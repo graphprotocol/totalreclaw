@@ -119,6 +119,89 @@ Specs are organized by product area under `docs/specs/`:
 
 ---
 
+## Feature Compatibility Matrix
+
+### Platform Support
+
+Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and NanoClaw (`skill-nanoclaw/`).
+
+| Feature | OpenClaw Plugin | MCP Server | NanoClaw | Notes |
+|---------|:-:|:-:|:-:|-------|
+| **Core Tools** | | | | |
+| `totalreclaw_remember` | Yes | Yes | Yes (via MCP) | |
+| `totalreclaw_recall` | Yes | Yes | Yes (via MCP) | |
+| `totalreclaw_forget` | Yes | Yes | Yes (via MCP) | |
+| `totalreclaw_export` | Yes | Yes | Yes (via MCP) | |
+| `totalreclaw_status` | Yes | Yes | Yes (via MCP) | |
+| `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | Mem0 + MCP Memory adapters |
+| `totalreclaw_import` | -- | Yes | Yes (via MCP) | JSON/Markdown re-import (MCP only) |
+| `totalreclaw_upgrade` | -- | Yes | Yes (via MCP) | Stripe/Coinbase checkout URL |
+| `totalreclaw_consolidate` | Yes | **No** | **No** | OpenClaw plugin only. See gap below. |
+| **Automatic Memory** | | | | |
+| Auto-search (before_agent_start) | Yes | -- | Yes (hook) | MCP has no lifecycle hooks |
+| Auto-extract (agent_end) | Yes | -- | Yes (hook) | MCP relies on host agent |
+| Pre-compaction flush | Yes | -- | Yes (hook) | |
+| Pre-reset flush | Yes | -- | -- | OpenClaw only |
+| CLAUDE.md sync | -- | -- | Yes | NanoClaw syncs high-importance facts |
+| **Dedup** | | | | |
+| Content fingerprint (exact) | Yes | Yes | Yes | Server-side HMAC-SHA256 |
+| Within-batch semantic dedup | Yes | -- | -- | Cosine >= 0.9, during extraction |
+| Store-time near-duplicate | Yes | **No** | **No** | `consolidation.ts` — plugin only |
+| LLM-guided dedup (ADD/UPDATE/DELETE) | -- | -- | Yes | NanoClaw hooks ask LLM to classify |
+| Bulk consolidation tool | Yes | **No** | **No** | Server mode only, plugin only |
+| **Billing** | | | | |
+| Quota warnings (>80%) | Yes | -- | -- | Injected via before_agent_start |
+| 403 handling + cache invalidation | Yes | Yes | Yes | |
+| **Search Optimizations** | | | | |
+| Hot cache + two-tier search | Yes (subgraph) | -- | -- | Skips subgraph if cached query similar |
+| Dynamic candidate pool sizing | Yes | Yes | Yes (via MCP) | 400-5000 based on vault size |
+| BM25 + Cosine + RRF reranking | Yes | Yes | Yes (via MCP) | Intent-weighted |
+
+### Storage Mode Support
+
+Features across Server mode (PostgreSQL) and Subgraph mode (on-chain via Gnosis/The Graph).
+
+| Feature | Server (HTTP) | Subgraph (On-Chain) | Notes |
+|---------|:-:|:-:|-------|
+| Remember / Store | Yes | Yes | Subgraph stores via Pimlico relay |
+| Recall / Search | Yes | Yes | Subgraph uses GraphQL queries |
+| Forget / Delete | Yes (HTTP DELETE) | Yes (tombstone) | Subgraph writes decayScore=0 on-chain |
+| Export | Yes | Yes | Subgraph queries by owner + isActive |
+| Import (from Mem0/MCP) | Yes | Yes | |
+| Consolidate tool | Yes | **No** | No batch delete on-chain |
+| Store-time dedup (supersede) | Yes | Partial | Subgraph: logs warning, stores anyway |
+| Billing / Status | Yes | Yes | Both query relay billing endpoint |
+| Hot cache | -- | Yes | Server mode doesn't need it |
+
+### Known Gaps
+
+| Gap | Severity | Description |
+|-----|----------|-------------|
+| Consolidation not in MCP | MEDIUM | `totalreclaw_consolidate` and store-time dedup (`consolidation.ts`) are OpenClaw plugin only. MCP server and NanoClaw lack these. NanoClaw mitigates via LLM-guided dedup in hooks. |
+| Consolidation not on subgraph | LOW | Bulk consolidation requires batch-delete, which has no on-chain equivalent. Store-time dedup search works but supersession doesn't. |
+| MCP no auto-memory | By design | MCP has no lifecycle hooks. Host agent (Claude, Cursor) must call tools explicitly. Documented in beta guide. |
+| Export/import not on subgraph (MCP) | LOW | MCP server's export and import tools are HTTP-mode only. OpenClaw plugin handles both modes. |
+
+---
+
+## Implementation Rules
+
+### New Feature Checklist
+
+Every new feature implementation MUST include:
+
+1. **Documentation** -- If user-facing: create or update a guide in `docs/guides/` explaining what it does and how users interact with it. If internal: add to the relevant spec in `docs/specs/`.
+
+2. **Feature compatibility table** -- Update the "Feature Compatibility Matrix" section above:
+   - Add the feature to the **Platform Support** table (OpenClaw / MCP / NanoClaw)
+   - Add to the **Storage Mode Support** table if relevant (Server / Subgraph)
+   - If there are platform-specific caveats, add a note
+   - If a platform lacks support, add to **Known Gaps**
+
+3. **Cross-platform consideration** -- Before marking a feature as done, verify whether it should also work on other platforms. If a feature is added to the OpenClaw plugin but not the MCP server, that is a gap that must be documented (and ideally tracked for implementation).
+
+---
+
 ## Known Technical Gaps
 
 | Gap | Severity | Status |
