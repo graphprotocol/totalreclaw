@@ -2,12 +2,13 @@
  * TotalReclaw Plugin for OpenClaw
  *
  * Registers runtime tools so OpenClaw can execute TotalReclaw operations:
- *   - totalreclaw_remember  -- store an encrypted memory
- *   - totalreclaw_recall    -- search and decrypt memories
- *   - totalreclaw_forget    -- soft-delete a memory
- *   - totalreclaw_export    -- export all memories (JSON or Markdown)
- *   - totalreclaw_status    -- check billing/subscription status
- *   - totalreclaw_import_from -- import memories from other tools (Mem0, MCP Memory, etc.)
+ *   - totalreclaw_remember     -- store an encrypted memory
+ *   - totalreclaw_recall       -- search and decrypt memories
+ *   - totalreclaw_forget       -- soft-delete a memory
+ *   - totalreclaw_export       -- export all memories (JSON or Markdown)
+ *   - totalreclaw_status       -- check billing/subscription status
+ *   - totalreclaw_consolidate  -- scan and merge near-duplicate memories
+ *   - totalreclaw_import_from  -- import memories from other tools (Mem0, MCP Memory, etc.)
  *
  * Also registers a `before_agent_start` hook that automatically injects
  * relevant memories into the agent's context.
@@ -31,6 +32,15 @@ import { initLLMClient, generateEmbedding, getEmbeddingDims } from './llm-client
 import { LSHHasher } from './lsh.js';
 import { rerank, cosineSimilarity, detectQueryIntent, INTENT_WEIGHTS, type RerankerCandidate } from './reranker.js';
 import { deduplicateBatch } from './semantic-dedup.js';
+import {
+  findNearDuplicate,
+  shouldSupersede,
+  clusterFacts,
+  getStoreDedupThreshold,
+  getConsolidationThreshold,
+  STORE_DEDUP_MAX_CANDIDATES,
+  type DecryptedCandidate,
+} from './consolidation.js';
 import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, deriveSmartAccountAddress, type FactPayload } from './subgraph-store.js';
 import { searchSubgraph, getSubgraphFactCount } from './subgraph-search.js';
 import { PluginHotCache, type HotFact } from './hot-cache-wrapper.js';
@@ -117,6 +127,9 @@ const SEMANTIC_SKIP_THRESHOLD = parseFloat(process.env.TOTALRECLAW_SEMANTIC_SKIP
 // Auto-extract throttle (C3): only extract every N turns in agent_end hook
 let turnsSinceLastExtraction = 0;
 const AUTO_EXTRACT_EVERY_TURNS = parseInt(process.env.TOTALRECLAW_EXTRACT_EVERY_TURNS ?? '5', 10);
+
+// Store-time near-duplicate detection (consolidation module)
+const STORE_DEDUP_ENABLED = process.env.TOTALRECLAW_STORE_DEDUP !== 'false';
 
 // B2: Minimum relevance threshold — cosine below this means no memory injection
 const RELEVANCE_THRESHOLD = parseFloat(process.env.TOTALRECLAW_RELEVANCE_THRESHOLD ?? '0.3');
@@ -492,6 +505,113 @@ async function generateEmbeddingAndLSH(
 }
 
 // ---------------------------------------------------------------------------
+// Store-time near-duplicate search helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Search the vault for near-duplicates of a fact about to be stored.
+ *
+ * Uses the fact's blind indices as trapdoors to fetch candidates, decrypts
+ * them, extracts embeddings, and calls `findNearDuplicate()` from the
+ * consolidation module.
+ *
+ * Returns null on any failure (fail-open: we'd rather store a duplicate than
+ * lose a fact).
+ */
+async function searchForNearDuplicates(
+  factText: string,
+  factEmbedding: number[],
+  allIndices: string[],
+  logger: OpenClawPluginApi['logger'],
+): Promise<{ match: DecryptedCandidate; similarity: number } | null> {
+  try {
+    if (!encryptionKey || !authKeyHex || !userId) return null;
+
+    // Fetch candidates from the vault using the fact's blind indices as trapdoors.
+    let decryptedCandidates: DecryptedCandidate[] = [];
+
+    if (isSubgraphMode()) {
+      const results = await searchSubgraph(
+        subgraphOwner || userId,
+        allIndices,
+        STORE_DEDUP_MAX_CANDIDATES,
+        authKeyHex,
+      );
+      for (const result of results) {
+        try {
+          const docJson = decryptFromHex(result.encryptedBlob, encryptionKey);
+          const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+
+          let embedding: number[] | null = null;
+          if (result.encryptedEmbedding) {
+            try {
+              embedding = JSON.parse(decryptFromHex(result.encryptedEmbedding, encryptionKey));
+            } catch { /* skip */ }
+          }
+
+          decryptedCandidates.push({
+            id: result.id,
+            text: doc.text,
+            embedding,
+            importance: doc.metadata?.importance
+              ? Math.round((doc.metadata.importance as number) * 10)
+              : 5,
+            decayScore: 5,
+            createdAt: result.timestamp ? parseInt(result.timestamp, 10) * 1000 : Date.now(),
+            version: 1,
+          });
+        } catch { /* skip undecryptable */ }
+      }
+    } else if (apiClient) {
+      const candidates = await apiClient.search(
+        userId,
+        allIndices,
+        STORE_DEDUP_MAX_CANDIDATES,
+        authKeyHex,
+      );
+      for (const candidate of candidates) {
+        try {
+          const docJson = decryptFromHex(candidate.encrypted_blob, encryptionKey);
+          const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+
+          let embedding: number[] | null = null;
+          if (candidate.encrypted_embedding) {
+            try {
+              embedding = JSON.parse(decryptFromHex(candidate.encrypted_embedding, encryptionKey));
+            } catch { /* skip */ }
+          }
+
+          decryptedCandidates.push({
+            id: candidate.fact_id,
+            text: doc.text,
+            embedding,
+            importance: doc.metadata?.importance
+              ? Math.round((doc.metadata.importance as number) * 10)
+              : 5,
+            decayScore: candidate.decay_score,
+            createdAt: typeof candidate.timestamp === 'number'
+              ? candidate.timestamp
+              : new Date(candidate.timestamp).getTime(),
+            version: candidate.version,
+          });
+        } catch { /* skip undecryptable */ }
+      }
+    }
+
+    if (decryptedCandidates.length === 0) return null;
+
+    const result = findNearDuplicate(factEmbedding, decryptedCandidates, getStoreDedupThreshold());
+    if (!result) return null;
+
+    return { match: result.existingFact, similarity: result.similarity };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`Store-time dedup search failed (proceeding with store): ${msg}`);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Utility helpers
 // ---------------------------------------------------------------------------
 
@@ -641,22 +761,13 @@ async function storeExtractedFacts(
     );
   }
 
-  // Phase 3: Store the deduplicated facts.
+  // Phase 3: Store the deduplicated facts (with optional store-time dedup).
   let stored = 0;
+  let superseded = 0;
+  let skipped = 0;
 
   for (const fact of dedupedFacts) {
     try {
-      const doc = {
-        text: fact.text,
-        metadata: {
-          type: fact.type,
-          importance: fact.importance / 10,
-          source: 'auto-extraction',
-          created_at: new Date().toISOString(),
-        },
-      };
-
-      const encryptedBlob = encryptToHex(JSON.stringify(doc), encryptionKey);
       const blindIndices = generateBlindIndices(fact.text);
 
       // Use pre-computed embedding result if available.
@@ -664,6 +775,60 @@ async function storeExtractedFacts(
       const allIndices = embeddingResult
         ? [...blindIndices, ...embeddingResult.lshBuckets]
         : blindIndices;
+
+      // Store-time near-duplicate check: search vault before writing.
+      let effectiveImportance = fact.importance;
+
+      if (STORE_DEDUP_ENABLED && embeddingResult) {
+        const dupResult = await searchForNearDuplicates(
+          fact.text,
+          embeddingResult.embedding,
+          allIndices,
+          logger,
+        );
+
+        if (dupResult) {
+          const action = shouldSupersede(fact.importance, dupResult.match);
+          if (action === 'skip') {
+            logger.info(
+              `Store-time dedup: skipping "${fact.text.slice(0, 60)}…" (sim=${dupResult.similarity.toFixed(3)}, existing ID=${dupResult.match.id})`,
+            );
+            skipped++;
+            continue;
+          }
+          // action === 'supersede': delete old fact, inherit higher importance
+          if (isSubgraphMode()) {
+            logger.warn(
+              `Store-time dedup: would supersede ${dupResult.match.id} but subgraph soft-delete not yet supported in batch mode`,
+            );
+          } else if (apiClient && authKeyHex) {
+            try {
+              await apiClient.deleteFact(dupResult.match.id, authKeyHex);
+              logger.info(
+                `Store-time dedup: superseding ${dupResult.match.id} (sim=${dupResult.similarity.toFixed(3)})`,
+              );
+            } catch (delErr) {
+              logger.warn(
+                `Store-time dedup: failed to delete superseded fact ${dupResult.match.id}: ${delErr instanceof Error ? delErr.message : String(delErr)}`,
+              );
+            }
+          }
+          effectiveImportance = Math.max(fact.importance, dupResult.match.decayScore);
+          superseded++;
+        }
+      }
+
+      const doc = {
+        text: fact.text,
+        metadata: {
+          type: fact.type,
+          importance: effectiveImportance / 10,
+          source: 'auto-extraction',
+          created_at: new Date().toISOString(),
+        },
+      };
+
+      const encryptedBlob = encryptToHex(JSON.stringify(doc), encryptionKey);
 
       const contentFp = generateContentFingerprint(fact.text, dedupKey);
       const factId = crypto.randomUUID();
@@ -673,7 +838,7 @@ async function storeExtractedFacts(
         timestamp: new Date().toISOString(),
         encrypted_blob: encryptedBlob,
         blind_indices: allIndices,
-        decay_score: fact.importance,
+        decay_score: effectiveImportance,
         source: 'auto-extraction',
         content_fp: contentFp,
         agent_id: 'openclaw-plugin-auto',
@@ -688,7 +853,7 @@ async function storeExtractedFacts(
           owner: subgraphOwner || userId!,
           encryptedBlob: encryptedBlob,
           blindIndices: allIndices,
-          decayScore: fact.importance,
+          decayScore: effectiveImportance,
           source: 'auto-extraction',
           contentFp: contentFp,
           agentId: 'openclaw-plugin-auto',
@@ -712,8 +877,8 @@ async function storeExtractedFacts(
     }
   }
 
-  if (stored > 0) {
-    logger.info(`Auto-extracted and stored ${stored} memories`);
+  if (stored > 0 || superseded > 0 || skipped > 0) {
+    logger.info(`Auto-extraction results: stored=${stored}, superseded=${superseded}, skipped=${skipped}`);
   }
 
   return stored;
@@ -900,7 +1065,54 @@ const plugin = {
             await requireFullSetup(api.logger);
 
             const memoryType = params.type ?? 'fact';
-            const importance = params.importance ?? 5;
+            let importance = params.importance ?? 5;
+
+            // Generate blind indices for server-side search.
+            const blindIndices = generateBlindIndices(params.text);
+
+            // Generate embedding + LSH bucket hashes (PoC v2).
+            // Falls back to word-only indices if embedding generation fails.
+            const embeddingResult = await generateEmbeddingAndLSH(params.text, api.logger);
+
+            // Merge LSH bucket hashes into blind indices.
+            const allIndices = embeddingResult
+              ? [...blindIndices, ...embeddingResult.lshBuckets]
+              : blindIndices;
+
+            // Store-time dedup: for explicit remember, ALWAYS supersede
+            // (user explicitly wants this stored — just remove the old one).
+            let supersededId: string | undefined;
+            if (STORE_DEDUP_ENABLED && embeddingResult) {
+              const dupResult = await searchForNearDuplicates(
+                params.text,
+                embeddingResult.embedding,
+                allIndices,
+                api.logger,
+              );
+              if (dupResult) {
+                // Inherit higher importance from existing fact.
+                importance = Math.max(importance, dupResult.match.decayScore);
+                supersededId = dupResult.match.id;
+
+                if (isSubgraphMode()) {
+                  api.logger.warn(
+                    `Remember dedup: would supersede ${dupResult.match.id} but subgraph soft-delete not yet supported`,
+                  );
+                } else if (apiClient && authKeyHex) {
+                  try {
+                    await apiClient.deleteFact(dupResult.match.id, authKeyHex);
+                    api.logger.info(
+                      `Remember dedup: superseded ${dupResult.match.id} (sim=${dupResult.similarity.toFixed(3)})`,
+                    );
+                  } catch (delErr) {
+                    api.logger.warn(
+                      `Remember dedup: failed to delete superseded fact ${dupResult.match.id}: ${delErr instanceof Error ? delErr.message : String(delErr)}`,
+                    );
+                    supersededId = undefined; // Don't report supersession if delete failed
+                  }
+                }
+              }
+            }
 
             // Build the document JSON that will be encrypted.
             const doc = {
@@ -915,18 +1127,6 @@ const plugin = {
 
             // Encrypt the document.
             const encryptedBlob = encryptToHex(JSON.stringify(doc), encryptionKey!);
-
-            // Generate blind indices for server-side search.
-            const blindIndices = generateBlindIndices(params.text);
-
-            // Generate embedding + LSH bucket hashes (PoC v2).
-            // Falls back to word-only indices if embedding generation fails.
-            const embeddingResult = await generateEmbeddingAndLSH(params.text, api.logger);
-
-            // Merge LSH bucket hashes into blind indices.
-            const allIndices = embeddingResult
-              ? [...blindIndices, ...embeddingResult.lshBuckets]
-              : blindIndices;
 
             // Generate content fingerprint for dedup.
             const contentFp = generateContentFingerprint(params.text, dedupKey!);
@@ -967,9 +1167,13 @@ const plugin = {
               await apiClient!.store(userId!, [factPayload], authKeyHex!);
             }
 
+            const statusMsg = supersededId
+              ? `Memory stored (ID: ${factId}). Superseded an older similar memory.`
+              : `Memory stored (ID: ${factId})`;
+
             return {
-              content: [{ type: 'text', text: `Memory stored (ID: ${factId})` }],
-              details: { factId },
+              content: [{ type: 'text', text: statusMsg }],
+              details: { factId, supersededId },
             };
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
@@ -1515,6 +1719,163 @@ const plugin = {
         },
       },
       { name: 'totalreclaw_status' },
+    );
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_consolidate
+    // ---------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: 'totalreclaw_consolidate',
+        label: 'Consolidate',
+        description:
+          'Scan all stored memories and merge near-duplicates. Keeps the most important/recent version and removes redundant copies.',
+        parameters: {
+          type: 'object',
+          properties: {
+            dry_run: {
+              type: 'boolean',
+              description: 'Preview consolidation without deleting (default: false)',
+            },
+          },
+          additionalProperties: false,
+        },
+        async execute(_toolCallId: string, params: { dry_run?: boolean }) {
+          try {
+            await requireFullSetup(api.logger);
+
+            const dryRun = params.dry_run ?? false;
+
+            // Consolidation is only available in centralized (HTTP server) mode.
+            if (isSubgraphMode()) {
+              return {
+                content: [{ type: 'text', text: 'Consolidation is currently only available in centralized mode.' }],
+              };
+            }
+
+            if (!apiClient || !authKeyHex || !encryptionKey) {
+              return {
+                content: [{ type: 'text', text: 'Plugin not fully initialized. Cannot consolidate.' }],
+              };
+            }
+
+            // 1. Export all facts (paginated, max 10 pages of 1000).
+            const allDecrypted: DecryptedCandidate[] = [];
+            let cursor: string | undefined;
+            let hasMore = true;
+            let pageCount = 0;
+            const MAX_PAGES = 10;
+
+            while (hasMore && pageCount < MAX_PAGES) {
+              const page = await apiClient.exportFacts(authKeyHex, 1000, cursor);
+
+              for (const fact of page.facts) {
+                try {
+                  const docJson = decryptFromHex(fact.encrypted_blob, encryptionKey);
+                  const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+
+                  let embedding: number[] | null = null;
+                  // ExportedFact does not include encrypted_embedding — generate it on-the-fly.
+                  // For consolidation we need embeddings, so generate them.
+                  try {
+                    embedding = await generateEmbedding(doc.text);
+                  } catch { /* skip — fact will not be clustered */ }
+
+                  allDecrypted.push({
+                    id: fact.id,
+                    text: doc.text,
+                    embedding,
+                    importance: doc.metadata?.importance
+                      ? Math.round((doc.metadata.importance as number) * 10)
+                      : 5,
+                    decayScore: fact.decay_score,
+                    createdAt: new Date(fact.created_at).getTime(),
+                    version: fact.version,
+                  });
+                } catch {
+                  // Skip undecryptable facts.
+                }
+              }
+
+              cursor = page.cursor ?? undefined;
+              hasMore = page.has_more;
+              pageCount++;
+            }
+
+            if (allDecrypted.length === 0) {
+              return {
+                content: [{ type: 'text', text: 'No memories found to consolidate.' }],
+              };
+            }
+
+            // 2. Cluster by cosine similarity.
+            const clusters = clusterFacts(allDecrypted, getConsolidationThreshold());
+
+            if (clusters.length === 0) {
+              return {
+                content: [{ type: 'text', text: `Scanned ${allDecrypted.length} memories — no near-duplicates found.` }],
+              };
+            }
+
+            // 3. Build report.
+            const totalDuplicates = clusters.reduce((sum, c) => sum + c.duplicates.length, 0);
+            const reportLines: string[] = [
+              `Scanned ${allDecrypted.length} memories.`,
+              `Found ${clusters.length} cluster(s) with ${totalDuplicates} duplicate(s).`,
+              '',
+            ];
+
+            const displayClusters = clusters.slice(0, 10);
+            for (let i = 0; i < displayClusters.length; i++) {
+              const cluster = displayClusters[i];
+              reportLines.push(`Cluster ${i + 1}: KEEP "${cluster.representative.text.slice(0, 80)}…"`);
+              for (const dup of cluster.duplicates) {
+                reportLines.push(`  - REMOVE "${dup.text.slice(0, 80)}…" (ID: ${dup.id})`);
+              }
+            }
+            if (clusters.length > 10) {
+              reportLines.push(`... and ${clusters.length - 10} more cluster(s).`);
+            }
+
+            // 4. If not dry_run, batch-delete duplicates.
+            if (!dryRun) {
+              const idsToDelete = clusters.flatMap((c) => c.duplicates.map((d) => d.id));
+              const BATCH_SIZE = 500;
+              let totalDeleted = 0;
+
+              for (let i = 0; i < idsToDelete.length; i += BATCH_SIZE) {
+                const batch = idsToDelete.slice(i, i + BATCH_SIZE);
+                const deleted = await apiClient.batchDelete(batch, authKeyHex);
+                totalDeleted += deleted;
+              }
+
+              reportLines.push('');
+              reportLines.push(`Deleted ${totalDeleted} duplicate memories.`);
+            } else {
+              reportLines.push('');
+              reportLines.push('DRY RUN — no memories were deleted. Run without dry_run to apply.');
+            }
+
+            return {
+              content: [{ type: 'text', text: reportLines.join('\n') }],
+              details: {
+                scanned: allDecrypted.length,
+                clusters: clusters.length,
+                duplicates: totalDuplicates,
+                dry_run: dryRun,
+              },
+            };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            api.logger.error(`totalreclaw_consolidate failed: ${message}`);
+            return {
+              content: [{ type: 'text', text: `Failed to consolidate memories: ${message}` }],
+            };
+          }
+        },
+      },
+      { name: 'totalreclaw_consolidate' },
     );
 
     // ---------------------------------------------------------------

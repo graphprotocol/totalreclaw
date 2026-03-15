@@ -208,6 +208,41 @@ Check subscription status and usage quota.
 
 ---
 
+### totalreclaw_consolidate
+
+Scan all stored memories and merge near-duplicates. Keeps the most important/recent version and removes redundant copies.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| dry_run | boolean | No | Preview consolidation without deleting. Default: `false` |
+
+**Example:**
+```json
+{
+  "dry_run": true
+}
+```
+
+**Returns:**
+```
+Scanned 247 memories.
+Found 12 cluster(s) with 18 duplicate(s).
+
+Cluster 1: KEEP "User prefers TypeScript over JavaScript for new projects..."
+  - REMOVE "User likes TypeScript more than JavaScript..." (ID: abc123)
+Cluster 2: KEEP "Project uses PostgreSQL as the main database..."
+  - REMOVE "The main database is PostgreSQL..." (ID: def456)
+...
+
+DRY RUN -- no memories were deleted. Run without dry_run to apply.
+```
+
+**Note:** Currently only available in centralized mode (not subgraph mode).
+
+---
+
 ### totalreclaw_import_from
 
 Import memories from other AI memory tools into TotalReclaw.
@@ -313,7 +348,7 @@ Register TotalReclaw as the memory plugin:
 
 ### Step 5: Restart and verify
 
-Restart the gateway, then confirm the plugin loaded by checking that `totalreclaw_remember`, `totalreclaw_recall`, `totalreclaw_forget`, `totalreclaw_export`, and `totalreclaw_import_from` tools are available.
+Restart the gateway, then confirm the plugin loaded by checking that `totalreclaw_remember`, `totalreclaw_recall`, `totalreclaw_forget`, `totalreclaw_export`, `totalreclaw_consolidate`, and `totalreclaw_import_from` tools are available.
 
 ### Step 6: Explain the free tier
 
@@ -409,6 +444,15 @@ Use when:
 - The user asks to consolidate memories from multiple tools
 
 Always run with `dry_run=true` first and show the preview before importing. API keys are used in-memory only and never stored.
+
+#### totalreclaw_consolidate
+
+Use when:
+- The user asks to clean up or deduplicate their memories
+- The user mentions having too many similar memories
+- After a large import to merge near-duplicates
+
+Always run with `dry_run=true` first to preview which memories will be merged, then confirm with the user before running without dry_run.
 
 ---
 
@@ -674,6 +718,16 @@ Default configuration values:
 | `maxMemoriesInContext` | `8` | Maximum memories to inject into context |
 | `forgetThreshold` | `0.3` | Decay score threshold for eviction |
 | `decayHalfLifeDays` | `30` | Memory decay half-life in days |
+
+### Memory Consolidation Configuration
+
+Environment variables for controlling near-duplicate detection and consolidation:
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `TOTALRECLAW_STORE_DEDUP` | `true` | Enable/disable store-time near-duplicate detection |
+| `TOTALRECLAW_STORE_DEDUP_THRESHOLD` | `0.85` | Cosine similarity threshold for store-time dedup (0-1) |
+| `TOTALRECLAW_CONSOLIDATION_THRESHOLD` | `0.88` | Cosine similarity threshold for bulk consolidation (0-1) |
 
 ---
 
