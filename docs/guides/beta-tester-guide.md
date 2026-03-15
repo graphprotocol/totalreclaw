@@ -81,7 +81,7 @@ If TotalReclaw is configured, the agent will show your tier, usage, and storage 
 1. **You set up with a 12-word recovery phrase** (like a crypto wallet)
 2. **All memories are encrypted on your device** before reaching our server
 3. **The server only stores encrypted blobs** -- it can never read them
-4. **Your data is anchored on-chain** (Gnosis Chain testnet) and indexed by The Graph — no single server controls your memories
+4. **Your data is anchored on-chain** (Gnosis Chain) and indexed by [The Graph](https://thegraph.com) — no single server controls your memories. Or self-host for full control.
 5. **Same phrase on any device = same keys = same memories**
 
 ---
@@ -117,10 +117,12 @@ TotalReclaw supports two storage modes:
 
 | Mode | How It Works | When to Use |
 |------|-------------|-------------|
-| **Subgraph (default)** | Encrypted facts are submitted on-chain (Gnosis Chain) via ERC-4337 and indexed by The Graph. Gas is sponsored — you pay nothing. | Default for all beta testers |
-| **HTTP** | Encrypted facts are stored in the server's database. Faster, but centralized. | Set `TOTALRECLAW_SUBGRAPH_MODE=false` |
+| **Subgraph (default)** | Encrypted facts are submitted on-chain (Gnosis Chain) via ERC-4337 and indexed by The Graph. Gas is sponsored — you pay nothing. No single server controls your data. | Default — recommended for most users |
+| **HTTP (self-hosted)** | Encrypted facts are stored in your own server's database. Faster writes, but you manage the infrastructure. | Set `TOTALRECLAW_SUBGRAPH_MODE=false` and `TOTALRECLAW_SERVER_URL` to your server |
 
-During beta, subgraph mode uses the Chiado testnet. Both modes encrypt your data identically — the difference is where the encrypted blobs are stored.
+To enable subgraph mode (the default), set `TOTALRECLAW_SUBGRAPH_MODE=true` in your environment. To switch to HTTP mode, set it to `false` and point `TOTALRECLAW_SERVER_URL` at your own server (see the [Self-Hosting section in the README](../../README.md#storage-modes)).
+
+During beta, subgraph mode uses the Chiado testnet. Both modes encrypt your data identically on your device — the difference is where the encrypted blobs are stored.
 
 ---
 
@@ -175,9 +177,21 @@ For full details, supported sources, and troubleshooting, see the [Importing Mem
 | Import from Mem0/MCP Memory | Yes | Yes | Yes |
 | Status & billing | Yes | Yes | Yes |
 | Upgrade to Pro | -- | Yes | Yes |
-| Near-duplicate prevention | Yes | Yes | Yes |
+| Near-duplicate prevention (cosine) | Yes | Yes | Yes |
+| LLM-guided dedup (contradictions) | Yes | -- | Yes |
 | Memory consolidation tool | Yes | Yes | Yes |
 | Pre-compaction memory flush | Yes | -- | Yes |
+
+---
+
+## Memory Dedup
+
+TotalReclaw uses two complementary layers to prevent duplicate memories:
+
+- **Cosine similarity** (all platforms) -- catches paraphrases and near-duplicates before storing. "User prefers dark mode" and "User likes dark themes" are recognized as the same fact.
+- **LLM-guided classification** (OpenClaw + NanoClaw) -- catches contradictions that cosine misses. When you say "I switched to light mode", the LLM recognizes this contradicts the earlier "prefers dark mode" and updates it, even though the embeddings are dissimilar.
+
+**Cosine catches paraphrases, LLM catches contradictions.** Together they cover the full spectrum. MCP agents (Claude Desktop, Cursor) rely on cosine only since they lack lifecycle hooks. For the full technical details, see [memory-dedup.md](./memory-dedup.md).
 
 ---
 
@@ -186,7 +200,7 @@ For full details, supported sources, and troubleshooting, see the [Importing Mem
 - Free tier limit (100 writes/month) and Pro pricing ($2-5/month) are not finalized
 - MCP agents rely on explicit tool use rather than automatic memory hooks
 - Beta runs on testnet infrastructure -- expect occasional downtime
-- Subgraph mode (on-chain storage) is enabled by default when using a 12-word recovery phrase. Set `TOTALRECLAW_SUBGRAPH_MODE=false` to use HTTP-only mode
+- Subgraph mode (on-chain storage) requires `TOTALRECLAW_SUBGRAPH_MODE=true`. Set to `false` and provide your own `TOTALRECLAW_SERVER_URL` for self-hosted HTTP mode
 
 ---
 

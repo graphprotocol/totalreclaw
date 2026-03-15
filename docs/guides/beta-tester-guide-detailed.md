@@ -134,7 +134,7 @@ Set the following environment variables in your OpenClaw configuration (e.g., wo
 TOTALRECLAW_MASTER_PASSWORD="word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12"
 TOTALRECLAW_SERVER_URL="https://api.totalreclaw.xyz"
 
-# --- Subgraph mode (on-chain storage, enabled by default) ---
+# --- Subgraph mode (on-chain storage, recommended) ---
 TOTALRECLAW_SUBGRAPH_MODE="true"
 TOTALRECLAW_CHAIN_ID="10200"
 ```
@@ -719,11 +719,11 @@ The OpenClaw plugin auto-detects your agent's LLM provider and API key for fact 
 
 ### Subgraph Mode Variables (Advanced)
 
-These variables control on-chain storage via the subgraph. **For the Chiado beta, subgraph mode is the default.**
+These variables control on-chain storage via the subgraph. **Set `TOTALRECLAW_SUBGRAPH_MODE=true` for decentralized on-chain storage (recommended for beta).**
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `TOTALRECLAW_SUBGRAPH_MODE` | Set to `true` to use on-chain subgraph storage. **Set this to `true` for beta.** | `false` |
+| `TOTALRECLAW_SUBGRAPH_MODE` | Set to `true` for decentralized on-chain storage via The Graph. Set to `false` for self-hosted HTTP mode. | `true` (recommended) |
 | `TOTALRECLAW_CHAIN_ID` | Chain ID for on-chain transactions. `10200` = Chiado testnet, `100` = Gnosis mainnet. | `10200` |
 | `TOTALRECLAW_DATA_EDGE_ADDRESS` | Address of the EventfulDataEdge smart contract on Chiado. | `0xA84c5433110Ccc93e57ec387e630E86Bad86c36f` |
 | `TOTALRECLAW_ENTRYPOINT_ADDRESS` | ERC-4337 EntryPoint v0.7 address. Same on all chains. | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` |
@@ -827,7 +827,7 @@ This is a beta release. The following items are known limitations that will be a
 - **Batch writes:** On-chain writes are currently sent one fact at a time. Batch writes for gas optimization are not yet implemented.
 - **Decay and eviction engine:** The importance decay formula runs, but tuning is ongoing. Low-importance facts decay over time and may be evicted.
 - **Write counter persists across upgrades:** If you exhaust the free tier, upgrade to Pro, and later cancel, the write counter from before the upgrade is preserved. The counter resets monthly, not on cancellation.
-- **Subgraph mode:** On-chain storage via Gnosis Chain subgraph is functional and deployed to the Chiado testnet. For the beta, subgraph mode is the default storage path.
+- **Subgraph mode:** On-chain storage via Gnosis Chain subgraph is functional and deployed to the Chiado testnet. Set `TOTALRECLAW_SUBGRAPH_MODE=true` to enable (recommended). Set to `false` and provide your own `TOTALRECLAW_SERVER_URL` if you prefer to self-host.
 
 ---
 

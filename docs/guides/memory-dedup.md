@@ -292,7 +292,9 @@ TotalReclaw uses two complementary strategies that operate at different layers:
 
 2. **LLM-guided dedup (extraction layer)** -- OpenClaw and NanoClaw. During extraction hooks, the LLM sees existing memories and classifies each new fact as ADD/UPDATE/DELETE/NOOP. This catches contradictions and semantic updates that cosine similarity misses (e.g., "prefers dark mode" → "switched to light mode" have low cosine similarity but are a clear UPDATE).
 
-These two approaches are independent and additive. OpenClaw and NanoClaw benefit from both; MCP relies on cosine-based dedup alone (which is sufficient for most workloads -- contradictions require lifecycle hooks to detect).
+**In short: cosine catches paraphrases, LLM catches contradictions.** Neither alone is sufficient — together they cover the full spectrum of semantic overlap.
+
+OpenClaw and NanoClaw benefit from both layers; MCP relies on cosine-based dedup alone (which is sufficient for most workloads — contradictions require lifecycle hooks to detect).
 
 ---
 

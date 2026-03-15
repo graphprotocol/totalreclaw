@@ -55,7 +55,7 @@ MCP agents use explicit tool calls rather than automatic hooks -- the agent deci
 1. **You set up with a 12-word recovery phrase** (like a crypto wallet)
 2. **All memories are encrypted on your device** before reaching the server
 3. **The server stores only encrypted blobs** + blind search indices -- it can never read your data
-4. **On-chain mode** (opt-in) anchors data on Gnosis Chain, indexed by The Graph's decentralized network
+4. **On-chain mode** (default) anchors data on Gnosis Chain, indexed by [The Graph](https://thegraph.com)'s decentralized network — no single server controls your memories
 5. **Same phrase on any device = same keys = same memories**
 
 ---
@@ -118,9 +118,15 @@ Counter resets at the start of each calendar month. Pay with card (Stripe) or cr
 
 **Search:** The server returns encrypted candidates matched by blind indices. The client decrypts them locally and re-ranks using BM25 + cosine similarity with reciprocal rank fusion (RRF).
 
+**Dedup:** Two complementary layers prevent duplicate memories — cosine similarity catches paraphrases ("prefers dark mode" ~ "likes dark themes"), while LLM-guided classification catches contradictions ("prefers dark mode" -> "switched to light mode"). See [memory-dedup.md](./docs/guides/memory-dedup.md) for the full architecture.
+
 ---
 
-## Self-Hosting
+## Storage Modes
+
+By default, TotalReclaw uses **subgraph mode**: your encrypted data is anchored on-chain (Gnosis Chain) and indexed by [The Graph](https://thegraph.com)'s decentralized network. No single server controls your memories. Gas is sponsored — you pay nothing during beta.
+
+If you prefer to self-host or want faster writes, you can switch to **server (HTTP) mode** by running your own backend:
 
 ```bash
 cd server
@@ -129,7 +135,14 @@ docker-compose up -d
 # Server runs at http://localhost:8080
 ```
 
-Point your client at your own server URL by setting the `TOTALRECLAW_SERVER_URL` environment variable.
+Then configure your client:
+
+```bash
+export TOTALRECLAW_SERVER_URL=http://localhost:8080
+export TOTALRECLAW_SUBGRAPH_MODE=false
+```
+
+Both modes encrypt your data identically on your device — the difference is where the encrypted blobs are stored. Subgraph mode gives you decentralized, tamper-proof storage with no infrastructure to manage. Server mode gives you full control and lower latency.
 
 ---
 
