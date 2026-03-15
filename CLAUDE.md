@@ -136,7 +136,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | Mem0 + MCP Memory adapters |
 | `totalreclaw_import` | -- | Yes | Yes (via MCP) | JSON/Markdown re-import (MCP only) |
 | `totalreclaw_upgrade` | -- | Yes | Yes (via MCP) | Stripe/Coinbase checkout URL |
-| `totalreclaw_consolidate` | Yes | **No** | **No** | OpenClaw plugin only. See gap below. |
+| `totalreclaw_consolidate` | Yes | Yes | Yes (via MCP) | Server mode only (no batch delete on-chain) |
 | **Automatic Memory** | | | | |
 | Auto-search (before_agent_start) | Yes | -- | Yes (hook) | MCP has no lifecycle hooks |
 | Auto-extract (agent_end) | Yes | -- | Yes (hook) | MCP relies on host agent |
@@ -146,9 +146,9 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | **Dedup** | | | | |
 | Content fingerprint (exact) | Yes | Yes | Yes | Server-side HMAC-SHA256 |
 | Within-batch semantic dedup | Yes | -- | -- | Cosine >= 0.9, during extraction |
-| Store-time near-duplicate | Yes | **No** | **No** | `consolidation.ts` — plugin only |
-| LLM-guided dedup (ADD/UPDATE/DELETE) | -- | -- | Yes | NanoClaw hooks ask LLM to classify |
-| Bulk consolidation tool | Yes | **No** | **No** | Server mode only, plugin only |
+| Store-time near-duplicate | Yes | Yes | Yes (via MCP) | `consolidation.ts` — both plugin and MCP |
+| LLM-guided dedup (ADD/UPDATE/DELETE) | Yes | -- | Yes | OpenClaw + NanoClaw extraction prompts |
+| Bulk consolidation tool | Yes | Yes | Yes (via MCP) | Server mode only (no batch delete on-chain) |
 | **Billing** | | | | |
 | Quota warnings (>80%) | Yes | -- | -- | Injected via before_agent_start |
 | 403 handling + cache invalidation | Yes | Yes | Yes | |
@@ -177,8 +177,7 @@ Features across Server mode (PostgreSQL) and Subgraph mode (on-chain via Gnosis/
 
 | Gap | Severity | Description |
 |-----|----------|-------------|
-| Consolidation not in MCP | MEDIUM | `totalreclaw_consolidate` and store-time dedup (`consolidation.ts`) are OpenClaw plugin only. MCP server and NanoClaw lack these. NanoClaw mitigates via LLM-guided dedup in hooks. |
-| Consolidation not on subgraph | LOW | Bulk consolidation requires batch-delete, which has no on-chain equivalent. Store-time dedup search works but supersession doesn't. |
+| Bulk consolidation not on subgraph | LOW | Bulk consolidation tool requires batch-delete, which has no on-chain equivalent. Store-time dedup supersession now works via tombstones. |
 | MCP no auto-memory | By design | MCP has no lifecycle hooks. Host agent (Claude, Cursor) must call tools explicitly. Documented in beta guide. |
 | Export/import not on subgraph (MCP) | LOW | MCP server's export and import tools are HTTP-mode only. OpenClaw plugin handles both modes. |
 

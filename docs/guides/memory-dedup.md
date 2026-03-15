@@ -2,7 +2,7 @@
 
 Over time, AI agents extract overlapping facts from conversations. "User prefers dark mode" might be stored five times across five sessions. Without dedup, your vault fills with redundant entries, wasting storage, slowing search, and diluting recall quality.
 
-TotalReclaw prevents this at three layers -- all operating client-side, preserving the zero-knowledge guarantee.
+TotalReclaw prevents this at multiple layers -- all operating client-side, preserving the zero-knowledge guarantee.
 
 ---
 
@@ -255,21 +255,44 @@ All semantic analysis -- embedding comparison, cosine similarity calculation, im
 | **Within-batch dedup** (Layer 2) | Yes | -- | -- |
 | **Store-time dedup** (Layer 3) | Yes | Yes | Yes |
 | **Bulk consolidation** (Layer 4) | Yes | Yes | Yes (via MCP server) |
+| **LLM-guided classification** (Layer 5) | Yes | -- | Yes |
 
 **Notes:**
 
 - **Within-batch dedup** is specific to the OpenClaw plugin's extraction pipeline, which produces multiple facts in a single batch from one conversation turn. MCP and NanoClaw store facts individually via tool calls, so there is no "batch" to deduplicate within.
-- **Bulk consolidation** (`totalreclaw_consolidate`) works in **server (HTTP) mode only**. In subgraph mode, the tool is unavailable because on-chain soft-delete is not yet implemented. Store-time dedup search works in both modes, but supersession (soft-delete of the old fact) is partial in subgraph mode -- the old fact is marked inactive in the local index but remains on-chain until on-chain soft-delete ships.
+- **Bulk consolidation** (`totalreclaw_consolidate`) works in **server (HTTP) mode only**. In subgraph mode, the tool is unavailable because there is no batch-delete on-chain equivalent. Store-time dedup supersession (tombstone old + store new) works in both modes.
+- **LLM-guided classification** requires lifecycle hooks (extraction context). MCP has no hooks -- it relies on cosine-based dedup only.
+
+### Layer 5: LLM-Guided Classification (OpenClaw + NanoClaw)
+
+The extraction prompt includes existing memories as context. The LLM classifies each extracted fact:
+
+| Action | Meaning | What Happens |
+|--------|---------|-------------|
+| **ADD** | New fact, no conflict | Stored normally (cosine dedup still applies as safety net) |
+| **UPDATE** | Refines or changes an existing fact | Old fact tombstoned, new version stored |
+| **DELETE** | Contradicts an existing fact | Old fact tombstoned, nothing new stored |
+| **NOOP** | Already captured or not worth storing | Skipped entirely |
+
+This catches what cosine similarity cannot: contradictions ("prefers dark mode" → "switched to light mode") and semantic updates where the meaning changes but embeddings are dissimilar.
+
+**Platform support:**
+
+| Platform | LLM-Guided Dedup | When |
+|----------|:---:|--------|
+| OpenClaw | Yes | agent_end, before_compaction, before_reset hooks |
+| MCP (Claude Desktop, Cursor) | No | No lifecycle hooks -- MCP relies on cosine dedup only |
+| NanoClaw | Yes | agent_end (ADD only), pre_compaction (full CRUD) |
 
 ### Two Complementary Dedup Approaches
 
 TotalReclaw uses two complementary strategies that operate at different layers:
 
-1. **Cosine-based dedup (storage layer)** -- A mathematical guard that runs on all platforms. Before any fact is stored, its embedding is compared against existing vault contents via cosine similarity. This catches near-duplicates regardless of how the fact was produced.
+1. **Cosine-based dedup (storage layer)** -- A mathematical guard that runs on all platforms. Before any fact is stored, its embedding is compared against existing vault contents via cosine similarity. This catches near-duplicates (paraphrases, restatements) regardless of how the fact was produced.
 
-2. **LLM-guided dedup (extraction layer)** -- NanoClaw only. During the `agent_end` and `pre_compaction` hooks, the LLM decides what to extract from the conversation, naturally avoiding redundant facts. This is a complementary layer that reduces duplicates before they even reach the storage pipeline.
+2. **LLM-guided dedup (extraction layer)** -- OpenClaw and NanoClaw. During extraction hooks, the LLM sees existing memories and classifies each new fact as ADD/UPDATE/DELETE/NOOP. This catches contradictions and semantic updates that cosine similarity misses (e.g., "prefers dark mode" → "switched to light mode" have low cosine similarity but are a clear UPDATE).
 
-These two approaches are independent and additive. NanoClaw benefits from both; OpenClaw and MCP rely on cosine-based dedup alone (which is sufficient for most workloads).
+These two approaches are independent and additive. OpenClaw and NanoClaw benefit from both; MCP relies on cosine-based dedup alone (which is sufficient for most workloads -- contradictions require lifecycle hooks to detect).
 
 ---
 
