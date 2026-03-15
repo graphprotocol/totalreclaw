@@ -327,42 +327,17 @@ Use this to get a copy of all your stored memories.
    _ID: b2c3d4e5-... | Created: 2026-03-04T10:25:00.000Z_
 ```
 
-### 7.5 Import -- `totalreclaw_import_from`
+### 7.5 Import from External Systems -- `totalreclaw_import_from`
 
-Use this to import memories from external AI memory systems. Currently supports **Mem0** and **MCP Memory Server**. Available in both OpenClaw plugin and MCP server.
+Import memories from Mem0, MCP Memory Server, or other supported sources. Available in both OpenClaw plugin and MCP server.
 
-**Importing from Mem0:**
+**Example prompts:**
+- "Import my memories from Mem0 using API key m0-abc123..."
+- "Import memories from MCP Memory Server at ~/.mcp-memory/memory.jsonl"
 
-If you have been using Mem0 (mem0.ai) and want to migrate your memories to TotalReclaw, ask your agent:
+All processing happens client-side — source data is fetched/parsed locally, encrypted with your key, then stored. The import is idempotent (duplicates are skipped via content fingerprinting).
 
-- "Import my memories from Mem0" (if your Mem0 API key is configured)
-- "Import my Mem0 memories using API key m0-abc123..."
-- "Import memories from Mem0 for user my-user-id"
-
-The agent will call `totalreclaw_import_from` with `source="mem0"`. You need to provide:
-1. Your **Mem0 API key** (from [app.mem0.ai](https://app.mem0.ai) → Settings → API Keys)
-2. Optionally, your **Mem0 user ID** (defaults to `"user"`)
-
-**What happens behind the scenes:**
-1. The tool fetches all your memories from the Mem0 API.
-2. Each memory is encrypted with your TotalReclaw key (AES-256-GCM) on your device.
-3. Blind search indices and content fingerprints are generated.
-4. Encrypted memories are stored in TotalReclaw.
-5. Duplicate memories (matching content fingerprints) are skipped if you run the import again.
-
-**Expected agent response:**
-> "Successfully imported 42 memories from Mem0. All 42 memories were imported with no skipped entries."
-
-**Importing from MCP Memory Server:**
-
-If you have been using `@modelcontextprotocol/server-memory`, you can import your JSONL knowledge graph:
-
-- "Import my memories from MCP Memory Server"
-- "Import memories from file /path/to/memory.jsonl"
-
-**Notes:**
-- All processing happens client-side — Mem0 data is fetched, decrypted/parsed locally, re-encrypted with your TotalReclaw key, then stored. The TotalReclaw server never sees plaintext.
-- The import is idempotent — running it multiple times will not create duplicates (content fingerprint dedup).
+For full details, supported sources, parameters, and troubleshooting, see the [Importing Memories guide](./importing-memories.md).
 
 ### 7.6 Status -- `totalreclaw_status` (MCP only)
 
@@ -855,6 +830,8 @@ This is a beta release. The following items are known limitations that will be a
 ---
 
 ## Further Reading
+
+- **Importing Memories:** [importing-memories.md](./importing-memories.md) -- how to migrate from Mem0, MCP Memory Server, and other AI memory tools.
 
 For those who want to understand the technical architecture:
 

@@ -78,7 +78,7 @@
     │   ├── subgraph/      # Subgraph specs (seed-to-subgraph, billing)
     │   └── tee/           # TEE specs (architecture, TDX SaaS)
     ├── deployment/        # Deployment guides (backup, Cloudflare)
-    ├── guides/            # User-facing guides (beta tester guide)
+    ├── guides/            # User-facing guides (beta tester guide, import/migration)
     ├── analysis/          # Cost analysis and projections
     ├── prd.md             # Product Requirements Document
     └── ROADMAP.md         # Phased roadmap

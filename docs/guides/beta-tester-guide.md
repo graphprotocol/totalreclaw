@@ -151,20 +151,17 @@ For detailed technical troubleshooting, see [beta-tester-guide-detailed.md](./be
 
 ---
 
-## Importing from Mem0
+## Importing from Other Tools
 
-Switching from Mem0? You can import all your Mem0 memories into TotalReclaw with a single command. Ask your agent:
+Switching from Mem0 or another AI memory system? TotalReclaw can import your existing memories. Ask your agent:
 
 > "Import my memories from Mem0 using API key m0-your-key-here"
 
-You'll need your Mem0 API key (from [app.mem0.ai](https://app.mem0.ai) → Settings → API Keys). The import:
+Everything is encrypted on your device before storage — the same zero-knowledge guarantee as natively stored memories. Imports are idempotent (running twice won't create duplicates).
 
-- Fetches all your Mem0 memories via their API
-- Encrypts each one with your TotalReclaw key on your device
-- Stores them in your encrypted vault
-- Is idempotent — running it again won't create duplicates
+**Supported sources:** Mem0 (live API), MCP Memory Server (JSONL file). More planned.
 
-For details, see the [detailed guide](./beta-tester-guide-detailed.md#75-import----totalreclaw_import_from).
+For full details, supported sources, and troubleshooting, see the [Importing Memories guide](./importing-memories.md).
 
 ---
 
@@ -205,6 +202,7 @@ Use any future expiry date, any 3-digit CVC, and any billing address.
 
 ## Further Reading
 
+- [Importing Memories](./importing-memories.md) -- migrate from Mem0, MCP Memory Server, and other tools
 - [Detailed technical guide](./beta-tester-guide-detailed.md) -- full reference with architecture, configuration, and environment variables
 - [totalreclaw.xyz](https://totalreclaw.xyz) -- project homepage
 
