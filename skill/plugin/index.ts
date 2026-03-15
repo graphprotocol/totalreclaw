@@ -69,7 +69,7 @@ interface OpenClawPluginApi {
 // ---------------------------------------------------------------------------
 
 /** Path where we persist userId + salt across restarts. */
-const CREDENTIALS_PATH = process.env.TOTALRECLAW_CREDENTIALS_PATH || '/home/node/.totalreclaw/credentials.json';
+const CREDENTIALS_PATH = process.env.TOTALRECLAW_CREDENTIALS_PATH || `${process.env.HOME ?? '/home/node'}/.totalreclaw/credentials.json`;
 
 // ---------------------------------------------------------------------------
 // Cosine similarity threshold — skip injection when top result is below this
@@ -360,11 +360,45 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
   }
 }
 
-const SETUP_ERROR_MSG =
-  'TotalReclaw setup required. Follow the "Post-Install Setup" steps in SKILL.md:\n' +
-  '1. Set TOTALRECLAW_MASTER_PASSWORD — ask the user if they have an existing recovery phrase or generate a new 12-word BIP-39 mnemonic.\n' +
-  '2. Set TOTALRECLAW_SUBGRAPH_MODE=true\n' +
-  '3. Restart the gateway to apply changes.';
+function isDocker(): boolean {
+  try {
+    return fs.existsSync('/.dockerenv') ||
+      (fs.existsSync('/proc/1/cgroup') &&
+        fs.readFileSync('/proc/1/cgroup', 'utf8').includes('docker'));
+  } catch { return false; }
+}
+
+function buildSetupErrorMsg(): string {
+  const base =
+    'TotalReclaw setup required:\n' +
+    '1. Set TOTALRECLAW_MASTER_PASSWORD — ask the user if they have an existing recovery phrase or generate a new 12-word BIP-39 mnemonic.\n' +
+    '2. Set TOTALRECLAW_SUBGRAPH_MODE=true\n' +
+    '3. Restart the gateway to apply changes.\n\n';
+
+  if (isDocker()) {
+    return base +
+      'Running in Docker — pass env vars via `-e` flags or your compose file:\n' +
+      '  -e TOTALRECLAW_MASTER_PASSWORD="word1 word2 ..."\n' +
+      '  -e TOTALRECLAW_SUBGRAPH_MODE=true';
+  }
+
+  if (process.platform === 'darwin') {
+    return base +
+      'Running on macOS — add env vars to the LaunchAgent plist at\n' +
+      '~/Library/LaunchAgents/ai.openclaw.gateway.plist under <key>EnvironmentVariables</key>:\n' +
+      '  <key>TOTALRECLAW_MASTER_PASSWORD</key><string>word1 word2 ...</string>\n' +
+      '  <key>TOTALRECLAW_SUBGRAPH_MODE</key><string>true</string>\n' +
+      'Then run: openclaw gateway restart';
+  }
+
+  return base +
+    'Running on Linux — add env vars to the systemd unit override or your shell profile:\n' +
+    '  export TOTALRECLAW_MASTER_PASSWORD="word1 word2 ..."\n' +
+    '  export TOTALRECLAW_SUBGRAPH_MODE=true\n' +
+    'Then run: openclaw gateway restart';
+}
+
+const SETUP_ERROR_MSG = buildSetupErrorMsg();
 
 /**
  * Ensure `initialize()` has completed (runs at most once).

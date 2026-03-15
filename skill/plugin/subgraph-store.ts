@@ -283,10 +283,10 @@ export async function submitFactOnChain(
 /**
  * Check if subgraph mode is enabled.
  *
- * Returns true unless TOTALRECLAW_SUBGRAPH_MODE is explicitly set to "false".
+ * Returns true only when TOTALRECLAW_SUBGRAPH_MODE is explicitly set to "true".
  */
 export function isSubgraphMode(): boolean {
-  return process.env.TOTALRECLAW_SUBGRAPH_MODE !== 'false';
+  return process.env.TOTALRECLAW_SUBGRAPH_MODE === 'true';
 }
 
 /**
@@ -331,7 +331,7 @@ export async function deriveSmartAccountAddress(mnemonic: string, chainId?: numb
 
 export function getSubgraphConfig(): SubgraphStoreConfig {
   return {
-    relayUrl: process.env.TOTALRECLAW_SERVER_URL || 'http://localhost:8000',
+    relayUrl: process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz',
     mnemonic: process.env.TOTALRECLAW_MASTER_PASSWORD || '',
     cachePath: process.env.TOTALRECLAW_CACHE_PATH || `${process.env.HOME}/.totalreclaw/cache.enc`,
     chainId: parseInt(process.env.TOTALRECLAW_CHAIN_ID || '10200'),

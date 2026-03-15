@@ -285,11 +285,7 @@ After installing TotalReclaw, the agent MUST complete setup automatically. **Do 
 
 ### Step 1: Set the server URL
 
-The TotalReclaw server URL is always `https://api.totalreclaw.xyz`. Set it in the OpenClaw config:
-
-```json
-{ "env": { "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz" } }
-```
+The TotalReclaw server URL is always `https://api.totalreclaw.xyz`. This is set automatically — no action required.
 
 ### Step 2: Master password (recovery phrase)
 
@@ -302,9 +298,11 @@ Ask the user:
   > "⚠️ SAVE YOUR RECOVERY PHRASE — it's the only way to recover your memories if you switch devices: `[phrase]`"
 - **Returning user:** Ask them to provide their existing 12-word phrase, then set it as `TOTALRECLAW_MASTER_PASSWORD`.
 
+When setup is required, the plugin will automatically detect the host environment (macOS, Linux, or Docker) and provide the exact commands or config snippets needed to set the env vars. Follow those instructions.
+
 ### Step 3: Enable subgraph mode
 
-Set `TOTALRECLAW_SUBGRAPH_MODE=true` in the config to enable on-chain storage (required for beta).
+Set `TOTALRECLAW_SUBGRAPH_MODE=true`. The plugin will provide platform-specific instructions alongside the master password setup in Step 2.
 
 ### Step 4: Set memory slot
 
