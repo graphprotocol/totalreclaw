@@ -54,8 +54,14 @@ Types:
 - episodic: Events or experiences
 - goal: Objectives or targets
 
+Actions (compare against existing memories if provided):
+- ADD: New fact, no conflict with existing memories
+- UPDATE: Modifies or refines an existing memory (provide existingFactId)
+- DELETE: Contradicts an existing memory — the old one is now wrong (provide existingFactId)
+- NOOP: Already captured in existing memories or not worth storing
+
 Return a JSON array (no markdown, no code fences):
-[{"text": "...", "type": "...", "importance": N}, ...]
+[{"text": "...", "type": "...", "importance": N, "action": "ADD|UPDATE|DELETE|NOOP", "existingFactId": "..."}, ...]
 
 If nothing is worth extracting, return: []`;
 
@@ -175,11 +181,13 @@ function parseFactsResponse(response: string): ExtractedFact[] {
  *
  * @param rawMessages - The messages array from the hook event (unknown[])
  * @param mode - 'turn' for agent_end (recent only), 'full' for compaction/reset
+ * @param existingMemories - Optional list of existing memories for dedup context
  * @returns Array of extracted facts, or empty array on failure.
  */
 export async function extractFacts(
   rawMessages: unknown[],
   mode: 'turn' | 'full',
+  existingMemories?: Array<{ id: string; text: string }>,
 ): Promise<ExtractedFact[]> {
   const config = resolveLLMConfig();
   if (!config) return []; // No LLM available
@@ -200,10 +208,19 @@ export async function extractFacts(
 
   if (conversationText.length < 20) return [];
 
+  // Build existing memories context if available
+  let memoriesContext = '';
+  if (existingMemories && existingMemories.length > 0) {
+    const memoriesStr = existingMemories
+      .map((m) => `[ID: ${m.id}] ${m.text}`)
+      .join('\n');
+    memoriesContext = `\n\nExisting memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n${memoriesStr}`;
+  }
+
   const userPrompt =
     mode === 'turn'
-      ? `Extract important facts from these recent conversation turns:\n\n${conversationText}`
-      : `Extract ALL valuable long-term memories from this conversation before it is lost:\n\n${conversationText}`;
+      ? `Extract important facts from these recent conversation turns:\n\n${conversationText}${memoriesContext}`
+      : `Extract ALL valuable long-term memories from this conversation before it is lost:\n\n${conversationText}${memoriesContext}`;
 
   try {
     const response = await chatCompletion(config, [
