@@ -643,17 +643,40 @@ function decryptFromHex(hexBlob: string, key: Buffer): string {
 async function fetchExistingMemoriesForExtraction(
   logger: { warn: (msg: string) => void },
   limit: number = 30,
+  rawMessages: unknown[] = [],
 ): Promise<Array<{ id: string; text: string }>> {
   try {
     if (!encryptionKey || !authKeyHex || !userId) return [];
 
+    // Extract key terms from the last few messages to generate meaningful trapdoors.
+    // Using '*' would produce zero trapdoors (stripped as punctuation), so we pull
+    // text from the conversation to find memories relevant to the current context.
+    const recentMessages = rawMessages.slice(-4);
+    const textChunks: string[] = [];
+    for (const msg of recentMessages) {
+      const m = msg as { content?: string | Array<{ text?: string }>; text?: string };
+      if (typeof m.content === 'string') {
+        textChunks.push(m.content);
+      } else if (Array.isArray(m.content)) {
+        for (const block of m.content) {
+          if (block.text) textChunks.push(block.text);
+        }
+      } else if (typeof m.text === 'string') {
+        textChunks.push(m.text);
+      }
+    }
+    const queryText = textChunks.join(' ').slice(0, 500); // cap to avoid giant trapdoor sets
+    if (!queryText.trim()) return [];
+
+    const trapdoors = generateBlindIndices(queryText);
+    if (trapdoors.length === 0) return [];
+
     const results: Array<{ id: string; text: string }> = [];
 
     if (isSubgraphMode()) {
-      const allIndices = generateBlindIndices('*');
       const rawResults = await searchSubgraph(
         subgraphOwner || userId,
-        allIndices,
+        trapdoors,
         limit,
         authKeyHex,
       );
@@ -665,8 +688,7 @@ async function fetchExistingMemoriesForExtraction(
         } catch { /* skip undecryptable */ }
       }
     } else if (apiClient) {
-      const allIndices = generateBlindIndices('*');
-      const candidates = await apiClient.search(userId, allIndices, limit, authKeyHex);
+      const candidates = await apiClient.search(userId, trapdoors, limit, authKeyHex);
       for (const c of candidates) {
         try {
           const docJson = decryptFromHex(c.encrypted_blob, encryptionKey);
@@ -835,7 +857,7 @@ async function storeExtractedFacts(
         // Tombstone the old fact, don't store anything new.
         if (isSubgraphMode()) {
           try {
-            const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner };
+            const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
             const tombstone: FactPayload = {
               id: fact.existingFactId,
               timestamp: new Date().toISOString(),
@@ -868,7 +890,7 @@ async function storeExtractedFacts(
         // Tombstone the old fact, then fall through to store the new version.
         if (isSubgraphMode()) {
           try {
-            const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner };
+            const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
             const tombstone: FactPayload = {
               id: fact.existingFactId,
               timestamp: new Date().toISOString(),
@@ -923,7 +945,7 @@ async function storeExtractedFacts(
           // action === 'supersede': delete old fact, inherit higher importance
           if (isSubgraphMode()) {
             try {
-              const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner };
+              const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
               const tombstone: FactPayload = {
                 id: dupResult.match.id,
                 timestamp: new Date().toISOString(),
@@ -990,7 +1012,7 @@ async function storeExtractedFacts(
       };
 
       if (isSubgraphMode()) {
-        const config = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner };
+        const config = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
         const protobuf = encodeFactProtobuf({
           id: factId,
           timestamp: new Date().toISOString(),
@@ -1090,6 +1112,7 @@ async function handlePluginImportFrom(
       text: f.text,
       type: f.type,
       importance: f.importance,
+      action: 'ADD' as const,
     }));
 
     // Store in batches of 50
@@ -1240,7 +1263,7 @@ const plugin = {
 
                 if (isSubgraphMode()) {
                   try {
-                    const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner };
+                    const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
                     const tombstone: FactPayload = {
                       id: dupResult.match.id,
                       timestamp: new Date().toISOString(),
@@ -1314,7 +1337,7 @@ const plugin = {
 
             if (isSubgraphMode()) {
               // Subgraph mode: encode as Protobuf and submit on-chain via relay UserOp
-              const config = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner };
+              const config = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
               const protobuf = encodeFactProtobuf({
                 id: factId,
                 timestamp: new Date().toISOString(),
@@ -1618,7 +1641,7 @@ const plugin = {
             if (isSubgraphMode()) {
               // On-chain tombstone: write a minimal protobuf with decayScore=0
               // The subgraph will overwrite the fact and set isActive=false
-              const config = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner };
+              const config = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
               const tombstone: FactPayload = {
                 id: params.factId,
                 timestamp: new Date().toISOString(),
@@ -2493,7 +2516,7 @@ const plugin = {
           // C3: Throttle auto-extraction to every N turns (configurable via env).
           turnsSinceLastExtraction++;
           if (turnsSinceLastExtraction >= AUTO_EXTRACT_EVERY_TURNS) {
-            const existingMemories = await fetchExistingMemoriesForExtraction(api.logger, 20);
+            const existingMemories = await fetchExistingMemoriesForExtraction(api.logger, 20, evt.messages);
             const rawFacts = await extractFacts(evt.messages, 'turn', existingMemories);
             const { kept: facts } = filterByImportance(rawFacts, api.logger);
             if (facts.length > 0) {
@@ -2527,7 +2550,7 @@ const plugin = {
             `Pre-compaction extraction: processing ${evt.messages.length} messages`,
           );
 
-          const existingMemories = await fetchExistingMemoriesForExtraction(api.logger, 50);
+          const existingMemories = await fetchExistingMemoriesForExtraction(api.logger, 50, evt.messages);
           const rawCompactFacts = await extractFacts(evt.messages, 'full', existingMemories);
           const { kept: facts } = filterByImportance(rawCompactFacts, api.logger);
           if (facts.length > 0) {
@@ -2560,7 +2583,7 @@ const plugin = {
             `Pre-reset extraction (${evt.reason ?? 'unknown'}): processing ${evt.messages.length} messages`,
           );
 
-          const existingMemories = await fetchExistingMemoriesForExtraction(api.logger, 50);
+          const existingMemories = await fetchExistingMemoriesForExtraction(api.logger, 50, evt.messages);
           const rawResetFacts = await extractFacts(evt.messages, 'full', existingMemories);
           const { kept: facts } = filterByImportance(rawResetFacts, api.logger);
           if (facts.length > 0) {

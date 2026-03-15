@@ -169,7 +169,7 @@ Features across Server mode (PostgreSQL) and Subgraph mode (on-chain via Gnosis/
 | Export | Yes | Yes | Subgraph queries by owner + isActive |
 | Import (from Mem0/MCP) | Yes | Yes | |
 | Consolidate tool | Yes | **No** | No batch delete on-chain |
-| Store-time dedup (supersede) | Yes | Partial | Subgraph: logs warning, stores anyway |
+| Store-time dedup (supersede) | Yes | Yes | Subgraph: via on-chain tombstone |
 | Billing / Status | Yes | Yes | Both query relay billing endpoint |
 | Hot cache | -- | Yes | Server mode doesn't need it |
 
