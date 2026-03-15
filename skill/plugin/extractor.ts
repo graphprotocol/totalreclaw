@@ -11,10 +11,14 @@ import { chatCompletion, resolveLLMConfig } from './llm-client.js';
 // Types
 // ---------------------------------------------------------------------------
 
+export type ExtractionAction = 'ADD' | 'UPDATE' | 'DELETE' | 'NOOP';
+
 export interface ExtractedFact {
   text: string;
   type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal';
   importance: number; // 1-10
+  action: ExtractionAction;
+  existingFactId?: string;
 }
 
 interface ContentBlock {
@@ -142,15 +146,21 @@ function parseFactsResponse(response: string): ExtractedFact[] {
       )
       .map((f: unknown) => {
         const fact = f as Record<string, unknown>;
+        const validActions: ExtractionAction[] = ['ADD', 'UPDATE', 'DELETE', 'NOOP'];
+        const action = validActions.includes(String(fact.action) as ExtractionAction)
+          ? (String(fact.action) as ExtractionAction)
+          : 'ADD'; // Default to ADD for backward compatibility
         return {
           text: String(fact.text).slice(0, 512),
           type: (['fact', 'preference', 'decision', 'episodic', 'goal'].includes(String(fact.type))
             ? String(fact.type)
             : 'fact') as ExtractedFact['type'],
           importance: Math.max(1, Math.min(10, Number(fact.importance) || 5)),
+          action,
+          existingFactId: typeof fact.existingFactId === 'string' ? fact.existingFactId : undefined,
         };
       })
-      .filter((f) => f.importance >= 6); // Only keep important facts
+      .filter((f) => f.importance >= 6 || f.action === 'DELETE'); // DELETE actions pass regardless of importance
   } catch {
     return [];
   }
