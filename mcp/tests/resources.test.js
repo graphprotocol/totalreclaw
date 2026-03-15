@@ -211,20 +211,23 @@ describe('Cache behavior', () => {
     await readMemoryContext(mockClient, 'default');
     expect(recallMock).toHaveBeenCalledTimes(1);
 
-    // Simulate a remember operation (which triggers the callback)
+    // Simulate a remember operation (which triggers the callback).
+    // Note: store-time dedup calls recall() once before storing to check for
+    // near-duplicates, so handleRemember adds +1 recall call.
     const { handleRemember } = require('../dist/tools/remember.js');
     await handleRemember(mockClient, { fact: 'New fact' }, 'default');
 
     expect(cacheInvalidated).toBe(true);
 
-    // Next readMemoryContext should re-fetch
+    // Next readMemoryContext should re-fetch (cache was invalidated by the callback)
     recallMock.mockResolvedValue([
       makeFact({ id: 'f1', text: 'Initial fact' }),
       makeFact({ id: 'f2', text: 'New fact' }),
     ]);
 
     await readMemoryContext(mockClient, 'default');
-    expect(recallMock).toHaveBeenCalledTimes(2);
+    // Total: 1 (prime) + 1 (dedup search in remember) + 1 (post-invalidation re-fetch) = 3
+    expect(recallMock).toHaveBeenCalledTimes(3);
 
     // Clean up the callback
     setOnRememberCallback(() => {});

@@ -18,18 +18,29 @@ import {
   exportToolDefinition,
   importToolDefinition,
   importFromToolDefinition,
+  consolidateToolDefinition,
   handleRemember,
   handleRecall,
   handleForget,
   handleExport,
   handleImport,
   handleImportFrom,
+  handleConsolidate,
   statusToolDefinition,
   upgradeToolDefinition,
   handleStatus,
   handleUpgrade,
 } from './tools/index.js';
 import { setOnRememberCallback } from './tools/remember.js';
+import {
+  findNearDuplicate,
+  shouldSupersede,
+  clusterFacts,
+  getStoreDedupThreshold,
+  getConsolidationThreshold,
+  STORE_DEDUP_MAX_CANDIDATES,
+  type DecryptedCandidate,
+} from './consolidation.js';
 import {
   SERVER_INSTRUCTIONS,
   PROMPT_DEFINITIONS,
@@ -78,6 +89,9 @@ import crypto from 'node:crypto';
 const SERVER_URL = process.env.TOTALRECLAW_SERVER_URL || 'http://127.0.0.1:8080';
 const DEFAULT_NAMESPACE = process.env.TOTALRECLAW_NAMESPACE || 'default';
 const MASTER_PASSWORD = process.env.TOTALRECLAW_MASTER_PASSWORD;
+
+// Store-time near-duplicate detection (consolidation module)
+const STORE_DEDUP_ENABLED = process.env.TOTALRECLAW_STORE_DEDUP !== 'false';
 
 // ── Server mode detection ───────────────────────────────────────────────────
 
@@ -298,28 +312,144 @@ async function handleRememberSubgraph(
     };
   }
 
-  const results: Array<{ success: boolean; fact_id: string; tx_hash?: string }> = [];
+  // Determine if this is an explicit remember (user-initiated) — always supersede.
+  // For batch mode (multiple facts from auto-extraction), apply full skip/supersede logic.
+  const isExplicitRemember = !!(input?.fact as string);
+
+  const results: Array<{ success: boolean; fact_id: string; tx_hash?: string; action?: string }> = [];
+  let dedupSkipped = 0;
+  let dedupSuperseded = 0;
 
   for (const item of textsToStore) {
     try {
-      // 1. Encrypt the fact text
-      const encryptedBlob = encrypt(item.text, state.encryptionKey);
-
-      // 2. Generate blind indices (word-based)
+      // 1. Generate blind indices (word-based)
       const wordIndices = generateBlindIndices(item.text);
 
-      // 3. Generate embedding and LSH indices
+      // 2. Generate embedding and LSH indices
       const embedding = await generateEmbedding(item.text);
       const lshIndices = state.lshHasher.hash(embedding);
 
-      // 4. Combine word + LSH indices
+      // 3. Combine word + LSH indices
       const allIndices = [...wordIndices, ...lshIndices];
+
+      // Store-time dedup: search for near-duplicates before storing
+      let effectiveImportance = item.importance;
+      if (STORE_DEDUP_ENABLED) {
+        try {
+          const maxCandidates = STORE_DEDUP_MAX_CANDIDATES;
+          const candidates = await searchSubgraph(
+            state.smartAccountAddress,
+            allIndices,
+            maxCandidates,
+            state.serverUrl,
+          );
+
+          if (candidates.length > 0) {
+            // Decrypt candidates and extract embeddings
+            const decryptedCandidates: DecryptedCandidate[] = [];
+            for (const c of candidates) {
+              try {
+                const blobBase64 = Buffer.from(c.encryptedBlob, 'hex').toString('base64');
+                const text = decrypt(blobBase64, state.encryptionKey);
+
+                let candEmbedding: number[] | null = null;
+                if (c.encryptedEmbedding) {
+                  try {
+                    candEmbedding = decryptEmbedding(c.encryptedEmbedding, state.encryptionKey);
+                  } catch { /* skip */ }
+                }
+
+                decryptedCandidates.push({
+                  id: c.id,
+                  text,
+                  embedding: candEmbedding,
+                  importance: Math.round(parseFloat(c.decayScore) * 10) || 5,
+                  decayScore: parseFloat(c.decayScore) || 0.5,
+                  createdAt: parseInt(c.timestamp) || 0,
+                  version: 1,
+                });
+              } catch { /* skip undecryptable */ }
+            }
+
+            const dupMatch = findNearDuplicate(embedding, decryptedCandidates, getStoreDedupThreshold());
+            if (dupMatch) {
+              if (isExplicitRemember) {
+                // Explicit remember: always supersede — submit tombstone for old fact
+                effectiveImportance = Math.max(item.importance, dupMatch.existingFact.importance);
+                try {
+                  const tombstonePayload: FactPayload = {
+                    id: dupMatch.existingFact.id,
+                    timestamp: new Date().toISOString(),
+                    owner: state.smartAccountAddress,
+                    encryptedBlob: Buffer.from('tombstone').toString('hex'),
+                    blindIndices: [],
+                    decayScore: 0,
+                    source: 'mcp_dedup',
+                    contentFp: '',
+                    agentId: 'mcp-server',
+                  };
+                  const tombProtobuf = encodeFactProtobuf(tombstonePayload);
+                  const tombConfig = getSubgraphConfig({
+                    relayUrl: state.serverUrl,
+                    mnemonic: state.mnemonic,
+                  });
+                  await submitFactOnChain(tombProtobuf, tombConfig);
+                  console.error(`Store-time dedup: superseded ${dupMatch.existingFact.id} (sim=${dupMatch.similarity.toFixed(3)})`);
+                } catch {
+                  console.error(`Store-time dedup: failed to tombstone superseded fact ${dupMatch.existingFact.id}`);
+                }
+                dedupSuperseded++;
+              } else {
+                // Batch mode: apply shouldSupersede logic
+                const action = shouldSupersede(item.importance, dupMatch.existingFact);
+                if (action === 'skip') {
+                  console.error(`Store-time dedup: skipping "${item.text.slice(0, 60)}..." (sim=${dupMatch.similarity.toFixed(3)})`);
+                  results.push({ success: true, fact_id: '', action: 'skipped_dedup' });
+                  dedupSkipped++;
+                  continue;
+                }
+                // action === 'supersede'
+                effectiveImportance = Math.max(item.importance, dupMatch.existingFact.importance);
+                try {
+                  const tombstonePayload: FactPayload = {
+                    id: dupMatch.existingFact.id,
+                    timestamp: new Date().toISOString(),
+                    owner: state.smartAccountAddress,
+                    encryptedBlob: Buffer.from('tombstone').toString('hex'),
+                    blindIndices: [],
+                    decayScore: 0,
+                    source: 'mcp_dedup',
+                    contentFp: '',
+                    agentId: 'mcp-server',
+                  };
+                  const tombProtobuf = encodeFactProtobuf(tombstonePayload);
+                  const tombConfig = getSubgraphConfig({
+                    relayUrl: state.serverUrl,
+                    mnemonic: state.mnemonic,
+                  });
+                  await submitFactOnChain(tombProtobuf, tombConfig);
+                  console.error(`Store-time dedup: superseded ${dupMatch.existingFact.id} (sim=${dupMatch.similarity.toFixed(3)})`);
+                } catch {
+                  console.error(`Store-time dedup: failed to tombstone superseded fact ${dupMatch.existingFact.id}`);
+                }
+                dedupSuperseded++;
+              }
+            }
+          }
+        } catch (dedupErr) {
+          // Fail-open: dedup failure should not prevent storing the fact
+          console.error(`Store-time dedup search failed: ${dedupErr instanceof Error ? dedupErr.message : String(dedupErr)}`);
+        }
+      }
+
+      // 4. Encrypt the fact text
+      const encryptedBlob = encrypt(item.text, state.encryptionKey);
 
       // 5. Generate content fingerprint for dedup
       const contentFp = generateContentFingerprint(item.text, state.dedupKey);
 
       // 6. Encrypt the embedding for on-chain storage
-      const encryptedEmbedding = encryptEmbedding(embedding, state.encryptionKey);
+      const encryptedEmb = encryptEmbedding(embedding, state.encryptionKey);
 
       // 7. Build fact payload
       const factId = crypto.randomUUID();
@@ -329,11 +459,11 @@ async function handleRememberSubgraph(
         owner: state.smartAccountAddress,
         encryptedBlob: Buffer.from(encryptedBlob, 'base64').toString('hex'),
         blindIndices: allIndices,
-        decayScore: item.importance / 10,
+        decayScore: effectiveImportance / 10,
         source: 'mcp_remember',
         contentFp,
         agentId: 'mcp-server',
-        encryptedEmbedding,
+        encryptedEmbedding: encryptedEmb,
       };
 
       // 8. Encode as protobuf and submit on-chain
@@ -345,7 +475,7 @@ async function handleRememberSubgraph(
 
       const { txHash, success } = await submitFactOnChain(protobuf, config);
 
-      results.push({ success, fact_id: factId, tx_hash: txHash });
+      results.push({ success, fact_id: factId, tx_hash: txHash, action: dedupSuperseded > 0 ? 'superseded' : 'created' });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       results.push({ success: false, fact_id: '', tx_hash: undefined });
@@ -353,7 +483,7 @@ async function handleRememberSubgraph(
     }
   }
 
-  const created = results.filter(r => r.success).length;
+  const created = results.filter(r => r.success && r.action !== 'skipped_dedup').length;
 
   return {
     content: [{
@@ -364,6 +494,8 @@ async function handleRememberSubgraph(
         total: textsToStore.length,
         created,
         skipped: textsToStore.length - created,
+        dedup_skipped: dedupSkipped,
+        dedup_superseded: dedupSuperseded,
         mode: 'subgraph',
       }),
     }],
@@ -668,6 +800,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     exportToolDefinition,
     importToolDefinition,
     importFromToolDefinition,
+    consolidateToolDefinition,
     statusToolDefinition,
     upgradeToolDefinition,
   ],
@@ -755,6 +888,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             isError: true,
           };
 
+        case 'totalreclaw_consolidate':
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                error: 'Consolidation is not yet supported in subgraph mode. On-chain facts require tombstone-based dedup which is handled automatically at store time.',
+              }),
+            }],
+            isError: true,
+          };
+
         default:
           return {
             content: [{
@@ -801,6 +945,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'totalreclaw_import_from':
         return await handleImportFrom(client, args, DEFAULT_NAMESPACE);
+
+      case 'totalreclaw_consolidate': {
+        const result = await handleConsolidate(client, args, DEFAULT_NAMESPACE);
+        // Invalidate cache after consolidation (facts may have been deleted)
+        invalidateMemoryContextCache();
+        server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
+        return result;
+      }
 
       default:
         return {
