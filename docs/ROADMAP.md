@@ -158,9 +158,10 @@ Reduce fact pile-up by detecting near-duplicates and merging them client-side.
 
 | Task | Description | Status |
 |------|-------------|--------|
-| Near-duplicate detection | Before storing, search for semantically similar facts; merge/replace instead of creating new | NOT DONE |
-| On-demand consolidation | `totalreclaw_consolidate` tool scans all memories and merges duplicates | NOT DONE |
-| Extraction-time dedup | Integrate dedup check into `agent_end` extraction pipeline | NOT DONE |
+| Near-duplicate detection | Before storing, search for semantically similar facts; supersede/skip (cosine >= 0.85) | **DONE** — store-time dedup in auto-extraction + remember tool |
+| On-demand consolidation | `totalreclaw_consolidate` tool scans all memories and merges duplicates | **DONE** — cluster by cosine (0.88), batch-delete, dry_run support |
+| Extraction-time dedup | Integrate dedup check into `agent_end` extraction pipeline | **DONE** — wired into `storeExtractedFacts()` |
+| Server batch-delete | `POST /v1/facts/batch-delete` for efficient consolidation | **DONE** |
 
 **Constraint:** All comparison/merging happens client-side (zero-knowledge). Server only has content fingerprints and blind indices.
 
