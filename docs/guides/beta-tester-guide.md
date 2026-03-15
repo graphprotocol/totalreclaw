@@ -165,6 +165,22 @@ For full details, supported sources, and troubleshooting, see the [Importing Mem
 
 ---
 
+## Feature Overview
+
+| Feature | OpenClaw | MCP (Claude Desktop, Cursor) | NanoClaw |
+|---------|:---:|:---:|:---:|
+| Auto-remember (every N turns) | Yes | -- | Yes |
+| Auto-recall (every message) | Yes | -- | Yes |
+| Explicit tools (remember, recall, forget, export) | Yes | Yes | Yes |
+| Import from Mem0/MCP Memory | Yes | Yes | Yes |
+| Status & billing | Yes | Yes | Yes |
+| Upgrade to Pro | -- | Yes | Yes |
+| Near-duplicate prevention | Yes | Yes | Yes |
+| Memory consolidation tool | Yes | Yes | Yes |
+| Pre-compaction memory flush | Yes | -- | Yes |
+
+---
+
 ## Known Limitations (Beta)
 
 - Free tier limit (100 writes/month) and Pro pricing ($2-5/month) are not finalized

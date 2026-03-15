@@ -146,6 +146,8 @@ The `totalreclaw_import_from` tool is available in:
 | **MCP server** | Yes | Tool is registered and callable by any MCP client |
 | **NanoClaw** | Yes | Via the MCP server spawned by the agent-runner |
 
+**Storage mode support:** Import works in both **server (HTTP) mode** and **subgraph mode**. In subgraph mode, each imported memory is submitted on-chain via the relay. Large imports (1,000+ memories) may take longer in subgraph mode due to per-transaction gas sponsorship.
+
 ---
 
 ## Troubleshooting

@@ -556,6 +556,8 @@ Restart your MCP client (Claude Desktop, Cursor, etc.). The MCP server starts au
 | Auto-search (every message) | Yes (via `before_agent_start` hook) | No -- use `totalreclaw_recall` explicitly |
 | Auto-store (every N turns) | Yes (via `agent_end` hook) | No -- use `totalreclaw_remember` explicitly |
 | Pre-compaction flush | Yes | No |
+| Near-duplicate prevention | Yes (store-time cosine dedup) | Yes (store-time cosine dedup) |
+| Memory consolidation | Yes (`totalreclaw_consolidate`) | Yes (`totalreclaw_consolidate`) |
 | Billing tools (status, upgrade) | Via agent orchestration | Via `totalreclaw_status` and `totalreclaw_upgrade` tools |
 | Import from Mem0/MCP Memory | Yes (`totalreclaw_import_from`) | Yes (`totalreclaw_import_from`) |
 | Import from JSON/Markdown export | No | Yes (`totalreclaw_import`) |

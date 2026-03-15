@@ -249,11 +249,27 @@ All semantic analysis -- embedding comparison, cosine similarity calculation, im
 
 ## Availability
 
-| Platform | Store-Time Dedup | Bulk Consolidation |
-|----------|------------------|--------------------|
-| **OpenClaw plugin** | Automatic | `totalreclaw_consolidate` tool |
-| **MCP server** | Automatic | `totalreclaw_consolidate` tool |
-| **NanoClaw** | Automatic | `totalreclaw_consolidate` tool |
+| Layer | OpenClaw Plugin | MCP Server | NanoClaw |
+|-------|:---:|:---:|:---:|
+| **Exact fingerprint** (Layer 1) | Yes | Yes | Yes |
+| **Within-batch dedup** (Layer 2) | Yes | -- | -- |
+| **Store-time dedup** (Layer 3) | Yes | Yes | Yes |
+| **Bulk consolidation** (Layer 4) | Yes | Yes | Yes (via MCP server) |
+
+**Notes:**
+
+- **Within-batch dedup** is specific to the OpenClaw plugin's extraction pipeline, which produces multiple facts in a single batch from one conversation turn. MCP and NanoClaw store facts individually via tool calls, so there is no "batch" to deduplicate within.
+- **Bulk consolidation** (`totalreclaw_consolidate`) works in **server (HTTP) mode only**. In subgraph mode, the tool is unavailable because on-chain soft-delete is not yet implemented. Store-time dedup search works in both modes, but supersession (soft-delete of the old fact) is partial in subgraph mode -- the old fact is marked inactive in the local index but remains on-chain until on-chain soft-delete ships.
+
+### Two Complementary Dedup Approaches
+
+TotalReclaw uses two complementary strategies that operate at different layers:
+
+1. **Cosine-based dedup (storage layer)** -- A mathematical guard that runs on all platforms. Before any fact is stored, its embedding is compared against existing vault contents via cosine similarity. This catches near-duplicates regardless of how the fact was produced.
+
+2. **LLM-guided dedup (extraction layer)** -- NanoClaw only. During the `agent_end` and `pre_compaction` hooks, the LLM decides what to extract from the conversation, naturally avoiding redundant facts. This is a complementary layer that reduces duplicates before they even reach the storage pipeline.
+
+These two approaches are independent and additive. NanoClaw benefits from both; OpenClaw and MCP rely on cosine-based dedup alone (which is sufficient for most workloads).
 
 ---
 
