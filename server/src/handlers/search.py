@@ -221,6 +221,58 @@ async def delete_fact(
         )
 
 
+class BatchDeleteRequestJSON(BaseModel):
+    """JSON batch delete request."""
+    fact_ids: List[str] = Field(..., description="List of fact IDs to delete", max_length=500)
+
+
+class BatchDeleteResponseJSON(BaseModel):
+    """JSON batch delete response."""
+    success: bool
+    deleted_count: int = 0
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+@router.post("/facts/batch-delete", response_model=BatchDeleteResponseJSON)
+async def batch_delete_facts(
+    request_obj: BatchDeleteRequestJSON,
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """
+    Batch soft-delete facts by ID list.
+
+    Accepts up to 500 fact IDs per request. Each fact is soft-deleted
+    (tombstoned) individually. Individual failures are skipped silently;
+    the response reports how many were actually deleted.
+    """
+    try:
+        deleted_count = 0
+        for fact_id in request_obj.fact_ids:
+            try:
+                deleted = await db.soft_delete_fact(fact_id, user_id)
+                if deleted:
+                    deleted_count += 1
+            except Exception:
+                # Skip individual failures silently
+                continue
+
+        return BatchDeleteResponseJSON(
+            success=True,
+            deleted_count=deleted_count,
+        )
+
+    except HTTPException:
+        raise
+    except Exception:
+        return BatchDeleteResponseJSON(
+            success=False,
+            error_code="INTERNAL_ERROR",
+            error_message="Batch delete failed",
+        )
+
+
 EXPORT_MAX_LIMIT = 5000
 EXPORT_DEFAULT_LIMIT = 1000
 

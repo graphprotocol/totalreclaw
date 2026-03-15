@@ -242,6 +242,34 @@ export function createApiClient(serverUrl: string) {
       }
     },
 
+    // ---- Batch Delete (authenticated) ----
+
+    /**
+     * Batch soft-delete facts by ID list.
+     *
+     * @param factIds     Array of fact UUIDs to delete (max 500).
+     * @param authKeyHex  Hex-encoded raw auth key for Bearer header.
+     * @returns The number of facts that were actually deleted.
+     */
+    async batchDelete(factIds: string[], authKeyHex: string): Promise<number> {
+      const res = await fetch(`${baseUrl}/v1/facts/batch-delete`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authKeyHex}`,
+        },
+        body: JSON.stringify({ fact_ids: factIds }),
+      });
+      await assertOk(res, 'batchDelete');
+      const json = (await res.json()) as Record<string, unknown>;
+      if (!json.success) {
+        throw new Error(
+          `batchDelete: server returned success=false - ${json.error_code}: ${json.error_message}`,
+        );
+      }
+      return (json.deleted_count as number) ?? 0;
+    },
+
     // ---- Export (authenticated) ----
 
     /**
