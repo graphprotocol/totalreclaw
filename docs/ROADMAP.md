@@ -181,9 +181,9 @@ Import tools to reduce switching costs. Prioritize the two most common sources f
 
 | Task | Description | Status |
 |------|-------------|--------|
-| `totalreclaw_import` tool (generic) | Source-agnostic import with adapter pattern | NOT DONE |
-| Mem0 adapter | Import from mem0.ai API export (JSON) | NOT DONE |
-| MCP Memory adapter | Import from `@modelcontextprotocol/server-memory` JSONL | NOT DONE |
+| `totalreclaw_import_from` tool | Source-agnostic import with adapter pattern | **DONE** |
+| Mem0 adapter | Import from mem0.ai API export (JSON) | **DONE** — unit tests + E2E validated (100% import, 100% recall) |
+| MCP Memory adapter | Import from `@modelcontextprotocol/server-memory` JSONL | **DONE** (unit tests); untested with real JSONL |
 | Progress tracking | Report progress for large imports | NOT DONE |
 
 **Constraint:** All processing client-side. Content fingerprint dedup prevents double-import.
@@ -339,7 +339,7 @@ Maps each spec to its rollout phase:
 | Seed-to-Subgraph v1.0 | `docs/specs/subgraph/seed-to-subgraph.md` | Phase 3 (Subgraph) | Spec complete |
 | TEE vs E2EE | `docs/specs/tee/architecture.md` | Phase 4 (TEE) | Analysis complete |
 | TDX SaaS v0.4 | `docs/specs/tee/tdx-saas.md` | Phase 4 (TEE) | Spec complete |
-| Import: External Memory Systems | — | Phase 5 (Import) | Not started |
+| Import: External Memory Systems | — | Phase 2.6 / Phase 5 (Import) | Mem0 DONE (E2E validated), MCP Memory DONE (unit tests), others not started |
 | Import: LLM Provider Histories | — | Phase 5 (Import) | Not started |
 
 ---

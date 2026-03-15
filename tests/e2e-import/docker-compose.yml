@@ -1,0 +1,72 @@
+services:
+  # --- Mem0-powered OpenClaw instance ---
+  openclaw-mem0:
+    build:
+      context: .
+      dockerfile: Dockerfile.openclaw-mem0
+    container_name: e2e-import-mem0
+    ports:
+      - "127.0.0.1:8082:18789"
+    volumes:
+      - type: bind
+        source: ./configs/openclaw-mem0
+        target: /config
+        read_only: true
+      - mem0-state:/home/node/.openclaw
+    environment:
+      - OPENCLAW_LLM_PROVIDER=zai
+      - OPENCLAW_LLM_MODEL=glm-5
+      - ZAI_API_KEY=${ZAI_API_KEY}
+      - OPENCLAW_CONFIG_PATH=/config/config.json5
+      - MEM0_API_KEY=${MEM0_API_KEY}
+      - HOME=/home/node
+    user: "0:0"
+    tmpfs:
+      - /tmp:size=100M,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:18789/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # --- TotalReclaw-powered OpenClaw instance ---
+  openclaw-totalreclaw:
+    build:
+      context: ../..
+      dockerfile: tests/e2e-import/Dockerfile.openclaw-totalreclaw
+    container_name: e2e-import-totalreclaw
+    ports:
+      - "127.0.0.1:18789:18789"
+    volumes:
+      - totalreclaw-creds:/home/node/.totalreclaw
+      - totalreclaw-state:/home/node/.openclaw
+    environment:
+      - ZAI_API_KEY=${ZAI_API_KEY}
+      - TOTALRECLAW_SERVER_URL=https://api.totalreclaw.xyz
+      - TOTALRECLAW_MASTER_PASSWORD=${TOTALRECLAW_MASTER_PASSWORD:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
+      - TOTALRECLAW_SUBGRAPH_MODE=true
+      - TOTALRECLAW_CHAIN_ID=10200
+      - TOTALRECLAW_DATA_EDGE_ADDRESS=0xA84c5433110Ccc93e57ec387e630E86Bad86c36f
+      - TOTALRECLAW_EXTRACT_EVERY_TURNS=1
+      - OPENCLAW_GATEWAY_TOKEN=e2e-import-token-2026
+      - OPENCLAW_RAW_STREAM=1
+      - PI_RAW_STREAM=1
+      - HOME=/home/node
+    tmpfs:
+      - /tmp:size=100M,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:18789/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  mem0-state:
+  totalreclaw-creds:
+  totalreclaw-state:

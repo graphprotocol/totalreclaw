@@ -61,7 +61,7 @@ You can always be explicit too -- "remember that I prefer dark mode" or "what do
 NanoClaw agents get TotalReclaw memory automatically — no setup required on your end. The NanoClaw admin adds a `TOTALRECLAW_MASTER_PASSWORD` secret for your group, and the agent-runner spawns `@totalreclaw/mcp-server` as a background process.
 
 **What this means for you:**
-- Your agent has 7 memory tools available: remember, recall, forget, export, import, status, upgrade (the OpenClaw plugin provides 5 of these — import and upgrade are MCP-only)
+- Your agent has 8 memory tools available: remember, recall, forget, export, import, import_from (Mem0/MCP Memory), status, upgrade
 - Memory is shared within your NanoClaw group (same namespace = same memories)
 - All data is encrypted with your group's master password before leaving the container
 - Subgraph mode, billing, and quota work identically to Claude Desktop / Cursor
@@ -148,6 +148,23 @@ During beta, subgraph mode uses the Chiado testnet. Both modes encrypt your data
 | Want to test billing | Use test card `4242 4242 4242 4242` with any expiry/CVC |
 
 For detailed technical troubleshooting, see [beta-tester-guide-detailed.md](./beta-tester-guide-detailed.md).
+
+---
+
+## Importing from Mem0
+
+Switching from Mem0? You can import all your Mem0 memories into TotalReclaw with a single command. Ask your agent:
+
+> "Import my memories from Mem0 using API key m0-your-key-here"
+
+You'll need your Mem0 API key (from [app.mem0.ai](https://app.mem0.ai) → Settings → API Keys). The import:
+
+- Fetches all your Mem0 memories via their API
+- Encrypts each one with your TotalReclaw key on your device
+- Stores them in your encrypted vault
+- Is idempotent — running it again won't create duplicates
+
+For details, see the [detailed guide](./beta-tester-guide-detailed.md#75-import----totalreclaw_import_from).
 
 ---
 
