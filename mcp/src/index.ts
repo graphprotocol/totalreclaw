@@ -117,13 +117,13 @@ let subgraphState: SubgraphState | null = null;
  * Subgraph mode requires:
  *   1. TOTALRECLAW_MASTER_PASSWORD is a valid BIP-39 mnemonic
  *
- * Subgraph mode is enabled by default when a valid mnemonic is provided.
- * Set TOTALRECLAW_SUBGRAPH_MODE=false to force HTTP mode.
+ * Subgraph mode requires TOTALRECLAW_SUBGRAPH_MODE=true and a valid mnemonic.
+ * Defaults to HTTP mode otherwise.
  */
 function detectServerMode(): ServerMode {
   if (!MASTER_PASSWORD) return 'http';
-  // Subgraph mode is opt-out: enabled by default when mnemonic is valid
-  if (process.env.TOTALRECLAW_SUBGRAPH_MODE === 'false') return 'http';
+  // Subgraph mode is opt-in: requires explicit TOTALRECLAW_SUBGRAPH_MODE=true
+  if (process.env.TOTALRECLAW_SUBGRAPH_MODE !== 'true') return 'http';
 
   const words = MASTER_PASSWORD.trim().split(/\s+/);
   if (words.length !== 12 && words.length !== 24) return 'http';
