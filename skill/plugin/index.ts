@@ -636,6 +636,54 @@ function decryptFromHex(hexBlob: string, key: Buffer): string {
 }
 
 /**
+ * Fetch existing memories from the vault to provide dedup context for extraction.
+ * Returns a lightweight list of {id, text} pairs for the LLM prompt.
+ * Fails silently — returns empty array on any error.
+ */
+async function fetchExistingMemoriesForExtraction(
+  logger: { warn: (msg: string) => void },
+  limit: number = 30,
+): Promise<Array<{ id: string; text: string }>> {
+  try {
+    if (!encryptionKey || !authKeyHex || !userId) return [];
+
+    const results: Array<{ id: string; text: string }> = [];
+
+    if (isSubgraphMode()) {
+      const allIndices = generateBlindIndices('*');
+      const rawResults = await searchSubgraph(
+        subgraphOwner || userId,
+        allIndices,
+        limit,
+        authKeyHex,
+      );
+      for (const r of rawResults) {
+        try {
+          const docJson = decryptFromHex(r.encryptedBlob, encryptionKey);
+          const doc = JSON.parse(docJson) as { text: string };
+          results.push({ id: r.id, text: doc.text });
+        } catch { /* skip undecryptable */ }
+      }
+    } else if (apiClient) {
+      const allIndices = generateBlindIndices('*');
+      const candidates = await apiClient.search(userId, allIndices, limit, authKeyHex);
+      for (const c of candidates) {
+        try {
+          const docJson = decryptFromHex(c.encrypted_blob, encryptionKey);
+          const doc = JSON.parse(docJson) as { text: string };
+          results.push({ id: c.fact_id, text: doc.text });
+        } catch { /* skip undecryptable */ }
+      }
+    }
+
+    return results;
+  } catch (err) {
+    logger.warn(`Failed to fetch existing memories for extraction context: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
+}
+
+/**
  * Simple text-overlap scoring between a query and a candidate document.
  * Returns the number of overlapping lowercase words.
  */
@@ -776,6 +824,82 @@ async function storeExtractedFacts(
         ? [...blindIndices, ...embeddingResult.lshBuckets]
         : blindIndices;
 
+      // LLM-guided dedup: handle UPDATE/DELETE/NOOP actions.
+      if (fact.action === 'NOOP') {
+        logger.info(`LLM dedup: NOOP — skipping "${fact.text.slice(0, 60)}…"`);
+        skipped++;
+        continue;
+      }
+
+      if (fact.action === 'DELETE' && fact.existingFactId) {
+        // Tombstone the old fact, don't store anything new.
+        if (isSubgraphMode()) {
+          try {
+            const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner };
+            const tombstone: FactPayload = {
+              id: fact.existingFactId,
+              timestamp: new Date().toISOString(),
+              owner: subgraphOwner || userId!,
+              encryptedBlob: '00',
+              blindIndices: [],
+              decayScore: 0,
+              source: 'tombstone',
+              contentFp: '',
+              agentId: 'openclaw-plugin-auto',
+            };
+            await submitFactOnChain(encodeFactProtobuf(tombstone), tombConfig);
+            logger.info(`LLM dedup: DELETE — tombstoned ${fact.existingFactId} on-chain`);
+          } catch (tombErr) {
+            logger.warn(`LLM dedup: DELETE failed for ${fact.existingFactId}: ${tombErr instanceof Error ? tombErr.message : String(tombErr)}`);
+          }
+        } else if (apiClient && authKeyHex) {
+          try {
+            await apiClient.deleteFact(fact.existingFactId, authKeyHex);
+            logger.info(`LLM dedup: DELETE — removed ${fact.existingFactId}`);
+          } catch (delErr) {
+            logger.warn(`LLM dedup: DELETE failed for ${fact.existingFactId}: ${delErr instanceof Error ? delErr.message : String(delErr)}`);
+          }
+        }
+        superseded++;
+        continue;
+      }
+
+      if (fact.action === 'UPDATE' && fact.existingFactId) {
+        // Tombstone the old fact, then fall through to store the new version.
+        if (isSubgraphMode()) {
+          try {
+            const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner };
+            const tombstone: FactPayload = {
+              id: fact.existingFactId,
+              timestamp: new Date().toISOString(),
+              owner: subgraphOwner || userId!,
+              encryptedBlob: '00',
+              blindIndices: [],
+              decayScore: 0,
+              source: 'tombstone',
+              contentFp: '',
+              agentId: 'openclaw-plugin-auto',
+            };
+            await submitFactOnChain(encodeFactProtobuf(tombstone), tombConfig);
+            logger.info(`LLM dedup: UPDATE — tombstoned ${fact.existingFactId} on-chain, storing replacement`);
+          } catch (tombErr) {
+            logger.warn(`LLM dedup: UPDATE tombstone failed for ${fact.existingFactId}: ${tombErr instanceof Error ? tombErr.message : String(tombErr)}`);
+          }
+        } else if (apiClient && authKeyHex) {
+          try {
+            await apiClient.deleteFact(fact.existingFactId, authKeyHex);
+            logger.info(`LLM dedup: UPDATE — deleted ${fact.existingFactId}, storing replacement`);
+          } catch (delErr) {
+            logger.warn(`LLM dedup: UPDATE delete failed for ${fact.existingFactId}: ${delErr instanceof Error ? delErr.message : String(delErr)}`);
+          }
+        }
+        superseded++;
+        // Fall through to store the new replacement fact below.
+      }
+
+      // ADD (default) or UPDATE (after tombstoning old) — proceed to store.
+      // The cosine-based store-time dedup below provides an additional safety net.
+
       // Store-time near-duplicate check: search vault before writing.
       let effectiveImportance = fact.importance;
 
@@ -798,9 +922,29 @@ async function storeExtractedFacts(
           }
           // action === 'supersede': delete old fact, inherit higher importance
           if (isSubgraphMode()) {
-            logger.warn(
-              `Store-time dedup: would supersede ${dupResult.match.id} but subgraph soft-delete not yet supported in batch mode`,
-            );
+            try {
+              const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner };
+              const tombstone: FactPayload = {
+                id: dupResult.match.id,
+                timestamp: new Date().toISOString(),
+                owner: subgraphOwner || userId!,
+                encryptedBlob: '00',
+                blindIndices: [],
+                decayScore: 0,
+                source: 'tombstone',
+                contentFp: '',
+                agentId: 'openclaw-plugin-auto',
+              };
+              const tombProtobuf = encodeFactProtobuf(tombstone);
+              await submitFactOnChain(tombProtobuf, tombConfig);
+              logger.info(
+                `Store-time dedup: superseded ${dupResult.match.id} on-chain (sim=${dupResult.similarity.toFixed(3)})`,
+              );
+            } catch (tombErr) {
+              logger.warn(
+                `Store-time dedup: failed to tombstone ${dupResult.match.id}: ${tombErr instanceof Error ? tombErr.message : String(tombErr)}`,
+              );
+            }
           } else if (apiClient && authKeyHex) {
             try {
               await apiClient.deleteFact(dupResult.match.id, authKeyHex);
@@ -1095,9 +1239,30 @@ const plugin = {
                 supersededId = dupResult.match.id;
 
                 if (isSubgraphMode()) {
-                  api.logger.warn(
-                    `Remember dedup: would supersede ${dupResult.match.id} but subgraph soft-delete not yet supported`,
-                  );
+                  try {
+                    const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner };
+                    const tombstone: FactPayload = {
+                      id: dupResult.match.id,
+                      timestamp: new Date().toISOString(),
+                      owner: subgraphOwner || userId!,
+                      encryptedBlob: '00',
+                      blindIndices: [],
+                      decayScore: 0,
+                      source: 'tombstone',
+                      contentFp: '',
+                      agentId: 'openclaw-plugin',
+                    };
+                    const tombProtobuf = encodeFactProtobuf(tombstone);
+                    await submitFactOnChain(tombProtobuf, tombConfig);
+                    api.logger.info(
+                      `Remember dedup: superseded ${dupResult.match.id} on-chain (sim=${dupResult.similarity.toFixed(3)})`,
+                    );
+                  } catch (tombErr) {
+                    api.logger.warn(
+                      `Remember dedup: failed to tombstone ${dupResult.match.id}: ${tombErr instanceof Error ? tombErr.message : String(tombErr)}`,
+                    );
+                    supersededId = undefined;
+                  }
                 } else if (apiClient && authKeyHex) {
                   try {
                     await apiClient.deleteFact(dupResult.match.id, authKeyHex);
@@ -2328,7 +2493,8 @@ const plugin = {
           // C3: Throttle auto-extraction to every N turns (configurable via env).
           turnsSinceLastExtraction++;
           if (turnsSinceLastExtraction >= AUTO_EXTRACT_EVERY_TURNS) {
-            const rawFacts = await extractFacts(evt.messages, 'turn');
+            const existingMemories = await fetchExistingMemoriesForExtraction(api.logger, 20);
+            const rawFacts = await extractFacts(evt.messages, 'turn', existingMemories);
             const { kept: facts } = filterByImportance(rawFacts, api.logger);
             if (facts.length > 0) {
               await storeExtractedFacts(facts, api.logger);
@@ -2361,7 +2527,8 @@ const plugin = {
             `Pre-compaction extraction: processing ${evt.messages.length} messages`,
           );
 
-          const rawCompactFacts = await extractFacts(evt.messages, 'full');
+          const existingMemories = await fetchExistingMemoriesForExtraction(api.logger, 50);
+          const rawCompactFacts = await extractFacts(evt.messages, 'full', existingMemories);
           const { kept: facts } = filterByImportance(rawCompactFacts, api.logger);
           if (facts.length > 0) {
             await storeExtractedFacts(facts, api.logger);
@@ -2393,7 +2560,8 @@ const plugin = {
             `Pre-reset extraction (${evt.reason ?? 'unknown'}): processing ${evt.messages.length} messages`,
           );
 
-          const rawResetFacts = await extractFacts(evt.messages, 'full');
+          const existingMemories = await fetchExistingMemoriesForExtraction(api.logger, 50);
+          const rawResetFacts = await extractFacts(evt.messages, 'full', existingMemories);
           const { kept: facts } = filterByImportance(rawResetFacts, api.logger);
           if (facts.length > 0) {
             await storeExtractedFacts(facts, api.logger);
