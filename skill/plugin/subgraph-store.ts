@@ -294,8 +294,8 @@ export function isSubgraphMode(): boolean {
  *
  * After the relay refactor, clients only need:
  *   - TOTALRECLAW_MASTER_PASSWORD -- BIP-39 mnemonic
- *   - TOTALRECLAW_SERVER_URL -- relay server URL (default: http://localhost:8000)
- *   - TOTALRECLAW_SUBGRAPH_MODE -- set "false" to disable (default: enabled with valid mnemonic)
+ *   - TOTALRECLAW_SERVER_URL -- relay server URL (default: https://api.totalreclaw.xyz)
+ *   - TOTALRECLAW_SUBGRAPH_MODE -- set "true" to enable (default: HTTP mode)
  *   - TOTALRECLAW_CHAIN_ID -- optional, defaults to 10200 (Chiado)
  *
  * Removed from client-side config (now server-side only):
