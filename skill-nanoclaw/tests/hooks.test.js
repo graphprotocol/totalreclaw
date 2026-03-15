@@ -770,3 +770,460 @@ describe('Decay Score Handling', () => {
     expect(result.memories).toHaveLength(2);
   });
 });
+
+/**
+ * agentEnd dedup interaction tests.
+ *
+ * Design insight: agent-end is a LIGHTWEIGHT extraction pass that runs every
+ * N turns (default 5). It intentionally only processes ADD actions with
+ * importance >= MIN_IMPORTANCE (default 6). UPDATE, DELETE, and NOOP actions
+ * are silently ignored.
+ *
+ * This is by design:
+ * - agent-end fires frequently, so full CRUD would be expensive
+ * - Near-duplicate protection is delegated to the MCP layer's store-time dedup
+ *   (cosine similarity + content fingerprint), which fires when client.remember()
+ *   is called
+ * - Full CRUD (UPDATE/DELETE) is handled by pre-compaction, which runs once
+ *   before context loss
+ */
+describe('agentEnd dedup interaction', () => {
+  it('should ONLY store ADD actions — UPDATE is silently ignored', async () => {
+    const mockClient = createMockClient();
+    const mockLLMClient = {
+      generate: jest.fn().mockResolvedValue(JSON.stringify({
+        facts: [
+          {
+            factText: 'User now prefers Rust over TypeScript',
+            type: 'preference',
+            importance: 9,
+            confidence: 0.95,
+            action: 'UPDATE',
+            existingFactId: 'old-ts-fact',
+            entities: [],
+            relations: [],
+          },
+        ],
+      })),
+    };
+
+    const { agentEnd } = require('../dist/hooks/agent-end.js');
+    const result = await agentEnd(mockClient, mockLLMClient, {
+      conversationHistory: [
+        { role: 'user', content: 'Actually I switched to Rust' },
+      ],
+      groupFolder: 'main',
+      turnCount: 5,
+    });
+
+    // UPDATE fact is extracted but NOT stored — agent-end only stores ADDs
+    expect(result.factsExtracted).toBe(1);
+    expect(result.factsStored).toBe(0);
+    expect(mockClient.remember).not.toHaveBeenCalled();
+    expect(mockClient.forget).not.toHaveBeenCalled();
+  });
+
+  it('should ONLY store ADD actions — DELETE is silently ignored', async () => {
+    const mockClient = createMockClient();
+    const mockLLMClient = {
+      generate: jest.fn().mockResolvedValue(JSON.stringify({
+        facts: [
+          {
+            factText: 'User no longer uses Python',
+            type: 'fact',
+            importance: 8,
+            confidence: 0.9,
+            action: 'DELETE',
+            existingFactId: 'python-fact-id',
+            entities: [],
+            relations: [],
+          },
+        ],
+      })),
+    };
+
+    const { agentEnd } = require('../dist/hooks/agent-end.js');
+    const result = await agentEnd(mockClient, mockLLMClient, {
+      conversationHistory: [
+        { role: 'user', content: 'I stopped using Python' },
+      ],
+      groupFolder: 'main',
+      turnCount: 5,
+    });
+
+    // DELETE fact is extracted but NOT acted upon — no forget, no remember
+    expect(result.factsExtracted).toBe(1);
+    expect(result.factsStored).toBe(0);
+    expect(mockClient.forget).not.toHaveBeenCalled();
+    expect(mockClient.remember).not.toHaveBeenCalled();
+  });
+
+  it('should silently skip NOOP facts without any action', async () => {
+    const mockClient = createMockClient();
+    const mockLLMClient = {
+      generate: jest.fn().mockResolvedValue(JSON.stringify({
+        facts: [
+          {
+            factText: 'User likes TypeScript',
+            type: 'preference',
+            importance: 8,
+            confidence: 0.9,
+            action: 'NOOP',
+            entities: [],
+            relations: [],
+          },
+        ],
+      })),
+    };
+
+    const { agentEnd } = require('../dist/hooks/agent-end.js');
+    const result = await agentEnd(mockClient, mockLLMClient, {
+      conversationHistory: [
+        { role: 'user', content: 'I still like TypeScript' },
+      ],
+      groupFolder: 'main',
+      turnCount: 5,
+    });
+
+    // NOOP passes through — counted as extracted but not stored
+    expect(result.factsExtracted).toBe(1);
+    expect(result.factsStored).toBe(0);
+    expect(mockClient.remember).not.toHaveBeenCalled();
+    expect(mockClient.forget).not.toHaveBeenCalled();
+  });
+
+  it('should store ADD and ignore UPDATE/DELETE/NOOP in a mixed batch', async () => {
+    const mockClient = createMockClient();
+    const mockLLMClient = {
+      generate: jest.fn().mockResolvedValue(JSON.stringify({
+        facts: [
+          {
+            factText: 'User started learning Go',
+            type: 'fact',
+            importance: 8,
+            confidence: 0.9,
+            action: 'ADD',
+            entities: [],
+            relations: [],
+          },
+          {
+            factText: 'User now prefers dark mode',
+            type: 'preference',
+            importance: 9,
+            confidence: 0.95,
+            action: 'UPDATE',
+            existingFactId: 'light-mode-fact',
+            entities: [],
+            relations: [],
+          },
+          {
+            factText: 'User stopped using Vim',
+            type: 'fact',
+            importance: 7,
+            confidence: 0.85,
+            action: 'DELETE',
+            existingFactId: 'vim-fact',
+            entities: [],
+            relations: [],
+          },
+          {
+            factText: 'User uses macOS',
+            type: 'fact',
+            importance: 7,
+            confidence: 0.9,
+            action: 'NOOP',
+            entities: [],
+            relations: [],
+          },
+        ],
+      })),
+    };
+
+    const { agentEnd } = require('../dist/hooks/agent-end.js');
+    const result = await agentEnd(mockClient, mockLLMClient, {
+      conversationHistory: [
+        { role: 'user', content: 'Lots of changes today' },
+      ],
+      groupFolder: 'main',
+      turnCount: 5,
+    });
+
+    // All 4 extracted, but only the ADD is stored
+    expect(result.factsExtracted).toBe(4);
+    expect(result.factsStored).toBe(1);
+    expect(mockClient.remember).toHaveBeenCalledTimes(1);
+    expect(mockClient.remember).toHaveBeenCalledWith(
+      'User started learning Go',
+      expect.objectContaining({ source: 'agent_end_extraction' })
+    );
+    // No forget calls — UPDATE/DELETE are not processed
+    expect(mockClient.forget).not.toHaveBeenCalled();
+  });
+
+  it('should delegate near-dup protection to MCP layer via client.remember()', async () => {
+    // When agent-end calls client.remember(), the MCP server's store-time
+    // dedup pipeline fires automatically (cosine search + content fingerprint).
+    // This test verifies agent-end calls remember() directly without any
+    // client-side dedup logic.
+    const mockClient = createMockClient();
+    const mockLLMClient = {
+      generate: jest.fn().mockResolvedValue(JSON.stringify({
+        facts: [
+          {
+            factText: 'User prefers dark themes',
+            type: 'preference',
+            importance: 8,
+            confidence: 0.9,
+            action: 'ADD',
+            entities: [],
+            relations: [],
+          },
+        ],
+      })),
+    };
+
+    const { agentEnd } = require('../dist/hooks/agent-end.js');
+    await agentEnd(mockClient, mockLLMClient, {
+      conversationHistory: [
+        { role: 'user', content: 'I like dark themes' },
+      ],
+      groupFolder: 'main',
+      turnCount: 5,
+    });
+
+    // agent-end calls remember() directly — no findNearDuplicate or dedup logic
+    expect(mockClient.remember).toHaveBeenCalledTimes(1);
+    expect(mockClient.remember).toHaveBeenCalledWith(
+      'User prefers dark themes',
+      expect.objectContaining({
+        tags: expect.arrayContaining(['namespace:main', 'preference']),
+        importance: 0.8,
+        source: 'agent_end_extraction',
+      })
+    );
+    // No dedup-related calls on the client side
+    expect(mockClient.forget).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * preCompact vs agentEnd: complementary dedup design.
+ *
+ * Key design:
+ * - agent-end is LIGHTWEIGHT: runs every N turns, ADD-only, importance >= 7,
+ *   delegates near-dup protection to MCP store-time dedup
+ * - pre-compaction is COMPREHENSIVE: runs once before context loss, handles
+ *   full ADD/UPDATE/DELETE/NOOP with explicit forget+remember for mutations
+ *
+ * This means:
+ * - Only pre-compaction can UPDATE a fact (forget old ID + store new text)
+ * - Only pre-compaction can DELETE a fact (forget old ID, don't store)
+ * - Both can ADD, but agent-end filters by importance while pre-compaction doesn't
+ * - Both rely on MCP store-time dedup for near-duplicate detection on ADDs
+ */
+describe('preCompact vs agentEnd: complementary dedup', () => {
+  it('preCompact handles UPDATE (forget old + remember new) — agentEnd does not', async () => {
+    const updateFacts = JSON.stringify({
+      facts: [{
+        factText: 'User now prefers Rust over TypeScript',
+        type: 'preference',
+        importance: 9,
+        confidence: 0.95,
+        action: 'UPDATE',
+        existingFactId: 'old-ts-fact',
+        entities: [],
+        relations: [],
+      }],
+    });
+
+    // Test agentEnd — should NOT process UPDATE
+    const agentEndClient = createMockClient();
+    const agentEndLLM = { generate: jest.fn().mockResolvedValue(updateFacts) };
+    const { agentEnd } = require('../dist/hooks/agent-end.js');
+    const agentEndResult = await agentEnd(agentEndClient, agentEndLLM, {
+      conversationHistory: [{ role: 'user', content: 'I switched to Rust' }],
+      groupFolder: 'main',
+      turnCount: 5,
+    });
+
+    expect(agentEndResult.factsStored).toBe(0);
+    expect(agentEndClient.forget).not.toHaveBeenCalled();
+    expect(agentEndClient.remember).not.toHaveBeenCalled();
+
+    // Test preCompact — SHOULD process UPDATE (forget old + remember new)
+    const preCompactClient = createMockClient();
+    const preCompactLLM = { generate: jest.fn().mockResolvedValue(updateFacts) };
+    const { preCompact } = require('../dist/hooks/pre-compact.js');
+    const preCompactResult = await preCompact(preCompactClient, preCompactLLM, {
+      transcript: 'User said they switched to Rust',
+      groupFolder: 'main',
+    });
+
+    expect(preCompactResult.factsStored).toBe(1);
+    expect(preCompactClient.forget).toHaveBeenCalledWith('old-ts-fact');
+    expect(preCompactClient.remember).toHaveBeenCalledWith(
+      'User now prefers Rust over TypeScript',
+      expect.objectContaining({ source: 'pre_compaction' })
+    );
+  });
+
+  it('preCompact handles DELETE (forget old, no store) — agentEnd does not', async () => {
+    const deleteFacts = JSON.stringify({
+      facts: [{
+        factText: 'User no longer uses Python',
+        type: 'fact',
+        importance: 8,
+        confidence: 0.9,
+        action: 'DELETE',
+        existingFactId: 'python-fact-id',
+        entities: [],
+        relations: [],
+      }],
+    });
+
+    // Test agentEnd — should NOT process DELETE
+    const agentEndClient = createMockClient();
+    const agentEndLLM = { generate: jest.fn().mockResolvedValue(deleteFacts) };
+    const { agentEnd } = require('../dist/hooks/agent-end.js');
+    const agentEndResult = await agentEnd(agentEndClient, agentEndLLM, {
+      conversationHistory: [{ role: 'user', content: 'I stopped using Python' }],
+      groupFolder: 'main',
+      turnCount: 5,
+    });
+
+    expect(agentEndResult.factsStored).toBe(0);
+    expect(agentEndClient.forget).not.toHaveBeenCalled();
+
+    // Test preCompact — SHOULD process DELETE (forget old, no store)
+    const preCompactClient = createMockClient();
+    const preCompactLLM = { generate: jest.fn().mockResolvedValue(deleteFacts) };
+    const { preCompact } = require('../dist/hooks/pre-compact.js');
+    const preCompactResult = await preCompact(preCompactClient, preCompactLLM, {
+      transcript: 'User said they stopped using Python',
+      groupFolder: 'main',
+    });
+
+    expect(preCompactResult.factsStored).toBe(0);
+    expect(preCompactClient.forget).toHaveBeenCalledWith('python-fact-id');
+    expect(preCompactClient.remember).not.toHaveBeenCalled();
+  });
+
+  it('both hooks store ADDs but agentEnd filters by importance', async () => {
+    const lowImportanceAdd = JSON.stringify({
+      facts: [{
+        factText: 'User mentioned the weather is nice',
+        type: 'fact',
+        importance: 4,
+        confidence: 0.7,
+        action: 'ADD',
+        entities: [],
+        relations: [],
+      }],
+    });
+
+    // agentEnd — should NOT store (importance 4 < MIN_IMPORTANCE 6)
+    const agentEndClient = createMockClient();
+    const agentEndLLM = { generate: jest.fn().mockResolvedValue(lowImportanceAdd) };
+    const { agentEnd } = require('../dist/hooks/agent-end.js');
+    const agentEndResult = await agentEnd(agentEndClient, agentEndLLM, {
+      conversationHistory: [{ role: 'user', content: 'Nice weather today' }],
+      groupFolder: 'main',
+      turnCount: 5,
+    });
+
+    expect(agentEndResult.factsExtracted).toBe(1);
+    expect(agentEndResult.factsStored).toBe(0);
+    expect(agentEndClient.remember).not.toHaveBeenCalled();
+
+    // preCompact — SHOULD store (no importance filter for ADDs)
+    const preCompactClient = createMockClient();
+    const preCompactLLM = { generate: jest.fn().mockResolvedValue(lowImportanceAdd) };
+    const { preCompact } = require('../dist/hooks/pre-compact.js');
+    const preCompactResult = await preCompact(preCompactClient, preCompactLLM, {
+      transcript: 'User mentioned the weather',
+      groupFolder: 'main',
+    });
+
+    expect(preCompactResult.factsExtracted).toBe(1);
+    expect(preCompactResult.factsStored).toBe(1);
+    expect(preCompactClient.remember).toHaveBeenCalled();
+  });
+
+  it('preCompact handles full CRUD in a single extraction', async () => {
+    const fullCrudFacts = JSON.stringify({
+      facts: [
+        {
+          factText: 'User started learning Go',
+          type: 'fact',
+          importance: 7,
+          confidence: 0.9,
+          action: 'ADD',
+          entities: [],
+          relations: [],
+        },
+        {
+          factText: 'User now prefers dark mode',
+          type: 'preference',
+          importance: 8,
+          confidence: 0.95,
+          action: 'UPDATE',
+          existingFactId: 'light-mode-fact',
+          entities: [],
+          relations: [],
+        },
+        {
+          factText: 'User stopped using Vim',
+          type: 'fact',
+          importance: 6,
+          confidence: 0.85,
+          action: 'DELETE',
+          existingFactId: 'vim-fact',
+          entities: [],
+          relations: [],
+        },
+        {
+          factText: 'User uses macOS',
+          type: 'fact',
+          importance: 7,
+          confidence: 0.9,
+          action: 'NOOP',
+          entities: [],
+          relations: [],
+        },
+      ],
+    });
+
+    const mockClient = createMockClient();
+    const mockLLMClient = { generate: jest.fn().mockResolvedValue(fullCrudFacts) };
+    const { preCompact } = require('../dist/hooks/pre-compact.js');
+    const result = await preCompact(mockClient, mockLLMClient, {
+      transcript: 'Long conversation with many changes',
+      groupFolder: 'main',
+    });
+
+    // All 4 extracted
+    expect(result.factsExtracted).toBe(4);
+    // ADD + UPDATE stored (2), DELETE and NOOP not stored
+    expect(result.factsStored).toBe(2);
+
+    // ADD: remember called for new fact
+    expect(mockClient.remember).toHaveBeenCalledWith(
+      'User started learning Go',
+      expect.objectContaining({ source: 'pre_compaction' })
+    );
+
+    // UPDATE: forget old + remember new
+    expect(mockClient.forget).toHaveBeenCalledWith('light-mode-fact');
+    expect(mockClient.remember).toHaveBeenCalledWith(
+      'User now prefers dark mode',
+      expect.objectContaining({ source: 'pre_compaction' })
+    );
+
+    // DELETE: forget old only
+    expect(mockClient.forget).toHaveBeenCalledWith('vim-fact');
+
+    // Total: 2 remember calls (ADD + UPDATE), 2 forget calls (UPDATE + DELETE)
+    expect(mockClient.remember).toHaveBeenCalledTimes(2);
+    expect(mockClient.forget).toHaveBeenCalledTimes(2);
+  });
+});
