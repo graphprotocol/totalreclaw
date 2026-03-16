@@ -20,6 +20,21 @@ from ..db.database import Database
 
 logger = logging.getLogger(__name__)
 
+
+def derive_features(tier: str) -> dict:
+    """Derive feature flags from subscription tier.
+
+    Client-side features gated by tier. Self-hosters can override
+    since they control their own server.
+    """
+    is_pro = tier == "pro"
+    return {
+        "llm_dedup": is_pro,
+        "custom_extract_interval": is_pro,
+        "min_extract_interval": 2 if is_pro else 5,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -211,6 +226,7 @@ class StripeService:
                 "expires_at": None,
                 "free_writes_used": 0,
                 "free_writes_limit": settings.free_tier_writes_per_month,
+                "features": derive_features("free"),
             }
 
         # Check if pro subscription has expired
@@ -229,6 +245,7 @@ class StripeService:
             ),
             "free_writes_used": row["free_writes_used"],
             "free_writes_limit": settings.free_tier_writes_per_month,
+            "features": derive_features(tier),
         }
 
     # ------------------------------------------------------------------

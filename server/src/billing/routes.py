@@ -59,6 +59,7 @@ class StatusResponse(BaseModel):
     expires_at: Optional[str] = None
     free_writes_used: Optional[int] = None
     free_writes_limit: Optional[int] = None
+    features: Optional[dict] = None
     error_code: Optional[str] = None
     error_message: Optional[str] = None
 
@@ -198,6 +199,7 @@ async def get_status(
             expires_at=sub_status["expires_at"],
             free_writes_used=sub_status["free_writes_used"],
             free_writes_limit=sub_status["free_writes_limit"],
+            features=sub_status.get("features"),
         )
 
     except Exception as exc:
