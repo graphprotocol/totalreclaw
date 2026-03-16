@@ -146,6 +146,11 @@ interface BillingCache {
   tier: string;
   free_writes_used: number;
   free_writes_limit: number;
+  features?: {
+    llm_dedup?: boolean;
+    custom_extract_interval?: boolean;
+    min_extract_interval?: number;
+  };
   checked_at: number;
 }
 
@@ -168,6 +173,18 @@ function writeBillingCache(cache: BillingCache): void {
   } catch {
     // Best-effort — don't block on cache write failure.
   }
+}
+
+/**
+ * Check if LLM-guided dedup is enabled for the current tier.
+ * Returns true for Pro users, or when no billing cache exists (fail-open for self-hosters).
+ */
+function isLlmDedupEnabled(): boolean {
+  const cache = readBillingCache();
+  if (!cache) return true;
+  if (cache.tier === 'pro') return true;
+  if (cache.features?.llm_dedup !== undefined) return cache.features.llm_dedup;
+  return false;
 }
 
 /**
@@ -1878,6 +1895,7 @@ const plugin = {
               tier,
               free_writes_used: freeWritesUsed,
               free_writes_limit: freeWritesLimit,
+              features: data.features as BillingCache['features'] | undefined,
               checked_at: Date.now(),
             });
 
@@ -2174,6 +2192,7 @@ const plugin = {
                   tier: (billingData.tier as string) || 'free',
                   free_writes_used: (billingData.free_writes_used as number) ?? 0,
                   free_writes_limit: (billingData.free_writes_limit as number) ?? 0,
+                  features: billingData.features as BillingCache['features'] | undefined,
                   checked_at: Date.now(),
                 };
                 writeBillingCache(cache);
@@ -2516,7 +2535,9 @@ const plugin = {
           // C3: Throttle auto-extraction to every N turns (configurable via env).
           turnsSinceLastExtraction++;
           if (turnsSinceLastExtraction >= AUTO_EXTRACT_EVERY_TURNS) {
-            const existingMemories = await fetchExistingMemoriesForExtraction(api.logger, 20, evt.messages);
+            const existingMemories = isLlmDedupEnabled()
+              ? await fetchExistingMemoriesForExtraction(api.logger, 20, evt.messages)
+              : [];
             const rawFacts = await extractFacts(evt.messages, 'turn', existingMemories);
             const { kept: facts } = filterByImportance(rawFacts, api.logger);
             if (facts.length > 0) {
@@ -2550,7 +2571,9 @@ const plugin = {
             `Pre-compaction extraction: processing ${evt.messages.length} messages`,
           );
 
-          const existingMemories = await fetchExistingMemoriesForExtraction(api.logger, 50, evt.messages);
+          const existingMemories = isLlmDedupEnabled()
+            ? await fetchExistingMemoriesForExtraction(api.logger, 50, evt.messages)
+            : [];
           const rawCompactFacts = await extractFacts(evt.messages, 'full', existingMemories);
           const { kept: facts } = filterByImportance(rawCompactFacts, api.logger);
           if (facts.length > 0) {
@@ -2583,7 +2606,9 @@ const plugin = {
             `Pre-reset extraction (${evt.reason ?? 'unknown'}): processing ${evt.messages.length} messages`,
           );
 
-          const existingMemories = await fetchExistingMemoriesForExtraction(api.logger, 50, evt.messages);
+          const existingMemories = isLlmDedupEnabled()
+            ? await fetchExistingMemoriesForExtraction(api.logger, 50, evt.messages)
+            : [];
           const rawResetFacts = await extractFacts(evt.messages, 'full', existingMemories);
           const { kept: facts } = filterByImportance(rawResetFacts, api.logger);
           if (facts.length > 0) {
