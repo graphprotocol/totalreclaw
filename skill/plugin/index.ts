@@ -126,7 +126,7 @@ const SEMANTIC_SKIP_THRESHOLD = parseFloat(process.env.TOTALRECLAW_SEMANTIC_SKIP
 
 // Auto-extract throttle (C3): only extract every N turns in agent_end hook
 let turnsSinceLastExtraction = 0;
-const AUTO_EXTRACT_EVERY_TURNS = parseInt(process.env.TOTALRECLAW_EXTRACT_EVERY_TURNS ?? '5', 10);
+const AUTO_EXTRACT_EVERY_TURNS_ENV = parseInt(process.env.TOTALRECLAW_EXTRACT_EVERY_TURNS ?? '5', 10);
 
 // Store-time near-duplicate detection (consolidation module)
 const STORE_DEDUP_ENABLED = process.env.TOTALRECLAW_STORE_DEDUP !== 'false';
@@ -185,6 +185,16 @@ function isLlmDedupEnabled(): boolean {
   if (cache.tier === 'pro') return true;
   if (cache.features?.llm_dedup !== undefined) return cache.features.llm_dedup;
   return false;
+}
+
+/**
+ * Get the effective extraction interval based on tier.
+ * Pro users can set interval as low as 2 via env; Free users are clamped to minimum 5.
+ */
+function getExtractInterval(): number {
+  const cache = readBillingCache();
+  const minInterval = cache?.features?.min_extract_interval ?? 5;
+  return Math.max(AUTO_EXTRACT_EVERY_TURNS_ENV, minInterval);
 }
 
 /**
@@ -2534,7 +2544,7 @@ const plugin = {
 
           // C3: Throttle auto-extraction to every N turns (configurable via env).
           turnsSinceLastExtraction++;
-          if (turnsSinceLastExtraction >= AUTO_EXTRACT_EVERY_TURNS) {
+          if (turnsSinceLastExtraction >= getExtractInterval()) {
             const existingMemories = isLlmDedupEnabled()
               ? await fetchExistingMemoriesForExtraction(api.logger, 20, evt.messages)
               : [];
