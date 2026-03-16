@@ -128,14 +128,16 @@ During beta, subgraph mode uses the Chiado testnet. Both modes encrypt your data
 
 ## Free Tier & Upgrading
 
-| Tier | Writes | Reads | Price |
-|------|--------|-------|-------|
-| **Free** | 100/month | Unlimited | $0 |
-| **Pro** | 10,000/month | Unlimited | $2-5/month |
+| Tier | Writes | Reads | Key Features | Price |
+|------|--------|-------|--------------|-------|
+| **Free** | 250/month | Unlimited | Cosine dedup, auto-extract every 5 turns | $0 |
+| **Pro** | 10,000/month | Unlimited | + LLM-guided dedup, configurable extract interval (min 2 turns) | $2-5/month |
 
 - Counter resets at the start of each calendar month
 - Pay with card (Stripe) or crypto (Coinbase Commerce)
 - When you hit the limit, your agent tells you and provides an upgrade link
+- **Free tier** includes full encryption, cosine-based dedup, and auto-extraction every 5 turns
+- **Pro tier** adds LLM-guided dedup (catches contradictions, not just paraphrases) and faster extraction intervals
 
 ---
 
@@ -178,7 +180,7 @@ For full details, supported sources, and troubleshooting, see the [Importing Mem
 | Status & billing | Yes | Yes | Yes |
 | Upgrade to Pro | -- | Yes | Yes |
 | Near-duplicate prevention (cosine) | Yes | Yes | Yes |
-| LLM-guided dedup (contradictions) | Yes | -- | Yes |
+| LLM-guided dedup (contradictions) | Pro | -- | Yes |
 | Memory consolidation tool | Yes | Yes | Yes |
 | Pre-compaction memory flush | Yes | -- | Yes |
 
@@ -197,7 +199,7 @@ TotalReclaw uses two complementary layers to prevent duplicate memories:
 
 ## Known Limitations (Beta)
 
-- Free tier limit (100 writes/month) and Pro pricing ($2-5/month) are not finalized
+- Free tier limit (250 writes/month) and Pro pricing ($2-5/month) are not finalized
 - MCP agents rely on explicit tool use rather than automatic memory hooks
 - Beta runs on testnet infrastructure -- expect occasional downtime
 - Subgraph mode (on-chain storage) requires `TOTALRECLAW_SUBGRAPH_MODE=true`. Set to `false` and provide your own `TOTALRECLAW_SERVER_URL` for self-hosted HTTP mode
@@ -222,7 +224,7 @@ Use any future expiry date, any 3-digit CVC, and any billing address.
 - **MCP agents:** The agent has a `status` tool that shows your tier, usage, and limits
 
 **What happens at the quota limit:**
-- Free tier: 100 writes/month, unlimited reads
+- Free tier: 250 writes/month, unlimited reads
 - When you hit the limit, your agent will tell you and provide an upgrade link
 - After upgrading (with a test card), writes resume immediately
 

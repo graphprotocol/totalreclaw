@@ -184,7 +184,7 @@ If you want to view your derived wallet address, check the plugin logs after the
 
 TotalReclaw includes a free tier so you can start using it immediately:
 
-- **Your first 100 memory writes per month are free** (beta; this limit may be adjusted).
+- **Your first 250 memory writes per month are free** (beta; this limit may be adjusted).
 - **Reading and searching your memories is always free and never metered.** You can always access your own data, even after exhausting the write quota.
 - All transaction fees (gas) are covered by the TotalReclaw paymaster (Pimlico) on Gnosis Chain. You pay nothing.
 - No credit card, no crypto, and no signup beyond your recovery phrase are required.
@@ -192,11 +192,11 @@ TotalReclaw includes a free tier so you can start using it immediately:
 
 When you approach the free tier limit, the agent will proactively tell you. For example:
 
-> "You've used 90/100 free writes this month. Consider upgrading to Pro for unlimited storage."
+> "You've used 225/250 free writes this month. Consider upgrading to Pro for unlimited storage."
 
 If you reach the limit, new memory writes will be rejected with a `quota_exceeded` error, but you can still search and recall all your existing memories. You can either wait for the monthly reset or upgrade to Pro (see [Upgrading to Pro Tier](#9-upgrading-to-pro-tier)).
 
-> **Note:** If you upgrade to Pro and later cancel, your write counter is preserved from before the upgrade. For example, if you used 100 free writes, upgraded, wrote more, and then cancelled, the next write after cancellation would still be blocked until the monthly reset.
+> **Note:** If you upgrade to Pro and later cancel, your write counter is preserved from before the upgrade. For example, if you used 250 free writes, upgraded, wrote more, and then cancelled, the next write after cancellation would still be blocked until the monthly reset.
 
 ---
 
@@ -427,10 +427,10 @@ Follow this checklist step by step to verify that TotalReclaw is working correct
 
 ## 9. Upgrading to Pro Tier
 
-When your free tier write limit (100 writes/month, beta default) is reached, the agent will prompt you to upgrade.
+When your free tier write limit (250 writes/month, beta default) is reached, the agent will prompt you to upgrade.
 
 **What you will see:**
-> "You've used 100/100 free writes this month. Upgrade to Pro for unlimited storage."
+> "You've used 250/250 free writes this month. Upgrade to Pro for unlimited storage."
 
 > **Note:** The Pro tier price ($2-5/month) is beta pricing and not yet finalized.
 
@@ -711,7 +711,7 @@ The OpenClaw plugin auto-detects your agent's LLM provider and API key for fact 
 | `TOTALRECLAW_CREDENTIALS_PATH` | Path to the credentials file (stores user ID and salt). The MCP setup wizard saves to `~/.totalreclaw/credentials.json` by default. | `~/.totalreclaw/credentials.json` |
 | `TOTALRECLAW_COSINE_THRESHOLD` | Minimum cosine similarity of the top result required to return memories. Lower = more permissive. | `0.15` |
 | `TOTALRECLAW_MIN_IMPORTANCE` | Minimum importance score (1-10) for auto-extracted facts. Facts below this are silently dropped. | `3` |
-| `TOTALRECLAW_EXTRACT_EVERY_TURNS` | Number of conversation turns between automatic extractions. | `5` |
+| `TOTALRECLAW_EXTRACT_EVERY_TURNS` | Number of conversation turns between automatic extractions. Pro users can set as low as `2`. | `5` |
 | `TOTALRECLAW_RELEVANCE_THRESHOLD` | Minimum cosine relevance score for auto-injecting memories into context. | `0.3` |
 | `TOTALRECLAW_SEMANTIC_SKIP_THRESHOLD` | Cosine similarity threshold for deduplication. Facts too similar to existing ones are skipped. | `0.85` |
 | `TOTALRECLAW_CACHE_TTL_MS` | Hot cache time-to-live in milliseconds. Cached results within this window are reused for similar queries. | `300000` (5 minutes) |
@@ -819,7 +819,7 @@ OPENAI_API_KEY="sk-your-key-here"
 
 This is a beta release. The following items are known limitations that will be addressed in future updates:
 
-- **Free tier threshold:** The default limit of 100 writes/month is provisional and may be adjusted based on usage data. The limit is a server-side configuration value.
+- **Free tier threshold:** The default limit of 250 writes/month is provisional and may be adjusted based on usage data. The limit is a server-side configuration value.
 - **Subscription pricing:** The Pro tier price ($2-5/month) is beta pricing and not yet finalized.
 - **Billing tools:** The upgrade flow (`totalreclaw_status`, `totalreclaw_upgrade`) may not be fully wired in all environments. If the agent cannot generate a checkout URL, contact the TotalReclaw team directly.
 - **Auto-extraction timing (OpenClaw only):** The `TOTALRECLAW_EXTRACT_EVERY_TURNS` environment variable controls extraction frequency. The plugin fires extraction on the `agent_end` hook every N turns (default: 5). The skill config also accepts `autoExtractEveryTurns` via the `TOTALRECLAW_EXTRACT_EVERY_TURNS` env var.

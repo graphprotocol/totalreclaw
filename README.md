@@ -70,10 +70,10 @@ TotalReclaw is different: your data is encrypted before it leaves your device. T
 
 ## Free Tier & Pricing
 
-| Tier | Writes | Reads | Price |
-|------|--------|-------|-------|
-| **Free** | 100/month | Unlimited | $0 |
-| **Pro** | 10,000/month | Unlimited | $2-5/month |
+| Tier | Writes | Reads | Key Features | Price |
+|------|--------|-------|--------------|-------|
+| **Free** | 250/month | Unlimited | Cosine dedup, auto-extract every 5 turns | $0 |
+| **Pro** | 10,000/month | Unlimited | + LLM-guided dedup, faster extraction | $2-5/month |
 
 Counter resets at the start of each calendar month. Pay with card (Stripe) or crypto (Coinbase Commerce). When you hit the limit, your agent tells you and provides an upgrade link.
 

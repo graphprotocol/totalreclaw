@@ -147,7 +147,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | Content fingerprint (exact) | Yes | Yes | Yes | Server-side HMAC-SHA256 |
 | Within-batch semantic dedup | Yes | -- | -- | Cosine >= 0.9, during extraction |
 | Store-time near-duplicate | Yes | Yes | Yes (via MCP) | `consolidation.ts` — both plugin and MCP |
-| LLM-guided dedup (ADD/UPDATE/DELETE) | Yes | -- | Yes | OpenClaw + NanoClaw extraction prompts |
+| LLM-guided dedup (ADD/UPDATE/DELETE) | Yes (Pro) | -- | Yes | OpenClaw + NanoClaw extraction prompts |
 | Bulk consolidation tool | Yes | Yes | Yes (via MCP) | Server mode only (no batch delete on-chain) |
 | **Billing** | | | | |
 | Quota warnings (>80%) | Yes | -- | -- | Injected via before_agent_start |
