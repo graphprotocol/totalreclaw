@@ -65,6 +65,8 @@ This provides memory isolation between different contexts.
 | `TOTALRECLAW_EXTRACT_INTERVAL` | Turns between extractions | `5` |
 | `TOTALRECLAW_CHAIN_ID` | Chain ID (10200=Chiado, 100=Gnosis) | `10200` |
 
+> **Pro tip:** Pro-tier NanoClaw deployments can lower `TOTALRECLAW_EXTRACT_INTERVAL` to `2` for more frequent, higher-fidelity extraction.
+
 ## Available Tools
 
 | Tool | Description |
