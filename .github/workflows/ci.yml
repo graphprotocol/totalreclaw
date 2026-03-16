@@ -22,7 +22,7 @@ jobs:
           node-version: '20'
 
       - name: Install and test
-        run: cd client && npm ci && npm test
+        run: cd client && npm ci --legacy-peer-deps && npm test
 
   plugin-build:
     name: Plugin Build Check
@@ -38,4 +38,4 @@ jobs:
 
       # Plugin has no test script yet — just verify deps install cleanly
       - name: Install dependencies
-        run: cd skill/plugin && npm ci
+        run: cd skill/plugin && npm ci --legacy-peer-deps
