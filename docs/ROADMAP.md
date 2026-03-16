@@ -167,7 +167,16 @@ Reduce fact pile-up by detecting near-duplicates and merging them client-side.
 
 **Plan:** `plans/2026-03-11-memory-consolidation-dedup.md` (internal repo)
 
-### 2.5 Memory Compression Stats
+### 2.5 Pro Tier Features (Post-Beta)
+
+| Feature | Description | Status |
+|---------|-------------|--------|
+| LLM-guided dedup (Pro) | UPDATE/DELETE/NOOP classification gated behind Pro tier | **DONE** — client-side gating via billing cache |
+| Configurable extraction interval (Pro) | Min 2 turns for Pro, clamped to 5 for Free | **DONE** — `getExtractInterval()` reads billing features |
+| Memory retention / decay tuning (Pro) | Configurable importance thresholds and decay curves. Pro users keep memories longer or tune what gets retained. | NOT DONE |
+| Namespace isolation (Pro) | Scope memories by namespace (e.g., "work" vs "personal"). Currently removed; will return as Pro-only. | NOT DONE — MCP had it, stripped in prep for Pro gating |
+
+### 2.6 Memory Compression Stats
 
 Surface token reduction metrics that users and integrators can see.
 
@@ -176,7 +185,7 @@ Surface token reduction metrics that users and integrators can see.
 | Track context savings | Measure tokens injected vs full conversation replay | NOT DONE |
 | Surface in `totalreclaw_status` | Show compression ratio alongside tier/usage | NOT DONE |
 
-### 2.6 Competitor Import (MVP — Mem0 + MCP Memory)
+### 2.7 Competitor Import (MVP — Mem0 + MCP Memory)
 
 Import tools to reduce switching costs. Prioritize the two most common sources for MVP.
 
@@ -191,7 +200,7 @@ Import tools to reduce switching costs. Prioritize the two most common sources f
 
 **Plan:** `plans/2026-03-11-competitor-import.md` (internal repo)
 
-### 2.7 Multi-Agent Conflict Resolution (`docs/specs/totalreclaw/conflict-resolution.md` v0.3.2)
+### 2.8 Multi-Agent Conflict Resolution (`docs/specs/totalreclaw/conflict-resolution.md` v0.3.2)
 
 Applies to both MVP (PostgreSQL) and future Subgraph path. 4-layer protocol:
 

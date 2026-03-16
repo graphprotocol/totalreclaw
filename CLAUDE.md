@@ -149,6 +149,9 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | Store-time near-duplicate | Yes | Yes | Yes (via MCP) | `consolidation.ts` — both plugin and MCP |
 | LLM-guided dedup (ADD/UPDATE/DELETE) | Yes (Pro) | -- | Yes | OpenClaw + NanoClaw extraction prompts |
 | Bulk consolidation tool | Yes | Yes | Yes (via MCP) | Server mode only (no batch delete on-chain) |
+| **Pro Tier Gating** | | | | |
+| Feature gating via billing cache | Yes | -- | -- | Server returns `features` dict, plugin gates client-side |
+| Tier-aware extraction interval | Yes | -- | Yes (env) | Pro: min 2 turns, Free: min 5. NanoClaw via env var |
 | **Billing** | | | | |
 | Quota warnings (>80%) | Yes | -- | -- | Injected via before_agent_start |
 | 403 handling + cache invalidation | Yes | Yes | Yes | |
