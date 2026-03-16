@@ -52,7 +52,6 @@ PARAMETERS:
 export async function handleConsolidate(
   client: TotalReclaw,
   args: unknown,
-  _defaultNamespace: string,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const input = (args || {}) as ConsolidateInput;
   const dryRun = input.dry_run ?? false;

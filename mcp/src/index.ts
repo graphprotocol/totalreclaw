@@ -87,7 +87,6 @@ import crypto from 'node:crypto';
 // ── Configuration ───────────────────────────────────────────────────────────
 
 const SERVER_URL = process.env.TOTALRECLAW_SERVER_URL || 'http://127.0.0.1:8080';
-const DEFAULT_NAMESPACE = process.env.TOTALRECLAW_NAMESPACE || 'default';
 const MASTER_PASSWORD = process.env.TOTALRECLAW_MASTER_PASSWORD;
 
 // Store-time near-duplicate detection (consolidation module)
@@ -916,7 +915,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     switch (name) {
       case 'totalreclaw_remember': {
         try {
-          const result = await handleRemember(client, args, DEFAULT_NAMESPACE);
+          const result = await handleRemember(client, args);
           return result;
         } catch (error) {
           if (isQuotaExceededError(error)) {
@@ -927,10 +926,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'totalreclaw_recall':
-        return await handleRecall(client, args, DEFAULT_NAMESPACE);
+        return await handleRecall(client, args);
 
       case 'totalreclaw_forget': {
-        const result = await handleForget(client, args, DEFAULT_NAMESPACE);
+        const result = await handleForget(client, args);
         // Invalidate cache on forget too
         invalidateMemoryContextCache();
         server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
@@ -938,16 +937,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'totalreclaw_export':
-        return await handleExport(client, args, DEFAULT_NAMESPACE);
+        return await handleExport(client, args);
 
       case 'totalreclaw_import':
-        return await handleImport(client, args, DEFAULT_NAMESPACE);
+        return await handleImport(client, args);
 
       case 'totalreclaw_import_from':
-        return await handleImportFrom(client, args, DEFAULT_NAMESPACE);
+        return await handleImportFrom(client, args);
 
       case 'totalreclaw_consolidate': {
-        const result = await handleConsolidate(client, args, DEFAULT_NAMESPACE);
+        const result = await handleConsolidate(client, args);
         // Invalidate cache after consolidation (facts may have been deleted)
         invalidateMemoryContextCache();
         server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
@@ -1018,7 +1017,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     }
 
     const client = await getClient();
-    const content = await readMemoryContext(client, DEFAULT_NAMESPACE);
+    const content = await readMemoryContext(client);
 
     return {
       contents: [

@@ -14,7 +14,6 @@ export interface ImportFromInput {
   source_user_id?: string;
   content?: string;
   file_path?: string;
-  namespace?: string;
   dry_run?: boolean;
   api_url?: string;
 }
@@ -86,10 +85,6 @@ export const importFromToolDefinition = {
         type: 'string',
         description: 'For file-based sources: path to the file on disk',
       },
-      namespace: {
-        type: 'string',
-        description: 'Target namespace in TotalReclaw (default: "imported")',
-      },
       dry_run: {
         type: 'boolean',
         default: false,
@@ -153,7 +148,6 @@ async function loadAdapter(source: ImportSource): Promise<ImportAdapter> {
 export async function handleImportFrom(
   client: TotalReclaw,
   args: unknown,
-  defaultNamespace: string,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const input = args as ImportFromInput;
   const startTime = Date.now();
@@ -163,10 +157,6 @@ export async function handleImportFrom(
   if (!input.source || !validSources.includes(input.source)) {
     return errorResponse(`Invalid source. Must be one of: ${validSources.join(', ')}`);
   }
-
-  // Security check: warn if API key is provided
-  // (API keys are used in-memory only, never stored)
-  const namespace = input.namespace || 'imported';
 
   try {
     // Get the appropriate adapter
@@ -233,7 +223,6 @@ export async function handleImportFrom(
           importance: fact.importance / 10, // Normalize to 0-1
           source: `import:${input.source}`,
           tags: [
-            `namespace:${namespace}`,
             `import_source:${input.source}`,
             ...(fact.tags || []),
           ],

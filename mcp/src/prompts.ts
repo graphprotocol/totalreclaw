@@ -120,8 +120,7 @@ EXAMPLES:
   -> Call: totalreclaw_export({ format: "markdown" })
 
 PARAMETERS:
-- format: Output format "markdown" or "json" (default: markdown)
-- namespace: Export only specific namespace (optional)`;
+- format: Output format "markdown" or "json" (default: markdown)`;
 
 export const STATUS_TOOL_DESCRIPTION = `Check your TotalReclaw subscription status and usage.
 
@@ -181,7 +180,6 @@ EXAMPLES:
 PARAMETERS:
 - content: The exported content (JSON or Markdown string)
 - format: Format of content "markdown" or "json" (auto-detected if not specified)
-- namespace: Target namespace (defaults to source namespace)
 - merge_strategy: How to handle conflicts (default: skip_existing)
 - validate_only: Parse and validate without importing (dry-run)`;
 

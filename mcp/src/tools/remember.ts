@@ -15,7 +15,6 @@ import {
 export interface RememberInputSingle {
   fact: string;
   importance?: number;
-  namespace?: string;
   metadata?: {
     type?: string;
     expires_at?: string;
@@ -32,7 +31,6 @@ export interface BatchFact {
 
 export interface RememberInputBatch {
   facts: BatchFact[];
-  namespace?: string;
 }
 
 // ── Union type for the handler ───────────────────────────────────────────────
@@ -98,10 +96,6 @@ export const rememberToolDefinition = {
         maximum: 10,
         default: 5,
         description: 'Importance score 1-10 (only for single-fact mode)',
-      },
-      namespace: {
-        type: 'string',
-        description: 'Optional namespace for isolation (e.g., "work", "personal")',
       },
       metadata: {
         type: 'object',
@@ -215,7 +209,6 @@ async function storeSingleFact(
   text: string,
   importance: number,
   factType: string | undefined,
-  namespace: string,
   isExplicitRemember: boolean,
   expiresAt?: string
 ): Promise<RememberOutput> {
@@ -267,9 +260,7 @@ async function storeSingleFact(
   const metadata: FactMetadata = {
     importance: effectiveImportance / 10,
     source: 'mcp_remember',
-    tags: factType
-      ? [factType, `namespace:${namespace}`]
-      : [`namespace:${namespace}`],
+    tags: factType ? [factType] : [],
   };
 
   if (expiresAt) {
@@ -292,7 +283,6 @@ async function storeSingleFact(
 export async function handleRemember(
   client: TotalReclaw,
   args: unknown,
-  defaultNamespace: string
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const input = args as Record<string, unknown>;
 
@@ -311,8 +301,6 @@ export async function handleRemember(
       }],
     };
   }
-
-  const namespace = (input.namespace as string) || defaultNamespace;
 
   // ── Batch mode ─────────────────────────────────────────────────────────────
   if (isBatch) {
@@ -353,7 +341,6 @@ export async function handleRemember(
           f.text,
           imp,
           f.type,
-          namespace,
           false, // batch mode: not explicit remember
         );
 
@@ -436,7 +423,6 @@ export async function handleRemember(
       singleInput.fact,
       singleInput.importance ?? 5,
       singleInput.metadata?.type,
-      namespace,
       true, // single-fact mode: explicit remember, always supersede
       singleInput.metadata?.expires_at
     );

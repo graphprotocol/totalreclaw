@@ -3,7 +3,6 @@ import { EXPORT_TOOL_DESCRIPTION } from '../prompts.js';
 
 export interface ExportInput {
   format?: 'markdown' | 'json';
-  namespace?: string;
   include_metadata?: boolean;
 }
 
@@ -26,10 +25,6 @@ export const exportToolDefinition = {
         default: 'markdown',
         description: 'Output format',
       },
-      namespace: {
-        type: 'string',
-        description: 'Export only specific namespace',
-      },
       include_metadata: {
         type: 'boolean',
         default: true,
@@ -47,7 +42,6 @@ export const exportToolDefinition = {
 export async function handleExport(
   client: TotalReclaw,
   args: unknown,
-  defaultNamespace: string
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const input = (args || {}) as ExportInput;
   const format = input.format || 'markdown';
@@ -55,11 +49,6 @@ export async function handleExport(
 
   try {
     const results = await client.recall('*', 1000);
-    const ns = input.namespace || defaultNamespace;
-
-    const filtered = ns !== 'default'
-      ? results.filter((r: RerankedResult) => r.fact.metadata.tags?.includes(`namespace:${ns}`))
-      : results;
 
     const exportedAt = new Date().toISOString();
 
@@ -68,8 +57,7 @@ export async function handleExport(
       const jsonData = {
         version: '1.0.0',
         exported_at: exportedAt,
-        namespace: ns,
-        facts: filtered.map((r: RerankedResult) => ({
+        facts: results.map((r: RerankedResult) => ({
           id: r.fact.id,
           text: r.fact.text,
           importance: Math.round((r.fact.metadata.importance ?? 0.5) * 10),
@@ -88,14 +76,13 @@ export async function handleExport(
         `# TotalReclaw Export`,
         ``,
         `**Exported:** ${exportedAt}`,
-        `**Namespace:** ${ns}`,
-        `**Total Facts:** ${filtered.length}`,
+        `**Total Facts:** ${results.length}`,
         ``,
         `---`,
         ``,
       ];
 
-      for (const r of filtered) {
+      for (const r of results) {
         const importance = Math.round((r.fact.metadata.importance ?? 0.5) * 10);
         lines.push(`## ${r.fact.text}`);
         lines.push(``);
@@ -119,7 +106,7 @@ export async function handleExport(
     const result: ExportOutput = {
       content,
       format,
-      fact_count: filtered.length,
+      fact_count: results.length,
       exported_at: exportedAt,
     };
 

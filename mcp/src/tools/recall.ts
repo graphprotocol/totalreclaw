@@ -5,7 +5,6 @@ export interface RecallInput {
   query: string;
   k?: number;
   min_importance?: number;
-  namespace?: string;
   include_decay?: boolean;
 }
 
@@ -42,10 +41,6 @@ export const recallToolDefinition = {
         maximum: 10,
         description: 'Filter by minimum importance',
       },
-      namespace: {
-        type: 'string',
-        description: 'Search within specific namespace',
-      },
       include_decay: {
         type: 'boolean',
         default: true,
@@ -64,7 +59,6 @@ export const recallToolDefinition = {
 export async function handleRecall(
   client: TotalReclaw,
   args: unknown,
-  defaultNamespace: string
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const input = args as RecallInput;
   const startTime = Date.now();
@@ -94,13 +88,6 @@ export async function handleRecall(
       const minImp = input.min_importance / 10;
       filtered = results.filter((r: RerankedResult) =>
         (r.fact.metadata.importance ?? 0.5) >= minImp
-      );
-    }
-
-    if (input.namespace || defaultNamespace !== 'default') {
-      const ns = input.namespace || defaultNamespace;
-      filtered = filtered.filter((r: RerankedResult) =>
-        r.fact.metadata.tags?.includes(`namespace:${ns}`)
       );
     }
 

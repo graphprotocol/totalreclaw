@@ -82,7 +82,7 @@ describe('readMemoryContext', () => {
 
   it('returns empty-state message when no facts exist', async () => {
     const mockClient = createMockClient();
-    const content = await readMemoryContext(mockClient, 'default');
+    const content = await readMemoryContext(mockClient);
     expect(content).toContain('Your Memory Context');
     expect(content).toContain('No memories stored yet');
   });
@@ -95,7 +95,7 @@ describe('readMemoryContext', () => {
       ]),
     });
 
-    const content = await readMemoryContext(mockClient, 'default');
+    const content = await readMemoryContext(mockClient);
     expect(content).toContain('High Priority');
     expect(content).toContain('User is vegan');
     expect(content).toContain('User lives in Lisbon');
@@ -110,24 +110,11 @@ describe('readMemoryContext', () => {
       ]),
     });
 
-    const content = await readMemoryContext(mockClient, 'default');
+    const content = await readMemoryContext(mockClient);
     expect(content).toContain('High Priority');
     expect(content).toContain('Core preference');
     expect(content).toContain('Recent');
     expect(content).toContain('Minor detail');
-  });
-
-  it('filters by namespace when not default', async () => {
-    const mockClient = createMockClient({
-      recall: jest.fn().mockResolvedValue([
-        makeFact({ id: 'f1', text: 'Work fact', importance: 0.7, tags: ['namespace:work'] }),
-        makeFact({ id: 'f2', text: 'Personal fact', importance: 0.7, tags: ['namespace:personal'] }),
-      ]),
-    });
-
-    const content = await readMemoryContext(mockClient, 'work');
-    expect(content).toContain('Work fact');
-    expect(content).not.toContain('Personal fact');
   });
 
   it('includes total count footer', async () => {
@@ -139,7 +126,7 @@ describe('readMemoryContext', () => {
       ]),
     });
 
-    const content = await readMemoryContext(mockClient, 'default');
+    const content = await readMemoryContext(mockClient);
     expect(content).toContain('3 total memories stored');
   });
 
@@ -148,7 +135,7 @@ describe('readMemoryContext', () => {
       recall: jest.fn().mockRejectedValue(new Error('Server unreachable')),
     });
 
-    const content = await readMemoryContext(mockClient, 'default');
+    const content = await readMemoryContext(mockClient);
     expect(content).toContain('Error loading memories');
     expect(content).toContain('Server unreachable');
   });
@@ -165,8 +152,8 @@ describe('Cache behavior', () => {
     ]);
     const mockClient = createMockClient({ recall: recallMock });
 
-    const first = await readMemoryContext(mockClient, 'default');
-    const second = await readMemoryContext(mockClient, 'default');
+    const first = await readMemoryContext(mockClient);
+    const second = await readMemoryContext(mockClient);
 
     expect(first).toBe(second);
     expect(recallMock).toHaveBeenCalledTimes(1); // Only called once due to cache
@@ -178,7 +165,7 @@ describe('Cache behavior', () => {
     ]);
     const mockClient = createMockClient({ recall: recallMock });
 
-    await readMemoryContext(mockClient, 'default');
+    await readMemoryContext(mockClient);
     expect(recallMock).toHaveBeenCalledTimes(1);
 
     // Invalidate cache
@@ -189,7 +176,7 @@ describe('Cache behavior', () => {
       makeFact({ id: 'f1', text: 'Updated version' }),
     ]);
 
-    const second = await readMemoryContext(mockClient, 'default');
+    const second = await readMemoryContext(mockClient);
     expect(recallMock).toHaveBeenCalledTimes(2);
     expect(second).toContain('Updated version');
   });
@@ -208,14 +195,14 @@ describe('Cache behavior', () => {
     const mockClient = createMockClient({ recall: recallMock });
 
     // Prime the cache
-    await readMemoryContext(mockClient, 'default');
+    await readMemoryContext(mockClient);
     expect(recallMock).toHaveBeenCalledTimes(1);
 
     // Simulate a remember operation (which triggers the callback).
     // Note: store-time dedup calls recall() once before storing to check for
     // near-duplicates, so handleRemember adds +1 recall call.
     const { handleRemember } = require('../dist/tools/remember.js');
-    await handleRemember(mockClient, { fact: 'New fact' }, 'default');
+    await handleRemember(mockClient, { fact: 'New fact' });
 
     expect(cacheInvalidated).toBe(true);
 
@@ -225,7 +212,7 @@ describe('Cache behavior', () => {
       makeFact({ id: 'f2', text: 'New fact' }),
     ]);
 
-    await readMemoryContext(mockClient, 'default');
+    await readMemoryContext(mockClient);
     // Total: 1 (prime) + 1 (dedup search in remember) + 1 (post-invalidation re-fetch) = 3
     expect(recallMock).toHaveBeenCalledTimes(3);
 
@@ -237,8 +224,8 @@ describe('Cache behavior', () => {
     const recallMock = jest.fn().mockResolvedValue([]);
     const mockClient = createMockClient({ recall: recallMock });
 
-    const first = await readMemoryContext(mockClient, 'default');
-    const second = await readMemoryContext(mockClient, 'default');
+    const first = await readMemoryContext(mockClient);
+    const second = await readMemoryContext(mockClient);
 
     expect(first).toBe(second);
     expect(first).toContain('No memories stored yet');
@@ -253,22 +240,8 @@ describe('Resource with no facts (empty states)', () => {
 
   it('returns guidance message for empty vault', async () => {
     const mockClient = createMockClient();
-    const content = await readMemoryContext(mockClient, 'default');
+    const content = await readMemoryContext(mockClient);
     expect(content).toContain('Memories will appear here');
   });
 
-  it('returns empty-state for non-default namespace with no matching facts', async () => {
-    // recall returns facts, but all in a different namespace
-    const mockClient = createMockClient({
-      recall: jest.fn().mockResolvedValue([
-        makeFact({ id: 'f1', text: 'Default ns fact', tags: ['namespace:default'] }),
-      ]),
-    });
-
-    const content = await readMemoryContext(mockClient, 'work');
-    // Should not show the default-namespace fact
-    expect(content).not.toContain('Default ns fact');
-    // Should show total count for filtered namespace (0)
-    expect(content).toContain('0 total memories stored');
-  });
 });

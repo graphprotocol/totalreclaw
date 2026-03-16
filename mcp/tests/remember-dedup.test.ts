@@ -77,7 +77,7 @@ describe('Store-time dedup wiring: single-fact (explicit remember)', () => {
     const client = createMockClient();
     const { handleRemember } = require('../src/tools/remember');
 
-    const result = await handleRemember(client, { fact: 'User likes TypeScript' }, 'default');
+    const result = await handleRemember(client, { fact: 'User likes TypeScript' });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
@@ -95,7 +95,7 @@ describe('Store-time dedup wiring: single-fact (explicit remember)', () => {
     const client = createMockClient();
     const { handleRemember } = require('../src/tools/remember');
 
-    const result = await handleRemember(client, { fact: 'User likes TypeScript', importance: 7 }, 'default');
+    const result = await handleRemember(client, { fact: 'User likes TypeScript', importance: 7 });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
@@ -114,7 +114,7 @@ describe('Store-time dedup wiring: single-fact (explicit remember)', () => {
     const client = createMockClient();
     const { handleRemember } = require('../src/tools/remember');
 
-    await handleRemember(client, { fact: 'User likes TypeScript', importance: 5 }, 'default');
+    await handleRemember(client, { fact: 'User likes TypeScript', importance: 5 });
 
     // Should store with max(5, 9) = 9 → 0.9 importance
     const rememberCall = mockRemember.mock.calls[0];
@@ -129,7 +129,7 @@ describe('Store-time dedup wiring: single-fact (explicit remember)', () => {
     const client = createMockClient();
     const { handleRemember } = require('../src/tools/remember');
 
-    const result = await handleRemember(client, { fact: 'User likes TypeScript' }, 'default');
+    const result = await handleRemember(client, { fact: 'User likes TypeScript' });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.action).toBe('created');
@@ -153,7 +153,7 @@ describe('Store-time dedup wiring: batch mode', () => {
 
     const result = await handleRemember(client, {
       facts: [{ text: 'User likes TypeScript', importance: 3 }],
-    }, 'default');
+    });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.dedup_skipped).toBe(1);
@@ -172,7 +172,7 @@ describe('Store-time dedup wiring: batch mode', () => {
 
     const result = await handleRemember(client, {
       facts: [{ text: 'User strongly prefers TypeScript', importance: 8 }],
-    }, 'default');
+    });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.dedup_superseded).toBe(1);
@@ -189,7 +189,7 @@ describe('Store-time dedup wiring: batch mode', () => {
 
     const result = await handleRemember(client, {
       facts: [{ text: 'User prefers TypeScript', importance: 5 }],
-    }, 'default');
+    });
     const parsed = JSON.parse(result.content[0].text);
 
     // Equal importance → shouldSupersede returns 'supersede' (newer wins)
@@ -216,7 +216,7 @@ describe('Store-time dedup: feature flag', () => {
     const { handleRemember } = require('../src/tools/remember');
 
     const client = createMockClient();
-    const result = await handleRemember(client, { fact: 'Test fact' }, 'default');
+    const result = await handleRemember(client, { fact: 'Test fact' });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.action).toBe('created');
@@ -238,7 +238,7 @@ describe('Store-time dedup: error handling (fail-open)', () => {
     const client = createMockClient();
     const { handleRemember } = require('../src/tools/remember');
 
-    const result = await handleRemember(client, { fact: 'Important fact' }, 'default');
+    const result = await handleRemember(client, { fact: 'Important fact' });
     const parsed = JSON.parse(result.content[0].text);
 
     // Should still succeed — dedup failure doesn't prevent storing
@@ -255,7 +255,7 @@ describe('Store-time dedup: error handling (fail-open)', () => {
     const client = createMockClient();
     const { handleRemember } = require('../src/tools/remember');
 
-    const result = await handleRemember(client, { fact: 'New fact' }, 'default');
+    const result = await handleRemember(client, { fact: 'New fact' });
     const parsed = JSON.parse(result.content[0].text);
 
     // Should still store the new fact

@@ -1,10 +1,9 @@
-import { TotalReclaw, RerankedResult } from '@totalreclaw/client';
+import { TotalReclaw } from '@totalreclaw/client';
 import { FORGET_TOOL_DESCRIPTION } from '../prompts.js';
 
 export interface ForgetIntput {
   fact_id?: string;
   query?: string;
-  namespace?: string;
 }
 
 export interface ForgetOutput {
@@ -26,10 +25,6 @@ export const forgetToolDefinition = {
         type: 'string',
         description: 'Or forget by semantic query',
       },
-      namespace: {
-        type: 'string',
-        description: 'Optional namespace scope',
-      },
     },
   },
   annotations: {
@@ -42,7 +37,6 @@ export const forgetToolDefinition = {
 export async function handleForget(
   client: TotalReclaw,
   args: unknown,
-  defaultNamespace: string
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const input = args as ForgetIntput;
 
@@ -67,16 +61,8 @@ export async function handleForget(
       deletedIds.push(input.fact_id);
     } else if (input.query) {
       const results = await client.recall(input.query, 50);
-      const ns = input.namespace || defaultNamespace;
 
-      const toDelete = results.filter((r: RerankedResult) => {
-        if (ns !== 'default') {
-          return r.fact.metadata.tags?.includes(`namespace:${ns}`);
-        }
-        return true;
-      });
-
-      for (const r of toDelete) {
+      for (const r of results) {
         try {
           await client.forget(r.fact.id);
           deletedIds.push(r.fact.id);

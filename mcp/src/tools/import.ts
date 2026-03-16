@@ -4,8 +4,6 @@ import { IMPORT_TOOL_DESCRIPTION } from '../prompts.js';
 export interface ImportInput {
   content: string;
   format?: 'markdown' | 'json';
-  namespace?: string;
-  namespace_mapping?: Record<string, string>;
   merge_strategy?: 'skip_existing' | 'overwrite' | 'merge';
   reencrypt?: boolean;
   validate_only?: boolean;
@@ -47,14 +45,6 @@ export const importToolDefinition = {
         type: 'string',
         enum: ['markdown', 'json'],
         description: 'Format of content (auto-detected if not specified)',
-      },
-      namespace: {
-        type: 'string',
-        description: 'Target namespace',
-      },
-      namespace_mapping: {
-        type: 'object',
-        description: 'Remap namespaces',
       },
       merge_strategy: {
         type: 'string',
@@ -169,7 +159,6 @@ function generateImportId(): string {
 export async function handleImport(
   client: TotalReclaw,
   args: unknown,
-  defaultNamespace: string
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const input = args as ImportInput;
   const errors: ImportOutput['errors'] = [];
@@ -248,11 +237,6 @@ export async function handleImport(
       fact.importance = 5;
     }
 
-    let targetNs = input.namespace || fact.namespace || defaultNamespace;
-    if (input.namespace_mapping && fact.namespace && input.namespace_mapping[fact.namespace]) {
-      targetNs = input.namespace_mapping[fact.namespace];
-    }
-
     const normalizedText = fact.text.toLowerCase().trim();
     const existingId = existingTexts.get(normalizedText);
 
@@ -276,12 +260,8 @@ export async function handleImport(
       const metadata: FactMetadata = {
         importance: (fact.importance ?? 5) / 10,
         source: 'import',
-        tags: [`namespace:${targetNs}`],
+        tags: fact.type ? [fact.type] : [],
       };
-
-      if (fact.type) {
-        metadata.tags?.push(fact.type);
-      }
 
       await client.remember(fact.text, metadata);
       factsImported++;

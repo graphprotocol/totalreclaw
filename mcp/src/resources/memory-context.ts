@@ -35,7 +35,6 @@ export function invalidateMemoryContextCache(): void {
 
 export async function readMemoryContext(
   client: TotalReclaw,
-  defaultNamespace: string
 ): Promise<string> {
   // Return cached version if still valid
   if (cachedSummary && Date.now() - cachedSummary.timestamp < CACHE_TTL_MS) {
@@ -52,16 +51,8 @@ export async function readMemoryContext(
       return empty;
     }
 
-    // Filter by namespace if not default
-    let filtered = results;
-    if (defaultNamespace !== 'default') {
-      filtered = results.filter((r: RerankedResult) =>
-        r.fact.metadata.tags?.includes(`namespace:${defaultNamespace}`)
-      );
-    }
-
     // Sort by importance (descending), then by recency (newest first)
-    const sorted = filtered
+    const sorted = results
       .map((r: RerankedResult) => ({
         text: r.fact.text,
         importance: Math.round((r.fact.metadata.importance ?? 0.5) * 10),
@@ -102,7 +93,7 @@ export async function readMemoryContext(
       lines.push('');
     }
 
-    const totalStored = filtered.length;
+    const totalStored = results.length;
     lines.push(
       `*${totalStored} total memories stored. Use totalreclaw_recall for specific searches.*`
     );
