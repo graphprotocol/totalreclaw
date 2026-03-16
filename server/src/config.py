@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     subgraph_endpoint: str = ""
 
     # Proxy tier limits (per calendar month, per user)
-    free_tier_writes_per_month: int = 100
+    free_tier_writes_per_month: int = 250
     free_tier_reads_per_month: int = 1000
     pro_tier_writes_per_month: int = 10000
     pro_tier_reads_per_month: int = 100000

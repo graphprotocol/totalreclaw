@@ -972,7 +972,7 @@ def _make_mock_settings(**overrides):
     setting by passing it as a keyword argument.
     """
     defaults = {
-        "free_tier_writes_per_month": 100,
+        "free_tier_writes_per_month": 250,
         "free_tier_reads_per_month": 1000,
         "pro_tier_writes_per_month": 10000,
         "pro_tier_reads_per_month": 100000,
