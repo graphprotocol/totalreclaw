@@ -1,6 +1,6 @@
 # @totalreclaw/mcp-server
 
-Encrypted memory for your AI agent — zero-knowledge E2EE, semantic search, and on-chain storage.
+Encrypted memory for your AI agent — zero-knowledge E2EE, semantic search, and portable storage.
 
 Works with Claude Desktop, Cursor, Windsurf, and any MCP-compatible client. Your memories are encrypted on your device before leaving — no one can read them, not even us.
 
@@ -32,8 +32,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
       "args": ["-y", "@totalreclaw/mcp-server"],
       "env": {
         "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz",
-        "TOTALRECLAW_MASTER_PASSWORD": "your twelve word recovery phrase goes here replace these words",
-        "TOTALRECLAW_SUBGRAPH_MODE": "true"
+        "TOTALRECLAW_MASTER_PASSWORD": "your twelve word recovery phrase goes here replace these words"
       }
     }
   }
@@ -51,8 +50,7 @@ Add to your MCP settings (Settings > MCP Servers):
     "args": ["-y", "@totalreclaw/mcp-server"],
     "env": {
       "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz",
-      "TOTALRECLAW_MASTER_PASSWORD": "your twelve word recovery phrase goes here replace these words",
-      "TOTALRECLAW_SUBGRAPH_MODE": "true"
+      "TOTALRECLAW_MASTER_PASSWORD": "your twelve word recovery phrase goes here replace these words"
     }
   }
 }
@@ -71,7 +69,7 @@ All encryption happens **client-side** inside the MCP server process on your mac
 1. Facts are encrypted with AES-256-GCM before leaving your device
 2. Search uses blind indices (SHA-256 hashes) — the server never sees your search terms
 3. Your recovery phrase derives all keys via Argon2id + HKDF — the server never sees it
-4. With subgraph mode, encrypted facts are stored on-chain (Gnosis Chain) and indexed by The Graph
+4. Encrypted facts are stored on-chain (Gnosis Chain) and indexed by The Graph
 
 The server only ever sees ciphertext and hashed tokens.
 
@@ -81,8 +79,8 @@ The server only ever sees ciphertext and hashed tokens.
 |----------|-------------|---------|
 | `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_MASTER_PASSWORD` | 12-word BIP-39 recovery phrase | Required |
-| `TOTALRECLAW_SUBGRAPH_MODE` | Enable on-chain storage via The Graph | `true` |
-| `TOTALRECLAW_CHAIN_ID` | Chain ID (10200=Chiado testnet, 100=Gnosis) | `10200` |
+| `TOTALRECLAW_SUBGRAPH_MODE` | Use managed service (`true`) or self-hosted server (`false`). Will be renamed to `TOTALRECLAW_SELF_HOSTED` (inverted) in a future release. | `true` |
+| `TOTALRECLAW_CHAIN_ID` | Chain ID (10200=Chiado testnet, 100=Gnosis). Managed service only. | `10200` |
 
 ## Available Tools
 

@@ -17,6 +17,8 @@
 
 ## Architecture (v0.3)
 
+Two storage modes: **Managed Service** (default -- on-chain via Gnosis/The Graph, accessed through relay) and **Self-Hosted** (PostgreSQL backend you run yourself). The client-side E2EE pipeline is identical for both.
+
 ```
 +-------------------------------------------------------------------------+
 |                           CLIENT (OpenClaw Skill)                       |
@@ -30,18 +32,18 @@
 |                    JSON over HTTP                                       |
 +-------------------------------------------------------------------------+
                                |
-                               v
-+-------------------------------------------------------------------------+
-|                        SERVER (TotalReclaw)                             |
-+-------------------------------------------------------------------------+
-|  PostgreSQL Tables:                                                     |
-|  - raw_events (immutable log, future DataEdge events)                  |
-|  - facts (mutable view with blind_indices, decay_score)                |
-|                                                                         |
-|  Search Flow:                                                           |
-|  blind_trapdoors -> GIN index lookup -> return encrypted candidates    |
-+-------------------------------------------------------------------------+
-                               |
+              +----------------+----------------+
+              v                                 v
++-------------------------------+  +-------------------------------+
+|   MANAGED SERVICE (default)   |  |   SELF-HOSTED (alternative)   |
++-------------------------------+  +-------------------------------+
+|  On-chain: DataEdge contract  |  |  PostgreSQL Tables:           |
+|  Relay: Pimlico bundler       |  |  - raw_events (immutable log) |
+|  Index: The Graph subgraph    |  |  - facts (blind_indices,      |
+|  Query: GraphQL via relay     |  |          decay_score)         |
++-------------------------------+  +-------------------------------+
+              |                                 |
+              +----------------+----------------+
                                v
 +-------------------------------------------------------------------------+
 |                         CLIENT (Re-ranking)                             |
@@ -136,7 +138,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | Mem0 + MCP Memory adapters |
 | `totalreclaw_import` | -- | Yes | Yes (via MCP) | JSON/Markdown re-import (MCP only) |
 | `totalreclaw_upgrade` | -- | Yes | Yes (via MCP) | Stripe/Coinbase checkout URL |
-| `totalreclaw_consolidate` | Yes | Yes | Yes (via MCP) | Server mode only (no batch delete on-chain) |
+| `totalreclaw_consolidate` | Yes | Yes | Yes (via MCP) | Self-hosted only (no batch delete on managed service) |
 | **Automatic Memory** | | | | |
 | Auto-search (before_agent_start) | Yes | -- | Yes (hook) | MCP has no lifecycle hooks |
 | Auto-extract (agent_end) | Yes | -- | Yes (hook) | MCP relies on host agent |
@@ -148,7 +150,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | Within-batch semantic dedup | Yes | -- | -- | Cosine >= 0.9, during extraction |
 | Store-time near-duplicate | Yes | Yes | Yes (via MCP) | `consolidation.ts` — both plugin and MCP |
 | LLM-guided dedup (ADD/UPDATE/DELETE) | Yes (Pro) | -- | Yes | OpenClaw + NanoClaw extraction prompts |
-| Bulk consolidation tool | Yes | Yes | Yes (via MCP) | Server mode only (no batch delete on-chain) |
+| Bulk consolidation tool | Yes | Yes | Yes (via MCP) | Self-hosted only (no batch delete on managed service) |
 | **Pro Tier Gating** | | | | |
 | Feature gating via billing cache | Yes | -- | -- | Server returns `features` dict, plugin gates client-side |
 | Tier-aware extraction interval | Yes | -- | Yes (env) | Pro: min 2 turns, Free: min 5. NanoClaw via env var |
@@ -156,33 +158,33 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | Quota warnings (>80%) | Yes | -- | -- | Injected via before_agent_start |
 | 403 handling + cache invalidation | Yes | Yes | Yes | |
 | **Search Optimizations** | | | | |
-| Hot cache + two-tier search | Yes (subgraph) | -- | -- | Skips subgraph if cached query similar |
+| Hot cache + two-tier search | Yes (managed) | -- | -- | Skips remote query if cached query similar |
 | Dynamic candidate pool sizing | Yes | Yes | Yes (via MCP) | 400-5000 based on vault size |
 | BM25 + Cosine + RRF reranking | Yes | Yes | Yes (via MCP) | Intent-weighted |
 
 ### Storage Mode Support
 
-Features across Server mode (PostgreSQL) and Subgraph mode (on-chain via Gnosis/The Graph).
+Features across Self-Hosted (PostgreSQL) and Managed Service (default, on-chain via Gnosis/The Graph).
 
-| Feature | Server (HTTP) | Subgraph (On-Chain) | Notes |
+| Feature | Self-Hosted | Managed Service | Notes |
 |---------|:-:|:-:|-------|
-| Remember / Store | Yes | Yes | Subgraph stores via Pimlico relay |
-| Recall / Search | Yes | Yes | Subgraph uses GraphQL queries |
-| Forget / Delete | Yes (HTTP DELETE) | Yes (tombstone) | Subgraph writes decayScore=0 on-chain |
-| Export | Yes | Yes | Subgraph queries by owner + isActive |
+| Remember / Store | Yes | Yes | Managed service stores via Pimlico relay |
+| Recall / Search | Yes | Yes | Managed service uses GraphQL queries |
+| Forget / Delete | Yes (HTTP DELETE) | Yes (tombstone) | Managed service writes decayScore=0 on-chain |
+| Export | Yes | Yes | Managed service queries by owner + isActive |
 | Import (from Mem0/MCP) | Yes | Yes | |
-| Consolidate tool | Yes | **No** | No batch delete on-chain |
-| Store-time dedup (supersede) | Yes | Yes | Subgraph: via on-chain tombstone |
+| Consolidate tool | Yes | **No** | No batch delete on managed service |
+| Store-time dedup (supersede) | Yes | Yes | Managed service: via on-chain tombstone |
 | Billing / Status | Yes | Yes | Both query relay billing endpoint |
-| Hot cache | -- | Yes | Server mode doesn't need it |
+| Hot cache | -- | Yes | Self-hosted doesn't need it |
 
 ### Known Gaps
 
 | Gap | Severity | Description |
 |-----|----------|-------------|
-| Bulk consolidation not on subgraph | LOW | Bulk consolidation tool requires batch-delete, which has no on-chain equivalent. Store-time dedup supersession now works via tombstones. |
+| Bulk consolidation not on managed service | LOW | Bulk consolidation tool requires batch-delete, which has no on-chain equivalent. Store-time dedup supersession now works via tombstones. |
 | MCP no auto-memory | By design | MCP has no lifecycle hooks. Host agent (Claude, Cursor) must call tools explicitly. Documented in beta guide. |
-| Export/import not on subgraph (MCP) | LOW | MCP server's export and import tools are HTTP-mode only. OpenClaw plugin handles both modes. |
+| Export/import not on managed service (MCP) | LOW | MCP server's export and import tools are self-hosted only. OpenClaw plugin handles both modes. |
 
 ---
 
@@ -196,7 +198,7 @@ Every new feature implementation MUST include:
 
 2. **Feature compatibility table** -- Update the "Feature Compatibility Matrix" section above:
    - Add the feature to the **Platform Support** table (OpenClaw / MCP / NanoClaw)
-   - Add to the **Storage Mode Support** table if relevant (Server / Subgraph)
+   - Add to the **Storage Mode Support** table if relevant (Self-Hosted / Managed Service)
    - If there are platform-specific caveats, add a note
    - If a platform lacks support, add to **Known Gaps**
 
@@ -249,5 +251,6 @@ cd skill-nanoclaw && npm install
 
 ## Current Status
 
-- **Version**: v0.2.0 (PoC v2)
+- **Version**: v1.0-beta
 - **Phase**: Private Beta
+- **Default mode**: Managed Service (on-chain via Gnosis/The Graph)

@@ -134,16 +134,16 @@ Set the following environment variables in your OpenClaw configuration (e.g., wo
 TOTALRECLAW_MASTER_PASSWORD="word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12"
 TOTALRECLAW_SERVER_URL="https://api.totalreclaw.xyz"
 
-# --- Subgraph mode (on-chain storage, recommended) ---
+# --- On-chain storage (default, recommended) ---
 TOTALRECLAW_SUBGRAPH_MODE="true"
 TOTALRECLAW_CHAIN_ID="10200"
 ```
 
 Replace `word1 word2 ...` with your actual 12-word phrase. Keep the quotes around it. These can be set in your OpenClaw workspace environment settings, your shell profile, or any method your OpenClaw instance supports for environment variables.
 
-The values above are all you need for the Chiado testnet. Subgraph endpoint and bundler/paymaster access are handled automatically by the relay server.
+The values above are all you need for the Chiado testnet. The managed service at `api.totalreclaw.xyz` handles on-chain storage, gas sponsorship, billing, and query routing -- without ever seeing your data.
 
-> **Note:** `TOTALRECLAW_SERVER_URL` is always required -- it handles user registration and billing, even in subgraph mode.
+> **Note:** `TOTALRECLAW_SERVER_URL` is always required -- the managed service handles user registration, billing, and relay operations.
 
 Your agent's LLM API key (e.g., `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`) should already be configured in your OpenClaw environment. TotalReclaw auto-detects it -- no extra LLM setup is needed.
 
@@ -468,7 +468,7 @@ If you switch to a new computer or install TotalReclaw on a second agent, you ca
 2. Set the same environment variables as in [Step 3](#step-3-set-your-environment-variables-openclaw-plugin) -- use the same 12-word phrase and the same server URL.
 3. Start a conversation with your agent.
 4. The plugin derives the same Smart Account address and encryption key from your phrase.
-5. All your memories are automatically retrieved from the subgraph and decrypted on your device.
+5. All your memories are automatically retrieved and decrypted on your device.
 6. If you have an active Pro subscription, it is recognized automatically (same wallet address).
 
 ### MCP Server Recovery
@@ -619,7 +619,7 @@ If you want to run the automated end-to-end test suite to verify the plugin agai
 | C | Noise Filtering | Low-importance facts are filtered out and not stored |
 | D | Topic Switching | Correct recall after switching between multiple conversation topics |
 | E | Long Conversations | Memory extraction and recall in extended conversations (many turns) |
-| F | Subgraph Mode | End-to-end flow using the on-chain subgraph path (mock) |
+| F | On-Chain Storage | End-to-end flow using the on-chain storage path (mock) |
 | G | Pagination | Correct behavior when the memory vault has many entries (pagination) |
 | H | Freeform | Open-ended conversational memory with diverse fact types |
 
@@ -633,11 +633,11 @@ You can test against multiple configurations by specifying different instances:
 
 | Instance | Description |
 |----------|-------------|
-| `server-improved` | Server mode with all retrieval improvements enabled |
-| `server-baseline` | Server mode with baseline configuration |
-| `server-recency` | Server mode with recency-weighted ranking |
-| `subgraph-improved` | Subgraph mode with all improvements enabled |
-| `subgraph-baseline` | Subgraph mode with baseline configuration |
+| `server-improved` | Self-hosted with all retrieval improvements enabled |
+| `server-baseline` | Self-hosted with baseline configuration |
+| `server-recency` | Self-hosted with recency-weighted ranking |
+| `subgraph-improved` | Managed service (on-chain) with all improvements enabled |
+| `subgraph-baseline` | Managed service (on-chain) with baseline configuration |
 
 Example running all instances:
 ```
@@ -717,13 +717,13 @@ The OpenClaw plugin auto-detects your agent's LLM provider and API key for fact 
 | `TOTALRECLAW_CACHE_TTL_MS` | Hot cache time-to-live in milliseconds. Cached results within this window are reused for similar queries. | `300000` (5 minutes) |
 | `TOTALRECLAW_LLM_MODEL` | **Advanced.** Override the auto-detected extraction model. TotalReclaw automatically derives a cheap model from your agent's provider (e.g., Anthropic → `claude-haiku-4-5`, OpenAI → `gpt-4.1-mini`). Only set this if the auto-derived model doesn't work for you. | Auto-detected |
 
-### Subgraph Mode Variables (Advanced)
+### On-Chain Storage Variables (Advanced)
 
-These variables control on-chain storage via the subgraph. **Set `TOTALRECLAW_SUBGRAPH_MODE=true` for decentralized on-chain storage (recommended for beta).**
+These variables control on-chain storage via the managed service. **The default (`TOTALRECLAW_SUBGRAPH_MODE=true`) uses the managed service with on-chain storage -- recommended for most users.**
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `TOTALRECLAW_SUBGRAPH_MODE` | Set to `true` for decentralized on-chain storage via The Graph. Set to `false` for self-hosted HTTP mode. | `true` (recommended) |
+| `TOTALRECLAW_SUBGRAPH_MODE` | Set to `true` to use the managed service with on-chain storage via The Graph (recommended). Set to `false` for self-hosted mode with your own PostgreSQL database. **Deprecation note:** This env var will be renamed to `TOTALRECLAW_SELF_HOSTED` (with inverted logic) in a future release. | `true` (recommended) |
 | `TOTALRECLAW_CHAIN_ID` | Chain ID for on-chain transactions. `10200` = Chiado testnet, `100` = Gnosis mainnet. | `10200` |
 | `TOTALRECLAW_DATA_EDGE_ADDRESS` | Address of the EventfulDataEdge smart contract on Chiado. | `0xA84c5433110Ccc93e57ec387e630E86Bad86c36f` |
 | `TOTALRECLAW_ENTRYPOINT_ADDRESS` | ERC-4337 EntryPoint v0.7 address. Same on all chains. | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` |
@@ -827,7 +827,7 @@ This is a beta release. The following items are known limitations that will be a
 - **Batch writes:** On-chain writes are currently sent one fact at a time. Batch writes for gas optimization are not yet implemented.
 - **Decay and eviction engine:** The importance decay formula runs, but tuning is ongoing. Low-importance facts decay over time and may be evicted.
 - **Write counter persists across upgrades:** If you exhaust the free tier, upgrade to Pro, and later cancel, the write counter from before the upgrade is preserved. The counter resets monthly, not on cancellation.
-- **Subgraph mode:** On-chain storage via Gnosis Chain subgraph is functional and deployed to the Chiado testnet. Set `TOTALRECLAW_SUBGRAPH_MODE=true` to enable (recommended). Set to `false` and provide your own `TOTALRECLAW_SERVER_URL` if you prefer to self-host.
+- **Self-hosted mode:** If you prefer full control, you can self-host the open-source server and store encrypted memories in your own PostgreSQL database instead. Set `TOTALRECLAW_SUBGRAPH_MODE=false` and provide your own `TOTALRECLAW_SERVER_URL`.
 
 ---
 

@@ -64,7 +64,7 @@ NanoClaw agents get TotalReclaw memory automatically — no setup required on yo
 - Your agent has 8 memory tools available: remember, recall, forget, export, import, import_from (Mem0/MCP Memory), status, upgrade
 - Memory is shared within your NanoClaw group (same namespace = same memories)
 - All data is encrypted with your group's master password before leaving the container
-- Subgraph mode, billing, and quota work identically to Claude Desktop / Cursor
+- Billing and quota work identically to Claude Desktop / Cursor
 
 **To verify it's working**, ask your agent:
 
@@ -81,7 +81,7 @@ If TotalReclaw is configured, the agent will show your tier, usage, and storage 
 1. **You set up with a 12-word recovery phrase** (like a crypto wallet)
 2. **All memories are encrypted on your device** before reaching our server
 3. **The server only stores encrypted blobs** -- it can never read them
-4. **Your data is anchored on-chain** (Gnosis Chain) and indexed by [The Graph](https://thegraph.com) — no single server controls your memories. Or self-host for full control.
+4. **The TotalReclaw managed service** facilitates on-chain storage, gas sponsorship, billing, and query routing — without ever seeing your data. Your encrypted memories are anchored on [Gnosis Chain](https://www.gnosis.io/) and indexed by [The Graph](https://thegraph.com). If you prefer full control, you can self-host the open-source server and store encrypted memories in your own PostgreSQL database instead.
 5. **Same phrase on any device = same keys = same memories**
 
 ---
@@ -111,18 +111,20 @@ To recover: just run the setup again (OpenClaw: reinstall the skill; MCP: re-run
 
 ---
 
-## Storage Modes
+## Storage
 
-TotalReclaw supports two storage modes:
+By default, TotalReclaw uses its managed service at `api.totalreclaw.xyz`, which facilitates on-chain storage, gas sponsorship, billing, and query routing — without ever seeing your data. Encrypted facts are submitted on-chain (Gnosis Chain) via ERC-4337 and indexed by The Graph. Gas is sponsored — you pay nothing.
 
-| Mode | How It Works | When to Use |
-|------|-------------|-------------|
-| **Subgraph (default)** | Encrypted facts are submitted on-chain (Gnosis Chain) via ERC-4337 and indexed by The Graph. Gas is sponsored — you pay nothing. No single server controls your data. | Default — recommended for most users |
-| **HTTP (self-hosted)** | Encrypted facts are stored in your own server's database. Faster writes, but you manage the infrastructure. | Set `TOTALRECLAW_SUBGRAPH_MODE=false` and `TOTALRECLAW_SERVER_URL` to your server |
+If you prefer full control, you can self-host the open-source server and store encrypted memories in your own PostgreSQL database instead.
 
-To enable subgraph mode (the default), set `TOTALRECLAW_SUBGRAPH_MODE=true` in your environment. To switch to HTTP mode, set it to `false` and point `TOTALRECLAW_SERVER_URL` at your own server (see the [Self-Hosting section in the README](../../README.md#storage-modes)).
+| Option | How It Works | When to Use |
+|--------|-------------|-------------|
+| **TotalReclaw (managed)** | Encrypted facts are stored on-chain (Gnosis Chain) and indexed by The Graph. Gas is sponsored. No single server controls your data. | Default — recommended for most users |
+| **Self-hosted** | Encrypted facts are stored in your own server's PostgreSQL database. Faster writes, but you manage the infrastructure. | Set `TOTALRECLAW_SUBGRAPH_MODE=false` and `TOTALRECLAW_SERVER_URL` to your server |
 
-During beta, subgraph mode uses the Chiado testnet. Both modes encrypt your data identically on your device — the difference is where the encrypted blobs are stored.
+> **Deprecation note:** The `TOTALRECLAW_SUBGRAPH_MODE` env var will be renamed to `TOTALRECLAW_SELF_HOSTED` (with inverted logic) in a future release. For now, set `TOTALRECLAW_SUBGRAPH_MODE=false` to enable self-hosted mode.
+
+During beta, the managed service uses the Chiado testnet. Both options encrypt your data identically on your device — the difference is where the encrypted blobs are stored.
 
 ---
 
@@ -202,7 +204,7 @@ TotalReclaw uses two complementary layers to prevent duplicate memories:
 - Free tier limit (250 writes/month) and Pro pricing ($2-5/month) are not finalized
 - MCP agents rely on explicit tool use rather than automatic memory hooks
 - Beta runs on testnet infrastructure -- expect occasional downtime
-- Subgraph mode (on-chain storage) requires `TOTALRECLAW_SUBGRAPH_MODE=true`. Set to `false` and provide your own `TOTALRECLAW_SERVER_URL` for self-hosted HTTP mode
+- On-chain storage is enabled by default (`TOTALRECLAW_SUBGRAPH_MODE=true`). Set to `false` and provide your own `TOTALRECLAW_SERVER_URL` for self-hosted mode
 
 ---
 

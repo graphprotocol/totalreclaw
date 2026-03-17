@@ -1,6 +1,6 @@
 # @totalreclaw/totalreclaw
 
-Encrypted memory for your AI agent — zero-knowledge E2EE vault with automatic extraction, semantic search, and on-chain storage.
+Encrypted memory for your AI agent — zero-knowledge E2EE vault with automatic extraction, semantic search, and portable storage.
 
 Built for [OpenClaw](https://openclaw.ai). Your memories are encrypted on your device before leaving — no one can read them, not even us.
 
@@ -48,7 +48,7 @@ Most of the time you won't use these directly — the automatic hooks handle mem
 - **Semantic search** — Local embeddings (bge-small-en-v1.5) + BM25 + cosine reranking with RRF
 - **Automatic extraction** — LLM extracts facts from conversations, no manual input needed
 - **Dedup** — Cosine similarity catches paraphrases; LLM-guided dedup catches contradictions (Pro)
-- **On-chain storage** — Encrypted data anchored on Gnosis Chain, indexed by The Graph
+- **On-chain storage** — Encrypted data stored on Gnosis Chain, indexed by The Graph
 - **Portable** — One 12-word phrase. Any device, same memories, no lock-in
 - **Import** — Migrate from Mem0 or MCP Memory Server
 
@@ -69,7 +69,7 @@ Set these environment variables before the agent starts:
 |----------|-------------|---------|
 | `TOTALRECLAW_SERVER_URL` | Server URL | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_CREDENTIALS_PATH` | Path to credentials file | `~/.totalreclaw/credentials.json` |
-| `TOTALRECLAW_SUBGRAPH_MODE` | On-chain storage via The Graph | `true` |
+| `TOTALRECLAW_SUBGRAPH_MODE` | Use managed service (`true`) or self-hosted server (`false`). Will be renamed to `TOTALRECLAW_SELF_HOSTED` (inverted) in a future release. | `true` |
 | `TOTALRECLAW_EXTRACT_EVERY_TURNS` | Auto-extract interval (turns) | `5` (Free) / `2` (Pro min) |
 
 ## Using with Other Agents

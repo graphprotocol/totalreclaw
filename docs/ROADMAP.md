@@ -2,13 +2,14 @@
 
 ## Overview
 
-TotalReclaw is a zero-knowledge encrypted memory vault for AI agents. The project progresses through four phases, each building on the last but with distinct goals:
+TotalReclaw is a zero-knowledge encrypted memory vault for AI agents. The project progresses through phases, each building on the last but with distinct goals:
 
 1. **Phase 1 (PoC)** -- Validate the E2EE architecture end-to-end with local testing.
-2. **Phase 2 (Free MVP)** -- Ship a production server, publish on Claw Hub, and benchmark against Mem0.
-3. **Phase 3 (Subgraph)** -- Decentralize storage onto Base L2 for censorship-resistant, self-sovereign memory.
+2. **Phase 2 (Free MVP)** -- Ship the managed service, publish on Claw Hub, and benchmark against Mem0.
+3. **Phase 3 (Self-Hosted)** -- Self-hosted deployment option for users who want full control over their memory infrastructure.
 4. **Phase 4 (TEE)** -- Hardware-enforced privacy via Intel TDX / AWS Nitro as a separate product stack.
 5. **Phase 5 (Import)** -- Import & migrate memories from external systems (Mem0, Zep, LLM providers, etc.).
+6. **Phase 6 (Platform)** -- Integrator support, knowledge graphs, and cross-agent intelligence.
 
 ---
 
@@ -40,12 +41,12 @@ TotalReclaw is a zero-knowledge encrypted memory vault for AI agents. The projec
 
 ---
 
-## Phase 2: Free MVP
+## Phase 2: Free MVP (Managed Service)
 
-**Goal:** Public launch via Claw Hub and other channels. Production server online for real users.
+**Goal:** Public launch via Claw Hub and other channels. Managed service online for real users.
 **Specs:** `docs/specs/totalreclaw/server.md` (v0.3.1b) + production hardening
 
-### 2.1 Server Production Readiness
+### 2.1 Managed Service Production Readiness
 
 #### Critical (must-fix before launch)
 
@@ -174,7 +175,8 @@ Reduce fact pile-up by detecting near-duplicates and merging them client-side.
 | LLM-guided dedup (Pro) | UPDATE/DELETE/NOOP classification gated behind Pro tier | **DONE** — client-side gating via billing cache |
 | Configurable extraction interval (Pro) | Min 2 turns for Pro, clamped to 5 for Free | **DONE** — `getExtractInterval()` reads billing features |
 | Memory retention / decay tuning (Pro) | Configurable importance thresholds and decay curves. Pro users keep memories longer or tune what gets retained. | NOT DONE |
-| Namespace isolation (Pro) | Scope memories by namespace (e.g., "work" vs "personal"). Currently removed; will return as Pro-only. | NOT DONE — MCP had it, stripped in prep for Pro gating |
+| Namespace isolation (Pro) | Scope memories by namespace (e.g., "work" vs "personal"). Currently removed; will return as Pro-only. | NOT DONE -- MCP had it, stripped in prep for Pro gating |
+| Supersession graph (Pro) | Track fact replacement chains for memory history. Foundation for knowledge graph (Phase 6). | NOT DONE -- see Phase 6.1 |
 
 ### 2.6 Memory Compression Stats
 
@@ -202,7 +204,7 @@ Import tools to reduce switching costs. Prioritize the two most common sources f
 
 ### 2.8 Multi-Agent Conflict Resolution (`docs/specs/totalreclaw/conflict-resolution.md` v0.3.2)
 
-Applies to both MVP (PostgreSQL) and future Subgraph path. 4-layer protocol:
+Applies to both managed service (PostgreSQL) and future self-hosted deployments. 4-layer protocol:
 
 | Layer | What | Effort | Priority |
 |-------|------|--------|----------|
@@ -215,12 +217,14 @@ Layers 1-2 are part of PoC (v0.3.1b). Layers 3-4 are MVP enhancements (v0.3.2).
 
 ---
 
-## Phase 3: Subgraph (Decentralized)
+## Phase 3: Self-Hosted
 
-**Goal:** Censorship-resistant, self-sovereign memory. User's 12-word seed is the only secret.
+**Goal:** Self-hosted deployment option for users who want full control over their memory infrastructure.
 **Specs:** `docs/specs/subgraph/seed-to-subgraph.md`, `docs/specs/subgraph/billing-and-onboarding.md`
 
-Architecture: User's BIP-39 seed derives both encryption key AND on-chain identity (ERC-4337 Smart Account). Writes go through a paymaster-sponsored UserOperation on **Gnosis Chain**, emitted as events by an EventfulDataEdge contract, indexed by The Graph Network.
+Self-hosted mode uses the same E2EE architecture but stores encrypted facts on-chain (Gnosis Chain via ERC-4337 Smart Accounts) rather than the managed PostgreSQL service. User's BIP-39 seed derives both encryption key AND on-chain identity. Writes go through a paymaster-sponsored UserOperation, emitted as events by an EventfulDataEdge contract, indexed by The Graph Network.
+
+> **Env var rename (planned):** `TOTALRECLAW_SUBGRAPH_MODE` will be renamed to `TOTALRECLAW_SELF_HOSTED` to align with the new terminology.
 
 ### Go-Live Architecture (Decided 2026-03-03)
 
@@ -243,38 +247,40 @@ Architecture: User's BIP-39 seed derives both encryption key AND on-chain identi
 | 1K users | $1,140 | $28 | $2,000 | +$832 |
 | 10K users | $11,400 | $298 | $20,000 | +$8,302 |
 
-### What's Built (Code Complete, Not Deployed)
+### What's Built (Code Complete, Deployed to Chiado Testnet)
 
-All scaffolding and smart contracts are built and locally tested. Need to redeploy to Gnosis (was originally targeting Base).
+All scaffolding and smart contracts are built, tested, and deployed to Chiado testnet. E2E validated.
 
 | Component | Description | Tests | Status |
 |-----------|-------------|-------|--------|
-| EventfulDataEdge.sol | Minimal DA contract, fallback() emits Log(bytes), EntryPoint access control | 14 | DONE |
+| EventfulDataEdge.sol | Minimal DA contract, fallback() emits Log(bytes), permissionless (no access control) | 14 | DONE |
 | TotalReclawPaymaster.sol | ERC-4337 paymaster with per-sender sliding window rate limiting | 32 | DONE |
-| Deploy/verify/fund scripts | Hardhat deploy (need to retarget Gnosis) | — | NEEDS UPDATE |
+| Deploy/verify/fund scripts | Hardhat deploy, deployed to Chiado via Pimlico CREATE2 | -- | DONE |
 | Subgraph schema + mapping | 14-field FactEntity, AssemblyScript Protobuf decoder, GlobalState tracking | graph build OK | DONE |
 | Client BIP-39 seed management | 12-word mnemonic, BIP-32/44 derivation, HKDF key compatibility with kdf.ts | 19 | DONE |
 | Client UserOperation builder | Encode facts as calldata, sign with seed-derived key, submit to relay | 11 | DONE |
-| Server /relay endpoint | Target/calldata validation, per-address rate limiting, Pimlico bundler submission | 16 | DONE |
-| Billing & onboarding spec | Full go-live architecture: payments, auth, tiers, onboarding flows | — | DONE (v1.0) |
+| Managed service relay proxy | Target/calldata validation, per-address rate limiting, Pimlico bundler submission, subgraph query proxy | 16 | DONE |
+| Billing & onboarding | Stripe + Coinbase Commerce, subscription table, webhook handlers | -- | DONE |
+
+### Relay Extraction (Planned)
+
+Extract the managed service relay into a private `totalreclaw-relay` repo (TypeScript). The relay handles billing, bundler submission, and subgraph query proxying. Extracting it decouples the relay from the monorepo and enables independent deployment.
 
 ### Next Steps
 
 | Step | Effort | Description |
 |------|--------|-------------|
-| Retarget deploy scripts to Gnosis | 1 day | Update Hardhat config, subgraph.yaml network field |
-| Fix subgraph recall gap | 1-2 days | Raise `GRAPH_GRAPHQL_MAX_FIRST` to 5,000, add pagination |
-| Pimlico/ZeroDev evaluation | 1 day | Test webhook policy support on Gnosis |
-| Stripe + Coinbase Commerce integration | 1 week | Checkout flow, webhooks, subscription table |
-| Deploy to Gnosis testnet (Chiado) | 1 day | E2E validation on real network |
+| Relay extraction to `totalreclaw-relay` | 1 week | Extract relay into private TypeScript repo |
+| Mainnet deployment | 1-2 days | Deploy contracts + subgraph to Gnosis mainnet |
+| Load testing (self-hosted path) | 2 days | Validate latency under concurrent self-hosted users |
 
-**Deployment deferred until MVP validates demand.**
+**Mainnet deployment deferred until managed service MVP validates demand.**
 
 ---
 
-## Phase 4: TEE (Trusted Execution Environment)
+## Phase 4: TEE (TDX SaaS)
 
-**Goal:** Hardware-enforced privacy with server-side intelligence. Separate stack from E2EE.
+**Goal:** Hardware-enforced privacy with server-side intelligence on encrypted data. Separate stack from E2EE.
 **Specs:** `docs/specs/tee/architecture.md`, `docs/specs/tee/tdx-saas.md`
 
 This is a fundamentally different architecture. Since TEE (Intel TDX / AWS Nitro) guarantees hardware isolation, the server CAN work with unencrypted data inside the enclave. This enables:
@@ -283,6 +289,7 @@ This is a fundamentally different architecture. Since TEE (Intel TDX / AWS Nitro
 - Semantic search with real vector similarity
 - LLM-powered enrichment and summarization on the server
 - Higher recall with simpler architecture
+- **Cross-agent conflict detection** -- blind index overlap patterns can be resolved with full plaintext access inside the enclave (see Phase 6)
 
 This is NOT an upgrade to the E2EE path -- it is a separate product/stack. The E2EE path remains for users who want mathematical guarantees (do not trust hardware). The TEE path is for users who want better search quality with hardware-based privacy.
 
@@ -332,6 +339,46 @@ Import conversation history and/or memory features from the major LLM providers.
 
 ---
 
+## Phase 6: Platform (Future)
+
+**Goal:** Integrator ecosystem, knowledge graphs, and cross-agent intelligence.
+
+### 6.1 Supersession Graph (Pro)
+
+Track fact replacement chains for memory history. When a fact is updated or superseded, maintain a linked chain of previous versions. Enables "what did I used to believe about X?" queries and audit trails.
+
+- Foundation for the knowledge graph (6.2)
+- Pro tier feature -- free users see only current facts
+- Requires encrypted graph edges stored alongside facts
+
+### 6.2 Knowledge Graph
+
+Build on the supersession graph foundation to create a full knowledge graph of entity relationships. Extract and maintain relationships between entities (people, tools, projects) from stored facts.
+
+- Depends on supersession graph (6.1)
+- Client-side extraction during fact storage
+- Encrypted relationship edges (zero-knowledge preserved)
+
+### 6.3 Integrator Support
+
+Partner onboarding, referral tracking, and revenue share dashboard for third-party integrators who build on TotalReclaw.
+
+| Component | Description | Status |
+|-----------|-------------|--------|
+| Partner onboarding flow | API key provisioning, sandbox environment | NOT DONE |
+| Referral tracking | Track signups and conversions per integrator | NOT DONE |
+| Revenue share dashboard | Real-time earnings, payout history, usage metrics | NOT DONE |
+
+### 6.4 Cross-Agent Conflict Detection
+
+Detect when multiple agents write conflicting facts about the same topic using blind index overlap patterns. In E2EE mode, detection is probabilistic (blind indices only). Full resolution requires TEE (Phase 4) for plaintext access inside the enclave.
+
+- E2EE mode: detect overlap via blind index intersection, surface conflicts to user
+- TEE mode: full semantic conflict resolution server-side
+- Builds on conflict resolution layers 3-4 (Phase 2.8)
+
+---
+
 ## Spec Inventory
 
 Maps each spec to its rollout phase:
@@ -346,9 +393,9 @@ Maps each spec to its rollout phase:
 | Multi-Agent Conflict Resolution v0.3.2 | `docs/specs/totalreclaw/conflict-resolution.md` | Phase 2 (MVP) | Draft spec |
 | TotalReclaw MCP Server | `docs/specs/totalreclaw/mcp-server.md` | Phase 1 (PoC) | Implemented |
 | TotalReclaw Skill for NanoClaw | `docs/specs/totalreclaw/skill-nanoclaw.md` | Phase 1 (PoC) | Implemented |
-| Seed-to-Subgraph v1.0 | `docs/specs/subgraph/seed-to-subgraph.md` | Phase 3 (Subgraph) | Spec complete |
-| TEE vs E2EE | `docs/specs/tee/architecture.md` | Phase 4 (TEE) | Analysis complete |
-| TDX SaaS v0.4 | `docs/specs/tee/tdx-saas.md` | Phase 4 (TEE) | Spec complete |
+| Seed-to-Subgraph v1.0 | `docs/specs/subgraph/seed-to-subgraph.md` | Phase 3 (Self-Hosted) | Deployed to Chiado testnet |
+| TEE vs E2EE | `docs/specs/tee/architecture.md` | Phase 4 (TDX SaaS) | Analysis complete |
+| TDX SaaS v0.4 | `docs/specs/tee/tdx-saas.md` | Phase 4 (TDX SaaS) | Spec complete |
 | Import: External Memory Systems | — | Phase 2.6 / Phase 5 (Import) | Mem0 DONE (E2E validated), MCP Memory DONE (unit tests), others not started |
 | Import: LLM Provider Histories | — | Phase 5 (Import) | Not started |
 
@@ -363,7 +410,7 @@ The codebase had old prototype directories (now in archive/prototypes/v02/ throu
 | v0.3 | Current spec family (E2EE + LSH architecture) |
 | v0.3.1 / v0.3.1b | Server PoC with auth + content fingerprint dedup |
 | v0.3.2 | Multi-agent conflict resolution protocol |
-| v1.0 (Seed-to-Subgraph) | Decentralized architecture spec |
-| v0.4 (TDX SaaS) | TEE architecture spec |
+| v1.0 (Seed-to-Subgraph) | Self-hosted architecture spec (on-chain storage via Gnosis) |
+| v0.4 (TDX SaaS) | TEE architecture spec (server-side intelligence on encrypted data) |
 
-The rollout phases (PoC, MVP, Subgraph, TEE) are the canonical way to think about what ships when.
+The rollout phases (PoC, MVP, Self-Hosted, TEE, Import, Platform) are the canonical way to think about what ships when.
