@@ -1,7 +1,8 @@
 {
   "name": "@totalreclaw/client",
   "version": "0.3.0",
-  "description": "TypeScript client library for TotalReclaw - zero-knowledge memory operations",
+  "description": "TypeScript client library for TotalReclaw — E2EE encryption, LSH blind indexing, embedding search, and BM25+cosine reranking for AI agent memory",
+  "homepage": "https://totalreclaw.xyz",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -17,8 +18,12 @@
     "totalreclaw",
     "zero-knowledge",
     "encryption",
+    "e2ee",
     "lsh",
     "vector-search",
+    "ai-memory",
+    "ai-agent",
+    "semantic-search",
     "memory"
   ],
   "author": "TotalReclaw Team",

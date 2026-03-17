@@ -1,7 +1,8 @@
 {
   "name": "@totalreclaw/mcp-server",
   "version": "1.0.0",
-  "description": "MCP Server for TotalReclaw - zero-knowledge encrypted memory",
+  "description": "Encrypted memory for your AI agent — MCP server with zero-knowledge E2EE, semantic search, import/export, and on-chain storage",
+  "homepage": "https://totalreclaw.xyz",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -21,8 +22,13 @@
     "totalreclaw",
     "mcp",
     "model-context-protocol",
-    "memory",
-    "encryption"
+    "ai-memory",
+    "ai-agent",
+    "zero-knowledge",
+    "encryption",
+    "e2ee",
+    "claude-desktop",
+    "cursor"
   ],
   "author": "TotalReclaw Team",
   "license": "MIT",

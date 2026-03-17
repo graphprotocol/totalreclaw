@@ -1,8 +1,10 @@
 # @totalreclaw/mcp-server
 
-MCP (Model Context Protocol) server for TotalReclaw — zero-knowledge encrypted memory for AI agents.
+Encrypted memory for your AI agent — zero-knowledge E2EE, semantic search, and on-chain storage.
 
-Works with Claude Desktop, Cursor, Windsurf, and any MCP-compatible client.
+Works with Claude Desktop, Cursor, Windsurf, and any MCP-compatible client. Your memories are encrypted on your device before leaving — no one can read them, not even us.
+
+**[totalreclaw.xyz](https://totalreclaw.xyz)**
 
 ## Quick Start
 
@@ -80,7 +82,6 @@ The server only ever sees ciphertext and hashed tokens.
 | `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_MASTER_PASSWORD` | 12-word BIP-39 recovery phrase | Required |
 | `TOTALRECLAW_SUBGRAPH_MODE` | Enable on-chain storage via The Graph | `true` |
-| `TOTALRECLAW_NAMESPACE` | Default namespace for memory isolation | `default` |
 | `TOTALRECLAW_CHAIN_ID` | Chain ID (10200=Chiado testnet, 100=Gnosis) | `10200` |
 
 ## Available Tools
@@ -92,6 +93,19 @@ The server only ever sees ciphertext and hashed tokens.
 | `totalreclaw_forget` | Delete a specific memory by ID |
 | `totalreclaw_export` | Export all memories decrypted as Markdown or JSON |
 | `totalreclaw_status` | Check billing status and quota usage |
+| `totalreclaw_import` | Re-import previously exported memories (JSON/Markdown) |
+| `totalreclaw_import_from` | Import from Mem0 or MCP Memory Server |
+| `totalreclaw_consolidate` | Merge duplicate and related memories |
+| `totalreclaw_upgrade` | Get a link to upgrade to Pro |
+
+## Free Tier & Pricing
+
+| Tier | Writes | Reads | Price |
+|------|--------|-------|-------|
+| **Free** | 250/month | Unlimited | $0 |
+| **Pro** | 10,000/month | Unlimited | $2-5/month |
+
+Pay with card (Stripe) or crypto (Coinbase Commerce). Counter resets monthly.
 
 ## Development
 

@@ -1,8 +1,28 @@
 {
   "name": "@totalreclaw/totalreclaw",
   "version": "0.1.0",
-  "description": "TotalReclaw plugin for OpenClaw - Zero-knowledge encrypted memory tools",
+  "description": "Encrypted memory for your AI agent — zero-knowledge E2EE vault with automatic extraction, semantic search, and on-chain storage",
   "type": "module",
+  "keywords": [
+    "totalreclaw",
+    "openclaw",
+    "ai-memory",
+    "ai-agent",
+    "zero-knowledge",
+    "encryption",
+    "e2ee",
+    "lsh",
+    "semantic-search",
+    "memory"
+  ],
+  "homepage": "https://totalreclaw.xyz",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/p-diogo/totalreclaw.git",
+    "directory": "skill/plugin"
+  },
+  "author": "TotalReclaw Team",
+  "license": "MIT",
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
     "@noble/hashes": "^2.0.1",

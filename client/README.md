@@ -1,6 +1,10 @@
-# TotalReclaw Client Library
+# @totalreclaw/client
 
-A TypeScript library for zero-knowledge memory operations. This library provides end-to-end encryption, LSH-based blind index search, and client-side reranking for secure and private memory storage.
+TypeScript client library for TotalReclaw — E2EE encryption, LSH blind indexing, embedding search, and BM25+cosine reranking for AI agent memory.
+
+Build encrypted memory into any AI agent. All encryption happens client-side — the server never sees plaintext.
+
+**[totalreclaw.xyz](https://totalreclaw.xyz)**
 
 ## Features
 
