@@ -39,6 +39,8 @@ export interface SubgraphStoreConfig {
   chainId: number;            // 10200 for Chiado, 100 for Gnosis
   dataEdgeAddress: string;    // EventfulDataEdge contract address
   entryPointAddress: string;  // ERC-4337 EntryPoint v0.7
+  authKeyHex?: string;        // HKDF auth key hex for relay Authorization header
+  walletAddress?: string;     // Smart Account address for X-Wallet-Address header
 }
 
 export interface FactPayload {
@@ -196,19 +198,28 @@ export async function submitFactOnChain(
   const dataEdgeAddress = config.dataEdgeAddress as Address;
   const entryPointAddr = (config.entryPointAddress || entryPoint07Address) as Address;
 
+  // Build authenticated transport for relay server proxy
+  const headers: Record<string, string> = {};
+  if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
+  if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
+
+  const authTransport = Object.keys(headers).length > 0
+    ? http(bundlerRpcUrl, { fetchOptions: { headers } })
+    : http(bundlerRpcUrl);
+
   // 1. Derive EOA signer from mnemonic (BIP-44 m/44'/60'/0'/0/0)
   const ownerAccount = mnemonicToAccount(config.mnemonic);
 
-  // 2. Create a public client for chain reads (via relay bundler proxy)
+  // 2. Create a public client for chain reads (use default RPC, not bundler proxy)
   const publicClient = createPublicClient({
     chain,
-    transport: http(bundlerRpcUrl),
+    transport: http(),
   });
 
   // 3. Create Pimlico client for bundler + paymaster operations (via relay)
   const pimlicoClient = createPimlicoClient({
     chain,
-    transport: http(bundlerRpcUrl),
+    transport: authTransport,
     entryPoint: {
       address: entryPointAddr,
       version: '0.7',
@@ -230,7 +241,7 @@ export async function submitFactOnChain(
   const smartAccountClient = createSmartAccountClient({
     account: smartAccount,
     chain,
-    bundlerTransport: http(bundlerRpcUrl),
+    bundlerTransport: authTransport,
     // Paymaster sponsorship proxied through relay to Pimlico
     paymaster: pimlicoClient,
     userOperation: {

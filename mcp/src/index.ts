@@ -391,6 +391,8 @@ async function handleRememberSubgraph(
                   const tombConfig = getSubgraphConfig({
                     relayUrl: state.serverUrl,
                     mnemonic: state.mnemonic,
+                    authKeyHex: Buffer.from(state.authKey).toString('hex'),
+                    walletAddress: state.smartAccountAddress,
                   });
                   await submitFactOnChain(tombProtobuf, tombConfig);
                   console.error(`Store-time dedup: superseded ${dupMatch.existingFact.id} (sim=${dupMatch.similarity.toFixed(3)})`);
@@ -425,6 +427,8 @@ async function handleRememberSubgraph(
                   const tombConfig = getSubgraphConfig({
                     relayUrl: state.serverUrl,
                     mnemonic: state.mnemonic,
+                    authKeyHex: Buffer.from(state.authKey).toString('hex'),
+                    walletAddress: state.smartAccountAddress,
                   });
                   await submitFactOnChain(tombProtobuf, tombConfig);
                   console.error(`Store-time dedup: superseded ${dupMatch.existingFact.id} (sim=${dupMatch.similarity.toFixed(3)})`);
@@ -470,6 +474,8 @@ async function handleRememberSubgraph(
       const config = getSubgraphConfig({
         relayUrl: state.serverUrl,
         mnemonic: state.mnemonic,
+        authKeyHex: Buffer.from(state.authKey).toString('hex'),
+        walletAddress: state.smartAccountAddress,
       });
 
       const { txHash, success } = await submitFactOnChain(protobuf, config);
@@ -812,17 +818,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     // ── Billing tools (mode-independent, always use HTTP relay) ────────────
     if (name === 'totalreclaw_status') {
-      const authKey = subgraphState
-        ? computeAuthKeyHash(subgraphState.authKey)
+      const authKeyHex = subgraphState
+        ? Buffer.from(subgraphState.authKey).toString('hex')
         : '';
-      return await handleStatus(SERVER_URL, authKey, args);
+      return await handleStatus(SERVER_URL, authKeyHex, args);
     }
 
     if (name === 'totalreclaw_upgrade') {
-      const authKey = subgraphState
-        ? computeAuthKeyHash(subgraphState.authKey)
+      const authKeyHex = subgraphState
+        ? Buffer.from(subgraphState.authKey).toString('hex')
         : '';
-      return await handleUpgrade(SERVER_URL, authKey, args);
+      return await handleUpgrade(SERVER_URL, authKeyHex, args);
     }
 
     // ── Subgraph mode ─────────────────────────────────────────────────────
