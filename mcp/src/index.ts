@@ -341,6 +341,7 @@ async function handleRememberSubgraph(
             allIndices,
             maxCandidates,
             state.serverUrl,
+            Buffer.from(state.authKey).toString('hex'),
           );
 
           if (candidates.length > 0) {
@@ -553,6 +554,7 @@ async function handleRecallSubgraph(
       allTrapdoors,
       maxCandidates,
       state.serverUrl,
+      Buffer.from(state.authKey).toString('hex'),
     );
 
     if (candidates.length === 0) {

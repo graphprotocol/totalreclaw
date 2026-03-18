@@ -46,11 +46,14 @@ async function gqlQuery<T>(
   endpoint: string,
   query: string,
   variables: Record<string, unknown>,
+  authKeyHex?: string,
 ): Promise<T | null> {
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authKeyHex) headers['Authorization'] = `Bearer ${authKeyHex}`;
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ query, variables }),
     });
     if (!response.ok) return null;
@@ -146,6 +149,7 @@ export async function searchSubgraph(
   trapdoors: string[],
   maxCandidates: number,
   relayUrl?: string,
+  authKeyHex?: string,
 ): Promise<SubgraphSearchFact[]> {
   const effectiveRelayUrl = relayUrl ?? getSubgraphConfig().relayUrl;
   const subgraphUrl = `${effectiveRelayUrl}/v1/subgraph`;
@@ -167,6 +171,7 @@ export async function searchSubgraph(
         subgraphUrl,
         SEARCH_QUERY,
         { trapdoors: chunk, owner, first: pageSize },
+        authKeyHex,
       );
       return { chunk, entries: data?.blindIndexes ?? [] };
     }),
@@ -201,6 +206,7 @@ export async function searchSubgraph(
         subgraphUrl,
         PAGINATE_QUERY,
         { trapdoors: chunk, owner, first: pageSize, lastId },
+        authKeyHex,
       );
 
       const entries = data?.blindIndexes ?? [];
@@ -236,6 +242,7 @@ export async function searchSubgraph(
 export async function getSubgraphFactCount(
   owner: string,
   relayUrl?: string,
+  authKeyHex?: string,
 ): Promise<number> {
   const effectiveRelayUrl = relayUrl ?? getSubgraphConfig().relayUrl;
   const subgraphUrl = `${effectiveRelayUrl}/v1/subgraph`;
@@ -254,6 +261,7 @@ export async function getSubgraphFactCount(
     subgraphUrl,
     query,
     {},
+    authKeyHex,
   );
 
   if (data?.globalStates && data.globalStates.length > 0) {
