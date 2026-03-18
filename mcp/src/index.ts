@@ -82,6 +82,10 @@ import { searchSubgraph } from './subgraph/search.js';
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { mnemonicToAccount } from 'viem/accounts';
+import { createPublicClient, http, type Address } from 'viem';
+import { gnosis, gnosisChiado } from 'viem/chains';
+import { toSimpleSmartAccount } from 'permissionless/accounts';
+import { entryPoint07Address } from 'viem/account-abstraction';
 import crypto from 'node:crypto';
 
 // ── Configuration ───────────────────────────────────────────────────────────
@@ -135,7 +139,7 @@ function detectServerMode(): ServerMode {
  * Initialize subgraph state from the BIP-39 mnemonic.
  * Derives all cryptographic keys and creates the LSH hasher.
  */
-function initSubgraphState(): SubgraphState {
+async function initSubgraphState(): Promise<SubgraphState> {
   const mnemonic = MASTER_PASSWORD!.trim();
   const { authKey, encryptionKey, dedupKey, salt } = deriveKeys(mnemonic);
 
@@ -144,11 +148,34 @@ function initSubgraphState(): SubgraphState {
   const dims = getEmbeddingDims(); // 384 for bge-small-en-v1.5
   const lshHasher = new LSHHasher(lshSeed, dims);
 
-  // Derive Smart Account address from mnemonic
+  // Derive Smart Account address via relay bundler proxy (same chain view as Pimlico).
+  // This does an eth_call to the EntryPoint to compute the counterfactual CREATE2 address.
+  const chainId = parseInt(process.env.TOTALRECLAW_CHAIN_ID || '10200');
+  const chain = chainId === 100 ? gnosis : gnosisChiado;
+  const bundlerRpcUrl = `${SERVER_URL}/v1/bundler`;
   const ownerAccount = mnemonicToAccount(mnemonic);
-  // The Smart Account address is deterministic from the EOA via CREATE2
-  // For now, use the EOA address as owner identifier (Smart Account is derived on-chain)
-  const smartAccountAddress = ownerAccount.address;
+  const entryPointAddr = (process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || entryPoint07Address) as Address;
+  const authKeyHex = Buffer.from(authKey).toString('hex');
+
+  // Use public RPC for the eth_call (Pimlico bundler doesn't support eth_call).
+  // This is only used to derive the counterfactual Smart Account address via CREATE2 —
+  // the result is deterministic and doesn't depend on chain head position.
+  const publicClient = createPublicClient({
+    chain,
+    transport: http(),
+  });
+
+  const smartAccount = await toSimpleSmartAccount({
+    // @ts-ignore - viem/permissionless type intersection conflict
+    client: publicClient,
+    owner: ownerAccount,
+    entryPoint: {
+      address: entryPointAddr,
+      version: '0.7',
+    },
+  });
+
+  const smartAccountAddress = smartAccount.address.toLowerCase();
 
   return {
     mode: 'subgraph',
@@ -1074,7 +1101,7 @@ async function main(): Promise<void> {
   // Detect and initialize server mode
   const mode = detectServerMode();
   if (mode === 'subgraph') {
-    subgraphState = initSubgraphState();
+    subgraphState = await initSubgraphState();
     console.error(`TotalReclaw MCP server started (managed service, owner: ${subgraphState.smartAccountAddress})`);
   } else {
     console.error('TotalReclaw MCP server started (self-hosted mode)');
