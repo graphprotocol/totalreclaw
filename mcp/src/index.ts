@@ -52,7 +52,7 @@ import {
   invalidateMemoryContextCache,
 } from './resources/index.js';
 
-// Subgraph imports (lazy usage -- only when subgraph mode is active)
+// Subgraph imports (lazy usage -- only when managed service is active)
 import {
   deriveKeys,
   deriveLshSeed,
@@ -113,16 +113,16 @@ let subgraphState: SubgraphState | null = null;
 /**
  * Detect server mode based on environment configuration.
  *
- * Subgraph mode requires:
- *   1. TOTALRECLAW_MASTER_PASSWORD is a valid BIP-39 mnemonic
+ * Managed service (subgraph) mode is the default when a valid BIP-39 mnemonic
+ * is provided as TOTALRECLAW_MASTER_PASSWORD.
  *
- * Subgraph mode requires TOTALRECLAW_SUBGRAPH_MODE=true and a valid mnemonic.
- * Defaults to HTTP mode otherwise.
+ * Self-hosted mode (HTTP) requires TOTALRECLAW_SELF_HOSTED=true.
+ * Defaults to managed service otherwise.
  */
 function detectServerMode(): ServerMode {
   if (!MASTER_PASSWORD) return 'http';
-  // Subgraph mode is opt-in: requires explicit TOTALRECLAW_SUBGRAPH_MODE=true
-  if (process.env.TOTALRECLAW_SUBGRAPH_MODE !== 'true') return 'http';
+  // Self-hosted mode is opt-in: requires explicit TOTALRECLAW_SELF_HOSTED=true
+  if (process.env.TOTALRECLAW_SELF_HOSTED === 'true') return 'http';
 
   const words = MASTER_PASSWORD.trim().split(/\s+/);
   if (words.length !== 12 && words.length !== 24) return 'http';
@@ -659,7 +659,7 @@ async function handleForgetSubgraph(
         text: JSON.stringify({
           deleted_count: 0,
           fact_ids: [],
-          error: 'fact_id is required for subgraph forget (query-based forget not supported in subgraph mode)',
+          error: 'fact_id is required for forget (query-based forget is not supported with the managed service)',
         }),
       }],
     };
@@ -854,12 +854,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         case 'totalreclaw_export':
-          // Export in subgraph mode not yet implemented -- fall through to error
+          // Export not yet implemented for the managed service -- fall through to error
           return {
             content: [{
               type: 'text',
               text: JSON.stringify({
-                error: 'Export is not yet supported in subgraph mode. Use HTTP mode for export.',
+                error: 'Export is not yet supported with the managed service. Use self-hosted mode for export.',
               }),
             }],
             isError: true,
@@ -870,7 +870,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [{
               type: 'text',
               text: JSON.stringify({
-                error: 'Import is not yet supported in subgraph mode. Use HTTP mode for import.',
+                error: 'Import is not yet supported with the managed service. Use self-hosted mode for import.',
               }),
             }],
             isError: true,
@@ -881,7 +881,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [{
               type: 'text',
               text: JSON.stringify({
-                error: 'Import from external sources is not yet supported in subgraph mode. Use HTTP mode for import.',
+                error: 'Import from external sources is not yet supported with the managed service. Use self-hosted mode for import.',
               }),
             }],
             isError: true,
@@ -892,7 +892,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [{
               type: 'text',
               text: JSON.stringify({
-                error: 'Consolidation is not yet supported in subgraph mode. On-chain facts require tombstone-based dedup which is handled automatically at store time.',
+                error: 'Consolidation is not supported with the managed service. On-chain facts require tombstone-based dedup which is handled automatically at store time.',
               }),
             }],
             isError: true,
@@ -1003,14 +1003,14 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   const { uri } = request.params;
 
   if (uri === memoryContextResource.uri) {
-    // In subgraph mode, resource reading is not supported yet
+    // With the managed service, resource reading is not supported yet
     if (subgraphState) {
       return {
         contents: [
           {
             uri: memoryContextResource.uri,
             mimeType: 'text/markdown',
-            text: '*Memory context resource is not available in subgraph mode. Use totalreclaw_recall to search memories.*',
+            text: '*Memory context resource is not available with the managed service. Use totalreclaw_recall to search memories.*',
           },
         ],
       };
@@ -1067,9 +1067,9 @@ async function main(): Promise<void> {
   const mode = detectServerMode();
   if (mode === 'subgraph') {
     subgraphState = initSubgraphState();
-    console.error(`TotalReclaw MCP server started (subgraph mode, owner: ${subgraphState.smartAccountAddress})`);
+    console.error(`TotalReclaw MCP server started (managed service, owner: ${subgraphState.smartAccountAddress})`);
   } else {
-    console.error('TotalReclaw MCP server started (HTTP mode)');
+    console.error('TotalReclaw MCP server started (self-hosted mode)');
   }
 
   const transport = new StdioServerTransport();

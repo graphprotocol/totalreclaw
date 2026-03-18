@@ -18,7 +18,7 @@ Set these in your NanoClaw deployment (Docker env, `.env` file, or platform conf
 ```bash
 TOTALRECLAW_SERVER_URL=https://api.totalreclaw.xyz
 TOTALRECLAW_MASTER_PASSWORD="your twelve word recovery phrase here"
-TOTALRECLAW_SUBGRAPH_MODE=true
+# Managed service is the default — set TOTALRECLAW_SELF_HOSTED=true only for self-hosted mode
 ```
 
 The NanoClaw agent-runner automatically spawns the MCP server with these variables.
@@ -34,7 +34,7 @@ All encryption happens inside the MCP server process — the TotalReclaw server 
 - Facts encrypted with AES-256-GCM before leaving the container
 - Search uses blind indices (SHA-256 hashes), not plaintext
 - Recovery phrase derives all keys via Argon2id + HKDF
-- With subgraph mode, encrypted facts are stored on-chain (Gnosis Chain) and indexed by The Graph
+- With the managed service, encrypted facts are stored on-chain (Gnosis Chain) and indexed by The Graph
 
 ## Hooks
 
@@ -59,7 +59,7 @@ This provides memory isolation between different contexts.
 |----------|-------------|---------|
 | `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_MASTER_PASSWORD` | 12-word BIP-39 recovery phrase | Required |
-| `TOTALRECLAW_SUBGRAPH_MODE` | Enable on-chain storage via The Graph | `true` |
+| `TOTALRECLAW_SELF_HOSTED` | Set to `true` to use your own server instead of the managed service | `false` |
 | `TOTALRECLAW_NAMESPACE` | Default namespace | Group folder name |
 | `TOTALRECLAW_AUTO_EXTRACT` | Enable automatic extraction | `true` |
 | `TOTALRECLAW_EXTRACT_INTERVAL` | Turns between extractions | `5` |

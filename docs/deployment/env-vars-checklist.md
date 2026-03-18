@@ -114,7 +114,7 @@ These go in each beta tester's OpenClaw `.env` or plugin config:
 
 | Variable | Value | Notes |
 |----------|-------|-------|
-| `TOTALRECLAW_SUBGRAPH_MODE` | `true` | Enables subgraph path |
+| `TOTALRECLAW_SELF_HOSTED` | `false` | Set to `true` for self-hosted mode (default: managed service) |
 | `TOTALRECLAW_SERVER_URL` | `https://<your-domain>` | Relay server (for registration + billing) |
 | `TOTALRECLAW_SUBGRAPH_ENDPOINT` | `https://api.studio.thegraph.com/query/<id>/totalreclaw/version/latest` | Graph Studio endpoint |
 | `TOTALRECLAW_RELAY_URL` | `https://<your-domain>` | Same as SERVER_URL for now |

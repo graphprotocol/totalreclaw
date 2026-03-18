@@ -335,9 +335,9 @@ Ask the user:
 
 When setup is required, the plugin will automatically detect the host environment (macOS, Linux, or Docker) and provide the exact commands or config snippets needed to set the env vars. Follow those instructions.
 
-### Step 3: Enable subgraph mode
+### Step 3: Storage mode (optional)
 
-Set `TOTALRECLAW_SUBGRAPH_MODE=true`. The plugin will provide platform-specific instructions alongside the master password setup in Step 2.
+The managed service is the default -- no extra configuration needed. If you want to self-host instead, set `TOTALRECLAW_SELF_HOSTED=true` and point `TOTALRECLAW_SERVER_URL` to your server.
 
 ### Step 4: Set memory slot
 

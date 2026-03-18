@@ -134,8 +134,8 @@ Set the following environment variables in your OpenClaw configuration (e.g., wo
 TOTALRECLAW_MASTER_PASSWORD="word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12"
 TOTALRECLAW_SERVER_URL="https://api.totalreclaw.xyz"
 
-# --- On-chain storage (default, recommended) ---
-TOTALRECLAW_SUBGRAPH_MODE="true"
+# --- Managed service is the default (no env var needed) ---
+# Set TOTALRECLAW_SELF_HOSTED="true" only if using your own server
 TOTALRECLAW_CHAIN_ID="10200"
 ```
 
@@ -719,11 +719,11 @@ The OpenClaw plugin auto-detects your agent's LLM provider and API key for fact 
 
 ### On-Chain Storage Variables (Advanced)
 
-These variables control on-chain storage via the managed service. **The default (`TOTALRECLAW_SUBGRAPH_MODE=true`) uses the managed service with on-chain storage -- recommended for most users.**
+These variables control on-chain storage via the managed service. **The default (managed service with on-chain storage) requires no extra configuration -- recommended for most users.**
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `TOTALRECLAW_SUBGRAPH_MODE` | Set to `true` to use the managed service with on-chain storage via The Graph (recommended). Set to `false` for self-hosted mode with your own PostgreSQL database. **Deprecation note:** This env var will be renamed to `TOTALRECLAW_SELF_HOSTED` (with inverted logic) in a future release. | `true` (recommended) |
+| `TOTALRECLAW_SELF_HOSTED` | Set to `true` to use your own self-hosted server with PostgreSQL instead of the managed service. When not set (or `false`), TotalReclaw uses the managed service with on-chain storage via The Graph. | `false` (managed service) |
 | `TOTALRECLAW_CHAIN_ID` | Chain ID for on-chain transactions. `10200` = Chiado testnet, `100` = Gnosis mainnet. | `10200` |
 | `TOTALRECLAW_DATA_EDGE_ADDRESS` | Address of the EventfulDataEdge smart contract on Chiado. | `0xA84c5433110Ccc93e57ec387e630E86Bad86c36f` |
 | `TOTALRECLAW_ENTRYPOINT_ADDRESS` | ERC-4337 EntryPoint v0.7 address. Same on all chains. | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` |
@@ -827,7 +827,7 @@ This is a beta release. The following items are known limitations that will be a
 - **Batch writes:** On-chain writes are currently sent one fact at a time. Batch writes for gas optimization are not yet implemented.
 - **Decay and eviction engine:** The importance decay formula runs, but tuning is ongoing. Low-importance facts decay over time and may be evicted.
 - **Write counter persists across upgrades:** If you exhaust the free tier, upgrade to Pro, and later cancel, the write counter from before the upgrade is preserved. The counter resets monthly, not on cancellation.
-- **Self-hosted mode:** If you prefer full control, you can self-host the open-source server and store encrypted memories in your own PostgreSQL database instead. Set `TOTALRECLAW_SUBGRAPH_MODE=false` and provide your own `TOTALRECLAW_SERVER_URL`.
+- **Self-hosted mode:** If you prefer full control, you can self-host the open-source server and store encrypted memories in your own PostgreSQL database instead. Set `TOTALRECLAW_SELF_HOSTED=true` and provide your own `TOTALRECLAW_SERVER_URL`.
 
 ---
 

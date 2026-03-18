@@ -118,7 +118,6 @@ const ALL_INSTANCES: InstanceConfig[] = [
       // to reliably match. With <20 mock facts, word trapdoors are needed.
       TOTALRECLAW_TWO_TIER_SEARCH: 'false',
       TOTALRECLAW_CACHE_TTL_MS: '300000',
-      TOTALRECLAW_SUBGRAPH_MODE: 'true',
       TOTALRECLAW_SUBGRAPH_ENDPOINT: 'http://localhost:28000/subgraphs/name/totalreclaw',
     },
     pluginPath: PLUGIN_PATH,
@@ -132,7 +131,6 @@ const ALL_INSTANCES: InstanceConfig[] = [
       TOTALRECLAW_EXTRACT_EVERY_TURNS: '1',
       TOTALRECLAW_TWO_TIER_SEARCH: 'false',
       TOTALRECLAW_CACHE_TTL_MS: '0',
-      TOTALRECLAW_SUBGRAPH_MODE: 'true',
       TOTALRECLAW_SUBGRAPH_ENDPOINT: 'http://localhost:28000/subgraphs/name/totalreclaw',
     },
     pluginPath: PLUGIN_PATH,

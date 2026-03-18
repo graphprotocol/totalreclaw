@@ -8,7 +8,7 @@
  *   T4: Cross-session recall (before_agent_start)
  *   T5: Explicit recall (totalreclaw_recall)
  *   T6: Status / billing
- *   T7: Export (subgraph mode)
+ *   T7: Export (managed service mode)
  *   T8: Forget (on-chain tombstone)
  *   T9: Recovery (same mnemonic, fresh container) — manual
  *   T10: MEMORY.md cleartext prevention

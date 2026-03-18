@@ -224,8 +224,6 @@ Layers 1-2 are part of PoC (v0.3.1b). Layers 3-4 are MVP enhancements (v0.3.2).
 
 Self-hosted mode uses the same E2EE architecture but stores encrypted facts on-chain (Gnosis Chain via ERC-4337 Smart Accounts) rather than the managed PostgreSQL service. User's BIP-39 seed derives both encryption key AND on-chain identity. Writes go through a paymaster-sponsored UserOperation, emitted as events by an EventfulDataEdge contract, indexed by The Graph Network.
 
-> **Env var rename (planned):** `TOTALRECLAW_SUBGRAPH_MODE` will be renamed to `TOTALRECLAW_SELF_HOSTED` to align with the new terminology.
-
 ### Go-Live Architecture (Decided 2026-03-03)
 
 | Component | Decision | Rationale |

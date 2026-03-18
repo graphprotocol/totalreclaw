@@ -7,7 +7,6 @@ services:
       ZAI_API_KEY: "${ZAI_API_KEY}"
       TOTALRECLAW_SERVER_URL: "https://api.totalreclaw.xyz"
       TOTALRECLAW_MASTER_PASSWORD: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-      TOTALRECLAW_SUBGRAPH_MODE: "true"
       TOTALRECLAW_CHAIN_ID: "10200"
       TOTALRECLAW_DATA_EDGE_ADDRESS: "0xA84c5433110Ccc93e57ec387e630E86Bad86c36f"
       TOTALRECLAW_EXTRACT_EVERY_TURNS: "1"  # Override for testing (default is 5)

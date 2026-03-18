@@ -79,7 +79,7 @@ The server only ever sees ciphertext and hashed tokens.
 |----------|-------------|---------|
 | `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_MASTER_PASSWORD` | 12-word BIP-39 recovery phrase | Required |
-| `TOTALRECLAW_SUBGRAPH_MODE` | Use managed service (`true`) or self-hosted server (`false`). Will be renamed to `TOTALRECLAW_SELF_HOSTED` (inverted) in a future release. | `true` |
+| `TOTALRECLAW_SELF_HOSTED` | Set to `true` to use a self-hosted server instead of the managed service. | `false` |
 | `TOTALRECLAW_CHAIN_ID` | Chain ID (10200=Chiado testnet, 100=Gnosis). Managed service only. | `10200` |
 
 ## Available Tools

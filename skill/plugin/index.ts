@@ -113,7 +113,7 @@ let initPromise: Promise<void> | null = null;
 let lshHasher: LSHHasher | null = null;
 let lshInitFailed = false; // If true, skip LSH on future calls (provider doesn't support embeddings)
 
-// Hot cache for subgraph mode — lazily initialized
+// Hot cache for managed service (subgraph mode) — lazily initialized
 let pluginHotCache: PluginHotCache | null = null;
 
 // Two-tier search state (C1): skip redundant searches when query is semantically similar
@@ -361,11 +361,11 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('USER_EXISTS') && isSubgraphMode()) {
-        // In subgraph mode, derive a deterministic userId from the auth key
+        // In managed mode, derive a deterministic userId from the auth key
         // hash. The server is only a relay proxy — userId is used as the
         // subgraph owner field and must be consistent between store/search.
         registeredUserId = authHash.slice(0, 32);
-        logger.info(`Using derived userId for subgraph mode (server returned USER_EXISTS)`);
+        logger.info(`Using derived userId for managed mode (server returned USER_EXISTS)`);
       } else {
         throw err;
       }
@@ -412,14 +412,13 @@ function buildSetupErrorMsg(): string {
   const base =
     'TotalReclaw setup required:\n' +
     '1. Set TOTALRECLAW_MASTER_PASSWORD — ask the user if they have an existing recovery phrase or generate a new 12-word BIP-39 mnemonic.\n' +
-    '2. Set TOTALRECLAW_SUBGRAPH_MODE=true\n' +
-    '3. Restart the gateway to apply changes.\n\n';
+    '2. Restart the gateway to apply changes.\n' +
+    '   (Optional: set TOTALRECLAW_SELF_HOSTED=true if using your own server instead of the managed service.)\n\n';
 
   if (isDocker()) {
     return base +
       'Running in Docker — pass env vars via `-e` flags or your compose file:\n' +
-      '  -e TOTALRECLAW_MASTER_PASSWORD="word1 word2 ..."\n' +
-      '  -e TOTALRECLAW_SUBGRAPH_MODE=true';
+      '  -e TOTALRECLAW_MASTER_PASSWORD="word1 word2 ..."';
   }
 
   if (process.platform === 'darwin') {
@@ -427,14 +426,12 @@ function buildSetupErrorMsg(): string {
       'Running on macOS — add env vars to the LaunchAgent plist at\n' +
       '~/Library/LaunchAgents/ai.openclaw.gateway.plist under <key>EnvironmentVariables</key>:\n' +
       '  <key>TOTALRECLAW_MASTER_PASSWORD</key><string>word1 word2 ...</string>\n' +
-      '  <key>TOTALRECLAW_SUBGRAPH_MODE</key><string>true</string>\n' +
       'Then run: openclaw gateway restart';
   }
 
   return base +
     'Running on Linux — add env vars to the systemd unit override or your shell profile:\n' +
     '  export TOTALRECLAW_MASTER_PASSWORD="word1 word2 ..."\n' +
-    '  export TOTALRECLAW_SUBGRAPH_MODE=true\n' +
     'Then run: openclaw gateway restart';
 }
 

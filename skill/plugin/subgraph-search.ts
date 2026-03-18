@@ -1,8 +1,9 @@
 /**
  * Subgraph search path — queries facts via GraphQL hash_in.
  *
- * Used when TOTALRECLAW_SUBGRAPH_MODE=true. Replaces the HTTP POST
- * to /v1/search with a GraphQL query to the subgraph via the relay server.
+ * Used when the managed service is active (TOTALRECLAW_SELF_HOSTED is not
+ * "true"). Replaces the HTTP POST to /v1/search with a GraphQL query to
+ * the subgraph via the relay server.
  *
  * The relay server proxies GraphQL queries to Graph Studio with its own
  * API key at `${relayUrl}/v1/subgraph`. Clients never need a subgraph endpoint.

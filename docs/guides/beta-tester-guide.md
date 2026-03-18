@@ -120,9 +120,7 @@ If you prefer full control, you can self-host the open-source server and store e
 | Option | How It Works | When to Use |
 |--------|-------------|-------------|
 | **TotalReclaw (managed)** | Encrypted facts are stored on-chain (Gnosis Chain) and indexed by The Graph. Gas is sponsored. No single server controls your data. | Default — recommended for most users |
-| **Self-hosted** | Encrypted facts are stored in your own server's PostgreSQL database. Faster writes, but you manage the infrastructure. | Set `TOTALRECLAW_SUBGRAPH_MODE=false` and `TOTALRECLAW_SERVER_URL` to your server |
-
-> **Deprecation note:** The `TOTALRECLAW_SUBGRAPH_MODE` env var will be renamed to `TOTALRECLAW_SELF_HOSTED` (with inverted logic) in a future release. For now, set `TOTALRECLAW_SUBGRAPH_MODE=false` to enable self-hosted mode.
+| **Self-hosted** | Encrypted facts are stored in your own server's PostgreSQL database. Faster writes, but you manage the infrastructure. | Set `TOTALRECLAW_SELF_HOSTED=true` and `TOTALRECLAW_SERVER_URL` to your server |
 
 During beta, the managed service uses the Chiado testnet. Both options encrypt your data identically on your device — the difference is where the encrypted blobs are stored.
 
@@ -204,7 +202,7 @@ TotalReclaw uses two complementary layers to prevent duplicate memories:
 - Free tier limit (250 writes/month) and Pro pricing ($2-5/month) are not finalized
 - MCP agents rely on explicit tool use rather than automatic memory hooks
 - Beta runs on testnet infrastructure -- expect occasional downtime
-- On-chain storage is enabled by default (`TOTALRECLAW_SUBGRAPH_MODE=true`). Set to `false` and provide your own `TOTALRECLAW_SERVER_URL` for self-hosted mode
+- The managed service (on-chain storage) is the default. Set `TOTALRECLAW_SELF_HOSTED=true` and provide your own `TOTALRECLAW_SERVER_URL` for self-hosted mode
 
 ---
 

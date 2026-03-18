@@ -306,7 +306,7 @@ if (turnsSinceLastExtraction >= config.autoExtractEveryTurns) {
 }
 ```
 
-**Impact:** Reduces LLM extraction calls by 80% (every 5 turns instead of every turn). For subgraph mode, also reduces on-chain writes by 80%.
+**Impact:** Reduces LLM extraction calls by 80% (every 5 turns instead of every turn). For the managed service, also reduces on-chain writes by 80%.
 
 ### C4. Fact count query optimization
 
@@ -326,7 +326,7 @@ Already exists in the schema. Single lightweight query instead of fetching 1,000
 
 ## Category D: Write Path Optimization
 
-### D1. Batch fact writes (subgraph mode)
+### D1. Batch fact writes (managed service)
 
 **Priority:** MEDIUM
 **Effort:** 4-6 hours

@@ -240,7 +240,7 @@ All semantic analysis -- embedding comparison, cosine similarity calculation, im
 | **I see duplicates in my export** | They may be below the 0.85 similarity threshold (semantically distinct enough to keep). Or they were stored before store-time dedup was enabled. Run `totalreclaw_consolidate` to clean them up. |
 | **Can dedup accidentally delete important memories?** | Store-time dedup never deletes -- it either supersedes (replaces with a better version) or skips (keeps the existing better version). Bulk consolidation soft-deletes, which is reversible. |
 | **Does disabling store-time dedup affect other layers?** | No. `TOTALRECLAW_STORE_DEDUP=false` only disables Layer 3. Exact fingerprint (Layer 1) and within-batch dedup (Layer 2) remain active. |
-| **How does dedup work with subgraph mode?** | Store-time dedup works identically in both HTTP and subgraph modes -- candidates are fetched and compared client-side either way. Bulk consolidation is HTTP-only for now. |
+| **How does dedup work with the managed service?** | Store-time dedup works identically in both managed service and self-hosted modes -- candidates are fetched and compared client-side either way. Bulk consolidation is self-hosted (HTTP) only for now. |
 | **What if embedding generation fails?** | The system fails open. The fact is stored normally without dedup. This is intentional -- losing a memory is worse than having a duplicate. |
 | **Does importing trigger dedup?** | Yes. Imported memories go through exact fingerprint dedup (prevents identical re-imports) and store-time dedup (catches semantic overlaps with existing vault contents). |
 | **Can I adjust the similarity thresholds?** | Not currently. The thresholds (0.85 store-time, 0.88 consolidation, 0.9 within-batch) were tuned on real-world memory data to balance recall and precision. Exposing them is on the roadmap. |
@@ -260,7 +260,7 @@ All semantic analysis -- embedding comparison, cosine similarity calculation, im
 **Notes:**
 
 - **Within-batch dedup** is specific to the OpenClaw plugin's extraction pipeline, which produces multiple facts in a single batch from one conversation turn. MCP and NanoClaw store facts individually via tool calls, so there is no "batch" to deduplicate within.
-- **Bulk consolidation** (`totalreclaw_consolidate`) works in **server (HTTP) mode only**. In subgraph mode, the tool is unavailable because there is no batch-delete on-chain equivalent. Store-time dedup supersession (tombstone old + store new) works in both modes.
+- **Bulk consolidation** (`totalreclaw_consolidate`) works in **self-hosted (HTTP) mode only**. In the managed service, the tool is unavailable because there is no batch-delete on-chain equivalent. Store-time dedup supersession (tombstone old + store new) works in both modes.
 - **LLM-guided classification** requires lifecycle hooks (extraction context). MCP has no hooks -- it relies on cosine-based dedup only.
 
 ### Layer 5: LLM-Guided Classification (OpenClaw + NanoClaw)

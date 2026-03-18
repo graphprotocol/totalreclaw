@@ -73,7 +73,7 @@ The agent calls the `totalreclaw_import_from` tool with:
 2. Each memory's text is encrypted with your TotalReclaw encryption key (AES-256-GCM).
 3. Blind search indices (LSH buckets + word trapdoors) are generated so the encrypted memories are searchable.
 4. A content fingerprint (HMAC-SHA256) is generated to prevent future duplicates.
-5. Each encrypted memory is stored on the TotalReclaw server (or on-chain if using subgraph mode).
+5. Each encrypted memory is stored on the TotalReclaw server (or on-chain if using the managed service).
 
 ### Expected Output
 
@@ -146,7 +146,7 @@ The `totalreclaw_import_from` tool is available in:
 | **MCP server** | Yes | Tool is registered and callable by any MCP client |
 | **NanoClaw** | Yes | Via the MCP server spawned by the agent-runner |
 
-**Storage mode support:** Import works in both **server (HTTP) mode** and **subgraph mode**. In subgraph mode, each imported memory is submitted on-chain via the relay. Large imports (1,000+ memories) may take longer in subgraph mode due to per-transaction gas sponsorship.
+**Storage mode support:** Import works in both **self-hosted (HTTP) mode** and **managed service mode**. In managed service mode, each imported memory is submitted on-chain via the relay. Large imports (1,000+ memories) may take longer in managed service mode due to per-transaction gas sponsorship.
 
 ---
 

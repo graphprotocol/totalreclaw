@@ -3,7 +3,7 @@
  *
  * Writes facts on-chain via ERC-4337 UserOps.
  *
- * Used when subgraph mode is enabled. Replaces the HTTP POST
+ * Used when the managed service is active. Replaces the HTTP POST
  * to /v1/store with an on-chain transaction flow.
  *
  * Builds UserOps client-side using `permissionless` + `viem` and submits
@@ -274,15 +274,16 @@ export async function submitFactOnChain(
 // ---------------------------------------------------------------------------
 
 /**
- * Check if subgraph mode is enabled.
+ * Check if the managed service (subgraph) is enabled.
  *
- * Returns true only when TOTALRECLAW_SUBGRAPH_MODE is explicitly set to "true".
+ * Returns true unless TOTALRECLAW_SELF_HOSTED is explicitly set to "true".
+ * The managed service is the default; self-hosted mode is opt-in.
  * Can be overridden by passing an explicit value (useful when MCP server
  * manages its own config state).
  */
 export function isSubgraphMode(override?: boolean): boolean {
   if (override !== undefined) return override;
-  return process.env.TOTALRECLAW_SUBGRAPH_MODE === 'true';
+  return process.env.TOTALRECLAW_SELF_HOSTED !== 'true';
 }
 
 /**
@@ -292,7 +293,7 @@ export function isSubgraphMode(override?: boolean): boolean {
  * After the relay refactor, clients only need:
  *   - TOTALRECLAW_MASTER_PASSWORD -- BIP-39 mnemonic
  *   - TOTALRECLAW_SERVER_URL -- relay server URL (default: https://api.totalreclaw.xyz)
- *   - TOTALRECLAW_SUBGRAPH_MODE -- set "true" to enable (default: HTTP mode)
+ *   - TOTALRECLAW_SELF_HOSTED -- set "true" for self-hosted HTTP mode (default: managed service)
  *   - TOTALRECLAW_CHAIN_ID -- optional, defaults to 10200 (Chiado)
  *
  * Removed from client-side config (now server-side only):

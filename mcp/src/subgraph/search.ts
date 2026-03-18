@@ -3,7 +3,7 @@
  *
  * Queries facts via GraphQL hash_in through the relay server.
  *
- * Used when subgraph mode is enabled. Replaces the HTTP POST
+ * Used when the managed service is active. Replaces the HTTP POST
  * to /v1/search with a GraphQL query to the subgraph via the relay server.
  *
  * The relay server proxies GraphQL queries to Graph Studio with its own

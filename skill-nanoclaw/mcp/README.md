@@ -34,7 +34,7 @@ RUN npm install -g @totalreclaw/mcp-server
 |----------|----------|---------|
 | `TOTALRECLAW_MASTER_PASSWORD` | Yes | — (12-word BIP-39 recovery phrase) |
 | `TOTALRECLAW_SERVER_URL` | No | `https://api.totalreclaw.xyz` |
-| `TOTALRECLAW_SUBGRAPH_MODE` | No | `true` (on-chain storage via The Graph) |
+| `TOTALRECLAW_SELF_HOSTED` | No | `false` (managed service with on-chain storage via The Graph) |
 | `TOTALRECLAW_NAMESPACE` | No | Group folder name |
 | `TOTALRECLAW_CREDENTIALS_PATH` | No | `/workspace/.totalreclaw/credentials.json` |
 | `TOTALRECLAW_CHAIN_ID` | No | `10200` (Chiado testnet) |

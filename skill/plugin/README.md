@@ -69,7 +69,7 @@ Set these environment variables before the agent starts:
 |----------|-------------|---------|
 | `TOTALRECLAW_SERVER_URL` | Server URL | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_CREDENTIALS_PATH` | Path to credentials file | `~/.totalreclaw/credentials.json` |
-| `TOTALRECLAW_SUBGRAPH_MODE` | Use managed service (`true`) or self-hosted server (`false`). Will be renamed to `TOTALRECLAW_SELF_HOSTED` (inverted) in a future release. | `true` |
+| `TOTALRECLAW_SELF_HOSTED` | Set to `true` to use your own self-hosted server instead of the managed service | `false` (managed service) |
 | `TOTALRECLAW_EXTRACT_EVERY_TURNS` | Auto-extract interval (turns) | `5` (Free) / `2` (Pro min) |
 
 ## Using with Other Agents
