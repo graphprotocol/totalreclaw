@@ -60,7 +60,7 @@ Two storage modes: **Managed Service** (default -- on-chain via Gnosis/The Graph
 /totalreclaw
 ├── CLAUDE.md              # This file
 │
-├── server/                # FastAPI + PostgreSQL backend
+├── server/                # FastAPI + PostgreSQL backend (self-hosted only; billing/relay moved to private totalreclaw-relay repo)
 ├── client/                # TypeScript client library (E2EE, LSH, embeddings)
 ├── skill/                 # OpenClaw plugin (PoC v2: embedding, LSH, reranker)
 ├── skill-nanoclaw/        # NanoClaw skill package + MCP server
@@ -254,3 +254,4 @@ cd skill-nanoclaw && npm install
 - **Version**: v1.0-beta
 - **Phase**: Private Beta
 - **Default mode**: Managed Service (on-chain via Gnosis/The Graph)
+- **Relay**: Billing, Pimlico sponsorship, and query proxying extracted to private `totalreclaw-relay` TypeScript repo (p-diogo/totalreclaw-relay). Public server retains only self-hosted functionality (storage, search, auth).

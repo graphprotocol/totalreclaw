@@ -39,3 +39,30 @@ jobs:
       # Plugin has no test script yet — just verify deps install cleanly
       - name: Install dependencies
         run: cd skill/plugin && npm ci --legacy-peer-deps
+
+  # NOTE: Relay unit tests run in the private totalreclaw-relay repo CI.
+  # This job runs the E2E smoke test against a real relay + PostgreSQL
+  # using Docker Compose. Requires access to totalreclaw-relay repo.
+  # Uncomment when relay repo is accessible from CI via RELAY_REPO_TOKEN secret.
+  #
+  # e2e-relay:
+  #   name: E2E Relay Smoke Tests
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         repository: p-diogo/totalreclaw-relay
+  #         path: totalreclaw-relay
+  #         token: ${{ secrets.RELAY_REPO_TOKEN }}
+  #     - name: Set up Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: '20'
+  #     - name: Start relay + PostgreSQL
+  #       run: cd tests/e2e-relay && docker compose up -d --wait
+  #     - name: Run smoke tests
+  #       run: cd tests/e2e-relay && npx tsx smoke-test.ts
+  #     - name: Tear down
+  #       if: always()
+  #       run: cd tests/e2e-relay && docker compose down -v

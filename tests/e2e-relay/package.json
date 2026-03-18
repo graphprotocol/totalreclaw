@@ -1,0 +1,14 @@
+{
+  "name": "totalreclaw-e2e-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "E2E smoke tests for totalreclaw-relay",
+  "scripts": {
+    "test": "tsx smoke-test.ts",
+    "test:docker": "docker compose up -d --wait && tsx smoke-test.ts; docker compose down -v"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.0"
+  }
+}
