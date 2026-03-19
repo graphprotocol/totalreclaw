@@ -231,7 +231,7 @@ Self-hosted mode uses the same E2EE architecture but stores encrypted facts on-c
 | **Chain** | Gnosis Chain | $0.00076/fact, xDAI stablecoin gas, Graph indexing rewards, 640GB archive, permanent L1 storage |
 | **Paymaster** | **Pimlico** | 60x cheaper than ZeroDev ($0.11/mo vs $69/mo at 100 ops/day), permissionless.js SDK, webhook policies |
 | **Fiat payments** | Stripe Checkout | Agent-generated URL, card/Apple Pay/Google Pay |
-| **Crypto payments** | Coinbase Commerce | USDC/USDT on Solana, Base, Ethereum, Polygon, Arbitrum (no bridging) |
+| **Crypto payments** | ~~Coinbase Commerce~~ **BLOCKED** | Coinbase Commerce sunset March 31, 2026. Replacement (Coinbase Business) is US/Singapore only -- TotalReclaw entity is in Portugal. Need alternative provider (NOWPayments, BTCPay Server) or wait for EU expansion. **Does not block launch -- Stripe (fiat) is sufficient.** |
 | **Auth** | Wallet signature | No API keys — seed-derived key signs every request |
 | **Free tier** | Yes (threshold TBD) | Users experience value before paying |
 | **Subscription** | $2-5/month (TBD) | Profitable on Gnosis at all scales (100-10K users) |
@@ -258,7 +258,7 @@ All scaffolding and smart contracts are built, tested, and deployed to Chiado te
 | Client BIP-39 seed management | 12-word mnemonic, BIP-32/44 derivation, HKDF key compatibility with kdf.ts | 19 | DONE |
 | Client UserOperation builder | Encode facts as calldata, sign with seed-derived key, submit to relay | 11 | DONE |
 | Managed service relay proxy | Target/calldata validation, per-address rate limiting, Pimlico bundler submission, subgraph query proxy | 16 | DONE |
-| Billing & onboarding | Stripe + Coinbase Commerce, subscription table, webhook handlers | -- | DONE |
+| Billing & onboarding | Stripe + ~~Coinbase Commerce~~ (sunset, see Go-Live Architecture), subscription table, webhook handlers | -- | DONE (crypto blocked) |
 
 ### Relay Extraction (Planned)
 
