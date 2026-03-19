@@ -49,7 +49,10 @@ async function gqlQuery<T>(
   authKeyHex?: string,
 ): Promise<T | null> {
   try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-TotalReclaw-Client': 'mcp-server',
+    };
     if (authKeyHex) headers['Authorization'] = `Bearer ${authKeyHex}`;
     const response = await fetch(endpoint, {
       method: 'POST',

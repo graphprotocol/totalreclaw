@@ -240,7 +240,7 @@ export async function beforeAgentStart(
       // Make API call to refresh cache
       const serverUrl = options.config.serverUrl.replace(/\/+$/, '');
       const response = await fetch(`${serverUrl}/v1/billing/status`, {
-        headers: { 'Authorization': `Bearer ${options.authKeyHex}` }
+        headers: { 'Authorization': `Bearer ${options.authKeyHex}`, 'X-TotalReclaw-Client': 'openclaw-plugin' }
       });
       if (response.ok) {
         const parsed: unknown = await response.json();

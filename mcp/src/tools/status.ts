@@ -66,6 +66,7 @@ export async function handleStatus(
       headers: {
         'Authorization': `Bearer ${authKey}`,
         'Content-Type': 'application/json',
+        'X-TotalReclaw-Client': 'mcp-server',
       },
     });
 

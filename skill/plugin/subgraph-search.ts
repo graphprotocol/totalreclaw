@@ -47,7 +47,10 @@ async function gqlQuery<T>(
   authKeyHex?: string,
 ): Promise<T | null> {
   try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-TotalReclaw-Client': 'openclaw-plugin',
+    };
     if (authKeyHex) {
       headers['Authorization'] = `Bearer ${authKeyHex}`;
     }

@@ -1754,6 +1754,7 @@ const plugin = {
                   method: 'POST',
                   headers: {
                     'Content-Type': 'application/json',
+                    'X-TotalReclaw-Client': 'openclaw-plugin',
                     ...(authKeyHex ? { Authorization: `Bearer ${authKeyHex}` } : {}),
                   },
                   body: JSON.stringify({ query }),
@@ -1881,6 +1882,7 @@ const plugin = {
               headers: {
                 'Authorization': `Bearer ${authKeyHex}`,
                 'Accept': 'application/json',
+                'X-TotalReclaw-Client': 'openclaw-plugin',
               },
             });
 
@@ -2191,7 +2193,7 @@ const plugin = {
               const walletParam = encodeURIComponent(subgraphOwner || userId || '');
               const billingResp = await fetch(`${billingUrl}/v1/billing/status?wallet_address=${walletParam}`, {
                 method: 'GET',
-                headers: { 'Authorization': `Bearer ${authKeyHex}`, 'Accept': 'application/json' },
+                headers: { 'Authorization': `Bearer ${authKeyHex}`, 'Accept': 'application/json', 'X-TotalReclaw-Client': 'openclaw-plugin' },
               });
               if (billingResp.ok) {
                 const billingData = await billingResp.json() as Record<string, unknown>;

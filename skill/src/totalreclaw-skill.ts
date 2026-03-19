@@ -406,7 +406,7 @@ export class TotalReclawSkill {
         // Make API call to refresh cache
         const serverUrl = this.config.serverUrl.replace(/\/+$/, '');
         const response = await fetch(`${serverUrl}/v1/billing/status`, {
-          headers: { 'Authorization': `Bearer ${this.authKeyHex}` }
+          headers: { 'Authorization': `Bearer ${this.authKeyHex}`, 'X-TotalReclaw-Client': 'openclaw-plugin' }
         });
         if (response.ok) {
           const parsed: unknown = await response.json();

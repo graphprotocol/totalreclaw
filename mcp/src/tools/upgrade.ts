@@ -86,6 +86,7 @@ export async function handleUpgrade(
       headers: {
         'Authorization': `Bearer ${authKey}`,
         'Content-Type': 'application/json',
+        'X-TotalReclaw-Client': 'mcp-server',
       },
       body: JSON.stringify({
         wallet_address: walletAddress,

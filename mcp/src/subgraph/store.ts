@@ -199,7 +199,9 @@ export async function submitFactOnChain(
   const entryPointAddr = (config.entryPointAddress || entryPoint07Address) as Address;
 
   // Build authenticated transport for relay server proxy
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = {
+    'X-TotalReclaw-Client': 'mcp-server',
+  };
   if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
   if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
 

@@ -89,6 +89,7 @@ export async function statusTool(
       headers: {
         'Authorization': `Bearer ${authKeyHex}`,
         'Accept': 'application/json',
+        'X-TotalReclaw-Client': 'openclaw-plugin',
       },
     });
 
