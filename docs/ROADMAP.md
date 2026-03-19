@@ -259,6 +259,8 @@ All scaffolding and smart contracts are built, tested, and deployed to Chiado te
 | Client UserOperation builder | Encode facts as calldata, sign with seed-derived key, submit to relay | 11 | DONE |
 | Managed service relay proxy | Target/calldata validation, per-address rate limiting, Pimlico bundler submission, subgraph query proxy | 16 | DONE |
 | Billing & onboarding | Stripe + ~~Coinbase Commerce~~ (sunset, see Go-Live Architecture), subscription table, webhook handlers | -- | DONE (crypto blocked) |
+| Admin dashboard | Two-factor auth (API key + OTP), 13 API endpoints, tier CRUD with Stripe, analytics, single-file HTML UI | 12 | DONE |
+| Client type tracking | X-TotalReclaw-Client header on all relay requests, request_log table, analytics queries | -- | DONE |
 
 ### Relay Extraction (Planned)
 
