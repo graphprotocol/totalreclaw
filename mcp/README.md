@@ -80,7 +80,7 @@ The server only ever sees ciphertext and hashed tokens.
 | `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_MASTER_PASSWORD` | 12-word BIP-39 recovery phrase | Required |
 | `TOTALRECLAW_SELF_HOSTED` | Set to `true` to use a self-hosted server instead of the managed service. | `false` |
-| `TOTALRECLAW_CHAIN_ID` | Chain ID (10200=Chiado testnet, 100=Gnosis). Managed service only. | `10200` |
+| `TOTALRECLAW_CHAIN_ID` | Chain ID (100=Gnosis mainnet, 10200=Chiado testnet). Managed service only. | `100` |
 
 ## Available Tools
 
@@ -103,7 +103,7 @@ The server only ever sees ciphertext and hashed tokens.
 | **Free** | 250/month | Unlimited | $0 |
 | **Pro** | 10,000/month | Unlimited | $2-5/month |
 
-Pay with card (Stripe) or crypto (Coinbase Commerce). Counter resets monthly.
+Pay with card (Stripe). Counter resets monthly.
 
 ## Development
 

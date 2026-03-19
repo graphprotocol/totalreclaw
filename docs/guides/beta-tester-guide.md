@@ -122,7 +122,7 @@ If you prefer full control, you can self-host the open-source server and store e
 | **TotalReclaw (managed)** | Encrypted facts are stored on-chain (Gnosis Chain) and indexed by The Graph. Gas is sponsored. No single server controls your data. | Default — recommended for most users |
 | **Self-hosted** | Encrypted facts are stored in your own server's PostgreSQL database. Faster writes, but you manage the infrastructure. | Set `TOTALRECLAW_SELF_HOSTED=true` and `TOTALRECLAW_SERVER_URL` to your server |
 
-During beta, the managed service uses the Chiado testnet. Both options encrypt your data identically on your device — the difference is where the encrypted blobs are stored.
+Both options encrypt your data identically on your device — the difference is where the encrypted blobs are stored.
 
 ---
 
@@ -134,7 +134,7 @@ During beta, the managed service uses the Chiado testnet. Both options encrypt y
 | **Pro** | 10,000/month | Unlimited | + LLM-guided dedup, configurable extract interval (min 2 turns) | $2-5/month |
 
 - Counter resets at the start of each calendar month
-- Pay with card (Stripe) or crypto (Coinbase Commerce)
+- Pay with card (Stripe)
 - When you hit the limit, your agent tells you and provides an upgrade link
 - **Free tier** includes full encryption, cosine-based dedup, and auto-extraction every 5 turns
 - **Pro tier** adds LLM-guided dedup (catches contradictions, not just paraphrases) and faster extraction intervals
@@ -149,7 +149,7 @@ During beta, the managed service uses the Chiado testnet. Both options encrypt y
 | "Not authenticated" / 401 | Check your recovery phrase -- exact words, exact order |
 | Memories not appearing | Try an explicit recall: "what do you remember about X?" |
 | Quota exceeded (403) | Wait for monthly reset or upgrade to Pro |
-| Want to test billing | Use test card `4242 4242 4242 4242` with any expiry/CVC |
+| Want to upgrade to Pro | Ask your agent "upgrade my TotalReclaw subscription" |
 
 For detailed technical troubleshooting, see [beta-tester-guide-detailed.md](./beta-tester-guide-detailed.md).
 
@@ -201,23 +201,12 @@ TotalReclaw uses two complementary layers to prevent duplicate memories:
 
 - Free tier limit (250 writes/month) and Pro pricing ($2-5/month) are not finalized
 - MCP agents rely on explicit tool use rather than automatic memory hooks
-- Beta runs on testnet infrastructure -- expect occasional downtime
+- Beta runs on Gnosis mainnet -- expect occasional downtime
 - The managed service (on-chain storage) is the default. Set `TOTALRECLAW_SELF_HOSTED=true` and provide your own `TOTALRECLAW_SERVER_URL` for self-hosted mode
 
 ---
 
-## Billing & Subscriptions (Beta)
-
-Billing is in **test mode** during beta — no real charges. To test the upgrade flow:
-
-**Test card numbers (Stripe test mode):**
-| Card Number | Result |
-|-------------|--------|
-| `4242 4242 4242 4242` | Successful payment |
-| `4000 0000 0000 3220` | Requires 3D Secure authentication |
-| `4000 0000 0000 9995` | Payment declined |
-
-Use any future expiry date, any 3-digit CVC, and any billing address.
+## Billing & Subscriptions
 
 **Checking your subscription status:**
 - **OpenClaw:** Ask your agent "What's my TotalReclaw subscription status?"
@@ -226,7 +215,7 @@ Use any future expiry date, any 3-digit CVC, and any billing address.
 **What happens at the quota limit:**
 - Free tier: 250 writes/month, unlimited reads
 - When you hit the limit, your agent will tell you and provide an upgrade link
-- After upgrading (with a test card), writes resume immediately
+- After upgrading via Stripe, writes resume immediately
 
 **Monthly reset:** Usage counters reset at the start of each calendar month.
 

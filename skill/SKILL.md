@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Zero-knowledge encrypted memory vault for AI agents — the password manager for AI memory. Full E2EE: server never sees plaintext."
-version: 0.1.0
+version: 0.2.0
 author: TotalReclaw Team
 license: MIT
 homepage: https://github.com/p-diogo/totalreclaw
@@ -200,7 +200,7 @@ Check subscription status and usage quota.
 {
   "tier": "Free",
   "writesUsed": 42,
-  "writesLimit": 100,
+  "writesLimit": 250,
   "resetsAt": "2026-04-01",
   "pricingUrl": "https://totalreclaw.xyz/pricing"
 }
@@ -353,7 +353,7 @@ Restart the gateway, then confirm the plugin loaded by checking that `totalrecla
 ### Step 6: Explain the free tier
 
 After setup completes, inform the user about the free tier:
-> "You're on TotalReclaw's free tier — 100 memory writes per month, unlimited reads and searches.
+> "You're on TotalReclaw's free tier — 250 memory writes per month, unlimited reads and searches.
 > I'll let you know if you're approaching the limit. For unlimited writes, visit
 > https://totalreclaw.xyz/pricing"
 
@@ -389,7 +389,7 @@ If you need to store a memory, use the `totalreclaw_remember` tool. If you need 
 
 ### Billing Awareness
 
-TotalReclaw has a free tier (100 writes/month, unlimited reads). The plugin monitors quota usage automatically:
+TotalReclaw has a free tier (250 writes/month, unlimited reads). The plugin monitors quota usage automatically:
 - If usage exceeds 80%, a warning is injected into your context at conversation start
 - If a write fails with quota exceeded (403), inform the user and suggest visiting https://totalreclaw.xyz/pricing
 - Use `totalreclaw_status` when the user asks about their subscription, quota, or billing

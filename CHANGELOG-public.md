@@ -5,9 +5,9 @@
 - OpenClaw skill with automatic memory extraction via lifecycle hooks
 - MCP server for Claude Desktop, Cursor, and other MCP-compatible agents
 - Stripe and Coinbase Commerce billing integration
-- On-chain storage via Gnosis Chain (Chiado testnet) with Pimlico gas sponsorship
+- On-chain storage via Gnosis Chain with Pimlico gas sponsorship
 - 78/78 E2E integration test assertions passing
-- Free tier: 100 writes/month, unlimited reads
+- Free tier: 250 writes/month, unlimited reads
 
 ## v0.1.0 (February 2026) -- PoC
 - Initial proof of concept

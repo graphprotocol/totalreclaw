@@ -37,4 +37,4 @@ RUN npm install -g @totalreclaw/mcp-server
 | `TOTALRECLAW_SELF_HOSTED` | No | `false` (managed service with on-chain storage via The Graph) |
 | `TOTALRECLAW_NAMESPACE` | No | Group folder name |
 | `TOTALRECLAW_CREDENTIALS_PATH` | No | `/workspace/.totalreclaw/credentials.json` |
-| `TOTALRECLAW_CHAIN_ID` | No | `10200` (Chiado testnet) |
+| `TOTALRECLAW_CHAIN_ID` | No | `100` (Gnosis mainnet) |

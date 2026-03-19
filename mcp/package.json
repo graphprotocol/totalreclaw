@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/mcp-server",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Encrypted memory for your AI agent — MCP server with zero-knowledge E2EE, semantic search, import/export, and on-chain storage",
   "homepage": "https://totalreclaw.xyz",
   "main": "dist/index.js",

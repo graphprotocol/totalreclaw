@@ -136,12 +136,12 @@ TOTALRECLAW_SERVER_URL="https://api.totalreclaw.xyz"
 
 # --- Managed service is the default (no env var needed) ---
 # Set TOTALRECLAW_SELF_HOSTED="true" only if using your own server
-TOTALRECLAW_CHAIN_ID="10200"
+# TOTALRECLAW_CHAIN_ID="100"  # Gnosis mainnet (default, no need to set)
 ```
 
 Replace `word1 word2 ...` with your actual 12-word phrase. Keep the quotes around it. These can be set in your OpenClaw workspace environment settings, your shell profile, or any method your OpenClaw instance supports for environment variables.
 
-The values above are all you need for the Chiado testnet. The managed service at `api.totalreclaw.xyz` handles on-chain storage, gas sponsorship, billing, and query routing -- without ever seeing your data.
+The values above are all you need. The managed service at `api.totalreclaw.xyz` handles on-chain storage (Gnosis mainnet), gas sponsorship, billing, and query routing -- without ever seeing your data.
 
 > **Note:** `TOTALRECLAW_SERVER_URL` is always required -- the managed service handles user registration, billing, and relay operations.
 
@@ -359,7 +359,7 @@ Use this to get a payment link for upgrading to Pro.
 - "Get me a payment link for TotalReclaw Pro."
 
 **What happens behind the scenes:**
-1. The MCP server requests a checkout session from the relay server (Stripe or Coinbase Commerce).
+1. The MCP server requests a checkout session from the relay server (Stripe).
 2. It returns a payment URL that you open in your browser.
 3. After payment, the webhook activates your subscription within 60 seconds.
 
@@ -443,15 +443,6 @@ When your free tier write limit (250 writes/month, beta default) is reached, the
 3. Click the URL. It opens in your browser.
 4. Complete the payment (card, Apple Pay, or Google Pay are all accepted).
 5. After payment, Stripe sends a webhook to the relay server, which activates your subscription.
-6. The agent confirms: "You're all set on the Pro tier."
-
-**Option B: Cryptocurrency**
-
-1. Tell the agent: "I'd like to upgrade with crypto."
-2. The agent generates a Coinbase Commerce payment URL and shares it.
-3. Click the URL. It opens in your browser.
-4. Pay with USDC, USDT, or ETH from any supported network: Base, Ethereum, Solana, Polygon, or Arbitrum. No bridging is required.
-5. After the payment is confirmed, Coinbase sends a webhook to the relay server, which activates your subscription.
 6. The agent confirms: "You're all set on the Pro tier."
 
 After upgrading, you can continue using TotalReclaw with higher write limits. Your subscription is tied to your wallet address, so it follows you across devices (as long as you use the same recovery phrase).
@@ -724,8 +715,8 @@ These variables control on-chain storage via the managed service. **The default 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TOTALRECLAW_SELF_HOSTED` | Set to `true` to use your own self-hosted server with PostgreSQL instead of the managed service. When not set (or `false`), TotalReclaw uses the managed service with on-chain storage via The Graph. | `false` (managed service) |
-| `TOTALRECLAW_CHAIN_ID` | Chain ID for on-chain transactions. `10200` = Chiado testnet, `100` = Gnosis mainnet. | `10200` |
-| `TOTALRECLAW_DATA_EDGE_ADDRESS` | Address of the EventfulDataEdge smart contract on Chiado. | `0xA84c5433110Ccc93e57ec387e630E86Bad86c36f` |
+| `TOTALRECLAW_CHAIN_ID` | Chain ID for on-chain transactions. `100` = Gnosis mainnet, `10200` = Chiado testnet. | `100` |
+| `TOTALRECLAW_DATA_EDGE_ADDRESS` | Address of the EventfulDataEdge smart contract on Gnosis mainnet. | `0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca` |
 | `TOTALRECLAW_ENTRYPOINT_ADDRESS` | ERC-4337 EntryPoint v0.7 address. Same on all chains. | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` |
 | `TOTALRECLAW_SUBGRAPH_PAGE_SIZE` | Maximum results per subgraph query page (Graph Studio limit: 1000). | `1000` |
 | `TOTALRECLAW_TRAPDOOR_BATCH_SIZE` | Number of trapdoors per batch in subgraph queries. | `5` |

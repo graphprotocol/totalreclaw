@@ -31,9 +31,9 @@ export const DERIVATION_PATH = "m/44'/60'/0'/0/0";
 
 /**
  * Default chain ID for Smart Account address computation.
- * Chiado testnet (10200) for development, Gnosis mainnet (100) for production.
+ * Gnosis mainnet (100) for production, Chiado testnet (10200) for development.
  */
-export const DEFAULT_CHAIN_ID = 10200;
+export const DEFAULT_CHAIN_ID = 100;
 
 /**
  * Keys derived from a BIP-39 mnemonic.
@@ -94,7 +94,7 @@ export function validateMnemonic(mnemonic: string): boolean {
  *   - smartAccountAddress: deterministic ERC-4337 Smart Account address
  *
  * @param mnemonic - 12-word BIP-39 mnemonic
- * @param chainId - Chain ID for Smart Account address computation (default: 10200 Chiado)
+ * @param chainId - Chain ID for Smart Account address computation (default: 100 Gnosis)
  * @returns All derived keys including the Smart Account address
  */
 export async function mnemonicToKeys(
@@ -171,7 +171,7 @@ export async function mnemonicToKeys(
  * Requires RPC connectivity (but no gas -- it's a view call).
  *
  * @param mnemonic - 12-word BIP-39 mnemonic
- * @param chainId - Chain ID (default: 10200 for Chiado, 100 for Gnosis)
+ * @param chainId - Chain ID (default: 100 for Gnosis, 10200 for Chiado)
  * @returns Smart Account address (checksummed hex string)
  */
 export async function mnemonicToSmartAccountAddress(

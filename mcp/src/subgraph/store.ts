@@ -26,8 +26,8 @@ import { createPimlicoClient } from 'permissionless/clients/pimlico';
 // Types
 // ---------------------------------------------------------------------------
 
-/** Default EventfulDataEdge contract address on Chiado testnet */
-const DEFAULT_DATA_EDGE_ADDRESS = '0xA84c5433110Ccc93e57ec387e630E86Bad86c36f';
+/** Default EventfulDataEdge contract address on Gnosis mainnet */
+const DEFAULT_DATA_EDGE_ADDRESS = '0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca';
 
 /** Well-known ERC-4337 EntryPoint v0.7 address (same on all chains) */
 const DEFAULT_ENTRYPOINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
@@ -36,7 +36,7 @@ export interface SubgraphStoreConfig {
   relayUrl: string;           // TotalReclaw relay server URL (proxies bundler + subgraph)
   mnemonic: string;           // BIP-39 mnemonic for key derivation
   cachePath: string;          // Hot cache file path
-  chainId: number;            // 10200 for Chiado, 100 for Gnosis
+  chainId: number;            // 100 for Gnosis mainnet, 10200 for Chiado testnet
   dataEdgeAddress: string;    // EventfulDataEdge contract address
   entryPointAddress: string;  // ERC-4337 EntryPoint v0.7
   authKeyHex?: string;        // HKDF auth key hex for relay Authorization header
@@ -307,7 +307,7 @@ export function isSubgraphMode(override?: boolean): boolean {
  *   - TOTALRECLAW_MASTER_PASSWORD -- BIP-39 mnemonic
  *   - TOTALRECLAW_SERVER_URL -- relay server URL (default: https://api.totalreclaw.xyz)
  *   - TOTALRECLAW_SELF_HOSTED -- set "true" for self-hosted HTTP mode (default: managed service)
- *   - TOTALRECLAW_CHAIN_ID -- optional, defaults to 10200 (Chiado)
+ *   - TOTALRECLAW_CHAIN_ID -- optional, defaults to 100 (Gnosis mainnet)
  *
  * Removed from client-side config (now server-side only):
  *   - PIMLICO_API_KEY
@@ -321,7 +321,7 @@ export function getSubgraphConfig(overrides?: Partial<SubgraphStoreConfig>): Sub
     relayUrl: process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz',
     mnemonic: process.env.TOTALRECLAW_MASTER_PASSWORD || '',
     cachePath: process.env.TOTALRECLAW_CACHE_PATH || `${process.env.HOME}/.totalreclaw/cache.enc`,
-    chainId: parseInt(process.env.TOTALRECLAW_CHAIN_ID || '10200'),
+    chainId: parseInt(process.env.TOTALRECLAW_CHAIN_ID || '100'),
     dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || DEFAULT_DATA_EDGE_ADDRESS,
     entryPointAddress: process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || DEFAULT_ENTRYPOINT_ADDRESS,
   };

@@ -170,8 +170,8 @@ describe("Seed Module", () => {
   });
 
   describe("DEFAULT_CHAIN_ID", () => {
-    it("should be Chiado testnet (10200)", () => {
-      expect(DEFAULT_CHAIN_ID).toBe(10200);
+    it("should be Gnosis mainnet (100)", () => {
+      expect(DEFAULT_CHAIN_ID).toBe(100);
     });
   });
 

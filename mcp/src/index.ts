@@ -150,7 +150,7 @@ async function initSubgraphState(): Promise<SubgraphState> {
 
   // Derive Smart Account address via relay bundler proxy (same chain view as Pimlico).
   // This does an eth_call to the EntryPoint to compute the counterfactual CREATE2 address.
-  const chainId = parseInt(process.env.TOTALRECLAW_CHAIN_ID || '10200');
+  const chainId = parseInt(process.env.TOTALRECLAW_CHAIN_ID || '100');
   const chain = chainId === 100 ? gnosis : gnosisChiado;
   const bundlerRpcUrl = `${SERVER_URL}/v1/bundler`;
   const ownerAccount = mnemonicToAccount(mnemonic);
