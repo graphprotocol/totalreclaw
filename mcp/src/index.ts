@@ -722,6 +722,8 @@ async function handleForgetSubgraph(
     const config = getSubgraphConfig({
       relayUrl: state.serverUrl,
       mnemonic: state.mnemonic,
+      authKeyHex: Buffer.from(state.authKey).toString('hex'),
+      walletAddress: state.smartAccountAddress,
     });
 
     const { txHash, success } = await submitFactOnChain(protobuf, config);
