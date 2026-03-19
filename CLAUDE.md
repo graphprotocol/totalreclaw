@@ -100,6 +100,7 @@ Specs are organized by product area under `docs/specs/`:
 | OpenClaw Skill | `skill-openclaw.md` | Implemented |
 | NanoClaw Skill | `skill-nanoclaw.md` | Implemented |
 | MCP Server | `mcp-server.md` | Implemented |
+| Admin Dashboard | `admin-dashboard-design.md` (plans/) | Implemented (in private relay repo) |
 | MCP Auto-Memory (Generic Hosts) | `mcp-auto-memory.md` | Spec complete |
 | Benchmark Harness (OMBH) | `benchmark.md` | Implemented |
 | LSH Tuning (Multi-Tenant SaaS) | `lsh-tuning.md` | Complete |
@@ -161,6 +162,9 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | Hot cache + two-tier search | Yes (managed) | -- | -- | Skips remote query if cached query similar |
 | Dynamic candidate pool sizing | Yes | Yes | Yes (via MCP) | 400-5000 based on vault size |
 | BM25 + Cosine + RRF reranking | Yes | Yes | Yes (via MCP) | Intent-weighted |
+| **Admin & Analytics** | | | | |
+| X-TotalReclaw-Client header | Yes | Yes | Yes (via MCP) | Sent on every relay request |
+| Admin dashboard | -- | -- | -- | Admin-only (relay service), not a client feature |
 
 ### Storage Mode Support
 
@@ -185,6 +189,7 @@ Features across Self-Hosted (PostgreSQL) and Managed Service (default, on-chain 
 | Bulk consolidation not on managed service | LOW | Bulk consolidation tool requires batch-delete, which has no on-chain equivalent. Store-time dedup supersession now works via tombstones. |
 | MCP no auto-memory | By design | MCP has no lifecycle hooks. Host agent (Claude, Cursor) must call tools explicitly. Documented in beta guide. |
 | Export/import not on managed service (MCP) | LOW | MCP server's export and import tools are self-hosted only. OpenClaw plugin handles both modes. |
+| Crypto payments blocked | MEDIUM | Coinbase Commerce sunset March 31, 2026. Coinbase Business US/Singapore only. Business entity in Portugal. Stripe (fiat) works. |
 
 ---
 
