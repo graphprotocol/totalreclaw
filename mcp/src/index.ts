@@ -601,8 +601,9 @@ async function handleRecallSubgraph(
     const decryptedCandidates = [];
     for (const c of candidates) {
       try {
-        // Decrypt the fact text (encryptedBlob is hex on subgraph, base64 internally)
-        const blobBase64 = Buffer.from(c.encryptedBlob, 'hex').toString('base64');
+        // Decrypt the fact text (encryptedBlob is 0x-prefixed hex from subgraph)
+        const blobHex = c.encryptedBlob.startsWith('0x') ? c.encryptedBlob.slice(2) : c.encryptedBlob;
+        const blobBase64 = Buffer.from(blobHex, 'hex').toString('base64');
         const text = decrypt(blobBase64, state.encryptionKey);
 
         // Decrypt embedding if available
@@ -623,7 +624,7 @@ async function handleRecallSubgraph(
           createdAt: parseInt(c.timestamp) || undefined,
         });
       } catch {
-        // Skip candidates that fail to decrypt
+        // Skip candidates that fail to decrypt (e.g., wrong key, corrupt data)
       }
     }
 

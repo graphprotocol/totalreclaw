@@ -36,7 +36,7 @@ export interface SubgraphSearchFact {
 
 /** Small batches so rare trapdoor matches aren't drowned by common ones. */
 const DEFAULT_TRAPDOOR_BATCH_SIZE = 5;
-const DEFAULT_PAGE_SIZE = 5000;
+const DEFAULT_PAGE_SIZE = 1000; // Graph Studio limits `first` to 1000
 
 /**
  * Execute a single GraphQL query against the subgraph endpoint.
@@ -56,10 +56,20 @@ async function gqlQuery<T>(
       headers,
       body: JSON.stringify({ query, variables }),
     });
-    if (!response.ok) return null;
-    const json = await response.json() as { data?: T };
+    if (!response.ok) {
+      console.error(`[search] gqlQuery HTTP ${response.status}: ${await response.text().catch(() => 'no body')}`);
+      return null;
+    }
+    const json = await response.json() as { data?: T; errors?: unknown[] };
+    if (json.errors) {
+      console.error(`[search] gqlQuery GraphQL errors:`, JSON.stringify(json.errors));
+    }
+    if (!json.data) {
+      console.error(`[search] gqlQuery returned null data, full response:`, JSON.stringify(json).slice(0, 500));
+    }
     return json.data ?? null;
-  } catch {
+  } catch (err) {
+    console.error(`[search] gqlQuery exception:`, err);
     return null;
   }
 }
