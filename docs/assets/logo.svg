@@ -1,0 +1,24 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="shieldGrad" x1="30%" y1="0%" x2="70%" y2="100%">
+      <stop offset="0%" stop-color="#5040B0"/>
+      <stop offset="100%" stop-color="#7B5CFF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer shield -->
+  <path d="M128 18 L212 58 V162 C212 210 174 236 128 250 C82 236 44 210 44 162 V58 Z"
+        fill="rgba(75,55,170,0.05)" stroke="url(#shieldGrad)" stroke-width="5" stroke-linejoin="round"/>
+
+  <!-- Inner shield -->
+  <path d="M128 40 L196 74 V160 C196 200 164 222 128 234 C92 222 60 200 60 160 V74 Z"
+        fill="none" stroke="url(#shieldGrad)" stroke-width="2.5" stroke-linejoin="round" opacity="0.45"/>
+
+  <!-- Left pincer: wider arc, sharper hook -->
+  <path d="M 116 186 C 96 162, 60 124, 72 92 C 76 78, 94 70, 108 82 C 118 90, 114 108, 100 116"
+        fill="none" stroke="url(#shieldGrad)" stroke-width="9" stroke-linecap="round"/>
+
+  <!-- Right pincer: mirror -->
+  <path d="M 140 186 C 160 162, 196 124, 184 92 C 180 78, 162 70, 148 82 C 138 90, 142 108, 156 116"
+        fill="none" stroke="url(#shieldGrad)" stroke-width="9" stroke-linecap="round"/>
+</svg>

@@ -1,32 +1,52 @@
-# @totalreclaw/totalreclaw
+<p align="center">
+  <img src="../../docs/assets/logo.png" alt="TotalReclaw" width="80" />
+</p>
 
-Encrypted memory for your AI agent — zero-knowledge E2EE vault with automatic extraction, semantic search, and portable storage.
+<h1 align="center">@totalreclaw/totalreclaw</h1>
 
-Built for [OpenClaw](https://openclaw.ai). Your memories are encrypted on your device before leaving — no one can read them, not even us.
+<p align="center">
+  <strong>Encrypted memory for OpenClaw -- fully automatic, zero-knowledge E2EE</strong>
+</p>
 
-**[totalreclaw.xyz](https://totalreclaw.xyz)**
+<p align="center">
+  <a href="https://totalreclaw.xyz">Website</a> &middot;
+  <a href="https://www.npmjs.com/package/@totalreclaw/totalreclaw">npm</a> &middot;
+  <a href="../../docs/guides/beta-tester-guide.md">Getting Started</a>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@totalreclaw/totalreclaw"><img src="https://img.shields.io/npm/v/@totalreclaw/totalreclaw?color=7B5CFF" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/@totalreclaw/totalreclaw"><img src="https://img.shields.io/npm/dm/@totalreclaw/totalreclaw" alt="npm downloads"></a>
+  <a href="../../LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
+</p>
+
+---
+
+Your AI agent remembers everything -- preferences, decisions, facts -- encrypted so only you can read it. Built for [OpenClaw](https://openclaw.ai) with fully automatic memory extraction and recall.
 
 ## Install
+
+Ask your OpenClaw agent:
+
+> "Install the @totalreclaw/totalreclaw plugin"
+
+Or from the terminal:
 
 ```bash
 openclaw plugins install @totalreclaw/totalreclaw
 ```
 
-Or just ask your agent:
-
-> "Install the totalreclaw plugin"
-
-The agent handles setup: generates your encryption keys and registers you. You'll be asked to write down a 12-word recovery phrase — that's the only thing you need to keep safe.
+The agent handles setup: generates your encryption keys, asks you to save a 12-word recovery phrase, and registers you. After that, memory is fully automatic.
 
 ## How It Works
 
-After setup, memory is **fully automatic**:
+After setup, everything happens in the background:
 
-- **Start of conversation** — loads relevant memories from your vault
-- **End of conversation** — extracts and encrypts new facts before storing them
-- **Before context compaction** — saves everything important before the context window is trimmed
+- **Start of conversation** -- loads relevant memories from your encrypted vault
+- **During conversation** -- extracts facts, preferences, and decisions automatically
+- **Before context compaction** -- saves important context before the window is trimmed
 
-All encryption happens client-side using AES-256-GCM. Search uses blind indices (SHA-256 hashes) — the server never sees your queries or data. Your 12-word recovery phrase derives all keys via Argon2id + HKDF.
+All encryption happens client-side using AES-256-GCM. The server never sees your plaintext data.
 
 ## Tools
 
@@ -39,47 +59,44 @@ Your agent gets these tools automatically:
 | `totalreclaw_forget` | Delete a specific memory |
 | `totalreclaw_export` | Export all memories as plaintext |
 | `totalreclaw_status` | Check billing status and quota |
+| `totalreclaw_consolidate` | Merge duplicate memories |
+| `totalreclaw_import_from` | Import from Mem0 or MCP Memory Server |
 
-Most of the time you won't use these directly — the automatic hooks handle memory for you.
+Most of the time you won't use these directly -- the automatic hooks handle memory for you.
 
 ## Features
 
-- **Zero-knowledge E2EE** — AES-256-GCM encryption, blind index search, HKDF auth
-- **Semantic search** — Local embeddings (bge-small-en-v1.5) + BM25 + cosine reranking with RRF
-- **Automatic extraction** — LLM extracts facts from conversations, no manual input needed
-- **Dedup** — Cosine similarity catches paraphrases; LLM-guided dedup catches contradictions (Pro)
-- **On-chain storage** — Encrypted data stored on Gnosis Chain, indexed by The Graph
-- **Portable** — One 12-word phrase. Any device, same memories, no lock-in
-- **Import** — Migrate from Mem0 or MCP Memory Server
+- **Zero-knowledge E2EE** -- AES-256-GCM encryption, blind index search, HKDF auth
+- **Automatic extraction** -- LLM extracts facts from conversations, no manual input needed
+- **Semantic search** -- Local embeddings + BM25 + cosine reranking with RRF fusion
+- **Smart dedup** -- Cosine similarity catches paraphrases; LLM-guided dedup catches contradictions (Pro)
+- **On-chain storage** -- Encrypted data stored on Gnosis Chain, indexed by The Graph
+- **Portable** -- One 12-word phrase. Any device, same memories, no lock-in
+- **Import** -- Migrate from Mem0 or MCP Memory Server
 
 ## Free Tier & Pricing
 
 | Tier | Writes | Reads | Price |
 |------|--------|-------|-------|
 | **Free** | 250/month | Unlimited | $0 |
-| **Pro** | 10,000/month | Unlimited | $2-5/month |
+| **Pro** | 10,000/month | Unlimited | $5/month |
 
-Pay with card (Stripe) or crypto (Coinbase Commerce). Counter resets monthly.
-
-## Configuration
-
-Set these environment variables before the agent starts:
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `TOTALRECLAW_SERVER_URL` | Server URL | `https://api.totalreclaw.xyz` |
-| `TOTALRECLAW_CREDENTIALS_PATH` | Path to credentials file | `~/.totalreclaw/credentials.json` |
-| `TOTALRECLAW_SELF_HOSTED` | Set to `true` to use your own self-hosted server instead of the managed service | `false` (managed service) |
-| `TOTALRECLAW_EXTRACT_EVERY_TURNS` | Auto-extract interval (turns) | `5` (Free) / `2` (Pro min) |
+Pay with card via Stripe. Counter resets monthly.
 
 ## Using with Other Agents
 
 TotalReclaw also works outside OpenClaw:
 
-- **Claude Desktop / Cursor / Windsurf** — Use [@totalreclaw/mcp-server](https://www.npmjs.com/package/@totalreclaw/mcp-server)
-- **NanoClaw** — Lightweight skill with MCP bridge
+- **Claude Desktop / Cursor / Windsurf** -- Use [@totalreclaw/mcp-server](https://www.npmjs.com/package/@totalreclaw/mcp-server)
+- **NanoClaw** -- Built-in support via MCP bridge
 
 Same encryption, same recovery phrase, same memories across all agents.
+
+## Learn More
+
+- [Getting Started Guide](../../docs/guides/beta-tester-guide.md)
+- [totalreclaw.xyz](https://totalreclaw.xyz)
+- [Main Repository](https://github.com/p-diogo/totalreclaw)
 
 ## License
 
