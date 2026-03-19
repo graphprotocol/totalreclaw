@@ -1,0 +1,28 @@
+specVersion: 0.0.5
+description: TotalReclaw — Zero-knowledge encrypted memory vault subgraph (Gnosis mainnet, test instance)
+repository: https://github.com/p-diogo/totalreclaw
+schema:
+  file: ./schema.graphql
+dataSources:
+  - kind: ethereum
+    name: EventfulDataEdge
+    network: gnosis
+    source:
+      address: "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca"
+      abi: EventfulDataEdge
+      startBlock: 45217698
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - Fact
+        - BlindIndex
+        - GlobalState
+      abis:
+        - name: EventfulDataEdge
+          file: ./abis/EventfulDataEdge.json
+      eventHandlers:
+        - event: Log(bytes)
+          handler: handleLog
+      file: ./src/mapping.ts
