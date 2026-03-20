@@ -73,7 +73,7 @@ export interface UserOperationConfig {
   privateKey: Buffer;
   /** EventfulDataEdge contract address */
   dataEdgeAddress: `0x${string}`;
-  /** Chain ID (10200 for Chiado, 100 for Gnosis) */
+  /** Chain ID (100 for Gnosis, 10200 for Chiado, 84532 for Base Sepolia) */
   chainId: number;
   /** Encrypted Protobuf payload to write on-chain */
   encryptedPayload: Buffer;
@@ -101,7 +101,7 @@ export interface SendFactConfig {
   privateKey: Buffer;
   /** EventfulDataEdge contract address */
   dataEdgeAddress: `0x${string}`;
-  /** Chain ID (10200 for Chiado, 100 for Gnosis) */
+  /** Chain ID (100 for Gnosis, 10200 for Chiado, 84532 for Base Sepolia) */
   chainId: number;
   /** Encrypted Protobuf payload to write on-chain */
   encryptedPayload: Buffer;
@@ -118,18 +118,20 @@ export interface SendFactConfig {
 /**
  * Resolve a viem Chain object from a numeric chain ID.
  *
- * Supports Gnosis mainnet (100) and Chiado testnet (10200).
+ * Supports Gnosis mainnet (100), Chiado testnet (10200), and Base Sepolia (84532).
  */
 async function resolveChain(chainId: number): Promise<Chain> {
-  const { gnosis, gnosisChiado } = await import("viem/chains");
+  const { gnosis, gnosisChiado, baseSepolia } = await import("viem/chains");
   switch (chainId) {
     case 100:
       return gnosis;
     case 10200:
       return gnosisChiado;
+    case 84532:
+      return baseSepolia;
     default:
       throw new Error(
-        `Unsupported chain ID ${chainId}. Supported: 100 (Gnosis), 10200 (Chiado)`
+        `Unsupported chain ID ${chainId}. Supported: 100 (Gnosis), 10200 (Chiado), 84532 (Base Sepolia)`
       );
   }
 }
@@ -176,7 +178,7 @@ export function encodeFactAsCalldata(encryptedBlob: Buffer): string {
  * every chain where the factory is deployed.
  *
  * @param ownerAddress - EOA address that will own the Smart Account
- * @param chainId - Chain ID (10200 for Chiado, 100 for Gnosis)
+ * @param chainId - Chain ID (100 for Gnosis, 10200 for Chiado, 84532 for Base Sepolia)
  * @param salt - Account index / salt (default: 0n)
  * @returns Deterministic Smart Account address (checksummed hex)
  */
@@ -211,7 +213,7 @@ export async function getSmartAccountAddress(
  * and then calls getSmartAccountAddress().
  *
  * @param privateKey - 32-byte private key (Buffer)
- * @param chainId - Chain ID (10200 for Chiado, 100 for Gnosis)
+ * @param chainId - Chain ID (100 for Gnosis, 10200 for Chiado, 84532 for Base Sepolia)
  * @param salt - Account index / salt (default: 0n)
  * @returns Deterministic Smart Account address (checksummed hex)
  */
@@ -356,7 +358,7 @@ export async function buildUserOperation(
  * This function just waits for on-chain confirmation via the relay.
  *
  * @param serverUrl - TotalReclaw relay server URL
- * @param chainId - Chain ID (10200 for Chiado, 100 for Gnosis)
+ * @param chainId - Chain ID (100 for Gnosis, 10200 for Chiado, 84532 for Base Sepolia)
  * @param userOpHash - UserOperation hash from buildUserOperation()
  * @param timeout - Timeout in ms (default: 60_000)
  * @returns Transaction hash of the mined UserOperation

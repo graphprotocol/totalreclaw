@@ -13,7 +13,7 @@
 import { createPublicClient, http, type Hex, type Address, type Chain } from 'viem';
 import { entryPoint07Address } from 'viem/account-abstraction';
 import { mnemonicToAccount } from 'viem/accounts';
-import { gnosis, gnosisChiado } from 'viem/chains';
+import { gnosis, gnosisChiado, baseSepolia } from 'viem/chains';
 import { createSmartAccountClient } from 'permissionless';
 import { toSimpleSmartAccount } from 'permissionless/accounts';
 import { createPimlicoClient } from 'permissionless/clients/pimlico';
@@ -32,7 +32,7 @@ export interface SubgraphStoreConfig {
   relayUrl: string;           // TotalReclaw relay server URL (proxies bundler + subgraph)
   mnemonic: string;           // BIP-39 mnemonic for key derivation
   cachePath: string;          // Hot cache file path
-  chainId: number;            // 100 for Gnosis mainnet, 10200 for Chiado testnet
+  chainId: number;            // 100 for Gnosis mainnet, 10200 for Chiado testnet, 84532 for Base Sepolia
   dataEdgeAddress: string;    // EventfulDataEdge contract address
   entryPointAddress: string;  // ERC-4337 EntryPoint v0.7
   authKeyHex?: string;        // HKDF auth key for relay server Authorization header
@@ -151,8 +151,10 @@ function getChainFromId(chainId: number): Chain {
       return gnosis;
     case 10200:
       return gnosisChiado;
+    case 84532:
+      return baseSepolia;
     default:
-      return gnosisChiado;
+      return gnosis;
   }
 }
 
@@ -311,7 +313,7 @@ export function isSubgraphMode(): boolean {
  * This is the on-chain owner identity used in the subgraph.
  */
 export async function deriveSmartAccountAddress(mnemonic: string, chainId?: number): Promise<string> {
-  const chain: Chain = (chainId ?? 100) === 100 ? gnosis : gnosisChiado;
+  const chain: Chain = getChainFromId(chainId ?? 100);
   const ownerAccount = mnemonicToAccount(mnemonic);
   const entryPointAddr = (process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || DEFAULT_ENTRYPOINT_ADDRESS) as Address;
   const rpcUrl = process.env.TOTALRECLAW_RPC_URL;
