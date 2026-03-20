@@ -31,7 +31,7 @@ export const DERIVATION_PATH = "m/44'/60'/0'/0/0";
 
 /**
  * Default chain ID for Smart Account address computation.
- * Gnosis mainnet (100) for production, Chiado testnet (10200) for development.
+ * Gnosis mainnet (100) for production, Base Sepolia (84532) for staging.
  */
 export const DEFAULT_CHAIN_ID = 100;
 

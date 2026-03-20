@@ -1,6 +1,6 @@
 # TotalReclaw Production Environment Variables Checklist
 
-> **Purpose**: Track all environment variables needed for the Chiado beta deployment.
+> **Purpose**: Track all environment variables needed for deployment.
 > **Status**: Collecting — fill in values before deploying.
 
 ---
@@ -11,8 +11,8 @@
 |----------|-----------|------------|
 | `PIMLICO_API_KEY` | Relay server + Plugin | Sign up at [pimlico.io](https://dashboard.pimlico.io/) → Create project → Copy API key |
 | `PIMLICO_WEBHOOK_SECRET` | Relay server | Pimlico dashboard → Sponsorship Policies → Create policy with webhook → Copy secret |
-| `PIMLICO_CHAIN_ID` | Relay server | `10200` for Chiado testnet, `100` for Gnosis mainnet |
-| `PIMLICO_BUNDLER_URL` | Relay server | `https://api.pimlico.io/v2/10200/rpc` (Chiado) |
+| `PIMLICO_CHAIN_ID` | Relay server | `100` for Gnosis mainnet (production), `84532` for Base Sepolia (staging) |
+| `PIMLICO_BUNDLER_URL` | Relay server | `https://api.pimlico.io/v2/100/rpc` (production) |
 
 **Setup steps**:
 1. Create account at [pimlico.io](https://dashboard.pimlico.io/)
@@ -128,7 +128,7 @@ These go in each beta tester's OpenClaw `.env` or plugin config:
 Already configured:
 - Address: `0x30d37b26257e03942dFCf12251FC25e41ca38cA8`
 - Private key: in your local `.env` (NEVER share)
-- Chiado contracts already deployed
+- Contracts deployed on Base Sepolia (staging) and Gnosis mainnet (production)
 
 For Gnosis mainnet (later):
 - Same wallet, just fund with real xDAI (~0.1 xDAI sufficient)
@@ -149,7 +149,7 @@ For Gnosis mainnet (later):
 - [ ] Cloudflare setup (can use Railway auto-domain for beta)
 
 ### Already done:
-- [x] Chiado contracts deployed
+- [x] Contracts deployed (Base Sepolia staging + Gnosis mainnet production)
 - [x] Deployer wallet configured
 - [x] Server code written
 - [x] Plugin code written
