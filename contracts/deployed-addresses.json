@@ -1,10 +1,10 @@
 {
-  "network": "gnosis",
-  "chainId": 100,
+  "network": "baseSepolia",
+  "chainId": 84532,
   "entryPoint": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
   "eventfulDataEdge": "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca",
   "openMemoryPaymaster": "0xd10Be4669c739C3315616f7E6a2D7Dbd7033e7aD",
-  "deployedAt": "2026-03-18T19:38:16.546Z",
+  "deployedAt": "2026-03-20T12:55:55.353Z",
   "deployer": "0x5C6A2E495F032E31Fc4c042085Bea0006B9C7A06",
-  "blockNumber": 45217699
+  "blockNumber": 39121533
 }
