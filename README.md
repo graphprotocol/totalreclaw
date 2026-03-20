@@ -23,9 +23,9 @@
 
 ---
 
-Your AI agent knows more about you than your closest friends. You should be the only one who controls that.
+Finally, an AI that remembers everything — without remembering it for Big Tech.
 
-TotalReclaw encrypts every memory on your device before it leaves. The service facilitates storage and retrieval without ever seeing your data. One 12-word recovery phrase gives you access from any device, any agent, with no vendor lock-in.
+TotalReclaw encrypts every memory on your device before it leaves. One 12-word recovery phrase gives you access from any device, any agent, with no vendor lock-in.
 
 - **End-to-end encrypted** -- AES-256-GCM. Only you can read your data.
 - **Portable** -- One 12-word recovery phrase. Any device, any agent, no lock-in.
