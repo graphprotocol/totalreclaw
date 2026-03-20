@@ -517,7 +517,7 @@ async function generateEmbeddingAndLSH(
     const hasher = getLSHHasher(logger);
     const lshBuckets = hasher ? hasher.hash(embedding) : [];
 
-    // Encrypt the embedding (JSON array of numbers) for zero-knowledge storage
+    // Encrypt the embedding (JSON array of numbers) for server-blind storage
     const encryptedEmbedding = encryptToHex(JSON.stringify(embedding), encryptionKey!);
 
     return { embedding, lshBuckets, encryptedEmbedding };
@@ -1177,7 +1177,7 @@ async function handlePluginImportFrom(
 const plugin = {
   id: 'totalreclaw',
   name: 'TotalReclaw',
-  description: 'Zero-knowledge encrypted memory vault for AI agents',
+  description: 'End-to-end encrypted memory vault for AI agents',
   kind: 'memory' as const,
   configSchema: {
     type: 'object',

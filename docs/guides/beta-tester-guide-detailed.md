@@ -73,7 +73,7 @@ If TotalReclaw is not yet listed in the marketplace, install it manually:
 
 2. The plugin registers itself with the ID `totalreclaw` and sets up automatically on first run.
 
-3. Verify the plugin appears in your OpenClaw plugin list. You should see **TotalReclaw** described as "Zero-knowledge encrypted memory vault for AI agents."
+3. Verify the plugin appears in your OpenClaw plugin list. You should see **TotalReclaw** described as "End-to-end encrypted memory vault for AI agents."
 
 ---
 
@@ -828,7 +828,7 @@ This is a beta release. The following items are known limitations that will be a
 
 For those who want to understand the technical architecture:
 
-- **E2EE Architecture:** `docs/specs/totalreclaw/architecture.md` -- how encryption, LSH blind indices, and zero-knowledge search work.
+- **E2EE Architecture:** `docs/specs/totalreclaw/architecture.md` -- how encryption, LSH blind indices, and server-blind search work.
 - **Skill Specification:** `docs/specs/totalreclaw/skill-openclaw.md` -- full plugin spec with data models, triggers, and processing pipelines.
 - **MCP Onboarding:** `docs/specs/totalreclaw/mcp-onboarding.md` -- MCP-specific onboarding design, seed management, and billing tool specifications.
 - **Billing and Onboarding:** `docs/specs/subgraph/billing-and-onboarding.md` -- tier structure, payment infrastructure, and Gnosis Chain rationale.

@@ -1,5 +1,5 @@
 """
-Zero-knowledge observability endpoint for TotalReclaw Server.
+Server-blind observability endpoint for TotalReclaw Server.
 
 GET /v1/metrics — returns per-user operational metrics.
 All metrics are derived from in-memory telemetry and DB counts.
@@ -29,7 +29,7 @@ async def user_metrics(
     db: Database = Depends(get_db),
 ):
     """
-    Return per-user operational metrics for zero-knowledge observability.
+    Return per-user operational metrics for server-blind observability.
 
     Requires authentication (same HKDF auth as other endpoints).
 

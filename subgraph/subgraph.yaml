@@ -1,5 +1,5 @@
 specVersion: 0.0.5
-description: TotalReclaw — Zero-knowledge encrypted memory vault subgraph
+description: TotalReclaw — End-to-end encrypted memory vault subgraph
 repository: https://github.com/p-diogo/totalreclaw
 schema:
   file: ./schema.graphql
@@ -8,11 +8,11 @@ dataSources:
     name: EventfulDataEdge
     # Local dev: hardhat | Production: gnosis | Testnet: gnosis-chiado
     # deploy-contracts.sh updates address + startBlock for localhost deploys
-    network: gnosis-chiado
+    network: base-sepolia
     source:
-      address: "0xA84c5433110Ccc93e57ec387e630E86Bad86c36f"
+      address: "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca"
       abi: EventfulDataEdge
-      startBlock: 20149969
+      startBlock: 39121533
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7

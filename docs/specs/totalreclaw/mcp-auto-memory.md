@@ -354,7 +354,7 @@ The `instructions` field in the `initialize` response is the most impactful sing
 
 ```typescript
 const SERVER_INSTRUCTIONS = `
-You have access to TotalReclaw, a zero-knowledge encrypted memory vault that persists across conversations.
+You have access to TotalReclaw, an end-to-end encrypted memory vault that persists across conversations.
 
 ## CRITICAL: Automatic Memory Behaviors
 
@@ -546,9 +546,9 @@ Where sampling is supported (VS Code, future clients), the server can use it for
 
 This is optional and not required for the initial implementation. The primary extraction path is the LLM in the host application doing extraction before calling `totalreclaw_remember`.
 
-### 4.8 Zero-Knowledge Constraints
+### 4.8 E2EE Constraints
 
-All approaches maintain zero-knowledge E2EE:
+All approaches maintain end-to-end encryption:
 
 - The MCP server runs **locally** on the user's machine
 - Encryption/decryption happens in the MCP server process

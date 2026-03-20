@@ -1,6 +1,6 @@
 # TotalReclaw End-to-End Flow
 
-> Complete reference for the TotalReclaw zero-knowledge encrypted memory vault.
+> Complete reference for the TotalReclaw end-to-end encrypted memory vault.
 > Covers every API endpoint, the cryptographic pipeline, blind search, delta sync,
 > content dedup, and authentication -- with request/response examples.
 
@@ -8,13 +8,13 @@
 
 ## 1. Overview
 
-TotalReclaw is a zero-knowledge encrypted memory vault for AI agents. It allows
+TotalReclaw is an end-to-end encrypted memory vault for AI agents. It allows
 AI agents (OpenClaw, Claude Desktop, any MCP-compatible client) to persist and
 retrieve structured "facts" without the server ever seeing plaintext data.
 
 **Core guarantees:**
 
-- **Zero-knowledge** -- the server stores only encrypted blobs and one-way blind
+- **End-to-end encrypted** -- the server stores only encrypted blobs and one-way blind
   indices. It never sees the master password, encryption key, or plaintext facts.
 - **Portable** -- one-click plain-text export with cursor-based pagination. No
   vendor lock-in.
@@ -590,7 +590,7 @@ No authentication required. Returns Prometheus-formatted metrics including:
 
 ## 6. Search Flow (Blind Index Search)
 
-This is the core of the zero-knowledge design. The server never learns what the
+This is the core of the server-blind design. The server never learns what the
 user is searching for.
 
 ### 6.1 Client-Side: Generating Trapdoors

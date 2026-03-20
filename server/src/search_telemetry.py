@@ -1,5 +1,5 @@
 """
-Per-user search telemetry for zero-knowledge observability.
+Per-user search telemetry for server-blind observability.
 
 Tracks rolling search metrics in-memory (no DB table needed):
 - total_candidates_matched per search

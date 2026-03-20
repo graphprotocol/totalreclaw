@@ -36,7 +36,7 @@ Last updated: 2026-02-24
 
 ### Goals
 - Simple, single-binary server for PoC testing
-- Zero-knowledge: server never sees plaintext or master password
+- Server-blind: server never sees plaintext or master password
 - Authentication derived from user's master password (no separate API keys)
 - Protobuf API (future-proof for decentralized migration)
 - PostgreSQL backend with event-sourced storage
@@ -215,7 +215,7 @@ Server validates: `SHA256(auth_key) == stored_auth_key_hash`
 
 ### Design Principles
 1. **No separate API key** - master password IS the auth credential
-2. **Zero-knowledge** - server never sees master password
+2. **Server-blind** - server never sees master password
 3. **Cryptographic separation** - auth key ≠ encryption key
 4. **Stateless requests** - no sessions, no tokens to refresh
 5. **Portable** - same master password works on any device
@@ -556,7 +556,7 @@ LIMIT ?;
 | Password reuse | Warn user (can't detect server-side) |
 | Key exfiltration | OS keychain storage |
 
-### Zero-Knowledge Guarantee
+### E2EE Guarantee
 - Server stores: `auth_key_hash`, `salt`, `encrypted_blob`, `blind_indices`
 - Server NEVER sees: `master_password`, `encryption_key`, `plaintext`
 

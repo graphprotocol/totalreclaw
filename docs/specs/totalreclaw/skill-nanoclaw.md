@@ -7,7 +7,7 @@ Last updated: 2026-02-24
 
 # Technical Specification: TotalReclaw Skill for NanoClaw
 
-> **Zero-knowledge encrypted memory integration for NanoClaw agents**
+> **End-to-end encrypted memory integration for NanoClaw agents**
 > **Uses the generic TotalReclaw MCP Server**
 
 **Version:** 0.3.0
@@ -297,7 +297,7 @@ TOTALRECLAW_MASTER_PASSWORD=${from_credentials_enc}
 ```yaml
 name: add-totalreclaw
 version: 0.3.0
-description: Add zero-knowledge encrypted memory to NanoClaw
+description: Add end-to-end encrypted memory to NanoClaw
 
 depends_on:
   - name: totalreclaw-mcp-server
@@ -462,7 +462,7 @@ export interface NanoClawContext {
                               |                      |
                               |  - Encrypted storage |
                               |  - Blind index (GIN) |
-                              |  - Zero-knowledge    |
+                              |  - Server-blind      |
                               +----------------------+
 ```
 
@@ -595,7 +595,7 @@ Create the `/add-totalreclaw` skill package for NanoClaw's skills engine.
 ```yaml
 name: add-totalreclaw
 version: 0.2.0
-description: Add zero-knowledge encrypted memory to NanoClaw
+description: Add end-to-end encrypted memory to NanoClaw
 author: TotalReclaw Team
 
 dependencies:
@@ -1124,7 +1124,7 @@ TOTALRECLAW_MAX_CONTEXT=8
 
 | Threat | Mitigation |
 |--------|------------|
-| Server compromise | Zero-knowledge encryption (server never sees plaintext) |
+| Server compromise | End-to-end encryption (server never sees plaintext) |
 | Credential theft | Credentials stored encrypted in group folder |
 | Cross-group access | Per-group namespace isolation |
 | Memory injection | All facts validated before storage |

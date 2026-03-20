@@ -11,7 +11,7 @@ Last updated: 2026-02-24
 **Date:** February 20, 2026
 **Author:** Grok (on behalf of the TotalReclaw team)
 **Target:** OpenClaw v0.x (GitHub: openclaw/openclaw)
-**Primary Storage:** TotalReclaw E2EE server (zero-knowledge, password-based restore)
+**Primary Storage:** TotalReclaw E2EE server (server-blind, password-based restore)
 **Philosophy Alignment:** Keep OpenClaw's Markdown-first "source of truth" for human readability/auditability while adding structured E2EE facts + graph layer behind the scenes. The Markdown files remain writable/editable by the agent and user; TotalReclaw acts as the private, portable, searchable backend.
 
 ---
@@ -24,7 +24,7 @@ Last updated: 2026-02-24
 - Lightweight entity-relation graph layer for multi-hop reasoning.
 - Built-in importance decay + eviction (from day one).
 - Seamless integration with OpenClaw's existing triggers (especially pre-compaction flush).
-- Zero-knowledge: all processing on OpenClaw runtime (client), only encrypted blobs + blind indices go to server.
+- Server-blind: all processing on OpenClaw runtime (client), only encrypted blobs + blind indices go to server.
 - Maintain <50 ms added latency on hot path; <200 ms on flush path.
 - Full portability: user enters master password → restores entire memory on any OpenClaw instance or other agent.
 

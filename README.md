@@ -5,7 +5,7 @@
 <h1 align="center">TotalReclaw</h1>
 
 <p align="center">
-  <strong>Zero-knowledge encrypted memory for personal AI agents</strong>
+  <strong>End-to-end encrypted memory for AI agents — portable, yours forever</strong>
 </p>
 
 <p align="center">
@@ -27,9 +27,9 @@ Your AI agent knows more about you than your closest friends. You should be the 
 
 TotalReclaw encrypts every memory on your device before it leaves. The service facilitates storage and retrieval without ever seeing your data. One 12-word recovery phrase gives you access from any device, any agent, with no vendor lock-in.
 
-- **Zero-knowledge** -- E2E encrypted with AES-256-GCM. Only you can read your data.
+- **End-to-end encrypted** -- AES-256-GCM. Only you can read your data.
 - **Portable** -- One 12-word recovery phrase. Any device, any agent, no lock-in.
-- **On-chain storage** -- Encrypted data stored on [Gnosis Chain](https://www.gnosis.io/), indexed by [The Graph](https://thegraph.com).
+- **Your data, forever** -- Encrypted data stored on [Gnosis Chain](https://www.gnosis.io/), indexed by [The Graph](https://thegraph.com).
 
 ## Quick Start
 

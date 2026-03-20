@@ -17,7 +17,7 @@ Last updated: 2026-02-24
 
 ### 1.1 Product Vision
 
-TotalReclaw is a zero-knowledge encrypted memory vault for AI agents that provides true cross-device sync and data portability. It is the "password manager for AI memory" — enabling users to maintain a single, portable memory that works across all their AI agents (OpenClaw, Claude Desktop, and any MCP-compatible tool).
+TotalReclaw is an end-to-end encrypted memory vault for AI agents that provides true cross-device sync and data portability. It is the "password manager for AI memory" — enabling users to maintain a single, portable memory that works across all their AI agents (OpenClaw, Claude Desktop, and any MCP-compatible tool).
 
 ### 1.2 The Problem
 
@@ -34,7 +34,7 @@ The result: a fragmented digital brain scattered across different companies' ser
 
 TotalReclaw is a universal memory layer for AI agents with three core promises:
 
-1. **Encrypted** — Zero-knowledge E2EE. We can never read your memories.
+1. **Encrypted** — End-to-end encrypted. We can never read your memories.
 2. **Portable** — One-click plain-text export. Leave anytime, no lock-in.
 3. **Universal** — Works across OpenClaw, Claude Desktop, and any MCP-compatible agent.
 
@@ -102,7 +102,7 @@ The AI memory lock-in problem is real and already emerging:
 
 ### 3.1 Core Features (MVP)
 
-#### FR-1: Zero-Knowledge Encryption
+#### FR-1: End-to-End Encryption
 - All memories encrypted client-side before leaving the device
 - AES-GCM for data encryption
 - HKDF (HMAC-based Key Derivation) for key derivation from master password
@@ -127,7 +127,7 @@ The AI memory lock-in problem is real and already emerging:
 #### FR-5: Hybrid Search
 - Two-pass retrieval: Remote vector search → Local BM25 reranking → RRF fusion
 - Blind indices for exact-match queries (emails, API keys, IDs)
-- Competitive accuracy with zero-knowledge privacy
+- Competitive accuracy with end-to-end encrypted privacy
 
 ### 3.2 Technical Architecture
 
@@ -143,7 +143,7 @@ The AI memory lock-in problem is real and already emerging:
 - PostgreSQL + pgvector for storage
 - Stores: ciphertext, embeddings, blind indices
 - mTLS for secure communication
-- Zero-knowledge — server never sees plaintext
+- End-to-end encrypted — server never sees plaintext
 
 **Search Flow:**
 ```
@@ -155,7 +155,7 @@ Pass 2 (Client, ~500ms): Decrypt → BM25 on plaintext → RRF fusion → Top 3-
 
 | Requirement | Specification |
 |-------------|---------------|
-| **Security** | Zero-knowledge encryption, mTLS, no plaintext on server disk |
+| **Security** | End-to-end encryption, mTLS, no plaintext on server disk |
 | **Privacy** | GDPR compliant, right to deletion, data minimization |
 | **Performance** | Search latency < 1 second, sync latency < 5 seconds |
 | **Availability** | 99.9% uptime SLA for SaaS |
@@ -203,7 +203,7 @@ Pass 2 (Client, ~500ms): Decrypt → BM25 on plaintext → RRF fusion → Top 3-
 **Focus:** Fast go-to-market, prove the model
 
 - Single-operator SaaS
-- Zero-knowledge encryption
+- End-to-end encryption
 - OpenClaw skill + MCP server
 - REST API for custom integrations
 
@@ -253,7 +253,7 @@ Pass 2 (Client, ~500ms): Decrypt → BM25 on plaintext → RRF fusion → Top 3-
 
 ### 6.2 Success Criteria
 
-- **Technical:** Zero-knowledge property maintained (no plaintext on server, ever)
+- **Technical:** E2EE property maintained (no plaintext on server, ever)
 - **Product:** Export functionality works for 100% of memories
 - **Business:** $10K MRR within 12 months
 - **Ecosystem:** At least 3 different AI agent integrations live
@@ -264,7 +264,7 @@ Pass 2 (Client, ~500ms): Decrypt → BM25 on plaintext → RRF fusion → Top 3-
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| **AI companies add portable memory** | High | Move fast to establish brand, focus on zero-knowledge differentiation |
+| **AI companies add portable memory** | High | Move fast to establish brand, focus on E2EE differentiation |
 | **Users don't care about privacy** | Medium | Emphasize portability benefit, make privacy invisible/automatic |
 | **Technical complexity of E2EE** | Medium | Extensive testing, clear documentation, graceful fallbacks |
 | **Competition from well-funded players** | High | Open-source client code, community trust, first-mover advantage |

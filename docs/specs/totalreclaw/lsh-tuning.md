@@ -31,7 +31,7 @@
 
 ## 2. The Multi-Tenant SaaS Challenge
 
-TotalReclaw is a zero-knowledge encrypted memory vault. The server never sees plaintext. This creates a unique tuning challenge:
+TotalReclaw is an end-to-end encrypted memory vault. The server never sees plaintext. This creates a unique tuning challenge:
 
 - **The server cannot analyze content.** It stores opaque SHA-256 hashes in `blind_indices` and returns candidates that match the trapdoors sent by the client. It has no ability to inspect, cluster, or profile user content.
 - **Different users have different content profiles.** A tech worker stores facts about code and APIs. A chef stores recipes and ingredients. A student stores lecture notes and exam topics.
@@ -105,13 +105,13 @@ The 32-bit x 20 config should be treated as a global constant baked into the cli
 | Non-English language support | Re-validate; stemming and word distributions differ | Yes |
 | Recall is acceptable but too many false positives overwhelm the reranker | Increase bit width (e.g., 36 or 40) | Yes |
 
-**Re-indexing cost:** All existing facts must be decrypted client-side, re-hashed with new LSH parameters, and the `blind_indices` array updated on the server. This is a client-initiated operation (the server cannot do it -- zero-knowledge). For production, a `PATCH /v1/facts/{fact_id}/indices` endpoint would be needed. For the PoC, a fresh re-ingest is simpler.
+**Re-indexing cost:** All existing facts must be decrypted client-side, re-hashed with new LSH parameters, and the `blind_indices` array updated on the server. This is a client-initiated operation (the server cannot do it -- server-blind). For production, a `PATCH /v1/facts/{fact_id}/indices` endpoint would be needed. For the PoC, a fresh re-ingest is simpler.
 
 ---
 
-## 5. Zero-Knowledge Observability
+## 5. Server-Blind Observability
 
-The server can observe the following metrics without breaking zero-knowledge. None of these reveal plaintext content.
+The server can observe the following metrics without breaking the E2EE guarantee. None of these reveal plaintext content.
 
 ### Candidate count per search
 
@@ -194,5 +194,5 @@ This strategy requires zero server-side configuration changes. The server does n
 
 - **Global LSH parameters (32-bit x 20) work for all users.** Content domain does not affect LSH match probabilities -- only cosine similarity matters, and paraphrasing follows similar patterns across domains.
 - **The only per-user parameter is candidate pool size.** This scales with fact count and is controlled entirely by the client in each search request.
-- **The server remains zero-knowledge.** It stores opaque hashes, returns matching candidates, and exposes operational metrics (fact count, candidate counts, latency) that help the client auto-tune without revealing content.
+- **The server remains blind to content.** It stores opaque hashes, returns matching candidates, and exposes operational metrics (fact count, candidate counts, latency) that help the client auto-tune without revealing content.
 - **Global parameter changes are rare** (new embedding model, new language, or a benchmark showing poor recall on a new content type) and require client-side re-indexing.

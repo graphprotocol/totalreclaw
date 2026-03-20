@@ -118,7 +118,7 @@ Last updated: 2026-02-27
 
 ### Gap 8: Privacy Verification
 
-**Real life:** TotalReclaw's key differentiator is zero-knowledge encryption. We should PROVE the server can't see plaintext.
+**Real life:** TotalReclaw's key differentiator is end-to-end encryption. We should PROVE the server can't see plaintext.
 
 **v1:** Privacy score is a static constant (100 for TotalReclaw, 0 for others).
 

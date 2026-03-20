@@ -1,7 +1,7 @@
 /**
  * TotalReclaw Skill for OpenClaw
  *
- * Zero-knowledge encrypted memory for AI agents using MemOS-inspired
+ * End-to-end encrypted memory for AI agents using MemOS-inspired
  * lifecycle hooks pattern.
  *
  * @example

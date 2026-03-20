@@ -1,5 +1,5 @@
 specVersion: 0.0.5
-description: TotalReclaw — Zero-knowledge encrypted memory vault subgraph (Gnosis mainnet, test instance)
+description: TotalReclaw — End-to-end encrypted memory vault subgraph (Gnosis mainnet, test instance)
 repository: https://github.com/p-diogo/totalreclaw
 schema:
   file: ./schema.graphql

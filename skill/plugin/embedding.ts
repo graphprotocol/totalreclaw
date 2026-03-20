@@ -4,7 +4,7 @@
  * Uses the Xenova/bge-small-en-v1.5 ONNX model to generate 384-dimensional
  * text embeddings locally. No API key needed, no data leaves the machine.
  *
- * This preserves the zero-knowledge guarantee: embeddings are generated
+ * This preserves the E2EE guarantee: embeddings are generated
  * CLIENT-SIDE before encryption, so no plaintext ever reaches an external API.
  *
  * Model details:

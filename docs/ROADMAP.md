@@ -2,7 +2,7 @@
 
 ## Overview
 
-TotalReclaw is a zero-knowledge encrypted memory vault for AI agents. The project progresses through phases, each building on the last but with distinct goals:
+TotalReclaw is an end-to-end encrypted memory vault for AI agents. The project progresses through phases, each building on the last but with distinct goals:
 
 1. **Phase 1 (PoC)** -- Validate the E2EE architecture end-to-end with local testing.
 2. **Phase 2 (Free MVP)** -- Ship the managed service, publish on Claw Hub, and benchmark against Mem0.
@@ -164,7 +164,7 @@ Reduce fact pile-up by detecting near-duplicates and merging them client-side.
 | Extraction-time dedup | Integrate dedup check into `agent_end` extraction pipeline | **DONE** — wired into `storeExtractedFacts()` |
 | Server batch-delete | `POST /v1/facts/batch-delete` for efficient consolidation | **DONE** |
 
-**Constraint:** All comparison/merging happens client-side (zero-knowledge). Server only has content fingerprints and blind indices.
+**Constraint:** All comparison/merging happens client-side (server-blind). Server only has content fingerprints and blind indices.
 
 **Plan:** `plans/2026-03-11-memory-consolidation-dedup.md` (internal repo)
 
@@ -357,7 +357,7 @@ Build on the supersession graph foundation to create a full knowledge graph of e
 
 - Depends on supersession graph (6.1)
 - Client-side extraction during fact storage
-- Encrypted relationship edges (zero-knowledge preserved)
+- Encrypted relationship edges (E2EE preserved)
 
 ### 6.3 Integrator Support
 

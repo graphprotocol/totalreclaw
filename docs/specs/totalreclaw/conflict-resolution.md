@@ -67,7 +67,7 @@ The system must handle all three cases without the server ever seeing plaintext.
 
 ## 2. Constraints
 
-### 2.1 Zero-Knowledge Invariant
+### 2.1 E2EE Invariant
 
 The server (PostgreSQL in MVP, subgraph in production) MUST NOT see plaintext content. This is TotalReclaw's core value proposition and is non-negotiable.
 
@@ -121,13 +121,13 @@ Reconnection sync should not block the agent from operating. The user should not
 **Rejected because:**
 - CRDTs work when the "merge" operation is well-defined. For text facts, merge = set union just means "keep both," which is exactly the duplicate problem we're trying to solve
 - Semantic deduplication ("prefers Python" vs "likes Python more than JS") is not a lattice operation — it requires understanding content
-- CRDTs add implementation complexity without solving the core problem (semantic duplicates under zero-knowledge)
+- CRDTs add implementation complexity without solving the core problem (semantic duplicates under E2EE)
 
 ### 3.3 Server-Side Embedding Comparison
 
 **Considered:** Send embeddings to the server for duplicate detection via cosine similarity.
 
-**Rejected because:** This directly violates zero-knowledge. Embeddings reveal semantic content — a server with embeddings can cluster, infer topics, and partially reconstruct meaning. This is explicitly forbidden by the architecture.
+**Rejected because:** This directly violates the server-blind guarantee. Embeddings reveal semantic content — a server with embeddings can cluster, infer topics, and partially reconstruct meaning. This is explicitly forbidden by the architecture.
 
 ### 3.4 Full Client-Side Reconciliation Only (No Server Help)
 
@@ -143,7 +143,7 @@ Reconnection sync should not block the agent from operating. The user should not
 **Considered:** Instead of UUIDv7, derive fact IDs from content: `fact_id = SHA256(plaintext)`. Same content = same ID = automatic dedup.
 
 **Rejected because:**
-- Reveals that two facts have identical content (the server sees the same ID appear twice). This leaks information under zero-knowledge: the server learns "these two writes from different sessions had the same content" without knowing what that content is. For a privacy-focused system, this is an unacceptable metadata leak at the ID level.
+- Reveals that two facts have identical content (the server sees the same ID appear twice). This leaks information under E2EE: the server learns "these two writes from different sessions had the same content" without knowing what that content is. For a privacy-focused system, this is an unacceptable metadata leak at the ID level.
 - Doesn't handle semantic duplicates (different wording, same meaning = different IDs)
 - We achieve the same exact-dedup benefit via `content_fingerprint` (Section 5.2) which is a separate, explicitly-purposed field — making the privacy tradeoff visible and auditable rather than hidden in the ID scheme.
 
@@ -153,9 +153,9 @@ Reconnection sync should not block the agent from operating. The user should not
 
 ### 4.1 Starting Observation
 
-Conflict resolution requires understanding content. Zero-knowledge forbids the server from understanding content. Therefore, **the final arbiter of any conflict must be the client.** This is inescapable.
+Conflict resolution requires understanding content. The server-blind guarantee forbids the server from understanding content. Therefore, **the final arbiter of any conflict must be the client.** This is inescapable.
 
-But making the client do ALL the work (rejected alternative 3.4) is inefficient. The question becomes: **what metadata can we expose to the server to reduce the client's workload without breaking zero-knowledge?**
+But making the client do ALL the work (rejected alternative 3.4) is inefficient. The question becomes: **what metadata can we expose to the server to reduce the client's workload without breaking the E2EE guarantee?**
 
 ### 4.2 Classifying Conflicts by Detectability
 
@@ -186,7 +186,7 @@ content_fingerprint = HMAC-SHA256(encryption_key, normalize(plaintext))
 
 This gives us:
 - **Determinism:** Same content from any agent produces the same fingerprint
-- **Zero-knowledge safety:** Without the encryption key, the fingerprint is indistinguishable from random. The server learns "these two writes have the same fingerprint" but cannot reverse it to content. This is the same class of metadata leak as blind indices (which we already accept).
+- **E2EE safety:** Without the encryption key, the fingerprint is indistinguishable from random. The server learns "these two writes have the same fingerprint" but cannot reverse it to content. This is the same class of metadata leak as blind indices (which we already accept).
 - **Exact dedup:** The server can reject exact duplicates without decrypting
 
 The privacy tradeoff is minimal and already accepted by the architecture: blind indices ALREADY tell the server which facts are "about similar topics." A content fingerprint reveals slightly less (only exact matches, not semantic similarity). If the blind index leak is acceptable, the fingerprint leak certainly is.

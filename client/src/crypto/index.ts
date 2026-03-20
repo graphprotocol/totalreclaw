@@ -1,7 +1,7 @@
 /**
  * TotalReclaw Crypto Module
  *
- * Provides cryptographic primitives for zero-knowledge memory operations.
+ * Provides cryptographic primitives for end-to-end encrypted memory operations.
  */
 
 export {

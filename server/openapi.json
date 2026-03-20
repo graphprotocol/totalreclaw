@@ -2,7 +2,7 @@
     "openapi": "3.1.0",
     "info": {
         "title": "TotalReclaw Server",
-        "description": "\n    Zero-knowledge encrypted memory vault API.\n\n    ## Authentication\n\n    All endpoints (except /register and /health) require authentication using\n    a Bearer token in the Authorization header:\n\n    ```\n    Authorization: Bearer <hex-encoded-auth-key>\n    ```\n\n    The auth_key is derived from the user's master password using HKDF-SHA256:\n    ```\n    auth_key = HKDF-SHA256(master_password, salt, \"totalreclaw-auth-v1\")\n    ```\n\n    ## Zero-Knowledge Design\n\n    - Server NEVER sees the master password\n    - Server NEVER sees the encryption key\n    - Server NEVER sees plaintext memories\n    - Server only stores encrypted blobs and blind indices\n    ",
+        "description": "\n    End-to-end encrypted memory vault API.\n\n    ## Authentication\n\n    All endpoints (except /register and /health) require authentication using\n    a Bearer token in the Authorization header:\n\n    ```\n    Authorization: Bearer <hex-encoded-auth-key>\n    ```\n\n    The auth_key is derived from the user's master password using HKDF-SHA256:\n    ```\n    auth_key = HKDF-SHA256(master_password, salt, \"totalreclaw-auth-v1\")\n    ```\n\n    ## Server-Blind Design\n\n    - Server NEVER sees the master password\n    - Server NEVER sees the encryption key\n    - Server NEVER sees plaintext memories\n    - Server only stores encrypted blobs and blind indices\n    ",
         "version": "0.3.1"
     },
     "paths": {

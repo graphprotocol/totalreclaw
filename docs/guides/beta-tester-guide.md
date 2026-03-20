@@ -105,7 +105,7 @@ Each fact is scored by importance. Low-importance facts decay over time; critica
 
 Your 12-word recovery phrase is the only thing you need to access your memories from a new device or agent. Same phrase = same keys = same data.
 
-**Write it down and store it safely.** If you lose it, your memories are unrecoverable -- that's the point of zero-knowledge encryption.
+**Write it down and store it safely.** If you lose it, your memories are unrecoverable -- that's the point of end-to-end encryption.
 
 To recover: just run the setup again (OpenClaw: reinstall the skill; MCP: re-run the setup wizard) and enter your existing phrase when prompted. NanoClaw users: ask your group admin — recovery is managed via the group's master password.
 
@@ -161,7 +161,7 @@ Switching from Mem0 or another AI memory system? TotalReclaw can import your exi
 
 > "Import my memories from Mem0 using API key m0-your-key-here"
 
-Everything is encrypted on your device before storage — the same zero-knowledge guarantee as natively stored memories. Imports are idempotent (running twice won't create duplicates).
+Everything is encrypted on your device before storage — the same E2EE guarantee as natively stored memories. Imports are idempotent (running twice won't create duplicates).
 
 **Supported sources:** Mem0 (live API), MCP Memory Server (JSONL file). More planned.
 

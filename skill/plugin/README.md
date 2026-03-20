@@ -5,7 +5,7 @@
 <h1 align="center">@totalreclaw/totalreclaw</h1>
 
 <p align="center">
-  <strong>Encrypted memory for OpenClaw -- fully automatic, zero-knowledge E2EE</strong>
+  <strong>End-to-end encrypted memory for OpenClaw -- fully automatic, yours forever</strong>
 </p>
 
 <p align="center">
@@ -66,7 +66,7 @@ Most of the time you won't use these directly -- the automatic hooks handle memo
 
 ## Features
 
-- **Zero-knowledge E2EE** -- AES-256-GCM encryption, blind index search, HKDF auth
+- **End-to-end encrypted** -- AES-256-GCM encryption, blind index search, HKDF auth
 - **Automatic extraction** -- LLM extracts facts from conversations, no manual input needed
 - **Semantic search** -- Local embeddings + BM25 + cosine reranking with RRF fusion
 - **Smart dedup** -- Cosine similarity catches paraphrases; LLM-guided dedup catches contradictions (Pro)

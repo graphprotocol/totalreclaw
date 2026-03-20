@@ -1,7 +1,7 @@
 """
 TotalReclaw Server - Main FastAPI Application.
 
-Zero-knowledge encrypted memory vault server for Phase 4.
+End-to-end encrypted memory vault server for Phase 4.
 """
 import logging
 import re
@@ -152,7 +152,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 app = FastAPI(
     title="TotalReclaw Server",
     description="""
-    Zero-knowledge encrypted memory vault API.
+    End-to-end encrypted memory vault API.
 
     ## Authentication
 
@@ -168,7 +168,7 @@ app = FastAPI(
     auth_key = HKDF-SHA256(master_password, salt, "totalreclaw-auth-key-v1")
     ```
 
-    ## Zero-Knowledge Design
+    ## Server-Blind Design
 
     - Server NEVER sees the master password
     - Server NEVER sees the encryption key

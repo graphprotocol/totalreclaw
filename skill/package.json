@@ -1,7 +1,7 @@
 {
   "name": "@totalreclaw/skill",
   "version": "0.1.0",
-  "description": "TotalReclaw Skill for OpenClaw - Zero-knowledge encrypted memory for AI agents",
+  "description": "TotalReclaw Skill for OpenClaw - End-to-end encrypted memory for AI agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -16,7 +16,7 @@
     "skill",
     "memory",
     "e2ee",
-    "zero-knowledge",
+    "e2e-encryption",
     "ai",
     "agent"
   ],

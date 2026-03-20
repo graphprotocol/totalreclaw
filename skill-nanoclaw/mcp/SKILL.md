@@ -1,6 +1,6 @@
 # TotalReclaw: Your Encrypted Memory Vault
 
-You have access to a zero-knowledge encrypted memory system via the `totalreclaw` MCP server. The server never sees your memories in plaintext — everything is encrypted client-side with AES-256-GCM before leaving the container.
+You have access to an end-to-end encrypted memory system via the `totalreclaw` MCP server. The server never sees your memories in plaintext — everything is encrypted client-side with AES-256-GCM before leaving the container.
 
 ## Available Tools
 

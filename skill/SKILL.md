@@ -1,6 +1,6 @@
 ---
 name: totalreclaw
-description: "Zero-knowledge encrypted memory vault for AI agents — the password manager for AI memory. Full E2EE: server never sees plaintext."
+description: "End-to-end encrypted memory for AI agents — portable, yours forever. AES-256-GCM E2EE: server never sees plaintext."
 version: 0.2.0
 author: TotalReclaw Team
 license: MIT
@@ -15,7 +15,7 @@ metadata:
     keywords:
       - memory
       - e2ee
-      - zero-knowledge
+      - e2e-encryption
       - encryption
       - privacy
       - agent-memory
@@ -363,7 +363,7 @@ The agent proactively warns when quota usage exceeds 80%. If the limit is reache
 
 ## Description
 
-TotalReclaw is a zero-knowledge encrypted memory vault for AI agents. Think of it as a "password manager for AI memory" that provides:
+TotalReclaw is an end-to-end encrypted memory vault for AI agents. Think of it as a "password manager for AI memory" that provides:
 
 1. **End-to-End Encryption** - All memories are encrypted client-side using AES-256-GCM. The server never sees plaintext data.
 
@@ -383,7 +383,7 @@ TotalReclaw is a zero-knowledge encrypted memory vault for AI agents. Think of i
 
 ### IMPORTANT: Do Not Write Cleartext Memory Files
 
-TotalReclaw handles all memory storage with end-to-end encryption. **Do NOT write facts, preferences, or decisions to MEMORY.md or memory/*.md files.** All memories are stored encrypted on-chain and recalled automatically — writing cleartext files defeats the zero-knowledge guarantee.
+TotalReclaw handles all memory storage with end-to-end encryption. **Do NOT write facts, preferences, or decisions to MEMORY.md or memory/*.md files.** All memories are stored encrypted on-chain and recalled automatically — writing cleartext files defeats the E2EE guarantee.
 
 If you need to store a memory, use the `totalreclaw_remember` tool. If you need to recall memories, use `totalreclaw_recall`.
 
@@ -733,7 +733,7 @@ Environment variables for controlling near-duplicate detection and consolidation
 
 ## Privacy & Security
 
-- **Zero-Knowledge**: All encryption happens client-side. The server never sees plaintext.
+- **End-to-End Encrypted**: All encryption happens client-side. The server never sees your data.
 - **Master Password**: Never sent to the server. Used only for key derivation (Argon2id).
 - **Export Portability**: Full plaintext export available anytime.
 - **Tombstone Recovery**: Deleted memories can be recovered within 30 days.

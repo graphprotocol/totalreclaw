@@ -1,5 +1,5 @@
 """
-Tests for zero-knowledge observability features:
+Tests for server-blind observability features:
 1. total_candidates_matched in search response
 2. GET /v1/metrics per-user endpoint
 3. SearchTelemetryStore in-memory metrics

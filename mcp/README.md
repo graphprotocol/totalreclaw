@@ -22,7 +22,7 @@
 
 ---
 
-Zero-knowledge E2EE memory vault as an MCP server. Your memories are encrypted on your device before leaving -- no one can read them, not even us.
+End-to-end encrypted memory vault as an MCP server. Your memories are encrypted on your device before leaving -- no one can read them, not even us.
 
 ## Quick Start
 

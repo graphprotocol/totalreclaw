@@ -7,10 +7,10 @@ Last updated: 2026-02-24
 
 # Technical Specification — Crypto-Only (LSH + Blind Buckets)
 
-**Title:** TotalReclaw v0.3 — Zero-Knowledge Vector Search via LSH + Encrypted Embeddings
+**Title:** TotalReclaw v0.3 — Server-Blind Vector Search via LSH + Encrypted Embeddings
 **Version:** 1.0 (complete, copy-paste for any coding agent with zero prior context)
 **Target stack:** Python 3.12+ (server + client lib) + TypeScript client for OpenClaw
-**Assumed PRD (lousy version):** "Make TotalReclaw truly zero-knowledge for both documents and embeddings while keeping accuracy within 3% of plaintext and latency <150ms at 1M memories."
+**Assumed PRD (lousy version):** "Make TotalReclaw truly server-blind for both documents and embeddings while keeping accuracy within 3% of plaintext and latency <150ms at 1M memories."
 
 ---
 

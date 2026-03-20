@@ -2,10 +2,10 @@
 
 ## Project Overview
 
-**TotalReclaw** is a zero-knowledge encrypted memory vault for AI agents -- the "password manager for AI memory."
+**TotalReclaw** is an end-to-end encrypted memory vault for AI agents -- the "password manager for AI memory."
 
 ### Core Value Proposition
-1. **Encrypted** -- Zero-knowledge E2EE. Server never sees plaintext.
+1. **Encrypted** -- End-to-end encrypted (AES-256-GCM). Server never sees plaintext.
 2. **Portable** -- One-click plain-text export. No vendor lock-in.
 3. **Universal** -- Works across OpenClaw, Claude Desktop, any MCP-compatible agent.
 
@@ -228,7 +228,7 @@ Every new feature implementation MUST include:
 - **Search latency**: <140ms p95 for 1M memories
 - **Recall**: >=93% of true top-250
 - **Storage overhead**: <=2.2x vs plaintext
-- **Zero-knowledge**: Server NEVER sees plaintext
+- **Server-blind**: Server NEVER sees plaintext
 
 ---
 

@@ -194,7 +194,7 @@ export async function runSetup(): Promise<void> {
 
   console.log('');
   console.log('=== TotalReclaw Setup ===');
-  console.log('Zero-knowledge encrypted memory for AI agents.');
+  console.log('End-to-end encrypted memory for AI agents.');
   console.log('');
 
   try {

@@ -1,5 +1,5 @@
 """
-TotalReclaw Server - Zero-knowledge encrypted memory vault.
+TotalReclaw Server - End-to-end encrypted memory vault.
 
 This is the FastAPI-based server implementation for Phase 4 of the TotalReclaw project.
 """

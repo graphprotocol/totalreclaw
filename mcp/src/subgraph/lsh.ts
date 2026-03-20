@@ -1,7 +1,7 @@
 /**
  * TotalReclaw MCP - LSH Hasher (Locality-Sensitive Hashing)
  *
- * Pure TypeScript implementation of Random Hyperplane LSH for zero-knowledge
+ * Pure TypeScript implementation of Random Hyperplane LSH for server-blind
  * semantic search. Generates deterministic hyperplane matrices from a seed
  * derived from the user's master key, so the same embedding always hashes to
  * the same buckets across sessions.

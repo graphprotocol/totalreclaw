@@ -1,7 +1,7 @@
 {
   "name": "totalreclaw",
   "version": "0.1.0",
-  "description": "Zero-knowledge encrypted memory vault for AI agents — the password manager for AI memory. Full E2EE: server never sees plaintext.",
+  "description": "End-to-end encrypted memory for AI agents — portable, yours forever. AES-256-GCM E2EE: server never sees plaintext.",
   "author": "TotalReclaw Team",
   "license": "MIT",
   "homepage": "https://github.com/p-diogo/totalreclaw",
@@ -9,7 +9,7 @@
   "keywords": [
     "memory",
     "e2ee",
-    "zero-knowledge",
+    "e2e-encryption",
     "encryption",
     "privacy",
     "agent-memory",

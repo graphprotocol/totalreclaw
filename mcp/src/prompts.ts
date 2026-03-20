@@ -3,7 +3,7 @@
 // system prompt, giving the LLM persistent behavioral guidance for the session.
 
 export const SERVER_INSTRUCTIONS = `
-You have access to TotalReclaw, a zero-knowledge encrypted memory vault that persists across conversations.
+You have access to TotalReclaw, an end-to-end encrypted memory vault that persists across conversations.
 
 ## CRITICAL: Automatic Memory Behaviors
 

@@ -1,6 +1,6 @@
 # NanoClaw TotalReclaw Integration
 
-NanoClaw uses the published `@totalreclaw/mcp-server` package for zero-knowledge
+NanoClaw uses the published `@totalreclaw/mcp-server` package for end-to-end
 encrypted memory — the same MCP server used by Claude Desktop, Cursor, and any
 MCP-compatible agent.
 

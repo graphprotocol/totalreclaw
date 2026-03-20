@@ -55,7 +55,7 @@ Ensure the SKILL.md starts with this frontmatter for ClawHub:
 ```yaml
 ---
 name: TotalReclaw
-description: "Zero-knowledge encrypted memory vault for AI agents. AES-256-GCM E2EE — server never sees plaintext. One recovery phrase, full portability."
+description: "End-to-end encrypted memory for AI agents — portable, yours forever. AES-256-GCM E2EE. One recovery phrase, full portability."
 version: 1.0.0
 metadata:
   openclaw:
@@ -83,15 +83,15 @@ clawhub publish ./skill \
   --slug totalreclaw \
   --name "TotalReclaw" \
   --version 1.0.0 \
-  --tags latest,memory,encryption,e2ee,zero-knowledge,privacy,agent-memory,persistent-context \
-  --changelog "Initial release: zero-knowledge encrypted memory vault for AI agents. AES-256-GCM E2EE, blind-index search, on-chain storage via The Graph, one-click plaintext export, 6 tools, 3 lifecycle hooks."
+  --tags latest,memory,encryption,e2ee,e2e-encryption,privacy,agent-memory,persistent-context \
+  --changelog "Initial release: end-to-end encrypted memory vault for AI agents. AES-256-GCM E2EE, blind-index search, on-chain storage via The Graph, one-click plaintext export, 6 tools, 3 lifecycle hooks."
 ```
 
 ---
 
 ## Security Scan Notes
 
-The `TOTALRECLAW_MASTER_PASSWORD` env var will likely trigger extra scrutiny from the automated security scanner. The zero-knowledge architecture explanation in SKILL.md should help it pass as `clean`:
+The `TOTALRECLAW_MASTER_PASSWORD` env var will likely trigger extra scrutiny from the automated security scanner. The E2EE architecture explanation in SKILL.md should help it pass as `clean`:
 
 - The password is a 12-word BIP-39 mnemonic used to derive encryption keys
 - It never leaves the client device

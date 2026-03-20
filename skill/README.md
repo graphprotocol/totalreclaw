@@ -1,6 +1,6 @@
 # TotalReclaw Skill for OpenClaw
 
-> **Zero-knowledge encrypted memory for AI agents -- the "password manager for AI memory."**
+> **End-to-end encrypted memory for AI agents -- portable, yours forever.**
 >
 > Your AI remembers everything. Your server sees nothing.
 
@@ -38,7 +38,7 @@ Most AI memory solutions force a tradeoff: **good recall OR privacy**. TotalRecl
 
 ### Key Differentiators
 
-- **True zero-knowledge**: AES-256-GCM encryption, Argon2id key derivation, HKDF-SHA256 auth. The server is cryptographically unable to read your memories.
+- **True end-to-end encryption**: AES-256-GCM encryption, Argon2id key derivation, HKDF-SHA256 auth. The server is cryptographically unable to read your memories.
 - **Near-plaintext recall**: LSH blind indices with client-side BM25 + cosine + RRF reranking achieve 98.1% recall@8.
 - **No vendor lock-in**: One-click plaintext export in JSON or Markdown. Your data is always yours.
 - **Works everywhere**: Any MCP-compatible AI agent, not just OpenClaw.
@@ -47,7 +47,7 @@ Most AI memory solutions force a tradeoff: **good recall OR privacy**. TotalRecl
 
 ## Features
 
-- **Zero-Knowledge Encryption**: End-to-end encryption ensures the server never sees plaintext memories
+- **End-to-End Encryption**: AES-256-GCM ensures the server never sees plaintext memories
 - **Intelligent Extraction**: Automatically extracts facts, preferences, and decisions from conversations
 - **Semantic Search**: LSH blind indices with client-side BM25 + cosine + RRF fusion reranking
 - **Lifecycle Hooks**: Seamlessly integrates with OpenClaw's agent lifecycle
@@ -290,7 +290,7 @@ Memories are scored on a 1-10 scale:
 
 ## Encryption Details
 
-TotalReclaw uses zero-knowledge end-to-end encryption:
+TotalReclaw uses end-to-end encryption:
 
 1. **Key Derivation**: Master password is processed through Argon2id to derive encryption keys. The password is never sent to the server.
 2. **Encryption**: All memories are encrypted client-side using AES-256-GCM before transmission.

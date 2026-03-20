@@ -7,7 +7,7 @@ Last updated: 2026-02-24
 
 # Technical Specification: TotalReclaw MCP Server
 
-> **Generic MCP server for zero-knowledge encrypted memory**
+> **Generic MCP server for end-to-end encrypted memory**
 > **Works with: Claude Desktop, NanoClaw, any MCP-compatible client**
 
 **Version:** 1.0.0
@@ -18,7 +18,7 @@ Last updated: 2026-02-24
 
 ## Overview
 
-This specification describes a **generic MCP (Model Context Protocol) server** that exposes TotalReclaw's zero-knowledge encrypted memory capabilities to any MCP-compatible client.
+This specification describes a **generic MCP (Model Context Protocol) server** that exposes TotalReclaw's end-to-end encrypted memory capabilities to any MCP-compatible client.
 
 ### Why MCP?
 
@@ -128,7 +128,7 @@ The MCP server provides a prompt fragment to inject:
 const SYSTEM_PROMPT_FRAGMENT = `
 ## TotalReclaw: Your Encrypted Memory Vault
 
-You have access to a zero-knowledge encrypted memory system. The server never sees your memories in plaintext - everything is encrypted client-side with AES-256-GCM.
+You have access to an end-to-end encrypted memory system. The server never sees your memories in plaintext - everything is encrypted client-side with AES-256-GCM.
 
 ### Available Tools
 

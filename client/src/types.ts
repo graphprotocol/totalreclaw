@@ -1,7 +1,7 @@
 /**
  * TotalReclaw Client - Type Definitions
  *
- * Core types for the zero-knowledge memory client library.
+ * Core types for the end-to-end encrypted memory client library.
  */
 
 // ============================================================================

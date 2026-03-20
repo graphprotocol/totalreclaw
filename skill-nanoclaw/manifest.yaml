@@ -1,6 +1,6 @@
 name: add-totalreclaw
 version: 0.3.0
-description: Add zero-knowledge encrypted memory to NanoClaw
+description: Add end-to-end encrypted memory to NanoClaw
 author: TotalReclaw Team
 
 dependencies:

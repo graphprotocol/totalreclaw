@@ -1,7 +1,7 @@
 /**
  * TotalReclaw Client Library
  *
- * A TypeScript library for zero-knowledge memory operations.
+ * A TypeScript library for end-to-end encrypted memory operations.
  *
  * This library provides:
  * - End-to-end encryption of memories and embeddings
@@ -65,7 +65,7 @@ interface ClientState {
 /**
  * Main TotalReclaw Client
  *
- * Provides a high-level API for zero-knowledge memory operations.
+ * Provides a high-level API for end-to-end encrypted memory operations.
  */
 export class TotalReclaw {
   private config: TotalReclawConfig & { lshConfig: Required<LSHConfig> };

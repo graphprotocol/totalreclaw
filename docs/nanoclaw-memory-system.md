@@ -442,7 +442,7 @@ User Message --> Agent Processing --> Response
 2. **Fact Extraction** - Automated extraction and deduplication from conversations
 3. **Memory Decay** - Importance-based forgetting instead of manual curation
 4. **Cross-Device Sync** - Encrypted memory that syncs across instances
-5. **Zero-Knowledge** - Server never sees plaintext memories
+5. **End-to-End Encrypted** - Server never sees plaintext memories
 
 ### Integration Opportunities
 

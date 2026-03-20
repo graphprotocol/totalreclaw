@@ -34,7 +34,7 @@ Branch: `audit-fixes` (worktree at `/tmp/totalreclaw-audit`)
 | Dimension | Grade |
 |-----------|-------|
 | Cryptography | A- |
-| Zero-Knowledge | A |
+| E2EE (Server-Blind) | A |
 | Code Organization | A- |
 | Code Quality | B- |
 | Product Clarity | B |

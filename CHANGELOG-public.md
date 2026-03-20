@@ -1,7 +1,7 @@
 # TotalReclaw Changelog
 
 ## v0.2.0 (March 2026) -- Private Beta
-- Zero-knowledge E2EE memory vault for AI agents
+- End-to-end encrypted memory vault for AI agents
 - OpenClaw skill with automatic memory extraction via lifecycle hooks
 - MCP server for Claude Desktop, Cursor, and other MCP-compatible agents
 - Stripe and Coinbase Commerce billing integration

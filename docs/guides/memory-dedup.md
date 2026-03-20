@@ -2,7 +2,7 @@
 
 Over time, AI agents extract overlapping facts from conversations. "User prefers dark mode" might be stored five times across five sessions. Without dedup, your vault fills with redundant entries, wasting storage, slowing search, and diluting recall quality.
 
-TotalReclaw prevents this at multiple layers -- all operating client-side, preserving the zero-knowledge guarantee.
+TotalReclaw prevents this at multiple layers -- all operating client-side, preserving the E2EE guarantee.
 
 ---
 
@@ -201,7 +201,7 @@ Bulk consolidation is an on-demand tool with no persistent configuration -- just
 
 ---
 
-## Zero-Knowledge Constraint
+## Server-Blind Constraint
 
 All semantic comparison happens on your device:
 

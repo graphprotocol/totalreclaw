@@ -1,6 +1,6 @@
 # Importing Memories into TotalReclaw
 
-TotalReclaw can import memories from external AI memory systems, so you can consolidate fragmented memory from other tools into a single encrypted vault. All imported data is encrypted client-side with your key before reaching the server — the same zero-knowledge guarantee as natively stored memories.
+TotalReclaw can import memories from external AI memory systems, so you can consolidate fragmented memory from other tools into a single encrypted vault. All imported data is encrypted client-side with your key before reaching the server — the same E2EE guarantee as natively stored memories.
 
 ---
 
@@ -36,7 +36,7 @@ Source System (e.g., Mem0)
 
 Key properties:
 
-- **Zero-knowledge** — Source data is fetched and processed entirely on your device. The TotalReclaw server never sees plaintext.
+- **End-to-end encrypted** — Source data is fetched and processed entirely on your device. The TotalReclaw server never sees plaintext.
 - **Idempotent** — Content fingerprint dedup means running the same import twice won't create duplicates.
 - **Searchable immediately** — Imported memories get the same blind indices and embeddings as natively stored ones. They appear in recall results right away.
 

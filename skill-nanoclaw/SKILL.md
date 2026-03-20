@@ -1,6 +1,6 @@
 # TotalReclaw Skill for NanoClaw
 
-Zero-knowledge encrypted memory for NanoClaw agents, powered by the `@totalreclaw/mcp-server`.
+End-to-end encrypted memory for NanoClaw agents, powered by the `@totalreclaw/mcp-server`.
 
 ## Setup
 

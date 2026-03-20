@@ -2,14 +2,14 @@
 
 ## Short Description (for search results)
 
-Zero-knowledge encrypted memory vault for AI agents. Your agent remembers -- only you can read it.
+End-to-end encrypted memory for AI agents. Your agent remembers -- only you can read it.
 
 ## Full Description
 
-TotalReclaw gives your AI agent persistent, encrypted memory that works across sessions and devices. Unlike other memory solutions, TotalReclaw uses true zero-knowledge encryption: your memories are encrypted on your device before they ever reach the server. Not even TotalReclaw can read your data.
+TotalReclaw gives your AI agent persistent, encrypted memory that works across sessions and devices. Unlike other memory solutions, TotalReclaw uses true end-to-end encryption: your memories are encrypted on your device before they ever reach the server. Not even TotalReclaw can read your data.
 
 **What makes it different:**
-- **True zero-knowledge E2EE** -- Client-side AES-256-GCM encryption. The server only sees encrypted blobs. (Most competitors encrypt server-side, meaning the server can read your data.)
+- **True end-to-end encryption** -- Client-side AES-256-GCM encryption. The server only sees encrypted blobs. (Most competitors encrypt server-side, meaning the server can read your data.)
 - **Portable** -- One-click plaintext export. No vendor lock-in. Your memories belong to you.
 - **Automatic** -- In OpenClaw, memory extraction and recall happen automatically via lifecycle hooks. No manual commands needed.
 - **Cross-device** -- Same 12-word seed phrase recovers all your memories on any device.
@@ -24,7 +24,7 @@ TotalReclaw gives your AI agent persistent, encrypted memory that works across s
 
 | Feature | TotalReclaw | agentmemory |
 |---------|-------------|-------------|
-| Encryption | Client-side (zero-knowledge) | Server-side (server can read your data) |
+| Encryption | Client-side E2EE (server never sees plaintext) | Server-side (server can read your data) |
 | Data portability | One-click plaintext export | No export |
 | Key management | BIP-39 seed phrase (user-controlled) | Server-managed keys |
 | Search method | Blind-index + encrypted reranking | Plaintext vector search |
@@ -35,7 +35,7 @@ The fundamental difference: with TotalReclaw, even a compromised server reveals 
 
 ## Keywords
 
-memory, e2ee, zero-knowledge, encryption, privacy, agent-memory, persistent-context, cross-device, portable
+memory, e2ee, e2e-encryption, encryption, privacy, agent-memory, persistent-context, cross-device, portable
 
 ## Category
 
