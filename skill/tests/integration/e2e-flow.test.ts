@@ -163,12 +163,12 @@ class MockTotalReclawClient {
 
   // Test helpers
   private generateEmbedding(text: string): number[] {
-    const embedding: number[] = new Array(384).fill(0);
+    const embedding: number[] = new Array(1024).fill(0);
     const words = text.toLowerCase().split(/\s+/);
 
     for (const word of words) {
       for (let i = 0; i < word.length && i < 10; i++) {
-        const idx = (word.charCodeAt(i) * (i + 1)) % 384;
+        const idx = (word.charCodeAt(i) * (i + 1)) % 1024;
         embedding[idx] += 0.1;
       }
     }

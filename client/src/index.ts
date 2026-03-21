@@ -107,7 +107,7 @@ export class TotalReclaw {
     await this.apiClient.init();
 
     // Initialize LSH index with embedding dimension
-    this.lshIndex.initialize(384); // all-MiniLM-L6-v2 dimension
+    this.lshIndex.initialize(1024); // Qwen3-Embedding-0.6B dimension
 
     // Try to load embedding model (optional)
     try {

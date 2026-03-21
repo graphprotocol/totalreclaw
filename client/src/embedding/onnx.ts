@@ -1,34 +1,32 @@
 /**
  * ONNX Embedding Model
  *
- * Uses @huggingface/transformers to run bge-small-en-v1.5 model for
- * text embeddings. Produces 384-dimensional normalized vectors suitable
- * for semantic search.
+ * Uses @huggingface/transformers to run Qwen3-Embedding-0.6B model for
+ * text embeddings. Produces 1024-dimensional normalized vectors suitable
+ * for semantic search with 100+ language support.
  *
  * The @huggingface/transformers library handles:
  *   - Model download (auto-downloads ONNX model from HuggingFace Hub)
- *   - Proper WordPiece tokenization (uses the model's actual tokenizer.json)
+ *   - Tokenization (uses the model's actual tokenizer.json)
  *   - ONNX inference
- *   - Mean pooling + normalization
+ *   - Last-token pooling + normalization
  *
  * Model details:
- *   - Xenova/bge-small-en-v1.5 (ONNX-optimized)
- *   - Quantized (int8): ~33.8MB download, cached in ~/.cache/huggingface/
- *   - 384-dimensional output vectors
- *   - Lazy initialization: first call ~2-3s, subsequent ~15ms
+ *   - onnx-community/Qwen3-Embedding-0.6B-ONNX (ONNX-optimized)
+ *   - Quantized (int8): ~600MB download, cached in ~/.cache/huggingface/
+ *   - 1024-dimensional output vectors
+ *   - 100+ multilingual support (EN, PT, ES, ZH, etc.)
+ *   - Lazy initialization: first call ~3-5s, subsequent ~100ms
  */
 
 import { pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
 import { TotalReclawError, TotalReclawErrorCode } from '../types';
 
-/** Expected embedding dimension for bge-small-en-v1.5 */
-const EMBEDDING_DIM = 384;
+/** Expected embedding dimension for Qwen3-Embedding-0.6B */
+const EMBEDDING_DIM = 1024;
 
 /** Model ID on HuggingFace Hub (ONNX-optimized version) */
-const MODEL_ID = 'Xenova/bge-small-en-v1.5';
-
-/** Query prefix for bge-small-en-v1.5 (applied to search queries, NOT to stored documents) */
-const QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
+const MODEL_ID = 'onnx-community/Qwen3-Embedding-0.6B-ONNX';
 
 /**
  * Embedding model using @huggingface/transformers + ONNX Runtime
@@ -40,7 +38,7 @@ export class EmbeddingModel {
   /**
    * Load the ONNX model.
    *
-   * Downloads the model on first use (~22MB, quantized). Subsequent calls
+   * Downloads the model on first use (~600MB, quantized). Subsequent calls
    * use the cached model from ~/.cache/huggingface/.
    *
    * @param _modelPath - Ignored (kept for backward compatibility). The model
@@ -48,9 +46,11 @@ export class EmbeddingModel {
    */
   async load(_modelPath?: string): Promise<void> {
     try {
+      console.log('Downloading embedding model (one-time setup, ~600MB)...');
       this.extractor = await pipeline('feature-extraction', MODEL_ID, {
         quantized: true,
       } as Record<string, unknown>);
+      console.log('Embedding model ready.');
       this.isLoaded = true;
     } catch (error) {
       throw new TotalReclawError(
@@ -78,8 +78,9 @@ export class EmbeddingModel {
    * Embed a single text
    *
    * @param text - Text to embed
-   * @param options - Options. Set isQuery=true for search queries (adds model-specific prefix).
-   * @returns 384-dimensional normalized embedding vector
+   * @param options - Options. isQuery is accepted for forward compatibility but
+   *                  does not change behavior (Qwen3 needs no instruction prefix).
+   * @returns 1024-dimensional normalized embedding vector
    */
   async embed(text: string, options?: { isQuery?: boolean }): Promise<number[]> {
     if (!this.isReady()) {
@@ -90,8 +91,8 @@ export class EmbeddingModel {
     }
 
     try {
-      const input = options?.isQuery ? QUERY_PREFIX + text : text;
-      const output = await this.extractor!(input, { pooling: 'mean', normalize: true });
+      const input = text;
+      const output = await this.extractor!(input, { pooling: 'last_token', normalize: true });
       return Array.from(output.data as Float32Array);
     } catch (error) {
       throw new TotalReclawError(
@@ -105,7 +106,7 @@ export class EmbeddingModel {
    * Embed multiple texts in batch
    *
    * @param texts - Texts to embed
-   * @returns Array of 384-dimensional embedding vectors
+   * @returns Array of 1024-dimensional embedding vectors
    */
   async embedBatch(texts: string[]): Promise<number[][]> {
     const embeddings: number[][] = [];
@@ -132,7 +133,7 @@ export class EmbeddingModel {
  * Useful when ONNX model is not available.
  *
  * @param seed - Seed for reproducible random embeddings
- * @returns 384-dimensional random embedding
+ * @returns 1024-dimensional random embedding
  */
 export function createDummyEmbedding(seed?: number): number[] {
   const dim = EMBEDDING_DIM;
@@ -171,7 +172,7 @@ export function createDummyEmbedding(seed?: number): number[] {
  * based on the text content. Useful for testing without loading the model.
  *
  * @param text - Text to create embedding for
- * @returns 384-dimensional deterministic embedding
+ * @returns 1024-dimensional deterministic embedding
  */
 export function createHashBasedEmbedding(text: string): number[] {
   const crypto = require('crypto');

@@ -22,7 +22,7 @@ import { mergeLSHConfig } from './config';
 export class LSHIndex {
   private config: Required<LSHConfig>;
   private hyperplanes: Array<Array<Float64Array>> = [];
-  private embeddingDim: number = 384; // Default for all-MiniLM-L6-v2
+  private embeddingDim: number = 1024; // Default for Qwen3-Embedding-0.6B
   private isBuilt: boolean = false;
 
   /**

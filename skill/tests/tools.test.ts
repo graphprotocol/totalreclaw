@@ -70,7 +70,7 @@ class MockTotalReclawClient {
       text,
       createdAt: new Date(),
       decayScore: 0.5,
-      embedding: new Array(384).fill(0).map(() => Math.random() * 0.1),
+      embedding: new Array(1024).fill(0).map(() => Math.random() * 0.1),
       metadata: metadata || {},
     };
     this.facts.set(factId, fact);

@@ -73,7 +73,7 @@ class MockTotalReclawClient implements Partial<TotalReclaw> {
       text,
       createdAt: new Date(),
       decayScore: 0.5,
-      embedding: new Array(384).fill(0).map(() => Math.random() * 0.1),
+      embedding: new Array(1024).fill(0).map(() => Math.random() * 0.1),
       metadata: metadata || {},
     });
     return factId;
@@ -410,7 +410,7 @@ describe('Lifecycle Hooks Integration', () => {
         text: 'User prefers TypeScript',
         createdAt: new Date(),
         decayScore: 0.8,
-        embedding: new Array(384).fill(0.1),
+        embedding: new Array(1024).fill(0.1),
         metadata: {},
       });
 
@@ -453,7 +453,7 @@ describe('Lifecycle Hooks Integration', () => {
           text: `Fact number ${i}`,
           createdAt: new Date(),
           decayScore: 0.5,
-          embedding: new Array(384).fill(0.1),
+          embedding: new Array(1024).fill(0.1),
           metadata: {},
         });
       }
@@ -628,7 +628,7 @@ describe('formatMemoriesForContext', () => {
           text: 'User prefers TypeScript',
           createdAt: new Date(),
           decayScore: 0.8,
-          embedding: new Array(384).fill(0.1),
+          embedding: new Array(1024).fill(0.1),
           metadata: { tags: ['preference'] },
         },
         score: 0.9,
@@ -653,7 +653,7 @@ describe('formatMemoriesForContext', () => {
           text: 'Memory 1',
           createdAt: new Date(),
           decayScore: 0.8,
-          embedding: new Array(384).fill(0.1),
+          embedding: new Array(1024).fill(0.1),
           metadata: {},
         },
         score: 0.9,
@@ -667,7 +667,7 @@ describe('formatMemoriesForContext', () => {
           text: 'Memory 2',
           createdAt: new Date(),
           decayScore: 0.7,
-          embedding: new Array(384).fill(0.1),
+          embedding: new Array(1024).fill(0.1),
           metadata: {},
         },
         score: 0.8,
@@ -693,7 +693,7 @@ describe('formatMemoriesForContext', () => {
           text: 'User said "hello" & <goodbye>',
           createdAt: new Date(),
           decayScore: 0.8,
-          embedding: new Array(384).fill(0.1),
+          embedding: new Array(1024).fill(0.1),
           metadata: {},
         },
         score: 0.9,

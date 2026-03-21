@@ -79,7 +79,7 @@ export interface Fact {
   id: string;
   /** The memory text content */
   text: string;
-  /** The embedding vector (384 dimensions for all-MiniLM-L6-v2) */
+  /** The embedding vector (1024 dimensions for Qwen3-Embedding-0.6B) */
   embedding: number[];
   /** Associated metadata */
   metadata: FactMetadata;

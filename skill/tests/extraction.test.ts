@@ -110,7 +110,7 @@ class MockVectorStoreClient implements VectorStoreClient {
 
     // Generate deterministic embedding based on text hash
     const embedding: number[] = [];
-    for (let i = 0; i < 384; i++) {
+    for (let i = 0; i < 1024; i++) {
       const hash = (text.charCodeAt(i % text.length) || 0) * (i + 1);
       embedding.push(Math.sin(hash) * 0.1);
     }
@@ -449,7 +449,7 @@ describe('FactDeduplicator', () => {
       mockVectorStore.setFacts([existingFact]);
 
       // Mock similarity to be very high
-      const similarEmbedding = new Array(384).fill(0.1);
+      const similarEmbedding = new Array(1024).fill(0.1);
       mockVectorStore.setEmbedding('User prefers TypeScript for all projects', similarEmbedding);
       mockVectorStore.setEmbedding('User prefers TypeScript for projects', similarEmbedding);
 

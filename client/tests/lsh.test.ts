@@ -54,9 +54,9 @@ describe('LSH Module', () => {
     });
 
     test('should initialize with embedding dimension', () => {
-      index.initialize(384);
+      index.initialize(1024);
       expect(index.isReady()).toBe(true);
-      expect(index.getEmbeddingDimension()).toBe(384);
+      expect(index.getEmbeddingDimension()).toBe(1024);
     });
 
     test('should build index from embeddings', () => {
@@ -66,7 +66,7 @@ describe('LSH Module', () => {
     });
 
     test('should hash vectors to correct number of buckets', () => {
-      index.initialize(384);
+      index.initialize(1024);
       const embedding = createDummyEmbedding(42);
       const buckets = index.hashVector(embedding);
 
@@ -74,7 +74,7 @@ describe('LSH Module', () => {
     });
 
     test('should produce consistent hashes for same vector', () => {
-      index.initialize(384, 12345); // Fixed seed
+      index.initialize(1024, 12345); // Fixed seed
       const embedding = createDummyEmbedding(42);
 
       const buckets1 = index.hashVector(embedding);
@@ -84,7 +84,7 @@ describe('LSH Module', () => {
     });
 
     test('should produce different hashes for different vectors', () => {
-      index.initialize(384);
+      index.initialize(1024);
       const embedding1 = createDummyEmbedding(1);
       const embedding2 = createDummyEmbedding(2);
 
@@ -97,7 +97,7 @@ describe('LSH Module', () => {
     });
 
     test('should hash vectors with prefix', () => {
-      index.initialize(384);
+      index.initialize(1024);
       const embedding = createDummyEmbedding(42);
       const buckets = index.hashVectorWithPrefix(embedding);
 
@@ -112,13 +112,13 @@ describe('LSH Module', () => {
     });
 
     test('should throw on dimension mismatch', () => {
-      index.initialize(384);
+      index.initialize(1024);
       const wrongDimEmbedding = new Array(128).fill(0);
       expect(() => index.hashVector(wrongDimEmbedding)).toThrow('dimension mismatch');
     });
 
     test('should export and import hyperplanes', () => {
-      index.initialize(384, 12345);
+      index.initialize(1024, 12345);
       const embedding = createDummyEmbedding(42);
       const originalBuckets = index.hashVector(embedding);
 
@@ -178,7 +178,7 @@ describe('LSH Module', () => {
       const emb2 = createHashBasedEmbedding('test text');
 
       expect(emb1).toEqual(emb2);
-      expect(emb1.length).toBe(384);
+      expect(emb1.length).toBe(1024);
     });
 
     test('should create different embeddings for different texts', () => {
@@ -201,7 +201,7 @@ describe('LSH Module', () => {
 
     test('should create dummy embeddings', () => {
       const emb = createDummyEmbedding(42);
-      expect(emb.length).toBe(384);
+      expect(emb.length).toBe(1024);
     });
 
     test('should create deterministic dummy embeddings with seed', () => {
@@ -215,7 +215,7 @@ describe('LSH Module', () => {
   describe('LSH Recall Quality', () => {
     test('should bucket identical vectors together', () => {
       const index = new LSHIndex({ n_bits_per_table: 64, n_tables: 12 });
-      index.initialize(384, 12345);
+      index.initialize(1024, 12345);
 
       const base = createDummyEmbedding(1);
 
@@ -229,7 +229,7 @@ describe('LSH Module', () => {
 
     test('should have some bucket overlap for similar vectors', () => {
       const index = new LSHIndex({ n_bits_per_table: 64, n_tables: 12 });
-      index.initialize(384, 12345);
+      index.initialize(1024, 12345);
 
       // Create a slightly modified vector that should be similar
       const base = createDummyEmbedding(1);

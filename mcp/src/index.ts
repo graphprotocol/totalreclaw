@@ -145,7 +145,7 @@ async function initSubgraphState(): Promise<SubgraphState> {
 
   // Derive LSH seed and create hasher
   const lshSeed = deriveLshSeed(mnemonic, salt);
-  const dims = getEmbeddingDims(); // 384 for bge-small-en-v1.5
+  const dims = getEmbeddingDims(); // 1024 for Qwen3-Embedding-0.6B
   const lshHasher = new LSHHasher(lshSeed, dims);
 
   // Derive Smart Account address via relay bundler proxy (same chain view as Pimlico).

@@ -112,7 +112,7 @@ class MockTotalReclawServer {
         text,
         createdAt: new Date(),
         decayScore: 0.5,
-        embedding: embedding || new Array(384).fill(0).map(() => Math.random() * 0.1),
+        embedding: embedding || new Array(1024).fill(0).map(() => Math.random() * 0.1),
         metadata: metadata || {},
       };
 
@@ -517,7 +517,7 @@ function createMockFact(overrides: Partial<Fact> = {}): Fact {
     text: 'Test fact',
     createdAt: new Date(),
     decayScore: 0.5,
-    embedding: new Array(384).fill(0).map(() => Math.random() * 0.1),
+    embedding: new Array(1024).fill(0).map(() => Math.random() * 0.1),
     metadata: {},
     ...overrides,
   };

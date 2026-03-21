@@ -141,7 +141,7 @@ class TotalReclawVectorStoreAdapter implements VectorStoreClient {
   private createDeterministicEmbedding(text: string): number[] {
     // Simple hash-based embedding for dedup comparison
     // Not as accurate as real embeddings but works for similarity comparison
-    const dimension = 384;
+    const dimension = 1024;
     const embedding: number[] = new Array(dimension).fill(0);
 
     const words = text.toLowerCase().split(/\s+/).filter(w => w.length > 2);
