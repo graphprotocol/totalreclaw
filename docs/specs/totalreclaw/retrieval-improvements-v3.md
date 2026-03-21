@@ -344,9 +344,9 @@ Already exists in the schema. Single lightweight query instead of fetching 1,000
 **Effort:** 2-3 hours
 **Files:** `skill/plugin/crypto.ts`, `client/src/crypto/`
 
-**Current:** 384-dim float32 embedding → encrypted → hex → ~3,128 bytes calldata (adds ~125K gas, +49% overhead for medium facts).
+**Current:** 1024-dim float32 embedding → encrypted → hex → ~8,248 bytes calldata.
 
-**Change:** Quantize to int8 before encryption: 384 dims × 1 byte = 384 bytes (vs 1,536 bytes float32). After encryption + hex encoding: ~824 bytes.
+**Change:** Quantize to int8 before encryption: 1024 dims × 1 byte = 1024 bytes (vs 4,096 bytes float32). After encryption + hex encoding: ~2,104 bytes.
 
 **Impact:** Embedding calldata drops from ~3,128 to ~824 bytes. Per-fact gas reduction of ~40K gas. Minimal reranking quality impact for BM25 + cosine fusion (int8 cosine approximation is >0.99 correlated with float32).
 

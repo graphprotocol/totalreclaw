@@ -35,6 +35,8 @@ After installation, your agent will ask: *"Do you have an existing recovery phra
 - **New user:** Let it generate one (it uses a cryptographically secure generator). Write down the 12 words on paper, in exact order.
 - **Returning user:** Enter your existing phrase to restore your memories.
 
+> **Note:** The first run downloads a ~600MB embedding model for local inference. This is cached locally and only happens once.
+
 **After setup, memory is fully automatic:**
 - Your agent remembers important things from conversations (preferences, decisions, facts)
 - At the start of each conversation, relevant memories are loaded automatically

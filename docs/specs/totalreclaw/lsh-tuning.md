@@ -15,7 +15,7 @@
 | Tables | 20 | `skill/plugin/lsh.ts` |
 | Candidate pool | 1200 | `skill/plugin/index.ts` |
 | Stemming | Porter | `skill/plugin/crypto.ts` |
-| Embedding model | all-MiniLM-L6-v2 (384-dim) | `skill/plugin/embedding.ts` |
+| Embedding model | Qwen3-Embedding-0.6B (1024-dim) | `client/src/embedding.ts` |
 
 **Validation dataset:** 50 conversations / 415 facts / 140 queries (diverse personal conversations).
 
@@ -25,7 +25,7 @@
 - Cross-conversation recall: 22.9%
 - Overall non-negative recall: 24.8%
 
-**Tuning history:** Started at 64-bit x 12 tables (too strict for 384-dim embeddings -- ~0% match probability at cosine 0.7). Tested 12-bit x 28 (too coarse, excessive false positives). Settled on 32-bit x 20 as the sweet spot.
+**Tuning history:** Started at 64-bit x 12 tables (too strict for 1024-dim embeddings -- ~0% match probability at cosine 0.7). Tested 12-bit x 28 (too coarse, excessive false positives). Settled on 32-bit x 20 as the sweet spot.
 
 ---
 
@@ -101,7 +101,7 @@ The 32-bit x 20 config should be treated as a global constant baked into the cli
 | Trigger | Action | Requires re-indexing? |
 |---------|--------|-----------------------|
 | New benchmark on very different content (e.g., enterprise/technical knowledge base) shows recall below 20% | Consider 24-bit x 24 or 28-bit x 22 | Yes |
-| Embedding model upgrade (e.g., bge-small-en-v1.5) | Re-validate; similarity distributions may shift | Yes |
+| Embedding model upgrade | Re-validate; similarity distributions may shift | Yes |
 | Non-English language support | Re-validate; stemming and word distributions differ | Yes |
 | Recall is acceptable but too many false positives overwhelm the reranker | Increase bit width (e.g., 36 or 40) | Yes |
 
@@ -185,7 +185,7 @@ This strategy requires zero server-side configuration changes. The server does n
 | Tables | 20 | Client (`lsh.ts`) | No -- global | Only if recall drops; diminishing returns past ~24-28 |
 | Candidate pool | 1200 (dynamic) | Client (`index.ts`) | Yes -- per search | Scale with fact count using formula |
 | Stemming | Porter | Client (`crypto.ts`) | No -- global | Only if adding non-English language support |
-| Embedding model | all-MiniLM-L6-v2 | Client (`embedding.ts`) | No -- global | Upgrade path: bge-small-en-v1.5 (+23% quality, +15-20MB RAM) |
+| Embedding model | Qwen3-Embedding-0.6B | Client (`embedding.ts`) | No -- global | Upgraded from all-MiniLM-L6-v2. 1024-dim, 100+ languages, ~600MB ONNX model |
 | Blind index format | SHA-256 hex | Client (`crypto.ts`) | No -- global | No change planned |
 
 ---

@@ -36,6 +36,8 @@ The wizard generates your 12-word recovery phrase, registers you, and prints a c
 
 > **Save your recovery phrase somewhere safe.** It's the only way to recover your encrypted memories.
 
+> **Note:** The first run downloads a ~600MB embedding model for local inference. This is cached locally and only happens once.
+
 ### 2. Add to your MCP client
 
 #### Claude Desktop

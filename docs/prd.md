@@ -133,7 +133,7 @@ The AI memory lock-in problem is real and already emerging:
 
 **Client-Side (Local Node):**
 - Argon2id KDF → Data Key + Blind Key
-- ONNX all-MiniLM-L6-v2 (INT8) for local vectorization
+- ONNX Qwen3-Embedding-0.6B (1024-dim) for local vectorization
 - AES-GCM encryption
 - HMAC-SHA256 blind indices
 - Local BM25 reranking

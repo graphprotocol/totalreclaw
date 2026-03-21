@@ -141,6 +141,6 @@ Ordered by expected impact as scale increases:
 
 1. **Batch writes:** Combine 10-50 facts per on-chain transaction to amortize 21,000 base gas. Requires contract upgrade to handle batch protobuf payloads.
 2. **Tiered storage:** Archive facts older than 90 days to cold storage; keep active facts in hot GIN index.
-3. **Embedding compression:** Quantize 384-dim float32 embeddings to int8 (4x size reduction: 1,536B -> 384B) before encryption. Reranking quality impact is minimal for BM25+cosine fusion.
+3. **Embedding compression:** Quantize 1024-dim float32 embeddings to int8 (4x size reduction: 4,096B -> 1,024B) before encryption. Reranking quality impact is minimal for BM25+cosine fusion.
 4. **Index pruning:** Periodically compact blind_index table by removing entries for superseded/deleted facts.
 5. **Horizontal scaling:** For >10K users, shard by user prefix (first 2 bytes of owner address) across multiple Graph Node instances.

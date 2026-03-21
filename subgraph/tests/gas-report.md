@@ -95,7 +95,7 @@ Estimated costs on Base L2 mainnet for different fact volumes.
 
 1. **Base gas cost** is dominated by the 21,000 intrinsic transaction gas.
    The Log event itself adds ~1,200 gas plus calldata costs.
-2. **Embeddings** (384-dim float32, encrypted) add ~3,128 bytes of calldata,
+2. **Embeddings** (1024-dim float32, encrypted) add ~8,248 bytes of calldata,
    which is the single largest component of most facts.
 3. **Blind indices** at 64 hex chars (32 bytes) + protobuf overhead each,
    scale linearly. 100 indices ~ 6.6 KB of calldata.

@@ -85,7 +85,7 @@ Gas per byte: 41-62 (avg 44.6). Smaller payloads have higher gas/byte due to fix
 | 100 words | 497,220 | 372,010 | +125,210 (+33.7%) |
 | 200 words | 600,330 | 475,150 | +125,180 (+26.3%) |
 
-Embeddings add a constant ~125K gas (~3,128 bytes: 384 dims × 4 bytes float32 + 28 bytes AES-GCM, hex-encoded). The relative overhead decreases with fact size.
+Embeddings add a constant ~330K gas (~8,248 bytes: 1024 dims × 4 bytes float32 + 28 bytes AES-GCM, hex-encoded). The relative overhead decreases with fact size.
 
 ### 2.3 Base L2 Cost Projections
 
