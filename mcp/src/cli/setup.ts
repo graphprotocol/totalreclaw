@@ -283,7 +283,24 @@ export async function runSetup(): Promise<void> {
     console.log(`\nCredentials saved to ${CREDENTIALS_PATH}`);
     console.log('(Mnemonic and keys are NOT stored -- only userId, salt, and serverUrl.)');
 
-    // ── Step 6: Print Config Snippet ──────────────────────────────────────
+    // ── Step 6: Pre-download Embedding Model ────────────────────────────
+
+    console.log('\nDownloading embedding model (one-time, ~600MB)...');
+    console.log('This enables local, private semantic search — no API calls needed.\n');
+    try {
+      const { pipeline } = await import('@huggingface/transformers');
+      await pipeline('feature-extraction', 'onnx-community/Qwen3-Embedding-0.6B-ONNX', {
+        // @ts-ignore - quantized option exists at runtime but not in type defs
+        quantized: true,
+      } as any);
+      console.log('Embedding model downloaded and cached.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`\nWarning: Could not pre-download embedding model: ${message}`);
+      console.warn('The model will be downloaded automatically on first use.');
+    }
+
+    // ── Step 7: Print Config Snippet ──────────────────────────────────────
 
     printConfigSnippet(serverUrl);
 
