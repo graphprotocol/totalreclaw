@@ -36,6 +36,9 @@ import { debugLog } from '../debug';
 
 const BILLING_CACHE_PATH = path.join(os.homedir(), '.totalreclaw', 'billing-cache.json');
 
+// Hard cap on facts per extraction to prevent LLM over-extraction from dense conversations
+const MAX_FACTS_PER_EXTRACTION = 15;
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -250,10 +253,16 @@ async function runExtraction(
     const extractionResult = await extractor.extractFacts(context, trigger);
     result.factsExtracted = extractionResult.facts.length;
 
+    // Cap extracted facts to prevent over-extraction from dense conversations
+    const factsToProcess = extractionResult.facts.slice(0, MAX_FACTS_PER_EXTRACTION);
+    if (extractionResult.facts.length > MAX_FACTS_PER_EXTRACTION) {
+      debugLog(!!options.debug, `Capped extraction from ${extractionResult.facts.length} to ${MAX_FACTS_PER_EXTRACTION} facts`);
+    }
+
     debugLog(!!options.debug, `Extracted ${result.factsExtracted} facts in ${extractionResult.processingTimeMs}ms`);
 
     // Filter and store facts
-    for (const fact of extractionResult.facts) {
+    for (const fact of factsToProcess) {
       // Skip NOOP facts
       if (fact.action === 'NOOP') {
         result.factsSkipped++;

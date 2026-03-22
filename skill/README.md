@@ -80,7 +80,7 @@ export TOTALRECLAW_SERVER_URL="http://your-totalreclaw-server:8080"
 export TOTALRECLAW_MASTER_PASSWORD="your-secure-password"
 
 # Optional
-export TOTALRECLAW_AUTO_EXTRACT_EVERY_TURNS=5
+export TOTALRECLAW_AUTO_EXTRACT_EVERY_TURNS=3
 export TOTALRECLAW_MIN_IMPORTANCE=6
 export TOTALRECLAW_MAX_MEMORIES=8
 export TOTALRECLAW_FORGET_THRESHOLD=0.3
@@ -225,7 +225,7 @@ const result = await skill.onPreCompaction(context);
 |----------|:---:|---------|-------------|
 | `TOTALRECLAW_SERVER_URL` | **Yes** | `http://127.0.0.1:8080` | TotalReclaw server URL |
 | `TOTALRECLAW_MASTER_PASSWORD` | **Yes** | -- | Encryption master password (never sent to server) |
-| `TOTALRECLAW_AUTO_EXTRACT_EVERY_TURNS` | No | `5` | Turns between automatic extractions |
+| `TOTALRECLAW_AUTO_EXTRACT_EVERY_TURNS` | No | `3` | Turns between automatic extractions |
 | `TOTALRECLAW_MIN_IMPORTANCE` | No | `6` | Minimum importance (1-10) to auto-store |
 | `TOTALRECLAW_MAX_MEMORIES` | No | `8` | Maximum memories to inject into context |
 | `TOTALRECLAW_FORGET_THRESHOLD` | No | `0.3` | Decay score threshold for eviction |
@@ -251,7 +251,7 @@ Add to your OpenClaw configuration file:
     "defaults": {
       "totalreclaw": {
         "serverUrl": "http://your-server:8080",
-        "autoExtractEveryTurns": 5,
+        "autoExtractEveryTurns": 3,
         "minImportanceForAutoStore": 6,
         "maxMemoriesInContext": 8,
         "forgetThreshold": 0.3

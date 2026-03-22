@@ -39,7 +39,7 @@ export interface TotalReclawSkillConfig {
  */
 export const DEFAULT_SKILL_CONFIG: TotalReclawSkillConfig = {
   serverUrl: 'http://127.0.0.1:8080',
-  autoExtractEveryTurns: 5,
+  autoExtractEveryTurns: 3,
   minImportanceForAutoStore: 6,
   maxMemoriesInContext: 8,
   forgetThreshold: 0.3,

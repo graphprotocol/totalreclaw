@@ -111,7 +111,7 @@ OpenClaw already fires a silent agentic turn when `totalTokens >= softThresholdT
 
 #### 2. Post-Turn Lightweight Extraction (every N turns, configurable)
 
-After every `config.memory.autoExtractEveryTurns` (default: 5) user+agent turns:
+After every `config.memory.autoExtractEveryTurns` (default: 3) user+agent turns:
 
 1. Queue last 3 turns to background worker.
 2. Run extraction via OpenClaw's `llm-task` plugin with `temperature: 0` and a JSON schema
@@ -277,7 +277,7 @@ memory:
   totalreclaw:
     enabled: true
     serverUrl: "https://api.totalreclaw.xyz"
-    autoExtractEveryTurns: 5
+    autoExtractEveryTurns: 3
     minImportanceForAutoStore: 6
     forgetThreshold: 0.3
     extractionModel: "claude-3-5-haiku-20241022"  # or local
@@ -305,7 +305,7 @@ memory:
 |------------|-------------|---------|
 | `memory.totalreclaw.enabled` | Enable/disable TotalReclaw | `true` |
 | `memory.totalreclaw.serverUrl` | TotalReclaw server URL | `"https://api.totalreclaw.xyz"` |
-| `memory.totalreclaw.autoExtractEveryTurns` | Turns between extractions | `5` |
+| `memory.totalreclaw.autoExtractEveryTurns` | Turns between extractions | `3` |
 | `memory.totalreclaw.minImportanceForAutoStore` | Minimum importance to auto-store | `6` |
 | `memory.totalreclaw.forgetThreshold` | Decay score threshold for eviction | `0.3` |
 | `memory.totalreclaw.extractionModel` | LLM for extraction | `"claude-3-5-haiku-20241022"` |

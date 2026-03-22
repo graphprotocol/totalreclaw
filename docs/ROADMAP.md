@@ -173,7 +173,7 @@ Reduce fact pile-up by detecting near-duplicates and merging them client-side.
 | Feature | Description | Status |
 |---------|-------------|--------|
 | LLM-guided dedup (Pro) | UPDATE/DELETE/NOOP classification gated behind Pro tier | **DONE** — client-side gating via billing cache |
-| Configurable extraction interval (Pro) | Min 2 turns for Pro, clamped to 5 for Free | **DONE** — `getExtractInterval()` reads billing features |
+| Unified extraction interval | 3 turns for all tiers (quota is per-transaction) | **DONE** — `getExtractInterval()` returns env override or default 3 |
 | Memory retention / decay tuning (Pro) | Configurable importance thresholds and decay curves. Pro users keep memories longer or tune what gets retained. | NOT DONE |
 | Namespace isolation (Pro) | Scope memories by namespace (e.g., "work" vs "personal"). Currently removed; will return as Pro-only. | NOT DONE -- MCP had it, stripped in prep for Pro gating |
 | Supersession graph (Pro) | Track fact replacement chains for memory history. Foundation for knowledge graph (Phase 6). | NOT DONE -- see Phase 6.1 |

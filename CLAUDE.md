@@ -154,7 +154,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | Bulk consolidation tool | Yes | Yes | Yes (via MCP) | Self-hosted only (no batch delete on managed service) |
 | **Pro Tier Gating** | | | | |
 | Feature gating via billing cache | Yes | -- | -- | Server returns `features` dict, plugin gates client-side |
-| Tier-aware extraction interval | Yes | -- | Yes (env) | Pro: min 2 turns, Free: min 5. NanoClaw via env var |
+| Unified extraction interval (3 turns) | Yes | -- | Yes (env) | Same for all tiers (quota is per-tx). Configurable via env var |
 | **Billing** | | | | |
 | Quota warnings (>80%) | Yes | -- | -- | Injected via before_agent_start |
 | 403 handling + cache invalidation | Yes | Yes | Yes | |

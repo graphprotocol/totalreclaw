@@ -62,10 +62,8 @@ This provides memory isolation between different contexts.
 | `TOTALRECLAW_SELF_HOSTED` | Set to `true` to use your own server instead of the managed service | `false` |
 | `TOTALRECLAW_NAMESPACE` | Default namespace | Group folder name |
 | `TOTALRECLAW_AUTO_EXTRACT` | Enable automatic extraction | `true` |
-| `TOTALRECLAW_EXTRACT_INTERVAL` | Turns between extractions | `5` |
+| `TOTALRECLAW_EXTRACT_INTERVAL` | Turns between extractions | `3` |
 | `TOTALRECLAW_CHAIN_ID` | Chain ID (100=Gnosis mainnet, 84532=Base Sepolia staging) | `100` |
-
-> **Pro tip:** Pro-tier NanoClaw deployments can lower `TOTALRECLAW_EXTRACT_INTERVAL` to `2` for more frequent, higher-fidelity extraction.
 
 ## Available Tools
 

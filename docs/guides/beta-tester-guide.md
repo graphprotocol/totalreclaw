@@ -132,14 +132,14 @@ Both options encrypt your data identically on your device — the difference is 
 
 | Tier | Writes | Reads | Key Features | Price |
 |------|--------|-------|--------------|-------|
-| **Free** | 250/month | Unlimited | Cosine dedup, auto-extract every 5 turns | $0 |
-| **Pro** | 10,000/month | Unlimited | + LLM-guided dedup, configurable extract interval (min 2 turns) | $2-5/month |
+| **Free** | 250/month | Unlimited | Cosine dedup, auto-extract every 3 turns | $0 |
+| **Pro** | 10,000/month | Unlimited | + LLM-guided dedup | $2-5/month |
 
 - Counter resets at the start of each calendar month
 - Pay with card (Stripe)
 - When you hit the limit, your agent tells you and provides an upgrade link
-- **Free tier** includes full encryption, cosine-based dedup, and auto-extraction every 5 turns
-- **Pro tier** adds LLM-guided dedup (catches contradictions, not just paraphrases) and faster extraction intervals
+- **Free tier** includes full encryption, cosine-based dedup, and auto-extraction every 3 turns
+- **Pro tier** adds LLM-guided dedup (catches contradictions, not just paraphrases)
 
 ---
 

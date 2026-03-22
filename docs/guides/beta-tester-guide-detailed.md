@@ -214,11 +214,11 @@ You do not need to ask the agent to recall anything -- it happens automatically.
 
 ### Auto-Store (every N turns)
 
-On the `agent_end` hook (which fires after each conversation turn), the plugin checks whether enough turns have elapsed since the last extraction. By default, it extracts every 5 turns. During extraction, it scores each fact by importance (1-10 scale), and facts that meet the minimum importance threshold (default: 3) are encrypted and stored.
+On the `agent_end` hook (which fires after each conversation turn), the plugin checks whether enough turns have elapsed since the last extraction. By default, it extracts every 3 turns. During extraction, it scores each fact by importance (1-10 scale), and facts that meet the minimum importance threshold (default: 3) are encrypted and stored.
 
 This means you do not need to explicitly tell the agent to remember things. Preferences, decisions, and notable facts are captured automatically as you chat.
 
-The number of turns between automatic extractions is configurable via the `TOTALRECLAW_EXTRACT_EVERY_TURNS` environment variable (default: `5`).
+The number of turns between automatic extractions is configurable via the `TOTALRECLAW_EXTRACT_EVERY_TURNS` environment variable (default: `3`).
 
 ### Pre-Compaction Flush
 
@@ -702,7 +702,7 @@ The OpenClaw plugin auto-detects your agent's LLM provider and API key for fact 
 | `TOTALRECLAW_CREDENTIALS_PATH` | Path to the credentials file (stores user ID and salt). The MCP setup wizard saves to `~/.totalreclaw/credentials.json` by default. | `~/.totalreclaw/credentials.json` |
 | `TOTALRECLAW_COSINE_THRESHOLD` | Minimum cosine similarity of the top result required to return memories. Lower = more permissive. | `0.15` |
 | `TOTALRECLAW_MIN_IMPORTANCE` | Minimum importance score (1-10) for auto-extracted facts. Facts below this are silently dropped. | `3` |
-| `TOTALRECLAW_EXTRACT_EVERY_TURNS` | Number of conversation turns between automatic extractions. Pro users can set as low as `2`. | `5` |
+| `TOTALRECLAW_EXTRACT_EVERY_TURNS` | Number of conversation turns between automatic extractions. | `3` |
 | `TOTALRECLAW_RELEVANCE_THRESHOLD` | Minimum cosine relevance score for auto-injecting memories into context. | `0.3` |
 | `TOTALRECLAW_SEMANTIC_SKIP_THRESHOLD` | Cosine similarity threshold for deduplication. Facts too similar to existing ones are skipped. | `0.85` |
 | `TOTALRECLAW_CACHE_TTL_MS` | Hot cache time-to-live in milliseconds. Cached results within this window are reused for similar queries. | `300000` (5 minutes) |
@@ -802,7 +802,7 @@ OPENAI_API_KEY="sk-your-key-here"
 **Fix:**
 1. Test your API key independently (e.g., make a simple curl request to the provider's API).
 2. Check that your API key has not expired or run out of credits.
-3. If rate-limited, the plugin will retry on the next extraction cycle (every 5 turns by default).
+3. If rate-limited, the plugin will retry on the next extraction cycle (every 3 turns by default).
 
 ---
 
@@ -813,7 +813,7 @@ This is a beta release. The following items are known limitations that will be a
 - **Free tier threshold:** The default limit of 250 writes/month is provisional and may be adjusted based on usage data. The limit is a server-side configuration value.
 - **Subscription pricing:** The Pro tier price ($2-5/month) is beta pricing and not yet finalized.
 - **Billing tools:** The upgrade flow (`totalreclaw_status`, `totalreclaw_upgrade`) may not be fully wired in all environments. If the agent cannot generate a checkout URL, contact the TotalReclaw team directly.
-- **Auto-extraction timing (OpenClaw only):** The `TOTALRECLAW_EXTRACT_EVERY_TURNS` environment variable controls extraction frequency. The plugin fires extraction on the `agent_end` hook every N turns (default: 5). The skill config also accepts `autoExtractEveryTurns` via the `TOTALRECLAW_EXTRACT_EVERY_TURNS` env var.
+- **Auto-extraction timing (OpenClaw only):** The `TOTALRECLAW_EXTRACT_EVERY_TURNS` environment variable controls extraction frequency. The plugin fires extraction on the `agent_end` hook every N turns (default: 3). The skill config also accepts `autoExtractEveryTurns` via the `TOTALRECLAW_EXTRACT_EVERY_TURNS` env var.
 - **MCP server has no auto-memory:** The MCP server does not have lifecycle hooks. It only responds to explicit tool calls. The host agent (Claude Desktop, Cursor) must call `totalreclaw_remember` and `totalreclaw_recall` explicitly.
 - **Batch writes:** On-chain writes are currently sent one fact at a time. Batch writes for gas optimization are not yet implemented.
 - **Decay and eviction engine:** The importance decay formula runs, but tuning is ongoing. Low-importance facts decay over time and may be evicted.

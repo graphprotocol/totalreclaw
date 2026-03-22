@@ -713,7 +713,7 @@ Default configuration values:
 | Key | Default | Description |
 |-----|---------|-------------|
 | `serverUrl` | `https://api.totalreclaw.xyz` | TotalReclaw server URL |
-| `autoExtractEveryTurns` | `5` | Turns between automatic extractions |
+| `autoExtractEveryTurns` | `3` | Turns between automatic extractions |
 | `minImportanceForAutoStore` | `6` | Minimum importance to auto-store |
 | `maxMemoriesInContext` | `8` | Maximum memories to inject into context |
 | `forgetThreshold` | `0.3` | Decay score threshold for eviction |

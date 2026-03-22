@@ -10,7 +10,7 @@ services:
       TOTALRECLAW_MASTER_PASSWORD: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
       TOTALRECLAW_CHAIN_ID: "100"
       TOTALRECLAW_DATA_EDGE_ADDRESS: "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca"
-      TOTALRECLAW_EXTRACT_EVERY_TURNS: "1"  # Override for testing (default is 5)
+      TOTALRECLAW_EXTRACT_EVERY_TURNS: "1"  # Override for testing (default is 3)
       OPENCLAW_GATEWAY_TOKEN: "guide-test-token-2026"
       OPENCLAW_RAW_STREAM: "1"
       PI_RAW_STREAM: "1"

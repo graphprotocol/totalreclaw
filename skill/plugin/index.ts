@@ -126,7 +126,10 @@ const SEMANTIC_SKIP_THRESHOLD = parseFloat(process.env.TOTALRECLAW_SEMANTIC_SKIP
 
 // Auto-extract throttle (C3): only extract every N turns in agent_end hook
 let turnsSinceLastExtraction = 0;
-const AUTO_EXTRACT_EVERY_TURNS_ENV = parseInt(process.env.TOTALRECLAW_EXTRACT_EVERY_TURNS ?? '5', 10);
+const AUTO_EXTRACT_EVERY_TURNS_ENV = parseInt(process.env.TOTALRECLAW_EXTRACT_EVERY_TURNS ?? '3', 10);
+
+// Hard cap on facts per extraction to prevent LLM over-extraction from dense conversations
+const MAX_FACTS_PER_EXTRACTION = 15;
 
 // Store-time near-duplicate detection (consolidation module)
 const STORE_DEDUP_ENABLED = process.env.TOTALRECLAW_STORE_DEDUP !== 'false';
@@ -188,13 +191,11 @@ function isLlmDedupEnabled(): boolean {
 }
 
 /**
- * Get the effective extraction interval based on tier.
- * Pro users can set interval as low as 2 via env; Free users are clamped to minimum 5.
+ * Get the effective extraction interval.
+ * Unified to 3 turns for all tiers (quota is per-transaction, not per-memory).
  */
 function getExtractInterval(): number {
-  const cache = readBillingCache();
-  const minInterval = cache?.features?.min_extract_interval ?? 5;
-  return Math.max(AUTO_EXTRACT_EVERY_TURNS_ENV, minInterval);
+  return AUTO_EXTRACT_EVERY_TURNS_ENV;
 }
 
 /**
@@ -2548,7 +2549,13 @@ const plugin = {
               ? await fetchExistingMemoriesForExtraction(api.logger, 20, evt.messages)
               : [];
             const rawFacts = await extractFacts(evt.messages, 'turn', existingMemories);
-            const { kept: facts } = filterByImportance(rawFacts, api.logger);
+            const { kept: importanceFiltered } = filterByImportance(rawFacts, api.logger);
+            if (importanceFiltered.length > MAX_FACTS_PER_EXTRACTION) {
+              api.logger.info(
+                `Capped extraction from ${importanceFiltered.length} to ${MAX_FACTS_PER_EXTRACTION} facts`,
+              );
+            }
+            const facts = importanceFiltered.slice(0, MAX_FACTS_PER_EXTRACTION);
             if (facts.length > 0) {
               await storeExtractedFacts(facts, api.logger);
             }
@@ -2584,7 +2591,13 @@ const plugin = {
             ? await fetchExistingMemoriesForExtraction(api.logger, 50, evt.messages)
             : [];
           const rawCompactFacts = await extractFacts(evt.messages, 'full', existingMemories);
-          const { kept: facts } = filterByImportance(rawCompactFacts, api.logger);
+          const { kept: compactImportanceFiltered } = filterByImportance(rawCompactFacts, api.logger);
+          if (compactImportanceFiltered.length > MAX_FACTS_PER_EXTRACTION) {
+            api.logger.info(
+              `Capped compaction extraction from ${compactImportanceFiltered.length} to ${MAX_FACTS_PER_EXTRACTION} facts`,
+            );
+          }
+          const facts = compactImportanceFiltered.slice(0, MAX_FACTS_PER_EXTRACTION);
           if (facts.length > 0) {
             await storeExtractedFacts(facts, api.logger);
           }
@@ -2619,7 +2632,13 @@ const plugin = {
             ? await fetchExistingMemoriesForExtraction(api.logger, 50, evt.messages)
             : [];
           const rawResetFacts = await extractFacts(evt.messages, 'full', existingMemories);
-          const { kept: facts } = filterByImportance(rawResetFacts, api.logger);
+          const { kept: resetImportanceFiltered } = filterByImportance(rawResetFacts, api.logger);
+          if (resetImportanceFiltered.length > MAX_FACTS_PER_EXTRACTION) {
+            api.logger.info(
+              `Capped reset extraction from ${resetImportanceFiltered.length} to ${MAX_FACTS_PER_EXTRACTION} facts`,
+            );
+          }
+          const facts = resetImportanceFiltered.slice(0, MAX_FACTS_PER_EXTRACTION);
           if (facts.length > 0) {
             await storeExtractedFacts(facts, api.logger);
           }

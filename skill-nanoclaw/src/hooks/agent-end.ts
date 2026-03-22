@@ -24,8 +24,9 @@ export type LLMClient = {
   generate: (system: string, user: string, options?: { responseFormat?: { type: string } }) => Promise<string>;
 };
 
-const EXTRACT_INTERVAL = parseInt(process.env.TOTALRECLAW_EXTRACT_INTERVAL || '5', 10);
+const EXTRACT_INTERVAL = parseInt(process.env.TOTALRECLAW_EXTRACT_INTERVAL || '3', 10);
 const MIN_IMPORTANCE = parseInt(process.env.TOTALRECLAW_MIN_IMPORTANCE || '6', 10);
+const MAX_FACTS_PER_EXTRACTION = 15;
 
 export async function agentEnd(
   client: TotalReclaw,
@@ -77,7 +78,11 @@ export async function agentEnd(
     }
 
     let factsStored = 0;
-    for (const fact of validation.facts!) {
+    const factsToProcess = validation.facts!.slice(0, MAX_FACTS_PER_EXTRACTION);
+    if (validation.facts!.length > MAX_FACTS_PER_EXTRACTION) {
+      console.log(`Capped extraction from ${validation.facts!.length} to ${MAX_FACTS_PER_EXTRACTION} facts`);
+    }
+    for (const fact of factsToProcess) {
       if (fact.action === 'ADD' && fact.importance >= MIN_IMPORTANCE) {
         const metadata: FactMetadata = {
           importance: fact.importance / 10,

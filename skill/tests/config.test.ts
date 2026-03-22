@@ -47,7 +47,7 @@ describe('loadConfig', () => {
       const config = loadConfig();
 
       expect(config.serverUrl).toBe('http://127.0.0.1:8080');
-      expect(config.autoExtractEveryTurns).toBe(5);
+      expect(config.autoExtractEveryTurns).toBe(3);
       expect(config.minImportanceForAutoStore).toBe(6);
       expect(config.maxMemoriesInContext).toBe(8);
       expect(config.forgetThreshold).toBe(0.3);
@@ -502,7 +502,7 @@ describe('createConfig', () => {
     });
 
     expect(config.serverUrl).toBe('http://custom:9000');
-    expect(config.autoExtractEveryTurns).toBe(5); // Default
+    expect(config.autoExtractEveryTurns).toBe(3); // Default
   });
 
   it('should throw for invalid configuration', () => {
