@@ -831,7 +831,6 @@ For those who want to understand the technical architecture:
 - **MCP Onboarding:** `docs/specs/totalreclaw/mcp-onboarding.md` -- MCP-specific onboarding design, seed management, and billing tool specifications.
 - **Billing and Onboarding:** `docs/specs/subgraph/billing-and-onboarding.md` -- tier structure, payment infrastructure, and Gnosis Chain rationale.
 - **Seed-to-Subgraph:** `docs/specs/subgraph/seed-to-subgraph.md` -- how BIP-39 derivation connects to on-chain identity.
-- **Product Requirements:** `docs/prd.md` -- the full product requirements document.
 
 ---
 

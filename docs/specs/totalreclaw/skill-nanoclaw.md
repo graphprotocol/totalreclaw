@@ -1476,4 +1476,3 @@ totalreclaw/
 - [TotalReclaw Skill Package](/skill/)
 - [MCP Protocol Specification](https://modelcontextprotocol.io)
 - [Claude Agent SDK Documentation](https://docs.anthropic.com)
-- [NanoClaw Memory System](/docs/nanoclaw-memory-system.md)
