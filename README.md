@@ -33,51 +33,37 @@ Every memory is encrypted on the device before it leaves. Storage and retrieval 
 
 ## Quick Start
 
-### OpenClaw (recommended)
+### 🦞 OpenClaw
 
 Ask your agent:
 
 > "Install the @totalreclaw/totalreclaw plugin"
 
-The agent handles everything: generates encryption keys, registers, and sets up automatic memory. Write down the 12-word recovery phrase — that's the only thing to keep safe.
+The agent handles everything: generates encryption keys, registers, and sets up automatic memory.
 
-After setup, memory is automatic. The agent remembers important things from conversations and loads relevant memories at the start of each new one.
+### 🖥️ Claude Desktop / Cursor / Windsurf
 
-### Claude Desktop / MCP Clients
-
-```
+```bash
 npx @totalreclaw/mcp-server setup
 ```
 
-The setup wizard generates a recovery phrase, registers, and prints a config snippet to paste into the MCP client. See the [@totalreclaw/mcp-server README](mcp/README.md) for details.
+The wizard generates your recovery phrase, registers you, and prints a config snippet. See the [@totalreclaw/mcp-server README](mcp/README.md) for details.
 
-## Architecture
+### 🤖 NanoClaw
 
-<p align="center">
-  <img src="docs/assets/architecture.svg" alt="TotalReclaw Architecture" />
-</p>
+NanoClaw agents get TotalReclaw memory automatically. Set `TOTALRECLAW_MASTER_PASSWORD` in your deployment config — the agent-runner spawns the MCP server as a background process. See the [NanoClaw README](skill-nanoclaw/README.md).
 
-The system splits into four layers. Everything that touches plaintext — encryption, embedding, search, re-ranking — happens on the device. The relay and the network only ever see ciphertext.
+## How It Works
 
-### How search works over encrypted data
+1. **Your agent extracts facts** from conversations (preferences, decisions, context)
+2. **Everything is encrypted on your device** before leaving — AES-256-GCM, keys derived from your recovery phrase
+3. **Encrypted data is stored on-chain** — the server only sees ciphertext and hashed search tokens
+4. **Search works over encrypted data** — blind indices let the server find relevant memories without reading them
+5. **Results are decrypted and ranked locally** — BM25 + semantic similarity + importance scoring
 
-This is the core engineering challenge: how do you find relevant memories when the server can't read any of them?
+The server does useful work (narrowing candidates, sponsoring gas) but never sees your data — even if fully compromised.
 
-The client generates a semantic embedding for each memory using a multilingual model (Qwen3-Embedding-0.6B, 1024 dimensions, 100+ languages). Then Locality-Sensitive Hashing (LSH) projects that embedding through multiple sets of random hyperplanes, producing bucket IDs where semantically similar memories land in the same buckets. These bucket IDs are SHA-256 hashed into "blind indices" before being sent to the server alongside the encrypted memory.
-
-When an agent searches, the client embeds the query, runs the same LSH process, and hashes the bucket IDs into "blind trapdoors." The server matches trapdoors against stored blind indices using a fast GIN index query — returning encrypted candidates without knowing what it just matched. The client then decrypts the candidates locally and re-ranks them across multiple signals (text relevance, semantic similarity, recency, importance) to return the top results to the agent.
-
-The server does useful work — narrowing thousands of memories to a few hundred candidates — but it never learns what it's searching for or what it found.
-
-### How encryption works
-
-A 12-word BIP-39 mnemonic (or master password) is the single root of trust. From it, three independent 256-bit keys are derived using HKDF-SHA256: one for authentication, one for encrypting memory content (AES-256-GCM), and one for generating deduplication fingerprints (HMAC-SHA256). None of these keys ever leave the device. The server only stores a SHA-256 hash of the auth key — it cannot derive the encryption or dedup keys even with full database access.
-
-### How the open network works
-
-The relay anchors each encrypted memory to Gnosis Chain via a minimal smart contract. The Graph indexes these events into an open, queryable subgraph. This means: anyone can verify the data exists, any competing service can build on the same index, and recovery works without any server — just the recovery phrase and the subgraph. The relay also sponsors all gas costs via ERC-4337 account abstraction, so the network layer is invisible to the user.
-
-> For a full technical deep dive — key derivation, LSH parameters, deduplication pipeline, re-ranking algorithm, on-chain wire format — see the [Architecture documentation](docs/architecture.md).
+> For the full technical deep dive — encryption pipeline, LSH parameters, re-ranking algorithm — see [Architecture](docs/architecture.md).
 
 ## Why TotalReclaw?
 
@@ -95,12 +81,9 @@ TotalReclaw encrypts everything on the device. The relay service never sees plai
 
 ## Pricing
 
-| Tier | Memories | Storage | Price |
-|------|----------|---------|-------|
-| **Free** | 500/month | Testnet (trial) | $0 |
-| **Pro** | Unlimited | Permanent on-chain (Gnosis) | $5/month |
+TotalReclaw has a generous free tier to get started. Upgrade to Pro for permanent on-chain storage.
 
-Counter resets monthly. Pay with card via Stripe.
+**[See pricing →](https://totalreclaw.xyz/pricing)**
 
 ## Self-Hosting
 
