@@ -110,7 +110,7 @@ You will see output like this:
   apple banana cherry dolphin eagle falcon grape honey iris jungle kite lemon
 
   WRITE THIS DOWN. If you lose it, your memories are unrecoverable.
-  Set it as TOTALRECLAW_MASTER_PASSWORD in your environment.
+  Set it as TOTALRECLAW_RECOVERY_PHRASE in your environment.
 ```
 
 The 12 words shown above are an example. Your actual phrase will be different and unique to you.
@@ -131,7 +131,7 @@ Set the following environment variables in your OpenClaw configuration (e.g., wo
 
 ```
 # --- Required ---
-TOTALRECLAW_MASTER_PASSWORD="word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12"
+TOTALRECLAW_RECOVERY_PHRASE="word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12"
 TOTALRECLAW_SERVER_URL="https://api.totalreclaw.xyz"
 
 # --- Managed service is the default (no env var needed) ---
@@ -466,7 +466,7 @@ If you switch to a new computer or install TotalReclaw on a second agent, you ca
    ```
    npx @totalreclaw/mcp-server setup
    ```
-2. When asked "Do you have an existing seed phrase?", answer **yes** and enter your 12 words.
+2. When asked "Do you have an existing recovery phrase?", answer **yes** and enter your 12 words.
 3. The wizard re-derives the same wallet address, saves credentials, and prints the MCP config snippet.
 4. Add the config snippet to your MCP client. All your existing memories are accessible immediately.
 
@@ -495,7 +495,7 @@ npx @totalreclaw/mcp-server setup
 
 The wizard walks you through:
 
-1. **Seed phrase** -- Generate a new 12-word phrase or import an existing one.
+1. **Recovery phrase** -- Generate a new 12-word phrase or import an existing one.
 2. **Key derivation** -- Derives your auth key, encryption key, and wallet address.
 3. **Server registration** -- Registers you with the relay server at `https://api.totalreclaw.xyz` (free tier, no payment required).
 4. **Credential storage** -- Saves your user ID and salt to `~/.totalreclaw/credentials.json` (the mnemonic itself is NOT stored on disk).
@@ -514,7 +514,7 @@ Copy the config snippet printed by the setup wizard into your MCP client configu
       "command": "npx",
       "args": ["@totalreclaw/mcp-server"],
       "env": {
-        "TOTALRECLAW_MASTER_PASSWORD": "your twelve words here",
+        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve words here",
         "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz"
       }
     }
@@ -564,7 +564,7 @@ If you prefer not to run the setup command, you can set the mnemonic directly as
       "command": "npx",
       "args": ["@totalreclaw/mcp-server"],
       "env": {
-        "TOTALRECLAW_MASTER_PASSWORD": "your twelve words here",
+        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve words here",
         "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz"
       }
     }
@@ -672,7 +672,7 @@ All configuration is done through environment variables, set in your OpenClaw wo
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `TOTALRECLAW_MASTER_PASSWORD` | Your 12-word BIP-39 recovery phrase. **Required.** | -- (none) |
+| `TOTALRECLAW_RECOVERY_PHRASE` | Your 12-word BIP-39 recovery phrase. **Required.** | -- (none) |
 | `TOTALRECLAW_SERVER_URL` | URL of the TotalReclaw relay server. **Required.** | `https://api.totalreclaw.xyz` |
 
 ### LLM Provider Keys (OpenClaw plugin only, auto-detected from your agent)
@@ -723,23 +723,23 @@ These variables control on-chain storage via the managed service. **The default 
 
 ## 14. Troubleshooting
 
-### "TOTALRECLAW_MASTER_PASSWORD not set"
+### "TOTALRECLAW_RECOVERY_PHRASE not set"
 
-**Cause:** The `TOTALRECLAW_MASTER_PASSWORD` environment variable is missing or empty.
+**Cause:** The `TOTALRECLAW_RECOVERY_PHRASE` environment variable is missing or empty.
 
-**Fix (OpenClaw plugin):** Make sure the `TOTALRECLAW_MASTER_PASSWORD` environment variable is set in your OpenClaw workspace environment settings:
+**Fix (OpenClaw plugin):** Make sure the `TOTALRECLAW_RECOVERY_PHRASE` environment variable is set in your OpenClaw workspace environment settings:
 ```
-TOTALRECLAW_MASTER_PASSWORD="your twelve words here"
+TOTALRECLAW_RECOVERY_PHRASE="your twelve words here"
 ```
 Restart the plugin after updating the variable.
 
-**Fix (MCP server):** Make sure the `TOTALRECLAW_MASTER_PASSWORD` env var is set in your MCP client config (e.g., `claude_desktop_config.json`). Alternatively, run `npx @totalreclaw/mcp-server setup` to generate credentials.
+**Fix (MCP server):** Make sure the `TOTALRECLAW_RECOVERY_PHRASE` env var is set in your MCP client config (e.g., `claude_desktop_config.json`). Alternatively, run `npx @totalreclaw/mcp-server setup` to generate credentials.
 
 ### "TotalReclaw is not set up" (MCP only)
 
-**Cause:** The MCP server started without a seed phrase and without a `credentials.json` file.
+**Cause:** The MCP server started without a recovery phrase and without a `credentials.json` file.
 
-**Fix:** Run `npx @totalreclaw/mcp-server setup` in your terminal. This generates or imports your seed phrase, registers with the server, and saves your credentials.
+**Fix:** Run `npx @totalreclaw/mcp-server setup` in your terminal. This generates or imports your recovery phrase, registers with the server, and saves your credentials.
 
 ### Memories not appearing in new conversations
 

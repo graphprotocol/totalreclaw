@@ -1,12 +1,12 @@
 /**
  * Keychain Credential Storage
  *
- * Provides secure OS keychain integration for storing the master password
+ * Provides secure OS keychain integration for storing the recovery phrase
  * using the `keytar` library. Supports macOS Keychain, Windows Credential Vault,
  * and Linux Secret Service (via libsecret).
  *
  * Security notes:
- * - Master passwords are stored in the OS-managed credential store
+ * - Recovery phrases are stored in the OS-managed credential store
  * - The server never sees plaintext passwords
  * - Credentials are scoped per userId
  * - No passwords are logged or written to disk outside the OS keychain
@@ -64,10 +64,10 @@ export function isKeychainAvailable(): boolean {
 }
 
 /**
- * Store a master password in the OS keychain.
+ * Store a recovery phrase in the OS keychain.
  *
  * @param userId  - The user identifier (used as the "account" in the keychain)
- * @param masterPassword - The plaintext master password to store
+ * @param masterPassword - The plaintext recovery phrase to store
  * @throws Error if the keychain backend is unavailable
  */
 export async function storeCredentials(
@@ -90,10 +90,10 @@ export async function storeCredentials(
 }
 
 /**
- * Retrieve a master password from the OS keychain.
+ * Retrieve a recovery phrase from the OS keychain.
  *
  * @param userId - The user identifier
- * @returns The stored master password, or null if none exists
+ * @returns The stored recovery phrase, or null if none exists
  * @throws Error if the keychain backend is unavailable
  */
 export async function getCredentials(
@@ -115,7 +115,7 @@ export async function getCredentials(
 }
 
 /**
- * Delete a stored master password from the OS keychain.
+ * Delete a stored recovery phrase from the OS keychain.
  *
  * @param userId - The user identifier
  * @returns true if a credential was deleted, false if none existed

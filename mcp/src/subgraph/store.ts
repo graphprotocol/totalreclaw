@@ -306,7 +306,7 @@ export function isSubgraphMode(override?: boolean): boolean {
  * overrides for constructor injection from MCP server state.
  *
  * After the relay refactor, clients only need:
- *   - TOTALRECLAW_MASTER_PASSWORD -- BIP-39 mnemonic
+ *   - TOTALRECLAW_RECOVERY_PHRASE -- BIP-39 mnemonic
  *   - TOTALRECLAW_SERVER_URL -- relay server URL (default: https://api.totalreclaw.xyz)
  *   - TOTALRECLAW_SELF_HOSTED -- set "true" for self-hosted HTTP mode (default: managed service)
  *   - TOTALRECLAW_CHAIN_ID -- optional, defaults to 100 (Gnosis mainnet)
@@ -321,7 +321,7 @@ export function isSubgraphMode(override?: boolean): boolean {
 export function getSubgraphConfig(overrides?: Partial<SubgraphStoreConfig>): SubgraphStoreConfig {
   const envConfig: SubgraphStoreConfig = {
     relayUrl: process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz',
-    mnemonic: process.env.TOTALRECLAW_MASTER_PASSWORD || '',
+    mnemonic: process.env.TOTALRECLAW_RECOVERY_PHRASE || '',
     cachePath: process.env.TOTALRECLAW_CACHE_PATH || `${process.env.HOME}/.totalreclaw/cache.enc`,
     chainId: parseInt(process.env.TOTALRECLAW_CHAIN_ID || '100'),
     dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || DEFAULT_DATA_EDGE_ADDRESS,

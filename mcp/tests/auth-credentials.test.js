@@ -5,7 +5,7 @@
 /**
  * Auth & Credentials Edge Cases
  *
- * These tests verify edge cases around credential handling, master password
+ * These tests verify edge cases around credential handling, recovery phrase
  * derivation, and client initialization states. Since the actual TotalReclaw
  * client and credential persistence are mocked, we focus on the contract:
  * - What happens when credentials are missing, corrupted, or invalid?
@@ -31,12 +31,12 @@ function createMockClient(overrides = {}) {
 }
 
 describe('Auth & Credentials Edge Cases', () => {
-  describe('missing TOTALRECLAW_MASTER_PASSWORD env var', () => {
+  describe('missing TOTALRECLAW_RECOVERY_PHRASE env var', () => {
     const originalEnv = process.env;
 
     beforeEach(() => {
       process.env = { ...originalEnv };
-      delete process.env.TOTALRECLAW_MASTER_PASSWORD;
+      delete process.env.TOTALRECLAW_RECOVERY_PHRASE;
     });
 
     afterEach(() => {

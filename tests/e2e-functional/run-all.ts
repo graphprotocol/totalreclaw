@@ -64,7 +64,7 @@ const PLUGIN_PATH = '../../skill/plugin/index.ts';
 /** These env vars are injected into ALL server-mode instances at runtime. */
 function serverBaseEnv(mockServerUrl: string, credentialsDir: string): Record<string, string> {
   return {
-    TOTALRECLAW_MASTER_PASSWORD: 'e2e-test-master-password-2026',
+    TOTALRECLAW_RECOVERY_PHRASE: 'e2e-test-master-password-2026',
     TOTALRECLAW_SERVER_URL: mockServerUrl,
     TOTALRECLAW_CREDENTIALS_PATH: path.join(credentialsDir, 'credentials.json'),
     // Mock LLM: set a fake OpenAI key so the plugin's LLM client detects a provider.
@@ -381,9 +381,9 @@ async function main(): Promise<void> {
         // it uses the full env var value as-is, so include the subgraph path.
         inst.env.TOTALRECLAW_SUBGRAPH_ENDPOINT = `${mockSubgraph.graphqlUrl}/subgraphs/name/totalreclaw`;
         // Subgraph instances also need the mock server for user registration,
-        // plus master password, credentials, and mock LLM keys.
+        // plus recovery phrase, credentials, and mock LLM keys.
         inst.env.TOTALRECLAW_SERVER_URL = mockServer.url;
-        inst.env.TOTALRECLAW_MASTER_PASSWORD = 'e2e-test-master-password-2026';
+        inst.env.TOTALRECLAW_RECOVERY_PHRASE = 'e2e-test-master-password-2026';
         inst.env.TOTALRECLAW_CREDENTIALS_PATH = path.join(credentialsDir, 'credentials.json');
         inst.env.OPENAI_API_KEY = 'mock-openai-key-for-e2e-testing';
         inst.env.ANTHROPIC_API_KEY = 'mock-anthropic-key-for-e2e';

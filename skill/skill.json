@@ -21,7 +21,7 @@
     "requires": {
       "env": [
         "TOTALRECLAW_SERVER_URL",
-        "TOTALRECLAW_MASTER_PASSWORD"
+        "TOTALRECLAW_RECOVERY_PHRASE"
       ],
       "bins": []
     },

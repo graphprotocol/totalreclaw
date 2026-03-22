@@ -61,7 +61,7 @@ async def register(
     3. Returns user_id to client
 
     The client must store user_id and salt locally (in OS keychain).
-    The master password is NEVER sent to the server.
+    The recovery phrase is NEVER sent to the server.
     """
     try:
         # Validate request

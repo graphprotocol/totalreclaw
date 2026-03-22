@@ -196,7 +196,7 @@ interface RememberInput {
 ```
 TotalReclaw Server
     │
-    └── User Vault (derived from master password)
+    └── User Vault (derived from recovery phrase)
             │
             ├── namespace: "default"     → General memories
             ├── namespace: "work"         → Work-related
@@ -294,7 +294,7 @@ interface ImportInput {
   namespace?: string;           // Target namespace (defaults to source namespace)
   namespace_mapping?: Record<string, string>;  // Remap namespaces: {"work": "work-v2"}
   merge_strategy?: "skip_existing" | "overwrite" | "merge";  // Default: "skip_existing"
-  reencrypt?: boolean;          // Re-encrypt with current master password (default: true)
+  reencrypt?: boolean;          // Re-encrypt with current recovery phrase (default: true)
   validate_only?: boolean;      // Parse and validate without importing (dry-run)
 }
 
@@ -325,7 +325,7 @@ interface ImportOutput {
    - `overwrite`: Delete existing, import new
    - `merge`: Use conflict resolution (see v0.3.1 §340-357)
 4. **Namespace Remapping**: Apply `namespace_mapping` before storage
-5. **Re-encryption**: All facts encrypted with current master password
+5. **Re-encryption**: All facts encrypted with current recovery phrase
 6. **Rollback**: `import_id` allows `totalreclaw_forget({ import_id })` within 24h
 
 #### Conflict Resolution
@@ -397,7 +397,7 @@ await server.connect(transport);
 ```bash
 # Required
 TOTALRECLAW_SERVER_URL=http://localhost:8080
-TOTALRECLAW_MASTER_PASSWORD=<user's master password>
+TOTALRECLAW_RECOVERY_PHRASE=<user's recovery phrase>
 
 # Optional
 TOTALRECLAW_NAMESPACE=default
@@ -419,7 +419,7 @@ TOTALRECLAW_DEFAULT_IMPORTANCE=5
       "args": ["-y", "@totalreclaw/mcp-server"],
       "env": {
         "TOTALRECLAW_SERVER_URL": "http://localhost:8080",
-        "TOTALRECLAW_MASTER_PASSWORD": "${TOTALRECLAW_PASSWORD}"
+        "TOTALRECLAW_RECOVERY_PHRASE": "${TOTALRECLAW_PASSWORD}"
       }
     }
   }
@@ -434,7 +434,7 @@ See: `TS: TotalReclaw Skill for NanoClaw.md` for NanoClaw-specific integration u
 
 ## Security Considerations
 
-1. **Master Password**: Never logged, passed via environment or secure prompt
+1. **Recovery Phrase**: Never logged, passed via environment or secure prompt
 2. **Memory Isolation**: Each namespace is cryptographically isolated
 3. **No Server Knowledge**: Server never sees plaintext facts
 4. **Transport**: Use TLS for server communication

@@ -16,7 +16,7 @@ Then set your environment variables:
 
 ```bash
 export TOTALRECLAW_SERVER_URL="http://your-totalreclaw-server:8080"
-export TOTALRECLAW_MASTER_PASSWORD="your-secure-password"
+export TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
 ```
 
 That's it. TotalReclaw hooks into your agent automatically.
@@ -77,7 +77,7 @@ Set the required environment variables:
 ```bash
 # Required
 export TOTALRECLAW_SERVER_URL="http://your-totalreclaw-server:8080"
-export TOTALRECLAW_MASTER_PASSWORD="your-secure-password"
+export TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
 
 # Optional
 export TOTALRECLAW_AUTO_EXTRACT_EVERY_TURNS=3
@@ -224,7 +224,7 @@ const result = await skill.onPreCompaction(context);
 | Variable | Required | Default | Description |
 |----------|:---:|---------|-------------|
 | `TOTALRECLAW_SERVER_URL` | **Yes** | `http://127.0.0.1:8080` | TotalReclaw server URL |
-| `TOTALRECLAW_MASTER_PASSWORD` | **Yes** | -- | Encryption master password (never sent to server) |
+| `TOTALRECLAW_RECOVERY_PHRASE` | **Yes** | -- | 12-word BIP-39 recovery phrase (never sent to server) |
 | `TOTALRECLAW_AUTO_EXTRACT_EVERY_TURNS` | No | `3` | Turns between automatic extractions |
 | `TOTALRECLAW_MIN_IMPORTANCE` | No | `6` | Minimum importance (1-10) to auto-store |
 | `TOTALRECLAW_MAX_MEMORIES` | No | `8` | Maximum memories to inject into context |
@@ -292,7 +292,7 @@ Memories are scored on a 1-10 scale:
 
 TotalReclaw uses end-to-end encryption:
 
-1. **Key Derivation**: Master password is processed through Argon2id to derive encryption keys. The password is never sent to the server.
+1. **Key Derivation**: Recovery phrase is processed through Argon2id to derive encryption keys. The phrase is never sent to the server.
 2. **Encryption**: All memories are encrypted client-side using AES-256-GCM before transmission.
 3. **Search**: LSH blind indices (SHA-256 hashed) enable server-side search without exposing plaintext.
 4. **Decryption**: Memories are decrypted client-side after retrieval.

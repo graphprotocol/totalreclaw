@@ -1,5 +1,5 @@
 /**
- * E2E Onboarding Tests — Fresh install without TOTALRECLAW_MASTER_PASSWORD.
+ * E2E Onboarding Tests — Fresh install without TOTALRECLAW_RECOVERY_PHRASE.
  *
  * Tests the user-facing onboarding flow:
  *   O1: Plugin loads in needsSetup mode
@@ -336,9 +336,9 @@ async function runO1(client: OpenClawClient): Promise<void> {
       passed: logs.includes('TotalReclaw plugin loaded'),
     },
     {
-      label: 'Setup required detected (no master password)',
-      passed: logs.includes('setup required') || logs.includes('TOTALRECLAW_MASTER_PASSWORD not set'),
-      detail: logs.includes('TOTALRECLAW_MASTER_PASSWORD not set')
+      label: 'Setup required detected (no recovery phrase)',
+      passed: logs.includes('setup required') || logs.includes('TOTALRECLAW_RECOVERY_PHRASE not set'),
+      detail: logs.includes('TOTALRECLAW_RECOVERY_PHRASE not set')
         ? 'explicit "not set" log found'
         : logs.includes('setup required')
           ? '"setup required" found in logs'
@@ -371,11 +371,9 @@ async function runO2(client: OpenClawClient): Promise<void> {
   // The before_agent_start hook injects setup instructions asking about recovery phrase
   const asksAboutPhrase =
     content.includes('recovery phrase') ||
-    content.includes('seed phrase') ||
-    content.includes('mnemonic') ||
+    content.includes('recovery phrase') ||
     content.includes('12-word') ||
-    content.includes('12 word') ||
-    content.includes('master password');
+    content.includes('12 word');
 
   const offersGeneration =
     content.includes('generate') ||
@@ -483,7 +481,7 @@ async function runO3(client: OpenClawClient): Promise<void> {
 
   // Check container logs AND config file for evidence
   const logs = getContainerLogs(300);
-  const configChanged = logs.includes('env.TOTALRECLAW_MASTER_PASSWORD');
+  const configChanged = logs.includes('env.TOTALRECLAW_RECOVERY_PHRASE');
   const credentialsLoaded = logs.includes('Loaded existing credentials') || logs.includes('Registered new user');
   const toolCalled = logs.includes('totalreclaw_generate_recovery_phrase');
 
@@ -495,7 +493,7 @@ async function runO3(client: OpenClawClient): Promise<void> {
       { encoding: 'utf8', timeout: 5_000 },
     );
     const config = JSON.parse(configContent);
-    const masterPwd = config?.env?.TOTALRECLAW_MASTER_PASSWORD || '';
+    const masterPwd = config?.env?.TOTALRECLAW_RECOVERY_PHRASE || '';
     configHasMnemonic = masterPwd.split(/\s+/).length >= 12;
     if (configHasMnemonic) {
       console.log(`  Config file contains mnemonic: "${masterPwd.substring(0, 30)}..."`);
@@ -570,7 +568,7 @@ async function runO3(client: OpenClawClient): Promise<void> {
       label: 'Config change detected (informational)',
       passed: true,
       detail: configChanged
-        ? 'TOTALRECLAW_MASTER_PASSWORD changed in config'
+        ? 'TOTALRECLAW_RECOVERY_PHRASE changed in config'
         : configHasMnemonic
           ? 'mnemonic present in config file'
           : 'no config change detected yet',
@@ -628,7 +626,7 @@ async function runO4(client: OpenClawClient): Promise<void> {
       {
         label: 'Plugin fully initialized after onboarding',
         passed: true,
-        detail: 'credentials loaded or registered — master password was set successfully',
+        detail: 'credentials loaded or registered — recovery phrase was set successfully',
       },
       {
         label: 'Recall tool works (agent did not crash)',
@@ -649,7 +647,6 @@ async function runO4(client: OpenClawClient): Promise<void> {
       content.includes('setup') ||
       content.includes('configured') ||
       content.includes('not set') ||
-      content.includes('master password') ||
       content.includes('recovery phrase');
 
     report('O4: Post-Setup Verification (Setup Still Required)', [
@@ -687,13 +684,13 @@ async function main(): Promise<void> {
   }
 
   console.log('='.repeat(60));
-  console.log('E2E Onboarding Tests — Fresh Install (No Master Password)');
+  console.log('E2E Onboarding Tests — Fresh Install (No Recovery Phrase)');
   console.log('='.repeat(60));
   console.log(`Tests to run: ${testsToRun.join(', ')}`);
   console.log(`WebSocket: ${WS_URL}`);
   console.log(`Shared session: ${SHARED_SESSION}`);
   console.log('');
-  console.log('This test verifies the onboarding flow when TOTALRECLAW_MASTER_PASSWORD');
+  console.log('This test verifies the onboarding flow when TOTALRECLAW_RECOVERY_PHRASE');
   console.log('is NOT set — the agent should guide the user through setup.\n');
 
   const client = new OpenClawClient();

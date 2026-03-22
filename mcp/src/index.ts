@@ -91,7 +91,7 @@ import crypto from 'node:crypto';
 // ── Configuration ───────────────────────────────────────────────────────────
 
 const SERVER_URL = process.env.TOTALRECLAW_SERVER_URL || 'http://127.0.0.1:8080';
-const MASTER_PASSWORD = process.env.TOTALRECLAW_MASTER_PASSWORD;
+const MASTER_PASSWORD = process.env.TOTALRECLAW_RECOVERY_PHRASE;
 
 // Store-time near-duplicate detection (consolidation module)
 const STORE_DEDUP_ENABLED = process.env.TOTALRECLAW_STORE_DEDUP !== 'false';
@@ -118,7 +118,7 @@ let subgraphState: SubgraphState | null = null;
  * Detect server mode based on environment configuration.
  *
  * Managed service (subgraph) mode is the default when a valid BIP-39 mnemonic
- * is provided as TOTALRECLAW_MASTER_PASSWORD.
+ * is provided as TOTALRECLAW_RECOVERY_PHRASE.
  *
  * Self-hosted mode (HTTP) requires TOTALRECLAW_SELF_HOSTED=true.
  * Defaults to managed service otherwise.

@@ -2,7 +2,7 @@
     "openapi": "3.1.0",
     "info": {
         "title": "TotalReclaw Server",
-        "description": "\n    End-to-end encrypted memory vault API.\n\n    ## Authentication\n\n    All endpoints (except /register and /health) require authentication using\n    a Bearer token in the Authorization header:\n\n    ```\n    Authorization: Bearer <hex-encoded-auth-key>\n    ```\n\n    The auth_key is derived from the user's master password using HKDF-SHA256:\n    ```\n    auth_key = HKDF-SHA256(master_password, salt, \"totalreclaw-auth-v1\")\n    ```\n\n    ## Server-Blind Design\n\n    - Server NEVER sees the master password\n    - Server NEVER sees the encryption key\n    - Server NEVER sees plaintext memories\n    - Server only stores encrypted blobs and blind indices\n    ",
+        "description": "\n    End-to-end encrypted memory vault API.\n\n    ## Authentication\n\n    All endpoints (except /register and /health) require authentication using\n    a Bearer token in the Authorization header:\n\n    ```\n    Authorization: Bearer <hex-encoded-auth-key>\n    ```\n\n    The auth_key is derived from the user's recovery phrase using HKDF-SHA256:\n    ```\n    auth_key = HKDF-SHA256(recovery_phrase, salt, \"totalreclaw-auth-v1\")\n    ```\n\n    ## Server-Blind Design\n\n    - Server NEVER sees the recovery phrase\n    - Server NEVER sees the encryption key\n    - Server NEVER sees plaintext memories\n    - Server only stores encrypted blobs and blind indices\n    ",
         "version": "0.3.1"
     },
     "paths": {
@@ -54,7 +54,7 @@
                     "auth"
                 ],
                 "summary": "Register",
-                "description": "Register a new user.\n\nThe client sends:\n- auth_key_hash: SHA256(HKDF(master_password, salt, \"totalreclaw-auth-v1\"))\n- salt: Random 32 bytes used for HKDF derivation\n\nThe server:\n1. Generates a user_id (UUIDv7)\n2. Stores auth_key_hash and salt\n3. Returns user_id to client\n\nThe client must store user_id and salt locally (in OS keychain).\nThe master password is NEVER sent to the server.",
+                "description": "Register a new user.\n\nThe client sends:\n- auth_key_hash: SHA256(HKDF(recovery_phrase, salt, \"totalreclaw-auth-v1\"))\n- salt: Random 32 bytes used for HKDF derivation\n\nThe server:\n1. Generates a user_id (UUIDv7)\n2. Stores auth_key_hash and salt\n3. Returns user_id to client\n\nThe client must store user_id and salt locally (in OS keychain).\nThe recovery phrase is NEVER sent to the server.",
                 "operationId": "register_v1_register_post",
                 "requestBody": {
                     "content": {

@@ -7,7 +7,7 @@ Implements HKDF-SHA256 based authentication:
 - Every request: Client sends auth_key in Authorization header
 - Server computes SHA256(auth_key) and looks up user
 
-The server NEVER sees the master password or encryption key.
+The server NEVER sees the recovery phrase or encryption key.
 """
 import hashlib
 import hmac
@@ -39,13 +39,13 @@ def generate_salt() -> bytes:
 
 def derive_auth_key(master_password: str, salt: bytes) -> bytes:
     """
-    Derive the auth key from master password using HKDF-SHA256.
+    Derive the auth key from recovery phrase using HKDF-SHA256.
 
     This is the CLIENT-SIDE function. The server should never need to call this.
     It's included here for reference and testing.
 
     Args:
-        master_password: User's master password
+        master_password: User's recovery phrase
         salt: 32-byte salt (stored on server)
 
     Returns:

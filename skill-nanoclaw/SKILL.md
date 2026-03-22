@@ -17,7 +17,7 @@ Set these in your NanoClaw deployment (Docker env, `.env` file, or platform conf
 
 ```bash
 TOTALRECLAW_SERVER_URL=https://api.totalreclaw.xyz
-TOTALRECLAW_MASTER_PASSWORD="your twelve word recovery phrase here"
+TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
 # Managed service is the default — set TOTALRECLAW_SELF_HOSTED=true only for self-hosted mode
 ```
 
@@ -58,7 +58,7 @@ This provides memory isolation between different contexts.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL | `https://api.totalreclaw.xyz` |
-| `TOTALRECLAW_MASTER_PASSWORD` | 12-word BIP-39 recovery phrase | Required |
+| `TOTALRECLAW_RECOVERY_PHRASE` | 12-word BIP-39 recovery phrase | Required |
 | `TOTALRECLAW_SELF_HOSTED` | Set to `true` to use your own server instead of the managed service | `false` |
 | `TOTALRECLAW_NAMESPACE` | Default namespace | Group folder name |
 | `TOTALRECLAW_AUTO_EXTRACT` | Enable automatic extraction | `true` |

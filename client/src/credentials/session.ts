@@ -100,10 +100,10 @@ export class SessionManager {
       return existing.keys;
     }
 
-    // Cache miss or expired — need the master password
+    // Cache miss or expired — need the recovery phrase
     if (!masterPassword) {
       throw new Error(
-        'Session expired or not yet established. Master password is required to derive keys.'
+        'Session expired or not yet established. Recovery phrase is required to derive keys.'
       );
     }
 

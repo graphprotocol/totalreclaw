@@ -26,7 +26,7 @@ Last updated: 2026-02-24
 - Seamless integration with OpenClaw's existing triggers (especially pre-compaction flush).
 - Server-blind: all processing on OpenClaw runtime (client), only encrypted blobs + blind indices go to server.
 - Maintain <50 ms added latency on hot path; <200 ms on flush path.
-- Full portability: user enters master password → restores entire memory on any OpenClaw instance or other agent.
+- Full portability: user enters recovery phrase → restores entire memory on any OpenClaw instance or other agent.
 
 ### Non-Goals (v1)
 
@@ -191,7 +191,7 @@ tool: {
 
 **Import Behavior**:
 - Validates data structure against TotalReclawFact schema
-- Re-encrypts all facts with current master password
+- Re-encrypts all facts with current recovery phrase
 - Deduplication via semantic similarity (threshold 0.85)
 - Namespace remapping for migration scenarios
 - Conflict resolution uses optimistic locking + LLM-assisted merge (v0.3.1 §340-357)
@@ -221,7 +221,7 @@ tool: {
 6. **For each fact + graph delta**:
    - Generate embedding (local or via TotalReclaw client).
    - Generate blind indices.
-   - AES-256-GCM encrypt (master password derived key using Argon2id).
+   - AES-256-GCM encrypt (recovery phrase derived key using Argon2id).
    - Upload batch to TotalReclaw server (or queue if offline).
 7. **(Optional)** Append human-readable bullet list to daily Markdown.
 
@@ -291,7 +291,7 @@ memory:
 
 ## 6. E2EE & Security Specifics
 
-- Master password **never leaves client**; used only for key derivation (Argon2id with high iterations).
+- Recovery phrase **never leaves client**; used only for key derivation (Argon2id with high iterations).
 - All LLM calls happen **before encryption**.
 - Graph stored as one encrypted blob per 100 facts (or on demand) to keep client RAM low.
 - **Offline mode:** queue facts locally (encrypted SQLite), sync on reconnect.

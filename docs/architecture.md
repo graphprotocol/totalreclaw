@@ -34,11 +34,11 @@ Every operation that touches plaintext — encryption, embedding generation, sea
 
 ### Key Derivation
 
-A 12-word BIP-39 mnemonic (or master password) is the single root of trust. From it, three independent keys are derived — none of which ever leave the device.
+A 12-word BIP-39 recovery phrase is the single root of trust. From it, three independent keys are derived — none of which ever leave the device.
 
 **Step 1 — Seed Generation**
 
-The 12 or 24 words pass through PBKDF2 (2048 rounds) to produce a 512-bit seed. For master passwords, Argon2id (t=3, m=64 MB, p=4) is used instead — memory-hard to resist GPU brute-force.
+The 12 or 24 words pass through PBKDF2 (2048 rounds) to produce a 512-bit seed. For arbitrary passwords, Argon2id (t=3, m=64 MB, p=4) is used instead — memory-hard to resist GPU brute-force.
 
 **Step 2 — Key Expansion**
 
@@ -70,7 +70,7 @@ The 128-bit authentication tag ensures both confidentiality and integrity — an
 
 ### What the relay never sees
 
-- Master password or mnemonic
+- Recovery phrase
 - Encryption key or dedup key
 - Plaintext memories
 - Raw embeddings

@@ -163,14 +163,14 @@ app = FastAPI(
     Authorization: Bearer <hex-encoded-auth-key>
     ```
 
-    The auth_key is derived from the user's master password using HKDF-SHA256:
+    The auth_key is derived from the user's recovery phrase using HKDF-SHA256:
     ```
-    auth_key = HKDF-SHA256(master_password, salt, "totalreclaw-auth-key-v1")
+    auth_key = HKDF-SHA256(recovery_phrase, salt, "totalreclaw-auth-key-v1")
     ```
 
     ## Server-Blind Design
 
-    - Server NEVER sees the master password
+    - Server NEVER sees the recovery phrase
     - Server NEVER sees the encryption key
     - Server NEVER sees plaintext memories
     - Server only stores encrypted blobs and blind indices

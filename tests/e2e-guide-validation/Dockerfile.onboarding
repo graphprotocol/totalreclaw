@@ -1,4 +1,4 @@
-# Test: Fresh onboarding flow — plugin installed but NO master password
+# Test: Fresh onboarding flow — plugin installed but NO recovery phrase
 # Verifies the agent guides the user through mnemonic generation/restoration
 FROM node:22-bookworm AS builder
 

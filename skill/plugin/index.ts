@@ -302,21 +302,21 @@ async function getFactCount(logger: OpenClawPluginApi['logger']): Promise<number
 // Initialisation
 // ---------------------------------------------------------------------------
 
-/** True when master password is missing — tools return setup instructions. */
+/** True when recovery phrase is missing — tools return setup instructions. */
 let needsSetup = false;
 
 /**
- * Derive keys from the master password, load or create credentials, and
+ * Derive keys from the recovery phrase, load or create credentials, and
  * register with the server if this is the first run.
  */
 async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
   const serverUrl =
     process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz';
-  const masterPassword = process.env.TOTALRECLAW_MASTER_PASSWORD;
+  const masterPassword = process.env.TOTALRECLAW_RECOVERY_PHRASE;
 
   if (!masterPassword) {
     needsSetup = true;
-    logger.info('TOTALRECLAW_MASTER_PASSWORD not set — setup required (see SKILL.md Post-Install Setup)');
+    logger.info('TOTALRECLAW_RECOVERY_PHRASE not set — setup required (see SKILL.md Post-Install Setup)');
     return;
   }
 
@@ -412,27 +412,27 @@ function isDocker(): boolean {
 function buildSetupErrorMsg(): string {
   const base =
     'TotalReclaw setup required:\n' +
-    '1. Set TOTALRECLAW_MASTER_PASSWORD — ask the user if they have an existing recovery phrase or generate a new 12-word BIP-39 mnemonic.\n' +
+    '1. Set TOTALRECLAW_RECOVERY_PHRASE — ask the user if they have an existing recovery phrase or generate a new 12-word BIP-39 mnemonic.\n' +
     '2. Restart the gateway to apply changes.\n' +
     '   (Optional: set TOTALRECLAW_SELF_HOSTED=true if using your own server instead of the managed service.)\n\n';
 
   if (isDocker()) {
     return base +
       'Running in Docker — pass env vars via `-e` flags or your compose file:\n' +
-      '  -e TOTALRECLAW_MASTER_PASSWORD="word1 word2 ..."';
+      '  -e TOTALRECLAW_RECOVERY_PHRASE="word1 word2 ..."';
   }
 
   if (process.platform === 'darwin') {
     return base +
       'Running on macOS — add env vars to the LaunchAgent plist at\n' +
       '~/Library/LaunchAgents/ai.openclaw.gateway.plist under <key>EnvironmentVariables</key>:\n' +
-      '  <key>TOTALRECLAW_MASTER_PASSWORD</key><string>word1 word2 ...</string>\n' +
+      '  <key>TOTALRECLAW_RECOVERY_PHRASE</key><string>word1 word2 ...</string>\n' +
       'Then run: openclaw gateway restart';
   }
 
   return base +
     'Running on Linux — add env vars to the systemd unit override or your shell profile:\n' +
-    '  export TOTALRECLAW_MASTER_PASSWORD="word1 word2 ..."\n' +
+    '  export TOTALRECLAW_RECOVERY_PHRASE="word1 word2 ..."\n' +
     'Then run: openclaw gateway restart';
 }
 
@@ -463,7 +463,7 @@ async function requireFullSetup(logger: OpenClawPluginApi['logger']): Promise<vo
 // LSH + Embedding helpers
 // ---------------------------------------------------------------------------
 
-/** Master password cached for LSH seed derivation (set during initialize()). */
+/** Recovery phrase cached for LSH seed derivation (set during initialize()). */
 let masterPasswordCache: string | null = null;
 /** Salt cached for LSH seed derivation (set during initialize()). */
 let saltCache: Buffer | null = null;
@@ -472,7 +472,7 @@ let saltCache: Buffer | null = null;
  * Get or initialize the LSH hasher.
  *
  * The hasher is created lazily because it needs:
- *   1. The master password + salt (available after initialize())
+ *   1. The recovery phrase + salt (available after initialize())
  *   2. The embedding dimensions (available after initLLMClient())
  *
  * If the provider doesn't support embeddings, this returns null and

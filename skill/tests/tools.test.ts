@@ -633,7 +633,7 @@ describe('Tool Error Handling', () => {
   it('should throw if skill not initialized', async () => {
     const skill = new TotalReclawSkill({
       serverUrl: 'http://mock',
-      // No master password - will fail init
+      // No recovery phrase - will fail init
     });
 
     // Don't call init()

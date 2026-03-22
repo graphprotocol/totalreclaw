@@ -99,7 +99,7 @@ const ENV_VAR_MAPPING: Record<
     key: 'rerankerModel',
     parser: (v) => v,
   },
-  TOTALRECLAW_MASTER_PASSWORD: {
+  TOTALRECLAW_RECOVERY_PHRASE: {
     key: 'masterPassword',
     parser: (v) => v,
   },

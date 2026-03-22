@@ -128,7 +128,7 @@ export class TotalReclaw {
   /**
    * Register a new user with the server
    *
-   * @param masterPassword - User's master password
+   * @param masterPassword - User's recovery phrase
    * @returns User ID
    */
   async register(masterPassword: string): Promise<string> {
@@ -170,7 +170,7 @@ export class TotalReclaw {
    * Login with existing credentials
    *
    * @param userId - User ID from previous registration
-   * @param masterPassword - User's master password
+   * @param masterPassword - User's recovery phrase
    * @param salt - Salt from previous registration
    */
   async login(userId: string, masterPassword: string, salt: Buffer): Promise<void> {

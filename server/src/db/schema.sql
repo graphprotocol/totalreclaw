@@ -6,8 +6,8 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ============ Users Table ============
 -- Stores authentication credentials for each user
--- auth_key_hash is SHA256(HKDF(master_password, salt, "totalreclaw-auth-v1"))
--- Server NEVER stores the master password or auth_key itself
+-- auth_key_hash is SHA256(HKDF(recovery_phrase, salt, "totalreclaw-auth-v1"))
+-- Server NEVER stores the recovery phrase or auth_key itself
 
 CREATE TABLE users (
   user_id TEXT PRIMARY KEY,           -- UUIDv7 (time-sortable)

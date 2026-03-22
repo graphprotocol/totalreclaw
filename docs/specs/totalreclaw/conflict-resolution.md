@@ -239,7 +239,7 @@ CREATE INDEX idx_facts_user_source ON facts(user_id, source_event_id);
 
 ```
 content_fingerprint = HMAC-SHA256(
-    key  = encryption_key,          -- derived from master password/seed
+    key  = encryption_key,          -- derived from recovery phrase
     data = normalize(plaintext)
 )
 

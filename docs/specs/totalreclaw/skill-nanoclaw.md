@@ -273,7 +273,7 @@ systemPrompt += '\n' + TOTALRECLAW_PROMPT;
 ### Credential Derivation
 
 ```typescript
-// Derive encryption key from master password
+// Derive encryption key from recovery phrase
 const masterKey = await argon2id(masterPassword, salt);
 
 // Store encrypted in .totalreclaw/credentials.enc
@@ -289,7 +289,7 @@ const masterKey = await argon2id(masterPassword, salt);
 ```bash
 TOTALRECLAW_SERVER_URL=http://localhost:8080
 TOTALRECLAW_NAMESPACE=${groupFolder}  # Set dynamically per-group
-TOTALRECLAW_MASTER_PASSWORD=${from_credentials_enc}
+TOTALRECLAW_RECOVERY_PHRASE=${from_credentials_enc}
 ```
 
 ### Skill manifest.yaml
@@ -526,7 +526,7 @@ Each group's memories are isolated via namespacing:
 |  Server          |
 +------------------+
         |
-        | userId (derived from master password)
+        | userId (derived from recovery phrase)
         v
 +------------------+
 |  User's vault    |
@@ -650,7 +650,7 @@ import { exportTool } from './tools/export.js';
 // Server configuration from environment
 const SERVER_URL = process.env.TOTALRECLAW_SERVER_URL || 'http://127.0.0.1:8080';
 const NAMESPACE = process.env.TOTALRECLAW_NAMESPACE || 'default';
-const MASTER_PASSWORD = process.env.TOTALRECLAW_MASTER_PASSWORD;
+const MASTER_PASSWORD = process.env.TOTALRECLAW_RECOVERY_PHRASE;
 
 // Initialize TotalReclaw client
 let client: TotalReclaw | null = null;
@@ -1078,7 +1078,7 @@ async function syncToClaudeMd(
 ```bash
 # Required
 TOTALRECLAW_SERVER_URL=https://api.totalreclaw.xyz
-TOTALRECLAW_MASTER_PASSWORD=<from user>
+TOTALRECLAW_RECOVERY_PHRASE=<from user>
 
 # Optional
 TOTALRECLAW_ENABLED=true
@@ -1105,7 +1105,7 @@ TOTALRECLAW_MAX_CONTEXT=8
 ### Credential Flow
 
 ```
-1. User sets master password (via main channel command)
+1. User sets recovery phrase (via main channel command)
        |
        v
 2. Password derives encryption key via Argon2id
@@ -1137,7 +1137,7 @@ TOTALRECLAW_MAX_CONTEXT=8
 const input: ContainerInput = {
   // ...
   secrets: {
-    TOTALRECLAW_MASTER_PASSWORD: masterPassword,
+    TOTALRECLAW_RECOVERY_PHRASE: masterPassword,
     // ... other secrets
   }
 };
@@ -1293,7 +1293,7 @@ TOTALRECLAW_MAX_CONTEXT=8       # memories in context
 
 ```
 @Andy configure memory server https://api.totalreclaw.xyz
-@Andy set memory password [master password]
+@Andy set memory password [recovery phrase]
 @Andy export all memories
 @Andy sync memories with CLAUDE.md
 ```
@@ -1394,7 +1394,7 @@ npm run test:e2e -- --group test --message "what do I like to drink?"
 1. Run /add-totalreclaw skill in NanoClaw
 2. Deploy TotalReclaw server (or use hosted version)
 3. Configure server URL via main channel
-4. Set master password
+4. Set recovery phrase
 5. Optionally: Import existing CLAUDE.md content
 ```
 

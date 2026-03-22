@@ -19,7 +19,7 @@ Last updated: 2026-02-24
 
 | Change | Section |
 |--------|---------|
-| Added authentication system using master password derivation | §5 |
+| Added authentication system using recovery phrase derivation | §5 |
 | Added rate limiting design (deferred to post-PoC) | §6 |
 | Clarified API error codes | §4 |
 | Added conflict resolution strategy | §8 |
@@ -36,8 +36,8 @@ Last updated: 2026-02-24
 
 ### Goals
 - Simple, single-binary server for PoC testing
-- Server-blind: server never sees plaintext or master password
-- Authentication derived from user's master password (no separate API keys)
+- Server-blind: server never sees plaintext or recovery phrase
+- Authentication derived from user's recovery phrase (no separate API keys)
 - Protobuf API (future-proof for decentralized migration)
 - PostgreSQL backend with event-sourced storage
 
@@ -214,11 +214,11 @@ Server validates: `SHA256(auth_key) == stored_auth_key_hash`
 ## 5. Authentication System
 
 ### Design Principles
-1. **No separate API key** - master password IS the auth credential
-2. **Server-blind** - server never sees master password
+1. **No separate API key** - recovery phrase IS the auth credential
+2. **Server-blind** - server never sees recovery phrase
 3. **Cryptographic separation** - auth key ≠ encryption key
 4. **Stateless requests** - no sessions, no tokens to refresh
-5. **Portable** - same master password works on any device
+5. **Portable** - same recovery phrase works on any device
 
 ### Registration Flow
 
@@ -655,7 +655,7 @@ When LSH parameters (`n_bits`, `n_tables`) need to change (rare, only at 500K+ c
 |--------|--------|
 | **Trigger** | Admin `POST /admin/lsh-reindex` with new params |
 | **Downtime** | Per-user, not global |
-| **Client requirement** | Must have master password (cannot re-index server-side) |
+| **Client requirement** | Must have recovery phrase (cannot re-index server-side) |
 | **Process** | Client-side: decrypt → recompute LSH → re-encrypt → re-upload |
 | **APIs needed** | `GET /lsh-config`, `POST /admin/lsh-reindex`, `GET /lsh-reindex/status` |
 

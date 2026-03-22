@@ -322,16 +322,16 @@ After installing TotalReclaw, the agent MUST complete setup automatically. **Do 
 
 The TotalReclaw server URL is always `https://api.totalreclaw.xyz`. This is set automatically — no action required.
 
-### Step 2: Master password (recovery phrase)
+### Step 2: Recovery phrase
 
-The master password is a **12-word BIP-39 mnemonic** — like a crypto wallet seed phrase. It derives all encryption keys. The server never sees it.
+The recovery phrase is a **12-word BIP-39 mnemonic**. It derives all encryption keys. The server never sees it.
 
 Ask the user:
 > "Do you have an existing TotalReclaw recovery phrase you'd like to restore, or should I generate a new one?"
 
-- **New user:** Generate a random 12-word BIP-39 mnemonic and set it as `TOTALRECLAW_MASTER_PASSWORD`. Then display it prominently with a warning:
+- **New user:** Generate a random 12-word BIP-39 mnemonic and set it as `TOTALRECLAW_RECOVERY_PHRASE`. Then display it prominently with a warning:
   > "⚠️ SAVE YOUR RECOVERY PHRASE — it's the only way to recover your memories if you switch devices: `[phrase]`"
-- **Returning user:** Ask them to provide their existing 12-word phrase, then set it as `TOTALRECLAW_MASTER_PASSWORD`.
+- **Returning user:** Ask them to provide their existing 12-word phrase, then set it as `TOTALRECLAW_RECOVERY_PHRASE`.
 
 When setup is required, the plugin will automatically detect the host environment (macOS, Linux, or Docker) and provide the exact commands or config snippets needed to set the env vars. Follow those instructions.
 
@@ -734,7 +734,7 @@ Environment variables for controlling near-duplicate detection and consolidation
 ## Privacy & Security
 
 - **End-to-End Encrypted**: All encryption happens client-side. The server never sees your data.
-- **Master Password**: Never sent to the server. Used only for key derivation (Argon2id).
+- **Recovery Phrase**: Never sent to the server. Used only for key derivation (Argon2id).
 - **Export Portability**: Full plaintext export available anytime.
 - **Tombstone Recovery**: Deleted memories can be recovered within 30 days.
 

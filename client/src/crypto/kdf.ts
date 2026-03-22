@@ -1,7 +1,7 @@
 /**
  * Key Derivation Functions
  *
- * Uses Argon2id for master password to key derivation and HKDF for
+ * Uses Argon2id for recovery phrase to key derivation and HKDF for
  * deriving auth and encryption keys.
  */
 
@@ -39,11 +39,11 @@ export function generateSalt(length: number = 32): Buffer {
 }
 
 /**
- * Derive the auth key from master password using Argon2id + HKDF
+ * Derive the auth key from recovery phrase using Argon2id + HKDF
  *
  * The auth key is used for server authentication (HMAC operations).
  *
- * @param masterPassword - User's master password
+ * @param masterPassword - User's recovery phrase
  * @param salt - Random salt
  * @param params - KDF parameters
  * @returns 32-byte auth key hash
@@ -87,11 +87,11 @@ export async function deriveAuthKey(
 }
 
 /**
- * Derive the encryption key from master password using Argon2id + HKDF
+ * Derive the encryption key from recovery phrase using Argon2id + HKDF
  *
  * The encryption key is used for AES-256-GCM encryption of documents and embeddings.
  *
- * @param masterPassword - User's master password
+ * @param masterPassword - User's recovery phrase
  * @param salt - Random salt
  * @param params - KDF parameters
  * @returns 32-byte encryption key
@@ -135,12 +135,12 @@ export async function deriveEncryptionKey(
 }
 
 /**
- * Derive both auth and encryption keys from master password
+ * Derive both auth and encryption keys from recovery phrase
  *
  * This is more efficient than calling deriveAuthKey and deriveEncryptionKey
  * separately because it only runs Argon2id once.
  *
- * @param masterPassword - User's master password
+ * @param masterPassword - User's recovery phrase
  * @param salt - Random salt
  * @param params - KDF parameters
  * @returns Object containing both auth and encryption keys

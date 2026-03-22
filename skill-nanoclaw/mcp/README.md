@@ -32,7 +32,7 @@ RUN npm install -g @totalreclaw/mcp-server
 
 | Variable | Required | Default |
 |----------|----------|---------|
-| `TOTALRECLAW_MASTER_PASSWORD` | Yes | — (12-word BIP-39 recovery phrase) |
+| `TOTALRECLAW_RECOVERY_PHRASE` | Yes | — (12-word BIP-39 recovery phrase) |
 | `TOTALRECLAW_SERVER_URL` | No | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_SELF_HOSTED` | No | `false` (managed service with on-chain storage via The Graph) |
 | `TOTALRECLAW_NAMESPACE` | No | Group folder name |

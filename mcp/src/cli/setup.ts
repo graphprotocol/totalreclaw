@@ -169,7 +169,7 @@ function printConfigSnippet(serverUrl: string): void {
         command: 'npx',
         args: ['@totalreclaw/mcp-server'],
         env: {
-          TOTALRECLAW_MASTER_PASSWORD: '<your-12-word-seed-phrase>',
+          TOTALRECLAW_RECOVERY_PHRASE: '<your-12-word-recovery-phrase>',
           TOTALRECLAW_SERVER_URL: serverUrl,
         },
       },
@@ -181,7 +181,7 @@ function printConfigSnippet(serverUrl: string): void {
   console.log('(Claude Desktop / Cursor / VS Code):');
   console.log('========================================\n');
   console.log(JSON.stringify(snippet, null, 2));
-  console.log('\nReplace <your-12-word-seed-phrase> with your actual seed phrase.');
+  console.log('\nReplace <your-12-word-recovery-phrase> with your actual recovery phrase.');
   console.log('');
 }
 
@@ -202,12 +202,12 @@ export async function runSetup(): Promise<void> {
 
     let mnemonic: string;
 
-    const hasExisting = await ask(rl, 'Do you have an existing seed phrase? (y/n): ');
+    const hasExisting = await ask(rl, 'Do you have an existing recovery phrase? (y/n): ');
 
     if (hasExisting.toLowerCase() === 'y' || hasExisting.toLowerCase() === 'yes') {
       // Import existing mnemonic
       console.log('');
-      console.log('Enter your 12-word seed phrase (space-separated):');
+      console.log('Enter your 12-word recovery phrase (space-separated):');
       mnemonic = await ask(rl, '> ');
 
       if (!validateMnemonic(mnemonic, wordlist)) {
@@ -216,13 +216,13 @@ export async function runSetup(): Promise<void> {
         process.exit(1);
       }
 
-      console.log('\nSeed phrase validated successfully.');
+      console.log('\nRecovery phrase validated successfully.');
     } else {
       // Generate new mnemonic
       mnemonic = generateMnemonic(wordlist, 128); // 128 bits = 12 words
 
       console.log('');
-      console.log('Your new seed phrase (WRITE THIS DOWN AND KEEP IT SAFE):');
+      console.log('Your new recovery phrase (WRITE THIS DOWN AND KEEP IT SAFE):');
       console.log('');
       console.log(`  ${mnemonic}`);
       console.log('');
@@ -231,9 +231,9 @@ export async function runSetup(): Promise<void> {
       console.log('         Store it in a password manager or write it down securely.');
       console.log('');
 
-      const confirmed = await ask(rl, 'Have you saved your seed phrase? (yes to continue): ');
+      const confirmed = await ask(rl, 'Have you saved your recovery phrase? (yes to continue): ');
       if (confirmed.toLowerCase() !== 'yes' && confirmed.toLowerCase() !== 'y') {
-        console.log('\nSetup cancelled. Please save your seed phrase and try again.');
+        console.log('\nSetup cancelled. Please save your recovery phrase and try again.');
         rl.close();
         process.exit(1);
       }

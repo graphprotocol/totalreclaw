@@ -552,7 +552,7 @@ RE-INDEX WORKFLOW:
 
 3. FOR EACH USER:
    a. Fetch all encrypted memories
-   b. Client-side: decrypt with master password
+   b. Client-side: decrypt with recovery phrase
    c. Client-side: re-compute LSH buckets with NEW params
    d. Client-side: re-encrypt, re-upload
    e. Server: update blind_indices atomically
@@ -568,7 +568,7 @@ RE-INDEX WORKFLOW:
 |--------|--------|
 | **Frequency** | Rare - only at 500K+ corpus size |
 | **Downtime** | Per-user, not global (each user re-indexes independently) |
-| **Client requirement** | Must have master password (cannot re-index server-side) |
+| **Client requirement** | Must have recovery phrase (cannot re-index server-side) |
 | **Rollback** | Keep old blind_indices until re-index complete |
 | **Export blocking** | Prevent export during re-index to avoid inconsistent data |
 

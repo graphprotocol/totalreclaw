@@ -25,7 +25,7 @@ ClawHub is the official skill registry for OpenClaw agents. Key facts:
 - [x] `README.md` — Public-facing documentation with quick start, benchmarks, configuration, and architecture
 - [x] Hooks defined: `before_agent_start`, `agent_end`, `pre_compaction`
 - [x] Tools defined: `totalreclaw_remember`, `totalreclaw_recall`, `totalreclaw_forget`, `totalreclaw_export`, `totalreclaw_status`, `totalreclaw_generate_recovery_phrase`
-- [x] Environment variables documented (`TOTALRECLAW_SERVER_URL`, `TOTALRECLAW_MASTER_PASSWORD`)
+- [x] Environment variables documented (`TOTALRECLAW_SERVER_URL`, `TOTALRECLAW_RECOVERY_PHRASE`)
 - [x] Benchmark comparison table (98.1% recall@8 with 100% privacy)
 - [x] License declared (MIT)
 - [x] Keywords and OS compatibility specified
@@ -62,8 +62,8 @@ metadata:
     requires:
       env:
         - TOTALRECLAW_SERVER_URL
-        - TOTALRECLAW_MASTER_PASSWORD
-    primaryEnv: TOTALRECLAW_MASTER_PASSWORD
+        - TOTALRECLAW_RECOVERY_PHRASE
+    primaryEnv: TOTALRECLAW_RECOVERY_PHRASE
     emoji: "\U0001F9E0"
     homepage: https://totalreclaw.xyz
     os: ["macos", "linux", "windows"]
@@ -91,7 +91,7 @@ clawhub publish ./skill \
 
 ## Security Scan Notes
 
-The `TOTALRECLAW_MASTER_PASSWORD` env var will likely trigger extra scrutiny from the automated security scanner. The E2EE architecture explanation in SKILL.md should help it pass as `clean`:
+The `TOTALRECLAW_RECOVERY_PHRASE` env var will likely trigger extra scrutiny from the automated security scanner. The E2EE architecture explanation in SKILL.md should help it pass as `clean`:
 
 - The password is a 12-word BIP-39 mnemonic used to derive encryption keys
 - It never leaves the client device

@@ -52,7 +52,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
       "args": ["-y", "@totalreclaw/mcp-server"],
       "env": {
         "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz",
-        "TOTALRECLAW_MASTER_PASSWORD": "your twelve word recovery phrase goes here"
+        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here"
       }
     }
   }
@@ -70,7 +70,7 @@ Add to your MCP settings (Settings > MCP Servers):
     "args": ["-y", "@totalreclaw/mcp-server"],
     "env": {
       "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz",
-      "TOTALRECLAW_MASTER_PASSWORD": "your twelve word recovery phrase goes here"
+      "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here"
     }
   }
 }
@@ -110,7 +110,7 @@ The server only ever sees ciphertext and hashed tokens.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL | `https://api.totalreclaw.xyz` |
-| `TOTALRECLAW_MASTER_PASSWORD` | 12-word BIP-39 recovery phrase | Required |
+| `TOTALRECLAW_RECOVERY_PHRASE` | 12-word BIP-39 recovery phrase | Required |
 | `TOTALRECLAW_SELF_HOSTED` | Use a self-hosted server instead of the managed service | `false` |
 | `TOTALRECLAW_CHAIN_ID` | Chain ID (100=Gnosis mainnet, 84532=Base Sepolia staging) | `100` |
 

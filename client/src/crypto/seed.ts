@@ -17,7 +17,7 @@
  *
  * The encryption key derivation uses the SAME HKDF info strings as
  * client/src/crypto/kdf.ts so that the AES and blind-index modules work
- * identically regardless of whether the key came from a master password
+ * identically regardless of whether the key came from a recovery phrase
  * or a BIP-39 seed.
  */
 

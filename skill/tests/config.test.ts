@@ -180,14 +180,14 @@ describe('loadConfig', () => {
       delete process.env.TOTALRECLAW_FORGET_THRESHOLD;
     });
 
-    it('should load from TOTALRECLAW_MASTER_PASSWORD', () => {
-      process.env.TOTALRECLAW_MASTER_PASSWORD = 'env-password';
+    it('should load from TOTALRECLAW_RECOVERY_PHRASE', () => {
+      process.env.TOTALRECLAW_RECOVERY_PHRASE = 'env-password';
 
       const config = loadConfig();
 
       expect(config.masterPassword).toBe('env-password');
 
-      delete process.env.TOTALRECLAW_MASTER_PASSWORD;
+      delete process.env.TOTALRECLAW_RECOVERY_PHRASE;
     });
 
     it('should handle invalid numeric env values', () => {

@@ -26,7 +26,7 @@ export interface TotalReclawSkillConfig {
   forgetThreshold: number;
   /** ONNX reranker model path */
   rerankerModel?: string;
-  /** Master password (from user) */
+  /** Recovery phrase (from user) */
   masterPassword?: string;
   /** User ID (from previous registration) */
   userId?: string;

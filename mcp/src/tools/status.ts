@@ -15,7 +15,7 @@ export const statusToolDefinition = {
     properties: {
       wallet_address: {
         type: 'string',
-        description: 'Smart Account address (derived from seed phrase)',
+        description: 'Smart Account address (derived from recovery phrase)',
       },
     },
     required: ['wallet_address'],

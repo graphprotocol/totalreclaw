@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-echo "[entrypoint] Writing OpenClaw config (onboarding test — NO master password)..."
+echo "[entrypoint] Writing OpenClaw config (onboarding test — NO recovery phrase)..."
 
-# NOTE: TOTALRECLAW_MASTER_PASSWORD is intentionally OMITTED to test the
+# NOTE: TOTALRECLAW_RECOVERY_PHRASE is intentionally OMITTED to test the
 # fresh onboarding flow where the agent guides the user through setup.
 cat > /home/node/.openclaw/openclaw.json << ENDCONFIG
 {
@@ -56,6 +56,6 @@ cat > /home/node/.openclaw/openclaw.json << ENDCONFIG
 }
 ENDCONFIG
 
-echo "[entrypoint] Config written (no master password). Starting OpenClaw gateway..."
+echo "[entrypoint] Config written (no recovery phrase). Starting OpenClaw gateway..."
 
 exec node /app/dist/index.js gateway

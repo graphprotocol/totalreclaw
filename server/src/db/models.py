@@ -23,7 +23,7 @@ class User(Base):
 
     Stores:
     - user_id: UUIDv7 identifier
-    - auth_key_hash: SHA256 of the derived auth key (NOT the master password)
+    - auth_key_hash: SHA256 of the derived auth key (NOT the recovery phrase)
     - salt: Random 32 bytes used for HKDF derivation
     """
     __tablename__ = "users"

@@ -89,7 +89,7 @@ function deriveKeysFromMnemonic(
 }
 
 /**
- * Derive auth, encryption, and dedup keys from a master password.
+ * Derive auth, encryption, and dedup keys from a recovery phrase.
  *
  * If the password is a valid BIP-39 mnemonic (12 or 24 words), keys are
  * derived from the 512-bit BIP-39 seed via HKDF. Otherwise, the legacy

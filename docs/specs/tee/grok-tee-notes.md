@@ -49,4 +49,4 @@ Cost: ~3–4× higher (enclave vCPU/RAM premium).
 
 Host provider cannot read RAM, disk, or network inside enclave (Nitro/TDX hardware guarantee).
 User can verify enclave measurement (PCR values) on every connection.
-Forward secrecy: each session uses fresh session key derived from master password.
+Forward secrecy: each session uses fresh session key derived from recovery phrase.

@@ -102,7 +102,7 @@ The MCP specification (2025-06-18 / 2025-11-25) provides these server-to-client 
 #### Elicitation (server-initiated user input)
 
 - **How it works**: Server requests structured input from the user via forms.
-- **Auto-memory potential**: Minimal. Could be used for first-time setup (asking for master password), but not for auto-recall/store.
+- **Auto-memory potential**: Minimal. Could be used for first-time setup (asking for recovery phrase), but not for auto-recall/store.
 - **Support**: Cursor (supported), VS Code (supported), others (limited).
 
 #### Notifications
@@ -738,7 +738,7 @@ mcp/
       "args": ["-y", "@totalreclaw/mcp-server"],
       "env": {
         "TOTALRECLAW_SERVER_URL": "http://localhost:8080",
-        "TOTALRECLAW_MASTER_PASSWORD": "your-password-or-mnemonic"
+        "TOTALRECLAW_RECOVERY_PHRASE": "your-recovery-phrase"
       }
     }
   }
@@ -754,7 +754,7 @@ mcp/
       "args": ["-y", "@totalreclaw/mcp-server"],
       "env": {
         "TOTALRECLAW_SERVER_URL": "http://localhost:8080",
-        "TOTALRECLAW_MASTER_PASSWORD": "your-password-or-mnemonic"
+        "TOTALRECLAW_RECOVERY_PHRASE": "your-recovery-phrase"
       }
     }
   }
@@ -770,7 +770,7 @@ mcp/
       "args": ["-y", "@totalreclaw/mcp-server"],
       "env": {
         "TOTALRECLAW_SERVER_URL": "http://localhost:8080",
-        "TOTALRECLAW_MASTER_PASSWORD": "your-password-or-mnemonic"
+        "TOTALRECLAW_RECOVERY_PHRASE": "your-recovery-phrase"
       }
     }
   }

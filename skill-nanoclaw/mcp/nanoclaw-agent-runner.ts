@@ -193,7 +193,7 @@ function createPreCompactHook(assistantName?: string): HookCallback {
 // Secrets to strip from Bash tool subprocess environments.
 // These are needed by claude-code for API auth but should never
 // be visible to commands Kit runs.
-const SECRET_ENV_VARS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'TOTALRECLAW_MASTER_PASSWORD'];
+const SECRET_ENV_VARS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'TOTALRECLAW_RECOVERY_PHRASE'];
 
 function createSanitizeBashHook(): HookCallback {
   return async (input, _toolUseId, _context) => {
@@ -461,7 +461,7 @@ async function runQuery(
           args: ['@totalreclaw/mcp-server'],
           env: {
             TOTALRECLAW_SERVER_URL: process.env.TOTALRECLAW_SERVER_URL || 'http://totalreclaw-server:8080',
-            TOTALRECLAW_MASTER_PASSWORD: sdkEnv.TOTALRECLAW_MASTER_PASSWORD || '',
+            TOTALRECLAW_RECOVERY_PHRASE: sdkEnv.TOTALRECLAW_RECOVERY_PHRASE || '',
             TOTALRECLAW_NAMESPACE: containerInput.groupFolder,
             TOTALRECLAW_CREDENTIALS_PATH: '/workspace/.totalreclaw/credentials.json',
           },

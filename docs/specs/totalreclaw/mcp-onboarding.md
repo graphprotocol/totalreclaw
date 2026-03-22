@@ -117,14 +117,14 @@ The setup command derives keys from the mnemonic and stores derived credentials 
 }
 ```
 
-The mnemonic is shown once and never stored on disk. This matches the skill's behavior: the `credentials.json` contains the userId and salt needed to re-derive keys at runtime, but requires the mnemonic (via env var `TOTALRECLAW_MASTER_PASSWORD`) to actually derive the encryption key.
+The mnemonic is shown once and never stored on disk. This matches the skill's behavior: the `credentials.json` contains the userId and salt needed to re-derive keys at runtime, but requires the mnemonic (via env var `TOTALRECLAW_RECOVERY_PHRASE`) to actually derive the encryption key.
 
 ### 2.4 Runtime Key Derivation
 
 At MCP server startup:
 
 1. Read `credentials.json` for userId and salt.
-2. Read `TOTALRECLAW_MASTER_PASSWORD` env var for the mnemonic.
+2. Read `TOTALRECLAW_RECOVERY_PHRASE` env var for the mnemonic.
 3. Derive keys: `deriveKeys(mnemonic)` produces authKey, encryptionKey, dedupKey, salt.
 4. Verify: derived salt matches stored salt (ensures correct mnemonic).
 5. If no env var and no credentials file: fail with clear error message.
@@ -140,7 +140,7 @@ For users who prefer not to run a setup command, the existing env-var-only path 
       "command": "npx",
       "args": ["-y", "@totalreclaw/mcp-server"],
       "env": {
-        "TOTALRECLAW_MASTER_PASSWORD": "abandon badge cake dance ...",
+        "TOTALRECLAW_RECOVERY_PHRASE": "abandon badge cake dance ...",
         "TOTALRECLAW_SERVER_URL": "https://relay.totalreclaw.com"
       }
     }
@@ -363,7 +363,7 @@ Step 2: Setup (one-time)
 
 Step 3: Configure MCP client
   Copy the printed config into claude_desktop_config.json (or equivalent).
-  Set TOTALRECLAW_MASTER_PASSWORD to the recovery phrase.
+  Set TOTALRECLAW_RECOVERY_PHRASE to the recovery phrase.
 
 Step 4: First conversation
   -> Claude Desktop starts MCP server
@@ -595,7 +595,7 @@ If the user ran `setup` and configured their MCP client correctly:
 
 If the user added the MCP server to their config without running setup:
 
-1. MCP server starts with no `TOTALRECLAW_MASTER_PASSWORD` and no `credentials.json`.
+1. MCP server starts with no `TOTALRECLAW_RECOVERY_PHRASE` and no `credentials.json`.
 2. First tool call returns:
 
 ```json
@@ -611,7 +611,7 @@ If the user added the MCP server to their config without running setup:
 
 ### 9.3 Partial Config (Password but No Credentials File)
 
-If `TOTALRECLAW_MASTER_PASSWORD` is set but no `credentials.json` exists, the MCP server auto-registers (current behavior in `mcp/src/index.ts` lines 68-76). This is the zero-friction path for users who put their mnemonic directly in the env var.
+If `TOTALRECLAW_RECOVERY_PHRASE` is set but no `credentials.json` exists, the MCP server auto-registers (current behavior in `mcp/src/index.ts` lines 68-76). This is the zero-friction path for users who put their mnemonic directly in the env var.
 
 ---
 
@@ -631,7 +631,7 @@ If `TOTALRECLAW_MASTER_PASSWORD` is set but no `credentials.json` exists, the MC
 
 ## 11. Summary of Recommendations
 
-1. **Seed management**: Setup CLI command (`npx @totalreclaw/mcp-server setup`) for first-time config. Mnemonic in `TOTALRECLAW_MASTER_PASSWORD` env var at runtime. `credentials.json` stores only userId + salt.
+1. **Seed management**: Setup CLI command (`npx @totalreclaw/mcp-server setup`) for first-time config. Mnemonic in `TOTALRECLAW_RECOVERY_PHRASE` env var at runtime. `credentials.json` stores only userId + salt.
 
 2. **Payment flow**: Two new MCP tools (`totalreclaw_status`, `totalreclaw_upgrade`). Quota errors include upgrade URLs. The host agent relays messages to the user.
 
