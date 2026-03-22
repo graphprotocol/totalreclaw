@@ -51,7 +51,7 @@ The wizard generates your recovery phrase, registers you, and prints a config sn
 
 ### 🤖 NanoClaw
 
-NanoClaw agents get TotalReclaw memory automatically. Set `TOTALRECLAW_MASTER_PASSWORD` in your deployment config — the agent-runner spawns the MCP server as a background process. See the [NanoClaw README](skill-nanoclaw/README.md).
+NanoClaw agents get TotalReclaw memory automatically. Set `TOTALRECLAW_RECOVERY_PHRASE` in your deployment config — the agent-runner spawns the MCP server as a background process. See the [NanoClaw README](skill-nanoclaw/README.md).
 
 ## How It Works
 
