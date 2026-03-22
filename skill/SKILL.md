@@ -353,8 +353,8 @@ Restart the gateway, then confirm the plugin loaded by checking that `totalrecla
 ### Step 6: Explain the free tier
 
 After setup completes, inform the user about the free tier:
-> "You're on TotalReclaw's free tier — 250 memory writes per month, unlimited reads and searches.
-> I'll let you know if you're approaching the limit. For unlimited writes, visit
+> "You're on TotalReclaw's free tier — 500 memories per month, unlimited reads and searches.
+> I'll let you know if you're approaching the limit. For unlimited memories, visit
 > https://totalreclaw.xyz/pricing"
 
 The agent proactively warns when quota usage exceeds 80%. If the limit is reached, new writes are rejected but all existing memories remain searchable.
@@ -389,7 +389,7 @@ If you need to store a memory, use the `totalreclaw_remember` tool. If you need 
 
 ### Billing Awareness
 
-TotalReclaw has a free tier (250 writes/month, unlimited reads). The plugin monitors quota usage automatically:
+TotalReclaw has a free tier (500 memories/month, unlimited reads). The plugin monitors quota usage automatically:
 - If usage exceeds 80%, a warning is injected into your context at conversation start
 - If a write fails with quota exceeded (403), inform the user and suggest visiting https://totalreclaw.xyz/pricing
 - Use `totalreclaw_status` when the user asks about their subscription, quota, or billing

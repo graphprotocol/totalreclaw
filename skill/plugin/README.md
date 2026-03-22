@@ -76,10 +76,10 @@ Most of the time you won't use these directly -- the automatic hooks handle memo
 
 ## Free Tier & Pricing
 
-| Tier | Writes | Reads | Price |
-|------|--------|-------|-------|
-| **Free** | 250/month | Unlimited | $0 |
-| **Pro** | 10,000/month | Unlimited | $5/month |
+| Tier | Memories | Reads | Storage | Price |
+|------|----------|-------|---------|-------|
+| **Free** | 500/month | Unlimited | Testnet (trial) | $0 |
+| **Pro** | Unlimited | Unlimited | Permanent on-chain (Gnosis) | $5/month |
 
 Pay with card via Stripe. Counter resets monthly.
 

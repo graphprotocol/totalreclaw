@@ -130,10 +130,10 @@ Both options encrypt your data identically on your device — the difference is 
 
 ## Free Tier & Upgrading
 
-| Tier | Writes | Reads | Key Features | Price |
-|------|--------|-------|--------------|-------|
-| **Free** | 250/month | Unlimited | Cosine dedup, auto-extract every 3 turns | $0 |
-| **Pro** | 10,000/month | Unlimited | + LLM-guided dedup | $2-5/month |
+| Tier | Memories | Reads | Storage | Key Features | Price |
+|------|----------|-------|---------|--------------|-------|
+| **Free** | 500/month | Unlimited | Testnet (trial) | Cosine dedup, auto-extract every 3 turns | $0 |
+| **Pro** | Unlimited | Unlimited | Permanent on-chain (Gnosis) | + LLM-guided dedup | $5/month |
 
 - Counter resets at the start of each calendar month
 - Pay with card (Stripe)
@@ -201,8 +201,7 @@ TotalReclaw uses two complementary layers to prevent duplicate memories:
 
 ## Known Limitations (Beta)
 
-- Free tier limit (250 writes/month) and Pro pricing ($2-5/month) are not finalized
-- MCP agents rely on explicit tool use rather than automatic memory hooks
+- MCP agents rely on explicit tool use rather than automatic memory hooks (by design)
 - Beta runs on Gnosis mainnet -- expect occasional downtime
 - The managed service (on-chain storage) is the default. Set `TOTALRECLAW_SELF_HOSTED=true` and provide your own `TOTALRECLAW_SERVER_URL` for self-hosted mode
 
@@ -215,7 +214,7 @@ TotalReclaw uses two complementary layers to prevent duplicate memories:
 - **MCP agents:** The agent has a `status` tool that shows your tier, usage, and limits
 
 **What happens at the quota limit:**
-- Free tier: 250 writes/month, unlimited reads
+- Free tier: 500 memories/month, unlimited reads
 - When you hit the limit, your agent will tell you and provide an upgrade link
 - After upgrading via Stripe, writes resume immediately
 

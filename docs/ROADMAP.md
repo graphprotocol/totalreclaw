@@ -233,17 +233,17 @@ Self-hosted mode uses the same E2EE architecture but stores encrypted facts on-c
 | **Fiat payments** | Stripe Checkout | Agent-generated URL, card/Apple Pay/Google Pay |
 | **Crypto payments** | ~~Coinbase Commerce~~ **BLOCKED** | Coinbase Commerce sunset March 31, 2026. Replacement (Coinbase Business) is US/Singapore only -- TotalReclaw entity is in Portugal. Need alternative provider (NOWPayments, BTCPay Server) or wait for EU expansion. **Does not block launch -- Stripe (fiat) is sufficient.** |
 | **Auth** | Wallet signature | No API keys — seed-derived key signs every request |
-| **Free tier** | Yes (threshold TBD) | Users experience value before paying |
-| **Subscription** | $2-5/month (TBD) | Profitable on Gnosis at all scales (100-10K users) |
+| **Free tier** | 500 memories/month | Users experience value before paying |
+| **Subscription** | $5/month (unlimited) | Profitable on Gnosis at all scales (100-10K users) |
 | **Indexing** | Subgraph on The Graph Network | Existing code, zero changes. GRT indexing rewards incentivize indexers |
 
 ### Economics (Power Users: 50 facts/day)
 
-| Scale | Gas cost/mo | Query fees/mo | Revenue @ $2/mo | Net |
+| Scale | Gas cost/mo | Query fees/mo | Revenue @ $5/mo | Net |
 |-------|:---:|:---:|:---:|:---:|
-| 100 users | $114 | $1 | $200 | +$85 |
-| 1K users | $1,140 | $28 | $2,000 | +$832 |
-| 10K users | $11,400 | $298 | $20,000 | +$8,302 |
+| 100 users | $114 | $1 | $500 | +$385 |
+| 1K users | $1,140 | $28 | $5,000 | +$3,832 |
+| 10K users | $11,400 | $298 | $50,000 | +$38,302 |
 
 ### What's Built (Code Complete, Deployed to Chiado Testnet)
 

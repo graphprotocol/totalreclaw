@@ -52,15 +52,13 @@ Last updated: 2026-03-03
 
 ### Cost Projections (Power Users: 50 facts/day)
 
-| Scenario | Write cost/mo | Query fees/mo | Total cost/mo | Revenue @ $2/mo | Net |
+| Scenario | Write cost/mo | Query fees/mo | Total cost/mo | Revenue @ $5/mo | Net |
 |----------|:---:|:---:|:---:|:---:|:---:|
-| 100 power users | $114 | $1 | $115 | $200 | **+$85** |
-| 1K power users | $1,140 | $28 | $1,168 | $2,000 | **+$832** |
-| 10K power users | $11,400 | $298 | $11,698 | $20,000 | **+$8,302** |
+| 100 power users | $114 | $1 | $115 | $500 | **+$385** |
+| 1K power users | $1,140 | $28 | $1,168 | $5,000 | **+$3,832** |
+| 10K power users | $11,400 | $298 | $11,698 | $50,000 | **+$38,302** |
 
-At $5/mo subscription, margins improve to +$385 / +$3,832 / +$38,302.
-
-**On Base, the same scenarios lose $1,300 / $1,000 / $10,000 per month at $2/mo. Gnosis is the only chain that makes this economically viable.**
+**On Base, the same scenarios would lose money at scale. Gnosis is the only chain that makes this economically viable.**
 
 ### Indexer Economics
 
@@ -89,10 +87,10 @@ Query fees alone are small ($1-$298/mo). Indexers are primarily incentivized by 
 
 | Tier | Cost | Limits | Authorization |
 |------|------|--------|---------------|
-| **Free** | $0 | TBD writes/month, rate-limited reads | Relay checks quota by wallet address |
-| **Pro** | $2-5/month (TBD) | Higher/unlimited write cap, priority reads | Relay checks active subscription |
+| **Free** | $0 | 500 memories/month, rate-limited reads | Relay checks quota by wallet address |
+| **Pro** | $5/month | Unlimited memories, priority reads | Relay checks active subscription |
 
-Free tier threshold TBD — to be tuned after observing real usage patterns. The architecture supports any threshold as a server-side config value.
+Free tier: 500 memories/month on Base Sepolia (testnet, trial). Pro tier: unlimited memories on Gnosis mainnet (permanent on-chain storage).
 
 ---
 

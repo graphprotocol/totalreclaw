@@ -7,7 +7,7 @@
 - Stripe and Coinbase Commerce billing integration
 - On-chain storage via Gnosis Chain with Pimlico gas sponsorship
 - 78/78 E2E integration test assertions passing
-- Free tier: 250 writes/month, unlimited reads
+- Free tier: 500 memories/month, unlimited reads
 
 ## v0.1.0 (February 2026) -- PoC
 - Initial proof of concept

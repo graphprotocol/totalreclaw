@@ -86,10 +86,10 @@ TotalReclaw is different: your data is encrypted before it leaves your device. T
 
 ## Free Tier & Pricing
 
-| Tier | Writes | Reads | Price |
-|------|--------|-------|-------|
-| **Free** | 250/month | Unlimited | $0 |
-| **Pro** | 10,000/month | Unlimited | $5/month |
+| Tier | Memories | Reads | Storage | Price |
+|------|----------|-------|---------|-------|
+| **Free** | 500/month | Unlimited | Testnet (trial) | $0 |
+| **Pro** | Unlimited | Unlimited | Permanent on-chain (Gnosis) | $5/month |
 
 Counter resets monthly. Pay with card via Stripe.
 

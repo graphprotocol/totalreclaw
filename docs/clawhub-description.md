@@ -14,7 +14,7 @@ TotalReclaw gives your AI agent persistent, encrypted memory that works across s
 - **Automatic** -- In OpenClaw, memory extraction and recall happen automatically via lifecycle hooks. No manual commands needed.
 - **Cross-device** -- Same 12-word seed phrase recovers all your memories on any device.
 - **98.1% recall** -- Blind-index search with BM25 + cosine + RRF fusion reranking delivers near-perfect retrieval.
-- **Free tier** -- 250 writes/month, unlimited reads. Pro at $5/month.
+- **Free tier** -- 500 memories/month, unlimited reads. Pro at $5/month (unlimited, permanent on-chain).
 
 **How it works:** Install, set a password, done. Your agent automatically extracts facts, preferences, and decisions from conversations, encrypts them, and stores them. At the start of each new conversation, relevant memories are recalled and injected into context.
 

@@ -125,7 +125,7 @@ Hosted on your own Graph Node (or use The Graph’s decentralized network).
 ## 6. Cost & Billing Reality
 
 - Per typical OpenClaw user: 5–15 writes/day → $0.0002 – $0.0007/day.
-- 10,000 active users: ~$2–7/day (easily covered by a $3–5/month “Decentralized  Memory” tier or absorbed as marketing).
+- 10,000 active users: ~$2-7/day (easily covered by the $5/month Pro tier or absorbed as marketing).
 - You can add an optional “pay-your-own-gas” mode for ultra-heavy users.
 
 

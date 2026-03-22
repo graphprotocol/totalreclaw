@@ -184,7 +184,7 @@ If you want to view your derived wallet address, check the plugin logs after the
 
 TotalReclaw includes a free tier so you can start using it immediately:
 
-- **Your first 250 memory writes per month are free** (beta; this limit may be adjusted).
+- **Your first 500 memories per month are free.**
 - **Reading and searching your memories is always free and never metered.** You can always access your own data, even after exhausting the write quota.
 - All transaction fees (gas) are covered by the TotalReclaw paymaster (Pimlico) on Gnosis Chain. You pay nothing.
 - No credit card, no crypto, and no signup beyond your recovery phrase are required.
@@ -192,11 +192,11 @@ TotalReclaw includes a free tier so you can start using it immediately:
 
 When you approach the free tier limit, the agent will proactively tell you. For example:
 
-> "You've used 225/250 free writes this month. Consider upgrading to Pro for unlimited storage."
+> "You've used 425/500 free memories this month. Consider upgrading to Pro for unlimited storage."
 
 If you reach the limit, new memory writes will be rejected with a `quota_exceeded` error, but you can still search and recall all your existing memories. You can either wait for the monthly reset or upgrade to Pro (see [Upgrading to Pro Tier](#9-upgrading-to-pro-tier)).
 
-> **Note:** If you upgrade to Pro and later cancel, your write counter is preserved from before the upgrade. For example, if you used 250 free writes, upgraded, wrote more, and then cancelled, the next write after cancellation would still be blocked until the monthly reset.
+> **Note:** If you upgrade to Pro and later cancel, your write counter is preserved from before the upgrade. For example, if you used 500 free memories, upgraded, wrote more, and then cancelled, the next write after cancellation would still be blocked until the monthly reset.
 
 ---
 
@@ -427,12 +427,10 @@ Follow this checklist step by step to verify that TotalReclaw is working correct
 
 ## 9. Upgrading to Pro Tier
 
-When your free tier write limit (250 writes/month, beta default) is reached, the agent will prompt you to upgrade.
+When your free tier limit (500 memories/month) is reached, the agent will prompt you to upgrade.
 
 **What you will see:**
-> "You've used 250/250 free writes this month. Upgrade to Pro for unlimited storage."
-
-> **Note:** The Pro tier price ($2-5/month) is beta pricing and not yet finalized.
+> "You've used 500/500 free memories this month. Upgrade to Pro for unlimited storage."
 
 ### Two payment options:
 
@@ -810,8 +808,8 @@ OPENAI_API_KEY="sk-your-key-here"
 
 This is a beta release. The following items are known limitations that will be addressed in future updates:
 
-- **Free tier threshold:** The default limit of 250 writes/month is provisional and may be adjusted based on usage data. The limit is a server-side configuration value.
-- **Subscription pricing:** The Pro tier price ($2-5/month) is beta pricing and not yet finalized.
+- **Free tier threshold:** 500 memories/month. The limit is a server-side configuration value.
+- **Subscription pricing:** Pro tier is $5/month (unlimited memories, permanent on-chain storage on Gnosis).
 - **Billing tools:** The upgrade flow (`totalreclaw_status`, `totalreclaw_upgrade`) may not be fully wired in all environments. If the agent cannot generate a checkout URL, contact the TotalReclaw team directly.
 - **Auto-extraction timing (OpenClaw only):** The `TOTALRECLAW_EXTRACT_EVERY_TURNS` environment variable controls extraction frequency. The plugin fires extraction on the `agent_end` hook every N turns (default: 3). The skill config also accepts `autoExtractEveryTurns` via the `TOTALRECLAW_EXTRACT_EVERY_TURNS` env var.
 - **MCP server has no auto-memory:** The MCP server does not have lifecycle hooks. It only responds to explicit tool calls. The host agent (Claude Desktop, Cursor) must call `totalreclaw_remember` and `totalreclaw_recall` explicitly.

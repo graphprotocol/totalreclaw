@@ -388,18 +388,17 @@ Impact on **Extreme user** (most compaction-sensitive):
 
 **Recommendation:** 100 facts/month is well-calibrated for the free tier. It generously covers casual usage while creating clear upgrade signals for regular+ users.
 
-### 8.2 Pro Tier ($2-5/month)
+### 8.2 Pro Tier ($5/month)
 
-| Profile | Facts/month | Gas cost/month | @ $2/mo margin | @ $5/mo margin | Margin % @ $2 | Margin % @ $5 |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| **Regular** | 234 | $0.178 | +$1.82 | +$4.82 | 91.1% | 96.4% |
-| **Power** | 831 | $0.632 | +$1.37 | +$4.37 | 68.4% | 87.4% |
-| **Extreme** | 1,731 | $1.315 | +$0.69 | +$3.69 | 34.3% | 73.7% |
+| Profile | Facts/month | Gas cost/month | @ $5/mo margin | Margin % @ $5 |
+|---|:-:|:-:|:-:|:-:|
+| **Regular** | 234 | $0.178 | +$4.82 | 96.4% |
+| **Power** | 831 | $0.632 | +$4.37 | 87.4% |
+| **Extreme** | 1,731 | $1.315 | +$3.69 | 73.7% |
 
 **Assessment:**
-- **At $2/month:** All profiles are profitable on gas costs alone. Even extreme users generate a positive margin of $0.69. However, this does NOT account for Paymaster service fees, infrastructure costs, or Stripe/Coinbase payment processing fees (~2.9% + $0.30/transaction for Stripe).
 - **At $5/month:** Comfortable margins across all profiles. Even extreme users generate $3.69/month margin, which absorbs Paymaster fees, payment processing, and contributes to infrastructure costs.
-- **Stripe fee impact:** At $2/month, Stripe takes ~$0.36 (2.9% + $0.30), leaving $1.64. At $5/month, Stripe takes ~$0.45, leaving $4.55. Annual billing mitigates this.
+- **Stripe fee impact:** At $5/month, Stripe takes ~$0.45 (2.9% + $0.30), leaving $4.55. Annual billing mitigates this further.
 
 ### 8.3 Break-Even Subscription Price (Gas-Only)
 
@@ -432,11 +431,11 @@ Projecting costs for realistic user cohorts at different growth stages:
 
 ### Cohort Gas Costs
 
-| Paid Users | Regular (60%) | Power (30%) | Extreme (10%) | Total Facts/mo | Total Gas/mo | Revenue @ $2/mo | Revenue @ $5/mo | Net @ $2 | Net @ $5 |
-|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| 100 | 60 | 30 | 10 | 56,370 | $42.84 | $200 | $500 | +$157 | +$457 |
-| 1,000 | 600 | 300 | 100 | 563,700 | $428.41 | $2,000 | $5,000 | +$1,572 | +$4,572 |
-| 10,000 | 6,000 | 3,000 | 1,000 | 5,637,000 | $4,284.12 | $20,000 | $50,000 | +$15,716 | +$45,716 |
+| Paid Users | Regular (60%) | Power (30%) | Extreme (10%) | Total Facts/mo | Total Gas/mo | Revenue @ $5/mo | Net @ $5 |
+|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| 100 | 60 | 30 | 10 | 56,370 | $42.84 | $500 | +$457 |
+| 1,000 | 600 | 300 | 100 | 563,700 | $428.41 | $5,000 | +$4,572 |
+| 10,000 | 6,000 | 3,000 | 1,000 | 5,637,000 | $4,284.12 | $50,000 | +$45,716 |
 
 **Note:** These projections exclude free tier users (who generate gas costs but no revenue). At 100 facts/month free tier with an estimated 5:1 free:paid ratio, free users add:
 
@@ -446,7 +445,7 @@ Projecting costs for realistic user cohorts at different growth stages:
 | 5,000 | 500,000 | $380.00 |
 | 50,000 | 5,000,000 | $3,800.00 |
 
-Even at 50,000 free users, the gas cost ($3,800/month) is manageable -- the revenue from 10,000 paid users ($20,000-$50,000/month) easily covers it.
+Even at 50,000 free users, the gas cost ($3,800/month) is manageable -- the revenue from 10,000 paid users ($50,000/month at $5/mo) easily covers it.
 
 ### Comparison with Billing Spec Projections
 
@@ -514,7 +513,7 @@ Note: LLM extraction uses the agent's own LLM, which is typically on a flat-rate
 
 2. **The free tier (100 facts/month) is well-calibrated.** Casual users (30 facts/month) never hit it. Regular users hit it mid-month, creating natural upgrade pressure.
 
-3. **Pro pricing ($2-5/month) is highly sustainable.** At $2/month, margins are 34-91% on gas alone (before infrastructure/LLM costs). At $5/month, margins are 74-96%.
+3. **Pro pricing ($5/month) is highly sustainable.** Margins are 74-96% on gas alone (before infrastructure/LLM costs).
 
 4. **Gas is the primary variable cost TotalReclaw bears per user.** LLM extraction uses the agent's own LLM (free for flat-rate subscription users). Infrastructure (Graph Node, relay server) is a fixed cost that scales with user count.
 
@@ -527,8 +526,8 @@ Note: LLM extraction uses the agent's own LLM, which is typically on a flat-rate
 **Q1: Is 100 facts/month a reasonable free tier for casual users? Will regular users hit it?**
 Yes. Casual users generate ~30 facts/month (well within the limit). Regular users generate ~234 facts/month and will hit the limit around day 13, creating a natural upgrade moment.
 
-**Q2: Does $2-5/month cover gas costs for power users?**
-Yes, comfortably. Power users cost $0.63/month in gas; extreme users cost $1.32/month. At $2/month, even extreme users are gas-profitable. At $5/month, there is ample margin for infrastructure costs.
+**Q2: Does $5/month cover gas costs for power users?**
+Yes, comfortably. Power users cost $0.63/month in gas; extreme users cost $1.32/month. At $5/month, there is ample margin for infrastructure costs.
 
 **Q3: Should AUTO_EXTRACT_EVERY_TURNS be increased to reduce gas costs?**
 No. Gas cost savings from increasing this parameter are negligible (<$0.50/month even for extreme users). The parameter should be tuned based on fact coverage quality and user-perceived latency instead.
@@ -537,15 +536,14 @@ No. Gas cost savings from increasing this parameter are negligible (<$0.50/month
 No, for gas costs (~5-10% overhead = $0.01-$0.11/month). Yes, for query performance (more blind index rows). Recommendation: implement write-side dedup (D3) for performance reasons, not cost reasons.
 
 **Q5: What is the break-even subscription price at different usage levels?**
-Gas-only break-even: $0.02 (casual) to $1.32 (extreme). Including Stripe fees: $0.33 to $1.71. Including 50% margin for infrastructure: $0.50 to $2.57. A $3/month price point would be sustainably profitable across ALL user profiles with comfortable margin for infrastructure.
+Gas-only break-even: $0.02 (casual) to $1.32 (extreme). Including Stripe fees: $0.33 to $1.71. Including 50% margin for infrastructure: $0.50 to $2.57.
 
-### Recommended Pricing Model
+### Final Pricing Model
 
-| Tier | Price | Fact Limit | Target User | Gas Cost Coverage |
-|---|:-:|:-:|---|---|
-| **Free** | $0 | 100/month | Casual, trial users | ~$0.076/month (covered by paid tier margins) |
-| **Pro** | $3/month | 2,000/month | Regular-Power users | Up to $1.52/month gas budget = 96% of power users |
-| **Unlimited** | $5/month | Unlimited | Extreme users | Full coverage + ample infrastructure margin |
+| Tier | Price | Memory Limit | Storage | Target User | Gas Cost Coverage |
+|---|:-:|:-:|---|---|---|
+| **Free** | $0 | 500/month | Base Sepolia (testnet, trial) | Trial users | Negligible (testnet) |
+| **Pro** | $5/month | Unlimited | Gnosis mainnet (permanent) | All paying users | Full coverage + ample infrastructure margin |
 
 ---
 
