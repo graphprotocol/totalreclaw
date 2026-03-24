@@ -6,7 +6,7 @@ export interface NormalizedFact {
   /** The atomic fact text (max 512 chars) */
   text: string;
   /** Fact type matching TotalReclaw's taxonomy */
-  type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal';
+  type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary';
   /** Importance score 1-10 */
   importance: number;
   /** Original source system */

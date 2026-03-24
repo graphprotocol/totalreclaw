@@ -422,7 +422,7 @@ export class FactExtractor {
       errors.push(`${prefix}.factText must be a non-empty string`);
     }
 
-    const validTypes: ExtractedFact['type'][] = ['fact', 'preference', 'decision', 'episodic', 'goal'];
+    const validTypes: ExtractedFact['type'][] = ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'];
     if (!validTypes.includes(rawFact.type)) {
       errors.push(`${prefix}.type must be one of: ${validTypes.join(', ')}`);
     }

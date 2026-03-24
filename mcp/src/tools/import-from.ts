@@ -20,7 +20,7 @@ export interface ImportFromInput {
 
 export interface NormalizedFact {
   text: string;
-  type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal';
+  type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary';
   importance: number;
   source: ImportSource;
   sourceId?: string;

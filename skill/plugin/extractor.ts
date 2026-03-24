@@ -15,7 +15,7 @@ export type ExtractionAction = 'ADD' | 'UPDATE' | 'DELETE' | 'NOOP';
 
 export interface ExtractedFact {
   text: string;
-  type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal';
+  type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary';
   importance: number; // 1-10
   action: ExtractionAction;
   existingFactId?: string;
@@ -37,28 +37,36 @@ interface ConversationMessage {
 // Extraction Prompt
 // ---------------------------------------------------------------------------
 
-const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction engine. Analyze the conversation and extract atomic facts worth remembering long-term.
+const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction engine. Analyze the conversation and extract valuable long-term memories.
 
 Rules:
-1. Each fact must be a single, atomic piece of information
-2. Focus on user-specific information: preferences, decisions, facts about them, their goals
-3. Skip generic knowledge, greetings, and small talk
-4. Skip information that is only relevant to the current conversation
-5. Score importance 1-10 (7+ = worth storing, below 7 = skip)
-6. Only extract facts with importance >= 6
+1. Each memory must be a single, self-contained piece of information
+2. Focus on user-specific information that would be useful in future conversations
+3. Skip generic knowledge, greetings, small talk, and ephemeral task coordination
+4. Score importance 1-10 (6+ = worth storing)
+5. Only extract memories with importance >= 6
 
 Types:
-- fact: Objective information about the user
-- preference: Likes, dislikes, or preferences
-- decision: Choices the user has made
-- episodic: Events or experiences
-- goal: Objectives or targets
+- fact: Objective information about the user (name, location, job, relationships)
+- preference: Likes, dislikes, or preferences ("prefers dark mode", "allergic to peanuts")
+- decision: Choices WITH reasoning ("chose PostgreSQL because data is relational and needs ACID")
+- episodic: Notable events or experiences ("deployed v1.0 to production on March 15")
+- goal: Objectives, targets, or plans ("wants to launch public beta by end of Q1")
+- context: Active project/task context ("working on TotalReclaw v1.2, staging on Base Sepolia")
+- summary: Key outcome or conclusion from a discussion ("agreed to use phased rollout for migration")
+
+Extraction guidance:
+- For decisions: ALWAYS include the reasoning. "Chose X" is weak. "Chose X because Y" is strong.
+- For context: Capture what the user is actively working on, including versions, environments, and status.
+- For summaries: Only extract when a conversation reaches a clear conclusion or agreement.
+- For facts: Prefer specific over vague. "Lives in Lisbon" beats "lives in Europe".
+- Decisions and context should be importance >= 7 (they are high-value for future conversations).
 
 Actions (compare against existing memories if provided):
-- ADD: New fact, no conflict with existing memories
-- UPDATE: Modifies or refines an existing memory (provide existingFactId)
-- DELETE: Contradicts an existing memory — the old one is now wrong (provide existingFactId)
-- NOOP: Already captured in existing memories or not worth storing
+- ADD: New memory, no conflict with existing
+- UPDATE: Refines or corrects an existing memory (provide existingFactId)
+- DELETE: Contradicts an existing memory -- the old one is now wrong (provide existingFactId)
+- NOOP: Already captured or not worth storing
 
 Return a JSON array (no markdown, no code fences):
 [{"text": "...", "type": "...", "importance": N, "action": "ADD|UPDATE|DELETE|NOOP", "existingFactId": "..."}, ...]
@@ -158,7 +166,7 @@ function parseFactsResponse(response: string): ExtractedFact[] {
           : 'ADD'; // Default to ADD for backward compatibility
         return {
           text: String(fact.text).slice(0, 512),
-          type: (['fact', 'preference', 'decision', 'episodic', 'goal'].includes(String(fact.type))
+          type: (['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'].includes(String(fact.type))
             ? String(fact.type)
             : 'fact') as ExtractedFact['type'],
           importance: Math.max(1, Math.min(10, Number(fact.importance) || 5)),

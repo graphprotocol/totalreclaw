@@ -61,7 +61,7 @@ export interface ExtractedFact {
   /** The fact text (atomic, concise) */
   factText: string;
   /** Type of fact */
-  type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal';
+  type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary';
   /** Importance score (1-10) */
   importance: number;
   /** Confidence (0-1) */

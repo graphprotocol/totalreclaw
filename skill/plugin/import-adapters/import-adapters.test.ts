@@ -453,7 +453,7 @@ async function runTests(): Promise<void> {
 
   // --- type normalization ---
   {
-    const validTypes = ['fact', 'preference', 'decision', 'episodic', 'goal'] as const;
+    const validTypes = ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'] as const;
 
     for (const t of validTypes) {
       const result = testAdapter.testValidateFact({ text: 'test fact', type: t });

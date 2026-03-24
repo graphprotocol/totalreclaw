@@ -57,7 +57,7 @@ function parseFactsResponse(response: string): ExtractedFact[] {
           : 'ADD';
         return {
           text: String(fact.text).slice(0, 512),
-          type: (['fact', 'preference', 'decision', 'episodic', 'goal'].includes(String(fact.type))
+          type: (['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'].includes(String(fact.type))
             ? String(fact.type)
             : 'fact') as ExtractedFact['type'],
           importance: Math.max(1, Math.min(10, Number(fact.importance) || 5)),

@@ -35,7 +35,7 @@ Store a new fact or preference in long-term memory.
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | text | string | Yes | The fact or information to remember |
-| type | string | No | Type of memory: `fact`, `preference`, `decision`, `episodic`, or `goal`. Default: `fact` |
+| type | string | No | Type of memory: `fact`, `preference`, `decision`, `episodic`, `goal`, `context`, or `summary`. Default: `fact` |
 | importance | integer | No | Importance score 1-10. Default: auto-detected by LLM |
 
 **Example:**
@@ -371,11 +371,29 @@ TotalReclaw is an end-to-end encrypted memory vault for AI agents. Think of it a
 
 3. **Universal Compatibility** - Works across any MCP-compatible AI agent, not just OpenClaw.
 
-4. **Intelligent Extraction** - Automatically extracts atomic facts, preferences, decisions, and goals from conversations.
+4. **Intelligent Extraction** - Automatically extracts facts, preferences, decisions with reasoning, project context, conversation summaries, and goals from conversations.
 
 5. **Smart Decay** - Important memories persist; trivial ones fade over time using a decay algorithm.
 
 6. **Graph-Based** - Maintains entity relationships for multi-hop reasoning.
+
+---
+
+## Memory Types
+
+TotalReclaw extracts and stores seven types of memories:
+
+| Type | Description | Example |
+|------|-------------|---------|
+| Fact | Objective information about you | "Lives in Lisbon, Portugal" |
+| Preference | Your likes, dislikes, choices | "Prefers dark mode in all applications" |
+| Decision | Choices you made WITH reasoning | "Chose PostgreSQL because data is relational and needs ACID" |
+| Episodic | Notable events or experiences | "Deployed v1.0 to production on March 15" |
+| Goal | Your objectives or plans | "Wants to launch public beta by end of Q1" |
+| Context | Active project/task context | "Working on TotalReclaw v1.2, staging on Base Sepolia" |
+| Summary | Key outcomes from discussions | "Agreed to use phased rollout for mainnet migration" |
+
+Decisions and context are treated as high-value memories (importance >= 7) because they provide the most useful information for future conversations.
 
 ---
 
@@ -465,7 +483,7 @@ Always run with `dry_run=true` first to preview which memories will be merged, t
 2. **Importance Scoring**:
    - 1-3: Trivial, unlikely to matter (small talk, pleasantries)
    - 4-6: Useful context (tool preferences, working style)
-   - 7-8: Important (key decisions, major preferences)
+   - 7-8: Important (key decisions with reasoning, project context, major preferences)
    - 9-10: Critical (core values, non-negotiables, safety info)
 
 3. **Search Before Storing**: Always recall similar memories before storing new ones to avoid duplicates.
@@ -502,34 +520,42 @@ You are a memory extraction engine for an AI assistant. Your job is to analyze c
 
 ## Extraction Guidelines
 
-1. **Atomicity**: Each fact should be a single, atomic piece of information
-   - GOOD: "User prefers TypeScript over JavaScript for new projects"
+1. **Atomicity**: Each fact should be a single, self-contained piece of information
+   - GOOD: "User chose PostgreSQL because the data model is relational and needs ACID"
    - BAD: "User likes TypeScript, uses VS Code, and works at Google"
 
 2. **Types**:
    - **fact**: Objective information about the user/world
    - **preference**: User's likes, dislikes, or preferences
-   - **decision**: Choices the user has made
+   - **decision**: Choices WITH reasoning ("chose X because Y")
    - **episodic**: Event-based memories (what happened when)
    - **goal**: User's objectives or targets
+   - **context**: Active project/task context (what the user is working on, versions, environments)
+   - **summary**: Key outcome or conclusion from a discussion
 
 3. **Importance Scoring (1-10)**:
    - 1-3: Trivial, unlikely to matter (small talk, pleasantries)
    - 4-6: Useful context (tool preferences, working style)
-   - 7-8: Important (key decisions, major preferences)
+   - 7-8: Important (key decisions with reasoning, project context, major preferences)
    - 9-10: Critical (core values, non-negotiables, safety info)
 
 4. **Confidence (0-1)**:
    - How certain are you that this is accurate and worth storing?
 
-5. **Entities**: Extract named entities (people, projects, tools, concepts)
+5. **Extraction quality cues**:
+   - Decisions: ALWAYS include reasoning. "Chose X" alone is low value.
+   - Context: Include version numbers, environments, status ("v1.2", "staging", "private beta")
+   - Summaries: Only when a conversation reaches a clear conclusion or agreement
+   - Facts: Prefer specific over vague
+
+6. **Entities**: Extract named entities (people, projects, tools, concepts)
    - Use stable IDs: hash of name+type (e.g., "typescript-tool")
    - Types: person, project, tool, preference, concept, location, etc.
 
-6. **Relations**: Extract relationships between entities
+7. **Relations**: Extract relationships between entities
    - Common predicates: prefers, uses, works_on, decided_to_use, dislikes, etc.
 
-7. **Actions (Mem0 pattern)**:
+8. **Actions (Mem0 pattern)**:
    - **ADD**: New fact, no conflict with existing memories
    - **UPDATE**: Modifies or refines an existing fact (provide existingFactId)
    - **DELETE**: Contradicts and replaces an existing fact
@@ -551,7 +577,7 @@ You are reviewing the last 20 turns of conversation before they are compacted. E
 
 ## Instructions:
 1. Review each turn carefully for extractable information
-2. Extract atomic facts, preferences, decisions, episodic memories, and goals
+2. Extract facts, preferences, decisions (with reasoning), episodic memories, goals, project context, and conversation summaries
 3. For each fact, determine if it's NEW (ADD), modifies existing (UPDATE), contradicts existing (DELETE), or is redundant (NOOP)
 4. Score importance based on long-term relevance
 5. Extract entities and relations
@@ -562,7 +588,7 @@ Return a JSON object with:
   "facts": [
     {
       "factText": "string (max 512 chars)",
-      "type": "fact|preference|decision|episodic|goal",
+      "type": "fact|preference|decision|episodic|goal|context|summary",
       "importance": 1-10,
       "confidence": 0-1,
       "action": "ADD|UPDATE|DELETE|NOOP",

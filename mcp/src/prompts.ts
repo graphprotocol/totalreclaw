@@ -64,7 +64,7 @@ Each fact needs:
   - 5-6: Moderate facts (schedule, minor preferences)
   - 3-4: Low priority (casual mentions)
   - 1-2: Ephemeral (likely to change)
-- type: Category (optional) -- "fact", "preference", "decision", "episodic", "goal"
+- type: Category (optional) -- "fact", "preference", "decision", "episodic", "goal", "context", "summary"
 
 The vault handles deduplication automatically. If a similar fact exists, it will be updated rather than duplicated.`;
 

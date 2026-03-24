@@ -147,6 +147,9 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | Pre-compaction flush | Yes | -- | Yes (hook) | |
 | Pre-reset flush | Yes | -- | -- | OpenClaw only |
 | CLAUDE.md sync | -- | -- | Yes | NanoClaw syncs high-importance facts |
+| **Extraction** | | | | |
+| Expanded memory types (7 categories) | Yes | Yes (via prompt) | Yes | fact, preference, decision, episodic, goal, context, summary |
+| Decision reasoning extraction | Yes | Yes (via prompt) | Yes | Extraction prompts require "chose X because Y" |
 | **Dedup** | | | | |
 | Content fingerprint (exact) | Yes | Yes | Yes | Server-side HMAC-SHA256 |
 | Within-batch semantic dedup | Yes | -- | -- | Cosine >= 0.9, during extraction |
@@ -251,6 +254,7 @@ Every new feature implementation MUST include:
 - **Server-blind**: Server NEVER sees plaintext
 - **Embedding model**: Qwen3-Embedding-0.6B (1024d, 100+ languages, last-token pooling)
 - **Extraction cap**: Max 15 facts per extraction cycle, unified 3-turn interval
+- **Memory types**: 7 categories -- fact, preference, decision (with reasoning), episodic, goal, context, summary
 
 ---
 

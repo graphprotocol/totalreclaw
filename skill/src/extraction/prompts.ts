@@ -25,7 +25,7 @@ export const EXTRACTION_RESPONSE_SCHEMA = {
           factText: { type: 'string', maxLength: 512 },
           type: {
             type: 'string',
-            enum: ['fact', 'preference', 'decision', 'episodic', 'goal']
+            enum: ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary']
           },
           importance: { type: 'integer', minimum: 1, maximum: 10 },
           confidence: { type: 'number', minimum: 0, maximum: 1 },
@@ -103,34 +103,42 @@ const BASE_SYSTEM_PROMPT = `You are a memory extraction engine for an AI assista
 
 ## Extraction Guidelines
 
-1. **Atomicity**: Each fact should be a single, atomic piece of information
-   - GOOD: "User prefers TypeScript over JavaScript for new projects"
+1. **Atomicity**: Each fact should be a single, self-contained piece of information
+   - GOOD: "User chose PostgreSQL because the data model is relational and needs ACID"
    - BAD: "User likes TypeScript, uses VS Code, and works at Google"
 
 2. **Types**:
    - **fact**: Objective information about the user/world
    - **preference**: User's likes, dislikes, or preferences
-   - **decision**: Choices the user has made
+   - **decision**: Choices WITH reasoning ("chose X because Y")
    - **episodic**: Event-based memories (what happened when)
    - **goal**: User's objectives or targets
+   - **context**: Active project/task context (what the user is working on, versions, environments)
+   - **summary**: Key outcome or conclusion from a discussion
 
 3. **Importance Scoring (1-10)**:
    - 1-3: Trivial, unlikely to matter (small talk, pleasantries)
    - 4-6: Useful context (tool preferences, working style)
-   - 7-8: Important (key decisions, major preferences)
+   - 7-8: Important (key decisions with reasoning, project context, major preferences)
    - 9-10: Critical (core values, non-negotiables, safety info)
 
 4. **Confidence (0-1)**:
    - How certain are you that this is accurate and worth storing?
 
-5. **Entities**: Extract named entities (people, projects, tools, concepts)
+5. **Extraction quality cues**:
+   - Decisions: ALWAYS include reasoning. "Chose X" alone is low value.
+   - Context: Include version numbers, environments, status ("v1.2", "staging", "private beta")
+   - Summaries: Only when a conversation reaches a clear conclusion or agreement
+   - Facts: Prefer specific over vague
+
+6. **Entities**: Extract named entities (people, projects, tools, concepts)
    - Use stable IDs: hash of name+type (e.g., "typescript-tool")
    - Types: person, project, tool, preference, concept, location, etc.
 
-6. **Relations**: Extract relationships between entities
+7. **Relations**: Extract relationships between entities
    - Common predicates: prefers, uses, works_on, decided_to_use, dislikes, etc.
 
-7. **Actions (Mem0 pattern)**:
+8. **Actions (Mem0 pattern)**:
    - **ADD**: New fact, no conflict with existing memories
    - **UPDATE**: Modifies or refines an existing fact (provide existingFactId)
    - **DELETE**: Contradicts and replaces an existing fact
@@ -483,7 +491,7 @@ export function validateExtractionResponse(response: unknown): {
       factErrors.push(`facts[${i}].factText must be a non-empty string`);
     }
 
-    const validTypes = ['fact', 'preference', 'decision', 'episodic', 'goal'];
+    const validTypes = ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'];
     if (!validTypes.includes(fact.type as string)) {
       factErrors.push(`facts[${i}].type must be one of: ${validTypes.join(', ')}`);
     }

@@ -44,7 +44,7 @@ export abstract class BaseImportAdapter {
     const text = fact.text.trim().slice(0, 512);
 
     // Normalize type
-    const validTypes = ['fact', 'preference', 'decision', 'episodic', 'goal'] as const;
+    const validTypes = ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'] as const;
     const type = validTypes.includes(fact.type as typeof validTypes[number])
       ? (fact.type as NormalizedFact['type'])
       : 'fact';

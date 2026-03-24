@@ -83,7 +83,7 @@ export async function rememberTool(
   }
 
   // Validate type if provided
-  const validTypes = ['fact', 'preference', 'decision', 'episodic', 'goal'];
+  const validTypes = ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'];
   if (params.type !== undefined && !validTypes.includes(params.type)) {
     return {
       success: false,

@@ -26,7 +26,7 @@ export interface RememberInputSingle {
 export interface BatchFact {
   text: string;
   importance?: number;
-  type?: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal';
+  type?: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary';
 }
 
 export interface RememberInputBatch {
@@ -82,7 +82,7 @@ export const rememberToolDefinition = {
             },
             type: {
               type: 'string',
-              enum: ['fact', 'preference', 'decision', 'episodic', 'goal'],
+              enum: ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'],
               description: 'Category of the fact',
             },
           },
@@ -102,7 +102,7 @@ export const rememberToolDefinition = {
         properties: {
           type: {
             type: 'string',
-            enum: ['fact', 'preference', 'decision', 'episodic', 'goal'],
+            enum: ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'],
           },
           expires_at: {
             type: 'string',

@@ -36,7 +36,7 @@ export async function beforeAgentStart(
       text: r.fact.text,
       score: r.score,
       type: r.fact.metadata.tags?.find(t =>
-        ['fact', 'preference', 'decision', 'episodic', 'goal'].includes(t)
+        ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'].includes(t)
       ) || 'fact',
     }));
 

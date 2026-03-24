@@ -1261,7 +1261,7 @@ const plugin = {
             },
             type: {
               type: 'string',
-              enum: ['fact', 'preference', 'decision', 'episodic', 'goal'],
+              enum: ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'],
               description: 'The kind of memory (default: fact)',
             },
             importance: {

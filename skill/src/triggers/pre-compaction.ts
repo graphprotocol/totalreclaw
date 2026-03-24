@@ -256,7 +256,7 @@ async function getExistingMemories(
     return results.map(r => {
       // Extract type from tags if available
       const typeTag = r.fact.metadata?.tags?.find(t =>
-        ['fact', 'preference', 'decision', 'episodic', 'goal'].includes(t)
+        ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'].includes(t)
       ) as ExtractedFact['type'] | undefined;
       const type: ExtractedFact['type'] = typeTag || 'fact';
 

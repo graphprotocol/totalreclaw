@@ -138,7 +138,7 @@ function getMemoryType(fact: Fact): string {
   // Check tags for type information
   if (fact.metadata?.tags && fact.metadata.tags.length > 0) {
     const typeTag = fact.metadata.tags.find(t =>
-      ['fact', 'preference', 'decision', 'episodic', 'goal'].includes(t)
+      ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'].includes(t)
     );
     if (typeTag) return typeTag;
   }
