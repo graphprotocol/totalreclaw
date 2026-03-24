@@ -27,11 +27,29 @@ export const statusToolDefinition = {
   },
 };
 
+export interface BillingFeatures {
+  llm_dedup?: boolean;
+  custom_extract_interval?: boolean;
+  min_extract_interval?: number;
+  extraction_interval?: number;
+  max_facts_per_extraction?: number;
+  max_candidate_pool?: number;
+}
+
 export interface BillingStatusResponse {
   tier: string;
   free_writes_used: number;
   free_writes_limit: number;
   expires_at: string | null;
+  features?: BillingFeatures;
+}
+
+/** Last raw billing response (for candidate pool caching in index.ts). */
+let lastBillingResponse: BillingStatusResponse | null = null;
+
+/** Get the last raw billing response. */
+export function getLastBillingResponse(): BillingStatusResponse | null {
+  return lastBillingResponse;
 }
 
 /**
@@ -84,6 +102,9 @@ export async function handleStatus(
     }
 
     const data = (await response.json()) as BillingStatusResponse;
+
+    // Cache the raw response for candidate pool sizing
+    lastBillingResponse = data;
 
     // Format nicely for the LLM to present
     const tierLabel = data.tier === 'pro' ? 'Pro' : 'Free';

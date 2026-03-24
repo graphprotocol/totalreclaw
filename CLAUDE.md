@@ -169,7 +169,8 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | 403 handling + cache invalidation | Yes | Yes | Yes | |
 | **Search Optimizations** | | | | |
 | Hot cache + two-tier search | Yes (managed) | -- | -- | Skips remote query if cached query similar |
-| Dynamic candidate pool sizing | Yes | Yes | Yes (via MCP) | 400-5000 based on vault size |
+| Dynamic candidate pool sizing | Yes | Yes | Yes (via MCP) | Server-configurable via billing features; env overrides `CANDIDATE_POOL_MAX_FREE`/`CANDIDATE_POOL_MAX_PRO` |
+| Server-side candidate pool | Yes | Yes | Yes (via MCP) | Relay computes `max_candidate_pool` from vault size + tier; clients read from billing cache with local fallback |
 | BM25 + Cosine + RRF reranking | Yes | Yes | Yes (via MCP) | Intent-weighted |
 | **Admin & Analytics** | | | | |
 | X-TotalReclaw-Client header | Yes | Yes | Yes (via MCP) | Sent on every relay request |
@@ -245,6 +246,7 @@ Every new feature implementation MUST include:
 | Migration tool (testnet to mainnet) | MEDIUM | Designed, not implemented -- re-encrypt + re-store on upgrade |
 | Load testing | IN PROGRESS | Benchmark harness at 1M memories, results in `totalreclaw-internal/e2e/load-test/` |
 | Graceful shutdown | LOW | Not yet configured in uvicorn |
+| Candidate pool sizing | RESOLVED | Server-configurable via relay billing endpoint (`max_candidate_pool` in FeatureFlags). Env overrides: `CANDIDATE_POOL_MAX_FREE`, `CANDIDATE_POOL_MAX_PRO`. |
 
 ---
 
