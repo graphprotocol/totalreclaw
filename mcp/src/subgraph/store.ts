@@ -284,6 +284,106 @@ export async function submitFactOnChain(
   };
 }
 
+/**
+ * Submit multiple facts on-chain in a single ERC-4337 UserOp (batched).
+ *
+ * Each protobuf payload becomes one call in a multi-call UserOp. The
+ * DataEdge contract emits a separate Log(bytes) event per call, and the
+ * subgraph indexes each event independently (by txHash + logIndex).
+ *
+ * Falls back to single-fact path for batches of 1 (no multicall overhead).
+ */
+export async function submitFactBatchOnChain(
+  protobufPayloads: Buffer[],
+  config: SubgraphStoreConfig,
+): Promise<{ txHash: string; userOpHash: string; success: boolean; batchSize: number }> {
+  if (!protobufPayloads.length) {
+    return { txHash: '', userOpHash: '', success: true, batchSize: 0 };
+  }
+
+  // Single fact — use standard path (avoids multicall overhead)
+  if (protobufPayloads.length === 1) {
+    const result = await submitFactOnChain(protobufPayloads[0], config);
+    return { ...result, batchSize: 1 };
+  }
+
+  if (!config.relayUrl) {
+    throw new Error('Relay URL is required for on-chain submission');
+  }
+  if (!config.mnemonic) {
+    throw new Error('Mnemonic is required for on-chain submission');
+  }
+
+  const chain = getChainFromId(config.chainId);
+  const bundlerRpcUrl = getRelayBundlerUrl(config.relayUrl);
+  const dataEdgeAddress = config.dataEdgeAddress as Address;
+  const entryPointAddr = (config.entryPointAddress || entryPoint07Address) as Address;
+
+  const headers: Record<string, string> = {
+    'X-TotalReclaw-Client': 'mcp-server',
+  };
+  if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
+  if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
+
+  const authTransport = Object.keys(headers).length > 0
+    ? http(bundlerRpcUrl, { fetchOptions: { headers } })
+    : http(bundlerRpcUrl);
+
+  const ownerAccount = mnemonicToAccount(config.mnemonic);
+  const publicClient = createPublicClient({
+    chain,
+    transport: http(),
+  });
+
+  const pimlicoClient = createPimlicoClient({
+    chain,
+    transport: authTransport,
+    entryPoint: {
+      address: entryPointAddr,
+      version: '0.7',
+    },
+  });
+
+  const smartAccount = await toSimpleSmartAccount({
+    // @ts-ignore - viem/permissionless type intersection conflict
+    client: publicClient,
+    owner: ownerAccount,
+    entryPoint: {
+      address: entryPointAddr,
+      version: '0.7',
+    },
+  });
+
+  const smartAccountClient = createSmartAccountClient({
+    account: smartAccount,
+    chain,
+    bundlerTransport: authTransport,
+    paymaster: pimlicoClient,
+    userOperation: {
+      estimateFeesPerGas: async () => {
+        return (await pimlicoClient.getUserOperationGasPrice()).fast;
+      },
+    },
+  });
+
+  // Build multi-call batch: each payload → one call to DataEdge fallback()
+  const calls = protobufPayloads.map(payload => ({
+    to: dataEdgeAddress,
+    value: 0n,
+    data: `0x${payload.toString('hex')}` as Hex,
+  }));
+
+  const userOpHash = await (smartAccountClient as any).sendUserOperation({ calls });
+  const receipt = await pimlicoClient.waitForUserOperationReceipt({ hash: userOpHash });
+
+  return {
+    txHash: receipt.receipt.transactionHash,
+    userOpHash,
+    success: receipt.success,
+    batchSize: protobufPayloads.length,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------

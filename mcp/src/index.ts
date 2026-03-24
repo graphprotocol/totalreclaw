@@ -71,6 +71,7 @@ import {
 } from './subgraph/reranker.js';
 import {
   submitFactOnChain,
+  submitFactBatchOnChain,
   encodeFactProtobuf,
   getSubgraphConfig,
   isSubgraphMode,
@@ -346,7 +347,12 @@ async function handleRememberSubgraph(
   let dedupSkipped = 0;
   let dedupSuperseded = 0;
 
+  // Collect protobuf payloads for batch submission (tombstones + facts)
+  const pendingPayloads: Buffer[] = [];
+  const pendingFactMeta: Array<{ factId: string; action: string }> = [];
+
   for (const item of textsToStore) {
+    let itemSuperseded = false; // Per-fact flag for action tracking
     try {
       // 1. Generate blind indices (word-based)
       const wordIndices = generateBlindIndices(item.text);
@@ -401,33 +407,23 @@ async function handleRememberSubgraph(
             const dupMatch = findNearDuplicate(embedding, decryptedCandidates, getStoreDedupThreshold());
             if (dupMatch) {
               if (isExplicitRemember) {
-                // Explicit remember: always supersede — submit tombstone for old fact
+                // Explicit remember: always supersede — queue tombstone for old fact
                 effectiveImportance = Math.max(item.importance, dupMatch.existingFact.importance);
-                try {
-                  const tombstonePayload: FactPayload = {
-                    id: dupMatch.existingFact.id,
-                    timestamp: new Date().toISOString(),
-                    owner: state.smartAccountAddress,
-                    encryptedBlob: Buffer.from('tombstone').toString('hex'),
-                    blindIndices: [],
-                    decayScore: 0,
-                    source: 'mcp_dedup',
-                    contentFp: '',
-                    agentId: 'mcp-server',
-                  };
-                  const tombProtobuf = encodeFactProtobuf(tombstonePayload);
-                  const tombConfig = getSubgraphConfig({
-                    relayUrl: state.serverUrl,
-                    mnemonic: state.mnemonic,
-                    authKeyHex: Buffer.from(state.authKey).toString('hex'),
-                    walletAddress: state.smartAccountAddress,
-                  });
-                  await submitFactOnChain(tombProtobuf, tombConfig);
-                  console.error(`Store-time dedup: superseded ${dupMatch.existingFact.id} (sim=${dupMatch.similarity.toFixed(3)})`);
-                } catch {
-                  console.error(`Store-time dedup: failed to tombstone superseded fact ${dupMatch.existingFact.id}`);
-                }
+                const tombstonePayload: FactPayload = {
+                  id: dupMatch.existingFact.id,
+                  timestamp: new Date().toISOString(),
+                  owner: state.smartAccountAddress,
+                  encryptedBlob: Buffer.from('tombstone').toString('hex'),
+                  blindIndices: [],
+                  decayScore: 0,
+                  source: 'mcp_dedup',
+                  contentFp: '',
+                  agentId: 'mcp-server',
+                };
+                pendingPayloads.push(encodeFactProtobuf(tombstonePayload));
+                console.error(`Store-time dedup: queued supersede for ${dupMatch.existingFact.id} (sim=${dupMatch.similarity.toFixed(3)})`);
                 dedupSuperseded++;
+                itemSuperseded = true;
               } else {
                 // Batch mode: apply shouldSupersede logic
                 const action = shouldSupersede(item.importance, dupMatch.existingFact);
@@ -439,31 +435,21 @@ async function handleRememberSubgraph(
                 }
                 // action === 'supersede'
                 effectiveImportance = Math.max(item.importance, dupMatch.existingFact.importance);
-                try {
-                  const tombstonePayload: FactPayload = {
-                    id: dupMatch.existingFact.id,
-                    timestamp: new Date().toISOString(),
-                    owner: state.smartAccountAddress,
-                    encryptedBlob: Buffer.from('tombstone').toString('hex'),
-                    blindIndices: [],
-                    decayScore: 0,
-                    source: 'mcp_dedup',
-                    contentFp: '',
-                    agentId: 'mcp-server',
-                  };
-                  const tombProtobuf = encodeFactProtobuf(tombstonePayload);
-                  const tombConfig = getSubgraphConfig({
-                    relayUrl: state.serverUrl,
-                    mnemonic: state.mnemonic,
-                    authKeyHex: Buffer.from(state.authKey).toString('hex'),
-                    walletAddress: state.smartAccountAddress,
-                  });
-                  await submitFactOnChain(tombProtobuf, tombConfig);
-                  console.error(`Store-time dedup: superseded ${dupMatch.existingFact.id} (sim=${dupMatch.similarity.toFixed(3)})`);
-                } catch {
-                  console.error(`Store-time dedup: failed to tombstone superseded fact ${dupMatch.existingFact.id}`);
-                }
+                const tombstonePayload: FactPayload = {
+                  id: dupMatch.existingFact.id,
+                  timestamp: new Date().toISOString(),
+                  owner: state.smartAccountAddress,
+                  encryptedBlob: Buffer.from('tombstone').toString('hex'),
+                  blindIndices: [],
+                  decayScore: 0,
+                  source: 'mcp_dedup',
+                  contentFp: '',
+                  agentId: 'mcp-server',
+                };
+                pendingPayloads.push(encodeFactProtobuf(tombstonePayload));
+                console.error(`Store-time dedup: queued supersede for ${dupMatch.existingFact.id} (sim=${dupMatch.similarity.toFixed(3)})`);
                 dedupSuperseded++;
+                itemSuperseded = true;
               }
             }
           }
@@ -497,22 +483,42 @@ async function handleRememberSubgraph(
         encryptedEmbedding: encryptedEmb,
       };
 
-      // 8. Encode as protobuf and submit on-chain
+      // 8. Encode as protobuf and queue for batch submission
       const protobuf = encodeFactProtobuf(factPayload);
-      const config = getSubgraphConfig({
+      pendingPayloads.push(protobuf);
+      pendingFactMeta.push({ factId, action: itemSuperseded ? 'superseded' : 'created' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      results.push({ success: false, fact_id: '', tx_hash: undefined });
+      console.error(`Failed to prepare fact for on-chain storage: ${message}`);
+    }
+  }
+
+  // Batch-submit all payloads (tombstones + facts) in a single UserOp
+  if (pendingPayloads.length > 0) {
+    try {
+      const batchConfig = getSubgraphConfig({
         relayUrl: state.serverUrl,
         mnemonic: state.mnemonic,
         authKeyHex: Buffer.from(state.authKey).toString('hex'),
         walletAddress: state.smartAccountAddress,
       });
-
-      const { txHash, success } = await submitFactOnChain(protobuf, config);
-
-      results.push({ success, fact_id: factId, tx_hash: txHash, action: dedupSuperseded > 0 ? 'superseded' : 'created' });
+      const batchResult = await submitFactBatchOnChain(pendingPayloads, batchConfig);
+      for (const meta of pendingFactMeta) {
+        results.push({
+          success: batchResult.success,
+          fact_id: meta.factId,
+          tx_hash: batchResult.txHash,
+          action: meta.action,
+        });
+      }
+      console.error(`Batch submitted ${batchResult.batchSize} payloads in 1 UserOp (tx=${batchResult.txHash.slice(0, 10)}...)`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      results.push({ success: false, fact_id: '', tx_hash: undefined });
-      console.error(`Failed to store fact on-chain: ${message}`);
+      for (const meta of pendingFactMeta) {
+        results.push({ success: false, fact_id: meta.factId, tx_hash: undefined });
+      }
+      console.error(`Batch submission failed: ${message}`);
     }
   }
 

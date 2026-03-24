@@ -1,0 +1,20 @@
+{
+  "name": "totalreclaw-e2e-batch",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "npx tsx batch-e2e.ts",
+    "test:quick": "npx tsx batch-e2e.ts --test A --test C",
+    "test:batch": "npx tsx batch-e2e.ts --test B",
+    "test:tombstone": "npx tsx batch-e2e.ts --test D",
+    "test:routing": "npx tsx batch-e2e.ts --test E",
+    "test:search": "npx tsx batch-e2e.ts --test F"
+  },
+  "dependencies": {
+    "@scure/bip39": "^1.5.4",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0",
+    "viem": "^2.27.0",
+    "permissionless": "^0.2.0"
+  }
+}

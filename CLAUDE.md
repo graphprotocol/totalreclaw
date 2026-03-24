@@ -155,9 +155,12 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | Bulk consolidation tool | Yes | Yes | Yes (via MCP) | Self-hosted only (no batch delete on managed service) |
 | **Pro Tier Gating** | | | | |
 | Feature gating via billing cache | Yes | -- | -- | Server returns `features` dict, plugin gates client-side |
-| Unified extraction interval (3 turns) | Yes | -- | Yes (env) | Same for all tiers (quota is per-tx). Configurable via env var |
-| 15-fact extraction cap | Yes | -- | Yes | Max 15 facts per extraction cycle |
+| Server-side extraction config | Yes | -- | -- | Relay returns `extraction_interval` + `max_facts_per_extraction` in billing status |
+| Unified extraction interval (3 turns) | Yes | -- | Yes (env) | Server-tunable via relay config (no npm publish needed) |
+| Max facts per extraction | Yes | -- | Yes | Server-tunable via relay config (default 15) |
 | Dual-chain routing | -- | -- | -- | Relay-side: routes to Base Sepolia (free) or Gnosis mainnet (pro) |
+| **Batching** | | | | |
+| Client batching (multi-call UserOps) | Yes | Yes | Yes (via MCP) | Wired into extraction loops — batch up to 15 facts per UserOp |
 | **Billing** | | | | |
 | Quota warnings (>80%) | Yes | -- | -- | Injected via before_agent_start |
 | 403 handling + cache invalidation | Yes | Yes | Yes | |
@@ -187,6 +190,7 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (500 memor
 | Billing / Status | Yes | Yes | Both query relay billing endpoint |
 | Hot cache | -- | Yes | Self-hosted doesn't need it |
 | Dual-chain routing | -- | Yes | Relay routes based on tier (free=Base Sepolia, pro=Gnosis) |
+| Client batching | -- | Yes | Multi-call UserOps via batcher.ts (managed service only, uses ERC-4337 executeBatch) |
 
 ### Known Gaps
 
@@ -215,6 +219,13 @@ Every new feature implementation MUST include:
 
 3. **Cross-platform consideration** -- Before marking a feature as done, verify whether it should also work on other platforms. If a feature is added to the OpenClaw plugin but not the MCP server, that is a gap that must be documented (and ideally tracked for implementation).
 
+4. **E2E testing (MANDATORY)** -- Every major feature, refactor, or code change MUST be validated with end-to-end integration tests BEFORE the feature can be considered complete. This is non-negotiable.
+   - **What counts as major**: New on-chain submission patterns (batching), billing/routing changes, embedding model changes, protocol changes, env var renames, new extraction logic, anything touching the relay-bundler-subgraph pipeline.
+   - **How to test**: Use the E2E test infrastructure in `tests/e2e-batch/` (staging relay tests) and `tests/e2e-functional/` (mock-based functional tests). For on-chain features, test against live staging (Base Sepolia via `api.totalreclaw.xyz`).
+   - **What to verify**: The full pipeline -- fact extraction → encryption → on-chain write → subgraph indexing → search → decryption → recall. Not just unit tests, not just type-checking.
+   - **When E2E can't run immediately**: Explicitly plan when it will run and leave it as an open item. Do NOT mark the feature as complete.
+   - **A feature is NOT done until E2E validates it.** Code that compiles and passes unit tests can still fail at the integration level (wrong chain behavior, subgraph not indexing, paymaster rejecting batched UserOps, etc.).
+
 ---
 
 ## Known Technical Gaps
@@ -225,7 +236,7 @@ Every new feature implementation MUST include:
 | Authentication | RESOLVED | HKDF auth with SHA-256 key hashing |
 | Embedding model | RESOLVED | Migrated to Qwen3-Embedding-0.6B (1024d, multilingual) |
 | Conflict resolution (Layers 3-4) | MEDIUM | Spec'd in v0.3.2, not implemented |
-| Client batching (A2) | MEDIUM | Designed, not implemented -- batch multiple facts per UserOp |
+| Client batching (A2) | RESOLVED | Implemented in client/src/userop/batcher.ts -- batch multiple facts per UserOp |
 | Migration tool (testnet to mainnet) | MEDIUM | Designed, not implemented -- re-encrypt + re-store on upgrade |
 | Load testing | MEDIUM | Not done -- need to validate <140ms p95 |
 | Graceful shutdown | LOW | Not yet configured in uvicorn |

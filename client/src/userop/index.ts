@@ -15,3 +15,20 @@ export type {
   UserOperationResult,
   SendFactConfig,
 } from "./builder";
+
+export {
+  buildBatchUserOperation,
+  sendBatchOnChain,
+  encodeBatchCalls,
+  validateBatchConfig,
+  estimateGasSavings,
+  MAX_BATCH_SIZE,
+  MIN_BATCH_SIZE,
+} from "./batcher";
+
+export type {
+  BatchUserOperationConfig,
+  BatchUserOperationResult,
+  SendBatchConfig,
+  SendBatchResult,
+} from "./batcher";

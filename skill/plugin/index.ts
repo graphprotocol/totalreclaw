@@ -41,7 +41,7 @@ import {
   STORE_DEDUP_MAX_CANDIDATES,
   type DecryptedCandidate,
 } from './consolidation.js';
-import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, deriveSmartAccountAddress, type FactPayload } from './subgraph-store.js';
+import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, submitFactBatchOnChain, deriveSmartAccountAddress, type FactPayload } from './subgraph-store.js';
 import { searchSubgraph, getSubgraphFactCount } from './subgraph-search.js';
 import { PluginHotCache, type HotFact } from './hot-cache-wrapper.js';
 import crypto from 'node:crypto';
@@ -153,6 +153,8 @@ interface BillingCache {
     llm_dedup?: boolean;
     custom_extract_interval?: boolean;
     min_extract_interval?: number;
+    extraction_interval?: number;
+    max_facts_per_extraction?: number;
   };
   checked_at: number;
 }
@@ -192,10 +194,23 @@ function isLlmDedupEnabled(): boolean {
 
 /**
  * Get the effective extraction interval.
- * Unified to 3 turns for all tiers (quota is per-transaction, not per-memory).
+ * Server-side config takes priority (from billing cache), then env var fallback.
+ * This allows the relay admin to tune extraction without an npm publish.
  */
 function getExtractInterval(): number {
+  const cache = readBillingCache();
+  if (cache?.features?.extraction_interval != null) return cache.features.extraction_interval;
   return AUTO_EXTRACT_EVERY_TURNS_ENV;
+}
+
+/**
+ * Get the max facts per extraction cycle.
+ * Server-side config takes priority (from billing cache), then env var / constant fallback.
+ */
+function getMaxFactsPerExtraction(): number {
+  const cache = readBillingCache();
+  if (cache?.features?.max_facts_per_extraction != null) return cache.features.max_facts_per_extraction;
+  return MAX_FACTS_PER_EXTRACTION;
 }
 
 /**
@@ -857,9 +872,13 @@ async function storeExtractedFacts(
   }
 
   // Phase 3: Store the deduplicated facts (with optional store-time dedup).
+  // In subgraph mode, collect all protobuf payloads (tombstones + new facts)
+  // and submit them in a single batched UserOp for gas efficiency.
   let stored = 0;
   let superseded = 0;
   let skipped = 0;
+  const pendingPayloads: Buffer[] = []; // Batched subgraph payloads
+  let preparedForSubgraph = 0;
 
   for (const fact of dedupedFacts) {
     try {
@@ -881,24 +900,19 @@ async function storeExtractedFacts(
       if (fact.action === 'DELETE' && fact.existingFactId) {
         // Tombstone the old fact, don't store anything new.
         if (isSubgraphMode()) {
-          try {
-            const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
-            const tombstone: FactPayload = {
-              id: fact.existingFactId,
-              timestamp: new Date().toISOString(),
-              owner: subgraphOwner || userId!,
-              encryptedBlob: '00',
-              blindIndices: [],
-              decayScore: 0,
-              source: 'tombstone',
-              contentFp: '',
-              agentId: 'openclaw-plugin-auto',
-            };
-            await submitFactOnChain(encodeFactProtobuf(tombstone), tombConfig);
-            logger.info(`LLM dedup: DELETE — tombstoned ${fact.existingFactId} on-chain`);
-          } catch (tombErr) {
-            logger.warn(`LLM dedup: DELETE failed for ${fact.existingFactId}: ${tombErr instanceof Error ? tombErr.message : String(tombErr)}`);
-          }
+          const tombstone: FactPayload = {
+            id: fact.existingFactId,
+            timestamp: new Date().toISOString(),
+            owner: subgraphOwner || userId!,
+            encryptedBlob: '00',
+            blindIndices: [],
+            decayScore: 0,
+            source: 'tombstone',
+            contentFp: '',
+            agentId: 'openclaw-plugin-auto',
+          };
+          pendingPayloads.push(encodeFactProtobuf(tombstone));
+          logger.info(`LLM dedup: DELETE — queued tombstone for ${fact.existingFactId}`);
         } else if (apiClient && authKeyHex) {
           try {
             await apiClient.deleteFact(fact.existingFactId, authKeyHex);
@@ -914,24 +928,19 @@ async function storeExtractedFacts(
       if (fact.action === 'UPDATE' && fact.existingFactId) {
         // Tombstone the old fact, then fall through to store the new version.
         if (isSubgraphMode()) {
-          try {
-            const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
-            const tombstone: FactPayload = {
-              id: fact.existingFactId,
-              timestamp: new Date().toISOString(),
-              owner: subgraphOwner || userId!,
-              encryptedBlob: '00',
-              blindIndices: [],
-              decayScore: 0,
-              source: 'tombstone',
-              contentFp: '',
-              agentId: 'openclaw-plugin-auto',
-            };
-            await submitFactOnChain(encodeFactProtobuf(tombstone), tombConfig);
-            logger.info(`LLM dedup: UPDATE — tombstoned ${fact.existingFactId} on-chain, storing replacement`);
-          } catch (tombErr) {
-            logger.warn(`LLM dedup: UPDATE tombstone failed for ${fact.existingFactId}: ${tombErr instanceof Error ? tombErr.message : String(tombErr)}`);
-          }
+          const tombstone: FactPayload = {
+            id: fact.existingFactId,
+            timestamp: new Date().toISOString(),
+            owner: subgraphOwner || userId!,
+            encryptedBlob: '00',
+            blindIndices: [],
+            decayScore: 0,
+            source: 'tombstone',
+            contentFp: '',
+            agentId: 'openclaw-plugin-auto',
+          };
+          pendingPayloads.push(encodeFactProtobuf(tombstone));
+          logger.info(`LLM dedup: UPDATE — queued tombstone for ${fact.existingFactId}, storing replacement`);
         } else if (apiClient && authKeyHex) {
           try {
             await apiClient.deleteFact(fact.existingFactId, authKeyHex);
@@ -969,29 +978,21 @@ async function storeExtractedFacts(
           }
           // action === 'supersede': delete old fact, inherit higher importance
           if (isSubgraphMode()) {
-            try {
-              const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
-              const tombstone: FactPayload = {
-                id: dupResult.match.id,
-                timestamp: new Date().toISOString(),
-                owner: subgraphOwner || userId!,
-                encryptedBlob: '00',
-                blindIndices: [],
-                decayScore: 0,
-                source: 'tombstone',
-                contentFp: '',
-                agentId: 'openclaw-plugin-auto',
-              };
-              const tombProtobuf = encodeFactProtobuf(tombstone);
-              await submitFactOnChain(tombProtobuf, tombConfig);
-              logger.info(
-                `Store-time dedup: superseded ${dupResult.match.id} on-chain (sim=${dupResult.similarity.toFixed(3)})`,
-              );
-            } catch (tombErr) {
-              logger.warn(
-                `Store-time dedup: failed to tombstone ${dupResult.match.id}: ${tombErr instanceof Error ? tombErr.message : String(tombErr)}`,
-              );
-            }
+            const tombstone: FactPayload = {
+              id: dupResult.match.id,
+              timestamp: new Date().toISOString(),
+              owner: subgraphOwner || userId!,
+              encryptedBlob: '00',
+              blindIndices: [],
+              decayScore: 0,
+              source: 'tombstone',
+              contentFp: '',
+              agentId: 'openclaw-plugin-auto',
+            };
+            pendingPayloads.push(encodeFactProtobuf(tombstone));
+            logger.info(
+              `Store-time dedup: queued supersede for ${dupResult.match.id} (sim=${dupResult.similarity.toFixed(3)})`,
+            );
           } else if (apiClient && authKeyHex) {
             try {
               await apiClient.deleteFact(dupResult.match.id, authKeyHex);
@@ -1024,20 +1025,7 @@ async function storeExtractedFacts(
       const contentFp = generateContentFingerprint(fact.text, dedupKey);
       const factId = crypto.randomUUID();
 
-      const payload: StoreFactPayload = {
-        id: factId,
-        timestamp: new Date().toISOString(),
-        encrypted_blob: encryptedBlob,
-        blind_indices: allIndices,
-        decay_score: effectiveImportance,
-        source: 'auto-extraction',
-        content_fp: contentFp,
-        agent_id: 'openclaw-plugin-auto',
-        encrypted_embedding: embeddingResult?.encryptedEmbedding,
-      };
-
       if (isSubgraphMode()) {
-        const config = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
         const protobuf = encodeFactProtobuf({
           id: factId,
           timestamp: new Date().toISOString(),
@@ -1050,11 +1038,23 @@ async function storeExtractedFacts(
           agentId: 'openclaw-plugin-auto',
           encryptedEmbedding: embeddingResult?.encryptedEmbedding,
         });
-        await submitFactOnChain(protobuf, config);
+        pendingPayloads.push(protobuf);
+        preparedForSubgraph++;
       } else {
+        const payload: StoreFactPayload = {
+          id: factId,
+          timestamp: new Date().toISOString(),
+          encrypted_blob: encryptedBlob,
+          blind_indices: allIndices,
+          decay_score: effectiveImportance,
+          source: 'auto-extraction',
+          content_fp: contentFp,
+          agent_id: 'openclaw-plugin-auto',
+          encrypted_embedding: embeddingResult?.encryptedEmbedding,
+        };
         await apiClient.store(userId, [payload], authKeyHex);
+        stored++;
       }
-      stored++;
     } catch (err: unknown) {
       // Check for 403 / quota exceeded — invalidate billing cache so next
       // before_agent_start re-fetches and warns the user.
@@ -1065,6 +1065,28 @@ async function storeExtractedFacts(
         break; // Stop trying to store remaining facts — they'll all fail too
       }
       // Otherwise skip failed facts (e.g., duplicates return success with duplicate_ids)
+    }
+  }
+
+  // Batch-submit all subgraph payloads in a single UserOp (gas-efficient).
+  if (pendingPayloads.length > 0 && isSubgraphMode()) {
+    try {
+      const batchConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
+      const result = await submitFactBatchOnChain(pendingPayloads, batchConfig);
+      if (result.success) {
+        stored += preparedForSubgraph;
+        logger.info(`Batch submitted ${result.batchSize} payloads in 1 UserOp (tx=${result.txHash.slice(0, 10)}…)`);
+      } else {
+        logger.warn(`Batch UserOp failed on-chain (tx=${result.txHash.slice(0, 10)}…)`);
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('403') || errMsg.toLowerCase().includes('quota')) {
+        try { fs.unlinkSync(BILLING_CACHE_PATH); } catch { /* ignore */ }
+        logger.warn(`Quota exceeded during batch submit — billing cache invalidated. ${errMsg}`);
+      } else {
+        logger.warn(`Batch submission failed: ${errMsg}`);
+      }
     }
   }
 
@@ -2550,12 +2572,13 @@ const plugin = {
               : [];
             const rawFacts = await extractFacts(evt.messages, 'turn', existingMemories);
             const { kept: importanceFiltered } = filterByImportance(rawFacts, api.logger);
-            if (importanceFiltered.length > MAX_FACTS_PER_EXTRACTION) {
+            const maxFacts = getMaxFactsPerExtraction();
+            if (importanceFiltered.length > maxFacts) {
               api.logger.info(
-                `Capped extraction from ${importanceFiltered.length} to ${MAX_FACTS_PER_EXTRACTION} facts`,
+                `Capped extraction from ${importanceFiltered.length} to ${maxFacts} facts`,
               );
             }
-            const facts = importanceFiltered.slice(0, MAX_FACTS_PER_EXTRACTION);
+            const facts = importanceFiltered.slice(0, maxFacts);
             if (facts.length > 0) {
               await storeExtractedFacts(facts, api.logger);
             }
@@ -2592,12 +2615,13 @@ const plugin = {
             : [];
           const rawCompactFacts = await extractFacts(evt.messages, 'full', existingMemories);
           const { kept: compactImportanceFiltered } = filterByImportance(rawCompactFacts, api.logger);
-          if (compactImportanceFiltered.length > MAX_FACTS_PER_EXTRACTION) {
+          const maxFactsCompact = getMaxFactsPerExtraction();
+          if (compactImportanceFiltered.length > maxFactsCompact) {
             api.logger.info(
-              `Capped compaction extraction from ${compactImportanceFiltered.length} to ${MAX_FACTS_PER_EXTRACTION} facts`,
+              `Capped compaction extraction from ${compactImportanceFiltered.length} to ${maxFactsCompact} facts`,
             );
           }
-          const facts = compactImportanceFiltered.slice(0, MAX_FACTS_PER_EXTRACTION);
+          const facts = compactImportanceFiltered.slice(0, maxFactsCompact);
           if (facts.length > 0) {
             await storeExtractedFacts(facts, api.logger);
           }
@@ -2633,12 +2657,13 @@ const plugin = {
             : [];
           const rawResetFacts = await extractFacts(evt.messages, 'full', existingMemories);
           const { kept: resetImportanceFiltered } = filterByImportance(rawResetFacts, api.logger);
-          if (resetImportanceFiltered.length > MAX_FACTS_PER_EXTRACTION) {
+          const maxFactsReset = getMaxFactsPerExtraction();
+          if (resetImportanceFiltered.length > maxFactsReset) {
             api.logger.info(
-              `Capped reset extraction from ${resetImportanceFiltered.length} to ${MAX_FACTS_PER_EXTRACTION} facts`,
+              `Capped reset extraction from ${resetImportanceFiltered.length} to ${maxFactsReset} facts`,
             );
           }
-          const facts = resetImportanceFiltered.slice(0, MAX_FACTS_PER_EXTRACTION);
+          const facts = resetImportanceFiltered.slice(0, maxFactsReset);
           if (facts.length > 0) {
             await storeExtractedFacts(facts, api.logger);
           }
