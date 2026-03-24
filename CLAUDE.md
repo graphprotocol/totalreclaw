@@ -224,7 +224,9 @@ Every new feature implementation MUST include:
 
 4. **E2E testing (MANDATORY)** -- Every major feature, refactor, or code change MUST be validated with end-to-end integration tests BEFORE the feature can be considered complete. This is non-negotiable.
    - **What counts as major**: New on-chain submission patterns (batching), billing/routing changes, embedding model changes, protocol changes, env var renames, new extraction logic, anything touching the relay-bundler-subgraph pipeline.
-   - **How to test**: Use the E2E test infrastructure in `tests/e2e-batch/` (staging relay tests) and `tests/e2e-functional/` (mock-based functional tests). For on-chain features, test against live staging (Base Sepolia via `api.totalreclaw.xyz`).
+   - **How to test**: Two levels of E2E testing:
+     1. **Staging smoke tests** (`tests/e2e-batch/`): Direct API + on-chain tests against live staging. Fast (~2 min). Run for every feature.
+     2. **Full agent lifecycle tests** (`totalreclaw-internal/e2e/`): OpenClaw Docker-based tests that mimic real user conversations. Tests auto-extraction, cross-session recall, explicit tools, forget/export. Run for major features and before releases.
    - **What to verify**: The full pipeline -- fact extraction → encryption → on-chain write → subgraph indexing → search → decryption → recall. Not just unit tests, not just type-checking.
    - **When E2E can't run immediately**: Explicitly plan when it will run and leave it as an open item. Do NOT mark the feature as complete.
    - **A feature is NOT done until E2E validates it.** Code that compiles and passes unit tests can still fail at the integration level (wrong chain behavior, subgraph not indexing, paymaster rejecting batched UserOps, etc.).
@@ -241,7 +243,7 @@ Every new feature implementation MUST include:
 | Conflict resolution (Layers 3-4) | MEDIUM | Spec'd in v0.3.2, not implemented |
 | Client batching (A2) | RESOLVED | Implemented in client/src/userop/batcher.ts -- batch multiple facts per UserOp |
 | Migration tool (testnet to mainnet) | MEDIUM | Designed, not implemented -- re-encrypt + re-store on upgrade |
-| Load testing | MEDIUM | Not done -- need to validate <140ms p95 |
+| Load testing | IN PROGRESS | Benchmark harness at 1M memories, results in `totalreclaw-internal/e2e/load-test/` |
 | Graceful shutdown | LOW | Not yet configured in uvicorn |
 
 ---
@@ -276,6 +278,13 @@ cd mcp && npm install && npm run build
 
 # NanoClaw skill
 cd skill-nanoclaw && npm install
+
+# E2E Tests (internal repo -- requires staging access)
+cd ../totalreclaw-internal/e2e
+ZAI_API_KEY=xxx ANTHROPIC_API_KEY=xxx npm test           # All paths
+npm run test:mcp                                          # MCP only (fastest)
+ZAI_API_KEY=xxx npm run test:openclaw                    # OpenClaw only
+ANTHROPIC_API_KEY=xxx npm run test:nanoclaw              # NanoClaw only
 ```
 
 ---
