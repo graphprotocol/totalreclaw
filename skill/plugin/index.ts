@@ -142,7 +142,7 @@ const RELEVANCE_THRESHOLD = parseFloat(process.env.TOTALRECLAW_RELEVANCE_THRESHO
 // ---------------------------------------------------------------------------
 
 const BILLING_CACHE_PATH = path.join(process.env.HOME ?? '/home/node', '.totalreclaw', 'billing-cache.json');
-const BILLING_CACHE_TTL = 12 * 60 * 60 * 1000; // 12 hours
+const BILLING_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
 const QUOTA_WARNING_THRESHOLD = 0.8; // 80%
 
 interface BillingCache {
@@ -155,6 +155,7 @@ interface BillingCache {
     min_extract_interval?: number;
     extraction_interval?: number;
     max_facts_per_extraction?: number;
+    max_candidate_pool?: number;
   };
   checked_at: number;
 }
@@ -270,12 +271,18 @@ const FACT_COUNT_CACHE_TTL = 5 * 60 * 1000;
 /**
  * Compute the candidate pool size from a fact count.
  *
- * Formula: pool = min(max(factCount * 3, 400), 5000)
+ * Server-side config takes priority (from billing cache), then local fallback.
+ * The server computes the optimal pool based on vault size and tier caps.
+ *
+ * Local fallback formula: pool = min(max(factCount * 3, 400), 5000)
  *   - At least 400 candidates (even for tiny vaults)
  *   - At most 5000 candidates (to bound decryption + reranking cost)
  *   - 3x fact count in between
  */
 function computeCandidatePool(factCount: number): number {
+  const cache = readBillingCache();
+  if (cache?.features?.max_candidate_pool != null) return cache.features.max_candidate_pool;
+  // Fallback to local formula if no server config
   return Math.min(Math.max(factCount * 3, 400), 5000);
 }
 

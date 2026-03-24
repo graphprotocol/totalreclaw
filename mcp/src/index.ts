@@ -31,6 +31,7 @@ import {
   handleStatus,
   handleUpgrade,
 } from './tools/index.js';
+import { getLastBillingResponse } from './tools/status.js';
 import { setOnRememberCallback } from './tools/remember.js';
 import {
   findNearDuplicate,
@@ -96,6 +97,65 @@ const MASTER_PASSWORD = process.env.TOTALRECLAW_RECOVERY_PHRASE;
 
 // Store-time near-duplicate detection (consolidation module)
 const STORE_DEDUP_ENABLED = process.env.TOTALRECLAW_STORE_DEDUP !== 'false';
+
+// ── Billing cache (in-memory, for server-side candidate pool) ───────────────
+
+interface BillingCacheEntry {
+  max_candidate_pool?: number;
+  checked_at: number;
+}
+
+const BILLING_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
+let billingCache: BillingCacheEntry | null = null;
+
+/** Whether a background billing fetch is already in progress. */
+let billingFetchInProgress = false;
+
+/**
+ * Proactively fetch billing status to populate the candidate pool cache.
+ * Fire-and-forget — does not block the caller.
+ */
+function proactiveBillingFetch(state: SubgraphState): void {
+  if (billingFetchInProgress) return;
+  billingFetchInProgress = true;
+  const authKeyHex = Buffer.from(state.authKey).toString('hex');
+  const url = `${state.serverUrl.replace(/\/+$/, '')}/v1/billing/status?wallet_address=${encodeURIComponent(state.smartAccountAddress)}`;
+  fetch(url, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${authKeyHex}`,
+      'X-TotalReclaw-Client': 'mcp-server',
+    },
+  })
+    .then(async (resp) => {
+      if (resp.ok) {
+        const raw = (await resp.json()) as Record<string, unknown>;
+        const features = raw.features as Record<string, unknown> | undefined;
+        billingCache = {
+          max_candidate_pool: features?.max_candidate_pool as number | undefined,
+          checked_at: Date.now(),
+        };
+      }
+    })
+    .catch(() => { /* best-effort */ })
+    .finally(() => { billingFetchInProgress = false; });
+}
+
+/**
+ * Get the server-configured max candidate pool size.
+ * Falls back to a local formula if no cached billing response.
+ */
+function getMaxCandidatePool(k: number): number {
+  if (billingCache && Date.now() - billingCache.checked_at < BILLING_CACHE_TTL) {
+    if (billingCache.max_candidate_pool != null) return billingCache.max_candidate_pool;
+  }
+  // Trigger a background fetch if we have subgraph state but no cache
+  if (!billingCache && subgraphState) {
+    proactiveBillingFetch(subgraphState);
+  }
+  // Fallback to local formula
+  return Math.max(k * 50, 400);
+}
 
 // ── Server mode detection ───────────────────────────────────────────────────
 
@@ -581,7 +641,7 @@ async function handleRecallSubgraph(
     const allTrapdoors = [...wordTrapdoors, ...lshTrapdoors];
 
     // 4. Search the subgraph
-    const maxCandidates = Math.max(k * 50, 400); // Fetch more candidates for reranking
+    const maxCandidates = getMaxCandidatePool(k);
     const candidates = await searchSubgraph(
       state.smartAccountAddress,
       allTrapdoors,
@@ -859,7 +919,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const authKeyHex = subgraphState
         ? Buffer.from(subgraphState.authKey).toString('hex')
         : '';
-      return await handleStatus(SERVER_URL, authKeyHex, args);
+      const statusResult = await handleStatus(SERVER_URL, authKeyHex, args);
+
+      // Cache billing features for candidate pool sizing.
+      // handleStatus stores the raw response; extract max_candidate_pool from it.
+      try {
+        const raw = getLastBillingResponse();
+        if (raw?.features) {
+          billingCache = {
+            max_candidate_pool: raw.features.max_candidate_pool,
+            checked_at: Date.now(),
+          };
+        }
+      } catch {
+        // Best-effort cache — don't fail the status call
+      }
+
+      return statusResult;
     }
 
     if (name === 'totalreclaw_upgrade') {
