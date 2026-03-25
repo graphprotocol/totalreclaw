@@ -291,6 +291,44 @@ ANTHROPIC_API_KEY=xxx npm run test:nanoclaw              # NanoClaw only
 
 ---
 
+## CI/CD Pipeline
+
+Full CI/CD pipeline documented in `totalreclaw-internal/docs/ci-cd-pipeline.md`. Key rules:
+
+1. **Production NEVER auto-deploys from git push.** Staging auto-deploys; production requires manual promotion via `railway up -s totalreclaw-production -d` or `railway redeploy`.
+2. **E2E tests gate production promotion.** At minimum, relay smoke tests must pass against staging before promoting.
+3. **npm packages tested against staging before publish.** Run `tests/verify-publish.sh` after every publish.
+4. **Subgraph deploys to staging first.** Verify indexing before deploying to production subgraph.
+
+For deployment procedures, invoke the `deploy-totalreclaw` skill.
+
+### Relay Quick Reference
+
+```bash
+# Staging deploys automatically on push to main
+# Run smoke tests after staging deploys:
+RELAY_URL=https://api.totalreclaw.xyz npx tsx tests/e2e-relay/smoke-test.ts
+
+# Promote to production (after smoke tests pass):
+cd ../totalreclaw-relay && railway up -s totalreclaw-production -d
+
+# Rollback production:
+git checkout <known-good-commit>
+railway up -s totalreclaw-production -d
+git checkout main
+```
+
+### npm Publish Flow
+
+```bash
+# 1. Tests pass: cd client && npm test
+# 2. E2E against staging: RELAY_URL=https://api.totalreclaw.xyz npx tsx tests/e2e-relay/smoke-test.ts
+# 3. Version bump + publish: cd client && npm version patch && npm run build && npm publish
+# 4. Verify: ./tests/verify-publish.sh
+```
+
+---
+
 ## Current Status
 
 - **Version**: v1.0-beta
