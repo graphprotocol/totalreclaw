@@ -139,7 +139,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | `totalreclaw_status` | Yes | Yes | Yes (via MCP) | |
 | `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | Mem0 + MCP Memory adapters |
 | `totalreclaw_import` | -- | Yes | Yes (via MCP) | JSON/Markdown re-import (MCP only) |
-| `totalreclaw_upgrade` | -- | Yes | Yes (via MCP) | Stripe/Coinbase checkout URL |
+| `totalreclaw_upgrade` | Yes | Yes | Yes (via MCP) | Stripe checkout URL |
 | `totalreclaw_consolidate` | Yes | Yes | Yes (via MCP) | Self-hosted only (no batch delete on managed service) |
 | **Automatic Memory** | | | | |
 | Auto-search (before_agent_start) | Yes | -- | Yes (hook) | MCP has no lifecycle hooks |
@@ -203,7 +203,7 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (500 memor
 | Bulk consolidation not on managed service | LOW | Bulk consolidation tool requires batch-delete, which has no on-chain equivalent. Store-time dedup supersession now works via tombstones. |
 | MCP no auto-memory | By design | MCP has no lifecycle hooks. Host agent (Claude, Cursor) must call tools explicitly. Documented in beta guide. |
 | Export/import not on managed service (MCP) | LOW | MCP server's export and import tools are self-hosted only. OpenClaw plugin handles both modes. |
-| Crypto payments blocked | MEDIUM | Coinbase Commerce sunset March 31, 2026. Coinbase Business US/Singapore only. Business entity in Portugal. Stripe (fiat) works. |
+| Crypto payments removed | LOW | Coinbase Commerce sunset March 31, 2026. Removed from relay, tools, and website. Stripe (fiat) is the sole payment method. |
 
 ---
 
