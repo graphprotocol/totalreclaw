@@ -5,6 +5,7 @@ import {
   PRE_COMPACTION_PROMPT,
   validateExtractionResponse,
 } from '../extraction/prompts';
+import { handleQuotaError } from '../billing.js';
 
 export interface PreCompactInput {
   transcript: string;
@@ -56,7 +57,10 @@ export async function preCompact(
     }
 
     let factsStored = 0;
+    let quotaExceeded = false;
     for (const fact of validation.facts!) {
+      if (quotaExceeded) break;
+
       const metadata: FactMetadata = {
         importance: fact.importance / 10,
         source: 'pre_compaction',
@@ -68,8 +72,14 @@ export async function preCompact(
 
       switch (fact.action) {
         case 'ADD':
-          await client.remember(fact.factText, metadata);
-          factsStored++;
+          try {
+            await client.remember(fact.factText, metadata);
+            factsStored++;
+          } catch (err: unknown) {
+            if (handleQuotaError(err)) {
+              quotaExceeded = true;
+            }
+          }
           break;
 
         case 'UPDATE':
@@ -81,8 +91,11 @@ export async function preCompact(
                 await client.remember(fact.factText, metadata);
                 factsStored++;
               }
-            } catch {
-              // Skip if delete fails
+            } catch (err: unknown) {
+              if (handleQuotaError(err)) {
+                quotaExceeded = true;
+              }
+              // Skip if delete/update fails for other reasons
             }
           }
           break;
@@ -103,6 +116,7 @@ export async function preCompact(
       claudeMdUpdated,
     };
   } catch (error) {
+    handleQuotaError(error);
     console.error('preCompact error:', error);
     return { factsExtracted: 0, factsStored: 0, claudeMdUpdated: false };
   }

@@ -157,15 +157,15 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | LLM-guided dedup (ADD/UPDATE/DELETE) | Yes (Pro) | -- | Yes | OpenClaw + NanoClaw extraction prompts |
 | Bulk consolidation tool | Yes | Yes | Yes (via MCP) | Self-hosted only (no batch delete on managed service) |
 | **Pro Tier Gating** | | | | |
-| Feature gating via billing cache | Yes | -- | -- | Server returns `features` dict, plugin gates client-side |
-| Server-side extraction config | Yes | -- | -- | Relay returns `extraction_interval` + `max_facts_per_extraction` in billing status |
-| Unified extraction interval (3 turns) | Yes | -- | Yes (env) | Server-tunable via relay config (no npm publish needed) |
+| Feature gating via billing cache | Yes | -- | Yes | Server returns `features` dict, plugin/skill gates client-side |
+| Server-side extraction config | Yes | -- | Yes | Relay returns `extraction_interval` + `max_facts_per_extraction` in billing status |
+| Unified extraction interval (3 turns) | Yes | -- | Yes | Server-tunable via relay config (no npm publish needed) |
 | Max facts per extraction | Yes | -- | Yes | Server-tunable via relay config (default 15) |
 | Dual-chain routing | -- | -- | -- | Relay-side: routes to Base Sepolia (free) or Gnosis mainnet (pro) |
 | **Batching** | | | | |
 | Client batching (multi-call UserOps) | Yes | Yes | Yes (via MCP) | Wired into extraction loops — batch up to 15 facts per UserOp |
 | **Billing** | | | | |
-| Quota warnings (>80%) | Yes | -- | -- | Injected via before_agent_start |
+| Quota warnings (>80%) | Yes | -- | Yes | Injected via before_agent_start hook |
 | 403 handling + cache invalidation | Yes | Yes | Yes | |
 | **Search Optimizations** | | | | |
 | Hot cache + two-tier search | Yes (managed) | -- | -- | Skips remote query if cached query similar |

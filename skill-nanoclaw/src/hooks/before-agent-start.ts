@@ -1,4 +1,10 @@
 import type { TotalReclaw } from '@totalreclaw/client';
+import {
+  getBillingContext,
+  fetchBillingStatus,
+  getQuotaWarning,
+  checkWelcomeBack,
+} from '../billing.js';
 
 export interface BeforeAgentStartInput {
   userMessage: string;
@@ -40,9 +46,30 @@ export async function beforeAgentStart(
       ) || 'fact',
     }));
 
+    // --- Billing check ---
+    let billingWarning = '';
+    let welcomeBack = '';
+    try {
+      const ctx = await getBillingContext();
+      if (ctx) {
+        // Fetch (or read cached) billing status.
+        const cache = await fetchBillingStatus(ctx);
+        billingWarning = getQuotaWarning(cache);
+
+        // One-time welcome-back for returning Pro users (first conversation after import).
+        if (!cache && ctx.walletAddress) {
+          welcomeBack = await checkWelcomeBack(ctx);
+        }
+      }
+    } catch {
+      // Best-effort -- don't block on billing check failure.
+    }
+
     const contextString = memories.length > 0
-      ? formatMemoriesForContext(memories)
-      : undefined;
+      ? formatMemoriesForContext(memories) + welcomeBack + billingWarning
+      : (welcomeBack || billingWarning)
+        ? (welcomeBack + billingWarning).trim()
+        : undefined;
 
     return {
       contextString,

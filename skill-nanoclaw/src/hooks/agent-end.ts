@@ -5,6 +5,11 @@ import {
   validateExtractionResponse,
   formatConversationHistory,
 } from '../extraction/prompts';
+import {
+  getExtractInterval,
+  getMaxFactsPerExtraction,
+  handleQuotaError,
+} from '../billing.js';
 
 export interface AgentEndInput {
   conversationHistory: Array<{
@@ -24,16 +29,15 @@ export type LLMClient = {
   generate: (system: string, user: string, options?: { responseFormat?: { type: string } }) => Promise<string>;
 };
 
-const EXTRACT_INTERVAL = parseInt(process.env.TOTALRECLAW_EXTRACT_INTERVAL || '3', 10);
 const MIN_IMPORTANCE = parseInt(process.env.TOTALRECLAW_MIN_IMPORTANCE || '6', 10);
-const MAX_FACTS_PER_EXTRACTION = 15;
 
 export async function agentEnd(
   client: TotalReclaw,
   llmClient: LLMClient | null,
   input: AgentEndInput
 ): Promise<AgentEndOutput> {
-  if (input.turnCount % EXTRACT_INTERVAL !== 0) {
+  const extractInterval = getExtractInterval();
+  if (input.turnCount % extractInterval !== 0) {
     return { factsExtracted: 0, factsStored: 0 };
   }
 
@@ -78,9 +82,10 @@ export async function agentEnd(
     }
 
     let factsStored = 0;
-    const factsToProcess = validation.facts!.slice(0, MAX_FACTS_PER_EXTRACTION);
-    if (validation.facts!.length > MAX_FACTS_PER_EXTRACTION) {
-      console.log(`Capped extraction from ${validation.facts!.length} to ${MAX_FACTS_PER_EXTRACTION} facts`);
+    const maxFacts = getMaxFactsPerExtraction();
+    const factsToProcess = validation.facts!.slice(0, maxFacts);
+    if (validation.facts!.length > maxFacts) {
+      console.log(`Capped extraction from ${validation.facts!.length} to ${maxFacts} facts`);
     }
     for (const fact of factsToProcess) {
       if (fact.action === 'ADD' && fact.importance >= MIN_IMPORTANCE) {
@@ -93,8 +98,18 @@ export async function agentEnd(
           ],
         };
 
-        await client.remember(fact.factText, metadata);
-        factsStored++;
+        try {
+          await client.remember(fact.factText, metadata);
+          factsStored++;
+        } catch (err: unknown) {
+          // Check for 403 / quota exceeded -- invalidate billing cache so next
+          // before_agent_start re-fetches and warns the user.
+          if (handleQuotaError(err)) {
+            break; // Stop trying to store remaining facts -- they'll all fail too
+          }
+          // Otherwise skip this fact and continue with the rest
+          console.warn(`Failed to store fact: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     }
 
@@ -103,6 +118,8 @@ export async function agentEnd(
       factsStored,
     };
   } catch (error) {
+    // Check for quota errors at the top level too (e.g. batch submit failures).
+    handleQuotaError(error);
     console.error('agentEnd error:', error);
     return { factsExtracted: 0, factsStored: 0 };
   }
