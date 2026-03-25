@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     environment:
       ZAI_API_KEY: "${ZAI_API_KEY}"
-      TOTALRECLAW_SERVER_URL: "https://api.totalreclaw.xyz"
+      TOTALRECLAW_SERVER_URL: "https://api-staging.totalreclaw.xyz"
       # NOTE: TOTALRECLAW_RECOVERY_PHRASE intentionally NOT set — tests onboarding flow
       TOTALRECLAW_CHAIN_ID: "10200"
       TOTALRECLAW_DATA_EDGE_ADDRESS: "0xA84c5433110Ccc93e57ec387e630E86Bad86c36f"

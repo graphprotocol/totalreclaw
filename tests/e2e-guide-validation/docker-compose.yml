@@ -6,7 +6,7 @@ services:
       dockerfile: tests/e2e-guide-validation/Dockerfile.openclaw
     environment:
       ZAI_API_KEY: "${ZAI_API_KEY}"
-      TOTALRECLAW_SERVER_URL: "https://api.totalreclaw.xyz"
+      TOTALRECLAW_SERVER_URL: "https://api-staging.totalreclaw.xyz"
       TOTALRECLAW_RECOVERY_PHRASE: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
       TOTALRECLAW_CHAIN_ID: "100"
       TOTALRECLAW_DATA_EDGE_ADDRESS: "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca"

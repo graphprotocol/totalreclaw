@@ -2,7 +2,7 @@
  * E2E Tests: Client Batching, Extraction Config, Dual-Chain Routing, Full Pipeline
  *
  * Tests against LIVE staging:
- *   - Relay: api.totalreclaw.xyz
+ *   - Relay: api-staging.totalreclaw.xyz
  *   - Chain: Base Sepolia (84532)
  *   - Subgraph: totalreclaw---base-sepolia (Graph Studio)
  *
@@ -35,7 +35,7 @@ import { createPimlicoClient } from 'permissionless/clients/pimlico';
 // Configuration
 // ---------------------------------------------------------------------------
 
-const RELAY_URL = process.env.RELAY_URL || 'https://api.totalreclaw.xyz';
+const RELAY_URL = process.env.RELAY_URL || 'https://api-staging.totalreclaw.xyz';
 const CHAIN_ID = 84532; // Base Sepolia
 const DATA_EDGE_ADDRESS = '0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca' as const;
 const ENTRYPOINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032' as const;

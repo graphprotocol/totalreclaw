@@ -228,17 +228,17 @@ else
   pass "No LanceDB files (native memory correctly disabled)"
 fi
 
-# ─── Phase 7: Verify production server is reachable ─────────────────────────
-header "Phase 7: Verify production TotalReclaw server"
+# ─── Phase 7: Verify staging server is reachable ─────────────────────────
+header "Phase 7: Verify staging TotalReclaw server"
 
 TESTS=$((TESTS + 1))
-SERVER_HEALTH=$(curl -sS --max-time 10 "https://api.totalreclaw.xyz/health" 2>/dev/null || echo "unreachable")
+SERVER_HEALTH=$(curl -sS --max-time 10 "https://api-staging.totalreclaw.xyz/health" 2>/dev/null || echo "unreachable")
 
 if echo "$SERVER_HEALTH" | grep -qi "ok\|healthy\|status"; then
-  pass "Production TotalReclaw server is healthy"
+  pass "Staging TotalReclaw server is healthy"
   info "Health: $SERVER_HEALTH"
 else
-  fail "Production server health check failed: $SERVER_HEALTH"
+  fail "Staging server health check failed: $SERVER_HEALTH"
 fi
 
 # ─── Summary ────────────────────────────────────────────────────────────────
