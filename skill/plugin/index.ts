@@ -9,6 +9,7 @@
  *   - totalreclaw_status       -- check billing/subscription status
  *   - totalreclaw_consolidate  -- scan and merge near-duplicate memories
  *   - totalreclaw_import_from  -- import memories from other tools (Mem0, MCP Memory, etc.)
+ *   - totalreclaw_upgrade      -- create Stripe checkout for Pro upgrade
  *
  * Also registers a `before_agent_start` hook that automatically injects
  * relevant memories into the agent's context.
@@ -133,6 +134,9 @@ const MAX_FACTS_PER_EXTRACTION = 15;
 
 // Store-time near-duplicate detection (consolidation module)
 const STORE_DEDUP_ENABLED = process.env.TOTALRECLAW_STORE_DEDUP !== 'false';
+
+// One-time welcome-back message for returning Pro users (set during init, consumed by first before_agent_start)
+let welcomeBackMessage: string | null = null;
 
 // B2: Minimum relevance threshold — cosine below this means no memory injection
 const RELEVANCE_THRESHOLD = parseFloat(process.env.TOTALRECLAW_RELEVANCE_THRESHOLD ?? '0.3');
@@ -419,6 +423,45 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
       logger.warn(`Failed to derive Smart Account address: ${err instanceof Error ? err.message : String(err)}`);
       // Fall back to userId — won't match subgraph Bytes format, but better than null
       subgraphOwner = userId;
+    }
+  }
+
+  // One-time billing check for returning users (imported recovery phrase).
+  // If they already have an active Pro subscription, inform them on next conversation start.
+  if (existingUserId && authKeyHex) {
+    try {
+      const walletAddr = subgraphOwner || userId || '';
+      if (walletAddr) {
+        const billingUrl = (process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz').replace(/\/+$/, '');
+        const resp = await fetch(`${billingUrl}/v1/billing/status?wallet_address=${encodeURIComponent(walletAddr)}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${authKeyHex}`,
+            'Accept': 'application/json',
+            'X-TotalReclaw-Client': 'openclaw-plugin',
+          },
+        });
+        if (resp.ok) {
+          const billingData = await resp.json() as Record<string, unknown>;
+          const tier = billingData.tier as string;
+          const expiresAt = billingData.expires_at as string | undefined;
+          // Populate billing cache for future use.
+          writeBillingCache({
+            tier: tier || 'free',
+            free_writes_used: (billingData.free_writes_used as number) ?? 0,
+            free_writes_limit: (billingData.free_writes_limit as number) ?? 0,
+            features: billingData.features as BillingCache['features'] | undefined,
+            checked_at: Date.now(),
+          });
+          if (tier === 'pro' && expiresAt) {
+            const expiryDate = new Date(expiresAt).toLocaleDateString();
+            welcomeBackMessage = `Welcome back! Your Pro subscription is active (expires: ${expiryDate}).`;
+            logger.info(`Returning Pro user detected — expires ${expiryDate}`);
+          }
+        }
+      }
+    } catch {
+      // Best-effort — don't block initialization on billing check failure.
     }
   }
 }
@@ -2184,6 +2227,85 @@ const plugin = {
     );
 
     // ---------------------------------------------------------------
+    // Tool: totalreclaw_upgrade
+    // ---------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: 'totalreclaw_upgrade',
+        label: 'Upgrade to Pro',
+        description:
+          'Upgrade to TotalReclaw Pro for unlimited encrypted memories. ' +
+          'Returns a Stripe checkout URL for the user to complete payment via credit/debit card.',
+        parameters: {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        },
+        async execute() {
+          try {
+            await requireFullSetup(api.logger);
+
+            if (!authKeyHex) {
+              return {
+                content: [{ type: 'text', text: 'Auth credentials are not available. Please initialize first.' }],
+              };
+            }
+
+            const serverUrl = (process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz').replace(/\/+$/, '');
+            const walletAddr = subgraphOwner || userId || '';
+
+            if (!walletAddr) {
+              return {
+                content: [{ type: 'text', text: 'Wallet address not available. Please ensure the plugin is fully initialized.' }],
+              };
+            }
+
+            const response = await fetch(`${serverUrl}/v1/billing/checkout`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${authKeyHex}`,
+                'Content-Type': 'application/json',
+                'X-TotalReclaw-Client': 'openclaw-plugin',
+              },
+              body: JSON.stringify({
+                wallet_address: walletAddr,
+                tier: 'pro',
+              }),
+            });
+
+            if (!response.ok) {
+              const body = await response.text().catch(() => '');
+              return {
+                content: [{ type: 'text', text: `Failed to create checkout session (HTTP ${response.status}): ${body || response.statusText}` }],
+              };
+            }
+
+            const data = await response.json() as { checkout_url?: string };
+
+            if (!data.checkout_url) {
+              return {
+                content: [{ type: 'text', text: 'Failed to create checkout session: no checkout URL returned.' }],
+              };
+            }
+
+            return {
+              content: [{ type: 'text', text: `Open this URL to upgrade to Pro: ${data.checkout_url}` }],
+              details: { checkout_url: data.checkout_url },
+            };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            api.logger.error(`totalreclaw_upgrade failed: ${message}`);
+            return {
+              content: [{ type: 'text', text: `Failed to create checkout session: ${message}` }],
+            };
+          }
+        },
+      },
+      { name: 'totalreclaw_upgrade' },
+    );
+
+    // ---------------------------------------------------------------
     // Hook: before_agent_start
     // ---------------------------------------------------------------
 
@@ -2211,6 +2333,13 @@ const plugin = {
                 'TotalReclaw is installed but needs configuration. Follow the "Post-Install Setup" steps in SKILL.md to complete setup.\n' +
                 'Ask the user: "Do you have an existing TotalReclaw recovery phrase, or should I generate a new one?"',
             };
+          }
+
+          // One-time welcome-back message for returning Pro users.
+          let welcomeBack = '';
+          if (welcomeBackMessage) {
+            welcomeBack = `\n\n${welcomeBackMessage}`;
+            welcomeBackMessage = null; // Consume — only show once
           }
 
           // Billing cache check — warn if quota is approaching limit.
@@ -2286,7 +2415,7 @@ const plugin = {
                 const lines = cachedFacts.slice(0, 8).map((f, i) =>
                   `${i + 1}. ${f.text} (importance: ${f.importance}/10, cached)`,
                 );
-                return { prependContext: `## Relevant Memories\n\n${lines.join('\n')}` + billingWarning };
+                return { prependContext: `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
               }
             }
 
@@ -2299,7 +2428,7 @@ const plugin = {
               const lines = cachedFacts.slice(0, 8).map((f, i) =>
                 `${i + 1}. ${f.text} (importance: ${f.importance}/10, cached)`,
               );
-              return { prependContext: `## Relevant Memories\n\n${lines.join('\n')}` + billingWarning };
+              return { prependContext: `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
             }
 
             if (allTrapdoors.length === 0) return undefined;
@@ -2316,7 +2445,7 @@ const plugin = {
                 const lines = cachedFacts.slice(0, 8).map((f, i) =>
                   `${i + 1}. ${f.text} (importance: ${f.importance}/10, cached)`,
                 );
-                return { prependContext: `## Relevant Memories\n\n${lines.join('\n')}` + billingWarning };
+                return { prependContext: `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
               }
               return undefined;
             }
@@ -2328,7 +2457,7 @@ const plugin = {
               const lines = cachedFacts.slice(0, 8).map((f, i) =>
                 `${i + 1}. ${f.text} (importance: ${f.importance}/10, cached)`,
               );
-              return { prependContext: `## Relevant Memories\n\n${lines.join('\n')}` + billingWarning };
+              return { prependContext: `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
             }
 
             // 5. Decrypt subgraph results and build reranker input.
@@ -2434,7 +2563,7 @@ const plugin = {
             });
             const contextString = `## Relevant Memories\n\n${lines.join('\n')}`;
 
-            return { prependContext: contextString + billingWarning };
+            return { prependContext: contextString + welcomeBack + billingWarning };
           }
 
           // --- Server mode (existing behavior) ---
@@ -2546,7 +2675,7 @@ const plugin = {
           });
           const contextString = `## Relevant Memories\n\n${lines.join('\n')}`;
 
-          return { prependContext: contextString + billingWarning };
+          return { prependContext: contextString + welcomeBack + billingWarning };
         } catch (err: unknown) {
           // The hook must NEVER throw -- log and return undefined.
           const message = err instanceof Error ? err.message : String(err);

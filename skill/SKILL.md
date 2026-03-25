@@ -243,6 +243,31 @@ DRY RUN -- no memories were deleted. Run without dry_run to apply.
 
 ---
 
+### totalreclaw_upgrade
+
+Upgrade to TotalReclaw Pro for unlimited encrypted memories on Gnosis mainnet.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| *(none)* | | | The tool automatically uses the current wallet address |
+
+**Example:**
+```json
+{}
+```
+
+**Returns:**
+```json
+{
+  "checkout_url": "https://checkout.stripe.com/c/pay/...",
+  "message": "Open this URL to upgrade to Pro: https://checkout.stripe.com/c/pay/..."
+}
+```
+
+---
+
 ### totalreclaw_import_from
 
 Import memories from other AI memory tools into TotalReclaw.
@@ -348,7 +373,7 @@ Register TotalReclaw as the memory plugin:
 
 ### Step 5: Restart and verify
 
-Restart the gateway, then confirm the plugin loaded by checking that `totalreclaw_remember`, `totalreclaw_recall`, `totalreclaw_forget`, `totalreclaw_export`, `totalreclaw_consolidate`, and `totalreclaw_import_from` tools are available.
+Restart the gateway, then confirm the plugin loaded by checking that `totalreclaw_remember`, `totalreclaw_recall`, `totalreclaw_forget`, `totalreclaw_export`, `totalreclaw_status`, `totalreclaw_upgrade`, `totalreclaw_consolidate`, and `totalreclaw_import_from` tools are available.
 
 ### Step 6: Explain the free tier
 
@@ -446,6 +471,13 @@ Use when:
 - The user explicitly asks you to forget something ("forget that...", "delete that memory...")
 - The user indicates information is outdated or incorrect and should be removed
 - The user requests a clean slate for a specific topic
+
+#### totalreclaw_upgrade
+
+Use when:
+- The user hits their free tier memory limit (403 quota exceeded)
+- The user asks about upgrading, pricing, or getting Pro
+- After a `totalreclaw_status` call shows the user is on the free tier and they want more
 
 #### totalreclaw_export
 

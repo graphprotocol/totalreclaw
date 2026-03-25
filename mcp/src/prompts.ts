@@ -136,11 +136,7 @@ Use this when:
 
 export const UPGRADE_TOOL_DESCRIPTION = `Upgrade to TotalReclaw Pro for unlimited encrypted memories.
 
-Returns a checkout URL for the user to complete payment.
-
-Payment options:
-- card: Stripe checkout (credit/debit card)
-- crypto: Coinbase Commerce (USDC, USDT, ETH on multiple chains)
+Returns a Stripe checkout URL for the user to complete payment via credit/debit card.
 
 Use this when:
 - User hits their free tier limit
