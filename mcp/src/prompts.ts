@@ -80,11 +80,11 @@ Each fact needs:
 
 The vault handles deduplication automatically. If a similar fact exists, it will be updated rather than duplicated.`;
 
-export const RECALL_TOOL_DESCRIPTION = `Search your memory for relevant context. Call this at the START of every conversation and whenever the user's question might relate to previously stored information.
+export const RECALL_TOOL_DESCRIPTION = `Search your memory for relevant context. Returns the top 8 most relevant memories (not all — this is a targeted search, not a full dump).
 
-IMPORTANT: You MUST call this tool at the beginning of every new conversation with a query summarizing the user's first message. This loads relevant context from past sessions and ensures continuity.
-
-Also call this proactively when:
+Call this proactively when:
+- The user's message suggests they've told you something before ("remember when I said...", "what's my...")
+- The conversation topic likely relates to previously stored information
 - The user asks about their preferences, history, or past decisions
 - The user references something from a previous conversation
 - You need context about the user's background, projects, or work style
