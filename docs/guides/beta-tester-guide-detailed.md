@@ -445,6 +445,8 @@ When your free tier limit (500 memories/month) is reached, the agent will prompt
 
 After upgrading, you can continue using TotalReclaw with higher write limits. Your subscription is tied to your wallet address, so it follows you across devices (as long as you use the same recovery phrase).
 
+> **Note:** Your client caches billing status for up to 2 hours. After upgrading, the new tier may take up to 2 hours to fully activate. If Pro features are not reflected immediately, restart your agent to force a billing cache refresh.
+
 ---
 
 ## 10. Recovery on a New Device

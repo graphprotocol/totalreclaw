@@ -448,6 +448,7 @@ TotalReclaw has a free tier (500 memories/month, unlimited reads). The plugin mo
 - If usage exceeds 80%, a warning is injected into your context at conversation start
 - If a write fails with quota exceeded (403), inform the user and suggest visiting https://totalreclaw.xyz/pricing
 - Use `totalreclaw_status` when the user asks about their subscription, quota, or billing
+- After upgrading, the new tier features may take up to 2 hours to fully activate on your client due to billing cache. If you experience issues, restart your agent.
 
 ### When to Use Each Tool
 

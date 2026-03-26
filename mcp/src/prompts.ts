@@ -48,6 +48,8 @@ When a totalreclaw_remember call fails with "quota_exceeded":
 3. If they want to upgrade, use totalreclaw_upgrade to get a checkout link
 Do NOT repeatedly attempt to store memories after a quota error.
 
+Note: Billing status is cached locally for up to 2 hours. After upgrading to Pro, the new tier may take up to 2 hours to take effect. If the user reports that Pro features are not active after upgrading, suggest restarting their agent to force a billing cache refresh.
+
 ### Importing memories from other tools
 If the user mentions migrating from Mem0, MCP Memory Server, MemoClaw, or any other AI memory tool, offer to use totalreclaw_import_from. Start with dry_run=true to preview, then confirm before importing.
 API keys provided by the user are used only for the import and are never stored.
