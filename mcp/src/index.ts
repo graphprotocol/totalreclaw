@@ -28,8 +28,15 @@ import {
   handleConsolidate,
   statusToolDefinition,
   upgradeToolDefinition,
+  migrateToolDefinition,
   handleStatus,
   handleUpgrade,
+  fetchAllFactsFromSubgraph,
+  fetchMainnetContentFps,
+  fetchBlindIndicesForFacts,
+  checkBillingTier,
+  type SubgraphFactFull,
+  type MigrationResult,
 } from './tools/index.js';
 import { getLastBillingResponse } from './tools/status.js';
 import { setOnRememberCallback } from './tools/remember.js';
@@ -821,6 +828,277 @@ async function handleForgetSubgraph(
   }
 }
 
+// ── Migration handler ─────────────────────────────────────────────────────────
+
+/** Maximum facts per UserOp batch during migration */
+const MIGRATION_BATCH_SIZE = 15;
+
+/**
+ * Handle the testnet-to-mainnet migration tool call.
+ *
+ * This function:
+ *   1. Validates the user is on subgraph mode with Pro tier
+ *   2. Fetches all active facts from the testnet (Base Sepolia) subgraph
+ *   3. Fetches existing mainnet content fingerprints for idempotency
+ *   4. In dry-run mode: returns a preview of what would be migrated
+ *   5. In confirm mode: re-encodes and batch-submits facts to mainnet
+ */
+async function handleMigrateFromIndex(
+  args: unknown,
+): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const input = args as Record<string, unknown>;
+  const confirm = input?.confirm === true;
+
+  // Must be in subgraph mode
+  if (!subgraphState) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: false,
+          error: 'Migration is only available with the managed service (subgraph mode). Self-hosted mode does not use chain-based storage.',
+        }),
+      }],
+    };
+  }
+
+  const authKeyHex = Buffer.from(subgraphState.authKey).toString('hex');
+
+  // 1. Check billing tier — must be Pro
+  const billing = await checkBillingTier(SERVER_URL, subgraphState.smartAccountAddress, authKeyHex);
+  if (billing.error) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: false,
+          error: `Failed to verify billing tier: ${billing.error}`,
+        }),
+      }],
+    };
+  }
+  if (billing.tier !== 'pro') {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: false,
+          error: 'Migration requires Pro tier. Use totalreclaw_upgrade to upgrade first, then run migration.',
+          current_tier: billing.tier,
+        }),
+      }],
+    };
+  }
+
+  // 2. Fetch all active facts from the TESTNET subgraph
+  //    The relay routes Pro users to the mainnet subgraph, so we need to
+  //    explicitly request the testnet subgraph via the ?chain=testnet query param.
+  const testnetSubgraphUrl = `${SERVER_URL.replace(/\/+$/, '')}/v1/subgraph?chain=testnet`;
+  const mainnetSubgraphUrl = `${SERVER_URL.replace(/\/+$/, '')}/v1/subgraph`;
+
+  console.error(`[migrate] Fetching testnet facts for owner ${subgraphState.smartAccountAddress}...`);
+  const testnetFacts = await fetchAllFactsFromSubgraph(
+    testnetSubgraphUrl,
+    subgraphState.smartAccountAddress,
+    authKeyHex,
+  );
+
+  if (testnetFacts.length === 0) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: true,
+          mode: 'dry_run',
+          testnet_facts: 0,
+          already_on_mainnet: 0,
+          to_migrate: 0,
+          migrated: 0,
+          failed_batches: 0,
+          batch_results: [],
+          message: 'No facts found on testnet. Nothing to migrate.',
+        } satisfies MigrationResult),
+      }],
+    };
+  }
+
+  // 3. Check which facts already exist on mainnet (by contentFp)
+  console.error(`[migrate] Checking mainnet for existing facts...`);
+  const mainnetFps = await fetchMainnetContentFps(
+    mainnetSubgraphUrl,
+    subgraphState.smartAccountAddress,
+    authKeyHex,
+  );
+
+  // Filter to facts that need migration
+  const factsToMigrate = testnetFacts.filter(f => {
+    if (!f.contentFp) return true; // No fingerprint — migrate it
+    return !mainnetFps.has(f.contentFp);
+  });
+
+  const alreadyOnMainnet = testnetFacts.length - factsToMigrate.length;
+
+  console.error(`[migrate] Testnet: ${testnetFacts.length} facts, already on mainnet: ${alreadyOnMainnet}, to migrate: ${factsToMigrate.length}`);
+
+  // 4. Dry-run mode: just report
+  if (!confirm) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: true,
+          mode: 'dry_run',
+          testnet_facts: testnetFacts.length,
+          already_on_mainnet: alreadyOnMainnet,
+          to_migrate: factsToMigrate.length,
+          migrated: 0,
+          failed_batches: 0,
+          batch_results: [],
+          message: factsToMigrate.length === 0
+            ? `All ${testnetFacts.length} testnet facts already exist on mainnet. Nothing to migrate.`
+            : `Found ${factsToMigrate.length} facts to migrate from testnet to Gnosis mainnet (${alreadyOnMainnet} already on mainnet). Call with confirm=true to proceed.`,
+        } satisfies MigrationResult),
+      }],
+    };
+  }
+
+  // 5. Execute migration: re-encode and batch-submit
+  if (factsToMigrate.length === 0) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: true,
+          mode: 'executed',
+          testnet_facts: testnetFacts.length,
+          already_on_mainnet: alreadyOnMainnet,
+          to_migrate: 0,
+          migrated: 0,
+          failed_batches: 0,
+          batch_results: [],
+          message: `All ${testnetFacts.length} testnet facts already exist on mainnet. Nothing to migrate.`,
+        } satisfies MigrationResult),
+      }],
+    };
+  }
+
+  // Fetch blind indices from testnet for all facts to migrate.
+  // The protobuf payload must include blind indices for the subgraph to create
+  // BlindIndex entities on mainnet (required for search to work).
+  console.error(`[migrate] Fetching blind indices for ${factsToMigrate.length} facts...`);
+  const factIdsToMigrate = factsToMigrate.map(f => f.id);
+  const blindIndicesMap = await fetchBlindIndicesForFacts(
+    testnetSubgraphUrl,
+    factIdsToMigrate,
+    authKeyHex,
+  );
+
+  // Build protobuf payloads with blind indices
+  const finalPayloads: Buffer[] = [];
+  for (const fact of factsToMigrate) {
+    const blobHex = fact.encryptedBlob.startsWith('0x')
+      ? fact.encryptedBlob.slice(2)
+      : fact.encryptedBlob;
+
+    const indices = blindIndicesMap.get(fact.id) || [];
+
+    const factPayload: FactPayload = {
+      id: fact.id,
+      timestamp: new Date().toISOString(),
+      owner: subgraphState.smartAccountAddress,
+      encryptedBlob: blobHex,
+      blindIndices: indices,
+      decayScore: parseFloat(fact.decayScore) || 0.5,
+      source: fact.source || 'migration',
+      contentFp: fact.contentFp || '',
+      agentId: fact.agentId || 'mcp-server',
+      encryptedEmbedding: fact.encryptedEmbedding || undefined,
+    };
+
+    finalPayloads.push(encodeFactProtobuf(factPayload));
+  }
+
+  // Batch into groups of MIGRATION_BATCH_SIZE
+  const batches: Buffer[][] = [];
+  for (let i = 0; i < finalPayloads.length; i += MIGRATION_BATCH_SIZE) {
+    batches.push(finalPayloads.slice(i, i + MIGRATION_BATCH_SIZE));
+  }
+
+  console.error(`[migrate] Submitting ${finalPayloads.length} facts in ${batches.length} batch(es)...`);
+
+  const batchConfig = getSubgraphConfig({
+    relayUrl: subgraphState.serverUrl,
+    mnemonic: subgraphState.mnemonic,
+    authKeyHex,
+    walletAddress: subgraphState.smartAccountAddress,
+  });
+
+  let migrated = 0;
+  let failedBatches = 0;
+  const batchResults: MigrationResult['batch_results'] = [];
+
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    const batchNum = i + 1;
+    console.error(`[migrate] Batch ${batchNum}/${batches.length} (${batch.length} facts)...`);
+
+    try {
+      const result = await submitFactBatchOnChain(batch, batchConfig);
+      if (result.success) {
+        migrated += batch.length;
+        batchResults.push({
+          batch_number: batchNum,
+          size: batch.length,
+          success: true,
+          tx_hash: result.txHash,
+        });
+        console.error(`[migrate] Batch ${batchNum} succeeded (tx=${result.txHash.slice(0, 10)}...)`);
+      } else {
+        failedBatches++;
+        batchResults.push({
+          batch_number: batchNum,
+          size: batch.length,
+          success: false,
+          tx_hash: result.txHash,
+          error: 'UserOp included but marked as failed',
+        });
+        console.error(`[migrate] Batch ${batchNum} included but failed (tx=${result.txHash.slice(0, 10)}...)`);
+      }
+    } catch (err) {
+      failedBatches++;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      batchResults.push({
+        batch_number: batchNum,
+        size: batch.length,
+        success: false,
+        error: errMsg,
+      });
+      console.error(`[migrate] Batch ${batchNum} error: ${errMsg}`);
+    }
+  }
+
+  const resultMessage = failedBatches === 0
+    ? `Successfully migrated ${migrated} memories from testnet to Gnosis mainnet in ${batches.length} batch(es).`
+    : `Migrated ${migrated}/${factsToMigrate.length} memories. ${failedBatches} batch(es) failed — re-run to retry (idempotent).`;
+
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        success: failedBatches === 0,
+        mode: 'executed',
+        testnet_facts: testnetFacts.length,
+        already_on_mainnet: alreadyOnMainnet,
+        to_migrate: factsToMigrate.length,
+        migrated,
+        failed_batches: failedBatches,
+        batch_results: batchResults,
+        message: resultMessage,
+      } satisfies MigrationResult),
+    }],
+  };
+}
+
 // ── Auth error helper ────────────────────────────────────────────────────────
 
 const AUTH_HINT_MESSAGE =
@@ -906,6 +1184,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     consolidateToolDefinition,
     statusToolDefinition,
     upgradeToolDefinition,
+    migrateToolDefinition,
   ],
 }));
 
@@ -943,6 +1222,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ? Buffer.from(subgraphState.authKey).toString('hex')
         : '';
       return await handleUpgrade(SERVER_URL, authKeyHex, args);
+    }
+
+    if (name === 'totalreclaw_migrate') {
+      return await handleMigrateFromIndex(args);
     }
 
     // ── Subgraph mode ─────────────────────────────────────────────────────

@@ -140,6 +140,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 | `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | Mem0 + MCP Memory adapters |
 | `totalreclaw_import` | -- | Yes | Yes (via MCP) | JSON/Markdown re-import (MCP only) |
 | `totalreclaw_upgrade` | Yes | Yes | Yes (via MCP) | Stripe checkout URL |
+| `totalreclaw_migrate` | Yes | Yes | Yes (via MCP) | Testnet-to-mainnet migration after Pro upgrade |
 | `totalreclaw_consolidate` | Yes | Yes | Yes (via MCP) | Self-hosted only (no batch delete on managed service) |
 | **Automatic Memory** | | | | |
 | Auto-search (before_agent_start) | Yes | -- | Yes (hook) | MCP has no lifecycle hooks |
@@ -195,6 +196,7 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (500 memor
 | Hot cache | -- | Yes | Self-hosted doesn't need it |
 | Dual-chain routing | -- | Yes | Relay routes based on tier (free=Base Sepolia, pro=Gnosis) |
 | Client batching | -- | Yes | Multi-call UserOps via batcher.ts (managed service only, uses ERC-4337 executeBatch) |
+| Testnet-to-mainnet migration | -- | Yes | `totalreclaw_migrate` — copies facts from Base Sepolia to Gnosis after Pro upgrade. Idempotent, dry-run by default. |
 
 ### Known Gaps
 
@@ -247,7 +249,7 @@ Every new feature implementation MUST include:
 | Stripe-driven tiers | PLANNED | Stripe as source of truth for pricing/limits. Plan at `totalreclaw-internal/plans/2026-03-26-stripe-driven-tiers.md` |
 | LLM memory import (ChatGPT/Claude/Gemini) | PLANNED | Adapters for importing memory from major LLM providers |
 | Conflict resolution (Layers 3-4) | MEDIUM | Spec'd in v0.3.2, not implemented |
-| Migration tool (testnet to mainnet) | MEDIUM | Designed, not implemented -- re-encrypt + re-store on upgrade |
+| Migration tool (testnet to mainnet) | RESOLVED | Implemented as `totalreclaw_migrate` tool in MCP server + OpenClaw plugin. Dry-run by default, idempotent, batch submission. |
 | Startup validation | MEDIUM | Validate Pimlico/Stripe/Subgraph reachability on relay boot |
 | DB backup monitoring | LOW | Add alerting (Slack/email) if daily R2 backup fails |
 | Graceful shutdown | LOW | Not yet configured in uvicorn |

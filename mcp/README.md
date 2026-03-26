@@ -104,6 +104,7 @@ The server only ever sees ciphertext and hashed tokens.
 | `totalreclaw_import_from` | Import from Mem0 or MCP Memory Server |
 | `totalreclaw_consolidate` | Merge duplicate and related memories |
 | `totalreclaw_upgrade` | Get a link to upgrade to Pro |
+| `totalreclaw_migrate` | Migrate testnet memories to mainnet after Pro upgrade |
 
 ## Environment Variables
 

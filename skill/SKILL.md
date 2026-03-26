@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "End-to-end encrypted memory for AI agents — portable, yours forever. AES-256-GCM E2EE: server never sees plaintext."
-version: 1.4.0
+version: 1.5.0
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz

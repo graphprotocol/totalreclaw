@@ -7,3 +7,12 @@ export { importFromToolDefinition, handleImportFrom } from './import-from.js';
 export { consolidateToolDefinition, handleConsolidate } from './consolidate.js';
 export { statusToolDefinition, handleStatus } from './status.js';
 export { upgradeToolDefinition, handleUpgrade } from './upgrade.js';
+export { migrateToolDefinition } from './migrate.js';
+export {
+  fetchAllFactsFromSubgraph,
+  fetchMainnetContentFps,
+  fetchBlindIndicesForFacts,
+  checkBillingTier,
+  type SubgraphFactFull,
+  type MigrationResult,
+} from './migrate.js';

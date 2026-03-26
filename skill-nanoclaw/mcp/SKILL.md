@@ -8,6 +8,7 @@ You have access to an end-to-end encrypted memory system via the `totalreclaw` M
 - `mcp__totalreclaw__totalreclaw_recall` — Search memories by natural language query
 - `mcp__totalreclaw__totalreclaw_forget` — Delete a specific memory by ID
 - `mcp__totalreclaw__totalreclaw_export` — Export all memories decrypted as Markdown or JSON
+- `mcp__totalreclaw__totalreclaw_migrate` — Migrate testnet memories to mainnet after upgrading to Pro
 
 ## Automatic Recall
 
