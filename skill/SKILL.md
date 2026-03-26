@@ -28,11 +28,15 @@ metadata:
 
 ## Recovery Phrase -- READ THIS FIRST
 
+**CRITICAL SAFETY WARNING:** TotalReclaw generates a NEW recovery phrase for the user. NEVER let the user enter a recovery phrase from an existing crypto wallet they own. TotalReclaw uses BIP-39 mnemonics (the same format as crypto wallets), but TotalReclaw recovery phrases must be SEPARATE from any funded wallet. If a user tries to import a phrase they already use for a crypto wallet, STOP and warn them: "Do NOT use a recovery phrase from an existing crypto wallet. TotalReclaw should have its own dedicated phrase to keep your funds safe."
+
 The recovery phrase is the user's ONLY identity in TotalReclaw. It derives all encryption keys. There is NO password reset, NO recovery mechanism, and NO support channel that can help if it is lost.
 
 **When showing the recovery phrase to the user, ALWAYS include this warning:**
 
 > Your recovery phrase is the ONLY way to access your encrypted memories. If you lose it, your memories are gone forever -- there is no password reset, no recovery, and no support that can help. Write it down and store it somewhere safe. Never share it with anyone.
+>
+> IMPORTANT: This phrase is for TotalReclaw ONLY. Never use a recovery phrase from an existing crypto wallet -- keep your TotalReclaw phrase separate from any wallet that holds funds.
 
 If the user asks to see their recovery phrase, remind them to store it securely. If they mention losing it, be clear that recovery is impossible and they will need to start fresh with a new phrase.
 
@@ -282,6 +286,60 @@ Upgrade to TotalReclaw Pro for unlimited encrypted memories on Gnosis mainnet.
 
 ---
 
+### totalreclaw_migrate
+
+Migrate memories from testnet (Base Sepolia) to mainnet (Gnosis) after upgrading to Pro.
+
+**When to use:** After a user successfully upgrades to Pro. Their memories are on the free-tier testnet and need to be copied to permanent mainnet storage.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| confirm | boolean | No | Set to `true` to execute the migration. Without it, returns a dry-run preview. Default: `false` |
+
+**Example (dry-run):**
+```json
+{}
+```
+
+**Example (execute):**
+```json
+{
+  "confirm": true
+}
+```
+
+**Returns (dry-run):**
+```json
+{
+  "mode": "dry_run",
+  "testnet_facts": 47,
+  "already_on_mainnet": 0,
+  "to_migrate": 47,
+  "message": "Found 47 facts to migrate from testnet to Gnosis mainnet. Call with confirm=true to proceed."
+}
+```
+
+**Returns (executed):**
+```json
+{
+  "mode": "executed",
+  "testnet_facts": 47,
+  "migrated": 47,
+  "failed_batches": 0,
+  "message": "Successfully migrated 47 memories from testnet to Gnosis mainnet."
+}
+```
+
+**Safety:**
+- Dry-run by default: call without `confirm=true` to preview what will be migrated
+- Idempotent: re-running skips facts that already exist on mainnet (by content fingerprint)
+- Testnet facts are never deleted (they remain as a backup)
+- Handles partial failures: if a batch fails, re-run to retry (only unmigrated facts are sent)
+
+---
+
 ### totalreclaw_import_from
 
 Import memories from other AI memory tools into TotalReclaw.
@@ -387,7 +445,7 @@ Register TotalReclaw as the memory plugin:
 
 ### Step 5: Restart and verify
 
-Restart the gateway, then confirm the plugin loaded by checking that `totalreclaw_remember`, `totalreclaw_recall`, `totalreclaw_forget`, `totalreclaw_export`, `totalreclaw_status`, `totalreclaw_upgrade`, `totalreclaw_consolidate`, and `totalreclaw_import_from` tools are available.
+Restart the gateway, then confirm the plugin loaded by checking that `totalreclaw_remember`, `totalreclaw_recall`, `totalreclaw_forget`, `totalreclaw_export`, `totalreclaw_status`, `totalreclaw_upgrade`, `totalreclaw_migrate`, `totalreclaw_consolidate`, and `totalreclaw_import_from` tools are available.
 
 ### Step 6: Explain the free tier
 
@@ -493,6 +551,15 @@ Use when:
 - The user hits their free tier memory limit (403 quota exceeded)
 - The user asks about upgrading, pricing, or getting Pro
 - After a `totalreclaw_status` call shows the user is on the free tier and they want more
+
+#### totalreclaw_migrate
+
+Use when:
+- The user has just upgraded to Pro and their memories are still on testnet
+- The user asks about migrating testnet memories to mainnet
+- After a successful `totalreclaw_upgrade`, proactively offer migration
+
+Always do a dry-run first (call without `confirm=true`), show the preview, then ask the user to confirm before executing.
 
 #### totalreclaw_export
 

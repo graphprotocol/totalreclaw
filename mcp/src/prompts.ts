@@ -5,6 +5,9 @@
 export const SERVER_INSTRUCTIONS = `
 You have access to TotalReclaw, a persistent encrypted memory system. You SHOULD use these tools PROACTIVELY -- do not wait for the user to say "remember this" or "recall that."
 
+## CRITICAL SAFETY: Recovery Phrase
+TotalReclaw uses a 12-word BIP-39 recovery phrase as the user's identity. If a user tries to import a phrase they already use for a CRYPTO WALLET, you MUST warn them: "Do NOT use a recovery phrase from an existing crypto wallet. TotalReclaw should have its own dedicated phrase to keep your funds safe." Always generate a fresh phrase for new users.
+
 ## CRITICAL: Automatic Memory Behaviors
 
 ### At Conversation Start
@@ -156,6 +159,29 @@ Use this when:
 - User hits their free tier limit
 - User asks about upgrading or pricing
 - A remember call returns a quota_exceeded error`;
+
+export const MIGRATE_TOOL_DESCRIPTION = `Migrate memories from testnet (Base Sepolia) to mainnet (Gnosis) after upgrading to Pro.
+
+When a user upgrades from Free to Pro, their memories are on the Base Sepolia testnet. This tool copies them to Gnosis mainnet for permanent storage. No re-encryption needed -- the encrypted data is chain-agnostic.
+
+SAFETY:
+- Dry-run by default: call without confirm=true to see a preview of what will be migrated
+- Idempotent: running it again skips facts that already exist on mainnet
+- Testnet facts are never deleted (they remain as a backup)
+
+WHEN TO USE:
+- After a user successfully upgrades to Pro via totalreclaw_upgrade
+- User asks about migrating their testnet memories to mainnet
+- User wants to ensure their memories are on permanent storage
+
+PARAMETERS:
+- confirm: Set to true to execute the migration. Without it, returns a dry-run preview showing how many memories will be migrated.
+
+WORKFLOW:
+1. First call with confirm=false (or omit) to see the preview
+2. Share the preview with the user
+3. If they confirm, call again with confirm=true
+4. Report progress as batches complete`;
 
 export const IMPORT_FROM_TOOL_DESCRIPTION = `Import memories from other AI memory tools into TotalReclaw.
 
