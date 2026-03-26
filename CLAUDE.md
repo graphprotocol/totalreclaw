@@ -241,12 +241,16 @@ Every new feature implementation MUST include:
 | LSH parameters | RESOLVED | 32-bit x 20 tables, 98.1% Recall@8 on real data |
 | Authentication | RESOLVED | HKDF auth with SHA-256 key hashing |
 | Embedding model | RESOLVED | Migrated to Qwen3-Embedding-0.6B (1024d, multilingual) |
-| Conflict resolution (Layers 3-4) | MEDIUM | Spec'd in v0.3.2, not implemented |
 | Client batching (A2) | RESOLVED | Implemented in client/src/userop/batcher.ts -- batch multiple facts per UserOp |
-| Migration tool (testnet to mainnet) | MEDIUM | Designed, not implemented -- re-encrypt + re-store on upgrade |
-| Load testing | IN PROGRESS | Managed service load test at `totalreclaw-internal/e2e/load-test-managed/`. Client-side <140ms p95 PASS up to 10K facts. |
-| Graceful shutdown | LOW | Not yet configured in uvicorn |
 | Candidate pool sizing | RESOLVED | Server-configurable via relay billing endpoint (`max_candidate_pool` in FeatureFlags). Env overrides: `CANDIDATE_POOL_MAX_FREE`, `CANDIDATE_POOL_MAX_PRO`. |
+| Load testing | RESOLVED | Managed service load test at `totalreclaw-internal/e2e/load-test-managed/`. Client-side <140ms p95 PASS up to 10K facts. |
+| Stripe-driven tiers | PLANNED | Stripe as source of truth for pricing/limits. Plan at `totalreclaw-internal/plans/2026-03-26-stripe-driven-tiers.md` |
+| LLM memory import (ChatGPT/Claude/Gemini) | PLANNED | Adapters for importing memory from major LLM providers |
+| Conflict resolution (Layers 3-4) | MEDIUM | Spec'd in v0.3.2, not implemented |
+| Migration tool (testnet to mainnet) | MEDIUM | Designed, not implemented -- re-encrypt + re-store on upgrade |
+| Startup validation | MEDIUM | Validate Pimlico/Stripe/Subgraph reachability on relay boot |
+| DB backup monitoring | LOW | Add alerting (Slack/email) if daily R2 backup fails |
+| Graceful shutdown | LOW | Not yet configured in uvicorn |
 
 ---
 
