@@ -1,6 +1,6 @@
 {
   "name": "totalreclaw",
-  "version": "0.1.0",
+  "version": "1.4.0",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. AES-256-GCM E2EE: server never sees plaintext.",
   "author": "TotalReclaw Team",
   "license": "MIT",
@@ -40,6 +40,10 @@
       "pre_compaction": {
         "priority": 5,
         "description": "Full memory flush before context compaction"
+      },
+      "before_reset": {
+        "priority": 5,
+        "description": "Full memory flush before conversation reset"
       }
     },
     "tools": [
@@ -114,6 +118,67 @@
         "name": "totalreclaw_status",
         "description": "Check billing and subscription status, including quota usage and upgrade options",
         "parameters": {}
+      },
+      {
+        "name": "totalreclaw_upgrade",
+        "description": "Get a checkout URL to upgrade to TotalReclaw Pro (unlimited memories on Gnosis mainnet)",
+        "parameters": {}
+      },
+      {
+        "name": "totalreclaw_import_from",
+        "description": "Import memories from other AI memory tools (Mem0, MCP Memory Server) into TotalReclaw",
+        "parameters": {
+          "source": {
+            "type": "string",
+            "required": true,
+            "enum": ["mem0", "mcp-memory"],
+            "description": "Source system to import from"
+          },
+          "api_key": {
+            "type": "string",
+            "required": false,
+            "description": "API key for the source (Mem0). Used once, never stored."
+          },
+          "source_user_id": {
+            "type": "string",
+            "required": false,
+            "description": "User or agent ID in the source system"
+          },
+          "content": {
+            "type": "string",
+            "required": false,
+            "description": "File content (JSON, JSONL, or CSV) for file-based sources"
+          },
+          "file_path": {
+            "type": "string",
+            "required": false,
+            "description": "Path to a file on disk for file-based sources"
+          },
+          "namespace": {
+            "type": "string",
+            "required": false,
+            "default": "imported",
+            "description": "Target namespace in TotalReclaw"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "required": false,
+            "default": false,
+            "description": "Preview without importing"
+          }
+        }
+      },
+      {
+        "name": "totalreclaw_consolidate",
+        "description": "Scan all stored memories and merge near-duplicates, keeping the most important/recent version",
+        "parameters": {
+          "dry_run": {
+            "type": "boolean",
+            "required": false,
+            "default": false,
+            "description": "Preview consolidation without deleting"
+          }
+        }
       }
     ],
     "config": {

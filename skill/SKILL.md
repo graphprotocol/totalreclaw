@@ -1,14 +1,16 @@
 ---
 name: totalreclaw
 description: "End-to-end encrypted memory for AI agents — portable, yours forever. AES-256-GCM E2EE: server never sees plaintext."
-version: 0.2.0
+version: 1.4.0
 author: TotalReclaw Team
 license: MIT
-homepage: https://github.com/p-diogo/totalreclaw
+homepage: https://totalreclaw.xyz
 metadata:
   openclaw:
     requires:
-      env: []
+      env:
+        - TOTALRECLAW_RECOVERY_PHRASE
+        - TOTALRECLAW_SERVER_URL
       bins: []
     emoji: "🧠"
     os: ["macos", "linux", "windows"]
