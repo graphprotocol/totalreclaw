@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://totalreclaw.xyz">Website</a> ·
+  <a href="https://clawhub.ai/skills/totalreclaw">ClawHub</a> ·
   <a href="https://www.npmjs.com/package/@totalreclaw/totalreclaw">npm</a> ·
   <a href="docs/guides/beta-tester-guide.md">Getting Started</a> ·
   <a href="docs/architecture.md">Architecture Deep Dive</a>
@@ -35,11 +36,25 @@ Every memory is encrypted on the device before it leaves. Storage and retrieval 
 
 ### 🦞 OpenClaw
 
-Ask your agent:
+Tell your agent:
 
-> "Install the @totalreclaw/totalreclaw plugin"
+> "Install the TotalReclaw skill from ClawHub"
+
+Or via terminal:
+
+```bash
+openclaw skills install totalreclaw
+```
 
 The agent handles everything: generates encryption keys, registers, and sets up automatic memory.
+
+<details>
+<summary>Alternative: install via npm</summary>
+
+```bash
+openclaw plugins install @totalreclaw/totalreclaw
+```
+</details>
 
 ### 🖥️ Claude Desktop / Cursor / Windsurf
 
@@ -75,7 +90,7 @@ TotalReclaw encrypts everything on the device. The relay service never sees plai
 
 | Package | Description | Install |
 | --- | --- | --- |
-| [@totalreclaw/totalreclaw](https://www.npmjs.com/package/@totalreclaw/totalreclaw) | OpenClaw plugin — automatic encrypted memory | `openclaw plugins install @totalreclaw/totalreclaw` |
+| [@totalreclaw/totalreclaw](https://clawhub.ai/skills/totalreclaw) | OpenClaw skill — automatic encrypted memory | `openclaw skills install totalreclaw` |
 | [@totalreclaw/mcp-server](https://www.npmjs.com/package/@totalreclaw/mcp-server) | MCP server for Claude Desktop and other MCP clients | `npx @totalreclaw/mcp-server setup` |
 | [@totalreclaw/client](https://www.npmjs.com/package/@totalreclaw/client) | Client library (encryption, indexing, search, re-ranking) | `npm install @totalreclaw/client` |
 

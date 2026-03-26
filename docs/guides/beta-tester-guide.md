@@ -8,9 +8,9 @@
 
 ## TL;DR — OpenClaw Users
 
-Ask your agent:
+Tell your agent:
 
-> "Install the @totalreclaw/totalreclaw plugin"
+> "Install the TotalReclaw skill from ClawHub"
 
 That's it. The agent will install it, guide you through setup (recovery phrase), and memory is automatic from there. Read on for details, other platforms, or troubleshooting.
 
@@ -20,15 +20,23 @@ That's it. The agent will install it, guide you through setup (recovery phrase),
 
 ### OpenClaw (recommended -- fully automatic)
 
-Ask your OpenClaw agent:
+Tell your OpenClaw agent:
 
-> "Install the @totalreclaw/totalreclaw plugin"
+> "Install the TotalReclaw skill from ClawHub"
 
-Or if you prefer the terminal:
+Or via terminal:
+
+```bash
+openclaw skills install totalreclaw
+```
+
+<details>
+<summary>Alternative: install via npm</summary>
 
 ```bash
 openclaw plugins install @totalreclaw/totalreclaw
 ```
+</details>
 
 After installation, your agent will ask: *"Do you have an existing recovery phrase, or should I generate a new one?"*
 
@@ -147,7 +155,7 @@ Both options encrypt your data identically on your device — the difference is 
 
 | Problem | Fix |
 |---------|-----|
-| Setup not working | Re-run: `openclaw plugins install @totalreclaw/totalreclaw` or `npx @totalreclaw/mcp-server setup` |
+| Setup not working | Re-run: `openclaw skills install totalreclaw` or `npx @totalreclaw/mcp-server setup` |
 | "Not authenticated" / 401 | Check your recovery phrase -- exact words, exact order |
 | Memories not appearing | Try an explicit recall: "what do you remember about X?" |
 | Quota exceeded (403) | Wait for monthly reset or upgrade to Pro |

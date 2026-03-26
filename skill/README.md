@@ -6,10 +6,18 @@
 
 TotalReclaw gives any [OpenClaw](https://github.com/openclaw/openclaw) agent persistent, encrypted long-term memory. Preferences, decisions, and context carry across every conversation -- fully end-to-end encrypted so the server **never** sees plaintext.
 
-## Claw Hub Installation
+## Installation
+
+### ClawHub (recommended)
+
+Tell your OpenClaw agent:
+
+> "Install the TotalReclaw skill from ClawHub"
+
+Or via terminal:
 
 ```bash
-clawhub install totalreclaw
+openclaw skills install totalreclaw
 ```
 
 Then set your environment variables:
@@ -20,6 +28,12 @@ export TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
 ```
 
 That's it. TotalReclaw hooks into your agent automatically.
+
+### Alternative: npm
+
+```bash
+openclaw plugins install @totalreclaw/totalreclaw
+```
 
 ---
 
@@ -60,14 +74,20 @@ Most AI memory solutions force a tradeoff: **good recall OR privacy**. TotalRecl
 
 ### 1. Install
 
+Tell your OpenClaw agent:
+
+> "Install the TotalReclaw skill from ClawHub"
+
+Or via terminal:
+
 ```bash
-clawhub install totalreclaw
+openclaw skills install totalreclaw
 ```
 
-Or manually:
+Alternative (npm):
 
 ```bash
-npm install @totalreclaw/skill
+openclaw plugins install @totalreclaw/totalreclaw
 ```
 
 ### 2. Configure

@@ -1,6 +1,13 @@
-# ClawHub Publishing Checklist
+# ClawHub Publishing
 
 Internal notes for publishing the TotalReclaw skill on [clawhub.ai](https://clawhub.ai).
+
+## Published
+
+- **Published:** 2026-03-26
+- **Version:** 1.4.0
+- **Package ID:** k978pv4b9nyrx4bt968vqyzpa983mbx3
+- **URL:** https://clawhub.ai/skills/totalreclaw
 
 ---
 
@@ -18,7 +25,7 @@ ClawHub is the official skill registry for OpenClaw agents. Key facts:
 
 ## Readiness Status
 
-### Ready
+### Published (v1.4.0, 2026-03-26)
 
 - [x] `skill.json` — Metadata, hooks, tools, config, and ClawHub fields populated
 - [x] `SKILL.md` — YAML frontmatter with full metadata; tools, hooks, prompts, and LLM instructions documented
@@ -32,7 +39,7 @@ ClawHub is the official skill registry for OpenClaw agents. Key facts:
 - [x] E2E onboarding tests passing (4/4)
 - [x] E2E subgraph tests passing (9/9)
 
-### Not Yet Ready
+### Not Yet Done
 
 - [ ] **Screenshots** (optional — linked from external hosting as markdown images in SKILL.md)
   - Suggested:
@@ -43,8 +50,6 @@ ClawHub is the official skill registry for OpenClaw agents. Key facts:
 - [ ] **Demo video** (optional, 30-90 seconds)
   - Show a full cycle: store a memory, start a new conversation, recall it automatically
   - Highlight that the server never sees plaintext
-- [ ] **Update skill.json version** — bump to match plugin version (currently 0.1.0, should be 1.0.0)
-- [ ] **Verify SKILL.md frontmatter** matches ClawHub format
 
 ---
 
@@ -56,7 +61,7 @@ Ensure the SKILL.md starts with this frontmatter for ClawHub:
 ---
 name: TotalReclaw
 description: "End-to-end encrypted memory for AI agents — portable, yours forever. AES-256-GCM E2EE. One recovery phrase, full portability."
-version: 1.0.0
+version: 1.4.0
 metadata:
   openclaw:
     requires:
@@ -78,13 +83,13 @@ metadata:
 # Login
 clawhub login
 
-# Publish
+# Publish (update version as needed)
 clawhub publish ./skill \
   --slug totalreclaw \
   --name "TotalReclaw" \
-  --version 1.0.0 \
+  --version 1.4.0 \
   --tags latest,memory,encryption,e2ee,e2e-encryption,privacy,agent-memory,persistent-context \
-  --changelog "Initial release: end-to-end encrypted memory vault for AI agents. AES-256-GCM E2EE, blind-index search, on-chain storage via The Graph, one-click plaintext export, 6 tools, 3 lifecycle hooks."
+  --changelog "v1.4.0: ClawHub as primary install method, LLM-guided dedup, dual-chain billing, Qwen3-Embedding-0.6B."
 ```
 
 ---
