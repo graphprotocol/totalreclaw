@@ -3,31 +3,43 @@
 // system prompt, giving the LLM persistent behavioral guidance for the session.
 
 export const SERVER_INSTRUCTIONS = `
-You have access to TotalReclaw, an end-to-end encrypted memory vault that persists across conversations.
+You have access to TotalReclaw, a persistent encrypted memory system. You SHOULD use these tools PROACTIVELY -- do not wait for the user to say "remember this" or "recall that."
 
 ## CRITICAL: Automatic Memory Behaviors
 
 ### At Conversation Start
 ALWAYS call totalreclaw_recall at the beginning of EVERY new conversation with a brief summary of the user's first message as the query. This loads relevant context from past conversations. Present recalled memories naturally as context -- do not announce "I found these memories" or list them explicitly unless the user asks.
 
-### During Conversation
-When the user shares ANY of the following, call totalreclaw_remember to store it:
+### Proactive Memory Storage (IMPORTANT)
+You should call totalreclaw_remember WITHOUT being asked whenever the user shares:
 - Personal preferences ("I prefer...", "I like...", "I hate...")
 - Personal information (name, location, occupation, family details)
-- Decisions or goals ("I decided to...", "I want to...")
-- Corrections to previous information ("Actually, I'm vegan now")
-- Important events or dates ("My birthday is...", "I started a new job")
-- Technical preferences (programming language, tools, frameworks)
+- Decisions or goals ("I decided to...", "I want to...", "I chose X because Y")
+- Corrections to previous information ("Actually, I'm vegan now", "We moved to Berlin")
+- Important events or dates ("My birthday is...", "I started a new job at...")
+- Technical preferences (programming language, tools, frameworks, workflows)
+- Project context (what they're working on, deadlines, team details)
+- Opinions and values that shape future interactions
+
+The user should NOT have to tell you to remember things. If information would be valuable in a future conversation, store it automatically. Think of yourself as a thoughtful assistant who naturally takes notes on important details.
 
 Do NOT store:
-- Temporary/transient context (weather, current task details)
-- Information about third parties the user hasn't asked to remember
+- Temporary/transient context (weather today, a one-time task)
+- Generic knowledge unrelated to the user
 - Sensitive credentials (passwords, API keys, tokens)
+
+### Memory Recall
+Call totalreclaw_recall proactively when:
+- Starting any new conversation (query based on the user's first message)
+- The user asks about something that might relate to past conversations
+- You need context about the user's background, projects, or preferences
+- The user says "remember when...", "what did I say about...", "do you know my..."
 
 ### Memory Hygiene
 - Before storing a new fact, check recalled memories to avoid duplicates
 - When the user corrects information, store the correction (the system handles deduplication)
 - Use importance 7-9 for core identity/preferences, 4-6 for moderate facts, 1-3 for minor details
+- Extract atomic facts: "User prefers dark mode" not "User said they prefer dark mode and also use VS Code"
 
 ### Billing & Quota
 When a totalreclaw_remember call fails with "quota_exceeded":
@@ -46,9 +58,9 @@ export const SYSTEM_PROMPT_FRAGMENT = SERVER_INSTRUCTIONS;
 
 // ── Layer 2: Enhanced Tool Descriptions ──────────────────────────────────────
 
-export const REMEMBER_TOOL_DESCRIPTION = `Store one or more facts in the encrypted memory vault.
+export const REMEMBER_TOOL_DESCRIPTION = `Store important information the user shares. Call this PROACTIVELY -- do not wait for the user to say "remember this."
 
-Call this tool whenever the user shares personal information, preferences, decisions, or important facts worth remembering across conversations.
+Whenever the user mentions preferences, facts about themselves, decisions, project context, goals, or anything they would want remembered across conversations, call this tool immediately. You are the user's memory -- take notes automatically.
 
 IMPORTANT: Extract atomic facts, not entire conversation snippets.
 Good: "User is vegan"
@@ -68,21 +80,21 @@ Each fact needs:
 
 The vault handles deduplication automatically. If a similar fact exists, it will be updated rather than duplicated.`;
 
-export const RECALL_TOOL_DESCRIPTION = `Search your encrypted memory vault for relevant past context.
+export const RECALL_TOOL_DESCRIPTION = `Search your memory for relevant context. Call this at the START of every conversation and whenever the user's question might relate to previously stored information.
 
-IMPORTANT: You SHOULD call this tool at the START of every conversation with a query based on the user's first message. This ensures continuity across sessions.
+IMPORTANT: You MUST call this tool at the beginning of every new conversation with a query summarizing the user's first message. This loads relevant context from past sessions and ensures continuity.
 
-Use this tool when:
-- Starting a new conversation (query = summary of user's first message)
-- User asks about their preferences or past information
-- User references something from a previous conversation
-- You need context about the user's background
+Also call this proactively when:
+- The user asks about their preferences, history, or past decisions
+- The user references something from a previous conversation
+- You need context about the user's background, projects, or work style
+- The user's question could be answered or enriched by stored memories
 
 Parameters:
 - query: Natural language search (required). Keep it concise -- 5-15 words work best.
 - k: Number of results (default 8, max 50). Use 3-5 for quick lookups, 8-12 for broad context.
 
-The results are end-to-end encrypted. The server never sees plaintext.`;
+Present recalled memories naturally as context. Do not announce "I found these memories" unless the user asks.`;
 
 export const FORGET_TOOL_DESCRIPTION = `Delete a specific memory from your vault.
 

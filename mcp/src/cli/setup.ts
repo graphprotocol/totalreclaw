@@ -186,6 +186,21 @@ function printConfigSnippet(serverUrl: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Recovery Phrase Warning
+// ---------------------------------------------------------------------------
+
+function printRecoveryPhraseWarning(): void {
+  console.log('');
+  console.log('+------------------------------------------------------------+');
+  console.log('|  CRITICAL: Your recovery phrase is your ONLY identity.     |');
+  console.log('|  If you lose it, you lose ALL your memories forever.       |');
+  console.log('|  There is NO password reset. No recovery. No support.      |');
+  console.log('|  Write it down. Store it securely. Never share it.         |');
+  console.log('+------------------------------------------------------------+');
+  console.log('');
+}
+
+// ---------------------------------------------------------------------------
 // Main Setup Flow
 // ---------------------------------------------------------------------------
 
@@ -217,25 +232,32 @@ export async function runSetup(): Promise<void> {
       }
 
       console.log('\nRecovery phrase validated successfully.');
+
+      // Show critical warning even for returning users
+      printRecoveryPhraseWarning();
     } else {
       // Generate new mnemonic
       mnemonic = generateMnemonic(wordlist, 128); // 128 bits = 12 words
 
       console.log('');
-      console.log('Your new recovery phrase (WRITE THIS DOWN AND KEEP IT SAFE):');
+      console.log('Your new recovery phrase:');
       console.log('');
       console.log(`  ${mnemonic}`);
       console.log('');
-      console.log('WARNING: This is the ONLY way to recover your encrypted memories.');
-      console.log('         Anyone with this phrase can access your data.');
-      console.log('         Store it in a password manager or write it down securely.');
-      console.log('');
 
-      const confirmed = await ask(rl, 'Have you saved your recovery phrase? (yes to continue): ');
-      if (confirmed.toLowerCase() !== 'yes' && confirmed.toLowerCase() !== 'y') {
-        console.log('\nSetup cancelled. Please save your recovery phrase and try again.');
-        rl.close();
-        process.exit(1);
+      printRecoveryPhraseWarning();
+
+      // Require explicit confirmation
+      let confirmed = await ask(rl, 'Have you written down your recovery phrase? (yes/no): ');
+      while (confirmed.toLowerCase() !== 'yes') {
+        if (confirmed.toLowerCase() === 'no' || confirmed.toLowerCase() === 'n') {
+          console.log('');
+          console.log('Please write down your recovery phrase before continuing:');
+          console.log('');
+          console.log(`  ${mnemonic}`);
+          console.log('');
+        }
+        confirmed = await ask(rl, 'Have you written down your recovery phrase? (yes/no): ');
       }
     }
 

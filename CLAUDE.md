@@ -244,7 +244,7 @@ Every new feature implementation MUST include:
 | Conflict resolution (Layers 3-4) | MEDIUM | Spec'd in v0.3.2, not implemented |
 | Client batching (A2) | RESOLVED | Implemented in client/src/userop/batcher.ts -- batch multiple facts per UserOp |
 | Migration tool (testnet to mainnet) | MEDIUM | Designed, not implemented -- re-encrypt + re-store on upgrade |
-| Load testing | IN PROGRESS | Benchmark harness at 1M memories, results in `totalreclaw-internal/e2e/load-test/` |
+| Load testing | IN PROGRESS | Managed service load test at `totalreclaw-internal/e2e/load-test-managed/`. Client-side <140ms p95 PASS up to 10K facts. |
 | Graceful shutdown | LOW | Not yet configured in uvicorn |
 | Candidate pool sizing | RESOLVED | Server-configurable via relay billing endpoint (`max_candidate_pool` in FeatureFlags). Env overrides: `CANDIDATE_POOL_MAX_FREE`, `CANDIDATE_POOL_MAX_PRO`. |
 
@@ -287,7 +287,13 @@ ZAI_API_KEY=xxx ANTHROPIC_API_KEY=xxx npm test           # All paths
 npm run test:mcp                                          # MCP only (fastest)
 ZAI_API_KEY=xxx npm run test:openclaw                    # OpenClaw only
 ANTHROPIC_API_KEY=xxx npm run test:nanoclaw              # NanoClaw only
+
+# Performance Benchmarks (internal repo -- requires Docker + Foundry/Anvil)
+cd ../totalreclaw-internal/e2e/load-test-managed
+npm install && bash setup-local.sh && npx tsx run-scaling-test.ts --queries-per-tier 100
 ```
+
+Performance benchmarks for the managed service search pipeline live in `totalreclaw-internal/e2e/load-test-managed/`. These measure client-side search latency (decryption, cosine, BM25, reranking) at progressive vault sizes against the <140ms p95 target. Run after any change to the search pipeline, LSH parameters, embedding model, or candidate pool sizing. See the README in that directory for full documentation.
 
 ---
 

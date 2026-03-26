@@ -24,6 +24,18 @@ metadata:
 
 # TotalReclaw Skill
 
+## Recovery Phrase -- READ THIS FIRST
+
+The recovery phrase is the user's ONLY identity in TotalReclaw. It derives all encryption keys. There is NO password reset, NO recovery mechanism, and NO support channel that can help if it is lost.
+
+**When showing the recovery phrase to the user, ALWAYS include this warning:**
+
+> Your recovery phrase is the ONLY way to access your encrypted memories. If you lose it, your memories are gone forever -- there is no password reset, no recovery, and no support that can help. Write it down and store it somewhere safe. Never share it with anyone.
+
+If the user asks to see their recovery phrase, remind them to store it securely. If they mention losing it, be clear that recovery is impossible and they will need to start fresh with a new phrase.
+
+---
+
 ## Tools
 
 ### totalreclaw_remember
