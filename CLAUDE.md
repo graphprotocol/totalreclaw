@@ -180,7 +180,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), and Nano
 
 Features across Self-Hosted (PostgreSQL) and Managed Service (default, dual-chain via The Graph).
 
-Managed Service two-tier chain model: **Free** = Base Sepolia testnet (500 memories/month), **Pro** = Gnosis mainnet ($5/month, unlimited, permanent storage).
+Managed Service two-tier chain model: **Free** = Base Sepolia testnet (500 memories/month), **Pro** = Gnosis mainnet (pricing from Stripe, unlimited, permanent storage).
 
 | Feature | Self-Hosted | Managed Service | Notes |
 |---------|:-:|:-:|-------|

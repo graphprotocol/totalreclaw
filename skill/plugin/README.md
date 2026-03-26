@@ -79,9 +79,9 @@ Most of the time you won't use these directly -- the automatic hooks handle memo
 | Tier | Memories | Reads | Storage | Price |
 |------|----------|-------|---------|-------|
 | **Free** | 500/month | Unlimited | Testnet (trial) | $0 |
-| **Pro** | Unlimited | Unlimited | Permanent on-chain (Gnosis) | $5/month |
+| **Pro** | Unlimited | Unlimited | Permanent on-chain (Gnosis) | See `totalreclaw_status` |
 
-Pay with card via Stripe. Counter resets monthly.
+Pay with card via Stripe. Use `totalreclaw_status` to check current pricing. Counter resets monthly.
 
 ## Using with Other Agents
 
