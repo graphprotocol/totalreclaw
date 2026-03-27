@@ -8,12 +8,11 @@ import type {
 /**
  * Abstract base class for import adapters.
  *
- * Each adapter:
- * 1. Fetches or reads source data
- * 2. Parses into NormalizedFact[]
- * 3. Validates each fact
+ * Adapters are PARSERS only — they convert raw export data into either:
+ * - Pre-structured facts (Mem0, MCP Memory — facts are already atomic)
+ * - Conversation chunks (ChatGPT, Claude — need LLM extraction)
  *
- * The caller (import tool) handles encryption + storage.
+ * The caller (import tool) handles LLM extraction, encryption, and storage.
  */
 export abstract class BaseImportAdapter {
   abstract readonly source: ImportSource;

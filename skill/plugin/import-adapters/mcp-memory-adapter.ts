@@ -67,7 +67,7 @@ export class MCPMemoryAdapter extends BaseImportAdapter {
         content = fs.readFileSync(resolvedPath, 'utf-8');
       } catch (e) {
         errors.push(`Failed to read file: ${e instanceof Error ? e.message : 'Unknown error'}`);
-        return { facts: [], warnings, errors };
+        return { facts: [], chunks: [], totalMessages: 0, warnings, errors };
       }
     } else {
       // Try default MCP memory path
@@ -80,7 +80,7 @@ export class MCPMemoryAdapter extends BaseImportAdapter {
           'No content, file_path, or file at default path (~/.mcp-memory/memory.jsonl). ' +
           'Provide the memory.jsonl content or file path.',
         );
-        return { facts: [], warnings, errors };
+        return { facts: [], chunks: [], totalMessages: 0, warnings, errors };
       }
     }
 
@@ -170,6 +170,8 @@ export class MCPMemoryAdapter extends BaseImportAdapter {
 
     return {
       facts,
+      chunks: [],
+      totalMessages: 0,
       warnings,
       errors,
       source_metadata: {

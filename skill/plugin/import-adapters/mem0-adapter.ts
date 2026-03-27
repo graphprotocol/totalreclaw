@@ -81,7 +81,7 @@ export class Mem0Adapter extends BaseImportAdapter {
       );
     } else {
       errors.push('Mem0 import requires either content (export file) or api_key');
-      return { facts: [], warnings, errors };
+      return { facts: [], chunks: [], totalMessages: 0, warnings, errors };
     }
 
     if (onProgress) {
@@ -110,7 +110,7 @@ export class Mem0Adapter extends BaseImportAdapter {
       warnings.push(`${invalidCount} memories had invalid/empty text and were skipped`);
     }
 
-    return { facts, warnings, errors, source_metadata: { total_from_source: memories.length } };
+    return { facts, chunks: [], totalMessages: 0, warnings, errors, source_metadata: { total_from_source: memories.length } };
   }
 
   /**
