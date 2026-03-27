@@ -135,11 +135,24 @@ totalreclaw/
 └── tests/           Integration and unit tests
 ```
 
+## Import from Other AI Tools
+
+Already using another AI assistant with memory? Bring your data with you.
+
+```
+"Import my ChatGPT memories into TotalReclaw"
+"Import my Claude memories into TotalReclaw"
+"Import my Mem0 memories using API key m0-abc123"
+```
+
+Supported sources: **ChatGPT** (memories or conversations.json), **Claude** (memory export), **Mem0** (API or file), **MCP Memory Server** (JSONL). All imports are encrypted client-side before storage. See the [import guides](docs/guides/importing-memories.md).
+
 ## Documentation
 
 - [Getting Started](docs/guides/beta-tester-guide.md) — setup, troubleshooting, known limitations
 - [Detailed Technical Guide](docs/guides/beta-tester-guide-detailed.md) — full reference with configuration
 - [Architecture Deep Dive](docs/architecture.md) — encryption, LSH, search, deduplication, network layer
+- [Importing Memories](docs/guides/importing-memories.md) — import from ChatGPT, Claude, Mem0, and more
 - [totalreclaw.xyz](https://totalreclaw.xyz) — project homepage
 
 ## License

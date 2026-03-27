@@ -10,6 +10,8 @@ TotalReclaw can import memories from external AI memory systems, so you can cons
 |--------|--------|--------|
 | **Mem0** (mem0.ai) | Live API fetch | Fully supported, E2E validated |
 | **MCP Memory Server** (`@modelcontextprotocol/server-memory`) | JSONL file import | Supported (unit tested) |
+| **ChatGPT** | Conversations.json or memory text | Supported (unit tested) |
+| **Claude** | Memory text | Supported (unit tested) |
 | More sources planned | See [Roadmap](../ROADMAP.md#phase-5-import--migration-future) | -- |
 
 ---
@@ -162,6 +164,24 @@ The `totalreclaw_import_from` tool is available in:
 
 ---
 
+## Importing from ChatGPT
+
+See the dedicated guide: **[Importing from ChatGPT](importing-from-chatgpt.md)**
+
+Two formats supported:
+- **ChatGPT Memories** (recommended) — copy from Settings -> Personalization -> Memory -> Manage
+- **conversations.json** — full data export from Settings -> Data Controls -> Export Data
+
+---
+
+## Importing from Claude
+
+See the dedicated guide: **[Importing from Claude](importing-from-claude.md)**
+
+Copy your memories from Claude: Settings -> Memory -> select all and copy.
+
+---
+
 ## Future Import Sources
 
 The following sources are planned but not yet implemented:
@@ -171,6 +191,6 @@ The following sources are planned but not yet implemented:
 - **LanceDB** — local or cloud vector store export
 - **QMD** — OpenClaw's native memory system
 - **Generic JSON/CSV** — catch-all for other tools
-- **Claude / ChatGPT / Gemini** — conversation history import via data export
+- **Gemini** — conversation history import via data export
 
 See the [full roadmap](../ROADMAP.md#phase-5-import--migration-future) for details.

@@ -8,6 +8,8 @@
 
 import { Mem0Adapter } from './mem0-adapter.js';
 import { MCPMemoryAdapter } from './mcp-memory-adapter.js';
+import { ChatGPTAdapter } from './chatgpt-adapter.js';
+import { ClaudeAdapter } from './claude-adapter.js';
 import { BaseImportAdapter } from './base-adapter.js';
 import { getAdapter } from './index.js';
 import type {
@@ -538,6 +540,436 @@ async function runTests(): Promise<void> {
   }
 
   // =========================================================================
+  // ChatGPTAdapter — conversations.json
+  // =========================================================================
+
+  console.log('# ChatGPTAdapter — conversations.json');
+
+  // --- parses conversations.json with user messages ---
+  {
+    const conversations = [
+      {
+        id: 'conv-1',
+        title: 'Test Conversation',
+        create_time: 1700000000,
+        mapping: {
+          root: { id: 'root', message: null, parent: null, children: ['msg1'] },
+          msg1: {
+            id: 'msg1',
+            message: {
+              id: 'msg1',
+              author: { role: 'user' },
+              content: { content_type: 'text', parts: ['I work at Google as a software engineer'] },
+              create_time: 1700000001,
+            },
+            parent: 'root',
+            children: ['msg2'],
+          },
+          msg2: {
+            id: 'msg2',
+            message: {
+              id: 'msg2',
+              author: { role: 'assistant' },
+              content: { content_type: 'text', parts: ['That sounds great!'] },
+              create_time: 1700000002,
+            },
+            parent: 'msg1',
+            children: ['msg3'],
+          },
+          msg3: {
+            id: 'msg3',
+            message: {
+              id: 'msg3',
+              author: { role: 'user' },
+              content: { content_type: 'text', parts: ['I prefer TypeScript over JavaScript for new projects'] },
+              create_time: 1700000003,
+            },
+            parent: 'msg2',
+            children: [],
+          },
+        },
+      },
+    ];
+
+    const adapter = new ChatGPTAdapter();
+    const result = await adapter.parse({ content: JSON.stringify(conversations) });
+
+    assert(result.facts.length >= 2, `ChatGPT conv: extracted at least 2 facts from user messages (got ${result.facts.length})`);
+    assert(result.facts.some((f) => f.text.includes('Google')), 'ChatGPT conv: found "Google" fact');
+    assert(result.facts.some((f) => f.text.includes('TypeScript')), 'ChatGPT conv: found "TypeScript" fact');
+    assert(result.facts[0].source === 'chatgpt', 'ChatGPT conv: source is chatgpt');
+    assert(result.facts.every((f) => f.sourceTimestamp), 'ChatGPT conv: all facts have timestamps');
+    assert(result.errors.length === 0, 'ChatGPT conv: no errors');
+  }
+
+  // --- skips assistant and system messages ---
+  {
+    const conversations = [
+      {
+        title: 'Test',
+        mapping: {
+          root: { id: 'root', message: null, parent: null, children: ['msg1'] },
+          msg1: {
+            id: 'msg1',
+            message: {
+              id: 'msg1',
+              author: { role: 'system' },
+              content: { content_type: 'text', parts: ['I am a helpful assistant working at OpenAI'] },
+            },
+            parent: 'root',
+            children: ['msg2'],
+          },
+          msg2: {
+            id: 'msg2',
+            message: {
+              id: 'msg2',
+              author: { role: 'assistant' },
+              content: { content_type: 'text', parts: ['I live in the cloud and I prefer helping users'] },
+            },
+            parent: 'msg1',
+            children: [],
+          },
+        },
+      },
+    ];
+
+    const adapter = new ChatGPTAdapter();
+    const result = await adapter.parse({ content: JSON.stringify(conversations) });
+
+    assert(result.facts.length === 0, 'ChatGPT conv: no facts from assistant/system messages');
+  }
+
+  // --- classifies fact types correctly ---
+  {
+    const conversations = [
+      {
+        title: 'Types Test',
+        mapping: {
+          root: { id: 'root', message: null, parent: null, children: ['msg1', 'msg2', 'msg3', 'msg4'] },
+          msg1: {
+            id: 'msg1',
+            message: { id: 'msg1', author: { role: 'user' }, content: { content_type: 'text', parts: ['I work at Microsoft as a developer'] } },
+            parent: 'root', children: [],
+          },
+          msg2: {
+            id: 'msg2',
+            message: { id: 'msg2', author: { role: 'user' }, content: { content_type: 'text', parts: ['I like programming in Rust a lot'] } },
+            parent: 'root', children: [],
+          },
+          msg3: {
+            id: 'msg3',
+            message: { id: 'msg3', author: { role: 'user' }, content: { content_type: 'text', parts: ['I decided to use PostgreSQL for the project'] } },
+            parent: 'root', children: [],
+          },
+          msg4: {
+            id: 'msg4',
+            message: { id: 'msg4', author: { role: 'user' }, content: { content_type: 'text', parts: ['I want to learn machine learning this year'] } },
+            parent: 'root', children: [],
+          },
+        },
+      },
+    ];
+
+    const adapter = new ChatGPTAdapter();
+    const result = await adapter.parse({ content: JSON.stringify(conversations) });
+
+    const workFact = result.facts.find((f) => f.text.includes('Microsoft'));
+    assert(workFact?.type === 'fact', `ChatGPT: "I work at" -> fact (got ${workFact?.type})`);
+
+    const prefFact = result.facts.find((f) => f.text.includes('Rust'));
+    assert(prefFact?.type === 'preference', `ChatGPT: "I like" -> preference (got ${prefFact?.type})`);
+
+    const decFact = result.facts.find((f) => f.text.includes('PostgreSQL'));
+    assert(decFact?.type === 'decision', `ChatGPT: "I decided" -> decision (got ${decFact?.type})`);
+
+    const goalFact = result.facts.find((f) => f.text.includes('machine learning'));
+    assert(goalFact?.type === 'goal', `ChatGPT: "I want to" -> goal (got ${goalFact?.type})`);
+  }
+
+  // --- handles single conversation object ---
+  {
+    const conv = {
+      title: 'Single',
+      mapping: {
+        root: { id: 'root', message: null, parent: null, children: ['msg1'] },
+        msg1: {
+          id: 'msg1',
+          message: { id: 'msg1', author: { role: 'user' }, content: { content_type: 'text', parts: ['I live in San Francisco near the park'] } },
+          parent: 'root', children: [],
+        },
+      },
+    };
+
+    const adapter = new ChatGPTAdapter();
+    const result = await adapter.parse({ content: JSON.stringify(conv) });
+
+    assert(result.facts.length >= 1, 'ChatGPT: single conversation object parses');
+    assert(result.facts[0].text.includes('San Francisco'), 'ChatGPT: single conv fact correct');
+  }
+
+  // --- skips short/question messages ---
+  {
+    const conversations = [
+      {
+        title: 'Short Messages',
+        mapping: {
+          root: { id: 'root', message: null, parent: null, children: ['msg1', 'msg2', 'msg3'] },
+          msg1: {
+            id: 'msg1',
+            message: { id: 'msg1', author: { role: 'user' }, content: { content_type: 'text', parts: ['hi'] } },
+            parent: 'root', children: [],
+          },
+          msg2: {
+            id: 'msg2',
+            message: { id: 'msg2', author: { role: 'user' }, content: { content_type: 'text', parts: ['What is machine learning?'] } },
+            parent: 'root', children: [],
+          },
+          msg3: {
+            id: 'msg3',
+            message: { id: 'msg3', author: { role: 'user' }, content: { content_type: 'text', parts: ['thanks'] } },
+            parent: 'root', children: [],
+          },
+        },
+      },
+    ];
+
+    const adapter = new ChatGPTAdapter();
+    const result = await adapter.parse({ content: JSON.stringify(conversations) });
+
+    assert(result.facts.length === 0, `ChatGPT: short/question messages skipped (got ${result.facts.length})`);
+  }
+
+  // --- invalid JSON returns error ---
+  {
+    const adapter = new ChatGPTAdapter();
+    const result = await adapter.parse({ content: 'not valid json {{{' });
+
+    // This should fall through to the plain-text parser since it doesn't start with [ or {
+    // ... actually "not valid json {{{" doesn't start with [ or {, so it parses as memories text
+    // Let's test explicit JSON failure
+    const result2 = await adapter.parse({ content: '[invalid json array' });
+    assert(result2.facts.length === 0, 'ChatGPT: invalid JSON array yields 0 facts');
+    assert(result2.errors.length > 0, 'ChatGPT: invalid JSON produces error');
+  }
+
+  // --- empty input returns error ---
+  {
+    const adapter = new ChatGPTAdapter();
+    const result = await adapter.parse({});
+
+    assert(result.facts.length === 0, 'ChatGPT: no input yields 0 facts');
+    assert(result.errors.length > 0, 'ChatGPT: no input produces error');
+  }
+
+  // --- handles null/non-string parts ---
+  {
+    const conversations = [
+      {
+        title: 'Null Parts',
+        mapping: {
+          root: { id: 'root', message: null, parent: null, children: ['msg1'] },
+          msg1: {
+            id: 'msg1',
+            message: {
+              id: 'msg1',
+              author: { role: 'user' },
+              content: { content_type: 'text', parts: [null, { type: 'image' }, 'I prefer dark mode in all my applications'] },
+            },
+            parent: 'root', children: [],
+          },
+        },
+      },
+    ];
+
+    const adapter = new ChatGPTAdapter();
+    const result = await adapter.parse({ content: JSON.stringify(conversations) });
+
+    assert(result.facts.length >= 1, 'ChatGPT: handles null/non-string parts');
+    assert(result.facts[0].text.includes('dark mode'), 'ChatGPT: extracted text from valid part');
+  }
+
+  // =========================================================================
+  // ChatGPTAdapter — memories text
+  // =========================================================================
+
+  console.log('# ChatGPTAdapter — memories text');
+
+  // --- parses plain text memories (one per line) ---
+  {
+    const memoriesText = `User prefers dark mode
+User works at Google as a software engineer
+User lives in San Francisco
+User likes hiking on weekends`;
+
+    const adapter = new ChatGPTAdapter();
+    const result = await adapter.parse({ content: memoriesText });
+
+    assert(result.facts.length === 4, `ChatGPT memories: parsed 4 lines (got ${result.facts.length})`);
+    assert(result.facts[0].source === 'chatgpt', 'ChatGPT memories: source is chatgpt');
+    assert(result.facts.every((f) => f.tags?.includes('chatgpt-memory')), 'ChatGPT memories: all tagged');
+  }
+
+  // --- handles bullet points and numbered lists ---
+  {
+    const memoriesText = `- User prefers TypeScript
+* User works remotely
+1. User lives in Berlin
+2) User likes coffee in the morning`;
+
+    const adapter = new ChatGPTAdapter();
+    const result = await adapter.parse({ content: memoriesText });
+
+    assert(result.facts.length === 4, `ChatGPT memories: handles bullets/numbers (got ${result.facts.length})`);
+    assert(!result.facts[0].text.startsWith('-'), 'ChatGPT memories: bullet stripped');
+    assert(!result.facts[2].text.startsWith('1'), 'ChatGPT memories: number stripped');
+  }
+
+  // --- skips empty lines and header lines ---
+  {
+    const memoriesText = `Memories:
+
+User prefers dark mode
+
+User lives in London`;
+
+    const adapter = new ChatGPTAdapter();
+    const result = await adapter.parse({ content: memoriesText });
+
+    assert(result.facts.length === 2, `ChatGPT memories: skips empty/header lines (got ${result.facts.length})`);
+  }
+
+  // --- empty text input ---
+  {
+    const adapter = new ChatGPTAdapter();
+    const result = await adapter.parse({ content: '' });
+
+    assert(result.facts.length === 0, 'ChatGPT memories: empty text yields 0 facts');
+  }
+
+  // =========================================================================
+  // ClaudeAdapter
+  // =========================================================================
+
+  console.log('# ClaudeAdapter');
+
+  // --- parses plain text memories ---
+  {
+    const memoriesText = `User prefers functional programming
+User works at a startup in Berlin
+User decided to use Rust for the backend
+User wants to learn machine learning`;
+
+    const adapter = new ClaudeAdapter();
+    const result = await adapter.parse({ content: memoriesText });
+
+    assert(result.facts.length === 4, `Claude: parsed 4 memories (got ${result.facts.length})`);
+    assert(result.facts[0].source === 'claude', 'Claude: source is claude');
+    assert(result.facts.every((f) => f.tags?.includes('claude-memory')), 'Claude: all tagged');
+  }
+
+  // --- classifies types correctly ---
+  {
+    const memoriesText = `User prefers TypeScript over JavaScript
+User decided to use PostgreSQL for the project
+User wants to launch by end of Q1
+User is currently working on a mobile app
+User is a senior developer at Google`;
+
+    const adapter = new ClaudeAdapter();
+    const result = await adapter.parse({ content: memoriesText });
+
+    assert(result.facts[0].type === 'preference', `Claude: "prefers" -> preference (got ${result.facts[0].type})`);
+    assert(result.facts[1].type === 'decision', `Claude: "decided" -> decision (got ${result.facts[1].type})`);
+    assert(result.facts[2].type === 'goal', `Claude: "wants to" -> goal (got ${result.facts[2].type})`);
+    assert(result.facts[3].type === 'context', `Claude: "working on" -> context (got ${result.facts[3].type})`);
+    assert(result.facts[4].type === 'fact', `Claude: default -> fact (got ${result.facts[4].type})`);
+  }
+
+  // --- handles date prefixes ---
+  {
+    const memoriesText = `[2026-03-15] - User prefers dark mode
+[2026-03-10] - User works at Google
+No date prefix here but still a memory`;
+
+    const adapter = new ClaudeAdapter();
+    const result = await adapter.parse({ content: memoriesText });
+
+    assert(result.facts.length === 3, `Claude: parsed 3 memories with/without dates (got ${result.facts.length})`);
+    assert(result.facts[0].sourceTimestamp === '2026-03-15', 'Claude: first fact has date from prefix');
+    assert(result.facts[1].sourceTimestamp === '2026-03-10', 'Claude: second fact has date from prefix');
+    assert(!result.facts[0].text.includes('[2026'), 'Claude: date prefix stripped from text');
+    assert(result.facts[2].sourceTimestamp === undefined, 'Claude: third fact has no timestamp');
+  }
+
+  // --- handles bullet points and numbered lists ---
+  {
+    const memoriesText = `- User prefers TypeScript
+* User works remotely from home
+1. User lives in Lisbon, Portugal
+2) User likes exploring new restaurants`;
+
+    const adapter = new ClaudeAdapter();
+    const result = await adapter.parse({ content: memoriesText });
+
+    assert(result.facts.length === 4, `Claude: handles bullets/numbers (got ${result.facts.length})`);
+    assert(!result.facts[0].text.startsWith('-'), 'Claude: bullet stripped');
+    assert(!result.facts[2].text.startsWith('1'), 'Claude: number stripped');
+  }
+
+  // --- skips empty lines and header lines ---
+  {
+    const memoriesText = `Claude Memories:
+
+User prefers dark mode in editors
+
+User lives in Tokyo`;
+
+    const adapter = new ClaudeAdapter();
+    const result = await adapter.parse({ content: memoriesText });
+
+    assert(result.facts.length === 2, `Claude: skips empty/header lines (got ${result.facts.length})`);
+  }
+
+  // --- empty input returns error ---
+  {
+    const adapter = new ClaudeAdapter();
+    const result = await adapter.parse({});
+
+    assert(result.facts.length === 0, 'Claude: no input yields 0 facts');
+    assert(result.errors.length > 0, 'Claude: no input produces error');
+  }
+
+  // --- empty text yields 0 facts ---
+  {
+    const adapter = new ClaudeAdapter();
+    const result = await adapter.parse({ content: '' });
+
+    assert(result.facts.length === 0, 'Claude: empty text yields 0 facts');
+  }
+
+  // --- importance defaults to 6 for curated memories ---
+  {
+    const adapter = new ClaudeAdapter();
+    const result = await adapter.parse({ content: 'User is a senior developer at Google' });
+
+    assert(result.facts[0].importance === 6, `Claude: importance defaults to 6 (got ${result.facts[0].importance})`);
+  }
+
+  // --- skips very short memories ---
+  {
+    const memoriesText = `ok
+ab
+User prefers TypeScript over JavaScript`;
+
+    const adapter = new ClaudeAdapter();
+    const result = await adapter.parse({ content: memoriesText });
+
+    // "ok" and "ab" are < 3 chars after validation
+    assert(result.facts.length === 1, `Claude: skips short memories (got ${result.facts.length})`);
+    assert(result.facts[0].text.includes('TypeScript'), 'Claude: valid fact kept');
+  }
+
+  // =========================================================================
   // getAdapter factory
   // =========================================================================
 
@@ -550,6 +982,12 @@ async function runTests(): Promise<void> {
 
     const mcp = getAdapter('mcp-memory');
     assert(mcp instanceof MCPMemoryAdapter, 'getAdapter("mcp-memory") returns MCPMemoryAdapter');
+
+    const chatgpt = getAdapter('chatgpt');
+    assert(chatgpt instanceof ChatGPTAdapter, 'getAdapter("chatgpt") returns ChatGPTAdapter');
+
+    const claude = getAdapter('claude');
+    assert(claude instanceof ClaudeAdapter, 'getAdapter("claude") returns ClaudeAdapter');
   }
 
   // --- unknown source throws ---
@@ -569,6 +1007,8 @@ async function runTests(): Promise<void> {
       const msg = (e as Error).message;
       assert(msg.includes('mem0'), 'getAdapter error lists "mem0" as valid source');
       assert(msg.includes('mcp-memory'), 'getAdapter error lists "mcp-memory" as valid source');
+      assert(msg.includes('chatgpt'), 'getAdapter error lists "chatgpt" as valid source');
+      assert(msg.includes('claude'), 'getAdapter error lists "claude" as valid source');
     }
   }
 
