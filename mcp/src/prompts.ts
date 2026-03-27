@@ -56,6 +56,11 @@ Note: Billing status is cached locally for up to 2 hours. After upgrading to Pro
 ### Importing memories from other tools
 If the user mentions migrating from Mem0, MCP Memory Server, MemoClaw, or any other AI memory tool, offer to use totalreclaw_import_from. Start with dry_run=true to preview, then confirm before importing.
 API keys provided by the user are used only for the import and are never stored.
+
+### Agent-specific tips
+- If your agent supports background routines or scheduled tasks, set up a routine to call totalreclaw_remember after conversations to ensure nothing is missed.
+- If your agent supports a credential vault or secret store, the user's TOTALRECLAW_RECOVERY_PHRASE should be stored there instead of as a plaintext environment variable.
+- TotalReclaw memories are fully portable -- they work across OpenClaw, IronClaw, Claude Desktop, Cursor, NanoClaw, and any MCP-compatible agent.
 `;
 
 // Keep backward-compat export name (some callers may still reference it)
