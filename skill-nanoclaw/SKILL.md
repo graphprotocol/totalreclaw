@@ -123,7 +123,7 @@ Import memories from other AI memory tools into TotalReclaw.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| source | string | Yes | Source system: `mem0`, `mcp-memory` |
+| source | string | Yes | Source system: `mem0`, `mcp-memory`, `chatgpt`, `claude` |
 | api_key | string | No | API key for the source (Mem0). Used once, never stored. |
 | source_user_id | string | No | User or agent ID in the source system |
 | content | string | No | File content (JSON, JSONL, or CSV) for file-based sources |
@@ -268,7 +268,8 @@ Use when:
 #### totalreclaw_import_from
 
 Use when:
-- The user mentions migrating from Mem0, MCP Memory Server, or another AI memory tool
+- The user mentions migrating from Mem0, MCP Memory Server, ChatGPT, Claude, or another AI memory tool
+- The user wants to import their ChatGPT memories or conversations, or Claude memory
 - Always run with `dry_run=true` first and show the preview before importing
 
 #### totalreclaw_consolidate

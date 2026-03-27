@@ -344,13 +344,13 @@ Migrate memories from testnet (Base Sepolia) to mainnet (Gnosis) after upgrading
 
 Import memories from other AI memory tools into TotalReclaw.
 
-**When to use:** User mentions migrating from Mem0, MCP Memory Server, or wants to import memories from another tool.
+**When to use:** User mentions migrating from Mem0, MCP Memory Server, ChatGPT, Claude, or wants to import memories from another tool.
 
 **Parameters:**
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| source | string | Yes | Source system: `mem0`, `mcp-memory` (MVP). Post-MVP: `memoclaw`, `generic-json`, `generic-csv` |
+| source | string | Yes | Source system: `mem0`, `mcp-memory`, `chatgpt`, `claude`. Post-MVP: `memoclaw`, `generic-json`, `generic-csv` |
 | api_key | string | No | API key for the source (Mem0). Used once, never stored. |
 | source_user_id | string | No | User or agent ID in the source system |
 | content | string | No | File content (JSON, JSONL, or CSV) -- for file-based sources |
@@ -375,6 +375,33 @@ Import memories from other AI memory tools into TotalReclaw.
 {
   "source": "mcp-memory",
   "file_path": "~/.mcp-memory/memory.jsonl",
+  "dry_run": true
+}
+```
+
+**Example -- import from ChatGPT (memories text):**
+```json
+{
+  "source": "chatgpt",
+  "content": "User prefers dark mode\nUser works at Google\nUser lives in SF",
+  "dry_run": true
+}
+```
+
+**Example -- import from ChatGPT (conversations.json):**
+```json
+{
+  "source": "chatgpt",
+  "file_path": "~/Downloads/chatgpt-export/conversations.json",
+  "dry_run": true
+}
+```
+
+**Example -- import from Claude (memories text):**
+```json
+{
+  "source": "claude",
+  "content": "[2026-03-15] - User prefers TypeScript\nUser works at a startup in Berlin",
   "dry_run": true
 }
 ```
@@ -571,9 +598,10 @@ Use when:
 #### totalreclaw_import_from
 
 Use when:
-- The user mentions migrating from Mem0, MCP Memory Server, or another AI memory tool
+- The user mentions migrating from Mem0, MCP Memory Server, ChatGPT, Claude, or another AI memory tool
 - The user wants to import memories from a file or API
 - The user asks to consolidate memories from multiple tools
+- The user mentions ChatGPT memories, conversations export, or Claude memory
 
 Always run with `dry_run=true` first and show the preview before importing. API keys are used in-memory only and never stored.
 

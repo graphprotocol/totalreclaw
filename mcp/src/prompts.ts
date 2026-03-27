@@ -193,6 +193,8 @@ export const IMPORT_FROM_TOOL_DESCRIPTION = `Import memories from other AI memor
 Supported sources:
 - **mem0**: Import from Mem0 (mem0.ai). Provide api_key + source_user_id, or paste the export JSON.
 - **mcp-memory**: Import from MCP Memory Server (@modelcontextprotocol/server-memory). Provide the memory.jsonl content or file_path. Default path: ~/.mcp-memory/memory.jsonl.
+- **chatgpt**: Import from ChatGPT. Two formats supported: (1) Paste ChatGPT memories text (from Settings > Personalization > Memory > Manage), or (2) provide conversations.json file from ChatGPT data export (Settings > Data Controls > Export Data).
+- **claude**: Import from Claude. Paste Claude memory text (from Settings > Memory). One fact per line, date prefixes like [2026-03-15] are preserved.
 - **memoclaw**: Import from MemoClaw. Provide api_key + source_user_id, or paste the export JSON.
 - **generic-json**: Import from a generic JSON file. Expects an array of objects with "text" field.
 - **generic-csv**: Import from a CSV file. Expects a header row with "text" column.

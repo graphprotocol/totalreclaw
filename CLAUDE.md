@@ -137,7 +137,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | `totalreclaw_forget` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | |
 | `totalreclaw_export` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | |
 | `totalreclaw_status` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | |
-| `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Mem0 + MCP Memory adapters |
+| `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Mem0, MCP Memory, ChatGPT, Claude adapters |
 | `totalreclaw_import` | -- | Yes | Yes (via MCP) | Yes (via MCP) | JSON/Markdown re-import (MCP only) |
 | `totalreclaw_upgrade` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Stripe checkout URL |
 | `totalreclaw_migrate` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Testnet-to-mainnet migration after Pro upgrade |

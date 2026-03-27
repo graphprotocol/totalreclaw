@@ -1296,7 +1296,7 @@ async function handlePluginImportFrom(
   const startTime = Date.now();
 
   const source = params.source as string;
-  const validSources = ['mem0', 'mcp-memory', 'memoclaw', 'generic-json', 'generic-csv'];
+  const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'memoclaw', 'generic-json', 'generic-csv'];
 
   if (!source || !validSources.includes(source)) {
     return { success: false, error: `Invalid source. Must be one of: ${validSources.join(', ')}` };
@@ -2308,16 +2308,16 @@ const plugin = {
         name: 'totalreclaw_import_from',
         label: 'Import From',
         description:
-          'Import memories from other AI memory tools (Mem0, MCP Memory Server, MemoClaw, or generic JSON/CSV). ' +
-          'Provide the source name and either an API key or file content. ' +
+          'Import memories from other AI memory tools (Mem0, MCP Memory Server, ChatGPT, Claude, MemoClaw, or generic JSON/CSV). ' +
+          'Provide the source name and either an API key, file content, or file path. ' +
           'Use dry_run=true to preview before importing. Idempotent — safe to run multiple times.',
         parameters: {
           type: 'object',
           properties: {
             source: {
               type: 'string',
-              enum: ['mem0', 'mcp-memory', 'memoclaw', 'generic-json', 'generic-csv'],
-              description: 'The source system to import from',
+              enum: ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'memoclaw', 'generic-json', 'generic-csv'],
+              description: 'The source system to import from (chatgpt: conversations.json or memory text; claude: memory text)',
             },
             api_key: {
               type: 'string',

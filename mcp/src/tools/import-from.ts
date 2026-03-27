@@ -6,7 +6,7 @@ import { IMPORT_FROM_TOOL_DESCRIPTION } from '../prompts.js';
 // We define these locally to avoid importing from outside the MCP rootDir.
 // The runtime import() below loads the actual adapter code at runtime.
 
-export type ImportSource = 'mem0' | 'mcp-memory' | 'memoclaw' | 'generic-json' | 'generic-csv';
+export type ImportSource = 'mem0' | 'mcp-memory' | 'chatgpt' | 'claude' | 'memoclaw' | 'generic-json' | 'generic-csv';
 
 export interface ImportFromInput {
   source: ImportSource;
@@ -66,8 +66,8 @@ export const importFromToolDefinition = {
     properties: {
       source: {
         type: 'string',
-        enum: ['mem0', 'mcp-memory', 'memoclaw', 'generic-json', 'generic-csv'],
-        description: 'The source system to import from',
+        enum: ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'memoclaw', 'generic-json', 'generic-csv'],
+        description: 'The source system to import from (chatgpt: conversations.json or memory text; claude: memory text)',
       },
       api_key: {
         type: 'string',
@@ -153,7 +153,7 @@ export async function handleImportFrom(
   const startTime = Date.now();
 
   // Validate source
-  const validSources: ImportSource[] = ['mem0', 'mcp-memory', 'memoclaw', 'generic-json', 'generic-csv'];
+  const validSources: ImportSource[] = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'memoclaw', 'generic-json', 'generic-csv'];
   if (!input.source || !validSources.includes(input.source)) {
     return errorResponse(`Invalid source. Must be one of: ${validSources.join(', ')}`);
   }
