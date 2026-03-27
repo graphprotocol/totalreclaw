@@ -5,7 +5,7 @@
 <h1 align="center">@totalreclaw/mcp-server</h1>
 
 <p align="center">
-  <strong>Encrypted memory for Claude Desktop, Cursor, Windsurf, and any MCP-compatible agent</strong>
+  <strong>Encrypted memory for Claude Desktop, Cursor, Windsurf, IronClaw, and any MCP-compatible agent</strong>
 </p>
 
 <p align="center">
@@ -76,6 +76,27 @@ Add to your MCP settings (Settings > MCP Servers):
 }
 ```
 
+#### IronClaw (NEAR AI)
+
+Add to your IronClaw MCP configuration (typically `~/.ironclaw/mcp.json` or via the IronClaw dashboard):
+
+```json
+{
+  "mcpServers": {
+    "totalreclaw": {
+      "command": "npx",
+      "args": ["@totalreclaw/mcp-server"],
+      "env": {
+        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here",
+        "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz"
+      }
+    }
+  }
+}
+```
+
+If IronClaw supports a credential vault, store `TOTALRECLAW_RECOVERY_PHRASE` there instead of in the config file. See the [IronClaw setup guide](../docs/guides/ironclaw-setup.md) for the full walkthrough including background routines.
+
 ### 3. Verify
 
 Ask your agent: *"Do you have access to TotalReclaw memory tools?"*
@@ -135,6 +156,7 @@ npm run lint     # Lint
 ## Learn More
 
 - [Getting Started Guide](../docs/guides/beta-tester-guide.md)
+- [IronClaw Setup Guide](../docs/guides/ironclaw-setup.md) -- full walkthrough for IronClaw (NEAR AI) agents
 - [totalreclaw.xyz](https://totalreclaw.xyz)
 - [Main Repository](https://github.com/p-diogo/totalreclaw)
 

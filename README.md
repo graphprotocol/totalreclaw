@@ -29,7 +29,7 @@ Finally, an AI that remembers everything — without remembering it for Big Tech
 Every memory is encrypted on the device before it leaves. Storage and retrieval happen without any server ever seeing the data. One 12-word recovery phrase gives access from any device, any agent, with no lock-in.
 
 - **Private** — memories are encrypted on the device before they leave. No server, service, or third party can read them — even if fully compromised.
-- **Portable** — one recovery phrase works across OpenClaw, NanoClaw, Claude Desktop, or any MCP-compatible agent. Switch agents without losing a single memory.
+- **Portable** — one recovery phrase works across OpenClaw, NanoClaw, IronClaw, Claude Desktop, or any MCP-compatible agent. Switch agents without losing a single memory.
 - **Yours forever** — memories are anchored to Gnosis Chain and indexed by The Graph. Upgrade to Pro for permanent, verifiable on-chain storage.
 
 ## Quick Start
@@ -63,6 +63,14 @@ npx @totalreclaw/mcp-server setup
 ```
 
 The wizard generates your recovery phrase, registers you, and prints a config snippet. See the [@totalreclaw/mcp-server README](mcp/README.md) for details.
+
+### 🔒 IronClaw (NEAR AI)
+
+```bash
+npx @totalreclaw/mcp-server setup
+```
+
+Then add the config snippet to your IronClaw MCP configuration. IronClaw's TEE protects the runtime; TotalReclaw protects the data. See the [IronClaw setup guide](docs/guides/ironclaw-setup.md) for the full walkthrough.
 
 ### 🤖 NanoClaw
 
