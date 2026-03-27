@@ -1,8 +1,8 @@
 import { BaseImportAdapter } from './base-adapter.js';
 import type {
   ImportSource,
-  NormalizedFact,
   AdapterParseResult,
+  ConversationChunk,
   ProgressCallback,
 } from './types.js';
 import fs from 'node:fs';
@@ -36,95 +36,8 @@ interface ChatGPTConversation {
   mapping: Record<string, ChatGPTMappingNode>;
 }
 
-// ── Pattern matching for fact extraction ────────────────────────────────────
-
-/**
- * Patterns that indicate fact-like statements.
- * Each pattern maps to a NormalizedFact type and importance boost.
- */
-const FACT_PATTERNS: Array<{
-  pattern: RegExp;
-  type: NormalizedFact['type'];
-  importanceBoost: number;
-}> = [
-  // Identity & personal info
-  { pattern: /\bmy name is\b/i, type: 'fact', importanceBoost: 2 },
-  { pattern: /\bi(?:'m| am) (?:a |an |the )?\w/i, type: 'fact', importanceBoost: 1 },
-  { pattern: /\bi work (?:at|for|in|as)\b/i, type: 'fact', importanceBoost: 2 },
-  { pattern: /\bi live (?:in|at|near)\b/i, type: 'fact', importanceBoost: 2 },
-  { pattern: /\bi(?:'m| am) from\b/i, type: 'fact', importanceBoost: 1 },
-  { pattern: /\bmy (?:wife|husband|partner|dog|cat|kid|child|son|daughter|mom|dad|brother|sister)\b/i, type: 'fact', importanceBoost: 2 },
-  { pattern: /\bmy (?:job|role|title|position) is\b/i, type: 'fact', importanceBoost: 2 },
-  { pattern: /\bmy (?:email|phone|address|birthday)\b/i, type: 'fact', importanceBoost: 1 },
-  { pattern: /\bi(?:'m| am) \d{1,3} years old\b/i, type: 'fact', importanceBoost: 1 },
-  { pattern: /\bi speak\b/i, type: 'fact', importanceBoost: 1 },
-  { pattern: /\bi studied\b/i, type: 'fact', importanceBoost: 1 },
-  { pattern: /\bi graduated\b/i, type: 'fact', importanceBoost: 1 },
-
-  // Preferences
-  { pattern: /\bi (?:like|love|enjoy|prefer|favor)\b/i, type: 'preference', importanceBoost: 1 },
-  { pattern: /\bi (?:don'?t like|dislike|hate|avoid|can'?t stand)\b/i, type: 'preference', importanceBoost: 1 },
-  { pattern: /\bi(?:'d| would) (?:rather|prefer)\b/i, type: 'preference', importanceBoost: 1 },
-  { pattern: /\bmy (?:favorite|favourite|preferred)\b/i, type: 'preference', importanceBoost: 1 },
-  { pattern: /\bi always\b/i, type: 'preference', importanceBoost: 0 },
-  { pattern: /\bi never\b/i, type: 'preference', importanceBoost: 0 },
-  { pattern: /\bi usually\b/i, type: 'preference', importanceBoost: 0 },
-
-  // Decisions
-  { pattern: /\bi (?:decided|chose|picked|selected|went with)\b/i, type: 'decision', importanceBoost: 1 },
-  { pattern: /\bwe (?:decided|chose|agreed)\b/i, type: 'decision', importanceBoost: 1 },
-
-  // Goals
-  { pattern: /\bi (?:want to|need to|plan to|hope to|aim to|intend to)\b/i, type: 'goal', importanceBoost: 1 },
-  { pattern: /\bi(?:'m| am) (?:trying to|working on|building|learning|studying)\b/i, type: 'goal', importanceBoost: 1 },
-  { pattern: /\bmy goal is\b/i, type: 'goal', importanceBoost: 2 },
-
-  // Context / work
-  { pattern: /\bi use\b/i, type: 'fact', importanceBoost: 0 },
-  { pattern: /\bi(?:'m| am) using\b/i, type: 'fact', importanceBoost: 0 },
-  { pattern: /\bmy (?:project|app|website|company|team|startup|business)\b/i, type: 'context', importanceBoost: 1 },
-];
-
-/**
- * Classify a user message and determine its fact type and importance.
- * Returns null if the message is too short or doesn't match any patterns.
- */
-function classifyMessage(text: string): { type: NormalizedFact['type']; importance: number } | null {
-  const trimmed = text.trim();
-
-  // Skip very short messages (questions, greetings, etc.)
-  if (trimmed.length < 15) return null;
-
-  // Skip messages that are purely questions (start with question word and end with ?)
-  if (/^(?:what|where|when|who|why|how|can|could|would|should|is|are|do|does|did)\b/i.test(trimmed) && trimmed.endsWith('?')) {
-    return null;
-  }
-
-  // Skip messages that are just greetings or single-word responses
-  if (/^(?:hi|hello|hey|thanks|thank you|ok|okay|yes|no|sure|great|cool|nice|bye|goodbye)\b/i.test(trimmed) && trimmed.length < 30) {
-    return null;
-  }
-
-  let bestType: NormalizedFact['type'] = 'episodic';
-  let bestBoost = -1;
-
-  for (const { pattern, type, importanceBoost } of FACT_PATTERNS) {
-    if (pattern.test(trimmed)) {
-      if (importanceBoost > bestBoost) {
-        bestType = type;
-        bestBoost = importanceBoost;
-      }
-    }
-  }
-
-  if (bestBoost >= 0) {
-    // Matched a pattern -- this is a fact-like statement
-    return { type: bestType, importance: 5 + bestBoost };
-  }
-
-  // No pattern match -- return null to let caller decide whether to include as episodic
-  return null;
-}
+/** Maximum messages per conversation chunk for LLM extraction. */
+const CHUNK_SIZE = 20;
 
 // ── ChatGPT Adapter ─────────────────────────────────────────────────────────
 
@@ -149,7 +62,7 @@ export class ChatGPTAdapter extends BaseImportAdapter {
         content = fs.readFileSync(resolvedPath, 'utf-8');
       } catch (e) {
         errors.push(`Failed to read file: ${e instanceof Error ? e.message : 'Unknown error'}`);
-        return { facts: [], warnings, errors };
+        return { facts: [], chunks: [], totalMessages: 0, warnings, errors };
       }
     } else {
       errors.push(
@@ -157,7 +70,7 @@ export class ChatGPTAdapter extends BaseImportAdapter {
         'Export from ChatGPT: Settings -> Data Controls -> Export Data (conversations.json), ' +
         'or copy from Settings -> Personalization -> Memory -> Manage.',
       );
-      return { facts: [], warnings, errors };
+      return { facts: [], chunks: [], totalMessages: 0, warnings, errors };
     }
 
     // Detect format: JSON array = conversations.json, plain text = memories
@@ -174,6 +87,7 @@ export class ChatGPTAdapter extends BaseImportAdapter {
 
   /**
    * Parse ChatGPT conversations.json — full export with mapping tree.
+   * Returns conversation chunks for LLM extraction (no pattern matching).
    */
   private parseConversationsJson(
     content: string,
@@ -198,11 +112,11 @@ export class ChatGPTAdapter extends BaseImportAdapter {
           'Unrecognized ChatGPT format. Expected an array of conversation objects (conversations.json) ' +
           'or plain text (ChatGPT memories).',
         );
-        return { facts: [], warnings, errors };
+        return { facts: [], chunks: [], totalMessages: 0, warnings, errors };
       }
     } catch (e) {
       errors.push(`Failed to parse ChatGPT JSON: ${e instanceof Error ? e.message : 'Unknown error'}`);
-      return { facts: [], warnings, errors };
+      return { facts: [], chunks: [], totalMessages: 0, warnings, errors };
     }
 
     if (onProgress) {
@@ -214,7 +128,8 @@ export class ChatGPTAdapter extends BaseImportAdapter {
       });
     }
 
-    const rawFacts: Partial<NormalizedFact>[] = [];
+    const chunks: ConversationChunk[] = [];
+    let totalMessages = 0;
     let convIndex = 0;
 
     for (const conv of conversations) {
@@ -223,35 +138,30 @@ export class ChatGPTAdapter extends BaseImportAdapter {
         continue;
       }
 
-      // Extract user messages from the mapping tree
-      const userMessages = this.extractUserMessages(conv.mapping);
+      // Extract user + assistant messages in chronological order
+      const messages = this.extractMessages(conv.mapping);
+      if (messages.length === 0) continue;
 
-      for (const msg of userMessages) {
-        const textParts = this.extractTextFromParts(msg.message?.content?.parts);
-        if (!textParts) continue;
+      totalMessages += messages.length;
 
-        // Split multi-sentence messages into individual sentences for better fact extraction
-        const sentences = this.splitIntoSentences(textParts);
+      // Determine timestamp from first message or conversation
+      const timestamp = conv.create_time
+        ? new Date(conv.create_time * 1000).toISOString()
+        : undefined;
 
-        for (const sentence of sentences) {
-          const classification = classifyMessage(sentence);
+      const title = conv.title || 'Untitled Conversation';
 
-          if (classification) {
-            rawFacts.push({
-              text: sentence.slice(0, 512),
-              type: classification.type,
-              importance: classification.importance,
-              source: 'chatgpt' as ImportSource,
-              sourceId: msg.id,
-              sourceTimestamp: msg.message?.create_time
-                ? new Date(msg.message.create_time * 1000).toISOString()
-                : conv.create_time
-                  ? new Date(conv.create_time * 1000).toISOString()
-                  : undefined,
-              tags: conv.title ? [`conversation:${conv.title.slice(0, 60)}`] : [],
-            });
-          }
-        }
+      // Chunk into batches of CHUNK_SIZE messages
+      for (let i = 0; i < messages.length; i += CHUNK_SIZE) {
+        const batch = messages.slice(i, i + CHUNK_SIZE);
+        const chunkIndex = Math.floor(i / CHUNK_SIZE) + 1;
+        const totalChunks = Math.ceil(messages.length / CHUNK_SIZE);
+
+        chunks.push({
+          title: totalChunks > 1 ? `${title} (part ${chunkIndex}/${totalChunks})` : title,
+          messages: batch,
+          timestamp,
+        });
       }
 
       convIndex++;
@@ -260,33 +170,28 @@ export class ChatGPTAdapter extends BaseImportAdapter {
           current: convIndex,
           total: conversations.length,
           phase: 'parsing',
-          message: `Parsed ${convIndex}/${conversations.length} conversations (${rawFacts.length} facts so far)...`,
+          message: `Parsed ${convIndex}/${conversations.length} conversations (${chunks.length} chunks, ${totalMessages} messages)...`,
         });
       }
     }
 
-    if (rawFacts.length === 0 && conversations.length > 0) {
+    if (chunks.length === 0 && conversations.length > 0) {
       warnings.push(
-        `Parsed ${conversations.length} conversations but extracted 0 facts. ` +
-        'The heuristic extraction looks for personal statements (I am, I like, I work at, etc.). ' +
-        'For better results, export your ChatGPT memories directly: Settings -> Personalization -> Memory -> Manage.',
+        `Parsed ${conversations.length} conversations but found no messages with text content.`,
       );
     }
 
-    const { facts, invalidCount } = this.validateFacts(rawFacts);
-
-    if (invalidCount > 0) {
-      warnings.push(`${invalidCount} extracted statements had invalid/empty text and were skipped`);
-    }
-
     return {
-      facts,
+      facts: [],
+      chunks,
+      totalMessages,
       warnings,
       errors,
       source_metadata: {
         format: 'conversations.json',
         conversations_count: conversations.length,
-        user_messages_extracted: rawFacts.length,
+        chunks_count: chunks.length,
+        total_messages: totalMessages,
       },
     };
   }
@@ -294,6 +199,8 @@ export class ChatGPTAdapter extends BaseImportAdapter {
   /**
    * Parse ChatGPT memories — plain text, one memory per line.
    * Users copy this from Settings -> Personalization -> Memory -> Manage.
+   *
+   * Each line becomes a single-message conversation chunk for LLM extraction.
    */
   private parseMemoriesText(
     content: string,
@@ -317,49 +224,46 @@ export class ChatGPTAdapter extends BaseImportAdapter {
       });
     }
 
-    const rawFacts: Partial<NormalizedFact>[] = lines.map((line, i) => {
-      // Strip leading bullet/dash/number markers
-      const cleaned = line
+    // Clean lines: strip bullet/dash/number markers
+    const cleanedLines = lines.map((line) =>
+      line
         .replace(/^[-*\u2022]\s+/, '')        // bullet points
         .replace(/^\d+[.)]\s+/, '')            // numbered lists
-        .trim();
+        .trim(),
+    ).filter((line) => line.length >= 3);
 
-      // Classify using pattern matching
-      const classification = classifyMessage(cleaned);
-
-      return {
-        text: cleaned.slice(0, 512),
-        type: classification?.type ?? 'fact',
-        // ChatGPT memories are pre-curated by ChatGPT's own memory system, so
-        // they are generally higher quality -- default to importance 6
-        importance: classification?.importance ?? 6,
-        source: 'chatgpt' as ImportSource,
-        sourceId: `chatgpt-memory-${i}`,
-        tags: ['chatgpt-memory'],
-      };
-    });
-
-    const { facts, invalidCount } = this.validateFacts(rawFacts);
-
-    if (invalidCount > 0) {
-      warnings.push(`${invalidCount} memories had invalid/empty text and were skipped`);
+    // Group all memories into chunks of CHUNK_SIZE for efficient LLM extraction
+    const chunks: ConversationChunk[] = [];
+    for (let i = 0; i < cleanedLines.length; i += CHUNK_SIZE) {
+      const batch = cleanedLines.slice(i, i + CHUNK_SIZE);
+      chunks.push({
+        title: `ChatGPT memories (${i + 1}-${Math.min(i + CHUNK_SIZE, cleanedLines.length)})`,
+        messages: batch.map((text) => ({ role: 'user' as const, text })),
+      });
     }
 
     return {
-      facts,
+      facts: [],
+      chunks,
+      totalMessages: cleanedLines.length,
       warnings,
       errors,
       source_metadata: {
         format: 'memories-text',
         total_lines: lines.length,
+        chunks_count: chunks.length,
       },
     };
   }
 
   /**
-   * Traverse the mapping tree and extract user messages in chronological order.
+   * Traverse the mapping tree and extract user + assistant messages in chronological order.
+   * Both roles are included because the assistant's response often provides context
+   * that helps the LLM understand what the user meant.
    */
-  private extractUserMessages(mapping: Record<string, ChatGPTMappingNode>): ChatGPTMappingNode[] {
+  private extractMessages(
+    mapping: Record<string, ChatGPTMappingNode>,
+  ): Array<{ role: 'user' | 'assistant'; text: string }> {
     // Find the root node (the one with no parent or parent not in mapping)
     let rootId: string | undefined;
     for (const [id, node] of Object.entries(mapping)) {
@@ -371,8 +275,8 @@ export class ChatGPTAdapter extends BaseImportAdapter {
 
     if (!rootId) return [];
 
-    // Walk the tree depth-first, following first child (main thread)
-    const messages: ChatGPTMappingNode[] = [];
+    // Walk the tree breadth-first, following children in order (main thread)
+    const messages: Array<{ role: 'user' | 'assistant'; text: string }> = [];
     const visited = new Set<string>();
     const queue: string[] = [rootId];
 
@@ -384,9 +288,13 @@ export class ChatGPTAdapter extends BaseImportAdapter {
       const node = mapping[nodeId];
       if (!node) continue;
 
-      // Only collect user messages
-      if (node.message?.author?.role === 'user') {
-        messages.push(node);
+      const role = node.message?.author?.role;
+      // Only collect user and assistant messages (skip system, tool)
+      if (role === 'user' || role === 'assistant') {
+        const textParts = this.extractTextFromParts(node.message?.content?.parts);
+        if (textParts && textParts.length >= 3) {
+          messages.push({ role, text: textParts });
+        }
       }
 
       // Follow children (add them to queue in order)
@@ -411,22 +319,5 @@ export class ChatGPTAdapter extends BaseImportAdapter {
     if (textParts.length === 0) return null;
 
     return textParts.join(' ').trim();
-  }
-
-  /**
-   * Split a message into individual sentences for finer-grained fact extraction.
-   * Only splits on sentence boundaries; keeps short messages intact.
-   */
-  private splitIntoSentences(text: string): string[] {
-    // If the message is short enough, return as-is
-    if (text.length < 100) return [text];
-
-    // Split on sentence-ending punctuation followed by space and uppercase
-    const sentences = text
-      .split(/(?<=[.!?])\s+(?=[A-Z])/)
-      .map((s) => s.trim())
-      .filter((s) => s.length >= 10);
-
-    return sentences.length > 0 ? sentences : [text];
   }
 }

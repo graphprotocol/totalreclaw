@@ -73,15 +73,38 @@ export interface ImportResult {
 export type ProgressCallback = (progress: {
   current: number;
   total: number;
-  phase: 'fetching' | 'parsing' | 'storing';
+  phase: 'fetching' | 'parsing' | 'storing' | 'extracting';
   message: string;
 }) => void;
 
 /**
+ * A chunk of conversation messages for LLM-based fact extraction.
+ * Adapters that parse conversation data (ChatGPT, Claude) return these
+ * instead of pre-extracted facts, delegating extraction to the LLM.
+ */
+export interface ConversationChunk {
+  /** Human-readable title for progress reporting */
+  title: string;
+  /** Ordered messages in this chunk */
+  messages: Array<{ role: 'user' | 'assistant'; text: string }>;
+  /** Original timestamp (ISO 8601) if available */
+  timestamp?: string;
+}
+
+/**
  * Adapter parse result — returned by each adapter's parse method.
+ *
+ * Adapters return EITHER `facts` (pre-structured sources like Mem0, MCP Memory)
+ * OR `chunks` (conversation-based sources like ChatGPT, Claude) that need
+ * LLM extraction. The caller checks which field is populated.
  */
 export interface AdapterParseResult {
+  /** Pre-structured facts (Mem0, MCP Memory adapters) */
   facts: NormalizedFact[];
+  /** Conversation chunks needing LLM extraction (ChatGPT, Claude adapters) */
+  chunks: ConversationChunk[];
+  /** Total message count across all chunks */
+  totalMessages: number;
   warnings: string[];
   errors: string[];
   /** Metadata about the source (for logging) */

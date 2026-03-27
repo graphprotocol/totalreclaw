@@ -1,8 +1,8 @@
 import { BaseImportAdapter } from './base-adapter.js';
 import type {
   ImportSource,
-  NormalizedFact,
   AdapterParseResult,
+  ConversationChunk,
   ProgressCallback,
 } from './types.js';
 import fs from 'node:fs';
@@ -24,34 +24,8 @@ const BULLET_PREFIX_RE = /^[-*\u2022]\s+/;
  */
 const NUMBERED_PREFIX_RE = /^\d+[.)]\s+/;
 
-/**
- * Patterns for classifying Claude memory entries by type.
- * Claude memories are already curated facts, so we use lighter heuristics.
- */
-const TYPE_PATTERNS: Array<{ pattern: RegExp; type: NormalizedFact['type'] }> = [
-  { pattern: /\bprefers?\b/i, type: 'preference' },
-  { pattern: /\blikes?\b/i, type: 'preference' },
-  { pattern: /\bdislikes?\b/i, type: 'preference' },
-  { pattern: /\bfavorite\b/i, type: 'preference' },
-  { pattern: /\bfavourite\b/i, type: 'preference' },
-  { pattern: /\bavoids?\b/i, type: 'preference' },
-  { pattern: /\bdecided\b/i, type: 'decision' },
-  { pattern: /\bchose\b/i, type: 'decision' },
-  { pattern: /\bwants? to\b/i, type: 'goal' },
-  { pattern: /\bplans? to\b/i, type: 'goal' },
-  { pattern: /\bgoal\b/i, type: 'goal' },
-  { pattern: /\baims? to\b/i, type: 'goal' },
-  { pattern: /\bworking on\b/i, type: 'context' },
-  { pattern: /\bcurrently\b/i, type: 'context' },
-  { pattern: /\bproject\b/i, type: 'context' },
-];
-
-function classifyMemory(text: string): NormalizedFact['type'] {
-  for (const { pattern, type } of TYPE_PATTERNS) {
-    if (pattern.test(text)) return type;
-  }
-  return 'fact';
-}
+/** Maximum messages per conversation chunk for LLM extraction. */
+const CHUNK_SIZE = 20;
 
 export class ClaudeAdapter extends BaseImportAdapter {
   readonly source: ImportSource = 'claude';
@@ -74,24 +48,26 @@ export class ClaudeAdapter extends BaseImportAdapter {
         content = fs.readFileSync(resolvedPath, 'utf-8');
       } catch (e) {
         errors.push(`Failed to read file: ${e instanceof Error ? e.message : 'Unknown error'}`);
-        return { facts: [], warnings, errors };
+        return { facts: [], chunks: [], totalMessages: 0, warnings, errors };
       }
     } else {
       errors.push(
         'Claude import requires either content (pasted text) or file_path. ' +
         'Copy your memories from Claude: Settings -> Memory -> select all and copy.',
       );
-      return { facts: [], warnings, errors };
+      return { facts: [], chunks: [], totalMessages: 0, warnings, errors };
     }
 
     // Claude memory export is plain text, one fact per line.
-    // Sometimes with date prefixes like [2026-03-15] - User prefers TypeScript.
-    // Sometimes with bullet points or numbered lists.
     return this.parseMemoriesText(content.trim(), warnings, errors, onProgress);
   }
 
   /**
    * Parse Claude memories — plain text, one memory per line.
+   * Returns conversation chunks for LLM extraction (no pattern matching).
+   *
+   * Each line is cleaned (date prefixes, bullets, numbers stripped) and
+   * grouped into chunks for the LLM to process.
    */
   private parseMemoriesText(
     content: string,
@@ -115,7 +91,9 @@ export class ClaudeAdapter extends BaseImportAdapter {
       });
     }
 
-    const rawFacts: Partial<NormalizedFact>[] = lines.map((line, i) => {
+    // Clean each line: extract date, strip formatting
+    const cleanedEntries: Array<{ text: string; timestamp?: string }> = [];
+    for (const line of lines) {
       let cleaned = line;
       let timestamp: string | undefined;
 
@@ -132,33 +110,36 @@ export class ClaudeAdapter extends BaseImportAdapter {
         .replace(NUMBERED_PREFIX_RE, '')
         .trim();
 
-      const type = classifyMemory(cleaned);
+      if (cleaned.length >= 3) {
+        cleanedEntries.push({ text: cleaned, timestamp });
+      }
+    }
 
-      return {
-        text: cleaned.slice(0, 512),
-        type,
-        // Claude memories are already curated -- default to importance 6
-        importance: 6,
-        source: 'claude' as ImportSource,
-        sourceId: `claude-memory-${i}`,
-        sourceTimestamp: timestamp,
-        tags: ['claude-memory'],
-      };
-    });
+    // Group memories into chunks of CHUNK_SIZE for efficient LLM extraction
+    const chunks: ConversationChunk[] = [];
+    for (let i = 0; i < cleanedEntries.length; i += CHUNK_SIZE) {
+      const batch = cleanedEntries.slice(i, i + CHUNK_SIZE);
 
-    const { facts, invalidCount } = this.validateFacts(rawFacts);
+      // Use the timestamp from the first entry in the batch (if available)
+      const batchTimestamp = batch.find((e) => e.timestamp)?.timestamp;
 
-    if (invalidCount > 0) {
-      warnings.push(`${invalidCount} memories had invalid/empty text and were skipped`);
+      chunks.push({
+        title: `Claude memories (${i + 1}-${Math.min(i + CHUNK_SIZE, cleanedEntries.length)})`,
+        messages: batch.map((entry) => ({ role: 'user' as const, text: entry.text })),
+        timestamp: batchTimestamp,
+      });
     }
 
     return {
-      facts,
+      facts: [],
+      chunks,
+      totalMessages: cleanedEntries.length,
       warnings,
       errors,
       source_metadata: {
         format: 'memories-text',
         total_lines: lines.length,
+        chunks_count: chunks.length,
       },
     };
   }

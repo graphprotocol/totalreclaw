@@ -28,8 +28,16 @@ export interface NormalizedFact {
   tags?: string[];
 }
 
+export interface ConversationChunk {
+  title: string;
+  messages: Array<{ role: 'user' | 'assistant'; text: string }>;
+  timestamp?: string;
+}
+
 export interface AdapterParseResult {
   facts: NormalizedFact[];
+  chunks: ConversationChunk[];
+  totalMessages: number;
   warnings: string[];
   errors: string[];
   source_metadata?: Record<string, unknown>;
@@ -145,6 +153,17 @@ async function loadAdapter(source: ImportSource): Promise<ImportAdapter> {
 
 // ── Handler ─────────────────────────────────────────────────────────────────
 
+/**
+ * Handle import_from in the MCP context.
+ *
+ * Two paths:
+ * 1. Pre-structured sources (Mem0, MCP Memory) — adapter returns facts directly,
+ *    stored via client.remember().
+ * 2. Conversation-based sources (ChatGPT, Claude) — adapter returns conversation
+ *    chunks. The MCP server does NOT have direct LLM access, so it returns the
+ *    parsed chunks as structured text with instructions for the host agent to
+ *    use totalreclaw_remember for each important fact.
+ */
 export async function handleImportFrom(
   client: TotalReclaw,
   args: unknown,
@@ -171,13 +190,67 @@ export async function handleImportFrom(
       file_path: input.file_path,
     });
 
-    if (parseResult.errors.length > 0 && parseResult.facts.length === 0) {
+    const hasChunks = parseResult.chunks && parseResult.chunks.length > 0;
+    const hasFacts = parseResult.facts && parseResult.facts.length > 0;
+
+    if (parseResult.errors.length > 0 && !hasFacts && !hasChunks) {
       return errorResponse(
         `Failed to parse ${adapter.displayName} data:\n` +
         parseResult.errors.join('\n'),
       );
     }
 
+    // ── Path 2: Conversation chunks (ChatGPT, Claude) ──────────────────
+    // MCP server has no LLM access — return parsed data with instructions
+    // for the host agent to extract and store facts.
+    if (hasChunks) {
+      if (input.dry_run) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              dry_run: true,
+              source: input.source,
+              total_chunks: parseResult.chunks.length,
+              total_messages: parseResult.totalMessages,
+              preview: parseResult.chunks.slice(0, 5).map((c) => ({
+                title: c.title,
+                messages: c.messages.length,
+                first_message: c.messages[0]?.text.slice(0, 100),
+              })),
+              warnings: ['DRY RUN — no facts were imported.', ...parseResult.warnings],
+            }),
+          }],
+        };
+      }
+
+      // Format chunks as readable text for the host agent to process.
+      // The agent should read through these and call totalreclaw_remember
+      // for each important fact it identifies.
+      const chunkTexts = parseResult.chunks.map((chunk, i) => {
+        const header = `--- Conversation ${i + 1}/${parseResult.chunks.length}: ${chunk.title} ---`;
+        const msgs = chunk.messages.map((m) => `[${m.role}]: ${m.text}`).join('\n');
+        return `${header}\n${msgs}`;
+      });
+
+      const instructions =
+        `I parsed ${parseResult.chunks.length} conversation chunks (${parseResult.totalMessages} messages) ` +
+        `from ${adapter.displayName}. ` +
+        `Please review the conversations below and use totalreclaw_remember to store each important fact ` +
+        `you identify. Focus on: personal facts, preferences, decisions (with reasoning), goals, ` +
+        `and active project context. Skip greetings, small talk, and ephemeral task coordination.\n\n` +
+        chunkTexts.join('\n\n');
+
+      return {
+        content: [{
+          type: 'text',
+          text: instructions,
+        }],
+      };
+    }
+
+    // ── Path 1: Pre-structured facts (Mem0, MCP Memory) ────────────────
     // Dry run — just report what would be imported
     if (input.dry_run) {
       const result: ImportResult = {

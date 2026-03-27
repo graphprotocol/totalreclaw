@@ -1287,7 +1287,12 @@ async function storeExtractedFacts(
 /**
  * Handle import_from tool calls in the plugin context.
  *
- * Uses the shared adapters to parse, then stores via storeExtractedFacts().
+ * Two paths:
+ * 1. Pre-structured sources (Mem0, MCP Memory) — adapter returns facts directly,
+ *    stored via storeExtractedFacts().
+ * 2. Conversation-based sources (ChatGPT, Claude) — adapter returns conversation
+ *    chunks, each chunk is passed through extractFacts() (the same LLM extraction
+ *    pipeline used for auto-extraction), then stored via storeExtractedFacts().
  */
 async function handlePluginImportFrom(
   params: Record<string, unknown>,
@@ -1314,7 +1319,10 @@ async function handlePluginImportFrom(
       file_path: params.file_path as string | undefined,
     });
 
-    if (parseResult.errors.length > 0 && parseResult.facts.length === 0) {
+    const hasChunks = parseResult.chunks && parseResult.chunks.length > 0;
+    const hasFacts = parseResult.facts && parseResult.facts.length > 0;
+
+    if (parseResult.errors.length > 0 && !hasFacts && !hasChunks) {
       return {
         success: false,
         error: `Failed to parse ${adapter.displayName} data`,
@@ -1322,7 +1330,24 @@ async function handlePluginImportFrom(
       };
     }
 
+    // Dry run: report what was parsed (chunks or facts)
     if (params.dry_run) {
+      if (hasChunks) {
+        return {
+          success: true,
+          dry_run: true,
+          source,
+          total_chunks: parseResult.chunks.length,
+          total_messages: parseResult.totalMessages,
+          preview: parseResult.chunks.slice(0, 5).map((c) => ({
+            title: c.title,
+            messages: c.messages.length,
+            first_message: c.messages[0]?.text.slice(0, 100),
+          })),
+          note: 'Chunks will be processed through LLM extraction (same quality as auto-extraction).',
+          warnings: parseResult.warnings,
+        };
+      }
       return {
         success: true,
         dry_run: true,
@@ -1337,7 +1362,12 @@ async function handlePluginImportFrom(
       };
     }
 
-    // Convert NormalizedFact[] to ExtractedFact[] for storeExtractedFacts()
+    // ── Path 1: Conversation chunks (ChatGPT, Claude) — LLM extraction ──
+    if (hasChunks) {
+      return handleChunkImport(parseResult.chunks, parseResult.totalMessages, source, logger, startTime, parseResult.warnings);
+    }
+
+    // ── Path 2: Pre-structured facts (Mem0, MCP Memory) — direct store ──
     const extractedFacts: ExtractedFact[] = parseResult.facts.map((f) => ({
       text: f.text,
       type: f.type,
@@ -1374,6 +1404,77 @@ async function handlePluginImportFrom(
     logger.error(`Import failed: ${msg}`);
     return { success: false, error: `Import failed: ${msg}` };
   }
+}
+
+/**
+ * Process conversation chunks through LLM extraction and store results.
+ *
+ * Each chunk is passed to extractFacts() — the same extraction pipeline used
+ * for auto-extraction during live conversations. This ensures import quality
+ * matches conversation extraction quality.
+ */
+async function handleChunkImport(
+  chunks: import('./import-adapters/types.js').ConversationChunk[],
+  totalMessages: number,
+  source: string,
+  logger: OpenClawPluginApi['logger'],
+  startTime: number,
+  warnings: string[],
+): Promise<Record<string, unknown>> {
+  let totalExtracted = 0;
+  let totalStored = 0;
+  let chunksProcessed = 0;
+
+  for (const chunk of chunks) {
+    chunksProcessed++;
+    logger.info(
+      `Import: extracting facts from chunk ${chunksProcessed}/${chunks.length}: "${chunk.title}"`,
+    );
+
+    // Convert chunk messages to the format extractFacts() expects.
+    // extractFacts() takes an array of message-like objects with { role, content }.
+    const messages = chunk.messages.map((m) => ({
+      role: m.role,
+      content: m.text,
+    }));
+
+    // Use 'full' mode to extract ALL valuable memories from the chunk
+    // (not just the last few messages like 'turn' mode does).
+    const facts = await extractFacts(messages, 'full');
+
+    if (facts.length > 0) {
+      totalExtracted += facts.length;
+
+      // Store through the normal pipeline (dedup, encrypt, store)
+      const stored = await storeExtractedFacts(facts, logger);
+      totalStored += stored;
+
+      logger.info(
+        `Import chunk ${chunksProcessed}/${chunks.length}: extracted ${facts.length} facts, stored ${stored}`,
+      );
+    }
+  }
+
+  if (totalExtracted === 0 && chunks.length > 0) {
+    warnings.push(
+      `Processed ${chunks.length} conversation chunks (${totalMessages} messages) but the LLM ` +
+      `did not extract any facts worth storing. This can happen if the conversations are mostly ` +
+      `generic/ephemeral content without personal facts, preferences, or decisions.`,
+    );
+  }
+
+  return {
+    success: totalStored > 0 || totalExtracted > 0,
+    source,
+    import_id: crypto.randomUUID(),
+    total_chunks: chunks.length,
+    total_messages: totalMessages,
+    facts_extracted: totalExtracted,
+    imported: totalStored,
+    skipped: totalExtracted - totalStored,
+    warnings,
+    duration_ms: Date.now() - startTime,
+  };
 }
 
 // ---------------------------------------------------------------------------
