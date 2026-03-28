@@ -2,8 +2,11 @@
 
 Set up TotalReclaw as the encrypted memory layer for your IronClaw agent. Your memories are encrypted on-device before they leave -- IronClaw's TEE protects the runtime, TotalReclaw protects the data at rest.
 
+> **Note:** TotalReclaw requires a local IronClaw installation (not NEAR AI hosted). The hosted environment does not include Node.js, which is needed to run the MCP server. Installing TotalReclaw as a "Skill" from ClawHub only injects instructions -- it does not register the tools.
+
 ## Prerequisites
 
+- **Local IronClaw installation** -- hosted IronClaw (NEAR AI Cloud) is not supported (no Node.js runtime in the TEE container)
 - **IronClaw v0.22+** (with MCP client support)
 - **Node.js 22+** (for the MCP server process)
 - ~600 MB disk space for the local embedding model (one-time download)
@@ -157,6 +160,17 @@ TotalReclaw and IronClaw provide complementary security layers:
 | **Portability** | Machine-locked | Any agent, any device |
 
 IronClaw's TEE protects your data while it is being processed. TotalReclaw protects your data at rest and in transit -- even if the storage layer is fully compromised, only ciphertext is exposed.
+
+### LLM provider privacy
+
+TotalReclaw encrypts memories at rest and in transit to the relay. However, recalled memories are decrypted locally and injected as context into LLM requests. If your IronClaw agent uses a third-party LLM (OpenAI, Anthropic, etc.), decrypted memories will be visible to that provider.
+
+To keep memories private end-to-end, use one of these LLM backends:
+- **`nearai`** -- NEAR AI private inference (TEE-based, hardware-isolated)
+- **`ollama`** -- local inference, nothing leaves your machine
+- **`tinfoil`** -- third-party confidential inference via TEEs
+
+This is not specific to TotalReclaw -- any memory system that provides context to an LLM has this property.
 
 ## Troubleshooting
 
