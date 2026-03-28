@@ -215,6 +215,34 @@ Applies to both managed service (PostgreSQL) and future self-hosted deployments.
 
 Layers 1-2 are part of PoC (v0.3.1b). Layers 3-4 are MVP enhancements (v0.3.2).
 
+### 2.9 HTTP MCP & Hosted Agent Integration
+
+Support hosted AI agents (IronClaw / NEAR AI Cloud, Windsurf, etc.) that cannot spawn local stdio processes.
+
+**Hard Constraint:** The relay NEVER sees the recovery phrase (mnemonic). Encryption and signing always happen in the agent's runtime. The relay is a blind proxy.
+
+**Architecture:** Hybrid model with two tiers:
+
+| Tier | What | Mnemonic Needed? | Status |
+|------|------|:----------------:|--------|
+| **Thin HTTP MCP** | `/v1/mcp` on relay — status, upgrade, encrypted recall only | No | NOT DONE |
+| **Client in TEE** | stdio MCP server inside IronClaw TEE — full E2EE | Yes (in TEE vault) | NOT DONE |
+
+**Thin HTTP MCP (Tier 1):** 3 server-side-safe tools (`totalreclaw_status`, `totalreclaw_upgrade`, `totalreclaw_recall_encrypted`). Relay authenticates via API key mapped to wallet address. No mnemonic on relay. Any hosted agent can connect via HTTPS URL + Bearer token.
+
+**Client in TEE (Tier 2):** Full 10-tool E2EE. Mnemonic stored in IronClaw's encrypted credential vault (AES-256-GCM, TEE-protected). `@totalreclaw/mcp-server` runs as stdio process inside the TEE, reads mnemonic from env var. Architecturally identical to local stdio model, but hardware-isolated.
+
+| Task | Description | Effort | Status |
+|------|-------------|--------|--------|
+| Thin HTTP MCP endpoint | `/v1/mcp` on relay (3 server-safe tools) | 7-8 days | NOT DONE |
+| Registration web UI | Browser-side key derivation, API key generation (mnemonic never leaves browser) | 1 day | NOT DONE |
+| Factor MCP server handlers | Shared handler module for stdio + HTTP transports | 1 day | NOT DONE |
+| stdio MCP inside IronClaw TEE | Validate local MCP spawning, document vault setup | 1-2 days | NOT DONE |
+| IronClaw testing | Validate both tiers on NEAR AI Cloud | 2 days | NOT DONE |
+| Documentation | HTTP MCP setup guide + IronClaw guide | 0.5 day | NOT DONE |
+
+**Plans:** `plans/2026-03-28-http-mcp-endpoint.md` (v2), `plans/2026-03-28-ironclaw-native-extension.md` (internal repo)
+
 ---
 
 ## Phase 3: Self-Hosted
