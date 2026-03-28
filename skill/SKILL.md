@@ -8,9 +8,7 @@ homepage: https://totalreclaw.xyz
 metadata:
   openclaw:
     requires:
-      env:
-        - TOTALRECLAW_RECOVERY_PHRASE
-        - TOTALRECLAW_SERVER_URL
+      env: []
       bins: []
     emoji: "🧠"
     os: ["macos", "linux", "windows"]
