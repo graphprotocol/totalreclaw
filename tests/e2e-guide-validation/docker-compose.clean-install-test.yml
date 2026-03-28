@@ -1,0 +1,18 @@
+services:
+  openclaw:
+    build:
+      context: ../..
+      dockerfile: tests/e2e-guide-validation/Dockerfile.clean-install
+    restart: unless-stopped
+    environment:
+      ZAI_API_KEY: "${ZAI_API_KEY}"
+      # NOTE: No TOTALRECLAW_* env vars — tests fully clean install
+      OPENCLAW_GATEWAY_TOKEN: "clean-install-test-token"
+      OPENCLAW_RAW_STREAM: "1"
+      PI_RAW_STREAM: "1"
+    ports:
+      - "127.0.0.1:18789:18789"
+    tmpfs:
+      - /tmp:size=100M
+    security_opt:
+      - no-new-privileges

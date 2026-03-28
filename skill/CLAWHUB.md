@@ -59,21 +59,31 @@ Ensure the SKILL.md starts with this frontmatter for ClawHub:
 
 ```yaml
 ---
-name: TotalReclaw
-description: "End-to-end encrypted memory for AI agents — portable, yours forever. AES-256-GCM E2EE. One recovery phrase, full portability."
-version: 1.4.0
+name: totalreclaw
+description: "End-to-end encrypted memory for AI agents — portable, yours forever. AES-256-GCM E2EE: server never sees plaintext."
+version: 1.5.1
+author: TotalReclaw Team
+license: MIT
+homepage: https://totalreclaw.xyz
 metadata:
   openclaw:
     requires:
-      env:
-        - TOTALRECLAW_SERVER_URL
-        - TOTALRECLAW_RECOVERY_PHRASE
-    primaryEnv: TOTALRECLAW_RECOVERY_PHRASE
+      env: []
+      bins: []
     emoji: "\U0001F9E0"
-    homepage: https://totalreclaw.xyz
     os: ["macos", "linux", "windows"]
+    keywords:
+      - memory
+      - e2ee
+      - e2e-encryption
+      - encryption
+      - privacy
+      - agent-memory
+      - persistent-context
 ---
 ```
+
+**Note:** `env: []` is intentional. The skill installs without any pre-configured env vars. The agent guides the user through onboarding (generating a recovery phrase) during first use.
 
 ---
 

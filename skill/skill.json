@@ -19,13 +19,9 @@
     "minVersion": "0.1.0",
     "maxVersion": "1.0.0",
     "requires": {
-      "env": [
-        "TOTALRECLAW_SERVER_URL",
-        "TOTALRECLAW_RECOVERY_PHRASE"
-      ],
+      "env": [],
       "bins": []
     },
-    "primaryEnv": "TOTALRECLAW_SERVER_URL",
     "emoji": "🧠",
     "os": ["macos", "linux", "windows"],
     "hooks": {

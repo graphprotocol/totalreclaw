@@ -1,0 +1,48 @@
+# Test: Clean install from npm — NO TotalReclaw env vars at all
+# Simulates what happens when a user installs from ClawHub on a fresh instance
+FROM node:22-bookworm AS builder
+
+RUN corepack enable
+WORKDIR /openclaw
+RUN git clone --depth 1 https://github.com/openclaw/openclaw.git .
+RUN pnpm install --frozen-lockfile
+RUN pnpm build
+
+FROM node:22-bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /openclaw /app
+
+# Install plugin from npm — simulates ClawHub/npm install
+RUN mkdir -p /opt/totalreclaw-npm && \
+    cd /opt/totalreclaw-npm && \
+    npm pack @totalreclaw/totalreclaw 2>/dev/null && \
+    tar xzf totalreclaw-totalreclaw-*.tgz && \
+    mv package plugin && \
+    rm -f *.tgz
+
+# Install plugin dependencies (npm pack doesn't include node_modules)
+RUN cd /opt/totalreclaw-npm/plugin && npm install && npm install tslib
+
+# Verify the plugin entry point exists (TypeScript source, loaded directly by OpenClaw)
+RUN ls -la /opt/totalreclaw-npm/plugin/index.ts
+
+# Create writable directories
+RUN mkdir -p /home/node/.openclaw /home/node/.totalreclaw && \
+    chown -R node:node /home/node/.openclaw /home/node/.totalreclaw /app /opt/totalreclaw-npm
+
+COPY tests/e2e-guide-validation/entrypoint-clean-install.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+USER node
+ENV NODE_ENV=production
+ENV OPENCLAW_NO_TELEMETRY=1
+
+WORKDIR /app
+EXPOSE 18789
+
+ENTRYPOINT ["/entrypoint.sh"]
