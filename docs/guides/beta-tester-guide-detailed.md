@@ -136,7 +136,6 @@ Set the following environment variables in your OpenClaw configuration (e.g., wo
 ```
 # --- Required ---
 TOTALRECLAW_RECOVERY_PHRASE="word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12"
-TOTALRECLAW_SERVER_URL="https://api.totalreclaw.xyz"
 
 # --- Managed service is the default (no env var needed) ---
 # Set TOTALRECLAW_SELF_HOSTED="true" only if using your own server
@@ -145,9 +144,7 @@ TOTALRECLAW_SERVER_URL="https://api.totalreclaw.xyz"
 
 Replace `word1 word2 ...` with your actual 12-word phrase. Keep the quotes around it. These can be set in your OpenClaw workspace environment settings, your shell profile, or any method your OpenClaw instance supports for environment variables.
 
-The values above are all you need. The managed service at `api.totalreclaw.xyz` handles on-chain storage (Gnosis mainnet), gas sponsorship, billing, and query routing -- without ever seeing your data.
-
-> **Note:** `TOTALRECLAW_SERVER_URL` is always required -- the managed service handles user registration, billing, and relay operations.
+The recovery phrase is all you need. The server URL defaults to the managed service at `api.totalreclaw.xyz`, which handles on-chain storage (Gnosis mainnet), gas sponsorship, billing, and query routing -- without ever seeing your data.
 
 Your agent's LLM API key (e.g., `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`) should already be configured in your OpenClaw environment. TotalReclaw auto-detects it -- no extra LLM setup is needed.
 
@@ -520,13 +517,14 @@ Copy the config snippet printed by the setup wizard into your MCP client configu
       "command": "npx",
       "args": ["@totalreclaw/mcp-server"],
       "env": {
-        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve words here",
-        "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz"
+        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve words here"
       }
     }
   }
 }
 ```
+
+> **Note:** The server URL defaults to `https://api.totalreclaw.xyz` (the managed service). You only need to set `TOTALRECLAW_SERVER_URL` if you are running a self-hosted server.
 
 **Cursor:** Add the same config block to your Cursor MCP settings.
 
@@ -570,8 +568,7 @@ If you prefer not to run the setup command, you can set the mnemonic directly as
       "command": "npx",
       "args": ["@totalreclaw/mcp-server"],
       "env": {
-        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve words here",
-        "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz"
+        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve words here"
       }
     }
   }
@@ -679,7 +676,7 @@ All configuration is done through environment variables, set in your OpenClaw wo
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TOTALRECLAW_RECOVERY_PHRASE` | Your 12-word BIP-39 recovery phrase. **Required.** | -- (none) |
-| `TOTALRECLAW_SERVER_URL` | URL of the TotalReclaw relay server. **Required.** | `https://api.totalreclaw.xyz` |
+| `TOTALRECLAW_SERVER_URL` | URL of the TotalReclaw relay server. Only needed for self-hosted mode. | `https://api.totalreclaw.xyz` |
 
 ### LLM Provider Keys (OpenClaw plugin only, auto-detected from your agent)
 
@@ -752,7 +749,7 @@ Restart the plugin after updating the variable.
 **Cause:** The plugin may not be connecting to the correct server, or the auto-search hook may not be triggering.
 
 **Fix:**
-1. Verify that `TOTALRECLAW_SERVER_URL` is set to `https://api.totalreclaw.xyz`.
+1. Verify your internet connection -- the managed service is at `api.totalreclaw.xyz`. If you are using a self-hosted server, verify that `TOTALRECLAW_SERVER_URL` points to the correct address.
 2. Try an explicit recall: "What do you remember about me?" If this returns results, auto-search is working but may have filtered your query as irrelevant (messages shorter than 5 characters are skipped).
 3. Check the plugin logs for error messages (look for lines starting with `TotalReclaw:`).
 

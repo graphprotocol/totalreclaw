@@ -54,10 +54,11 @@ Add these to your NanoClaw deployment (Docker env, `.env` file, or platform conf
 
 ```bash
 TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
-TOTALRECLAW_SERVER_URL=https://api.totalreclaw.xyz
 ```
 
-The NanoClaw agent-runner automatically spawns `@totalreclaw/mcp-server` as a background process with these variables. No further configuration needed.
+The NanoClaw agent-runner automatically spawns `@totalreclaw/mcp-server` as a background process with this variable. No further configuration needed.
+
+> **Note:** The server URL defaults to `https://api.totalreclaw.xyz` (the managed service). You only need to set `TOTALRECLAW_SERVER_URL` if you are running a self-hosted server.
 
 ### Step 3: Verify
 
@@ -111,7 +112,7 @@ This provides memory isolation between different NanoClaw groups. Memories store
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TOTALRECLAW_RECOVERY_PHRASE` | 12-word recovery phrase (required) | -- |
-| `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL | `https://api.totalreclaw.xyz` |
+| `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL (only needed for self-hosted) | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_SELF_HOSTED` | Set to `true` for self-hosted mode | `false` |
 | `TOTALRECLAW_NAMESPACE` | Default namespace | Group folder name |
 | `TOTALRECLAW_AUTO_EXTRACT` | Enable automatic fact extraction | `true` |
@@ -180,8 +181,8 @@ This makes TotalReclaw a universal memory layer across all your AI agents.
 - Restart the NanoClaw agent after changing environment variables
 
 **"Registration failed" or network errors**
-- Verify `TOTALRECLAW_SERVER_URL` is reachable from the container
-- The default (`https://api.totalreclaw.xyz`) requires internet access
+- Verify the container can reach `https://api.totalreclaw.xyz`
+- If using a self-hosted server, verify `TOTALRECLAW_SERVER_URL` is set and reachable
 
 **Memories not appearing across sessions**
 - Confirm the same recovery phrase is used across deployments

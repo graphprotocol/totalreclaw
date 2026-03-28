@@ -270,12 +270,9 @@ export async function runSetup(): Promise<void> {
     console.log('\nKeys derived successfully.');
 
     // ── Step 3: Server URL ────────────────────────────────────────────────
+    // Default to production — only override via TOTALRECLAW_SERVER_URL env var (for self-hosted)
 
-    const serverUrlInput = await ask(
-      rl,
-      `Server URL (press Enter for ${DEFAULT_SERVER_URL}): `,
-    );
-    const serverUrl = serverUrlInput || DEFAULT_SERVER_URL;
+    const serverUrl = process.env.TOTALRECLAW_SERVER_URL || DEFAULT_SERVER_URL;
 
     // ── Step 4: Server Registration ───────────────────────────────────────
 

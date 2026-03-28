@@ -61,11 +61,9 @@ TOTALRECLAW_RECOVERY_PHRASE="word1 word2 word3 word4 word5 word6 word7 word8 wor
 ### Optional
 
 ```bash
-# Server URL (default: managed service)
-TOTALRECLAW_SERVER_URL=https://api.totalreclaw.xyz
-
 # Use self-hosted server instead of managed service
 # TOTALRECLAW_SELF_HOSTED=true
+# TOTALRECLAW_SERVER_URL=https://your-server.example.com
 
 # Namespace for memory isolation (default: group folder name)
 # TOTALRECLAW_NAMESPACE=main

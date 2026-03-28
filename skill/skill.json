@@ -1,6 +1,6 @@
 {
   "name": "totalreclaw",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. AES-256-GCM E2EE: server never sees plaintext.",
   "author": "TotalReclaw Team",
   "license": "MIT",
@@ -180,8 +180,8 @@
     "config": {
       "serverUrl": {
         "type": "string",
-        "default": "http://127.0.0.1:8080",
-        "description": "TotalReclaw server URL"
+        "default": "https://api.totalreclaw.xyz",
+        "description": "TotalReclaw server URL (only change for self-hosted mode)"
       },
       "autoExtractEveryTurns": {
         "type": "number",

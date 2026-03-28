@@ -16,10 +16,11 @@ The **recovery phrase** is a 12-word BIP-39 mnemonic that derives all encryption
 Set these in your NanoClaw deployment (Docker env, `.env` file, or platform config):
 
 ```bash
-TOTALRECLAW_SERVER_URL=https://api.totalreclaw.xyz
 TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
 # Managed service is the default -- set TOTALRECLAW_SELF_HOSTED=true only for self-hosted mode
 ```
+
+> **Note:** The server URL defaults to `https://api.totalreclaw.xyz` (the managed service). You only need to set `TOTALRECLAW_SERVER_URL` if you are running a self-hosted server.
 
 The NanoClaw agent-runner automatically spawns the MCP server with these variables.
 
@@ -314,8 +315,8 @@ This provides memory isolation between different contexts.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_RECOVERY_PHRASE` | 12-word BIP-39 recovery phrase | Required |
+| `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL (only needed for self-hosted) | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_SELF_HOSTED` | Set to `true` to use your own server instead of the managed service | `false` |
 | `TOTALRECLAW_NAMESPACE` | Default namespace | Group folder name |
 | `TOTALRECLAW_EXTRACT_INTERVAL` | Turns between automatic extractions | `3` |

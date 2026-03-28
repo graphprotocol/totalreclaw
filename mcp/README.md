@@ -51,13 +51,14 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
       "command": "npx",
       "args": ["-y", "@totalreclaw/mcp-server"],
       "env": {
-        "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz",
         "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here"
       }
     }
   }
 }
 ```
+
+> **Note:** The server URL defaults to `https://api.totalreclaw.xyz` (the managed service). You only need to set `TOTALRECLAW_SERVER_URL` if you are running a self-hosted server.
 
 #### Cursor / Windsurf
 
@@ -69,7 +70,6 @@ Add to your MCP settings (Settings > MCP Servers):
     "command": "npx",
     "args": ["-y", "@totalreclaw/mcp-server"],
     "env": {
-      "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz",
       "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here"
     }
   }
@@ -87,8 +87,7 @@ Add to your IronClaw MCP configuration (typically `~/.ironclaw/mcp.json` or via 
       "command": "npx",
       "args": ["@totalreclaw/mcp-server"],
       "env": {
-        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here",
-        "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz"
+        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here"
       }
     }
   }
@@ -131,8 +130,8 @@ The server only ever sees ciphertext and hashed tokens.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_RECOVERY_PHRASE` | 12-word BIP-39 recovery phrase | Required |
+| `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL (only needed for self-hosted) | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_SELF_HOSTED` | Use a self-hosted server instead of the managed service | `false` |
 | `TOTALRECLAW_CHAIN_ID` | Chain ID (100=Gnosis mainnet, 84532=Base Sepolia staging) | `100` |
 

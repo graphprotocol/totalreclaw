@@ -40,20 +40,20 @@ Add to your IronClaw MCP configuration (typically `~/.ironclaw/mcp.json` or via 
       "command": "npx",
       "args": ["@totalreclaw/mcp-server"],
       "env": {
-        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here",
-        "TOTALRECLAW_SERVER_URL": "https://api.totalreclaw.xyz"
+        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here"
       }
     }
   }
 }
 ```
 
+> **Note:** The server URL defaults to `https://api.totalreclaw.xyz` (the managed service). You only need to set `TOTALRECLAW_SERVER_URL` if you are running a self-hosted server.
+
 ### Option B: IronClaw CLI
 
 ```bash
 ironclaw mcp add totalreclaw --command "npx @totalreclaw/mcp-server" \
-  --env TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase goes here" \
-  --env TOTALRECLAW_SERVER_URL="https://api.totalreclaw.xyz"
+  --env TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase goes here"
 ```
 
 > Replace `your twelve word recovery phrase goes here` with the actual phrase from the setup wizard.

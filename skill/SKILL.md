@@ -440,11 +440,7 @@ Imported facts are tagged with `import_source:{source}` for easy filtering. The 
 
 After installing TotalReclaw, the agent MUST complete setup automatically. **Do NOT ask the user to set environment variables manually.**
 
-### Step 1: Set the server URL
-
-The TotalReclaw server URL is always `https://api.totalreclaw.xyz`. This is set automatically — no action required.
-
-### Step 2: Recovery phrase
+### Step 1: Recovery phrase
 
 The recovery phrase is a **12-word BIP-39 mnemonic**. It derives all encryption keys. The server never sees it.
 
@@ -457,11 +453,11 @@ Ask the user:
 
 When setup is required, the plugin will automatically detect the host environment (macOS, Linux, or Docker) and provide the exact commands or config snippets needed to set the env vars. Follow those instructions.
 
-### Step 3: Storage mode (optional)
+### Step 2: Storage mode (optional)
 
-The managed service is the default -- no extra configuration needed. If you want to self-host instead, set `TOTALRECLAW_SELF_HOSTED=true` and point `TOTALRECLAW_SERVER_URL` to your server.
+The managed service is the default -- no extra configuration needed. If you want to self-host instead, set `TOTALRECLAW_SELF_HOSTED=true` and `TOTALRECLAW_SERVER_URL` to your server URL.
 
-### Step 4: Set memory slot
+### Step 3: Set memory slot
 
 Register TotalReclaw as the memory plugin:
 ```json
@@ -878,7 +874,7 @@ Default configuration values:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `serverUrl` | `https://api.totalreclaw.xyz` | TotalReclaw server URL |
+| `serverUrl` | `https://api.totalreclaw.xyz` | TotalReclaw server URL (do not change unless self-hosting) |
 | `autoExtractEveryTurns` | `3` | Turns between automatic extractions |
 | `minImportanceForAutoStore` | `6` | Minimum importance to auto-store |
 | `maxMemoriesInContext` | `8` | Maximum memories to inject into context |
