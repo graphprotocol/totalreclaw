@@ -21,8 +21,6 @@ export {
   decrypt,
 } from './aes';
 
-export type { EncryptedData } from './aes';
-
 export {
   generateBlindIndices,
   generateTrapdoors,
@@ -41,8 +39,11 @@ export {
 export {
   generateMnemonic,
   validateMnemonic,
+  deriveKeysFromMnemonic,
+  deriveLshSeed,
   mnemonicToKeys,
   mnemonicToSmartAccountAddress,
+  computeAuthKeyHash,
   storeSeedInKeychain,
   getSeedFromKeychain,
   deleteSeedFromKeychain,

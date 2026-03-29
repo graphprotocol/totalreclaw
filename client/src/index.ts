@@ -44,9 +44,10 @@ import {
 } from './types';
 import { deriveKeys, generateSalt, createAuthProof } from './crypto';
 import type { KeyDerivationParams } from './crypto';
-import { encrypt, decrypt, decryptToVector } from './crypto/aes';
+import { encrypt, decrypt } from './crypto/aes';
 import { generateBlindIndices, generateTrapdoors } from './crypto/blind';
-import { LSHIndex, mergeLSHConfig } from './lsh';
+import { LSHHasher, mergeLSHConfig } from './lsh';
+import { deriveLshSeed } from './crypto/seed';
 import { EmbeddingModel, createHashBasedEmbedding } from './embedding';
 import { cosineSimilarity, BM25Scorer, rrfFusion, normalizeScores, calculateDecayScore } from './search';
 import { TotalReclawClient } from './api';
@@ -70,7 +71,7 @@ interface ClientState {
 export class TotalReclaw {
   private config: TotalReclawConfig & { lshConfig: Required<LSHConfig> };
   private apiClient: TotalReclawClient;
-  private lshIndex: LSHIndex;
+  private lshHasher: LSHHasher | null = null;
   private embeddingModel: EmbeddingModel;
   private bm25Scorer: BM25Scorer;
   private state: ClientState = {
@@ -93,7 +94,7 @@ export class TotalReclaw {
     };
 
     this.apiClient = new TotalReclawClient(this.config);
-    this.lshIndex = new LSHIndex(this.config.lshConfig);
+    // LSHHasher is created lazily after mnemonic-based seed derivation
     this.embeddingModel = new EmbeddingModel();
     this.bm25Scorer = new BM25Scorer();
   }
@@ -105,9 +106,6 @@ export class TotalReclaw {
    */
   async init(): Promise<void> {
     await this.apiClient.init();
-
-    // Initialize LSH index with embedding dimension
-    this.lshIndex.initialize(1024); // Qwen3-Embedding-0.6B dimension
 
     // Try to load embedding model (optional)
     try {
@@ -123,6 +121,32 @@ export class TotalReclaw {
         'ONNX model not available. Using hash-based embeddings for testing.'
       );
     }
+  }
+
+  /**
+   * Initialize LSH hasher from a mnemonic.
+   * Must be called before remember() or recall() when using the mnemonic path.
+   */
+  initLshFromMnemonic(mnemonic: string): void {
+    const lshSeed = deriveLshSeed(mnemonic);
+    this.lshHasher = new LSHHasher(
+      lshSeed,
+      1024, // Qwen3-Embedding-0.6B dimension
+      this.config.lshConfig.n_tables,
+      this.config.lshConfig.n_bits_per_table,
+    );
+  }
+
+  /**
+   * Initialize LSH hasher from a raw seed (Uint8Array).
+   */
+  initLshFromSeed(seed: Uint8Array): void {
+    this.lshHasher = new LSHHasher(
+      seed,
+      1024,
+      this.config.lshConfig.n_tables,
+      this.config.lshConfig.n_bits_per_table,
+    );
   }
 
   /**
@@ -200,21 +224,31 @@ export class TotalReclaw {
   async remember(text: string, metadata?: FactMetadata): Promise<string> {
     this.ensureReady();
 
+    if (!this.lshHasher) {
+      throw new TotalReclawError(
+        TotalReclawErrorCode.LSH_HASH_FAILED,
+        'LSH hasher not initialized. Call initLshFromMnemonic() or initLshFromSeed() first.',
+      );
+    }
+
     // Generate embedding
     const embedding = await this.getEmbedding(text);
 
-    // Generate LSH buckets
-    const lshBuckets = this.lshIndex.hashVectorWithPrefix(embedding);
+    // Generate LSH buckets (already blind-hashed by LSHHasher)
+    const lshBuckets = this.lshHasher.hash(embedding);
 
-    // Generate blind indices
-    const blindIndices = generateBlindIndices(text, lshBuckets);
+    // Generate blind indices (word + stem hashes)
+    const wordIndices = generateBlindIndices(text);
 
-    // Encrypt document
-    const encryptedDoc = encrypt(Buffer.from(text, 'utf-8'), this.state.encryptionKey!);
+    // Merge word indices and LSH bucket hashes
+    const blindIndices = [...wordIndices, ...lshBuckets];
 
-    // Encrypt embedding
-    const embeddingBuffer = Buffer.from(new Float64Array(embedding).buffer);
-    const encryptedEmbedding = encrypt(embeddingBuffer, this.state.encryptionKey!);
+    // Encrypt document and embedding
+    const encryptedDoc = encrypt(text, this.state.encryptionKey!);
+    const encryptedEmbedding = encrypt(
+      JSON.stringify(embedding),
+      this.state.encryptionKey!,
+    );
 
     // Calculate initial decay score
     const importance = metadata?.importance ?? 0.5;
@@ -223,15 +257,11 @@ export class TotalReclaw {
     // Create encrypted fact
     const fact: EncryptedFact = {
       id: this.apiClient.generateUUIDv7(),
-      encryptedDoc: encryptedDoc.ciphertext,
-      encryptedEmbedding: encryptedEmbedding.ciphertext,
+      encryptedDoc: encryptedDoc,
+      encryptedEmbedding: encryptedEmbedding,
       blindIndices,
       decayScore,
       timestamp: Date.now(),
-      docIv: encryptedDoc.iv,
-      docTag: encryptedDoc.tag,
-      embIv: encryptedEmbedding.iv,
-      embTag: encryptedEmbedding.tag,
     };
 
     // Store on server
@@ -250,13 +280,20 @@ export class TotalReclaw {
   async recall(query: string, k: number = 8): Promise<RerankedResult[]> {
     this.ensureReady();
 
+    if (!this.lshHasher) {
+      throw new TotalReclawError(
+        TotalReclawErrorCode.LSH_HASH_FAILED,
+        'LSH hasher not initialized. Call initLshFromMnemonic() or initLshFromSeed() first.',
+      );
+    }
+
     // Generate query embedding
     const queryEmbedding = await this.getEmbedding(query);
 
-    // Generate LSH buckets for query
-    const queryBuckets = this.lshIndex.hashVectorWithPrefix(queryEmbedding);
+    // Generate LSH buckets for query (already blind-hashed)
+    const queryBuckets = this.lshHasher.hash(queryEmbedding);
 
-    // Generate trapdoors
+    // Generate trapdoors (word + stem hashes merged with LSH bucket hashes)
     const trapdoors = generateTrapdoors(query, queryBuckets);
 
     // Search server
@@ -340,27 +377,17 @@ export class TotalReclaw {
 
     for (const result of results) {
       try {
-        // Decrypt document
-        const docBuffer = decrypt(
-          result.encryptedDoc,
-          this.state.encryptionKey!,
-          result.docIv,
-          result.docTag
-        );
-        const text = docBuffer.toString('utf-8');
+        // Decrypt document (base64 wire format)
+        const text = decrypt(result.encryptedDoc, this.state.encryptionKey!);
 
-        // Decrypt embedding
-        const embeddingVector = decryptToVector(
-          result.encryptedEmbedding,
-          this.state.encryptionKey!,
-          result.embIv,
-          result.embTag
-        );
+        // Decrypt embedding (base64 wire format, JSON-encoded array)
+        const embeddingJson = decrypt(result.encryptedEmbedding, this.state.encryptionKey!);
+        const embedding: number[] = JSON.parse(embeddingJson);
 
         const fact: Fact = {
           id: result.factId,
           text,
-          embedding: Array.from(embeddingVector),
+          embedding,
           metadata: {
             importance: result.decayScore,
           },
@@ -513,7 +540,7 @@ export {
   sha256Hash,
 } from './crypto';
 
-export type { EncryptedData, KeyDerivationParams } from './crypto';
+export type { KeyDerivationParams } from './crypto';
 
 export * from './lsh';
 export * from './embedding';

@@ -9,23 +9,23 @@
 // ============================================================================
 
 /**
- * LSH configuration parameters (validated from TS v0.3)
+ * LSH configuration parameters (32-bit x 20 tables -- matching MCP)
  */
 export interface LSHConfig {
-  /** Number of bits per hash table (default: 64) */
+  /** Number of bits per hash table (default: 32) */
   n_bits_per_table: number;
-  /** Number of independent hash tables (default: 12) */
+  /** Number of independent hash tables (default: 20) */
   n_tables: number;
   /** Number of candidates to retrieve for re-ranking (default: 3000) */
   candidate_pool: number;
 }
 
 /**
- * Default LSH configuration based on validation results
+ * Default LSH configuration (matches mcp/src/subgraph/lsh.ts)
  */
 export const DEFAULT_LSH_CONFIG: LSHConfig = {
-  n_bits_per_table: 64,
-  n_tables: 12,
+  n_bits_per_table: 32,
+  n_tables: 20,
   candidate_pool: 3000,
 };
 
@@ -90,29 +90,23 @@ export interface Fact {
 }
 
 /**
- * Encrypted fact for server storage
+ * Encrypted fact for server storage.
+ *
+ * Encrypted fields use base64 wire format: iv(12) || tag(16) || ciphertext.
  */
 export interface EncryptedFact {
   /** Unique fact ID (UUID v7) */
   id: string;
-  /** Encrypted document content */
-  encryptedDoc: Buffer;
-  /** Encrypted embedding vector */
-  encryptedEmbedding: Buffer;
+  /** Encrypted document content (base64-encoded: iv || tag || ciphertext) */
+  encryptedDoc: string;
+  /** Encrypted embedding vector (base64-encoded: iv || tag || ciphertext) */
+  encryptedEmbedding: string;
   /** Blind indices for search (SHA-256 hashes of tokens + LSH buckets) */
   blindIndices: string[];
   /** Initial decay score */
   decayScore: number;
   /** Creation timestamp (Unix milliseconds) */
   timestamp: number;
-  /** IV for document encryption */
-  docIv: Buffer;
-  /** Auth tag for document encryption */
-  docTag: Buffer;
-  /** IV for embedding encryption */
-  embIv: Buffer;
-  /** Auth tag for embedding encryption */
-  embTag: Buffer;
 }
 
 // ============================================================================
@@ -120,24 +114,21 @@ export interface EncryptedFact {
 // ============================================================================
 
 /**
- * Search result before decryption
+ * Search result before decryption.
+ *
+ * Encrypted fields use base64 wire format: iv(12) || tag(16) || ciphertext.
  */
 export interface EncryptedSearchResult {
   /** Fact ID */
   factId: string;
-  /** Encrypted document */
-  encryptedDoc: Buffer;
-  /** Encrypted embedding */
-  encryptedEmbedding: Buffer;
+  /** Encrypted document (base64-encoded) */
+  encryptedDoc: string;
+  /** Encrypted embedding (base64-encoded) */
+  encryptedEmbedding: string;
   /** Server-side decay score */
   decayScore: number;
   /** Timestamp */
   timestamp: number;
-  /** Encryption metadata */
-  docIv: Buffer;
-  docTag: Buffer;
-  embIv: Buffer;
-  embTag: Buffer;
 }
 
 /**

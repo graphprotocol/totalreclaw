@@ -12,7 +12,7 @@ import {
   createAuthProof,
   verifyAuthProof,
 } from '../src/crypto/kdf';
-import { encrypt, decrypt, encryptString, decryptToString, serializeEncryptedData, deserializeEncryptedData } from '../src/crypto/aes';
+import { encrypt, decrypt } from '../src/crypto/aes';
 import {
   tokenize,
   sha256Hash,
@@ -114,37 +114,36 @@ describe('Crypto Module', () => {
     });
   });
 
-  describe('AES-256-GCM Encryption', () => {
-    test('should encrypt and decrypt data correctly', async () => {
-      const { encryptionKey } = await deriveKeys('test-password', generateSalt());
-      const plaintext = Buffer.from('Hello, World!', 'utf-8');
-
-      const encrypted = encrypt(plaintext, encryptionKey);
-      const decrypted = decrypt(encrypted.ciphertext, encryptionKey, encrypted.iv, encrypted.tag);
-
-      expect(decrypted).toEqual(plaintext);
-    });
-
+  describe('AES-256-GCM Encryption (base64 wire format)', () => {
     test('should encrypt and decrypt strings correctly', async () => {
       const { encryptionKey } = await deriveKeys('test-password', generateSalt());
       const text = 'Hello, World!';
 
-      const encrypted = encryptString(text, encryptionKey);
-      const decrypted = decryptToString(encrypted.ciphertext, encryptionKey, encrypted.iv, encrypted.tag);
+      const encrypted = encrypt(text, encryptionKey);
+      const decrypted = decrypt(encrypted, encryptionKey);
 
       expect(decrypted).toBe(text);
     });
 
-    test('should produce different ciphertexts for same plaintext', async () => {
+    test('should return base64-encoded string from encrypt', async () => {
       const { encryptionKey } = await deriveKeys('test-password', generateSalt());
-      const plaintext = Buffer.from('Hello, World!', 'utf-8');
+      const encrypted = encrypt('test', encryptionKey);
 
-      const encrypted1 = encrypt(plaintext, encryptionKey);
-      const encrypted2 = encrypt(plaintext, encryptionKey);
+      // Should be a valid base64 string
+      expect(typeof encrypted).toBe('string');
+      const decoded = Buffer.from(encrypted, 'base64');
+      // iv(12) + tag(16) + ciphertext(>=1) = at least 29 bytes
+      expect(decoded.length).toBeGreaterThanOrEqual(29);
+    });
+
+    test('should produce different ciphertexts for same plaintext (random IV)', async () => {
+      const { encryptionKey } = await deriveKeys('test-password', generateSalt());
+
+      const encrypted1 = encrypt('Hello, World!', encryptionKey);
+      const encrypted2 = encrypt('Hello, World!', encryptionKey);
 
       // Different IVs mean different ciphertexts
-      expect(encrypted1.ciphertext).not.toEqual(encrypted2.ciphertext);
-      expect(encrypted1.iv).not.toEqual(encrypted2.iv);
+      expect(encrypted1).not.toEqual(encrypted2);
     });
 
     test('should fail decryption with wrong key', async () => {
@@ -152,46 +151,56 @@ describe('Crypto Module', () => {
       const { encryptionKey: key1 } = await deriveKeys('password1', salt);
       const { encryptionKey: key2 } = await deriveKeys('password2', salt);
 
-      const plaintext = Buffer.from('Secret message', 'utf-8');
-      const encrypted = encrypt(plaintext, key1);
+      const encrypted = encrypt('Secret message', key1);
 
       expect(() => {
-        decrypt(encrypted.ciphertext, key2, encrypted.iv, encrypted.tag);
+        decrypt(encrypted, key2);
       }).toThrow();
     });
 
     test('should fail decryption with tampered ciphertext', async () => {
       const { encryptionKey } = await deriveKeys('test-password', generateSalt());
-      const plaintext = Buffer.from('Secret message', 'utf-8');
-      const encrypted = encrypt(plaintext, encryptionKey);
+      const encrypted = encrypt('Secret message', encryptionKey);
 
-      // Tamper with ciphertext
-      const tamperedCiphertext = Buffer.from(encrypted.ciphertext);
-      tamperedCiphertext[0] ^= 0xff;
+      // Tamper with the base64-encoded data
+      const bytes = Buffer.from(encrypted, 'base64');
+      bytes[bytes.length - 1] ^= 0xff;
+      const tampered = bytes.toString('base64');
 
       expect(() => {
-        decrypt(tamperedCiphertext, encryptionKey, encrypted.iv, encrypted.tag);
+        decrypt(tampered, encryptionKey);
       }).toThrow();
     });
 
-    test('should serialize and deserialize encrypted data', async () => {
+    test('should handle empty string encryption', async () => {
       const { encryptionKey } = await deriveKeys('test-password', generateSalt());
-      const plaintext = Buffer.from('Hello, World!', 'utf-8');
+      const encrypted = encrypt('', encryptionKey);
+      const decrypted = decrypt(encrypted, encryptionKey);
 
-      const encrypted = encrypt(plaintext, encryptionKey);
-      const serialized = serializeEncryptedData(encrypted);
-      const deserialized = deserializeEncryptedData(serialized);
+      expect(decrypted).toBe('');
+    });
 
-      expect(deserialized.iv).toEqual(encrypted.iv);
-      expect(deserialized.tag).toEqual(encrypted.tag);
-      expect(deserialized.ciphertext).toEqual(encrypted.ciphertext);
+    test('should handle unicode text', async () => {
+      const { encryptionKey } = await deriveKeys('test-password', generateSalt());
+      const text = 'Olá mundo! 你好世界 🌍';
 
-      const decrypted = decrypt(deserialized.ciphertext, encryptionKey, deserialized.iv, deserialized.tag);
-      expect(decrypted).toEqual(plaintext);
+      const encrypted = encrypt(text, encryptionKey);
+      const decrypted = decrypt(encrypted, encryptionKey);
+
+      expect(decrypted).toBe(text);
+    });
+
+    test('wire format should be iv(12) || tag(16) || ciphertext', async () => {
+      const { encryptionKey } = await deriveKeys('test-password', generateSalt());
+      const encrypted = encrypt('test data', encryptionKey);
+
+      const combined = Buffer.from(encrypted, 'base64');
+      // iv = 12, tag = 16, ciphertext = length of "test data" encrypted
+      expect(combined.length).toBe(12 + 16 + 9); // AES-GCM: plaintext len == ciphertext len
     });
   });
 
-  describe('Blind Indices', () => {
+  describe('Blind Indices (with Porter stemming)', () => {
     test('should tokenize text correctly', () => {
       const tokens = tokenize('Hello, World! This is a test.');
       expect(tokens).toContain('hello');
@@ -227,28 +236,63 @@ describe('Crypto Module', () => {
       expect(hash1).not.toBe(hash2);
     });
 
-    test('should generate blind indices from text and LSH buckets', () => {
-      const text = 'I love coffee';
-      const lshBuckets = ['table_0_101010', 'table_1_010101'];
+    test('should generate blind indices with stemming', () => {
+      const text = 'I love running and swimming';
+      const indices = generateBlindIndices(text);
 
-      const indices = generateBlindIndices(text, lshBuckets);
-
-      // Should include token hashes
+      // Should include both exact token hashes and stem hashes
       expect(indices.length).toBeGreaterThan(0);
 
       // Should be unique
       const uniqueIndices = new Set(indices);
       expect(uniqueIndices.size).toBe(indices.length);
+
+      // "running" stems to "run", "swimming" stems to "swim"
+      // We expect more indices than just the raw tokens because stems are added
+      const rawTokens = tokenize(text);
+      expect(indices.length).toBeGreaterThan(rawTokens.length);
+    });
+
+    test('should include stem hashes prefixed with stem:', () => {
+      // "communities" should stem to "commun" (via porter-stemmer)
+      const indices = generateBlindIndices('communities');
+      // We should get at least 2 hashes: the exact word + the stem
+      expect(indices.length).toBeGreaterThanOrEqual(2);
+    });
+
+    test('should not add stem hash when stem equals token', () => {
+      // "test" stems to "test" -- no stem hash should be added
+      const indices = generateBlindIndices('test');
+      // Only the exact word hash
+      expect(indices.length).toBe(1);
+    });
+
+    test('generateBlindIndices takes only text (no lshBuckets param)', () => {
+      // The new API takes only text, not text + lshBuckets
+      const indices = generateBlindIndices('coffee preferences');
+      expect(indices.length).toBeGreaterThan(0);
     });
 
     test('should generate trapdoors consistently', () => {
       const query = 'coffee preferences';
-      const lshBuckets = ['table_0_101010', 'table_1_010101'];
+      const lshBuckets = ['abc123', 'def456']; // Already-hashed bucket IDs
 
       const trapdoors1 = generateTrapdoors(query, lshBuckets);
       const trapdoors2 = generateTrapdoors(query, lshBuckets);
 
       expect(trapdoors1).toEqual(trapdoors2);
+    });
+
+    test('trapdoors should include both word/stem hashes and LSH bucket hashes', () => {
+      const query = 'coffee preferences';
+      const lshBuckets = ['abc123'];
+
+      const trapdoors = generateTrapdoors(query, lshBuckets);
+
+      // Should include the LSH bucket hash directly
+      expect(trapdoors).toContain('abc123');
+      // Should also include word hashes
+      expect(trapdoors.length).toBeGreaterThan(1);
     });
 
     test('should compute index overlap correctly', () => {

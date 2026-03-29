@@ -1310,7 +1310,7 @@ async function handleSetup(
     mode: 'managed_service',
     smart_account: subgraphState.smartAccountAddress,
     tier: 'free',
-    tier_info: 'Free tier: unlimited memories and reads (test network — memories may be reset). Upgrade to Pro ($5/month) for permanent on-chain storage. Pricing: https://totalreclaw.xyz — upgrade anytime via totalreclaw_upgrade.',
+    tier_info: 'Free tier: unlimited memories and reads (test network — memories may be reset). Upgrade to Pro for permanent on-chain storage. Pricing: https://totalreclaw.xyz/pricing — upgrade anytime via totalreclaw_upgrade.',
   };
 
   if (action === 'generate') {

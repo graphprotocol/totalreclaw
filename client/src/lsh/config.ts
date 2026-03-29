@@ -4,12 +4,16 @@
  * Validated parameters from TS v0.3 specification.
  */
 
-import { LSHConfig, DEFAULT_LSH_CONFIG } from '../types';
+import { LSHConfig } from '../types';
 
 /**
- * LSH configuration with defaults
+ * LSH configuration with defaults (32-bit, 20 tables -- matching MCP)
  */
-export const LSH_DEFAULTS: LSHConfig = DEFAULT_LSH_CONFIG;
+export const LSH_DEFAULTS: LSHConfig = {
+  n_bits_per_table: 32,
+  n_tables: 20,
+  candidate_pool: 3000,
+};
 
 /**
  * Calculate optimal candidate pool size based on corpus size

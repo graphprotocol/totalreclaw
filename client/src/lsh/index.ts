@@ -5,7 +5,7 @@
  * while preserving privacy.
  */
 
-export { LSHIndex, hammingDistance, estimateSimilarity } from './hyperplane';
+export { LSHHasher, hammingDistance, estimateSimilarity } from './hyperplane';
 export {
   LSH_DEFAULTS,
   calculateCandidatePool,

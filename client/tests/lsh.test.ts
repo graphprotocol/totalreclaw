@@ -1,15 +1,30 @@
 /**
  * LSH Module Tests
  *
- * Tests for Random Hyperplane LSH implementation.
+ * Tests for the HKDF-seeded Random Hyperplane LSH hasher (32-bit, 20 tables).
+ * Matches mcp/src/subgraph/lsh.ts.
  */
 
-import { LSHIndex, hammingDistance, estimateSimilarity } from '../src/lsh/hyperplane';
-import { calculateCandidatePool, LSH_SCALING_TABLE, mergeLSHConfig } from '../src/lsh/config';
+import { LSHHasher, hammingDistance, estimateSimilarity } from '../src/lsh/hyperplane';
+import { calculateCandidatePool, LSH_SCALING_TABLE, mergeLSHConfig, LSH_DEFAULTS } from '../src/lsh/config';
 import { createDummyEmbedding, createHashBasedEmbedding } from '../src/embedding/onnx';
+import { deriveLshSeed } from '../src/crypto/seed';
+
+// A fixed 32-byte seed for deterministic testing
+const TEST_SEED = new Uint8Array(32);
+for (let i = 0; i < 32; i++) TEST_SEED[i] = i;
+
+const TEST_MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
 describe('LSH Module', () => {
-  describe('LSH Config', () => {
+  describe('LSH Config (32-bit, 20 tables)', () => {
+    test('should have correct defaults', () => {
+      expect(LSH_DEFAULTS.n_bits_per_table).toBe(32);
+      expect(LSH_DEFAULTS.n_tables).toBe(20);
+      expect(LSH_DEFAULTS.candidate_pool).toBe(3000);
+    });
+
     test('should calculate candidate pool for small corpus', () => {
       expect(calculateCandidatePool(500)).toBe(2000);
       expect(calculateCandidatePool(1000)).toBe(2000);
@@ -21,11 +36,6 @@ describe('LSH Module', () => {
       expect(pool).toBeLessThanOrEqual(4000);
     });
 
-    test('should calculate candidate pool for large corpus', () => {
-      const pool = calculateCandidatePool(50000);
-      expect(pool).toBeLessThanOrEqual(10000);
-    });
-
     test('should cap candidate pool at maximum', () => {
       const pool = calculateCandidatePool(1000000);
       expect(pool).toBe(10000);
@@ -33,108 +43,128 @@ describe('LSH Module', () => {
 
     test('should merge config with defaults', () => {
       const config = mergeLSHConfig({ n_tables: 16 });
-      expect(config.n_bits_per_table).toBe(64);
+      expect(config.n_bits_per_table).toBe(32);
       expect(config.n_tables).toBe(16);
       expect(config.candidate_pool).toBe(3000);
     });
 
     test('should return defaults when no config provided', () => {
       const config = mergeLSHConfig();
-      expect(config.n_bits_per_table).toBe(64);
-      expect(config.n_tables).toBe(12);
+      expect(config.n_bits_per_table).toBe(32);
+      expect(config.n_tables).toBe(20);
       expect(config.candidate_pool).toBe(3000);
     });
   });
 
-  describe('LSHIndex', () => {
-    let index: LSHIndex;
-
-    beforeEach(() => {
-      index = new LSHIndex({ n_bits_per_table: 64, n_tables: 12, candidate_pool: 3000 });
+  describe('LSHHasher', () => {
+    test('should construct with seed and dims', () => {
+      const hasher = new LSHHasher(TEST_SEED, 1024);
+      expect(hasher.tables).toBe(20);
+      expect(hasher.bits).toBe(32);
+      expect(hasher.dimensions).toBe(1024);
     });
 
-    test('should initialize with embedding dimension', () => {
-      index.initialize(1024);
-      expect(index.isReady()).toBe(true);
-      expect(index.getEmbeddingDimension()).toBe(1024);
-    });
-
-    test('should build index from embeddings', () => {
-      const embeddings = [createDummyEmbedding(1)];
-      index.buildIndex(embeddings);
-      expect(index.isReady()).toBe(true);
+    test('should construct with custom nTables and nBits', () => {
+      const hasher = new LSHHasher(TEST_SEED, 1024, 10, 16);
+      expect(hasher.tables).toBe(10);
+      expect(hasher.bits).toBe(16);
+      expect(hasher.dimensions).toBe(1024);
     });
 
     test('should hash vectors to correct number of buckets', () => {
-      index.initialize(1024);
+      const hasher = new LSHHasher(TEST_SEED, 1024);
       const embedding = createDummyEmbedding(42);
-      const buckets = index.hashVector(embedding);
+      const buckets = hasher.hash(embedding);
 
-      expect(buckets.length).toBe(12); // n_tables
+      expect(buckets.length).toBe(20); // n_tables
+    });
+
+    test('should produce SHA-256 hex strings as bucket IDs', () => {
+      const hasher = new LSHHasher(TEST_SEED, 1024);
+      const embedding = createDummyEmbedding(42);
+      const buckets = hasher.hash(embedding);
+
+      for (const bucket of buckets) {
+        expect(bucket).toMatch(/^[a-f0-9]{64}$/);
+      }
     });
 
     test('should produce consistent hashes for same vector', () => {
-      index.initialize(1024, 12345); // Fixed seed
+      const hasher = new LSHHasher(TEST_SEED, 1024);
       const embedding = createDummyEmbedding(42);
 
-      const buckets1 = index.hashVector(embedding);
-      const buckets2 = index.hashVector(embedding);
+      const buckets1 = hasher.hash(embedding);
+      const buckets2 = hasher.hash(embedding);
 
       expect(buckets1).toEqual(buckets2);
     });
 
     test('should produce different hashes for different vectors', () => {
-      index.initialize(1024);
+      const hasher = new LSHHasher(TEST_SEED, 1024);
       const embedding1 = createDummyEmbedding(1);
       const embedding2 = createDummyEmbedding(2);
 
-      const buckets1 = index.hashVector(embedding1);
-      const buckets2 = index.hashVector(embedding2);
+      const buckets1 = hasher.hash(embedding1);
+      const buckets2 = hasher.hash(embedding2);
 
       // Most buckets should differ for different vectors
       const matchingBuckets = buckets1.filter((b, i) => b === buckets2[i]);
       expect(matchingBuckets.length).toBeLessThan(buckets1.length);
     });
 
-    test('should hash vectors with prefix', () => {
-      index.initialize(1024);
-      const embedding = createDummyEmbedding(42);
-      const buckets = index.hashVectorWithPrefix(embedding);
-
-      expect(buckets.length).toBe(12);
-      expect(buckets[0]).toMatch(/^table_0_/);
-      expect(buckets[11]).toMatch(/^table_11_/);
-    });
-
-    test('should throw if not initialized', () => {
-      const embedding = createDummyEmbedding(42);
-      expect(() => index.hashVector(embedding)).toThrow('not initialized');
-    });
-
     test('should throw on dimension mismatch', () => {
-      index.initialize(1024);
+      const hasher = new LSHHasher(TEST_SEED, 1024);
       const wrongDimEmbedding = new Array(128).fill(0);
-      expect(() => index.hashVector(wrongDimEmbedding)).toThrow('dimension mismatch');
+      expect(() => hasher.hash(wrongDimEmbedding)).toThrow('dimension mismatch');
     });
 
-    test('should export and import hyperplanes', () => {
-      index.initialize(1024, 12345);
+    test('should throw if seed is too short', () => {
+      expect(() => new LSHHasher(new Uint8Array(8), 1024)).toThrow('too short');
+    });
+
+    test('should be deterministic from seed', () => {
+      const hasher1 = new LSHHasher(TEST_SEED, 1024);
+      const hasher2 = new LSHHasher(TEST_SEED, 1024);
       const embedding = createDummyEmbedding(42);
-      const originalBuckets = index.hashVector(embedding);
 
-      const exported = index.exportHyperplanes();
-      const newIndex = new LSHIndex();
-      newIndex.importHyperplanes(exported);
-
-      const importedBuckets = newIndex.hashVector(embedding);
-      expect(importedBuckets).toEqual(originalBuckets);
+      expect(hasher1.hash(embedding)).toEqual(hasher2.hash(embedding));
     });
 
-    test('should get config', () => {
-      const config = index.getConfig();
-      expect(config.n_bits_per_table).toBe(64);
-      expect(config.n_tables).toBe(12);
-      expect(config.candidate_pool).toBe(3000);
+    test('different seeds should produce different hashes', () => {
+      const seed2 = new Uint8Array(32);
+      for (let i = 0; i < 32; i++) seed2[i] = i + 100;
+
+      const hasher1 = new LSHHasher(TEST_SEED, 1024);
+      const hasher2 = new LSHHasher(seed2, 1024);
+      const embedding = createDummyEmbedding(42);
+
+      const buckets1 = hasher1.hash(embedding);
+      const buckets2 = hasher2.hash(embedding);
+      expect(buckets1).not.toEqual(buckets2);
+    });
+  });
+
+  describe('deriveLshSeed integration', () => {
+    test('should work with LSHHasher', () => {
+      const seed = deriveLshSeed(TEST_MNEMONIC);
+      const hasher = new LSHHasher(seed, 1024);
+      const embedding = createDummyEmbedding(42);
+      const buckets = hasher.hash(embedding);
+
+      expect(buckets.length).toBe(20);
+      for (const bucket of buckets) {
+        expect(bucket).toMatch(/^[a-f0-9]{64}$/);
+      }
+    });
+
+    test('same mnemonic should produce same LSH buckets', () => {
+      const seed1 = deriveLshSeed(TEST_MNEMONIC);
+      const seed2 = deriveLshSeed(TEST_MNEMONIC);
+      const hasher1 = new LSHHasher(seed1, 1024);
+      const hasher2 = new LSHHasher(seed2, 1024);
+      const embedding = createDummyEmbedding(42);
+
+      expect(hasher1.hash(embedding)).toEqual(hasher2.hash(embedding));
     });
   });
 
@@ -157,17 +187,17 @@ describe('LSH Module', () => {
 
   describe('Similarity Estimation', () => {
     test('should estimate high similarity for small Hamming distance', () => {
-      const similarity = estimateSimilarity(1, 64);
+      const similarity = estimateSimilarity(1, 32);
       expect(similarity).toBeGreaterThan(0.9);
     });
 
     test('should estimate low similarity for large Hamming distance', () => {
-      const similarity = estimateSimilarity(50, 64);
+      const similarity = estimateSimilarity(28, 32);
       expect(similarity).toBeLessThan(0);
     });
 
     test('should estimate medium similarity for half distance', () => {
-      const similarity = estimateSimilarity(32, 64);
+      const similarity = estimateSimilarity(16, 32);
       expect(Math.abs(similarity)).toBeLessThan(0.1); // Close to 0 (orthogonal)
     });
   });
@@ -214,38 +244,28 @@ describe('LSH Module', () => {
 
   describe('LSH Recall Quality', () => {
     test('should bucket identical vectors together', () => {
-      const index = new LSHIndex({ n_bits_per_table: 64, n_tables: 12 });
-      index.initialize(1024, 12345);
-
+      const hasher = new LSHHasher(TEST_SEED, 1024);
       const base = createDummyEmbedding(1);
 
-      const buckets1 = index.hashVector(base);
-      const buckets2 = index.hashVector(base);
+      const buckets1 = hasher.hash(base);
+      const buckets2 = hasher.hash(base);
 
-      // Identical vectors should have all matching buckets
-      const matchingBuckets = buckets1.filter((b, i) => b === buckets2[i]);
-      expect(matchingBuckets.length).toBe(buckets1.length);
+      expect(buckets1).toEqual(buckets2);
     });
 
     test('should have some bucket overlap for similar vectors', () => {
-      const index = new LSHIndex({ n_bits_per_table: 64, n_tables: 12 });
-      index.initialize(1024, 12345);
+      const hasher = new LSHHasher(TEST_SEED, 1024);
 
-      // Create a slightly modified vector that should be similar
       const base = createDummyEmbedding(1);
-      const similar = base.map((v) => v * 0.99); // Very similar (99% same direction)
+      const similar = base.map((v) => v * 0.99);
 
-      const buckets1 = index.hashVector(base);
-      const buckets2 = index.hashVector(similar);
+      const buckets1 = hasher.hash(base);
+      const buckets2 = hasher.hash(similar);
 
-      // With very similar vectors, some buckets should match
-      // Note: LSH is probabilistic, so we just check that the mechanism works
+      // With very similar vectors, many or all buckets should match
+      // (since scaling preserves direction and sign of dot products)
       const matchingBuckets = buckets1.filter((b, i) => b === buckets2[i]);
-
-      // At minimum, the hashing should be consistent
-      expect(buckets1.length).toBe(buckets2.length);
-      expect(typeof buckets1[0]).toBe('string');
-      expect(typeof buckets2[0]).toBe('string');
+      expect(matchingBuckets.length).toBeGreaterThan(0);
     });
   });
 });

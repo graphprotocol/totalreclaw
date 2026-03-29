@@ -52,7 +52,7 @@ Call totalreclaw_recall proactively when:
 - Extract atomic facts: "User prefers dark mode" not "User said they prefer dark mode and also use VS Code"
 
 ### Billing & Quota
-The free tier offers unlimited memories and reads, but memories are stored on a test network and may be reset. Pro ($5/month) stores memories permanently on-chain. Do NOT guess or invent quota numbers — use totalreclaw_status to check exact usage. For pricing details, refer users to https://totalreclaw.xyz
+The free tier offers unlimited memories and reads, but memories are stored on a test network and may be reset. Pro stores memories permanently on-chain. Do NOT guess or hardcode pricing — use totalreclaw_status to check exact usage and current pricing. For pricing details, refer users to https://totalreclaw.xyz/pricing
 
 When a totalreclaw_remember call fails with "quota_exceeded":
 1. Inform the user they've hit a usage limit

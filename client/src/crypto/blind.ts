@@ -1,19 +1,22 @@
 /**
  * Blind Index Generation
  *
- * Creates SHA-256 hashes of tokens and LSH buckets for searchable encryption.
- * The server can match these hashes without knowing the original content.
+ * Creates SHA-256 hashes of tokens (with Porter stemming) and LSH buckets
+ * for searchable encryption. The server can match these hashes without
+ * knowing the original content.
+ *
+ * Matches mcp/src/subgraph/crypto.ts:generateBlindIndices() exactly.
  */
 
-import * as crypto from 'crypto';
-import { TotalReclawError, TotalReclawErrorCode } from '../types';
+import * as crypto from "crypto";
+import { stemmer } from "porter-stemmer";
 
 /**
- * Tokenize text into words for blind indexing
+ * Tokenize text into words for blind indexing.
  *
  * Performs basic tokenization:
  * - Converts to lowercase
- * - Removes punctuation
+ * - Removes punctuation (keeps Unicode letters, numbers, whitespace)
  * - Splits on whitespace
  * - Filters out short tokens (< 2 chars)
  *
@@ -23,88 +26,94 @@ import { TotalReclawError, TotalReclawErrorCode } from '../types';
 export function tokenize(text: string): string[] {
   return text
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ') // Remove punctuation, keep letters/numbers
+    .replace(/[^\p{L}\p{N}\s]/gu, " ") // Remove punctuation, keep letters/numbers
     .split(/\s+/)
     .filter((token) => token.length >= 2);
 }
 
 /**
- * Compute SHA-256 hash of a string
+ * Compute SHA-256 hash of a string.
  *
  * @param input - String to hash
  * @returns Hex-encoded SHA-256 hash
  */
 export function sha256Hash(input: string): string {
-  return crypto.createHash('sha256').update(input, 'utf-8').digest('hex');
+  return crypto.createHash("sha256").update(input, "utf-8").digest("hex");
 }
 
 /**
- * Generate blind indices from text and LSH buckets
+ * Generate blind indices from text.
  *
  * Creates SHA-256 hashes of:
  * 1. All tokens in the text (for keyword search)
- * 2. All LSH bucket identifiers (for semantic search)
+ * 2. Stemmed variants of tokens (for morphological matching)
+ *
+ * Stemmed tokens are prefixed with "stem:" before hashing to avoid
+ * collisions between a word that happens to equal another word's stem
+ * (e.g., the word "commun" vs the stem of "community").
+ *
+ * Matches mcp/src/subgraph/crypto.ts:generateBlindIndices().
  *
  * @param text - Document text
- * @param lshBuckets - Array of LSH bucket identifiers
- * @returns Array of blind indices (hex-encoded SHA-256 hashes)
+ * @returns Array of blind indices (hex-encoded SHA-256 hashes), deduplicated
  */
-export function generateBlindIndices(
-  text: string,
-  lshBuckets: string[]
-): string[] {
-  const indices: Set<string> = new Set();
-
-  // Hash all tokens from the text
+export function generateBlindIndices(text: string): string[] {
   const tokens = tokenize(text);
+
+  const seen = new Set<string>();
+  const indices: string[] = [];
+
   for (const token of tokens) {
-    indices.add(sha256Hash(token));
+    // Exact word hash
+    const hash = sha256Hash(token);
+    if (!seen.has(hash)) {
+      seen.add(hash);
+      indices.push(hash);
+    }
+
+    // Stemmed word hash (prefixed with "stem:" to avoid collisions)
+    const stem = stemmer(token);
+    if (stem.length >= 2 && stem !== token) {
+      const stemHash = sha256Hash(`stem:${stem}`);
+      if (!seen.has(stemHash)) {
+        seen.add(stemHash);
+        indices.push(stemHash);
+      }
+    }
   }
 
-  // Hash all LSH buckets
-  for (const bucket of lshBuckets) {
-    indices.add(sha256Hash(bucket));
-  }
-
-  return Array.from(indices);
+  return indices;
 }
 
 /**
- * Generate trapdoors for search query
+ * Generate trapdoors for search query.
  *
  * Trapdoors are SHA-256 hashes of:
  * 1. All tokens in the query (for keyword matching)
- * 2. All LSH bucket identifiers from query embedding (for semantic matching)
- *
- * The server can use these to find matching documents without knowing
- * the original query content.
+ * 2. Stemmed variants of tokens (for morphological matching)
+ * 3. All LSH bucket identifiers from query embedding (for semantic matching)
  *
  * @param query - Search query text
- * @param lshBuckets - LSH bucket identifiers from query embedding
+ * @param lshBuckets - LSH bucket identifiers from query embedding (already blind-hashed)
  * @returns Array of trapdoors (hex-encoded SHA-256 hashes)
  */
 export function generateTrapdoors(
   query: string,
-  lshBuckets: string[]
+  lshBuckets: string[],
 ): string[] {
-  const trapdoors: Set<string> = new Set();
+  // Start with word + stem indices from the query text
+  const trapdoors = new Set<string>(generateBlindIndices(query));
 
-  // Hash query tokens for keyword matching
-  const tokens = tokenize(query);
-  for (const token of tokens) {
-    trapdoors.add(sha256Hash(token));
-  }
-
-  // Hash LSH buckets for semantic matching
+  // LSH buckets are already blind-hashed by LSHHasher, so add them directly
   for (const bucket of lshBuckets) {
-    trapdoors.add(sha256Hash(bucket));
+    trapdoors.add(bucket);
   }
 
   return Array.from(trapdoors);
 }
 
 /**
- * Generate only token-based blind indices (without LSH)
+ * Generate only token-based blind indices (without LSH).
  *
  * Useful for keyword-only search or when embedding is not available.
  *
@@ -112,50 +121,29 @@ export function generateTrapdoors(
  * @returns Array of blind indices for tokens only
  */
 export function generateTokenIndices(text: string): string[] {
-  const tokens = tokenize(text);
-  return tokens.map(sha256Hash);
+  return generateBlindIndices(text);
 }
 
 /**
- * Generate only LSH-based blind indices (without tokens)
- *
- * Useful for pure semantic search.
- *
- * @param lshBuckets - LSH bucket identifiers
- * @returns Array of blind indices for LSH buckets only
- */
-export function generateLSHIndices(lshBuckets: string[]): string[] {
-  return lshBuckets.map(sha256Hash);
-}
-
-/**
- * Verify that a blind index matches a trapdoor
+ * Verify that a blind index matches a trapdoor.
  *
  * Since both are SHA-256 hashes, this is a simple equality check.
- *
- * @param blindIndex - Blind index from stored document
- * @param trapdoor - Trapdoor from search query
- * @returns True if they match
  */
 export function verifyBlindIndexMatch(
   blindIndex: string,
-  trapdoor: string
+  trapdoor: string,
 ): boolean {
   return blindIndex === trapdoor;
 }
 
 /**
- * Compute the overlap between two sets of blind indices
+ * Compute the overlap between two sets of blind indices.
  *
  * Used to estimate recall quality during development.
- *
- * @param indices1 - First set of indices
- * @param indices2 - Second set of indices
- * @returns Number of matching indices
  */
 export function computeIndexOverlap(
   indices1: string[],
-  indices2: string[]
+  indices2: string[],
 ): number {
   const set1 = new Set(indices1);
   const set2 = new Set(indices2);
@@ -168,63 +156,4 @@ export function computeIndexOverlap(
   }
 
   return overlap;
-}
-
-/**
- * Generate n-gram tokens from text
- *
- * Useful for fuzzy matching of partial words.
- *
- * @param text - Text to tokenize
- * @param n - N-gram size (default: 3)
- * @returns Array of n-gram tokens
- */
-export function generateNgrams(text: string, n: number = 3): string[] {
-  const normalized = text.toLowerCase().replace(/\s+/g, ' ');
-  const ngrams: string[] = [];
-
-  for (let i = 0; i <= normalized.length - n; i++) {
-    ngrams.push(normalized.substring(i, i + n));
-  }
-
-  return ngrams;
-}
-
-/**
- * Generate blind indices with n-gram support for fuzzy matching
- *
- * @param text - Text to index
- * @param lshBuckets - LSH bucket identifiers
- * @param includeNgrams - Whether to include n-gram indices
- * @param ngramSize - Size of n-grams (default: 3)
- * @returns Array of blind indices
- */
-export function generateBlindIndicesWithNgrams(
-  text: string,
-  lshBuckets: string[],
-  includeNgrams: boolean = false,
-  ngramSize: number = 3
-): string[] {
-  const indices: Set<string> = new Set();
-
-  // Standard token indices
-  const tokens = tokenize(text);
-  for (const token of tokens) {
-    indices.add(sha256Hash(token));
-  }
-
-  // N-gram indices for fuzzy matching
-  if (includeNgrams) {
-    const ngrams = generateNgrams(text, ngramSize);
-    for (const ngram of ngrams) {
-      indices.add(sha256Hash(ngram));
-    }
-  }
-
-  // LSH bucket indices
-  for (const bucket of lshBuckets) {
-    indices.add(sha256Hash(bucket));
-  }
-
-  return Array.from(indices);
 }

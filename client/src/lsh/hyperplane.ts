@@ -1,299 +1,277 @@
 /**
- * Random Hyperplane LSH Implementation
+ * TotalReclaw LSH Hasher (Locality-Sensitive Hashing)
  *
- * Implements locality-sensitive hashing for cosine similarity using
- * random hyperplanes. This allows approximate nearest neighbor search
- * while preserving privacy (the server only sees bucket IDs, not vectors).
+ * Pure TypeScript implementation of Random Hyperplane LSH for server-blind
+ * semantic search. Generates deterministic hyperplane matrices from a seed
+ * derived from the user's master key, so the same embedding always hashes to
+ * the same buckets across sessions.
+ *
+ * Copied from mcp/src/subgraph/lsh.ts to ensure byte-for-byte compatibility.
+ *
+ * Architecture overview:
+ *   1. Seed (32 bytes from HKDF) -> HKDF per table -> random bytes
+ *   2. Random bytes -> Box-Muller transform -> Gaussian-distributed hyperplanes
+ *   3. Embedding dot hyperplane -> sign bit -> N-bit signature per table
+ *   4. Signature -> `lsh_t{table}_{signature}` -> SHA-256 -> blind hash
+ *
+ * Default parameters:
+ *   - 32 bits per table (balanced discrimination vs. recall)
+ *   - 20 tables (moderate table count for good coverage)
+ *
+ * Dependencies: @noble/hashes only (already in project).
  */
 
-import * as crypto from 'crypto';
-import { LSHConfig, TotalReclawError, TotalReclawErrorCode } from '../types';
-import { mergeLSHConfig } from './config';
+import { hkdf } from "@noble/hashes/hkdf.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { TotalReclawError, TotalReclawErrorCode } from "../types";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Default number of independent hash tables. */
+const DEFAULT_N_TABLES = 20;
+
+/** Default number of bits (hyperplanes) per table. */
+const DEFAULT_N_BITS = 32;
+
+/** Number of bytes needed per Gaussian float via Box-Muller (2 x uint32 = 8 bytes). */
+const BYTES_PER_FLOAT = 8;
+
+// ---------------------------------------------------------------------------
+// LSHHasher
+// ---------------------------------------------------------------------------
 
 /**
- * LSH Index using Random Hyperplane method
+ * Random Hyperplane LSH hasher.
  *
- * The algorithm works by:
- * 1. Generate n_tables sets of n_bits random hyperplanes
- * 2. For each vector, compute which side of each hyperplane it falls on (+ or -)
- * 3. This gives n_bits binary digits, forming a bucket ID per table
- * 4. Similar vectors will likely land in the same buckets
+ * All state is deterministic from the seed -- no randomness at hash time.
+ * Construct once per session; call `hash()` for every store/search operation.
  */
-export class LSHIndex {
-  private config: Required<LSHConfig>;
-  private hyperplanes: Array<Array<Float64Array>> = [];
-  private embeddingDim: number = 1024; // Default for Qwen3-Embedding-0.6B
-  private isBuilt: boolean = false;
+export class LSHHasher {
+  /**
+   * Flat hyperplane storage.
+   *
+   * `hyperplanes[t]` is a Float64Array of length `dims * nBits` containing the
+   * hyperplane matrix for table `t`. The hyperplane for bit `b` starts at
+   * offset `b * dims`.
+   */
+  private hyperplanes: Float64Array[];
+
+  /** Embedding dimensionality. */
+  private readonly dims: number;
+
+  /** Number of independent hash tables. */
+  private readonly nTables: number;
+
+  /** Number of bits (hyperplanes) per table. */
+  private readonly nBits: number;
 
   /**
-   * Create a new LSH index
+   * Create a new LSH hasher.
    *
-   * @param config - LSH configuration parameters
-   * @param seed - Optional seed for reproducible hyperplane generation
+   * @param seed   - 32-byte seed from `deriveLshSeed()` in seed.ts.
+   * @param dims   - Embedding dimensionality (e.g. 1024 for Qwen3-Embedding-0.6B).
+   * @param nTables - Number of independent hash tables (default 20).
+   * @param nBits   - Number of bits per table (default 32).
    */
-  constructor(config?: Partial<LSHConfig>, seed?: number) {
-    this.config = {
-      n_bits_per_table: config?.n_bits_per_table ?? 64,
-      n_tables: config?.n_tables ?? 12,
-      candidate_pool: config?.candidate_pool ?? 3000,
-    } as Required<LSHConfig>;
+  constructor(
+    seed: Uint8Array,
+    dims: number,
+    nTables: number = DEFAULT_N_TABLES,
+    nBits: number = DEFAULT_N_BITS,
+  ) {
+    if (seed.length < 16) {
+      throw new TotalReclawError(
+        TotalReclawErrorCode.LSH_HASH_FAILED,
+        `LSH seed too short: expected >= 16 bytes, got ${seed.length}`,
+      );
+    }
+    if (dims < 1) {
+      throw new TotalReclawError(
+        TotalReclawErrorCode.LSH_HASH_FAILED,
+        `dims must be positive, got ${dims}`,
+      );
+    }
+    if (nTables < 1) {
+      throw new TotalReclawError(
+        TotalReclawErrorCode.LSH_HASH_FAILED,
+        `nTables must be positive, got ${nTables}`,
+      );
+    }
+    if (nBits < 1) {
+      throw new TotalReclawError(
+        TotalReclawErrorCode.LSH_HASH_FAILED,
+        `nBits must be positive, got ${nBits}`,
+      );
+    }
 
-    if (seed !== undefined) {
-      this.seedRandom(seed);
+    this.dims = dims;
+    this.nTables = nTables;
+    this.nBits = nBits;
+    this.hyperplanes = new Array(nTables);
+
+    // Generate hyperplane matrices deterministically from the seed.
+    for (let t = 0; t < nTables; t++) {
+      this.hyperplanes[t] = this.generateTableHyperplanes(seed, t);
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Hyperplane generation (deterministic from seed)
+  // -------------------------------------------------------------------------
+
   /**
-   * Seed the random number generator for reproducible hyperplanes
+   * Generate the hyperplane matrix for a single table.
    *
-   * Note: This uses a simple seeded PRNG for determinism.
-   * For production, consider using a more robust seeded RNG.
+   * Each table gets a unique HKDF-derived byte stream. We consume 8 bytes
+   * per Gaussian sample (Box-Muller uses two uniform uint32 values).
+   *
+   * The hyperplanes are NOT normalised to unit length. Normalisation is
+   * unnecessary because we only care about the sign of the dot product,
+   * which is scale-invariant.
    */
-  private seedRandom(seed: number): () => number {
-    let s = seed;
-    return () => {
-      s = (s * 1103515245 + 12345) & 0x7fffffff;
-      return s / 0x7fffffff;
-    };
+  private generateTableHyperplanes(
+    seed: Uint8Array,
+    tableIndex: number,
+  ): Float64Array {
+    const totalFloats = this.dims * this.nBits;
+    const totalBytes = totalFloats * BYTES_PER_FLOAT;
+
+    const randomBytes = this.deriveRandomBytes(
+      seed,
+      `lsh_table_${tableIndex}`,
+      totalBytes,
+    );
+
+    // Convert the random bytes to Gaussian-distributed floats via Box-Muller.
+    const hyperplaneMatrix = new Float64Array(totalFloats);
+    const view = new DataView(
+      randomBytes.buffer,
+      randomBytes.byteOffset,
+      randomBytes.byteLength,
+    );
+
+    for (let i = 0; i < totalFloats; i++) {
+      const offset = i * BYTES_PER_FLOAT;
+      const u1Raw = view.getUint32(offset, true);
+      const u2Raw = view.getUint32(offset + 4, true);
+
+      // Map to (0, 1] -- avoid exactly 0 for the log in Box-Muller.
+      const u1 = (u1Raw + 1) / (0xffffffff + 2);
+      const u2 = (u2Raw + 1) / (0xffffffff + 2);
+
+      // Box-Muller transform (we only need one of the two outputs).
+      hyperplaneMatrix[i] =
+        Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    }
+
+    return hyperplaneMatrix;
   }
 
   /**
-   * Generate random hyperplanes
+   * Derive `length` pseudo-random bytes from the seed using HKDF with
+   * chunked sub-blocks.
    *
-   * @param dim - Embedding dimension
-   * @param seed - Optional seed for reproducibility
+   * A single HKDF-SHA256 call can output at most 255 * 32 = 8,160 bytes.
+   * For large embedding dimensions we need more, so we iterate over
+   * sub-block indices as part of the info string.
    */
-  private generateHyperplanes(dim: number, seed?: number): void {
-    this.embeddingDim = dim;
-    this.hyperplanes = [];
+  private deriveRandomBytes(
+    seed: Uint8Array,
+    baseInfo: string,
+    length: number,
+  ): Uint8Array {
+    const MAX_HKDF_OUTPUT = 255 * 32; // SHA-256 hash length = 32
+    const result = new Uint8Array(length);
+    let offset = 0;
+    let blockIndex = 0;
 
-    const random = seed !== undefined ? this.seedRandom(seed) : Math.random;
+    while (offset < length) {
+      const remaining = length - offset;
+      const chunkLen = Math.min(remaining, MAX_HKDF_OUTPUT);
+      const info = Buffer.from(`${baseInfo}_block_${blockIndex}`, "utf8");
+      const chunk = hkdf(sha256, seed, new Uint8Array(0), info, chunkLen);
+      result.set(new Uint8Array(chunk), offset);
+      offset += chunkLen;
+      blockIndex++;
+    }
 
-    for (let t = 0; t < this.config.n_tables; t++) {
-      const tableHyperplanes: Array<Float64Array> = [];
+    return result;
+  }
 
-      for (let b = 0; b < this.config.n_bits_per_table; b++) {
-        // Generate random unit vector (hyperplane normal)
-        const hyperplane = new Float64Array(dim);
-        let norm = 0;
+  // -------------------------------------------------------------------------
+  // Hash function
+  // -------------------------------------------------------------------------
 
-        for (let i = 0; i < dim; i++) {
-          // Box-Muller transform for Gaussian distribution
-          const u1 = random();
-          const u2 = random();
-          const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-          hyperplane[i] = z;
-          norm += z * z;
+  /**
+   * Hash an embedding vector to an array of blind-hashed bucket IDs.
+   *
+   * For each table:
+   *   1. Compute the N-bit signature (sign of dot product with each hyperplane).
+   *   2. Build the bucket string: `lsh_t{tableIndex}_{binarySignature}`.
+   *   3. SHA-256 the bucket string to produce a blind hash (hex).
+   *
+   * @param embedding - The embedding vector (must have `dims` elements).
+   * @returns Array of `nTables` hex strings (one blind hash per table).
+   */
+  hash(embedding: number[]): string[] {
+    if (embedding.length !== this.dims) {
+      throw new TotalReclawError(
+        TotalReclawErrorCode.LSH_HASH_FAILED,
+        `Embedding dimension mismatch: expected ${this.dims}, got ${embedding.length}`,
+      );
+    }
+
+    const results: string[] = new Array(this.nTables);
+
+    for (let t = 0; t < this.nTables; t++) {
+      const matrix = this.hyperplanes[t];
+
+      // Build the binary signature.
+      const bits = new Array<string>(this.nBits);
+      for (let b = 0; b < this.nBits; b++) {
+        const baseOffset = b * this.dims;
+        let dot = 0;
+        for (let d = 0; d < this.dims; d++) {
+          dot += matrix[baseOffset + d] * embedding[d];
         }
-
-        // Normalize to unit vector
-        norm = Math.sqrt(norm);
-        for (let i = 0; i < dim; i++) {
-          hyperplane[i] /= norm;
-        }
-
-        tableHyperplanes.push(hyperplane);
+        bits[b] = dot >= 0 ? "1" : "0";
       }
 
-      this.hyperplanes.push(tableHyperplanes);
+      const signature = bits.join("");
+      const bucketId = `lsh_t${t}_${signature}`;
+
+      // Blind-hash the bucket ID with SHA-256.
+      const hashBytes = sha256(Buffer.from(bucketId, "utf8"));
+      results[t] = Buffer.from(hashBytes).toString("hex");
     }
 
-    this.isBuilt = true;
+    return results;
   }
 
-  /**
-   * Build the LSH index by generating hyperplanes
-   *
-   * @param embeddings - Sample embeddings (used to determine dimension)
-   * @param seed - Optional seed for reproducibility
-   */
-  buildIndex(embeddings: number[][], seed?: number): void {
-    if (embeddings.length === 0) {
-      throw new TotalReclawError(
-        TotalReclawErrorCode.LSH_HASH_FAILED,
-        'Cannot build index with empty embeddings'
-      );
-    }
+  // -------------------------------------------------------------------------
+  // Accessors
+  // -------------------------------------------------------------------------
 
-    const dim = embeddings[0].length;
-    this.generateHyperplanes(dim, seed);
+  /** Number of hash tables. */
+  get tables(): number {
+    return this.nTables;
   }
 
-  /**
-   * Initialize hyperplanes with known embedding dimension
-   *
-   * @param dim - Embedding dimension
-   * @param seed - Optional seed for reproducibility
-   */
-  initialize(dim: number, seed?: number): void {
-    this.generateHyperplanes(dim, seed);
+  /** Number of bits per table. */
+  get bits(): number {
+    return this.nBits;
   }
 
-  /**
-   * Compute a single bit for a vector against a hyperplane
-   *
-   * Returns 1 if the vector is on the positive side of the hyperplane,
-   * 0 otherwise.
-   */
-  private computeBit(vector: Float64Array, hyperplane: Float64Array): number {
-    let dot = 0;
-    for (let i = 0; i < vector.length; i++) {
-      dot += vector[i] * hyperplane[i];
-    }
-    return dot >= 0 ? 1 : 0;
-  }
-
-  /**
-   * Compute bucket ID for a vector in a single table
-   *
-   * @param vector - Input vector
-   * @param tableIndex - Which hash table to use
-   * @returns Binary bucket ID as string (e.g., "1011001...")
-   */
-  private computeBucketId(vector: Float64Array, tableIndex: number): string {
-    if (!this.isBuilt) {
-      throw new TotalReclawError(
-        TotalReclawErrorCode.LSH_HASH_FAILED,
-        'LSH index not initialized. Call buildIndex() or initialize() first.'
-      );
-    }
-
-    const bits: number[] = [];
-    const hyperplanes = this.hyperplanes[tableIndex];
-
-    for (let b = 0; b < this.config.n_bits_per_table; b++) {
-      bits.push(this.computeBit(vector, hyperplanes[b]));
-    }
-
-    return bits.join('');
-  }
-
-  /**
-   * Hash a vector to get all bucket IDs
-   *
-   * @param vector - Input vector (embedding)
-   * @returns Array of bucket IDs (one per table)
-   */
-  hashVector(vector: number[]): string[] {
-    if (!this.isBuilt) {
-      throw new TotalReclawError(
-        TotalReclawErrorCode.LSH_HASH_FAILED,
-        'LSH index not initialized. Call buildIndex() or initialize() first.'
-      );
-    }
-
-    if (vector.length !== this.embeddingDim) {
-      throw new TotalReclawError(
-        TotalReclawErrorCode.LSH_HASH_FAILED,
-        `Vector dimension mismatch: expected ${this.embeddingDim}, got ${vector.length}`
-      );
-    }
-
-    const vecArray = new Float64Array(vector);
-    const bucketIds: string[] = [];
-
-    for (let t = 0; t < this.config.n_tables; t++) {
-      bucketIds.push(this.computeBucketId(vecArray, t));
-    }
-
-    return bucketIds;
-  }
-
-  /**
-   * Get bucket IDs with table prefix for uniqueness
-   *
-   * Format: "table_<tableIndex>_<bucketBits>"
-   *
-   * @param vector - Input vector
-   * @returns Array of prefixed bucket IDs
-   */
-  hashVectorWithPrefix(vector: number[]): string[] {
-    const buckets = this.hashVector(vector);
-    return buckets.map((bucket, index) => `table_${index}_${bucket}`);
-  }
-
-  /**
-   * Query for candidate IDs (requires external storage of bucket->id mappings)
-   *
-   * This method returns the bucket IDs that should be queried.
-   * The actual candidate retrieval is done by the server using
-   * the blind index.
-   *
-   * @param vector - Query vector
-   * @returns Array of bucket IDs to query
-   */
-  query(vector: number[]): string[] {
-    return this.hashVectorWithPrefix(vector);
-  }
-
-  /**
-   * Get the configuration used by this index
-   */
-  getConfig(): Required<LSHConfig> {
-    return { ...this.config };
-  }
-
-  /**
-   * Get the embedding dimension
-   */
-  getEmbeddingDimension(): number {
-    return this.embeddingDim;
-  }
-
-  /**
-   * Check if the index is ready to use
-   */
-  isReady(): boolean {
-    return this.isBuilt;
-  }
-
-  /**
-   * Export hyperplanes for persistence
-   *
-   * @returns Serialized hyperplane data
-   */
-  exportHyperplanes(): {
-    config: Required<LSHConfig>;
-    embeddingDim: number;
-    hyperplanes: number[][][];
-  } {
-    if (!this.isBuilt) {
-      throw new TotalReclawError(
-        TotalReclawErrorCode.LSH_HASH_FAILED,
-        'Cannot export: index not initialized'
-      );
-    }
-
-    return {
-      config: this.config,
-      embeddingDim: this.embeddingDim,
-      hyperplanes: this.hyperplanes.map((table) =>
-        table.map((h) => Array.from(h))
-      ),
-    };
-  }
-
-  /**
-   * Import hyperplanes from previous export
-   *
-   * @param data - Serialized hyperplane data
-   */
-  importHyperplanes(data: {
-    config: Required<LSHConfig>;
-    embeddingDim: number;
-    hyperplanes: number[][][];
-  }): void {
-    this.config = data.config;
-    this.embeddingDim = data.embeddingDim;
-    this.hyperplanes = data.hyperplanes.map((table) =>
-      table.map((h) => new Float64Array(h))
-    );
-    this.isBuilt = true;
+  /** Embedding dimensionality. */
+  get dimensions(): number {
+    return this.dims;
   }
 }
 
 /**
- * Compute the Hamming distance between two bucket IDs
+ * Compute the Hamming distance between two binary signature strings.
  *
  * @param bucket1 - First bucket ID (binary string)
  * @param bucket2 - Second bucket ID (binary string)
@@ -314,19 +292,15 @@ export function hammingDistance(bucket1: string, bucket2: string): number {
 }
 
 /**
- * Estimate similarity from Hamming distance
+ * Estimate similarity from Hamming distance.
  *
  * For random hyperplane LSH, the expected Hamming distance
  * is proportional to the angle between vectors.
- *
- * @param hammingDist - Hamming distance
- * @param nBits - Number of bits per bucket
- * @returns Estimated cosine similarity (approximate)
  */
-export function estimateSimilarity(hammingDist: number, nBits: number): number {
-  // Pr(bit differs) = angle / pi
-  // So angle = Pr * pi
-  // And cos(angle) = similarity
+export function estimateSimilarity(
+  hammingDist: number,
+  nBits: number,
+): number {
   const angleRatio = hammingDist / nBits;
   const angle = angleRatio * Math.PI;
   return Math.cos(angle);
