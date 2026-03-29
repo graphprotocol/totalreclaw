@@ -173,7 +173,7 @@ Switching from Mem0 or another AI memory system? TotalReclaw can import your exi
 
 Everything is encrypted on your device before storage — the same E2EE guarantee as natively stored memories. Imports are idempotent (running twice won't create duplicates).
 
-**Supported sources:** Mem0 (live API), MCP Memory Server (JSONL file). More planned.
+**Supported sources:** Mem0 (live API), MCP Memory Server (JSONL file), ChatGPT (data export), Claude (data export). More planned.
 
 For full details, supported sources, and troubleshooting, see the [Importing Memories guide](./importing-memories.md).
 

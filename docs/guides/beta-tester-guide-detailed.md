@@ -661,7 +661,7 @@ The integration tests run against a real server with PostgreSQL and validate the
 | 3 | Wallet & Seed Derivation | 10 | BIP-39 mnemonic generation, HKDF key derivation, cross-device recovery (same mnemonic = same keys), wrong mnemonic rejection |
 | 4 | Free Tier Quota | 10 | Write quota enforcement (N writes then 403), read operations bypass quota, billing status reporting |
 | 5 | Stripe Upgrade | 10 | Free -> exhaust -> Stripe webhook -> pro activation -> cancel -> revert to free, write counter persistence |
-| 6 | Coinbase Commerce | 10 | Coinbase upgrade, webhook idempotency, charge:failed handling, monthly counter reset |
+| 6 | Billing Edge Cases | 10 | Webhook idempotency, failed payment handling, monthly counter reset |
 | 7 | Security | 10 | Auth enforcement (no token, bad token, unregistered token), webhook signature validation, cross-user isolation, SQL injection handling |
 | 8 | Full Relay Pipeline | 7 | Bundler proxy, subgraph proxy, mock request forwarding, error propagation |
 
@@ -716,7 +716,7 @@ These variables control on-chain storage via the managed service. **The default 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TOTALRECLAW_SELF_HOSTED` | Set to `true` to use your own self-hosted server with PostgreSQL instead of the managed service. When not set (or `false`), TotalReclaw uses the managed service with on-chain storage via The Graph. | `false` (managed service) |
-| `TOTALRECLAW_CHAIN_ID` | Chain ID for on-chain transactions. `100` = Gnosis mainnet, `10200` = Chiado testnet. | `100` |
+| `TOTALRECLAW_CHAIN_ID` | Chain ID for on-chain transactions. `100` = Gnosis mainnet (Pro), `84532` = Base Sepolia testnet (Free). | `100` |
 | `TOTALRECLAW_DATA_EDGE_ADDRESS` | Address of the EventfulDataEdge smart contract on Gnosis mainnet. | `0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca` |
 | `TOTALRECLAW_ENTRYPOINT_ADDRESS` | ERC-4337 EntryPoint v0.7 address. Same on all chains. | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` |
 | `TOTALRECLAW_SUBGRAPH_PAGE_SIZE` | Maximum results per subgraph query page (Graph Studio limit: 1000). | `1000` |
@@ -755,7 +755,7 @@ Restart the plugin after updating the variable.
 
 ### "Free tier quota exceeded"
 
-**Cause:** You have used all 100 free writes for the month. (Note: reads are never metered.)
+**Cause:** You have used all 500 free writes for the month. (Note: reads are never metered.)
 
 **Fix:** Either upgrade to Pro (see [Section 9](#9-upgrading-to-pro-tier)) or wait for the monthly reset. You can still search and recall your existing memories while on the free tier -- only new writes are blocked.
 

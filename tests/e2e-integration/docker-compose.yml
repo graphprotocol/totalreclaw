@@ -58,16 +58,14 @@ services:
       FREE_TIER_READS_PER_MONTH: "10"
       SUBGRAPH_ENDPOINT: "http://mock-services:9090/subgraph"
       PIMLICO_BUNDLER_URL: "http://mock-services:9090/bundler"
-      DATA_EDGE_ADDRESS: "0xA84c5433110Ccc93e57ec387e630E86Bad86c36f"
+      DATA_EDGE_ADDRESS: "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca"
       ENTRY_POINT_ADDRESS: "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
       # API keys — test-only fake values (never use real keys in tests)
       PIMLICO_API_KEY: "test_pimlico_key_for_e2e"
       STRIPE_SECRET_KEY: "sk_test_fake_for_e2e"
       STRIPE_PRICE_ID: "price_test_123"
-      COINBASE_COMMERCE_API_KEY: "fake_coinbase_key"
       # Webhook secrets must use test values so webhook-helpers.ts can compute valid signatures
       STRIPE_WEBHOOK_SECRET: "whsec_test_secret_for_e2e"
-      COINBASE_COMMERCE_WEBHOOK_SECRET: "coinbase_webhook_secret_for_e2e"
       # High rate limits for E2E tests (all requests come from same IP)
       RATE_LIMIT_REGISTER_PER_HOUR: "200"
       RATE_LIMIT_STORE_PER_HOUR: "5000"

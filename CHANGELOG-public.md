@@ -1,10 +1,26 @@
 # TotalReclaw Changelog
 
-## v0.2.0 (March 2026) -- Private Beta
+## v1.0-beta (March 2026) -- Private Beta
+- End-to-end encrypted memory vault for AI agents (AES-256-GCM, HKDF key derivation)
+- Dual-chain storage: Free tier on Base Sepolia testnet, Pro tier on Gnosis mainnet
+- Stripe billing integration ($5/month Pro tier, 500 free memories/month)
+- OpenClaw plugin with automatic memory extraction via lifecycle hooks
+- MCP server for Claude Desktop, Cursor, and other MCP-compatible agents
+- NanoClaw integration with automatic hooks and CLAUDE.md sync
+- IronClaw support via MCP server (routine-based extraction)
+- Import adapters: Mem0, ChatGPT, Claude, MCP Memory Server
+- Testnet-to-mainnet migration tool (`totalreclaw_migrate`)
+- Qwen3-Embedding-0.6B embedding model (1024d, multilingual)
+- BM25 + Cosine + RRF fusion reranking with dynamic candidate pool sizing
+- Store-time near-duplicate dedup (cosine) and LLM-guided dedup (Pro)
+- Client batching: multiple facts per UserOp via ERC-4337 executeBatch
+- 9/9 E2E integration test journeys passing
+
+## v0.2.0 (March 2026)
 - End-to-end encrypted memory vault for AI agents
 - OpenClaw skill with automatic memory extraction via lifecycle hooks
 - MCP server for Claude Desktop, Cursor, and other MCP-compatible agents
-- Stripe and Coinbase Commerce billing integration
+- Stripe billing integration
 - On-chain storage via Gnosis Chain with Pimlico gas sponsorship
 - 78/78 E2E integration test assertions passing
 - Free tier: 500 memories/month, unlimited reads

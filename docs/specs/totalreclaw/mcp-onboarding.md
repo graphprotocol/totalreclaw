@@ -238,15 +238,14 @@ Call this tool when:
 - User asks how to get more memory storage
 - Free tier quota is exhausted and user wants to continue
 
-Returns a URL the user can open in their browser to complete payment.
-Supports credit card (Stripe) and crypto (Coinbase Commerce).`,
+Returns a URL the user can open in their browser to complete payment via Stripe.`,
   inputSchema: {
     type: 'object',
     properties: {
       method: {
         type: 'string',
-        enum: ['card', 'crypto'],
-        description: 'Payment method. "card" for credit/debit card via Stripe, "crypto" for stablecoins via Coinbase Commerce. Default: "card".',
+        enum: ['card'],
+        description: 'Payment method. "card" for credit/debit card via Stripe. Default: "card".',
       },
     },
   },
@@ -271,7 +270,7 @@ Supports credit card (Stripe) and crypto (Coinbase Commerce).`,
 ### 3.3 Why Two Tools Instead of One
 
 - `totalreclaw_status` is read-only and idempotent. The LLM can call it freely to check status.
-- `totalreclaw_upgrade` creates a Stripe/Coinbase session (side effect). Separating it prevents accidental session creation on every status check.
+- `totalreclaw_upgrade` creates a Stripe checkout session (side effect). Separating it prevents accidental session creation on every status check.
 - Clear separation makes tool descriptions simpler and LLM tool selection more reliable.
 
 ---
@@ -440,7 +439,7 @@ Step 2: Run setup on new machine
 | File | Purpose |
 |------|---------|
 | `mcp/src/tools/status.ts` | `handleStatus()` -- queries relay for subscription + usage |
-| `mcp/src/tools/upgrade.ts` | `handleUpgrade()` -- creates Stripe/Coinbase checkout session via relay API |
+| `mcp/src/tools/upgrade.ts` | `handleUpgrade()` -- creates Stripe checkout session via relay API |
 | `mcp/src/cli/setup.ts` | CLI setup command for seed generation and credential storage |
 
 ### 6.3 Changes to `mcp/package.json`
@@ -475,7 +474,7 @@ The relay server needs two new endpoints (consumed by the MCP server):
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `GET /v1/subscription/status` | GET | Returns tier, usage, limits for a wallet address (authenticated) |
-| `POST /v1/subscription/checkout` | POST | Creates Stripe or Coinbase checkout session, returns URL (authenticated) |
+| `POST /v1/subscription/checkout` | POST | Creates Stripe checkout session, returns URL (authenticated) |
 
 These are the same endpoints the OpenClaw skill would use. The MCP server and skill share the same relay API.
 

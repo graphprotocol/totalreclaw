@@ -258,8 +258,7 @@ Self-hosted mode uses the same E2EE architecture but stores encrypted facts on-c
 |-----------|----------|-----------|
 | **Chain** | Gnosis Chain | $0.00076/fact, xDAI stablecoin gas, Graph indexing rewards, 640GB archive, permanent L1 storage |
 | **Paymaster** | **Pimlico** | 60x cheaper than ZeroDev ($0.11/mo vs $69/mo at 100 ops/day), permissionless.js SDK, webhook policies |
-| **Fiat payments** | Stripe Checkout | Agent-generated URL, card/Apple Pay/Google Pay |
-| **Crypto payments** | ~~Coinbase Commerce~~ **BLOCKED** | Coinbase Commerce sunset March 31, 2026. Replacement (Coinbase Business) is US/Singapore only -- TotalReclaw entity is in Portugal. Need alternative provider (NOWPayments, BTCPay Server) or wait for EU expansion. **Does not block launch -- Stripe (fiat) is sufficient.** |
+| **Fiat payments** | Stripe Checkout | Agent-generated URL, card/Apple Pay/Google Pay. Sole payment method. |
 | **Auth** | Wallet signature | No API keys — seed-derived key signs every request |
 | **Free tier** | 500 memories/month | Users experience value before paying |
 | **Subscription** | $5/month (unlimited) | Profitable on Gnosis at all scales (100-10K users) |
@@ -273,36 +272,36 @@ Self-hosted mode uses the same E2EE architecture but stores encrypted facts on-c
 | 1K users | $1,140 | $28 | $5,000 | +$3,832 |
 | 10K users | $11,400 | $298 | $50,000 | +$38,302 |
 
-### What's Built (Code Complete, Deployed to Chiado Testnet)
+### What's Built (Code Complete, Deployed to Base Sepolia + Gnosis Mainnet)
 
-All scaffolding and smart contracts are built, tested, and deployed to Chiado testnet. E2E validated.
+All scaffolding and smart contracts are built, tested, and deployed to Base Sepolia (free tier) and Gnosis mainnet (Pro tier). E2E validated.
 
 | Component | Description | Tests | Status |
 |-----------|-------------|-------|--------|
 | EventfulDataEdge.sol | Minimal DA contract, fallback() emits Log(bytes), permissionless (no access control) | 14 | DONE |
 | TotalReclawPaymaster.sol | ERC-4337 paymaster with per-sender sliding window rate limiting | 32 | DONE |
-| Deploy/verify/fund scripts | Hardhat deploy, deployed to Chiado via Pimlico CREATE2 | -- | DONE |
+| Deploy/verify/fund scripts | Hardhat deploy, deployed to Base Sepolia + Gnosis mainnet via Pimlico CREATE2 | -- | DONE |
 | Subgraph schema + mapping | 14-field FactEntity, AssemblyScript Protobuf decoder, GlobalState tracking | graph build OK | DONE |
 | Client BIP-39 seed management | 12-word mnemonic, BIP-32/44 derivation, HKDF key compatibility with kdf.ts | 19 | DONE |
 | Client UserOperation builder | Encode facts as calldata, sign with seed-derived key, submit to relay | 11 | DONE |
 | Managed service relay proxy | Target/calldata validation, per-address rate limiting, Pimlico bundler submission, subgraph query proxy | 16 | DONE |
-| Billing & onboarding | Stripe + ~~Coinbase Commerce~~ (sunset, see Go-Live Architecture), subscription table, webhook handlers | -- | DONE (crypto blocked) |
+| Billing & onboarding | Stripe billing, subscription table, webhook handlers | -- | DONE |
 | Admin dashboard | Two-factor auth (API key + OTP), 13 API endpoints, tier CRUD with Stripe, analytics, single-file HTML UI | 12 | DONE |
 | Client type tracking | X-TotalReclaw-Client header on all relay requests, request_log table, analytics queries | -- | DONE |
 
-### Relay Extraction (Planned)
+### Relay Extraction (Complete)
 
-Extract the managed service relay into a private `totalreclaw-relay` repo (TypeScript). The relay handles billing, bundler submission, and subgraph query proxying. Extracting it decouples the relay from the monorepo and enables independent deployment.
+The managed service relay has been extracted to a private `totalreclaw-relay` TypeScript repo (`p-diogo/totalreclaw-relay`). The relay handles billing, Pimlico bundler submission, dual-chain routing, and subgraph query proxying. Deployed independently on Railway.
 
-### Next Steps
+### Current Deployment
 
-| Step | Effort | Description |
-|------|--------|-------------|
-| Relay extraction to `totalreclaw-relay` | 1 week | Extract relay into private TypeScript repo |
-| Mainnet deployment | 1-2 days | Deploy contracts + subgraph to Gnosis mainnet |
-| Load testing (self-hosted path) | 2 days | Validate latency under concurrent self-hosted users |
-
-**Mainnet deployment deferred until managed service MVP validates demand.**
+| Component | Status |
+|-----------|--------|
+| Relay extraction to `totalreclaw-relay` | DONE |
+| Base Sepolia deployment (free tier) | DONE |
+| Gnosis mainnet deployment (Pro tier) | DONE |
+| Dual-chain routing | DONE |
+| Load testing (managed service) | DONE -- <140ms p95 up to 10K facts |
 
 ---
 
@@ -421,7 +420,7 @@ Maps each spec to its rollout phase:
 | Multi-Agent Conflict Resolution v0.3.2 | `docs/specs/totalreclaw/conflict-resolution.md` | Phase 2 (MVP) | Draft spec |
 | TotalReclaw MCP Server | `docs/specs/totalreclaw/mcp-server.md` | Phase 1 (PoC) | Implemented |
 | TotalReclaw Skill for NanoClaw | `docs/specs/totalreclaw/skill-nanoclaw.md` | Phase 1 (PoC) | Implemented |
-| Seed-to-Subgraph v1.0 | `docs/specs/subgraph/seed-to-subgraph.md` | Phase 3 (Self-Hosted) | Deployed to Chiado testnet |
+| Seed-to-Subgraph v1.0 | `docs/specs/subgraph/seed-to-subgraph.md` | Phase 3 (Self-Hosted) | Deployed to Base Sepolia + Gnosis mainnet |
 | TEE vs E2EE | `docs/specs/tee/architecture.md` | Phase 4 (TDX SaaS) | Analysis complete |
 | TDX SaaS v0.4 | `docs/specs/tee/tdx-saas.md` | Phase 4 (TDX SaaS) | Spec complete |
 | Import: External Memory Systems | — | Phase 2.6 / Phase 5 (Import) | Mem0 DONE (E2E validated), MCP Memory DONE (unit tests), others not started |

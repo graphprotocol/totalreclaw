@@ -9,7 +9,7 @@ type Fact @entity(immutable: false) {
   owner: Bytes!
   "AES-256-GCM encrypted Protobuf blob"
   encryptedBlob: Bytes!
-  "AES-256-GCM encrypted embedding vector (384-dim bge-small-en-v1.5). Nullable for v1 facts."
+  "AES-256-GCM encrypted embedding vector (1024-dim Qwen3-Embedding-0.6B). Nullable for v1 facts."
   encryptedEmbedding: String
   "Decay score (0.0-1.0). Facts below 0.3 are considered inactive."
   decayScore: BigDecimal!

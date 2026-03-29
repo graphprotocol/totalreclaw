@@ -178,7 +178,7 @@ If you want separate memory per instance, use **different recovery phrases** or 
 
 | Tier | Writes | Reads | Storage | Price |
 |------|--------|-------|---------|-------|
-| **Free** | 500/month | Unlimited | Testnet (trial) | $0 |
+| **Free** | Unlimited (test network) | Unlimited | Testnet (trial) | $0 |
 | **Pro** | Unlimited | Unlimited | Permanent on-chain (Gnosis) | $5/month |
 
 The free tier resets monthly. When the quota is reached, write operations return a 403 error. The agent will surface an upgrade link.

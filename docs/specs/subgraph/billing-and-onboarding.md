@@ -16,7 +16,7 @@ Last updated: 2026-03-03
 
 1. **Seed is everything** — The 12-word BIP-39 seed derives the encryption key, on-chain identity (Smart Account), AND the authentication credential. No API keys, no usernames, no passwords.
 2. **Free tier first** — Users experience value before being asked to pay. Zero friction onboarding.
-3. **Pragmatic hybrid** — Billing is centralized (Stripe + Coinbase Commerce). Data layer is decentralized (subgraph on Gnosis Chain). The relay server bridges both.
+3. **Pragmatic hybrid** — Billing is centralized (Stripe). Data layer is decentralized (subgraph on Gnosis Chain). The relay server bridges both.
 4. **Agent-driven UX** — The OpenClaw agent orchestrates checkout, activation detection, and error handling. Users never visit a separate dashboard.
 
 ---
@@ -28,7 +28,6 @@ Last updated: 2026-03-03
 | **Chain** | Gnosis Chain | $0.00076/fact (8-13x cheaper than Base), xDAI stablecoin gas (no volatility), Graph indexing rewards, 640GB archive (easy for indexers), permanent L1 storage |
 | **Paymaster** | Pimlico or ZeroDev | Multi-chain support (incl. Gnosis), custom webhook for subscription gating. NOT Coinbase Paymaster (Base-only, no webhooks) |
 | **Fiat payments** | Stripe Checkout | Agent-generated checkout URL. Card, Apple Pay, Google Pay |
-| **Crypto payments** | Coinbase Commerce | USDC/USDT/ETH on Solana, Base, Ethereum, Polygon, Arbitrum. No bridging required |
 | **Identity** | Wallet address (ERC-4337 Smart Account) | Derived from BIP-39 seed. Single identity for billing, auth, and on-chain |
 | **Auth** | Wallet signature per request | No API keys. Seed-derived private key signs every relay request |
 | **Indexing** | Subgraph on The Graph Network | Existing subgraph code, zero changes needed. Indexing rewards incentivize indexers on Gnosis |
@@ -79,7 +78,7 @@ Query fees alone are small ($1-$298/mo). Indexers are primarily incentivized by 
 
 - **Identity:** Wallet address (ERC-4337 Smart Account derived from BIP-39 seed via `m/44'/60'/0'/0/0`).
 - **Auth mechanism:** Every relay request is signed by the seed-derived private key. The relay server verifies the signature — no API key needed.
-- **Billing mapping:** `wallet_address → Stripe customer_id / Coinbase Commerce charge`.
+- **Billing mapping:** `wallet_address → Stripe customer_id`.
 
 ---
 
@@ -102,22 +101,14 @@ Free tier: 500 memories/month on Base Sepolia (testnet, trial). Pro tier: unlimi
 - **Flow:** Agent creates a Stripe Checkout session via TotalReclaw API → user clicks URL → pays (card, Apple Pay, Google Pay) → Stripe webhook confirms → relay activates subscription for wallet address.
 - **Stripe customer ID:** Mapped to wallet address. Email collected by Stripe for receipts only (not a TotalReclaw account).
 
-### 6.2 Crypto (Stablecoins)
-
-- **Provider:** Coinbase Commerce (merging into Coinbase Business)
-- **Supported tokens:** USDC, USDT, ETH
-- **Supported networks:** Base, Ethereum, Solana, Polygon, Arbitrum (native — no bridging required)
-- **Flow:** Agent creates a Coinbase Commerce charge via TotalReclaw API → user clicks payment URL → sends stablecoins from any supported network → Coinbase webhook confirms → relay activates subscription for wallet address.
-
-### 6.3 Subscription Status Table
+### 6.2 Subscription Status Table
 
 ```sql
 CREATE TABLE subscriptions (
     wallet_address  TEXT PRIMARY KEY,
     tier            TEXT NOT NULL DEFAULT 'free',  -- 'free' | 'pro'
-    source          TEXT,                          -- 'stripe' | 'coinbase_commerce'
+    source          TEXT,                          -- 'stripe'
     stripe_id       TEXT,
-    coinbase_id     TEXT,
     expires_at      TIMESTAMPTZ,
     free_writes_used INTEGER NOT NULL DEFAULT 0,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -176,9 +167,7 @@ User signs tx with seed-derived key
 ```
 1. User approaches free tier limit
 2. Agent: "You've used X/Y free memories. Upgrade for $Z/month."
-3. Agent: "Pay with credit card or crypto?"
-    ├─ Credit card → Agent creates Stripe Checkout URL
-    └─ Crypto → Agent creates Coinbase Commerce charge URL
+3. Agent creates Stripe Checkout URL
 4. User clicks URL, completes payment in browser
 5. Webhook fires → relay activates subscription
 6. Agent detects activation: "You're all set."
@@ -215,9 +204,9 @@ User signs tx with seed-derived key
 |  │ (wallet auth) │  │ (free/paid?) │  │ (Pimlico/ZeroDev)   │  |
 |  └───────────────┘  └───────────────┘  └─────────────────────┘  |
 |  ┌───────────────┐  ┌───────────────┐                           |
-|  │ Stripe        │  │ Coinbase      │  ← Payment webhooks       |
-|  │ Checkout      │  │ Commerce      │                           |
-|  └───────────────┘  └───────────────┘                           |
+|  │ Stripe        │                      ← Payment webhooks       |
+|  │ Checkout      │                                               |
+|  └───────────────┘                                               |
 +------------------------------------------------------------------+
                               │
                     ┌─────────┴──────────┐

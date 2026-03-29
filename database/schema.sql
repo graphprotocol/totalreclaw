@@ -1,6 +1,6 @@
 -- TotalReclaw Database Schema
 -- PostgreSQL schema for encrypted memory storage with vector embeddings
--- Requires pgvector extension for vector(384) type
+-- Requires pgvector extension for vector(1024) type
 
 -- Drop existing tables
 DROP TABLE IF EXISTS encrypted_vault CASCADE;
@@ -13,8 +13,8 @@ CREATE TABLE encrypted_vault (
     ciphertext BYTEA NOT NULL,
     nonce BYTEA NOT NULL,
     tag BYTEA NOT NULL,
-    -- Vector embedding using pgvector (384 dimensions)
-    embedding vector(384) NOT NULL,
+    -- Vector embedding using pgvector (1024 dimensions)
+    embedding vector(1024) NOT NULL,
     -- Blind indices for searchable encryption
     blind_indices TEXT[] NOT NULL DEFAULT '{}',
     -- OpenClaw compatibility fields
@@ -50,7 +50,7 @@ COMMENT ON COLUMN encrypted_vault.agent_id IS 'Agent that created the memory';
 COMMENT ON COLUMN encrypted_vault.ciphertext IS 'Encrypted content (AES-256-GCM)';
 COMMENT ON COLUMN encrypted_vault.nonce IS 'GCM nonce for encryption';
 COMMENT ON COLUMN encrypted_vault.tag IS 'GCM authentication tag';
-COMMENT ON COLUMN encrypted_vault.embedding IS '384-dim vector embedding (pgvector)';
+COMMENT ON COLUMN encrypted_vault.embedding IS '1024-dim vector embedding (pgvector)';
 COMMENT ON COLUMN encrypted_vault.blind_indices IS 'Searchable blind indices';
 COMMENT ON COLUMN encrypted_vault.source_type IS 'OpenClaw: MEMORY.md, memory-daily, or imported';
 COMMENT ON COLUMN encrypted_vault.chunk_index IS 'OpenClaw: chunk sequence number';
