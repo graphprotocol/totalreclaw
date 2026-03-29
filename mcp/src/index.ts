@@ -88,7 +88,7 @@ import {
 } from './subgraph/store.js';
 import { searchSubgraph } from './subgraph/search.js';
 
-import { validateMnemonic } from '@scure/bip39';
+import { validateMnemonic, generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { mnemonicToAccount } from 'viem/accounts';
 import { createPublicClient, http, type Address } from 'viem';
@@ -96,11 +96,51 @@ import { gnosis, gnosisChiado, baseSepolia } from 'viem/chains';
 import { toSimpleSmartAccount } from 'permissionless/accounts';
 import { entryPoint07Address } from 'viem/account-abstraction';
 import crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
+
+import {
+  registerWithServer,
+  CREDENTIALS_PATH,
+  deriveAuthKey,
+  computeAuthKeyHash as computeSetupAuthKeyHash,
+} from './cli/setup.js';
+import type { SavedCredentials } from './cli/setup.js';
 
 // ── Configuration ───────────────────────────────────────────────────────────
 
-const SERVER_URL = process.env.TOTALRECLAW_SERVER_URL || 'http://127.0.0.1:8080';
+const SERVER_URL = process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz';
 const MASTER_PASSWORD = process.env.TOTALRECLAW_RECOVERY_PHRASE;
+
+// ── Client identification ──────────────────────────────────────────────────
+import { setClientId, getClientId } from './client-id.js';
+let clientIdentifierResolved = false;
+
+function resolveMnemonic(): string | undefined {
+  // Priority 1: env var
+  if (MASTER_PASSWORD) return MASTER_PASSWORD.trim();
+
+  // Priority 2: credentials.json mnemonic field
+  try {
+    const data = fs.readFileSync(CREDENTIALS_PATH, 'utf-8');
+    const parsed = JSON.parse(data) as { mnemonic?: string };
+    if (parsed.mnemonic && typeof parsed.mnemonic === 'string') {
+      const trimmed = parsed.mnemonic.trim();
+      const words = trimmed.split(/\s+/);
+      const allWordsValid = words.length === 12 && words.every((w: string) => wordlist.includes(w));
+      if (validateMnemonic(trimmed, wordlist) || allWordsValid) {
+        return trimmed;
+      }
+    }
+  } catch {
+    // credentials.json doesn't exist — fall through to unconfigured
+  }
+
+  return undefined;
+}
+
+let currentMode: ServerMode = 'unconfigured';
 
 // Store-time near-duplicate detection (consolidation module)
 const STORE_DEDUP_ENABLED = process.env.TOTALRECLAW_STORE_DEDUP !== 'false';
@@ -131,7 +171,7 @@ function proactiveBillingFetch(state: SubgraphState): void {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${authKeyHex}`,
-      'X-TotalReclaw-Client': 'mcp-server',
+      'X-TotalReclaw-Client': getClientIdentifier(),
     },
   })
     .then(async (resp) => {
@@ -166,7 +206,7 @@ function getMaxCandidatePool(k: number): number {
 
 // ── Server mode detection ───────────────────────────────────────────────────
 
-type ServerMode = 'http' | 'subgraph';
+type ServerMode = 'http' | 'subgraph' | 'unconfigured';
 
 interface SubgraphState {
   mode: 'subgraph';
@@ -191,15 +231,13 @@ let subgraphState: SubgraphState | null = null;
  * Self-hosted mode (HTTP) requires TOTALRECLAW_SELF_HOSTED=true.
  * Defaults to managed service otherwise.
  */
-function detectServerMode(): ServerMode {
-  if (!MASTER_PASSWORD) return 'http';
-  // Self-hosted mode is opt-in: requires explicit TOTALRECLAW_SELF_HOSTED=true
+function detectServerMode(mnemonic: string | undefined): ServerMode {
+  if (!mnemonic) return 'unconfigured';
   if (process.env.TOTALRECLAW_SELF_HOSTED === 'true') return 'http';
-
-  const words = MASTER_PASSWORD.trim().split(/\s+/);
-  if (words.length !== 12 && words.length !== 24) return 'http';
-  if (!validateMnemonic(MASTER_PASSWORD.trim(), wordlist)) return 'http';
-
+  const words = mnemonic.split(/\s+/);
+  if (words.length !== 12 && words.length !== 24) return 'unconfigured';
+  const allWordsValid = words.every((w: string) => wordlist.includes(w));
+  if (!validateMnemonic(mnemonic, wordlist) && !allWordsValid) return 'unconfigured';
   return 'subgraph';
 }
 
@@ -207,8 +245,7 @@ function detectServerMode(): ServerMode {
  * Initialize subgraph state from the BIP-39 mnemonic.
  * Derives all cryptographic keys and creates the LSH hasher.
  */
-async function initSubgraphState(): Promise<SubgraphState> {
-  const mnemonic = MASTER_PASSWORD!.trim();
+async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
   const { authKey, encryptionKey, dedupKey, salt } = deriveKeys(mnemonic);
 
   // Derive LSH seed and create hasher
@@ -1148,6 +1185,149 @@ function quotaExceededResponse(): { content: Array<{ type: string; text: string 
   };
 }
 
+// ── Setup tool (unconfigured mode) ──────────────────────────────────────────
+
+const setupToolDefinition = {
+  name: 'totalreclaw_setup',
+  description: 'Set up TotalReclaw for first-time use. Generate a new recovery phrase or import an existing one.',
+  inputSchema: {
+    type: 'object' as const,
+    properties: {
+      action: {
+        type: 'string',
+        enum: ['generate', 'import'],
+        description: 'Whether to generate a new recovery phrase or import an existing one',
+      },
+      recovery_phrase: {
+        type: 'string',
+        description: 'Your existing 12-word BIP-39 recovery phrase (only for action="import")',
+      },
+    },
+    required: ['action'],
+  },
+};
+
+async function handleSetup(
+  args: unknown,
+): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const input = args as Record<string, unknown>;
+  const action = input?.action as string;
+
+  if (action !== 'generate' && action !== 'import') {
+    return {
+      content: [{ type: 'text', text: JSON.stringify({
+        success: false,
+        error: 'Invalid action. Use "generate" for a new identity or "import" to restore an existing one.',
+      })}],
+    };
+  }
+
+  let mnemonic: string;
+
+  if (action === 'import') {
+    const phrase = (input?.recovery_phrase as string || '').trim();
+    const words = phrase.split(/\s+/);
+    const allWordsValid = words.length === 12 && words.every(w => wordlist.includes(w));
+    if (!phrase || (!validateMnemonic(phrase, wordlist) && !allWordsValid)) {
+      return {
+        content: [{ type: 'text', text: JSON.stringify({
+          success: false,
+          error: 'Invalid recovery phrase. Must be 12 words from the BIP-39 English wordlist.',
+        })}],
+      };
+    }
+    if (!validateMnemonic(phrase, wordlist)) {
+      console.error('Warning: recovery phrase has valid words but invalid BIP-39 checksum. Accepting anyway.');
+    }
+    mnemonic = phrase;
+  } else {
+    mnemonic = generateMnemonic(wordlist, 128);
+  }
+
+  // Derive keys
+  const { authKey, salt } = deriveAuthKey(mnemonic);
+  const authKeyHash = computeSetupAuthKeyHash(authKey);
+  const saltHex = Buffer.from(salt).toString('hex');
+
+  // Register with relay
+  const serverUrl = SERVER_URL;
+  let userId: string;
+  try {
+    userId = await registerWithServer(serverUrl, authKeyHash, saltHex);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      content: [{ type: 'text', text: JSON.stringify({
+        success: false,
+        error: `Registration failed: ${message}. Check your internet connection.`,
+      })}],
+    };
+  }
+
+  // Save credentials (including mnemonic)
+  const credDir = path.dirname(CREDENTIALS_PATH);
+  fs.mkdirSync(credDir, { recursive: true });
+  const credentials: SavedCredentials = {
+    userId,
+    salt: saltHex,
+    serverUrl,
+    mnemonic,
+  };
+  fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(credentials, null, 2), {
+    encoding: 'utf-8',
+    mode: 0o600,
+  });
+
+  // Pre-download embedding model
+  console.error('Downloading embedding model (one-time, ~600MB)...');
+  try {
+    await generateEmbedding('warmup');
+    console.error('Embedding model ready.');
+  } catch (err) {
+    console.error(`Warning: Could not pre-download embedding model: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Hot-reload server state
+  try {
+    subgraphState = await initSubgraphState(mnemonic);
+    currentMode = 'subgraph';
+    console.error(`TotalReclaw configured (managed service, owner: ${subgraphState.smartAccountAddress})`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      content: [{ type: 'text', text: JSON.stringify({
+        success: true,
+        warning: `Setup saved but initialization failed: ${message}. Restart the MCP server.`,
+        recovery_phrase: action === 'generate' ? mnemonic : undefined,
+        user_id: userId,
+      })}],
+    };
+  }
+
+  const result: Record<string, unknown> = {
+    success: true,
+    user_id: userId,
+    mode: 'managed_service',
+    smart_account: subgraphState.smartAccountAddress,
+    tier: 'free',
+    tier_info: 'Free tier: unlimited memories and reads (test network — memories may be reset). Upgrade to Pro ($5/month) for permanent on-chain storage. Pricing: https://totalreclaw.xyz — upgrade anytime via totalreclaw_upgrade.',
+  };
+
+  if (action === 'generate') {
+    result.recovery_phrase = mnemonic;
+    result.recovery_phrase_warning =
+      'CRITICAL: Write down this recovery phrase and store it securely. ' +
+      'It is your ONLY identity in TotalReclaw. If you lose it, ALL your memories are lost forever. ' +
+      'There is NO password reset, NO recovery, NO support that can help.';
+  } else {
+    result.message = 'Identity restored. Your existing memories are now accessible.';
+  }
+
+  return {
+    content: [{ type: 'text', text: JSON.stringify(result) }],
+  };
+}
+
 // ── Layer 1: Server with instructions ────────────────────────────────────────
 
 const server = new Server(
@@ -1171,10 +1351,26 @@ setOnRememberCallback(() => {
   server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
 });
 
+// ── Client identification (resolved after initialize handshake) ──────────────
+
+function getClientIdentifier(): string {
+  if (!clientIdentifierResolved) {
+    const clientInfo = server.getClientVersion();
+    if (clientInfo?.name) {
+      const name = clientInfo.name.toLowerCase().replace(/\s+/g, '-');
+      setClientId(`mcp-server:${name}`);
+    }
+    clientIdentifierResolved = true;
+    console.error(`Client identified as: ${getClientId()}`);
+  }
+  return getClientId();
+}
+
 // ── Layer 2 + 3: Tool handlers ───────────────────────────────────────────────
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
+    setupToolDefinition,
     rememberToolDefinition,
     recallToolDefinition,
     forgetToolDefinition,
@@ -1190,6 +1386,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+
+  // Handle setup tool (available in all modes)
+  if (name === 'totalreclaw_setup') {
+    return await handleSetup(args);
+  }
+
+  // In unconfigured mode, all other tools return setup guidance
+  if (currentMode === 'unconfigured') {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          error: 'not_configured',
+          message: 'TotalReclaw is not configured yet. Ask the user if they have an existing recovery phrase or want to generate a new one, then use the totalreclaw_setup tool.',
+        }),
+      }],
+      isError: true,
+    };
+  }
+
   const mode = subgraphState ? 'subgraph' : 'http';
 
   try {
@@ -1456,23 +1672,49 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
   return { messages };
 });
 
+// ── Show-phrase CLI subcommand ────────────────────────────────────────────────
+
+async function showPhrase(): Promise<void> {
+  try {
+    const data = fs.readFileSync(CREDENTIALS_PATH, 'utf-8');
+    const parsed = JSON.parse(data) as { mnemonic?: string };
+    if (parsed.mnemonic) {
+      console.log(parsed.mnemonic);
+    } else {
+      console.error('No recovery phrase found in credentials. Re-run setup.');
+      process.exit(1);
+    }
+  } catch {
+    console.error(`No credentials found at ${CREDENTIALS_PATH}. Run setup first.`);
+    process.exit(1);
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  // CLI subcommand routing
   if (process.argv[2] === 'setup') {
     const { runSetup } = await import('./cli/setup.js');
     await runSetup();
     return;
   }
 
-  // Detect and initialize server mode
-  const mode = detectServerMode();
-  if (mode === 'subgraph') {
-    subgraphState = await initSubgraphState();
+  if (process.argv[2] === 'show-phrase') {
+    await showPhrase();
+    return;
+  }
+
+  // Resolve mnemonic from env var or credentials.json
+  const mnemonic = resolveMnemonic();
+  currentMode = detectServerMode(mnemonic);
+
+  if (currentMode === 'subgraph' && mnemonic) {
+    subgraphState = await initSubgraphState(mnemonic);
     console.error(`TotalReclaw MCP server started (managed service, owner: ${subgraphState.smartAccountAddress})`);
-  } else {
+  } else if (currentMode === 'http') {
     console.error('TotalReclaw MCP server started (self-hosted mode)');
+  } else {
+    console.error('TotalReclaw MCP server started (unconfigured — use totalreclaw_setup tool)');
   }
 
   const transport = new StdioServerTransport();

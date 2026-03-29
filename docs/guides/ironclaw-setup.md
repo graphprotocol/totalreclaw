@@ -11,67 +11,44 @@ Set up TotalReclaw as the encrypted memory layer for your IronClaw agent. Your m
 - **Node.js 22+** (for the MCP server process)
 - ~600 MB disk space for the local embedding model (one-time download)
 
-## 1. Install and run the setup wizard
+## 1. Install TotalReclaw
 
 ```bash
-npx @totalreclaw/mcp-server setup
+npm install -g @totalreclaw/mcp-server
 ```
 
-The wizard:
-1. Generates a 12-word recovery phrase (or imports an existing one)
-2. Derives encryption keys locally
-3. Registers with the TotalReclaw relay
-4. Downloads the embedding model for local semantic search (~600 MB, cached)
-5. Prints a config snippet
+## 2. Add to IronClaw
+
+```bash
+ironclaw mcp add totalreclaw --transport stdio --command totalreclaw-mcp
+```
+
+That's it -- no environment variables, no config files, no recovery phrase needed yet.
+
+Verify the connection:
+
+```bash
+ironclaw mcp test totalreclaw
+```
+
+You should see 11 tools including `totalreclaw_setup`.
+
+## 3. Start chatting
+
+Restart IronClaw and start a conversation. The first time you mention anything worth remembering (e.g. "remember that my name is Pedro"), the agent will:
+
+1. Detect that TotalReclaw is not configured yet
+2. Ask: "Do you have an existing recovery phrase, or should I generate a new one?"
+3. Generate or import your phrase via the `totalreclaw_setup` tool
+4. Register with the relay, download the embedding model, and activate -- all automatically
+
+Your recovery phrase and credentials are saved to `~/.totalreclaw/credentials.json` (owner-only permissions). On subsequent restarts, the MCP server loads them automatically.
 
 > **Save your recovery phrase somewhere safe.** It is the only key to your memories. There is no password reset, no recovery, no support ticket that can help. Write it down and store it securely.
 
-> **Credential vault tip:** If IronClaw's credential vault is available, store the recovery phrase there instead of as an environment variable. This keeps it isolated from the LLM and WASM tools.
+## 4. How it works
 
-## 2. Add TotalReclaw to IronClaw
-
-IronClaw connects to MCP servers via its built-in MCP client. Add TotalReclaw to your IronClaw MCP configuration:
-
-### Option A: IronClaw config file
-
-Add to your IronClaw MCP configuration (typically `~/.ironclaw/mcp.json` or via the IronClaw dashboard):
-
-```json
-{
-  "mcpServers": {
-    "totalreclaw": {
-      "command": "npx",
-      "args": ["@totalreclaw/mcp-server"],
-      "env": {
-        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here"
-      }
-    }
-  }
-}
-```
-
-> **Note:** The server URL defaults to `https://api.totalreclaw.xyz` (the managed service). You only need to set `TOTALRECLAW_SERVER_URL` if you are running a self-hosted server.
-
-### Option B: IronClaw CLI
-
-```bash
-ironclaw mcp add totalreclaw --command "npx @totalreclaw/mcp-server" \
-  --env TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase goes here"
-```
-
-> Replace `your twelve word recovery phrase goes here` with the actual phrase from the setup wizard.
-
-## 3. Verify the connection
-
-Ask your IronClaw agent:
-
-> "Do you have access to TotalReclaw memory tools?"
-
-The agent should confirm it can see tools like `totalreclaw_remember`, `totalreclaw_recall`, `totalreclaw_forget`, `totalreclaw_export`, and `totalreclaw_status`.
-
-## 4. First use
-
-TotalReclaw's MCP server instructs the agent to use memory proactively. Once connected:
+Once set up, TotalReclaw works automatically:
 
 - **Automatic recall**: The agent searches your memory at the start of every conversation
 - **Proactive storage**: The agent stores preferences, decisions, and important context without being asked
@@ -126,13 +103,14 @@ If your IronClaw version supports event-triggered routines (e.g., `on_thread_idl
 
 | Tool | Description |
 |------|-------------|
+| `totalreclaw_setup` | Set up TotalReclaw (generate or import recovery phrase) |
 | `totalreclaw_remember` | Store facts in encrypted memory |
 | `totalreclaw_recall` | Search memories by natural language query |
 | `totalreclaw_forget` | Delete a specific memory by ID |
 | `totalreclaw_export` | Export all memories as Markdown or JSON |
-| `totalreclaw_status` | Check billing status and quota |
+| `totalreclaw_status` | Check billing status and usage |
 | `totalreclaw_import` | Re-import previously exported memories |
-| `totalreclaw_import_from` | Import from Mem0 or MCP Memory Server |
+| `totalreclaw_import_from` | Import from Mem0, ChatGPT, Claude, or MCP Memory Server |
 | `totalreclaw_consolidate` | Merge duplicate memories (self-hosted only) |
 | `totalreclaw_upgrade` | Get a Stripe checkout link for Pro |
 | `totalreclaw_migrate` | Migrate testnet memories to mainnet after Pro upgrade |
@@ -141,10 +119,10 @@ If your IronClaw version supports event-triggered routines (e.g., `on_thread_idl
 
 | Tier | Memories | Storage | Price |
 |------|----------|---------|-------|
-| **Free** | 500/month | Testnet (trial) | $0 |
-| **Pro** | Unlimited | Permanent on-chain (Gnosis) | See `totalreclaw_status` |
+| **Free** | Unlimited | Testnet (trial -- may be reset) | $0 |
+| **Pro** | Unlimited | Permanent on-chain (Gnosis) | See [totalreclaw.xyz/pricing](https://totalreclaw.xyz/pricing/) |
 
-Ask your agent to run `totalreclaw_status` to check current pricing and usage.
+Upgrade anytime via the `totalreclaw_upgrade` tool -- the agent handles it for you.
 
 ## Security model
 
@@ -174,13 +152,18 @@ This is not specific to TotalReclaw -- any memory system that provides context t
 
 ## Troubleshooting
 
-### "MCP server not found"
+### "MCP server not found" or activation timeout
 
-Make sure Node.js 22+ is installed and `npx @totalreclaw/mcp-server` works from your terminal.
+Make sure Node.js 22+ is installed and `totalreclaw-mcp` is available:
+
+```bash
+npm install -g @totalreclaw/mcp-server
+which totalreclaw-mcp
+```
 
 ### "Registration failed"
 
-Check your internet connection. The setup wizard needs to reach `api.totalreclaw.xyz` to register.
+Check your internet connection. The setup tool needs to reach `api.totalreclaw.xyz` to register.
 
 ### "No memories found" on first recall
 
@@ -188,11 +171,11 @@ The first time you use TotalReclaw, there are no memories yet. Start a conversat
 
 ### Slow first response
 
-The embedding model (~600 MB) downloads on first use if it was not pre-downloaded during setup. This is a one-time cost. Subsequent runs use the cached model.
+The embedding model (~600 MB) downloads on first use. This is a one-time cost. Subsequent runs use the cached model.
 
-### Recovery phrase in credential vault
+### Agent uses built-in memory instead of TotalReclaw
 
-If IronClaw supports a credential vault, store `TOTALRECLAW_RECOVERY_PHRASE` there instead of in the MCP config. This ensures the phrase is never exposed to the LLM or WASM tools -- only the MCP server process can access it.
+IronClaw has its own `memory_write`/`memory_read` tools. If the agent uses those instead of TotalReclaw, tell it explicitly: "Use totalreclaw_remember instead of memory_write for all memory operations."
 
 ## Portability
 
@@ -208,5 +191,5 @@ Same phrase, same memories. Switch agents without losing anything.
 ## Learn more
 
 - [Getting Started Guide](beta-tester-guide.md) -- full reference with configuration details
-- [Architecture Deep Dive](../architecture.md) -- encryption, LSH, search, deduplication
 - [totalreclaw.xyz](https://totalreclaw.xyz) -- project homepage
+- [Pricing](https://totalreclaw.xyz/pricing/) -- free and Pro tier details

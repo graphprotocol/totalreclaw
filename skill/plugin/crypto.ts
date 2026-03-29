@@ -53,7 +53,10 @@ const KEY_LENGTH = 32;
 function isBip39Mnemonic(input: string): boolean {
   const words = input.trim().split(/\s+/);
   if (words.length !== 12 && words.length !== 24) return false;
-  return validateMnemonic(input.trim(), wordlist);
+  // Accept valid BIP-39 mnemonics OR phrases where all words are in the wordlist
+  // (LLMs sometimes generate phrases with valid words but invalid checksums)
+  if (validateMnemonic(input.trim(), wordlist)) return true;
+  return words.every(w => wordlist.includes(w));
 }
 
 /**

@@ -31,9 +31,9 @@ import { sha256 } from '@noble/hashes/sha2.js';
 
 const AUTH_KEY_INFO = 'totalreclaw-auth-key-v1';
 
-const DEFAULT_SERVER_URL = 'https://api.totalreclaw.xyz';
+export const DEFAULT_SERVER_URL = 'https://api.totalreclaw.xyz';
 const CREDENTIALS_DIR = path.join(os.homedir(), '.totalreclaw');
-const CREDENTIALS_PATH = path.join(CREDENTIALS_DIR, 'credentials.json');
+export const CREDENTIALS_PATH = path.join(CREDENTIALS_DIR, 'credentials.json');
 
 // ---------------------------------------------------------------------------
 // Key Derivation (BIP-39 path only -- matches plugin/crypto.ts)
@@ -97,7 +97,7 @@ interface RegisterResponse {
   user_id: string;
 }
 
-async function registerWithServer(
+export async function registerWithServer(
   serverUrl: string,
   authKeyHash: string,
   saltHex: string,
@@ -136,6 +136,7 @@ export interface SavedCredentials {
   userId: string;
   salt: string; // hex
   serverUrl: string;
+  mnemonic?: string;
 }
 
 export function saveCredentials(credentials: SavedCredentials, filePath?: string): void {
@@ -162,16 +163,12 @@ export function loadCredentials(filePath?: string): SavedCredentials {
 // Config Snippet
 // ---------------------------------------------------------------------------
 
-function printConfigSnippet(serverUrl: string): void {
+function printConfigSnippet(_serverUrl: string): void {
   const snippet = {
     mcpServers: {
       totalreclaw: {
         command: 'npx',
         args: ['@totalreclaw/mcp-server'],
-        env: {
-          TOTALRECLAW_RECOVERY_PHRASE: '<your-12-word-recovery-phrase>',
-          TOTALRECLAW_SERVER_URL: serverUrl,
-        },
       },
     },
   };
@@ -181,7 +178,7 @@ function printConfigSnippet(serverUrl: string): void {
   console.log('(Claude Desktop / Cursor / VS Code):');
   console.log('========================================\n');
   console.log(JSON.stringify(snippet, null, 2));
-  console.log('\nReplace <your-12-word-recovery-phrase> with your actual recovery phrase.');
+  console.log(`\nCredentials are loaded automatically from ${CREDENTIALS_PATH}.`);
   console.log('');
 }
 
@@ -296,11 +293,12 @@ export async function runSetup(): Promise<void> {
       userId,
       salt: saltHex,
       serverUrl,
+      mnemonic,
     };
 
     saveCredentials(credentials);
     console.log(`\nCredentials saved to ${CREDENTIALS_PATH}`);
-    console.log('(Mnemonic and keys are NOT stored -- only userId, salt, and serverUrl.)');
+    console.log('(Recovery phrase saved securely in credentials.json with owner-only permissions.)');
 
     // ── Step 6: Pre-download Embedding Model ────────────────────────────
 

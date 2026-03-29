@@ -24,6 +24,7 @@
  */
 
 import { MIGRATE_TOOL_DESCRIPTION } from '../prompts.js';
+import { getClientId } from '../client-id.js';
 
 export const migrateToolDefinition = {
   name: 'totalreclaw_migrate',
@@ -177,7 +178,7 @@ async function gqlQuery<T>(
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'X-TotalReclaw-Client': 'mcp-server',
+      'X-TotalReclaw-Client': getClientId(),
     };
     if (authKeyHex) headers['Authorization'] = `Bearer ${authKeyHex}`;
     const response = await fetch(endpoint, {
@@ -303,7 +304,7 @@ export async function checkBillingTier(
       headers: {
         'Authorization': `Bearer ${authKeyHex}`,
         'Content-Type': 'application/json',
-        'X-TotalReclaw-Client': 'mcp-server',
+        'X-TotalReclaw-Client': getClientId(),
       },
     });
 

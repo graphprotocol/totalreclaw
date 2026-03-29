@@ -24,6 +24,7 @@
  */
 
 import { getSubgraphConfig } from './store.js';
+import { getClientId } from '../client-id.js';
 
 export interface SubgraphSearchFact {
   id: string;
@@ -51,7 +52,7 @@ async function gqlQuery<T>(
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'X-TotalReclaw-Client': 'mcp-server',
+      'X-TotalReclaw-Client': getClientId(),
     };
     if (authKeyHex) headers['Authorization'] = `Bearer ${authKeyHex}`;
     const response = await fetch(endpoint, {

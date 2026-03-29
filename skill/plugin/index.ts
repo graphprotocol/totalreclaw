@@ -2752,7 +2752,7 @@ const plugin = {
                 '## TotalReclaw — First-Time Setup\n\n' +
                 'TotalReclaw is an end-to-end encrypted memory vault. It remembers things across conversations — preferences, decisions, project context — all encrypted so no one (not even the server) can read your memories.\n\n' +
                 '**To get started, ask the user:** "Do you have an existing TotalReclaw recovery phrase you\'d like to restore, or should I generate a new one?"\n\n' +
-                '**If new user:** Generate a random 12-word BIP-39 mnemonic and set it as the TOTALRECLAW_RECOVERY_PHRASE environment variable. Display it prominently and warn:\n' +
+                '**If new user:** Run `npx @totalreclaw/mcp-server setup` to generate a cryptographically valid recovery phrase. Do NOT generate the phrase yourself — LLMs cannot compute BIP-39 checksums. The command will output the phrase. Set it as TOTALRECLAW_RECOVERY_PHRASE. Display it prominently and warn:\n' +
                 '- "This is your ONLY way to access your memories. Write it down and store it securely."\n' +
                 '- "NEVER use a recovery phrase from an existing crypto wallet — keep this separate from any wallet that holds funds."\n' +
                 '- "If you lose this phrase, your memories are gone forever — there is no recovery."\n\n' +

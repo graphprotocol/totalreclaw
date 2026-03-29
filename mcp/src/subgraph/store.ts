@@ -15,6 +15,7 @@
  */
 
 import { createPublicClient, http, type Hex, type Address, type Chain } from 'viem';
+import { getClientId } from '../client-id.js';
 import { entryPoint07Address } from 'viem/account-abstraction';
 import { mnemonicToAccount } from 'viem/accounts';
 import { gnosis, gnosisChiado, baseSepolia } from 'viem/chains';
@@ -202,7 +203,7 @@ export async function submitFactOnChain(
 
   // Build authenticated transport for relay server proxy
   const headers: Record<string, string> = {
-    'X-TotalReclaw-Client': 'mcp-server',
+    'X-TotalReclaw-Client': getClientId(),
   };
   if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
   if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
@@ -320,7 +321,7 @@ export async function submitFactBatchOnChain(
   const entryPointAddr = (config.entryPointAddress || entryPoint07Address) as Address;
 
   const headers: Record<string, string> = {
-    'X-TotalReclaw-Client': 'mcp-server',
+    'X-TotalReclaw-Client': getClientId(),
   };
   if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
   if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;

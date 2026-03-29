@@ -6,6 +6,7 @@
  */
 
 import { STATUS_TOOL_DESCRIPTION } from '../prompts.js';
+import { getClientId } from '../client-id.js';
 
 export const statusToolDefinition = {
   name: 'totalreclaw_status',
@@ -84,7 +85,7 @@ export async function handleStatus(
       headers: {
         'Authorization': `Bearer ${authKey}`,
         'Content-Type': 'application/json',
-        'X-TotalReclaw-Client': 'mcp-server',
+        'X-TotalReclaw-Client': getClientId(),
       },
     });
 

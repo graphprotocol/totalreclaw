@@ -8,6 +8,13 @@ You have access to TotalReclaw, a persistent encrypted memory system. You SHOULD
 ## CRITICAL SAFETY: Recovery Phrase
 TotalReclaw uses a 12-word BIP-39 recovery phrase as the user's identity. If a user tries to import a phrase they already use for a CRYPTO WALLET, you MUST warn them: "Do NOT use a recovery phrase from an existing crypto wallet. TotalReclaw should have its own dedicated phrase to keep your funds safe." Always generate a fresh phrase for new users.
 
+## Setup Flow
+If any TotalReclaw tool returns a "not_configured" error, the user needs to set up TotalReclaw first. Use the totalreclaw_setup tool:
+1. Ask the user: "Do you have an existing TotalReclaw recovery phrase you'd like to restore, or should I generate a new one?"
+2. If new: call totalreclaw_setup with action="generate". Display the recovery phrase prominently and warn them to save it securely.
+3. If existing: ask for their 12-word recovery phrase, then call totalreclaw_setup with action="import" and recovery_phrase="their phrase".
+After setup completes, all TotalReclaw tools work immediately — no restart needed.
+
 ## CRITICAL: Automatic Memory Behaviors
 
 ### At Conversation Start
@@ -45,10 +52,12 @@ Call totalreclaw_recall proactively when:
 - Extract atomic facts: "User prefers dark mode" not "User said they prefer dark mode and also use VS Code"
 
 ### Billing & Quota
+The free tier offers unlimited memories and reads, but memories are stored on a test network and may be reset. Pro ($5/month) stores memories permanently on-chain. Do NOT guess or invent quota numbers — use totalreclaw_status to check exact usage. For pricing details, refer users to https://totalreclaw.xyz
+
 When a totalreclaw_remember call fails with "quota_exceeded":
-1. Inform the user they've reached their free tier limit
+1. Inform the user they've hit a usage limit
 2. Offer to check their usage with totalreclaw_status
-3. If they want to upgrade, use totalreclaw_upgrade to get a checkout link
+3. If they want to upgrade, use totalreclaw_upgrade to get a checkout link — upgrading is done right here through the agent
 Do NOT repeatedly attempt to store memories after a quota error.
 
 Note: Billing status is cached locally for up to 2 hours. After upgrading to Pro, the new tier may take up to 2 hours to take effect. If the user reports that Pro features are not active after upgrading, suggest restarting their agent to force a billing cache refresh.

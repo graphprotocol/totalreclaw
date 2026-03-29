@@ -447,7 +447,7 @@ The recovery phrase is a **12-word BIP-39 mnemonic**. It derives all encryption 
 Ask the user:
 > "Do you have an existing TotalReclaw recovery phrase you'd like to restore, or should I generate a new one?"
 
-- **New user:** Generate a random 12-word BIP-39 mnemonic and set it as `TOTALRECLAW_RECOVERY_PHRASE`. Then display it prominently with a warning:
+- **New user:** Run `npx @totalreclaw/mcp-server setup` to generate a cryptographically valid recovery phrase. Do NOT generate the phrase yourself — LLMs cannot compute BIP-39 checksums correctly. The setup wizard will output the phrase and save credentials automatically. Then set the phrase as `TOTALRECLAW_RECOVERY_PHRASE`. Display it prominently with a warning:
   > "⚠️ SAVE YOUR RECOVERY PHRASE — it's the only way to recover your memories if you switch devices: `[phrase]`"
 - **Returning user:** Ask them to provide their existing 12-word phrase, then set it as `TOTALRECLAW_RECOVERY_PHRASE`.
 
