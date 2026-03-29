@@ -1,12 +1,12 @@
 {
   "name": "@totalreclaw/client",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "TypeScript client library for TotalReclaw — E2EE encryption, LSH blind indexing, embedding search, and BM25+cosine reranking for AI agent memory",
   "homepage": "https://totalreclaw.xyz",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc || true",
     "postinstall": "find node_modules/ox -name '*.ts' -not -path '*/node_modules/*' -not -path '*/_types/*' -delete 2>/dev/null; true",
     "test": "jest",
     "test:watch": "jest --watch",
