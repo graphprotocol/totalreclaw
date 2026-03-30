@@ -284,3 +284,73 @@ pub struct SubmitResult {
     pub user_op_hash: String,
     pub success: bool,
 }
+
+// ---------------------------------------------------------------------------
+// Smart Account address derivation (CREATE2 via factory eth_call)
+// ---------------------------------------------------------------------------
+
+/// SimpleAccountFactory address (v0.7, same on all EVM chains).
+const SIMPLE_ACCOUNT_FACTORY: &str = "0x91E60e0613810449d098b0b5Ec8b51A0FE8c8985";
+
+/// Derive the Smart Account address by calling getAddress(owner, 0) on the factory.
+///
+/// Uses Base Sepolia public RPC. The factory returns the CREATE2 deterministic address.
+pub async fn resolve_smart_account(eoa_address: &str) -> Result<String> {
+    // ABI-encode: getAddress(address,uint256)
+    // keccak256("getAddress(address,uint256)")[:4] = 0x8cb84e18
+    let selector = "8cb84e18";
+    let owner = eoa_address
+        .trim_start_matches("0x")
+        .to_lowercase();
+    let owner_padded = format!("{:0>64}", owner);
+    let salt_padded = "0".repeat(64);
+    let calldata = format!("0x{}{}{}", selector, owner_padded, salt_padded);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://sepolia.base.org")
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "eth_call",
+            "params": [
+                {"to": SIMPLE_ACCOUNT_FACTORY, "data": calldata},
+                "latest"
+            ],
+            "id": 1
+        }))
+        .send()
+        .await
+        .map_err(|e| Error::Http(e.to_string()))?;
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| Error::Http(e.to_string()))?;
+
+    let result = body["result"]
+        .as_str()
+        .unwrap_or("");
+
+    if result.len() < 42 {
+        return Err(Error::Http("Factory returned invalid address".into()));
+    }
+
+    // Result is ABI-encoded address (32 bytes, last 20 bytes = 40 hex chars)
+    let address = format!("0x{}", &result[result.len() - 40..]);
+    Ok(address.to_lowercase())
+}
+
+/// Derive EOA address from BIP-39 mnemonic via BIP-44 path m/44'/60'/0'/0/0.
+///
+/// This is a simplified derivation for the test harness. In production,
+/// the full HD wallet derivation should be used.
+pub fn derive_eoa_address(mnemonic: &str) -> Result<String> {
+    // Use the BIP-39 seed to derive the Ethereum EOA via BIP-44
+    // For now, shell out to a helper or use a simplified approach.
+    // The actual derivation requires: seed → HMAC-SHA512 → secp256k1 → keccak256
+    // We'll use the coin_bip39 + k256 crates in production.
+    // For the test, we derive via Python helper.
+    Err(Error::Http(
+        "EOA derivation not yet implemented natively — use Python helper or pass address directly".into(),
+    ))
+}

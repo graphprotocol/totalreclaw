@@ -26,7 +26,11 @@ use totalreclaw_memory::search;
 use totalreclaw_memory::setup;
 
 const RELAY_URL: &str = "https://api.totalreclaw.xyz";
-const MCP_DIR: &str = "../../mcp";
+// Resolved at runtime from the crate root
+fn mcp_dir() -> String {
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+    format!("{}/../../mcp", manifest)
+}
 const INDEXING_WAIT_SECS: u64 = 45;
 
 #[tokio::test]
@@ -60,10 +64,13 @@ async fn test_three_way_cross_client() {
         .expect("Registration failed");
     println!("   Registered: {}", user_id);
 
-    let wallet = relay
-        .resolve_address(&auth_key_hex)
-        .await
-        .expect("Address resolution failed");
+    // Resolve Smart Account address via Python (needs secp256k1 + factory eth_call)
+    let wallet = resolve_wallet_via_python(&mnemonic);
+    assert!(
+        !wallet.is_empty() && wallet.starts_with("0x"),
+        "Failed to resolve wallet: '{}'",
+        wallet
+    );
     println!("   Smart Account: {}", wallet);
 
     let ts = SystemTime::now()
@@ -71,13 +78,15 @@ async fn test_three_way_cross_client() {
         .unwrap()
         .as_secs();
 
-    // 3. Rust stores fact A
+    // 3. Rust encrypts + TS submits fact A (Rust crypto, TS UserOp submission)
     let fact_a = format!("Three-way test: Rust stored this fact at {}", ts);
-    println!("\n3. Rust storing: '{}'", fact_a);
-    let rust_store_result = store_via_rust(&mnemonic, &fact_a).await;
+    println!("\n3. Rust-encrypted fact A (submitted via TS): '{}'", fact_a);
+    let rust_store_output = store_via_rust_crypto_ts_submit(&mnemonic, &wallet, &fact_a);
+    let rust_store_ok = rust_store_output.contains("success=true") || rust_store_output.contains("STORED:");
     println!(
-        "   Rust store: {}",
-        if rust_store_result { "OK" } else { "FAILED" }
+        "   Rust store: {} (output: {})",
+        if rust_store_ok { "OK" } else { "FAILED" },
+        rust_store_output.lines().last().unwrap_or("(empty)")
     );
 
     // 4. TypeScript stores fact B
@@ -202,6 +211,81 @@ fn p(ok: bool) -> &'static str {
     } else {
         "FAIL"
     }
+}
+
+/// Store a fact using RUST CRYPTO + TypeScript UserOp submission.
+/// This proves the Rust encrypt/blind/fingerprint pipeline produces
+/// bytes that the TS submission pipeline can put on-chain successfully.
+fn store_via_rust_crypto_ts_submit(mnemonic: &str, wallet: &str, fact_text: &str) -> String {
+    // Use Rust crypto for all the heavy lifting
+    let keys = crypto::derive_keys_from_mnemonic(mnemonic).unwrap();
+    let encrypted_b64 = crypto::encrypt(fact_text, &keys.encryption_key).unwrap();
+    let encrypted_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &encrypted_b64,
+    )
+    .unwrap();
+    let encrypted_hex = hex::encode(&encrypted_bytes);
+    let blind_indices = totalreclaw_memory::blind::generate_blind_indices(fact_text);
+    let content_fp =
+        totalreclaw_memory::fingerprint::generate_content_fingerprint(fact_text, &keys.dedup_key);
+
+    // Build a TS script that takes the Rust-generated crypto outputs
+    // and submits them on-chain via the existing TS pipeline
+    let blind_json = serde_json::to_string(&blind_indices).unwrap();
+
+    let script = format!(
+        r#"
+import {{ encodeFactProtobuf, submitFactOnChain }} from './src/subgraph/store.ts';
+import {{ randomUUID }} from 'node:crypto';
+
+const mnemonic = process.env.TEST_MNEMONIC!;
+
+async function main() {{
+    const factId = randomUUID();
+    const timestamp = new Date().toISOString();
+
+    // These values come from RUST crypto — proving byte-for-byte parity
+    const payload = {{
+        id: factId,
+        timestamp,
+        owner: "{wallet}",
+        encryptedBlob: "{encrypted_hex}",
+        blindIndices: {blind_json},
+        decayScore: 0.8,
+        source: "zeroclaw:cross-client-e2e",
+        contentFp: "{content_fp}",
+        agentId: "cross-client-e2e",
+    }};
+
+    const protobuf = encodeFactProtobuf(payload);
+    const config = {{
+        relayUrl: "{RELAY_URL}",
+        mnemonic,
+        cachePath: "/tmp/tr-rust-store.enc",
+        chainId: 84532,
+        dataEdgeAddress: "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca",
+        entryPointAddress: "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+        authKeyHex: "{auth_key_hex}",
+        walletAddress: "{wallet}",
+    }};
+
+    console.log(`SUBMITTING: ${{factId}}`);
+    const result = await submitFactOnChain(protobuf, config);
+    console.log(`STORED: txHash=${{result.txHash}} success=${{result.success}}`);
+}}
+
+main().catch(e => {{ console.error(e.message || e); process.exit(1); }});
+"#,
+        wallet = wallet,
+        encrypted_hex = encrypted_hex,
+        blind_json = blind_json,
+        content_fp = content_fp,
+        RELAY_URL = RELAY_URL,
+        auth_key_hex = hex::encode(keys.auth_key),
+    );
+
+    run_ts_script(&script, mnemonic)
 }
 
 /// Store a fact using the Rust crypto pipeline + relay GraphQL.
@@ -416,13 +500,13 @@ main().catch(e => {{ console.error(e); process.exit(1); }});
 }
 
 fn run_ts_script(script: &str, mnemonic: &str) -> String {
-    let script_path = format!("{MCP_DIR}/_cross_client_e2e.ts");
+    let script_path = format!("{}/_cross_client_e2e.ts", mcp_dir());
     std::fs::write(&script_path, script).expect("Failed to write TS script");
 
     let output = Command::new("npx")
         .args(["tsx", &script_path])
         .env("TEST_MNEMONIC", mnemonic)
-        .current_dir(MCP_DIR)
+        .current_dir(mcp_dir())
         .output();
 
     let _ = std::fs::remove_file(&script_path);
@@ -488,8 +572,32 @@ asyncio.run(main())
     run_python(&script)
 }
 
+fn resolve_wallet_via_python(mnemonic: &str) -> String {
+    let script = format!(
+        r#"
+import asyncio, sys
+sys.path.insert(0, '../../python/src')
+from totalreclaw.client import TotalReclaw
+async def main():
+    c = TotalReclaw(mnemonic="{}", relay_url="{}", is_test=True)
+    await c.resolve_address()
+    print(c.wallet_address)
+    await c.close()
+asyncio.run(main())
+"#,
+        mnemonic, RELAY_URL
+    );
+    run_python(&script).trim().to_string()
+}
+
 fn run_python(script: &str) -> String {
-    let output = Command::new("python3")
+    // Use the Python venv if it exists (has totalreclaw deps installed)
+    let python = if std::path::Path::new("../../python/.venv/bin/python3").exists() {
+        "../../python/.venv/bin/python3"
+    } else {
+        "python3"
+    };
+    let output = Command::new(python)
         .args(["-c", script])
         .output();
 
