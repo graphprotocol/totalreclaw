@@ -191,6 +191,39 @@ pub async fn count_facts(relay: &RelayClient, owner: &str) -> Result<usize> {
     Ok(data.facts.map(|f| f.len()).unwrap_or(0))
 }
 
+/// Search for a fact by content fingerprint (exact dedup check).
+pub async fn search_by_fingerprint(
+    relay: &RelayClient,
+    owner: &str,
+    content_fp: &str,
+) -> Result<Option<SubgraphFact>> {
+    const FP_QUERY: &str = r#"
+      query FactByFingerprint($owner: Bytes!, $contentFp: String!) {
+        facts(
+          where: { owner: $owner, contentFp: $contentFp, isActive: true }
+          first: 1
+        ) {
+          id
+          encryptedBlob
+          isActive
+        }
+      }
+    "#;
+
+    let variables = serde_json::json!({
+        "owner": owner,
+        "contentFp": content_fp,
+    });
+
+    #[derive(Deserialize)]
+    struct FpData {
+        facts: Option<Vec<SubgraphFact>>,
+    }
+
+    let data: FpData = relay.graphql(FP_QUERY, variables).await?;
+    Ok(data.facts.and_then(|f| f.into_iter().next()))
+}
+
 /// Decode an encrypted blob from subgraph hex format to base64 for decryption.
 ///
 /// Subgraph returns `0x`-prefixed hex. Strip prefix, decode hex to bytes, base64-encode.

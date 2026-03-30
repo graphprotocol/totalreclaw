@@ -51,32 +51,12 @@ pub struct DerivedKeys {
 /// Uses PBKDF2-HMAC-SHA512 with passphrase="mnemonic" and 2048 iterations,
 /// matching the BIP-39 spec and `@scure/bip39`'s `mnemonicToSeedSync`.
 fn mnemonic_to_seed(mnemonic: &str) -> Result<[u8; 64]> {
-    // Validate words are in BIP-39 English wordlist
+    // Validate BIP-39 mnemonic (strict: checksum must be valid).
+    // We never accept LLM-generated phrases — only proper BIP-39 mnemonics.
     let trimmed = mnemonic.trim();
-
-    // Try strict parsing first (validates checksum)
-    match bip39::Mnemonic::parse(trimmed) {
-        Ok(_) => {}
-        Err(_) => {
-            // Lenient: check each word is in the wordlist
-            let words: Vec<&str> = trimmed.split_whitespace().collect();
-            if words.len() != 12 && words.len() != 24 {
-                return Err(Error::InvalidMnemonic(format!(
-                    "expected 12 or 24 words, got {}",
-                    words.len()
-                )));
-            }
-            let wordlist = bip39::Language::English.word_list();
-            for word in &words {
-                if !wordlist.contains(word) {
-                    return Err(Error::InvalidMnemonic(format!(
-                        "word '{}' not in BIP-39 English wordlist",
-                        word
-                    )));
-                }
-            }
-        }
-    }
+    bip39::Mnemonic::parse(trimmed).map_err(|e| {
+        Error::InvalidMnemonic(format!("invalid BIP-39 mnemonic: {}", e))
+    })?;
 
     // PBKDF2-HMAC-SHA512: password = mnemonic (NFKD normalized), salt = "mnemonic", 2048 rounds
     // This matches @scure/bip39's mnemonicToSeedSync exactly.

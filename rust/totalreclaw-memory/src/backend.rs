@@ -362,4 +362,14 @@ impl TotalReclawMemory {
     pub async fn health_check(&self) -> bool {
         self.relay.health_check().await.unwrap_or(false)
     }
+
+    /// Billing status — tier, usage, limits.
+    pub async fn status(&self) -> Result<crate::relay::BillingStatus> {
+        self.relay.billing_status().await
+    }
+
+    /// Export all memories as plaintext (decrypted).
+    pub async fn export(&self) -> Result<Vec<MemoryEntry>> {
+        self.list(None, None).await
+    }
 }

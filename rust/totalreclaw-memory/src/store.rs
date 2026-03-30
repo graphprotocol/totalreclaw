@@ -12,19 +12,21 @@ use crate::fingerprint;
 use crate::lsh::LshHasher;
 use crate::protobuf::{self, FactPayload};
 use crate::relay::RelayClient;
+use crate::search;
 use crate::Result;
 
 /// Store a fact on-chain via the relay.
 ///
 /// Full pipeline:
-/// 1. Generate embedding
-/// 2. Encrypt content (AES-256-GCM)
-/// 3. Encrypt embedding
-/// 4. Generate blind indices (word + stem hashes)
-/// 5. Generate LSH bucket hashes from embedding
-/// 6. Generate content fingerprint (dedup)
-/// 7. Encode protobuf
-/// 8. Submit via relay
+/// 1. Check for near-duplicates (content fingerprint)
+/// 2. Generate embedding
+/// 3. Encrypt content (AES-256-GCM)
+/// 4. Encrypt embedding
+/// 5. Generate blind indices (word + stem hashes)
+/// 6. Generate LSH bucket hashes from embedding
+/// 7. Generate content fingerprint (dedup)
+/// 8. Encode protobuf
+/// 9. Submit via relay (supersede duplicate if found)
 pub async fn store_fact(
     content: &str,
     source: &str,
@@ -33,7 +35,19 @@ pub async fn store_fact(
     embedding_provider: &dyn EmbeddingProvider,
     relay: &RelayClient,
 ) -> Result<String> {
-    // 1. Generate embedding
+    // 1. Content fingerprint (used for exact dedup AND in the protobuf)
+    let content_fp = fingerprint::generate_content_fingerprint(content, &keys.dedup_key);
+
+    // 2. Check for near-duplicate: search by content fingerprint
+    //    If an existing fact has the same fingerprint, tombstone it (supersede).
+    if let Ok(existing) = search::search_by_fingerprint(relay, relay.wallet_address(), &content_fp).await {
+        if let Some(dup) = existing {
+            // Exact duplicate found — supersede it with a tombstone
+            let _ = store_tombstone(&dup.id, relay).await;
+        }
+    }
+
+    // 3. Generate embedding
     let embedding = embedding_provider.embed(content).await?;
 
     // 2. Encrypt content
@@ -56,9 +70,6 @@ pub async fn store_fact(
     let embedding_f64: Vec<f64> = embedding.iter().map(|&f| f as f64).collect();
     let lsh_buckets = lsh_hasher.hash(&embedding_f64)?;
     blind_indices.extend(lsh_buckets.into_iter());
-
-    // 6. Content fingerprint
-    let content_fp = fingerprint::generate_content_fingerprint(content, &keys.dedup_key);
 
     // 7. Build fact payload
     let fact_id = uuid::Uuid::now_v7().to_string();

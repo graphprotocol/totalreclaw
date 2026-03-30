@@ -25,7 +25,8 @@ use totalreclaw_memory::crypto;
 use totalreclaw_memory::search;
 use totalreclaw_memory::setup;
 
-const RELAY_URL: &str = "https://api.totalreclaw.xyz";
+/// Tests MUST hit staging, NEVER production.
+const RELAY_URL: &str = "https://api-staging.totalreclaw.xyz";
 // Resolved at runtime from the crate root
 fn mcp_dir() -> String {
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());

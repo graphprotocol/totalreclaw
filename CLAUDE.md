@@ -220,10 +220,9 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | Hermes no client batching | LOW | Python client submits facts one-by-one (no ERC-4337 executeBatch). Acceptable for extraction volumes (max 15 facts). |
 | Hermes no store-time dedup | LOW | Python client does not check for near-duplicates before storing. Server-side content fingerprint still prevents exact duplicates. |
 | Hermes heuristic extraction only | MEDIUM | Hermes plugin uses regex-based extraction (no LLM call). Sufficient for preferences/facts/decisions but less comprehensive than LLM-guided extraction. |
-| ZeroClaw no import/migrate/upgrade/status | MEDIUM | Rust crate implements core Memory trait (store/recall/forget/list/count) but not import, migrate, upgrade, or billing status tools. |
+| ZeroClaw no import/migrate/upgrade | LOW | Rust crate implements core Memory trait + status + export but not import adapters, migrate, or upgrade tools. |
 | ZeroClaw no client batching | LOW | Rust crate submits facts one-by-one. Acceptable for ZeroClaw's extraction volumes. |
-| ZeroClaw no store-time dedup | LOW | Server-side content fingerprint prevents exact duplicates. Near-duplicate detection not yet implemented. |
-| ZeroClaw UserOp submission | MEDIUM | Rust crate uses simplified relay submission. Full ERC-4337 UserOp construction (viem/permissionless equivalent) not yet implemented natively in Rust. |
+| ZeroClaw UserOp submission | LOW | Rust crate uses TS bridge for UserOp submission. Native Rust alternative available via Alloy (`alloy-rpc-types-eth::erc4337::UserOperation`). |
 
 ---
 
@@ -342,12 +341,21 @@ Full CI/CD pipeline documented in `totalreclaw-internal/docs/ci-cd-pipeline.md`.
 
 For deployment procedures, invoke the `deploy-totalreclaw` skill.
 
+### Relay Environments
+
+| Environment | Railway Service | URL | Deploys |
+|-------------|----------------|-----|---------|
+| **Staging** | `totalreclaw` | `https://api-staging.totalreclaw.xyz` | Auto on push to `main` |
+| **Production** | `totalreclaw-production` | `https://api.totalreclaw.xyz` | Manual via `railway up -s totalreclaw-production -d` |
+
+**IMPORTANT: All tests (E2E, integration, smoke, cross-client) MUST hit the staging relay (`api-staging.totalreclaw.xyz`), NEVER production.** Both environments use Base Sepolia testnet for free-tier users. Test registrations send `X-TotalReclaw-Test: true` header and show as `[TEST]` in Telegram notifications.
+
 ### Relay Quick Reference
 
 ```bash
 # Staging deploys automatically on push to main
 # Run smoke tests after staging deploys:
-RELAY_URL=https://api.totalreclaw.xyz npx tsx tests/e2e-relay/smoke-test.ts
+RELAY_URL=https://api-staging.totalreclaw.xyz npx tsx tests/e2e-relay/smoke-test.ts
 
 # Promote to production (after smoke tests pass):
 cd ../totalreclaw-relay && railway up -s totalreclaw-production -d
@@ -362,7 +370,7 @@ git checkout main
 
 ```bash
 # 1. Tests pass: cd client && npm test
-# 2. E2E against staging: RELAY_URL=https://api.totalreclaw.xyz npx tsx tests/e2e-relay/smoke-test.ts
+# 2. E2E against staging: RELAY_URL=https://api-staging.totalreclaw.xyz npx tsx tests/e2e-relay/smoke-test.ts
 # 3. Version bump + publish: cd client && npm version patch && npm run build && npm publish
 # 4. Verify: ./tests/verify-publish.sh
 ```
