@@ -31,6 +31,8 @@ pub struct Candidate {
     pub text: String,
     /// Embedding vector of the fact.
     pub embedding: Vec<f32>,
+    /// Timestamp (passed through to results).
+    pub timestamp: String,
 }
 
 /// A reranked result with scores.
@@ -46,6 +48,8 @@ pub struct RankedResult {
     pub bm25_score: f64,
     /// Cosine similarity score.
     pub cosine_score: f64,
+    /// Timestamp (passed through from candidate).
+    pub timestamp: String,
 }
 
 /// Rerank candidates using BM25 + Cosine + RRF fusion.
@@ -124,6 +128,7 @@ pub fn rerank(
             score: final_score,
             bm25_score: bm25_scores[i],
             cosine_score: cosine_scores[i],
+            timestamp: candidate.timestamp.clone(),
         });
     }
 
@@ -255,6 +260,7 @@ mod tests {
                 id: format!("fact_{}", i),
                 text: format!("fact number {} about dark mode preferences", i),
                 embedding: vec![i as f32 / 10.0; 4],
+                timestamp: String::new(),
             })
             .collect();
 

@@ -11,14 +11,28 @@
 //! - [`lsh`] — Locality-sensitive hashing (random hyperplane LSH)
 //! - [`embedding`] — Embedding pipeline (Local ONNX, Ollama, ZeroClaw, LLM provider)
 //! - [`reranker`] — BM25 + Cosine + RRF fusion reranker
+//! - [`relay`] — HTTP client for TotalReclaw relay server
+//! - [`protobuf`] — Minimal protobuf encoder for fact payloads
+//! - [`store`] — Encrypt → index → encode → submit pipeline
+//! - [`search`] — Subgraph query → decrypt → rerank pipeline
+//! - [`backend`] — ZeroClaw Memory trait implementation
+//! - [`setup`] — First-use setup wizard (credentials + embedding config)
 
+pub mod backend;
 pub mod blind;
 pub mod crypto;
 pub mod embedding;
 pub mod fingerprint;
 pub mod lsh;
+pub mod protobuf;
+pub mod relay;
 pub mod reranker;
+pub mod search;
+pub mod setup;
 pub mod stemmer;
+pub mod store;
+
+pub use backend::{MemoryCategory, MemoryEntry, TotalReclawConfig, TotalReclawMemory};
 
 /// Crate-level error type.
 #[derive(Debug, thiserror::Error)]
