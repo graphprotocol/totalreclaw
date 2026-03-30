@@ -22,6 +22,13 @@ rand = "0.8"
 bip39 = "2"
 pbkdf2 = { version = "0.12", features = ["hmac"] }
 
+# Ethereum / ERC-4337
+alloy-primitives = "1"
+alloy-sol-types = "1"
+k256 = { version = "0.13", features = ["ecdsa"] }
+tiny-keccak = { version = "2", features = ["keccak"] }
+coins-bip32 = "0.12"
+
 # Encoding
 base64 = "0.22"
 hex = "0.4"
@@ -34,7 +41,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Async
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["rt", "macros", "time"] }
 
 # HTTP
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
