@@ -70,6 +70,11 @@ Managed Service uses a **dual-chain model**: Free tier stores on **Base Sepolia*
 ├── skill-nanoclaw/        # NanoClaw skill package + MCP server
 │   ├── src/               # Hooks, extraction logic
 │   └── mcp/               # NanoClaw agent-runner (spawns @totalreclaw/mcp-server)
+├── python/                # Python client library + Hermes Agent plugin
+│   ├── src/totalreclaw/   # Client library (crypto, LSH, relay, reranker, embedding)
+│   └── src/totalreclaw/hermes/  # Hermes Agent plugin (hooks, tools, state)
+├── rust/                  # Rust crate for ZeroClaw memory backend
+│   └── totalreclaw-memory/  # Native Rust implementation (crypto, relay, Memory trait)
 ├── mcp/                   # Generic MCP server (for Claude Desktop, etc.)
 ├── contracts/             # Solidity smart contracts (EventfulDataEdge, Paymaster)
 ├── subgraph/              # Graph Node indexer (AssemblyScript mappings)
@@ -127,56 +132,59 @@ Specs are organized by product area under `docs/specs/`:
 
 ### Platform Support
 
-Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw (`skill-nanoclaw/`), and IronClaw (via MCP server).
+Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw (`skill-nanoclaw/`), Hermes Agent (`python/`), IronClaw (via MCP server), and ZeroClaw (`rust/totalreclaw-memory/`).
 
-| Feature | OpenClaw Plugin | MCP Server | NanoClaw | IronClaw | Notes |
-|---------|:-:|:-:|:-:|:-:|-------|
-| **Core Tools** | | | | | |
-| `totalreclaw_remember` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | |
-| `totalreclaw_recall` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | |
-| `totalreclaw_forget` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | |
-| `totalreclaw_export` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | |
-| `totalreclaw_status` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | |
-| `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Mem0, MCP Memory, ChatGPT, Claude adapters |
-| `totalreclaw_import` | -- | Yes | Yes (via MCP) | Yes (via MCP) | JSON/Markdown re-import (MCP only) |
-| `totalreclaw_upgrade` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Stripe checkout URL |
-| `totalreclaw_migrate` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Testnet-to-mainnet migration after Pro upgrade |
-| `totalreclaw_consolidate` | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Self-hosted only (no batch delete on managed service) |
-| **Automatic Memory** | | | | | |
-| Auto-search (before_agent_start) | Yes | -- | Yes (hook) | -- | MCP/IronClaw have no lifecycle hooks; MCP prompts guide agent to recall at conversation start |
-| Auto-extract (agent_end) | Yes | -- | Yes (hook) | -- | MCP relies on host agent; IronClaw can use routines |
-| Pre-compaction flush | Yes | -- | Yes (hook) | -- | |
-| Pre-reset flush | Yes | -- | -- | -- | OpenClaw only |
-| CLAUDE.md sync | -- | -- | Yes | -- | NanoClaw syncs high-importance facts |
-| Routine-based extraction | -- | -- | -- | Yes (cron) | IronClaw routines engine; see ironclaw-setup.md |
-| **Extraction** | | | | | |
-| Expanded memory types (7 categories) | Yes | Yes (via prompt) | Yes | Yes (via prompt) | fact, preference, decision, episodic, goal, context, summary |
-| Decision reasoning extraction | Yes | Yes (via prompt) | Yes | Yes (via prompt) | Extraction prompts require "chose X because Y" |
-| **Dedup** | | | | | |
-| Content fingerprint (exact) | Yes | Yes | Yes | Yes (via MCP) | Server-side HMAC-SHA256 |
-| Within-batch semantic dedup | Yes | -- | -- | -- | Cosine >= 0.9, during extraction |
-| Store-time near-duplicate | Yes | Yes | Yes (via MCP) | Yes (via MCP) | `consolidation.ts` — both plugin and MCP |
-| LLM-guided dedup (ADD/UPDATE/DELETE) | Yes (Pro) | -- | Yes | -- | OpenClaw + NanoClaw extraction prompts |
-| Bulk consolidation tool | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Self-hosted only (no batch delete on managed service) |
-| **Pro Tier Gating** | | | | | |
-| Feature gating via billing cache | Yes | -- | Yes | -- | Server returns `features` dict, plugin/skill gates client-side |
-| Server-side extraction config | Yes | -- | Yes | -- | Relay returns `extraction_interval` + `max_facts_per_extraction` in billing status |
-| Unified extraction interval (3 turns) | Yes | -- | Yes | -- | Server-tunable via relay config (no npm publish needed) |
-| Max facts per extraction | Yes | -- | Yes | -- | Server-tunable via relay config (default 15) |
-| Dual-chain routing | -- | -- | -- | -- | Relay-side: routes to Base Sepolia (free) or Gnosis mainnet (pro) |
-| **Batching** | | | | | |
-| Client batching (multi-call UserOps) | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Wired into extraction loops — batch up to 15 facts per UserOp |
-| **Billing** | | | | | |
-| Quota warnings (>80%) | Yes | -- | Yes | -- | Injected via before_agent_start hook |
-| 403 handling + cache invalidation | Yes | Yes | Yes | Yes (via MCP) | |
-| **Search Optimizations** | | | | | |
-| Hot cache + two-tier search | Yes (managed) | -- | -- | -- | Skips remote query if cached query similar |
-| Dynamic candidate pool sizing | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Server-configurable via billing features; env overrides `CANDIDATE_POOL_MAX_FREE`/`CANDIDATE_POOL_MAX_PRO` |
-| Server-side candidate pool | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Relay computes `max_candidate_pool` from vault size + tier; clients read from billing cache with local fallback |
-| BM25 + Cosine + RRF reranking | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Intent-weighted |
-| **Admin & Analytics** | | | | | |
-| X-TotalReclaw-Client header | Yes | Yes | Yes (via MCP) | Yes (via MCP) | Sent on every relay request |
-| Admin dashboard | -- | -- | -- | -- | Admin-only (relay service), not a client feature |
+| Feature | OpenClaw Plugin | MCP Server | NanoClaw | Hermes | IronClaw | ZeroClaw | Notes |
+|---------|:-:|:-:|:-:|:-:|:-:|:-:|-------|
+| **Core Tools** | | | | | | | |
+| `totalreclaw_remember` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (via Memory trait) | |
+| `totalreclaw_recall` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (via Memory trait) | |
+| `totalreclaw_forget` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (via Memory trait) | |
+| `totalreclaw_export` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (via Memory trait) | |
+| `totalreclaw_status` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | -- | |
+| `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Mem0, MCP Memory, ChatGPT, Claude adapters |
+| `totalreclaw_import` | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | JSON/Markdown re-import (MCP only) |
+| `totalreclaw_upgrade` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Stripe checkout URL |
+| `totalreclaw_migrate` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Testnet-to-mainnet migration after Pro upgrade |
+| `totalreclaw_consolidate` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Self-hosted only (no batch delete on managed service) |
+| **Automatic Memory** | | | | | | | |
+| Auto-search (before_agent_start) | Yes | -- | Yes (hook) | Yes (pre_llm_call) | -- | Yes (Memory trait) | ZeroClaw calls recall() at conversation start |
+| Auto-extract (agent_end) | Yes | -- | Yes (hook) | Yes (post_llm_call) | -- | Yes (Memory trait) | ZeroClaw consolidation calls store() |
+| Pre-compaction flush | Yes | -- | Yes (hook) | -- | -- | -- | Hermes has no compaction hook |
+| Pre-reset flush | Yes | -- | -- | -- | -- | -- | OpenClaw only |
+| Session-end flush | -- | -- | -- | Yes (on_session_end) | -- | -- | Hermes plugin flushes unprocessed messages |
+| CLAUDE.md sync | -- | -- | Yes | -- | -- | -- | NanoClaw syncs high-importance facts |
+| Routine-based extraction | -- | -- | -- | -- | Yes (cron) | -- | IronClaw routines engine; see ironclaw-setup.md |
+| Decay handling | -- | -- | -- | -- | -- | Yes (via ZeroClaw) | ZeroClaw applies 7-day half-life at retrieval time |
+| Conflict resolution | -- | -- | -- | -- | -- | Yes (via ZeroClaw) | ZeroClaw checks semantic similarity before storing Core |
+| **Extraction** | | | | | | | |
+| Expanded memory types (7 categories) | Yes | Yes (via prompt) | Yes | Yes (heuristic) | Yes (via prompt) | Yes (category mapping) | fact, preference, decision, episodic, goal, context, summary |
+| Decision reasoning extraction | Yes | Yes (via prompt) | Yes | Yes (heuristic) | Yes (via prompt) | Yes (via ZeroClaw) | Extraction prompts require "chose X because Y" |
+| **Dedup** | | | | | | |
+| Content fingerprint (exact) | Yes | Yes | Yes | Yes | Yes (via MCP) | Server-side HMAC-SHA256 |
+| Within-batch semantic dedup | Yes | -- | -- | -- | -- | Cosine >= 0.9, during extraction |
+| Store-time near-duplicate | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | `consolidation.ts` — both plugin and MCP |
+| LLM-guided dedup (ADD/UPDATE/DELETE) | Yes (Pro) | -- | Yes | -- | -- | OpenClaw + NanoClaw extraction prompts |
+| Bulk consolidation tool | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Self-hosted only (no batch delete on managed service) |
+| **Pro Tier Gating** | | | | | | |
+| Feature gating via billing cache | Yes | -- | Yes | Yes | -- | Server returns `features` dict, plugin/skill gates client-side |
+| Server-side extraction config | Yes | -- | Yes | -- | -- | Relay returns `extraction_interval` + `max_facts_per_extraction` in billing status |
+| Unified extraction interval (3 turns) | Yes | -- | Yes | Yes | -- | Server-tunable via relay config (no npm publish needed) |
+| Max facts per extraction | Yes | -- | Yes | Yes | -- | Server-tunable via relay config (default 15) |
+| Dual-chain routing | -- | -- | -- | -- | -- | Relay-side: routes to Base Sepolia (free) or Gnosis mainnet (pro) |
+| **Batching** | | | | | | |
+| Client batching (multi-call UserOps) | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Hermes stores facts one-by-one (no ERC-4337 batch support in Python) |
+| **Billing** | | | | | | |
+| Quota warnings (>80%) | Yes | -- | Yes | Yes | -- | Injected via on_session_start hook |
+| 403 handling + cache invalidation | Yes | Yes | Yes | -- | Yes (via MCP) | |
+| **Search Optimizations** | | | | | | |
+| Hot cache + two-tier search | Yes (managed) | -- | -- | -- | -- | Skips remote query if cached query similar |
+| Dynamic candidate pool sizing | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Server-configurable via billing features; env overrides `CANDIDATE_POOL_MAX_FREE`/`CANDIDATE_POOL_MAX_PRO` |
+| Server-side candidate pool | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Relay computes `max_candidate_pool` from vault size + tier; clients read from billing cache with local fallback |
+| BM25 + Cosine + RRF reranking | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Intent-weighted |
+| **Admin & Analytics** | | | | | | |
+| X-TotalReclaw-Client header | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Sent on every relay request |
+| Admin dashboard | -- | -- | -- | -- | -- | Admin-only (relay service), not a client feature |
 
 ### Storage Mode Support
 
@@ -208,6 +216,14 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | IronClaw no lifecycle hooks | By design | IronClaw uses routines engine (cron/event-driven) instead of lifecycle hooks. Auto-extraction requires routine setup. Documented in ironclaw-setup.md. |
 | Export/import not on managed service (MCP) | LOW | MCP server's export and import tools are self-hosted only. OpenClaw plugin handles both modes. |
 | Crypto payments removed | LOW | Coinbase Commerce sunset March 31, 2026. Removed from relay, tools, and website. Stripe (fiat) is the sole payment method. |
+| Hermes no import/migrate/consolidate | MEDIUM | Python client does not yet implement import adapters, migrate tool, or consolidation. Core remember/recall/forget/export/status work. |
+| Hermes no client batching | LOW | Python client submits facts one-by-one (no ERC-4337 executeBatch). Acceptable for extraction volumes (max 15 facts). |
+| Hermes no store-time dedup | LOW | Python client does not check for near-duplicates before storing. Server-side content fingerprint still prevents exact duplicates. |
+| Hermes heuristic extraction only | MEDIUM | Hermes plugin uses regex-based extraction (no LLM call). Sufficient for preferences/facts/decisions but less comprehensive than LLM-guided extraction. |
+| ZeroClaw no import/migrate/upgrade/status | MEDIUM | Rust crate implements core Memory trait (store/recall/forget/list/count) but not import, migrate, upgrade, or billing status tools. |
+| ZeroClaw no client batching | LOW | Rust crate submits facts one-by-one. Acceptable for ZeroClaw's extraction volumes. |
+| ZeroClaw no store-time dedup | LOW | Server-side content fingerprint prevents exact duplicates. Near-duplicate detection not yet implemented. |
+| ZeroClaw UserOp submission | MEDIUM | Rust crate uses simplified relay submission. Full ERC-4337 UserOp construction (viem/permissionless equivalent) not yet implemented natively in Rust. |
 
 ---
 
@@ -288,6 +304,16 @@ cd mcp && npm install && npm run build
 
 # NanoClaw skill
 cd skill-nanoclaw && npm install
+
+# Python client + Hermes plugin
+cd python && python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]" && python -m pytest tests/ -v
+
+# Rust crate (ZeroClaw memory backend)
+cd rust/totalreclaw-memory && cargo test
+
+# Cross-language parity tests (Python ↔ TypeScript)
+cd tests/parity && node --experimental-strip-types cross-impl-test.ts
 
 # E2E Tests (internal repo -- requires staging access)
 cd ../totalreclaw-internal/e2e
