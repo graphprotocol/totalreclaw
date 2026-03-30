@@ -1,157 +1,203 @@
 /**
- * Cross-language Crypto Test Fixture Generator
+ * Generate crypto parity test fixtures from the canonical TypeScript implementation.
  *
- * Generates a JSON file with known inputs -> expected outputs from the
- * canonical TypeScript crypto implementation (MCP server). The Python
- * client uses these fixtures to verify byte-for-byte parity.
+ * Usage: cd mcp && npx tsx generate-fixtures.ts
  *
- * Usage (from repo root):
- *   node --experimental-strip-types tests/parity/generate-fixtures.ts > python/tests/fixtures/crypto_vectors.json
+ * Outputs: ../rust/totalreclaw-memory/tests/fixtures/crypto_vectors.json
  */
+
+import { mnemonicToSeedSync } from '@scure/bip39';
+import { hkdf } from '@noble/hashes/hkdf.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { hmac } from '@noble/hashes/hmac.js';
+import { stemmer } from 'porter-stemmer';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import {
   deriveKeysFromMnemonic,
-  computeAuthKeyHash,
   deriveLshSeed,
+  computeAuthKeyHash,
   encrypt,
   decrypt,
   generateBlindIndices,
   generateContentFingerprint,
-} from '../../mcp/src/subgraph/crypto.ts';
+} from './src/subgraph/crypto.js';
+import { LSHHasher } from './src/subgraph/lsh.js';
 
-import { LSHHasher } from '../../mcp/src/subgraph/lsh.ts';
-import { sha256 } from '@noble/hashes/sha2.js';
+const TEST_MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
+// 1. Key Derivation
+const keys = deriveKeysFromMnemonic(TEST_MNEMONIC);
+const seed = mnemonicToSeedSync(TEST_MNEMONIC.trim());
 
-const TEST_MNEMONIC =
-  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+const keyDerivation = {
+  mnemonic: TEST_MNEMONIC,
+  bip39_seed_hex: Buffer.from(seed).toString('hex'),
+  salt_hex: keys.salt.toString('hex'),
+  auth_key_hex: keys.authKey.toString('hex'),
+  encryption_key_hex: keys.encryptionKey.toString('hex'),
+  dedup_key_hex: keys.dedupKey.toString('hex'),
+  auth_key_hash: computeAuthKeyHash(keys.authKey),
+};
 
-const TEST_PLAINTEXT = 'The user prefers dark mode and uses Vim keybindings.';
-const BLIND_INDEX_TEXT = 'Alice likes distributed systems and Rust programming';
-const EMBEDDING_SEED = 42;
-const EMBEDDING_DIMS = 1024;
+// 2. LSH Seed
+const lshSeed = deriveLshSeed(TEST_MNEMONIC, keys.salt);
+const lshSeedHex = Buffer.from(lshSeed).toString('hex');
 
-// ---------------------------------------------------------------------------
-// Deterministic embedding generator (reproducible across languages)
-// ---------------------------------------------------------------------------
+// 3. AES-256-GCM
+const testPlaintext = 'The user prefers dark mode in all applications.';
+const fixedIv = Buffer.alloc(12, 0);
 
-/**
- * Generate a deterministic unit-norm embedding from a seed.
- *
- * Uses SHA-256 in counter mode to produce uniform random bytes, converts to
- * floats in [-1, 1], then L2-normalizes. The exact algorithm must be
- * re-implemented identically in Python for the fixtures to be useful.
- */
-function makeEmbedding(seed: number, dims: number): number[] {
-  const vec: number[] = new Array(dims);
-  let hash = sha256(Buffer.from(`embedding_${seed}`, 'utf8'));
-  let offset = 0;
-  const view = new DataView(new ArrayBuffer(4));
+function encryptWithFixedIv(plaintext: string, encryptionKey: Buffer, iv: Buffer): string {
+  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey, iv, { authTagLength: 16 });
+  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  const combined = Buffer.concat([iv, tag, ciphertext]);
+  return combined.toString('base64');
+}
 
-  for (let i = 0; i < dims; i++) {
-    if (offset + 4 > hash.length) {
-      hash = sha256(hash);
-      offset = 0;
+const aesFixedEncrypted = encryptWithFixedIv(testPlaintext, keys.encryptionKey, fixedIv);
+const aesRandomEncrypted = encrypt(testPlaintext, keys.encryptionKey);
+const aesDecrypted = decrypt(aesRandomEncrypted, keys.encryptionKey);
+if (aesDecrypted !== testPlaintext) throw new Error('AES round-trip failed');
+
+const aesVectors = {
+  plaintext: testPlaintext,
+  encryption_key_hex: keys.encryptionKey.toString('hex'),
+  fixed_iv_hex: fixedIv.toString('hex'),
+  fixed_iv_encrypted_base64: aesFixedEncrypted,
+  round_trip_verified: true,
+};
+
+// 4. Blind Indices
+const blindTestTexts = [
+  'The user prefers dark mode in all applications.',
+  'Project deadline is March 15th 2025.',
+  'User chose Python over Rust because of team expertise.',
+];
+
+const blindIndices = blindTestTexts.map((text) => ({
+  text,
+  indices: generateBlindIndices(text),
+}));
+
+const tokenHashMappings: Record<string, string> = {};
+const stemMappings: Record<string, { stem: string; hash: string }> = {};
+
+for (const text of blindTestTexts) {
+  const tokens = text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((t: string) => t.length >= 2);
+  for (const token of tokens) {
+    if (!tokenHashMappings[token]) {
+      tokenHashMappings[token] = Buffer.from(sha256(Buffer.from(token, 'utf8'))).toString('hex');
     }
-    view.setUint8(0, hash[offset]);
-    view.setUint8(1, hash[offset + 1]);
-    view.setUint8(2, hash[offset + 2]);
-    view.setUint8(3, hash[offset + 3]);
-    vec[i] = (view.getUint32(0, true) / 0xFFFFFFFF) * 2 - 1;
-    offset += 4;
+    const stem = stemmer(token);
+    if (stem.length >= 2 && stem !== token && !stemMappings[token]) {
+      stemMappings[token] = {
+        stem,
+        hash: Buffer.from(sha256(Buffer.from(`stem:${stem}`, 'utf8'))).toString('hex'),
+      };
+    }
   }
-
-  let norm = 0;
-  for (let i = 0; i < dims; i++) norm += vec[i] * vec[i];
-  norm = Math.sqrt(norm);
-  for (let i = 0; i < dims; i++) vec[i] /= norm;
-
-  return vec;
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
+// 5. Content Fingerprint
+const fingerprintTests = [
+  'The user prefers dark mode in all applications.',
+  '  The   USER prefers dark   mode in ALL applications.  ',
+  'Project deadline is March 15th 2025.',
+];
 
-function main(): void {
-  // 1. Key derivation
-  const { authKey, encryptionKey, dedupKey, salt } =
-    deriveKeysFromMnemonic(TEST_MNEMONIC);
+const fingerprints = fingerprintTests.map((text) => ({
+  text,
+  fingerprint: generateContentFingerprint(text, keys.dedupKey),
+}));
 
-  const authKeyHash = computeAuthKeyHash(authKey);
-  const lshSeed = deriveLshSeed(TEST_MNEMONIC, salt);
+// 6. LSH Hasher
+const SMALL_DIMS = 4;
+const REAL_DIMS = 1024;
 
-  // 2. Encryption (deterministic decrypt test -- we encrypt and record the
-  //    ciphertext so the Python side can decrypt it)
-  const encryptedBase64 = encrypt(TEST_PLAINTEXT, encryptionKey);
+const lshSmall = new LSHHasher(lshSeed, SMALL_DIMS, 3, 4);
+const lshReal = new LSHHasher(lshSeed, REAL_DIMS, 20, 32);
 
-  // Verify round-trip
-  const decrypted = decrypt(encryptedBase64, encryptionKey);
-  if (decrypted !== TEST_PLAINTEXT) {
-    throw new Error('Encryption round-trip failed');
-  }
+const smallEmbedding = [0.5, -0.3, 0.8, -0.1];
+const smallHashes = lshSmall.hash(smallEmbedding);
 
-  // 3. Blind indices
-  const blindIndices = generateBlindIndices(BLIND_INDEX_TEXT);
+const realEmbedding: number[] = new Array(REAL_DIMS);
+for (let i = 0; i < REAL_DIMS; i++) {
+  realEmbedding[i] = Math.sin(i * 0.1) * 0.5;
+}
+const realHashes = lshReal.hash(realEmbedding);
 
-  // 4. Content fingerprint
-  const contentFingerprint = generateContentFingerprint(
-    TEST_PLAINTEXT,
-    dedupKey,
-  );
-
-  // 5. LSH buckets
-  const embedding = makeEmbedding(EMBEDDING_SEED, EMBEDDING_DIMS);
-  const lshHasher = new LSHHasher(lshSeed, EMBEDDING_DIMS);
-  const lshBuckets = lshHasher.hash(embedding);
-
-  // 6. Assemble fixture
-  const fixture = {
-    _comment:
-      'Auto-generated by tests/parity/generate-fixtures.ts — DO NOT EDIT',
-    _generated_at: new Date().toISOString(),
-
-    mnemonic: TEST_MNEMONIC,
-
-    derived: {
-      salt_hex: salt.toString('hex'),
-      auth_key_hex: authKey.toString('hex'),
-      encryption_key_hex: encryptionKey.toString('hex'),
-      dedup_key_hex: dedupKey.toString('hex'),
-      auth_key_hash_hex: authKeyHash,
-      lsh_seed_hex: Buffer.from(lshSeed).toString('hex'),
-    },
-
-    encryption: {
-      plaintext: TEST_PLAINTEXT,
-      encrypted_base64: encryptedBase64,
-    },
-
-    blind_indices: {
-      input_text: BLIND_INDEX_TEXT,
-      expected: blindIndices,
-    },
-
-    content_fingerprint: {
-      input_text: TEST_PLAINTEXT,
-      expected_hex: contentFingerprint,
-    },
-
-    lsh: {
-      embedding_seed: EMBEDDING_SEED,
-      embedding_dims: EMBEDDING_DIMS,
-      n_tables: 20,
-      n_bits: 32,
-      embedding: embedding,
-      expected_buckets: lshBuckets,
-    },
-  };
-
-  // Output JSON to stdout
-  process.stdout.write(JSON.stringify(fixture, null, 2) + '\n');
+const lshSmallFirstHyperplanes: number[] = [];
+const smallHP = (lshSmall as any).hyperplanes[0];
+for (let i = 0; i < Math.min(16, smallHP.length); i++) {
+  lshSmallFirstHyperplanes.push(smallHP[i]);
 }
 
-main();
+const lshVectors = {
+  lsh_seed_hex: lshSeedHex,
+  small: {
+    dims: SMALL_DIMS,
+    n_tables: 3,
+    n_bits: 4,
+    embedding: smallEmbedding,
+    hashes: smallHashes,
+    first_hyperplanes_table0: lshSmallFirstHyperplanes,
+  },
+  real: {
+    dims: REAL_DIMS,
+    n_tables: 20,
+    n_bits: 32,
+    embedding_first_10: realEmbedding.slice(0, 10),
+    embedding_generation: 'sin(i * 0.1) * 0.5 for i in 0..1024',
+    hashes: realHashes,
+  },
+};
+
+// 7. Porter Stemmer Parity
+const stemmerTestWords = [
+  'applications', 'prefers', 'running', 'community', 'communities',
+  'argued', 'argues', 'arguing', 'deadline', 'project',
+  'expertise', 'chosen', 'because', 'python', 'user',
+  'dark', 'mode', 'march', 'over', 'team',
+];
+
+const stemmerResults = stemmerTestWords.map((word) => ({
+  word,
+  stem: stemmer(word),
+}));
+
+// Assemble and write
+const fixture = {
+  _comment: 'Generated from TypeScript canonical implementation. Do not edit manually.',
+  _generated_at: new Date().toISOString(),
+  _mnemonic: TEST_MNEMONIC,
+  key_derivation: keyDerivation,
+  aes_gcm: aesVectors,
+  blind_indices: {
+    test_cases: blindIndices,
+    token_hash_mappings: tokenHashMappings,
+    stem_mappings: stemMappings,
+  },
+  content_fingerprint: {
+    dedup_key_hex: keys.dedupKey.toString('hex'),
+    test_cases: fingerprints,
+  },
+  lsh: lshVectors,
+  porter_stemmer: stemmerResults,
+};
+
+const outDir = path.resolve(__dirname, '../rust/totalreclaw-memory/tests/fixtures');
+fs.mkdirSync(outDir, { recursive: true });
+const outPath = path.join(outDir, 'crypto_vectors.json');
+fs.writeFileSync(outPath, JSON.stringify(fixture, null, 2) + '\n');
+
+console.log(`Fixture written to: ${outPath}`);
+console.log(`Key derivation: auth_key=${keyDerivation.auth_key_hex.slice(0, 16)}...`);
+console.log(`LSH seed: ${lshSeedHex.slice(0, 16)}...`);
+console.log(`Blind indices counts: ${blindIndices.map((b) => b.indices.length).join(', ')}`);
+console.log(`Content fingerprints: ${fingerprints.map((f) => f.fingerprint.slice(0, 16)).join(', ')}`);
+console.log(`LSH small hashes: ${smallHashes.length}, real hashes: ${realHashes.length}`);
+console.log(`Porter stemmer tests: ${stemmerResults.length}`);
