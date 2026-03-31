@@ -416,7 +416,29 @@ Partner onboarding, referral tracking, and revenue share dashboard for third-par
 | Referral tracking | Track signups and conversions per integrator | NOT DONE |
 | Revenue share dashboard | Real-time earnings, payout history, usage metrics | NOT DONE |
 
-### 6.4 Cross-Agent Conflict Detection
+### 6.4 Local-First Hybrid Cache (ZeroClaw)
+
+Encrypted local SQLite read cache in front of on-chain storage, specifically for the ZeroClaw Rust backend. Eliminates the 5-40s subgraph latency for repeat queries and enables offline reads.
+
+- On `store()`: submit on-chain (same as now) + cache encrypted fact locally
+- On `recall()`: check local cache first (microsecond), return if hit. Background-refresh from subgraph for cross-device facts.
+- On startup: sync local cache from subgraph (pull facts stored from other devices/agents)
+- On-chain data remains source of truth; local SQLite is a read-through cache
+- Leverages ZeroClaw's existing SQLite infrastructure (reuse their DB layer)
+- Enables offline reads — the biggest UX weakness of the managed service
+- Same AES-256-GCM encryption for the local cache (keys never touch disk unencrypted)
+
+This makes ZeroClaw the best TotalReclaw platform: native Rust performance + encrypted local cache + on-chain portability.
+
+| Component | Description | Status |
+|-----------|-------------|--------|
+| Local encrypted cache | SQLite with AES-256-GCM encrypted facts | NOT DONE |
+| Read-through on recall | Check cache before subgraph query | NOT DONE |
+| Write-through on store | Cache locally after on-chain confirm | NOT DONE |
+| Startup sync | Pull new facts from subgraph on init | NOT DONE |
+| Cache invalidation | Invalidate on forget/tombstone | NOT DONE |
+
+### 6.5 Cross-Agent Conflict Detection
 
 Detect when multiple agents write conflicting facts about the same topic using blind index overlap patterns. In E2EE mode, detection is probabilistic (blind indices only). Full resolution requires TEE (Phase 4) for plaintext access inside the enclave.
 
