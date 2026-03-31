@@ -24,6 +24,7 @@ pub mod blind;
 pub mod crypto;
 pub mod embedding;
 pub mod fingerprint;
+pub mod hotcache;
 pub mod lsh;
 pub mod protobuf;
 pub mod relay;
