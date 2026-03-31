@@ -95,7 +95,7 @@ impl RelayClient {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             "X-TotalReclaw-Client",
-            "zeroclaw-memory".parse().unwrap(),
+            "rust-client:zeroclaw".parse().unwrap(),
         );
         if !self.auth_key_hex.is_empty() {
             headers.insert(
