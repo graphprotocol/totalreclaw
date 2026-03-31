@@ -164,7 +164,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Content fingerprint (exact) | Yes | Yes | Yes | Yes | Yes (via MCP) | Server-side HMAC-SHA256 |
 | Within-batch semantic dedup | Yes | -- | -- | -- | -- | Cosine >= 0.9, during extraction |
 | Store-time near-duplicate | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | `consolidation.ts` — both plugin and MCP |
-| LLM-guided dedup (ADD/UPDATE/DELETE) | Yes (Pro) | -- | Yes | -- | -- | OpenClaw + NanoClaw extraction prompts |
+| LLM-guided dedup (ADD/UPDATE/DELETE) | Yes | -- | Yes | Yes | -- | All tiers — uses user's own LLM API key, zero cost to us |
 | Bulk consolidation tool | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Self-hosted only (no batch delete on managed service) |
 | **Pro Tier Gating** | | | | | | |
 | Feature gating via billing cache | Yes | -- | Yes | Yes | -- | Server returns `features` dict, plugin/skill gates client-side |

@@ -1,0 +1,63 @@
+{
+  "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+  "source": "python",
+  "derived": {
+    "salt_hex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc1",
+    "auth_key_hex": "5580b82ac0a8763328600dd335b139d0915de9a591970207d6820306a2a36ae7",
+    "encryption_key_hex": "a58fdc56e1d768461d95cd46b49e03727b2eb342ac558b9f3ebf1255b871f703",
+    "dedup_key_hex": "63d19334b64c460a95c23c14c1bff018bc83807031451b23117ec0baf85dcf34",
+    "auth_key_hash_hex": "b6be7885057f5d0eac5b65c458060a9a26ab93f098048a1362816873b704f166",
+    "lsh_seed_hex": "6f8b0d095090ecc480130490337485290344eed21235a4d5add0b3870bb0dcd8"
+  },
+  "encryption": {
+    "plaintext": "The quick brown fox jumps over the lazy dog",
+    "encrypted_base64": "caHaoOZj/BuXZwYTzlE+vrSKzWPjy3aKq2JqN2ZrGegiCU5keGEZrhmi3jnxnidlW8AqNe/UInSq00kVOOOiGo2RCcxWxNI="
+  },
+  "blind_indices": {
+    "input_text": "The quick brown fox jumps over the lazy dog",
+    "expected": [
+      "b9776d7ddf459c9ad5b0e1d6ac61e27befb5e99fd62446677600d7cacef544d0",
+      "22c72aa82ce77c82e2ca65a711c79eaa4b51c57f85f91489ceeacc7b385943ba",
+      "5eb67f9f8409b9c3f739735633cbdf92121393d0e13bd0f464b1b2a6a15ad2dc",
+      "776cb326ab0cd5f0a974c1b9606044d8485201f2db19cf8e3749bdee5f36e200",
+      "ef30940a2d1b943c8007b8a15e45935dc01902b7c0534dc7e27fda30a9b81aef",
+      "1221d29e21c19889ccb9c15f75b6df89a540c1047cef09b280b7ff789f6b996c",
+      "5fb6a47e368e12e5d8b19280796e6a3d146fe391ed2e967d5f95c55bfb0f9c2f",
+      "81fd67d02f679b818a4df6a50139958aa857eddc4d8f3561630dfb905e6d3c24",
+      "fe7094c1d3254e4e298b307048700e6681cf46e3d080e5a1a0baa2ed77bd9878",
+      "cd6357efdd966de8c0cb2f876cc89ec74ce35f0968e11743987084bd42fb8944"
+    ]
+  },
+  "content_fingerprint": {
+    "input_text": "The quick brown fox jumps over the lazy dog",
+    "expected_hex": "a47314c92b74a4a062a78f02c09dac187e9c61de7ba52db71cd44f7a92c4edda"
+  },
+  "lsh": {
+    "embedding_seed": 42,
+    "embedding_dims": 1024,
+    "n_tables": 20,
+    "n_bits": 32,
+    "expected_buckets": [
+      "b9c9d79b70a7a2d05b645ea4746270ca082fac2158a546c23bfc628c2ab311bc",
+      "66f256e235c7ad0b38b4c63ae28161229748782a761cc9633f9e604563dbfbab",
+      "f5a2af13a0539ed4738d615026ae65f79b6a475713de7acd5c2538a3e051dbd2",
+      "d6136a98837d51d6ca9973691bbda63aa2135ab1cf53289122d60e05ffbe9d5a",
+      "c7576c9a80bdfef34565212ced174f59544cf41eb4ed4c16e457ab0cb4aae65e",
+      "b3cba2a33e08231edc54376135ce771f702c408cd562b323a62d93e0fbb73e6c",
+      "f13fca374557a50eb7778050575a2cc8864bfa90d75f057caf61cecb12e7ec8c",
+      "cfb918c21824e07e65cf4fd60e3dd517c6beaa3c5fdb93538cf1c52816377c6b",
+      "0849ef8e792e9645e6e982d09f97d7d49f1d8f6ea3ac5ceb595a39ca4d755093",
+      "06556be20217d6341cb9e5eb74b47a5066a90e954e11cbca918f0d6d95eddf9e",
+      "9aa375bd205ee345710dce80548ee242a63866123176f45824822cc444eb6bff",
+      "c2c70f1afc8239d5f67f1b5aa91662a069129fe9893e0138b255ed8b00d0409d",
+      "6fce591601150851bc5223d0977e258d0c67056aadde5417f121846dd8fee5e4",
+      "19c64abafef9c62f4144d90ac4e10f8989a962501591b7cf3564088172879787",
+      "769944ace6b688d89bf0e149553f638c47578c7468083cd34373ddbfd412a2b2",
+      "f01e957b6a1107bc1fe96e6bf0b7072df21bc5fe426c70d998b64e496cbdb57f",
+      "71df0720a6536a69a2374126250d133591a2bc189e1e6e95d15658d2eb163adb",
+      "e1f624ff7e964e3958e9d2663a1eb74a62b794936795ac79536e87cbdbf6977d",
+      "3730b167da76514a752ece5332ca5280d8b5d273795f2c1dc0b14666abfc09b5",
+      "66f68bb5b6ae060bd0f0712870c32d9d9c2b8b6d92ea7aa9f59cbc0fbbc9c4f8"
+    ]
+  }
+}

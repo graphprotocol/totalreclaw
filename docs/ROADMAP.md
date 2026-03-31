@@ -27,6 +27,8 @@ TotalReclaw is an end-to-end encrypted memory vault for AI agents. The project p
 | TypeScript client library | Argon2id KDF, AES-256-GCM, LSH buckets, BM25+cosine+RRF reranking, fingerprint dedup, sync client | 180 |
 | OpenClaw skill | Lifecycle hooks, fact extraction, export, host LLM injection | 309 |
 | NanoClaw skill + generic MCP server | 5 MCP tools, 3 hooks | 59 |
+| Python client library (`totalreclaw`) | E2EE crypto, LSH, embeddings, reranking, relay, UserOps | 209 |
+| Hermes Agent plugin (`hermes-totalreclaw`) | Auto-recall, auto-extraction, 6 tools | 24 |
 | Credential management | OS keychain integration, session manager | 118 |
 | Benchmark harness (OMBH) | 3 backends, real WhatsApp+Slack data, HTML dashboard | -- |
 | Content fingerprint dedup (v0.3.1b) | HMAC-SHA256 fingerprints, server-side dedup check | 28 |
@@ -215,7 +217,25 @@ Applies to both managed service (PostgreSQL) and future self-hosted deployments.
 
 Layers 1-2 are part of PoC (v0.3.1b). Layers 3-4 are MVP enhancements (v0.3.2).
 
-### 2.9 HTTP MCP & Hosted Agent Integration
+### 2.9 Python Client Library & Hermes Agent Plugin — COMPLETE
+
+**Goal:** Native Python implementation of TotalReclaw with byte-for-byte crypto parity against TypeScript, plus a Hermes Agent plugin for auto-recall, auto-extraction, and 6 explicit tools.
+
+| Component | Description | Tests | Status |
+|-----------|-------------|-------|--------|
+| `totalreclaw` Python library | E2EE crypto, LSH, embeddings, reranking, relay client, ERC-4337 UserOps | 209 | **DONE** |
+| `hermes-totalreclaw` plugin | Auto-recall, auto-extraction, 6 tools (remember, recall, forget, export, status, setup) | 24 | **DONE** |
+| Cross-language parity | 12 offline parity tests (Python <-> TypeScript) — crypto, LSH, protobuf, reranker | 12 | **DONE** |
+| Cross-client E2E | Python stores -> TS recalls, TS stores -> Python recalls (live Base Sepolia) | 2 | **DONE** |
+
+**Total:** 233 tests (214 unit + 12 parity + 5 staging integration + 2 cross-client E2E). All passing.
+
+**Architecture:** Client-side UserOp signing — UserOps constructed and signed on user's device, relay is a transparent proxy. Guarantees the relay cannot tamper with user intent.
+
+**Docs:** `docs/guides/hermes-setup.md`, `python/README.md`
+**Plan:** `docs/plans/2026-03-29-python-client-and-hermes-plugin.md`
+
+### 2.10 HTTP MCP & Hosted Agent Integration
 
 Support hosted AI agents (IronClaw / NEAR AI Cloud, Windsurf, etc.) that cannot spawn local stdio processes.
 

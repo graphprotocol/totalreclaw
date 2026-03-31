@@ -73,7 +73,7 @@ export async function preCompact(
       switch (fact.action) {
         case 'ADD':
           try {
-            await client.remember(fact.factText, metadata);
+            await client.remember(fact.text, metadata);
             factsStored++;
           } catch (err: unknown) {
             if (handleQuotaError(err)) {
@@ -88,7 +88,7 @@ export async function preCompact(
             try {
               await client.forget(fact.existingFactId);
               if (fact.action === 'UPDATE') {
-                await client.remember(fact.factText, metadata);
+                await client.remember(fact.text, metadata);
                 factsStored++;
               }
             } catch (err: unknown) {

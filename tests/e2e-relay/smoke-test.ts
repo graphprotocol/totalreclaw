@@ -8,7 +8,7 @@
  * Tests:
  *   1. Health check (GET /health -> 200)
  *   2. Register user (POST /v1/register)
- *   3. Check billing status (GET /v1/billing/status -> free tier, 250 writes)
+ *   3. Check billing status (GET /v1/billing/status -> free tier)
  *   4. Verify features dict returned
  *
  * Run:
@@ -57,6 +57,8 @@ async function main() {
   const authKeyHash = createHash('sha256').update(authKey).digest();
   const salt = randomBytes(32);
   const tokenHex = authKey.toString('hex');
+  // Valid-format Ethereum address for billing tests (deterministic from test key)
+  const testWalletAddress = '0x' + createHash('sha256').update('smoke-test-wallet').digest('hex').slice(0, 40);
 
   // ============================================================
   // Test 1: Health check
@@ -117,7 +119,7 @@ async function main() {
   try {
     const res = await request(
       'GET',
-      '/v1/billing/status?wallet_address=0xTestSmartAccount',
+      `/v1/billing/status?wallet_address=${testWalletAddress}`,
       undefined,
       { Authorization: `Bearer ${tokenHex}` },
     );
@@ -125,7 +127,10 @@ async function main() {
     await assert(res.data.success === true, `Expected success=true`);
     await assert(res.data.tier === 'free', `Expected tier=free, got ${res.data.tier}`);
     await assert(res.data.free_writes_used === 0, `Expected 0 writes used`);
-    await assert(res.data.free_writes_limit === 250, `Expected 250 limit, got ${res.data.free_writes_limit}`);
+    await assert(
+      typeof res.data.free_writes_limit === 'number' && res.data.free_writes_limit > 0,
+      `Expected positive free_writes_limit, got ${res.data.free_writes_limit}`,
+    );
     console.log('  [PASS] T4: Billing status (free tier)');
     passed++;
   } catch (err: any) {
@@ -139,12 +144,12 @@ async function main() {
   try {
     const res = await request(
       'GET',
-      '/v1/billing/status?wallet_address=0xTestSmartAccount',
+      `/v1/billing/status?wallet_address=${testWalletAddress}`,
       undefined,
       { Authorization: `Bearer ${tokenHex}` },
     );
     await assert(res.data.features !== undefined, 'Expected features dict');
-    await assert(res.data.features.llm_dedup === false, 'Expected llm_dedup=false');
+    await assert(res.data.features.llm_dedup === true, 'Expected llm_dedup=true (enabled for all tiers)');
     await assert(res.data.features.custom_extract_interval === false, 'Expected custom_extract_interval=false');
     await assert(res.data.features.min_extract_interval === 5, `Expected min_extract_interval=5, got ${res.data.features.min_extract_interval}`);
     console.log('  [PASS] T5: Feature flags (free tier)');

@@ -128,7 +128,10 @@ const SEMANTIC_SKIP_THRESHOLD = parseFloat(process.env.TOTALRECLAW_SEMANTIC_SKIP
 
 // Auto-extract throttle (C3): only extract every N turns in agent_end hook
 let turnsSinceLastExtraction = 0;
-const AUTO_EXTRACT_EVERY_TURNS_ENV = parseInt(process.env.TOTALRECLAW_EXTRACT_EVERY_TURNS ?? '3', 10);
+const AUTO_EXTRACT_EVERY_TURNS_ENV = parseInt(
+  process.env.TOTALRECLAW_EXTRACT_INTERVAL ?? process.env.TOTALRECLAW_EXTRACT_EVERY_TURNS ?? '3',
+  10,
+);
 
 // Hard cap on facts per extraction to prevent LLM over-extraction from dense conversations
 const MAX_FACTS_PER_EXTRACTION = 15;
@@ -187,15 +190,16 @@ function writeBillingCache(cache: BillingCache): void {
 }
 
 /**
- * Check if LLM-guided dedup is enabled for the current tier.
- * Returns true for Pro users, or when no billing cache exists (fail-open for self-hosters).
+ * Check if LLM-guided dedup is enabled.
+ *
+ * Always returns true — LLM extraction runs client-side using the user's
+ * own API key, so there is no cost to us. The server flag is respected as
+ * a kill-switch but defaults to true for all tiers.
  */
 function isLlmDedupEnabled(): boolean {
   const cache = readBillingCache();
-  if (!cache) return true;
-  if (cache.tier === 'pro') return true;
-  if (cache.features?.llm_dedup !== undefined) return cache.features.llm_dedup;
-  return false;
+  if (cache?.features?.llm_dedup === false) return false; // Server kill-switch
+  return true;
 }
 
 /**
@@ -977,7 +981,7 @@ function relativeTime(isoOrMs: string | number): string {
  */
 const MIN_IMPORTANCE_THRESHOLD = Math.max(
   1,
-  Math.min(10, Number(process.env.TOTALRECLAW_MIN_IMPORTANCE) || 3),
+  Math.min(10, Number(process.env.TOTALRECLAW_MIN_IMPORTANCE) || 6),
 );
 
 /**

@@ -47,7 +47,7 @@ export async function agentEnd(
 
   try {
     const history = formatConversationHistory(
-      input.conversationHistory.slice(-3).map((t, i) => ({
+      input.conversationHistory.map((t) => ({
         role: t.role,
         content: t.content,
         timestamp: new Date(),
@@ -99,7 +99,7 @@ export async function agentEnd(
         };
 
         try {
-          await client.remember(fact.factText, metadata);
+          await client.remember(fact.text, metadata);
           factsStored++;
         } catch (err: unknown) {
           // Check for 403 / quota exceeded -- invalidate billing cache so next

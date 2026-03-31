@@ -245,7 +245,7 @@ describe('Extraction Prompts', () => {
 
       expect(result.valid).toBe(true);
       expect(result.facts).toHaveLength(1);
-      expect(result.facts[0].factText).toBe('Test fact');
+      expect(result.facts[0].text).toBe('Test fact');
     });
 
     it('should reject invalid response', () => {

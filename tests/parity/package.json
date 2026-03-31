@@ -2,6 +2,7 @@
   "name": "@totalreclaw/parity-tests",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Parity tests: verify NanoClaw produces byte-identical outputs to the OpenClaw plugin",
   "type": "module",
   "scripts": {

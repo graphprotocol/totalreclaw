@@ -1,0 +1,16 @@
+name: totalreclaw
+version: 0.1.0
+description: End-to-end encrypted memory vault for AI agents
+author: TotalReclaw Team
+provides_tools:
+  - totalreclaw_remember
+  - totalreclaw_recall
+  - totalreclaw_forget
+  - totalreclaw_export
+  - totalreclaw_status
+  - totalreclaw_setup
+provides_hooks:
+  - on_session_start
+  - pre_llm_call
+  - post_llm_call
+  - on_session_end
