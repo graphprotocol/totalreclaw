@@ -60,6 +60,9 @@ pub enum Error {
 
     #[error("HTTP error: {0}")]
     Http(String),
+
+    #[error("quota exceeded: {0}")]
+    QuotaExceeded(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

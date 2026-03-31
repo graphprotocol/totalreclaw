@@ -195,6 +195,16 @@ impl RelayClient {
             .await
             .map_err(|e| Error::Http(e.to_string()))?;
 
+        if resp.status().as_u16() == 403 {
+            // Quota exceeded — invalidate billing cache and return specific error
+            crate::billing::invalidate_cache();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(Error::QuotaExceeded(format!(
+                "Quota exceeded (403). Billing cache invalidated. Upgrade to Pro for unlimited storage. Server: {}",
+                text
+            )));
+        }
+
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();

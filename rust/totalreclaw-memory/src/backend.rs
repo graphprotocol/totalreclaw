@@ -45,6 +45,7 @@
 
 use base64::Engine;
 
+use crate::billing::{self, BillingCache};
 use crate::crypto::{self, DerivedKeys};
 use crate::embedding::{self, EmbeddingMode, EmbeddingProvider};
 use crate::lsh::LshHasher;
@@ -399,9 +400,25 @@ impl TotalReclawMemory {
         self.relay.health_check().await.unwrap_or(false)
     }
 
-    /// Billing status -- tier, usage, limits.
+    /// Billing status -- tier, usage, limits. Also updates the billing cache.
     pub async fn status(&self) -> Result<crate::relay::BillingStatus> {
         self.relay.billing_status().await
+    }
+
+    /// Fetch billing cache (from disk or relay, with 2h TTL).
+    ///
+    /// Returns a cached billing status with parsed feature flags.
+    pub async fn billing_cache(&self) -> Result<BillingCache> {
+        billing::fetch_billing_status(&self.relay).await
+    }
+
+    /// Check for quota warnings (>80% usage).
+    ///
+    /// Returns a human-readable warning message or None if usage is below 80%.
+    /// Call at session start (before_agent_start equivalent).
+    pub async fn quota_warning(&self) -> Option<String> {
+        let cache = billing::fetch_billing_status(&self.relay).await.ok()?;
+        cache.quota_warning_message()
     }
 
     /// Export all memories as plaintext (decrypted).
