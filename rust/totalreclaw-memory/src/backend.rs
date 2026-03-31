@@ -59,8 +59,8 @@ use crate::Result;
 /// Default relay URL.
 const DEFAULT_RELAY_URL: &str = "https://api.totalreclaw.xyz";
 
-/// Default max candidates for search.
-const DEFAULT_MAX_CANDIDATES: usize = 100;
+/// Auto-recall top_k constant (after reranking). Matches all other clients.
+const AUTO_RECALL_TOP_K: usize = 8;
 
 // ---------------------------------------------------------------------------
 // ZeroClaw-compatible types
@@ -279,16 +279,20 @@ impl TotalReclawMemory {
         let mut all_trapdoors = word_trapdoors;
         all_trapdoors.extend(lsh_trapdoors.into_iter());
 
-        // 4. Search subgraph
+        // 4. Dynamic candidate pool sizing from billing cache
+        let billing_cache = billing::read_cache();
+        let max_candidates = billing::get_max_candidate_pool(billing_cache.as_ref());
+
+        // 5. Search subgraph
         let candidates = search::search_candidates(
             &self.relay,
             self.relay.wallet_address(),
             &all_trapdoors,
-            DEFAULT_MAX_CANDIDATES,
+            max_candidates,
         )
         .await?;
 
-        // 5. Decrypt candidates and build reranker input
+        // 6. Decrypt candidates and build reranker input
         let mut rerank_candidates = Vec::new();
         for fact in &candidates {
             // Decrypt content
@@ -327,10 +331,10 @@ impl TotalReclawMemory {
             });
         }
 
-        // 6. Rerank
+        // 7. Rerank
         let ranked = reranker::rerank(query, &query_embedding, &rerank_candidates, limit)?;
 
-        // 7. Convert to MemoryEntry
+        // 8. Convert to MemoryEntry
         Ok(ranked
             .into_iter()
             .map(|r| MemoryEntry {
