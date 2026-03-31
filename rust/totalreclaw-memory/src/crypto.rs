@@ -92,6 +92,12 @@ pub fn derive_keys_from_mnemonic(mnemonic: &str) -> Result<DerivedKeys> {
     })
 }
 
+/// Public access to the raw BIP-39 seed bytes (64 bytes).
+/// Used by wallet.rs for BIP-32/BIP-44 derivation.
+pub fn mnemonic_to_seed_bytes(mnemonic: &str) -> Result<[u8; 64]> {
+    mnemonic_to_seed(mnemonic)
+}
+
 /// Derive the 32-byte LSH seed from a BIP-39 mnemonic.
 ///
 /// Matches `deriveLshSeed()` in `mcp/src/subgraph/crypto.ts` (BIP-39 path).
