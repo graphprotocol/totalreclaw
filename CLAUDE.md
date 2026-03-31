@@ -220,9 +220,9 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | Hermes no client batching | LOW | Python client submits facts one-by-one (no ERC-4337 executeBatch). Acceptable for extraction volumes (max 15 facts). |
 | Hermes no store-time dedup | LOW | Python client does not check for near-duplicates before storing. Server-side content fingerprint still prevents exact duplicates. |
 | Hermes heuristic extraction only | MEDIUM | Hermes plugin uses regex-based extraction (no LLM call). Sufficient for preferences/facts/decisions but less comprehensive than LLM-guided extraction. |
-| ZeroClaw no import/migrate/upgrade | LOW | Rust crate implements core Memory trait + status + export but not import adapters, migrate, or upgrade tools. |
-| ZeroClaw no client batching | LOW | Rust crate submits facts one-by-one. Acceptable for ZeroClaw's extraction volumes. |
-| ZeroClaw UserOp submission | LOW | Rust crate uses TS bridge for UserOp submission. Native Rust alternative available via Alloy (`alloy-rpc-types-eth::erc4337::UserOperation`). |
+| ZeroClaw no import/migrate | LOW | Rust crate implements core Memory trait + status + export + upgrade (Stripe checkout) but not import adapters or migrate tool. |
+| ZeroClaw no client batching | RESOLVED | Rust crate supports executeBatch() multi-call UserOps (up to 15 facts per batch). |
+| ZeroClaw UserOp submission | RESOLVED | Native Rust ERC-4337 v0.7 UserOp construction via alloy-primitives/alloy-sol-types. Hash + signing verified byte-for-byte against viem. |
 
 ---
 
