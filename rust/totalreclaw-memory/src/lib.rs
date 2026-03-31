@@ -31,6 +31,7 @@ pub mod search;
 pub mod setup;
 pub mod stemmer;
 pub mod store;
+pub mod userop;
 pub mod wallet;
 
 pub use backend::{MemoryCategory, MemoryEntry, TotalReclawConfig, TotalReclawMemory};
