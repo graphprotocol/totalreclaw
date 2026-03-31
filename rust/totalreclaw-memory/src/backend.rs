@@ -404,6 +404,14 @@ impl TotalReclawMemory {
         Ok(results)
     }
 
+    /// Auto-recall: search with the spec-mandated top_k=8.
+    ///
+    /// Per the client-consistency spec, auto-recall at session start
+    /// uses the raw user message as query and returns top 8 after reranking.
+    pub async fn auto_recall(&self, query: &str) -> Result<Vec<MemoryEntry>> {
+        self.recall(query, AUTO_RECALL_TOP_K, None).await
+    }
+
     /// Get a specific memory entry by key/ID.
     pub async fn get(&self, key: &str) -> Result<Option<MemoryEntry>> {
         let results = self.recall(key, 1, None).await?;
