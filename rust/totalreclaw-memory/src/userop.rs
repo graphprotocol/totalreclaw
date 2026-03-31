@@ -128,14 +128,15 @@ const SIMPLE_ACCOUNT_FACTORY: &str = "0x91E60e0613810449d098b0b5Ec8b51A0FE8c8985
 
 /// Submit a UserOp to the relay bundler endpoint.
 ///
-/// Full flow:
-/// 1. Get nonce from EntryPoint
-/// 2. Check if Smart Account is deployed; if not, include factory initCode
-/// 3. Build unsigned v0.7 UserOp
-/// 4. Get paymaster sponsorship (gas estimates + paymaster data)
-/// 5. Sign the UserOp
-/// 6. Submit via eth_sendUserOperation
-/// 7. Wait for receipt
+/// Full flow (matches viem/permissionless ordering):
+/// 1. Get gas prices from bundler
+/// 2. Get nonce from EntryPoint
+/// 3. Check if Smart Account is deployed; if not, include factory initCode
+/// 4. Build unsigned v0.7 UserOp (with gas prices already set)
+/// 5. Get paymaster sponsorship (gas estimates + paymaster data)
+/// 6. Sign the UserOp
+/// 7. Submit via eth_sendUserOperation
+/// 8. Wait for receipt
 pub async fn submit_userop(
     calldata: &[u8],
     sender: &str,
@@ -154,11 +155,31 @@ pub async fn submit_userop(
 
     let headers = build_headers(auth_key_hex, sender, is_test);
 
-    // 1. Get nonce: eth_call to EntryPoint.getNonce(sender, 0)
-    let nonce = get_nonce(&client, sender, chain_id).await?;
-    let nonce_hex = format!("0x{:x}", nonce);
+    // 1. Get gas prices FIRST (matches viem/permissionless flow)
+    let gas_price_resp = jsonrpc_call(
+        &client,
+        &bundler_url,
+        "pimlico_getUserOperationGasPrice",
+        serde_json::json!([]),
+        &headers,
+    )
+    .await?;
 
-    // 2. Check if Smart Account is deployed; include factory if not
+    let mut max_fee = "0x0".to_string();
+    let mut max_priority_fee = "0x0".to_string();
+    if let Some(fast) = gas_price_resp.get("result").and_then(|r| r.get("fast")) {
+        if let Some(v) = fast.get("maxFeePerGas") {
+            max_fee = v.as_str().unwrap_or("0x0").to_string();
+        }
+        if let Some(v) = fast.get("maxPriorityFeePerGas") {
+            max_priority_fee = v.as_str().unwrap_or("0x0").to_string();
+        }
+    }
+
+    // 2. Get nonce: eth_call to EntryPoint.getNonce(sender, 0)
+    let nonce_hex = get_nonce(&client, sender, chain_id).await?;
+
+    // 3. Check if Smart Account is deployed; include factory if not
     let deployed = is_account_deployed(&client, sender, chain_id).await?;
     let (factory, factory_data) = if deployed {
         (None, None)
@@ -184,7 +205,8 @@ pub async fn submit_userop(
         )
     };
 
-    // 3. Build unsigned v0.7 UserOp
+    // 4. Build unsigned v0.7 UserOp with gas prices already set
+    //    Use the same stub signature as viem/permissionless for gas estimation.
     let mut userop = UserOperationV7 {
         sender: sender.to_string(),
         nonce: nonce_hex,
@@ -194,23 +216,18 @@ pub async fn submit_userop(
         call_gas_limit: "0x0".to_string(),
         verification_gas_limit: "0x0".to_string(),
         pre_verification_gas: "0x0".to_string(),
-        max_fee_per_gas: "0x0".to_string(),
-        max_priority_fee_per_gas: "0x0".to_string(),
+        max_fee_per_gas: max_fee,
+        max_priority_fee_per_gas: max_priority_fee,
         paymaster: None,
         paymaster_verification_gas_limit: None,
         paymaster_post_op_gas_limit: None,
         paymaster_data: None,
-        // Dummy signature for gas estimation.
-        // SimpleAccount validates ECDSA format — use a well-formed signature
-        // with valid r,s values and v=27. This will fail ecrecover but not revert.
-        signature: format!(
-            "0x{}{}1b",
-            "00".repeat(31).to_owned() + "01", // r = 1 (valid, non-zero)
-            "00".repeat(31).to_owned() + "01", // s = 1 (valid, non-zero)
-        ),
+        // Stub signature matching viem/permissionless SimpleAccount default.
+        // Uses max r and s-curve values that won't revert ecrecover.
+        signature: "0xfffffffffffffffffffffffffffffff0000000000000000000000000000000007aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1c".to_string(),
     };
 
-    // 4. Get paymaster sponsorship via pm_sponsorUserOperation
+    // 5. Get paymaster sponsorship via pm_sponsorUserOperation
     let sponsor_resp = jsonrpc_call(
         &client,
         &bundler_url,
@@ -231,11 +248,16 @@ pub async fn submit_userop(
         if let Some(v) = result.get("preVerificationGas") {
             userop.pre_verification_gas = v.as_str().unwrap_or("0x0").to_string();
         }
+        // Only update gas prices if sponsor explicitly provides them
         if let Some(v) = result.get("maxFeePerGas") {
-            userop.max_fee_per_gas = v.as_str().unwrap_or("0x0").to_string();
+            if let Some(s) = v.as_str() {
+                userop.max_fee_per_gas = s.to_string();
+            }
         }
         if let Some(v) = result.get("maxPriorityFeePerGas") {
-            userop.max_priority_fee_per_gas = v.as_str().unwrap_or("0x0").to_string();
+            if let Some(s) = v.as_str() {
+                userop.max_priority_fee_per_gas = s.to_string();
+            }
         }
         // v0.7 paymaster fields
         if let Some(v) = result.get("paymaster") {
@@ -261,33 +283,12 @@ pub async fn submit_userop(
         )));
     }
 
-    // 4a. Get gas prices if not filled by pm_sponsorUserOperation
-    if userop.max_fee_per_gas == "0x0" || userop.max_fee_per_gas == "0x" {
-        let gas_price_resp = jsonrpc_call(
-            &client,
-            &bundler_url,
-            "pimlico_getUserOperationGasPrice",
-            serde_json::json!([]),
-            &headers,
-        )
-        .await?;
-
-        if let Some(fast) = gas_price_resp.get("result").and_then(|r| r.get("fast")) {
-            if let Some(v) = fast.get("maxFeePerGas") {
-                userop.max_fee_per_gas = v.as_str().unwrap_or("0x0").to_string();
-            }
-            if let Some(v) = fast.get("maxPriorityFeePerGas") {
-                userop.max_priority_fee_per_gas = v.as_str().unwrap_or("0x0").to_string();
-            }
-        }
-    }
-
-    // 4b. Sign the UserOp
+    // 6. Sign the UserOp
     let userop_hash = compute_userop_hash_v7(&userop, ENTRYPOINT_ADDRESS, chain_id)?;
     let signature = sign_userop_hash(&userop_hash, private_key)?;
     userop.signature = format!("0x{}", hex::encode(&signature));
 
-    // 5. Submit via eth_sendUserOperation
+    // 7. Submit via eth_sendUserOperation
     let send_resp = jsonrpc_call(
         &client,
         &bundler_url,
@@ -392,7 +393,10 @@ async fn is_account_deployed(client: &reqwest::Client, address: &str, chain_id: 
     Ok(code.len() > 2)
 }
 
-async fn get_nonce(client: &reqwest::Client, sender: &str, chain_id: u64) -> Result<u64> {
+/// Get the nonce for a sender from the EntryPoint.
+/// Returns a hex string (e.g. "0x0", "0x1a") that can be used directly
+/// in the UserOp. Handles uint256 nonces (not just u64).
+async fn get_nonce(client: &reqwest::Client, sender: &str, chain_id: u64) -> Result<String> {
     let rpc_url = match chain_id {
         84532 => "https://sepolia.base.org",
         100 => "https://rpc.gnosischain.com",
@@ -425,8 +429,13 @@ async fn get_nonce(client: &reqwest::Client, sender: &str, chain_id: u64) -> Res
         .map_err(|e| Error::Http(e.to_string()))?;
 
     let result = body["result"].as_str().unwrap_or("0x0");
-    let nonce = u64::from_str_radix(result.trim_start_matches("0x"), 16).unwrap_or(0);
-    Ok(nonce)
+    // Strip leading zeros but keep at least one digit after 0x
+    let trimmed = result.trim_start_matches("0x").trim_start_matches('0');
+    if trimmed.is_empty() {
+        Ok("0x0".to_string())
+    } else {
+        Ok(format!("0x{}", trimmed))
+    }
 }
 
 /// Compute the UserOp hash for signing (ERC-4337 v0.7 format).
@@ -521,14 +530,19 @@ fn compute_userop_hash_v7(
     // sender (address, 32 bytes padded)
     packed.extend_from_slice(&[0u8; 12]);
     packed.extend_from_slice(&decode_hex(&userop.sender));
-    // nonce (uint256)
-    let nonce = u64::from_str_radix(
-        userop.nonce.trim_start_matches("0x"),
-        16,
-    )
-    .unwrap_or(0);
+    // nonce (uint256 -- can exceed u64, e.g. with non-zero nonce keys)
+    let nonce_hex_str = userop.nonce.trim_start_matches("0x");
+    // Pad to even length for hex decoding
+    let nonce_padded = if nonce_hex_str.len() % 2 != 0 {
+        format!("0{}", nonce_hex_str)
+    } else {
+        nonce_hex_str.to_string()
+    };
+    let nonce_raw = hex::decode(&nonce_padded).unwrap_or_default();
     let mut nonce_bytes = [0u8; 32];
-    nonce_bytes[24..].copy_from_slice(&nonce.to_be_bytes());
+    if !nonce_raw.is_empty() && nonce_raw.len() <= 32 {
+        nonce_bytes[32 - nonce_raw.len()..].copy_from_slice(&nonce_raw);
+    }
     packed.extend_from_slice(&nonce_bytes);
     // keccak256(initCode)
     packed.extend_from_slice(&keccak256_hash(&init_code));
@@ -771,5 +785,74 @@ mod tests {
             hex::encode(hash),
             "1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8"
         );
+    }
+
+    #[test]
+    fn test_userop_hash_v7_real_paymaster() {
+        // Real UserOp from a successful viem/permissionless submission
+        // against staging (Base Sepolia, chain 84532).
+        // This tests with real paymaster data (longer than the synthetic test above).
+        let userop = UserOperationV7 {
+            sender: "0x695241674733a452a5373b16baf2dc2d9435be8e".to_string(),
+            nonce: "0x0".to_string(),
+            factory: Some("0x91E60e0613810449d098b0b5Ec8b51A0FE8c8985".to_string()),
+            factory_data: Some("0x5fbfb9cf000000000000000000000000cd894ed607b25d52e9ac776cf48e9407d3a263d30000000000000000000000000000000000000000000000000000000000000000".to_string()),
+            call_data: "0xb61d27f6000000000000000000000000c445af1d4eb9fce4e1e61fe96ea7b8febf03c5ca000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000".to_string(),
+            call_gas_limit: "0x4623".to_string(),
+            verification_gas_limit: "0x41bab".to_string(),
+            pre_verification_gas: "0xc9c9".to_string(),
+            max_fee_per_gas: "0x757e20".to_string(),
+            max_priority_fee_per_gas: "0x10c8e0".to_string(),
+            paymaster: Some("0x777777777777AeC03fd955926DbF81597e66834C".to_string()),
+            paymaster_verification_gas_limit: Some("0x8a8e".to_string()),
+            paymaster_post_op_gas_limit: Some("0x1".to_string()),
+            paymaster_data: Some("0x01000069cb37390000000000006568f8cf98f823f68c4fedbde90b241f30e9323b436eeb3cddeb688e0859b23565005402808774472237b1808f0006721bd065729a72a84710fdceaa465737f61c".to_string()),
+            signature: format!("0x{}", "00".repeat(65)),
+        };
+
+        let hash = compute_userop_hash_v7(
+            &userop,
+            "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+            84532,
+        )
+        .unwrap();
+
+        // Verified against viem's getUserOperationHash with identical inputs.
+        assert_eq!(
+            format!("0x{}", hex::encode(hash)),
+            "0x3d4467d9a3c070eea659ef9a7cf42f1b4e87e14cd91792d869faf031b6fea3e8",
+            "v0.7 hash with real paymaster data must match viem"
+        );
+    }
+
+    #[test]
+    fn test_nonce_uint256_parsing() {
+        // Test that large nonces (used by viem with non-zero nonce keys) parse correctly
+        let userop = UserOperationV7 {
+            sender: "0x949bc374325a4f41e46e8e78a07d910332934542".to_string(),
+            nonce: "0x19d41c68d5e0000000000000000".to_string(), // Large nonce key
+            factory: None,
+            factory_data: None,
+            call_data: "0xb61d27f6".to_string(),
+            call_gas_limit: "0x186a0".to_string(),
+            verification_gas_limit: "0x30d40".to_string(),
+            pre_verification_gas: "0xc350".to_string(),
+            max_fee_per_gas: "0xf4240".to_string(),
+            max_priority_fee_per_gas: "0x7a120".to_string(),
+            paymaster: None,
+            paymaster_verification_gas_limit: None,
+            paymaster_post_op_gas_limit: None,
+            paymaster_data: None,
+            signature: format!("0x{}", "00".repeat(65)),
+        };
+
+        // Should not panic or produce zero hash
+        let hash = compute_userop_hash_v7(
+            &userop,
+            "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+            84532,
+        )
+        .unwrap();
+        assert_ne!(hex::encode(hash), "0".repeat(64));
     }
 }
