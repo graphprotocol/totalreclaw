@@ -141,7 +141,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | `totalreclaw_recall` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (via Memory trait) | |
 | `totalreclaw_forget` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (via Memory trait) | |
 | `totalreclaw_export` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (via Memory trait) | |
-| `totalreclaw_status` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | -- | |
+| `totalreclaw_status` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (billing cache) | |
 | `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Mem0, MCP Memory, ChatGPT, Claude adapters |
 | `totalreclaw_import` | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | JSON/Markdown re-import (MCP only) |
 | `totalreclaw_upgrade` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Stripe checkout URL |
@@ -161,29 +161,29 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Expanded memory types (7 categories) | Yes | Yes (via prompt) | Yes | Yes (heuristic) | Yes (via prompt) | Yes (category mapping) | fact, preference, decision, episodic, goal, context, summary |
 | Decision reasoning extraction | Yes | Yes (via prompt) | Yes | Yes (heuristic) | Yes (via prompt) | Yes (via ZeroClaw) | Extraction prompts require "chose X because Y" |
 | **Dedup** | | | | | | |
-| Content fingerprint (exact) | Yes | Yes | Yes | Yes | Yes (via MCP) | Server-side HMAC-SHA256 |
-| Within-batch semantic dedup | Yes | -- | -- | -- | -- | Cosine >= 0.9, during extraction |
-| Store-time near-duplicate | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | `consolidation.ts` — both plugin and MCP |
-| LLM-guided dedup (ADD/UPDATE/DELETE) | Yes | -- | Yes | Yes | -- | All tiers — uses user's own LLM API key, zero cost to us |
-| Bulk consolidation tool | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Self-hosted only (no batch delete on managed service) |
+| Content fingerprint (exact) | Yes | Yes | Yes | Yes | Yes (via MCP) | Yes | Server-side HMAC-SHA256 |
+| Within-batch semantic dedup | Yes | -- | -- | -- | -- | -- | Cosine >= 0.9, during extraction |
+| Store-time near-duplicate | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Yes (cosine >= 0.85) | `consolidation.ts` — both plugin and MCP; Rust checks 50 existing facts |
+| LLM-guided dedup (ADD/UPDATE/DELETE) | Yes | -- | Yes | Yes | -- | -- | All tiers — uses user's own LLM API key, zero cost to us |
+| Bulk consolidation tool | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Self-hosted only (no batch delete on managed service) |
 | **Pro Tier Gating** | | | | | | |
-| Feature gating via billing cache | Yes | -- | Yes | Yes | -- | Server returns `features` dict, plugin/skill gates client-side |
-| Server-side extraction config | Yes | -- | Yes | -- | -- | Relay returns `extraction_interval` + `max_facts_per_extraction` in billing status |
-| Unified extraction interval (3 turns) | Yes | -- | Yes | Yes | -- | Server-tunable via relay config (no npm publish needed) |
-| Max facts per extraction | Yes | -- | Yes | Yes | -- | Server-tunable via relay config (default 15) |
+| Feature gating via billing cache | Yes | -- | Yes | Yes | -- | Yes (2h TTL) | Server returns `features` dict, plugin/skill gates client-side |
+| Server-side extraction config | Yes | -- | Yes | -- | -- | Yes | Relay returns `extraction_interval` + `max_facts_per_extraction` in billing status |
+| Unified extraction interval (3 turns) | Yes | -- | Yes | Yes | -- | Yes | Server-tunable via relay config (no npm publish needed) |
+| Max facts per extraction | Yes | -- | Yes | Yes | -- | Yes | Server-tunable via relay config (default 15) |
 | Dual-chain routing | -- | -- | -- | -- | -- | Relay-side: routes to Base Sepolia (free) or Gnosis mainnet (pro) |
 | **Batching** | | | | | | |
 | Client batching (multi-call UserOps) | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Hermes stores facts one-by-one (no ERC-4337 batch support in Python) |
 | **Billing** | | | | | | |
-| Quota warnings (>80%) | Yes | -- | Yes | Yes | -- | Injected via on_session_start hook |
-| 403 handling + cache invalidation | Yes | Yes | Yes | -- | Yes (via MCP) | |
+| Quota warnings (>80%) | Yes | -- | Yes | Yes | -- | Yes | Injected via on_session_start hook; ZeroClaw via quota_warning() method |
+| 403 handling + cache invalidation | Yes | Yes | Yes | -- | Yes (via MCP) | Yes | ZeroClaw invalidates billing cache on 403, returns QuotaExceeded error |
 | **Search Optimizations** | | | | | | |
-| Hot cache + two-tier search | Yes (managed) | -- | -- | -- | -- | Skips remote query if cached query similar |
-| Dynamic candidate pool sizing | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Server-configurable via billing features; env overrides `CANDIDATE_POOL_MAX_FREE`/`CANDIDATE_POOL_MAX_PRO` |
-| Server-side candidate pool | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Relay computes `max_candidate_pool` from vault size + tier; clients read from billing cache with local fallback |
-| BM25 + Cosine + RRF reranking | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Intent-weighted |
+| Hot cache + two-tier search | Yes (managed) | -- | -- | -- | -- | Yes (30 entries, cosine >= 0.85) | Skips remote query if cached query similar |
+| Dynamic candidate pool sizing | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Yes | Server-configurable via billing features; env overrides `CANDIDATE_POOL_MAX_FREE`/`CANDIDATE_POOL_MAX_PRO` |
+| Server-side candidate pool | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Yes | Relay computes `max_candidate_pool` from vault size + tier; clients read from billing cache with local fallback |
+| BM25 + Cosine + RRF reranking | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes | Intent-weighted |
 | **Admin & Analytics** | | | | | | |
-| X-TotalReclaw-Client header | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Sent on every relay request |
+| X-TotalReclaw-Client header | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (rust-client:zeroclaw) | Sent on every relay request |
 | Admin dashboard | -- | -- | -- | -- | -- | Admin-only (relay service), not a client feature |
 
 ### Storage Mode Support
@@ -223,6 +223,7 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | ZeroClaw no import/migrate | LOW | Rust crate implements core Memory trait + status + export + upgrade (Stripe checkout) but not import adapters or migrate tool. |
 | ZeroClaw no client batching | RESOLVED | Rust crate supports executeBatch() multi-call UserOps (up to 15 facts per batch). |
 | ZeroClaw UserOp submission | RESOLVED | Native Rust ERC-4337 v0.7 UserOp construction via alloy-primitives/alloy-sol-types. Hash + signing verified byte-for-byte against viem. |
+| ZeroClaw client-consistency | RESOLVED | Rust crate now fully compliant: client ID header, billing cache (2h TTL), quota warnings, 403 handling, dynamic candidate pool, store-time cosine dedup (0.85), hot cache (30 entries), importance normalization, auto-recall top_k=8. 24 spec compliance tests + 2 E2E tests against staging. |
 
 ---
 
