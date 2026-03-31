@@ -45,8 +45,10 @@
 
 use base64::Engine;
 
+use crate::billing::{self, BillingCache};
 use crate::crypto::{self, DerivedKeys};
 use crate::embedding::{self, EmbeddingMode, EmbeddingProvider};
+use crate::hotcache::HotCache;
 use crate::lsh::LshHasher;
 use crate::reranker::{self, Candidate};
 use crate::relay::{RelayClient, RelayConfig};
@@ -58,8 +60,8 @@ use crate::Result;
 /// Default relay URL.
 const DEFAULT_RELAY_URL: &str = "https://api.totalreclaw.xyz";
 
-/// Default max candidates for search.
-const DEFAULT_MAX_CANDIDATES: usize = 100;
+/// Auto-recall top_k constant (after reranking). Matches all other clients.
+const AUTO_RECALL_TOP_K: usize = 8;
 
 // ---------------------------------------------------------------------------
 // ZeroClaw-compatible types
@@ -110,6 +112,8 @@ pub struct TotalReclawMemory {
     embedding_provider: Box<dyn EmbeddingProvider>,
     relay: RelayClient,
     private_key: [u8; 32],
+    /// In-memory hot cache for recent recall results.
+    hot_cache: std::sync::Mutex<HotCache>,
 }
 
 /// Configuration for creating a TotalReclawMemory instance.
@@ -187,6 +191,7 @@ impl TotalReclawMemory {
             embedding_provider,
             relay,
             private_key,
+            hot_cache: std::sync::Mutex::new(HotCache::new()),
         })
     }
 
@@ -220,6 +225,11 @@ impl TotalReclawMemory {
     }
 
     /// Store a memory entry using native UserOp.
+    ///
+    /// Importance defaults to 10 (max) if not specified. Per the client-consistency
+    /// spec, `decayScore = importance / 10`, so importance=10 -> decayScore=1.0.
+    ///
+    /// Clears the hot cache after storing to avoid stale results.
     pub async fn store(
         &self,
         _key: &str,
@@ -227,10 +237,26 @@ impl TotalReclawMemory {
         category: MemoryCategory,
         _session_id: Option<&str>,
     ) -> Result<()> {
+        self.store_with_importance(_key, content, category, _session_id, 10.0)
+            .await
+    }
+
+    /// Store a memory entry with explicit importance (1-10 scale).
+    ///
+    /// Per the client-consistency spec, `decayScore = importance / 10`.
+    pub async fn store_with_importance(
+        &self,
+        _key: &str,
+        content: &str,
+        category: MemoryCategory,
+        _session_id: Option<&str>,
+        importance: f64,
+    ) -> Result<()> {
         let source = format!("zeroclaw_{}", category);
-        store::store_fact(
+        store::store_fact_with_importance(
             content,
             &source,
+            importance,
             &self.keys,
             &self.lsh_hasher,
             self.embedding_provider.as_ref(),
@@ -238,6 +264,11 @@ impl TotalReclawMemory {
             Some(&self.private_key),
         )
         .await?;
+
+        // Invalidate hot cache after store (new data available)
+        if let Ok(mut cache) = self.hot_cache.lock() {
+            cache.clear();
+        }
         Ok(())
     }
 
@@ -248,7 +279,7 @@ impl TotalReclawMemory {
         &self,
         facts: &[(&str, &str)], // (content, source) pairs
     ) -> Result<Vec<String>> {
-        store::store_fact_batch(
+        let result = store::store_fact_batch(
             facts,
             &self.keys,
             &self.lsh_hasher,
@@ -256,38 +287,60 @@ impl TotalReclawMemory {
             &self.relay,
             &self.private_key,
         )
-        .await
+        .await?;
+
+        // Invalidate hot cache after batch store
+        if let Ok(mut cache) = self.hot_cache.lock() {
+            cache.clear();
+        }
+        Ok(result)
     }
 
     /// Recall memories matching a query.
+    ///
+    /// Uses a hot cache to skip remote queries when a semantically similar
+    /// query (cosine >= 0.85) was recently answered.
     pub async fn recall(
         &self,
         query: &str,
         limit: usize,
         _session_id: Option<&str>,
     ) -> Result<Vec<MemoryEntry>> {
-        // 1. Generate query trapdoors (word hashes + stems)
+        // 1. Generate query embedding first (needed for both cache check and search)
+        let query_embedding = self.embedding_provider.embed(query).await?;
+
+        // 2. Hot cache check: skip remote query if similar query was recently answered
+        if let Ok(cache) = self.hot_cache.lock() {
+            if let Some(cached_results) = cache.lookup(&query_embedding) {
+                return Ok(cached_results);
+            }
+        }
+
+        // 3. Generate query trapdoors (word hashes + stems)
         let word_trapdoors = crate::blind::generate_blind_indices(query);
 
-        // 2. Generate query embedding and LSH trapdoors
-        let query_embedding = self.embedding_provider.embed(query).await?;
+        // 4. Generate LSH trapdoors from embedding
         let embedding_f64: Vec<f64> = query_embedding.iter().map(|&f| f as f64).collect();
         let lsh_trapdoors = self.lsh_hasher.hash(&embedding_f64)?;
 
-        // 3. Combine all trapdoors
+        // 5. Combine all trapdoors
         let mut all_trapdoors = word_trapdoors;
         all_trapdoors.extend(lsh_trapdoors.into_iter());
 
-        // 4. Search subgraph
+        // 6. Dynamic candidate pool sizing from billing cache
+        let billing_cache = billing::read_cache();
+        let max_candidates = billing::get_max_candidate_pool(billing_cache.as_ref());
+
+        // 7. Search subgraph
         let candidates = search::search_candidates(
             &self.relay,
             self.relay.wallet_address(),
             &all_trapdoors,
-            DEFAULT_MAX_CANDIDATES,
+            max_candidates,
         )
         .await?;
 
-        // 5. Decrypt candidates and build reranker input
+        // 8. Decrypt candidates and build reranker input
         let mut rerank_candidates = Vec::new();
         for fact in &candidates {
             // Decrypt content
@@ -326,11 +379,11 @@ impl TotalReclawMemory {
             });
         }
 
-        // 6. Rerank
+        // 9. Rerank
         let ranked = reranker::rerank(query, &query_embedding, &rerank_candidates, limit)?;
 
-        // 7. Convert to MemoryEntry
-        Ok(ranked
+        // 10. Convert to MemoryEntry
+        let results: Vec<MemoryEntry> = ranked
             .into_iter()
             .map(|r| MemoryEntry {
                 id: r.id.clone(),
@@ -341,7 +394,22 @@ impl TotalReclawMemory {
                 session_id: None,
                 score: Some(r.score),
             })
-            .collect())
+            .collect();
+
+        // 11. Update hot cache
+        if let Ok(mut cache) = self.hot_cache.lock() {
+            cache.insert(query_embedding, results.clone());
+        }
+
+        Ok(results)
+    }
+
+    /// Auto-recall: search with the spec-mandated top_k=8.
+    ///
+    /// Per the client-consistency spec, auto-recall at session start
+    /// uses the raw user message as query and returns top 8 after reranking.
+    pub async fn auto_recall(&self, query: &str) -> Result<Vec<MemoryEntry>> {
+        self.recall(query, AUTO_RECALL_TOP_K, None).await
     }
 
     /// Get a specific memory entry by key/ID.
@@ -399,9 +467,25 @@ impl TotalReclawMemory {
         self.relay.health_check().await.unwrap_or(false)
     }
 
-    /// Billing status -- tier, usage, limits.
+    /// Billing status -- tier, usage, limits. Also updates the billing cache.
     pub async fn status(&self) -> Result<crate::relay::BillingStatus> {
         self.relay.billing_status().await
+    }
+
+    /// Fetch billing cache (from disk or relay, with 2h TTL).
+    ///
+    /// Returns a cached billing status with parsed feature flags.
+    pub async fn billing_cache(&self) -> Result<BillingCache> {
+        billing::fetch_billing_status(&self.relay).await
+    }
+
+    /// Check for quota warnings (>80% usage).
+    ///
+    /// Returns a human-readable warning message or None if usage is below 80%.
+    /// Call at session start (before_agent_start equivalent).
+    pub async fn quota_warning(&self) -> Option<String> {
+        let cache = billing::fetch_billing_status(&self.relay).await.ok()?;
+        cache.quota_warning_message()
     }
 
     /// Export all memories as plaintext (decrypted).

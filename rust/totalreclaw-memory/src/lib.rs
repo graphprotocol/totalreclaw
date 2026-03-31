@@ -19,10 +19,12 @@
 //! - [`setup`] — First-use setup wizard (credentials + embedding config)
 
 pub mod backend;
+pub mod billing;
 pub mod blind;
 pub mod crypto;
 pub mod embedding;
 pub mod fingerprint;
+pub mod hotcache;
 pub mod lsh;
 pub mod protobuf;
 pub mod relay;
@@ -59,6 +61,9 @@ pub enum Error {
 
     #[error("HTTP error: {0}")]
     Http(String),
+
+    #[error("quota exceeded: {0}")]
+    QuotaExceeded(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
