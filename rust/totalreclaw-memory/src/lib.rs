@@ -19,6 +19,7 @@
 //! - [`setup`] — First-use setup wizard (credentials + embedding config)
 
 pub mod backend;
+pub mod billing;
 pub mod blind;
 pub mod crypto;
 pub mod embedding;
