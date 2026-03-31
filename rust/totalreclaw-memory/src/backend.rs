@@ -226,6 +226,9 @@ impl TotalReclawMemory {
 
     /// Store a memory entry using native UserOp.
     ///
+    /// Importance defaults to 10 (max) if not specified. Per the client-consistency
+    /// spec, `decayScore = importance / 10`, so importance=10 -> decayScore=1.0.
+    ///
     /// Clears the hot cache after storing to avoid stale results.
     pub async fn store(
         &self,
@@ -234,10 +237,26 @@ impl TotalReclawMemory {
         category: MemoryCategory,
         _session_id: Option<&str>,
     ) -> Result<()> {
+        self.store_with_importance(_key, content, category, _session_id, 10.0)
+            .await
+    }
+
+    /// Store a memory entry with explicit importance (1-10 scale).
+    ///
+    /// Per the client-consistency spec, `decayScore = importance / 10`.
+    pub async fn store_with_importance(
+        &self,
+        _key: &str,
+        content: &str,
+        category: MemoryCategory,
+        _session_id: Option<&str>,
+        importance: f64,
+    ) -> Result<()> {
         let source = format!("zeroclaw_{}", category);
-        store::store_fact(
+        store::store_fact_with_importance(
             content,
             &source,
+            importance,
             &self.keys,
             &self.lsh_hasher,
             self.embedding_provider.as_ref(),
