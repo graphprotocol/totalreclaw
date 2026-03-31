@@ -371,8 +371,6 @@ fn compute_userop_hash(
     entrypoint: &str,
     chain_id: u64,
 ) -> Result<[u8; 32]> {
-    use tiny_keccak::{Hasher, Keccak};
-
     // Pack the UserOp fields (excluding signature) and keccak256
     let pack = pack_userop_for_hash(userop)?;
     let inner_hash = keccak256_hash(&pack);

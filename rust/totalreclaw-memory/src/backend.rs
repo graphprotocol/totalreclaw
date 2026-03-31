@@ -28,7 +28,7 @@
 //! relay_url = "https://api.totalreclaw.xyz"
 //! ```
 //!
-//! ## Category Mapping (TotalReclaw → ZeroClaw)
+//! ## Category Mapping (TotalReclaw -> ZeroClaw)
 //!
 //! ZeroClaw applies 7-day half-life decay to non-Core entries at retrieval time.
 //! We map TotalReclaw memory types to ZeroClaw categories:
@@ -52,6 +52,7 @@ use crate::reranker::{self, Candidate};
 use crate::relay::{RelayClient, RelayConfig};
 use crate::search;
 use crate::store;
+use crate::wallet;
 use crate::Result;
 
 /// Default relay URL.
@@ -108,6 +109,7 @@ pub struct TotalReclawMemory {
     lsh_hasher: LshHasher,
     embedding_provider: Box<dyn EmbeddingProvider>,
     relay: RelayClient,
+    private_key: [u8; 32],
 }
 
 /// Configuration for creating a TotalReclawMemory instance.
@@ -137,8 +139,8 @@ impl Default for TotalReclawConfig {
 impl TotalReclawMemory {
     /// Create a new TotalReclaw memory backend.
     ///
-    /// This initializes all crypto keys, the LSH hasher, the embedding provider,
-    /// registers with the relay, and resolves the Smart Account address.
+    /// This initializes all crypto keys, derives the EOA and Smart Account,
+    /// sets up the LSH hasher, the embedding provider, and registers with the relay.
     pub async fn new(config: TotalReclawConfig) -> Result<Self> {
         // Derive keys from mnemonic
         let keys = crypto::derive_keys_from_mnemonic(&config.mnemonic)?;
@@ -149,48 +151,63 @@ impl TotalReclawMemory {
         let embedding_provider =
             embedding::create_provider(config.embedding_mode, config.embedding_dims)?;
 
+        // Derive EOA + private key natively (BIP-44)
+        let eth_wallet = wallet::derive_eoa(&config.mnemonic)?;
+        let private_key = eth_wallet.private_key;
+
+        // Resolve Smart Account address via CREATE2 factory
+        let wallet_address =
+            wallet::resolve_smart_account_address(&eth_wallet.address, "https://sepolia.base.org")
+                .await?;
+
         // Compute auth key hash and hex
         let auth_key_hex = hex::encode(keys.auth_key);
         let auth_key_hash = crypto::compute_auth_key_hash(&keys.auth_key);
         let salt_hex = hex::encode(keys.salt);
 
-        // Create relay client (initially without wallet address)
-        let mut relay_config = RelayConfig {
+        // Create relay client with wallet address
+        let relay_config = RelayConfig {
             relay_url: config.relay_url.clone(),
             auth_key_hex: auth_key_hex.clone(),
-            wallet_address: String::new(),
+            wallet_address: wallet_address.clone(),
             is_test: config.is_test,
+            chain_id: 84532, // Base Sepolia (free tier)
         };
-
-        let temp_relay = RelayClient::new(relay_config.clone());
+        let relay = RelayClient::new(relay_config);
 
         // Register with relay (idempotent)
-        let _user_id = temp_relay
+        let _user_id = relay
             .register(&auth_key_hash, &salt_hex)
             .await
             .ok(); // Non-fatal if registration fails (may already be registered)
-
-        // Resolve Smart Account address
-        let wallet_address = temp_relay
-            .resolve_address(&auth_key_hex)
-            .await
-            .unwrap_or_default();
-
-        // Recreate relay client with wallet address
-        relay_config.wallet_address = wallet_address;
-        let relay = RelayClient::new(relay_config);
 
         Ok(Self {
             keys,
             lsh_hasher,
             embedding_provider,
             relay,
+            private_key,
         })
     }
 
     /// Get the wallet address.
     pub fn wallet_address(&self) -> &str {
         self.relay.wallet_address()
+    }
+
+    /// Get a reference to the relay client.
+    pub fn relay(&self) -> &RelayClient {
+        &self.relay
+    }
+
+    /// Get a reference to the derived keys.
+    pub fn keys(&self) -> &DerivedKeys {
+        &self.keys
+    }
+
+    /// Get a reference to the private key.
+    pub fn private_key(&self) -> &[u8; 32] {
+        &self.private_key
     }
 
     // -----------------------------------------------------------------------
@@ -202,7 +219,7 @@ impl TotalReclawMemory {
         "totalreclaw"
     }
 
-    /// Store a memory entry.
+    /// Store a memory entry using native UserOp.
     pub async fn store(
         &self,
         _key: &str,
@@ -218,9 +235,28 @@ impl TotalReclawMemory {
             &self.lsh_hasher,
             self.embedding_provider.as_ref(),
             &self.relay,
+            Some(&self.private_key),
         )
         .await?;
         Ok(())
+    }
+
+    /// Store multiple memory entries as a single batched UserOp.
+    ///
+    /// Gas savings: ~64% vs individual submissions for batch of 5.
+    pub async fn store_batch(
+        &self,
+        facts: &[(&str, &str)], // (content, source) pairs
+    ) -> Result<Vec<String>> {
+        store::store_fact_batch(
+            facts,
+            &self.keys,
+            &self.lsh_hasher,
+            self.embedding_provider.as_ref(),
+            &self.relay,
+            &self.private_key,
+        )
+        .await
     }
 
     /// Recall memories matching a query.
@@ -347,9 +383,9 @@ impl TotalReclawMemory {
         Ok(entries)
     }
 
-    /// Forget (soft-delete) a memory entry.
+    /// Forget (soft-delete) a memory entry using native UserOp.
     pub async fn forget(&self, key: &str) -> Result<bool> {
-        store::store_tombstone(key, &self.relay).await?;
+        store::store_tombstone(key, &self.relay, Some(&self.private_key)).await?;
         Ok(true)
     }
 
@@ -363,7 +399,7 @@ impl TotalReclawMemory {
         self.relay.health_check().await.unwrap_or(false)
     }
 
-    /// Billing status — tier, usage, limits.
+    /// Billing status -- tier, usage, limits.
     pub async fn status(&self) -> Result<crate::relay::BillingStatus> {
         self.relay.billing_status().await
     }
@@ -371,5 +407,10 @@ impl TotalReclawMemory {
     /// Export all memories as plaintext (decrypted).
     pub async fn export(&self) -> Result<Vec<MemoryEntry>> {
         self.list(None, None).await
+    }
+
+    /// Upgrade to Pro tier -- returns Stripe checkout URL.
+    pub async fn upgrade(&self) -> Result<String> {
+        self.relay.create_checkout().await
     }
 }

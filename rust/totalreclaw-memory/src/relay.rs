@@ -15,6 +15,7 @@ pub struct RelayClient {
     auth_key_hex: String,
     wallet_address: String,
     is_test: bool,
+    chain_id: u64,
 }
 
 /// Response from POST /v1/register.
@@ -56,6 +57,19 @@ pub struct RelayConfig {
     pub auth_key_hex: String,
     pub wallet_address: String,
     pub is_test: bool,
+    pub chain_id: u64,
+}
+
+impl Default for RelayConfig {
+    fn default() -> Self {
+        Self {
+            relay_url: String::new(),
+            auth_key_hex: String::new(),
+            wallet_address: String::new(),
+            is_test: false,
+            chain_id: 84532, // Base Sepolia (free tier default)
+        }
+    }
 }
 
 impl RelayClient {
@@ -72,6 +86,7 @@ impl RelayClient {
             auth_key_hex: config.auth_key_hex,
             wallet_address: config.wallet_address,
             is_test: config.is_test,
+            chain_id: config.chain_id,
         }
     }
 
@@ -195,11 +210,46 @@ impl RelayClient {
             .ok_or_else(|| Error::Http("GraphQL returned no data".into()))
     }
 
-    /// Submit a protobuf payload via the bundler proxy.
+    /// Submit a single protobuf payload as a native UserOp.
+    pub async fn submit_fact_native(
+        &self,
+        protobuf_payload: &[u8],
+        private_key: &[u8; 32],
+    ) -> Result<crate::userop::SubmitResult> {
+        let calldata = crate::userop::encode_single_call(protobuf_payload);
+        crate::userop::submit_userop(
+            &calldata,
+            &self.wallet_address,
+            private_key,
+            &self.relay_url,
+            &self.auth_key_hex,
+            self.chain_id,
+            self.is_test,
+        )
+        .await
+    }
+
+    /// Submit multiple protobuf payloads as a single batched UserOp.
+    pub async fn submit_fact_batch_native(
+        &self,
+        protobuf_payloads: &[Vec<u8>],
+        private_key: &[u8; 32],
+    ) -> Result<crate::userop::SubmitResult> {
+        let calldata = crate::userop::encode_batch_call(protobuf_payloads)?;
+        crate::userop::submit_userop(
+            &calldata,
+            &self.wallet_address,
+            private_key,
+            &self.relay_url,
+            &self.auth_key_hex,
+            self.chain_id,
+            self.is_test,
+        )
+        .await
+    }
+
+    /// Submit a protobuf payload via the bundler proxy (legacy, non-native).
     pub async fn submit_protobuf(&self, payload: &[u8]) -> Result<SubmitResult> {
-        // The relay's bundler endpoint accepts raw protobuf for direct submission
-        // when using the X-TotalReclaw-Direct-Submit header.
-        // Fallback: wrap in JSON-RPC eth_sendUserOperation format.
         let payload_hex = hex::encode(payload);
 
         let resp = self
@@ -266,6 +316,31 @@ impl RelayClient {
             .map_err(|e| Error::Http(e.to_string()))
     }
 
+    /// Create a Stripe checkout session for upgrading to Pro.
+    pub async fn create_checkout(&self) -> Result<String> {
+        let resp = self
+            .client
+            .post(format!("{}/v1/billing/checkout", self.relay_url))
+            .headers(self.headers())
+            .json(&serde_json::json!({
+                "wallet_address": self.wallet_address,
+                "tier": "pro",
+            }))
+            .send()
+            .await
+            .map_err(|e| Error::Http(e.to_string()))?;
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::Http(e.to_string()))?;
+
+        body["checkout_url"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| Error::Http("No checkout_url in response".into()))
+    }
+
     /// Get the relay URL.
     pub fn relay_url(&self) -> &str {
         &self.relay_url
@@ -275,6 +350,21 @@ impl RelayClient {
     pub fn wallet_address(&self) -> &str {
         &self.wallet_address
     }
+
+    /// Get the auth key hex.
+    pub fn auth_key_hex(&self) -> &str {
+        &self.auth_key_hex
+    }
+
+    /// Whether this is a test client.
+    pub fn is_test(&self) -> bool {
+        self.is_test
+    }
+
+    /// Get the chain ID.
+    pub fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
 }
 
 /// Result of submitting a UserOp.
@@ -283,74 +373,4 @@ pub struct SubmitResult {
     pub tx_hash: String,
     pub user_op_hash: String,
     pub success: bool,
-}
-
-// ---------------------------------------------------------------------------
-// Smart Account address derivation (CREATE2 via factory eth_call)
-// ---------------------------------------------------------------------------
-
-/// SimpleAccountFactory address (v0.7, same on all EVM chains).
-const SIMPLE_ACCOUNT_FACTORY: &str = "0x91E60e0613810449d098b0b5Ec8b51A0FE8c8985";
-
-/// Derive the Smart Account address by calling getAddress(owner, 0) on the factory.
-///
-/// Uses Base Sepolia public RPC. The factory returns the CREATE2 deterministic address.
-pub async fn resolve_smart_account(eoa_address: &str) -> Result<String> {
-    // ABI-encode: getAddress(address,uint256)
-    // keccak256("getAddress(address,uint256)")[:4] = 0x8cb84e18
-    let selector = "8cb84e18";
-    let owner = eoa_address
-        .trim_start_matches("0x")
-        .to_lowercase();
-    let owner_padded = format!("{:0>64}", owner);
-    let salt_padded = "0".repeat(64);
-    let calldata = format!("0x{}{}{}", selector, owner_padded, salt_padded);
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .post("https://sepolia.base.org")
-        .json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "eth_call",
-            "params": [
-                {"to": SIMPLE_ACCOUNT_FACTORY, "data": calldata},
-                "latest"
-            ],
-            "id": 1
-        }))
-        .send()
-        .await
-        .map_err(|e| Error::Http(e.to_string()))?;
-
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| Error::Http(e.to_string()))?;
-
-    let result = body["result"]
-        .as_str()
-        .unwrap_or("");
-
-    if result.len() < 42 {
-        return Err(Error::Http("Factory returned invalid address".into()));
-    }
-
-    // Result is ABI-encoded address (32 bytes, last 20 bytes = 40 hex chars)
-    let address = format!("0x{}", &result[result.len() - 40..]);
-    Ok(address.to_lowercase())
-}
-
-/// Derive EOA address from BIP-39 mnemonic via BIP-44 path m/44'/60'/0'/0/0.
-///
-/// This is a simplified derivation for the test harness. In production,
-/// the full HD wallet derivation should be used.
-pub fn derive_eoa_address(mnemonic: &str) -> Result<String> {
-    // Use the BIP-39 seed to derive the Ethereum EOA via BIP-44
-    // For now, shell out to a helper or use a simplified approach.
-    // The actual derivation requires: seed → HMAC-SHA512 → secp256k1 → keccak256
-    // We'll use the coin_bip39 + k256 crates in production.
-    // For the test, we derive via Python helper.
-    Err(Error::Http(
-        "EOA derivation not yet implemented natively — use Python helper or pass address directly".into(),
-    ))
 }

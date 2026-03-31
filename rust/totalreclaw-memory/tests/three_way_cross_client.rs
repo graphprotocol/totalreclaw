@@ -55,6 +55,7 @@ async fn test_three_way_cross_client() {
             auth_key_hex: auth_key_hex.clone(),
             wallet_address: String::new(),
             is_test: true,
+            chain_id: 84532,
         },
     );
 
@@ -304,6 +305,7 @@ async fn store_via_rust(mnemonic: &str, fact_text: &str) -> bool {
             auth_key_hex: auth_key_hex.clone(),
             wallet_address: String::new(),
             is_test: true,
+            chain_id: 84532,
         },
     );
 
@@ -359,6 +361,7 @@ async fn recall_via_rust(mnemonic: &str, wallet: &str, auth_key_hex: &str) -> Ve
             auth_key_hex: auth_key_hex.to_string(),
             wallet_address: wallet.to_string(),
             is_test: true,
+            chain_id: 84532,
         },
     );
 
