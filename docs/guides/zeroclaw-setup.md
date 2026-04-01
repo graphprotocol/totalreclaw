@@ -61,8 +61,9 @@ Your text → AES-256-GCM encrypt → Blind indices (SHA-256) + LSH buckets
 
 On recall:
 ```
-Query → Blind index trapdoors → Subgraph search → Decrypt candidates
-  → BM25 + Cosine + RRF reranking → Top results
+Query → Hot cache check (cosine >= 0.85 → instant return)
+  → Blind index trapdoors → Subgraph search → Decrypt candidates
+  → BM25 + Cosine + RRF reranking → Top results → Cache result
 ```
 
 The relay never sees your plaintext. The subgraph stores only encrypted blobs and blind hashes.
@@ -76,6 +77,7 @@ Because TotalReclaw implements ZeroClaw's `Memory` trait, you get these features
 - **Decay** — Core memories persist forever; episodic/context memories fade naturally (7-day half-life, handled by ZeroClaw)
 - **Conflict resolution** — ZeroClaw checks semantic similarity before storing duplicates
 - **Cross-channel persistence** — memories work across all 25+ ZeroClaw channels
+- **Hot cache** — recent query results are cached in-memory. If a new query is semantically similar (cosine >= 0.85) to one answered recently, cached results are returned instantly without hitting the subgraph. Holds up to 30 entries per session. Automatically cleared after storing new facts to prevent stale results.
 
 ### Category Mapping
 

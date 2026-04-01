@@ -3,7 +3,9 @@ import type { LLMClient } from './agent-end';
 import type { ExtractedFact } from '../extraction/prompts';
 import {
   PRE_COMPACTION_PROMPT,
+  DEBRIEF_SYSTEM_PROMPT,
   validateExtractionResponse,
+  parseDebriefResponse,
 } from '../extraction/prompts';
 import { handleQuotaError } from '../billing.js';
 
@@ -105,6 +107,51 @@ export async function preCompact(
       }
     }
 
+    // Session debrief — after regular extraction
+    let debriefStored = 0;
+    if (llmClient && validation.facts && validation.facts.length > 0) {
+      try {
+        const storedTexts = validation.facts
+          .filter(f => f.action === 'ADD' || f.action === 'UPDATE')
+          .map(f => f.text);
+        const alreadyStored = storedTexts.length > 0
+          ? storedTexts.map(t => `- ${t}`).join('\n')
+          : '(none)';
+        const debriefSystemPrompt = DEBRIEF_SYSTEM_PROMPT.replace('{already_stored_facts}', alreadyStored);
+
+        const debriefResponse = await llmClient.generate(
+          debriefSystemPrompt,
+          `Review this conversation and provide a debrief:\n\n${input.transcript}`,
+        );
+
+        const debriefItems = parseDebriefResponse(debriefResponse);
+        for (const item of debriefItems) {
+          if (quotaExceeded) break;
+          const debriefMetadata: FactMetadata = {
+            importance: item.importance / 10,
+            source: 'nanoclaw_debrief',
+            tags: [
+              `namespace:${input.groupFolder}`,
+              item.type,
+            ],
+          };
+          try {
+            await client.remember(item.text, debriefMetadata);
+            debriefStored++;
+          } catch (err: unknown) {
+            if (handleQuotaError(err)) {
+              quotaExceeded = true;
+            }
+          }
+        }
+        if (debriefStored > 0) {
+          console.error(`Session debrief: stored ${debriefStored} items`);
+        }
+      } catch (debriefErr) {
+        console.error('Pre-compact debrief failed:', debriefErr);
+      }
+    }
+
     let claudeMdUpdated = false;
     if (input.claudeMdPath) {
       claudeMdUpdated = await syncToClaudeMd(client, input.groupFolder, input.claudeMdPath);
@@ -112,7 +159,7 @@ export async function preCompact(
 
     return {
       factsExtracted: validation.facts!.length,
-      factsStored,
+      factsStored: factsStored + debriefStored,
       claudeMdUpdated,
     };
   } catch (error) {

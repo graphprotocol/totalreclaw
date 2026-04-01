@@ -127,6 +127,80 @@ Conversation context:
   },
 };
 
+// ---------------------------------------------------------------------------
+// Debrief Prompt (canonical — must be identical across all implementations)
+// ---------------------------------------------------------------------------
+
+export const DEBRIEF_SYSTEM_PROMPT = `You are reviewing a conversation that just ended. The following facts were
+already extracted and stored during this conversation:
+
+{already_stored_facts}
+
+Your job is to capture what turn-by-turn extraction MISSED. Focus on:
+
+1. **Broader context** — What was the conversation about overall? What project,
+   problem, or topic tied the discussion together?
+2. **Outcomes & conclusions** — What was decided, agreed upon, or resolved?
+3. **What was attempted** — What approaches were tried? What worked, what didn't, and why?
+4. **Relationships** — How do topics discussed relate to each other or to things
+   from previous conversations?
+5. **Open threads** — What was left unfinished or needs follow-up?
+
+Do NOT repeat facts already stored. Only add genuinely new information that provides
+broader context a future conversation would benefit from.
+
+Return a JSON array (no markdown, no code fences):
+[{"text": "...", "type": "summary|context", "importance": N}]
+
+- Use type "summary" for conclusions, outcomes, and decisions-of-the-session
+- Use type "context" for broader project context, open threads, and what-was-tried
+- Importance 7-8 for most debrief items (they are high-value by definition)
+- Maximum 5 items (debriefs should be concise, not exhaustive)
+- Each item should be 1-3 sentences, self-contained
+
+If the conversation was too short or trivial to warrant a debrief, return: []`;
+
+export interface DebriefItem {
+  text: string;
+  type: 'summary' | 'context';
+  importance: number;
+}
+
+/**
+ * Parse a debrief response into validated DebriefItems.
+ */
+export function parseDebriefResponse(response: string): DebriefItem[] {
+  let cleaned = response.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+  }
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .filter(
+        (item: unknown) =>
+          item &&
+          typeof item === 'object' &&
+          typeof (item as Record<string, unknown>).text === 'string' &&
+          ((item as Record<string, unknown>).text as string).length >= 5,
+      )
+      .map((item: unknown) => {
+        const d = item as Record<string, unknown>;
+        const type: 'summary' | 'context' = d.type === 'summary' ? 'summary' : 'context';
+        const rawImportance = typeof d.importance === 'number' ? d.importance : 7;
+        const importance = Math.max(1, Math.min(10, rawImportance));
+        return { text: String(d.text).slice(0, 512), type, importance };
+      })
+      .filter((d) => d.importance >= 6)
+      .slice(0, 5);
+  } catch {
+    return [];
+  }
+}
+
 export function formatConversationHistory(
   turns: Array<{ role: 'user' | 'assistant'; content: string; timestamp: Date }>
 ): string {

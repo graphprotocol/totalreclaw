@@ -147,12 +147,14 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | `totalreclaw_upgrade` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Stripe checkout URL |
 | `totalreclaw_migrate` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Testnet-to-mainnet migration after Pro upgrade |
 | `totalreclaw_consolidate` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Self-hosted only (no batch delete on managed service) |
+| `totalreclaw_debrief` | Yes (auto) | Yes | Yes (auto) | Yes (auto) | Yes (via MCP) | Yes (debrief method) | Session debrief — broader context at conversation end |
 | **Automatic Memory** | | | | | | | |
 | Auto-search (before_agent_start) | Yes | -- | Yes (hook) | Yes (pre_llm_call) | -- | Yes (Memory trait) | ZeroClaw calls recall() at conversation start |
 | Auto-extract (agent_end) | Yes | -- | Yes (hook) | Yes (post_llm_call) | -- | Yes (Memory trait) | ZeroClaw consolidation calls store() |
 | Pre-compaction flush | Yes | -- | Yes (hook) | -- | -- | -- | Hermes has no compaction hook |
 | Pre-reset flush | Yes | -- | -- | -- | -- | -- | OpenClaw only |
 | Session-end flush | -- | -- | -- | Yes (on_session_end) | -- | -- | Hermes plugin flushes unprocessed messages |
+| Session debrief | Yes (hook) | Yes (tool) | Yes (hook) | Yes (hook) | Yes (via MCP tool) | Yes (debrief method) | Captures broader context at session end; max 5 items |
 | CLAUDE.md sync | -- | -- | Yes | -- | -- | -- | NanoClaw syncs high-importance facts |
 | Routine-based extraction | -- | -- | -- | -- | Yes (cron) | -- | IronClaw routines engine; see ironclaw-setup.md |
 | Decay handling | -- | -- | -- | -- | -- | Yes (via ZeroClaw) | ZeroClaw applies 7-day half-life at retrieval time |
@@ -224,6 +226,9 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | ZeroClaw no client batching | RESOLVED | Rust crate supports executeBatch() multi-call UserOps (up to 15 facts per batch). |
 | ZeroClaw UserOp submission | RESOLVED | Native Rust ERC-4337 v0.7 UserOp construction via alloy-primitives/alloy-sol-types. Hash + signing verified byte-for-byte against viem. |
 | ZeroClaw client-consistency | RESOLVED | Rust crate now fully compliant: client ID header, billing cache (2h TTL), quota warnings, 403 handling, dynamic candidate pool, store-time cosine dedup (0.85), hot cache (30 entries), importance normalization, auto-recall top_k=8. 24 spec compliance tests + 2 E2E tests against staging. |
+| Debrief bypasses store-time dedup | LOW | MCP, NanoClaw, Hermes call `client.remember()` directly for debrief items (no cosine dedup). Only OpenClaw routes through `storeExtractedFacts()`. LLM-level dedup via prompt + server-side content fingerprint mitigate. |
+| Hermes debrief stores without embedding | LOW | `hooks.py` stores debrief items without embedding param — no LSH bucket hashes, search relies on word-level blind indices only. |
+| NanoClaw debrief no 8-message guard | LOW | `pre-compact.ts` triggers debrief based on extraction results, not conversation length. LLM prompt handles it, but no code-level guard like other clients. |
 
 ---
 

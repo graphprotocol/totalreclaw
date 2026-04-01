@@ -8,6 +8,7 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from .state import PluginState
 
+from .debrief import generate_debrief
 from .extractor import extract_facts_llm, extract_facts_heuristic, ExtractedFact
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,7 @@ def post_llm_call(state: "PluginState", **kwargs) -> None:
 
 
 def on_session_end(state: "PluginState", **kwargs) -> None:
-    """Comprehensive flush of unprocessed messages."""
+    """Comprehensive flush of unprocessed messages + session debrief."""
     if not state.is_configured():
         return
 
@@ -118,9 +119,39 @@ def on_session_end(state: "PluginState", **kwargs) -> None:
         return
 
     try:
-        _extract_and_store(state, mode="full")
-    except Exception as e:
-        logger.warning("TotalReclaw on_session_end flush failed: %s", e)
+        stored_fact_texts: list[str] = []
+        try:
+            stored_fact_texts = _extract_and_store(state, mode="full")
+        except Exception as e:
+            logger.warning("TotalReclaw on_session_end flush failed: %s", e)
+
+        # Session debrief (after regular extraction)
+        try:
+            all_messages = state.get_all_messages()
+            if len(all_messages) >= 8:  # Minimum 4 turns
+                loop = asyncio.new_event_loop()
+                try:
+                    debrief_items = loop.run_until_complete(
+                        generate_debrief(all_messages, stored_fact_texts)
+                    )
+                    if debrief_items:
+                        client = state.get_client()
+                        if client:
+                            for item in debrief_items:
+                                try:
+                                    loop.run_until_complete(
+                                        client.remember(
+                                            item.text,
+                                            importance=item.importance / 10.0,
+                                            source="hermes_debrief",
+                                        )
+                                    )
+                                except Exception as e:
+                                    logger.warning("Failed to store debrief item: %s", e)
+                finally:
+                    loop.close()
+        except Exception as e:
+            logger.warning("TotalReclaw on_session_end debrief failed: %s", e)
     finally:
         state.clear_messages()
 
@@ -172,16 +203,18 @@ def _is_near_duplicate(
     return False
 
 
-def _extract_and_store(state: "PluginState", mode: str = "turn") -> None:
+def _extract_and_store(state: "PluginState", mode: str = "turn") -> list[str]:
     """Extract facts from conversation and store them.
 
     Tries LLM extraction first, falls back to heuristic if no LLM available.
     Handles ADD, UPDATE, and DELETE actions from LLM-guided extraction.
     Performs cosine-based near-duplicate detection before storing.
+
+    Returns list of stored fact texts (for debrief context).
     """
     messages = state.get_unprocessed_messages()
     if not messages:
-        return
+        return []
 
     max_facts = state.get_max_facts_per_extraction()
 
@@ -190,12 +223,13 @@ def _extract_and_store(state: "PluginState", mode: str = "turn") -> None:
         f"{m['role']}: {m['content']}" for m in messages if m.get("content")
     )
     if not msg_text.strip():
-        return
+        return []
 
     client = state.get_client()
     if not client:
-        return
+        return []
 
+    stored_texts: list[str] = []
     loop = asyncio.new_event_loop()
     try:
         # Fetch existing memories for both LLM dedup context and cosine dedup
@@ -215,7 +249,7 @@ def _extract_and_store(state: "PluginState", mode: str = "turn") -> None:
             facts = extract_facts_heuristic(messages, max_facts)
 
         if not facts:
-            return
+            return []
 
         # Cap to max_facts
         facts = facts[:max_facts]
@@ -256,6 +290,7 @@ def _extract_and_store(state: "PluginState", mode: str = "turn") -> None:
                         source="hermes-auto",
                     )
                 )
+                stored_texts.append(fact.text)
 
                 # For UPDATE: also tombstone the old fact after storing the new one
                 if fact.action == "UPDATE" and fact.existing_fact_id:
@@ -269,3 +304,4 @@ def _extract_and_store(state: "PluginState", mode: str = "turn") -> None:
         loop.close()
 
     state.mark_messages_processed()
+    return stored_texts

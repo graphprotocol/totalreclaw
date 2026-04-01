@@ -22,6 +22,7 @@ pub mod backend;
 pub mod billing;
 pub mod blind;
 pub mod crypto;
+pub mod debrief;
 pub mod embedding;
 pub mod fingerprint;
 pub mod hotcache;

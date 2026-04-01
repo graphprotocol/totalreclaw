@@ -488,6 +488,38 @@ impl TotalReclawMemory {
         cache.quota_warning_message()
     }
 
+    /// Store debrief items from a session.
+    ///
+    /// ZeroClaw calls this from its consolidation phase or session-end handler.
+    /// The caller is responsible for running the LLM and passing parsed results.
+    ///
+    /// Each item is stored via the existing `store` pipeline with
+    /// `source: "zeroclaw_debrief"`.
+    pub async fn debrief(&self, items: &[crate::debrief::DebriefItem]) -> Result<usize> {
+        let mut stored = 0;
+        for item in items.iter().take(crate::debrief::MAX_DEBRIEF_ITEMS) {
+            let importance = item.importance as f64;
+            store::store_fact_with_importance(
+                &item.text,
+                crate::debrief::DEBRIEF_SOURCE,
+                importance,
+                &self.keys,
+                &self.lsh_hasher,
+                self.embedding_provider.as_ref(),
+                &self.relay,
+                Some(&self.private_key),
+            )
+            .await?;
+            stored += 1;
+        }
+
+        // Invalidate hot cache after debrief store
+        if let Ok(mut cache) = self.hot_cache.lock() {
+            cache.clear();
+        }
+        Ok(stored)
+    }
+
     /// Export all memories as plaintext (decrypted).
     pub async fn export(&self) -> Result<Vec<MemoryEntry>> {
         self.list(None, None).await

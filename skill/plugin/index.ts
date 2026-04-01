@@ -29,7 +29,7 @@ import {
   generateContentFingerprint,
 } from './crypto.js';
 import { createApiClient, type StoreFactPayload } from './api-client.js';
-import { extractFacts, type ExtractedFact } from './extractor.js';
+import { extractFacts, extractDebrief, type ExtractedFact } from './extractor.js';
 import { initLLMClient, generateEmbedding, getEmbeddingDims } from './llm-client.js';
 import { LSHHasher } from './lsh.js';
 import { rerank, cosineSimilarity, detectQueryIntent, INTENT_WEIGHTS, type RerankerCandidate } from './reranker.js';
@@ -1030,6 +1030,7 @@ function filterByImportance(
 async function storeExtractedFacts(
   facts: ExtractedFact[],
   logger: OpenClawPluginApi['logger'],
+  sourceOverride?: string,
 ): Promise<number> {
   if (!encryptionKey || !dedupKey || !authKeyHex || !userId || !apiClient) return 0;
 
@@ -1215,6 +1216,7 @@ async function storeExtractedFacts(
       const contentFp = generateContentFingerprint(fact.text, dedupKey);
       const factId = crypto.randomUUID();
 
+      const factSource = sourceOverride || 'auto-extraction';
       if (isSubgraphMode()) {
         const protobuf = encodeFactProtobuf({
           id: factId,
@@ -1223,7 +1225,7 @@ async function storeExtractedFacts(
           encryptedBlob: encryptedBlob,
           blindIndices: allIndices,
           decayScore: effectiveImportance,
-          source: 'auto-extraction',
+          source: factSource,
           contentFp: contentFp,
           agentId: 'openclaw-plugin-auto',
           encryptedEmbedding: embeddingResult?.encryptedEmbedding,
@@ -1237,7 +1239,7 @@ async function storeExtractedFacts(
           encrypted_blob: encryptedBlob,
           blind_indices: allIndices,
           decay_score: effectiveImportance,
-          source: 'auto-extraction',
+          source: factSource,
           content_fp: contentFp,
           agent_id: 'openclaw-plugin-auto',
           encrypted_embedding: embeddingResult?.encryptedEmbedding,
@@ -3201,6 +3203,24 @@ const plugin = {
             await storeExtractedFacts(facts, api.logger);
           }
           turnsSinceLastExtraction = 0; // Reset C3 counter on compaction.
+
+          // Session debrief — after regular extraction
+          try {
+            const storedTexts = facts.map((f) => f.text);
+            const debriefItems = await extractDebrief(evt.messages, storedTexts);
+            if (debriefItems.length > 0) {
+              const debriefFacts: ExtractedFact[] = debriefItems.map((d) => ({
+                text: d.text,
+                type: d.type as ExtractedFact['type'],
+                importance: d.importance,
+                action: 'ADD' as const,
+              }));
+              await storeExtractedFacts(debriefFacts, api.logger, 'openclaw_debrief');
+              api.logger.info(`Session debrief: stored ${debriefItems.length} items`);
+            }
+          } catch (debriefErr: unknown) {
+            api.logger.warn(`before_compaction debrief failed: ${debriefErr instanceof Error ? debriefErr.message : String(debriefErr)}`);
+          }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           api.logger.warn(`before_compaction extraction failed: ${message}`);
@@ -3243,6 +3263,24 @@ const plugin = {
             await storeExtractedFacts(facts, api.logger);
           }
           turnsSinceLastExtraction = 0; // Reset C3 counter on reset.
+
+          // Session debrief — after regular extraction
+          try {
+            const storedTexts = facts.map((f) => f.text);
+            const debriefItems = await extractDebrief(evt.messages, storedTexts);
+            if (debriefItems.length > 0) {
+              const debriefFacts: ExtractedFact[] = debriefItems.map((d) => ({
+                text: d.text,
+                type: d.type as ExtractedFact['type'],
+                importance: d.importance,
+                action: 'ADD' as const,
+              }));
+              await storeExtractedFacts(debriefFacts, api.logger, 'openclaw_debrief');
+              api.logger.info(`Session debrief: stored ${debriefItems.length} items`);
+            }
+          } catch (debriefErr: unknown) {
+            api.logger.warn(`before_reset debrief failed: ${debriefErr instanceof Error ? debriefErr.message : String(debriefErr)}`);
+          }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           api.logger.warn(`before_reset extraction failed: ${message}`);

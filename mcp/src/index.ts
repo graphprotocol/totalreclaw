@@ -37,6 +37,9 @@ import {
   checkBillingTier,
   type SubgraphFactFull,
   type MigrationResult,
+  debriefToolDefinition,
+  handleDebrief,
+  parseDebriefResponse,
 } from './tools/index.js';
 import { getLastBillingResponse } from './tools/status.js';
 import { setOnRememberCallback } from './tools/remember.js';
@@ -486,13 +489,15 @@ async function handleRememberSubgraph(
             const decryptedCandidates: DecryptedCandidate[] = [];
             for (const c of candidates) {
               try {
-                const blobBase64 = Buffer.from(c.encryptedBlob, 'hex').toString('base64');
+                const blobHex = c.encryptedBlob.startsWith('0x') ? c.encryptedBlob.slice(2) : c.encryptedBlob;
+                const blobBase64 = Buffer.from(blobHex, 'hex').toString('base64');
                 const text = decrypt(blobBase64, state.encryptionKey);
 
                 let candEmbedding: number[] | null = null;
                 if (c.encryptedEmbedding) {
                   try {
-                    candEmbedding = decryptEmbedding(c.encryptedEmbedding, state.encryptionKey);
+                    const embHex = c.encryptedEmbedding.startsWith('0x') ? c.encryptedEmbedding.slice(2) : c.encryptedEmbedding;
+                    candEmbedding = decryptEmbedding(embHex, state.encryptionKey);
                   } catch { /* skip */ }
                 }
 
@@ -640,6 +645,124 @@ async function handleRememberSubgraph(
         dedup_skipped: dedupSkipped,
         dedup_superseded: dedupSuperseded,
         mode: 'subgraph',
+      }),
+    }],
+  };
+}
+
+/**
+ * Handle debrief in subgraph mode: validate, encrypt, submit on-chain.
+ *
+ * Follows the same pipeline as handleRememberSubgraph but simpler:
+ * no dedup (debrief items are high-level summaries), source 'mcp_debrief'.
+ */
+async function handleDebriefSubgraph(
+  state: SubgraphState,
+  args: unknown,
+): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const input = args as Record<string, unknown>;
+  const factsInput = input?.facts;
+
+  if (!Array.isArray(factsInput) || factsInput.length === 0) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: false,
+          error: 'Invalid input: "facts" array is required and must not be empty',
+        }),
+      }],
+    };
+  }
+
+  // Validate through the canonical parser
+  const validated = parseDebriefResponse(JSON.stringify(factsInput));
+
+  if (validated.length === 0) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: true,
+          stored: 0,
+          message: 'No valid debrief items to store (filtered by validation)',
+        }),
+      }],
+    };
+  }
+
+  const pendingPayloads: Buffer[] = [];
+  const pendingFactMeta: Array<{ factId: string }> = [];
+
+  for (const item of validated) {
+    try {
+      const wordIndices = generateBlindIndices(item.text);
+      const embedding = await generateEmbedding(item.text);
+      const lshIndices = state.lshHasher.hash(embedding);
+      const allIndices = [...wordIndices, ...lshIndices];
+
+      const encryptedBlob = encrypt(item.text, state.encryptionKey);
+      const contentFp = generateContentFingerprint(item.text, state.dedupKey);
+      const encryptedEmb = encryptEmbedding(embedding, state.encryptionKey);
+
+      const factId = crypto.randomUUID();
+      const factPayload: FactPayload = {
+        id: factId,
+        timestamp: new Date().toISOString(),
+        owner: state.smartAccountAddress,
+        encryptedBlob: Buffer.from(encryptedBlob, 'base64').toString('hex'),
+        blindIndices: allIndices,
+        decayScore: item.importance / 10,
+        source: 'mcp_debrief',
+        contentFp,
+        agentId: 'mcp-server',
+        encryptedEmbedding: encryptedEmb,
+      };
+
+      pendingPayloads.push(encodeFactProtobuf(factPayload));
+      pendingFactMeta.push({ factId });
+    } catch (error) {
+      console.error(`Failed to prepare debrief item: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const results: Array<{ success: boolean; fact_id: string; tx_hash?: string }> = [];
+
+  if (pendingPayloads.length > 0) {
+    try {
+      const batchConfig = getSubgraphConfig({
+        relayUrl: state.serverUrl,
+        mnemonic: state.mnemonic,
+        authKeyHex: Buffer.from(state.authKey).toString('hex'),
+        walletAddress: state.smartAccountAddress,
+      });
+      const batchResult = await submitFactBatchOnChain(pendingPayloads, batchConfig);
+      for (const meta of pendingFactMeta) {
+        results.push({
+          success: batchResult.success,
+          fact_id: meta.factId,
+          tx_hash: batchResult.txHash,
+        });
+      }
+      console.error(`Debrief: submitted ${batchResult.batchSize} items (tx=${batchResult.txHash.slice(0, 10)}...)`);
+    } catch (error) {
+      for (const meta of pendingFactMeta) {
+        results.push({ success: false, fact_id: meta.factId });
+      }
+      console.error(`Debrief batch submission failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const stored = results.filter((r) => r.success).length;
+
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        success: stored > 0,
+        stored,
+        total: validated.length,
+        results,
       }),
     }],
   };
@@ -1381,6 +1504,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     statusToolDefinition,
     upgradeToolDefinition,
     migrateToolDefinition,
+    debriefToolDefinition,
   ],
 }));
 
@@ -1517,6 +1641,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             isError: true,
           };
 
+        case 'totalreclaw_debrief': {
+          try {
+            const result = await handleDebriefSubgraph(subgraphState, args);
+            invalidateMemoryContextCache();
+            server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
+            return result;
+          } catch (error) {
+            if (isQuotaExceededError(error)) {
+              return quotaExceededResponse();
+            }
+            throw error;
+          }
+        }
+
         default:
           return {
             content: [{
@@ -1570,6 +1708,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         invalidateMemoryContextCache();
         server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
         return result;
+      }
+
+      case 'totalreclaw_debrief': {
+        try {
+          const result = await handleDebrief(client, args);
+          return result;
+        } catch (error) {
+          if (isQuotaExceededError(error)) {
+            return quotaExceededResponse();
+          }
+          throw error;
+        }
       }
 
       default:

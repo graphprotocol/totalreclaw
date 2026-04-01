@@ -70,6 +70,19 @@ API keys provided by the user are used only for the import and are never stored.
 - If your agent supports background routines or scheduled tasks, set up a routine to call totalreclaw_remember after conversations to ensure nothing is missed.
 - If your agent supports a credential vault or secret store, the user's TOTALRECLAW_RECOVERY_PHRASE should be stored there instead of as a plaintext environment variable.
 - TotalReclaw memories are fully portable -- they work across OpenClaw, IronClaw, Claude Desktop, Cursor, NanoClaw, and any MCP-compatible agent.
+
+### End of Conversation
+When a substantive conversation is ending (the user says goodbye, the topic is resolved,
+or the conversation naturally concludes), call totalreclaw_debrief with the key takeaways.
+
+Focus on what individual memory storage missed:
+- What was the conversation about overall?
+- What was decided or resolved?
+- What approaches were tried and what was the outcome?
+- What's left unfinished?
+
+Do NOT debrief casual conversations (greetings, simple Q&A, small talk).
+Max 5 items, each 1-3 sentences, type "summary" or "context", importance 7-8.
 `;
 
 // Keep backward-compat export name (some callers may still reference it)

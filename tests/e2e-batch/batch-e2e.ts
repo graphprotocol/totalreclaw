@@ -200,7 +200,10 @@ async function relayRequest(
 }
 
 async function registerUser(authKeyHash: string, salt: string) {
-  return relayRequest('POST', '/v1/register', { auth_key_hash: authKeyHash, salt });
+  return relayRequest('POST', '/v1/register', { auth_key_hash: authKeyHash, salt }, {
+    'X-TotalReclaw-Test': 'true',
+    'X-TotalReclaw-Client': 'e2e-batch-test',
+  });
 }
 
 async function getBillingStatus(authKeyHex: string, walletAddress: string) {

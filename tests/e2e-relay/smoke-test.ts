@@ -83,6 +83,9 @@ async function main() {
     const res = await request('POST', '/v1/register', {
       auth_key_hash: authKeyHash.toString('hex'),
       salt: salt.toString('hex'),
+    }, {
+      'X-TotalReclaw-Test': 'true',
+      'X-TotalReclaw-Client': 'e2e-relay-smoke-test',
     });
     await assert(res.status === 200, `Expected 200, got ${res.status}`);
     await assert(res.data.success === true, `Expected success=true`);
@@ -102,6 +105,9 @@ async function main() {
     const res = await request('POST', '/v1/register', {
       auth_key_hash: authKeyHash.toString('hex'),
       salt: salt.toString('hex'),
+    }, {
+      'X-TotalReclaw-Test': 'true',
+      'X-TotalReclaw-Client': 'e2e-relay-smoke-test',
     });
     await assert(res.status === 200, `Expected 200, got ${res.status}`);
     await assert(res.data.success === true, `Expected success=true`);

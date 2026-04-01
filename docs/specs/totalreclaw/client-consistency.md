@@ -72,6 +72,37 @@
 | `GET /v1/billing/status?wallet_address=<addr>` | GET | Bearer | Billing status + feature flags |
 | `POST /v1/billing/checkout` | POST | Bearer | Create Stripe checkout |
 
+### Session Debrief
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Debrief prompt | See `mcp/src/tools/debrief.ts:DEBRIEF_SYSTEM_PROMPT` | Canonical source of truth — identical across all clients |
+| Max items | 5 | Per debrief |
+| Types | summary, context | Only these two types |
+| Importance | 7-8 typical (filter < 6) | High-value by definition |
+| Minimum conversation | 4 turns (8 messages) | Skip trivial sessions |
+| Source tag | `{client}_debrief` | e.g. `mcp_debrief`, `openclaw_debrief`, `hermes_debrief`, `nanoclaw_debrief`, `zeroclaw_debrief` |
+| LLM required | Yes — no heuristic fallback | Debrief is inherently an LLM task |
+| Dedup context | Already-stored fact texts passed to prompt | Prevents duplicate extraction |
+
+**Trigger per platform:**
+
+| Agent | Trigger |
+|-------|---------|
+| MCP / Claude Desktop / IronClaw | Host agent calls `totalreclaw_debrief` tool (prompt-guided) |
+| OpenClaw | Automatic in `before_compaction` and `before_reset` hooks |
+| NanoClaw | Automatic in `pre_compact` hook |
+| Hermes | Automatic in `on_session_end` hook |
+| ZeroClaw | Framework calls `debrief()` method on `TotalReclawMemory` |
+
+**Known debrief gaps (low severity):**
+
+| Gap | Clients Affected | Severity | Notes |
+|-----|-----------------|----------|-------|
+| Debrief items bypass store-time near-duplicate detection | MCP, NanoClaw, Hermes | LOW | Only OpenClaw routes debrief through `storeExtractedFacts()` with batch+cosine dedup. Others call `client.remember()` directly. LLM-level dedup via `{already_stored_facts}` prompt + server-side content fingerprint mitigate. |
+| Hermes debrief stores without embedding | Hermes | LOW | `hooks.py` calls `client.remember()` without `embedding=` param, so debrief items lack LSH bucket hashes. Search relies on word-level blind indices only. |
+| NanoClaw debrief has no code-level 8-message guard | NanoClaw | LOW | Triggers based on `validation.facts.length > 0`, not conversation length. LLM prompt returns `[]` for trivial conversations, but no code guard like other clients. |
+
 ### On-Chain Write Pipeline
 
 Every client must implement this pipeline identically:

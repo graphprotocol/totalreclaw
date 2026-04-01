@@ -243,3 +243,123 @@ export async function extractFacts(
     return []; // Fail silently -- hooks must never break the agent
   }
 }
+
+// ---------------------------------------------------------------------------
+// Debrief Extraction
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonical debrief system prompt — must be identical across all clients.
+ */
+export const DEBRIEF_SYSTEM_PROMPT = `You are reviewing a conversation that just ended. The following facts were
+already extracted and stored during this conversation:
+
+{already_stored_facts}
+
+Your job is to capture what turn-by-turn extraction MISSED. Focus on:
+
+1. **Broader context** — What was the conversation about overall? What project,
+   problem, or topic tied the discussion together?
+2. **Outcomes & conclusions** — What was decided, agreed upon, or resolved?
+3. **What was attempted** — What approaches were tried? What worked, what didn't, and why?
+4. **Relationships** — How do topics discussed relate to each other or to things
+   from previous conversations?
+5. **Open threads** — What was left unfinished or needs follow-up?
+
+Do NOT repeat facts already stored. Only add genuinely new information that provides
+broader context a future conversation would benefit from.
+
+Return a JSON array (no markdown, no code fences):
+[{"text": "...", "type": "summary|context", "importance": N}]
+
+- Use type "summary" for conclusions, outcomes, and decisions-of-the-session
+- Use type "context" for broader project context, open threads, and what-was-tried
+- Importance 7-8 for most debrief items (they are high-value by definition)
+- Maximum 5 items (debriefs should be concise, not exhaustive)
+- Each item should be 1-3 sentences, self-contained
+
+If the conversation was too short or trivial to warrant a debrief, return: []`;
+
+export interface DebriefItem {
+  text: string;
+  type: 'summary' | 'context';
+  importance: number;
+}
+
+/**
+ * Parse a debrief response into validated DebriefItems.
+ */
+export function parseDebriefResponse(response: string): DebriefItem[] {
+  let cleaned = response.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+  }
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .filter(
+        (item: unknown) =>
+          item &&
+          typeof item === 'object' &&
+          typeof (item as Record<string, unknown>).text === 'string' &&
+          ((item as Record<string, unknown>).text as string).length >= 5,
+      )
+      .map((item: unknown) => {
+        const d = item as Record<string, unknown>;
+        const type: 'summary' | 'context' = d.type === 'summary' ? 'summary' : 'context';
+        const rawImportance = typeof d.importance === 'number' ? d.importance : 7;
+        const importance = Math.max(1, Math.min(10, rawImportance));
+        return { text: String(d.text).slice(0, 512), type, importance };
+      })
+      .filter((d) => d.importance >= 6)
+      .slice(0, 5);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Extract a session debrief using LLM.
+ *
+ * @param rawMessages - All messages from the session
+ * @param storedFactTexts - Texts of facts already stored in this session (for dedup)
+ * @returns Array of debrief items, or empty array on failure
+ */
+export async function extractDebrief(
+  rawMessages: unknown[],
+  storedFactTexts: string[],
+): Promise<DebriefItem[]> {
+  const config = resolveLLMConfig();
+  if (!config) return [];
+
+  const parsed = rawMessages
+    .map(messageToText)
+    .filter((m): m is { role: string; content: string } => m !== null);
+
+  // Minimum 4 turns (8 messages) to warrant a debrief
+  if (parsed.length < 8) return [];
+
+  const conversationText = truncateMessages(parsed, 12_000);
+  if (conversationText.length < 20) return [];
+
+  const alreadyStored = storedFactTexts.length > 0
+    ? storedFactTexts.map((t) => `- ${t}`).join('\n')
+    : '(none)';
+
+  const systemPrompt = DEBRIEF_SYSTEM_PROMPT.replace('{already_stored_facts}', alreadyStored);
+
+  try {
+    const response = await chatCompletion(config, [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Review this conversation and provide a debrief:\n\n${conversationText}` },
+    ]);
+
+    if (!response) return [];
+    return parseDebriefResponse(response);
+  } catch {
+    return [];
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "totalreclaw-e2e-debrief",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz TOTALRECLAW_TEST=true npx tsx mcp-debrief-e2e.ts",
+    "test:mcp": "TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz TOTALRECLAW_TEST=true npx tsx mcp-debrief-e2e.ts",
+    "test:1": "TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz TOTALRECLAW_TEST=true npx tsx mcp-debrief-e2e.ts --test 1",
+    "test:5": "TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz TOTALRECLAW_TEST=true npx tsx mcp-debrief-e2e.ts --test 5",
+    "test:6": "TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz TOTALRECLAW_TEST=true npx tsx mcp-debrief-e2e.ts --test 6",
+    "test:cross-client": "cd ../../python && TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz TOTALRECLAW_TEST=true .venv/bin/python ../tests/e2e-debrief/cross-client-debrief-e2e.py"
+  },
+  "dependencies": {
+    "@scure/bip39": "^1.5.4",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0",
+    "viem": "^2.27.0",
+    "permissionless": "^0.2.0",
+    "@noble/hashes": "^1.6.0",
+    "porter-stemmer": "^0.9.1"
+  }
+}

@@ -131,6 +131,10 @@ class PluginState:
         """Mark all current messages as processed."""
         self._last_processed_idx = len(self._messages)
 
+    def get_all_messages(self) -> list[dict]:
+        """Return all messages from the session (processed + unprocessed)."""
+        return list(self._messages)
+
     def clear_messages(self) -> None:
         """Clear all messages and reset the processed index."""
         self._messages.clear()
