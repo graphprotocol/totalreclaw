@@ -206,16 +206,16 @@ Import tools to reduce switching costs. Prioritize the two most common sources f
 
 ### 2.8 Multi-Agent Conflict Resolution (`docs/specs/totalreclaw/conflict-resolution.md` v0.3.2)
 
-Applies to both managed service (PostgreSQL) and future self-hosted deployments. 4-layer protocol:
+4-layer protocol for detecting and resolving contradictory facts across sessions/devices:
 
-| Layer | What | Effort | Priority |
-|-------|------|--------|----------|
-| 1: Content fingerprint | HMAC-SHA256 exact dedup (server-side) | 2h | HIGH (in v0.3.1b) |
-| 2: Sync watermark | Delta sync via sequence_id | 3h | HIGH (in v0.3.1b) |
-| 3: Blind index overlap | Probabilistic near-dedup without plaintext | 3h | MEDIUM |
-| 4: Client LLM merge | Decrypt, compare, LLM resolves contradictions | 4h | MEDIUM |
+| Layer | What | Status |
+|-------|------|--------|
+| 1: Content fingerprint | HMAC-SHA256 exact dedup (server-side) | **DONE** |
+| 2: Sync watermark | Delta sync via sequence_id | **DONE** |
+| 3: Blind index overlap | Server-side probabilistic near-dedup without plaintext | DEPRIORITIZED |
+| 4: Client LLM merge | Decrypt, compare, LLM resolves contradictions | DEPRIORITIZED |
 
-Layers 1-2 are part of PoC (v0.3.1b). Layers 3-4 are MVP enhancements (v0.3.2).
+Layers 1-2 are complete. Layers 3-4 are **largely superseded** by existing mechanisms: store-time cosine dedup (>= 0.85) catches near-duplicates client-side, and LLM-guided extraction (ADD/UPDATE/DELETE/NOOP) handles contradictions within sessions. The remaining gap is cross-session contradictions from different devices — narrow enough to deprioritize vs. other work.
 
 ### 2.9 Python Client Library & Hermes Agent Plugin — COMPLETE
 
@@ -261,9 +261,9 @@ Layers 1-2 are part of PoC (v0.3.1b). Layers 3-4 are MVP enhancements (v0.3.2).
 **Docs:** `docs/specs/totalreclaw/client-consistency.md` (Session Debrief section)
 **Plan:** `docs/plans/2026-03-31-session-debrief.md`
 
-### 2.11 HTTP MCP & Hosted Agent Integration
+### 2.11 HTTP MCP & Hosted Agent Integration — PARKED
 
-Support hosted AI agents (IronClaw / NEAR AI Cloud, Windsurf, etc.) that cannot spawn local stdio processes.
+Support hosted AI agents (IronClaw / NEAR AI Cloud, Windsurf, etc.) that cannot spawn local stdio processes. **Deprioritized** — IronClaw works via local MCP (`npx @totalreclaw/mcp-server`). Will revisit if a hosted platform without local stdio support becomes a priority.
 
 **Hard Constraint:** The relay NEVER sees the recovery phrase (mnemonic). Encryption and signing always happen in the agent's runtime. The relay is a blind proxy.
 
