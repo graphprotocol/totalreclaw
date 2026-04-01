@@ -235,7 +235,33 @@ Layers 1-2 are part of PoC (v0.3.1b). Layers 3-4 are MVP enhancements (v0.3.2).
 **Docs:** `docs/guides/hermes-setup.md`, `python/README.md`
 **Plan:** `docs/plans/2026-03-29-python-client-and-hermes-plugin.md`
 
-### 2.10 HTTP MCP & Hosted Agent Integration
+### 2.10 Session Debrief — COMPLETE
+
+**Goal:** Capture broader context, outcomes, and open threads at conversation end — things turn-by-turn extraction misses because each turn only sees a narrow window.
+
+| Component | Description | Tests | Status |
+|-----------|-------------|-------|--------|
+| Canonical prompt + parser | Identical across all 5 implementations (TS, Python, Rust) | 20 offline parity | **DONE** |
+| MCP server tool | `totalreclaw_debrief` — host agent provides facts, MCP validates + stores | 10 edge-case | **DONE** |
+| OpenClaw plugin | Auto-debrief in `before_compaction` + `before_reset` hooks | -- | **DONE** |
+| NanoClaw skill | Auto-debrief in `pre_compact` hook | -- | **DONE** |
+| Hermes plugin | Auto-debrief in `on_session_end` hook | -- | **DONE** |
+| ZeroClaw crate | `debrief()` method on `TotalReclawMemory` | 22 unit | **DONE** |
+| E2E validation | Store+recall, cross-client interop (MCP<->Python), source tags | 17 staging | **DONE** |
+
+**Total:** 37 E2E assertions (20 offline + 17 staging). All passing.
+
+**How it works:** At session end, the full conversation is sent to the LLM with already-stored facts as dedup context. The LLM returns up to 5 high-level items (type `summary` or `context`, importance 7-8) capturing what the session was about overall, what was decided, and what's left open. These are stored as regular facts, searchable and recallable by auto-recall at next session start.
+
+**Known gaps (low severity):**
+- MCP/NanoClaw/Hermes debrief items bypass store-time near-duplicate detection (LLM-level dedup via prompt mitigates)
+- Hermes stores debrief items without embeddings (word-level blind index search only)
+- NanoClaw has no code-level 8-message guard (relies on LLM prompt)
+
+**Docs:** `docs/specs/totalreclaw/client-consistency.md` (Session Debrief section)
+**Plan:** `docs/plans/2026-03-31-session-debrief.md`
+
+### 2.11 HTTP MCP & Hosted Agent Integration
 
 Support hosted AI agents (IronClaw / NEAR AI Cloud, Windsurf, etc.) that cannot spawn local stdio processes.
 
