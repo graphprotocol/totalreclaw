@@ -1,0 +1,79 @@
+name: Publish npm packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Package to publish'
+        required: true
+        type: choice
+        options:
+          - mcp-server
+          - client
+          - both
+      dry-run:
+        description: 'Dry run (build only, no publish)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  publish-mcp-server:
+    if: inputs.package == 'mcp-server' || inputs.package == 'both'
+    name: Publish @totalreclaw/mcp-server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: cd mcp && npm ci
+
+      - name: Build
+        run: cd mcp && npm run build
+
+      - name: Run tests
+        run: cd mcp && npm test
+
+      - name: Publish
+        if: inputs.dry-run == false
+        run: cd mcp && npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Report version
+        run: node -e "console.log('Published:', require('./mcp/package.json').name + '@' + require('./mcp/package.json').version)"
+
+  publish-client:
+    if: inputs.package == 'client' || inputs.package == 'both'
+    name: Publish @totalreclaw/client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: cd client && npm ci --legacy-peer-deps
+
+      - name: Build
+        run: cd client && npm run build
+
+      - name: Run tests
+        run: cd client && npm test
+
+      - name: Publish
+        if: inputs.dry-run == false
+        run: cd client && npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Report version
+        run: node -e "console.log('Published:', require('./client/package.json').name + '@' + require('./client/package.json').version)"
