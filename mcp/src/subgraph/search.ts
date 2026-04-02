@@ -285,3 +285,57 @@ export async function getSubgraphFactCount(
 
   return 0;
 }
+
+/**
+ * Get per-owner active fact count from the subgraph.
+ *
+ * The Graph does not support aggregate count queries, so we paginate
+ * through facts fetching only `id` and count client-side.
+ *
+ * @param owner      - Smart Account address (hex, lowercase)
+ * @param relayUrl   - Optional relay URL override
+ * @param authKeyHex - Auth key for relay authorization
+ */
+export async function getOwnerFactCount(
+  owner: string,
+  relayUrl?: string,
+  authKeyHex?: string,
+): Promise<number> {
+  const effectiveRelayUrl = relayUrl ?? getSubgraphConfig().relayUrl;
+  const subgraphUrl = `${effectiveRelayUrl}/v1/subgraph`;
+  const pageSize = 1000;
+  let total = 0;
+  let lastId = '';
+  let hasMore = true;
+
+  while (hasMore) {
+    const query = lastId
+      ? `query OwnerFactCount($owner: Bytes!, $first: Int!, $lastId: String!) {
+          facts(where: { owner: $owner, isActive: true, id_gt: $lastId }, first: $first, orderBy: id, orderDirection: asc) { id }
+        }`
+      : `query OwnerFactCountInitial($owner: Bytes!, $first: Int!) {
+          facts(where: { owner: $owner, isActive: true }, first: $first, orderBy: id, orderDirection: asc) { id }
+        }`;
+
+    const variables: Record<string, unknown> = { owner, first: pageSize };
+    if (lastId) variables.lastId = lastId;
+
+    const data = await gqlQuery<{ facts?: Array<{ id: string }> }>(
+      subgraphUrl,
+      query,
+      variables,
+      authKeyHex,
+    );
+
+    const facts = data?.facts ?? [];
+    total += facts.length;
+
+    if (facts.length < pageSize) {
+      hasMore = false;
+    } else {
+      lastId = facts[facts.length - 1].id;
+    }
+  }
+
+  return total;
+}

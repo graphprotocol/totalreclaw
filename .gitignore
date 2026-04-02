@@ -30,6 +30,9 @@ htmlcov/
 build/
 dist/
 typechain-types/
+rust/totalreclaw-core/pkg/
+rust/totalreclaw-core/target/
+rust/totalreclaw-memory/target/
 
 # Data files (too large / contain PII)
 testbed/v2-realworld-data/raw/

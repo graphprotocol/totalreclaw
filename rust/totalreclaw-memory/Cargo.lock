@@ -3218,10 +3218,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "totalreclaw-memory"
+name = "totalreclaw-core"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "base64 0.22.1",
+ "bip39",
+ "chrono",
+ "hex",
+ "hkdf",
+ "hmac",
+ "pbkdf2",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "totalreclaw-memory"
+version = "0.1.0"
+dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
  "base64 0.22.1",
@@ -3229,21 +3248,17 @@ dependencies = [
  "chrono",
  "coins-bip32",
  "hex",
- "hkdf",
- "hmac",
  "k256",
  "ort",
- "pbkdf2",
  "rand 0.8.5",
  "reqwest",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 2.0.18",
  "tiny-keccak",
  "tokenizers",
  "tokio",
- "unicode-normalization",
+ "totalreclaw-core",
  "uuid",
 ]
 

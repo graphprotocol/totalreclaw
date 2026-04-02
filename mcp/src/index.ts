@@ -40,6 +40,10 @@ import {
   debriefToolDefinition,
   handleDebrief,
   parseDebriefResponse,
+  supportToolDefinition,
+  handleSupport,
+  accountToolDefinition,
+  handleAccount,
 } from './tools/index.js';
 import { getLastBillingResponse } from './tools/status.js';
 import { setOnRememberCallback } from './tools/remember.js';
@@ -89,7 +93,7 @@ import {
   type FactPayload,
   type SubgraphStoreConfig,
 } from './subgraph/store.js';
-import { searchSubgraph } from './subgraph/search.js';
+import { searchSubgraph, getOwnerFactCount } from './subgraph/search.js';
 
 import { validateMnemonic, generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
@@ -1505,6 +1509,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     upgradeToolDefinition,
     migrateToolDefinition,
     debriefToolDefinition,
+    supportToolDefinition,
+    accountToolDefinition,
   ],
 }));
 
@@ -1514,6 +1520,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   // Handle setup tool (available in all modes)
   if (name === 'totalreclaw_setup') {
     return await handleSetup(args);
+  }
+
+  // Handle support tool (available in all modes, including unconfigured)
+  if (name === 'totalreclaw_support') {
+    const walletAddress = subgraphState?.smartAccountAddress ?? null;
+    return handleSupport(walletAddress);
   }
 
   // In unconfigured mode, all other tools return setup guidance
@@ -1562,6 +1574,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ? Buffer.from(subgraphState.authKey).toString('hex')
         : '';
       return await handleUpgrade(SERVER_URL, authKeyHex, args);
+    }
+
+    if (name === 'totalreclaw_account') {
+      if (!subgraphState) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              error: 'Account details require managed service mode (subgraph). Self-hosted mode does not track billing.',
+            }),
+          }],
+          isError: true,
+        };
+      }
+      const authKeyHex = Buffer.from(subgraphState.authKey).toString('hex');
+      const words = subgraphState.mnemonic.split(/\s+/);
+      const mnemonicHint = `${words[0]} ... ${words[words.length - 1]}`;
+      const getFactCount = () => getOwnerFactCount(
+        subgraphState!.smartAccountAddress,
+        subgraphState!.serverUrl,
+        authKeyHex,
+      );
+      return await handleAccount(
+        SERVER_URL,
+        authKeyHex,
+        subgraphState.smartAccountAddress,
+        mnemonicHint,
+        getFactCount,
+      );
     }
 
     if (name === 'totalreclaw_migrate') {

@@ -248,6 +248,35 @@ PARAMETERS:
 - merge_strategy: How to handle conflicts (default: skip_existing)
 - validate_only: Parse and validate without importing (dry-run)`;
 
+export const SUPPORT_TOOL_DESCRIPTION = `Get TotalReclaw support information and troubleshooting help.
+
+Returns:
+- Contact email (pre-filled with your wallet address)
+- Documentation and issue tracker links
+- Troubleshooting guide for common issues (lost phrase, slow recall, quota, import)
+
+Use this when:
+- User asks for help or how to contact support
+- User encounters an issue and needs troubleshooting steps
+- User asks about documentation or where to report bugs
+
+Works even when TotalReclaw is not yet configured.`;
+
+export const ACCOUNT_TOOL_DESCRIPTION = `View your TotalReclaw account details at a glance.
+
+Shows:
+- Wallet address and subscription tier
+- Write usage (used / limit / remaining)
+- Total facts stored in your vault
+- Feature flags enabled for your tier
+- Recovery phrase hint (first and last word only)
+
+Use this when:
+- User asks about their account or profile
+- User wants a comprehensive overview of their TotalReclaw setup
+- User asks "what's my wallet" or "how many memories do I have"
+- User wants to verify their recovery phrase (hint only, never the full phrase)`;
+
 // ── Layer 5: Prompt Fallback Templates ───────────────────────────────────────
 
 export const PROMPT_DEFINITIONS = [

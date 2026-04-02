@@ -67,4 +67,15 @@ pub enum Error {
     QuotaExceeded(String),
 }
 
+/// Bridge totalreclaw_core errors into this crate's Error type.
+impl From<totalreclaw_core::Error> for Error {
+    fn from(e: totalreclaw_core::Error) -> Self {
+        match e {
+            totalreclaw_core::Error::Crypto(msg) => Error::Crypto(msg),
+            totalreclaw_core::Error::InvalidMnemonic(msg) => Error::InvalidMnemonic(msg),
+            totalreclaw_core::Error::Lsh(msg) => Error::Lsh(msg),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;

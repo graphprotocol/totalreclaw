@@ -11,16 +11,12 @@ default = []
 local-embeddings = ["dep:ort", "dep:tokenizers"]
 
 [dependencies]
-# Crypto
-aes-gcm = "0.10"
-hkdf = "0.12"
-hmac = "0.12"
-sha2 = "0.10"
-rand = "0.8"
+# Core crypto primitives (shared with WASM/PyO3 builds)
+totalreclaw-core = { path = "../totalreclaw-core" }
 
-# BIP-39
+# BIP-39 + CSPRNG (used by setup.rs for mnemonic generation)
 bip39 = "2"
-pbkdf2 = { version = "0.12", features = ["hmac"] }
+rand = "0.8"
 
 # Ethereum / ERC-4337
 alloy-primitives = "1"
@@ -29,12 +25,9 @@ k256 = { version = "0.13", features = ["ecdsa"] }
 tiny-keccak = { version = "2", features = ["keccak"] }
 coins-bip32 = "0.12"
 
-# Encoding
+# Encoding (still needed by wallet, userop, store, search)
 base64 = "0.22"
 hex = "0.4"
-
-# Unicode
-unicode-normalization = "0.1"
 
 # Serialization (for fixtures, config)
 serde = { version = "1", features = ["derive"] }

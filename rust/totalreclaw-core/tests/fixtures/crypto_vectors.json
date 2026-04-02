@@ -1,0 +1,290 @@
+{
+  "_comment": "Generated from TypeScript canonical implementation. Do not edit manually.",
+  "_generated_at": "2026-03-30T14:43:09.783Z",
+  "_mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+  "key_derivation": {
+    "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+    "bip39_seed_hex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+    "salt_hex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc1",
+    "auth_key_hex": "5580b82ac0a8763328600dd335b139d0915de9a591970207d6820306a2a36ae7",
+    "encryption_key_hex": "a58fdc56e1d768461d95cd46b49e03727b2eb342ac558b9f3ebf1255b871f703",
+    "dedup_key_hex": "63d19334b64c460a95c23c14c1bff018bc83807031451b23117ec0baf85dcf34",
+    "auth_key_hash": "b6be7885057f5d0eac5b65c458060a9a26ab93f098048a1362816873b704f166"
+  },
+  "aes_gcm": {
+    "plaintext": "The user prefers dark mode in all applications.",
+    "encryption_key_hex": "a58fdc56e1d768461d95cd46b49e03727b2eb342ac558b9f3ebf1255b871f703",
+    "fixed_iv_hex": "000000000000000000000000",
+    "fixed_iv_encrypted_base64": "AAAAAAAAAAAAAAAAhUb0M0Nq+Hhy8G4gQeqv9ONDgbGMr05cxw8+FFJ59hLERlWcJQ3sfrDI0CUmXYGrWJhJFBHzOHdvWp/SQUwO",
+    "round_trip_verified": true
+  },
+  "blind_indices": {
+    "test_cases": [
+      {
+        "text": "The user prefers dark mode in all applications.",
+        "indices": [
+          "b9776d7ddf459c9ad5b0e1d6ac61e27befb5e99fd62446677600d7cacef544d0",
+          "04f8996da763b7a969b1028ee3007569eaf3a635486ddab211d512c85b9df8fb",
+          "ab54d31028582d8e67bea13e58bbdde856d8fdf13b1acbd6c7bccb012745a26b",
+          "4797c7aef1457415713009084e978703f4d47152adf2a4c9dbf261d3fb8fa72e",
+          "e6bb5689beec52c4672bd4df92c3613d128d30cdc2b704f76953fe43d89c4ae8",
+          "e642b12901a6ee51456f654c48cd0aa6e90afd64e035afbc97cfc542209c70f9",
+          "582967534d0f909d196b97f9e6921342777aea87b46fa52df165389db1fb8ccf",
+          "5ef5ef0364b6939c4ca61f34b393f7b368d1be8619647aaf83d5b395919ab629",
+          "fd54e5a82e36d787abb29e938f337caa363e9f11d88331711c0932fca32d2875",
+          "32cfcfd94d2dc47f89b60a6d754b88aa2a438a9bee558722c5fd404b7fbf93fa"
+        ]
+      },
+      {
+        "text": "Project deadline is March 15th 2025.",
+        "indices": [
+          "244210e48437b6556980a70249a99369934a352429034cef9d7bd253b3bf2c01",
+          "dfc8aeb39828e31c4cf8fec553c76b65cf91b5ec8b2b00f397788b9f58bbd80e",
+          "fc33e14feac18332c731f9ba3fd3aea5e32b7821507003561bcfc9ed847fa42b",
+          "fa51fd49abf67705d6a35d18218c115ff5633aec1f9ebfdc9d5d4956416f57f6",
+          "fa75b5c25fc089798cf96479474da0ebe84c6cb743a1f1010bb05fd8756275b7",
+          "464b0c8c3c01e79c24c1e08c88a5c2d49a323e3317bff8210f1b51510bf16062",
+          "b2b2f104d32c638903e151a9b20d6e27b41d8c0c84cf8458738f83ca2f1dd744"
+        ]
+      },
+      {
+        "text": "User chose Python over Rust because of team expertise.",
+        "indices": [
+          "04f8996da763b7a969b1028ee3007569eaf3a635486ddab211d512c85b9df8fb",
+          "40f7ad19cd04bc520fd01831e97677d1d6776c6be7138d67dbb66cef3636d70d",
+          "11a4a60b518bf24989d481468076e5d5982884626aed9faeb35b8576fcd223e1",
+          "5fb6a47e368e12e5d8b19280796e6a3d146fe391ed2e967d5f95c55bfb0f9c2f",
+          "521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3",
+          "a511aeeeb8a119931a67038a63b7974faee48712de1c79391ebe2c9b929678e9",
+          "6f30b76a60f3c966cf0a1813d62aa60b06378725e0806912c16c05b4a66c6ae3",
+          "28391d3bc64ec15cbb090426b04aa6b7649c3cc85f11230bb0105e02d15e3624",
+          "ca8b22d0db83a22db163b560b3e4e51527e533d31d067b614a0c33c4d2df8432",
+          "2b3bcb2b7d1d97cec0bf38439c7238a9e0e11bfd250e455712df0d781f35b98e",
+          "34c4b2b8024944ffc1b904f30aeebf47f1f96f59ad6f9d07d10591baf1efc621"
+        ]
+      }
+    ],
+    "token_hash_mappings": {
+      "2025": "b2b2f104d32c638903e151a9b20d6e27b41d8c0c84cf8458738f83ca2f1dd744",
+      "the": "b9776d7ddf459c9ad5b0e1d6ac61e27befb5e99fd62446677600d7cacef544d0",
+      "user": "04f8996da763b7a969b1028ee3007569eaf3a635486ddab211d512c85b9df8fb",
+      "prefers": "ab54d31028582d8e67bea13e58bbdde856d8fdf13b1acbd6c7bccb012745a26b",
+      "dark": "e6bb5689beec52c4672bd4df92c3613d128d30cdc2b704f76953fe43d89c4ae8",
+      "mode": "e642b12901a6ee51456f654c48cd0aa6e90afd64e035afbc97cfc542209c70f9",
+      "in": "582967534d0f909d196b97f9e6921342777aea87b46fa52df165389db1fb8ccf",
+      "all": "5ef5ef0364b6939c4ca61f34b393f7b368d1be8619647aaf83d5b395919ab629",
+      "applications": "fd54e5a82e36d787abb29e938f337caa363e9f11d88331711c0932fca32d2875",
+      "project": "244210e48437b6556980a70249a99369934a352429034cef9d7bd253b3bf2c01",
+      "deadline": "dfc8aeb39828e31c4cf8fec553c76b65cf91b5ec8b2b00f397788b9f58bbd80e",
+      "is": "fa51fd49abf67705d6a35d18218c115ff5633aec1f9ebfdc9d5d4956416f57f6",
+      "march": "fa75b5c25fc089798cf96479474da0ebe84c6cb743a1f1010bb05fd8756275b7",
+      "15th": "464b0c8c3c01e79c24c1e08c88a5c2d49a323e3317bff8210f1b51510bf16062",
+      "chose": "40f7ad19cd04bc520fd01831e97677d1d6776c6be7138d67dbb66cef3636d70d",
+      "python": "11a4a60b518bf24989d481468076e5d5982884626aed9faeb35b8576fcd223e1",
+      "over": "5fb6a47e368e12e5d8b19280796e6a3d146fe391ed2e967d5f95c55bfb0f9c2f",
+      "rust": "521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3",
+      "because": "a511aeeeb8a119931a67038a63b7974faee48712de1c79391ebe2c9b929678e9",
+      "of": "28391d3bc64ec15cbb090426b04aa6b7649c3cc85f11230bb0105e02d15e3624",
+      "team": "ca8b22d0db83a22db163b560b3e4e51527e533d31d067b614a0c33c4d2df8432",
+      "expertise": "2b3bcb2b7d1d97cec0bf38439c7238a9e0e11bfd250e455712df0d781f35b98e"
+    },
+    "stem_mappings": {
+      "prefers": {
+        "stem": "prefer",
+        "hash": "4797c7aef1457415713009084e978703f4d47152adf2a4c9dbf261d3fb8fa72e"
+      },
+      "applications": {
+        "stem": "applic",
+        "hash": "32cfcfd94d2dc47f89b60a6d754b88aa2a438a9bee558722c5fd404b7fbf93fa"
+      },
+      "deadline": {
+        "stem": "deadlin",
+        "hash": "fc33e14feac18332c731f9ba3fd3aea5e32b7821507003561bcfc9ed847fa42b"
+      },
+      "because": {
+        "stem": "becaus",
+        "hash": "6f30b76a60f3c966cf0a1813d62aa60b06378725e0806912c16c05b4a66c6ae3"
+      },
+      "expertise": {
+        "stem": "expertis",
+        "hash": "34c4b2b8024944ffc1b904f30aeebf47f1f96f59ad6f9d07d10591baf1efc621"
+      }
+    }
+  },
+  "content_fingerprint": {
+    "dedup_key_hex": "63d19334b64c460a95c23c14c1bff018bc83807031451b23117ec0baf85dcf34",
+    "test_cases": [
+      {
+        "text": "The user prefers dark mode in all applications.",
+        "fingerprint": "c45640a6295df922906c4bdc5b403b6708f02a19f4b33ac25769e775e7abbba5"
+      },
+      {
+        "text": "  The   USER prefers dark   mode in ALL applications.  ",
+        "fingerprint": "c45640a6295df922906c4bdc5b403b6708f02a19f4b33ac25769e775e7abbba5"
+      },
+      {
+        "text": "Project deadline is March 15th 2025.",
+        "fingerprint": "5cc47e07a5c72106a276ca1b50240c81c020e39f7d7b1ca21768eafe2b042d4e"
+      }
+    ]
+  },
+  "lsh": {
+    "lsh_seed_hex": "6f8b0d095090ecc480130490337485290344eed21235a4d5add0b3870bb0dcd8",
+    "small": {
+      "dims": 4,
+      "n_tables": 3,
+      "n_bits": 4,
+      "embedding": [
+        0.5,
+        -0.3,
+        0.8,
+        -0.1
+      ],
+      "hashes": [
+        "463bd7eb9a4b013688cca0406913759561c03ad9f2c7e5ce2593ec2b9725c160",
+        "be23e5f6a72e8c9e1671ee4e5052a5b85490c907e7dd3c1810ace1b17dcc4137",
+        "a418d6f3cf46311f9187fd91fe0736c2eeac647043406d22e952ceb5e7f9ebdc"
+      ],
+      "first_hyperplanes_table0": [
+        0.2793121433396607,
+        0.12404430380721115,
+        0.9232998413063636,
+        0.10207562509607696,
+        0.08564770563810467,
+        -1.0188010601466846,
+        -0.6339878477568374,
+        -0.184417346427592,
+        -1.68295069499376,
+        1.2739158639311443,
+        -0.2584514628452298,
+        -0.3093903181581613,
+        -0.3464622813391981,
+        1.6825832310544853,
+        -2.2472164110762627,
+        0.059148279247496105
+      ]
+    },
+    "real": {
+      "dims": 1024,
+      "n_tables": 20,
+      "n_bits": 32,
+      "embedding_first_10": [
+        0,
+        0.04991670832341408,
+        0.09933466539753061,
+        0.1477601033306698,
+        0.19470917115432526,
+        0.2397127693021015,
+        0.28232123669751774,
+        0.32210884361884556,
+        0.3586780454497614,
+        0.3916634548137417
+      ],
+      "embedding_generation": "sin(i * 0.1) * 0.5 for i in 0..1024",
+      "hashes": [
+        "fd3080455f40326ba4c69b372fbeebfa0468257ba5d2d623ff5ae1b9745e8053",
+        "95ab08801bdefa5597ea9427cf6de667fb5e74fe45090da11d5c92d7931d34c5",
+        "83371eb81d27f9ddcf7f4dcd96187535196b677cf4866acd5fb848bae8ef1ff0",
+        "3e0b84da069420840e55e6400fc4543285331bed9bae9662806cc29e0e32862d",
+        "3daa39adef8dc73751275310444c55bc30d8af6401882124212fdb3a71beb94b",
+        "068365c76714aac3f418331b8255e8235bb06047b4a40c44f50f792a68167722",
+        "85264aeb4f9fde79a2fa27f274b8ae316ea9855a98e52969d0da8c8ae0684887",
+        "c08f61014406c48ea806837675fde5dfa85806b81a0707e567e2b6c3fa5b8d52",
+        "c7960cc0d7b7e839cf95002d102757adb165e5347bdf9abfcbb5ddbb75cf10b7",
+        "02de095bf689c20f311531e6bd8d4a368574c994dd161829536f55e86e8cb196",
+        "cf19ed43a1d67aa3646af96c74bea25f7b03eb58756421da015e2b2dac0a383b",
+        "0c5e0faca0e96f2a34bd57c347502abff3bfccc2f187c2529f04bb2c644240f7",
+        "00b162a4aa78e0b71e058950ff124f6693abb469478fedff7729b7c84a70b753",
+        "8eaa6863a4f814c0fe212936afa5562468c4df8647d060583d0b5deb63bdbeda",
+        "471eb0286f63670fcda906f04d52d42e5c3015b24cb139323239da5a46ec113c",
+        "5683b243d711a3bcf831015f81244c68a76574136df3f10290f19afe490839b7",
+        "071d38a9a9dc2c6a341aff21a94dc5d9f54ff5da1592227107b3d902610a1064",
+        "5470032569037914ffc2ff5d07cd477277280b65407c85cdcdd24a65ad5967fc",
+        "7496adab67365aa7f87f6ff20dd2846cc447430b4d171e3a158ad69e9ae09893",
+        "a02c331ec7c9774eadd8954ec272ef66f776ae202eed4c156d3bf5dd5e4604be"
+      ]
+    }
+  },
+  "porter_stemmer": [
+    {
+      "word": "applications",
+      "stem": "applic"
+    },
+    {
+      "word": "prefers",
+      "stem": "prefer"
+    },
+    {
+      "word": "running",
+      "stem": "run"
+    },
+    {
+      "word": "community",
+      "stem": "commun"
+    },
+    {
+      "word": "communities",
+      "stem": "commun"
+    },
+    {
+      "word": "argued",
+      "stem": "argu"
+    },
+    {
+      "word": "argues",
+      "stem": "argu"
+    },
+    {
+      "word": "arguing",
+      "stem": "argu"
+    },
+    {
+      "word": "deadline",
+      "stem": "deadlin"
+    },
+    {
+      "word": "project",
+      "stem": "project"
+    },
+    {
+      "word": "expertise",
+      "stem": "expertis"
+    },
+    {
+      "word": "chosen",
+      "stem": "chosen"
+    },
+    {
+      "word": "because",
+      "stem": "becaus"
+    },
+    {
+      "word": "python",
+      "stem": "python"
+    },
+    {
+      "word": "user",
+      "stem": "user"
+    },
+    {
+      "word": "dark",
+      "stem": "dark"
+    },
+    {
+      "word": "mode",
+      "stem": "mode"
+    },
+    {
+      "word": "march",
+      "stem": "march"
+    },
+    {
+      "word": "over",
+      "stem": "over"
+    },
+    {
+      "word": "team",
+      "stem": "team"
+    }
+  ]
+}
