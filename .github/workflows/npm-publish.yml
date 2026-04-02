@@ -8,9 +8,10 @@ on:
         required: true
         type: choice
         options:
+          - core
           - mcp-server
           - client
-          - both
+          - all
       dry-run:
         description: 'Dry run (build only, no publish)'
         required: false
@@ -18,38 +19,42 @@ on:
         default: false
 
 jobs:
-  publish-mcp-server:
-    if: inputs.package == 'mcp-server' || inputs.package == 'both'
-    name: Publish @totalreclaw/mcp-server
+  publish-core:
+    if: inputs.package == 'core' || inputs.package == 'all'
+    name: Publish @totalreclaw/core (WASM)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: jetli/wasm-pack-action@v0.4.0
+
+      - name: Build WASM
+        run: cd rust/totalreclaw-core && wasm-pack build --target nodejs --out-dir pkg --features wasm
 
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install dependencies
-        run: cd mcp && npm ci
-
-      - name: Build
-        run: cd mcp && npm run build
-
-      - name: Run tests
-        run: cd mcp && npm test
-
       - name: Publish
         if: inputs.dry-run == false
-        run: cd mcp && npm publish --access public
+        run: cd rust/totalreclaw-core/pkg && npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Report version
-        run: node -e "console.log('Published:', require('./mcp/package.json').name + '@' + require('./mcp/package.json').version)"
+        run: |
+          node -e "const p = require('./rust/totalreclaw-core/pkg/package.json'); console.log('Published:', p.name + '@' + p.version)"
 
   publish-client:
-    if: inputs.package == 'client' || inputs.package == 'both'
+    # Depends on core when publishing all (core must be on npm first)
+    needs: [publish-core]
+    if: |
+      always() &&
+      (inputs.package == 'client' || inputs.package == 'all') &&
+      (needs.publish-core.result == 'success' || needs.publish-core.result == 'skipped')
     name: Publish @totalreclaw/client
     runs-on: ubuntu-latest
     steps:
@@ -76,4 +81,41 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Report version
-        run: node -e "console.log('Published:', require('./client/package.json').name + '@' + require('./client/package.json').version)"
+        run: |
+          node -e "const p = require('./client/package.json'); console.log('Published:', p.name + '@' + p.version)"
+
+  publish-mcp-server:
+    # Depends on core when publishing all (core must be on npm first)
+    needs: [publish-core]
+    if: |
+      always() &&
+      (inputs.package == 'mcp-server' || inputs.package == 'all') &&
+      (needs.publish-core.result == 'success' || needs.publish-core.result == 'skipped')
+    name: Publish @totalreclaw/mcp-server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: cd mcp && npm ci
+
+      - name: Build
+        run: cd mcp && npm run build
+
+      - name: Run tests
+        run: cd mcp && npm test
+
+      - name: Publish
+        if: inputs.dry-run == false
+        run: cd mcp && npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Report version
+        run: |
+          node -e "const p = require('./mcp/package.json'); console.log('Published:', p.name + '@' + p.version)"
