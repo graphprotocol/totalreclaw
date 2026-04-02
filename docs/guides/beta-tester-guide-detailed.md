@@ -185,19 +185,12 @@ If you want to view your derived wallet address, check the plugin logs after the
 
 TotalReclaw includes a free tier so you can start using it immediately:
 
-- **Your first 500 memories per month are free.**
-- **Reading and searching your memories is always free and never metered.** You can always access your own data, even after exhausting the write quota.
-- All transaction fees (gas) are covered by the TotalReclaw paymaster (Pimlico) on Gnosis Chain. You pay nothing.
+- **Free tier memories are unlimited.** Your memories are stored on Base Sepolia testnet at no cost.
+- **Reading and searching your memories is always free and never metered.** You can always access your own data.
+- All transaction fees (gas) are covered by the TotalReclaw paymaster (Pimlico). You pay nothing.
 - No credit card, no crypto, and no signup beyond your recovery phrase are required.
-- The relay server tracks your write usage by wallet address. The counter resets automatically at the start of each calendar month.
 
-When you approach the free tier limit, the agent will proactively tell you. For example:
-
-> "You've used 425/500 free memories this month. Consider upgrading to Pro for unlimited storage."
-
-If you reach the limit, new memory writes will be rejected with a `quota_exceeded` error, but you can still search and recall all your existing memories. You can either wait for the monthly reset or upgrade to Pro (see [Upgrading to Pro Tier](#9-upgrading-to-pro-tier)).
-
-> **Note:** If you upgrade to Pro and later cancel, your write counter is preserved from before the upgrade. For example, if you used 500 free memories, upgraded, wrote more, and then cancelled, the next write after cancellation would still be blocked until the monthly reset.
+The free tier uses Base Sepolia testnet, which is a test network. This means your data is stored on a network that may be reset. For permanent, production-grade storage on Gnosis mainnet, upgrade to Pro (see [Upgrading to Pro Tier](#9-upgrading-to-pro-tier)).
 
 ---
 
@@ -349,7 +342,7 @@ Use this to check your subscription status and usage.
 - "How many free memories do I have left?"
 
 **Expected agent response:**
-> "You're on the free tier. You've used 42/100 free writes this month."
+> "You're on the free tier (Base Sepolia testnet). You've stored 42 memories."
 
 ### 7.7 Upgrade -- `totalreclaw_upgrade` (MCP only)
 
@@ -428,14 +421,11 @@ Follow this checklist step by step to verify that TotalReclaw is working correct
 
 ## 9. Upgrading to Pro Tier
 
-When your free tier limit (500 memories/month) is reached, the agent will prompt you to upgrade.
+The free tier stores memories on Base Sepolia testnet (unlimited, but may be reset). Upgrading to Pro moves your storage to Gnosis mainnet for permanent, production-grade on-chain storage.
 
-**What you will see:**
-> "You've used 500/500 free memories this month. Upgrade to Pro for unlimited storage."
+### Payment:
 
-### Two payment options:
-
-**Option A: Credit card**
+**Credit card (Stripe)**
 
 1. Tell the agent: "I'd like to upgrade with a credit card."
 2. The agent generates a Stripe Checkout URL and shares it with you.
@@ -444,7 +434,7 @@ When your free tier limit (500 memories/month) is reached, the agent will prompt
 5. After payment, Stripe sends a webhook to the relay server, which activates your subscription.
 6. The agent confirms: "You're all set on the Pro tier."
 
-After upgrading, you can continue using TotalReclaw with higher write limits. Your subscription is tied to your wallet address, so it follows you across devices (as long as you use the same recovery phrase).
+After upgrading, your memories are stored on Gnosis mainnet (permanent on-chain storage). Your subscription is tied to your wallet address, so it follows you across devices (as long as you use the same recovery phrase).
 
 > **Note:** Your client caches billing status for up to 2 hours. After upgrading, the new tier may take up to 2 hours to fully activate. If Pro features are not reflected immediately, restart your agent to force a billing cache refresh.
 
@@ -755,9 +745,9 @@ Restart the plugin after updating the variable.
 
 ### "Free tier quota exceeded"
 
-**Cause:** You have used all 500 free writes for the month. (Note: reads are never metered.)
+**Cause:** You have exceeded the abuse-prevention write cap for the month. (Note: reads are never metered.)
 
-**Fix:** Either upgrade to Pro (see [Section 9](#9-upgrading-to-pro-tier)) or wait for the monthly reset. You can still search and recall your existing memories while on the free tier -- only new writes are blocked.
+**Fix:** Upgrade to Pro (see [Section 9](#9-upgrading-to-pro-tier)). You can still search and recall your existing memories while on the free tier -- only new writes are blocked.
 
 ### Slow retrieval
 
@@ -811,14 +801,14 @@ OPENAI_API_KEY="sk-your-key-here"
 
 This is a beta release. The following items are known limitations that will be addressed in future updates:
 
-- **Free tier threshold:** 500 memories/month. The limit is a server-side configuration value.
-- **Subscription pricing:** Pro tier is $5/month (unlimited memories, permanent on-chain storage on Gnosis).
+- **Free tier storage:** Base Sepolia testnet (unlimited writes, but testnet data may be reset). An abuse-prevention cap exists server-side but is high enough for normal usage.
+- **Subscription pricing:** Pro tier is $3.99/month (unlimited memories, permanent on-chain storage on Gnosis mainnet).
 - **Billing tools:** The upgrade flow (`totalreclaw_status`, `totalreclaw_upgrade`) may not be fully wired in all environments. If the agent cannot generate a checkout URL, contact the TotalReclaw team directly.
 - **Auto-extraction timing (OpenClaw only):** The `TOTALRECLAW_EXTRACT_EVERY_TURNS` environment variable controls extraction frequency. The plugin fires extraction on the `agent_end` hook every N turns (default: 3). The skill config also accepts `autoExtractEveryTurns` via the `TOTALRECLAW_EXTRACT_EVERY_TURNS` env var.
 - **MCP server has no auto-memory:** The MCP server does not have lifecycle hooks. It only responds to explicit tool calls. The host agent (Claude Desktop, Cursor) must call `totalreclaw_remember` and `totalreclaw_recall` explicitly.
-- **Batch writes:** On-chain writes are currently sent one fact at a time. Batch writes for gas optimization are not yet implemented.
+- **Batch writes:** On-chain writes support batching multiple facts per UserOp via ERC-4337 executeBatch.
 - **Decay and eviction engine:** The importance decay formula runs, but tuning is ongoing. Low-importance facts decay over time and may be evicted.
-- **Write counter persists across upgrades:** If you exhaust the free tier, upgrade to Pro, and later cancel, the write counter from before the upgrade is preserved. The counter resets monthly, not on cancellation.
+- **Downgrade after cancellation:** If you cancel a Pro subscription, your storage reverts to Base Sepolia testnet. Existing mainnet memories remain accessible but new writes go to testnet.
 - **Self-hosted mode:** If you prefer full control, you can self-host the open-source server and store encrypted memories in your own PostgreSQL database instead. Set `TOTALRECLAW_SELF_HOSTED=true` and provide your own `TOTALRECLAW_SERVER_URL`.
 
 ---

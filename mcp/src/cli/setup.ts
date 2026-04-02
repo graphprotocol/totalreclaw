@@ -20,54 +20,45 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import { generateMnemonic, validateMnemonic, mnemonicToSeedSync } from '@scure/bip39';
+import { generateMnemonic, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
-import { hkdf } from '@noble/hashes/hkdf.js';
-import { sha256 } from '@noble/hashes/sha2.js';
+import * as wasm from '@totalreclaw/core';
 
 // ---------------------------------------------------------------------------
-// Constants -- must match plugin/crypto.ts
+// Constants
 // ---------------------------------------------------------------------------
-
-const AUTH_KEY_INFO = 'totalreclaw-auth-key-v1';
 
 export const DEFAULT_SERVER_URL = 'https://api.totalreclaw.xyz';
 const CREDENTIALS_DIR = path.join(os.homedir(), '.totalreclaw');
 export const CREDENTIALS_PATH = path.join(CREDENTIALS_DIR, 'credentials.json');
 
 // ---------------------------------------------------------------------------
-// Key Derivation (BIP-39 path only -- matches plugin/crypto.ts)
+// Key Derivation (delegates to @totalreclaw/core Rust WASM)
 // ---------------------------------------------------------------------------
 
 /**
  * Derive the auth key and salt from a BIP-39 mnemonic.
  *
- * This is the exact same derivation as `deriveKeysFromMnemonic` in
- * `skill/plugin/crypto.ts`:
+ * Delegates to `@totalreclaw/core` WASM which performs:
  *   - BIP-39 seed via mnemonicToSeedSync (512 bits)
  *   - salt = first 32 bytes of seed
  *   - authKey = HKDF-SHA256(seed, salt, "totalreclaw-auth-key-v1", 32)
+ *
+ * Returns hex-encoded strings (not raw Uint8Array).
  */
-export function deriveAuthKey(mnemonic: string): { authKey: Uint8Array; salt: Uint8Array } {
-  const seed = mnemonicToSeedSync(mnemonic.trim());
-
-  // Deterministic salt: first 32 bytes of BIP-39 seed
-  const salt = seed.slice(0, 32);
-
-  // HKDF-SHA256 with the full 512-bit seed as IKM
-  const infoBytes = new TextEncoder().encode(AUTH_KEY_INFO);
-  const authKey = hkdf(sha256, seed, salt, infoBytes, 32);
-
-  return { authKey, salt };
+export function deriveAuthKey(mnemonic: string): { authKeyHex: string; saltHex: string } {
+  const keys = wasm.deriveKeysFromMnemonic(mnemonic.trim());
+  return { authKeyHex: keys.auth_key, saltHex: keys.salt };
 }
 
 /**
  * Compute SHA-256(authKey) as a hex string.
- * Matches `computeAuthKeyHash` in plugin/crypto.ts.
+ * Delegates to `@totalreclaw/core` WASM.
+ *
+ * @param authKeyHex - 64-char hex string (32 bytes)
  */
-export function computeAuthKeyHash(authKey: Uint8Array): string {
-  const hash = sha256(authKey);
-  return Buffer.from(hash).toString('hex');
+export function computeAuthKeyHash(authKeyHex: string): string {
+  return wasm.computeAuthKeyHash(authKeyHex);
 }
 
 // ---------------------------------------------------------------------------
@@ -260,9 +251,8 @@ export async function runSetup(): Promise<void> {
 
     // ── Step 2: Key Derivation ────────────────────────────────────────────
 
-    const { authKey, salt } = deriveAuthKey(mnemonic);
-    const authKeyHash = computeAuthKeyHash(authKey);
-    const saltHex = Buffer.from(salt).toString('hex');
+    const { authKeyHex, saltHex } = deriveAuthKey(mnemonic);
+    const authKeyHash = computeAuthKeyHash(authKeyHex);
 
     console.log('\nKeys derived successfully.');
 

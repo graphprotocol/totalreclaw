@@ -7,16 +7,15 @@
  *   - before-agent-start: fetch/cache billing status, inject quota warnings
  *   - agent-end: invalidate cache on 403/quota errors so next start re-fetches
  *
- * Key derivation reuses the same BIP-39 seed path as the MCP server:
- *   mnemonic -> mnemonicToSeedSync() -> 512-bit seed
+ * Key derivation delegates to @totalreclaw/core (Rust WASM) which performs:
+ *   mnemonic -> BIP-39 seed (512 bits)
  *   salt = seed[0..32]
  *   authKey = HKDF-SHA256(seed, salt, "totalreclaw-auth-key-v1", 32)
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as crypto from 'crypto';
-import { mnemonicToSeedSync } from '@scure/bip39';
+import * as wasm from '@totalreclaw/core';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -26,9 +25,6 @@ const BILLING_CACHE_DIR = path.join(process.env.HOME ?? '/home/node', '.totalrec
 const BILLING_CACHE_PATH = path.join(BILLING_CACHE_DIR, 'billing-cache.json');
 const BILLING_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
 const QUOTA_WARNING_THRESHOLD = 0.8; // 80%
-
-// HKDF info string -- must match MCP server and client library exactly.
-const AUTH_KEY_INFO = 'totalreclaw-auth-key-v1';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,7 +56,7 @@ export interface BillingContext {
 /**
  * Derive the auth key hex from a BIP-39 mnemonic.
  *
- * Uses the same derivation path as the MCP server's crypto module:
+ * Delegates to the Rust WASM core which performs:
  *   mnemonic -> BIP-39 seed (512 bits)
  *   salt = seed[0..32]
  *   authKey = HKDF-SHA256(seed, salt, "totalreclaw-auth-key-v1", 32)
@@ -68,48 +64,8 @@ export interface BillingContext {
  * This is synchronous and does not require RPC connectivity.
  */
 export function deriveAuthKeyHex(mnemonic: string): string {
-  const seed = mnemonicToSeedSync(mnemonic.trim());
-  const salt = Buffer.from(seed.slice(0, 32));
-  const seedBuf = Buffer.from(seed);
-
-  const authKey = hkdfSha256(
-    seedBuf,
-    salt,
-    Buffer.from(AUTH_KEY_INFO, 'utf-8'),
-    32,
-  );
-
-  return authKey.toString('hex');
-}
-
-/**
- * HKDF-SHA256 implementation -- identical to client/src/crypto/kdf.ts.
- */
-function hkdfSha256(
-  ikm: Buffer,
-  salt: Buffer,
-  info: Buffer,
-  length: number,
-): Buffer {
-  const prk = crypto.createHmac('sha256', salt).update(ikm).digest();
-  const okm = Buffer.alloc(length);
-  let t = Buffer.alloc(0);
-  let offset = 0;
-  let counter = 1;
-
-  while (offset < length) {
-    const hmac = crypto.createHmac('sha256', prk);
-    hmac.update(t);
-    hmac.update(info);
-    hmac.update(Buffer.from([counter]));
-    t = hmac.digest();
-    const copyLength = Math.min(t.length, length - offset);
-    t.copy(okm, offset, 0, copyLength);
-    offset += copyLength;
-    counter++;
-  }
-
-  return okm;
+  const result = wasm.deriveKeysFromMnemonic(mnemonic.trim());
+  return result.auth_key;
 }
 
 // ---------------------------------------------------------------------------

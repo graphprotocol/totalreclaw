@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/client",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "TypeScript client library for TotalReclaw — E2EE encryption, LSH blind indexing, embedding search, and BM25+cosine reranking for AI agent memory",
   "homepage": "https://totalreclaw.xyz",
   "main": "dist/index.js",
@@ -31,10 +31,9 @@
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
     "@scure/bip39": "^2.0.1",
-    "@totalreclaw/core": "file:../rust/totalreclaw-core/pkg",
+    "@totalreclaw/core": "^0.1.0",
     "argon2": "^0.31.0",
     "onnxruntime-node": "^1.17.0",
-    "permissionless": "^0.3.4",
     "protobufjs": "^7.2.5",
     "tslib": "^2.8.1",
     "viem": "^2.46.3"

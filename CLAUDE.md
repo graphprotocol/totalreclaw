@@ -117,7 +117,7 @@ Specs are organized by product area under `docs/specs/`:
 | Spec | File | Status |
 |------|------|--------|
 | Seed-to-Subgraph v1.0 | `seed-to-subgraph.md` | Implemented, deployed to Base Sepolia + Gnosis mainnet |
-| Billing & Onboarding | `billing-and-onboarding.md` | Implemented (Stripe + Coinbase) |
+| Billing & Onboarding | `billing-and-onboarding.md` | Implemented (Stripe) |
 | Paymaster Comparison | `paymaster-comparison.md` | Complete (Pimlico chosen) |
 
 ### TEE (Trusted Execution) -- `docs/specs/tee/`

@@ -128,12 +128,15 @@ NanoClaw's lifecycle hooks handle memory without any user action:
 
 ### Extraction
 
-The agent periodically extracts atomic facts from conversations -- things like:
+The agent periodically extracts atomic facts from conversations across 7 categories:
 
-- User preferences ("prefers dark mode")
-- Decisions ("chose PostgreSQL for the database")
-- Facts ("works at Acme Corp")
-- Goals ("wants to launch by Q2")
+- **Preferences** ("prefers dark mode")
+- **Decisions** ("chose PostgreSQL for the database because the data is relational")
+- **Facts** ("works at Acme Corp")
+- **Goals** ("wants to launch by Q2")
+- **Episodic** ("we deployed v2.0 on March 15th")
+- **Context** ("the project uses PostgreSQL")
+- **Summary** ("today we discussed the migration plan")
 
 Each fact is encrypted with AES-256-GCM before leaving the container. The server stores only ciphertext.
 
@@ -178,10 +181,10 @@ If you want separate memory per instance, use **different recovery phrases** or 
 
 | Tier | Writes | Reads | Storage | Price |
 |------|--------|-------|---------|-------|
-| **Free** | Unlimited (test network) | Unlimited | Testnet (trial) | $0 |
-| **Pro** | Unlimited | Unlimited | Permanent on-chain (Gnosis) | $5/month |
+| **Free** | Unlimited | Unlimited | Testnet (Base Sepolia) | $0 |
+| **Pro** | Unlimited | Unlimited | Permanent on-chain (Gnosis) | $3.99/month |
 
-The free tier resets monthly. When the quota is reached, write operations return a 403 error. The agent will surface an upgrade link.
+The free tier stores on Base Sepolia testnet (unlimited, but testnet data may be reset). Upgrade to Pro for permanent storage on Gnosis mainnet.
 
 To upgrade, ask the agent: *"How do I upgrade TotalReclaw?"*
 
@@ -211,8 +214,9 @@ To upgrade, ask the agent: *"How do I upgrade TotalReclaw?"*
 
 ### Quota exceeded (403 errors)
 
-- Free tier: 500 writes/month. Check with *"What's my TotalReclaw status?"*
-- Upgrade to Pro for unlimited writes
+- The free tier is unlimited on testnet, but a high abuse-prevention cap exists server-side
+- If you encounter a 403, check with *"What's my TotalReclaw status?"*
+- Upgrade to Pro for permanent mainnet storage
 
 ### First startup is slow
 
@@ -225,7 +229,7 @@ To upgrade, ask the agent: *"How do I upgrade TotalReclaw?"*
 - The recovery phrase derives all encryption keys. **Never share it** or commit it to version control.
 - Use secrets management (Docker secrets, platform secret store) rather than plaintext `.env` files in production.
 - The TotalReclaw server never sees plaintext data. Even if the server is compromised, your memories remain encrypted.
-- All encryption uses AES-256-GCM. Key derivation uses Argon2id + HKDF.
+- All encryption uses AES-256-GCM. Key derivation uses BIP-39 seed + HKDF-SHA256.
 
 ---
 

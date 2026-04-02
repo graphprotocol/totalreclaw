@@ -103,9 +103,12 @@ Your agent extracts and stores atomic facts from conversations:
 | Type | Example |
 |------|---------|
 | **Preference** | "User prefers TypeScript over JavaScript" |
-| **Decision** | "User decided to use PostgreSQL for the main database" |
+| **Decision** | "User decided to use PostgreSQL for the main database because the data is relational" |
 | **Fact** | "User works at Acme Corp" |
+| **Episodic** | "We deployed v2.0 on March 15th" |
 | **Goal** | "User wants to launch by Q2" |
+| **Context** | "The project uses PostgreSQL" |
+| **Summary** | "Today we discussed the migration plan" |
 
 Each fact is scored by importance. Low-importance facts decay over time; critical ones persist.
 
@@ -140,14 +143,12 @@ Both options encrypt your data identically on your device — the difference is 
 
 | Tier | Memories | Reads | Storage | Key Features | Price |
 |------|----------|-------|---------|--------------|-------|
-| **Free** | 500/month | Unlimited | Testnet (trial) | Cosine dedup, auto-extract every 3 turns | $0 |
-| **Pro** | Unlimited | Unlimited | Permanent on-chain (Gnosis) | + LLM-guided dedup | $5/month |
+| **Free** | Unlimited | Unlimited | Testnet (Base Sepolia) | Cosine dedup, auto-extract every 3 turns | $0 |
+| **Pro** | Unlimited | Unlimited | Permanent on-chain (Gnosis) | + LLM-guided dedup | $3.99/month |
 
-- Counter resets at the start of each calendar month
 - Pay with card (Stripe)
-- When you hit the limit, your agent tells you and provides an upgrade link
-- **Free tier** includes full encryption, cosine-based dedup, and auto-extraction every 3 turns
-- **Pro tier** adds LLM-guided dedup (catches contradictions, not just paraphrases)
+- **Free tier** uses Base Sepolia testnet -- unlimited memories, full encryption, cosine-based dedup, and auto-extraction every 3 turns. Testnet data may be reset.
+- **Pro tier** stores permanently on Gnosis mainnet and adds LLM-guided dedup (catches contradictions, not just paraphrases)
 
 ---
 
@@ -158,7 +159,7 @@ Both options encrypt your data identically on your device — the difference is 
 | Setup not working | Re-run: `openclaw skills install totalreclaw` or `npx @totalreclaw/mcp-server setup` |
 | "Not authenticated" / 401 | Check your recovery phrase -- exact words, exact order |
 | Memories not appearing | Try an explicit recall: "what do you remember about X?" |
-| Quota exceeded (403) | Wait for monthly reset or upgrade to Pro |
+| Quota exceeded (403) | Upgrade to Pro for permanent mainnet storage |
 | Want to upgrade to Pro | Ask your agent "upgrade my TotalReclaw subscription" |
 
 For detailed technical troubleshooting, see [beta-tester-guide-detailed.md](./beta-tester-guide-detailed.md).
@@ -222,11 +223,11 @@ TotalReclaw uses two complementary layers to prevent duplicate memories:
 - **MCP agents:** The agent has a `status` tool that shows your tier, usage, and limits
 
 **What happens at the quota limit:**
-- Free tier: 500 memories/month, unlimited reads
-- When you hit the limit, your agent will tell you and provide an upgrade link
-- After upgrading via Stripe, writes resume immediately
+- Free tier: unlimited memories on testnet (Base Sepolia), unlimited reads
+- Pro tier: unlimited memories on Gnosis mainnet (permanent on-chain storage)
+- After upgrading via Stripe, writes move to mainnet immediately
 
-**Monthly reset:** Usage counters reset at the start of each calendar month.
+**Free tier** stores on Base Sepolia testnet (unlimited, but testnet data may be reset). **Pro tier** stores permanently on Gnosis mainnet.
 
 ---
 

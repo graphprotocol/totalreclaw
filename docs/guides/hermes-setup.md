@@ -132,8 +132,8 @@ Store a memory in Hermes, recall it in Claude Desktop -- same encryption, same d
 
 | Tier | Storage | Cost |
 |------|---------|------|
-| Free | 500 memories/month on testnet | $0 |
-| Pro | Unlimited on mainnet | $5/month |
+| Free | Unlimited on testnet (Base Sepolia) | $0 |
+| Pro | Unlimited on mainnet (Gnosis) | $3.99/month |
 
 Check your usage anytime:
 

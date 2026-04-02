@@ -107,7 +107,7 @@ Switch agents, keep your memories. No export/import needed.
 
 Check [totalreclaw.xyz/pricing](https://totalreclaw.xyz/pricing) for current pricing.
 
-- **Free tier** — Base Sepolia testnet, limited writes
+- **Free tier** — Base Sepolia testnet, unlimited writes (testnet data may be reset)
 - **Pro tier** — Gnosis mainnet, unlimited
 
 ## Troubleshooting

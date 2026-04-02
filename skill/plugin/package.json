@@ -27,7 +27,7 @@
     "@huggingface/transformers": "^3.8.1",
     "@noble/hashes": "^2.0.1",
     "@scure/bip39": "^2.0.1",
-    "@totalreclaw/core": "file:../../rust/totalreclaw-core/pkg",
+    "@totalreclaw/core": "^0.1.0",
     "permissionless": "^0.3.4",
     "porter-stemmer": "^0.9.1",
     "viem": "^2.46.3"

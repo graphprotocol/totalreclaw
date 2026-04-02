@@ -74,24 +74,20 @@ function referenceDerive(mnemonic: string): {
 
 describe('Setup CLI - Key Derivation', () => {
   it('should derive auth key matching plugin/crypto.ts for known mnemonic', () => {
-    // Derive using the setup CLI function
-    const { authKey, salt } = deriveAuthKey(TEST_MNEMONIC);
+    // Derive using the setup CLI function (WASM)
+    const { authKeyHex, saltHex } = deriveAuthKey(TEST_MNEMONIC);
 
     // Derive using the reference (plugin) implementation
     const ref = referenceDerive(TEST_MNEMONIC);
 
-    // Both must produce identical byte sequences
-    expect(Buffer.from(authKey).toString('hex')).toBe(
-      Buffer.from(ref.authKey).toString('hex'),
-    );
-    expect(Buffer.from(salt).toString('hex')).toBe(
-      Buffer.from(ref.salt).toString('hex'),
-    );
+    // Both must produce identical values
+    expect(authKeyHex).toBe(Buffer.from(ref.authKey).toString('hex'));
+    expect(saltHex).toBe(Buffer.from(ref.salt).toString('hex'));
   });
 
   it('should compute auth key hash matching plugin/crypto.ts', () => {
-    const { authKey } = deriveAuthKey(TEST_MNEMONIC);
-    const hash = computeAuthKeyHash(authKey);
+    const { authKeyHex } = deriveAuthKey(TEST_MNEMONIC);
+    const hash = computeAuthKeyHash(authKeyHex);
 
     const ref = referenceDerive(TEST_MNEMONIC);
 
@@ -104,23 +100,17 @@ describe('Setup CLI - Key Derivation', () => {
     const seed = mnemonicToSeedSync(TEST_MNEMONIC.trim());
     const expectedSalt = seed.slice(0, 32);
 
-    const { salt } = deriveAuthKey(TEST_MNEMONIC);
+    const { saltHex } = deriveAuthKey(TEST_MNEMONIC);
 
-    expect(Buffer.from(salt).toString('hex')).toBe(
-      Buffer.from(expectedSalt).toString('hex'),
-    );
+    expect(saltHex).toBe(Buffer.from(expectedSalt).toString('hex'));
   });
 
   it('should be deterministic (same mnemonic = same output)', () => {
     const result1 = deriveAuthKey(TEST_MNEMONIC);
     const result2 = deriveAuthKey(TEST_MNEMONIC);
 
-    expect(Buffer.from(result1.authKey).toString('hex')).toBe(
-      Buffer.from(result2.authKey).toString('hex'),
-    );
-    expect(Buffer.from(result1.salt).toString('hex')).toBe(
-      Buffer.from(result2.salt).toString('hex'),
-    );
+    expect(result1.authKeyHex).toBe(result2.authKeyHex);
+    expect(result1.saltHex).toBe(result2.saltHex);
   });
 
   it('should produce different keys for different mnemonics', () => {
@@ -130,9 +120,7 @@ describe('Setup CLI - Key Derivation', () => {
     const result1 = deriveAuthKey(TEST_MNEMONIC);
     const result2 = deriveAuthKey(mnemonic2);
 
-    expect(Buffer.from(result1.authKey).toString('hex')).not.toBe(
-      Buffer.from(result2.authKey).toString('hex'),
-    );
+    expect(result1.authKeyHex).not.toBe(result2.authKeyHex);
   });
 
   it('should handle whitespace-padded mnemonics', () => {
@@ -140,19 +128,19 @@ describe('Setup CLI - Key Derivation', () => {
     const clean = deriveAuthKey(TEST_MNEMONIC);
     const paddedResult = deriveAuthKey(padded);
 
-    expect(Buffer.from(paddedResult.authKey).toString('hex')).toBe(
-      Buffer.from(clean.authKey).toString('hex'),
-    );
+    expect(paddedResult.authKeyHex).toBe(clean.authKeyHex);
   });
 
-  it('should produce 32-byte auth key', () => {
-    const { authKey } = deriveAuthKey(TEST_MNEMONIC);
-    expect(authKey.length).toBe(32);
+  it('should produce 64-char hex auth key (32 bytes)', () => {
+    const { authKeyHex } = deriveAuthKey(TEST_MNEMONIC);
+    expect(authKeyHex.length).toBe(64);
+    expect(authKeyHex).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('should produce 32-byte salt', () => {
-    const { salt } = deriveAuthKey(TEST_MNEMONIC);
-    expect(salt.length).toBe(32);
+  it('should produce 64-char hex salt (32 bytes)', () => {
+    const { saltHex } = deriveAuthKey(TEST_MNEMONIC);
+    expect(saltHex.length).toBe(64);
+    expect(saltHex).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 
@@ -287,7 +275,7 @@ describe('Setup CLI - Cross-validation with plugin/crypto.ts', () => {
    */
   it('should match plugin derivation using Buffer.from for info param', () => {
     // Plugin uses: Buffer.from(AUTH_KEY_INFO, 'utf8')
-    // Setup uses: new TextEncoder().encode(AUTH_KEY_INFO)
+    // WASM core uses the same derivation internally.
     // Both must produce identical bytes.
     const mnemonic = TEST_MNEMONIC;
     const seed = mnemonicToSeedSync(mnemonic.trim());
@@ -300,25 +288,25 @@ describe('Setup CLI - Cross-validation with plugin/crypto.ts', () => {
     );
     const pluginHash = Buffer.from(sha256(pluginAuthKey)).toString('hex');
 
-    // Setup CLI derivation
-    const { authKey } = deriveAuthKey(mnemonic);
-    const setupHash = computeAuthKeyHash(authKey);
+    // Setup CLI derivation (WASM)
+    const { authKeyHex } = deriveAuthKey(mnemonic);
+    const setupHash = computeAuthKeyHash(authKeyHex);
 
     expect(setupHash).toBe(pluginHash);
-    expect(Buffer.from(authKey).toString('hex')).toBe(pluginAuthKey.toString('hex'));
+    expect(authKeyHex).toBe(pluginAuthKey.toString('hex'));
   });
 
   it('should produce non-trivial key values (not all zeros)', () => {
-    const { authKey, salt } = deriveAuthKey(TEST_MNEMONIC);
-    const zeros = new Uint8Array(32);
+    const { authKeyHex, saltHex } = deriveAuthKey(TEST_MNEMONIC);
+    const zeros = '0'.repeat(64);
 
-    expect(Buffer.from(authKey).equals(Buffer.from(zeros))).toBe(false);
-    expect(Buffer.from(salt).equals(Buffer.from(zeros))).toBe(false);
+    expect(authKeyHex).not.toBe(zeros);
+    expect(saltHex).not.toBe(zeros);
   });
 
   it('should produce a valid 64-char hex auth key hash', () => {
-    const { authKey } = deriveAuthKey(TEST_MNEMONIC);
-    const hash = computeAuthKeyHash(authKey);
+    const { authKeyHex } = deriveAuthKey(TEST_MNEMONIC);
+    const hash = computeAuthKeyHash(authKeyHex);
 
     expect(typeof hash).toBe('string');
     expect(hash.length).toBe(64);

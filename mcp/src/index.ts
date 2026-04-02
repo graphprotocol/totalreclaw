@@ -1372,9 +1372,8 @@ async function handleSetup(
   }
 
   // Derive keys
-  const { authKey, salt } = deriveAuthKey(mnemonic);
-  const authKeyHash = computeSetupAuthKeyHash(authKey);
-  const saltHex = Buffer.from(salt).toString('hex');
+  const { authKeyHex, saltHex } = deriveAuthKey(mnemonic);
+  const authKeyHash = computeSetupAuthKeyHash(authKeyHex);
 
   // Register with relay
   const serverUrl = SERVER_URL;
