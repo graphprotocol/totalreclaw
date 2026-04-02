@@ -68,9 +68,9 @@ class TestEncryption:
             )
 
     def test_invalid_key_length(self):
-        with pytest.raises(ValueError, match="Invalid key length"):
+        with pytest.raises(ValueError, match="expected 32 bytes"):
             encrypt("test", b"short")
-        with pytest.raises(ValueError, match="Invalid key length"):
+        with pytest.raises(ValueError, match="expected 32 bytes"):
             decrypt("dGVzdA==", b"short")
 
     def test_embedding_roundtrip(self):

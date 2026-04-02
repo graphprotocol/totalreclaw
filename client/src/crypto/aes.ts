@@ -1,20 +1,17 @@
 /**
- * AES-256-GCM Encryption
+ * AES-256-GCM Encryption (WASM-backed)
  *
- * Provides authenticated encryption using AES-256 in GCM mode.
+ * Thin wrappers over `@totalreclaw/core` WASM module. Same function
+ * signatures as the previous pure-TS implementation so callers don't
+ * need to change.
+ *
  * Wire format (base64-encoded): [iv: 12 bytes][tag: 16 bytes][ciphertext: variable]
  *
  * Matches mcp/src/subgraph/crypto.ts:encrypt()/decrypt() exactly.
  */
 
-import * as crypto from "crypto";
+import * as wasm from "@totalreclaw/core";
 import { TotalReclawError, TotalReclawErrorCode } from "../types";
-
-/** IV length for GCM mode (12 bytes is recommended) */
-const IV_LENGTH = 12;
-
-/** Tag length for GCM mode (16 bytes = 128 bits) */
-const TAG_LENGTH = 16;
 
 /** Key length for AES-256 (32 bytes) */
 const KEY_LENGTH = 32;
@@ -40,22 +37,8 @@ export function encrypt(plaintext: string, encryptionKey: Buffer): string {
   }
 
   try {
-    const iv = crypto.randomBytes(IV_LENGTH);
-    const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey, iv, {
-      authTagLength: TAG_LENGTH,
-    });
-
-    const ciphertext = Buffer.concat([
-      cipher.update(plaintext, "utf8"),
-      cipher.final(),
-    ]);
-    const tag = cipher.getAuthTag();
-
-    // Combine: iv || tag || ciphertext
-    const combined = Buffer.concat([iv, tag, ciphertext]);
-    return combined.toString("base64");
+    return wasm.encrypt(plaintext, encryptionKey.toString("hex"));
   } catch (error) {
-    if (error instanceof TotalReclawError) throw error;
     throw new TotalReclawError(
       TotalReclawErrorCode.ENCRYPTION_FAILED,
       `Encryption failed: ${error instanceof Error ? error.message : "Unknown error"}`,
@@ -81,28 +64,8 @@ export function decrypt(encryptedBase64: string, encryptionKey: Buffer): string 
   }
 
   try {
-    const combined = Buffer.from(encryptedBase64, "base64");
-
-    if (combined.length < IV_LENGTH + TAG_LENGTH) {
-      throw new Error("Encrypted data too short");
-    }
-
-    const iv = combined.subarray(0, IV_LENGTH);
-    const tag = combined.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
-    const ciphertext = combined.subarray(IV_LENGTH + TAG_LENGTH);
-
-    const decipher = crypto.createDecipheriv("aes-256-gcm", encryptionKey, iv, {
-      authTagLength: TAG_LENGTH,
-    });
-    decipher.setAuthTag(tag);
-
-    const plaintext = Buffer.concat([
-      decipher.update(ciphertext),
-      decipher.final(),
-    ]);
-    return plaintext.toString("utf8");
+    return wasm.decrypt(encryptedBase64, encryptionKey.toString("hex"));
   } catch (error) {
-    if (error instanceof TotalReclawError) throw error;
     throw new TotalReclawError(
       TotalReclawErrorCode.DECRYPTION_FAILED,
       `Decryption failed: ${error instanceof Error ? error.message : "Unknown error"}`,

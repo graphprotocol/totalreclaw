@@ -1,6 +1,10 @@
 /**
  * BIP-39 Seed Management for TotalReclaw Phase 3 (Subgraph).
  *
+ * WASM-backed: BIP-39 key derivation, HKDF key separation, and SHA-256
+ * auth key hashing are delegated to `@totalreclaw/core`. Mnemonic
+ * generation/validation and Smart Account address derivation remain in TS.
+ *
  * The user's 12-word mnemonic is the ONLY secret. From it we derive:
  *   1. A private key (for signing UserOperations)
  *   2. An EOA address (the owner of the Smart Account)
@@ -25,8 +29,7 @@
 
 import { mnemonicToSeedSync, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
-import { hkdf } from "@noble/hashes/hkdf.js";
-import { sha256 } from "@noble/hashes/sha2.js";
+import * as wasm from "@totalreclaw/core";
 
 /**
  * Standard Ethereum BIP-44 derivation path.
@@ -38,12 +41,6 @@ export const DERIVATION_PATH = "m/44'/60'/0'/0/0";
  * Gnosis mainnet (100) for production, Base Sepolia (84532) for staging.
  */
 export const DEFAULT_CHAIN_ID = 100;
-
-/** HKDF context strings -- must match mcp/src/subgraph/crypto.ts exactly. */
-const AUTH_KEY_INFO = "totalreclaw-auth-key-v1";
-const ENCRYPTION_KEY_INFO = "totalreclaw-encryption-key-v1";
-const DEDUP_KEY_INFO = "openmemory-dedup-v1";
-const LSH_SEED_INFO = "openmemory-lsh-seed-v1";
 
 /**
  * Keys derived from a BIP-39 mnemonic.
@@ -98,32 +95,19 @@ export { isMnemonicValid as validateMnemonic };
 /**
  * Derive encryption, auth, and dedup keys from a BIP-39 mnemonic.
  *
- * Uses the 512-bit BIP-39 seed as HKDF input (NOT the derived private key)
- * for proper key separation. Matches mcp/src/subgraph/crypto.ts:deriveKeysFromMnemonic().
+ * Delegates to the WASM module which performs BIP-39 seed derivation
+ * and HKDF key separation. Matches mcp/src/subgraph/crypto.ts:deriveKeysFromMnemonic().
  */
 export function deriveKeysFromMnemonic(
   mnemonic: string,
 ): { authKey: Buffer; encryptionKey: Buffer; dedupKey: Buffer; salt: Buffer } {
-  const seed = mnemonicToSeedSync(mnemonic.trim());
-
-  // Use first 32 bytes of seed as deterministic salt for HKDF
-  // (BIP-39 mnemonics are self-salting via PBKDF2, no random salt needed)
-  const salt = Buffer.from(seed.slice(0, 32));
-
-  const enc = (s: string) => Buffer.from(s, "utf8");
-  const seedBuf = Buffer.from(seed);
-
-  const authKey = Buffer.from(
-    hkdf(sha256, seedBuf, salt, enc(AUTH_KEY_INFO), 32),
-  );
-  const encryptionKey = Buffer.from(
-    hkdf(sha256, seedBuf, salt, enc(ENCRYPTION_KEY_INFO), 32),
-  );
-  const dedupKey = Buffer.from(
-    hkdf(sha256, seedBuf, salt, enc(DEDUP_KEY_INFO), 32),
-  );
-
-  return { authKey, encryptionKey, dedupKey, salt };
+  const result = wasm.deriveKeysFromMnemonic(mnemonic.trim());
+  return {
+    authKey: Buffer.from(result.auth_key, "hex"),
+    encryptionKey: Buffer.from(result.encryption_key, "hex"),
+    dedupKey: Buffer.from(result.dedup_key, "hex"),
+    salt: Buffer.from(result.salt, "hex"),
+  };
 }
 
 /**
@@ -132,15 +116,15 @@ export function deriveKeysFromMnemonic(
  * Call this once during initialization and pass the result to
  * `new LSHHasher(seed, dims)`.
  *
- * Matches mcp/src/subgraph/crypto.ts:deriveLshSeed().
+ * Delegates to the WASM module. Matches mcp/src/subgraph/crypto.ts:deriveLshSeed().
  */
 export function deriveLshSeed(mnemonic: string): Uint8Array {
-  const seed = mnemonicToSeedSync(mnemonic.trim());
-  const salt = Buffer.from(seed.slice(0, 32));
-
-  return new Uint8Array(
-    hkdf(sha256, Buffer.from(seed), salt, Buffer.from(LSH_SEED_INFO, "utf8"), 32),
-  );
+  // WASM deriveLshSeed requires the salt as hex. For the BIP-39 path,
+  // the salt is the first 32 bytes of the BIP-39 seed -- same value
+  // returned by deriveKeysFromMnemonic().salt.
+  const { salt } = deriveKeysFromMnemonic(mnemonic);
+  const seedHex = wasm.deriveLshSeed(mnemonic.trim(), salt.toString("hex"));
+  return new Uint8Array(Buffer.from(seedHex, "hex"));
 }
 
 /**
@@ -283,5 +267,5 @@ export async function deleteSeedFromKeychain(
  * up users on every request.
  */
 export function computeAuthKeyHash(authKey: Buffer): string {
-  return Buffer.from(sha256(authKey)).toString("hex");
+  return wasm.computeAuthKeyHash(authKey.toString("hex"));
 }
