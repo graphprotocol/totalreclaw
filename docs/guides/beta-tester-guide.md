@@ -235,6 +235,7 @@ TotalReclaw uses two complementary layers to prevent duplicate memories:
 
 - [Importing Memories](./importing-memories.md) -- migrate from Mem0, MCP Memory Server, and other tools
 - [Detailed technical guide](./beta-tester-guide-detailed.md) -- full reference with architecture, configuration, and environment variables
+- [Monitoring Setup Guide](./monitoring-setup.md) -- production monitoring and alerting setup
 - [totalreclaw.xyz](https://totalreclaw.xyz) -- project homepage
 
 ---

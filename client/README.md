@@ -27,6 +27,10 @@ This is the core cryptographic library used by [@totalreclaw/totalreclaw](https:
 
 **Requirements:** Node.js 18+
 
+### Architecture
+
+All cryptographic operations (AES-256-GCM, HKDF key derivation, LSH hashing, blind indices, content fingerprinting) are powered by [`@totalreclaw/core`](https://www.npmjs.com/package/@totalreclaw/core) -- a unified Rust/WASM module that ensures byte-for-byte consistency across all TotalReclaw clients.
+
 ## Installation
 
 ```bash

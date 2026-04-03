@@ -485,7 +485,7 @@ Maps each spec to its rollout phase:
 | Benchmark Harness (OMBH) | `docs/specs/totalreclaw/benchmark.md` | Phase 1 (PoC) | Implemented |
 | Server PoC (no auth, superseded) | `docs/specs/archive/server-no-auth-superseded.md` | Phase 1 (PoC) | Superseded by v0.3.1 |
 | Server PoC v0.3.1b (Auth + Dedup) | `docs/specs/totalreclaw/server.md` | Phase 1-2 (PoC to MVP) | Partially implemented |
-| Multi-Agent Conflict Resolution v0.3.2 | `docs/specs/totalreclaw/conflict-resolution.md` | Phase 2 (MVP) | Draft spec |
+| Multi-Agent Conflict Resolution v0.3.2 | `docs/specs/totalreclaw/conflict-resolution.md` | Phase 2 (MVP) | Design complete, not implemented |
 | TotalReclaw MCP Server | `docs/specs/totalreclaw/mcp-server.md` | Phase 1 (PoC) | Implemented |
 | TotalReclaw Skill for NanoClaw | `docs/specs/totalreclaw/skill-nanoclaw.md` | Phase 1 (PoC) | Implemented |
 | Seed-to-Subgraph v1.0 | `docs/specs/subgraph/seed-to-subgraph.md` | Phase 3 (Self-Hosted) | Deployed to Base Sepolia + Gnosis mainnet |

@@ -104,6 +104,8 @@ Ask your agent: *"Do you have access to TotalReclaw memory tools?"*
 
 ## How It Works
 
+All cryptographic operations (AES-256-GCM, HKDF key derivation, LSH hashing, blind indices, content fingerprinting) are powered by [`@totalreclaw/core`](https://www.npmjs.com/package/@totalreclaw/core) -- a unified Rust/WASM module shared across all TotalReclaw clients.
+
 All encryption happens **client-side** inside the MCP server process on your machine:
 
 1. Facts are encrypted with AES-256-GCM before leaving your device
