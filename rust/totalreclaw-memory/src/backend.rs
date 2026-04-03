@@ -169,21 +169,36 @@ impl TotalReclawMemory {
         let auth_key_hash = crypto::compute_auth_key_hash(&keys.auth_key);
         let salt_hex = hex::encode(keys.salt);
 
+        // Auto-detect Pro tier from billing cache for chain routing
+        // Free tier = Base Sepolia (84532), Pro tier = Gnosis mainnet (100)
+        let chain_id = if let Some(cache) = billing::read_cache() {
+            if cache.is_pro() { 100 } else { 84532 }
+        } else {
+            84532
+        };
+
         // Create relay client with wallet address
         let relay_config = RelayConfig {
             relay_url: config.relay_url.clone(),
             auth_key_hex: auth_key_hex.clone(),
             wallet_address: wallet_address.clone(),
             is_test: config.is_test,
-            chain_id: 84532, // Base Sepolia (free tier)
+            chain_id,
         };
-        let relay = RelayClient::new(relay_config);
+        let mut relay = RelayClient::new(relay_config);
 
         // Register with relay (idempotent)
         let _user_id = relay
             .register(&auth_key_hash, &salt_hex)
             .await
             .ok(); // Non-fatal if registration fails (may already be registered)
+
+        // Re-check billing to potentially update chain_id for Pro users
+        if let Ok(status) = relay.billing_status().await {
+            if status.tier.as_deref() == Some("pro") {
+                relay.set_chain_id(100);
+            }
+        }
 
         Ok(Self {
             keys,
@@ -339,6 +354,19 @@ impl TotalReclawMemory {
             max_candidates,
         )
         .await?;
+
+        // Broadened fallback: if trapdoor search returns 0 candidates, fetch recent facts
+        let candidates = if candidates.is_empty() {
+            search::search_broadened(
+                &self.relay,
+                self.relay.wallet_address(),
+                max_candidates,
+            )
+            .await
+            .unwrap_or_default()
+        } else {
+            candidates
+        };
 
         // 8. Decrypt candidates and build reranker input
         let mut rerank_candidates = Vec::new();

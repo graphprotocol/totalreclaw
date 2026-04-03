@@ -73,6 +73,27 @@ const SEARCH_QUERY: &str = r#"
   }
 "#;
 
+/// Broadened search query: fetch recent active facts by owner without trapdoor filtering.
+/// Used as fallback when trapdoor search returns 0 candidates (e.g., vague queries).
+const BROADENED_SEARCH_QUERY: &str = r#"
+  query BroadenedSearch($owner: Bytes!, $first: Int!) {
+    facts(
+      where: { owner: $owner, isActive: true }
+      first: $first
+      orderBy: timestamp
+      orderDirection: desc
+    ) {
+      id
+      encryptedBlob
+      encryptedEmbedding
+      decayScore
+      timestamp
+      isActive
+      contentFp
+    }
+  }
+"#;
+
 /// Export all facts query.
 const EXPORT_QUERY: &str = r#"
   query ExportFacts($owner: Bytes!, $first: Int!, $skip: Int!) {
@@ -146,6 +167,28 @@ pub async fn search_candidates(
     }
 
     Ok(all_results.into_values().collect())
+}
+
+/// Broadened search: fetch recent active facts by owner without trapdoor filtering.
+/// Used as a fallback when trapdoor search returns 0 candidates (vague queries).
+pub async fn search_broadened(
+    relay: &RelayClient,
+    owner: &str,
+    max_candidates: usize,
+) -> Result<Vec<SubgraphFact>> {
+    let first = max_candidates.min(PAGE_SIZE);
+    let variables = serde_json::json!({
+        "owner": owner,
+        "first": first,
+    });
+
+    let data: ExportData = relay.graphql(BROADENED_SEARCH_QUERY, variables).await?;
+    Ok(data
+        .facts
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|f| f.is_active != Some(false))
+        .collect())
 }
 
 /// Fetch all facts for an owner (paginated export).

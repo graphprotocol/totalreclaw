@@ -375,6 +375,11 @@ impl RelayClient {
     pub fn chain_id(&self) -> u64 {
         self.chain_id
     }
+
+    /// Set the chain ID (used for Pro tier auto-detection).
+    pub fn set_chain_id(&mut self, chain_id: u64) {
+        self.chain_id = chain_id;
+    }
 }
 
 /// Result of submitting a UserOp.
