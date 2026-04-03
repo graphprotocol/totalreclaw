@@ -93,7 +93,7 @@ import {
   type FactPayload,
   type SubgraphStoreConfig,
 } from './subgraph/store.js';
-import { searchSubgraph, getOwnerFactCount } from './subgraph/search.js';
+import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount } from './subgraph/search.js';
 
 import { validateMnemonic, generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
@@ -841,7 +841,7 @@ async function handleRecallSubgraph(
 
     // 4. Search the subgraph
     const maxCandidates = getMaxCandidatePool(k);
-    const candidates = await searchSubgraph(
+    let candidates = await searchSubgraph(
       state.smartAccountAddress,
       allTrapdoors,
       maxCandidates,
@@ -849,17 +849,31 @@ async function handleRecallSubgraph(
       Buffer.from(state.authKey).toString('hex'),
     );
 
+    // Broadened fallback: if trapdoor search returns 0 candidates (e.g., vague
+    // queries like "who am I?" where word trapdoors don't match stored tokens),
+    // fetch recent facts by owner and let the embedding reranker sort by similarity.
+    let broadened = false;
     if (candidates.length === 0) {
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            memories: [],
-            latency_ms: Date.now() - startTime,
-            mode: 'subgraph',
-          }),
-        }],
-      };
+      const fallbackCandidates = await searchSubgraphBroadened(
+        state.smartAccountAddress,
+        maxCandidates,
+        state.serverUrl,
+        Buffer.from(state.authKey).toString('hex'),
+      );
+      if (fallbackCandidates.length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              memories: [],
+              latency_ms: Date.now() - startTime,
+              mode: 'subgraph',
+            }),
+          }],
+        };
+      }
+      candidates.push(...fallbackCandidates);
+      broadened = true;
     }
 
     // 5. Decrypt candidates
@@ -919,6 +933,7 @@ async function handleRecallSubgraph(
           memories,
           latency_ms: Date.now() - startTime,
           candidates_searched: candidates.length,
+          broadened_search: broadened,
           mode: 'subgraph',
           query_intent: intent,
         }),

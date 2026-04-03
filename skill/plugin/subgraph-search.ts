@@ -250,6 +250,50 @@ export async function searchSubgraph(
 }
 
 /**
+ * Broadened search: fetch recent active facts by owner without trapdoor filtering.
+ * Used as a fallback when trapdoor search returns 0 candidates (e.g., vague queries
+ * like "who am I?" where word trapdoors don't overlap with stored fact tokens).
+ */
+export async function searchSubgraphBroadened(
+  owner: string,
+  maxCandidates: number,
+  authKeyHex?: string,
+): Promise<SubgraphSearchFact[]> {
+  const config = getSubgraphConfig();
+  const subgraphUrl = `${config.relayUrl}/v1/subgraph`;
+
+  const query = `
+    query BroadenedSearch($owner: Bytes!, $first: Int!) {
+      facts(
+        where: { owner: $owner, isActive: true }
+        first: $first
+        orderBy: timestamp
+        orderDirection: desc
+      ) {
+        id
+        encryptedBlob
+        encryptedEmbedding
+        decayScore
+        timestamp
+        isActive
+        contentFp
+        sequenceId
+        version
+      }
+    }
+  `;
+
+  const data = await gqlQuery<{ facts?: SubgraphSearchFact[] }>(
+    subgraphUrl,
+    query,
+    { owner, first: Math.min(maxCandidates, 1000) },
+    authKeyHex,
+  );
+
+  return (data?.facts ?? []).filter(f => f.isActive !== false);
+}
+
+/**
  * Get fact count from the subgraph for dynamic pool sizing.
  * Uses the globalStates entity for a lightweight single-row lookup
  * instead of fetching and counting individual fact IDs.

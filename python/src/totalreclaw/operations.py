@@ -70,6 +70,25 @@ PAGINATE_QUERY = """
   }
 """
 
+BROADENED_SEARCH_QUERY = """
+  query BroadenedSearch($owner: Bytes!, $first: Int!) {
+    facts(
+      where: { owner: $owner, isActive: true }
+      first: $first
+      orderBy: timestamp
+      orderDirection: desc
+    ) {
+      id
+      encryptedBlob
+      encryptedEmbedding
+      timestamp
+      decayScore
+      isActive
+      contentFp
+    }
+  }
+"""
+
 EXPORT_QUERY = """
   query ExportFacts($owner: Bytes!, $first: Int!, $skip: Int!) {
     facts(
@@ -253,6 +272,24 @@ async def search_facts(
                     last_id = page_entries[-1]["id"]
         except Exception:
             continue
+
+    # Broadened fallback: if trapdoor search returns 0 candidates (vague queries
+    # like "who am I?" where word trapdoors don't match stored tokens), fetch
+    # recent facts by owner and let the reranker sort by embedding similarity.
+    broadened = False
+    if not all_facts:
+        try:
+            data = await relay.query_subgraph(
+                BROADENED_SEARCH_QUERY,
+                {"owner": owner, "first": min(max_candidates, 1000)},
+            )
+            facts_list = data.get("data", {}).get("facts", [])
+            for fact in facts_list:
+                if fact and fact.get("isActive", True) and fact["id"] not in all_facts:
+                    all_facts[fact["id"]] = fact
+            broadened = True
+        except Exception:
+            pass
 
     if not all_facts:
         return []

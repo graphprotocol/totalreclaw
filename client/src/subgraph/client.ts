@@ -44,6 +44,22 @@ export class SubgraphClient {
     return Array.from(allResults.values());
   }
 
+  /**
+   * Broadened search: fetch recent active facts by owner without trapdoor filtering.
+   * Used as a fallback when trapdoor search returns 0 candidates.
+   */
+  async searchBroadened(owner: string, maxCandidates: number = 200): Promise<SubgraphFact[]> {
+    const data = await this.query(
+      `query BroadenedSearch($owner: Bytes!, $first: Int!) {
+        facts(where: { owner: $owner, isActive: true }, first: $first, orderBy: timestamp, orderDirection: desc) {
+          id encryptedBlob encryptedEmbedding decayScore timestamp isActive contentFp sequenceId version
+        }
+      }`,
+      { owner, first: Math.min(maxCandidates, PAGE_SIZE) },
+    );
+    return (data?.facts ?? []).filter((f: SubgraphFact) => f.isActive !== false);
+  }
+
   async fetchAllFacts(owner: string): Promise<SubgraphFact[]> {
     const allFacts: SubgraphFact[] = [];
     let skip = 0;

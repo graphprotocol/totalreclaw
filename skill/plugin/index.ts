@@ -44,7 +44,7 @@ import {
   type DecryptedCandidate,
 } from './consolidation.js';
 import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, submitFactBatchOnChain, deriveSmartAccountAddress, type FactPayload } from './subgraph-store.js';
-import { searchSubgraph, getSubgraphFactCount } from './subgraph-search.js';
+import { searchSubgraph, searchSubgraphBroadened, getSubgraphFactCount } from './subgraph-search.js';
 import { PluginHotCache, type HotFact } from './hot-cache-wrapper.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -1784,7 +1784,15 @@ const plugin = {
               // --- Subgraph search path ---
               const factCount = await getSubgraphFactCount(subgraphOwner || userId!, authKeyHex!);
               const pool = computeCandidatePool(factCount);
-              const subgraphResults = await searchSubgraph(subgraphOwner || userId!, allTrapdoors, pool, authKeyHex!);
+              let subgraphResults = await searchSubgraph(subgraphOwner || userId!, allTrapdoors, pool, authKeyHex!);
+
+              // Broadened fallback: if trapdoor search returns 0, fetch recent facts
+              // by owner and let the reranker sort by embedding similarity.
+              if (subgraphResults.length === 0) {
+                try {
+                  subgraphResults = await searchSubgraphBroadened(subgraphOwner || userId!, pool, authKeyHex!);
+                } catch { /* best-effort */ }
+              }
 
               for (const result of subgraphResults) {
                 try {
@@ -2889,6 +2897,15 @@ const plugin = {
                 return { prependContext: `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
               }
               return undefined;
+            }
+
+            // Broadened fallback: if trapdoor search returns 0, fetch recent facts
+            // by owner and let the reranker sort by embedding similarity.
+            if (subgraphResults.length === 0) {
+              try {
+                const pool = computeCandidatePool(0);
+                subgraphResults = await searchSubgraphBroadened(subgraphOwner || userId!, pool, authKeyHex!);
+              } catch { /* best-effort */ }
             }
 
             if (subgraphResults.length === 0 && cachedFacts.length === 0) return undefined;
