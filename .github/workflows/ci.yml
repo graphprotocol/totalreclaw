@@ -48,8 +48,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install and test
-        run: cd mcp && rm -f package-lock.json && npm install --legacy-peer-deps && npm test
+      - name: Install, build, and test
+        run: cd mcp && rm -f package-lock.json && npm install --legacy-peer-deps && npm run build && npm test
 
   rust-tests:
     name: Rust Core Tests
