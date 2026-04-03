@@ -173,6 +173,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Server-side extraction config | Yes | -- | Yes | -- | -- | Yes | Relay returns `extraction_interval` + `max_facts_per_extraction` in billing status |
 | Unified extraction interval (3 turns) | Yes | -- | Yes | Yes | -- | Yes | Server-tunable via relay config (no npm publish needed) |
 | Max facts per extraction | Yes | -- | Yes | Yes | -- | Yes | Server-tunable via relay config (default 15) |
+| Chain ID auto-detect (billing) | Yes | Yes | Yes | -- | -- | Yes | Defaults to 84532 (Base Sepolia/free); auto-detects Pro tier from billing, switches to 100 (Gnosis) |
 | Dual-chain routing | -- | -- | -- | -- | -- | Relay-side: routes to Base Sepolia (free) or Gnosis mainnet (pro) |
 | **Batching** | | | | | | |
 | Client batching (multi-call UserOps) | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Hermes stores facts one-by-one (no ERC-4337 batch support in Python) |
@@ -183,6 +184,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Hot cache + two-tier search | Yes (managed) | -- | -- | -- | -- | Yes (30 entries, cosine >= 0.85) | Skips remote query if cached query similar |
 | Dynamic candidate pool sizing | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Yes | Server-configurable via billing features; env overrides `CANDIDATE_POOL_MAX_FREE`/`CANDIDATE_POOL_MAX_PRO` |
 | Server-side candidate pool | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Yes | Relay computes `max_candidate_pool` from vault size + tier; clients read from billing cache with local fallback |
+| Broadened search fallback | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes | Fetches recent facts by owner when trapdoor search returns 0 (vague queries like "who am I?") |
 | BM25 + Cosine + RRF reranking | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes | Intent-weighted |
 | **Admin & Analytics** | | | | | | |
 | X-TotalReclaw-Client header | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (rust-client:zeroclaw) | Sent on every relay request |
@@ -225,7 +227,8 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | ZeroClaw no import/migrate | LOW | Rust crate implements core Memory trait + status + export + upgrade (Stripe checkout) but not import adapters or migrate tool. |
 | ZeroClaw no client batching | RESOLVED | Rust crate supports executeBatch() multi-call UserOps (up to 15 facts per batch). |
 | ZeroClaw UserOp submission | RESOLVED | Native Rust ERC-4337 v0.7 UserOp construction via alloy-primitives/alloy-sol-types. Hash + signing verified byte-for-byte against viem. |
-| ZeroClaw client-consistency | RESOLVED | Rust crate now fully compliant: client ID header, billing cache (2h TTL), quota warnings, 403 handling, dynamic candidate pool, store-time cosine dedup (0.85), hot cache (30 entries), importance normalization, auto-recall top_k=8. 24 spec compliance tests + 2 E2E tests against staging. |
+| ZeroClaw client-consistency | RESOLVED | Rust crate now fully compliant: client ID header, billing cache (2h TTL), quota warnings, 403 handling, dynamic candidate pool, store-time cosine dedup (0.85), hot cache (30 entries), importance normalization, auto-recall top_k=8, broadened search fallback, chain ID auto-detect from billing. 24 spec compliance tests + 2 E2E tests against staging. |
+| Hermes no chain ID auto-detect | LOW | Python client defaults to 84532 (Base Sepolia) but does not auto-detect Pro tier from billing to switch to chain 100 (Gnosis). Pro users must set `chain_id=100` manually. |
 | Debrief bypasses store-time dedup | LOW | MCP, NanoClaw, Hermes call `client.remember()` directly for debrief items (no cosine dedup). Only OpenClaw routes through `storeExtractedFacts()`. LLM-level dedup via prompt + server-side content fingerprint mitigate. |
 | Hermes debrief stores without embedding | LOW | `hooks.py` stores debrief items without embedding param — no LSH bucket hashes, search relies on word-level blind indices only. |
 | NanoClaw debrief no 8-message guard | LOW | `pre-compact.ts` triggers debrief based on extraction results, not conversation length. LLM prompt handles it, but no code-level guard like other clients. |
@@ -388,7 +391,11 @@ git checkout main
 - **Version**: v1.0-beta
 - **Phase**: Private Beta
 - **Default mode**: Managed Service with dual-chain (free=Base Sepolia testnet, pro=Gnosis mainnet)
+- **Default chain ID**: 84532 (Base Sepolia) -- all clients default to free tier, auto-detect Pro (chain 100/Gnosis) from billing
 - **Embedding model**: Qwen3-Embedding-0.6B (1024d, multilingual, last-token pooling)
+- **Crypto core**: `@totalreclaw/core` (Rust WASM for npm, PyO3 for PyPI) -- unified crypto across all clients
+- **Packages**: `@totalreclaw/core@0.1.0`, `@totalreclaw/client@0.7.3`, `@totalreclaw/mcp-server@1.6.8` (npm); `totalreclaw-core@0.1.0`, `totalreclaw@0.1.0` (PyPI)
 - **Relay**: Billing, Pimlico sponsorship, dual-chain routing, and query proxying extracted to private `totalreclaw-relay` TypeScript repo (p-diogo/totalreclaw-relay). Public server retains only self-hosted functionality (storage, search, auth).
 - **Staging**: Base Sepolia (chain 84532) -- free testnet, no gas costs
 - **Production**: Gnosis mainnet (chain 100) -- Pro tier only
+- **All releases via CI**: GitHub Actions workflows for npm, PyPI, and ClawHub. Never publish manually.

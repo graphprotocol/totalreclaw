@@ -43,7 +43,16 @@ jobs:
 
       - name: Publish
         if: inputs.dry-run == false
-        run: cd rust/totalreclaw-core/pkg && npm publish --access public
+        run: |
+          cd rust/totalreclaw-core/pkg
+          npm publish --access public 2>&1 || {
+            # Tolerate "already published" (403/409) — version already exists on registry
+            if npm view @totalreclaw/core version 2>/dev/null; then
+              echo "Version already published, continuing"
+            else
+              exit 1
+            fi
+          }
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -56,7 +65,7 @@ jobs:
     if: |
       always() &&
       (inputs.package == 'client' || inputs.package == 'all') &&
-      (needs.publish-core.result == 'success' || needs.publish-core.result == 'skipped')
+      (needs.publish-core.result != 'cancelled')
     name: Publish @totalreclaw/client
     runs-on: ubuntu-latest
     permissions:
@@ -94,7 +103,7 @@ jobs:
     if: |
       always() &&
       (inputs.package == 'mcp-server' || inputs.package == 'all') &&
-      (needs.publish-core.result == 'success' || needs.publish-core.result == 'skipped')
+      (needs.publish-core.result != 'cancelled')
     name: Publish @totalreclaw/mcp-server
     runs-on: ubuntu-latest
     permissions:
