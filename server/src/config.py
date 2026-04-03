@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     # API version
     api_version: str = "0.3.1"
 
-    # NOTE: Pimlico, Stripe, Coinbase, subgraph, and proxy/billing config
+    # NOTE: Pimlico, Stripe, subgraph, and proxy/billing config
     # have been moved to the private relay repo (totalreclaw-relay).
     # This self-hosted server only needs core storage, search, and auth config.
 

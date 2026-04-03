@@ -13,7 +13,7 @@
 import { createPublicClient, http, type Hex, type Address, type Chain } from 'viem';
 import { entryPoint07Address } from 'viem/account-abstraction';
 import { mnemonicToAccount } from 'viem/accounts';
-import { gnosis, gnosisChiado, baseSepolia } from 'viem/chains';
+import { gnosis, baseSepolia } from 'viem/chains';
 import { createSmartAccountClient } from 'permissionless';
 import { toSimpleSmartAccount } from 'permissionless/accounts';
 import { createPimlicoClient } from 'permissionless/clients/pimlico';
@@ -149,8 +149,6 @@ function getChainFromId(chainId: number): Chain {
   switch (chainId) {
     case 100:
       return gnosis;
-    case 10200:
-      return gnosisChiado;
     case 84532:
       return baseSepolia;
     default:

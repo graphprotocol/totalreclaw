@@ -428,7 +428,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Links
 
-- [TotalReclaw Documentation](https://docs.totalreclaw.ai)
+- [TotalReclaw Documentation](https://github.com/p-diogo/totalreclaw)
 - [Claw Hub Listing](https://clawhub.ai/skills/totalreclaw)
 - [OpenClaw](https://github.com/openclaw/openclaw)
 - [Issue Tracker](https://github.com/p-diogo/totalreclaw/issues)

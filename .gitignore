@@ -116,3 +116,7 @@ tests/e2e-functional/results/
 tests/parity/node_modules/
 subgraph/tests/e2e-results/*.json
 subgraph/tests/e2e-results/*.txt
+
+# Package lockfiles use local file: refs that break CI
+client/package-lock.json
+mcp/package-lock.json

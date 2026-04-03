@@ -24,6 +24,8 @@
 
 End-to-end encrypted memory vault as an MCP server. Your memories are encrypted on your device before leaving -- no one can read them, not even us.
 
+**Requirements:** Node.js 18+
+
 ## Quick Start
 
 ### 1. Run the setup wizard

@@ -99,7 +99,7 @@ import { validateMnemonic, generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { mnemonicToAccount } from 'viem/accounts';
 import { createPublicClient, http, type Address } from 'viem';
-import { gnosis, gnosisChiado, baseSepolia } from 'viem/chains';
+import { gnosis, baseSepolia } from 'viem/chains';
 import { toSimpleSmartAccount } from 'permissionless/accounts';
 import { entryPoint07Address } from 'viem/account-abstraction';
 import crypto from 'node:crypto';
@@ -263,7 +263,7 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
   // Derive Smart Account address via relay bundler proxy (same chain view as Pimlico).
   // This does an eth_call to the EntryPoint to compute the counterfactual CREATE2 address.
   const chainId = parseInt(process.env.TOTALRECLAW_CHAIN_ID || '100');
-  const chain = chainId === 100 ? gnosis : chainId === 84532 ? baseSepolia : gnosisChiado;
+  const chain = chainId === 100 ? gnosis : baseSepolia;
   const bundlerRpcUrl = `${SERVER_URL}/v1/bundler`;
   const ownerAccount = mnemonicToAccount(mnemonic);
   const entryPointAddr = (process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || entryPoint07Address) as Address;

@@ -25,6 +25,8 @@ Build encrypted memory into any AI agent. All encryption happens client-side -- 
 
 This is the core cryptographic library used by [@totalreclaw/totalreclaw](https://www.npmjs.com/package/@totalreclaw/totalreclaw) (OpenClaw plugin) and [@totalreclaw/mcp-server](https://www.npmjs.com/package/@totalreclaw/mcp-server). Most users should install one of those packages instead.
 
+**Requirements:** Node.js 18+
+
 ## Installation
 
 ```bash

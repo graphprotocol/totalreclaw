@@ -19,10 +19,10 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install and test
-        run: cd client && npm ci --legacy-peer-deps && npm test
+        run: cd client && rm -f package-lock.json && npm install --legacy-peer-deps && npm test
 
   plugin-build:
     name: Plugin Build Check
@@ -39,6 +39,43 @@ jobs:
       # Plugin has no test script yet — just verify deps install cleanly
       - name: Install dependencies
         run: cd skill/plugin && npm ci --legacy-peer-deps
+
+  mcp-tests:
+    name: MCP Server Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install and test
+        run: cd mcp && rm -f package-lock.json && npm install --legacy-peer-deps && npm test
+
+  rust-tests:
+    name: Rust Core Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run tests
+        run: cd rust/totalreclaw-core && cargo test
+
+  python-tests:
+    name: Python Client Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install and test
+        run: |
+          cd python
+          pip install -e ".[dev]"
+          python -m pytest tests/ -v --ignore=tests/test_staging_integration.py --ignore=tests/cross_client_e2e.py --ignore=tests/test_cross_client.py -x
 
   # NOTE: Relay unit tests run in the private totalreclaw-relay repo CI.
   # This job runs the E2E smoke test against a real relay + PostgreSQL

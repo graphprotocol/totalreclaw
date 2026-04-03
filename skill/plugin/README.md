@@ -24,6 +24,8 @@
 
 Your AI agent remembers everything -- preferences, decisions, facts -- encrypted so only you can read it. Built for [OpenClaw](https://openclaw.ai) with fully automatic memory extraction and recall.
 
+**Requirements:** Node.js 18+
+
 ## Install
 
 Ask your OpenClaw agent:
