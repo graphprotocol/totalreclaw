@@ -4,6 +4,7 @@
  * Tests the full flow: recall all facts → cluster by cosine → batch delete.
  * Uses mocked client to verify the correct sequence of operations.
  */
+export {}; // make this file a module to avoid TS2451 scope collision with other test files
 
 const mockRecall = jest.fn();
 const mockRemember = jest.fn();

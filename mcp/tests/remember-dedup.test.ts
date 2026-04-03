@@ -13,6 +13,8 @@
  *   npx jest tests/remember-dedup.test.ts --no-cache
  */
 
+export {}; // make this file a module to avoid TS2451 scope collision with other test files
+
 // We need to mock the @totalreclaw/client module before any imports
 const mockRecall = jest.fn();
 const mockRemember = jest.fn();
