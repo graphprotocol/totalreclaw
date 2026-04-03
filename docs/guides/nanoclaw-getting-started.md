@@ -50,7 +50,7 @@ The wizard will:
 
 ## Step 2: Configure Your NanoClaw Deployment
 
-Add these environment variables to your NanoClaw deployment:
+Add these environment variables to your NanoClaw deployment. The MCP server automatically registers with the relay on startup -- no manual setup step is needed.
 
 ### Required
 

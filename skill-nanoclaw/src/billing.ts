@@ -359,6 +359,25 @@ export async function getBillingContext(): Promise<BillingContext | null> {
     const chainId = parseInt(process.env.TOTALRECLAW_CHAIN_ID || '84532', 10);
     const walletAddress = await getWalletAddress(mnemonic, chainId);
 
+    // Register auth key with relay (idempotent — relay returns 200 for existing users).
+    // Without this, all relay queries return 401 when using env var mnemonic path.
+    try {
+      const keys = wasm.deriveKeysFromMnemonic(mnemonic.trim());
+      const authKeyHash = wasm.computeAuthKeyHash(keys.auth_key);
+      const saltHex = keys.salt;
+      const regUrl = `${serverUrl.replace(/\/+$/, '')}/v1/register`;
+      await fetch(regUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-TotalReclaw-Client': 'nanoclaw-skill',
+        },
+        body: JSON.stringify({ auth_key_hash: authKeyHash, salt: saltHex }),
+      });
+    } catch {
+      // Best-effort — relay may be unreachable; will retry on next startup.
+    }
+
     cachedBillingContext = { serverUrl, authKeyHex, walletAddress };
     return cachedBillingContext;
   } catch (err) {

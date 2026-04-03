@@ -152,6 +152,20 @@ class TotalReclaw:
         if not self._address_resolved:
             await self.resolve_address()
 
+    async def _ensure_registered(self) -> None:
+        """Register auth key with relay if not yet done (idempotent).
+
+        Without this, all relay queries return 401. The relay returns 200
+        for already-registered users, so this is safe to call on every startup.
+        """
+        if self._registered:
+            return
+        try:
+            await self.register()
+        except Exception:
+            # Best-effort — relay may be unreachable; will retry on next call.
+            pass
+
     def _get_lsh_hasher(self, dims: int = 1024) -> LSHHasher:
         if self._lsh_hasher is None:
             self._lsh_hasher = LSHHasher(self._lsh_seed, dims)
@@ -181,6 +195,7 @@ class TotalReclaw:
     ) -> str:
         """Store a fact. Returns the fact ID."""
         await self._ensure_address()
+        await self._ensure_registered()
         lsh = self._get_lsh_hasher() if embedding else None
         return await store_fact(
             text=text,
@@ -205,6 +220,7 @@ class TotalReclaw:
     ) -> list[RerankerResult]:
         """Search for facts matching a query. Returns ranked results."""
         await self._ensure_address()
+        await self._ensure_registered()
         return await search_facts(
             query=query,
             keys=self._keys,
@@ -218,6 +234,7 @@ class TotalReclaw:
     async def forget(self, fact_id: str) -> bool:
         """Soft-delete a fact by writing a tombstone."""
         await self._ensure_address()
+        await self._ensure_registered()
         return await forget_fact(
             fact_id,
             self._wallet_address,
@@ -230,11 +247,13 @@ class TotalReclaw:
     async def export_all(self) -> list[dict]:
         """Export all active facts, decrypted."""
         await self._ensure_address()
+        await self._ensure_registered()
         return await export_facts(self._keys, self._wallet_address, self._relay)
 
     async def status(self) -> BillingStatus:
         """Get billing status."""
         await self._ensure_address()
+        await self._ensure_registered()
         return await self._relay.get_billing_status()
 
     async def close(self):

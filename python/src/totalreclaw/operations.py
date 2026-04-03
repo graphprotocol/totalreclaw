@@ -273,11 +273,14 @@ async def search_facts(
         except Exception:
             continue
 
-    # Broadened fallback: if trapdoor search returns 0 candidates (vague queries
-    # like "who am I?" where word trapdoors don't match stored tokens), fetch
-    # recent facts by owner and let the reranker sort by embedding similarity.
+    # Broadened fallback: if trapdoor search returns 0 candidates, or if the query
+    # is short/vague (<=3 words) with very few matches (<=3) that are likely noise
+    # from common word trapdoors (e.g., "who am I?" matching "I"/"am"), fetch
+    # recent facts by owner and merge with existing results.
     broadened = False
-    if not all_facts:
+    query_word_count = len(query.strip().split())
+    should_broaden = not all_facts or (query_word_count <= 3 and len(all_facts) <= 3)
+    if should_broaden:
         try:
             data = await relay.query_subgraph(
                 BROADENED_SEARCH_QUERY,

@@ -1786,11 +1786,21 @@ const plugin = {
               const pool = computeCandidatePool(factCount);
               let subgraphResults = await searchSubgraph(subgraphOwner || userId!, allTrapdoors, pool, authKeyHex!);
 
-              // Broadened fallback: if trapdoor search returns 0, fetch recent facts
-              // by owner and let the reranker sort by embedding similarity.
-              if (subgraphResults.length === 0) {
+              // Broadened fallback: if trapdoor search returns 0, or if the query
+              // is short/vague (<=3 words) with very few matches (<=3) that are
+              // likely noise from common word trapdoors.
+              const recallWordCount = params.query.trim().split(/\s+/).length;
+              const recallShouldBroaden = subgraphResults.length === 0 || (recallWordCount <= 3 && subgraphResults.length <= 3);
+              if (recallShouldBroaden) {
                 try {
-                  subgraphResults = await searchSubgraphBroadened(subgraphOwner || userId!, pool, authKeyHex!);
+                  const broadenedResults = await searchSubgraphBroadened(subgraphOwner || userId!, pool, authKeyHex!);
+                  // Merge broadened results with existing (deduplicate by ID)
+                  const existingIds = new Set(subgraphResults.map(r => r.id));
+                  for (const br of broadenedResults) {
+                    if (!existingIds.has(br.id)) {
+                      subgraphResults.push(br);
+                    }
+                  }
                 } catch { /* best-effort */ }
               }
 
@@ -2899,12 +2909,22 @@ const plugin = {
               return undefined;
             }
 
-            // Broadened fallback: if trapdoor search returns 0, fetch recent facts
-            // by owner and let the reranker sort by embedding similarity.
-            if (subgraphResults.length === 0) {
+            // Broadened fallback: if trapdoor search returns 0, or if the query
+            // is short/vague (<=3 words) with very few matches (<=3) that are
+            // likely noise from common word trapdoors.
+            const hookWordCount = evt.prompt.trim().split(/\s+/).length;
+            const hookShouldBroaden = subgraphResults.length === 0 || (hookWordCount <= 3 && subgraphResults.length <= 3);
+            if (hookShouldBroaden) {
               try {
-                const pool = computeCandidatePool(0);
-                subgraphResults = await searchSubgraphBroadened(subgraphOwner || userId!, pool, authKeyHex!);
+                const broadPool = computeCandidatePool(0);
+                const broadenedResults = await searchSubgraphBroadened(subgraphOwner || userId!, broadPool, authKeyHex!);
+                // Merge broadened results with existing (deduplicate by ID)
+                const existingIds = new Set(subgraphResults.map(r => r.id));
+                for (const br of broadenedResults) {
+                  if (!existingIds.has(br.id)) {
+                    subgraphResults.push(br);
+                  }
+                }
               } catch { /* best-effort */ }
             }
 

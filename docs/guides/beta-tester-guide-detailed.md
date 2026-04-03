@@ -726,7 +726,7 @@ TOTALRECLAW_RECOVERY_PHRASE="your twelve words here"
 ```
 Restart the plugin after updating the variable.
 
-**Fix (MCP server):** Make sure the `TOTALRECLAW_RECOVERY_PHRASE` env var is set in your MCP client config (e.g., `claude_desktop_config.json`). Alternatively, run `npx @totalreclaw/mcp-server setup` to generate credentials.
+**Fix (MCP server):** Make sure the `TOTALRECLAW_RECOVERY_PHRASE` env var is set in your MCP client config (e.g., `claude_desktop_config.json`). The MCP server automatically registers with the relay on startup when using the env var -- no manual setup step is needed. Alternatively, run `npx @totalreclaw/mcp-server setup` to generate credentials interactively.
 
 ### "TotalReclaw is not set up" (MCP only)
 

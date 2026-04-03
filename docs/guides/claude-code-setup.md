@@ -12,7 +12,11 @@ Encrypted, cross-session memory for MCP-compatible AI agents. Set up in under 2 
 
 ---
 
-## 1. Run the setup wizard
+## 1. Get your recovery phrase
+
+You have two options:
+
+### Option A: Run the setup wizard (recommended for new users)
 
 ```bash
 npx @totalreclaw/mcp-server setup
@@ -24,6 +28,10 @@ The wizard will:
 2. Generate a 12-word recovery phrase (BIP-39) if needed
 3. Register with the TotalReclaw relay
 4. Print a config snippet to paste into your host app
+
+### Option B: Use an existing recovery phrase directly
+
+If you already have a recovery phrase from another TotalReclaw client (OpenClaw, NanoClaw, Hermes, ZeroClaw), you can skip the wizard entirely. Just set `TOTALRECLAW_RECOVERY_PHRASE` in your host app config (step 2 below). The MCP server automatically registers with the relay on startup -- no manual registration step is needed.
 
 > **Save your recovery phrase somewhere safe.** It is the only key to your encrypted memories. There is no password reset, no recovery email, no support ticket that can help. If you lose it, your memories are permanently unrecoverable. This is by design.
 
@@ -163,7 +171,7 @@ The MCP server also instructs the agent to recall relevant memories at the start
 | Embedding model download is slow | Normal on first run (~600 MB). Check disk space and retry if it fails. Subsequent runs use the cached model. |
 | "Not configured" error | Run `npx @totalreclaw/mcp-server setup` or ask the agent to use the `totalreclaw_setup` tool. |
 | Agent does not see TotalReclaw tools | Restart the host app after adding the config. Verify with "Do you have access to TotalReclaw memory tools?" |
-| "Not authenticated" / 401 | Check your recovery phrase -- exact words, exact order, no extra spaces. |
+| "Not authenticated" / 401 | Check your recovery phrase -- exact words, exact order, no extra spaces. The MCP server auto-registers with the relay on startup, so no manual registration step is needed. If the error persists, verify your internet connection and restart the host app. |
 | Recovery phrase lost | Memories are permanently unrecoverable. This is by design for end-to-end encryption security. |
 | Quota exceeded (403) | Free tier has a monthly write cap. Use `totalreclaw_upgrade` to move to Pro. |
 

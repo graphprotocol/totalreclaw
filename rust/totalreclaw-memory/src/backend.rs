@@ -355,15 +355,34 @@ impl TotalReclawMemory {
         )
         .await?;
 
-        // Broadened fallback: if trapdoor search returns 0 candidates, fetch recent facts
-        let candidates = if candidates.is_empty() {
-            search::search_broadened(
+        // Broadened fallback: if trapdoor search returns 0 candidates, or if the query
+        // is short/vague (<=3 words) with very few matches (<=3) that are likely noise
+        // from common word trapdoors (e.g., "who am I?" matching "I"/"am"), fetch
+        // recent facts by owner and merge with existing results.
+        let query_word_count = query.split_whitespace().count();
+        let should_broaden = candidates.is_empty() || (query_word_count <= 3 && candidates.len() <= 3);
+        let candidates = if should_broaden {
+            let broadened = search::search_broadened(
                 &self.relay,
                 self.relay.wallet_address(),
                 max_candidates,
             )
             .await
-            .unwrap_or_default()
+            .unwrap_or_default();
+            if candidates.is_empty() {
+                broadened
+            } else {
+                // Merge broadened results with existing candidates (deduplicate by ID)
+                let existing_ids: std::collections::HashSet<String> =
+                    candidates.iter().map(|c| c.id.clone()).collect();
+                let mut merged = candidates;
+                for fact in broadened {
+                    if !existing_ids.contains(&fact.id) {
+                        merged.push(fact);
+                    }
+                }
+                merged
+            }
         } else {
             candidates
         };

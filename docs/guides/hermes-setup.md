@@ -107,7 +107,7 @@ The plugin recognizes 7 memory types:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TOTALRECLAW_RECOVERY_PHRASE` | -- | BIP-39 mnemonic (auto-loads on startup) |
+| `TOTALRECLAW_RECOVERY_PHRASE` | -- | BIP-39 mnemonic (auto-loads and auto-registers on startup) |
 | `TOTALRECLAW_SERVER_URL` | `https://api.totalreclaw.xyz` | Relay server URL |
 
 ### Hermes config (optional)
@@ -173,7 +173,7 @@ Run setup:
 Set up TotalReclaw with my recovery phrase: [your 12 words]
 ```
 
-Or set the env var:
+Or set the env var (auto-registers with relay on first use):
 ```bash
 export TOTALRECLAW_RECOVERY_PHRASE="your twelve word phrase here"
 ```

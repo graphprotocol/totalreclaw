@@ -317,6 +317,19 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
     }
   }
 
+  // Register auth key with relay (idempotent — relay returns 200 for existing users).
+  // Without this, all relay queries return 401 when using env var mnemonic path
+  // (the setup wizard handles registration, but the env var path previously skipped it).
+  try {
+    const authKeyHashForReg = computeAuthKeyHash(authKey);
+    const saltHexForReg = Buffer.from(salt).toString('hex');
+    await registerWithServer(SERVER_URL, authKeyHashForReg, saltHexForReg);
+  } catch {
+    // Best-effort — if relay is unreachable, billing check above may have also failed.
+    // The server returns 200 for already-registered users, so this only fails on network errors.
+    console.error('TotalReclaw: Registration with relay failed (best-effort, will retry on next start).');
+  }
+
   return {
     mode: 'subgraph',
     mnemonic,
@@ -849,18 +862,21 @@ async function handleRecallSubgraph(
       Buffer.from(state.authKey).toString('hex'),
     );
 
-    // Broadened fallback: if trapdoor search returns 0 candidates (e.g., vague
-    // queries like "who am I?" where word trapdoors don't match stored tokens),
-    // fetch recent facts by owner and let the embedding reranker sort by similarity.
+    // Broadened fallback: if trapdoor search returns 0 candidates, or if the query
+    // is short/vague (<=3 words) with very few matches (<=3) that are likely noise
+    // from common word trapdoors (e.g., "who am I?" matching "I"/"am"),
+    // fetch recent facts by owner and merge with existing results.
     let broadened = false;
-    if (candidates.length === 0) {
+    const queryWordCount = query.trim().split(/\s+/).length;
+    const shouldBroaden = candidates.length === 0 || (queryWordCount <= 3 && candidates.length <= 3);
+    if (shouldBroaden) {
       const fallbackCandidates = await searchSubgraphBroadened(
         state.smartAccountAddress,
         maxCandidates,
         state.serverUrl,
         Buffer.from(state.authKey).toString('hex'),
       );
-      if (fallbackCandidates.length === 0) {
+      if (fallbackCandidates.length === 0 && candidates.length === 0) {
         return {
           content: [{
             type: 'text',
@@ -872,7 +888,13 @@ async function handleRecallSubgraph(
           }],
         };
       }
-      candidates.push(...fallbackCandidates);
+      // Merge broadened results with existing candidates (deduplicate by ID)
+      const existingIds = new Set(candidates.map(c => c.id));
+      for (const fc of fallbackCandidates) {
+        if (!existingIds.has(fc.id)) {
+          candidates.push(fc);
+        }
+      }
       broadened = true;
     }
 
