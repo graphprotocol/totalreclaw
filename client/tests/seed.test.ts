@@ -256,8 +256,8 @@ describe("Seed Module", () => {
   });
 
   describe("DEFAULT_CHAIN_ID", () => {
-    it("should be Gnosis mainnet (100)", () => {
-      expect(DEFAULT_CHAIN_ID).toBe(100);
+    it("should be Base Sepolia testnet (84532)", () => {
+      expect(DEFAULT_CHAIN_ID).toBe(84532);
     });
   });
 

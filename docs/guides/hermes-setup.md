@@ -11,12 +11,12 @@ Set up TotalReclaw as the encrypted memory layer for your Hermes Agent. Your mem
 ## 1. Install TotalReclaw
 
 ```bash
-pip install "totalreclaw[hermes] @ git+https://github.com/p-diogo/totalreclaw.git#subdirectory=python"
+pip install "totalreclaw[hermes]"
 ```
 
 > **Docker note:** If you see "externally-managed-environment" errors, add `--break-system-packages`:
 > ```bash
-> pip install --break-system-packages "totalreclaw[hermes] @ git+https://github.com/p-diogo/totalreclaw.git#subdirectory=python"
+> pip install --break-system-packages "totalreclaw[hermes]"
 > ```
 
 This installs the Python client library and registers the Hermes plugin via the `hermes_agent.plugins` entry point.

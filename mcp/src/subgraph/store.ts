@@ -422,7 +422,7 @@ export function getSubgraphConfig(overrides?: Partial<SubgraphStoreConfig>): Sub
     relayUrl: process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz',
     mnemonic: process.env.TOTALRECLAW_RECOVERY_PHRASE || '',
     cachePath: process.env.TOTALRECLAW_CACHE_PATH || `${process.env.HOME}/.totalreclaw/cache.enc`,
-    chainId: parseInt(process.env.TOTALRECLAW_CHAIN_ID || '100'),
+    chainId: parseInt(process.env.TOTALRECLAW_CHAIN_ID || '84532'),
     dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || DEFAULT_DATA_EDGE_ADDRESS,
     entryPointAddress: process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || DEFAULT_ENTRYPOINT_ADDRESS,
   };

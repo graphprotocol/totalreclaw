@@ -38,9 +38,10 @@ export const DERIVATION_PATH = "m/44'/60'/0'/0/0";
 
 /**
  * Default chain ID for Smart Account address computation.
- * Gnosis mainnet (100) for production, Base Sepolia (84532) for staging.
+ * Defaults to 84532 (Base Sepolia testnet). Free-tier users operate on
+ * testnet; the relay promotes to Gnosis mainnet (100) for Pro-tier users.
  */
-export const DEFAULT_CHAIN_ID = 100;
+export const DEFAULT_CHAIN_ID = 84532;
 
 /**
  * Keys derived from a BIP-39 mnemonic.

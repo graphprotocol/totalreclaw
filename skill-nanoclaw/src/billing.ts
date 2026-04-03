@@ -84,7 +84,7 @@ export function deriveAuthKeyHex(mnemonic: string): string {
 let cachedWalletAddress: string | null = null;
 const WALLET_CACHE_PATH = path.join(BILLING_CACHE_DIR, 'wallet-address-cache.json');
 
-export async function getWalletAddress(mnemonic: string, chainId: number = 100): Promise<string> {
+export async function getWalletAddress(mnemonic: string, chainId: number = 84532): Promise<string> {
   // Check env var override first
   if (process.env.TOTALRECLAW_WALLET_ADDRESS) {
     return process.env.TOTALRECLAW_WALLET_ADDRESS.toLowerCase();
@@ -356,7 +356,7 @@ export async function getBillingContext(): Promise<BillingContext | null> {
 
   try {
     const authKeyHex = deriveAuthKeyHex(mnemonic);
-    const chainId = parseInt(process.env.TOTALRECLAW_CHAIN_ID || '100', 10);
+    const chainId = parseInt(process.env.TOTALRECLAW_CHAIN_ID || '84532', 10);
     const walletAddress = await getWalletAddress(mnemonic, chainId);
 
     cachedBillingContext = { serverUrl, authKeyHex, walletAddress };

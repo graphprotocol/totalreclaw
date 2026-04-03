@@ -260,20 +260,17 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
   const dims = getEmbeddingDims(); // 1024 for Qwen3-Embedding-0.6B
   const lshHasher = new LSHHasher(lshSeed, dims);
 
-  // Derive Smart Account address via relay bundler proxy (same chain view as Pimlico).
-  // This does an eth_call to the EntryPoint to compute the counterfactual CREATE2 address.
-  const chainId = parseInt(process.env.TOTALRECLAW_CHAIN_ID || '100');
-  const chain = chainId === 100 ? gnosis : baseSepolia;
-  const bundlerRpcUrl = `${SERVER_URL}/v1/bundler`;
-  const ownerAccount = mnemonicToAccount(mnemonic);
+  // Derive Smart Account address via CREATE2 (deterministic, same on all chains).
+  // First derive on Base Sepolia (free tier default), then query billing to detect
+  // Pro tier and switch to Gnosis if needed.
   const entryPointAddr = (process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || entryPoint07Address) as Address;
   const authKeyHex = Buffer.from(authKey).toString('hex');
+  const ownerAccount = mnemonicToAccount(mnemonic);
 
-  // Use public RPC for the eth_call (Pimlico bundler doesn't support eth_call).
-  // This is only used to derive the counterfactual Smart Account address via CREATE2 —
-  // the result is deterministic and doesn't depend on chain head position.
+  // Smart Account address is deterministic via CREATE2 — use Base Sepolia for derivation
+  // (same address regardless of chain).
   const publicClient = createPublicClient({
-    chain,
+    chain: baseSepolia,
     transport: http(),
   });
 
@@ -288,6 +285,37 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
   });
 
   const smartAccountAddress = smartAccount.address.toLowerCase();
+
+  // Determine chain ID: env var override > billing tier > default (Base Sepolia).
+  // Free tier → Base Sepolia (84532, testnet — Pimlico sponsors gas for free).
+  // Pro tier  → Gnosis mainnet (100, permanent on-chain storage).
+  let chainId = process.env.TOTALRECLAW_CHAIN_ID
+    ? parseInt(process.env.TOTALRECLAW_CHAIN_ID)
+    : 84532; // default free tier
+
+  // Auto-detect Pro tier from billing endpoint (if no env override).
+  if (!process.env.TOTALRECLAW_CHAIN_ID) {
+    try {
+      const billingUrl = `${SERVER_URL.replace(/\/+$/, '')}/v1/billing/status?wallet_address=${encodeURIComponent(smartAccountAddress)}`;
+      const resp = await fetch(billingUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${authKeyHex}`,
+          'X-TotalReclaw-Client': getClientIdentifier(),
+        },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (resp.ok) {
+        const billing = (await resp.json()) as Record<string, unknown>;
+        if (billing.tier === 'pro') {
+          chainId = 100;
+          console.error('TotalReclaw: Pro tier detected — using Gnosis mainnet (chain 100).');
+        }
+      }
+    } catch {
+      // Best-effort — default to free tier chain if billing is unreachable.
+    }
+  }
 
   return {
     mode: 'subgraph',

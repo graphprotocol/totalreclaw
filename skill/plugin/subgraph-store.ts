@@ -410,7 +410,7 @@ export function isSubgraphMode(): boolean {
  * This is the on-chain owner identity used in the subgraph.
  */
 export async function deriveSmartAccountAddress(mnemonic: string, chainId?: number): Promise<string> {
-  const chain: Chain = getChainFromId(chainId ?? 100);
+  const chain: Chain = getChainFromId(chainId ?? 84532);
   const ownerAccount = mnemonicToAccount(mnemonic);
   const entryPointAddr = (process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || DEFAULT_ENTRYPOINT_ADDRESS) as Address;
   const rpcUrl = process.env.TOTALRECLAW_RPC_URL;
@@ -437,7 +437,7 @@ export function getSubgraphConfig(): SubgraphStoreConfig {
     relayUrl: process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz',
     mnemonic: process.env.TOTALRECLAW_RECOVERY_PHRASE || '',
     cachePath: process.env.TOTALRECLAW_CACHE_PATH || `${process.env.HOME}/.totalreclaw/cache.enc`,
-    chainId: parseInt(process.env.TOTALRECLAW_CHAIN_ID || '100'),
+    chainId: parseInt(process.env.TOTALRECLAW_CHAIN_ID || '84532'),
     dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || DEFAULT_DATA_EDGE_ADDRESS,
     entryPointAddress: process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || DEFAULT_ENTRYPOINT_ADDRESS,
     rpcUrl: process.env.TOTALRECLAW_RPC_URL || undefined,
