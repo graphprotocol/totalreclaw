@@ -1549,7 +1549,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const authKeyHex = subgraphState
         ? Buffer.from(subgraphState.authKey).toString('hex')
         : '';
-      const statusResult = await handleStatus(SERVER_URL, authKeyHex, args);
+      const enrichedArgs = {
+        ...(args as Record<string, unknown>),
+        wallet_address:
+          (args as Record<string, unknown>)?.wallet_address ||
+          subgraphState?.smartAccountAddress,
+      };
+      const statusResult = await handleStatus(SERVER_URL, authKeyHex, enrichedArgs);
 
       // Cache billing features for candidate pool sizing.
       // handleStatus stores the raw response; extract max_candidate_pool from it.

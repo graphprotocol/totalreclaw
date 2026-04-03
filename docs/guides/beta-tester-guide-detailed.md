@@ -786,6 +786,16 @@ OPENAI_API_KEY="sk-your-key-here"
 3. Verify the word order is exactly right. Even one wrong word derives a completely different key and wallet address, meaning the server will treat you as a new user.
 4. Make sure there is exactly one space between each word, no leading or trailing spaces.
 
+### Permission denied on model download (Docker)
+
+If you see EACCES errors when the embedding model downloads, set the `HF_HOME` environment variable to a writable directory:
+
+```bash
+export HF_HOME=/tmp/hf-cache
+```
+
+This is common in Docker containers where the global npm cache directory isn't writable.
+
 ### Plugin logs show "LLM call failed" errors
 
 **Cause:** Your LLM API key may be invalid, expired, or rate-limited.

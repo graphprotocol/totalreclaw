@@ -11,10 +11,17 @@ Set up TotalReclaw as the encrypted memory layer for your Hermes Agent. Your mem
 ## 1. Install TotalReclaw
 
 ```bash
-pip install totalreclaw[hermes]
+pip install "totalreclaw[hermes] @ git+https://github.com/p-diogo/totalreclaw.git#subdirectory=python"
 ```
 
+> **Docker note:** If you see "externally-managed-environment" errors, add `--break-system-packages`:
+> ```bash
+> pip install --break-system-packages "totalreclaw[hermes] @ git+https://github.com/p-diogo/totalreclaw.git#subdirectory=python"
+> ```
+
 This installs the Python client library and registers the Hermes plugin via the `hermes_agent.plugins` entry point.
+
+> **Apple Silicon note:** The Hermes Docker image is amd64-only. On Apple Silicon (M1/M2/M3/M4), use `docker run --platform linux/amd64 ...` which runs via Rosetta emulation (slower but functional).
 
 Alternatively, install as a local plugin:
 
@@ -174,3 +181,13 @@ export TOTALRECLAW_RECOVERY_PHRASE="your twelve word phrase here"
 ### Embedding model download slow
 
 The first recall/remember downloads ~600 MB. Subsequent calls use the cached model. If download fails, the plugin falls back to keyword-only search (no semantic similarity).
+
+### Permission denied on model download (Docker)
+
+If you see EACCES errors when the embedding model downloads, set the `HF_HOME` environment variable to a writable directory:
+
+```bash
+export HF_HOME=/tmp/hf-cache
+```
+
+This is common in Docker containers where the global npm cache directory isn't writable.

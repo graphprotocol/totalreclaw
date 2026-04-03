@@ -21,6 +21,7 @@ Key addresses (deployed on all supported chains):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -343,124 +344,148 @@ async def build_and_send_userop(
         "X-Wallet-Address": wallet_address,
     }
 
+    _MAX_NONCE_RETRIES = 3
+
     async with httpx.AsyncClient(timeout=30.0) as http:
-        # 1. Encode the execute calldata
+        # 1. Encode the execute calldata (idempotent, does not depend on nonce)
         #    SmartAccount.execute(dataEdgeAddress, 0, protobufPayload)
         call_data = encode_execute_calldata(
             DATA_EDGE_ADDRESS, 0, protobuf_payload
         )
 
-        # 2. Get nonce from EntryPoint
-        nonce = await get_nonce(http, sender, chain_id)
-        logger.debug("Nonce for %s: %d", sender, nonce)
+        # Retry loop for AA25 nonce conflicts.  When two UserOps race for
+        # the same nonce the bundler rejects one with AA25.  Re-fetching
+        # the nonce and rebuilding the UserOp resolves it.
+        for attempt in range(_MAX_NONCE_RETRIES):
+            try:
+                # 2. Get nonce from EntryPoint
+                nonce = await get_nonce(http, sender, chain_id)
+                logger.debug("Nonce for %s: %d", sender, nonce)
 
-        # 3. Check if account is already deployed
-        code = await _eth_get_code(http, rpc_url, sender)
-        is_deployed = code != "0x" and len(code) > 2
+                # 3. Check if account is already deployed
+                code = await _eth_get_code(http, rpc_url, sender)
+                is_deployed = code != "0x" and len(code) > 2
 
-        # 4. Build partial UserOp with stub signature for gas estimation.
-        #    This specific dummy signature passes ecrecover without reverting
-        #    (matches permissionless SDK's SimpleAccount.getStubSignature).
-        _STUB_SIGNATURE = (
-            "0x"
-            "fffffffffffffffffffffffffffffff0000000000000000000000000000000007a"
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            "1c"
-        )
-        user_op: dict = {
-            "sender": sender,
-            "nonce": hex(nonce),
-            "callData": call_data,
-            "signature": _STUB_SIGNATURE,
-        }
+                # 4. Build partial UserOp with stub signature for gas estimation.
+                #    This specific dummy signature passes ecrecover without
+                #    reverting (matches permissionless SDK's
+                #    SimpleAccount.getStubSignature).
+                _STUB_SIGNATURE = (
+                    "0x"
+                    "fffffffffffffffffffffffffffffff000000000000000000000000000000000"
+                    "7aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    "1c"
+                )
+                user_op: dict = {
+                    "sender": sender,
+                    "nonce": hex(nonce),
+                    "callData": call_data,
+                    "signature": _STUB_SIGNATURE,
+                }
 
-        if not is_deployed:
-            user_op["factory"] = SIMPLE_ACCOUNT_FACTORY
-            user_op["factoryData"] = encode_factory_data(eoa_address)
-            logger.debug("Account not deployed; including factory data")
+                if not is_deployed:
+                    user_op["factory"] = SIMPLE_ACCOUNT_FACTORY
+                    user_op["factoryData"] = encode_factory_data(eoa_address)
+                    logger.debug(
+                        "Account not deployed; including factory data"
+                    )
 
-        # 5. Get gas prices from Pimlico
-        gas_data = await _relay_rpc(
-            http,
-            relay_url,
-            headers,
-            "pimlico_getUserOperationGasPrice",
-            [],
-            rpc_id=1,
-        )
-        if "result" in gas_data and gas_data["result"].get("fast"):
-            fast = gas_data["result"]["fast"]
-            user_op["maxFeePerGas"] = fast["maxFeePerGas"]
-            user_op["maxPriorityFeePerGas"] = fast["maxPriorityFeePerGas"]
-        else:
-            # Fallback gas prices
-            user_op["maxFeePerGas"] = hex(2_000_000_000)
-            user_op["maxPriorityFeePerGas"] = hex(1_500_000_000)
+                # 5. Get gas prices from Pimlico
+                gas_data = await _relay_rpc(
+                    http,
+                    relay_url,
+                    headers,
+                    "pimlico_getUserOperationGasPrice",
+                    [],
+                    rpc_id=1,
+                )
+                if "result" in gas_data and gas_data["result"].get("fast"):
+                    fast = gas_data["result"]["fast"]
+                    user_op["maxFeePerGas"] = fast["maxFeePerGas"]
+                    user_op["maxPriorityFeePerGas"] = fast[
+                        "maxPriorityFeePerGas"
+                    ]
+                else:
+                    # Fallback gas prices
+                    user_op["maxFeePerGas"] = hex(2_000_000_000)
+                    user_op["maxPriorityFeePerGas"] = hex(1_500_000_000)
 
-        # 6. Sponsor the UserOperation via Pimlico's pm_sponsorUserOperation.
-        #    This single call returns all gas limits AND paymaster fields:
-        #    callGasLimit, verificationGasLimit, preVerificationGas,
-        #    paymaster, paymasterData, paymasterVerificationGasLimit,
-        #    paymasterPostOpGasLimit.
-        sponsor_data = await _relay_rpc(
-            http,
-            relay_url,
-            headers,
-            "pm_sponsorUserOperation",
-            [user_op, ENTRYPOINT_V07],
-            rpc_id=2,
-        )
-        if "result" in sponsor_data:
-            sp = sponsor_data["result"]
-            user_op["callGasLimit"] = sp["callGasLimit"]
-            user_op["verificationGasLimit"] = sp["verificationGasLimit"]
-            user_op["preVerificationGas"] = sp["preVerificationGas"]
-            user_op["paymaster"] = sp["paymaster"]
-            user_op["paymasterData"] = sp["paymasterData"]
-            user_op["paymasterVerificationGasLimit"] = sp[
-                "paymasterVerificationGasLimit"
-            ]
-            user_op["paymasterPostOpGasLimit"] = sp[
-                "paymasterPostOpGasLimit"
-            ]
-        elif "error" in sponsor_data:
-            raise RuntimeError(
-                f"Paymaster sponsorship failed: {sponsor_data['error']}"
-            )
-        else:
-            raise RuntimeError(
-                "pm_sponsorUserOperation returned no result or error"
-            )
+                # 6. Sponsor the UserOperation via Pimlico's
+                #    pm_sponsorUserOperation.  This single call returns all
+                #    gas limits AND paymaster fields.
+                sponsor_data = await _relay_rpc(
+                    http,
+                    relay_url,
+                    headers,
+                    "pm_sponsorUserOperation",
+                    [user_op, ENTRYPOINT_V07],
+                    rpc_id=2,
+                )
+                if "result" in sponsor_data:
+                    sp = sponsor_data["result"]
+                    user_op["callGasLimit"] = sp["callGasLimit"]
+                    user_op["verificationGasLimit"] = sp[
+                        "verificationGasLimit"
+                    ]
+                    user_op["preVerificationGas"] = sp["preVerificationGas"]
+                    user_op["paymaster"] = sp["paymaster"]
+                    user_op["paymasterData"] = sp["paymasterData"]
+                    user_op["paymasterVerificationGasLimit"] = sp[
+                        "paymasterVerificationGasLimit"
+                    ]
+                    user_op["paymasterPostOpGasLimit"] = sp[
+                        "paymasterPostOpGasLimit"
+                    ]
+                elif "error" in sponsor_data:
+                    raise RuntimeError(
+                        f"Paymaster sponsorship failed: "
+                        f"{sponsor_data['error']}"
+                    )
+                else:
+                    raise RuntimeError(
+                        "pm_sponsorUserOperation returned no result or error"
+                    )
 
-        # 7. Compute UserOp hash and sign with EOA key.
-        #    SimpleAccount's _validateSignature uses
-        #    userOpHash.toEthSignedMessageHash().recover(signature),
-        #    so we must sign with the Ethereum message prefix.
-        from eth_account.messages import encode_defunct
+                # 7. Compute UserOp hash and sign with EOA key.
+                #    SimpleAccount's _validateSignature uses
+                #    userOpHash.toEthSignedMessageHash().recover(signature),
+                #    so we must sign with the Ethereum message prefix.
+                from eth_account.messages import encode_defunct
 
-        user_op_hash = compute_user_op_hash(
-            user_op, ENTRYPOINT_V07, chain_id
-        )
-        msg = encode_defunct(user_op_hash)
-        signed = Account.sign_message(msg, eoa_private_key)
-        sig_hex = signed.signature.hex()
-        if not sig_hex.startswith("0x"):
-            sig_hex = "0x" + sig_hex
-        user_op["signature"] = sig_hex
+                user_op_hash = compute_user_op_hash(
+                    user_op, ENTRYPOINT_V07, chain_id
+                )
+                msg = encode_defunct(user_op_hash)
+                signed = Account.sign_message(msg, eoa_private_key)
+                sig_hex = signed.signature.hex()
+                if not sig_hex.startswith("0x"):
+                    sig_hex = "0x" + sig_hex
+                user_op["signature"] = sig_hex
 
-        # 8. Submit the signed UserOp to the bundler
-        send_data = await _relay_rpc(
-            http,
-            relay_url,
-            headers,
-            "eth_sendUserOperation",
-            [user_op, ENTRYPOINT_V07],
-            rpc_id=3,
-        )
+                # 8. Submit the signed UserOp to the bundler
+                send_data = await _relay_rpc(
+                    http,
+                    relay_url,
+                    headers,
+                    "eth_sendUserOperation",
+                    [user_op, ENTRYPOINT_V07],
+                    rpc_id=3,
+                )
 
-        if "error" in send_data:
-            raise RuntimeError(
-                f"UserOp submission failed: {send_data['error']}"
-            )
+                if "error" in send_data:
+                    raise RuntimeError(
+                        f"UserOp submission failed: {send_data['error']}"
+                    )
 
-        return send_data.get("result", "")
+                return send_data.get("result", "")
+
+            except Exception as e:
+                if "AA25" in str(e) and attempt < _MAX_NONCE_RETRIES - 1:
+                    logger.warning(
+                        "AA25 nonce conflict (attempt %d/%d), retrying...",
+                        attempt + 1,
+                        _MAX_NONCE_RETRIES,
+                    )
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                raise
