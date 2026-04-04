@@ -9,6 +9,8 @@
  * @huggingface/transformers). No API key needed for embeddings.
  */
 
+import { CONFIG } from './config.js';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -45,19 +47,20 @@ export interface LLMClientConfig {
 // Provider mappings
 // ---------------------------------------------------------------------------
 
-const PROVIDER_ENV_VARS: Record<string, string[]> = {
-  zai:        ['ZAI_API_KEY'],
-  anthropic:  ['ANTHROPIC_API_KEY'],
-  openai:     ['OPENAI_API_KEY'],
-  gemini:     ['GEMINI_API_KEY'],
-  google:     ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
-  mistral:    ['MISTRAL_API_KEY'],
-  groq:       ['GROQ_API_KEY'],
-  deepseek:   ['DEEPSEEK_API_KEY'],
-  openrouter: ['OPENROUTER_API_KEY'],
-  xai:        ['XAI_API_KEY'],
-  together:   ['TOGETHER_API_KEY'],
-  cerebras:   ['CEREBRAS_API_KEY'],
+/** Maps provider name to CONFIG.llmApiKeys property names to check (in order). */
+const PROVIDER_KEY_NAMES: Record<string, string[]> = {
+  zai:        ['zai'],
+  anthropic:  ['anthropic'],
+  openai:     ['openai'],
+  gemini:     ['gemini'],
+  google:     ['gemini', 'google'],
+  mistral:    ['mistral'],
+  groq:       ['groq'],
+  deepseek:   ['deepseek'],
+  openrouter: ['openrouter'],
+  xai:        ['xai'],
+  together:   ['together'],
+  cerebras:   ['cerebras'],
 };
 
 const PROVIDER_BASE_URLS: Record<string, string> = {
@@ -180,9 +183,9 @@ export function initLLMClient(options: {
 
     if (provider) {
       // Find the API key for this provider
-      const envVarNames = PROVIDER_ENV_VARS[provider];
-      const apiKey = envVarNames
-        ? envVarNames.map((name) => process.env[name]).find(Boolean)
+      const keyNames = PROVIDER_KEY_NAMES[provider];
+      const apiKey = keyNames
+        ? keyNames.map((name) => CONFIG.llmApiKeys[name]).find(Boolean)
         : undefined;
 
       if (apiKey) {
@@ -190,8 +193,8 @@ export function initLLMClient(options: {
         if (baseUrl) {
           // Determine model: env override > plugin config > auto-derived
           const model =
-            process.env.TOTALRECLAW_LLM_MODEL ??
-            (typeof extraction?.model === 'string' ? extraction.model : null) ??
+            CONFIG.llmModel ||
+            (typeof extraction?.model === 'string' ? extraction.model : null) ||
             deriveCheapModel(provider, modelName);
 
           const apiFormat: 'openai' | 'anthropic' =
@@ -204,19 +207,19 @@ export function initLLMClient(options: {
     }
   }
 
-  // --- Fallback: try common env vars (for dev/test without OpenClaw config) ---
+  // --- Fallback: try common API keys (for dev/test without OpenClaw config) ---
   const fallbackProviders: Array<[string, string, string]> = [
-    ['zai', 'ZAI_API_KEY', 'glm-4.5-flash'],
-    ['openai', 'OPENAI_API_KEY', 'gpt-4.1-mini'],
-    ['anthropic', 'ANTHROPIC_API_KEY', 'claude-haiku-4-5-20251001'],
-    ['gemini', 'GEMINI_API_KEY', 'gemini-2.0-flash'],
+    ['zai', 'zai', 'glm-4.5-flash'],
+    ['openai', 'openai', 'gpt-4.1-mini'],
+    ['anthropic', 'anthropic', 'claude-haiku-4-5-20251001'],
+    ['gemini', 'gemini', 'gemini-2.0-flash'],
   ];
 
-  for (const [provider, envVar, defaultModel] of fallbackProviders) {
-    const apiKey = process.env[envVar];
+  for (const [provider, keyName, defaultModel] of fallbackProviders) {
+    const apiKey = CONFIG.llmApiKeys[keyName];
     if (apiKey) {
-      const model = process.env.TOTALRECLAW_LLM_MODEL ??
-        (typeof extraction?.model === 'string' ? extraction.model : null) ??
+      const model = CONFIG.llmModel ||
+        (typeof extraction?.model === 'string' ? extraction.model : null) ||
         defaultModel;
 
       const apiFormat: 'openai' | 'anthropic' =
@@ -253,12 +256,12 @@ export function resolveLLMConfig(): LLMClientConfig | null {
   }
 
   // Legacy fallback: if initLLMClient() was never called (e.g. running outside
-  // the plugin context), try the old env-var approach for backwards compat.
-  const zaiKey = process.env.ZAI_API_KEY;
-  const openaiKey = process.env.OPENAI_API_KEY;
+  // the plugin context), try the config-based approach for backwards compat.
+  const zaiKey = CONFIG.llmApiKeys.zai;
+  const openaiKey = CONFIG.llmApiKeys.openai;
 
-  const model = process.env.TOTALRECLAW_LLM_MODEL
-    ?? (zaiKey ? 'glm-4.5-flash' : 'gpt-4.1-mini');
+  const model = CONFIG.llmModel
+    || (zaiKey ? 'glm-4.5-flash' : 'gpt-4.1-mini');
 
   if (zaiKey) {
     return {

@@ -21,6 +21,7 @@
  */
 
 import { getSubgraphConfig } from './subgraph-store.js';
+import { CONFIG } from './config.js';
 
 export interface SubgraphSearchFact {
   id: string;
@@ -32,9 +33,9 @@ export interface SubgraphSearchFact {
 }
 
 /** Batch size for Phase 2 split queries. */
-const TRAPDOOR_BATCH_SIZE = parseInt(process.env.TOTALRECLAW_TRAPDOOR_BATCH_SIZE ?? '5', 10);
+const TRAPDOOR_BATCH_SIZE = CONFIG.trapdoorBatchSize;
 /** Graph Studio / Graph Network hard limit on `first` argument. */
-const PAGE_SIZE = parseInt(process.env.TOTALRECLAW_SUBGRAPH_PAGE_SIZE ?? '1000', 10);
+const PAGE_SIZE = CONFIG.pageSize;
 
 /**
  * Execute a single GraphQL query against the subgraph endpoint.

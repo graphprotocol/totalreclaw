@@ -46,6 +46,7 @@ import {
 import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, submitFactBatchOnChain, deriveSmartAccountAddress, type FactPayload } from './subgraph-store.js';
 import { searchSubgraph, searchSubgraphBroadened, getSubgraphFactCount } from './subgraph-search.js';
 import { PluginHotCache, type HotFact } from './hot-cache-wrapper.js';
+import { CONFIG } from './config.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -81,7 +82,7 @@ interface OpenClawPluginApi {
 // ---------------------------------------------------------------------------
 
 /** Path where we persist userId + salt across restarts. */
-const CREDENTIALS_PATH = process.env.TOTALRECLAW_CREDENTIALS_PATH || `${process.env.HOME ?? '/home/node'}/.totalreclaw/credentials.json`;
+const CREDENTIALS_PATH = CONFIG.credentialsPath;
 
 // ---------------------------------------------------------------------------
 // Cosine similarity threshold — skip injection when top result is below this
@@ -95,9 +96,7 @@ const CREDENTIALS_PATH = process.env.TOTALRECLAW_CREDENTIALS_PATH || `${process.
  * Default 0.15 is tuned for bge-small-en-v1.5 which produces lower
  * similarity scores than OpenAI models. Configurable via env var.
  */
-const COSINE_THRESHOLD = parseFloat(
-  process.env.TOTALRECLAW_COSINE_THRESHOLD ?? '0.15',
-);
+const COSINE_THRESHOLD = CONFIG.cosineThreshold;
 
 // ---------------------------------------------------------------------------
 // Module-level state (persists across tool calls within a session)
@@ -123,33 +122,30 @@ let lastSearchTimestamp = 0;
 let lastQueryEmbedding: number[] | null = null;
 
 // Feature flags — configurable for A/B testing
-const CACHE_TTL_MS = parseInt(process.env.TOTALRECLAW_CACHE_TTL_MS ?? String(5 * 60 * 1000), 10);
-const SEMANTIC_SKIP_THRESHOLD = parseFloat(process.env.TOTALRECLAW_SEMANTIC_SKIP_THRESHOLD ?? '0.85');
+const CACHE_TTL_MS = CONFIG.cacheTtlMs;
+const SEMANTIC_SKIP_THRESHOLD = CONFIG.semanticSkipThreshold;
 
 // Auto-extract throttle (C3): only extract every N turns in agent_end hook
 let turnsSinceLastExtraction = 0;
-const AUTO_EXTRACT_EVERY_TURNS_ENV = parseInt(
-  process.env.TOTALRECLAW_EXTRACT_INTERVAL ?? process.env.TOTALRECLAW_EXTRACT_EVERY_TURNS ?? '3',
-  10,
-);
+const AUTO_EXTRACT_EVERY_TURNS_ENV = CONFIG.extractInterval;
 
 // Hard cap on facts per extraction to prevent LLM over-extraction from dense conversations
 const MAX_FACTS_PER_EXTRACTION = 15;
 
 // Store-time near-duplicate detection (consolidation module)
-const STORE_DEDUP_ENABLED = process.env.TOTALRECLAW_STORE_DEDUP !== 'false';
+const STORE_DEDUP_ENABLED = CONFIG.storeDedupEnabled;
 
 // One-time welcome-back message for returning Pro users (set during init, consumed by first before_agent_start)
 let welcomeBackMessage: string | null = null;
 
 // B2: Minimum relevance threshold — cosine below this means no memory injection
-const RELEVANCE_THRESHOLD = parseFloat(process.env.TOTALRECLAW_RELEVANCE_THRESHOLD ?? '0.3');
+const RELEVANCE_THRESHOLD = CONFIG.relevanceThreshold;
 
 // ---------------------------------------------------------------------------
 // Billing cache infrastructure
 // ---------------------------------------------------------------------------
 
-const BILLING_CACHE_PATH = path.join(process.env.HOME ?? '/home/node', '.totalreclaw', 'billing-cache.json');
+const BILLING_CACHE_PATH = CONFIG.billingCachePath;
 const BILLING_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
 const QUOTA_WARNING_THRESHOLD = 0.8; // 80%
 
@@ -245,7 +241,7 @@ const MEMORY_HEADER = `# Memory
 
 function ensureMemoryHeader(logger: OpenClawPluginApi['logger']): void {
   try {
-    const workspace = path.join(process.env.HOME ?? '/home/node', '.openclaw', 'workspace');
+    const workspace = CONFIG.openclawWorkspace;
     const memoryMd = path.join(workspace, 'MEMORY.md');
 
     if (fs.existsSync(memoryMd)) {
@@ -344,9 +340,8 @@ let firstRunAfterInit = true;
  * register with the server if this is the first run.
  */
 async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
-  const serverUrl =
-    process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz';
-  const masterPassword = process.env.TOTALRECLAW_RECOVERY_PHRASE;
+  const serverUrl = CONFIG.serverUrl || 'https://api.totalreclaw.xyz';
+  const masterPassword = CONFIG.recoveryPhrase;
 
   if (!masterPassword) {
     needsSetup = true;
@@ -440,7 +435,7 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
     try {
       const walletAddr = subgraphOwner || userId || '';
       if (walletAddr) {
-        const billingUrl = (process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz').replace(/\/+$/, '');
+        const billingUrl = CONFIG.serverUrl;
         const resp = await fetch(`${billingUrl}/v1/billing/status?wallet_address=${encodeURIComponent(walletAddr)}`, {
           method: 'GET',
           headers: {
@@ -979,10 +974,7 @@ function relativeTime(isoOrMs: string | number): string {
  * NOTE: This filter is ONLY applied to auto-extraction (hooks).
  * The explicit `totalreclaw_remember` tool always stores regardless of importance.
  */
-const MIN_IMPORTANCE_THRESHOLD = Math.max(
-  1,
-  Math.min(10, Number(process.env.TOTALRECLAW_MIN_IMPORTANCE) || 6),
-);
+const MIN_IMPORTANCE_THRESHOLD = CONFIG.minImportance;
 
 /**
  * Filter extracted facts by importance threshold.
@@ -2205,7 +2197,7 @@ const plugin = {
               };
             }
 
-            const serverUrl = (process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz').replace(/\/+$/, '');
+            const serverUrl = CONFIG.serverUrl;
             const walletAddr = subgraphOwner || userId || '';
             const response = await fetch(`${serverUrl}/v1/billing/status?wallet_address=${encodeURIComponent(walletAddr)}`, {
               method: 'GET',
@@ -2509,7 +2501,7 @@ const plugin = {
               };
             }
 
-            const serverUrl = (process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz').replace(/\/+$/, '');
+            const serverUrl = CONFIG.serverUrl;
             const walletAddr = subgraphOwner || userId || '';
 
             if (!walletAddr) {
@@ -2601,7 +2593,7 @@ const plugin = {
             }
 
             const confirm = _params?.confirm === true;
-            const serverUrl = (process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz').replace(/\/+$/, '');
+            const serverUrl = CONFIG.serverUrl;
 
             // 1. Check billing tier
             const billingResp = await fetch(
@@ -2803,7 +2795,7 @@ const plugin = {
             let cache = readBillingCache();
             if (!cache && authKeyHex) {
               // Cache is stale or missing — fetch fresh billing status.
-              const billingUrl = (process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz').replace(/\/+$/, '');
+              const billingUrl = CONFIG.serverUrl;
               const walletParam = encodeURIComponent(subgraphOwner || userId || '');
               const billingResp = await fetch(`${billingUrl}/v1/billing/status?wallet_address=${walletParam}`, {
                 method: 'GET',

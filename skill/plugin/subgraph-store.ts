@@ -11,6 +11,7 @@
  */
 
 import * as wasm from '@totalreclaw/core';
+import { CONFIG } from './config.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -104,7 +105,7 @@ export async function deriveSmartAccountAddress(mnemonic: string, chainId?: numb
   const selector = '5fbfb9cf';
   const calldata = `0x${selector}${ownerPadded}${saltPadded}`;
 
-  const rpcUrl = process.env.TOTALRECLAW_RPC_URL || getDefaultRpcUrl(resolvedChainId);
+  const rpcUrl = CONFIG.rpcUrl || getDefaultRpcUrl(resolvedChainId);
   const response = await fetch(rpcUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -192,7 +193,7 @@ export async function submitFactOnChain(
   const keyPadded = '0'.repeat(64);
   const nonceCalldata = `0x35567e1a${senderPadded}${keyPadded}`;
 
-  const rpcUrl = config.rpcUrl || process.env.TOTALRECLAW_RPC_URL || getDefaultRpcUrl(config.chainId);
+  const rpcUrl = config.rpcUrl || CONFIG.rpcUrl || getDefaultRpcUrl(config.chainId);
   const nonceResp = await fetch(rpcUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -315,7 +316,7 @@ export async function submitFactBatchOnChain(
   const keyPadded = '0'.repeat(64);
   const nonceCalldata = `0x35567e1a${senderPadded}${keyPadded}`;
 
-  const rpcUrl = config.rpcUrl || process.env.TOTALRECLAW_RPC_URL || getDefaultRpcUrl(config.chainId);
+  const rpcUrl = config.rpcUrl || CONFIG.rpcUrl || getDefaultRpcUrl(config.chainId);
   const nonceResp = await fetch(rpcUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -382,7 +383,7 @@ export async function submitFactBatchOnChain(
  * The managed service (subgraph mode) is the default.
  */
 export function isSubgraphMode(): boolean {
-  return process.env.TOTALRECLAW_SELF_HOSTED !== 'true';
+  return !CONFIG.selfHosted;
 }
 
 /**
@@ -396,12 +397,12 @@ export function isSubgraphMode(): boolean {
  */
 export function getSubgraphConfig(): SubgraphStoreConfig {
   return {
-    relayUrl: process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz',
-    mnemonic: process.env.TOTALRECLAW_RECOVERY_PHRASE || '',
-    cachePath: process.env.TOTALRECLAW_CACHE_PATH || `${process.env.HOME}/.totalreclaw/cache.enc`,
-    chainId: parseInt(process.env.TOTALRECLAW_CHAIN_ID || '84532'),
-    dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || wasm.getDataEdgeAddress(),
-    entryPointAddress: process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || wasm.getEntryPointAddress(),
-    rpcUrl: process.env.TOTALRECLAW_RPC_URL || undefined,
+    relayUrl: CONFIG.serverUrl || 'https://api.totalreclaw.xyz',
+    mnemonic: CONFIG.recoveryPhrase,
+    cachePath: CONFIG.cachePath,
+    chainId: CONFIG.chainId,
+    dataEdgeAddress: CONFIG.dataEdgeAddress || wasm.getDataEdgeAddress(),
+    entryPointAddress: CONFIG.entryPointAddress || wasm.getEntryPointAddress(),
+    rpcUrl: CONFIG.rpcUrl || undefined,
   };
 }
