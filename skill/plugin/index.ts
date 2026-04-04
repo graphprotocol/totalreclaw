@@ -1786,23 +1786,19 @@ const plugin = {
               const pool = computeCandidatePool(factCount);
               let subgraphResults = await searchSubgraph(subgraphOwner || userId!, allTrapdoors, pool, authKeyHex!);
 
-              // Broadened fallback: if trapdoor search returns 0, or if the query
-              // is short/vague (<=3 words) with very few matches (<=3) that are
-              // likely noise from common word trapdoors.
-              const recallWordCount = params.query.trim().split(/\s+/).length;
-              const recallShouldBroaden = subgraphResults.length === 0 || (recallWordCount <= 3 && subgraphResults.length <= 3);
-              if (recallShouldBroaden) {
-                try {
-                  const broadenedResults = await searchSubgraphBroadened(subgraphOwner || userId!, pool, authKeyHex!);
-                  // Merge broadened results with existing (deduplicate by ID)
-                  const existingIds = new Set(subgraphResults.map(r => r.id));
-                  for (const br of broadenedResults) {
-                    if (!existingIds.has(br.id)) {
-                      subgraphResults.push(br);
-                    }
+              // Always run broadened search and merge — ensures vocabulary mismatches
+              // (e.g., "preferences" vs "prefer") don't cause recall failures.
+              // The reranker handles scoring; extra cost is ~1 GraphQL query per recall.
+              try {
+                const broadenedResults = await searchSubgraphBroadened(subgraphOwner || userId!, pool, authKeyHex!);
+                // Merge broadened results with existing (deduplicate by ID)
+                const existingIds = new Set(subgraphResults.map(r => r.id));
+                for (const br of broadenedResults) {
+                  if (!existingIds.has(br.id)) {
+                    subgraphResults.push(br);
                   }
-                } catch { /* best-effort */ }
-              }
+                }
+              } catch { /* best-effort */ }
 
               for (const result of subgraphResults) {
                 try {
@@ -2909,24 +2905,20 @@ const plugin = {
               return undefined;
             }
 
-            // Broadened fallback: if trapdoor search returns 0, or if the query
-            // is short/vague (<=3 words) with very few matches (<=3) that are
-            // likely noise from common word trapdoors.
-            const hookWordCount = evt.prompt.trim().split(/\s+/).length;
-            const hookShouldBroaden = subgraphResults.length === 0 || (hookWordCount <= 3 && subgraphResults.length <= 3);
-            if (hookShouldBroaden) {
-              try {
-                const broadPool = computeCandidatePool(0);
-                const broadenedResults = await searchSubgraphBroadened(subgraphOwner || userId!, broadPool, authKeyHex!);
-                // Merge broadened results with existing (deduplicate by ID)
-                const existingIds = new Set(subgraphResults.map(r => r.id));
-                for (const br of broadenedResults) {
-                  if (!existingIds.has(br.id)) {
-                    subgraphResults.push(br);
-                  }
+            // Always run broadened search and merge — ensures vocabulary mismatches
+            // (e.g., "preferences" vs "prefer") don't cause recall failures.
+            // The reranker handles scoring; extra cost is ~1 GraphQL query per recall.
+            try {
+              const broadPool = computeCandidatePool(0);
+              const broadenedResults = await searchSubgraphBroadened(subgraphOwner || userId!, broadPool, authKeyHex!);
+              // Merge broadened results with existing (deduplicate by ID)
+              const existingIds = new Set(subgraphResults.map(r => r.id));
+              for (const br of broadenedResults) {
+                if (!existingIds.has(br.id)) {
+                  subgraphResults.push(br);
                 }
-              } catch { /* best-effort */ }
-            }
+              }
+            } catch { /* best-effort */ }
 
             if (subgraphResults.length === 0 && cachedFacts.length === 0) return undefined;
 

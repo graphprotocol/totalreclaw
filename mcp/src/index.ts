@@ -862,32 +862,16 @@ async function handleRecallSubgraph(
       Buffer.from(state.authKey).toString('hex'),
     );
 
-    // Broadened fallback: if trapdoor search returns 0 candidates, or if the query
-    // is short/vague (<=3 words) with very few matches (<=3) that are likely noise
-    // from common word trapdoors (e.g., "who am I?" matching "I"/"am"),
-    // fetch recent facts by owner and merge with existing results.
-    let broadened = false;
-    const queryWordCount = query.trim().split(/\s+/).length;
-    const shouldBroaden = candidates.length === 0 || (queryWordCount <= 3 && candidates.length <= 3);
-    if (shouldBroaden) {
+    // Always run broadened search and merge — ensures vocabulary mismatches
+    // (e.g., "preferences" vs "prefer") don't cause recall failures.
+    // The reranker handles scoring; extra cost is ~1 GraphQL query per recall.
+    try {
       const fallbackCandidates = await searchSubgraphBroadened(
         state.smartAccountAddress,
         maxCandidates,
         state.serverUrl,
         Buffer.from(state.authKey).toString('hex'),
       );
-      if (fallbackCandidates.length === 0 && candidates.length === 0) {
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              memories: [],
-              latency_ms: Date.now() - startTime,
-              mode: 'subgraph',
-            }),
-          }],
-        };
-      }
       // Merge broadened results with existing candidates (deduplicate by ID)
       const existingIds = new Set(candidates.map(c => c.id));
       for (const fc of fallbackCandidates) {
@@ -895,7 +879,21 @@ async function handleRecallSubgraph(
           candidates.push(fc);
         }
       }
-      broadened = true;
+    } catch {
+      // Non-fatal — trapdoor results still work
+    }
+
+    if (candidates.length === 0) {
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            memories: [],
+            latency_ms: Date.now() - startTime,
+            mode: 'subgraph',
+          }),
+        }],
+      };
     }
 
     // 5. Decrypt candidates
@@ -955,7 +953,7 @@ async function handleRecallSubgraph(
           memories,
           latency_ms: Date.now() - startTime,
           candidates_searched: candidates.length,
-          broadened_search: broadened,
+          broadened_search: true,
           mode: 'subgraph',
           query_intent: intent,
         }),

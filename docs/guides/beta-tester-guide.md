@@ -102,8 +102,8 @@ from totalreclaw import TotalReclaw
 
 async def main():
     client = TotalReclaw(
-        mnemonic="your 12-word phrase",
-        relay_url="https://api.totalreclaw.xyz",
+        recovery_phrase="your 12-word phrase",
+        server_url="https://api.totalreclaw.xyz",
     )
     await client.resolve_address()
     await client.register()

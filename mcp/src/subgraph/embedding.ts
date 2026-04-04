@@ -50,12 +50,12 @@ export async function generateEmbedding(
   options?: { isQuery?: boolean },
 ): Promise<number[]> {
   if (!extractor) {
-    console.log('Downloading embedding model (one-time setup, ~600MB)...');
+    console.error('[TotalReclaw] Downloading embedding model (~600MB, first run only)...');
     extractor = await pipeline('feature-extraction', MODEL_ID, {
       // @ts-ignore - quantized option exists at runtime but not in type defs
       quantized: true,
     } as any);
-    console.log('Embedding model ready.');
+    console.error('[TotalReclaw] Embedding model ready.');
   }
 
   const input = text;

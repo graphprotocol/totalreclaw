@@ -30,8 +30,8 @@ from totalreclaw import TotalReclaw
 
 async def main():
     client = TotalReclaw(
-        mnemonic="your twelve word recovery phrase here",
-        relay_url="https://api.totalreclaw.xyz",  # default, can be omitted
+        recovery_phrase="your twelve word recovery phrase here",
+        server_url="https://api.totalreclaw.xyz",  # default, can be omitted
     )
 
     # REQUIRED: resolve Smart Account address and register with relay
@@ -75,7 +75,7 @@ pip install totalreclaw
 from totalreclaw import TotalReclaw
 from totalreclaw.embedding import get_embedding
 
-client = TotalReclaw(mnemonic="...")
+client = TotalReclaw(recovery_phrase="...")
 
 # Store with embedding for semantic search
 text = "Pedro prefers dark mode"

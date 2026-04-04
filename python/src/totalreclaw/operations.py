@@ -216,6 +216,7 @@ async def search_facts(
     owner: str,
     relay: RelayClient,
     query_embedding: Optional[list[float]] = None,
+    lsh_hasher: Optional[LSHHasher] = None,
     max_candidates: int = 250,
     top_k: int = 8,
 ) -> list[RerankerResult]:
@@ -226,13 +227,21 @@ async def search_facts(
     # Generate search trapdoors from query text
     word_trapdoors = generate_blind_indices(query)
 
-    if not word_trapdoors:
+    # Generate LSH trapdoors from embedding (if available)
+    lsh_trapdoors: list[str] = []
+    if lsh_hasher and query_embedding:
+        lsh_trapdoors = lsh_hasher.hash(query_embedding)
+
+    # Combine all trapdoors
+    all_trapdoors = word_trapdoors + lsh_trapdoors
+
+    if not all_trapdoors:
         return []
 
     # Split trapdoors into small batches
     chunks: list[list[str]] = []
-    for i in range(0, len(word_trapdoors), DEFAULT_TRAPDOOR_BATCH_SIZE):
-        chunks.append(word_trapdoors[i : i + DEFAULT_TRAPDOOR_BATCH_SIZE])
+    for i in range(0, len(all_trapdoors), DEFAULT_TRAPDOOR_BATCH_SIZE):
+        chunks.append(all_trapdoors[i : i + DEFAULT_TRAPDOOR_BATCH_SIZE])
 
     # Query subgraph via relay
     all_facts: dict[str, dict] = {}
@@ -280,34 +289,20 @@ async def search_facts(
             logger.warning("Trapdoor batch query failed (owner=%s): %s", owner, e)
             continue
 
-    # Broadened fallback: if trapdoor search returns 0 candidates, or if the query
-    # is short/vague (<=3 words) with very few matches (<=3) that are likely noise
-    # from common word trapdoors (e.g., "who am I?" matching "I"/"am"), fetch
-    # recent facts by owner and merge with existing results.
-    broadened = False
-    query_word_count = len(query.strip().split())
-    should_broaden = not all_facts or (query_word_count <= 3 and len(all_facts) <= 3)
-    if should_broaden:
-        try:
-            data = await relay.query_subgraph(
-                BROADENED_SEARCH_QUERY,
-                {"owner": owner, "first": min(max_candidates, 1000)},
-            )
-            facts_list = data.get("data", {}).get("facts", [])
-            if not facts_list:
-                logger.debug(
-                    "Broadened search returned 0 facts (owner=%s, response keys=%s)",
-                    owner,
-                    list(data.keys()) if isinstance(data, dict) else type(data).__name__,
-                )
-            for fact in facts_list:
-                if fact and fact.get("isActive", True) and fact["id"] not in all_facts:
-                    all_facts[fact["id"]] = fact
-            broadened = True
-        except Exception as e:
-            logger.warning(
-                "Broadened search failed (owner=%s): %s", owner, e
-            )
+    # Always run broadened search and merge — ensures vocabulary mismatches
+    # (e.g., "preferences" vs "prefer") don't cause recall failures.
+    # The reranker handles scoring; extra cost is ~1 GraphQL query per recall.
+    try:
+        data = await relay.query_subgraph(
+            BROADENED_SEARCH_QUERY,
+            {"owner": owner, "first": min(max_candidates, 1000)},
+        )
+        facts_list = data.get("data", {}).get("facts", [])
+        for fact in facts_list:
+            if fact and fact.get("isActive", True) and fact["id"] not in all_facts:
+                all_facts[fact["id"]] = fact
+    except Exception as e:
+        logger.warning("Broadened search failed (owner=%s): %s", owner, e)
 
     if not all_facts:
         return []

@@ -464,7 +464,7 @@ async function runQuery(
             ? [process.env.TOTALRECLAW_MCP_PATH]
             : ['@totalreclaw/mcp-server'],
           env: {
-            TOTALRECLAW_SERVER_URL: process.env.TOTALRECLAW_SERVER_URL || 'http://totalreclaw-server:8080',
+            TOTALRECLAW_SERVER_URL: process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz',
             TOTALRECLAW_RECOVERY_PHRASE: sdkEnv.TOTALRECLAW_RECOVERY_PHRASE || '',
             TOTALRECLAW_NAMESPACE: containerInput.groupFolder,
             TOTALRECLAW_CREDENTIALS_PATH: path.join(WORKSPACE_ROOT, '.totalreclaw', 'credentials.json'),

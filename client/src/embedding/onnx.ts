@@ -46,11 +46,11 @@ export class EmbeddingModel {
    */
   async load(_modelPath?: string): Promise<void> {
     try {
-      console.log('Downloading embedding model (one-time setup, ~600MB)...');
+      console.error('[TotalReclaw] Downloading embedding model (~600MB, first run only)...');
       this.extractor = await pipeline('feature-extraction', MODEL_ID, {
         quantized: true,
       } as Record<string, unknown>);
-      console.log('Embedding model ready.');
+      console.error('[TotalReclaw] Embedding model ready.');
       this.isLoaded = true;
     } catch (error) {
       throw new TotalReclawError(

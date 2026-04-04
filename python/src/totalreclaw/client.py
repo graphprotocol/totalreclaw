@@ -4,13 +4,16 @@ TotalReclaw Client -- High-level API.
 Usage:
     from totalreclaw import TotalReclaw
 
-    client = TotalReclaw(mnemonic="abandon abandon ...")
+    client = TotalReclaw(recovery_phrase="abandon abandon ...")
     await client.remember("Pedro prefers dark mode")
     results = await client.recall("What does Pedro prefer?")
     await client.forget(results[0].id)
     facts = await client.export_all()
     status = await client.status()
     await client.close()
+
+Legacy parameter names (mnemonic, relay_url) are still accepted for
+backwards compatibility but are deprecated.
 """
 from __future__ import annotations
 from typing import Optional
@@ -100,21 +103,43 @@ class TotalReclaw:
     The wallet_address is the CREATE2 Smart Account address. If not provided,
     call `await client.resolve_address()` before using remember/recall/forget/export
     to derive it via an RPC call to the SimpleAccountFactory contract.
+
+    Parameters
+    ----------
+    recovery_phrase : str
+        BIP-39 12-word recovery phrase (preferred name).
+    server_url : str
+        Relay server URL (preferred name, default: ``https://api.totalreclaw.xyz``).
+    mnemonic : str
+        Deprecated alias for ``recovery_phrase``.
+    relay_url : str
+        Deprecated alias for ``server_url``.
+    wallet_address : str, optional
+        Pre-resolved Smart Account address.
+    is_test : bool
+        Send ``X-TotalReclaw-Test: true`` header.
     """
 
     def __init__(
         self,
-        mnemonic: str,
-        relay_url: str = DEFAULT_RELAY_URL,
+        recovery_phrase: Optional[str] = None,
+        server_url: Optional[str] = None,
         wallet_address: Optional[str] = None,
         is_test: bool = False,
+        *,
+        mnemonic: Optional[str] = None,
+        relay_url: Optional[str] = None,
     ):
-        self._mnemonic = mnemonic.strip()
+        resolved_mnemonic = recovery_phrase or mnemonic
+        if not resolved_mnemonic:
+            raise ValueError("recovery_phrase is required")
+        self._mnemonic = resolved_mnemonic.strip()
         self._keys = derive_keys_from_mnemonic(self._mnemonic)
         self._lsh_seed = derive_lsh_seed(self._mnemonic, self._keys.salt)
         self._lsh_hasher: Optional[LSHHasher] = None
         self._auth_key_hex = self._keys.auth_key.hex()
-        self._relay_url = relay_url
+        resolved_url = server_url or relay_url or DEFAULT_RELAY_URL
+        self._relay_url = resolved_url
 
         # Derive EOA account (address + private key) for UserOp signing
         eoa_acct = _get_eoa_account(self._mnemonic)
@@ -125,7 +150,7 @@ class TotalReclaw:
         self._wallet_address = (wallet_address or self._eoa_address).lower()
         self._address_resolved = wallet_address is not None
         self._relay = RelayClient(
-            relay_url=relay_url,
+            relay_url=resolved_url,
             auth_key_hex=self._auth_key_hex,
             wallet_address=self._wallet_address,
             is_test=is_test,
@@ -221,12 +246,14 @@ class TotalReclaw:
         """Search for facts matching a query. Returns ranked results."""
         await self._ensure_address()
         await self._ensure_registered()
+        lsh = self._get_lsh_hasher() if query_embedding else None
         return await search_facts(
             query=query,
             keys=self._keys,
             owner=self._wallet_address,
             relay=self._relay,
             query_embedding=query_embedding,
+            lsh_hasher=lsh,
             max_candidates=max_candidates,
             top_k=top_k,
         )
