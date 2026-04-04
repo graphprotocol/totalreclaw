@@ -393,8 +393,8 @@ git checkout main
 - **Default mode**: Managed Service with dual-chain (free=Base Sepolia testnet, pro=Gnosis mainnet)
 - **Default chain ID**: 84532 (Base Sepolia) -- all clients default to free tier, auto-detect Pro (chain 100/Gnosis) from billing
 - **Embedding model**: Qwen3-Embedding-0.6B (1024d, multilingual, last-token pooling)
-- **Crypto core**: `@totalreclaw/core` (Rust WASM for npm, PyO3 for PyPI) -- unified crypto across all clients
-- **Packages**: `@totalreclaw/core@0.1.0`, `@totalreclaw/client@0.7.3`, `@totalreclaw/mcp-server@1.6.8` (npm); `totalreclaw-core@0.1.0`, `totalreclaw@0.1.0` (PyPI)
+- **Crypto core**: `@totalreclaw/core` v1.0.0 (Rust WASM for npm, PyO3 for PyPI) -- 13 modules (crypto, reranker, wallet, userop, store, search, blind, lsh, fingerprint, hotcache, consolidation, debrief, stemmer). Single source of truth for all clients.
+- **Packages**: `@totalreclaw/core@1.0.0`, `@totalreclaw/client@1.0.0`, `@totalreclaw/mcp-server@2.0.0`, `@totalreclaw/totalreclaw@2.0.0` (npm); `totalreclaw-core@1.0.0`, `totalreclaw@1.0.0` (PyPI)
 - **Relay**: Billing, Pimlico sponsorship, dual-chain routing, and query proxying extracted to private `totalreclaw-relay` TypeScript repo (p-diogo/totalreclaw-relay). Public server retains only self-hosted functionality (storage, search, auth).
 - **Staging**: Base Sepolia (chain 84532) -- free testnet, no gas costs
 - **Production**: Gnosis mainnet (chain 100) -- Pro tier only

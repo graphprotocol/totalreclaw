@@ -71,7 +71,7 @@ You can always be explicit too -- "remember that I prefer dark mode" or "what do
 NanoClaw agents get TotalReclaw memory automatically — no setup required on your end. The NanoClaw admin adds a `TOTALRECLAW_RECOVERY_PHRASE` secret for your group, and the agent-runner spawns `@totalreclaw/mcp-server` as a background process.
 
 **What this means for you:**
-- Your agent has 8 memory tools available: remember, recall, forget, export, import, import_from (Mem0/MCP Memory), status, upgrade
+- Your agent has 14 memory tools available (remember, recall, forget, export, import, import_from, status, upgrade, migrate, consolidate, debrief, setup, support, account)
 - Memory is shared within your NanoClaw group (same namespace = same memories)
 - All data is encrypted with your group's recovery phrase before leaving the container
 - Billing and quota work identically to Claude Desktop / Cursor

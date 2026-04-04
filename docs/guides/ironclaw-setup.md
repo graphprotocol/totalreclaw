@@ -19,6 +19,8 @@ npm install -g @totalreclaw/mcp-server
 
 ## 2. Add to IronClaw
 
+> **Known issue:** The `ironclaw mcp add` command shown below may not exist in current versions of the `nearai` CLI. If this command is not available, you can configure the MCP server manually by adding it to your IronClaw MCP config file (typically `~/.nearai/mcp.json` or similar). Consult IronClaw documentation for the current MCP integration method.
+
 ```bash
 ironclaw mcp add totalreclaw --transport stdio --command totalreclaw-mcp
 ```
