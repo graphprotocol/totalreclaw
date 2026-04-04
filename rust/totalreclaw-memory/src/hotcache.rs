@@ -1,5 +1,8 @@
 //! In-memory hot cache for recently recalled facts.
 //!
+//! Wraps the generic `totalreclaw_core::hotcache::HotCache<T>` with
+//! `MemoryEntry`-specific types for the ZeroClaw memory backend.
+//!
 //! Matches the TypeScript plugin's hot cache behavior:
 //! - Caches up to 30 recent query results in memory
 //! - Skips remote subgraph query if a semantically similar query was recently answered
@@ -7,33 +10,19 @@
 //! - Cache is per-session (lives on the TotalReclawMemory struct)
 
 use crate::backend::MemoryEntry;
-use crate::reranker;
-
-/// Maximum number of cached queries.
-const HOT_CACHE_MAX_ENTRIES: usize = 30;
-
-/// Cosine similarity threshold for cache hit (skip remote query).
-const HOT_CACHE_SIMILARITY_THRESHOLD: f64 = 0.85;
-
-/// A cached query result.
-#[derive(Clone)]
-struct CacheEntry {
-    /// The query embedding.
-    query_embedding: Vec<f32>,
-    /// The cached results.
-    results: Vec<MemoryEntry>,
-}
 
 /// In-memory hot cache for semantic query dedup.
+///
+/// Thin wrapper around `totalreclaw_core::hotcache::HotCache<Vec<MemoryEntry>>`.
 pub struct HotCache {
-    entries: Vec<CacheEntry>,
+    inner: totalreclaw_core::hotcache::HotCache<Vec<MemoryEntry>>,
 }
 
 impl HotCache {
-    /// Create an empty hot cache.
+    /// Create an empty hot cache with default settings (30 entries, cosine >= 0.85).
     pub fn new() -> Self {
         Self {
-            entries: Vec::with_capacity(HOT_CACHE_MAX_ENTRIES),
+            inner: totalreclaw_core::hotcache::HotCache::new(),
         }
     }
 
@@ -41,42 +30,29 @@ impl HotCache {
     ///
     /// Returns cached results if a query with cosine >= 0.85 exists.
     pub fn lookup(&self, query_embedding: &[f32]) -> Option<Vec<MemoryEntry>> {
-        for entry in &self.entries {
-            let similarity =
-                reranker::cosine_similarity_f32(query_embedding, &entry.query_embedding);
-            if similarity >= HOT_CACHE_SIMILARITY_THRESHOLD {
-                return Some(entry.results.clone());
-            }
-        }
-        None
+        self.inner.lookup(query_embedding).cloned()
     }
 
     /// Insert a query result into the cache.
     ///
     /// Evicts the oldest entry if the cache is full.
     pub fn insert(&mut self, query_embedding: Vec<f32>, results: Vec<MemoryEntry>) {
-        if self.entries.len() >= HOT_CACHE_MAX_ENTRIES {
-            self.entries.remove(0); // FIFO eviction
-        }
-        self.entries.push(CacheEntry {
-            query_embedding,
-            results,
-        });
+        self.inner.insert(query_embedding, results);
     }
 
     /// Clear the cache (e.g., after a store operation).
     pub fn clear(&mut self) {
-        self.entries.clear();
+        self.inner.clear();
     }
 
     /// Number of cached entries.
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.inner.len()
     }
 
     /// Whether the cache is empty.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.inner.is_empty()
     }
 }
 
@@ -89,7 +65,7 @@ impl Default for HotCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{MemoryCategory, MemoryEntry};
+    use crate::backend::MemoryCategory;
 
     fn make_entry(id: &str, content: &str) -> MemoryEntry {
         MemoryEntry {
@@ -155,7 +131,7 @@ mod tests {
             cache.insert(emb, vec![make_entry(&i.to_string(), "fact")]);
         }
 
-        assert_eq!(cache.len(), HOT_CACHE_MAX_ENTRIES);
+        assert_eq!(cache.len(), 30);
     }
 
     #[test]
@@ -166,11 +142,5 @@ mod tests {
 
         cache.clear();
         assert!(cache.is_empty());
-    }
-
-    #[test]
-    fn test_hot_cache_constants() {
-        assert_eq!(HOT_CACHE_MAX_ENTRIES, 30);
-        assert!((HOT_CACHE_SIMILARITY_THRESHOLD - 0.85).abs() < 1e-10);
     }
 }

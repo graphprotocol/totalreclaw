@@ -18,11 +18,15 @@
 //! - [`search`] — Search pipeline (pure computation: trapdoors, parse, decrypt+rerank; feature: `managed`)
 //! - [`wallet`] — Ethereum wallet derivation (BIP-44 + Keccak256)
 //! - [`userop`] — ERC-4337 v0.7 UserOp building + signing (feature: `managed`)
+//! - [`hotcache`] — Generic in-memory hot cache for semantic query dedup (no WASM binding)
+//! - [`consolidation`] — Store-time near-duplicate detection + supersede logic
 
 pub mod blind;
+pub mod consolidation;
 pub mod crypto;
 pub mod debrief;
 pub mod fingerprint;
+pub mod hotcache;
 pub mod lsh;
 pub mod protobuf;
 pub mod reranker;

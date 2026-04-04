@@ -789,5 +789,8 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(hex_blob_to_base64, m)?)?;
     }
 
+    // Consolidation / dedup
+    crate::consolidation::register_python_functions(m)?;
+
     Ok(())
 }
