@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/client",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "TypeScript client library for TotalReclaw — E2EE encryption, LSH blind indexing, embedding search, and BM25+cosine reranking for AI agent memory",
   "homepage": "https://totalreclaw.xyz",
   "main": "dist/index.js",
