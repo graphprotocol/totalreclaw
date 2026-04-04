@@ -14,6 +14,7 @@
 //! - [`protobuf`] — Minimal protobuf encoder for fact payloads
 //! - [`reranker`] — BM25 + Cosine + RRF fusion reranker
 //! - [`debrief`] — Session debrief response parser
+//! - [`wallet`] — Ethereum wallet derivation (BIP-44 + Keccak256)
 
 pub mod blind;
 pub mod crypto;
@@ -23,6 +24,7 @@ pub mod lsh;
 pub mod protobuf;
 pub mod reranker;
 pub mod stemmer;
+pub mod wallet;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;

@@ -26,6 +26,11 @@ rand = "0.8"
 bip39 = "2"
 pbkdf2 = { version = "0.12", features = ["hmac"] }
 
+# Ethereum / wallet derivation (BIP-44 + Keccak256)
+coins-bip32 = "0.12"
+k256 = { version = "0.13", features = ["ecdsa"] }
+tiny-keccak = { version = "2", features = ["keccak"] }
+
 # Encoding
 base64 = "0.22"
 hex = "0.4"

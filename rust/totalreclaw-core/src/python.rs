@@ -348,6 +348,29 @@ fn py_cosine_similarity(a: Vec<f32>, b: Vec<f32>) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
+// Wallet derivation
+// ---------------------------------------------------------------------------
+
+/// Derive an Ethereum EOA wallet from a BIP-39 mnemonic via BIP-44.
+///
+/// Path: m/44'/60'/0'/0/0 (standard Ethereum derivation path).
+/// Returns a JSON string: ``{"private_key": "hex...", "address": "0x..."}``.
+#[pyfunction]
+fn derive_eoa(mnemonic: &str) -> PyResult<String> {
+    let w = crate::wallet::derive_eoa(mnemonic).map_err(to_pyerr)?;
+    serde_json::to_string(&w)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Derive just the Ethereum EOA address from a BIP-39 mnemonic.
+///
+/// Returns: ``"0x..."`` (lowercase hex).
+#[pyfunction]
+fn derive_eoa_address(mnemonic: &str) -> PyResult<String> {
+    crate::wallet::derive_eoa_address(mnemonic).map_err(to_pyerr)
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -388,6 +411,10 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Reranker
     m.add_function(wrap_pyfunction!(py_rerank, m)?)?;
     m.add_function(wrap_pyfunction!(py_cosine_similarity, m)?)?;
+
+    // Wallet derivation
+    m.add_function(wrap_pyfunction!(derive_eoa, m)?)?;
+    m.add_function(wrap_pyfunction!(derive_eoa_address, m)?)?;
 
     Ok(())
 }

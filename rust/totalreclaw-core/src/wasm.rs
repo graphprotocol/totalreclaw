@@ -14,6 +14,7 @@ use crate::fingerprint;
 use crate::lsh;
 use crate::protobuf;
 use crate::reranker;
+use crate::wallet;
 
 // ---------------------------------------------------------------------------
 // Key derivation
@@ -327,6 +328,28 @@ pub fn wasm_rerank(query: &str, query_embedding: &[f32], candidates_json: &str, 
 #[wasm_bindgen(js_name = "cosineSimilarity")]
 pub fn wasm_cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     reranker::cosine_similarity_f32(a, b)
+}
+
+// ---------------------------------------------------------------------------
+// Wallet derivation
+// ---------------------------------------------------------------------------
+
+/// Derive an Ethereum EOA wallet from a BIP-39 mnemonic via BIP-44.
+///
+/// Path: m/44'/60'/0'/0/0 (standard Ethereum derivation path).
+/// Returns a JS object: `{ private_key: "hex...", address: "0x..." }`.
+#[wasm_bindgen(js_name = "deriveEoa")]
+pub fn wasm_derive_eoa(mnemonic: &str) -> Result<JsValue, JsError> {
+    let w = wallet::derive_eoa(mnemonic).map_err(to_js_error)?;
+    serde_wasm_bindgen::to_value(&w).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Derive just the Ethereum EOA address from a BIP-39 mnemonic.
+///
+/// Returns: `"0x..."` (lowercase hex).
+#[wasm_bindgen(js_name = "deriveEoaAddress")]
+pub fn wasm_derive_eoa_address(mnemonic: &str) -> Result<String, JsError> {
+    wallet::derive_eoa_address(mnemonic).map_err(to_js_error)
 }
 
 // ---------------------------------------------------------------------------

@@ -3225,15 +3225,18 @@ dependencies = [
  "base64 0.22.1",
  "bip39",
  "chrono",
+ "coins-bip32",
  "hex",
  "hkdf",
  "hmac",
+ "k256",
  "pbkdf2",
  "rand 0.8.5",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 2.0.18",
+ "tiny-keccak",
  "unicode-normalization",
 ]
 
