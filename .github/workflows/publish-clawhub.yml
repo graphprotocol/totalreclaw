@@ -45,7 +45,7 @@ jobs:
           VERSION="${VERSION#v}"  # Strip 'v' prefix if present
 
           clawhub login --token "$CLAWHUB_TOKEN" --no-browser
-          clawhub publish ./skill \
+          clawhub publish ./skill/plugin \
             --slug totalreclaw \
             --version "$VERSION" \
             --tags "latest,memory,encryption,e2ee,privacy,agent-memory,e2e-encryption,persistent-context" \
