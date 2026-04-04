@@ -41,13 +41,21 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Patch package name for npm scope
+        run: |
+          cd rust/totalreclaw-core/pkg
+          # wasm-pack generates "totalreclaw-core" but npm package is "@totalreclaw/core"
+          node -e "const p=require('./package.json'); p.name='@totalreclaw/core'; require('fs').writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n')"
+          echo "Package name: $(node -e "console.log(require('./package.json').name)")"
+          echo "Version: $(node -e "console.log(require('./package.json').version)")"
+
       - name: Publish
         if: inputs.dry-run == false
         run: |
           cd rust/totalreclaw-core/pkg
           npm publish --access public 2>&1 || {
             # Tolerate "already published" (403/409) — version already exists on registry
-            if npm view @totalreclaw/core version 2>/dev/null; then
+            if npm view @totalreclaw/core@$(node -e "console.log(require('./package.json').version)") version 2>/dev/null; then
               echo "Version already published, continuing"
             else
               exit 1
