@@ -31,7 +31,7 @@
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
     "@scure/bip39": "^2.0.1",
-    "@totalreclaw/core": "^0.1.0",
+    "@totalreclaw/core": "^1.0.0",
     "argon2": "^0.31.0",
     "permissionless": "^0.3.4",
     "protobufjs": "^7.2.5",
