@@ -24,14 +24,8 @@
   "author": "TotalReclaw Team",
   "license": "MIT",
   "dependencies": {
-    "@huggingface/transformers": "^3.8.1",
-    "@noble/hashes": "^2.0.1",
-    "@scure/bip39": "^2.0.1",
-    "@totalreclaw/core": "^0.1.0",
-    "permissionless": "^0.3.4",
-    "porter-stemmer": "^0.9.1",
-    "tslib": "^2.8.1",
-    "viem": "^2.46.3"
+    "@totalreclaw/client": "^0.8.0",
+    "@totalreclaw/core": "^0.1.0"
   },
   "openclaw": {
     "extensions": [

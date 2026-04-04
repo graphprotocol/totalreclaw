@@ -1,13 +1,10 @@
 /**
- * TotalReclaw Plugin - LSH Hasher (WASM-backed)
+ * TotalReclaw Plugin - LSH Hasher
  *
- * Thin wrapper over `WasmLshHasher` from `@totalreclaw/core`. Same class
- * interface as the previous pure-TS implementation so callers don't need
- * to change.
+ * Re-exports `WasmLshHasher` from `@totalreclaw/core` as `LSHHasher`
+ * for backward compatibility with existing plugin code.
  *
- * Default parameters:
- *   - 32 bits per table
- *   - 20 tables
+ * Default parameters: 32 bits per table, 20 tables.
  */
 
 import { WasmLshHasher } from '@totalreclaw/core';
