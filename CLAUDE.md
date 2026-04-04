@@ -52,7 +52,7 @@ Managed Service uses a **dual-chain model**: Free tier stores on **Base Sepolia*
 +-------------------------------------------------------------------------+
 |                         CLIENT (Re-ranking)                             |
 +-------------------------------------------------------------------------+
-|  Decrypt candidates -> Qwen3 1024d embeds -> BM25+Cosine+RRF -> Top 8 |
+|  Decrypt candidates -> Harrier 640d embeds -> BM25+Cosine+RRF -> Top 8 |
 +-------------------------------------------------------------------------+
 ```
 
@@ -268,7 +268,7 @@ Every new feature implementation MUST include:
 |-----|----------|--------|
 | LSH parameters | RESOLVED | 32-bit x 20 tables, 98.1% Recall@8 on real data |
 | Authentication | RESOLVED | HKDF auth with SHA-256 key hashing |
-| Embedding model | RESOLVED | Migrated to Qwen3-Embedding-0.6B (1024d, multilingual) |
+| Embedding model | RESOLVED | Migrated to Harrier-OSS-v1-270M (640d, ~164MB, last-token pooling) |
 | Client batching (A2) | RESOLVED | Implemented in client/src/userop/batcher.ts -- batch multiple facts per UserOp |
 | Candidate pool sizing | RESOLVED | Server-configurable via relay billing endpoint (`max_candidate_pool` in FeatureFlags). Env overrides: `CANDIDATE_POOL_MAX_FREE`, `CANDIDATE_POOL_MAX_PRO`. |
 | Load testing | RESOLVED | Managed service load test at `totalreclaw-internal/e2e/load-test-managed/`. Client-side <140ms p95 PASS up to 10K facts. |
@@ -288,7 +288,7 @@ Every new feature implementation MUST include:
 - **Recall**: >=93% of true top-250
 - **Storage overhead**: <=2.2x vs plaintext
 - **Server-blind**: Server NEVER sees plaintext
-- **Embedding model**: Qwen3-Embedding-0.6B (1024d, 100+ languages, last-token pooling)
+- **Embedding model**: Harrier-OSS-v1-270M (640d, ~164MB, last-token pooling)
 - **Extraction cap**: Max 15 facts per extraction cycle, unified 3-turn interval
 - **Memory types**: 7 categories -- fact, preference, decision (with reasoning), episodic, goal, context, summary
 
@@ -392,7 +392,7 @@ git checkout main
 - **Phase**: Private Beta
 - **Default mode**: Managed Service with dual-chain (free=Base Sepolia testnet, pro=Gnosis mainnet)
 - **Default chain ID**: 84532 (Base Sepolia) -- all clients default to free tier, auto-detect Pro (chain 100/Gnosis) from billing
-- **Embedding model**: Qwen3-Embedding-0.6B (1024d, multilingual, last-token pooling)
+- **Embedding model**: Harrier-OSS-v1-270M (640d, ~164MB, last-token pooling)
 - **Crypto core**: `@totalreclaw/core` v1.0.0 (Rust WASM for npm, PyO3 for PyPI) -- 13 modules (crypto, reranker, wallet, userop, store, search, blind, lsh, fingerprint, hotcache, consolidation, debrief, stemmer). Single source of truth for all clients.
 - **Packages**: `@totalreclaw/core@1.0.0`, `@totalreclaw/client@1.0.0`, `@totalreclaw/mcp-server@2.0.0`, `@totalreclaw/totalreclaw@2.0.0` (npm); `totalreclaw-core@1.0.0`, `totalreclaw@1.0.0` (PyPI)
 - **Relay**: Billing, Pimlico sponsorship, dual-chain routing, and query proxying extracted to private `totalreclaw-relay` TypeScript repo (p-diogo/totalreclaw-relay). Public server retains only self-hosted functionality (storage, search, auth).

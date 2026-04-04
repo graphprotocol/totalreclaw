@@ -4,12 +4,10 @@
  * Generates text embeddings locally using an ONNX model. No API key needed,
  * no data leaves the machine. Preserves the E2EE guarantee.
  *
- * Two model options (selected via CONFIG.embeddingModel):
- *   - "small" (default): Xenova/multilingual-e5-small (384d, ~34MB, fast, low RAM)
- *   - "large": onnx-community/Qwen3-Embedding-0.6B-ONNX (1024d, ~600MB, best accuracy)
- *
- * The small model is the default because the plugin runs inside the host
- * agent process (OpenClaw, etc.) which already uses significant RAM.
+ * Three model options (selected via CONFIG.embeddingModel):
+ *   - "default": onnx-community/harrier-oss-v1-270m-ONNX (640d, ~164MB, best accuracy/size ratio)
+ *   - "small": Xenova/multilingual-e5-small (384d, ~34MB, fast, low RAM)
+ *   - "large": onnx-community/Qwen3-Embedding-0.6B-ONNX (1024d, ~600MB, legacy)
  *
  * Dependencies: @huggingface/transformers
  */
@@ -26,6 +24,12 @@ interface ModelConfig {
 }
 
 const MODELS: Record<string, ModelConfig> = {
+  default: {
+    id: 'onnx-community/harrier-oss-v1-270m-ONNX',
+    dims: 640,
+    pooling: 'last_token',
+    size: '~164MB',
+  },
   small: {
     id: 'Xenova/multilingual-e5-small',
     dims: 384,
@@ -41,8 +45,8 @@ const MODELS: Record<string, ModelConfig> = {
 };
 
 function getModelConfig(): ModelConfig {
-  const key = CONFIG.embeddingModel || 'small';
-  return MODELS[key] || MODELS.small;
+  const key = CONFIG.embeddingModel || 'default';
+  return MODELS[key] || MODELS.default;
 }
 
 /** Lazily initialized feature extraction pipeline. */
@@ -78,7 +82,7 @@ export async function generateEmbedding(
 
 /**
  * Get the embedding vector dimensionality.
- * Returns 384 (small/default) or 1024 (large) depending on model selection.
+ * Returns 640 (default/Harrier), 384 (small), or 1024 (large) depending on model selection.
  */
 export function getEmbeddingDims(): number {
   return getModelConfig().dims;

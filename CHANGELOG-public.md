@@ -10,7 +10,7 @@
 - IronClaw support via MCP server (routine-based extraction)
 - Import adapters: Mem0, ChatGPT, Claude, MCP Memory Server
 - Testnet-to-mainnet migration tool (`totalreclaw_migrate`)
-- Qwen3-Embedding-0.6B embedding model (1024d, multilingual)
+- Harrier-OSS-v1-270M embedding model (640d, ~164MB)
 - BM25 + Cosine + RRF fusion reranking with dynamic candidate pool sizing
 - Store-time near-duplicate dedup (cosine) and LLM-guided dedup (Pro)
 - Client batching: multiple facts per UserOp via ERC-4337 executeBatch

@@ -8,7 +8,7 @@ Store, search, and recall memories across any AI agent with zero-knowledge encry
 
 - **End-to-end encrypted** -- AES-256-GCM encryption, HKDF key derivation from BIP-39 mnemonic
 - **Portable** -- Same recovery phrase works across Hermes, OpenClaw, Claude Desktop, IronClaw
-- **Local embeddings** -- Qwen3-Embedding-0.6B runs on-device (no API calls)
+- **Local embeddings** -- Harrier-OSS-v1-270M runs on-device (no API calls)
 - **Hybrid search** -- BM25 + cosine similarity + RRF reranking
 - **LSH bucketing** -- Locality-sensitive hashing for encrypted search
 - **On-chain storage** -- Managed service stores on Gnosis/Base Sepolia via ERC-4337

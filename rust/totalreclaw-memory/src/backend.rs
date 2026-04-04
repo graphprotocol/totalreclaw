@@ -133,7 +133,7 @@ impl Default for TotalReclawConfig {
                 base_url: "http://localhost:11434".into(),
                 model: "nomic-embed-text".into(),
             },
-            embedding_dims: 1024,
+            embedding_dims: 640,
             relay_url: DEFAULT_RELAY_URL.into(),
             is_test: false,
         }
@@ -390,7 +390,7 @@ impl TotalReclawMemory {
             };
 
             // Decrypt embedding (if available)
-            let emb = fact
+            let mut emb = fact
                 .encrypted_embedding
                 .as_deref()
                 .and_then(|e| crypto::decrypt(e, &self.keys.encryption_key).ok())
@@ -406,6 +406,15 @@ impl TotalReclawMemory {
                         .collect::<Vec<f32>>()
                 })
                 .unwrap_or_default();
+
+            // Re-embed if stored dimension differs from current model
+            let expected_dims = self.embedding_provider.dimensions();
+            if !emb.is_empty() && emb.len() != expected_dims {
+                match self.embedding_provider.embed(&text).await {
+                    Ok(fresh) => emb = fresh,
+                    Err(_) => emb = Vec::new(),
+                }
+            }
 
             rerank_candidates.push(Candidate {
                 id: fact.id.clone(),

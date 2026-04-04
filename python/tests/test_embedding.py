@@ -1,6 +1,6 @@
 """Tests for TotalReclaw embedding pipeline.
 
-These tests require model download (~600MB first time).
+These tests require model download (~164MB first time).
 Mark with pytest.mark.slow if needed.
 """
 import math
@@ -15,7 +15,7 @@ class TestEmbedding:
 
     def test_output_dimensions(self, embed):
         emb = embed("Hello world")
-        assert len(emb) == 1024
+        assert len(emb) == 640
 
     def test_unit_norm(self, embed):
         emb = embed("Hello world")
@@ -42,14 +42,14 @@ class TestEmbedding:
 
     def test_empty_text(self, embed):
         emb = embed("")
-        assert len(emb) == 1024
+        assert len(emb) == 640
 
     def test_get_embedding_dims(self):
         from totalreclaw.embedding import get_embedding_dims
-        assert get_embedding_dims() == 1024
+        assert get_embedding_dims() == 640
 
     def test_batch(self, embed):
         from totalreclaw.embedding import get_embeddings_batch
         results = get_embeddings_batch(["hello", "world"])
         assert len(results) == 2
-        assert all(len(e) == 1024 for e in results)
+        assert all(len(e) == 640 for e in results)

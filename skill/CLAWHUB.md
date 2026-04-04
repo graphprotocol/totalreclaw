@@ -99,7 +99,7 @@ clawhub publish ./skill \
   --name "TotalReclaw" \
   --version 1.4.0 \
   --tags latest,memory,encryption,e2ee,e2e-encryption,privacy,agent-memory,persistent-context \
-  --changelog "v1.4.0: ClawHub as primary install method, LLM-guided dedup, dual-chain billing, Qwen3-Embedding-0.6B."
+  --changelog "v1.4.0: ClawHub as primary install method, LLM-guided dedup, dual-chain billing, Harrier-OSS-v1-270M."
 ```
 
 ---

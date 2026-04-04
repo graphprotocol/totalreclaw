@@ -79,7 +79,7 @@ export interface Fact {
   id: string;
   /** The memory text content */
   text: string;
-  /** The embedding vector (1024 dimensions for Qwen3-Embedding-0.6B) */
+  /** The embedding vector (640 dimensions for Harrier-OSS-v1-270M) */
   embedding: number[];
   /** Associated metadata */
   metadata: FactMetadata;

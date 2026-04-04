@@ -117,7 +117,7 @@ pub fn config_to_mode(config: &EmbeddingConfig) -> EmbeddingMode {
             model_path: config
                 .model
                 .clone()
-                .unwrap_or_else(|| "onnx-community/Qwen3-Embedding-0.6B-ONNX".into()),
+                .unwrap_or_else(|| "onnx-community/harrier-oss-v1-270m-ONNX".into()),
         },
         "ollama" => EmbeddingMode::Ollama {
             base_url: config

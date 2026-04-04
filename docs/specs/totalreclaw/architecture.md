@@ -69,7 +69,7 @@ Based on research of Mem0, Zep, Letta:
 | Model | Size | Latency | When to Use |
 |-------|------|---------|-------------|
 | **Main agent LLM** | - | 500ms+ | **Preferred** - already available, no extra RAM |
-| Qwen3-0.6B (local) | 400MB | 100-300ms | Only if main LLM unavailable |
+| Qwen3-0.6B (local) | 400MB | 100-300ms | Only if main LLM unavailable (extraction LLM, not embedding) |
 | Phi-3-mini (local) | 2GB | 200-500ms | Higher accuracy (not recommended) |
 
 **Extraction is async** - doesn't block user queries, so latency is acceptable.

@@ -1,9 +1,9 @@
 /**
  * ONNX Embedding Model
  *
- * Uses @huggingface/transformers to run Qwen3-Embedding-0.6B model for
- * text embeddings. Produces 1024-dimensional normalized vectors suitable
- * for semantic search with 100+ language support.
+ * Uses @huggingface/transformers to run Harrier-OSS-v1-270M model for
+ * text embeddings. Produces 640-dimensional normalized vectors suitable
+ * for semantic search.
  *
  * The @huggingface/transformers library handles:
  *   - Model download (auto-downloads ONNX model from HuggingFace Hub)
@@ -12,21 +12,20 @@
  *   - Last-token pooling + normalization
  *
  * Model details:
- *   - onnx-community/Qwen3-Embedding-0.6B-ONNX (ONNX-optimized)
- *   - Quantized (int8): ~600MB download, cached in ~/.cache/huggingface/
- *   - 1024-dimensional output vectors
- *   - 100+ multilingual support (EN, PT, ES, ZH, etc.)
+ *   - onnx-community/harrier-oss-v1-270m-ONNX (ONNX-optimized)
+ *   - Quantized: ~164MB download, cached in ~/.cache/huggingface/
+ *   - 640-dimensional output vectors
  *   - Lazy initialization: first call ~3-5s, subsequent ~100ms
  */
 
 import { pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
 import { TotalReclawError, TotalReclawErrorCode } from '../types';
 
-/** Expected embedding dimension for Qwen3-Embedding-0.6B */
-const EMBEDDING_DIM = 1024;
+/** Expected embedding dimension for Harrier-OSS-v1-270M */
+const EMBEDDING_DIM = 640;
 
 /** Model ID on HuggingFace Hub (ONNX-optimized version) */
-const MODEL_ID = 'onnx-community/Qwen3-Embedding-0.6B-ONNX';
+const MODEL_ID = 'onnx-community/harrier-oss-v1-270m-ONNX';
 
 /**
  * Embedding model using @huggingface/transformers + ONNX Runtime
@@ -38,7 +37,7 @@ export class EmbeddingModel {
   /**
    * Load the ONNX model.
    *
-   * Downloads the model on first use (~600MB, quantized). Subsequent calls
+   * Downloads the model on first use (~164MB, quantized). Subsequent calls
    * use the cached model from ~/.cache/huggingface/.
    *
    * @param _modelPath - Ignored (kept for backward compatibility). The model
@@ -46,7 +45,7 @@ export class EmbeddingModel {
    */
   async load(_modelPath?: string): Promise<void> {
     try {
-      console.error('[TotalReclaw] Downloading embedding model (~600MB, first run only)...');
+      console.error('[TotalReclaw] Downloading embedding model (~164MB, first run only)...');
       this.extractor = await pipeline('feature-extraction', MODEL_ID, {
         quantized: true,
       } as Record<string, unknown>);
@@ -79,8 +78,8 @@ export class EmbeddingModel {
    *
    * @param text - Text to embed
    * @param options - Options. isQuery is accepted for forward compatibility but
-   *                  does not change behavior (Qwen3 needs no instruction prefix).
-   * @returns 1024-dimensional normalized embedding vector
+   *                  does not change behavior (Harrier needs no instruction prefix).
+   * @returns 640-dimensional normalized embedding vector
    */
   async embed(text: string, options?: { isQuery?: boolean }): Promise<number[]> {
     if (!this.isReady()) {
@@ -106,7 +105,7 @@ export class EmbeddingModel {
    * Embed multiple texts in batch
    *
    * @param texts - Texts to embed
-   * @returns Array of 1024-dimensional embedding vectors
+   * @returns Array of 640-dimensional embedding vectors
    */
   async embedBatch(texts: string[]): Promise<number[][]> {
     const embeddings: number[][] = [];
@@ -133,7 +132,7 @@ export class EmbeddingModel {
  * Useful when ONNX model is not available.
  *
  * @param seed - Seed for reproducible random embeddings
- * @returns 1024-dimensional random embedding
+ * @returns Random embedding with current model dimensions
  */
 export function createDummyEmbedding(seed?: number): number[] {
   const dim = EMBEDDING_DIM;
@@ -172,7 +171,7 @@ export function createDummyEmbedding(seed?: number): number[] {
  * based on the text content. Useful for testing without loading the model.
  *
  * @param text - Text to create embedding for
- * @returns 1024-dimensional deterministic embedding
+ * @returns Deterministic embedding with current model dimensions
  */
 export function createHashBasedEmbedding(text: string): number[] {
   const crypto = require('crypto');

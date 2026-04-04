@@ -123,7 +123,7 @@ TotalReclaw splits search into a server-side candidate retrieval step (using bli
 
 ### Step 1 — Embedding and LSH (client-side)
 
-Each fact is embedded using Qwen3-Embedding-0.6B — a multilingual model supporting 100+ languages with 1024-dimensional output. The model runs locally via ONNX Runtime (int8 quantized).
+Each fact is embedded using Harrier-OSS-v1-270M — a 640-dimensional embedding model. The model runs locally via ONNX Runtime (quantized, ~164MB).
 
 For search queries, a task instruction is prepended to improve retrieval accuracy:
 
@@ -139,9 +139,9 @@ The embedding is then projected through 20 independent LSH hash tables, each wit
 
 | Parameter | Value |
 | --- | --- |
-| Embedding model | Qwen3-Embedding-0.6B |
-| Dimensions | 1024 |
-| Languages | 100+ |
+| Embedding model | Harrier-OSS-v1-270M |
+| Dimensions | 640 |
+| Size | ~164MB |
 | Hash tables | 20 |
 | Bits per table | 32 |
 | Validated recall | 98.1% Recall@8 on real data |
@@ -225,7 +225,7 @@ The relay handles fast day-to-day reads and writes. The network layer is what tu
 | Encryption | AES-256-GCM — 256-bit key, 96-bit IV, 128-bit auth tag |
 | KDF (password) | Argon2id — t=3, m=64 MB, p=4 |
 | KDF (mnemonic) | BIP-39 PBKDF2 — 2048 rounds → HKDF-SHA256 expansion |
-| Embeddings | Qwen3-Embedding-0.6B — 1024 dimensions, ONNX int8 quantized, 100+ languages |
+| Embeddings | Harrier-OSS-v1-270M — 640 dimensions, ONNX quantized (~164MB) |
 | LSH | 20 hash tables, 32 bits per table |
 | Blind indices | SHA-256 of word tokens + LSH bucket IDs |
 | Content dedup | HMAC-SHA256 fingerprint |

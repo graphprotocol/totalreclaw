@@ -191,7 +191,7 @@ class TotalReclaw:
             # Best-effort — relay may be unreachable; will retry on next call.
             pass
 
-    def _get_lsh_hasher(self, dims: int = 1024) -> LSHHasher:
+    def _get_lsh_hasher(self, dims: int = 640) -> LSHHasher:
         if self._lsh_hasher is None:
             self._lsh_hasher = LSHHasher(self._lsh_seed, dims)
         return self._lsh_hasher

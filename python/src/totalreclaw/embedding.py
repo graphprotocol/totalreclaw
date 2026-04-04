@@ -1,14 +1,14 @@
 """
 TotalReclaw Embedding Pipeline.
 
-Uses Qwen3-Embedding-0.6B via ONNX Runtime for embedding generation.
+Uses Harrier-OSS-v1-270M via ONNX Runtime for embedding generation.
 Client-side only — preserves E2EE guarantee.
 
-Model: onnx-community/Qwen3-Embedding-0.6B-ONNX (quantized int8)
+Model: onnx-community/harrier-oss-v1-270m-ONNX (quantized)
 Pooling: last-token
 Normalization: L2 unit-length
-Dimensions: 1024
-No instruction prefix (bare queries perform better per spike).
+Dimensions: 640
+No instruction prefix needed.
 """
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ _num_layers: int = 0
 _num_heads: int = 0
 _head_dim: int = 0
 
-MODEL_ID = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
-EMBEDDING_DIMS = 1024
+MODEL_ID = "onnx-community/harrier-oss-v1-270m-ONNX"
+EMBEDDING_DIMS = 640
 
 
 def _ensure_loaded():
@@ -63,7 +63,7 @@ def _ensure_loaded():
 
 
 def get_embedding(text: str) -> list[float]:
-    """Generate a 1024-dim L2-normalized embedding (last-token pooling)."""
+    """Generate a 640-dim L2-normalized embedding (last-token pooling)."""
     session, tokenizer = _ensure_loaded()
 
     inputs = tokenizer(

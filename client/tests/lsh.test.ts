@@ -58,21 +58,21 @@ describe('LSH Module', () => {
 
   describe('LSHHasher', () => {
     test('should construct with seed and dims', () => {
-      const hasher = new LSHHasher(TEST_SEED, 1024);
+      const hasher = new LSHHasher(TEST_SEED, 640);
       expect(hasher.tables).toBe(20);
       expect(hasher.bits).toBe(32);
-      expect(hasher.dimensions).toBe(1024);
+      expect(hasher.dimensions).toBe(640);
     });
 
     test('should construct with custom nTables and nBits', () => {
-      const hasher = new LSHHasher(TEST_SEED, 1024, 10, 16);
+      const hasher = new LSHHasher(TEST_SEED, 640, 10, 16);
       expect(hasher.tables).toBe(10);
       expect(hasher.bits).toBe(16);
-      expect(hasher.dimensions).toBe(1024);
+      expect(hasher.dimensions).toBe(640);
     });
 
     test('should hash vectors to correct number of buckets', () => {
-      const hasher = new LSHHasher(TEST_SEED, 1024);
+      const hasher = new LSHHasher(TEST_SEED, 640);
       const embedding = createDummyEmbedding(42);
       const buckets = hasher.hash(embedding);
 
@@ -80,7 +80,7 @@ describe('LSH Module', () => {
     });
 
     test('should produce SHA-256 hex strings as bucket IDs', () => {
-      const hasher = new LSHHasher(TEST_SEED, 1024);
+      const hasher = new LSHHasher(TEST_SEED, 640);
       const embedding = createDummyEmbedding(42);
       const buckets = hasher.hash(embedding);
 
@@ -90,7 +90,7 @@ describe('LSH Module', () => {
     });
 
     test('should produce consistent hashes for same vector', () => {
-      const hasher = new LSHHasher(TEST_SEED, 1024);
+      const hasher = new LSHHasher(TEST_SEED, 640);
       const embedding = createDummyEmbedding(42);
 
       const buckets1 = hasher.hash(embedding);
@@ -100,7 +100,7 @@ describe('LSH Module', () => {
     });
 
     test('should produce different hashes for different vectors', () => {
-      const hasher = new LSHHasher(TEST_SEED, 1024);
+      const hasher = new LSHHasher(TEST_SEED, 640);
       const embedding1 = createDummyEmbedding(1);
       const embedding2 = createDummyEmbedding(2);
 
@@ -113,18 +113,18 @@ describe('LSH Module', () => {
     });
 
     test('should throw on dimension mismatch', () => {
-      const hasher = new LSHHasher(TEST_SEED, 1024);
+      const hasher = new LSHHasher(TEST_SEED, 640);
       const wrongDimEmbedding = new Array(128).fill(0);
       expect(() => hasher.hash(wrongDimEmbedding)).toThrow('dimension mismatch');
     });
 
     test('should throw if seed is too short', () => {
-      expect(() => new LSHHasher(new Uint8Array(8), 1024)).toThrow('too short');
+      expect(() => new LSHHasher(new Uint8Array(8), 640)).toThrow('too short');
     });
 
     test('should be deterministic from seed', () => {
-      const hasher1 = new LSHHasher(TEST_SEED, 1024);
-      const hasher2 = new LSHHasher(TEST_SEED, 1024);
+      const hasher1 = new LSHHasher(TEST_SEED, 640);
+      const hasher2 = new LSHHasher(TEST_SEED, 640);
       const embedding = createDummyEmbedding(42);
 
       expect(hasher1.hash(embedding)).toEqual(hasher2.hash(embedding));
@@ -134,8 +134,8 @@ describe('LSH Module', () => {
       const seed2 = new Uint8Array(32);
       for (let i = 0; i < 32; i++) seed2[i] = i + 100;
 
-      const hasher1 = new LSHHasher(TEST_SEED, 1024);
-      const hasher2 = new LSHHasher(seed2, 1024);
+      const hasher1 = new LSHHasher(TEST_SEED, 640);
+      const hasher2 = new LSHHasher(seed2, 640);
       const embedding = createDummyEmbedding(42);
 
       const buckets1 = hasher1.hash(embedding);
@@ -147,7 +147,7 @@ describe('LSH Module', () => {
   describe('deriveLshSeed integration', () => {
     test('should work with LSHHasher', () => {
       const seed = deriveLshSeed(TEST_MNEMONIC);
-      const hasher = new LSHHasher(seed, 1024);
+      const hasher = new LSHHasher(seed, 640);
       const embedding = createDummyEmbedding(42);
       const buckets = hasher.hash(embedding);
 
@@ -160,8 +160,8 @@ describe('LSH Module', () => {
     test('same mnemonic should produce same LSH buckets', () => {
       const seed1 = deriveLshSeed(TEST_MNEMONIC);
       const seed2 = deriveLshSeed(TEST_MNEMONIC);
-      const hasher1 = new LSHHasher(seed1, 1024);
-      const hasher2 = new LSHHasher(seed2, 1024);
+      const hasher1 = new LSHHasher(seed1, 640);
+      const hasher2 = new LSHHasher(seed2, 640);
       const embedding = createDummyEmbedding(42);
 
       expect(hasher1.hash(embedding)).toEqual(hasher2.hash(embedding));
@@ -208,7 +208,7 @@ describe('LSH Module', () => {
       const emb2 = createHashBasedEmbedding('test text');
 
       expect(emb1).toEqual(emb2);
-      expect(emb1.length).toBe(1024);
+      expect(emb1.length).toBe(640);
     });
 
     test('should create different embeddings for different texts', () => {
@@ -231,7 +231,7 @@ describe('LSH Module', () => {
 
     test('should create dummy embeddings', () => {
       const emb = createDummyEmbedding(42);
-      expect(emb.length).toBe(1024);
+      expect(emb.length).toBe(640);
     });
 
     test('should create deterministic dummy embeddings with seed', () => {
@@ -244,7 +244,7 @@ describe('LSH Module', () => {
 
   describe('LSH Recall Quality', () => {
     test('should bucket identical vectors together', () => {
-      const hasher = new LSHHasher(TEST_SEED, 1024);
+      const hasher = new LSHHasher(TEST_SEED, 640);
       const base = createDummyEmbedding(1);
 
       const buckets1 = hasher.hash(base);
@@ -254,7 +254,7 @@ describe('LSH Module', () => {
     });
 
     test('should have some bucket overlap for similar vectors', () => {
-      const hasher = new LSHHasher(TEST_SEED, 1024);
+      const hasher = new LSHHasher(TEST_SEED, 640);
 
       const base = createDummyEmbedding(1);
       const similar = base.map((v) => v * 0.99);

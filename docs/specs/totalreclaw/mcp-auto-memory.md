@@ -334,7 +334,7 @@ Layer 6: Sampling for extraction      → Server-side fact extraction (where sup
 │                                                                  │
 │  Internal:                                                       │
 │    ├─ E2EE crypto (AES-256-GCM, HKDF, blind indices)           │
-│    ├─ LSH + embeddings (local Qwen3-Embedding-0.6B)            │
+│    ├─ LSH + embeddings (local Harrier-OSS-v1-270M)             │
 │    ├─ BM25 + cosine + RRF reranker                             │
 │    └─ TotalReclaw server client (HTTP)                           │
 │                                                                  │
@@ -555,7 +555,7 @@ All approaches maintain end-to-end encryption:
 - The TotalReclaw backend server only receives encrypted blobs and blind indices
 - The `instructions` field contains no user data -- only behavioral guidance
 - Resources contain decrypted data, but this is served locally (stdio transport) between the MCP server and the host application on the same machine
-- No API keys are needed -- local embeddings (Qwen3-Embedding-0.6B) are used
+- No API keys are needed -- local embeddings (Harrier-OSS-v1-270M) are used
 
 ---
 

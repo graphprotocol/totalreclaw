@@ -293,11 +293,11 @@ export async function runSetup(): Promise<void> {
 
     // ── Step 6: Pre-download Embedding Model ────────────────────────────
 
-    console.log('\nDownloading embedding model (one-time, ~600MB)...');
+    console.log('\nDownloading embedding model (one-time, ~164MB)...');
     console.log('This enables local, private semantic search — no API calls needed.\n');
     try {
       const { pipeline } = await import('@huggingface/transformers');
-      await pipeline('feature-extraction', 'onnx-community/Qwen3-Embedding-0.6B-ONNX', {
+      await pipeline('feature-extraction', 'onnx-community/harrier-oss-v1-270m-ONNX', {
         // @ts-ignore - quantized option exists at runtime but not in type defs
         quantized: true,
       } as any);

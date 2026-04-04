@@ -1808,6 +1808,15 @@ const plugin = {
                     }
                   }
 
+                  // Re-embed if stored dimension differs from current model
+                  if (decryptedEmbedding && decryptedEmbedding.length !== getEmbeddingDims()) {
+                    try {
+                      decryptedEmbedding = await generateEmbedding(doc.text);
+                    } catch {
+                      decryptedEmbedding = undefined;
+                    }
+                  }
+
                   rerankerCandidates.push({
                     id: result.id,
                     text: doc.text,
@@ -1871,6 +1880,15 @@ const plugin = {
                       );
                     } catch {
                       // Embedding decryption failed -- proceed without it.
+                    }
+                  }
+
+                  // Re-embed if stored dimension differs from current model
+                  if (decryptedEmbedding && decryptedEmbedding.length !== getEmbeddingDims()) {
+                    try {
+                      decryptedEmbedding = await generateEmbedding(doc.text);
+                    } catch {
+                      decryptedEmbedding = undefined;
                     }
                   }
 

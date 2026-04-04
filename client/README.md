@@ -41,7 +41,7 @@ npm install @totalreclaw/client
 
 - **AES-256-GCM encryption** -- All memories encrypted client-side
 - **Blind index search** -- LSH-based blind indices for searching encrypted data
-- **Local embeddings** -- Qwen3-Embedding-0.6B for semantic similarity (no API keys, 100+ languages)
+- **Local embeddings** -- Harrier-OSS-v1-270M for semantic similarity (no API keys)
 - **BM25 + cosine reranking** -- Reciprocal rank fusion for high-quality retrieval
 - **Smart Account derivation** -- BIP-39 mnemonic to ERC-4337 Smart Account address
 - **Memory decay** -- Importance-based lifecycle management
@@ -69,7 +69,7 @@ const results = await client.recall('what do I like to drink?');
 | Encryption | AES-256-GCM | Authenticated encryption of memories and embeddings |
 | Blind indices | SHA-256 | Searchable encryption without exposing plaintext |
 | LSH | Random hyperplane | Approximate nearest neighbor search on encrypted data |
-| Embeddings | Qwen3-Embedding-0.6B (1024d) | Local semantic similarity (no API calls, 100+ languages) |
+| Embeddings | Harrier-OSS-v1-270M (640d) | Local semantic similarity (no API calls) |
 | Reranking | BM25 + cosine + RRF | Multi-signal result fusion |
 
 ## Development

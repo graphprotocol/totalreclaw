@@ -64,7 +64,7 @@ const RESULTS_DIR = path.resolve(__dirname, 'e2e-results');
 const TEST_MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
 // NOTE: This test still uses the legacy bge-small-en-v1.5 model for local Hardhat/Graph Node testing.
-// Production uses Qwen3-Embedding-0.6B (1024d). Update when test infra supports the larger model.
+// Production uses Harrier-OSS-v1-270M (640d). Update when test infra supports the larger model.
 const EMBEDDING_MODEL_ID = 'Xenova/bge-small-en-v1.5';
 const EMBEDDING_DIM = 384;
 const QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';

@@ -22,6 +22,7 @@ from .crypto import (
     encrypt_embedding,
     decrypt_embedding,
 )
+from .embedding import get_embedding, get_embedding_dims
 from .lsh import LSHHasher
 from .protobuf import FactPayload, encode_fact_protobuf, encode_tombstone_protobuf
 from .relay import RelayClient
@@ -327,6 +328,13 @@ async def search_facts(
                     emb = decrypt_embedding(encrypted_emb, keys.encryption_key)
                 except Exception:
                     pass
+
+            # Re-embed if stored dimension differs from current model
+            if emb and len(emb) != get_embedding_dims():
+                try:
+                    emb = get_embedding(text)
+                except Exception:
+                    emb = None
 
             decay_str = fact.get("decayScore", "0.5")
             decay = float(decay_str) if isinstance(decay_str, str) else float(decay_str)

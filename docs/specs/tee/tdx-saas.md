@@ -18,7 +18,7 @@ TotalReclaw MVP is a centralized, Git-backed memory vault for AI agents executin
 - **Git Operations:** `GitPython`
 - **Encryption:** `cryptography.hazmat.primitives` (AES-GCM for files, HKDF).
 - **Database:** SQLite 3 + `sqlcipher3` + `sqlite-vec` executed in enclave RAM.
-- **Embedding Model:** Qwen3-Embedding-0.6B (ONNX, 1024-dim) on CPU.
+- **Embedding Model:** Harrier-OSS-v1-270M (ONNX, 640-dim) on CPU.
 - **Semantic Extraction LLM:** `llama-cpp-python` running a Q8-quantized **Qwen-2.5-1.5B-Instruct.gguf** (MIT Licensed) exclusively on Enclave CPU using AVX2/AVX-512 instructions.
 - **Concurrency/Queue:** Valkey and Celery.
 

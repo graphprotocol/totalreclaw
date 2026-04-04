@@ -266,7 +266,7 @@ async function runTests(): Promise<void> {
   // =========================================================================
   console.log('# 6. LSH Bucket Hashes Parity');
 
-  const DIMS = 1024; // Qwen3-Embedding-0.6B dimension
+  const DIMS = 1024; // Parity test fixture uses 1024d (legacy Qwen3 vectors)
   const N_TABLES = 20;
   const N_BITS = 32;
 

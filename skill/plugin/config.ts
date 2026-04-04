@@ -55,8 +55,8 @@ export const CONFIG = {
     cerebras: process.env.CEREBRAS_API_KEY || '',
   } as Record<string, string>,
 
-  // Embedding model: "small" (384d, ~34MB, default) or "large" (1024d, ~600MB)
-  embeddingModel: (process.env.TOTALRECLAW_EMBEDDING_MODEL || 'small') as 'small' | 'large',
+  // Embedding model: "default" (640d, ~164MB), "small" (384d, ~34MB), or "large" (1024d, ~600MB)
+  embeddingModel: (process.env.TOTALRECLAW_EMBEDDING_MODEL || 'default') as 'default' | 'small' | 'large',
 
   // Paths
   home,

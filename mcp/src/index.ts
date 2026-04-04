@@ -257,7 +257,7 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
 
   // Derive LSH seed and create hasher
   const lshSeed = deriveLshSeed(mnemonic, salt);
-  const dims = getEmbeddingDims(); // 1024 for Qwen3-Embedding-0.6B
+  const dims = getEmbeddingDims(); // 640 for Harrier-OSS-v1-270M
   const lshHasher = new LSHHasher(lshSeed, dims);
 
   // Derive Smart Account address via CREATE2 (deterministic, same on all chains).
@@ -544,6 +544,13 @@ async function handleRememberSubgraph(
                     const embHex = c.encryptedEmbedding.startsWith('0x') ? c.encryptedEmbedding.slice(2) : c.encryptedEmbedding;
                     candEmbedding = decryptEmbedding(embHex, state.encryptionKey);
                   } catch { /* skip */ }
+                }
+
+                // Re-embed if stored dimension differs from current model
+                if (candEmbedding && candEmbedding.length !== getEmbeddingDims()) {
+                  try {
+                    candEmbedding = await generateEmbedding(text);
+                  } catch { candEmbedding = null; }
                 }
 
                 decryptedCandidates.push({
@@ -912,6 +919,18 @@ async function handleRecallSubgraph(
             embedding = decryptEmbedding(c.encryptedEmbedding, state.encryptionKey);
           } catch {
             // Skip embedding if decryption fails
+          }
+        }
+
+        // Dimension-check re-embedding: if stored embedding has a different
+        // dimension than the current model (e.g. 1024 from Qwen3 vs 640 from
+        // Harrier), re-embed the decrypted text with the current model so
+        // cosine reranking works correctly. In-memory only, no on-chain write.
+        if (embedding && embedding.length !== getEmbeddingDims()) {
+          try {
+            embedding = await generateEmbedding(text);
+          } catch {
+            embedding = undefined; // fall back to BM25-only reranking
           }
         }
 

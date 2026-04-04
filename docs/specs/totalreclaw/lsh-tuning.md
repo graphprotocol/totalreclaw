@@ -15,7 +15,7 @@
 | Tables | 20 | `skill/plugin/lsh.ts` |
 | Candidate pool | 1200 | `skill/plugin/index.ts` |
 | Stemming | Porter | `skill/plugin/crypto.ts` |
-| Embedding model | Qwen3-Embedding-0.6B (1024-dim) | `client/src/embedding.ts` |
+| Embedding model | Harrier-OSS-v1-270M (640-dim) | `client/src/embedding.ts` |
 
 **Validation dataset:** 50 conversations / 415 facts / 140 queries (diverse personal conversations).
 
@@ -185,7 +185,7 @@ This strategy requires zero server-side configuration changes. The server does n
 | Tables | 20 | Client (`lsh.ts`) | No -- global | Only if recall drops; diminishing returns past ~24-28 |
 | Candidate pool | 1200 (dynamic) | Client (`index.ts`) | Yes -- per search | Scale with fact count using formula |
 | Stemming | Porter | Client (`crypto.ts`) | No -- global | Only if adding non-English language support |
-| Embedding model | Qwen3-Embedding-0.6B | Client (`embedding.ts`) | No -- global | Upgraded from all-MiniLM-L6-v2. 1024-dim, 100+ languages, ~600MB ONNX model |
+| Embedding model | Harrier-OSS-v1-270M | Client (`embedding.ts`) | No -- global | Upgraded from Qwen3-Embedding-0.6B. 640-dim, ~164MB ONNX model |
 | Blind index format | SHA-256 hex | Client (`crypto.ts`) | No -- global | No change planned |
 
 ---

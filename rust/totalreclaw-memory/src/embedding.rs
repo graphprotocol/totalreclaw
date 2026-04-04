@@ -228,7 +228,7 @@ pub fn create_provider(mode: EmbeddingMode, dims: usize) -> Result<Box<dyn Embed
             Ok(Box::new(OllamaProvider::new(&base_url, &model, dims)))
         }
         EmbeddingMode::ZeroClaw { base_url, api_key } => Ok(Box::new(
-            OpenAiCompatibleProvider::new(&base_url, &api_key, "qwen3-embedding-0.6b", dims),
+            OpenAiCompatibleProvider::new(&base_url, &api_key, "harrier-oss-v1-270m", dims),
         )),
         EmbeddingMode::LlmProvider {
             base_url,
@@ -257,12 +257,12 @@ mod tests {
         let provider = create_provider(
             EmbeddingMode::Ollama {
                 base_url: "http://localhost:11434".into(),
-                model: "qwen3-embedding".into(),
+                model: "harrier-oss-v1-270m".into(),
             },
-            1024,
+            640,
         );
         assert!(provider.is_ok());
-        assert_eq!(provider.unwrap().dimensions(), 1024);
+        assert_eq!(provider.unwrap().dimensions(), 640);
     }
 
     #[test]
@@ -272,10 +272,10 @@ mod tests {
                 base_url: "https://api.example.com".into(),
                 api_key: "test-key".into(),
             },
-            1024,
+            640,
         );
         assert!(provider.is_ok());
-        assert_eq!(provider.unwrap().dimensions(), 1024);
+        assert_eq!(provider.unwrap().dimensions(), 640);
     }
 
     #[test]
@@ -298,7 +298,7 @@ mod tests {
             EmbeddingMode::Local {
                 model_path: "/tmp/model".into(),
             },
-            1024,
+            640,
         );
         #[cfg(not(feature = "local-embeddings"))]
         assert!(provider.is_err());

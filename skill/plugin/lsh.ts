@@ -22,7 +22,7 @@ export class LSHHasher {
    * Create a new LSH hasher.
    *
    * @param seed    - 32-byte seed from `deriveLshSeed()` in crypto.ts.
-   * @param dims    - Embedding dimensionality (e.g. 1024 for Qwen3).
+   * @param dims    - Embedding dimensionality (e.g. 640 for Harrier).
    * @param nTables - Number of independent hash tables (default 20).
    * @param nBits   - Number of bits per table (default 32).
    */
