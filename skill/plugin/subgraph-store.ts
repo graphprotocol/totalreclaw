@@ -42,6 +42,10 @@ export interface FactPayload {
   encryptedEmbedding?: string;
 }
 
+// Dummy 65-byte signature for gas estimation (pm_sponsorUserOperation).
+// Some paymasters/bundlers need a realistic-length signature for accurate gas estimation.
+const DUMMY_SIGNATURE = `0x${'00'.repeat(65)}`;
+
 // ---------------------------------------------------------------------------
 // Protobuf encoding (WASM)
 // ---------------------------------------------------------------------------
@@ -128,6 +132,50 @@ export async function deriveSmartAccountAddress(mnemonic: string, chainId?: numb
 }
 
 // ---------------------------------------------------------------------------
+// Smart Account deployment check
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a Smart Account is deployed and return factory/factoryData if not.
+ *
+ * For ERC-4337 v0.7, undeployed accounts need `factory` and `factoryData`
+ * in the UserOp so the EntryPoint can deploy them during the first transaction.
+ * The factoryData is `createAccount(owner, 0)` on the SimpleAccountFactory.
+ */
+async function getInitCode(
+  sender: string,
+  eoaAddress: string,
+  rpcUrl: string,
+): Promise<{ factory: string | null; factoryData: string | null }> {
+  // Check if the Smart Account contract is deployed
+  const codeResp = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'eth_getCode',
+      params: [sender, 'latest'],
+    }),
+  });
+  const codeJson = await codeResp.json() as { result?: string };
+  const isDeployed = codeJson.result && codeJson.result !== '0x' && codeJson.result !== '0x0';
+
+  if (isDeployed) {
+    return { factory: null, factoryData: null };
+  }
+
+  // Account not deployed — build factory + factoryData for first-time deployment.
+  // createAccount(address owner, uint256 salt) — same selector as getAddress
+  // (SimpleAccountFactory uses the same function signature pattern).
+  const factory = wasm.getSimpleAccountFactory();
+  const ownerPadded = eoaAddress.slice(2).toLowerCase().padStart(64, '0');
+  const saltPadded = '0'.repeat(64);
+  const selector = '5fbfb9cf';
+  const factoryData = `0x${selector}${ownerPadded}${saltPadded}`;
+
+  return { factory, factoryData };
+}
+
+// ---------------------------------------------------------------------------
 // On-chain submission (ERC-4337 UserOps via raw fetch)
 // ---------------------------------------------------------------------------
 
@@ -187,13 +235,17 @@ export async function submitFactOnChain(
   const gasPrices = await rpc('pimlico_getUserOperationGasPrice', []);
   const fast = gasPrices.fast;
 
-  // 4. Get nonce from EntryPoint via eth_call
+  const rpcUrl = config.rpcUrl || CONFIG.rpcUrl || getDefaultRpcUrl(config.chainId);
+
+  // 4. Check if Smart Account is deployed (needed for factory/factoryData)
+  const { factory, factoryData } = await getInitCode(sender, eoa.address, rpcUrl);
+
+  // 5. Get nonce from EntryPoint via eth_call
   //    getNonce(address sender, uint192 key) — selector 0x35567e1a
   const senderPadded = sender.slice(2).toLowerCase().padStart(64, '0');
   const keyPadded = '0'.repeat(64);
   const nonceCalldata = `0x35567e1a${senderPadded}${keyPadded}`;
 
-  const rpcUrl = config.rpcUrl || CONFIG.rpcUrl || getDefaultRpcUrl(config.chainId);
   const nonceResp = await fetch(rpcUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -205,7 +257,7 @@ export async function submitFactOnChain(
   const nonceJson = await nonceResp.json() as { result?: string };
   const nonce = nonceJson.result || '0x0';
 
-  // 5. Build unsigned UserOp (v0.7 fields, camelCase for Rust JSON serde)
+  // 6. Build unsigned UserOp (v0.7 fields, camelCase for Rust JSON serde)
   const unsignedOp: Record<string, any> = {
     sender,
     nonce,
@@ -215,23 +267,27 @@ export async function submitFactOnChain(
     preVerificationGas: '0x0',
     maxFeePerGas: fast.maxFeePerGas,
     maxPriorityFeePerGas: fast.maxPriorityFeePerGas,
-    signature: '0x',
+    signature: DUMMY_SIGNATURE,
   };
+  if (factory) {
+    unsignedOp.factory = factory;
+    unsignedOp.factoryData = factoryData;
+  }
 
-  // 6. Get paymaster sponsorship (fills gas limits + paymaster fields)
+  // 7. Get paymaster sponsorship (fills gas limits + paymaster fields)
   const sponsorResult = await rpc('pm_sponsorUserOperation', [unsignedOp, entryPoint]);
   Object.assign(unsignedOp, sponsorResult);
 
-  // 7. Hash and sign the UserOp via WASM
+  // 8. Hash and sign the UserOp via WASM
   const opJson = JSON.stringify(unsignedOp);
   const hashHex = wasm.hashUserOp(opJson, entryPoint, BigInt(config.chainId));
   const sigHex = wasm.signUserOp(hashHex, eoa.private_key);
   unsignedOp.signature = `0x${sigHex}`;
 
-  // 8. Submit the signed UserOp
+  // 9. Submit the signed UserOp
   const userOpHash = await rpc('eth_sendUserOperation', [unsignedOp, entryPoint]);
 
-  // 9. Wait for receipt (poll up to 120s)
+  // 10. Wait for receipt (poll up to 120s)
   let receipt = null;
   for (let i = 0; i < 60; i++) {
     await new Promise(r => setTimeout(r, 2000));
@@ -311,12 +367,16 @@ export async function submitFactBatchOnChain(
   const gasPrices = await rpc('pimlico_getUserOperationGasPrice', []);
   const fast = gasPrices.fast;
 
+  const rpcUrl = config.rpcUrl || CONFIG.rpcUrl || getDefaultRpcUrl(config.chainId);
+
+  // Check if Smart Account is deployed (needed for factory/factoryData)
+  const { factory, factoryData } = await getInitCode(sender, eoa.address, rpcUrl);
+
   // Get nonce
   const senderPadded = sender.slice(2).toLowerCase().padStart(64, '0');
   const keyPadded = '0'.repeat(64);
   const nonceCalldata = `0x35567e1a${senderPadded}${keyPadded}`;
 
-  const rpcUrl = config.rpcUrl || CONFIG.rpcUrl || getDefaultRpcUrl(config.chainId);
   const nonceResp = await fetch(rpcUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -338,8 +398,12 @@ export async function submitFactBatchOnChain(
     preVerificationGas: '0x0',
     maxFeePerGas: fast.maxFeePerGas,
     maxPriorityFeePerGas: fast.maxPriorityFeePerGas,
-    signature: '0x',
+    signature: DUMMY_SIGNATURE,
   };
+  if (factory) {
+    unsignedOp.factory = factory;
+    unsignedOp.factoryData = factoryData;
+  }
 
   // Paymaster sponsorship
   const sponsorResult = await rpc('pm_sponsorUserOperation', [unsignedOp, entryPoint]);
