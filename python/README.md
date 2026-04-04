@@ -19,15 +19,27 @@ Store, search, and recall memories across any AI agent with zero-knowledge encry
 pip install totalreclaw
 ```
 
+> **Docker users:** On slim images (e.g., `python:3.12-slim`), install a C compiler first for PyStemmer:
+> ```bash
+> apt-get update && apt-get install -y gcc g++
+> ```
+
 ```python
 import asyncio
 from totalreclaw import TotalReclaw
 
 async def main():
-    client = TotalReclaw(mnemonic="your twelve word recovery phrase here")
+    client = TotalReclaw(
+        mnemonic="your twelve word recovery phrase here",
+        relay_url="https://api.totalreclaw.xyz",  # default, can be omitted
+    )
 
-    # Store a memory
-    fact_id = await client.remember("Pedro prefers dark mode for all editors")
+    # REQUIRED: resolve Smart Account address and register with relay
+    await client.resolve_address()
+    await client.register()
+
+    # Store a memory (importance is a float from 0.0 to 1.0)
+    fact_id = await client.remember("Pedro prefers dark mode for all editors", importance=0.8)
 
     # Search memories
     results = await client.recall("What does Pedro prefer?")
@@ -48,6 +60,8 @@ async def main():
 
 asyncio.run(main())
 ```
+
+**Important:** You must call `resolve_address()` and `register()` before any operations. `resolve_address()` derives the CREATE2 Smart Account address via an RPC call, and `register()` authenticates with the relay.
 
 ## With Embeddings (Recommended)
 

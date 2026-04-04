@@ -31,7 +31,7 @@ Verify the connection:
 ironclaw mcp test totalreclaw
 ```
 
-You should see 11 tools including `totalreclaw_setup`.
+You should see 14 tools including `totalreclaw_setup`.
 
 ## 3. Start chatting
 
@@ -114,6 +114,9 @@ If your IronClaw version supports event-triggered routines (e.g., `on_thread_idl
 | `totalreclaw_consolidate` | Merge duplicate memories (self-hosted only) |
 | `totalreclaw_upgrade` | Get a Stripe checkout link for Pro |
 | `totalreclaw_migrate` | Migrate testnet memories to mainnet after Pro upgrade |
+| `totalreclaw_debrief` | Summarize and store key takeaways from a session |
+| `totalreclaw_support` | Get help and troubleshooting information |
+| `totalreclaw_account` | View account details and wallet address |
 
 ## Pricing
 

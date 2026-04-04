@@ -84,6 +84,45 @@ If TotalReclaw is configured, the agent will show your tier, usage, and storage 
 
 **Recovery:** Your group's memory is tied to the `TOTALRECLAW_RECOVERY_PHRASE`. If the admin changes it, previous memories become inaccessible. The admin should store this phrase securely.
 
+### Python Client (for custom integrations)
+
+Install the Python client:
+
+```bash
+pip install totalreclaw
+```
+
+> **Docker users:** On slim images (e.g., `python:3.12-slim`), install a C compiler first for PyStemmer:
+> ```bash
+> apt-get update && apt-get install -y gcc g++
+> ```
+
+```python
+from totalreclaw import TotalReclaw
+
+async def main():
+    client = TotalReclaw(
+        mnemonic="your 12-word phrase",
+        relay_url="https://api.totalreclaw.xyz",
+    )
+    await client.resolve_address()
+    await client.register()
+
+    # Store a memory (importance is a float from 0.0 to 1.0)
+    await client.remember("I prefer dark mode", importance=0.8)
+
+    # Search memories
+    results = await client.recall("What are my preferences?")
+    for r in results:
+        print(f"  [{r.rrf_score:.3f}] {r.text}")
+
+    await client.close()
+```
+
+You must call `resolve_address()` and `register()` before any remember/recall/forget/export operations. The recovery phrase is the same one used across all TotalReclaw clients -- same phrase, same memories.
+
+For the Hermes Agent plugin, see the [Hermes setup guide](hermes-setup.md).
+
 ---
 
 ## How It Works

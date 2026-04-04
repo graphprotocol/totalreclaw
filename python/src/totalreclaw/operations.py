@@ -6,9 +6,12 @@ construction into high-level operations.
 """
 from __future__ import annotations
 import base64
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from .crypto import (
     DerivedKeys,
@@ -217,6 +220,9 @@ async def search_facts(
     top_k: int = 8,
 ) -> list[RerankerResult]:
     """Search for facts using blind indices + reranking."""
+    # Normalize owner address to lowercase for subgraph Bytes! type
+    owner = owner.lower() if owner else owner
+
     # Generate search trapdoors from query text
     word_trapdoors = generate_blind_indices(query)
 
@@ -270,7 +276,8 @@ async def search_facts(
                     if len(page_entries) < DEFAULT_PAGE_SIZE:
                         break
                     last_id = page_entries[-1]["id"]
-        except Exception:
+        except Exception as e:
+            logger.warning("Trapdoor batch query failed (owner=%s): %s", owner, e)
             continue
 
     # Broadened fallback: if trapdoor search returns 0 candidates, or if the query
@@ -287,12 +294,20 @@ async def search_facts(
                 {"owner": owner, "first": min(max_candidates, 1000)},
             )
             facts_list = data.get("data", {}).get("facts", [])
+            if not facts_list:
+                logger.debug(
+                    "Broadened search returned 0 facts (owner=%s, response keys=%s)",
+                    owner,
+                    list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+                )
             for fact in facts_list:
                 if fact and fact.get("isActive", True) and fact["id"] not in all_facts:
                     all_facts[fact["id"]] = fact
             broadened = True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "Broadened search failed (owner=%s): %s", owner, e
+            )
 
     if not all_facts:
         return []
@@ -340,7 +355,8 @@ async def search_facts(
                     created_at=created_at,
                 )
             )
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to decrypt candidate %s: %s", fact_id, e)
             continue
 
     if not candidates:
@@ -403,6 +419,9 @@ async def export_facts(
     page_size: int = 1000,
 ) -> list[dict]:
     """Export all active facts, decrypted."""
+    # Normalize owner address to lowercase for subgraph Bytes! type
+    owner = owner.lower() if owner else owner
+
     results: list[dict] = []
     skip = 0
 

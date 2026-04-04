@@ -61,6 +61,11 @@ TOTALRECLAW_RECOVERY_PHRASE="word1 word2 word3 word4 word5 word6 word7 word8 wor
 ### Optional
 
 ```bash
+# Relay URL for managed service (REQUIRED for managed service users)
+# The NanoClaw agent-runner defaults to http://totalreclaw-server:8080 (self-hosted).
+# For managed service, you MUST set this explicitly:
+TOTALRECLAW_SERVER_URL=https://api.totalreclaw.xyz
+
 # Use self-hosted server instead of managed service
 # TOTALRECLAW_SELF_HOSTED=true
 # TOTALRECLAW_SERVER_URL=https://your-server.example.com
@@ -74,6 +79,8 @@ TOTALRECLAW_RECOVERY_PHRASE="word1 word2 word3 word4 word5 word6 word7 word8 wor
 # Turns between extractions (default: 3)
 # TOTALRECLAW_EXTRACT_INTERVAL=3
 ```
+
+> **Important:** The NanoClaw agent-runner defaults `TOTALRECLAW_SERVER_URL` to `http://totalreclaw-server:8080`, which assumes a self-hosted server in the same Docker network. If you are using the managed service (the default for most users), you **must** set `TOTALRECLAW_SERVER_URL=https://api.totalreclaw.xyz`.
 
 ### Where to set these
 
