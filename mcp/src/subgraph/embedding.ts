@@ -51,9 +51,8 @@ export async function generateEmbedding(
   if (!extractor) {
     console.error('[TotalReclaw] Downloading embedding model (~164MB, first run only)...');
     extractor = await pipeline('feature-extraction', MODEL_ID, {
-      // @ts-ignore - quantized option exists at runtime but not in type defs
-      quantized: true,
-    } as any);
+      dtype: 'q8',
+    });
     console.error('[TotalReclaw] Embedding model ready.');
   }
 

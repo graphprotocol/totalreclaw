@@ -298,9 +298,8 @@ export async function runSetup(): Promise<void> {
     try {
       const { pipeline } = await import('@huggingface/transformers');
       await pipeline('feature-extraction', 'onnx-community/harrier-oss-v1-270m-ONNX', {
-        // @ts-ignore - quantized option exists at runtime but not in type defs
-        quantized: true,
-      } as any);
+        dtype: 'q8',
+      });
       console.log('Embedding model downloaded and cached.');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

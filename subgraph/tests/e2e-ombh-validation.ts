@@ -191,7 +191,7 @@ async function generateEmbedding(
 ): Promise<number[]> {
   if (!extractor) {
     extractor = await pipeline('feature-extraction', EMBEDDING_MODEL_ID, {
-      quantized: true,
+      dtype: 'q8',
     });
   }
   const input = options?.isQuery ? QUERY_PREFIX + text : text;

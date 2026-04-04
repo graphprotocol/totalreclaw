@@ -47,8 +47,8 @@ export class EmbeddingModel {
     try {
       console.error('[TotalReclaw] Downloading embedding model (~164MB, first run only)...');
       this.extractor = await pipeline('feature-extraction', MODEL_ID, {
-        quantized: true,
-      } as Record<string, unknown>);
+        dtype: 'q8',
+      });
       console.error('[TotalReclaw] Embedding model ready.');
       this.isLoaded = true;
     } catch (error) {

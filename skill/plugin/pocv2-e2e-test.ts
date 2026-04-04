@@ -220,7 +220,7 @@ let embeddingPipeline: any = null;
 async function generateLocalEmbedding(text: string, options?: { isQuery?: boolean }): Promise<number[]> {
   if (!embeddingPipeline) {
     embeddingPipeline = await pipeline('feature-extraction', EMBEDDING_MODEL_ID, {
-      quantized: true,
+      dtype: 'q8',
     });
   }
 

@@ -67,7 +67,7 @@ export async function generateEmbedding(
     activeModel = getModelConfig();
     console.error(`[TotalReclaw] Downloading embedding model (${activeModel.size}, one-time setup)...`);
     extractor = await pipeline('feature-extraction', activeModel.id, {
-      quantized: true,
+      dtype: 'q8',
     });
     console.error('[TotalReclaw] Embedding model ready.');
   }
