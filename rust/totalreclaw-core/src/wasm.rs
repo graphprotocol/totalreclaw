@@ -13,6 +13,7 @@ use crate::debrief;
 use crate::fingerprint;
 use crate::lsh;
 use crate::protobuf;
+use crate::reranker;
 
 // ---------------------------------------------------------------------------
 // Key derivation
@@ -302,6 +303,30 @@ pub fn wasm_max_debrief_items() -> usize {
 #[wasm_bindgen(js_name = "getDebriefSource")]
 pub fn wasm_debrief_source() -> String {
     debrief::DEBRIEF_SOURCE.to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Reranker
+// ---------------------------------------------------------------------------
+
+/// Rerank candidates using BM25 + Cosine + RRF fusion.
+///
+/// `candidates_json`: JSON array of `{ id, text, embedding, timestamp }` objects.
+/// Returns a JsValue (array of `RankedResult` objects).
+#[wasm_bindgen(js_name = "rerank")]
+pub fn wasm_rerank(query: &str, query_embedding: &[f32], candidates_json: &str, top_k: usize) -> Result<JsValue, JsError> {
+    let candidates: Vec<reranker::Candidate> = serde_json::from_str(candidates_json)
+        .map_err(|e| JsError::new(&format!("Invalid candidates JSON: {}", e)))?;
+    let results = reranker::rerank(query, query_embedding, &candidates, top_k)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    serde_wasm_bindgen::to_value(&results)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Cosine similarity between two f32 vectors.
+#[wasm_bindgen(js_name = "cosineSimilarity")]
+pub fn wasm_cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+    reranker::cosine_similarity_f32(a, b)
 }
 
 // ---------------------------------------------------------------------------

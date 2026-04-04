@@ -12,6 +12,7 @@
 //! - [`stemmer`] — Porter 1 stemmer (hand-rolled, NOT Snowball/Porter 2)
 //! - [`fingerprint`] — Content fingerprint (HMAC-SHA256 with NFC normalization)
 //! - [`protobuf`] — Minimal protobuf encoder for fact payloads
+//! - [`reranker`] — BM25 + Cosine + RRF fusion reranker
 //! - [`debrief`] — Session debrief response parser
 
 pub mod blind;
@@ -20,6 +21,7 @@ pub mod debrief;
 pub mod fingerprint;
 pub mod lsh;
 pub mod protobuf;
+pub mod reranker;
 pub mod stemmer;
 
 #[cfg(feature = "wasm")]
@@ -39,6 +41,9 @@ pub enum Error {
 
     #[error("LSH error: {0}")]
     Lsh(String),
+
+    #[error("reranker error: {0}")]
+    Reranker(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

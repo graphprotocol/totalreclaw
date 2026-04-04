@@ -10,7 +10,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
-use crate::{blind, crypto, debrief, fingerprint, lsh, protobuf};
+use crate::{blind, crypto, debrief, fingerprint, lsh, protobuf, reranker};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -309,6 +309,45 @@ fn get_debrief_system_prompt() -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
+// Reranker
+// ---------------------------------------------------------------------------
+
+/// Rerank candidates using BM25 + Cosine + RRF fusion.
+///
+/// Args:
+///     query: Search query text.
+///     query_embedding: Query embedding vector (list of floats).
+///     candidates_json: JSON array of ``{ id, text, embedding, timestamp }`` objects.
+///     top_k: Number of top results to return.
+///
+/// Returns:
+///     JSON string of ranked results.
+#[pyfunction]
+#[pyo3(name = "rerank")]
+fn py_rerank(query: &str, query_embedding: Vec<f32>, candidates_json: &str, top_k: usize) -> PyResult<String> {
+    let candidates: Vec<reranker::Candidate> = serde_json::from_str(candidates_json)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let results = reranker::rerank(query, &query_embedding, &candidates, top_k)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    serde_json::to_string(&results)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Cosine similarity between two f32 vectors.
+///
+/// Args:
+///     a: First vector (list of floats).
+///     b: Second vector (list of floats).
+///
+/// Returns:
+///     Cosine similarity as a float (0.0 to 1.0 for normalized vectors).
+#[pyfunction]
+#[pyo3(name = "cosine_similarity")]
+fn py_cosine_similarity(a: Vec<f32>, b: Vec<f32>) -> f64 {
+    reranker::cosine_similarity_f32(&a, &b)
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -345,6 +384,10 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Debrief
     m.add_function(wrap_pyfunction!(parse_debrief_response, m)?)?;
     m.add_function(wrap_pyfunction!(get_debrief_system_prompt, m)?)?;
+
+    // Reranker
+    m.add_function(wrap_pyfunction!(py_rerank, m)?)?;
+    m.add_function(wrap_pyfunction!(py_cosine_similarity, m)?)?;
 
     Ok(())
 }

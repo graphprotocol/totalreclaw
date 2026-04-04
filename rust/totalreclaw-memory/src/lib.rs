@@ -74,6 +74,7 @@ impl From<totalreclaw_core::Error> for Error {
             totalreclaw_core::Error::Crypto(msg) => Error::Crypto(msg),
             totalreclaw_core::Error::InvalidMnemonic(msg) => Error::InvalidMnemonic(msg),
             totalreclaw_core::Error::Lsh(msg) => Error::Lsh(msg),
+            totalreclaw_core::Error::Reranker(msg) => Error::Reranker(msg),
         }
     }
 }
