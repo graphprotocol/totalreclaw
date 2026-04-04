@@ -15,6 +15,7 @@
 //! - [`reranker`] — BM25 + Cosine + RRF fusion reranker
 //! - [`debrief`] — Session debrief response parser
 //! - [`store`] — Store pipeline (pure computation: encrypt, index, encode)
+//! - [`search`] — Search pipeline (pure computation: trapdoors, parse, decrypt+rerank; feature: `managed`)
 //! - [`wallet`] — Ethereum wallet derivation (BIP-44 + Keccak256)
 //! - [`userop`] — ERC-4337 v0.7 UserOp building + signing (feature: `managed`)
 
@@ -29,6 +30,8 @@ pub mod stemmer;
 pub mod store;
 pub mod wallet;
 
+#[cfg(feature = "managed")]
+pub mod search;
 #[cfg(feature = "managed")]
 pub mod userop;
 

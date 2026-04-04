@@ -12,6 +12,8 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 
 use crate::{blind, crypto, debrief, fingerprint, lsh, protobuf, reranker, store};
 #[cfg(feature = "managed")]
+use crate::search;
+#[cfg(feature = "managed")]
 use crate::userop;
 
 // ---------------------------------------------------------------------------
@@ -596,6 +598,123 @@ fn prepare_tombstone<'py>(py: Python<'py>, fact_id: &str, owner: &str) -> Bound<
 }
 
 // ---------------------------------------------------------------------------
+// Search pipeline (feature-gated: managed)
+// ---------------------------------------------------------------------------
+
+/// Generate all search trapdoors for a query (word hashes + LSH bucket hashes).
+///
+/// Args:
+///     query: The search query text.
+///     query_embedding: List of floats (query embedding vector).
+///     lsh_hasher: A LshHasher instance.
+///
+/// Returns:
+///     List of hex-encoded trapdoor strings.
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn generate_search_trapdoors(
+    query: &str,
+    query_embedding: Vec<f32>,
+    lsh_hasher: &PyLshHasher,
+) -> PyResult<Vec<String>> {
+    search::generate_search_trapdoors(query, &query_embedding, &lsh_hasher.inner)
+        .map_err(to_pyerr)
+}
+
+/// Parse a blind index search GraphQL response into SubgraphFact list.
+///
+/// Args:
+///     response_json: Raw JSON string from the GraphQL response.
+///
+/// Returns:
+///     JSON string of SubgraphFact array.
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn parse_search_response(response_json: &str) -> PyResult<String> {
+    let facts = search::parse_search_response(response_json).map_err(to_pyerr)?;
+    serde_json::to_string(&facts)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Parse a broadened search GraphQL response into SubgraphFact list.
+///
+/// Args:
+///     response_json: Raw JSON string from the GraphQL response.
+///
+/// Returns:
+///     JSON string of SubgraphFact array.
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn parse_broadened_response(response_json: &str) -> PyResult<String> {
+    let facts = search::parse_broadened_response(response_json).map_err(to_pyerr)?;
+    serde_json::to_string(&facts)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Decrypt and rerank search candidates.
+///
+/// Args:
+///     facts_json: JSON array of SubgraphFact objects.
+///     query: The search query text.
+///     query_embedding: List of floats (query embedding vector).
+///     encryption_key: 32-byte encryption key.
+///     top_k: Number of top results to return.
+///
+/// Returns:
+///     JSON string of ranked results.
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn decrypt_and_rerank(
+    facts_json: &str,
+    query: &str,
+    query_embedding: Vec<f32>,
+    encryption_key: &[u8],
+    top_k: usize,
+) -> PyResult<String> {
+    let key = bytes_to_array32(encryption_key)?;
+    let facts: Vec<search::SubgraphFact> = serde_json::from_str(facts_json)
+        .map_err(|e| PyValueError::new_err(format!("Invalid SubgraphFact array JSON: {}", e)))?;
+    let results = search::decrypt_and_rerank_with_key(&facts, query, &query_embedding, &key, top_k)
+        .map_err(to_pyerr)?;
+    serde_json::to_string(&results)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Get the GraphQL query string for blind index search.
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn get_search_query() -> &'static str {
+    search::search_query()
+}
+
+/// Get the GraphQL query string for broadened (fallback) search.
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn get_broadened_search_query() -> &'static str {
+    search::broadened_search_query()
+}
+
+/// Get the GraphQL query string for paginated export.
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn get_export_query() -> &'static str {
+    search::export_query()
+}
+
+/// Convert a subgraph hex blob to base64 for decryption.
+///
+/// Args:
+///     hex_blob: Hex string (optionally ``0x``-prefixed) from the subgraph.
+///
+/// Returns:
+///     Base64-encoded bytes, or None if the hex is invalid.
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn hex_blob_to_base64(hex_blob: &str) -> Option<String> {
+    search::hex_blob_to_base64(hex_blob)
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -655,6 +774,19 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(sign_userop, m)?)?;
         m.add_function(wrap_pyfunction!(build_single_calldata_from_prepared, m)?)?;
         m.add_function(wrap_pyfunction!(build_batch_calldata_from_prepared, m)?)?;
+    }
+
+    // Search pipeline — feature-gated: managed
+    #[cfg(feature = "managed")]
+    {
+        m.add_function(wrap_pyfunction!(generate_search_trapdoors, m)?)?;
+        m.add_function(wrap_pyfunction!(parse_search_response, m)?)?;
+        m.add_function(wrap_pyfunction!(parse_broadened_response, m)?)?;
+        m.add_function(wrap_pyfunction!(decrypt_and_rerank, m)?)?;
+        m.add_function(wrap_pyfunction!(get_search_query, m)?)?;
+        m.add_function(wrap_pyfunction!(get_broadened_search_query, m)?)?;
+        m.add_function(wrap_pyfunction!(get_export_query, m)?)?;
+        m.add_function(wrap_pyfunction!(hex_blob_to_base64, m)?)?;
     }
 
     Ok(())

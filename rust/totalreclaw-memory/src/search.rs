@@ -2,6 +2,10 @@
 //!
 //! Queries facts via GraphQL through the relay server.
 //! Implements trapdoor batching, cursor-based pagination, and deduplication.
+//!
+//! Pure computation functions (trapdoor generation, response parsing,
+//! hex_blob_to_base64, decrypt+rerank) are delegated to `totalreclaw_core::search`.
+//! This module provides the async I/O wrappers that call the relay.
 
 use std::collections::HashMap;
 
@@ -10,26 +14,19 @@ use serde::Deserialize;
 use crate::relay::RelayClient;
 use crate::Result;
 
-/// Default number of trapdoors per GraphQL query batch.
-const TRAPDOOR_BATCH_SIZE: usize = 5;
+// Re-export core search types and functions for backward compatibility.
+pub use totalreclaw_core::search::{
+    hex_blob_to_base64, SubgraphFact,
+    // Constants
+    TRAPDOOR_BATCH_SIZE, PAGE_SIZE,
+    // Pure functions
+    generate_search_trapdoors, parse_search_response, parse_broadened_response,
+    decrypt_and_rerank, decrypt_and_rerank_with_key,
+    // Query string accessors
+    search_query, broadened_search_query, export_query, count_query,
+};
 
-/// Default page size for GraphQL queries (Graph Studio limit = 1000).
-const PAGE_SIZE: usize = 1000;
-
-/// A raw fact from the subgraph.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubgraphFact {
-    pub id: String,
-    pub encrypted_blob: String,
-    pub encrypted_embedding: Option<String>,
-    pub decay_score: Option<String>,
-    pub timestamp: Option<String>,
-    pub is_active: Option<bool>,
-    pub content_fp: Option<String>,
-}
-
-/// GraphQL response types.
+/// GraphQL response types (internal, for relay deserialization).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BlindIndexEntry {
@@ -49,79 +46,6 @@ struct SearchData {
 struct ExportData {
     facts: Option<Vec<SubgraphFact>>,
 }
-
-/// GraphQL query for blind index lookup.
-const SEARCH_QUERY: &str = r#"
-  query SearchByBlindIndex($trapdoors: [String!]!, $owner: Bytes!, $first: Int!) {
-    blindIndexes(
-      where: { hash_in: $trapdoors, owner: $owner, fact_: { isActive: true } }
-      first: $first
-      orderBy: id
-      orderDirection: desc
-    ) {
-      id
-      fact {
-        id
-        encryptedBlob
-        encryptedEmbedding
-        decayScore
-        timestamp
-        isActive
-        contentFp
-      }
-    }
-  }
-"#;
-
-/// Broadened search query: fetch recent active facts by owner without trapdoor filtering.
-/// Used as fallback when trapdoor search returns 0 candidates (e.g., vague queries).
-const BROADENED_SEARCH_QUERY: &str = r#"
-  query BroadenedSearch($owner: Bytes!, $first: Int!) {
-    facts(
-      where: { owner: $owner, isActive: true }
-      first: $first
-      orderBy: timestamp
-      orderDirection: desc
-    ) {
-      id
-      encryptedBlob
-      encryptedEmbedding
-      decayScore
-      timestamp
-      isActive
-      contentFp
-    }
-  }
-"#;
-
-/// Export all facts query.
-const EXPORT_QUERY: &str = r#"
-  query ExportFacts($owner: Bytes!, $first: Int!, $skip: Int!) {
-    facts(
-      where: { owner: $owner, isActive: true }
-      first: $first
-      skip: $skip
-      orderBy: timestamp
-      orderDirection: desc
-    ) {
-      id
-      encryptedBlob
-      encryptedEmbedding
-      decayScore
-      timestamp
-      isActive
-    }
-  }
-"#;
-
-/// Fact count query.
-const COUNT_QUERY: &str = r#"
-  query FactCount($owner: Bytes!) {
-    facts(where: { owner: $owner, isActive: true }, first: 1000) {
-      id
-    }
-  }
-"#;
 
 /// Search the subgraph for facts matching trapdoors.
 ///
@@ -150,7 +74,7 @@ pub async fn search_candidates(
             "first": PAGE_SIZE,
         });
 
-        let data: SearchData = match relay.graphql(SEARCH_QUERY, variables).await {
+        let data: SearchData = match relay.graphql(search_query(), variables).await {
             Ok(d) => d,
             Err(_) => continue,
         };
@@ -182,7 +106,7 @@ pub async fn search_broadened(
         "first": first,
     });
 
-    let data: ExportData = relay.graphql(BROADENED_SEARCH_QUERY, variables).await?;
+    let data: ExportData = relay.graphql(broadened_search_query(), variables).await?;
     Ok(data
         .facts
         .unwrap_or_default()
@@ -206,7 +130,7 @@ pub async fn fetch_all_facts(
             "skip": skip,
         });
 
-        let data: ExportData = relay.graphql(EXPORT_QUERY, variables).await?;
+        let data: ExportData = relay.graphql(export_query(), variables).await?;
 
         let facts = data.facts.unwrap_or_default();
         let count = facts.len();
@@ -230,7 +154,7 @@ pub async fn count_facts(relay: &RelayClient, owner: &str) -> Result<usize> {
         facts: Option<Vec<serde_json::Value>>,
     }
 
-    let data: CountData = relay.graphql(COUNT_QUERY, variables).await?;
+    let data: CountData = relay.graphql(count_query(), variables).await?;
     Ok(data.facts.map(|f| f.len()).unwrap_or(0))
 }
 
@@ -265,16 +189,4 @@ pub async fn search_by_fingerprint(
 
     let data: FpData = relay.graphql(FP_QUERY, variables).await?;
     Ok(data.facts.and_then(|f| f.into_iter().next()))
-}
-
-/// Decode an encrypted blob from subgraph hex format to base64 for decryption.
-///
-/// Subgraph returns `0x`-prefixed hex. Strip prefix, decode hex to bytes, base64-encode.
-pub fn hex_blob_to_base64(hex_blob: &str) -> Option<String> {
-    let hex_str = hex_blob.strip_prefix("0x").unwrap_or(hex_blob);
-    let bytes = hex::decode(hex_str).ok()?;
-    Some(base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        &bytes,
-    ))
 }

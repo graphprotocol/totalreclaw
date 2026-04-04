@@ -16,6 +16,8 @@ use crate::protobuf;
 use crate::reranker;
 use crate::store;
 #[cfg(feature = "managed")]
+use crate::search;
+#[cfg(feature = "managed")]
 use crate::userop;
 use crate::wallet;
 
@@ -596,6 +598,131 @@ pub fn wasm_compute_content_fingerprint(
 ) -> Result<String, JsError> {
     let key = parse_key_hex(dedup_key_hex, "dedup_key")?;
     Ok(store::compute_content_fingerprint(text, &key))
+}
+
+// ---------------------------------------------------------------------------
+// Search pipeline (feature-gated: managed)
+// ---------------------------------------------------------------------------
+
+/// Generate all search trapdoors for a query (word hashes + LSH bucket hashes).
+///
+/// `query`: The search query text.
+/// `query_embedding`: Float32Array of the query embedding.
+/// `lsh_hasher`: A `WasmLshHasher` instance.
+///
+/// Returns a JsValue (JSON array of hex-encoded trapdoor strings).
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "generateSearchTrapdoors")]
+pub fn wasm_generate_search_trapdoors(
+    query: &str,
+    query_embedding: &[f32],
+    lsh_hasher: &WasmLshHasher,
+) -> Result<JsValue, JsError> {
+    let trapdoors = search::generate_search_trapdoors(query, query_embedding, &lsh_hasher.inner)
+        .map_err(to_js_error)?;
+    serde_wasm_bindgen::to_value(&trapdoors).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Parse a blind index search GraphQL response into SubgraphFact list.
+///
+/// `response_json`: Raw JSON string from the GraphQL response.
+/// Returns a JsValue (JSON array of SubgraphFact objects).
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "parseSearchResponse")]
+pub fn wasm_parse_search_response(response_json: &str) -> Result<JsValue, JsError> {
+    let facts = search::parse_search_response(response_json).map_err(to_js_error)?;
+    serde_wasm_bindgen::to_value(&facts).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Parse a broadened search GraphQL response into SubgraphFact list.
+///
+/// `response_json`: Raw JSON string from the GraphQL response.
+/// Returns a JsValue (JSON array of SubgraphFact objects).
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "parseBroadenedResponse")]
+pub fn wasm_parse_broadened_response(response_json: &str) -> Result<JsValue, JsError> {
+    let facts = search::parse_broadened_response(response_json).map_err(to_js_error)?;
+    serde_wasm_bindgen::to_value(&facts).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Decrypt and rerank search candidates.
+///
+/// Takes raw SubgraphFacts (as JSON), decrypts their content + embeddings,
+/// and returns top-K ranked results using BM25 + Cosine + RRF fusion.
+///
+/// `facts_json`: JSON array of SubgraphFact objects.
+/// `query`: The search query text.
+/// `query_embedding`: Float32Array of the query embedding.
+/// `encryption_key_hex`: 64-char hex string (32 bytes).
+/// `top_k`: Number of top results to return.
+///
+/// Returns a JsValue (JSON array of RankedResult objects).
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "decryptAndRerank")]
+pub fn wasm_decrypt_and_rerank(
+    facts_json: &str,
+    query: &str,
+    query_embedding: &[f32],
+    encryption_key_hex: &str,
+    top_k: usize,
+) -> Result<JsValue, JsError> {
+    let facts: Vec<search::SubgraphFact> = serde_json::from_str(facts_json)
+        .map_err(|e| JsError::new(&format!("Invalid SubgraphFact array JSON: {}", e)))?;
+    let results = search::decrypt_and_rerank(&facts, query, query_embedding, encryption_key_hex, top_k)
+        .map_err(to_js_error)?;
+    serde_wasm_bindgen::to_value(&results).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Get the GraphQL query string for blind index search.
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "getSearchQuery")]
+pub fn wasm_get_search_query() -> String {
+    search::search_query().to_string()
+}
+
+/// Get the GraphQL query string for broadened (fallback) search.
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "getBroadenedSearchQuery")]
+pub fn wasm_get_broadened_search_query() -> String {
+    search::broadened_search_query().to_string()
+}
+
+/// Get the GraphQL query string for paginated export.
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "getExportQuery")]
+pub fn wasm_get_export_query() -> String {
+    search::export_query().to_string()
+}
+
+/// Get the GraphQL query string for fact count.
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "getCountQuery")]
+pub fn wasm_get_count_query() -> String {
+    search::count_query().to_string()
+}
+
+/// Convert a subgraph hex blob to base64 for decryption.
+///
+/// `hex_blob`: Hex string (optionally `0x`-prefixed) from the subgraph.
+/// Returns base64-encoded bytes, or null if the hex is invalid.
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "hexBlobToBase64")]
+pub fn wasm_hex_blob_to_base64(hex_blob: &str) -> Option<String> {
+    search::hex_blob_to_base64(hex_blob)
+}
+
+/// Get the trapdoor batch size constant.
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "getTrapdoorBatchSize")]
+pub fn wasm_trapdoor_batch_size() -> usize {
+    search::TRAPDOOR_BATCH_SIZE
+}
+
+/// Get the page size constant.
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "getPageSize")]
+pub fn wasm_page_size() -> usize {
+    search::PAGE_SIZE
 }
 
 // ---------------------------------------------------------------------------
