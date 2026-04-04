@@ -10,7 +10,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
-use crate::{blind, crypto, debrief, fingerprint, lsh, protobuf, reranker};
+use crate::{blind, crypto, debrief, fingerprint, lsh, protobuf, reranker, store};
 #[cfg(feature = "managed")]
 use crate::userop;
 
@@ -454,6 +454,148 @@ fn sign_userop<'py>(
 }
 
 // ---------------------------------------------------------------------------
+// Store pipeline (pure computation, no I/O)
+// ---------------------------------------------------------------------------
+
+/// Prepare a fact for on-chain storage.
+///
+/// Pure computation: encrypt, generate indices, encode protobuf.
+/// Does NOT submit -- the host handles I/O.
+///
+/// Args:
+///     text: Plaintext fact content.
+///     encryption_key: 32-byte encryption key.
+///     dedup_key: 32-byte dedup key.
+///     lsh_hasher: A LshHasher instance.
+///     embedding: List of floats (pre-computed embedding vector).
+///     importance: Importance score on 1-10 scale.
+///     source: Source tag (e.g. "auto_extraction").
+///     owner: Owner address (Smart Account address).
+///     agent_id: Agent identifier.
+///
+/// Returns:
+///     JSON string of PreparedFact.
+#[pyfunction]
+fn prepare_fact(
+    text: &str,
+    encryption_key: &[u8],
+    dedup_key: &[u8],
+    lsh_hasher: &PyLshHasher,
+    embedding: Vec<f32>,
+    importance: f64,
+    source: &str,
+    owner: &str,
+    agent_id: &str,
+) -> PyResult<String> {
+    let enc_key = bytes_to_array32(encryption_key)?;
+    let ded_key = bytes_to_array32(dedup_key)?;
+
+    let prepared = store::prepare_fact(
+        text,
+        &enc_key,
+        &ded_key,
+        &lsh_hasher.inner,
+        &embedding,
+        importance,
+        source,
+        owner,
+        agent_id,
+    )
+    .map_err(to_pyerr)?;
+
+    serde_json::to_string(&prepared)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Prepare a fact with a pre-normalized decay score (already 0.0-1.0).
+///
+/// Same as `prepare_fact()` but takes a raw decay score.
+#[pyfunction]
+fn prepare_fact_with_decay_score(
+    text: &str,
+    encryption_key: &[u8],
+    dedup_key: &[u8],
+    lsh_hasher: &PyLshHasher,
+    embedding: Vec<f32>,
+    decay_score: f64,
+    source: &str,
+    owner: &str,
+    agent_id: &str,
+) -> PyResult<String> {
+    let enc_key = bytes_to_array32(encryption_key)?;
+    let ded_key = bytes_to_array32(dedup_key)?;
+
+    let prepared = store::prepare_fact_with_decay_score(
+        text,
+        &enc_key,
+        &ded_key,
+        &lsh_hasher.inner,
+        &embedding,
+        decay_score,
+        source,
+        owner,
+        agent_id,
+    )
+    .map_err(to_pyerr)?;
+
+    serde_json::to_string(&prepared)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Build ABI-encoded calldata for a single prepared fact.
+///
+/// Args:
+///     prepared_json: JSON string of a PreparedFact.
+///
+/// Returns:
+///     bytes (ABI-encoded calldata).
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn build_single_calldata_from_prepared<'py>(
+    py: Python<'py>,
+    prepared_json: &str,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let prepared: store::PreparedFact = serde_json::from_str(prepared_json)
+        .map_err(|e| PyValueError::new_err(format!("Invalid PreparedFact JSON: {}", e)))?;
+    let calldata = store::build_single_calldata(&prepared);
+    Ok(PyBytes::new(py, &calldata))
+}
+
+/// Build ABI-encoded calldata for a batch of prepared facts.
+///
+/// Args:
+///     prepared_array_json: JSON array of PreparedFact objects.
+///
+/// Returns:
+///     bytes (ABI-encoded calldata).
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn build_batch_calldata_from_prepared<'py>(
+    py: Python<'py>,
+    prepared_array_json: &str,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let prepared: Vec<store::PreparedFact> = serde_json::from_str(prepared_array_json)
+        .map_err(|e| PyValueError::new_err(format!("Invalid PreparedFact array JSON: {}", e)))?;
+    let calldata = store::build_batch_calldata(&prepared)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(PyBytes::new(py, &calldata))
+}
+
+/// Prepare a tombstone (soft-delete) protobuf.
+///
+/// Args:
+///     fact_id: The fact ID to tombstone.
+///     owner: The owner address.
+///
+/// Returns:
+///     bytes (protobuf wire format).
+#[pyfunction]
+fn prepare_tombstone<'py>(py: Python<'py>, fact_id: &str, owner: &str) -> Bound<'py, PyBytes> {
+    let bytes = store::prepare_tombstone(fact_id, owner);
+    PyBytes::new(py, &bytes)
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -499,6 +641,11 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(derive_eoa, m)?)?;
     m.add_function(wrap_pyfunction!(derive_eoa_address, m)?)?;
 
+    // Store pipeline
+    m.add_function(wrap_pyfunction!(prepare_fact, m)?)?;
+    m.add_function(wrap_pyfunction!(prepare_fact_with_decay_score, m)?)?;
+    m.add_function(wrap_pyfunction!(prepare_tombstone, m)?)?;
+
     // UserOp (ERC-4337) — feature-gated: managed
     #[cfg(feature = "managed")]
     {
@@ -506,6 +653,8 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(encode_batch_call, m)?)?;
         m.add_function(wrap_pyfunction!(hash_userop, m)?)?;
         m.add_function(wrap_pyfunction!(sign_userop, m)?)?;
+        m.add_function(wrap_pyfunction!(build_single_calldata_from_prepared, m)?)?;
+        m.add_function(wrap_pyfunction!(build_batch_calldata_from_prepared, m)?)?;
     }
 
     Ok(())

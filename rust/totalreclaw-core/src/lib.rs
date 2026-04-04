@@ -14,6 +14,7 @@
 //! - [`protobuf`] — Minimal protobuf encoder for fact payloads
 //! - [`reranker`] — BM25 + Cosine + RRF fusion reranker
 //! - [`debrief`] — Session debrief response parser
+//! - [`store`] — Store pipeline (pure computation: encrypt, index, encode)
 //! - [`wallet`] — Ethereum wallet derivation (BIP-44 + Keccak256)
 //! - [`userop`] — ERC-4337 v0.7 UserOp building + signing (feature: `managed`)
 
@@ -25,6 +26,7 @@ pub mod lsh;
 pub mod protobuf;
 pub mod reranker;
 pub mod stemmer;
+pub mod store;
 pub mod wallet;
 
 #[cfg(feature = "managed")]

@@ -3,18 +3,23 @@
 //! Orchestrates the full fact storage pipeline:
 //! text -> embed -> encrypt -> blind indices + LSH -> protobuf -> relay submission.
 //!
+//! Uses `totalreclaw-core::store::prepare_fact()` for the pure computation phase
+//! (encrypt, index, encode) and handles the I/O phase (dedup checks, relay
+//! submission) in this crate.
+//!
 //! Includes store-time near-duplicate detection (cosine >= 0.85 threshold).
 
 use base64::Engine;
 
-use crate::blind;
-use crate::crypto;
+use totalreclaw_core::blind;
+use totalreclaw_core::crypto;
+use totalreclaw_core::fingerprint;
+use totalreclaw_core::lsh::LshHasher;
+use totalreclaw_core::reranker;
+use totalreclaw_core::store as core_store;
+
 use crate::embedding::EmbeddingProvider;
-use crate::fingerprint;
-use crate::lsh::LshHasher;
-use crate::protobuf::{self, FactPayload};
 use crate::relay::RelayClient;
-use crate::reranker;
 use crate::search;
 use crate::Result;
 
@@ -32,12 +37,8 @@ const STORE_DEDUP_FETCH_LIMIT: usize = 50;
 /// 2. Check fingerprint against existing (supersede if exact match)
 /// 3. Generate embedding
 /// 4. Store-time cosine dedup (skip if >= 0.85 against existing facts)
-/// 5. Encrypt content (AES-256-GCM)
-/// 6. Encrypt embedding
-/// 7. Generate blind indices (word + stem hashes)
-/// 8. Generate LSH bucket hashes from embedding
-/// 9. Encode protobuf
-/// 10. Submit via native UserOp (or legacy if no private key)
+/// 5. Prepare fact via core (encrypt, index, encode protobuf)
+/// 6. Submit via native UserOp (or legacy if no private key)
 pub async fn store_fact(
     content: &str,
     source: &str,
@@ -47,7 +48,7 @@ pub async fn store_fact(
     relay: &RelayClient,
     private_key: Option<&[u8; 32]>,
 ) -> Result<String> {
-    // 1. Content fingerprint (used for exact dedup AND in the protobuf)
+    // 1. Content fingerprint (used for exact dedup)
     let content_fp = fingerprint::generate_content_fingerprint(content, &keys.dedup_key);
 
     // 2. Check for exact duplicate: search by content fingerprint
@@ -66,57 +67,34 @@ pub async fn store_fact(
 
     // 4. Store-time cosine dedup: check if a near-duplicate already exists
     if is_near_duplicate(content, &embedding, keys, relay).await {
-        // Near-duplicate found — skip storage silently (same behavior as TS consolidation.ts)
+        // Near-duplicate found -- skip storage silently (same behavior as TS consolidation.ts)
         return Ok(String::new());
     }
 
-    // 5. Encrypt content
-    let encrypted_blob_b64 = crypto::encrypt(content, &keys.encryption_key)?;
-    let encrypted_blob_bytes = base64::engine::general_purpose::STANDARD
-        .decode(&encrypted_blob_b64)
-        .map_err(|e| crate::Error::Crypto(e.to_string()))?;
-    let encrypted_blob_hex = hex::encode(&encrypted_blob_bytes);
+    // 5. Prepare fact via core (encrypt, index, encode protobuf)
+    let prepared = core_store::prepare_fact_with_decay_score(
+        content,
+        &keys.encryption_key,
+        &keys.dedup_key,
+        lsh_hasher,
+        &embedding,
+        1.0, // default decay_score
+        source,
+        relay.wallet_address(),
+        "zeroclaw",
+    )
+    .map_err(|e| crate::Error::Crypto(e.to_string()))?;
 
-    // 6. Encrypt embedding (float32 -> LE bytes -> base64 -> AES-GCM)
-    let emb_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
-    let emb_b64 = base64::engine::general_purpose::STANDARD.encode(&emb_bytes);
-    let encrypted_embedding = crypto::encrypt(&emb_b64, &keys.encryption_key)?;
-
-    // 7. Generate blind indices
-    let mut blind_indices = blind::generate_blind_indices(content);
-
-    // 8. Generate LSH bucket hashes
-    let embedding_f64: Vec<f64> = embedding.iter().map(|&f| f as f64).collect();
-    let lsh_buckets = lsh_hasher.hash(&embedding_f64)?;
-    blind_indices.extend(lsh_buckets.into_iter());
-
-    // 9. Build fact payload
-    let fact_id = uuid::Uuid::now_v7().to_string();
-    let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-
-    let payload = FactPayload {
-        id: fact_id.clone(),
-        timestamp,
-        owner: relay.wallet_address().to_string(),
-        encrypted_blob_hex,
-        blind_indices,
-        decay_score: 1.0,
-        source: source.to_string(),
-        content_fp,
-        agent_id: "zeroclaw".to_string(),
-        encrypted_embedding: Some(encrypted_embedding),
-    };
-
-    // 10. Encode and submit
-    let protobuf = protobuf::encode_fact_protobuf(&payload);
-
+    // 6. Submit
     if let Some(pk) = private_key {
-        relay.submit_fact_native(&protobuf, pk).await?;
+        relay
+            .submit_fact_native(&prepared.protobuf_bytes, pk)
+            .await?;
     } else {
-        relay.submit_protobuf(&protobuf).await?;
+        relay.submit_protobuf(&prepared.protobuf_bytes).await?;
     }
 
-    Ok(fact_id)
+    Ok(prepared.fact_id)
 }
 
 /// Store a fact with a specific importance value (0.0 - 1.0).
@@ -133,9 +111,6 @@ pub async fn store_fact_with_importance(
     relay: &RelayClient,
     private_key: Option<&[u8; 32]>,
 ) -> Result<String> {
-    // Normalize importance: input 1-10 -> stored 0.0-1.0
-    let decay_score = (importance / 10.0).clamp(0.0, 1.0);
-
     // Content fingerprint
     let content_fp = fingerprint::generate_content_fingerprint(content, &keys.dedup_key);
 
@@ -156,48 +131,30 @@ pub async fn store_fact_with_importance(
         return Ok(String::new());
     }
 
-    // Encrypt content
-    let encrypted_blob_b64 = crypto::encrypt(content, &keys.encryption_key)?;
-    let encrypted_blob_bytes = base64::engine::general_purpose::STANDARD
-        .decode(&encrypted_blob_b64)
-        .map_err(|e| crate::Error::Crypto(e.to_string()))?;
-    let encrypted_blob_hex = hex::encode(&encrypted_blob_bytes);
+    // Prepare fact via core (with importance normalization)
+    let prepared = core_store::prepare_fact(
+        content,
+        &keys.encryption_key,
+        &keys.dedup_key,
+        lsh_hasher,
+        &embedding,
+        importance,
+        source,
+        relay.wallet_address(),
+        "zeroclaw",
+    )
+    .map_err(|e| crate::Error::Crypto(e.to_string()))?;
 
-    // Encrypt embedding
-    let emb_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
-    let emb_b64 = base64::engine::general_purpose::STANDARD.encode(&emb_bytes);
-    let encrypted_embedding = crypto::encrypt(&emb_b64, &keys.encryption_key)?;
-
-    // Generate blind indices + LSH
-    let mut blind_indices = blind::generate_blind_indices(content);
-    let embedding_f64: Vec<f64> = embedding.iter().map(|&f| f as f64).collect();
-    let lsh_buckets = lsh_hasher.hash(&embedding_f64)?;
-    blind_indices.extend(lsh_buckets.into_iter());
-
-    let fact_id = uuid::Uuid::now_v7().to_string();
-    let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-
-    let payload = FactPayload {
-        id: fact_id.clone(),
-        timestamp,
-        owner: relay.wallet_address().to_string(),
-        encrypted_blob_hex,
-        blind_indices,
-        decay_score,
-        source: source.to_string(),
-        content_fp,
-        agent_id: "zeroclaw".to_string(),
-        encrypted_embedding: Some(encrypted_embedding),
-    };
-
-    let protobuf = protobuf::encode_fact_protobuf(&payload);
+    // Submit
     if let Some(pk) = private_key {
-        relay.submit_fact_native(&protobuf, pk).await?;
+        relay
+            .submit_fact_native(&prepared.protobuf_bytes, pk)
+            .await?;
     } else {
-        relay.submit_protobuf(&protobuf).await?;
+        relay.submit_protobuf(&prepared.protobuf_bytes).await?;
     }
 
-    Ok(fact_id)
+    Ok(prepared.fact_id)
 }
 
 /// Store multiple facts in a single on-chain transaction (batched UserOp).
@@ -212,49 +169,35 @@ pub async fn store_fact_batch(
     relay: &RelayClient,
     private_key: &[u8; 32],
 ) -> Result<Vec<String>> {
-    let mut protobuf_payloads = Vec::with_capacity(facts.len());
-    let mut fact_ids = Vec::with_capacity(facts.len());
+    let mut prepared_facts = Vec::with_capacity(facts.len());
 
     for (content, source) in facts {
-        // Full pipeline per fact: embed -> encrypt -> indices -> protobuf
+        // Generate embedding (I/O)
         let embedding = embedding_provider.embed(content).await?;
-        let encrypted_blob_b64 = crypto::encrypt(content, &keys.encryption_key)?;
-        let encrypted_blob_bytes = base64::engine::general_purpose::STANDARD
-            .decode(&encrypted_blob_b64)
-            .map_err(|e| crate::Error::Crypto(e.to_string()))?;
-        let encrypted_blob_hex = hex::encode(&encrypted_blob_bytes);
 
-        let emb_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
-        let emb_b64 = base64::engine::general_purpose::STANDARD.encode(&emb_bytes);
-        let encrypted_embedding = crypto::encrypt(&emb_b64, &keys.encryption_key)?;
+        // Prepare fact via core (pure computation)
+        let prepared = core_store::prepare_fact_with_decay_score(
+            content,
+            &keys.encryption_key,
+            &keys.dedup_key,
+            lsh_hasher,
+            &embedding,
+            1.0,
+            source,
+            relay.wallet_address(),
+            "zeroclaw",
+        )
+        .map_err(|e| crate::Error::Crypto(e.to_string()))?;
 
-        let mut blind_indices = blind::generate_blind_indices(content);
-        let embedding_f64: Vec<f64> = embedding.iter().map(|&f| f as f64).collect();
-        let lsh_buckets = lsh_hasher.hash(&embedding_f64)?;
-        blind_indices.extend(lsh_buckets.into_iter());
-
-        let content_fp = fingerprint::generate_content_fingerprint(content, &keys.dedup_key);
-
-        let fact_id = uuid::Uuid::now_v7().to_string();
-        let timestamp =
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-
-        let payload = FactPayload {
-            id: fact_id.clone(),
-            timestamp,
-            owner: relay.wallet_address().to_string(),
-            encrypted_blob_hex,
-            blind_indices,
-            decay_score: 1.0,
-            source: source.to_string(),
-            content_fp,
-            agent_id: "zeroclaw".to_string(),
-            encrypted_embedding: Some(encrypted_embedding),
-        };
-
-        protobuf_payloads.push(protobuf::encode_fact_protobuf(&payload));
-        fact_ids.push(fact_id);
+        prepared_facts.push(prepared);
     }
+
+    // Collect protobuf payloads for batch submission
+    let protobuf_payloads: Vec<Vec<u8>> = prepared_facts
+        .iter()
+        .map(|p| p.protobuf_bytes.clone())
+        .collect();
+    let fact_ids: Vec<String> = prepared_facts.iter().map(|p| p.fact_id.clone()).collect();
 
     // Submit all as one batched UserOp
     relay
@@ -270,7 +213,7 @@ pub async fn store_tombstone(
     relay: &RelayClient,
     private_key: Option<&[u8; 32]>,
 ) -> Result<()> {
-    let protobuf = protobuf::encode_tombstone_protobuf(fact_id, relay.wallet_address());
+    let protobuf = core_store::prepare_tombstone(fact_id, relay.wallet_address());
 
     if let Some(pk) = private_key {
         relay.submit_fact_native(&protobuf, pk).await?;
