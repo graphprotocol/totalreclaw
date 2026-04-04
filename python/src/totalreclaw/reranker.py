@@ -9,8 +9,11 @@ Replaces naive word-overlap scoring with a proper ranking pipeline:
   5. Weighted RRF (Reciprocal Rank Fusion) — combines all ranking lists
   6. MMR (Maximal Marginal Relevance) — promotes diversity in results
 
-All functions are pure Python. This module runs CLIENT-SIDE after
-decrypting candidates from the server.
+Cosine similarity delegates to the totalreclaw_core Rust/PyO3 module.
+The full rerank pipeline remains in Python because the Rust core's rerank()
+uses a simpler 2-signal model (BM25 + Cosine), while the Python client uses
+a richer 4-signal pipeline (BM25 + Cosine + Importance + Recency) with
+MMR diversity and stemming.
 
 Port of the canonical TypeScript implementation at mcp/src/subgraph/reranker.ts.
 """
@@ -24,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import Stemmer  # PyStemmer
+import totalreclaw_core
 
 # ---------------------------------------------------------------------------
 # Tokenization
@@ -127,27 +131,24 @@ def bm25_score(
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors.
 
+    Delegates to totalreclaw_core (Rust/PyO3) for the actual computation.
     Returns dot(a, b) / (||a|| * ||b||).
     Returns 0 if either vector has zero magnitude.
+
+    Note: The Rust implementation requires equal-length vectors and uses f32
+    precision. We handle empty/mismatched-length edge cases in Python before
+    delegating.
     """
     if not a or not b:
         return 0.0
 
+    # The Rust core requires equal-length vectors; truncate to min length
+    # (matches the previous Python behavior of using min(len(a), len(b)))
     length = min(len(a), len(b))
-    dot = 0.0
-    norm_a = 0.0
-    norm_b = 0.0
+    a_trunc = [float(x) for x in a[:length]]
+    b_trunc = [float(x) for x in b[:length]]
 
-    for i in range(length):
-        dot += a[i] * b[i]
-        norm_a += a[i] * a[i]
-        norm_b += b[i] * b[i]
-
-    denom = math.sqrt(norm_a) * math.sqrt(norm_b)
-    if denom == 0:
-        return 0.0
-
-    return dot / denom
+    return totalreclaw_core.cosine_similarity(a_trunc, b_trunc)
 
 
 # ---------------------------------------------------------------------------

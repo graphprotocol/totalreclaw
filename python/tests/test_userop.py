@@ -6,16 +6,19 @@ from totalreclaw.userop import (
     ENTRYPOINT_V07,
     SIMPLE_ACCOUNT_FACTORY,
     DATA_EDGE_ADDRESS,
-    EXECUTE_SELECTOR,
     CREATE_ACCOUNT_SELECTOR,
     GET_NONCE_SELECTOR,
-    encode_execute_calldata,
+    encode_execute_calldata_for_data_edge,
     encode_factory_data,
     compute_user_op_hash,
+    sign_user_op_hash,
     _pad32,
     _encode_uint256,
-    _encode_bytes_dynamic,
 )
+
+# The execute selector is no longer exported (encoding delegated to Rust core),
+# but we compute it here for validation in tests.
+EXECUTE_SELECTOR = keccak(b"execute(address,uint256,bytes)")[:4].hex()
 
 
 class TestABIEncoding:
@@ -34,26 +37,8 @@ class TestABIEncoding:
         assert len(result) == 64
         assert result == "0" * 63 + "1"
 
-    def test_encode_bytes_dynamic(self):
-        data = b"\x01\x02\x03"
-        result = _encode_bytes_dynamic(data)
-        # Should be: length (32 bytes) + data padded to 32 bytes
-        assert result.startswith(_encode_uint256(3))
-        # Data portion: 010203 padded to 64 hex chars
-        data_hex = result[64:]
-        assert data_hex.startswith("010203")
-        assert len(data_hex) == 64  # padded to 32 bytes
-
-    def test_encode_bytes_dynamic_empty(self):
-        result = _encode_bytes_dynamic(b"")
-        assert result == _encode_uint256(0)
-
 
 class TestFunctionSelectors:
-    def test_execute_selector(self):
-        expected = keccak(b"execute(address,uint256,bytes)")[:4].hex()
-        assert EXECUTE_SELECTOR == expected
-
     def test_create_account_selector(self):
         expected = keccak(b"createAccount(address,uint256)")[:4].hex()
         assert CREATE_ACCOUNT_SELECTOR == expected
@@ -65,25 +50,23 @@ class TestFunctionSelectors:
 
 class TestEncodeExecuteCalldata:
     def test_basic_encoding(self):
-        target = "0x1234567890abcdef1234567890abcdef12345678"
+        """Rust core encodes execute(dataEdge, 0, payload) — verify it starts with the selector."""
         data = b"\xde\xad\xbe\xef"
-        result = encode_execute_calldata(target, 0, data)
+        result = encode_execute_calldata_for_data_edge(data)
 
         # Should start with 0x + execute selector
         assert result.startswith(f"0x{EXECUTE_SELECTOR}")
-        # Should contain the target address (padded)
-        assert _pad32(target) in result
+        # Should contain the DataEdge address (padded, lowercase)
+        assert _pad32(DATA_EDGE_ADDRESS).lower() in result.lower()
 
     def test_empty_data(self):
-        target = DATA_EDGE_ADDRESS
-        result = encode_execute_calldata(target, 0, b"")
+        result = encode_execute_calldata_for_data_edge(b"")
         assert result.startswith(f"0x{EXECUTE_SELECTOR}")
 
     def test_protobuf_payload(self):
         """Test with a realistic protobuf payload size."""
-        target = DATA_EDGE_ADDRESS
         payload = b"\x0a\x24" + b"a" * 36  # ~38 bytes
-        result = encode_execute_calldata(target, 0, payload)
+        result = encode_execute_calldata_for_data_edge(payload)
         assert result.startswith(f"0x{EXECUTE_SELECTOR}")
         # Verify the hex is valid
         bytes.fromhex(result[2:])
@@ -174,14 +157,14 @@ class TestUserOpHash:
 
 class TestSignature:
     def test_sign_userop_hash(self):
-        """Verify that signing a UserOp hash produces a valid 65-byte signature."""
-        from eth_account import Account
+        """Verify that signing a UserOp hash via Rust core produces a valid 65-byte signature."""
+        import totalreclaw_core
 
-        Account.enable_unaudited_hdwallet_features()
-        acct = Account.from_mnemonic(
-            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-            account_path="m/44'/60'/0'/0/0",
-        )
+        mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+        eoa_json = totalreclaw_core.derive_eoa(mnemonic)
+        import json
+        eoa = json.loads(eoa_json)
+        private_key = bytes.fromhex(eoa["private_key"])
 
         user_op = {
             "sender": "0x2c0cf74b2b76110708ca431796367779e3738250",
@@ -194,9 +177,11 @@ class TestSignature:
             "maxPriorityFeePerGas": hex(1_500_000_000),
         }
         user_op_hash = compute_user_op_hash(user_op, ENTRYPOINT_V07, 84532)
-        signed = Account.unsafe_sign_hash(user_op_hash, acct.key)
+        sig_hex = sign_user_op_hash(user_op_hash, private_key)
 
-        sig_hex = signed.signature.hex()
-        # Should be 65 bytes (130 hex chars) -- r (32) + s (32) + v (1)
-        assert len(bytes.fromhex(sig_hex)) == 65
-        assert signed.v in (27, 28)
+        # Should be 0x-prefixed, 65 bytes (130 hex chars)
+        assert sig_hex.startswith("0x")
+        sig_bytes = bytes.fromhex(sig_hex[2:])
+        assert len(sig_bytes) == 65
+        # v should be 27 or 28
+        assert sig_bytes[-1] in (27, 28)
