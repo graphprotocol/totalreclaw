@@ -307,19 +307,7 @@ describe("buildBatchUserOperation (validation)", () => {
     ).rejects.toThrow(`exceeds maximum of ${MAX_BATCH_SIZE}`);
   });
 
-  it("should reject unsupported chain ID", async () => {
-    const { buildBatchUserOperation } = await import("../src/userop/batcher");
-
-    await expect(
-      buildBatchUserOperation({
-        privateKey: Buffer.alloc(32, 0x01),
-        dataEdgeAddress: TEST_DATA_EDGE,
-        chainId: 99999,
-        encryptedPayloads: [makePayload()],
-        serverUrl: "http://localhost:8000",
-      })
-    ).rejects.toThrow("Unsupported chain ID 99999");
-  });
+  // Chain ID validation removed — relay routes based on billing tier.
 
   it("should reject batch with empty payload", async () => {
     const { buildBatchUserOperation } = await import("../src/userop/batcher");

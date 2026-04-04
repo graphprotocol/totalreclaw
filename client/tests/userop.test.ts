@@ -85,19 +85,7 @@ describe("UserOperation Builder", () => {
       expect(typeof sendFactOnChain).toBe("function");
     });
 
-    it("should reject unsupported chain IDs", async () => {
-      const { buildUserOperation } = await import("../src/userop/builder");
-
-      await expect(
-        buildUserOperation({
-          privateKey: Buffer.alloc(32, 0x01),
-          dataEdgeAddress:
-            "0xababababababababababababababababababababab" as `0x${string}`,
-          chainId: 99999,
-          encryptedPayload: Buffer.from("test"),
-          serverUrl: "http://localhost:8000",
-        })
-      ).rejects.toThrow("Unsupported chain ID 99999");
-    });
+    // Chain ID validation removed — relay routes based on billing tier.
+    // Any chain ID is accepted; the relay determines the correct chain.
   });
 });
