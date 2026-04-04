@@ -5,34 +5,22 @@
  * "true"). Replaces the HTTP POST to /v1/store with an on-chain transaction
  * flow.
  *
- * Builds UserOps client-side using `permissionless` + `viem` and submits
- * them through the TotalReclaw relay server, which proxies bundler/paymaster
- * JSON-RPC to Pimlico with its own API key. Clients never need a Pimlico key.
+ * Uses @totalreclaw/core WASM for calldata encoding, UserOp hashing, and
+ * ECDSA signing. Raw fetch() for all JSON-RPC calls to the relay bundler
+ * and chain RPCs. No viem, no permissionless.
  */
 
-import { createPublicClient, http, type Hex, type Address, type Chain } from 'viem';
-import { entryPoint07Address } from 'viem/account-abstraction';
-import { mnemonicToAccount } from 'viem/accounts';
-import { gnosis, baseSepolia } from 'viem/chains';
-import { createSmartAccountClient } from 'permissionless';
-import { toSimpleSmartAccount } from 'permissionless/accounts';
-import { createPimlicoClient } from 'permissionless/clients/pimlico';
+import * as wasm from '@totalreclaw/core';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-/** Default EventfulDataEdge contract address on Gnosis mainnet */
-const DEFAULT_DATA_EDGE_ADDRESS = '0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca';
-
-/** Well-known ERC-4337 EntryPoint v0.7 address (same on all chains) */
-const DEFAULT_ENTRYPOINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
-
 export interface SubgraphStoreConfig {
   relayUrl: string;           // TotalReclaw relay server URL (proxies bundler + subgraph)
   mnemonic: string;           // BIP-39 mnemonic for key derivation
   cachePath: string;          // Hot cache file path
-  chainId: number;            // 100 for Gnosis mainnet, 10200 for Chiado testnet, 84532 for Base Sepolia
+  chainId: number;            // 100 for Gnosis mainnet, 84532 for Base Sepolia
   dataEdgeAddress: string;    // EventfulDataEdge contract address
   entryPointAddress: string;  // ERC-4337 EntryPoint v0.7
   authKeyHex?: string;        // HKDF auth key for relay server Authorization header
@@ -54,129 +42,104 @@ export interface FactPayload {
 }
 
 // ---------------------------------------------------------------------------
-// Protobuf encoding (unchanged)
+// Protobuf encoding (WASM)
 // ---------------------------------------------------------------------------
 
 /**
- * Encode a fact payload as a minimal Protobuf wire format.
+ * Encode a fact payload as a minimal Protobuf wire format via WASM core.
  *
- * Field numbers match server/proto/totalreclaw.proto:
- *   1: id (string), 2: timestamp (string), 3: owner (string),
- *   4: encrypted_blob (bytes), 5: blind_indices (repeated string),
- *   6: decay_score (double), 7: is_active (bool), 8: version (int32),
- *   9: source (string), 10: content_fp (string), 11: agent_id (string),
- *   12: sequence_id (int64), 13: encrypted_embedding (string)
+ * Field numbers match server/proto/totalreclaw.proto.
  */
 export function encodeFactProtobuf(fact: FactPayload): Buffer {
-  const parts: Buffer[] = [];
-
-  // Helper: encode a string field
-  const writeString = (fieldNumber: number, value: string) => {
-    if (!value) return;
-    const data = Buffer.from(value, 'utf-8');
-    const key = (fieldNumber << 3) | 2; // wire type 2 = length-delimited
-    parts.push(encodeVarint(key));
-    parts.push(encodeVarint(data.length));
-    parts.push(data);
-  };
-
-  // Helper: encode a bytes field
-  const writeBytes = (fieldNumber: number, value: Buffer) => {
-    const key = (fieldNumber << 3) | 2;
-    parts.push(encodeVarint(key));
-    parts.push(encodeVarint(value.length));
-    parts.push(value);
-  };
-
-  // Helper: encode a double field (wire type 1 = 64-bit)
-  const writeDouble = (fieldNumber: number, value: number) => {
-    const key = (fieldNumber << 3) | 1;
-    parts.push(encodeVarint(key));
-    const buf = Buffer.alloc(8);
-    buf.writeDoubleLE(value);
-    parts.push(buf);
-  };
-
-  // Helper: encode a varint field (wire type 0)
-  const writeVarintField = (fieldNumber: number, value: number) => {
-    const key = (fieldNumber << 3) | 0;
-    parts.push(encodeVarint(key));
-    parts.push(encodeVarint(value));
-  };
-
-  // Encode fields
-  writeString(1, fact.id);
-  writeString(2, fact.timestamp);
-  writeString(3, fact.owner);
-  writeBytes(4, Buffer.from(fact.encryptedBlob, 'hex'));
-
-  for (const index of fact.blindIndices) {
-    writeString(5, index);
-  }
-
-  writeDouble(6, fact.decayScore);
-  writeVarintField(7, 1); // is_active = true
-  writeVarintField(8, 2); // version = 2
-  writeString(9, fact.source);
-  writeString(10, fact.contentFp);
-  writeString(11, fact.agentId);
-  // Field 12 (sequence_id) is assigned by the subgraph mapping, not the client
-  if (fact.encryptedEmbedding) {
-    writeString(13, fact.encryptedEmbedding);
-  }
-
-  return Buffer.concat(parts);
-}
-
-/** Encode an integer as a Protobuf varint */
-export function encodeVarint(value: number): Buffer {
-  const bytes: number[] = [];
-  let v = value >>> 0; // unsigned
-  while (v > 0x7f) {
-    bytes.push((v & 0x7f) | 0x80);
-    v >>>= 7;
-  }
-  bytes.push(v & 0x7f);
-  return Buffer.from(bytes);
+  const json = JSON.stringify({
+    id: fact.id,
+    timestamp: fact.timestamp,
+    owner: fact.owner,
+    encrypted_blob_hex: fact.encryptedBlob,
+    blind_indices: fact.blindIndices,
+    decay_score: fact.decayScore,
+    source: fact.source,
+    content_fp: fact.contentFp,
+    agent_id: fact.agentId,
+    encrypted_embedding: fact.encryptedEmbedding || null,
+  });
+  return Buffer.from(wasm.encodeFactProtobuf(json));
 }
 
 // ---------------------------------------------------------------------------
 // Chain helpers
 // ---------------------------------------------------------------------------
 
-/** Resolve a viem Chain object from chain ID */
-function getChainFromId(chainId: number): Chain {
+/** Get the default public RPC URL for a chain ID */
+function getDefaultRpcUrl(chainId: number): string {
   switch (chainId) {
     case 100:
-      return gnosis;
+      return 'https://rpc.gnosischain.com';
     case 84532:
-      return baseSepolia;
+      return 'https://sepolia.base.org';
     default:
-      return gnosis;
+      return 'https://sepolia.base.org';
   }
 }
 
-/** Build the relay bundler RPC URL from the relay server URL */
-function getRelayBundlerUrl(relayUrl: string): string {
-  return `${relayUrl}/v1/bundler`;
+// ---------------------------------------------------------------------------
+// Smart Account address derivation
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the Smart Account address from a BIP-39 mnemonic.
+ *
+ * Uses the SimpleAccountFactory's getAddress(owner, salt=0) view function
+ * via a raw eth_call to the chain RPC. The address is deterministic (CREATE2).
+ */
+export async function deriveSmartAccountAddress(mnemonic: string, chainId?: number): Promise<string> {
+  const eoa = wasm.deriveEoa(mnemonic) as { private_key: string; address: string };
+  const resolvedChainId = chainId ?? 84532;
+
+  // SimpleAccountFactory.getAddress(address owner, uint256 salt)
+  // Selector: 0x5fbfb9cf = keccak256("getAddress(address,uint256)")[0:4]
+  const factoryAddress = wasm.getSimpleAccountFactory();
+  const ownerPadded = eoa.address.slice(2).toLowerCase().padStart(64, '0');
+  const saltPadded = '0'.repeat(64);
+  const selector = '5fbfb9cf';
+  const calldata = `0x${selector}${ownerPadded}${saltPadded}`;
+
+  const rpcUrl = process.env.TOTALRECLAW_RPC_URL || getDefaultRpcUrl(resolvedChainId);
+  const response = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'eth_call',
+      params: [{ to: factoryAddress, data: calldata }, 'latest'],
+    }),
+  });
+  const json = await response.json() as { result?: string; error?: { message: string } };
+  if (json.error) {
+    throw new Error(`Failed to resolve Smart Account address: ${json.error.message}`);
+  }
+  if (!json.result || json.result === '0x') {
+    throw new Error('Failed to resolve Smart Account address: empty result');
+  }
+  // Result is a 32-byte ABI-encoded address — take last 20 bytes
+  return `0x${json.result.slice(-40)}`.toLowerCase();
 }
 
 // ---------------------------------------------------------------------------
-// On-chain submission (Pimlico UserOps)
+// On-chain submission (ERC-4337 UserOps via raw fetch)
 // ---------------------------------------------------------------------------
 
 /**
  * Submit a fact on-chain via ERC-4337 UserOp through the relay server.
  *
- * Builds a UserOp client-side using `permissionless` + `viem`:
- * 1. Derives private key from mnemonic (BIP-39 + BIP-44 m/44'/60'/0'/0/0)
- * 2. Creates a SimpleSmartAccount
- * 3. Gets paymaster sponsorship (via relay proxy to Pimlico)
- * 4. Signs and submits the UserOp to relay bundler endpoint
- * 5. Waits for the transaction receipt
+ * Uses @totalreclaw/core WASM for:
+ * 1. EOA derivation from mnemonic (BIP-39 + BIP-44)
+ * 2. Calldata encoding (SimpleAccount.execute)
+ * 3. UserOp hashing (ERC-4337 v0.7)
+ * 4. ECDSA signing (EIP-191 prefixed)
  *
- * The relay server proxies all bundler/paymaster JSON-RPC to Pimlico
- * with its own API key. Clients never need a Pimlico API key.
+ * All JSON-RPC calls go through raw fetch() to the relay bundler endpoint.
  */
 export async function submitFactOnChain(
   protobufPayload: Buffer,
@@ -190,92 +153,97 @@ export async function submitFactOnChain(
     throw new Error('Mnemonic (TOTALRECLAW_RECOVERY_PHRASE) is required for on-chain submission');
   }
 
-  const chain = getChainFromId(config.chainId);
-  const bundlerRpcUrl = getRelayBundlerUrl(config.relayUrl);
-  const dataEdgeAddress = config.dataEdgeAddress as Address;
-  const entryPointAddr = (config.entryPointAddress || entryPoint07Address) as Address;
-
-  // Build authenticated transport for relay server proxy
+  const bundlerUrl = `${config.relayUrl}/v1/bundler`;
   const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
     'X-TotalReclaw-Client': 'openclaw-plugin',
   };
   if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
   if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
 
-  const authTransport = Object.keys(headers).length > 0
-    ? http(bundlerRpcUrl, { fetchOptions: { headers } })
-    : http(bundlerRpcUrl);
+  // Helper for JSON-RPC calls to relay bundler
+  async function rpc(method: string, params: unknown[]): Promise<any> {
+    const resp = await fetch(bundlerUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    });
+    const json = await resp.json() as { result?: any; error?: { message: string } };
+    if (json.error) throw new Error(`RPC ${method}: ${json.error.message}`);
+    return json.result;
+  }
 
-  // 1. Derive EOA signer from mnemonic (BIP-44 m/44'/60'/0'/0/0)
-  const ownerAccount = mnemonicToAccount(config.mnemonic);
+  // 1. Derive EOA from mnemonic
+  const eoa = wasm.deriveEoa(config.mnemonic) as { private_key: string; address: string };
+  const sender = config.walletAddress || await deriveSmartAccountAddress(config.mnemonic, config.chainId);
+  const entryPoint = config.entryPointAddress || wasm.getEntryPointAddress();
 
-  // 2. Create a public client for chain reads (using explicit RPC if configured,
-  //    NOT the bundler proxy which only supports ERC-4337 JSON-RPC methods)
-  const publicClient = createPublicClient({
-    chain,
-    transport: config.rpcUrl ? http(config.rpcUrl) : http(),
+  // 2. Encode calldata (SimpleAccount.execute → DataEdge fallback)
+  const calldataBytes = wasm.encodeSingleCall(protobufPayload);
+  const callData = `0x${Buffer.from(calldataBytes).toString('hex')}`;
+
+  // 3. Get gas prices from Pimlico
+  const gasPrices = await rpc('pimlico_getUserOperationGasPrice', []);
+  const fast = gasPrices.fast;
+
+  // 4. Get nonce from EntryPoint via eth_call
+  //    getNonce(address sender, uint192 key) — selector 0x35567e1a
+  const senderPadded = sender.slice(2).toLowerCase().padStart(64, '0');
+  const keyPadded = '0'.repeat(64);
+  const nonceCalldata = `0x35567e1a${senderPadded}${keyPadded}`;
+
+  const rpcUrl = config.rpcUrl || process.env.TOTALRECLAW_RPC_URL || getDefaultRpcUrl(config.chainId);
+  const nonceResp = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'eth_call',
+      params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
+    }),
   });
+  const nonceJson = await nonceResp.json() as { result?: string };
+  const nonce = nonceJson.result || '0x0';
 
-  // 3. Create Pimlico client for bundler + paymaster operations (via relay)
-  const pimlicoClient = createPimlicoClient({
-    chain,
-    transport: authTransport,
-    entryPoint: {
-      address: entryPointAddr,
-      version: '0.7',
-    },
-  });
+  // 5. Build unsigned UserOp (v0.7 fields, camelCase for Rust JSON serde)
+  const unsignedOp: Record<string, any> = {
+    sender,
+    nonce,
+    callData,
+    callGasLimit: '0x0',
+    verificationGasLimit: '0x0',
+    preVerificationGas: '0x0',
+    maxFeePerGas: fast.maxFeePerGas,
+    maxPriorityFeePerGas: fast.maxPriorityFeePerGas,
+    signature: '0x',
+  };
 
-  // 4. Create a SimpleSmartAccount (auto-generates initCode if undeployed)
-  const smartAccount = await toSimpleSmartAccount({
-    client: publicClient,
-    owner: ownerAccount,
-    entryPoint: {
-      address: entryPointAddr,
-      version: '0.7',
-    },
-  });
+  // 6. Get paymaster sponsorship (fills gas limits + paymaster fields)
+  const sponsorResult = await rpc('pm_sponsorUserOperation', [unsignedOp, entryPoint]);
+  Object.assign(unsignedOp, sponsorResult);
 
-  // 5. Create smart account client wired to relay bundler + paymaster
-  const smartAccountClient = createSmartAccountClient({
-    account: smartAccount,
-    chain,
-    bundlerTransport: authTransport,
-    // Paymaster sponsorship proxied through relay to Pimlico
-    paymaster: pimlicoClient,
-    userOperation: {
-      estimateFeesPerGas: async () => {
-        return (await pimlicoClient.getUserOperationGasPrice()).fast;
-      },
-    },
-  });
+  // 7. Hash and sign the UserOp via WASM
+  const opJson = JSON.stringify(unsignedOp);
+  const hashHex = wasm.hashUserOp(opJson, entryPoint, BigInt(config.chainId));
+  const sigHex = wasm.signUserOp(hashHex, eoa.private_key);
+  unsignedOp.signature = `0x${sigHex}`;
 
-  // 6. Send the transaction: Smart Account execute(dataEdgeAddress, 0, protobufPayload)
-  //    The DataEdge contract has a fallback() that emits Log(bytes), so the calldata
-  //    IS the protobuf payload directly (no function selector needed).
-  //    permissionless encodes the execute() call internally from to/value/data.
-  const calldata = `0x${protobufPayload.toString('hex')}` as Hex;
+  // 8. Submit the signed UserOp
+  const userOpHash = await rpc('eth_sendUserOperation', [unsignedOp, entryPoint]);
 
-  // Use sendUserOperation to get the userOpHash, then wait for receipt
-  const userOpHash = await smartAccountClient.sendUserOperation({
-    calls: [
-      {
-        to: dataEdgeAddress,
-        value: 0n,
-        data: calldata,
-      },
-    ],
-  });
-
-  // 7. Wait for the UserOp to be included in a transaction
-  const receipt = await pimlicoClient.waitForUserOperationReceipt({
-    hash: userOpHash,
-  });
+  // 9. Wait for receipt (poll up to 120s)
+  let receipt = null;
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      receipt = await rpc('eth_getUserOperationReceipt', [userOpHash]);
+      if (receipt) break;
+    } catch { /* not mined yet */ }
+  }
 
   return {
-    txHash: receipt.receipt.transactionHash,
+    txHash: receipt?.receipt?.transactionHash || '',
     userOpHash,
-    success: receipt.success,
+    success: receipt?.success ?? false,
   };
 }
 
@@ -309,71 +277,96 @@ export async function submitFactBatchOnChain(
     throw new Error('Mnemonic (TOTALRECLAW_RECOVERY_PHRASE) is required for on-chain submission');
   }
 
-  const chain = getChainFromId(config.chainId);
-  const bundlerRpcUrl = getRelayBundlerUrl(config.relayUrl);
-  const dataEdgeAddress = config.dataEdgeAddress as Address;
-  const entryPointAddr = (config.entryPointAddress || entryPoint07Address) as Address;
-
+  const bundlerUrl = `${config.relayUrl}/v1/bundler`;
   const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
     'X-TotalReclaw-Client': 'openclaw-plugin',
   };
   if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
   if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
 
-  const authTransport = Object.keys(headers).length > 0
-    ? http(bundlerRpcUrl, { fetchOptions: { headers } })
-    : http(bundlerRpcUrl);
+  async function rpc(method: string, params: unknown[]): Promise<any> {
+    const resp = await fetch(bundlerUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    });
+    const json = await resp.json() as { result?: any; error?: { message: string } };
+    if (json.error) throw new Error(`RPC ${method}: ${json.error.message}`);
+    return json.result;
+  }
 
-  const ownerAccount = mnemonicToAccount(config.mnemonic);
-  const publicClient = createPublicClient({
-    chain,
-    transport: config.rpcUrl ? http(config.rpcUrl) : http(),
+  const eoa = wasm.deriveEoa(config.mnemonic) as { private_key: string; address: string };
+  const sender = config.walletAddress || await deriveSmartAccountAddress(config.mnemonic, config.chainId);
+  const entryPoint = config.entryPointAddress || wasm.getEntryPointAddress();
+
+  // Encode batch calldata (SimpleAccount.executeBatch)
+  // encodeBatchCall expects a JSON array of hex-encoded payload strings
+  const payloadsHex = protobufPayloads.map(p => p.toString('hex'));
+  const calldataBytes = wasm.encodeBatchCall(JSON.stringify(payloadsHex));
+  const callData = `0x${Buffer.from(calldataBytes).toString('hex')}`;
+
+  // Get gas prices
+  const gasPrices = await rpc('pimlico_getUserOperationGasPrice', []);
+  const fast = gasPrices.fast;
+
+  // Get nonce
+  const senderPadded = sender.slice(2).toLowerCase().padStart(64, '0');
+  const keyPadded = '0'.repeat(64);
+  const nonceCalldata = `0x35567e1a${senderPadded}${keyPadded}`;
+
+  const rpcUrl = config.rpcUrl || process.env.TOTALRECLAW_RPC_URL || getDefaultRpcUrl(config.chainId);
+  const nonceResp = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'eth_call',
+      params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
+    }),
   });
+  const nonceJson = await nonceResp.json() as { result?: string };
+  const nonce = nonceJson.result || '0x0';
 
-  const pimlicoClient = createPimlicoClient({
-    chain,
-    transport: authTransport,
-    entryPoint: {
-      address: entryPointAddr,
-      version: '0.7',
-    },
-  });
+  // Build unsigned UserOp
+  const unsignedOp: Record<string, any> = {
+    sender,
+    nonce,
+    callData,
+    callGasLimit: '0x0',
+    verificationGasLimit: '0x0',
+    preVerificationGas: '0x0',
+    maxFeePerGas: fast.maxFeePerGas,
+    maxPriorityFeePerGas: fast.maxPriorityFeePerGas,
+    signature: '0x',
+  };
 
-  const smartAccount = await toSimpleSmartAccount({
-    client: publicClient,
-    owner: ownerAccount,
-    entryPoint: {
-      address: entryPointAddr,
-      version: '0.7',
-    },
-  });
+  // Paymaster sponsorship
+  const sponsorResult = await rpc('pm_sponsorUserOperation', [unsignedOp, entryPoint]);
+  Object.assign(unsignedOp, sponsorResult);
 
-  const smartAccountClient = createSmartAccountClient({
-    account: smartAccount,
-    chain,
-    bundlerTransport: authTransport,
-    paymaster: pimlicoClient,
-    userOperation: {
-      estimateFeesPerGas: async () => {
-        return (await pimlicoClient.getUserOperationGasPrice()).fast;
-      },
-    },
-  });
+  // Hash and sign via WASM
+  const opJson = JSON.stringify(unsignedOp);
+  const hashHex = wasm.hashUserOp(opJson, entryPoint, BigInt(config.chainId));
+  const sigHex = wasm.signUserOp(hashHex, eoa.private_key);
+  unsignedOp.signature = `0x${sigHex}`;
 
-  // Build multi-call batch: each payload → one call to DataEdge fallback()
-  const calls = protobufPayloads.map(payload => ({
-    to: dataEdgeAddress,
-    value: 0n,
-    data: `0x${payload.toString('hex')}` as Hex,
-  }));
+  // Submit
+  const userOpHash = await rpc('eth_sendUserOperation', [unsignedOp, entryPoint]);
 
-  const userOpHash = await smartAccountClient.sendUserOperation({ calls });
-  const receipt = await pimlicoClient.waitForUserOperationReceipt({ hash: userOpHash });
+  // Wait for receipt (poll up to 120s)
+  let receipt = null;
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      receipt = await rpc('eth_getUserOperationReceipt', [userOpHash]);
+      if (receipt) break;
+    } catch { /* not mined yet */ }
+  }
 
   return {
-    txHash: receipt.receipt.transactionHash,
+    txHash: receipt?.receipt?.transactionHash || '',
     userOpHash,
-    success: receipt.success,
+    success: receipt?.success ?? false,
     batchSize: protobufPayloads.length,
   };
 }
@@ -399,47 +392,16 @@ export function isSubgraphMode(): boolean {
  *   - TOTALRECLAW_RECOVERY_PHRASE -- BIP-39 mnemonic
  *   - TOTALRECLAW_SERVER_URL -- relay server URL (default: https://api.totalreclaw.xyz)
  *   - TOTALRECLAW_SELF_HOSTED -- set "true" to use self-hosted server (default: managed service)
- *   - TOTALRECLAW_CHAIN_ID -- optional, defaults to 100 (Gnosis mainnet)
- *
- * Removed from client-side config (now server-side only):
- *   - PIMLICO_API_KEY
- *   - TOTALRECLAW_SUBGRAPH_ENDPOINT
+ *   - TOTALRECLAW_CHAIN_ID -- optional, defaults to 84532 (Base Sepolia)
  */
-/**
- * Derive the Smart Account address from a BIP-39 mnemonic.
- * This is the on-chain owner identity used in the subgraph.
- */
-export async function deriveSmartAccountAddress(mnemonic: string, chainId?: number): Promise<string> {
-  const chain: Chain = getChainFromId(chainId ?? 84532);
-  const ownerAccount = mnemonicToAccount(mnemonic);
-  const entryPointAddr = (process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || DEFAULT_ENTRYPOINT_ADDRESS) as Address;
-  const rpcUrl = process.env.TOTALRECLAW_RPC_URL;
-
-  const publicClient = createPublicClient({
-    chain,
-    transport: rpcUrl ? http(rpcUrl) : http(),
-  });
-
-  const smartAccount = await toSimpleSmartAccount({
-    client: publicClient,
-    owner: ownerAccount,
-    entryPoint: {
-      address: entryPointAddr,
-      version: '0.7',
-    },
-  });
-
-  return smartAccount.address.toLowerCase();
-}
-
 export function getSubgraphConfig(): SubgraphStoreConfig {
   return {
     relayUrl: process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz',
     mnemonic: process.env.TOTALRECLAW_RECOVERY_PHRASE || '',
     cachePath: process.env.TOTALRECLAW_CACHE_PATH || `${process.env.HOME}/.totalreclaw/cache.enc`,
     chainId: parseInt(process.env.TOTALRECLAW_CHAIN_ID || '84532'),
-    dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || DEFAULT_DATA_EDGE_ADDRESS,
-    entryPointAddress: process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || DEFAULT_ENTRYPOINT_ADDRESS,
+    dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || wasm.getDataEdgeAddress(),
+    entryPointAddress: process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || wasm.getEntryPointAddress(),
     rpcUrl: process.env.TOTALRECLAW_RPC_URL || undefined,
   };
 }
