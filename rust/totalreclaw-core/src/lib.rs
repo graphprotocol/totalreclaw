@@ -15,6 +15,7 @@
 //! - [`reranker`] — BM25 + Cosine + RRF fusion reranker
 //! - [`debrief`] — Session debrief response parser
 //! - [`wallet`] — Ethereum wallet derivation (BIP-44 + Keccak256)
+//! - [`userop`] — ERC-4337 v0.7 UserOp building + signing (feature: `managed`)
 
 pub mod blind;
 pub mod crypto;
@@ -25,6 +26,9 @@ pub mod protobuf;
 pub mod reranker;
 pub mod stemmer;
 pub mod wallet;
+
+#[cfg(feature = "managed")]
+pub mod userop;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;

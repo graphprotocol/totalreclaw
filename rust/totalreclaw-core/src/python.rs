@@ -11,6 +11,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
 use crate::{blind, crypto, debrief, fingerprint, lsh, protobuf, reranker};
+#[cfg(feature = "managed")]
+use crate::userop;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -371,6 +373,87 @@ fn derive_eoa_address(mnemonic: &str) -> PyResult<String> {
 }
 
 // ---------------------------------------------------------------------------
+// UserOp (ERC-4337) — feature-gated: managed
+// ---------------------------------------------------------------------------
+
+/// Encode a single fact submission as SimpleAccount.execute() calldata.
+///
+/// Args:
+///     protobuf_payload: Raw protobuf bytes.
+///
+/// Returns:
+///     bytes (ABI-encoded calldata).
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn encode_single_call<'py>(py: Python<'py>, protobuf_payload: &[u8]) -> Bound<'py, PyBytes> {
+    let encoded = userop::encode_single_call(protobuf_payload);
+    PyBytes::new(py, &encoded)
+}
+
+/// Encode multiple fact submissions as SimpleAccount.executeBatch() calldata.
+///
+/// Args:
+///     payloads: List of bytes (raw protobuf payloads).
+///
+/// Returns:
+///     bytes (ABI-encoded calldata).
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn encode_batch_call<'py>(py: Python<'py>, payloads: Vec<Vec<u8>>) -> PyResult<Bound<'py, PyBytes>> {
+    let encoded = userop::encode_batch_call(&payloads)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(PyBytes::new(py, &encoded))
+}
+
+/// Compute the ERC-4337 v0.7 UserOp hash for signing.
+///
+/// Args:
+///     userop_json: JSON string of a UserOperationV7 struct.
+///     entrypoint: EntryPoint address (0x-prefixed).
+///     chain_id: Chain ID (e.g. 84532).
+///
+/// Returns:
+///     bytes (32-byte hash).
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn hash_userop<'py>(
+    py: Python<'py>,
+    userop_json: &str,
+    entrypoint: &str,
+    chain_id: u64,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let op: userop::UserOperationV7 = serde_json::from_str(userop_json)
+        .map_err(|e| PyValueError::new_err(format!("Invalid UserOp JSON: {}", e)))?;
+    let hash = userop::hash_userop(&op, entrypoint, chain_id)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(PyBytes::new(py, &hash))
+}
+
+/// Sign a UserOp hash with an ECDSA private key (EIP-191 prefixed).
+///
+/// Args:
+///     hash: 32-byte UserOp hash.
+///     private_key: 32-byte private key.
+///
+/// Returns:
+///     bytes (65-byte signature: r + s + v).
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn sign_userop<'py>(
+    py: Python<'py>,
+    hash: &[u8],
+    private_key: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let h = hash
+        .try_into()
+        .map_err(|_| PyValueError::new_err(format!("Hash must be 32 bytes, got {}", hash.len())))?;
+    let pk = bytes_to_array32(private_key)?;
+    let sig = userop::sign_userop(&h, &pk)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(PyBytes::new(py, &sig))
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -415,6 +498,15 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Wallet derivation
     m.add_function(wrap_pyfunction!(derive_eoa, m)?)?;
     m.add_function(wrap_pyfunction!(derive_eoa_address, m)?)?;
+
+    // UserOp (ERC-4337) — feature-gated: managed
+    #[cfg(feature = "managed")]
+    {
+        m.add_function(wrap_pyfunction!(encode_single_call, m)?)?;
+        m.add_function(wrap_pyfunction!(encode_batch_call, m)?)?;
+        m.add_function(wrap_pyfunction!(hash_userop, m)?)?;
+        m.add_function(wrap_pyfunction!(sign_userop, m)?)?;
+    }
 
     Ok(())
 }

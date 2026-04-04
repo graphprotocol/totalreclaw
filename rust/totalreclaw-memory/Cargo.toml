@@ -18,12 +18,9 @@ totalreclaw-core = { path = "../totalreclaw-core" }
 bip39 = "2"
 rand = "0.8"
 
-# Ethereum / ERC-4337
-alloy-primitives = "1"
-alloy-sol-types = "1"
+# Ethereum / ERC-4337 (signing key for submit_userop, keccak for EOA derivation)
 k256 = { version = "0.13", features = ["ecdsa"] }
 tiny-keccak = { version = "2", features = ["keccak"] }
-coins-bip32 = "0.12"
 
 # Encoding (still needed by wallet, userop, store, search)
 base64 = "0.22"

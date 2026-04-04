@@ -3222,6 +3222,8 @@ name = "totalreclaw-core"
 version = "0.2.0"
 dependencies = [
  "aes-gcm",
+ "alloy-primitives",
+ "alloy-sol-types",
  "base64 0.22.1",
  "bip39",
  "chrono",
@@ -3244,12 +3246,9 @@ dependencies = [
 name = "totalreclaw-memory"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives",
- "alloy-sol-types",
  "base64 0.22.1",
  "bip39",
  "chrono",
- "coins-bip32",
  "hex",
  "k256",
  "ort",
