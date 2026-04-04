@@ -260,11 +260,12 @@ describe('Crypto Module', () => {
       expect(indices.length).toBeGreaterThanOrEqual(2);
     });
 
-    test('should not add stem hash when stem equals token', () => {
-      // "test" stems to "test" -- no stem hash should be added
+    test('should always add stem hash even when stem equals token', () => {
+      // "test" stems to "test" -- stem hash is ALWAYS generated now
+      // to ensure search parity (e.g. "preferences" stem matches "prefer")
       const indices = generateBlindIndices('test');
-      // Only the exact word hash
-      expect(indices.length).toBe(1);
+      // Token hash + stem hash SHA256("stem:test")
+      expect(indices.length).toBe(2);
     });
 
     test('generateBlindIndices takes only text (no lshBuckets param)', () => {

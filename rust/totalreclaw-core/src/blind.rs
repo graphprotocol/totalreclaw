@@ -8,7 +8,7 @@
 //!   3. Split on whitespace
 //!   4. Filter tokens shorter than 2 characters
 //!   5. SHA-256 each token -> hex
-//!   6. Porter stem each token; if stem != token and len >= 2, SHA-256("stem:" + stem) -> hex
+//!   6. Porter stem each token; if len >= 2, SHA-256("stem:" + stem) -> hex (always, even if stem == token)
 //!   7. Deduplicate (preserving insertion order)
 
 use sha2::{Digest, Sha256};
@@ -32,9 +32,11 @@ pub fn generate_blind_indices(text: &str) -> Vec<String> {
             indices.push(hash);
         }
 
-        // Stemmed word hash
+        // Stemmed word hash — ALWAYS generated (even when stem == token).
+        // This ensures "prefer" (stem=prefer) and "preferences" (stem=prefer)
+        // both produce SHA256("stem:prefer") and match each other.
         let stem = stemmer::stem(token);
-        if stem.len() >= 2 && stem != *token {
+        if stem.len() >= 2 {
             let stem_input = format!("stem:{}", stem);
             let stem_hash = sha256_hex(stem_input.as_bytes());
             if seen.insert(stem_hash.clone()) {
