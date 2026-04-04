@@ -107,11 +107,12 @@ jobs:
           node -e "const p = require('./client/package.json'); console.log('Published:', p.name + '@' + p.version)"
 
   publish-mcp-server:
-    needs: [publish-core]
+    needs: [publish-core, publish-client]
     if: |
       always() &&
       (inputs.package == 'mcp-server' || inputs.package == 'all') &&
-      (needs.publish-core.result != 'cancelled')
+      (needs.publish-core.result != 'cancelled') &&
+      (needs.publish-client.result != 'cancelled')
     name: Publish @totalreclaw/mcp-server
     runs-on: ubuntu-latest
     permissions:
