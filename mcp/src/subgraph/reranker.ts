@@ -10,12 +10,14 @@
  *   5. Weighted RRF (Reciprocal Rank Fusion) — combines all ranking lists
  *   6. MMR (Maximal Marginal Relevance) — promotes diversity in results
  *
- * All functions are pure TypeScript with zero external dependencies (except
- * porter-stemmer for morphological normalization). This module runs
- * CLIENT-SIDE after decrypting candidates from the server.
+ * All functions are pure TypeScript with minimal external dependencies
+ * (porter-stemmer for morphological normalization, @totalreclaw/core
+ * for WASM-backed cosine similarity). This module runs CLIENT-SIDE
+ * after decrypting candidates from the server.
  */
 
 import { stemmer } from 'porter-stemmer';
+import * as wasm from '@totalreclaw/core';
 
 // ---------------------------------------------------------------------------
 // Tokenization
@@ -125,33 +127,21 @@ export function bm25Score(
 }
 
 // ---------------------------------------------------------------------------
-// Cosine Similarity
+// Cosine Similarity (WASM-backed)
 // ---------------------------------------------------------------------------
 
 /**
  * Compute cosine similarity between two vectors.
  *
+ * Delegates to the Rust WASM core for performance.
  * Returns dot(a, b) / (||a|| * ||b||).
- * Returns 0 if either vector has zero magnitude (avoids division by zero).
+ * Returns 0 if either vector is empty or vectors have different lengths.
  */
 export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length === 0 || b.length === 0) return 0;
+  if (a.length !== b.length) return 0;
 
-  const len = Math.min(a.length, b.length);
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-
-  for (let i = 0; i < len; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  if (denom === 0) return 0;
-
-  return dot / denom;
+  return wasm.cosineSimilarity(new Float32Array(a), new Float32Array(b));
 }
 
 // ---------------------------------------------------------------------------
