@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "totalreclaw"
-version = "0.1.0"
+version = "0.1.1"
 description = "End-to-end encrypted memory for AI agents — Python client"
 readme = "README.md"
 license = "MIT"
