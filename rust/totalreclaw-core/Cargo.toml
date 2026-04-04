@@ -1,8 +1,8 @@
 [package]
 name = "totalreclaw-core"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2021"
-description = "TotalReclaw core crypto primitives — E2EE, LSH, blind indices, protobuf encoding"
+description = "TotalReclaw core — E2EE crypto, reranker, wallet, UserOp, store/search pipelines. Single source of truth for all clients."
 license = "MIT"
 repository = "https://github.com/p-diogo/totalreclaw"
 
