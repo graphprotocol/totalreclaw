@@ -12,7 +12,10 @@ export {
   combineSignals,
   bm25Score,
   bm25Scorer,
+  wasmRerank,
 } from './rerank';
+
+export type { WasmRankedResult } from './rerank';
 
 export {
   calculateDecayScore,

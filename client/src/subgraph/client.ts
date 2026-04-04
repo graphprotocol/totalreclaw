@@ -1,4 +1,18 @@
-import { SEARCH_BY_BLIND_INDEX, FETCH_ALL_FACTS, DELTA_SYNC_FACTS, COUNT_FACTS } from "./queries";
+/**
+ * Subgraph Client
+ *
+ * Handles GraphQL queries to The Graph subgraph for searching, exporting,
+ * and counting on-chain facts. Query strings are sourced from the Rust WASM
+ * core where possible to ensure consistency across implementations.
+ */
+
+import {
+  SEARCH_BY_BLIND_INDEX,
+  BROADENED_SEARCH,
+  FETCH_ALL_FACTS,
+  DELTA_SYNC_FACTS,
+  COUNT_FACTS,
+} from "./queries";
 
 export interface SubgraphFact {
   id: string;
@@ -13,6 +27,13 @@ export interface SubgraphFact {
   version?: number;
 }
 
+/**
+ * Client-side batching constants.
+ *
+ * These differ from the WASM core constants (which are tuned for the MCP
+ * server's direct-to-relay path). The client library sends trapdoors in
+ * larger batches because the relay handles sub-batching internally.
+ */
 const TRAPDOOR_BATCH_SIZE = 500;
 const PAGE_SIZE = 1000;
 
@@ -30,13 +51,17 @@ export class SubgraphClient {
         first: PAGE_SIZE,
       });
 
-      if (data?.blindIndices) {
-        for (const entry of data.blindIndices) {
-          // T322: Client-side safety net — skip inactive facts even if the
-          // subgraph endpoint doesn't support relation filters.
-          if (entry.fact && entry.fact.isActive !== false && !allResults.has(entry.fact.id)) {
-            allResults.set(entry.fact.id, entry.fact);
-          }
+      // Parse blind index entries from response.
+      // The Graph Node pluralizes BlindIndex as `blindIndexes`, but some
+      // legacy subgraphs may return `blindIndices`. Handle both.
+      const entries: any[] =
+        (data as any)?.blindIndexes ||
+        (data as any)?.blindIndices ||
+        [];
+
+      for (const entry of entries) {
+        if (entry.fact && entry.fact.isActive !== false && !allResults.has(entry.fact.id)) {
+          allResults.set(entry.fact.id, entry.fact);
         }
       }
     }
@@ -49,15 +74,14 @@ export class SubgraphClient {
    * Used as a fallback when trapdoor search returns 0 candidates.
    */
   async searchBroadened(owner: string, maxCandidates: number = 200): Promise<SubgraphFact[]> {
-    const data = await this.query(
-      `query BroadenedSearch($owner: Bytes!, $first: Int!) {
-        facts(where: { owner: $owner, isActive: true }, first: $first, orderBy: timestamp, orderDirection: desc) {
-          id encryptedBlob encryptedEmbedding decayScore timestamp isActive contentFp sequenceId version
-        }
-      }`,
-      { owner, first: Math.min(maxCandidates, PAGE_SIZE) },
+    const data = await this.query(BROADENED_SEARCH, {
+      owner,
+      first: Math.min(maxCandidates, PAGE_SIZE),
+    });
+
+    return ((data as any)?.facts ?? []).filter(
+      (f: SubgraphFact) => f.isActive !== false
     );
-    return (data?.facts ?? []).filter((f: SubgraphFact) => f.isActive !== false);
   }
 
   async fetchAllFacts(owner: string): Promise<SubgraphFact[]> {

@@ -9,7 +9,7 @@ repository = "https://github.com/p-diogo/totalreclaw"
 [features]
 default = ["managed"]
 managed = ["dep:alloy-primitives", "dep:alloy-sol-types"]
-wasm = ["dep:wasm-bindgen", "dep:js-sys", "dep:serde-wasm-bindgen", "getrandom/js"]
+wasm = ["dep:wasm-bindgen", "dep:js-sys", "dep:serde-wasm-bindgen", "getrandom/js", "uuid/js"]
 python = ["dep:pyo3"]
 
 [lib]

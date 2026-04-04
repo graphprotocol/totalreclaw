@@ -4,10 +4,19 @@
  * Implements BM25 text scoring, cosine similarity, Reciprocal Rank Fusion (RRF),
  * Weighted RRF, and Maximal Marginal Relevance (MMR) for combining multiple
  * ranking signals with diversity.
+ *
+ * Cosine similarity delegates to the Rust WASM core for performance.
+ * BM25, RRF, and higher-order combinators remain in TypeScript because
+ * they operate on Maps/objects that are expensive to serialize across the
+ * WASM boundary.
  */
+
+import * as wasm from "@totalreclaw/core";
 
 /**
  * Compute cosine similarity between two vectors
+ *
+ * Delegates to the Rust WASM core for SIMD-style inner-product computation.
  *
  * @param a - First vector
  * @param b - Second vector
@@ -18,24 +27,12 @@ export function cosineSimilarity(a: number[], b: number[]): number {
     throw new Error(`Vector length mismatch: ${a.length} vs ${b.length}`);
   }
 
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
+  if (a.length === 0) return 0;
 
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-
-  normA = Math.sqrt(normA);
-  normB = Math.sqrt(normB);
-
-  if (normA === 0 || normB === 0) {
-    return 0;
-  }
-
-  return dotProduct / (normA * normB);
+  // WASM cosineSimilarity takes Float32Array
+  const fa = new Float32Array(a);
+  const fb = new Float32Array(b);
+  return wasm.cosineSimilarity(fa, fb);
 }
 
 /**
@@ -443,4 +440,45 @@ export function applyMMR<T extends { id: string; embedding?: number[] }>(
   }
 
   return selected;
+}
+
+// ---------------------------------------------------------------------------
+// WASM-backed full rerank pipeline
+// ---------------------------------------------------------------------------
+
+/**
+ * Result from the WASM rerank pipeline.
+ */
+export interface WasmRankedResult {
+  id: string;
+  text: string;
+  score: number;
+  cosine_score: number;
+  bm25_score: number;
+  decay_score: number;
+}
+
+/**
+ * Rerank candidates using the Rust WASM BM25 + Cosine + RRF fusion pipeline.
+ *
+ * This is the high-performance path for managed-service search. It takes
+ * decrypted candidates and returns top-K ranked results in a single WASM call.
+ *
+ * @param query - Search query text
+ * @param queryEmbedding - Query embedding vector
+ * @param candidates - Array of {id, text, embedding, timestamp} candidates
+ * @param topK - Number of results to return
+ * @returns Ranked results from WASM
+ */
+export function wasmRerank(
+  query: string,
+  queryEmbedding: number[],
+  candidates: Array<{ id: string; text: string; embedding: number[]; timestamp?: string }>,
+  topK: number,
+): WasmRankedResult[] {
+  if (candidates.length === 0) return [];
+
+  const qe = new Float32Array(queryEmbedding);
+  const candidatesJson = JSON.stringify(candidates);
+  return wasm.rerank(query, qe, candidatesJson, topK) as WasmRankedResult[];
 }
