@@ -42,7 +42,6 @@
     "@totalreclaw/core": "^0.1.0",
     "permissionless": "^0.3.4",
     "porter-stemmer": "^0.9.1",
-    "tslib": "^2.8.1",
     "viem": "^2.47.0"
   },
   "devDependencies": {

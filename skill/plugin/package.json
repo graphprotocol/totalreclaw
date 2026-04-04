@@ -27,6 +27,17 @@
     "@totalreclaw/client": "^0.8.0",
     "@totalreclaw/core": "^0.1.0"
   },
+  "files": [
+    "*.ts",
+    "import-adapters/",
+    "!**/*.test.ts",
+    "!pocv2-e2e-test.ts",
+    "openclaw.plugin.json",
+    "SKILL.md",
+    "README.md",
+    "CLAWHUB.md",
+    "skill.json"
+  ],
   "openclaw": {
     "extensions": [
       "./index.ts"
