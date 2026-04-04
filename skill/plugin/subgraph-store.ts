@@ -42,9 +42,16 @@ export interface FactPayload {
   encryptedEmbedding?: string;
 }
 
-// Dummy 65-byte signature for gas estimation (pm_sponsorUserOperation).
-// Some paymasters/bundlers need a realistic-length signature for accurate gas estimation.
-const DUMMY_SIGNATURE = `0x${'00'.repeat(65)}`;
+// Stub 65-byte signature for gas estimation (pm_sponsorUserOperation).
+// Must be a structurally valid ECDSA signature (r,s,v) so that ecrecover does
+// NOT revert inside SimpleAccount._validateSignature.  All-zeros causes
+// OpenZeppelin ECDSA.recover() to revert with ECDSAInvalidSignature() (0xf645eedf),
+// which the EntryPoint surfaces as AA23.
+// This matches the stub used by permissionless/viem — ecrecover returns a
+// non-owner address, so validateUserOp returns SIG_VALIDATION_FAILED (1)
+// instead of reverting, which is what bundlers expect during simulation.
+const DUMMY_SIGNATURE =
+  '0xfffffffffffffffffffffffffffffff0000000000000000000000000000000007aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1c';
 
 // ---------------------------------------------------------------------------
 // Protobuf encoding (WASM)
@@ -101,12 +108,12 @@ export async function deriveSmartAccountAddress(mnemonic: string, chainId?: numb
   const eoa = wasm.deriveEoa(mnemonic) as { private_key: string; address: string };
   const resolvedChainId = chainId ?? 84532;
 
-  // SimpleAccountFactory.getAddress(address owner, uint256 salt)
-  // Selector: 0x5fbfb9cf = keccak256("getAddress(address,uint256)")[0:4]
+  // SimpleAccountFactory.getAddress(address owner, uint256 salt) — view function
+  // Selector: 0x8cb84e18 = keccak256("getAddress(address,uint256)")[0:4]
   const factoryAddress = wasm.getSimpleAccountFactory();
   const ownerPadded = eoa.address.slice(2).toLowerCase().padStart(64, '0');
   const saltPadded = '0'.repeat(64);
-  const selector = '5fbfb9cf';
+  const selector = '8cb84e18';
   const calldata = `0x${selector}${ownerPadded}${saltPadded}`;
 
   const rpcUrl = CONFIG.rpcUrl || getDefaultRpcUrl(resolvedChainId);
@@ -164,8 +171,8 @@ async function getInitCode(
   }
 
   // Account not deployed — build factory + factoryData for first-time deployment.
-  // createAccount(address owner, uint256 salt) — same selector as getAddress
-  // (SimpleAccountFactory uses the same function signature pattern).
+  // createAccount(address owner, uint256 salt) — state-changing function
+  // Selector: 0x5fbfb9cf = keccak256("createAccount(address,uint256)")[0:4]
   const factory = wasm.getSimpleAccountFactory();
   const ownerPadded = eoaAddress.slice(2).toLowerCase().padStart(64, '0');
   const saltPadded = '0'.repeat(64);
