@@ -11,6 +11,7 @@
  *   - totalreclaw_import_from  -- import memories from other tools (Mem0, MCP Memory, etc.)
  *   - totalreclaw_upgrade      -- create Stripe checkout for Pro upgrade
  *   - totalreclaw_migrate      -- migrate testnet memories to mainnet after Pro upgrade
+ *   - totalreclaw_setup        -- initialize with recovery phrase (no gateway restart needed)
  *
  * Also registers a `before_agent_start` hook that automatically injects
  * relevant memories into the agent's context.
@@ -46,7 +47,7 @@ import {
 import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, submitFactBatchOnChain, deriveSmartAccountAddress, type FactPayload } from './subgraph-store.js';
 import { searchSubgraph, searchSubgraphBroadened, getSubgraphFactCount } from './subgraph-search.js';
 import { PluginHotCache, type HotFact } from './hot-cache-wrapper.js';
-import { CONFIG } from './config.js';
+import { CONFIG, setRecoveryPhraseOverride } from './config.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -415,14 +416,20 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
     userId = registeredUserId!;
 
     // Persist credentials so we can resume later.
+    // Include the mnemonic so hot-reload works without env var.
     const dir = path.dirname(CREDENTIALS_PATH);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(
-      CREDENTIALS_PATH,
-      JSON.stringify({ userId, salt: keys.salt.toString('base64') }),
-    );
+    const credsToSave: Record<string, string> = {
+      userId,
+      salt: keys.salt.toString('base64'),
+    };
+    // Only persist mnemonic if we have one (avoid writing empty string).
+    if (masterPassword) {
+      credsToSave.mnemonic = masterPassword;
+    }
+    fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(credsToSave), { mode: 0o600 });
 
     logger.info(`Registered new user: ${userId}`);
   }
@@ -489,6 +496,13 @@ function isDocker(): boolean {
 }
 
 function buildSetupErrorMsg(): string {
+  return 'TotalReclaw setup required. Use the `totalreclaw_setup` tool with a 12-word BIP-39 recovery phrase.\n\n' +
+    '1. Ask the user if they have an existing recovery phrase, or generate a new one with `npx @totalreclaw/mcp-server setup`.\n' +
+    '2. Call `totalreclaw_setup` with the phrase — no gateway restart needed.\n' +
+    '   (Optional: set TOTALRECLAW_SELF_HOSTED=true if using your own server instead of the managed service.)';
+}
+
+function buildSetupErrorMsgLegacy(): string {
   const base =
     'TotalReclaw setup required:\n' +
     '1. Set TOTALRECLAW_RECOVERY_PHRASE — ask the user if they have an existing recovery phrase or generate a new 12-word BIP-39 mnemonic.\n' +
@@ -519,11 +533,83 @@ const SETUP_ERROR_MSG = buildSetupErrorMsg();
 
 /**
  * Ensure `initialize()` has completed (runs at most once).
+ *
+ * If `needsSetup` is true after init, attempts a hot-reload from
+ * credentials.json in case the mnemonic was written there by a
+ * `totalreclaw_setup` tool call or `npx @totalreclaw/mcp-server setup`.
  */
 async function ensureInitialized(logger: OpenClawPluginApi['logger']): Promise<void> {
   if (!initPromise) {
     initPromise = initialize(logger);
   }
+  await initPromise;
+
+  // Hot-reload: if setup is still needed, check if credentials.json
+  // now has a mnemonic (written by totalreclaw_setup or MCP setup CLI).
+  if (needsSetup) {
+    await attemptHotReload(logger);
+  }
+}
+
+/**
+ * Attempt to hot-reload credentials from credentials.json.
+ *
+ * Called when `needsSetup` is true — checks if credentials.json contains
+ * a mnemonic (written by the `totalreclaw_setup` tool or MCP setup CLI).
+ * If found, re-derives keys and completes initialization without requiring
+ * a gateway restart.
+ */
+async function attemptHotReload(logger: OpenClawPluginApi['logger']): Promise<void> {
+  try {
+    if (!fs.existsSync(CREDENTIALS_PATH)) return;
+
+    const creds = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
+    if (!creds.mnemonic) return;
+
+    logger.info('Hot-reloading credentials from credentials.json (no restart needed)');
+
+    // Set the runtime override so CONFIG.recoveryPhrase returns the mnemonic.
+    setRecoveryPhraseOverride(creds.mnemonic);
+
+    // Re-run initialization with the newly available mnemonic.
+    needsSetup = false;
+    initPromise = initialize(logger);
+    await initPromise;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`Hot-reload from credentials.json failed: ${msg}`);
+    // Leave needsSetup as true — user will see the setup prompt.
+  }
+}
+
+/**
+ * Force re-initialization after credentials are written.
+ *
+ * Called by the `totalreclaw_setup` tool after writing the mnemonic to
+ * credentials.json. Resets module state and re-derives all keys, LSH,
+ * auth, and Smart Account address.
+ */
+async function forceReinitialization(mnemonic: string, logger: OpenClawPluginApi['logger']): Promise<void> {
+  // Set the runtime override so CONFIG.recoveryPhrase returns this mnemonic.
+  setRecoveryPhraseOverride(mnemonic);
+
+  // Reset module state for a clean re-init.
+  needsSetup = false;
+  authKeyHex = null;
+  encryptionKey = null;
+  dedupKey = null;
+  userId = null;
+  subgraphOwner = null;
+  apiClient = null;
+  lshHasher = null;
+  lshInitFailed = false;
+  masterPasswordCache = null;
+  saltCache = null;
+  pluginHotCache = null;
+  firstRunAfterInit = true;
+
+  // Re-run initialization.
+  initPromise = initialize(logger);
   await initPromise;
 }
 
@@ -2787,6 +2873,85 @@ const plugin = {
     );
 
     // ---------------------------------------------------------------
+    // Tool: totalreclaw_setup
+    // ---------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: 'totalreclaw_setup',
+        label: 'Setup TotalReclaw',
+        description:
+          'Initialize TotalReclaw with a recovery phrase. Derives encryption keys and registers with the server. ' +
+          'Use this during first-time setup instead of setting environment variables — no gateway restart needed.',
+        parameters: {
+          type: 'object',
+          properties: {
+            recovery_phrase: {
+              type: 'string',
+              description: 'A 12-word BIP-39 mnemonic recovery phrase. Generate one with `npx @totalreclaw/mcp-server setup --generate-only`, or let the user provide an existing one.',
+            },
+          },
+          required: ['recovery_phrase'],
+          additionalProperties: false,
+        },
+        async execute(_toolCallId: string, params: { recovery_phrase: string }) {
+          try {
+            const mnemonic = params.recovery_phrase.trim();
+
+            if (!mnemonic) {
+              return {
+                content: [{ type: 'text', text: 'Error: recovery_phrase is required.' }],
+              };
+            }
+
+            // Basic validation: must be 12 words
+            const words = mnemonic.split(/\s+/);
+            if (words.length !== 12) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: `Error: Recovery phrase must be exactly 12 words (got ${words.length}). Use \`npx @totalreclaw/mcp-server setup\` to generate a valid BIP-39 mnemonic.`,
+                }],
+              };
+            }
+
+            api.logger.info('totalreclaw_setup: initializing with provided recovery phrase');
+
+            // Force re-initialization with the new mnemonic.
+            // This derives keys, registers with the server, saves credentials,
+            // and sets up LSH/auth — all without a gateway restart.
+            await forceReinitialization(mnemonic, api.logger);
+
+            if (needsSetup) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: 'Setup failed — could not initialize with the provided recovery phrase. Check the logs for details.',
+                }],
+              };
+            }
+
+            return {
+              content: [{
+                type: 'text',
+                text: 'TotalReclaw setup complete! Encryption keys derived, server registration confirmed. ' +
+                      'You can now use totalreclaw_remember, totalreclaw_recall, and all other tools immediately — no restart needed.\n\n' +
+                      'From now on, I will automatically remember important things from our conversations and recall relevant context at the start of each session.',
+              }],
+            };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            api.logger.error(`totalreclaw_setup failed: ${message}`);
+            return {
+              content: [{ type: 'text', text: `Setup failed: ${message}` }],
+            };
+          }
+        },
+      },
+      { name: 'totalreclaw_setup' },
+    );
+
+    // ---------------------------------------------------------------
     // Hook: before_agent_start
     // ---------------------------------------------------------------
 
@@ -2813,11 +2978,12 @@ const plugin = {
                 '## TotalReclaw — First-Time Setup\n\n' +
                 'TotalReclaw is an end-to-end encrypted memory vault. It remembers things across conversations — preferences, decisions, project context — all encrypted so no one (not even the server) can read your memories.\n\n' +
                 '**To get started, ask the user:** "Do you have an existing TotalReclaw recovery phrase you\'d like to restore, or should I generate a new one?"\n\n' +
-                '**If new user:** Run `npx @totalreclaw/mcp-server setup` to generate a cryptographically valid recovery phrase. Do NOT generate the phrase yourself — LLMs cannot compute BIP-39 checksums. The command will output the phrase. Set it as TOTALRECLAW_RECOVERY_PHRASE. Display it prominently and warn:\n' +
+                '**If new user:** Run `npx @totalreclaw/mcp-server setup` to generate a cryptographically valid recovery phrase. Do NOT generate the phrase yourself — LLMs cannot compute BIP-39 checksums. The command will output the phrase. Then call the `totalreclaw_setup` tool with the phrase. Display the phrase prominently and warn:\n' +
                 '- "This is your ONLY way to access your memories. Write it down and store it securely."\n' +
                 '- "NEVER use a recovery phrase from an existing crypto wallet — keep this separate from any wallet that holds funds."\n' +
                 '- "If you lose this phrase, your memories are gone forever — there is no recovery."\n\n' +
-                '**If returning user:** Ask them to provide their 12-word phrase, validate it, and set it as TOTALRECLAW_RECOVERY_PHRASE.\n\n' +
+                '**If returning user:** Ask them to provide their 12-word phrase, then call `totalreclaw_setup` with that phrase.\n\n' +
+                '**IMPORTANT:** Use the `totalreclaw_setup` tool to complete setup. This initializes encryption keys immediately — no gateway restart needed. The user can continue chatting right away.\n\n' +
                 '**After setup:** Explain that from now on, you will automatically remember important things from conversations and recall relevant memories at the start of each session. The user can also explicitly ask you to remember, recall, forget, or export memories.',
             };
           }

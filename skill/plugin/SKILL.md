@@ -338,6 +338,34 @@ Migrate memories from testnet (Base Sepolia) to mainnet (Gnosis) after upgrading
 
 ---
 
+### totalreclaw_setup
+
+Initialize TotalReclaw with a recovery phrase. No gateway restart needed.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| recovery_phrase | string | Yes | A 12-word BIP-39 mnemonic. Generate with `npx @totalreclaw/mcp-server setup` or provide an existing one. |
+
+**Example:**
+```json
+{
+  "recovery_phrase": "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12"
+}
+```
+
+**Returns:**
+```json
+{
+  "content": [{ "type": "text", "text": "TotalReclaw setup complete! Encryption keys derived, server registration confirmed..." }]
+}
+```
+
+**Important:** This tool derives encryption keys and registers with the server immediately. The user can start using all TotalReclaw tools right away without restarting the gateway.
+
+---
+
 ### totalreclaw_import_from
 
 Import memories from other AI memory tools into TotalReclaw.
@@ -447,28 +475,32 @@ The recovery phrase is a **12-word BIP-39 mnemonic**. It derives all encryption 
 Ask the user:
 > "Do you have an existing TotalReclaw recovery phrase you'd like to restore, or should I generate a new one?"
 
-- **New user:** Run `npx @totalreclaw/mcp-server setup` to generate a cryptographically valid recovery phrase. Do NOT generate the phrase yourself — LLMs cannot compute BIP-39 checksums correctly. The setup wizard will output the phrase and save credentials automatically. Then set the phrase as `TOTALRECLAW_RECOVERY_PHRASE`. Display it prominently with a warning:
-  > "⚠️ SAVE YOUR RECOVERY PHRASE — it's the only way to recover your memories if you switch devices: `[phrase]`"
-- **Returning user:** Ask them to provide their existing 12-word phrase, then set it as `TOTALRECLAW_RECOVERY_PHRASE`.
+- **New user:** Run `npx @totalreclaw/mcp-server setup` to generate a cryptographically valid recovery phrase. Do NOT generate the phrase yourself — LLMs cannot compute BIP-39 checksums correctly. The setup wizard will output the phrase and save credentials automatically.
+  Display it prominently with a warning:
+  > "SAVE YOUR RECOVERY PHRASE — it's the only way to recover your memories if you switch devices: `[phrase]`"
+- **Returning user:** Ask them to provide their existing 12-word phrase.
 
-When setup is required, the plugin will automatically detect the host environment (macOS, Linux, or Docker) and provide the exact commands or config snippets needed to set the env vars. Follow those instructions.
+### Step 2: Call totalreclaw_setup
 
-### Step 2: Storage mode (optional)
+Once you have the recovery phrase, call the `totalreclaw_setup` tool with it:
+```json
+{ "recovery_phrase": "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12" }
+```
+
+This derives encryption keys and registers with the server immediately. **No gateway restart needed.** The user can continue chatting and all TotalReclaw tools will work right away.
+
+### Step 3: Storage mode (optional)
 
 The managed service is the default -- no extra configuration needed. If you want to self-host instead, set `TOTALRECLAW_SELF_HOSTED=true` and `TOTALRECLAW_SERVER_URL` to your server URL.
 
-### Step 3: Set memory slot
+### Step 4: Set memory slot
 
 Register TotalReclaw as the memory plugin:
 ```json
 { "plugins": { "slots": { "memory": "totalreclaw" } } }
 ```
 
-### Step 5: Restart and verify
-
-Restart the gateway, then confirm the plugin loaded by checking that `totalreclaw_remember`, `totalreclaw_recall`, `totalreclaw_forget`, `totalreclaw_export`, `totalreclaw_status`, `totalreclaw_upgrade`, `totalreclaw_migrate`, `totalreclaw_consolidate`, and `totalreclaw_import_from` tools are available.
-
-### Step 6: Explain the free tier
+### Step 5: Explain the free tier
 
 After setup completes, inform the user about the free tier:
 > "You're on TotalReclaw's free tier — 500 memories per month, unlimited reads and searches.
@@ -532,6 +564,15 @@ TotalReclaw has a free tier (500 memories/month, unlimited reads). The plugin mo
 - After upgrading, the new tier features may take up to 2 hours to fully activate on your client due to billing cache. If you experience issues, restart your agent.
 
 ### When to Use Each Tool
+
+#### totalreclaw_setup
+
+Use when:
+- TotalReclaw prompts for first-time setup (recovery phrase needed)
+- The user provides a recovery phrase for initialization
+- You have generated a recovery phrase via `npx @totalreclaw/mcp-server setup`
+
+This tool initializes encryption keys immediately without requiring a gateway restart.
 
 #### totalreclaw_remember
 

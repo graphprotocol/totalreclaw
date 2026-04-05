@@ -12,9 +12,24 @@ import path from 'node:path';
 
 const home = process.env.HOME ?? '/home/node';
 
+/** Runtime override for recovery phrase (set by hot-reload after setup). */
+let _recoveryPhraseOverride: string | null = null;
+
+export function setRecoveryPhraseOverride(phrase: string): void {
+  _recoveryPhraseOverride = phrase;
+}
+
+export function getRecoveryPhrase(): string {
+  return _recoveryPhraseOverride ?? process.env.TOTALRECLAW_RECOVERY_PHRASE ?? '';
+}
+
 export const CONFIG = {
-  // Core
-  recoveryPhrase: process.env.TOTALRECLAW_RECOVERY_PHRASE || '',
+  // Core — recoveryPhrase reads from override first, then env var.
+  // Use getRecoveryPhrase() for dynamic access; this property is for
+  // backward-compat with code that reads CONFIG.recoveryPhrase at init time.
+  get recoveryPhrase(): string {
+    return getRecoveryPhrase();
+  },
   serverUrl: (process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz').replace(/\/+$/, ''),
   selfHosted: process.env.TOTALRECLAW_SELF_HOSTED === 'true',
   credentialsPath: process.env.TOTALRECLAW_CREDENTIALS_PATH || path.join(home, '.totalreclaw', 'credentials.json'),
