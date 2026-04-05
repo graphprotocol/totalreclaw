@@ -238,6 +238,9 @@ export async function submitFactOnChain(
       headers,
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
     });
+    if (!resp.ok) {
+      throw new Error(`Relay returned HTTP ${resp.status} for ${method}`);
+    }
     const json = await resp.json() as { result?: any; error?: { message: string } };
     if (json.error) throw new Error(`RPC ${method}: ${json.error.message}`);
     return json.result;
@@ -376,6 +379,9 @@ export async function submitFactBatchOnChain(
       headers,
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
     });
+    if (!resp.ok) {
+      throw new Error(`Relay returned HTTP ${resp.status} for ${method}`);
+    }
     const json = await resp.json() as { result?: any; error?: { message: string } };
     if (json.error) throw new Error(`RPC ${method}: ${json.error.message}`);
     return json.result;

@@ -1060,6 +1060,7 @@ async function storeExtractedFacts(
   let stored = 0;
   let superseded = 0;
   let skipped = 0;
+  let failedFacts = 0;
   const pendingPayloads: Buffer[] = []; // Batched subgraph payloads
   let preparedForSubgraph = 0;
 
@@ -1242,17 +1243,20 @@ async function storeExtractedFacts(
     } catch (err: unknown) {
       // Check for 403 / quota exceeded — invalidate billing cache so next
       // before_agent_start re-fetches and warns the user.
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (errMsg.includes('403') || errMsg.toLowerCase().includes('quota')) {
+      const factErrMsg = err instanceof Error ? err.message : String(err);
+      if (factErrMsg.includes('403') || factErrMsg.toLowerCase().includes('quota')) {
         try { fs.unlinkSync(BILLING_CACHE_PATH); } catch { /* ignore */ }
-        logger.warn(`Quota exceeded — billing cache invalidated. ${errMsg}`);
+        logger.warn(`Quota exceeded — billing cache invalidated. ${factErrMsg}`);
         break; // Stop trying to store remaining facts — they'll all fail too
       }
-      // Otherwise skip failed facts (e.g., duplicates return success with duplicate_ids)
+      // Otherwise log and continue — individual fact failures shouldn't block remaining facts
+      logger.warn(`Failed to store fact "${fact.text.slice(0, 60)}…": ${factErrMsg}`);
+      failedFacts++;
     }
   }
 
   // Batch-submit all subgraph payloads in a single UserOp (gas-efficient).
+  let batchError: string | undefined;
   if (pendingPayloads.length > 0 && isSubgraphMode()) {
     try {
       const batchConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
@@ -1261,21 +1265,30 @@ async function storeExtractedFacts(
         stored += preparedForSubgraph;
         logger.info(`Batch submitted ${result.batchSize} payloads in 1 UserOp (tx=${result.txHash.slice(0, 10)}…)`);
       } else {
-        logger.warn(`Batch UserOp failed on-chain (tx=${result.txHash.slice(0, 10)}…)`);
+        batchError = `On-chain batch submission failed (tx=${result.txHash.slice(0, 10)}…)`;
+        logger.warn(batchError);
       }
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
       if (errMsg.includes('403') || errMsg.toLowerCase().includes('quota')) {
         try { fs.unlinkSync(BILLING_CACHE_PATH); } catch { /* ignore */ }
-        logger.warn(`Quota exceeded during batch submit — billing cache invalidated. ${errMsg}`);
+        batchError = `Quota exceeded — billing cache invalidated. ${errMsg}`;
+        logger.warn(batchError);
       } else {
-        logger.warn(`Batch submission failed: ${errMsg}`);
+        batchError = `Batch submission failed: ${errMsg}`;
+        logger.warn(batchError);
       }
     }
   }
 
-  if (stored > 0 || superseded > 0 || skipped > 0) {
-    logger.info(`Auto-extraction results: stored=${stored}, superseded=${superseded}, skipped=${skipped}`);
+  if (stored > 0 || superseded > 0 || skipped > 0 || failedFacts > 0) {
+    logger.info(`Auto-extraction results: stored=${stored}, superseded=${superseded}, skipped=${skipped}, failed=${failedFacts}`);
+  }
+
+  // If nothing was stored and there were failures, throw so callers can surface the error
+  if (stored === 0 && (failedFacts > 0 || batchError)) {
+    const reason = batchError || `${failedFacts} fact(s) failed to store`;
+    throw new Error(`Memory storage failed: ${reason}`);
   }
 
   return stored;
@@ -1682,7 +1695,10 @@ const plugin = {
                 agentId: 'openclaw-plugin',
                 encryptedEmbedding: embeddingResult?.encryptedEmbedding,
               });
-              await submitFactOnChain(protobuf, config);
+              const result = await submitFactOnChain(protobuf, config);
+              if (!result.success) {
+                throw new Error(`On-chain submission failed (tx=${result.txHash?.slice(0, 10) || 'none'}…)`);
+              }
             } else {
               await apiClient!.store(userId!, [factPayload], authKeyHex!);
             }
@@ -2019,6 +2035,9 @@ const plugin = {
               };
               const protobuf = encodeFactProtobuf(tombstone);
               const result = await submitFactOnChain(protobuf, config);
+              if (!result.success) {
+                throw new Error(`On-chain tombstone failed (tx=${result.txHash?.slice(0, 10) || 'none'}…)`);
+              }
               api.logger.info(`Tombstone written for ${params.factId}: tx=${result.txHash}`);
               return {
                 content: [{ type: 'text', text: `Memory ${params.factId} deleted (on-chain tombstone, tx: ${result.txHash})` }],
@@ -3202,7 +3221,7 @@ const plugin = {
           }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
-          api.logger.warn(`agent_end extraction failed: ${message}`);
+          api.logger.error(`agent_end extraction failed: ${message}`);
         }
       },
       { priority: 90 },
