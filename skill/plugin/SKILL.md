@@ -466,6 +466,11 @@ Imported facts are tagged with `import_source:{source}` for easy filtering. The 
 
 ## Post-Install Setup
 
+> **Important:** After `openclaw skills install totalreclaw`, you also need to run
+> `openclaw plugins install ~/.openclaw/workspace/skills/totalreclaw` to register
+> the executable plugin. The skill alone only provides instructions; the plugin
+> provides the actual memory tools.
+
 After installing TotalReclaw, the agent MUST complete setup automatically. **Do NOT ask the user to set environment variables manually.**
 
 ### Step 1: Recovery phrase

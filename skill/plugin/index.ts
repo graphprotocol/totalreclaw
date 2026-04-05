@@ -402,7 +402,14 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
   try {
     if (fs.existsSync(CREDENTIALS_PATH)) {
       const creds = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
-      existingSalt = Buffer.from(creds.salt, 'base64');
+      // Salt may be stored as base64 (plugin-written) or hex (MCP setup-written).
+      // Detect format: hex strings are 64 chars of [0-9a-f], base64 uses [A-Z+/=].
+      const saltStr: string = creds.salt;
+      if (saltStr && /^[0-9a-f]{64}$/i.test(saltStr)) {
+        existingSalt = Buffer.from(saltStr, 'hex');
+      } else if (saltStr) {
+        existingSalt = Buffer.from(saltStr, 'base64');
+      }
       existingUserId = creds.userId;
       logger.info(`Loaded existing credentials for user ${existingUserId}`);
     }
@@ -423,6 +430,20 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
   if (existingUserId) {
     userId = existingUserId;
     logger.info(`Authenticated as user ${userId}`);
+
+    // Idempotent registration — ensure auth key is registered with the relay.
+    // Without this, returning users get 401 if the relay database was reset or
+    // if credentials were created by the MCP setup CLI (different process).
+    try {
+      const authHash = computeAuthKeyHash(keys.authKey);
+      const saltHex = keys.salt.toString('hex');
+      await apiClient.register(authHash, saltHex);
+    } catch {
+      // Best-effort — relay returns 200 for already-registered users.
+      // Only fails on network errors; bearer token auth still works if
+      // a prior registration succeeded.
+      logger.warn('Idempotent relay registration failed (best-effort, will retry on next start)');
+    }
   } else {
     // First run -- register with the server.
     const authHash = computeAuthKeyHash(keys.authKey);
@@ -1833,13 +1854,8 @@ const plugin = {
               await apiClient!.store(userId!, [factPayload], authKeyHex!);
             }
 
-            const statusMsg = supersededId
-              ? `Memory stored (ID: ${factId}). Superseded an older similar memory.`
-              : `Memory stored (ID: ${factId})`;
-
             return {
-              content: [{ type: 'text', text: statusMsg }],
-              details: { factId, supersededId },
+              content: [{ type: 'text', text: 'Memory encrypted and stored.' }],
             };
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
@@ -3396,6 +3412,9 @@ const plugin = {
     api.on(
       'agent_end',
       async (event: unknown) => {
+        // CRITICAL: Always return { memoryHandled: true } so OpenClaw's default
+        // memory system does NOT fall back to writing plaintext MEMORY.md.
+        // Losing facts on error is acceptable; leaking them in cleartext is not.
         try {
           // Defensive: ensure MEMORY.md header is present so OpenClaw's default
           // memory system doesn't write sensitive data in cleartext, even if
@@ -3405,17 +3424,17 @@ const plugin = {
           const evt = event as { messages?: unknown[]; success?: boolean } | undefined;
           if (!evt?.messages || evt.messages.length < 2) {
             api.logger.info('agent_end: skipping extraction (no messages)');
-            return;
+            return { memoryHandled: true };
           }
           // Allow extraction even when evt.success is undefined (some OpenClaw
           // versions don't set it). Only skip on explicit failure.
           if (evt.success === false) {
             api.logger.info('agent_end: skipping extraction (agent reported failure)');
-            return;
+            return { memoryHandled: true };
           }
 
           await ensureInitialized(api.logger);
-          if (needsSetup) return;
+          if (needsSetup) return { memoryHandled: true };
 
           // C3: Throttle auto-extraction to every N turns (configurable via env).
           turnsSinceLastExtraction++;
@@ -3441,7 +3460,11 @@ const plugin = {
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           api.logger.error(`agent_end extraction failed: ${message}`);
+          // Re-assert MEMORY.md header even on failure — last line of defense.
+          ensureMemoryHeader(api.logger);
         }
+        // Always signal that memory is handled — prevent plaintext fallback.
+        return { memoryHandled: true };
       },
       { priority: 90 },
     );
