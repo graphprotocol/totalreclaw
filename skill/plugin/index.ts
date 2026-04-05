@@ -148,8 +148,9 @@ const STORE_DEDUP_ENABLED = CONFIG.storeDedupEnabled;
 // One-time welcome-back message for returning Pro users (set during init, consumed by first before_agent_start)
 let welcomeBackMessage: string | null = null;
 
-// B2: Minimum relevance threshold — cosine below this means no memory injection
-const RELEVANCE_THRESHOLD = CONFIG.relevanceThreshold;
+// B2: COSINE_THRESHOLD (above) is the single relevance gate for both
+// the before_agent_start hook and the recall tool.  The former "RELEVANCE_THRESHOLD"
+// (0.3) was too aggressive and silently suppressed auto-recall at session start.
 
 // ---------------------------------------------------------------------------
 // Billing cache infrastructure
@@ -3022,15 +3023,6 @@ const plugin = {
               INTENT_WEIGHTS[hookQueryIntent],
             );
 
-            // B2: Minimum relevance threshold — skip noise injection for irrelevant turns.
-            const candidatesWithEmb = rerankerCandidates.filter(c => c.embedding && c.embedding.length > 0);
-            if (candidatesWithEmb.length > 0 && queryEmbedding && queryEmbedding.length > 0) {
-              const topCosine = Math.max(
-                ...candidatesWithEmb.map(c => cosineSimilarity(queryEmbedding!, c.embedding!))
-              );
-              if (topCosine < RELEVANCE_THRESHOLD) return undefined;
-            }
-
             // Update hot cache with reranked results.
             try {
               if (pluginHotCache) {
@@ -3165,16 +3157,19 @@ const plugin = {
             INTENT_WEIGHTS[srvHookIntent],
           );
 
-          // B2: Minimum relevance threshold — skip noise injection for irrelevant turns.
-          const candidatesWithEmbSrv = rerankerCandidates.filter(c => c.embedding && c.embedding.length > 0);
-          if (candidatesWithEmbSrv.length > 0 && queryEmbedding && queryEmbedding.length > 0) {
-            const topCosine = Math.max(
-              ...candidatesWithEmbSrv.map(c => cosineSimilarity(queryEmbedding!, c.embedding!))
-            );
-            if (topCosine < RELEVANCE_THRESHOLD) return undefined;
-          }
-
           if (reranked.length === 0) return undefined;
+
+          // Cosine similarity threshold gate — skip injection when the
+          // best match is below the minimum relevance threshold.
+          const srvMaxCosine = Math.max(
+            ...reranked.map((r) => r.cosineSimilarity ?? 0),
+          );
+          if (srvMaxCosine < COSINE_THRESHOLD) {
+            api.logger.info(
+              `Hook: cosine threshold gate filtered results (max=${srvMaxCosine.toFixed(3)}, threshold=${COSINE_THRESHOLD})`,
+            );
+            return undefined;
+          }
 
           // 7. Build context string.
           const lines = reranked.map((m, i) => {
