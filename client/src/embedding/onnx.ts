@@ -13,9 +13,11 @@
  *
  * Model details:
  *   - onnx-community/harrier-oss-v1-270m-ONNX (ONNX-optimized)
- *   - Quantized: ~164MB download, cached in ~/.cache/huggingface/
+ *   - FP16: ~553MB download, cached in ~/.cache/huggingface/
  *   - 640-dimensional output vectors
  *   - Lazy initialization: first call ~3-5s, subsequent ~100ms
+ *   - Note: q4 uses GatherBlockQuantized (unsupported), q8 not available;
+ *     fp16 is the best compatible quantization for this model.
  */
 
 import { pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
@@ -37,7 +39,7 @@ export class EmbeddingModel {
   /**
    * Load the ONNX model.
    *
-   * Downloads the model on first use (~164MB, quantized). Subsequent calls
+   * Downloads the model on first use (~553MB, fp16). Subsequent calls
    * use the cached model from ~/.cache/huggingface/.
    *
    * @param _modelPath - Ignored (kept for backward compatibility). The model
@@ -45,9 +47,9 @@ export class EmbeddingModel {
    */
   async load(_modelPath?: string): Promise<void> {
     try {
-      console.error('[TotalReclaw] Downloading embedding model (~164MB, first run only)...');
+      console.error('[TotalReclaw] Downloading embedding model (~553MB, first run only)...');
       this.extractor = await pipeline('feature-extraction', MODEL_ID, {
-        dtype: 'q8',
+        dtype: 'fp16',
       });
       console.error('[TotalReclaw] Embedding model ready.');
       this.isLoaded = true;

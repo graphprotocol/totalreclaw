@@ -8,11 +8,13 @@
  * CLIENT-SIDE before encryption, so no plaintext ever reaches an external API.
  *
  * Model details:
- *   - Quantized ONNX model: ~164MB download on first use
+ *   - FP16 ONNX model: ~553MB download on first use
  *   - Cached in ~/.cache/huggingface/ after first download
  *   - Lazy initialization: first call ~3-5s (model load), subsequent ~100ms
  *   - Output: 640-dimensional normalized embedding vector
  *   - No instruction prefix needed
+ *   - Note: q4 uses GatherBlockQuantized (unsupported), q8 not available;
+ *     fp16 is the best compatible quantization for this model.
  *
  * Dependencies: @huggingface/transformers (handles model download,
  * tokenization, ONNX inference, last-token pooling, and normalization).
@@ -33,7 +35,7 @@ let extractor: FeatureExtractionPipeline | null = null;
 /**
  * Generate a 640-dimensional embedding vector for the given text.
  *
- * On first call, downloads and loads the ONNX model (~164MB, cached).
+ * On first call, downloads and loads the ONNX model (~553MB, cached).
  * Subsequent calls reuse the loaded model and run in ~100ms.
  *
  * The isQuery option is accepted for forward compatibility but does not
@@ -49,9 +51,9 @@ export async function generateEmbedding(
   options?: { isQuery?: boolean },
 ): Promise<number[]> {
   if (!extractor) {
-    console.error('[TotalReclaw] Downloading embedding model (~164MB, first run only)...');
+    console.error('[TotalReclaw] Downloading embedding model (~553MB, first run only)...');
     extractor = await pipeline('feature-extraction', MODEL_ID, {
-      dtype: 'q8',
+      dtype: 'fp16',
     });
     console.error('[TotalReclaw] Embedding model ready.');
   }

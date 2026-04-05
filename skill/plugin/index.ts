@@ -69,6 +69,16 @@ interface OpenClawPluginApi {
         };
       };
     };
+    models?: {
+      providers?: Record<string, {
+        baseUrl: string;
+        apiKey?: string;
+        api?: string;
+        models?: Array<{ id: string; [k: string]: unknown }>;
+        [k: string]: unknown;
+      }>;
+      [k: string]: unknown;
+    };
     [key: string]: unknown;
   };
   pluginConfig?: Record<string, unknown>;
@@ -1523,6 +1533,7 @@ const plugin = {
     initLLMClient({
       primaryModel: api.config?.agents?.defaults?.model?.primary as string | undefined,
       pluginConfig: api.pluginConfig,
+      openclawProviders: api.config?.models?.providers,
       logger: api.logger,
     });
 

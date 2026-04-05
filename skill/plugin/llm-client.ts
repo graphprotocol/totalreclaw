@@ -43,6 +43,15 @@ export interface LLMClientConfig {
   apiFormat: 'openai' | 'anthropic';
 }
 
+/** Shape of an OpenClaw model provider config entry. */
+interface OpenClawProviderConfig {
+  baseUrl: string;
+  apiKey?: string;
+  api?: string;
+  models?: Array<{ id: string; [k: string]: unknown }>;
+  [k: string]: unknown;
+}
+
 // ---------------------------------------------------------------------------
 // Provider mappings
 // ---------------------------------------------------------------------------
@@ -154,19 +163,21 @@ let _logger: { warn: (msg: string) => void } | null = null;
  * Resolution order (highest priority first):
  *   1. TOTALRECLAW_LLM_MODEL env var (power user override for model)
  *   2. Plugin config `extraction.model` (if provided)
- *   3. Auto-derived from provider heuristic
- *   4. Fallback: try common env vars (ZAI_API_KEY, OPENAI_API_KEY) for dev/test
+ *   3. Auto-derived from provider heuristic using env var API keys
+ *   4. OpenClaw's model provider config (api.config.models.providers)
+ *   5. Fallback: try common env vars (ZAI_API_KEY, OPENAI_API_KEY) for dev/test
  */
 export function initLLMClient(options: {
   primaryModel?: string;
   pluginConfig?: Record<string, unknown>;
+  openclawProviders?: Record<string, OpenClawProviderConfig>;
   logger?: { warn: (msg: string) => void };
 }): void {
   _logger = options.logger ?? null;
   _initialized = true;
   _cachedConfig = null;
 
-  const { primaryModel, pluginConfig } = options;
+  const { primaryModel, pluginConfig, openclawProviders } = options;
 
   // Check if extraction is explicitly disabled
   const extraction = pluginConfig?.extraction as Record<string, unknown> | undefined;
@@ -182,32 +193,73 @@ export function initLLMClient(options: {
     const modelName = parts.length >= 2 ? parts.slice(1).join('/') : primaryModel;
 
     if (provider) {
-      // Find the API key for this provider
+      // Find the API key for this provider — first from env vars, then from
+      // OpenClaw's provider config (api.config.models.providers)
       const keyNames = PROVIDER_KEY_NAMES[provider];
-      const apiKey = keyNames
+      let apiKey = keyNames
         ? keyNames.map((name) => CONFIG.llmApiKeys[name]).find(Boolean)
         : undefined;
 
-      if (apiKey) {
-        const baseUrl = PROVIDER_BASE_URLS[provider];
-        if (baseUrl) {
-          // Determine model: env override > plugin config > auto-derived
-          const model =
-            CONFIG.llmModel ||
-            (typeof extraction?.model === 'string' ? extraction.model : null) ||
-            deriveCheapModel(provider, modelName);
+      let baseUrl = PROVIDER_BASE_URLS[provider];
 
-          const apiFormat: 'openai' | 'anthropic' =
-            provider === 'anthropic' ? 'anthropic' : 'openai';
-
-          _cachedConfig = { apiKey, baseUrl, model, apiFormat };
-          return;
+      // If no env var key found, check OpenClaw's provider config
+      if (!apiKey && openclawProviders) {
+        const ocProvider = openclawProviders[provider];
+        if (ocProvider?.apiKey) {
+          apiKey = ocProvider.apiKey;
+          // Prefer the provider's configured baseUrl (may differ from our
+          // built-in default, e.g. Z.AI has /coding/paas vs /paas paths)
+          if (ocProvider.baseUrl) {
+            baseUrl = ocProvider.baseUrl.replace(/\/+$/, '');
+          }
         }
+      }
+
+      if (apiKey && baseUrl) {
+        // Determine model: env override > plugin config > auto-derived
+        const model =
+          CONFIG.llmModel ||
+          (typeof extraction?.model === 'string' ? extraction.model : null) ||
+          deriveCheapModel(provider, modelName);
+
+        const apiFormat: 'openai' | 'anthropic' =
+          provider === 'anthropic' ? 'anthropic' : 'openai';
+
+        _cachedConfig = { apiKey, baseUrl, model, apiFormat };
+        return;
       }
     }
   }
 
-  // --- Fallback: try common API keys (for dev/test without OpenClaw config) ---
+  // --- Fallback: try OpenClaw provider configs (any provider with an apiKey) ---
+  if (openclawProviders) {
+    for (const [providerName, providerConfig] of Object.entries(openclawProviders)) {
+      if (!providerConfig?.apiKey) continue;
+
+      const provider = providerName.toLowerCase();
+      const baseUrl = providerConfig.baseUrl?.replace(/\/+$/, '') || PROVIDER_BASE_URLS[provider];
+      if (!baseUrl) continue;
+
+      // Pick a model from the provider's configured models, or use our default
+      const firstModelId = providerConfig.models?.[0]?.id;
+      const model =
+        CONFIG.llmModel ||
+        (typeof extraction?.model === 'string' ? extraction.model : null) ||
+        (firstModelId ? deriveCheapModel(provider, firstModelId) : null);
+
+      if (!model) continue;
+
+      const apiFormat: 'openai' | 'anthropic' =
+        providerConfig.api === 'anthropic-messages' || provider === 'anthropic'
+          ? 'anthropic'
+          : 'openai';
+
+      _cachedConfig = { apiKey: providerConfig.apiKey, baseUrl, model, apiFormat };
+      return;
+    }
+  }
+
+  // --- Fallback: try common env var API keys (for dev/test without OpenClaw config) ---
   const fallbackProviders: Array<[string, string, string]> = [
     ['zai', 'zai', 'glm-4.5-flash'],
     ['openai', 'openai', 'gpt-4.1-mini'],

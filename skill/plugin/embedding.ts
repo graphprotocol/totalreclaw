@@ -5,9 +5,9 @@
  * no data leaves the machine. Preserves the E2EE guarantee.
  *
  * Three model options (selected via CONFIG.embeddingModel):
- *   - "default": onnx-community/harrier-oss-v1-270m-ONNX (640d, ~164MB, best accuracy/size ratio)
- *   - "small": Xenova/multilingual-e5-small (384d, ~34MB, fast, low RAM)
- *   - "large": onnx-community/Qwen3-Embedding-0.6B-ONNX (1024d, ~600MB, legacy)
+ *   - "default": onnx-community/harrier-oss-v1-270m-ONNX (640d, fp16 ~553MB, best accuracy/size ratio)
+ *   - "small": Xenova/multilingual-e5-small (384d, q8 ~34MB, fast, low RAM)
+ *   - "large": onnx-community/Qwen3-Embedding-0.6B-ONNX (1024d, q8 ~600MB, legacy)
  *
  * Dependencies: @huggingface/transformers
  */
@@ -21,6 +21,8 @@ interface ModelConfig {
   dims: number;
   pooling: string;
   size: string;
+  /** ONNX quantization dtype. Must match an available variant in the HF repo. */
+  dtype: string;
 }
 
 const MODELS: Record<string, ModelConfig> = {
@@ -28,19 +30,25 @@ const MODELS: Record<string, ModelConfig> = {
     id: 'onnx-community/harrier-oss-v1-270m-ONNX',
     dims: 640,
     pooling: 'last_token',
-    size: '~164MB',
+    size: '~553MB',
+    // Harrier ONNX repo has fp32, fp16, q4, q4f16, quantized — but NOT q8.
+    // q4 uses GatherBlockQuantized (unsupported in many runtimes).
+    // fp16 is the best balance of size and compatibility.
+    dtype: 'fp16',
   },
   small: {
     id: 'Xenova/multilingual-e5-small',
     dims: 384,
     pooling: 'mean',
     size: '~34MB',
+    dtype: 'q8',
   },
   large: {
     id: 'onnx-community/Qwen3-Embedding-0.6B-ONNX',
     dims: 1024,
     pooling: 'last_token',
     size: '~600MB',
+    dtype: 'q8',
   },
 };
 
@@ -67,7 +75,7 @@ export async function generateEmbedding(
     activeModel = getModelConfig();
     console.error(`[TotalReclaw] Downloading embedding model (${activeModel.size}, one-time setup)...`);
     extractor = await pipeline('feature-extraction', activeModel.id, {
-      dtype: 'q8',
+      dtype: activeModel.dtype as any,
     });
     console.error('[TotalReclaw] Embedding model ready.');
   }
