@@ -71,10 +71,11 @@ export async function generateEmbedding(
   if (!extractor) {
     activeModel = getModelConfig();
     console.error(`[TotalReclaw] Downloading embedding model (${activeModel.size}, one-time setup)...`);
+    console.error('[TotalReclaw] This enables semantic search across your encrypted memories.');
     extractor = await pipeline('feature-extraction', activeModel.id, {
       dtype: activeModel.dtype as any,
     });
-    console.error('[TotalReclaw] Embedding model ready.');
+    console.error('[TotalReclaw] Embedding model ready. Future startups will be instant.');
   }
 
   const model = activeModel!;

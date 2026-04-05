@@ -89,6 +89,38 @@ interface OpenClawPluginApi {
 }
 
 // ---------------------------------------------------------------------------
+// Human-friendly error messages
+// ---------------------------------------------------------------------------
+
+/**
+ * Translate technical error messages from the on-chain submission pipeline
+ * into user-friendly messages. The original technical details are still
+ * logged via api.logger — this only affects what the agent sees.
+ */
+function humanizeError(rawMessage: string): string {
+  if (rawMessage.includes('AA23')) {
+    return 'Memory storage temporarily unavailable. Will retry next time.';
+  }
+  if (rawMessage.includes('AA10')) {
+    return 'Please wait a moment before storing more memories.';
+  }
+  if (rawMessage.includes('AA25')) {
+    return 'Memory storage busy. Will retry.';
+  }
+  if (rawMessage.includes('pm_sponsorUserOperation')) {
+    return 'Memory storage service temporarily unavailable.';
+  }
+  if (/Relay returned HTTP\s*404/.test(rawMessage)) {
+    return 'Memory service is temporarily offline.';
+  }
+  if (/Relay returned HTTP\s*5\d\d/.test(rawMessage)) {
+    return 'Memory service encountered a temporary error. Will retry next time.';
+  }
+  // Pass through non-technical messages as-is.
+  return rawMessage;
+}
+
+// ---------------------------------------------------------------------------
 // Persistent credential storage
 // ---------------------------------------------------------------------------
 
@@ -1813,7 +1845,7 @@ const plugin = {
             const message = err instanceof Error ? err.message : String(err);
             api.logger.error(`totalreclaw_remember failed: ${message}`);
             return {
-              content: [{ type: 'text', text: `Failed to store memory: ${message}` }],
+              content: [{ type: 'text', text: `Failed to store memory: ${humanizeError(message)}` }],
             };
           }
         },
@@ -2084,7 +2116,7 @@ const plugin = {
             const message = err instanceof Error ? err.message : String(err);
             api.logger.error(`totalreclaw_recall failed: ${message}`);
             return {
-              content: [{ type: 'text', text: `Failed to search memories: ${message}` }],
+              content: [{ type: 'text', text: `Failed to search memories: ${humanizeError(message)}` }],
             };
           }
         },
@@ -2152,7 +2184,7 @@ const plugin = {
             const message = err instanceof Error ? err.message : String(err);
             api.logger.error(`totalreclaw_forget failed: ${message}`);
             return {
-              content: [{ type: 'text', text: `Failed to delete memory: ${message}` }],
+              content: [{ type: 'text', text: `Failed to delete memory: ${humanizeError(message)}` }],
             };
           }
         },
@@ -2299,7 +2331,7 @@ const plugin = {
             const message = err instanceof Error ? err.message : String(err);
             api.logger.error(`totalreclaw_export failed: ${message}`);
             return {
-              content: [{ type: 'text', text: `Failed to export memories: ${message}` }],
+              content: [{ type: 'text', text: `Failed to export memories: ${humanizeError(message)}` }],
             };
           }
         },
@@ -2385,7 +2417,7 @@ const plugin = {
             const message = err instanceof Error ? err.message : String(err);
             api.logger.error(`totalreclaw_status failed: ${message}`);
             return {
-              content: [{ type: 'text', text: `Failed to check status: ${message}` }],
+              content: [{ type: 'text', text: `Failed to check status: ${humanizeError(message)}` }],
             };
           }
         },
@@ -2542,7 +2574,7 @@ const plugin = {
             const message = err instanceof Error ? err.message : String(err);
             api.logger.error(`totalreclaw_consolidate failed: ${message}`);
             return {
-              content: [{ type: 'text', text: `Failed to consolidate memories: ${message}` }],
+              content: [{ type: 'text', text: `Failed to consolidate memories: ${humanizeError(message)}` }],
             };
           }
         },
@@ -2681,7 +2713,7 @@ const plugin = {
             const message = err instanceof Error ? err.message : String(err);
             api.logger.error(`totalreclaw_upgrade failed: ${message}`);
             return {
-              content: [{ type: 'text', text: `Failed to create checkout session: ${message}` }],
+              content: [{ type: 'text', text: `Failed to create checkout session: ${humanizeError(message)}` }],
             };
           }
         },
@@ -2864,7 +2896,7 @@ const plugin = {
             const message = err instanceof Error ? err.message : String(err);
             api.logger.error(`totalreclaw_migrate failed: ${message}`);
             return {
-              content: [{ type: 'text', text: `Migration failed: ${message}` }],
+              content: [{ type: 'text', text: `Migration failed: ${humanizeError(message)}` }],
             };
           }
         },
@@ -2943,7 +2975,7 @@ const plugin = {
             const message = err instanceof Error ? err.message : String(err);
             api.logger.error(`totalreclaw_setup failed: ${message}`);
             return {
-              content: [{ type: 'text', text: `Setup failed: ${message}` }],
+              content: [{ type: 'text', text: `Setup failed: ${humanizeError(message)}` }],
             };
           }
         },
@@ -3365,8 +3397,22 @@ const plugin = {
       'agent_end',
       async (event: unknown) => {
         try {
+          // Defensive: ensure MEMORY.md header is present so OpenClaw's default
+          // memory system doesn't write sensitive data in cleartext, even if
+          // our extraction fails below.
+          ensureMemoryHeader(api.logger);
+
           const evt = event as { messages?: unknown[]; success?: boolean } | undefined;
-          if (!evt?.success || !evt?.messages || evt.messages.length < 2) return;
+          if (!evt?.messages || evt.messages.length < 2) {
+            api.logger.info('agent_end: skipping extraction (no messages)');
+            return;
+          }
+          // Allow extraction even when evt.success is undefined (some OpenClaw
+          // versions don't set it). Only skip on explicit failure.
+          if (evt.success === false) {
+            api.logger.info('agent_end: skipping extraction (agent reported failure)');
+            return;
+          }
 
           await ensureInitialized(api.logger);
           if (needsSetup) return;
@@ -3388,6 +3434,7 @@ const plugin = {
             const facts = importanceFiltered.slice(0, maxFacts);
             if (facts.length > 0) {
               await storeExtractedFacts(facts, api.logger);
+              api.logger.info(`agent_end: stored ${facts.length} facts to encrypted vault`);
             }
             turnsSinceLastExtraction = 0;
           }
