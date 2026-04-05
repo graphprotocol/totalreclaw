@@ -8,11 +8,16 @@
 
 ## TL;DR — OpenClaw Users
 
-Tell your agent:
+Two terminal commands, then chat:
 
-> "Install the TotalReclaw skill from ClawHub"
+```bash
+openclaw skills install totalreclaw
+openclaw plugins install ~/.openclaw/workspace/skills/totalreclaw
+```
 
-That's it. The agent will install it, guide you through setup (recovery phrase), and memory is automatic from there. Read on for details, other platforms, or troubleshooting.
+Then tell your agent: *"Set up TotalReclaw for me. Generate a new recovery phrase."*
+
+That's it. Write down the 12 words, and memory is automatic from there.
 
 ---
 
@@ -20,37 +25,40 @@ That's it. The agent will install it, guide you through setup (recovery phrase),
 
 ### OpenClaw (recommended -- fully automatic)
 
-Tell your OpenClaw agent:
-
-> "Install the TotalReclaw skill from ClawHub"
-
-Or via terminal:
+**Step 1: Install the plugin**
 
 ```bash
 openclaw skills install totalreclaw
+openclaw plugins install ~/.openclaw/workspace/skills/totalreclaw
 ```
 
-<details>
-<summary>Alternative: install via npm</summary>
+Restart the gateway if prompted. You may see a "1 suspicious code pattern" warning -- this is normal (the plugin reads configuration and makes encrypted network calls).
 
-```bash
-openclaw plugins install @totalreclaw/totalreclaw
-```
-</details>
+**Step 2: Set up your recovery phrase**
 
-After installation, your agent will ask: *"Do you have an existing recovery phrase, or should I generate a new one?"*
+Start a conversation and tell your agent:
 
-- **New user:** Let it generate one (it uses a cryptographically secure generator). Write down the 12 words on paper, in exact order.
-- **Returning user:** Enter your existing phrase to restore your memories.
+> "Set up TotalReclaw for me. Generate a new recovery phrase."
 
-> **Note:** The first run downloads a ~600MB embedding model for local inference. This is cached locally and only happens once.
+The agent will generate a 12-word phrase and display it. **Write it down on paper and store it safely.** This phrase is the only key to your encrypted memories -- there is no password reset.
+
+**Returning user?** If you already have a phrase from another device or agent:
+
+> "I have an existing TotalReclaw recovery phrase: word1 word2 word3 ... word12"
+
+The agent will import it and all your existing memories become accessible immediately.
+
+The gateway restarts automatically after setup. Wait a few seconds, then continue chatting normally.
+
+> **Note:** The first interaction downloads a ~34MB embedding model for local inference. This is cached locally and only happens once.
 
 **After setup, memory is fully automatic:**
-- Your agent remembers important things from conversations (preferences, decisions, facts)
-- At the start of each conversation, relevant memories are loaded automatically
-- You never need to tell your agent to "remember" anything -- it just does
+- Your agent extracts and stores important facts from your conversations (preferences, decisions, project context)
+- In new sessions, ask *"What do you remember about me?"* to see your stored memories
+- You can also be explicit: *"Remember that I prefer dark mode"* or *"What database did I choose?"*
+- Everything is encrypted before leaving your machine -- the server never sees plaintext
 
-You can always be explicit too -- "remember that I prefer dark mode" or "what do you remember about my project?" -- but it's not required.
+**Verified to work:** Same recovery phrase on a different device retrieves all your memories. Your data is truly portable.
 
 ### Claude Desktop / Cursor / Other MCP Agents
 
