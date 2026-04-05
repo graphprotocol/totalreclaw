@@ -139,21 +139,34 @@ export async function deriveSmartAccountAddress(mnemonic: string, chainId?: numb
 }
 
 // ---------------------------------------------------------------------------
-// Smart Account deployment check
+// Smart Account deployment check (with session cache)
 // ---------------------------------------------------------------------------
+
+/**
+ * Session-level cache for account deployment status.
+ * Once an account is deployed (first successful UserOp), we skip the
+ * eth_getCode check and omit factory/factoryData for all subsequent calls.
+ * This prevents AA10 "duplicate deployment" errors when multiple facts
+ * are stored in rapid succession for a first-time user.
+ */
+const deployedAccounts = new Set<string>();
 
 /**
  * Check if a Smart Account is deployed and return factory/factoryData if not.
  *
  * For ERC-4337 v0.7, undeployed accounts need `factory` and `factoryData`
  * in the UserOp so the EntryPoint can deploy them during the first transaction.
- * The factoryData is `createAccount(owner, 0)` on the SimpleAccountFactory.
  */
 async function getInitCode(
   sender: string,
   eoaAddress: string,
   rpcUrl: string,
 ): Promise<{ factory: string | null; factoryData: string | null }> {
+  // Session cache: if we already deployed this account, skip the RPC check
+  if (deployedAccounts.has(sender.toLowerCase())) {
+    return { factory: null, factoryData: null };
+  }
+
   // Check if the Smart Account contract is deployed
   const codeResp = await fetch(rpcUrl, {
     method: 'POST',
@@ -167,6 +180,7 @@ async function getInitCode(
   const isDeployed = codeJson.result && codeJson.result !== '0x' && codeJson.result !== '0x0';
 
   if (isDeployed) {
+    deployedAccounts.add(sender.toLowerCase());
     return { factory: null, factoryData: null };
   }
 
@@ -304,10 +318,17 @@ export async function submitFactOnChain(
     } catch { /* not mined yet */ }
   }
 
+  const success = receipt?.success ?? false;
+
+  // Mark account as deployed after first successful submission
+  if (success) {
+    deployedAccounts.add(sender.toLowerCase());
+  }
+
   return {
     txHash: receipt?.receipt?.transactionHash || '',
     userOpHash,
-    success: receipt?.success ?? false,
+    success,
   };
 }
 
@@ -435,10 +456,17 @@ export async function submitFactBatchOnChain(
     } catch { /* not mined yet */ }
   }
 
+  const batchSuccess = receipt?.success ?? false;
+
+  // Mark account as deployed after first successful submission
+  if (batchSuccess) {
+    deployedAccounts.add(sender.toLowerCase());
+  }
+
   return {
     txHash: receipt?.receipt?.transactionHash || '',
     userOpHash,
-    success: receipt?.success ?? false,
+    success: batchSuccess,
     batchSize: protobufPayloads.length,
   };
 }
