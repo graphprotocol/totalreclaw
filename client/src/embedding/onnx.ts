@@ -1,33 +1,27 @@
 /**
  * ONNX Embedding Model
  *
- * Uses @huggingface/transformers to run Harrier-OSS-v1-270M model for
- * text embeddings. Produces 640-dimensional normalized vectors suitable
+ * Uses @huggingface/transformers to run multilingual-e5-small for
+ * text embeddings. Produces 384-dimensional normalized vectors suitable
  * for semantic search.
  *
- * The @huggingface/transformers library handles:
- *   - Model download (auto-downloads ONNX model from HuggingFace Hub)
- *   - Tokenization (uses the model's actual tokenizer.json)
- *   - ONNX inference
- *   - Last-token pooling + normalization
- *
  * Model details:
- *   - onnx-community/harrier-oss-v1-270m-ONNX (ONNX-optimized)
- *   - FP16: ~553MB download, cached in ~/.cache/huggingface/
- *   - 640-dimensional output vectors
- *   - Lazy initialization: first call ~3-5s, subsequent ~100ms
- *   - Note: q4 uses GatherBlockQuantized (unsupported), q8 not available;
- *     fp16 is the best compatible quantization for this model.
+ *   - Xenova/multilingual-e5-small (ONNX-optimized, int8 quantized)
+ *   - ~34MB download, cached in ~/.cache/huggingface/
+ *   - 384-dimensional output vectors
+ *   - 100+ languages (multilingual)
+ *   - mean pooling
+ *   - Lazy initialization: first call ~2-3s, subsequent ~50ms
  */
 
 import { pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
 import { TotalReclawError, TotalReclawErrorCode } from '../types';
 
-/** Expected embedding dimension for Harrier-OSS-v1-270M */
-const EMBEDDING_DIM = 640;
+/** Expected embedding dimension */
+const EMBEDDING_DIM = 384;
 
-/** Model ID on HuggingFace Hub (ONNX-optimized version) */
-const MODEL_ID = 'onnx-community/harrier-oss-v1-270m-ONNX';
+/** Model ID on HuggingFace Hub */
+const MODEL_ID = 'Xenova/multilingual-e5-small';
 
 /**
  * Embedding model using @huggingface/transformers + ONNX Runtime
@@ -47,9 +41,9 @@ export class EmbeddingModel {
    */
   async load(_modelPath?: string): Promise<void> {
     try {
-      console.error('[TotalReclaw] Downloading embedding model (~553MB, first run only)...');
+      console.error('[TotalReclaw] Downloading embedding model (~34MB, first run only)...');
       this.extractor = await pipeline('feature-extraction', MODEL_ID, {
-        dtype: 'fp16',
+        dtype: 'q8',
       });
       console.error('[TotalReclaw] Embedding model ready.');
       this.isLoaded = true;
@@ -93,7 +87,7 @@ export class EmbeddingModel {
 
     try {
       const input = text;
-      const output = await this.extractor!(input, { pooling: 'last_token', normalize: true });
+      const output = await this.extractor!(input, { pooling: 'mean', normalize: true });
       return Array.from(output.data as Float32Array);
     } catch (error) {
       throw new TotalReclawError(

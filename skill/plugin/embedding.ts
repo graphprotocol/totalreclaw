@@ -27,21 +27,18 @@ interface ModelConfig {
 
 const MODELS: Record<string, ModelConfig> = {
   default: {
-    id: 'onnx-community/harrier-oss-v1-270m-ONNX',
-    dims: 640,
-    pooling: 'last_token',
-    size: '~553MB',
-    // Harrier ONNX repo has fp32, fp16, q4, q4f16, quantized — but NOT q8.
-    // q4 uses GatherBlockQuantized (unsupported in many runtimes).
-    // fp16 is the best balance of size and compatibility.
-    dtype: 'fp16',
-  },
-  small: {
     id: 'Xenova/multilingual-e5-small',
     dims: 384,
     pooling: 'mean',
     size: '~34MB',
     dtype: 'q8',
+  },
+  harrier: {
+    id: 'onnx-community/harrier-oss-v1-270m-ONNX',
+    dims: 640,
+    pooling: 'last_token',
+    size: '~553MB',
+    dtype: 'fp16',  // q4 uses unsupported GatherBlockQuantized op
   },
   large: {
     id: 'onnx-community/Qwen3-Embedding-0.6B-ONNX',
