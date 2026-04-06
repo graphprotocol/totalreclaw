@@ -267,6 +267,72 @@ class TestDetectLLMConfig:
             assert config.api_key == "goog-test"
             assert config.model == "gemini-2.0-flash"
 
+    def test_openai_base_url_override(self):
+        with patch.dict(os.environ, {
+            "OPENAI_API_KEY": "sk-test",
+            "OPENAI_BASE_URL": "https://my-proxy.example.com/v1",
+        }, clear=True):
+            config = detect_llm_config()
+            assert config is not None
+            assert config.base_url == "https://my-proxy.example.com/v1"
+            assert config.api_format == "openai"
+
+    def test_openai_base_url_strips_trailing_slash(self):
+        with patch.dict(os.environ, {
+            "OPENAI_API_KEY": "sk-test",
+            "OPENAI_BASE_URL": "https://my-proxy.example.com/v1/",
+        }, clear=True):
+            config = detect_llm_config()
+            assert config is not None
+            assert config.base_url == "https://my-proxy.example.com/v1"
+
+    def test_openai_base_url_does_not_affect_anthropic(self):
+        with patch.dict(os.environ, {
+            "ANTHROPIC_API_KEY": "sk-ant-test",
+            "OPENAI_BASE_URL": "https://my-proxy.example.com/v1",
+        }, clear=True):
+            config = detect_llm_config()
+            assert config is not None
+            assert config.api_format == "anthropic"
+            assert "anthropic.com" in config.base_url
+
+    def test_openai_base_url_does_not_affect_groq(self):
+        with patch.dict(os.environ, {
+            "GROQ_API_KEY": "gsk-test",
+            "OPENAI_BASE_URL": "https://my-proxy.example.com/v1",
+        }, clear=True):
+            config = detect_llm_config()
+            assert config is not None
+            assert "groq.com" in config.base_url
+
+    def test_extraction_model_override(self):
+        with patch.dict(os.environ, {
+            "OPENAI_API_KEY": "sk-test",
+            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",
+        }, clear=True):
+            config = detect_llm_config()
+            assert config is not None
+            assert config.model == "gpt-4.1-nano"
+
+    def test_extraction_model_takes_priority_over_llm_model(self):
+        with patch.dict(os.environ, {
+            "OPENAI_API_KEY": "sk-test",
+            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",
+            "TOTALRECLAW_LLM_MODEL": "gpt-4o",
+        }, clear=True):
+            config = detect_llm_config()
+            assert config is not None
+            assert config.model == "gpt-4.1-nano"
+
+    def test_llm_model_fallback_when_no_extraction_model(self):
+        with patch.dict(os.environ, {
+            "OPENAI_API_KEY": "sk-test",
+            "TOTALRECLAW_LLM_MODEL": "gpt-4o",
+        }, clear=True):
+            config = detect_llm_config()
+            assert config is not None
+            assert config.model == "gpt-4o"
+
 
 # ---------------------------------------------------------------------------
 # chat_completion tests

@@ -43,18 +43,28 @@ PROVIDERS = [
 def detect_llm_config() -> Optional[LLMConfig]:
     """Auto-detect LLM provider from environment variables.
 
-    Override model with TOTALRECLAW_LLM_MODEL env var.
+    Override model with TOTALRECLAW_EXTRACTION_MODEL or TOTALRECLAW_LLM_MODEL env var.
+    For OpenAI-compatible providers, OPENAI_BASE_URL overrides the default base URL.
     """
-    override_model = os.environ.get("TOTALRECLAW_LLM_MODEL")
+    override_model = os.environ.get("TOTALRECLAW_EXTRACTION_MODEL") or os.environ.get("TOTALRECLAW_LLM_MODEL")
+    openai_base_url = os.environ.get("OPENAI_BASE_URL")
 
-    for _provider, env_vars, base_url, default_model, api_format in PROVIDERS:
+    for _provider, env_vars, default_base_url, default_model, api_format in PROVIDERS:
         for env_var in env_vars:
             api_key = os.environ.get(env_var)
             if api_key:
                 model = override_model or default_model
+                # For the openai provider specifically, respect OPENAI_BASE_URL.
+                # Other OpenAI-compatible providers (Groq, DeepSeek, etc.) keep
+                # their own base URLs since they have provider-specific endpoints.
+                # Anthropic is never affected by OPENAI_BASE_URL.
+                if _provider == "openai" and openai_base_url:
+                    resolved_base_url = openai_base_url.rstrip("/")
+                else:
+                    resolved_base_url = default_base_url
                 return LLMConfig(
                     api_key=api_key,
-                    base_url=base_url,
+                    base_url=resolved_base_url,
                     model=model,
                     api_format=api_format,
                 )
