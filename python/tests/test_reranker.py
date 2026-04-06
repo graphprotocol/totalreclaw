@@ -166,6 +166,10 @@ class TestBM25:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    not hasattr(__import__("totalreclaw_core"), "cosine_similarity"),
+    reason="totalreclaw_core missing cosine_similarity",
+)
 class TestCosineSimilarity:
     def test_parallel_vectors(self):
         assert cosine_similarity([1, 0], [2, 0]) == pytest.approx(1.0)
@@ -369,6 +373,10 @@ class TestRecencyScore:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    not hasattr(__import__("totalreclaw_core"), "cosine_similarity"),
+    reason="totalreclaw_core missing cosine_similarity",
+)
 class TestApplyMMR:
     def test_empty(self):
         assert apply_mmr([]) == []
@@ -427,6 +435,10 @@ class TestApplyMMR:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    not hasattr(__import__("totalreclaw_core"), "cosine_similarity"),
+    reason="totalreclaw_core missing cosine_similarity",
+)
 class TestRerank:
     @pytest.fixture
     def synthetic_candidates(self):
