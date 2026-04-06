@@ -130,13 +130,13 @@ The agent should confirm it can see the tools. If not, check the troubleshooting
 | `totalreclaw_remember` | Store a fact in encrypted memory |
 | `totalreclaw_recall` | Search memories by natural language query |
 | `totalreclaw_forget` | Delete a specific memory by ID |
-| `totalreclaw_export` | Export all memories as Markdown or JSON |
+| `totalreclaw_export` | Export all memories as Markdown or JSON (self-hosted only) |
 | `totalreclaw_status` | Check billing status, tier, and usage |
 | `totalreclaw_setup` | First-time setup (if not done via the CLI wizard) |
 | `totalreclaw_upgrade` | Get a Stripe checkout link to upgrade to Pro |
 | `totalreclaw_migrate` | Migrate testnet memories to mainnet after Pro upgrade |
 | `totalreclaw_import_from` | Import from Mem0, ChatGPT, Claude, or MCP Memory Server |
-| `totalreclaw_import` | Re-import previously exported JSON or Markdown |
+| `totalreclaw_import` | Re-import previously exported JSON or Markdown (self-hosted only) |
 | `totalreclaw_consolidate` | Merge duplicate memories (self-hosted only) |
 | `totalreclaw_debrief` | Extract and store key takeaways from the current session |
 | `totalreclaw_support` | Get help with common issues |

@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/mcp-server",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. MCP server with AES-256-GCM E2EE, semantic search, import/export, and on-chain storage",
   "homepage": "https://totalreclaw.xyz",
   "main": "dist/index.js",
@@ -41,6 +41,7 @@
     "@totalreclaw/client": "^1.0.0",
     "@totalreclaw/core": "^1.0.0",
     "permissionless": "^0.3.4",
+    "tslib": "^2.8.1",
     "porter-stemmer": "^0.9.1",
     "viem": "^2.47.0"
   },

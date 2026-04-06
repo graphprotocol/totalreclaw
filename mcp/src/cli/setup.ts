@@ -328,7 +328,8 @@ const isDirectRun =
   process.argv[1] &&
   (process.argv[1].endsWith('/setup.js') ||
    process.argv[1].endsWith('/setup.ts') ||
-   process.argv[1].endsWith('cli/setup'));
+   process.argv[1].endsWith('cli/setup') ||
+   process.argv[1]?.includes('totalreclaw-setup'));
 
 if (isDirectRun) {
   runSetup().catch((error) => {
