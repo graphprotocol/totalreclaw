@@ -215,64 +215,95 @@ class TestDetectLLMConfig:
             config = detect_llm_config()
             assert config is None
 
-    def test_anthropic_key(self):
+    def test_anthropic_key_with_configured_model(self):
+        """Uses configured_model param — no hardcoded default."""
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
-            config = detect_llm_config()
+            config = detect_llm_config(configured_model="test-model")
             assert config is not None
             assert config.api_key == "sk-ant-test"
             assert config.api_format == "anthropic"
-            assert config.model == "claude-haiku-4-5-20251001"
+            assert config.model == "test-model"
             assert "anthropic.com" in config.base_url
 
-    def test_openai_key(self):
+    def test_openai_key_with_configured_model(self):
+        """Uses configured_model param — no hardcoded default."""
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
-            config = detect_llm_config()
+            config = detect_llm_config(configured_model="test-model")
             assert config is not None
             assert config.api_key == "sk-test"
             assert config.api_format == "openai"
-            assert config.model == "gpt-4.1-mini"
+            assert config.model == "test-model"
 
-    def test_groq_key(self):
+    def test_groq_key_with_configured_model(self):
+        """Uses configured_model param — no hardcoded default."""
         with patch.dict(os.environ, {"GROQ_API_KEY": "gsk-test"}, clear=True):
-            config = detect_llm_config()
+            config = detect_llm_config(configured_model="test-model")
             assert config is not None
-            assert config.model == "llama-3.3-70b-versatile"
+            assert config.model == "test-model"
             assert "groq.com" in config.base_url
 
-    def test_model_override(self):
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "TOTALRECLAW_LLM_MODEL": "gpt-4o"}, clear=True):
+    def test_no_model_returns_none(self):
+        """API key present but no model configured anywhere -> None."""
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
+            config = detect_llm_config()
+            assert config is None
+
+    def test_openai_model_env_var(self):
+        """OPENAI_MODEL env var provides the model name."""
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
             config = detect_llm_config()
             assert config is not None
-            assert config.model == "gpt-4o"
+            assert config.model == "gpt-4.1-mini"
+
+    def test_anthropic_model_env_var(self):
+        """ANTHROPIC_MODEL env var provides the model name."""
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test", "ANTHROPIC_MODEL": "claude-haiku-4-5-20251001"}, clear=True):
+            config = detect_llm_config()
+            assert config is not None
+            assert config.model == "claude-haiku-4-5-20251001"
+
+    def test_llm_model_env_var(self):
+        """LLM_MODEL env var provides the model name as fallback."""
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "LLM_MODEL": "my-custom-model"}, clear=True):
+            config = detect_llm_config()
+            assert config is not None
+            assert config.model == "my-custom-model"
+
+    def test_configured_model_overrides_env_var(self):
+        """configured_model param takes priority over OPENAI_MODEL env var."""
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "env-model"}, clear=True):
+            config = detect_llm_config(configured_model="param-model")
+            assert config is not None
+            assert config.model == "param-model"
 
     def test_priority_order(self):
         # Anthropic is first in the list, so it should be picked
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "ant", "OPENAI_API_KEY": "oai"}, clear=True):
-            config = detect_llm_config()
+            config = detect_llm_config(configured_model="test-model")
             assert config is not None
             assert config.api_key == "ant"
             assert config.api_format == "anthropic"
 
-    def test_gemini_key(self):
+    def test_gemini_key_with_configured_model(self):
         with patch.dict(os.environ, {"GEMINI_API_KEY": "gem-test"}, clear=True):
-            config = detect_llm_config()
+            config = detect_llm_config(configured_model="test-model")
             assert config is not None
-            assert config.model == "gemini-2.0-flash"
+            assert config.model == "test-model"
             assert config.api_format == "openai"
 
     def test_google_api_key_fallback(self):
         with patch.dict(os.environ, {"GOOGLE_API_KEY": "goog-test"}, clear=True):
-            config = detect_llm_config()
+            config = detect_llm_config(configured_model="test-model")
             assert config is not None
             assert config.api_key == "goog-test"
-            assert config.model == "gemini-2.0-flash"
+            assert config.model == "test-model"
 
     def test_openai_base_url_override(self):
         with patch.dict(os.environ, {
             "OPENAI_API_KEY": "sk-test",
             "OPENAI_BASE_URL": "https://my-proxy.example.com/v1",
         }, clear=True):
-            config = detect_llm_config()
+            config = detect_llm_config(configured_model="test-model")
             assert config is not None
             assert config.base_url == "https://my-proxy.example.com/v1"
             assert config.api_format == "openai"
@@ -282,7 +313,7 @@ class TestDetectLLMConfig:
             "OPENAI_API_KEY": "sk-test",
             "OPENAI_BASE_URL": "https://my-proxy.example.com/v1/",
         }, clear=True):
-            config = detect_llm_config()
+            config = detect_llm_config(configured_model="test-model")
             assert config is not None
             assert config.base_url == "https://my-proxy.example.com/v1"
 
@@ -291,7 +322,7 @@ class TestDetectLLMConfig:
             "ANTHROPIC_API_KEY": "sk-ant-test",
             "OPENAI_BASE_URL": "https://my-proxy.example.com/v1",
         }, clear=True):
-            config = detect_llm_config()
+            config = detect_llm_config(configured_model="test-model")
             assert config is not None
             assert config.api_format == "anthropic"
             assert "anthropic.com" in config.base_url
@@ -301,37 +332,40 @@ class TestDetectLLMConfig:
             "GROQ_API_KEY": "gsk-test",
             "OPENAI_BASE_URL": "https://my-proxy.example.com/v1",
         }, clear=True):
-            config = detect_llm_config()
+            config = detect_llm_config(configured_model="test-model")
             assert config is not None
             assert "groq.com" in config.base_url
 
     def test_extraction_model_override(self):
+        """TOTALRECLAW_EXTRACTION_MODEL overrides everything."""
         with patch.dict(os.environ, {
             "OPENAI_API_KEY": "sk-test",
             "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",
         }, clear=True):
-            config = detect_llm_config()
+            config = detect_llm_config(configured_model="test-model")
             assert config is not None
             assert config.model == "gpt-4.1-nano"
 
-    def test_extraction_model_takes_priority_over_llm_model(self):
+    def test_extraction_model_overrides_configured_model(self):
+        """TOTALRECLAW_EXTRACTION_MODEL beats configured_model param."""
         with patch.dict(os.environ, {
             "OPENAI_API_KEY": "sk-test",
             "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",
-            "TOTALRECLAW_LLM_MODEL": "gpt-4o",
+        }, clear=True):
+            config = detect_llm_config(configured_model="agent-default-model")
+            assert config is not None
+            assert config.model == "gpt-4.1-nano"
+
+    def test_extraction_model_overrides_env_model(self):
+        """TOTALRECLAW_EXTRACTION_MODEL beats OPENAI_MODEL env var."""
+        with patch.dict(os.environ, {
+            "OPENAI_API_KEY": "sk-test",
+            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",
+            "OPENAI_MODEL": "gpt-4o",
         }, clear=True):
             config = detect_llm_config()
             assert config is not None
             assert config.model == "gpt-4.1-nano"
-
-    def test_llm_model_fallback_when_no_extraction_model(self):
-        with patch.dict(os.environ, {
-            "OPENAI_API_KEY": "sk-test",
-            "TOTALRECLAW_LLM_MODEL": "gpt-4o",
-        }, clear=True):
-            config = detect_llm_config()
-            assert config is not None
-            assert config.model == "gpt-4o"
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +460,7 @@ class TestExtractFactsLLM:
             {"text": "User prefers dark mode", "type": "preference", "importance": 7, "action": "ADD"},
         ])
 
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
             with patch("totalreclaw.hermes.extractor.chat_completion", new_callable=AsyncMock) as mock_chat:
                 mock_chat.return_value = llm_response
                 messages = [
@@ -445,7 +479,7 @@ class TestExtractFactsLLM:
             {"text": "User now lives in Berlin", "type": "fact", "importance": 8, "action": "UPDATE", "existingFactId": "old-123"},
         ])
 
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
             with patch("totalreclaw.hermes.extractor.chat_completion", new_callable=AsyncMock) as mock_chat:
                 mock_chat.return_value = llm_response
                 messages = [
@@ -466,7 +500,7 @@ class TestExtractFactsLLM:
 
     @pytest.mark.asyncio
     async def test_llm_returns_none(self):
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
             with patch("totalreclaw.hermes.extractor.chat_completion", new_callable=AsyncMock) as mock_chat:
                 mock_chat.return_value = None
                 messages = [{"role": "user", "content": "Some conversation content here"}]
@@ -475,7 +509,7 @@ class TestExtractFactsLLM:
 
     @pytest.mark.asyncio
     async def test_short_conversation_skipped(self):
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
             with patch("totalreclaw.hermes.extractor.chat_completion", new_callable=AsyncMock) as mock_chat:
                 messages = [{"role": "user", "content": "hi"}]
                 facts = await extract_facts_llm(messages)
@@ -488,7 +522,7 @@ class TestExtractFactsLLM:
         llm_response = json.dumps([])
         messages = [{"role": "user", "content": f"Message number {i} with content"} for i in range(20)]
 
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
             with patch("totalreclaw.hermes.extractor.chat_completion", new_callable=AsyncMock) as mock_chat:
                 mock_chat.return_value = llm_response
                 await extract_facts_llm(messages, mode="turn")
@@ -503,7 +537,7 @@ class TestExtractFactsLLM:
         llm_response = json.dumps([])
         messages = [{"role": "user", "content": f"Message number {i} with content"} for i in range(10)]
 
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
             with patch("totalreclaw.hermes.extractor.chat_completion", new_callable=AsyncMock) as mock_chat:
                 mock_chat.return_value = llm_response
                 await extract_facts_llm(messages, mode="full")
