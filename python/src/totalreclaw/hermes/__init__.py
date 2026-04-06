@@ -2,6 +2,10 @@
 
 Entry point for the Hermes plugin system. Registers tools and hooks
 for E2E encrypted AI memory.
+
+This is a thin adapter that wires the generic ``totalreclaw.agent``
+layer into Hermes's lifecycle hooks. New agent integrations should
+use ``totalreclaw.agent`` directly.
 """
 from __future__ import annotations
 

@@ -451,8 +451,8 @@ class TestStoreTimeDedup:
 
         mock_client.remember = tracking_remember
 
-        with patch("totalreclaw.hermes.hooks.extract_facts_llm") as mock_llm, \
-             patch("totalreclaw.hermes.hooks.extract_facts_heuristic"), \
+        with patch("totalreclaw.agent.lifecycle.extract_facts_llm") as mock_llm, \
+             patch("totalreclaw.agent.lifecycle.extract_facts_heuristic"), \
              patch("totalreclaw.embedding.get_embedding", return_value=[1.0, 0.0, 0.0]):
 
             async def llm_extract(messages, mode, existing_memories):

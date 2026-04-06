@@ -387,7 +387,7 @@ class TestChatCompletion:
             "choices": [{"message": {"content": "test response"}}]
         })
 
-        with patch("totalreclaw.hermes.llm_client.httpx.AsyncClient") as mock_client_cls:
+        with patch("totalreclaw.agent.llm_client.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -411,7 +411,7 @@ class TestChatCompletion:
             "content": [{"type": "text", "text": "anthropic response"}]
         })
 
-        with patch("totalreclaw.hermes.llm_client.httpx.AsyncClient") as mock_client_cls:
+        with patch("totalreclaw.agent.llm_client.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -430,7 +430,7 @@ class TestChatCompletion:
             api_format="openai",
         )
 
-        with patch("totalreclaw.hermes.llm_client.httpx.AsyncClient") as mock_client_cls:
+        with patch("totalreclaw.agent.llm_client.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(side_effect=Exception("Connection error"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -461,7 +461,7 @@ class TestExtractFactsLLM:
         ])
 
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
-            with patch("totalreclaw.hermes.extractor.chat_completion", new_callable=AsyncMock) as mock_chat:
+            with patch("totalreclaw.agent.extraction.chat_completion", new_callable=AsyncMock) as mock_chat:
                 mock_chat.return_value = llm_response
                 messages = [
                     {"role": "user", "content": "I live in Lisbon and I prefer dark mode for everything"},
@@ -480,7 +480,7 @@ class TestExtractFactsLLM:
         ])
 
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
-            with patch("totalreclaw.hermes.extractor.chat_completion", new_callable=AsyncMock) as mock_chat:
+            with patch("totalreclaw.agent.extraction.chat_completion", new_callable=AsyncMock) as mock_chat:
                 mock_chat.return_value = llm_response
                 messages = [
                     {"role": "user", "content": "I just moved to Berlin from Lisbon"},
@@ -501,7 +501,7 @@ class TestExtractFactsLLM:
     @pytest.mark.asyncio
     async def test_llm_returns_none(self):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
-            with patch("totalreclaw.hermes.extractor.chat_completion", new_callable=AsyncMock) as mock_chat:
+            with patch("totalreclaw.agent.extraction.chat_completion", new_callable=AsyncMock) as mock_chat:
                 mock_chat.return_value = None
                 messages = [{"role": "user", "content": "Some conversation content here"}]
                 facts = await extract_facts_llm(messages)
@@ -510,7 +510,7 @@ class TestExtractFactsLLM:
     @pytest.mark.asyncio
     async def test_short_conversation_skipped(self):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
-            with patch("totalreclaw.hermes.extractor.chat_completion", new_callable=AsyncMock) as mock_chat:
+            with patch("totalreclaw.agent.extraction.chat_completion", new_callable=AsyncMock) as mock_chat:
                 messages = [{"role": "user", "content": "hi"}]
                 facts = await extract_facts_llm(messages)
                 assert facts == []
@@ -523,7 +523,7 @@ class TestExtractFactsLLM:
         messages = [{"role": "user", "content": f"Message number {i} with content"} for i in range(20)]
 
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
-            with patch("totalreclaw.hermes.extractor.chat_completion", new_callable=AsyncMock) as mock_chat:
+            with patch("totalreclaw.agent.extraction.chat_completion", new_callable=AsyncMock) as mock_chat:
                 mock_chat.return_value = llm_response
                 await extract_facts_llm(messages, mode="turn")
                 call_args = mock_chat.call_args
@@ -538,7 +538,7 @@ class TestExtractFactsLLM:
         messages = [{"role": "user", "content": f"Message number {i} with content"} for i in range(10)]
 
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
-            with patch("totalreclaw.hermes.extractor.chat_completion", new_callable=AsyncMock) as mock_chat:
+            with patch("totalreclaw.agent.extraction.chat_completion", new_callable=AsyncMock) as mock_chat:
                 mock_chat.return_value = llm_response
                 await extract_facts_llm(messages, mode="full")
                 call_args = mock_chat.call_args

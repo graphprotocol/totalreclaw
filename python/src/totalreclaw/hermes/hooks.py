@@ -1,19 +1,27 @@
-"""Lifecycle hooks for TotalReclaw Hermes plugin."""
+"""Lifecycle hooks for TotalReclaw Hermes plugin.
+
+Thin adapter that wires the generic ``totalreclaw.agent`` lifecycle
+functions into Hermes's hook registration system.
+"""
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .state import PluginState
 
-from .debrief import generate_debrief
-from .extractor import extract_facts_llm, extract_facts_heuristic, ExtractedFact
+from totalreclaw.agent.lifecycle import (
+    auto_extract as _auto_extract,
+    session_debrief as _session_debrief,
+    _is_near_duplicate,
+    _fetch_recent_memories,
+    STORE_DEDUP_THRESHOLD,
+)
+from totalreclaw.agent.recall import auto_recall
+from totalreclaw.agent.extraction import extract_facts_llm, extract_facts_heuristic
 
 logger = logging.getLogger(__name__)
-
-STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity for near-duplicate detection
 
 
 def on_session_start(state: "PluginState", **kwargs) -> None:
@@ -65,21 +73,9 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
     if is_first_turn and user_message:
         # Auto-recall relevant memories for the first turn
         try:
-            client = state.get_client()
-            if client:
-                loop = asyncio.new_event_loop()
-                try:
-                    results = loop.run_until_complete(
-                        client.recall(user_message, top_k=8)
-                    )
-                finally:
-                    loop.close()
-
-                if results:
-                    memories = "\n".join(
-                        f"- {r.text}" for r in results
-                    )
-                    context_parts.append(f"## Relevant memories from TotalReclaw\n{memories}")
+            memories_ctx = auto_recall(user_message, state, top_k=8)
+            if memories_ctx:
+                context_parts.append(memories_ctx)
         except Exception as e:
             logger.warning("TotalReclaw pre_llm_call auto-recall failed: %s", e)
 
@@ -105,7 +101,7 @@ def post_llm_call(state: "PluginState", **kwargs) -> None:
 
     # Extract and store facts
     try:
-        _extract_and_store(state, mode="turn")
+        _auto_extract(state, mode="turn")
     except Exception as e:
         logger.warning("TotalReclaw post_llm_call extraction failed: %s", e)
 
@@ -121,187 +117,20 @@ def on_session_end(state: "PluginState", **kwargs) -> None:
     try:
         stored_fact_texts: list[str] = []
         try:
-            stored_fact_texts = _extract_and_store(state, mode="full")
+            stored_fact_texts = _auto_extract(state, mode="full")
         except Exception as e:
             logger.warning("TotalReclaw on_session_end flush failed: %s", e)
 
         # Session debrief (after regular extraction)
         try:
-            all_messages = state.get_all_messages()
-            if len(all_messages) >= 8:  # Minimum 4 turns
-                loop = asyncio.new_event_loop()
-                try:
-                    debrief_items = loop.run_until_complete(
-                        generate_debrief(all_messages, stored_fact_texts)
-                    )
-                    if debrief_items:
-                        client = state.get_client()
-                        if client:
-                            for item in debrief_items:
-                                try:
-                                    loop.run_until_complete(
-                                        client.remember(
-                                            item.text,
-                                            importance=item.importance / 10.0,
-                                            source="hermes_debrief",
-                                        )
-                                    )
-                                except Exception as e:
-                                    logger.warning("Failed to store debrief item: %s", e)
-                finally:
-                    loop.close()
+            _session_debrief(state, stored_fact_texts=stored_fact_texts)
         except Exception as e:
             logger.warning("TotalReclaw on_session_end debrief failed: %s", e)
     finally:
         state.clear_messages()
 
 
-def _fetch_recent_memories(state: "PluginState", loop: asyncio.AbstractEventLoop) -> list[dict]:
-    """Fetch recent memories from the vault for dedup context.
-
-    Returns dicts with id, text, and embedding for both LLM dedup context and
-    cosine-based near-duplicate detection.
-    """
-    client = state.get_client()
-    if not client:
-        return []
-    try:
-        # Use a generic query to get recent memories for dedup
-        results = loop.run_until_complete(
-            client.recall("recent context", top_k=50)
-        )
-        return [{"id": r.id, "text": r.text, "embedding": r.embedding} for r in results]
-    except Exception as e:
-        logger.debug("Failed to fetch recent memories for dedup: %s", e)
-        return []
-
-
-def _is_near_duplicate(
-    embedding: list[float],
-    existing_memories: list[dict],
-    threshold: float = STORE_DEDUP_THRESHOLD,
-) -> bool:
-    """Check if a fact's embedding is a near-duplicate of any existing memory.
-
-    Returns True if cosine similarity >= threshold with any existing memory.
-    """
-    if not embedding:
-        return False
-
-    from totalreclaw.reranker import cosine_similarity
-
-    for mem in existing_memories:
-        mem_emb = mem.get("embedding")
-        if mem_emb and len(mem_emb) > 0:
-            sim = cosine_similarity(embedding, mem_emb)
-            if sim >= threshold:
-                logger.debug(
-                    "Near-duplicate detected (sim=%.3f >= %.3f): skipping store",
-                    sim, threshold,
-                )
-                return True
-    return False
-
-
+# Backward-compatible alias used by tests
 def _extract_and_store(state: "PluginState", mode: str = "turn") -> list[str]:
-    """Extract facts from conversation and store them.
-
-    Tries LLM extraction first, falls back to heuristic if no LLM available.
-    Handles ADD, UPDATE, and DELETE actions from LLM-guided extraction.
-    Performs cosine-based near-duplicate detection before storing.
-
-    Returns list of stored fact texts (for debrief context).
-    """
-    messages = state.get_unprocessed_messages()
-    if not messages:
-        return []
-
-    max_facts = state.get_max_facts_per_extraction()
-
-    # Format messages for extraction (used by heuristic fallback check)
-    msg_text = "\n".join(
-        f"{m['role']}: {m['content']}" for m in messages if m.get("content")
-    )
-    if not msg_text.strip():
-        return []
-
-    client = state.get_client()
-    if not client:
-        return []
-
-    stored_texts: list[str] = []
-    loop = asyncio.new_event_loop()
-    try:
-        # Fetch existing memories for both LLM dedup context and cosine dedup
-        existing_memories = _fetch_recent_memories(state, loop)
-
-        # Try LLM extraction first
-        facts: list[ExtractedFact] = []
-        try:
-            facts = loop.run_until_complete(
-                extract_facts_llm(messages, mode=mode, existing_memories=existing_memories)
-            )
-        except Exception as e:
-            logger.debug("LLM extraction failed, falling back to heuristic: %s", e)
-
-        # Fall back to heuristic if LLM returned nothing
-        if not facts:
-            facts = extract_facts_heuristic(messages, max_facts)
-
-        if not facts:
-            return []
-
-        # Cap to max_facts
-        facts = facts[:max_facts]
-
-        for fact in facts:
-            try:
-                if fact.action == "NOOP":
-                    continue
-
-                if fact.action == "DELETE":
-                    # Tombstone the old fact
-                    if fact.existing_fact_id:
-                        loop.run_until_complete(
-                            client.forget(fact.existing_fact_id)
-                        )
-                    continue
-
-                # For ADD and UPDATE: store the new fact
-                embedding = None
-                try:
-                    from totalreclaw.embedding import get_embedding
-                    embedding = get_embedding(fact.text)
-                except Exception:
-                    pass
-
-                # Store-time near-duplicate detection (skip if cosine sim >= threshold)
-                # UPDATE actions always store (they supersede the old fact)
-                if fact.action != "UPDATE" and embedding and existing_memories:
-                    if _is_near_duplicate(embedding, existing_memories):
-                        logger.debug("Skipping near-duplicate fact: %s", fact.text[:80])
-                        continue
-
-                loop.run_until_complete(
-                    client.remember(
-                        fact.text,
-                        embedding=embedding,
-                        importance=fact.importance / 10.0,  # Normalize 1-10 to 0.0-1.0
-                        source="hermes-auto",
-                    )
-                )
-                stored_texts.append(fact.text)
-
-                # For UPDATE: also tombstone the old fact after storing the new one
-                if fact.action == "UPDATE" and fact.existing_fact_id:
-                    loop.run_until_complete(
-                        client.forget(fact.existing_fact_id)
-                    )
-
-            except Exception as e:
-                logger.warning("Failed to store/process extracted fact: %s", e)
-    finally:
-        loop.close()
-
-    state.mark_messages_processed()
-    return stored_texts
+    """Backward-compatible wrapper for auto_extract."""
+    return _auto_extract(state, mode=mode)
