@@ -26,72 +26,64 @@ class LLMConfig:
     api_format: str  # "openai" or "anthropic"
 
 
-# Provider detection order and their env vars
-# (provider, env_vars, default_base_url, default_cheap_model, api_format)
+# Provider detection: (provider, env_vars, default_base_url, api_format)
+# No hardcoded model names — uses whatever the user configured via their
+# agent framework. Override with TOTALRECLAW_EXTRACTION_MODEL if needed.
 PROVIDERS = [
-    ("anthropic", ["ANTHROPIC_API_KEY"], "https://api.anthropic.com/v1", "claude-haiku-4-5-20251001", "anthropic"),
-    ("openai", ["OPENAI_API_KEY"], "https://api.openai.com/v1", "gpt-4.1-mini", "openai"),
-    ("groq", ["GROQ_API_KEY"], "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile", "openai"),
-    ("deepseek", ["DEEPSEEK_API_KEY"], "https://api.deepseek.com/v1", "deepseek-chat", "openai"),
-    ("openrouter", ["OPENROUTER_API_KEY"], "https://openrouter.ai/api/v1", "anthropic/claude-haiku-4-5-20251001", "openai"),
-    ("gemini", ["GEMINI_API_KEY", "GOOGLE_API_KEY"], "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.0-flash", "openai"),
-    ("mistral", ["MISTRAL_API_KEY"], "https://api.mistral.ai/v1", "mistral-small-latest", "openai"),
-    ("xai", ["XAI_API_KEY"], "https://api.x.ai/v1", "grok-2", "openai"),
-    ("together", ["TOGETHER_API_KEY"], "https://api.together.xyz/v1", "meta-llama/Llama-3.3-70B-Instruct-Turbo", "openai"),
+    ("anthropic", ["ANTHROPIC_API_KEY"], "https://api.anthropic.com/v1", "anthropic"),
+    ("openai", ["OPENAI_API_KEY"], "https://api.openai.com/v1", "openai"),
+    ("groq", ["GROQ_API_KEY"], "https://api.groq.com/openai/v1", "openai"),
+    ("deepseek", ["DEEPSEEK_API_KEY"], "https://api.deepseek.com/v1", "openai"),
+    ("openrouter", ["OPENROUTER_API_KEY"], "https://openrouter.ai/api/v1", "openai"),
+    ("gemini", ["GEMINI_API_KEY", "GOOGLE_API_KEY"], "https://generativelanguage.googleapis.com/v1beta/openai", "openai"),
+    ("mistral", ["MISTRAL_API_KEY"], "https://api.mistral.ai/v1", "openai"),
+    ("xai", ["XAI_API_KEY"], "https://api.x.ai/v1", "openai"),
+    ("together", ["TOGETHER_API_KEY"], "https://api.together.xyz/v1", "openai"),
 ]
 
-# Detect provider from custom base URLs and pick appropriate cheap models.
-# When OPENAI_BASE_URL is set to a known provider, we can auto-select
-# the right fast model without the user configuring anything extra.
-_BASE_URL_PROVIDERS: dict[str, tuple[str, str]] = {
-    "api.z.ai": ("zai", "glm-5-turbo"),
-    "api.together.xyz": ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
-    "api.fireworks.ai": ("fireworks", "accounts/fireworks/models/llama-v3p3-70b-instruct"),
-}
 
+def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMConfig]:
+    """Auto-detect LLM provider and model from environment variables.
 
-def _detect_provider_from_url(base_url: str) -> Optional[tuple[str, str]]:
-    """Detect provider and cheap model from a custom base URL."""
-    for domain, (provider, model) in _BASE_URL_PROVIDERS.items():
-        if domain in base_url:
-            return (provider, model)
-    return None
+    Uses the agent's configured model by default. No hardcoded model lists
+    to maintain — just uses whatever the user set up.
 
+    Model priority:
+      1. TOTALRECLAW_EXTRACTION_MODEL (optional override for power users)
+      2. configured_model (passed from agent framework)
+      3. OPENAI_MODEL / ANTHROPIC_MODEL (common env vars)
 
-def detect_llm_config() -> Optional[LLMConfig]:
-    """Auto-detect LLM provider from environment variables.
-
-    Smart model selection: automatically picks a fast/cheap model for extraction
-    based on the detected provider. No extra env vars needed — just uses whatever
-    the user configured for Hermes.
-
-    Override with TOTALRECLAW_EXTRACTION_MODEL or TOTALRECLAW_LLM_MODEL if needed.
+    Base URL priority:
+      1. OPENAI_BASE_URL (for OpenAI-compatible custom providers)
+      2. Provider default
     """
-    override_model = os.environ.get("TOTALRECLAW_EXTRACTION_MODEL") or os.environ.get("TOTALRECLAW_LLM_MODEL")
+    override_model = os.environ.get("TOTALRECLAW_EXTRACTION_MODEL")
     openai_base_url = os.environ.get("OPENAI_BASE_URL")
+    # Common env vars for configured model name
+    env_model = (
+        os.environ.get("OPENAI_MODEL")
+        or os.environ.get("ANTHROPIC_MODEL")
+        or os.environ.get("LLM_MODEL")
+    )
 
-    for _provider, env_vars, default_base_url, default_model, api_format in PROVIDERS:
+    for _provider, env_vars, default_base_url, api_format in PROVIDERS:
         for env_var in env_vars:
             api_key = os.environ.get(env_var)
             if api_key:
-                # Determine base URL
+                model = override_model or configured_model or env_model
+                if not model:
+                    logger.warning(
+                        "TotalReclaw: %s API key found but no model configured. "
+                        "Set TOTALRECLAW_EXTRACTION_MODEL or OPENAI_MODEL.",
+                        _provider,
+                    )
+                    continue
+
+                # For OpenAI provider, respect OPENAI_BASE_URL
                 if _provider == "openai" and openai_base_url:
                     resolved_base_url = openai_base_url.rstrip("/")
-                    # If custom base URL points to a known provider, use their
-                    # cheap model instead of the generic OpenAI default
-                    if not override_model:
-                        detected = _detect_provider_from_url(resolved_base_url)
-                        if detected:
-                            _, cheap_model = detected
-                            model = cheap_model
-                            logger.info("TotalReclaw: detected %s from OPENAI_BASE_URL, using %s for extraction", detected[0], cheap_model)
-                        else:
-                            model = default_model
-                    else:
-                        model = override_model
                 else:
                     resolved_base_url = default_base_url
-                    model = override_model or default_model
 
                 return LLMConfig(
                     api_key=api_key,
