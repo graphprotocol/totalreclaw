@@ -306,19 +306,9 @@ Layers 1-2 are complete. Layers 3-4 are **largely superseded** by existing mecha
 | OPENAI_BASE_URL | Fix LLM extraction to respect custom base URL | **IN PROGRESS** |
 | Full agent QA | Hermes CLI with hooks + auto-extraction | **IN PROGRESS** |
 
-### 2.14 Coinbase Paymaster Migration — PLANNED
+### 2.14 Bundler/Paymaster Scaling — PLANNED
 
-**Goal:** Move from Pimlico/Gnosis to Coinbase Paymaster on Base mainnet. Eliminates bundler rate limiting ($15K/month gas credits, bundler included).
-
-| Step | Description | Status |
-|------|-------------|--------|
-| Deploy DataEdge to Base mainnet | CREATE2 — same address as other chains | PLANNED |
-| Deploy subgraph to Base mainnet | The Graph supports Base | PLANNED |
-| Update relay | Coinbase endpoint (paymaster + bundler combined) | PLANNED |
-| Update chain routing | Pro tier: Base mainnet (was Gnosis) | PLANNED |
-| QA | E2E validation on Base mainnet | PLANNED |
-
-**Decision:** Before marketing launch. Current Pimlico setup works for beta (<10 users).
+**Goal:** Scale on-chain submission beyond Pimlico free tier before marketing launch. See internal repo for business analysis and provider comparison.
 
 ### 2.15 HTTP MCP & Hosted Agent Integration — PARKED
 
