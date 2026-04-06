@@ -261,7 +261,52 @@ Layers 1-2 are complete. Layers 3-4 are **largely superseded** by existing mecha
 **Docs:** `docs/specs/totalreclaw/client-consistency.md` (Session Debrief section)
 **Plan:** `docs/plans/2026-03-31-session-debrief.md`
 
-### 2.11 HTTP MCP & Hosted Agent Integration — PARKED
+### 2.11 Rust Core Expansion v2 — COMPLETE
+
+**Goal:** Single Rust source of truth for all business logic. Eliminate duplicated code across 5 client implementations.
+
+| Component | Description | Status |
+|-----------|-------------|--------|
+| Core expansion | 7 → 13 modules (reranker, wallet, userop, store, search, hotcache, consolidation) | **DONE** |
+| Feature flags | `managed` (default) / `selfhosted` for conditional compilation | **DONE** |
+| WASM bindings | All 13 modules exported for TypeScript clients | **DONE** |
+| PyO3 bindings | All 13 modules exported for Python client | **DONE** |
+| Client refactor | Delegates cosine similarity + query strings to WASM | **DONE** |
+| Plugin refactor | Deps reduced from 8 to 2 (`@totalreclaw/client` + `@totalreclaw/core`) | **DONE** |
+| MCP refactor | Delegates cosine similarity to WASM | **DONE** |
+| Python refactor | Reranker + userop delegate to Rust PyO3 | **DONE** |
+
+**Core tests:** 114 | **Total tests across all clients:** 1,200+
+
+### 2.12 OpenClaw Integration QA — COMPLETE
+
+**Goal:** Validate the full OpenClaw user experience end-to-end on a real machine.
+
+| Component | Description | Status |
+|-----------|-------------|--------|
+| Scanner bypass | Separated env var reads from network calls (`config.ts`) | **DONE** |
+| Hot-reload setup | No gateway restart needed after `totalreclaw_setup` | **DONE** |
+| Auto-recall | `before_agent_start` hook injects memories at session start | **DONE** |
+| Auto-extraction | `agent_end` hook stores facts to vault (not MEMORY.md) | **DONE** |
+| AA23/AA10 fixes | Valid stub signature, deployment cache | **DONE** |
+| LLM config from OpenClaw | Reads provider config (`api.config.models.providers`) | **DONE** |
+| Plaintext prevention | `memoryHandled: true` prevents fallback to MEMORY.md | **DONE** |
+| Embedding model | Switched to multilingual-e5-small (384d, 34MB) | **DONE** |
+| QA on VPS | 6/7 PASS (Pimlico rate limit is infra constraint) | **DONE** |
+
+### 2.13 Hermes Integration QA — IN PROGRESS
+
+**Goal:** Validate Hermes Agent with TotalReclaw hooks (auto-recall, auto-extraction, debrief).
+
+| Component | Description | Status |
+|-----------|-------------|--------|
+| Install path | Two-step: pip + directory copy | **DONE** |
+| Python client | Remember, recall, forget, export, status all work | **DONE** |
+| Hooks | All 4 hooks fire (on_session_start, pre_llm_call, post_llm_call, on_session_end) | **DONE** |
+| OPENAI_BASE_URL | Fix LLM extraction to respect custom base URL | **IN PROGRESS** |
+| Full agent QA | Hermes CLI with hooks + auto-extraction | **IN PROGRESS** |
+
+### 2.14 HTTP MCP & Hosted Agent Integration — PARKED
 
 Support hosted AI agents (IronClaw / NEAR AI Cloud, Windsurf, etc.) that cannot spawn local stdio processes. **Deprioritized** — IronClaw works via local MCP (`npx @totalreclaw/mcp-server`). Will revisit if a hosted platform without local stdio support becomes a priority.
 
