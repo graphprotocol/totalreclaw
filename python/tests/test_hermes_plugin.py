@@ -363,6 +363,10 @@ class TestHooks:
         assert any("dark mode" in f.text.lower() for f in facts)
 
 
+_has_cosine = hasattr(__import__("totalreclaw_core"), "cosine_similarity")
+
+
+@pytest.mark.skipif(not _has_cosine, reason="totalreclaw_core missing cosine_similarity")
 class TestStoreTimeDedup:
     """Tests for cosine-based near-duplicate detection at store time."""
 
