@@ -636,15 +636,32 @@ async function attemptHotReload(logger: OpenClawPluginApi['logger']): Promise<vo
 }
 
 /**
- * Force re-initialization after credentials are written.
+ * Force re-initialization with a specific mnemonic.
  *
- * Called by the `totalreclaw_setup` tool after writing the mnemonic to
- * credentials.json. Resets module state and re-derives all keys, LSH,
- * auth, and Smart Account address.
+ * Called by the `totalreclaw_setup` tool. Clears stale credentials from
+ * disk so that `initialize()` treats this as a fresh registration and
+ * persists the NEW mnemonic + freshly derived salt/userId.
+ *
+ * Without clearing credentials.json first, `initialize()` would load the
+ * OLD salt and userId, derive keys from (new mnemonic + old salt), skip
+ * writing credentials (because existingUserId is set), and the new
+ * mnemonic would never be persisted — a critical data-loss bug.
  */
 async function forceReinitialization(mnemonic: string, logger: OpenClawPluginApi['logger']): Promise<void> {
   // Set the runtime override so CONFIG.recoveryPhrase returns this mnemonic.
   setRecoveryPhraseOverride(mnemonic);
+
+  // CRITICAL: Remove stale credentials so initialize() does a fresh
+  // registration with a new salt. If we leave the old file, initialize()
+  // loads the old salt + userId and never writes the new mnemonic.
+  try {
+    if (fs.existsSync(CREDENTIALS_PATH)) {
+      fs.unlinkSync(CREDENTIALS_PATH);
+      logger.info('Cleared stale credentials.json for fresh setup');
+    }
+  } catch (err) {
+    logger.warn(`Could not remove old credentials.json: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // Reset module state for a clean re-init.
   needsSetup = false;
@@ -661,7 +678,7 @@ async function forceReinitialization(mnemonic: string, logger: OpenClawPluginApi
   pluginHotCache = null;
   firstRunAfterInit = true;
 
-  // Re-run initialization.
+  // Re-run initialization — will register fresh and persist new credentials.
   initPromise = initialize(logger);
   await initPromise;
 }
@@ -3426,11 +3443,13 @@ const plugin = {
             api.logger.info('agent_end: skipping extraction (no messages)');
             return { memoryHandled: true };
           }
-          // Allow extraction even when evt.success is undefined (some OpenClaw
-          // versions don't set it). Only skip on explicit failure.
+          // Proceed with extraction even when evt.success is false or undefined.
+          // A single LLM timeout on one turn should not prevent extraction of
+          // facts from the (potentially many) successful turns in the message
+          // history. The extractor processes the full message array and can
+          // extract valuable facts from content before the failure.
           if (evt.success === false) {
-            api.logger.info('agent_end: skipping extraction (agent reported failure)');
-            return { memoryHandled: true };
+            api.logger.info('agent_end: turn reported failure, but proceeding with extraction from message history');
           }
 
           await ensureInitialized(api.logger);

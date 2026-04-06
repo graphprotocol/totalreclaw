@@ -207,10 +207,17 @@ export function initLLMClient(options: {
         const ocProvider = openclawProviders[provider];
         if (ocProvider?.apiKey) {
           apiKey = ocProvider.apiKey;
-          // Prefer the provider's configured baseUrl (may differ from our
-          // built-in default, e.g. Z.AI has /coding/paas vs /paas paths)
+          // Use the provider's configured baseUrl but normalize for extraction.
+          // OpenClaw's Z.AI config may use /api/coding/paas/v4 (coding-specific
+          // endpoint), but extraction uses the cheap model (glm-4.5-flash) which
+          // is available on the standard /api/paas/v4 endpoint. Normalize to
+          // avoid routing extraction calls through the coding endpoint.
           if (ocProvider.baseUrl) {
-            baseUrl = ocProvider.baseUrl.replace(/\/+$/, '');
+            let url = ocProvider.baseUrl.replace(/\/+$/, '');
+            if (provider === 'zai') {
+              url = url.replace('/api/coding/paas/', '/api/paas/');
+            }
+            baseUrl = url;
           }
         }
       }
@@ -237,8 +244,12 @@ export function initLLMClient(options: {
       if (!providerConfig?.apiKey) continue;
 
       const provider = providerName.toLowerCase();
-      const baseUrl = providerConfig.baseUrl?.replace(/\/+$/, '') || PROVIDER_BASE_URLS[provider];
+      let baseUrl = providerConfig.baseUrl?.replace(/\/+$/, '') || PROVIDER_BASE_URLS[provider];
       if (!baseUrl) continue;
+      // Normalize Z.AI coding endpoint to standard endpoint for extraction
+      if (provider === 'zai') {
+        baseUrl = baseUrl.replace('/api/coding/paas/', '/api/paas/');
+      }
 
       // Pick a model from the provider's configured models, or use our default
       const firstModelId = providerConfig.models?.[0]?.id;
