@@ -1,6 +1,6 @@
 {
   "name": "totalreclaw",
-  "version": "1.6.1",
+  "version": "3.6.0",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. AES-256-GCM E2EE: server never sees plaintext.",
   "author": "TotalReclaw Team",
   "license": "MIT",
