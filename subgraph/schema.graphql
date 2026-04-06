@@ -29,6 +29,8 @@ type Fact @entity(immutable: false) {
   blockNumber: BigInt!
   "Block timestamp"
   timestamp: BigInt!
+  "Client-generated timestamp (when fact was originally created). Falls back to block timestamp for pre-migration or malformed payloads."
+  createdAt: BigInt!
   "Transaction hash"
   txHash: Bytes!
   "Derived: all blind index entries for this fact"

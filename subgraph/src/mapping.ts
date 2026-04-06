@@ -19,6 +19,58 @@ import { decodeFact, DecodedFact } from "./protobuf";
 const GLOBAL_STATE_ID = "global";
 const INACTIVE_THRESHOLD = BigDecimal.fromString("0.3");
 
+/**
+ * Parse a subset of ISO 8601 timestamps into Unix seconds (BigInt).
+ *
+ * Supports formats emitted by TotalReclaw clients:
+ *   "YYYY-MM-DDTHH:MM:SSZ"
+ *   "YYYY-MM-DDTHH:MM:SS.fffZ"
+ *   "YYYY-MM-DDTHH:MM:SS+00:00"
+ *
+ * Returns BigInt.zero() on parse failure (caller falls back to block timestamp).
+ */
+function parseISO8601ToUnix(iso: string): BigInt {
+  // Minimum valid: "YYYY-MM-DDTHH:MM:SSZ" = 20 chars
+  if (iso.length < 20) return BigInt.zero();
+
+  let year = I32.parseInt(iso.substring(0, 4)) as i32;
+  let month = I32.parseInt(iso.substring(5, 7)) as i32;
+  let day = I32.parseInt(iso.substring(8, 10)) as i32;
+  let hour = I32.parseInt(iso.substring(11, 13)) as i32;
+  let minute = I32.parseInt(iso.substring(14, 16)) as i32;
+  let second = I32.parseInt(iso.substring(17, 19)) as i32;
+
+  // Basic sanity checks
+  if (year < 2024 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) {
+    return BigInt.zero();
+  }
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+    return BigInt.zero();
+  }
+
+  // Days per month (non-leap)
+  let daysInMonth: i32[] = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  let isLeap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+
+  // Count days from Unix epoch (1970-01-01) to the given date
+  let days: i64 = 0;
+  for (let y: i32 = 1970; y < year; y++) {
+    let leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+    days += leap ? 366 : 365;
+  }
+  for (let m: i32 = 1; m < month; m++) {
+    days += daysInMonth[m] as i64;
+    if (m == 2 && isLeap) {
+      days += 1;
+    }
+  }
+  days += (day - 1) as i64;
+
+  let totalSeconds: i64 = days * 86400 + (hour as i64) * 3600 + (minute as i64) * 60 + (second as i64);
+
+  return BigInt.fromI64(totalSeconds);
+}
+
 function getOrCreateGlobalState(): GlobalState {
   let state = GlobalState.load(GLOBAL_STATE_ID);
   if (state == null) {
@@ -71,6 +123,15 @@ export function handleLog(event: Log): void {
   fact!.blockNumber = event.block.number;
   fact!.timestamp = event.block.timestamp;
   fact!.txHash = event.transaction.hash;
+
+  // Client-generated per-fact timestamp (from protobuf field 2).
+  // Falls back to block timestamp if field 2 is missing or malformed.
+  let parsedCreatedAt = parseISO8601ToUnix(decoded.timestamp);
+  if (parsedCreatedAt.gt(BigInt.zero())) {
+    fact!.createdAt = parsedCreatedAt;
+  } else {
+    fact!.createdAt = event.block.timestamp;
+  }
 
   // Assign monotonic sequence ID
   let state = getOrCreateGlobalState();

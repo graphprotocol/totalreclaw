@@ -30,6 +30,7 @@ import { Bytes, BigDecimal, BigInt } from "@graphprotocol/graph-ts";
 
 export class DecodedFact {
   id: string;
+  timestamp: string;
   owner: string;
   encryptedBlob: Bytes;
   blindIndices: string[];
@@ -44,6 +45,7 @@ export class DecodedFact {
 
   constructor() {
     this.id = "";
+    this.timestamp = "";
     this.owner = "";
     this.encryptedBlob = Bytes.empty();
     this.blindIndices = [];
@@ -139,6 +141,8 @@ export function decodeFact(data: Bytes): DecodedFact {
 
       if (fieldNumber == 1) {
         fact.id = sliceBytes.toString();
+      } else if (fieldNumber == 2) {
+        fact.timestamp = sliceBytes.toString();
       } else if (fieldNumber == 3) {
         fact.owner = sliceBytes.toString();
       } else if (fieldNumber == 4) {
