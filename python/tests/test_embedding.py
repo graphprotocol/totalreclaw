@@ -1,10 +1,19 @@
 """Tests for TotalReclaw embedding pipeline.
 
-These tests require model download (~164MB first time).
-Mark with pytest.mark.slow if needed.
+These tests require model download (~34MB for e5-small, ~164MB for Harrier).
+Skipped in CI (no ONNX model cache). Run locally with:
+    cd python && python -m pytest tests/test_embedding.py -v
 """
 import math
+import os
+
 import pytest
+
+# Skip the entire module in CI where model downloads may fail
+pytestmark = pytest.mark.skipif(
+    os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true",
+    reason="Embedding tests require model download; skipped in CI",
+)
 
 
 class TestEmbedding:
@@ -13,9 +22,14 @@ class TestEmbedding:
         from totalreclaw.embedding import get_embedding
         return get_embedding
 
-    def test_output_dimensions(self, embed):
+    @pytest.fixture(scope="class")
+    def dims(self):
+        from totalreclaw.embedding import get_embedding_dims
+        return get_embedding_dims()
+
+    def test_output_dimensions(self, embed, dims):
         emb = embed("Hello world")
-        assert len(emb) == 640
+        assert len(emb) == dims
 
     def test_unit_norm(self, embed):
         emb = embed("Hello world")
@@ -40,16 +54,18 @@ class TestEmbedding:
         dot = sum(a * b for a, b in zip(emb1, emb2))
         assert dot > 0.7
 
-    def test_empty_text(self, embed):
+    def test_empty_text(self, embed, dims):
         emb = embed("")
-        assert len(emb) == 640
+        assert len(emb) == dims
 
     def test_get_embedding_dims(self):
         from totalreclaw.embedding import get_embedding_dims
-        assert get_embedding_dims() == 640
+        dims = get_embedding_dims()
+        assert isinstance(dims, int)
+        assert dims > 0
 
-    def test_batch(self, embed):
+    def test_batch(self, embed, dims):
         from totalreclaw.embedding import get_embeddings_batch
         results = get_embeddings_batch(["hello", "world"])
         assert len(results) == 2
-        assert all(len(e) == 640 for e in results)
+        assert all(len(e) == dims for e in results)
