@@ -27,6 +27,7 @@ class LLMConfig:
 
 
 # Provider detection order and their env vars
+# (provider, env_vars, default_base_url, default_cheap_model, api_format)
 PROVIDERS = [
     ("anthropic", ["ANTHROPIC_API_KEY"], "https://api.anthropic.com/v1", "claude-haiku-4-5-20251001", "anthropic"),
     ("openai", ["OPENAI_API_KEY"], "https://api.openai.com/v1", "gpt-4.1-mini", "openai"),
@@ -39,12 +40,32 @@ PROVIDERS = [
     ("together", ["TOGETHER_API_KEY"], "https://api.together.xyz/v1", "meta-llama/Llama-3.3-70B-Instruct-Turbo", "openai"),
 ]
 
+# Detect provider from custom base URLs and pick appropriate cheap models.
+# When OPENAI_BASE_URL is set to a known provider, we can auto-select
+# the right fast model without the user configuring anything extra.
+_BASE_URL_PROVIDERS: dict[str, tuple[str, str]] = {
+    "api.z.ai": ("zai", "glm-5-turbo"),
+    "api.together.xyz": ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+    "api.fireworks.ai": ("fireworks", "accounts/fireworks/models/llama-v3p3-70b-instruct"),
+}
+
+
+def _detect_provider_from_url(base_url: str) -> Optional[tuple[str, str]]:
+    """Detect provider and cheap model from a custom base URL."""
+    for domain, (provider, model) in _BASE_URL_PROVIDERS.items():
+        if domain in base_url:
+            return (provider, model)
+    return None
+
 
 def detect_llm_config() -> Optional[LLMConfig]:
     """Auto-detect LLM provider from environment variables.
 
-    Override model with TOTALRECLAW_EXTRACTION_MODEL or TOTALRECLAW_LLM_MODEL env var.
-    For OpenAI-compatible providers, OPENAI_BASE_URL overrides the default base URL.
+    Smart model selection: automatically picks a fast/cheap model for extraction
+    based on the detected provider. No extra env vars needed — just uses whatever
+    the user configured for Hermes.
+
+    Override with TOTALRECLAW_EXTRACTION_MODEL or TOTALRECLAW_LLM_MODEL if needed.
     """
     override_model = os.environ.get("TOTALRECLAW_EXTRACTION_MODEL") or os.environ.get("TOTALRECLAW_LLM_MODEL")
     openai_base_url = os.environ.get("OPENAI_BASE_URL")
@@ -53,15 +74,25 @@ def detect_llm_config() -> Optional[LLMConfig]:
         for env_var in env_vars:
             api_key = os.environ.get(env_var)
             if api_key:
-                model = override_model or default_model
-                # For the openai provider specifically, respect OPENAI_BASE_URL.
-                # Other OpenAI-compatible providers (Groq, DeepSeek, etc.) keep
-                # their own base URLs since they have provider-specific endpoints.
-                # Anthropic is never affected by OPENAI_BASE_URL.
+                # Determine base URL
                 if _provider == "openai" and openai_base_url:
                     resolved_base_url = openai_base_url.rstrip("/")
+                    # If custom base URL points to a known provider, use their
+                    # cheap model instead of the generic OpenAI default
+                    if not override_model:
+                        detected = _detect_provider_from_url(resolved_base_url)
+                        if detected:
+                            _, cheap_model = detected
+                            model = cheap_model
+                            logger.info("TotalReclaw: detected %s from OPENAI_BASE_URL, using %s for extraction", detected[0], cheap_model)
+                        else:
+                            model = default_model
+                    else:
+                        model = override_model
                 else:
                     resolved_base_url = default_base_url
+                    model = override_model or default_model
+
                 return LLMConfig(
                     api_key=api_key,
                     base_url=resolved_base_url,

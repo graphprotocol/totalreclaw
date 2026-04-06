@@ -102,12 +102,14 @@ The plugin recognizes 7 memory types:
 
 ## 5. Configuration
 
-### Environment variables
+### Environment variables (all optional)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TOTALRECLAW_RECOVERY_PHRASE` | -- | BIP-39 mnemonic (auto-loads and auto-registers on startup) |
-| `TOTALRECLAW_SERVER_URL` | `https://api.totalreclaw.xyz` | Relay server URL |
+| `TOTALRECLAW_RECOVERY_PHRASE` | -- | Import an existing recovery phrase. If not set, the agent generates one on first use. |
+| `TOTALRECLAW_SERVER_URL` | `https://api.totalreclaw.xyz` | Override for self-hosted deployments. Most users don't need this. |
+
+TotalReclaw automatically uses whatever LLM provider you configured for Hermes. It picks a fast/cheap model from the same provider for fact extraction — no extra API keys or model settings needed.
 
 ### Hermes config (optional)
 
