@@ -35,6 +35,7 @@ export const DELTA_SYNC_FACTS = `
       sequenceId
       blockNumber
       timestamp
+      createdAt
       version
     }
   }

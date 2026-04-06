@@ -97,6 +97,7 @@ const SEARCH_QUERY = `
         encryptedEmbedding
         decayScore
         timestamp
+        createdAt
         isActive
         contentFp
         sequenceId
@@ -122,6 +123,7 @@ const PAGINATE_QUERY = `
         encryptedBlob
         encryptedEmbedding
         timestamp
+        createdAt
         decayScore
         isActive
         contentFp
@@ -271,6 +273,7 @@ export async function searchSubgraphBroadened(
         encryptedEmbedding
         decayScore
         timestamp
+        createdAt
         isActive
         contentFp
         sequenceId

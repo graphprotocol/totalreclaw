@@ -51,6 +51,7 @@ const SEARCH_QUERY: &str = r#"
         encryptedEmbedding
         decayScore
         timestamp
+        createdAt
         isActive
         contentFp
       }
@@ -73,6 +74,7 @@ const BROADENED_SEARCH_QUERY: &str = r#"
       encryptedEmbedding
       decayScore
       timestamp
+      createdAt
       isActive
       contentFp
     }
@@ -94,6 +96,7 @@ const EXPORT_QUERY: &str = r#"
       encryptedEmbedding
       decayScore
       timestamp
+      createdAt
       isActive
     }
   }
@@ -121,6 +124,7 @@ pub struct SubgraphFact {
     pub encrypted_embedding: Option<String>,
     pub decay_score: Option<String>,
     pub timestamp: Option<String>,
+    pub created_at: Option<String>,
     pub is_active: Option<bool>,
     pub content_fp: Option<String>,
 }

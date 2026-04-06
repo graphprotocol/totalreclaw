@@ -106,6 +106,7 @@ const FETCH_FACTS_QUERY = `
       agentId
       version
       timestamp
+      createdAt
     }
   }
 `;
@@ -130,6 +131,7 @@ const FETCH_FACTS_INITIAL_QUERY = `
       agentId
       version
       timestamp
+      createdAt
     }
   }
 `;

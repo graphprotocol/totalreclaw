@@ -45,6 +45,7 @@ SEARCH_QUERY = """
         encryptedEmbedding
         decayScore
         timestamp
+        createdAt
         isActive
         contentFp
       }
@@ -66,6 +67,7 @@ PAGINATE_QUERY = """
         encryptedBlob
         encryptedEmbedding
         timestamp
+        createdAt
         decayScore
         isActive
         contentFp
@@ -86,6 +88,7 @@ BROADENED_SEARCH_QUERY = """
       encryptedBlob
       encryptedEmbedding
       timestamp
+      createdAt
       decayScore
       isActive
       contentFp
@@ -107,6 +110,7 @@ EXPORT_QUERY = """
       encryptedEmbedding
       decayScore
       timestamp
+      createdAt
       isActive
       contentFp
     }
