@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-hermes = ["hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git"]
+# hermes-agent is not on PyPI — install manually: pip install git+https://github.com/NousResearch/hermes-agent.git
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-xdist>=3.5", "mnemonic>=0.21"]
 
 [project.entry-points."hermes_agent.plugins"]
