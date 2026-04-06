@@ -17,27 +17,18 @@ Set up TotalReclaw as the encrypted memory layer for your Hermes Agent. Your mem
 ## 1. Install TotalReclaw
 
 ```bash
-pip install "totalreclaw[hermes]"
-```
+# Step 1: Install TotalReclaw and Hermes Agent
+pip install totalreclaw
+pip install "git+https://github.com/NousResearch/hermes-agent.git"
 
-This installs both the TotalReclaw client and Hermes Agent (from GitHub, since Hermes is not yet on PyPI).
-
-> **Docker note:** If you see "externally-managed-environment" errors, add `--break-system-packages`:
-> ```bash
-> pip install --break-system-packages "totalreclaw[hermes]"
-> ```
-
-This installs the Python client library and registers the Hermes plugin via the `hermes_agent.plugins` entry point.
-
-> **Apple Silicon note:** The Hermes Docker image is amd64-only. On Apple Silicon (M1/M2/M3/M4), use `docker run --platform linux/amd64 ...` which runs via Rosetta emulation (slower but functional).
-
-Alternatively, install as a local plugin:
-
-```bash
-# Copy the plugin to Hermes plugins directory
+# Step 2: Register the TotalReclaw plugin with Hermes
 mkdir -p ~/.hermes/plugins/totalreclaw
 cp -r $(python -c "import totalreclaw.hermes; print(totalreclaw.hermes.__path__[0])")/* ~/.hermes/plugins/totalreclaw/
 ```
+
+> **Docker note:** Add `--break-system-packages` if you see "externally-managed-environment" errors.
+
+> **Why two steps?** Hermes Agent is not yet on PyPI (install from GitHub). Hermes discovers plugins via its `~/.hermes/plugins/` directory, so the copy step is required.
 
 ## 2. Verify installation
 
