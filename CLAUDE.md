@@ -268,6 +268,7 @@ Every new feature implementation MUST include:
 
 | Gap | Severity | Status |
 |-----|----------|--------|
+| Per-fact timestamps | RESOLVED | Subgraph decodes protobuf field 2 (client-generated ISO 8601) into `createdAt: BigInt!` (Unix seconds). Batched facts now retain individual timestamps. `timestamp` (block time) kept for on-chain confirmation time. |
 | LSH parameters | RESOLVED | 32-bit x 20 tables, 98.1% Recall@8 on real data |
 | Authentication | RESOLVED | HKDF auth with SHA-256 key hashing |
 | Embedding model | RESOLVED | Migrated to Xenova/multilingual-e5-small (384d, ~34MB, mean pooling). Harrier-OSS-v1-270M (640d) blocked by ONNX runtime incompatibility (GatherBlockQuantized op) -- revisit when @huggingface/transformers upgrades ONNX Runtime to 1.25+. |
