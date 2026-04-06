@@ -160,12 +160,12 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Decay handling | -- | -- | -- | -- | -- | Yes (via ZeroClaw) | ZeroClaw applies 7-day half-life at retrieval time |
 | Conflict resolution | -- | -- | -- | -- | -- | Yes (via ZeroClaw) | ZeroClaw checks semantic similarity before storing Core |
 | **Extraction** | | | | | | | |
-| Expanded memory types (7 categories) | Yes | Yes (via prompt) | Yes | Yes (heuristic) | Yes (via prompt) | Yes (category mapping) | fact, preference, decision, episodic, goal, context, summary |
-| Decision reasoning extraction | Yes | Yes (via prompt) | Yes | Yes (heuristic) | Yes (via prompt) | Yes (via ZeroClaw) | Extraction prompts require "chose X because Y" |
+| Expanded memory types (7 categories) | Yes | Yes (via prompt) | Yes | Yes (LLM or heuristic) | Yes (via prompt) | Yes (category mapping) | fact, preference, decision, episodic, goal, context, summary |
+| Decision reasoning extraction | Yes | Yes (via prompt) | Yes | Yes (LLM or heuristic) | Yes (via prompt) | Yes (via ZeroClaw) | Extraction prompts require "chose X because Y" |
 | **Dedup** | | | | | | |
 | Content fingerprint (exact) | Yes | Yes | Yes | Yes | Yes (via MCP) | Yes | Server-side HMAC-SHA256 |
 | Within-batch semantic dedup | Yes | -- | -- | -- | -- | -- | Cosine >= 0.9, during extraction |
-| Store-time near-duplicate | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Yes (cosine >= 0.85) | `consolidation.ts` — both plugin and MCP; Rust checks 50 existing facts |
+| Store-time near-duplicate | Yes | Yes | Yes (via MCP) | Yes (cosine >= 0.85) | Yes (via MCP) | Yes (cosine >= 0.85) | `consolidation.ts` — both plugin and MCP; Python via generic agent layer; Rust checks 50 existing facts |
 | LLM-guided dedup (ADD/UPDATE/DELETE) | Yes | -- | Yes | Yes | -- | -- | All tiers — uses user's own LLM API key, zero cost to us |
 | Bulk consolidation tool | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Self-hosted only (no batch delete on managed service) |
 | **Pro Tier Gating** | | | | | | |
@@ -221,11 +221,11 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | IronClaw CLI no MCP support | MEDIUM | `nearai mcp add` / `ironclaw mcp add` CLI does not exist. Users must manually configure MCP server in NEAR AI agent config. |
 | Export/import not on managed service (MCP) | LOW | MCP server's export and import tools are self-hosted only. OpenClaw plugin handles both modes. |
 | Crypto payments removed | LOW | Coinbase Commerce sunset March 31, 2026. Removed from relay, tools, and website. Stripe (fiat) is the sole payment method. |
-| Hermes not on PyPI (hermes-agent) | MEDIUM | `hermes-agent` package is not published on PyPI. Users must install from git. The `totalreclaw[hermes]` extra depends on it, so Hermes plugin setup requires manual steps. |
+| Hermes not on PyPI (hermes-agent) | RESOLVED | `totalreclaw` 1.2.0 on PyPI includes generic agent layer (no hermes-agent dependency). OPENAI_BASE_URL fix + model detection included. |
 | Hermes no import/migrate/consolidate | MEDIUM | Python client does not yet implement import adapters, migrate tool, or consolidation. Core remember/recall/forget/export/status work. |
 | Hermes no client batching | LOW | Python client submits facts one-by-one (no ERC-4337 executeBatch). Acceptable for extraction volumes (max 15 facts). |
-| Hermes no store-time dedup | LOW | Python client does not check for near-duplicates before storing. Server-side content fingerprint still prevents exact duplicates. |
-| Hermes heuristic extraction only | MEDIUM | Hermes plugin uses regex-based extraction (no LLM call). Sufficient for preferences/facts/decisions but less comprehensive than LLM-guided extraction. |
+| Hermes no store-time dedup | RESOLVED | Generic agent layer now performs cosine-based near-duplicate detection (>= 0.85) before storing. |
+| Hermes heuristic extraction only | LOW | Generic agent layer tries LLM extraction first, falls back to heuristic regex. LLM path requires compatible provider (OpenAI-compatible endpoint). |
 | ZeroClaw no import/migrate | LOW | Rust crate implements core Memory trait + status + export + upgrade (Stripe checkout) but not import adapters or migrate tool. |
 | ZeroClaw no client batching | RESOLVED | Rust crate supports executeBatch() multi-call UserOps (up to 15 facts per batch). |
 | ZeroClaw UserOp submission | RESOLVED | Native Rust ERC-4337 v0.7 UserOp construction via alloy-primitives/alloy-sol-types. Hash + signing verified byte-for-byte against viem. |
@@ -397,7 +397,7 @@ git checkout main
 - **Default chain ID**: 84532 (Base Sepolia) -- all clients default to free tier, auto-detect Pro (chain 100/Gnosis) from billing
 - **Embedding model**: Xenova/multilingual-e5-small (384d, ~34MB, mean pooling). Harrier-OSS-v1-270M (640d) blocked by ONNX runtime incompatibility (GatherBlockQuantized op) -- revisit when @huggingface/transformers upgrades ONNX Runtime to 1.25+.
 - **Crypto core**: `@totalreclaw/core` v1.0.0 (Rust WASM for npm, PyO3 for PyPI) -- 13 modules (crypto, reranker, wallet, userop, store, search, blind, lsh, fingerprint, hotcache, consolidation, debrief, stemmer). Single source of truth for all clients.
-- **Packages**: `@totalreclaw/core@1.0.0`, `@totalreclaw/client@1.0.0`, `@totalreclaw/mcp-server@2.0.0`, `@totalreclaw/totalreclaw@3.4.0` (OpenClaw plugin, npm + ClawHub); `totalreclaw-core@1.0.0`, `totalreclaw@1.0.0` (PyPI)
+- **Packages**: `@totalreclaw/core@1.0.0`, `@totalreclaw/client@1.0.0`, `@totalreclaw/mcp-server@2.0.0`, `@totalreclaw/totalreclaw@3.6.0` (OpenClaw plugin, npm + ClawHub); `totalreclaw-core@1.0.0`, `totalreclaw@1.2.0` (PyPI)
 - **OpenClaw integration**: Plugin installs without force flags (`openclaw plugins install`), hot-reload setup via `TOTALRECLAW_HOT_RELOAD=true`, auto-recall on `before_agent_start`, auto-extraction on `agent_end`, LLM config sourced from OpenClaw providers, plaintext fallback prevention
 - **Relay**: Billing, Pimlico sponsorship, dual-chain routing, and query proxying extracted to private `totalreclaw-relay` TypeScript repo (p-diogo/totalreclaw-relay). Public server retains only self-hosted functionality (storage, search, auth).
 - **Staging**: Base Sepolia (chain 84532) -- free testnet, no gas costs
