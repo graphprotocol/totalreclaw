@@ -16,18 +16,11 @@ Set up TotalReclaw as the encrypted memory layer for your Hermes Agent. Your mem
 
 ## 1. Install TotalReclaw
 
-> **Known blocker:** `pip install "totalreclaw[hermes]"` currently fails because `hermes-agent` is not published on PyPI. Until Hermes is available on PyPI, install from the git source instead:
-
 ```bash
-# Install the TotalReclaw Python client (works)
-pip install totalreclaw
-
-# Install hermes-agent from source (not yet on PyPI)
-pip install git+https://github.com/socra-ai/hermes-agent.git
-
-# Then install the Hermes extras
 pip install "totalreclaw[hermes]"
 ```
+
+This installs both the TotalReclaw client and Hermes Agent (from GitHub, since Hermes is not yet on PyPI).
 
 > **Docker note:** If you see "externally-managed-environment" errors, add `--break-system-packages`:
 > ```bash
