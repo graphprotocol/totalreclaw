@@ -81,17 +81,17 @@ STATUS = {
 SETUP = {
     "name": "totalreclaw_setup",
     "description": (
-        "Configure TotalReclaw with a recovery phrase. Run this once to set up "
-        "the encrypted memory vault."
+        "Configure TotalReclaw with a recovery phrase. If no phrase is provided, "
+        "a new one is generated automatically. Run this once to set up the "
+        "encrypted memory vault."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "recovery_phrase": {
                 "type": "string",
-                "description": "BIP-39 recovery phrase (12 or 24 words)",
+                "description": "BIP-39 recovery phrase (12 or 24 words). If omitted, a new phrase is generated.",
             },
         },
-        "required": ["recovery_phrase"],
     },
 }

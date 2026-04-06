@@ -123,17 +123,31 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
 
 
 def setup(args: dict, state: "PluginState", **kwargs) -> str:
-    """Configure TotalReclaw credentials."""
+    """Configure TotalReclaw credentials. Generates a new recovery phrase if none provided."""
     recovery_phrase = args.get("recovery_phrase", "").strip()
+    generated = False
+
     if not recovery_phrase:
-        return json.dumps({"error": "No recovery phrase provided"})
+        # Generate a new BIP-39 mnemonic using eth_account (already a dependency)
+        try:
+            from eth_account import Account
+            Account.enable_unaudited_hdwallet_features()
+            _acct, recovery_phrase = Account.create_with_mnemonic()
+            generated = True
+        except Exception as e:
+            logger.error("Failed to generate recovery phrase: %s", e)
+            return json.dumps({"error": f"Failed to generate recovery phrase: {e}"})
 
     try:
         state.configure(recovery_phrase)
-        return json.dumps({
+        result = {
             "configured": True,
             "wallet_address": state.get_client().wallet_address,
-        })
+        }
+        if generated:
+            result["recovery_phrase"] = recovery_phrase
+            result["generated"] = True
+        return json.dumps(result)
     except Exception as e:
         logger.error("totalreclaw_setup failed: %s", e)
         return json.dumps({"error": str(e)})

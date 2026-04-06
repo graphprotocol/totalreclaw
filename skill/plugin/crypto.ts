@@ -15,7 +15,12 @@
  *     -> HKDF-SHA256(seed, salt, "openmemory-dedup-v1",           32) -> dedupKey
  */
 
-import * as wasm from '@totalreclaw/core';
+// Lazy-load WASM to avoid crash when npm install hasn't finished yet.
+let _wasm: typeof import('@totalreclaw/core') | null = null;
+function getWasm() {
+  if (!_wasm) _wasm = require('@totalreclaw/core');
+  return _wasm;
+}
 
 // ---------------------------------------------------------------------------
 // BIP-39 Validation
@@ -58,9 +63,9 @@ export function deriveKeys(
   // Try strict validation first, fall back to lenient
   let result: { auth_key: string; encryption_key: string; dedup_key: string; salt: string };
   try {
-    result = wasm.deriveKeysFromMnemonic(trimmed);
+    result = getWasm().deriveKeysFromMnemonic(trimmed);
   } catch {
-    result = wasm.deriveKeysFromMnemonicLenient(trimmed);
+    result = getWasm().deriveKeysFromMnemonicLenient(trimmed);
   }
 
   return {
@@ -84,7 +89,7 @@ export function deriveLshSeed(
   password: string,
   salt: Buffer,
 ): Uint8Array {
-  const seedHex = wasm.deriveLshSeed(password.trim(), salt.toString('hex'));
+  const seedHex = getWasm().deriveLshSeed(password.trim(), salt.toString('hex'));
   return new Uint8Array(Buffer.from(seedHex, 'hex'));
 }
 
@@ -96,7 +101,7 @@ export function deriveLshSeed(
  * Compute the SHA-256 hash of the auth key.
  */
 export function computeAuthKeyHash(authKey: Buffer): string {
-  return wasm.computeAuthKeyHash(authKey.toString('hex'));
+  return getWasm().computeAuthKeyHash(authKey.toString('hex'));
 }
 
 // ---------------------------------------------------------------------------
@@ -110,14 +115,14 @@ export function computeAuthKeyHash(authKey: Buffer): string {
  *   [iv: 12 bytes][tag: 16 bytes][ciphertext: variable]
  */
 export function encrypt(plaintext: string, encryptionKey: Buffer): string {
-  return wasm.encrypt(plaintext, encryptionKey.toString('hex'));
+  return getWasm().encrypt(plaintext, encryptionKey.toString('hex'));
 }
 
 /**
  * Decrypt a base64-encoded AES-256-GCM blob back to a UTF-8 string.
  */
 export function decrypt(encryptedBase64: string, encryptionKey: Buffer): string {
-  return wasm.decrypt(encryptedBase64, encryptionKey.toString('hex'));
+  return getWasm().decrypt(encryptedBase64, encryptionKey.toString('hex'));
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +136,7 @@ export function decrypt(encryptedBase64: string, encryptionKey: Buffer): string 
  * and SHA-256 hashing.
  */
 export function generateBlindIndices(text: string): string[] {
-  return wasm.generateBlindIndices(text);
+  return getWasm().generateBlindIndices(text);
 }
 
 // ---------------------------------------------------------------------------
@@ -144,5 +149,5 @@ export function generateBlindIndices(text: string): string[] {
  * @returns 64-character hex string.
  */
 export function generateContentFingerprint(plaintext: string, dedupKey: Buffer): string {
-  return wasm.generateContentFingerprint(plaintext, dedupKey.toString('hex'));
+  return getWasm().generateContentFingerprint(plaintext, dedupKey.toString('hex'));
 }

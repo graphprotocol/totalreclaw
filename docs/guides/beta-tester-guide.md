@@ -32,7 +32,7 @@ openclaw skills install totalreclaw
 openclaw plugins install ~/.openclaw/workspace/skills/totalreclaw
 ```
 
-Restart the gateway if prompted. You may see a "1 suspicious code pattern" warning -- this is normal (the plugin reads configuration and makes encrypted network calls).
+Restart the gateway if prompted. You may see a "1 suspicious code pattern" warning -- this is normal (the plugin reads configuration and makes encrypted network calls). If the plugin fails to load on the very first install, restart the gateway once more -- npm dependencies may still be installing in the background.
 
 **Step 2: Set up your recovery phrase**
 

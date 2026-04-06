@@ -7,7 +7,12 @@
  * Default parameters: 32 bits per table, 20 tables.
  */
 
-import { WasmLshHasher } from '@totalreclaw/core';
+// Lazy-load WASM to avoid crash when npm install hasn't finished yet.
+let _WasmLshHasher: typeof import('@totalreclaw/core')['WasmLshHasher'] | null = null;
+function getWasmLshHasher() {
+  if (!_WasmLshHasher) _WasmLshHasher = require('@totalreclaw/core').WasmLshHasher;
+  return _WasmLshHasher!;
+}
 
 /**
  * Random Hyperplane LSH hasher.
@@ -16,7 +21,7 @@ import { WasmLshHasher } from '@totalreclaw/core';
  * Construct once per session; call `hash()` for every store/search operation.
  */
 export class LSHHasher {
-  private inner: WasmLshHasher;
+  private inner: InstanceType<typeof import('@totalreclaw/core')['WasmLshHasher']>;
 
   /**
    * Create a new LSH hasher.
@@ -33,7 +38,7 @@ export class LSHHasher {
     nBits: number = 32,
   ) {
     const seedHex = Buffer.from(seed).toString('hex');
-    this.inner = WasmLshHasher.withParams(seedHex, dims, nTables, nBits);
+    this.inner = getWasmLshHasher().withParams(seedHex, dims, nTables, nBits);
   }
 
   /**

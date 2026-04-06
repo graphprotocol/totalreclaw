@@ -1867,6 +1867,7 @@ const plugin = {
               if (!result.success) {
                 throw new Error(`On-chain submission failed (tx=${result.txHash?.slice(0, 10) || 'none'}…)`);
               }
+              api.logger.info(`totalreclaw_remember: stored on-chain (tx=${result.txHash.slice(0, 10)}…)`);
             } else {
               await apiClient!.store(userId!, [factPayload], authKeyHex!);
             }

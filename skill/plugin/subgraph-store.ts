@@ -10,8 +10,64 @@
  * and chain RPCs. No viem, no permissionless.
  */
 
-import * as wasm from '@totalreclaw/core';
+// Lazy-load WASM to avoid crash when npm install hasn't finished yet.
+let _wasm: typeof import('@totalreclaw/core') | null = null;
+function getWasm() {
+  if (!_wasm) _wasm = require('@totalreclaw/core');
+  return _wasm;
+}
 import { CONFIG } from './config.js';
+
+// ---------------------------------------------------------------------------
+// Pimlico 429 retry helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap a fetch-based JSON-RPC call with exponential backoff for HTTP 429
+ * (rate limit) responses from Pimlico. Max 3 retries with 1s/2s/4s delays.
+ * All other HTTP errors throw immediately.
+ */
+async function rpcWithRetry(
+  url: string,
+  headers: Record<string, string>,
+  method: string,
+  params: unknown[],
+): Promise<any> {
+  const maxRetries = 3;
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params });
+
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    const resp = await fetch(url, { method: 'POST', headers, body });
+
+    if (resp.ok) {
+      const json = await resp.json() as { result?: any; error?: { message: string } };
+      if (json.error) {
+        // Check if the RPC-level error message indicates a rate limit
+        if (attempt <= maxRetries && /429|rate limit/i.test(json.error.message)) {
+          const delay = Math.pow(2, attempt - 1) * 1000;
+          console.error(`Pimlico rate limited, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})...`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        throw new Error(`RPC ${method}: ${json.error.message}`);
+      }
+      return json.result;
+    }
+
+    // HTTP-level 429 — retry with backoff
+    if (resp.status === 429 && attempt <= maxRetries) {
+      const delay = Math.pow(2, attempt - 1) * 1000;
+      console.error(`Pimlico rate limited, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})...`);
+      await new Promise(r => setTimeout(r, delay));
+      continue;
+    }
+
+    throw new Error(`Relay returned HTTP ${resp.status} for ${method}`);
+  }
+
+  // Should not be reached, but satisfies TypeScript
+  throw new Error(`RPC ${method}: max retries exceeded`);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -75,7 +131,7 @@ export function encodeFactProtobuf(fact: FactPayload): Buffer {
     agent_id: fact.agentId,
     encrypted_embedding: fact.encryptedEmbedding || null,
   });
-  return Buffer.from(wasm.encodeFactProtobuf(json));
+  return Buffer.from(getWasm().encodeFactProtobuf(json));
 }
 
 // ---------------------------------------------------------------------------
@@ -105,12 +161,12 @@ function getDefaultRpcUrl(chainId: number): string {
  * via a raw eth_call to the chain RPC. The address is deterministic (CREATE2).
  */
 export async function deriveSmartAccountAddress(mnemonic: string, chainId?: number): Promise<string> {
-  const eoa = wasm.deriveEoa(mnemonic) as { private_key: string; address: string };
+  const eoa = getWasm().deriveEoa(mnemonic) as { private_key: string; address: string };
   const resolvedChainId = chainId ?? 84532;
 
   // SimpleAccountFactory.getAddress(address owner, uint256 salt) — view function
   // Selector: 0x8cb84e18 = keccak256("getAddress(address,uint256)")[0:4]
-  const factoryAddress = wasm.getSimpleAccountFactory();
+  const factoryAddress = getWasm().getSimpleAccountFactory();
   const ownerPadded = eoa.address.slice(2).toLowerCase().padStart(64, '0');
   const saltPadded = '0'.repeat(64);
   const selector = '8cb84e18';
@@ -187,7 +243,7 @@ async function getInitCode(
   // Account not deployed — build factory + factoryData for first-time deployment.
   // createAccount(address owner, uint256 salt) — state-changing function
   // Selector: 0x5fbfb9cf = keccak256("createAccount(address,uint256)")[0:4]
-  const factory = wasm.getSimpleAccountFactory();
+  const factory = getWasm().getSimpleAccountFactory();
   const ownerPadded = eoaAddress.slice(2).toLowerCase().padStart(64, '0');
   const saltPadded = '0'.repeat(64);
   const selector = '5fbfb9cf';
@@ -231,28 +287,18 @@ export async function submitFactOnChain(
   if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
   if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
 
-  // Helper for JSON-RPC calls to relay bundler
+  // Helper for JSON-RPC calls to relay bundler (with 429 retry)
   async function rpc(method: string, params: unknown[]): Promise<any> {
-    const resp = await fetch(bundlerUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-    });
-    if (!resp.ok) {
-      throw new Error(`Relay returned HTTP ${resp.status} for ${method}`);
-    }
-    const json = await resp.json() as { result?: any; error?: { message: string } };
-    if (json.error) throw new Error(`RPC ${method}: ${json.error.message}`);
-    return json.result;
+    return rpcWithRetry(bundlerUrl, headers, method, params);
   }
 
   // 1. Derive EOA from mnemonic
-  const eoa = wasm.deriveEoa(config.mnemonic) as { private_key: string; address: string };
+  const eoa = getWasm().deriveEoa(config.mnemonic) as { private_key: string; address: string };
   const sender = config.walletAddress || await deriveSmartAccountAddress(config.mnemonic, config.chainId);
-  const entryPoint = config.entryPointAddress || wasm.getEntryPointAddress();
+  const entryPoint = config.entryPointAddress || getWasm().getEntryPointAddress();
 
   // 2. Encode calldata (SimpleAccount.execute → DataEdge fallback)
-  const calldataBytes = wasm.encodeSingleCall(protobufPayload);
+  const calldataBytes = getWasm().encodeSingleCall(protobufPayload);
   const callData = `0x${Buffer.from(calldataBytes).toString('hex')}`;
 
   // 3. Get gas prices from Pimlico
@@ -304,8 +350,8 @@ export async function submitFactOnChain(
 
   // 8. Hash and sign the UserOp via WASM
   const opJson = JSON.stringify(unsignedOp);
-  const hashHex = wasm.hashUserOp(opJson, entryPoint, BigInt(config.chainId));
-  const sigHex = wasm.signUserOp(hashHex, eoa.private_key);
+  const hashHex = getWasm().hashUserOp(opJson, entryPoint, BigInt(config.chainId));
+  const sigHex = getWasm().signUserOp(hashHex, eoa.private_key);
   unsignedOp.signature = `0x${sigHex}`;
 
   // 9. Submit the signed UserOp
@@ -373,28 +419,19 @@ export async function submitFactBatchOnChain(
   if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
   if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
 
+  // Helper for JSON-RPC calls to relay bundler (with 429 retry)
   async function rpc(method: string, params: unknown[]): Promise<any> {
-    const resp = await fetch(bundlerUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-    });
-    if (!resp.ok) {
-      throw new Error(`Relay returned HTTP ${resp.status} for ${method}`);
-    }
-    const json = await resp.json() as { result?: any; error?: { message: string } };
-    if (json.error) throw new Error(`RPC ${method}: ${json.error.message}`);
-    return json.result;
+    return rpcWithRetry(bundlerUrl, headers, method, params);
   }
 
-  const eoa = wasm.deriveEoa(config.mnemonic) as { private_key: string; address: string };
+  const eoa = getWasm().deriveEoa(config.mnemonic) as { private_key: string; address: string };
   const sender = config.walletAddress || await deriveSmartAccountAddress(config.mnemonic, config.chainId);
-  const entryPoint = config.entryPointAddress || wasm.getEntryPointAddress();
+  const entryPoint = config.entryPointAddress || getWasm().getEntryPointAddress();
 
   // Encode batch calldata (SimpleAccount.executeBatch)
   // encodeBatchCall expects a JSON array of hex-encoded payload strings
   const payloadsHex = protobufPayloads.map(p => p.toString('hex'));
-  const calldataBytes = wasm.encodeBatchCall(JSON.stringify(payloadsHex));
+  const calldataBytes = getWasm().encodeBatchCall(JSON.stringify(payloadsHex));
   const callData = `0x${Buffer.from(calldataBytes).toString('hex')}`;
 
   // Get gas prices
@@ -445,8 +482,8 @@ export async function submitFactBatchOnChain(
 
   // Hash and sign via WASM
   const opJson = JSON.stringify(unsignedOp);
-  const hashHex = wasm.hashUserOp(opJson, entryPoint, BigInt(config.chainId));
-  const sigHex = wasm.signUserOp(hashHex, eoa.private_key);
+  const hashHex = getWasm().hashUserOp(opJson, entryPoint, BigInt(config.chainId));
+  const sigHex = getWasm().signUserOp(hashHex, eoa.private_key);
   unsignedOp.signature = `0x${sigHex}`;
 
   // Submit
@@ -506,8 +543,8 @@ export function getSubgraphConfig(): SubgraphStoreConfig {
     mnemonic: CONFIG.recoveryPhrase,
     cachePath: CONFIG.cachePath,
     chainId: CONFIG.chainId,
-    dataEdgeAddress: CONFIG.dataEdgeAddress || wasm.getDataEdgeAddress(),
-    entryPointAddress: CONFIG.entryPointAddress || wasm.getEntryPointAddress(),
+    dataEdgeAddress: CONFIG.dataEdgeAddress || getWasm().getDataEdgeAddress(),
+    entryPointAddress: CONFIG.entryPointAddress || getWasm().getEntryPointAddress(),
     rpcUrl: CONFIG.rpcUrl || undefined,
   };
 }

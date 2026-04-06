@@ -170,7 +170,9 @@ class TestSchemas:
 
     def test_setup_schema(self):
         assert schemas.SETUP["name"] == "totalreclaw_setup"
-        assert "recovery_phrase" in schemas.SETUP["parameters"]["required"]
+        assert "recovery_phrase" in schemas.SETUP["parameters"]["properties"]
+        # recovery_phrase is optional (generates one if omitted)
+        assert "required" not in schemas.SETUP["parameters"]
 
 
 class TestTools:
@@ -201,13 +203,18 @@ class TestTools:
         result = json.loads(await recall({"query": "test"}, state))
         assert "error" in result
 
-    def test_setup_no_phrase(self):
+    def test_setup_no_phrase_generates_one(self):
         from totalreclaw.hermes.tools import setup
         with patch.dict(os.environ, {}, clear=True):
             with patch.object(Path, "exists", return_value=False):
                 state = PluginState()
-        result = json.loads(setup({"recovery_phrase": ""}, state))
-        assert "error" in result
+        with patch.object(Path, "write_text"), patch.object(Path, "chmod"), \
+             patch.object(Path, "mkdir", return_value=None):
+            result = json.loads(setup({"recovery_phrase": ""}, state))
+        assert result["configured"] is True
+        assert result["generated"] is True
+        assert len(result["recovery_phrase"].split()) == 12
+        assert result["wallet_address"].startswith("0x")
 
     def test_setup_success(self):
         from totalreclaw.hermes.tools import setup
