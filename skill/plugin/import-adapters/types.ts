@@ -19,7 +19,7 @@ export interface NormalizedFact {
   tags?: string[];
 }
 
-export type ImportSource = 'mem0' | 'mcp-memory' | 'chatgpt' | 'claude' | 'memoclaw' | 'generic-json' | 'generic-csv';
+export type ImportSource = 'mem0' | 'mcp-memory' | 'chatgpt' | 'claude' | 'gemini' | 'memoclaw' | 'generic-json' | 'generic-csv';
 
 /**
  * What the user passes to the import tool.

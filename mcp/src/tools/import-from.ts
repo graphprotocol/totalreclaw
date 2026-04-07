@@ -6,7 +6,7 @@ import { IMPORT_FROM_TOOL_DESCRIPTION } from '../prompts.js';
 // We define these locally to avoid importing from outside the MCP rootDir.
 // The runtime import() below loads the actual adapter code at runtime.
 
-export type ImportSource = 'mem0' | 'mcp-memory' | 'chatgpt' | 'claude' | 'memoclaw' | 'generic-json' | 'generic-csv';
+export type ImportSource = 'mem0' | 'mcp-memory' | 'chatgpt' | 'claude' | 'gemini' | 'memoclaw' | 'generic-json' | 'generic-csv';
 
 export interface ImportFromInput {
   source: ImportSource;
