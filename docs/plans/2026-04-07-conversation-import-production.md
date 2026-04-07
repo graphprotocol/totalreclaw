@@ -48,7 +48,7 @@ For a ~7K fact Gemini import on Gnosis mainnet:
 ```
 1. User uploads Gemini/ChatGPT/Claude export file
 2. Client-side: parse → chunk into sessions → LLM extraction (user's model)
-3. Client-side: encrypt facts (AES-256-GCM) + generate embeddings (e5-small)
+3. Client-side: encrypt facts (AES-256-GCM) + generate embeddings (Harrier 640d)
 4. Client-side: encode protobuf with ORIGINAL conversation timestamps
 5. Client-side: batch 50 facts per UserOp → submit via relay/Pimlico
 6. Subgraph indexes with per-fact `createdAt` from protobuf field 2
@@ -63,7 +63,7 @@ For a ~7K fact Gemini import on Gnosis mainnet:
 | Timestamp | `Date.now()` | Original conversation time |
 | Source field | `conversation` / `pre_compaction` | `gemini-import` / `chatgpt-import` |
 | Trigger | `agent_end` hook | User-initiated tool call |
-| Dedup | Store-time cosine + LLM-guided | Content fingerprint + text dedup |
+| Dedup | Store-time cosine + LLM-guided | Content fingerprint + text dedup (P0). Post-import LLM consolidation (P1). |
 
 ### Adapter Pattern
 
@@ -73,3 +73,127 @@ Reuse the existing `BaseImportAdapter` pattern in `skill/plugin/import-adapters/
 - `claude-adapter.ts` — already exists
 
 Add `'gemini'` to the `ImportSource` type and register in the adapter factory.
+
+---
+
+## Deduplication Strategy for Imports
+
+Bulk imports introduce a dedup challenge that doesn't exist in live extraction:
+facts about the same topic appear across months/years of conversation history,
+and naively deduping destroys temporal signal.
+
+### Why Cosine Dedup Alone Is Dangerous
+
+Cosine similarity at 0.85 threshold is structurally blind to temporal changes:
+
+- "User lives in Berlin" vs "User lives in Lisbon" → cosine ~0.92+ (identical structure, different city)
+- "User prefers Python" vs "User prefers TypeScript" → cosine ~0.90+
+- "Learning Rust" vs "Proficient in Rust" → cosine ~0.88+
+
+All of these represent **real changes over time**, not duplicates. Blind cosine
+dedup would kill the second fact, losing the life change / preference evolution.
+
+### Safety by Fact Type
+
+| Type | Blind cosine dedup safe? | Why |
+|------|--------------------------|-----|
+| **Fact** (location, job) | NO | "Lives in X" → "Lives in Y" = life change |
+| **Preference** | NO | Preferences evolve over time |
+| **Decision** | YES | One-time events with reasoning |
+| **Episodic** | YES | Unique events by nature |
+| **Goal** | NO | "Learning X" → "Proficient in X" = progress |
+| **Context** | NO | Active projects change frequently |
+| **Summary** | YES | Summaries are point-in-time snapshots |
+
+Safe for ~40% of fact types. Dangerous for the rest.
+
+### Recommended: Post-Import LLM Consolidation
+
+Instead of per-fact cosine dedup, use a two-phase approach:
+
+**Phase 1: Cluster (cosine similarity for GROUPING, not deletion)**
+
+After all facts are extracted, cluster semantically similar facts:
+- Compute pairwise cosine similarity across all extracted facts
+- Group facts with cosine >= 0.80 into clusters
+- Single-fact clusters pass through unchanged
+
+**Phase 2: LLM Consolidation (per cluster)**
+
+For each multi-fact cluster, ask the LLM to produce the best representation:
+
+```
+You have multiple memories about the same topic from different dates.
+Produce the single best memory that captures the full picture, including
+any changes over time.
+
+Facts:
+- [2024-06-15] "User lives in Berlin, Germany"
+- [2025-01-20] "User moved to Lisbon, Portugal"
+- [2026-01-10] "User lives in Lisbon"
+
+Output: {"text": "User moved from Berlin to Lisbon in January 2025 (still there as of January 2026)", "type": "fact", "importance": 9}
+```
+
+**Why this works:**
+- Cosine similarity is used for grouping, not deletion — no information loss
+- LLM understands temporal progression and life changes
+- One LLM call per cluster (not per fact) — efficient
+- Produces richer facts that capture evolution ("moved from X to Y")
+- Works correctly for ALL fact types
+
+**Cost:** For ~3,000 extracted facts with ~200 clusters of 2+ facts:
+- ~200 LLM calls (cheap/fast model, small input)
+- ~30 seconds total with local Ollama
+- Negligible compared to extraction phase
+
+### Extraction Prompt Tuning
+
+The extraction system prompt should emphasize temporal context:
+
+```
+- When extracting facts about the user's situation (location, job, projects),
+  capture CHANGES and TRANSITIONS, not just current state.
+  BAD:  "User lives in Lisbon"
+  GOOD: "User moved to Lisbon in January 2025"
+  
+- Include temporal markers when available in the conversation.
+  BAD:  "User works at a startup"
+  GOOD: "User joined a crypto startup in March 2025"
+```
+
+This produces more informative facts AND makes them more distinct for cosine
+similarity (less likely to be false-positive clustered with related-but-different facts).
+
+### Implementation Priority
+
+1. **P0 (ship now):** Current pipeline with text dedup + content fingerprint. Agent reasons over timestamps at recall time. This is what the current staging import uses.
+2. **P1 (next iteration):** Post-import LLM consolidation pass. Add as optional `--consolidate` flag to CLI.
+3. **P2 (future):** Extraction prompt tuning for temporal context. Requires A/B testing extraction quality.
+
+---
+
+## Control Plane / Rate Limiting
+
+Even with Pro gating, the relay needs protection against import abuse.
+
+### Pre-flight Check (Dry Run)
+
+The `totalreclaw_import_from` tool with `dry_run=true` returns:
+- Parsed entry/session count
+- Estimated fact count (based on historical extraction ratios)
+- Estimated UserOps (facts / batch_size)
+- Current quota usage and remaining capacity
+- Time estimate for extraction phase
+
+### Relay-Side Protection
+
+- **Per-import token:** The dry-run returns a signed import token encoding the approved fact count. The relay only accepts import UserOps with a valid token.
+- **Rate limiting:** Max 1 active import per wallet. Max 50,000 facts per import (prevents runaway scripts).
+- **Source tracking:** `X-TotalReclaw-Import: true` header + `source: gemini-import` in protobuf. Relay can track import volume separately from live extraction.
+
+### Implementation Priority
+
+1. **P0 (ship now):** Gate to Pro. No relay-side enforcement — trust the client.
+2. **P1 (next iteration):** Pre-flight estimation in dry-run response. Per-wallet import rate limit at relay.
+3. **P2 (future):** Signed import tokens. Import volume dashboard in admin panel.
