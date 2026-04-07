@@ -402,9 +402,10 @@ async def build_and_send_userop(
                 return send_data.get("result", "")
 
             except Exception as e:
-                if "AA25" in str(e) and attempt < _MAX_NONCE_RETRIES - 1:
+                err_str = str(e)
+                if ("AA25" in err_str or "AA10" in err_str) and attempt < _MAX_NONCE_RETRIES - 1:
                     logger.warning(
-                        "AA25 nonce conflict (attempt %d/%d), retrying...",
+                        "AA25/AA10 nonce or sender conflict (attempt %d/%d), retrying...",
                         attempt + 1,
                         _MAX_NONCE_RETRIES,
                     )

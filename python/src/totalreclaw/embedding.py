@@ -34,6 +34,11 @@ def _ensure_loaded():
         repo_id=MODEL_ID,
         filename="onnx/model_q4.onnx",
     )
+    # q4 models store weights in a companion file that must also be present
+    hf_hub_download(
+        repo_id=MODEL_ID,
+        filename="onnx/model_q4.onnx_data",
+    )
 
     sess_options = ort.SessionOptions()
     sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
