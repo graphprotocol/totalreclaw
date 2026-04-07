@@ -397,7 +397,7 @@ git checkout main
 - **Default chain ID**: 84532 (Base Sepolia) -- all clients default to free tier, auto-detect Pro (chain 100/Gnosis) from billing
 - **Embedding model**: onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled). e5-small (384d, ~34MB) available as fallback via TOTALRECLAW_EMBEDDING_MODEL=small.
 - **Crypto core**: `@totalreclaw/core` v1.0.0 (Rust WASM for npm, PyO3 for PyPI) -- 13 modules (crypto, reranker, wallet, userop, store, search, blind, lsh, fingerprint, hotcache, consolidation, debrief, stemmer). Single source of truth for all clients.
-- **Packages**: `@totalreclaw/core@1.0.0`, `@totalreclaw/client@1.0.0`, `@totalreclaw/mcp-server@2.0.0`, `@totalreclaw/totalreclaw@3.6.0` (OpenClaw plugin, npm + ClawHub); `totalreclaw-core@1.0.0`, `totalreclaw@1.2.0` (PyPI)
+- **Packages**: `@totalreclaw/core@1.0.0`, `@totalreclaw/client@1.1.0`, `@totalreclaw/mcp-server@2.2.0`, `@totalreclaw/totalreclaw@2.2.0` (OpenClaw plugin, ClawHub); `totalreclaw-core@1.0.0`, `totalreclaw@1.3.0` (PyPI)
 - **OpenClaw integration**: Plugin installs without force flags (`openclaw plugins install`), hot-reload setup via `TOTALRECLAW_HOT_RELOAD=true`, auto-recall on `before_agent_start`, auto-extraction on `agent_end`, LLM config sourced from OpenClaw providers, plaintext fallback prevention
 - **Relay**: Billing, Pimlico sponsorship, dual-chain routing, and query proxying extracted to private `totalreclaw-relay` TypeScript repo (p-diogo/totalreclaw-relay). Public server retains only self-hosted functionality (storage, search, auth).
 - **Staging**: Base Sepolia (chain 84532) -- free testnet, no gas costs
