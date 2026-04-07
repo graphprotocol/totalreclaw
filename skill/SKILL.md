@@ -342,13 +342,13 @@ Migrate memories from testnet (Base Sepolia) to mainnet (Gnosis) after upgrading
 
 Import memories from other AI memory tools into TotalReclaw.
 
-**When to use:** User mentions migrating from Mem0, MCP Memory Server, ChatGPT, Claude, or wants to import memories from another tool.
+**When to use:** User mentions migrating from Mem0, MCP Memory Server, ChatGPT, Claude, Gemini, or wants to import memories from another tool.
 
 **Parameters:**
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| source | string | Yes | Source system: `mem0`, `mcp-memory`, `chatgpt`, `claude`. Post-MVP: `memoclaw`, `generic-json`, `generic-csv` |
+| source | string | Yes | Source system: `mem0`, `mcp-memory`, `chatgpt`, `claude`, `gemini`. Post-MVP: `memoclaw`, `generic-json`, `generic-csv` |
 | api_key | string | No | API key for the source (Mem0). Used once, never stored. |
 | source_user_id | string | No | User or agent ID in the source system |
 | content | string | No | File content (JSON, JSONL, or CSV) -- for file-based sources |
@@ -391,6 +391,15 @@ Import memories from other AI memory tools into TotalReclaw.
 {
   "source": "chatgpt",
   "file_path": "~/Downloads/chatgpt-export/conversations.json",
+  "dry_run": true
+}
+```
+
+**Example -- import from Gemini (Google Takeout HTML):**
+```json
+{
+  "source": "gemini",
+  "file_path": "~/Downloads/Takeout/My Activity/Gemini Apps/My Activity.html",
   "dry_run": true
 }
 ```
