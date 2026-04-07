@@ -1482,7 +1482,7 @@ async function handlePluginImportFrom(
   const startTime = Date.now();
 
   const source = params.source as string;
-  const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'memoclaw', 'generic-json', 'generic-csv'];
+  const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini', 'memoclaw', 'generic-json', 'generic-csv'];
 
   if (!source || !validSources.includes(source)) {
     return { success: false, error: `Invalid source. Must be one of: ${validSources.join(', ')}` };
