@@ -7,7 +7,7 @@
  *
  * Prerequisites:
  *   - dev.sh running in another terminal (Hardhat + Graph Node)
- *   - ONNX model will auto-download on first run (~33.8MB)
+ *   - ONNX model will auto-download on first run (~344MB)
  *
  * Run with (from subgraph/): npx tsx --tsconfig tsconfig.node.json tests/e2e-ombh-validation.ts
  *
@@ -34,7 +34,7 @@ import { rerank, type RerankerCandidate } from '../../skill/plugin/reranker.js';
 import { encodeFactProtobuf, type FactPayload } from '../../skill/plugin/subgraph-store.js';
 
 // @ts-ignore - @huggingface/transformers types
-import { pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
+import { AutoTokenizer, AutoModel } from '@huggingface/transformers';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -63,11 +63,8 @@ const RESULTS_DIR = path.resolve(__dirname, 'e2e-results');
 /** Deterministic test mnemonic — 12 words derived from a fixed seed. */
 const TEST_MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
-// NOTE: This test still uses the legacy bge-small-en-v1.5 model for local Hardhat/Graph Node testing.
-// Production uses Harrier-OSS-v1-270M (640d). Update when test infra supports the larger model.
-const EMBEDDING_MODEL_ID = 'Xenova/bge-small-en-v1.5';
-const EMBEDDING_DIM = 384;
-const QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
+const EMBEDDING_MODEL_ID = 'onnx-community/harrier-oss-v1-270m-ONNX';
+const EMBEDDING_DIM = 640;
 
 // ---------------------------------------------------------------------------
 // Crypto (inlined for tsx compatibility — matches crypto.ts exactly)
@@ -180,23 +177,22 @@ function generateContentFingerprint(plaintext: string, dedupKey: Buffer): string
 }
 
 // ---------------------------------------------------------------------------
-// Embedding (local ONNX bge-small-en-v1.5)
+// Embedding (local ONNX Harrier q4)
 // ---------------------------------------------------------------------------
 
-let extractor: FeatureExtractionPipeline | null = null;
+let tokenizer: Awaited<ReturnType<typeof AutoTokenizer.from_pretrained>> | null = null;
+let model: Awaited<ReturnType<typeof AutoModel.from_pretrained>> | null = null;
 
 async function generateEmbedding(
   text: string,
-  options?: { isQuery?: boolean },
 ): Promise<number[]> {
-  if (!extractor) {
-    extractor = await pipeline('feature-extraction', EMBEDDING_MODEL_ID, {
-      dtype: 'q8',
-    });
+  if (!tokenizer || !model) {
+    tokenizer = await AutoTokenizer.from_pretrained(EMBEDDING_MODEL_ID);
+    model = await AutoModel.from_pretrained(EMBEDDING_MODEL_ID, { dtype: 'q4' });
   }
-  const input = options?.isQuery ? QUERY_PREFIX + text : text;
-  const output = await extractor(input, { pooling: 'mean', normalize: true });
-  return Array.from(output.data as Float32Array);
+  const inputs = tokenizer(text, { return_tensors: 'pt', padding: true });
+  const output = await model(inputs);
+  return Array.from(output.sentence_embedding.data as Float32Array);
 }
 
 // ---------------------------------------------------------------------------
@@ -444,8 +440,8 @@ async function main() {
   console.log(`  Encryption key: ${keys.encryptionKey.length * 8}-bit`);
   console.log(`  LSH seed: ${keys.lshSeed.length} bytes`);
 
-  // Initialize embedding model (downloads ~33.8MB on first run)
-  console.log('  Loading embedding model (bge-small-en-v1.5 ONNX, may download on first run)...');
+  // Initialize embedding model (downloads ~344MB on first run)
+  console.log('  Loading embedding model (Harrier q4 ONNX, may download on first run)...');
   const testEmb = await generateEmbedding('initialization test');
   console.log(`  Embedding model ready: ${testEmb.length}-dim vectors`);
 
@@ -670,7 +666,7 @@ async function main() {
       const wordTrapdoors = generateBlindIndices(query.text);
 
       // 2. Generate query embedding + LSH trapdoors
-      const queryEmbedding = await generateEmbedding(query.text, { isQuery: true });
+      const queryEmbedding = await generateEmbedding(query.text);
       const lshTrapdoors = lshHasher.hash(queryEmbedding);
 
       // 3. Merge all trapdoors

@@ -439,9 +439,9 @@ mod tests {
             &keys.salt,
         )
         .unwrap();
-        let lsh_hasher = LshHasher::new(&lsh_seed, 1024).unwrap();
+        let lsh_hasher = LshHasher::new(&lsh_seed, 640).unwrap();
 
-        let embedding = vec![0.5f32; 1024];
+        let embedding = vec![0.5f32; 640];
         let trapdoors = generate_search_trapdoors("dark mode preference", &embedding, &lsh_hasher).unwrap();
 
         // Should have word hashes + stem hashes + 20 LSH bucket hashes
@@ -619,6 +619,7 @@ mod tests {
                 encrypted_embedding: None,
                 decay_score: Some("0.8".to_string()),
                 timestamp: Some("2026-01-01T00:00:00.000Z".to_string()),
+                created_at: None,
                 is_active: Some(true),
                 content_fp: None,
             },
@@ -628,6 +629,7 @@ mod tests {
                 encrypted_embedding: None,
                 decay_score: Some("0.5".to_string()),
                 timestamp: Some("2026-01-02T00:00:00.000Z".to_string()),
+                created_at: None,
                 is_active: Some(true),
                 content_fp: None,
             },
@@ -662,6 +664,7 @@ mod tests {
                 encrypted_embedding: None,
                 decay_score: None,
                 timestamp: None,
+                created_at: None,
                 is_active: Some(true),
                 content_fp: None,
             },
@@ -712,6 +715,7 @@ mod tests {
             encrypted_embedding: None,
             decay_score: None,
             timestamp: Some("2026-01-01T00:00:00.000Z".to_string()),
+            created_at: None,
             is_active: Some(true),
             content_fp: None,
         }];

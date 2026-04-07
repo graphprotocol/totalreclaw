@@ -1,7 +1,7 @@
 # Embedding Model Migration: e5-small (384d) -> Harrier q4 (640d)
 
-> **Status: NOT STARTED**
-> **Date: 2026-04-07**
+> **Status: COMPLETE**
+> **Date: 2026-04-07 (executed 2026-04-07)**
 
 ## Overview
 

@@ -9,8 +9,8 @@
  *
  * Run with: npx tsx pocv2-e2e-test.ts
  *
- * No API key needed! Embeddings are generated locally using bge-small-en-v1.5
- * ONNX model via @huggingface/transformers (~33.8MB download on first run).
+ * No API key needed! Embeddings are generated locally using Harrier-OSS-v1-270M
+ * ONNX model via @huggingface/transformers (~344MB download on first run).
  *
  * Output: TAP (Test Anything Protocol) format.
  *
@@ -200,33 +200,27 @@ function generateContentFingerprint(plaintext: string, dedupKey: Buffer): string
 }
 
 // ---------------------------------------------------------------------------
-// Local embedding via @huggingface/transformers (bge-small-en-v1.5 ONNX)
+// Local embedding via @huggingface/transformers (Harrier-OSS-v1-270M ONNX)
 // ---------------------------------------------------------------------------
 
 // @ts-ignore - @huggingface/transformers types
-import { pipeline } from '@huggingface/transformers';
+import { AutoTokenizer, AutoModel } from '@huggingface/transformers';
 
-const EMBEDDING_MODEL_ID = 'Xenova/bge-small-en-v1.5';
-const LOCAL_EMBEDDING_DIM = 384;
+const EMBEDDING_MODEL_ID = 'onnx-community/harrier-oss-v1-270m-ONNX';
+const LOCAL_EMBEDDING_DIM = 640;
 
-/**
- * Query instruction prefix for bge-small-en-v1.5 retrieval tasks.
- * Prepend to queries but NOT to documents/passages being stored.
- */
-const QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
-
-let embeddingPipeline: any = null;
+let embeddingTokenizer: any = null;
+let embeddingModel: any = null;
 
 async function generateLocalEmbedding(text: string, options?: { isQuery?: boolean }): Promise<number[]> {
-  if (!embeddingPipeline) {
-    embeddingPipeline = await pipeline('feature-extraction', EMBEDDING_MODEL_ID, {
-      dtype: 'q8',
-    });
+  if (!embeddingModel) {
+    embeddingTokenizer = await AutoTokenizer.from_pretrained(EMBEDDING_MODEL_ID);
+    embeddingModel = await AutoModel.from_pretrained(EMBEDDING_MODEL_ID, { dtype: 'q4' });
   }
 
-  const input = options?.isQuery ? QUERY_PREFIX + text : text;
-  const output = await embeddingPipeline(input, { pooling: 'mean', normalize: true });
-  return Array.from(output.data as Float32Array);
+  const inputs = await embeddingTokenizer(text, { return_tensors: 'pt', padding: true });
+  const output = await embeddingModel(inputs);
+  return Array.from(output.sentence_embedding.data as Float32Array);
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +402,7 @@ async function runTests(): Promise<void> {
 
   // ---- Step 2: Initialize local embedding model ----
   comment('');
-  comment('Initializing local embedding model (bge-small-en-v1.5 ONNX)...');
+  comment('Initializing local embedding model (Harrier-OSS-v1-270M ONNX)...');
 
   let lshHasher: LSHHasher | null = null;
   let embeddingsAvailable = true;
@@ -422,7 +416,7 @@ async function runTests(): Promise<void> {
     const lshSeed = deriveLshSeed(testPassword, keys.salt);
     lshHasher = new LSHHasher(lshSeed, LOCAL_EMBEDDING_DIM);
     comment(`  LSH hasher initialized: ${lshHasher.tables} tables, ${lshHasher.bits} bits/table`);
-    comment(`  Embedding model: Xenova/bge-small-en-v1.5 (${LOCAL_EMBEDDING_DIM} dims, local ONNX)`);
+    comment(`  Embedding model: onnx-community/harrier-oss-v1-270m-ONNX (${LOCAL_EMBEDDING_DIM} dims, local ONNX)`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     comment(`  Local embedding model failed to load: ${msg}`);
@@ -575,7 +569,7 @@ async function runTests(): Promise<void> {
   } else {
     // Note: "What database change was planned?" has NO word overlap with
     // "The team decided to migrate from MongoDB to PostgreSQL".
-    // This relies entirely on LSH bucket collisions. With 384-dim embeddings
+    // This relies entirely on LSH bucket collisions. With 640-dim embeddings
     // and 64 bits per table, the collision probability is lower than with
     // larger API-based embeddings (1536 dims), so this may not match with
     // only 1 stored fact. This is expected -- LSH recall improves with
@@ -675,7 +669,7 @@ async function runTests(): Promise<void> {
 
     ok(resultsF2.length > 0, 'F2: Database query returns results from multi-fact set');
     if (resultsF2.length > 0) {
-      // With 384-dim local embeddings and 64-bit LSH, the migration fact
+      // With 640-dim local embeddings and 64-bit LSH, the migration fact
       // may not be ranked #1 since "database" and "technology" don't appear
       // in the stored fact text. Check if it appears anywhere in results.
       const migrationFound = resultsF2.some((r) =>
@@ -798,7 +792,7 @@ async function runTests(): Promise<void> {
     comment(`  H: Similar text bucket overlap: ${similarOverlap}/${lshHasher.tables}`);
     comment(`  H: Dissimilar text bucket overlap: ${dissimilarOverlap}/${lshHasher.tables}`);
 
-    // With 384-dim embeddings and 64 bits per table, bucket overlap requires
+    // With 640-dim embeddings and 64 bits per table, bucket overlap requires
     // all 64 hyperplane sign bits to match exactly. This is less likely than
     // with larger dimension models (1536 dims). The overlap may be 0 for
     // even similar texts. What matters is that cosine similarity (used in
@@ -806,7 +800,7 @@ async function runTests(): Promise<void> {
     if (similarOverlap > 0) {
       ok(true, `H: Similar texts share ${similarOverlap} LSH bucket(s)`);
     } else {
-      comment('  H: No bucket overlap (expected with 64-bit signatures on 384-dim embeddings)');
+      comment('  H: No bucket overlap (expected with 64-bit signatures on 640-dim embeddings)');
       ok(true, 'H: LSH bucket mechanics validated (64-bit signatures have very fine granularity)');
     }
 
@@ -889,7 +883,7 @@ async function runTests(): Promise<void> {
 
   if (lshHasher && embeddingsAvailable) {
     comment('');
-    comment(`Embedding model: Xenova/bge-small-en-v1.5 (${LOCAL_EMBEDDING_DIM} dims, local ONNX)`);
+    comment(`Embedding model: onnx-community/harrier-oss-v1-270m-ONNX (${LOCAL_EMBEDDING_DIM} dims, local ONNX)`);
     comment('Full LSH semantic tests were executed.');
   } else {
     comment('');

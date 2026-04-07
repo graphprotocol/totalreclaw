@@ -466,6 +466,6 @@ async function chatCompletionAnthropic(
 // ---------------------------------------------------------------------------
 
 // Embeddings are now generated locally via @huggingface/transformers
-// (bge-small-en-v1.5 ONNX model). No API key needed.
+// (Harrier-OSS-v1-270M ONNX model). No API key needed.
 // See embedding.ts for implementation details.
 export { generateEmbedding, getEmbeddingDims } from './embedding.js';

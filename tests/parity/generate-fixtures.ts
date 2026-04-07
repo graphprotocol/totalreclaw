@@ -116,7 +116,7 @@ const fingerprints = fingerprintTests.map((text) => ({
 
 // 6. LSH Hasher
 const SMALL_DIMS = 4;
-const REAL_DIMS = 1024;
+const REAL_DIMS = 640;
 
 const lshSmall = new LSHHasher(lshSeed, SMALL_DIMS, 3, 4);
 const lshReal = new LSHHasher(lshSeed, REAL_DIMS, 20, 32);

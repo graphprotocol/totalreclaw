@@ -291,7 +291,7 @@ Layers 1-2 are complete. Layers 3-4 are **largely superseded** by existing mecha
 | AA23/AA10 fixes | Valid stub signature, deployment cache | **DONE** |
 | LLM config from OpenClaw | Reads provider config (`api.config.models.providers`) | **DONE** |
 | Plaintext prevention | `memoryHandled: true` prevents fallback to MEMORY.md | **DONE** |
-| Embedding model | Switched to multilingual-e5-small (384d, 34MB) | **DONE** |
+| Embedding model | Migrated to Harrier-OSS-v1-270M (640d, 344MB, q4) | **DONE** |
 | QA on VPS | 6/7 PASS (Pimlico rate limit is infra constraint) | **DONE** |
 
 ### 2.13 Hermes Integration QA — IN PROGRESS

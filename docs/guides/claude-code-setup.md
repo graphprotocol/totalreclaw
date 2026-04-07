@@ -8,7 +8,7 @@ Encrypted, cross-session memory for MCP-compatible AI agents. Set up in under 2 
 
 - **Node.js 18+** (22 recommended)
 - **An MCP-compatible host app:** Claude Code, Claude Desktop, Cursor, Windsurf, or similar
-- ~34 MB disk space for the embedding model (one-time download, cached locally)
+- ~344 MB disk space for the embedding model (one-time download, cached locally)
 
 ---
 
@@ -168,7 +168,7 @@ The MCP server also instructs the agent to recall relevant memories at the start
 
 | Problem | Fix |
 |---------|-----|
-| Embedding model download is slow | Normal on first run (~34 MB). Check disk space and retry if it fails. Subsequent runs use the cached model. |
+| Embedding model download is slow | Normal on first run (~344 MB). Check disk space and retry if it fails. Subsequent runs use the cached model. |
 | "Not configured" error | Run `npx @totalreclaw/mcp-server setup` or ask the agent to use the `totalreclaw_setup` tool. |
 | Agent does not see TotalReclaw tools | Restart the host app after adding the config. Verify with "Do you have access to TotalReclaw memory tools?" |
 | "Not authenticated" / 401 | Check your recovery phrase -- exact words, exact order, no extra spaces. The MCP server auto-registers with the relay on startup, so no manual registration step is needed. If the error persists, verify your internet connection and restart the host app. |

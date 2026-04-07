@@ -1,6 +1,6 @@
 """Tests for TotalReclaw embedding pipeline.
 
-These tests require model download (~34MB for e5-small, ~164MB for Harrier).
+These tests require model download (~344MB for Harrier q4).
 Skipped in CI (no ONNX model cache). Run locally with:
     cd python && python -m pytest tests/test_embedding.py -v
 """

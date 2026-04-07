@@ -175,12 +175,12 @@ function generateBlindIndices(count: number): string[] {
 
 /**
  * Generate a synthetic encrypted embedding.
- * A 384-dim float32 embedding = 384 * 4 = 1,536 bytes.
- * After AES-GCM encryption: 1,536 + 28 = 1,564 bytes.
+ * A 640-dim float32 embedding = 640 * 4 = 2,560 bytes.
+ * After AES-GCM encryption: 2,560 + 28 = 2,588 bytes.
  * Represented as hex string.
  */
 function generateEncryptedEmbedding(): string {
-  const embeddingBytes = 384 * 4; // float32 x 384 dims
+  const embeddingBytes = 640 * 4; // float32 x 640 dims
   const ciphertextSize = embeddingBytes + 28; // IV + auth tag
   return randomHex(ciphertextSize);
 }
@@ -313,7 +313,7 @@ function generateReport(results: GasResult[]): string {
   lines.push(`| Base L2 data cost | ${formatUsd(BASE_L2_COST_PER_KB_USD)}/KB (post-EIP-4844) |`);
   lines.push(`| Base L2 gas price | ${BASE_L2_GAS_PRICE_GWEI} gwei |`);
   lines.push(`| ETH price | ${formatUsd(ETH_PRICE_USD)} |`);
-  lines.push(`| Embedding dims | 384 (float32) |`);
+  lines.push(`| Embedding dims | 640 (float32) |`);
   lines.push(`| Encryption overhead | 28 bytes (AES-256-GCM: 12B IV + 16B tag) |`);
   lines.push("");
 
@@ -458,7 +458,7 @@ function generateReport(results: GasResult[]): string {
   lines.push("");
   lines.push("1. **Base gas cost** is dominated by the 21,000 intrinsic transaction gas.");
   lines.push("   The Log event itself adds ~1,200 gas plus calldata costs.");
-  lines.push("2. **Embeddings** (384-dim float32, encrypted) add ~3,128 bytes of calldata,");
+  lines.push("2. **Embeddings** (640-dim float32, encrypted) add ~5,168 bytes of calldata,");
   lines.push("   which is the single largest component of most facts.");
   lines.push("3. **Blind indices** at 64 hex chars (32 bytes) + protobuf overhead each,");
   lines.push("   scale linearly. 100 indices ~ 6.6 KB of calldata.");

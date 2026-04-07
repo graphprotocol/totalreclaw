@@ -52,7 +52,7 @@ CREATE TABLE memory_chunks (
 );
 
 CREATE VIRTUAL TABLE fts_chunks USING fts5( text_content, metadata_json, content='memory_chunks', content_rowid='id' );
-CREATE VIRTUAL TABLE vec_chunks USING vec0( id INTEGER PRIMARY KEY, embedding float[384] );
+CREATE VIRTUAL TABLE vec_chunks USING vec0( id INTEGER PRIMARY KEY, embedding float[640] );
 ```
 
 ## 4. Sequence Diagrams

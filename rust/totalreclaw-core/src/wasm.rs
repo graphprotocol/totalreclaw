@@ -154,7 +154,7 @@ impl WasmLshHasher {
     /// Create a new LSH hasher with default parameters (20 tables, 32 bits).
     ///
     /// `seed_hex`: hex-encoded seed (>= 32 chars = 16 bytes).
-    /// `dims`: embedding dimensionality (e.g. 1024).
+    /// `dims`: embedding dimensionality (e.g. 640).
     #[wasm_bindgen(constructor)]
     pub fn new(seed_hex: &str, dims: usize) -> Result<WasmLshHasher, JsError> {
         let seed = hex::decode(seed_hex)

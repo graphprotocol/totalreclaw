@@ -1,39 +1,40 @@
 /**
  * ONNX Embedding Model
  *
- * Uses @huggingface/transformers to run multilingual-e5-small for
- * text embeddings. Produces 384-dimensional normalized vectors suitable
+ * Uses @huggingface/transformers to run Harrier-OSS-v1-270M for
+ * text embeddings. Produces 640-dimensional normalized vectors suitable
  * for semantic search.
  *
  * Model details:
- *   - Xenova/multilingual-e5-small (ONNX-optimized, int8 quantized)
- *   - ~34MB download, cached in ~/.cache/huggingface/
- *   - 384-dimensional output vectors
- *   - 100+ languages (multilingual)
- *   - mean pooling
- *   - Lazy initialization: first call ~2-3s, subsequent ~50ms
+ *   - onnx-community/harrier-oss-v1-270m-ONNX (q4 quantized)
+ *   - ~344MB download, cached in ~/.cache/huggingface/
+ *   - 640-dimensional output vectors
+ *   - Pre-pooled sentence_embedding output (no manual pooling needed)
+ *   - Already L2-normalized
+ *   - Lazy initialization: first call ~5-10s, subsequent ~100ms
  */
 
-import { pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
+import { AutoTokenizer, AutoModel } from '@huggingface/transformers';
 import { TotalReclawError, TotalReclawErrorCode } from '../types';
 
 /** Expected embedding dimension */
-const EMBEDDING_DIM = 384;
+const EMBEDDING_DIM = 640;
 
 /** Model ID on HuggingFace Hub */
-const MODEL_ID = 'Xenova/multilingual-e5-small';
+const MODEL_ID = 'onnx-community/harrier-oss-v1-270m-ONNX';
 
 /**
  * Embedding model using @huggingface/transformers + ONNX Runtime
  */
 export class EmbeddingModel {
-  private extractor: FeatureExtractionPipeline | null = null;
+  private tokenizer: any = null;
+  private model: any = null;
   private isLoaded: boolean = false;
 
   /**
    * Load the ONNX model.
    *
-   * Downloads the model on first use (~553MB, fp16). Subsequent calls
+   * Downloads the model on first use (~344MB, q4). Subsequent calls
    * use the cached model from ~/.cache/huggingface/.
    *
    * @param _modelPath - Ignored (kept for backward compatibility). The model
@@ -41,10 +42,9 @@ export class EmbeddingModel {
    */
   async load(_modelPath?: string): Promise<void> {
     try {
-      console.error('[TotalReclaw] Downloading embedding model (~34MB, first run only)...');
-      this.extractor = await pipeline('feature-extraction', MODEL_ID, {
-        dtype: 'q8',
-      });
+      console.error('[TotalReclaw] Downloading embedding model (~344MB, first run only)...');
+      this.tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID);
+      this.model = await AutoModel.from_pretrained(MODEL_ID, { dtype: 'q4' });
       console.error('[TotalReclaw] Embedding model ready.');
       this.isLoaded = true;
     } catch (error) {
@@ -59,7 +59,7 @@ export class EmbeddingModel {
    * Check if the model is loaded
    */
   isReady(): boolean {
-    return this.isLoaded && this.extractor !== null;
+    return this.isLoaded && this.model !== null;
   }
 
   /**
@@ -86,9 +86,9 @@ export class EmbeddingModel {
     }
 
     try {
-      const input = text;
-      const output = await this.extractor!(input, { pooling: 'mean', normalize: true });
-      return Array.from(output.data as Float32Array);
+      const inputs = await this.tokenizer(text, { return_tensors: 'pt', padding: true });
+      const output = await this.model(inputs);
+      return Array.from(output.sentence_embedding.data as Float32Array);
     } catch (error) {
       throw new TotalReclawError(
         TotalReclawErrorCode.EMBEDDING_FAILED,
@@ -116,8 +116,8 @@ export class EmbeddingModel {
    * Dispose of the model resources
    */
   async dispose(): Promise<void> {
-    // @huggingface/transformers handles cleanup internally
-    this.extractor = null;
+    this.tokenizer = null;
+    this.model = null;
     this.isLoaded = false;
   }
 }

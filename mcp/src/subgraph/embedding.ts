@@ -1,59 +1,56 @@
 /**
  * TotalReclaw MCP - Local Embedding via @huggingface/transformers
  *
- * Uses Xenova/multilingual-e5-small to generate 384-dimensional text
- * embeddings locally. No API key needed, no data leaves the machine.
+ * Uses onnx-community/harrier-oss-v1-270m-ONNX to generate 640-dimensional
+ * text embeddings locally. No API key needed, no data leaves the machine.
  *
  * Model details:
- *   - Quantized (int8) ONNX model: ~34MB download on first use
+ *   - Quantized (q4) ONNX model: ~344MB download on first use
  *   - Cached in ~/.cache/huggingface/ after first download
- *   - Lazy initialization: first call ~2-3s (model load), subsequent ~50ms
- *   - Output: 384-dimensional normalized embedding vector
- *   - 100+ languages (multilingual)
- *   - mean pooling
+ *   - Lazy initialization: first call ~5-10s (model load), subsequent ~100ms
+ *   - Output: 640-dimensional L2-normalized embedding vector
+ *   - Pre-pooled sentence_embedding output (no manual pooling needed)
  *
  * Dependencies: @huggingface/transformers
  */
 
 // @ts-ignore - @huggingface/transformers types may not be perfect
-import { pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
+import { AutoTokenizer, AutoModel } from '@huggingface/transformers';
 
-/** Multilingual E5-small ONNX model. */
-const MODEL_ID = 'Xenova/multilingual-e5-small';
+/** Harrier-OSS-v1-270M ONNX model (q4 quantized). */
+const MODEL_ID = 'onnx-community/harrier-oss-v1-270m-ONNX';
 
 /** Fixed output dimensionality. */
-const EMBEDDING_DIM = 384;
+const EMBEDDING_DIM = 640;
 
-/** Lazily initialized feature extraction pipeline. */
-let extractor: FeatureExtractionPipeline | null = null;
+/** Lazily initialized model and tokenizer. */
+let tokenizer: any = null;
+let model: any = null;
 
 /**
- * Generate a 384-dimensional embedding vector for the given text.
+ * Generate a 640-dimensional embedding vector for the given text.
  *
- * On first call, downloads and loads the ONNX model (~34MB, cached).
- * Subsequent calls reuse the loaded model and run in ~50ms.
+ * On first call, downloads and loads the ONNX model (~344MB, cached).
+ * Subsequent calls reuse the loaded model and run in ~100ms.
  *
  * @param text - The text to embed.
- * @param options - Optional settings.
- * @param options.isQuery - Prepends "query: " prefix for e5-small.
- * @returns 384-dimensional normalized embedding as a number array.
+ * @param options - Optional settings (isQuery accepted for compatibility but unused).
+ * @returns 640-dimensional L2-normalized embedding as a number array.
  */
 export async function generateEmbedding(
   text: string,
   options?: { isQuery?: boolean },
 ): Promise<number[]> {
-  if (!extractor) {
-    console.error('[TotalReclaw] Downloading embedding model (~34MB, first run only)...');
-    extractor = await pipeline('feature-extraction', MODEL_ID, {
-      dtype: 'q8',
-    });
+  if (!model) {
+    console.error('[TotalReclaw] Downloading embedding model (~344MB, first run only)...');
+    tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID);
+    model = await AutoModel.from_pretrained(MODEL_ID, { dtype: 'q4' });
     console.error('[TotalReclaw] Embedding model ready.');
   }
 
-  const input = options?.isQuery ? `query: ${text}` : text;
-  const output = await extractor(input, { pooling: 'mean', normalize: true });
-  // output.data is a Float32Array; convert to plain number[]
-  return Array.from(output.data as Float32Array);
+  const inputs = await tokenizer(text, { return_tensors: 'pt', padding: true });
+  const output = await model(inputs);
+  return Array.from(output.sentence_embedding.data as Float32Array);
 }
 
 /**

@@ -136,7 +136,7 @@ const CREDENTIALS_PATH = CONFIG.credentialsPath;
  * memories into context. Below this threshold, the query is considered
  * irrelevant to any stored memories and results are suppressed.
  *
- * Default 0.15 is tuned for bge-small-en-v1.5 which produces lower
+ * Default 0.15 is tuned for local ONNX models which produce lower
  * similarity scores than OpenAI models. Configurable via env var.
  */
 const COSINE_THRESHOLD = CONFIG.cosineThreshold;

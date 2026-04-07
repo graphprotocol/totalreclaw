@@ -73,7 +73,7 @@ pub struct PreparedFact {
 /// * `encryption_key` - 32-byte AES-256-GCM encryption key.
 /// * `dedup_key` - 32-byte HMAC-SHA256 dedup key.
 /// * `lsh_hasher` - Pre-initialized LSH hasher (seeded from mnemonic).
-/// * `embedding` - Pre-computed embedding vector (f32, e.g. 1024d).
+/// * `embedding` - Pre-computed embedding vector (f32, e.g. 640d).
 /// * `importance` - Importance score on 1-10 scale. Normalized to 0.0-1.0.
 /// * `source` - Source tag (e.g. "auto_extraction", "explicit_remember").
 /// * `owner` - Owner address (Smart Account address for managed service).
@@ -279,13 +279,13 @@ mod tests {
     fn test_keys() -> (crypto::DerivedKeys, LshHasher) {
         let keys = crypto::derive_keys_from_mnemonic(TEST_MNEMONIC).unwrap();
         let lsh_seed = crypto::derive_lsh_seed(TEST_MNEMONIC, &keys.salt).unwrap();
-        let lsh_hasher = LshHasher::new(&lsh_seed, 1024).unwrap();
+        let lsh_hasher = LshHasher::new(&lsh_seed, 640).unwrap();
         (keys, lsh_hasher)
     }
 
     fn dummy_embedding() -> Vec<f32> {
-        // 1024-dim unit vector (first component = 1.0, rest = 0.0)
-        let mut emb = vec![0.0f32; 1024];
+        // 640-dim unit vector (first component = 1.0, rest = 0.0)
+        let mut emb = vec![0.0f32; 640];
         emb[0] = 1.0;
         emb
     }
@@ -500,7 +500,7 @@ mod tests {
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
 
-        assert_eq!(recovered.len(), 1024);
+        assert_eq!(recovered.len(), 640);
         assert!((recovered[0] - 1.0).abs() < 1e-6);
         assert!((recovered[1] - 0.0).abs() < 1e-6);
     }

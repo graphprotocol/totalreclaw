@@ -7,7 +7,7 @@ Set up TotalReclaw as the encrypted memory layer for your Hermes Agent. Your mem
 - **Hermes Agent v0.5.0+** (with plugin lifecycle hooks)
 - **Python 3.11+**
 - **C compiler** (gcc/g++) -- needed to build PyStemmer from source
-- ~34 MB disk space for the local embedding model (one-time download)
+- ~344 MB disk space for the local embedding model (one-time download)
 
 > **Docker users:** On slim images (e.g., `python:3.12-slim`), install a C compiler first:
 > ```bash
@@ -58,7 +58,7 @@ The first time you mention anything worth remembering, the agent will:
 1. Detect that TotalReclaw is not configured yet
 2. Ask: "Do you have an existing recovery phrase, or should I generate a new one?"
 3. Run `totalreclaw_setup` — if you don't have a phrase, the tool generates one automatically
-4. Register with the relay, download the embedding model (~34 MB, one-time), and activate
+4. Register with the relay, download the embedding model (~344 MB, one-time), and activate
 
 Your recovery phrase and credentials are saved to `~/.totalreclaw/credentials.json` (owner-only permissions). On subsequent restarts, the plugin loads them automatically.
 
@@ -181,7 +181,7 @@ export TOTALRECLAW_RECOVERY_PHRASE="your twelve word phrase here"
 
 ### Embedding model download
 
-The first recall/remember downloads ~34 MB (e5-small model). Subsequent calls use the cached model. If download fails, the plugin falls back to keyword-only search (no semantic similarity).
+The first recall/remember downloads ~344 MB (Harrier model). Subsequent calls use the cached model. If download fails, the plugin falls back to keyword-only search (no semantic similarity).
 
 ### Permission denied on model download (Docker)
 

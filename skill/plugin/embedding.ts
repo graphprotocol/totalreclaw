@@ -5,7 +5,7 @@
  * no data leaves the machine. Preserves the E2EE guarantee.
  *
  * Three model options (selected via CONFIG.embeddingModel):
- *   - "default": onnx-community/harrier-oss-v1-270m-ONNX (640d, fp16 ~553MB, best accuracy/size ratio)
+ *   - "default": onnx-community/harrier-oss-v1-270m-ONNX (640d, q4 ~344MB, best accuracy/size ratio)
  *   - "small": Xenova/multilingual-e5-small (384d, q8 ~34MB, fast, low RAM)
  *   - "large": onnx-community/Qwen3-Embedding-0.6B-ONNX (1024d, q8 ~600MB, legacy)
  *
@@ -13,12 +13,13 @@
  */
 
 // @ts-ignore - @huggingface/transformers types may not be perfect
-import { pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
+import { AutoTokenizer, AutoModel, pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
 import { CONFIG } from './config.js';
 
 interface ModelConfig {
   id: string;
   dims: number;
+  /** 'sentence_embedding' for models with pre-pooled output, 'mean'/'last_token' for pipeline models */
   pooling: string;
   size: string;
   /** ONNX quantization dtype. Must match an available variant in the HF repo. */
@@ -27,18 +28,18 @@ interface ModelConfig {
 
 const MODELS: Record<string, ModelConfig> = {
   default: {
+    id: 'onnx-community/harrier-oss-v1-270m-ONNX',
+    dims: 640,
+    pooling: 'sentence_embedding',
+    size: '~344MB',
+    dtype: 'q4',
+  },
+  small: {
     id: 'Xenova/multilingual-e5-small',
     dims: 384,
     pooling: 'mean',
     size: '~34MB',
     dtype: 'q8',
-  },
-  harrier: {
-    id: 'onnx-community/harrier-oss-v1-270m-ONNX',
-    dims: 640,
-    pooling: 'last_token',
-    size: '~553MB',
-    dtype: 'fp16',  // q4 uses unsupported GatherBlockQuantized op
   },
   large: {
     id: 'onnx-community/Qwen3-Embedding-0.6B-ONNX',
@@ -54,8 +55,10 @@ function getModelConfig(): ModelConfig {
   return MODELS[key] || MODELS.default;
 }
 
-/** Lazily initialized feature extraction pipeline. */
-let extractor: FeatureExtractionPipeline | null = null;
+/** Lazily initialized model instances. */
+let pipelineExtractor: FeatureExtractionPipeline | null = null;
+let autoTokenizer: any = null;
+let autoModel: any = null;
 let activeModel: ModelConfig | null = null;
 
 /**
@@ -68,22 +71,41 @@ export async function generateEmbedding(
   text: string,
   options?: { isQuery?: boolean },
 ): Promise<number[]> {
-  if (!extractor) {
+  if (!activeModel) {
     activeModel = getModelConfig();
     console.error(`[TotalReclaw] Downloading embedding model (${activeModel.size}, one-time setup)...`);
     console.error('[TotalReclaw] This enables semantic search across your encrypted memories.');
-    extractor = await pipeline('feature-extraction', activeModel.id, {
-      dtype: activeModel.dtype as any,
-    });
+
+    if (activeModel.pooling === 'sentence_embedding') {
+      // Harrier: use AutoModel (pipeline doesn't support sentence_embedding output)
+      autoTokenizer = await AutoTokenizer.from_pretrained(activeModel.id);
+      autoModel = await AutoModel.from_pretrained(activeModel.id, {
+        dtype: activeModel.dtype as any,
+      });
+    } else {
+      // e5-small / Qwen: use pipeline
+      pipelineExtractor = await pipeline('feature-extraction', activeModel.id, {
+        dtype: activeModel.dtype as any,
+      });
+    }
     console.error('[TotalReclaw] Embedding model ready. Future startups will be instant.');
   }
 
   const model = activeModel!;
-  const input = model.pooling === 'mean' && options?.isQuery
-    ? `query: ${text}`
-    : text;
-  const output = await extractor(input, { pooling: model.pooling as any, normalize: true });
-  return Array.from(output.data as Float32Array);
+
+  if (model.pooling === 'sentence_embedding') {
+    // Harrier: pre-pooled, pre-normalized output
+    const inputs = await autoTokenizer(text, { return_tensors: 'pt', padding: true });
+    const output = await autoModel(inputs);
+    return Array.from(output.sentence_embedding.data as Float32Array);
+  } else {
+    // Pipeline models: use pooling option
+    const input = model.pooling === 'mean' && options?.isQuery
+      ? `query: ${text}`
+      : text;
+    const output = await pipelineExtractor!(input, { pooling: model.pooling as any, normalize: true });
+    return Array.from(output.data as Float32Array);
+  }
 }
 
 /**

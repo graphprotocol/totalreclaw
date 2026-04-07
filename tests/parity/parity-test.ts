@@ -402,13 +402,13 @@ async function runTests(): Promise<void> {
     assertNumberEqual(nanoCos, pluginCos, `cosine similarity matches for ${label}`);
   }
 
-  // High-dimensional vectors (384-dim, like real embeddings)
+  // High-dimensional vectors (640-dim, like real embeddings)
   {
-    const embA = makeEmbedding(42, 384);
-    const embB = makeEmbedding(43, 384);
+    const embA = makeEmbedding(42, 640);
+    const embB = makeEmbedding(43, 640);
     const pluginCos = pluginCosineSimilarity(embA, embB);
     const nanoCos = nanoCosineSimilarity(embA, embB);
-    assertNumberEqual(nanoCos, pluginCos, 'cosine similarity matches for 384-dim embeddings');
+    assertNumberEqual(nanoCos, pluginCos, 'cosine similarity matches for 640-dim embeddings');
   }
 
   // =========================================================================

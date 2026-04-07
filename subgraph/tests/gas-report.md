@@ -12,7 +12,7 @@
 | Base L2 data cost | $0.001000/KB (post-EIP-4844) |
 | Base L2 gas price | 0.05 gwei |
 | ETH price | $3500.00 |
-| Embedding dims | 384 (float32) |
+| Embedding dims | 640 (float32) |
 | Encryption overhead | 28 bytes (AES-256-GCM: 12B IV + 16B tag) |
 
 ## Per-Fact Gas Measurements

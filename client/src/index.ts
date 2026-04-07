@@ -131,7 +131,7 @@ export class TotalReclaw {
     const lshSeed = deriveLshSeed(mnemonic);
     this.lshHasher = new LSHHasher(
       lshSeed,
-      384, // multilingual-e5-small dimension
+      640, // harrier-oss-v1-270m dimension
       this.config.lshConfig.n_tables,
       this.config.lshConfig.n_bits_per_table,
     );
@@ -143,7 +143,7 @@ export class TotalReclaw {
   initLshFromSeed(seed: Uint8Array): void {
     this.lshHasher = new LSHHasher(
       seed,
-      384, // multilingual-e5-small dimension
+      640, // harrier-oss-v1-270m dimension
       this.config.lshConfig.n_tables,
       this.config.lshConfig.n_bits_per_table,
     );

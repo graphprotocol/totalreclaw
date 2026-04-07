@@ -13,7 +13,7 @@ authors = [{ name = "TotalReclaw Team" }]
 dependencies = [
     "totalreclaw-core>=0.1.0",
     "httpx>=0.27",
-    "onnxruntime>=1.17",
+    "onnxruntime>=1.24",
     "numpy>=1.26",
     "PyStemmer>=2.2",
     "transformers>=4.40",

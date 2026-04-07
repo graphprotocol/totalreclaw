@@ -56,8 +56,8 @@ async def test_vector_operations():
         # Create a test vault ID
         vault_id = uuid4()
 
-        # Create a test embedding (384 dimensions, all zeros for simplicity)
-        test_embedding = np.zeros(384, dtype=np.float32)
+        # Create a test embedding (640 dimensions, all zeros for simplicity)
+        test_embedding = np.zeros(640, dtype=np.float32)
         test_embedding[0] = 1.0  # Set first dimension to 1
 
         # Insert test record
@@ -86,7 +86,7 @@ async def test_vector_operations():
             return False
 
         # Test vector search
-        query_embedding = np.zeros(384, dtype=np.float32)
+        query_embedding = np.zeros(640, dtype=np.float32)
         query_embedding[0] = 1.0
 
         results = await db.vector_search(
@@ -163,7 +163,7 @@ async def test_pgvector_extension():
                 )
                 result = await cur.fetchone()
                 if result and "vector" in result[0]:
-                    print(f"  embedding column type: {result[0]} (384 dimensions)")
+                    print(f"  embedding column type: {result[0]} (640 dimensions)")
                 else:
                     print(f"  embedding column type: {result[0] if result else 'NOT FOUND'}")
                     return False

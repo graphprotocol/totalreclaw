@@ -50,7 +50,7 @@ The agent will import it and all your existing memories become accessible immedi
 
 The gateway restarts automatically after setup. Wait a few seconds, then continue chatting normally.
 
-> **Note:** The first interaction downloads a ~34MB embedding model for local inference. This is cached locally and only happens once.
+> **Note:** The first interaction downloads a ~344MB embedding model for local inference. This is cached locally and only happens once.
 
 **After setup, memory is fully automatic:**
 - Your agent extracts and stores important facts from your conversations (preferences, decisions, project context)

@@ -567,7 +567,7 @@ function generateReport(
   lines.push('');
   lines.push('1. **Batch writes:** Combine 10-50 facts per on-chain transaction to amortize 21,000 base gas. Requires contract upgrade to handle batch protobuf payloads.');
   lines.push('2. **Tiered storage:** Archive facts older than 90 days to cold storage; keep active facts in hot GIN index.');
-  lines.push('3. **Embedding compression:** Quantize 384-dim float32 embeddings to int8 (4x size reduction: 1,536B -> 384B) before encryption. Reranking quality impact is minimal for BM25+cosine fusion.');
+  lines.push('3. **Embedding compression:** Quantize 640-dim float32 embeddings to int8 (4x size reduction: 2,560B -> 640B) before encryption. Reranking quality impact is minimal for BM25+cosine fusion.');
   lines.push('4. **Index pruning:** Periodically compact blind_index table by removing entries for superseded/deleted facts.');
   lines.push('5. **Horizontal scaling:** For >10K users, shard by user prefix (first 2 bytes of owner address) across multiple Graph Node instances.');
   lines.push('');

@@ -148,7 +148,7 @@ impl PyLshHasher {
     ///
     /// Args:
     ///     seed: 32-byte seed (from derive_lsh_seed).
-    ///     dims: Embedding dimensionality (e.g. 1024).
+    ///     dims: Embedding dimensionality (e.g. 640).
     ///     n_tables: Number of hash tables (default 20).
     ///     n_bits: Number of bits per table (default 32).
     #[new]
