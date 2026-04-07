@@ -165,35 +165,56 @@ The extraction system prompt should emphasize temporal context:
 This produces more informative facts AND makes them more distinct for cosine
 similarity (less likely to be false-positive clustered with related-but-different facts).
 
-### Implementation Priority
-
-1. **P0 (ship now):** Current pipeline with text dedup + content fingerprint. Agent reasons over timestamps at recall time. This is what the current staging import uses.
-2. **P1 (next iteration):** Post-import LLM consolidation pass. Add as optional `--consolidate` flag to CLI.
-3. **P2 (future):** Extraction prompt tuning for temporal context. Requires A/B testing extraction quality.
+All three are required for production launch — no phased rollout.
 
 ---
 
-## Control Plane / Rate Limiting
+## Control Plane / Quota Protection
 
-Even with Pro gating, the relay needs protection against import abuse.
+Pro users pay $3.99/mo for the managed service. The relay sponsors gas via
+Pimlico. Import must work within the existing quota system — no extra billing,
+no upsell. The quota protects our Pimlico sponsorship budget from being
+burned disproportionately by a single user's import.
+
+### How It Works
+
+1. Pro user initiates import
+2. Pre-flight check: parse file, estimate facts/UserOps, check remaining quota
+3. If within quota → proceed
+4. If import would exceed remaining quota → tell user:
+   "This import needs 170 UserOps. You have 50 remaining this month.
+   Options: import a smaller batch, or wait for quota reset on the 1st."
+5. Import runs, UserOps count against monthly quota (same as live extraction)
+
+**No extra charge. No new tier. Just the existing quota, surfaced transparently.**
 
 ### Pre-flight Check (Dry Run)
 
 The `totalreclaw_import_from` tool with `dry_run=true` returns:
 - Parsed entry/session count
 - Estimated fact count (based on historical extraction ratios)
-- Estimated UserOps (facts / batch_size)
+- Estimated UserOps at denser batching (facts / 50)
 - Current quota usage and remaining capacity
+- Whether the import fits within remaining quota
 - Time estimate for extraction phase
 
 ### Relay-Side Protection
 
-- **Per-import token:** The dry-run returns a signed import token encoding the approved fact count. The relay only accepts import UserOps with a valid token.
+- **Signed import token:** The dry-run returns a signed token encoding the approved fact count and wallet address. The relay only accepts import UserOps with a valid, unexpired token. Prevents bypassing the pre-flight check.
 - **Rate limiting:** Max 1 active import per wallet. Max 50,000 facts per import (prevents runaway scripts).
-- **Source tracking:** `X-TotalReclaw-Import: true` header + `source: gemini-import` in protobuf. Relay can track import volume separately from live extraction.
+- **Source tracking:** `X-TotalReclaw-Import: true` header + `source: gemini-import` in protobuf. Relay tracks import volume separately from live extraction in the admin dashboard.
+- **Quota enforcement:** Import UserOps count against the same monthly quota as live extraction. Relay rejects UserOps when quota is exhausted.
 
-### Implementation Priority
+### Roadmap: Quota Top-ups
 
-1. **P0 (ship now):** Gate to Pro. No relay-side enforcement — trust the client.
-2. **P1 (next iteration):** Pre-flight estimation in dry-run response. Per-wallet import rate limit at relay.
-3. **P2 (future):** Signed import tokens. Import volume dashboard in admin panel.
+When a user's import exceeds their remaining monthly quota, they're currently
+blocked until the next billing cycle. A future enhancement:
+
+- **Top-up credits:** User purchases additional UserOps (e.g., 1,000 for $0.99)
+  without changing their subscription tier
+- **One-time import pass:** Flat fee for unlimited import UserOps during a
+  24-hour window
+- **Auto top-up:** Opt-in setting that automatically purchases credits when
+  quota is exhausted during an active import
+
+This is NOT required for launch. Track in roadmap for post-launch iteration.
