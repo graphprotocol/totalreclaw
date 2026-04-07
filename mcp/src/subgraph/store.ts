@@ -14,11 +14,11 @@
  * Config can be injected directly (for MCP server state) or read from env vars.
  */
 
-import { createPublicClient, http, type Hex, type Address, type Chain } from 'viem';
+import { createPublicClient, createWalletClient, http, type Hex, type Address, type Chain } from 'viem';
 import { getClientId } from '../client-id.js';
 import { entryPoint07Address } from 'viem/account-abstraction';
 import { mnemonicToAccount } from 'viem/accounts';
-import { gnosis, baseSepolia } from 'viem/chains';
+import { gnosis, baseSepolia, foundry } from 'viem/chains';
 import { createSmartAccountClient } from 'permissionless';
 import { toSimpleSmartAccount } from 'permissionless/accounts';
 import { createPimlicoClient } from 'permissionless/clients/pimlico';
@@ -155,6 +155,8 @@ export function getChainFromId(chainId: number): Chain {
       return gnosis;
     case 84532:
       return baseSepolia;
+    case 31337:
+      return foundry; // Local Anvil
     default:
       return gnosis;
   }
@@ -381,6 +383,66 @@ export async function submitFactBatchOnChain(
     success: receipt.success,
     batchSize: protobufPayloads.length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Local mode (direct-to-RPC, no ERC-4337)
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if local mode is enabled.
+ * When TOTALRECLAW_LOCAL_RPC is set, facts are stored via raw eth_sendTransaction
+ * instead of ERC-4337 UserOps through the relay/Pimlico.
+ */
+export function isLocalMode(): boolean {
+  return !!process.env.TOTALRECLAW_LOCAL_RPC;
+}
+
+/**
+ * Submit a fact directly to a local RPC (e.g., Anvil) via raw transaction.
+ * No ERC-4337, no paymaster, no relay. Uses a pre-funded account.
+ *
+ * The sender is derived from the mnemonic (BIP-44 EOA), NOT a Smart Account.
+ * The fact's `owner` field should be set to this EOA address.
+ */
+export async function submitFactLocal(
+  protobufPayload: Buffer,
+  config: SubgraphStoreConfig,
+): Promise<{ txHash: string; success: boolean }> {
+  const rpcUrl = process.env.TOTALRECLAW_LOCAL_RPC!;
+  const dataEdgeAddress = config.dataEdgeAddress as Address;
+  const ownerAccount = mnemonicToAccount(config.mnemonic);
+
+  const walletClient = createWalletClient({
+    account: ownerAccount,
+    chain: foundry,
+    transport: http(rpcUrl),
+  });
+
+  const calldata = `0x${protobufPayload.toString('hex')}` as Hex;
+  const txHash = await walletClient.sendTransaction({
+    to: dataEdgeAddress,
+    data: calldata,
+    value: 0n,
+  });
+
+  return { txHash, success: true };
+}
+
+/**
+ * Submit multiple facts directly to a local RPC in individual transactions.
+ * Each fact is a separate tx (no multicall needed on local chains).
+ */
+export async function submitFactBatchLocal(
+  protobufPayloads: Buffer[],
+  config: SubgraphStoreConfig,
+): Promise<{ txHashes: string[]; success: boolean; batchSize: number }> {
+  const txHashes: string[] = [];
+  for (const payload of protobufPayloads) {
+    const result = await submitFactLocal(payload, config);
+    txHashes.push(result.txHash);
+  }
+  return { txHashes, success: true, batchSize: protobufPayloads.length };
 }
 
 // ---------------------------------------------------------------------------

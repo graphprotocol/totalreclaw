@@ -168,7 +168,8 @@ export async function searchSubgraph(
   authKeyHex?: string,
 ): Promise<SubgraphSearchFact[]> {
   const effectiveRelayUrl = relayUrl ?? getSubgraphConfig().relayUrl;
-  const subgraphUrl = `${effectiveRelayUrl}/v1/subgraph`;
+  // Local mode: TOTALRECLAW_SUBGRAPH_URL overrides relay proxy path
+  const subgraphUrl = process.env.TOTALRECLAW_SUBGRAPH_URL || `${effectiveRelayUrl}/v1/subgraph`;
   const allResults = new Map<string, SubgraphSearchFact>();
 
   const trapdoorBatchSize = parseInt(process.env.TOTALRECLAW_TRAPDOOR_BATCH_SIZE ?? String(DEFAULT_TRAPDOOR_BATCH_SIZE), 10);
@@ -258,7 +259,7 @@ export async function searchSubgraphBroadened(
   authKeyHex?: string,
 ): Promise<SubgraphSearchFact[]> {
   const effectiveRelayUrl = relayUrl ?? getSubgraphConfig().relayUrl;
-  const subgraphUrl = `${effectiveRelayUrl}/v1/subgraph`;
+  const subgraphUrl = process.env.TOTALRECLAW_SUBGRAPH_URL || `${effectiveRelayUrl}/v1/subgraph`;
 
   const query = `
     query BroadenedSearch($owner: Bytes!, $first: Int!) {
@@ -308,7 +309,7 @@ export async function getSubgraphFactCount(
   authKeyHex?: string,
 ): Promise<number> {
   const effectiveRelayUrl = relayUrl ?? getSubgraphConfig().relayUrl;
-  const subgraphUrl = `${effectiveRelayUrl}/v1/subgraph`;
+  const subgraphUrl = process.env.TOTALRECLAW_SUBGRAPH_URL || `${effectiveRelayUrl}/v1/subgraph`;
 
   // globalStates is a singleton entity (id: "global") with aggregate counters.
   // It is NOT per-owner — it tracks totals across the entire subgraph.
@@ -351,7 +352,7 @@ export async function getOwnerFactCount(
   authKeyHex?: string,
 ): Promise<number> {
   const effectiveRelayUrl = relayUrl ?? getSubgraphConfig().relayUrl;
-  const subgraphUrl = `${effectiveRelayUrl}/v1/subgraph`;
+  const subgraphUrl = process.env.TOTALRECLAW_SUBGRAPH_URL || `${effectiveRelayUrl}/v1/subgraph`;
   const pageSize = 1000;
   let total = 0;
   let lastId = '';
