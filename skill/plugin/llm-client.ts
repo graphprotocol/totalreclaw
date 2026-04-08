@@ -73,7 +73,7 @@ const PROVIDER_KEY_NAMES: Record<string, string[]> = {
 };
 
 const PROVIDER_BASE_URLS: Record<string, string> = {
-  zai:        'https://api.z.ai/api/paas/v4',
+  zai:        'https://api.z.ai/api/coding/paas/v4',
   anthropic:  'https://api.anthropic.com/v1',
   openai:     'https://api.openai.com/v1',
   gemini:     'https://generativelanguage.googleapis.com/v1beta/openai',
@@ -316,7 +316,7 @@ export function resolveLLMConfig(): LLMClientConfig | null {
   if (zaiKey) {
     return {
       apiKey: zaiKey,
-      baseUrl: 'https://api.z.ai/api/paas/v4',
+      baseUrl: 'https://api.z.ai/api/coding/paas/v4',
       model,
       apiFormat: 'openai',
     };
