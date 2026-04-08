@@ -5,8 +5,8 @@
  * no data leaves the machine. Preserves the E2EE guarantee.
  *
  * Three model options (selected via CONFIG.embeddingModel):
- *   - "default": onnx-community/harrier-oss-v1-270m-ONNX (640d, q4 ~344MB, best accuracy/size ratio)
- *   - "small": Xenova/multilingual-e5-small (384d, q8 ~34MB, fast, low RAM)
+ *   - "default": Xenova/multilingual-e5-small (384d, q8 ~34MB — OpenClaw onnxruntime compat)
+ *   - "harrier": onnx-community/harrier-oss-v1-270m-ONNX (640d, q4 ~344MB — needs onnxruntime 1.24+)
  *   - "large": onnx-community/Qwen3-Embedding-0.6B-ONNX (1024d, q8 ~600MB, legacy)
  *
  * Dependencies: @huggingface/transformers
@@ -28,18 +28,22 @@ interface ModelConfig {
 
 const MODELS: Record<string, ModelConfig> = {
   default: {
-    id: 'onnx-community/harrier-oss-v1-270m-ONNX',
-    dims: 640,
-    pooling: 'sentence_embedding',
-    size: '~344MB',
-    dtype: 'q4',
-  },
-  small: {
+    // e5-small is the default for the OpenClaw plugin because OpenClaw's
+    // @huggingface/transformers v3.x bundles an onnxruntime that doesn't
+    // support GatherBlockQuantized (needed for Harrier q4). The MCP server
+    // and client library use Harrier (640d) since they control their own deps.
     id: 'Xenova/multilingual-e5-small',
     dims: 384,
     pooling: 'mean',
     size: '~34MB',
     dtype: 'q8',
+  },
+  harrier: {
+    id: 'onnx-community/harrier-oss-v1-270m-ONNX',
+    dims: 640,
+    pooling: 'sentence_embedding',
+    size: '~344MB',
+    dtype: 'q4',
   },
   large: {
     id: 'onnx-community/Qwen3-Embedding-0.6B-ONNX',

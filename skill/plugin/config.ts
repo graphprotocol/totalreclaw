@@ -70,8 +70,8 @@ export const CONFIG = {
     cerebras: process.env.CEREBRAS_API_KEY || '',
   } as Record<string, string>,
 
-  // Embedding model: "default" (640d, q4 ~344MB), "small" (384d, q8 ~34MB), or "large" (1024d, q8 ~600MB)
-  embeddingModel: (process.env.TOTALRECLAW_EMBEDDING_MODEL || 'default') as 'default' | 'small' | 'large',
+  // Embedding model: "default" (384d, e5-small), "harrier" (640d, q4 — needs onnxruntime 1.24+), or "large" (1024d, Qwen3)
+  embeddingModel: (process.env.TOTALRECLAW_EMBEDDING_MODEL || 'default') as 'default' | 'harrier' | 'large',
 
   // Paths
   home,
