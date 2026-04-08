@@ -12,7 +12,7 @@ dataSources:
     source:
       address: "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca"
       abi: EventfulDataEdge
-      startBlock: 39121533
+      startBlock: 39870000
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
