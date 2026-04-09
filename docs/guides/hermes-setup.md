@@ -14,6 +14,8 @@ Set up TotalReclaw as the encrypted memory layer for your Hermes Agent. Your mem
 > apt-get update && apt-get install -y gcc g++
 > ```
 
+> **Ubuntu/Debian users:** System Python on Ubuntu 23.04+ and Debian 12+ is "externally managed." You will need the `--break-system-packages` flag on every `pip install` (or use a virtual environment). System packages like PyYAML and PyJWT may also conflict with pip-installed versions -- see the troubleshooting note in the install section below.
+
 ## 1. Install TotalReclaw
 
 ```bash
@@ -26,7 +28,19 @@ mkdir -p ~/.hermes/plugins/totalreclaw
 cp -r $(python -c "import totalreclaw.hermes; print(totalreclaw.hermes.__path__[0])")/* ~/.hermes/plugins/totalreclaw/
 ```
 
-> **Docker note:** Add `--break-system-packages` if you see "externally-managed-environment" errors.
+> **Ubuntu/Debian/Docker note:** Add `--break-system-packages` if you see "externally-managed-environment" errors:
+> ```bash
+> pip install --break-system-packages totalreclaw
+> pip install --break-system-packages "git+https://github.com/NousResearch/hermes-agent.git"
+> ```
+
+> **PyYAML / PyJWT conflicts:** On systems with OS-managed Python packages, pip may refuse to uninstall system-owned packages like PyYAML or PyJWT. If you see "Cannot uninstall PyYAML" or similar errors:
+> ```bash
+> # Force-install the conflicting packages first
+> pip install --break-system-packages --ignore-installed PyYAML PyJWT rich requests
+> # Then retry the hermes-agent install
+> pip install --break-system-packages "git+https://github.com/NousResearch/hermes-agent.git"
+> ```
 
 > **Why two steps?** Hermes Agent is not yet on PyPI (install from GitHub). Hermes discovers plugins via its `~/.hermes/plugins/` directory, so the copy step is required.
 
@@ -48,7 +62,7 @@ You should see:
 
 ```
 Plugins (1+):
-  ✓ totalreclaw v1.0.0 (6 tools, 4 hooks)
+  ✓ totalreclaw v1.0.0 (8 tools, 4 hooks)
 ```
 
 ## 3. Start chatting
@@ -87,6 +101,8 @@ The plugin hooks into Hermes's lifecycle:
 | `totalreclaw_export` | Export all memories as plaintext |
 | `totalreclaw_status` | Check billing and usage |
 | `totalreclaw_setup` | Configure credentials |
+| `totalreclaw_import_from` | Import memories from Gemini, ChatGPT, Claude, Mem0 |
+| `totalreclaw_import_batch` | Process one batch of a large import |
 
 ### What gets extracted
 
@@ -109,7 +125,9 @@ The plugin recognizes 7 memory types:
 | `TOTALRECLAW_RECOVERY_PHRASE` | -- | Import an existing recovery phrase. If not set, the agent generates one on first use. |
 | `TOTALRECLAW_SERVER_URL` | `https://api.totalreclaw.xyz` | Override for self-hosted deployments. Most users don't need this. |
 
-TotalReclaw automatically uses whatever LLM provider you configured for Hermes. It picks a fast/cheap model from the same provider for fact extraction — no extra API keys or model settings needed.
+TotalReclaw automatically uses whatever LLM provider you configured for Hermes. It picks a fast/cheap model from the same provider for fact extraction -- no extra API keys or model settings needed.
+
+> **Z.AI users:** If you use Z.AI as your Hermes provider, set provider name to `zai` and add `ZAI_API_KEY` to `~/.hermes/.env`. TotalReclaw reads this automatically -- no separate TotalReclaw LLM configuration needed.
 
 ### Hermes config (optional)
 
@@ -154,6 +172,45 @@ Upgrade via:
 ```
 I'd like to upgrade to TotalReclaw Pro
 ```
+
+## 8. Importing conversation history
+
+You can import memories from other AI providers into your TotalReclaw vault. The agent handles the entire process -- just tell it what you want to import.
+
+### Supported sources
+
+| Source | Export format | How to export |
+|--------|-------------|---------------|
+| **Gemini** | Google Takeout HTML | Go to [takeout.google.com](https://takeout.google.com), select "Gemini Apps", download the archive, and extract the HTML files |
+| **ChatGPT** | conversations.json | Go to Settings > Data controls > Export data. OpenAI emails you a zip containing `conversations.json` |
+| **Claude** | Memory text | Go to Settings > Memory in Claude.ai, copy the memory entries |
+| **Mem0** | API export | Use the Mem0 API or dashboard to export your memories as JSON |
+
+### Example conversation
+
+```
+You: I exported my Gemini conversations from Google Takeout.
+     Import them into TotalReclaw from /tmp/takeout/Gemini/
+
+Agent: I'll import your Gemini conversations. Let me scan the directory...
+
+     Found 847 conversation files. This is a large import -- I'll process
+     it in batches of 50 conversations each.
+
+     Batch 1/17: Processing conversations 1-50...
+     ✓ Batch 1 complete: 142 memories extracted and stored.
+
+     Batch 2/17: Processing conversations 51-100...
+     ✓ Batch 2 complete: 98 memories extracted and stored.
+     ...
+```
+
+### Notes on large imports
+
+- Large exports (hundreds of conversations) are automatically processed in batches using `totalreclaw_import_batch`. Each batch extracts facts, encrypts them, and stores them on-chain.
+- Progress is reported after each batch so you can see how the import is going.
+- Imports are idempotent -- if interrupted, you can re-run and already-imported facts will be deduplicated by content fingerprint.
+- Imported memories are searchable immediately via `totalreclaw_recall` or automatic context injection.
 
 ## Troubleshooting
 
