@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/totalreclaw",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. Automatic extraction, semantic search, and on-chain storage",
   "type": "module",
   "keywords": [
@@ -24,8 +24,8 @@
   "author": "TotalReclaw Team",
   "license": "MIT",
   "dependencies": {
-    "@totalreclaw/client": "^0.8.0",
-    "@totalreclaw/core": "^1.0.0",
+    "@totalreclaw/client": "^1.2.0",
+    "@totalreclaw/core": "^1.1.0",
     "@huggingface/transformers": "^4.0.1",
     "onnxruntime-node": "^1.24.0"
   },
