@@ -33,6 +33,7 @@ class LLMConfig:
 # No hardcoded model names — uses whatever the user configured via their
 # agent framework. Override with TOTALRECLAW_EXTRACTION_MODEL if needed.
 PROVIDERS = [
+    ("zai", ["ZAI_API_KEY", "GLM_API_KEY", "Z_AI_API_KEY"], "https://api.z.ai/api/coding/paas/v4", "openai"),
     ("anthropic", ["ANTHROPIC_API_KEY"], "https://api.anthropic.com/v1", "anthropic"),
     ("openai", ["OPENAI_API_KEY"], "https://api.openai.com/v1", "openai"),
     ("groq", ["GROQ_API_KEY"], "https://api.groq.com/openai/v1", "openai"),
