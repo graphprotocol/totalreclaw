@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "description": "Parity tests: verify NanoClaw produces byte-identical outputs to the OpenClaw plugin",
-  "type": "module",
   "scripts": {
     "test": "npx tsx parity-test.ts"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.1.1",
     "@noble/hashes": "^2.0.1",
     "@scure/bip39": "^2.0.1",
     "porter-stemmer": "^0.9.1",

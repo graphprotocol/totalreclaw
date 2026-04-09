@@ -100,18 +100,18 @@ const lshSeedHex = wasm.deriveLshSeed(kd.mnemonic, kd.salt_hex);
 assertEqual(lshSeedHex, vectors.lsh.lsh_seed_hex, 'LSH seed matches');
 
 // ---------------------------------------------------------------------------
-// 3. Encrypt / Decrypt round-trip
+// 3. Encrypt / Decrypt round-trip (XChaCha20-Poly1305)
 // ---------------------------------------------------------------------------
-console.log('\n=== AES-256-GCM ===');
+console.log('\n=== XChaCha20-Poly1305 ===');
 
-const aes = vectors.aes_gcm;
-const encrypted = wasm.encrypt(aes.plaintext, aes.encryption_key_hex);
-const decrypted = wasm.decrypt(encrypted, aes.encryption_key_hex);
-assertEqual(decrypted, aes.plaintext, 'encrypt/decrypt round-trip');
+const xc = vectors.xchacha20;
+const encrypted = wasm.encrypt(xc.plaintext, xc.encryption_key_hex);
+const decrypted = wasm.decrypt(encrypted, xc.encryption_key_hex);
+assertEqual(decrypted, xc.plaintext, 'encrypt/decrypt round-trip');
 
-// Decrypt the known fixed-IV ciphertext
-const decryptedFixed = wasm.decrypt(aes.fixed_iv_encrypted_base64, aes.encryption_key_hex);
-assertEqual(decryptedFixed, aes.plaintext, 'decrypt fixed-IV ciphertext from vectors');
+// Decrypt the known fixed-nonce ciphertext
+const decryptedFixed = wasm.decrypt(xc.fixed_nonce_encrypted_base64, xc.encryption_key_hex);
+assertEqual(decryptedFixed, xc.plaintext, 'decrypt fixed-nonce ciphertext from vectors');
 
 // Wrong key fails
 try {

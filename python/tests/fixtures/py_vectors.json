@@ -11,21 +11,27 @@
   },
   "encryption": {
     "plaintext": "The quick brown fox jumps over the lazy dog",
-    "encrypted_base64": "caHaoOZj/BuXZwYTzlE+vrSKzWPjy3aKq2JqN2ZrGegiCU5keGEZrhmi3jnxnidlW8AqNe/UInSq00kVOOOiGo2RCcxWxNI="
+    "encrypted_base64": "HKhfe/ZE+adL9LHtp8Gva23ZM0exV6MDUh/pvBUXTcoA33jLH2XwDyAIuWEW/k5KKHxkrwYRi8WbtPTHVIwF4ucMATjYig/gmwnrw12wZZSRe38="
   },
   "blind_indices": {
     "input_text": "The quick brown fox jumps over the lazy dog",
     "expected": [
       "b9776d7ddf459c9ad5b0e1d6ac61e27befb5e99fd62446677600d7cacef544d0",
+      "dea2da3e11cd1e2106f4de62d0073a11ae6295875df32979b465d3c7b8a3ecff",
       "22c72aa82ce77c82e2ca65a711c79eaa4b51c57f85f91489ceeacc7b385943ba",
+      "1dbf551fb41e0690bc6239431beddaf1a42967bddc1e9dd2836989083eb2e688",
       "5eb67f9f8409b9c3f739735633cbdf92121393d0e13bd0f464b1b2a6a15ad2dc",
+      "57725305a73b7ddfd8239e56dd4b977591249d9ba42e1b091f3ef4ac558a0fb6",
       "776cb326ab0cd5f0a974c1b9606044d8485201f2db19cf8e3749bdee5f36e200",
+      "e06cf40b0487a64c4119a4f994181619956c9debb14aebc649dca0eb005b1dbb",
       "ef30940a2d1b943c8007b8a15e45935dc01902b7c0534dc7e27fda30a9b81aef",
       "1221d29e21c19889ccb9c15f75b6df89a540c1047cef09b280b7ff789f6b996c",
       "5fb6a47e368e12e5d8b19280796e6a3d146fe391ed2e967d5f95c55bfb0f9c2f",
+      "0204829e7a756bc1b2bc2ff2dd14ecab3c6c0722df047346b5d6866ac79d2e72",
       "81fd67d02f679b818a4df6a50139958aa857eddc4d8f3561630dfb905e6d3c24",
       "fe7094c1d3254e4e298b307048700e6681cf46e3d080e5a1a0baa2ed77bd9878",
-      "cd6357efdd966de8c0cb2f876cc89ec74ce35f0968e11743987084bd42fb8944"
+      "cd6357efdd966de8c0cb2f876cc89ec74ce35f0968e11743987084bd42fb8944",
+      "5f5c13c198170ded14cbf0f4effe1850112056783959e3cd248500e3b278aab8"
     ]
   },
   "content_fingerprint": {

@@ -21,10 +21,11 @@ import { hmac } from '@noble/hashes/hmac.js';
 import { mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { stemmer } from 'porter-stemmer';
+import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
 import crypto from 'node:crypto';
 
 // =========================================================================
-// Crypto primitives (Argon2id + HKDF key derivation, AES-GCM encryption)
+// Crypto primitives (Argon2id + HKDF key derivation, XChaCha20-Poly1305 encryption)
 // =========================================================================
 
 const AUTH_KEY_INFO = 'totalreclaw-auth-key-v1';
@@ -36,7 +37,7 @@ const ARGON2_MEMORY_COST = 65536;
 const ARGON2_PARALLELISM = 4;
 const ARGON2_DK_LEN = 32;
 
-const IV_LENGTH = 12;
+const NONCE_LENGTH = 24;
 const TAG_LENGTH = 16;
 const KEY_LENGTH = 32;
 
@@ -107,15 +108,17 @@ export function encrypt(plaintext: string, encryptionKey: Buffer): string {
     throw new Error(`Invalid key length: expected ${KEY_LENGTH}, got ${encryptionKey.length}`);
   }
 
-  const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey, iv, {
-    authTagLength: TAG_LENGTH,
-  });
+  const nonce = crypto.randomBytes(NONCE_LENGTH);
+  const cipher = xchacha20poly1305(new Uint8Array(encryptionKey), nonce);
+  const sealed = cipher.encrypt(new Uint8Array(Buffer.from(plaintext, 'utf8')));
 
-  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
+  // sealed = ciphertext || tag (tag is last 16 bytes)
+  const ctLen = sealed.length - TAG_LENGTH;
+  const ciphertext = sealed.subarray(0, ctLen);
+  const tag = sealed.subarray(ctLen);
 
-  const combined = Buffer.concat([iv, tag, ciphertext]);
+  // Wire format: nonce(24) || tag(16) || ciphertext
+  const combined = Buffer.concat([nonce, tag, ciphertext]);
   return combined.toString('base64');
 }
 
@@ -126,21 +129,20 @@ export function decrypt(encryptedBase64: string, encryptionKey: Buffer): string 
 
   const combined = Buffer.from(encryptedBase64, 'base64');
 
-  if (combined.length < IV_LENGTH + TAG_LENGTH) {
+  if (combined.length < NONCE_LENGTH + TAG_LENGTH) {
     throw new Error('Encrypted data too short');
   }
 
-  const iv = combined.subarray(0, IV_LENGTH);
-  const tag = combined.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
-  const ciphertext = combined.subarray(IV_LENGTH + TAG_LENGTH);
+  const nonce = combined.subarray(0, NONCE_LENGTH);
+  const tag = combined.subarray(NONCE_LENGTH, NONCE_LENGTH + TAG_LENGTH);
+  const ciphertext = combined.subarray(NONCE_LENGTH + TAG_LENGTH);
 
-  const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey, iv, {
-    authTagLength: TAG_LENGTH,
-  });
-  decipher.setAuthTag(tag);
+  // @noble/ciphers expects: ciphertext || tag
+  const ctWithTag = Buffer.concat([ciphertext, tag]);
+  const cipher = xchacha20poly1305(new Uint8Array(encryptionKey), new Uint8Array(nonce));
+  const plaintext = cipher.decrypt(new Uint8Array(ctWithTag));
 
-  const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  return plaintext.toString('utf8');
+  return Buffer.from(plaintext).toString('utf8');
 }
 
 export function generateBlindIndices(text: string): string[] {

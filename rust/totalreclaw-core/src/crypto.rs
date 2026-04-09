@@ -336,23 +336,29 @@ mod tests {
     }
 
     #[test]
-    fn test_xchacha_fixed_nonce_round_trip() {
+    fn test_xchacha_fixed_nonce_parity() {
         let fixture: serde_json::Value = serde_json::from_str(
             include_str!("../tests/fixtures/crypto_vectors.json"),
         )
         .unwrap();
 
-        let aes = &fixture["aes_gcm"];
-        let key_hex = aes["encryption_key_hex"].as_str().unwrap();
+        let xc = &fixture["xchacha20"];
+        let key_hex = xc["encryption_key_hex"].as_str().unwrap();
         let key_bytes = hex::decode(key_hex).unwrap();
         let mut key = [0u8; 32];
         key.copy_from_slice(&key_bytes);
 
-        let nonce = [0u8; 24]; // fixed zero nonce
-        let plaintext = aes["plaintext"].as_str().unwrap();
+        let nonce_hex = xc["fixed_nonce_hex"].as_str().unwrap();
+        let nonce_bytes = hex::decode(nonce_hex).unwrap();
+        let mut nonce = [0u8; 24];
+        nonce.copy_from_slice(&nonce_bytes);
 
-        // New cipher — don't match old AES-GCM base64 value, just verify round-trip
+        let plaintext = xc["plaintext"].as_str().unwrap();
+        let expected_b64 = xc["fixed_nonce_encrypted_base64"].as_str().unwrap();
+
         let encrypted = encrypt_with_nonce(plaintext, &key, &nonce).unwrap();
+        assert_eq!(encrypted, expected_b64);
+
         let decrypted = decrypt(&encrypted, &key).unwrap();
         assert_eq!(decrypted, plaintext);
     }
@@ -416,4 +422,5 @@ mod tests {
         let result = derive_keys_from_mnemonic_lenient(mnemonic);
         assert!(result.is_ok());
     }
+
 }

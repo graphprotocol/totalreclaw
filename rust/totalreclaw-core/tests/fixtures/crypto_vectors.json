@@ -11,11 +11,11 @@
     "dedup_key_hex": "63d19334b64c460a95c23c14c1bff018bc83807031451b23117ec0baf85dcf34",
     "auth_key_hash": "b6be7885057f5d0eac5b65c458060a9a26ab93f098048a1362816873b704f166"
   },
-  "aes_gcm": {
+  "xchacha20": {
     "plaintext": "The user prefers dark mode in all applications.",
     "encryption_key_hex": "a58fdc56e1d768461d95cd46b49e03727b2eb342ac558b9f3ebf1255b871f703",
-    "fixed_iv_hex": "000000000000000000000000",
-    "fixed_iv_encrypted_base64": "AAAAAAAAAAAAAAAAhUb0M0Nq+Hhy8G4gQeqv9ONDgbGMr05cxw8+FFJ59hLERlWcJQ3sfrDI0CUmXYGrWJhJFBHzOHdvWp/SQUwO",
+    "fixed_nonce_hex": "000000000000000000000000000000000000000000000000",
+    "fixed_nonce_encrypted_base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjkMWCmiz9CAGzM801WEKs+x3vA9hY/gOdJ1L7mmPe1g1T2t9ttrtS7hkh+IlVUfTnWC5VtKGi27ERLzQySxU",
     "round_trip_verified": true
   },
   "blind_indices": {
