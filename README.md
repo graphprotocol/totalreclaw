@@ -12,7 +12,7 @@
   <a href="https://totalreclaw.xyz">Website</a> ·
   <a href="https://clawhub.ai/skills/totalreclaw">ClawHub</a> ·
   <a href="https://www.npmjs.com/package/@totalreclaw/totalreclaw">npm</a> ·
-  <a href="docs/guides/beta-tester-guide.md">Getting Started</a> ·
+  <a href="docs/guides/openclaw-setup.md">Getting Started</a> ·
   <a href="docs/architecture.md">Architecture Deep Dive</a>
 </p>
 
@@ -29,7 +29,7 @@ Finally, an AI that remembers everything — without remembering it for Big Tech
 Every memory is encrypted on the device before it leaves. Storage and retrieval happen without any server ever seeing the data. One 12-word recovery phrase gives access from any device, any agent, with no lock-in.
 
 - **Private** — memories are encrypted on the device before they leave. No server, service, or third party can read them — even if fully compromised.
-- **Portable** — one recovery phrase works across OpenClaw, NanoClaw, IronClaw, Claude Desktop, or any MCP-compatible agent. Switch agents without losing a single memory.
+- **Portable** — one recovery phrase works across OpenClaw, NanoClaw, IronClaw, Claude Desktop, or any MCP-compatible agent. Switch agents without losing a single memory. [Compare integrations →](docs/guides/feature-comparison.md)
 - **Yours forever** — memories are anchored to Gnosis Chain and indexed by The Graph. Upgrade to Pro for permanent, verifiable on-chain storage.
 
 ## Quick Start
@@ -149,8 +149,9 @@ Supported sources: **ChatGPT** (memories or conversations.json), **Claude** (mem
 
 ## Documentation
 
-- [Getting Started](docs/guides/beta-tester-guide.md) — setup, troubleshooting, known limitations
-- [Detailed Technical Guide](docs/guides/beta-tester-guide-detailed.md) — full reference with configuration
+- [OpenClaw Setup](docs/guides/openclaw-setup.md) — install, configure, and start using memory
+- [Claude Desktop / Cursor / Windsurf](docs/guides/claude-code-setup.md) — MCP server setup
+- [Feature Comparison](docs/guides/feature-comparison.md) — what works on each platform
 - [Architecture Deep Dive](docs/architecture.md) — encryption, LSH, search, deduplication, network layer
 - [Importing Memories](docs/guides/importing-memories.md) — import from ChatGPT, Claude, Mem0, and more
 - [totalreclaw.xyz](https://totalreclaw.xyz) — project homepage
