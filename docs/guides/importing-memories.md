@@ -12,6 +12,7 @@ TotalReclaw can import memories from external AI memory systems, so you can cons
 | **MCP Memory Server** (`@modelcontextprotocol/server-memory`) | JSONL file import | Supported (unit tested) |
 | **ChatGPT** | Conversations.json or memory text | Supported (unit tested) |
 | **Claude** | Memory text | Supported (unit tested) |
+| **Gemini** (Google) | Google Takeout HTML (conversation history) | Supported |
 | More sources planned | See [Roadmap](../ROADMAP.md#phase-5-import--migration-future) | -- |
 
 ---
@@ -147,6 +148,7 @@ The `totalreclaw_import_from` tool is available in:
 | **OpenClaw plugin** | Yes | Ask your agent or use the tool directly |
 | **MCP server** | Yes | Tool is registered and callable by any MCP client |
 | **NanoClaw** | Yes | Via the MCP server spawned by the agent-runner |
+| **Hermes Agent** | Yes | Native Python adapters + import engine |
 
 **Storage mode support:** Import works in both **self-hosted (HTTP) mode** and **managed service mode**. In managed service mode, each imported memory is submitted on-chain via the relay. Large imports (1,000+ memories) may take longer in managed service mode due to per-transaction gas sponsorship.
 
@@ -182,6 +184,50 @@ Copy your memories from Claude: Settings -> Memory -> select all and copy.
 
 ---
 
+## Importing from Gemini
+
+Google does not have a dedicated "memory" feature like ChatGPT or Claude, but your Gemini conversation history contains the same kind of personal facts, preferences, and decisions. TotalReclaw extracts these from the Google Takeout export.
+
+### Step 1: Export from Google Takeout
+
+1. Go to [takeout.google.com](https://takeout.google.com)
+2. Click "Deselect all"
+3. Scroll down and select **"Gemini Apps"** only
+4. Click "Next step" -> "Create export"
+5. Wait for the email with the download link (usually 1-5 minutes)
+6. Download and unzip the archive
+7. Find the file at: `Takeout/My Activity/Gemini Apps/My Activity.html`
+
+### Step 2: Import into TotalReclaw
+
+Ask your agent:
+
+> "Import my Gemini conversation history from ~/Downloads/Takeout/My Activity/Gemini Apps/My Activity.html"
+
+Or more explicitly:
+
+> "Use totalreclaw_import_from with source=gemini and file_path=~/Downloads/Takeout/My Activity/Gemini Apps/My Activity.html"
+
+The agent will:
+
+1. Run a dry-run first showing the estimate (conversations found, estimated facts, time)
+2. Ask for your confirmation
+3. For small exports: process everything at once
+4. For large exports (3,000+ conversations): process in batches with progress updates
+
+### What gets imported
+
+The tool parses your Gemini conversations, groups them into sessions (conversations within 30 minutes of each other), then uses LLM extraction to identify important facts, preferences, decisions, and context. Generic Q&A conversations (recipes, product lookups) may not produce facts -- only personal, long-term-valuable information is extracted.
+
+### Important notes
+
+- The HTML file is processed entirely on your device -- never sent to any server unencrypted
+- Large exports (3,000+ conversations) may take 10-30 minutes depending on your LLM provider
+- Attachments (images, PDFs, audio) in the Gemini export are not imported -- only text conversations
+- The import is idempotent: re-running it won't create duplicates
+
+---
+
 ## Future Import Sources
 
 The following sources are planned but not yet implemented:
@@ -190,7 +236,6 @@ The following sources are planned but not yet implemented:
 - **Zep** (getzep.com) — session-based memory with facts and summaries
 - **LanceDB** — local or cloud vector store export
 - **QMD** — OpenClaw's native memory system
-- **Generic JSON/CSV** — catch-all for other tools
-- **Gemini** — conversation history import via data export
+- **Generic JSON/CSV** -- catch-all for other tools
 
 See the [full roadmap](../ROADMAP.md#phase-5-import--migration-future) for details.

@@ -175,42 +175,15 @@ I'd like to upgrade to TotalReclaw Pro
 
 ## 8. Importing conversation history
 
-You can import memories from other AI providers into your TotalReclaw vault. The agent handles the entire process -- just tell it what you want to import.
+TotalReclaw can import your conversation history from Gemini, ChatGPT, Claude, and other AI tools. This lets you consolidate all your AI memories into one encrypted vault.
 
-### Supported sources
+**Quick start:**
 
-| Source | Export format | How to export |
-|--------|-------------|---------------|
-| **Gemini** | Google Takeout HTML | Go to [takeout.google.com](https://takeout.google.com), select "Gemini Apps", download the archive, and extract the HTML files |
-| **ChatGPT** | conversations.json | Go to Settings > Data controls > Export data. OpenAI emails you a zip containing `conversations.json` |
-| **Claude** | Memory text | Go to Settings > Memory in Claude.ai, copy the memory entries |
-| **Mem0** | API export | Use the Mem0 API or dashboard to export your memories as JSON |
+> "Import my Gemini history from ~/Downloads/Takeout/My Activity/Gemini Apps/My Activity.html"
 
-### Example conversation
+For detailed export instructions and supported sources, see the **[Importing Memories guide](importing-memories.md)**.
 
-```
-You: I exported my Gemini conversations from Google Takeout.
-     Import them into TotalReclaw from /tmp/takeout/Gemini/
-
-Agent: I'll import your Gemini conversations. Let me scan the directory...
-
-     Found 847 conversation files. This is a large import -- I'll process
-     it in batches of 50 conversations each.
-
-     Batch 1/17: Processing conversations 1-50...
-     ✓ Batch 1 complete: 142 memories extracted and stored.
-
-     Batch 2/17: Processing conversations 51-100...
-     ✓ Batch 2 complete: 98 memories extracted and stored.
-     ...
-```
-
-### Notes on large imports
-
-- Large exports (hundreds of conversations) are automatically processed in batches using `totalreclaw_import_batch`. Each batch extracts facts, encrypts them, and stores them on-chain.
-- Progress is reported after each batch so you can see how the import is going.
-- Imports are idempotent -- if interrupted, you can re-run and already-imported facts will be deduplicated by content fingerprint.
-- Imported memories are searchable immediately via `totalreclaw_recall` or automatic context injection.
+The agent will show you an estimate before importing and process large files in batches with progress updates. All data is encrypted on your device before storage.
 
 ## Troubleshooting
 
