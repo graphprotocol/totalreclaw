@@ -265,6 +265,19 @@ pub fn hex_blob_to_base64(hex_blob: &str) -> Option<String> {
 // Decrypt + Rerank pipeline
 // ---------------------------------------------------------------------------
 
+/// Extract text from a decrypted blob (handles JSON envelope or raw text).
+///
+/// JSON envelope format: `{"t": "text", "a": "agentId", "s": "source"}`
+/// Falls back to treating the whole string as text for edge cases.
+fn extract_text_from_blob(decrypted: &str) -> String {
+    if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(decrypted) {
+        if let Some(text) = envelope.get("t").and_then(|v| v.as_str()) {
+            return text.to_string();
+        }
+    }
+    decrypted.to_string()
+}
+
 /// Decrypt and rerank search candidates.
 ///
 /// This is the key pipeline function: takes raw `SubgraphFact` entries from
@@ -276,7 +289,7 @@ pub fn hex_blob_to_base64(hex_blob: &str) -> Option<String> {
 /// * `facts` - Raw facts from the subgraph (blind index search + broadened)
 /// * `query` - The original search query text
 /// * `query_embedding` - The query's embedding vector
-/// * `encryption_key` - 32-byte AES-256-GCM encryption key (hex-encoded)
+/// * `encryption_key` - 32-byte XChaCha20-Poly1305 encryption key (hex-encoded)
 /// * `top_k` - Number of top results to return
 ///
 /// # Returns
@@ -308,15 +321,16 @@ pub fn decrypt_and_rerank(
     // Decrypt each candidate and build reranker input
     let mut candidates = Vec::new();
     for fact in facts {
-        // Decrypt content: hex blob -> base64 -> AES-GCM decrypt
+        // Decrypt content: hex blob -> base64 -> XChaCha20-Poly1305 decrypt -> extract text from JSON envelope
         let blob_b64 = match hex_blob_to_base64(&fact.encrypted_blob) {
             Some(b) => b,
             None => continue, // skip unparseable blobs
         };
-        let text = match crypto::decrypt(&blob_b64, &encryption_key) {
+        let raw = match crypto::decrypt(&blob_b64, &encryption_key) {
             Ok(t) => t,
             Err(_) => continue, // skip undecryptable facts
         };
+        let text = extract_text_from_blob(&raw);
 
         // Decrypt embedding (if available)
         let emb = decrypt_embedding(fact.encrypted_embedding.as_deref(), &encryption_key);
@@ -353,10 +367,11 @@ pub fn decrypt_and_rerank_with_key(
             Some(b) => b,
             None => continue,
         };
-        let text = match crypto::decrypt(&blob_b64, encryption_key) {
+        let raw = match crypto::decrypt(&blob_b64, encryption_key) {
             Ok(t) => t,
             Err(_) => continue,
         };
+        let text = extract_text_from_blob(&raw);
 
         let emb = decrypt_embedding(fact.encrypted_embedding.as_deref(), encryption_key);
 
@@ -377,7 +392,7 @@ pub fn decrypt_and_rerank_with_key(
 
 /// Decrypt an encrypted embedding.
 ///
-/// Pipeline: AES-GCM decrypt -> base64 decode -> chunks of 4 -> f32 LE.
+/// Pipeline: XChaCha20-Poly1305 decrypt -> base64 decode -> chunks of 4 -> f32 LE.
 fn decrypt_embedding(encrypted: Option<&str>, encryption_key: &[u8; 32]) -> Vec<f32> {
     encrypted
         .and_then(|e| crypto::decrypt(e, encryption_key).ok())
@@ -600,15 +615,17 @@ mod tests {
 
         let encryption_key_hex = hex::encode(keys.encryption_key);
 
-        // Create encrypted facts
+        // Create encrypted facts (JSON envelope format)
         let text1 = "User prefers dark mode in all applications";
         let text2 = "The weather is sunny today";
 
-        let enc1 = crypto::encrypt(text1, &keys.encryption_key).unwrap();
+        let envelope1 = serde_json::json!({"t": text1, "a": "test", "s": "test"});
+        let enc1 = crypto::encrypt(&envelope1.to_string(), &keys.encryption_key).unwrap();
         let enc1_bytes = base64::engine::general_purpose::STANDARD.decode(&enc1).unwrap();
         let enc1_hex = format!("0x{}", hex::encode(&enc1_bytes));
 
-        let enc2 = crypto::encrypt(text2, &keys.encryption_key).unwrap();
+        let envelope2 = serde_json::json!({"t": text2, "a": "test", "s": "test"});
+        let enc2 = crypto::encrypt(&envelope2.to_string(), &keys.encryption_key).unwrap();
         let enc2_bytes = base64::engine::general_purpose::STANDARD.decode(&enc2).unwrap();
         let enc2_hex = format!("0x{}", hex::encode(&enc2_bytes));
 
@@ -705,7 +722,8 @@ mod tests {
         .unwrap();
 
         let text = "User prefers dark mode";
-        let enc = crypto::encrypt(text, &keys.encryption_key).unwrap();
+        let envelope = serde_json::json!({"t": text, "a": "test", "s": "test"});
+        let enc = crypto::encrypt(&envelope.to_string(), &keys.encryption_key).unwrap();
         let enc_bytes = base64::engine::general_purpose::STANDARD.decode(&enc).unwrap();
         let enc_hex = format!("0x{}", hex::encode(&enc_bytes));
 
@@ -731,5 +749,18 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].text, text);
+    }
+
+    #[test]
+    fn test_extract_text_from_blob() {
+        // JSON envelope
+        let json = r#"{"t":"hello world","a":"agent","s":"source"}"#;
+        assert_eq!(extract_text_from_blob(json), "hello world");
+
+        // Raw string fallback
+        assert_eq!(extract_text_from_blob("raw text"), "raw text");
+
+        // JSON without "t" key falls back
+        assert_eq!(extract_text_from_blob(r#"{"x":"y"}"#), r#"{"x":"y"}"#);
     }
 }

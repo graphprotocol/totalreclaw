@@ -37,7 +37,7 @@ pub struct PreparedFact {
     pub timestamp: String,
     /// Owner address (Smart Account or wallet).
     pub owner: String,
-    /// Hex-encoded AES-256-GCM encrypted content.
+    /// Hex-encoded XChaCha20-Poly1305 encrypted content.
     pub encrypted_blob_hex: String,
     /// Blind indices: SHA-256 word hashes + stem hashes + LSH bucket hashes.
     pub blind_indices: Vec<String>,
@@ -49,7 +49,7 @@ pub struct PreparedFact {
     pub content_fp: String,
     /// Agent identifier.
     pub agent_id: String,
-    /// Base64-encoded AES-256-GCM encrypted embedding (optional).
+    /// Base64-encoded XChaCha20-Poly1305 encrypted embedding (optional).
     pub encrypted_embedding: Option<String>,
     /// Raw protobuf bytes ready for relay submission or UserOp wrapping.
     pub protobuf_bytes: Vec<u8>,
@@ -95,8 +95,13 @@ pub fn prepare_fact(
     // 2. Generate timestamp (RFC 3339, millisecond precision, UTC)
     let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
-    // 3. Encrypt text -> base64 -> decode -> hex
-    let encrypted_blob_b64 = crypto::encrypt(text, encryption_key)?;
+    // 3. Wrap text + metadata in JSON envelope, then encrypt -> base64 -> decode -> hex
+    let envelope = serde_json::json!({
+        "t": text,
+        "a": agent_id,
+        "s": source,
+    });
+    let encrypted_blob_b64 = crypto::encrypt(&envelope.to_string(), encryption_key)?;
     let encrypted_blob_bytes = base64::engine::general_purpose::STANDARD
         .decode(&encrypted_blob_b64)
         .map_err(|e| crate::Error::Crypto(e.to_string()))?;
@@ -113,7 +118,7 @@ pub fn prepare_fact(
     // 6. Generate content fingerprint
     let content_fp = fingerprint::generate_content_fingerprint(text, dedup_key);
 
-    // 7. Encrypt embedding (float32 -> LE bytes -> base64 -> AES-GCM)
+    // 7. Encrypt embedding (float32 -> LE bytes -> base64 -> XChaCha20-Poly1305)
     let encrypted_embedding = encrypt_embedding(embedding, encryption_key)?;
 
     // 8. Normalize importance: input 1-10 -> stored 0.0-1.0
@@ -170,7 +175,12 @@ pub fn prepare_fact_with_decay_score(
     let fact_id = uuid::Uuid::now_v7().to_string();
     let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
-    let encrypted_blob_b64 = crypto::encrypt(text, encryption_key)?;
+    let envelope = serde_json::json!({
+        "t": text,
+        "a": agent_id,
+        "s": source,
+    });
+    let encrypted_blob_b64 = crypto::encrypt(&envelope.to_string(), encryption_key)?;
     let encrypted_blob_bytes = base64::engine::general_purpose::STANDARD
         .decode(&encrypted_blob_b64)
         .map_err(|e| crate::Error::Crypto(e.to_string()))?;
@@ -254,9 +264,9 @@ pub fn compute_content_fingerprint(text: &str, dedup_key: &[u8; 32]) -> String {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Encrypt an embedding vector with AES-256-GCM.
+/// Encrypt an embedding vector with XChaCha20-Poly1305.
 ///
-/// Pipeline: float32 -> LE bytes -> base64 -> AES-GCM encrypt -> base64.
+/// Pipeline: float32 -> LE bytes -> base64 -> XChaCha20-Poly1305 encrypt -> base64.
 /// Matches the TypeScript and memory crate implementations.
 fn encrypt_embedding(embedding: &[f32], encryption_key: &[u8; 32]) -> Result<String> {
     let emb_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
@@ -464,11 +474,39 @@ mod tests {
         )
         .unwrap();
 
-        // Decrypt the encrypted blob back
+        // Decrypt the encrypted blob back — now contains a JSON envelope
         let encrypted_bytes = hex::decode(&prepared.encrypted_blob_hex).unwrap();
         let encrypted_b64 = base64::engine::general_purpose::STANDARD.encode(&encrypted_bytes);
         let decrypted = crypto::decrypt(&encrypted_b64, &keys.encryption_key).unwrap();
-        assert_eq!(decrypted, "Secret fact content");
+        let envelope: serde_json::Value = serde_json::from_str(&decrypted).unwrap();
+        assert_eq!(envelope["t"].as_str().unwrap(), "Secret fact content");
+    }
+
+    #[test]
+    fn test_prepare_fact_encrypted_content_has_envelope() {
+        let (keys, lsh_hasher) = test_keys();
+        let emb = dummy_embedding();
+
+        let prepared = prepare_fact(
+            "Secret fact content",
+            &keys.encryption_key,
+            &keys.dedup_key,
+            &lsh_hasher,
+            &emb,
+            8.0,
+            "conversation",
+            "0xABCD1234",
+            "hermes-agent",
+        )
+        .unwrap();
+
+        let encrypted_bytes = hex::decode(&prepared.encrypted_blob_hex).unwrap();
+        let encrypted_b64 = base64::engine::general_purpose::STANDARD.encode(&encrypted_bytes);
+        let decrypted = crypto::decrypt(&encrypted_b64, &keys.encryption_key).unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(&decrypted).unwrap();
+        assert_eq!(envelope["t"].as_str().unwrap(), "Secret fact content");
+        assert_eq!(envelope["a"].as_str().unwrap(), "hermes-agent");
+        assert_eq!(envelope["s"].as_str().unwrap(), "conversation");
     }
 
     #[test]
