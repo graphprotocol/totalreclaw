@@ -9,6 +9,8 @@ provides_tools:
   - totalreclaw_export
   - totalreclaw_status
   - totalreclaw_setup
+  - totalreclaw_import_from
+  - totalreclaw_import_batch
 provides_hooks:
   - on_session_start
   - pre_llm_call

@@ -99,10 +99,15 @@ SETUP = {
 IMPORT_FROM = {
     "name": "totalreclaw_import_from",
     "description": (
-        "Import memories from other AI tools (Gemini, ChatGPT, Claude, Mem0, etc.) "
-        "into TotalReclaw's encrypted vault. Supports dry_run to preview what would "
-        "be imported. For large imports (>50 chunks), use totalreclaw_import_batch "
-        "to process in batches."
+        "Import memories from other AI tools (Gemini, ChatGPT, Claude, Mem0) into "
+        "TotalReclaw's encrypted vault. "
+        "WORKFLOW: (1) ALWAYS call with dry_run=true first to show the user the "
+        "estimate (conversations found, estimated facts, estimated time). "
+        "(2) If the user confirms, and the dry-run shows <=50 chunks: call again "
+        "without dry_run to process everything. "
+        "(3) If >50 chunks: tell the user this is a large import and you'll process "
+        "it in batches. Then use totalreclaw_import_batch repeatedly with increasing "
+        "offset, reporting progress after each batch."
     ),
     "parameters": {
         "type": "object",
@@ -132,9 +137,12 @@ IMPORT_FROM = {
 IMPORT_BATCH = {
     "name": "totalreclaw_import_batch",
     "description": (
-        "Process one batch of a large import. Call repeatedly with increasing "
-        "offset until is_complete is true. Each batch processes up to batch_size "
-        "conversation chunks, extracting and storing facts."
+        "Process one batch of a large conversation import. Call repeatedly with "
+        "increasing offset until the response contains is_complete=true. "
+        "After each batch, report progress to the user: "
+        "'Batch 3/14 complete — 45 facts stored so far, ~8 minutes remaining.' "
+        "The response includes chunks_processed, total_chunks, facts_stored, "
+        "and remaining_chunks for progress calculation."
     ),
     "parameters": {
         "type": "object",
