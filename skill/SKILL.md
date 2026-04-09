@@ -443,6 +443,33 @@ Import memories from other AI memory tools into TotalReclaw.
 
 Imported facts are tagged with `import_source:{source}` for easy filtering. The import is idempotent -- running it twice will not create duplicates (content fingerprint dedup).
 
+### totalreclaw_import_batch
+
+Process one batch of a large conversation import. Call repeatedly with increasing offset.
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| source | string | Yes | `gemini`, `chatgpt`, or `claude` |
+| file_path | string | No | Path to the source file |
+| content | string | No | File content (for text sources) |
+| offset | number | No | Starting chunk index (default 0) |
+| batch_size | number | No | Chunks per call (default 25) |
+
+**When to use:** For large imports (>50 chunks as reported by dry-run). For smaller imports, `totalreclaw_import_from` handles everything in one call.
+
+**Background import pattern (for large files):**
+1. Run `totalreclaw_import_from` with `dry_run=true` to get chunk count and estimate
+2. If >50 chunks, use `sessions_spawn` to run a background worker:
+   ```
+   sessions_spawn({
+     task: "Import worker: call totalreclaw_import_batch repeatedly with source=gemini, file_path=/path/to/file.html. Start at offset=0, batch_size=25. Keep calling with offset+=25 until is_complete=true. Report final summary.",
+     label: "Gemini Import",
+     runTimeoutSeconds: 0
+   })
+   ```
+3. Report to user: "Importing in the background. Ask 'how's my import?' for progress."
+4. Check progress via `sessions_history` on the spawned session
+
 ---
 
 ## Post-Install Setup

@@ -1588,6 +1588,75 @@ async function handlePluginImportFrom(
 }
 
 /**
+ * Process a batch (slice) of conversation chunks from a file.
+ * Called repeatedly by the agent for large imports.
+ */
+async function handleBatchImport(
+  params: Record<string, unknown>,
+  logger: OpenClawPluginApi['logger'],
+): Promise<Record<string, unknown>> {
+  const source = params.source as string;
+  const filePath = params.file_path as string | undefined;
+  const content = params.content as string | undefined;
+  const offset = (params.offset as number) ?? 0;
+  const batchSize = (params.batch_size as number) ?? 25;
+
+  const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini', 'memoclaw', 'generic-json', 'generic-csv'];
+  if (!source || !validSources.includes(source)) {
+    return { success: false, error: `Invalid source. Must be one of: ${validSources.join(', ')}` };
+  }
+
+  const startTime = Date.now();
+
+  const { getAdapter } = await import('./import-adapters/index.js');
+  const adapter = getAdapter(source as import('./import-adapters/types.js').ImportSource);
+
+  const parseResult = await adapter.parse({ content, file_path: filePath });
+
+  if (parseResult.errors.length > 0 && parseResult.chunks.length === 0) {
+    return { success: false, error: parseResult.errors.join('; ') };
+  }
+
+  const totalChunks = parseResult.chunks.length;
+  const slice = parseResult.chunks.slice(offset, offset + batchSize);
+  const remaining = Math.max(0, totalChunks - offset - slice.length);
+
+  // Process the slice through the normal extraction + storage pipeline
+  let factsExtracted = 0;
+  let factsStored = 0;
+
+  for (let i = 0; i < slice.length; i++) {
+    const chunk = slice[i];
+    logger.info(`Import: extracting facts from chunk ${offset + i + 1}/${totalChunks}: "${chunk.title}"`);
+
+    const messages = chunk.messages.map((m) => ({ role: m.role, content: m.text }));
+    const facts = await extractFacts(messages, 'full');
+
+    if (facts.length > 0) {
+      factsExtracted += facts.length;
+      const stored = await storeExtractedFacts(facts, logger);
+      factsStored += stored;
+    }
+  }
+
+  return {
+    success: true,
+    batch_offset: offset,
+    batch_size: slice.length,
+    total_chunks: totalChunks,
+    facts_extracted: factsExtracted,
+    facts_stored: factsStored,
+    remaining_chunks: remaining,
+    is_complete: remaining === 0,
+    // Estimation for the full import
+    estimated_total_facts: Math.round(totalChunks * 2.5),
+    estimated_total_userops: Math.ceil(totalChunks * 2.5 / 15),
+    estimated_minutes: Math.ceil(Math.ceil(totalChunks / batchSize) * 45 / 60),
+    duration_ms: Date.now() - startTime,
+  };
+}
+
+/**
  * Process conversation chunks through LLM extraction and store results.
  *
  * Each chunk is passed to extractFacts() — the same extraction pipeline used
@@ -2674,6 +2743,58 @@ const plugin = {
         },
       },
       { name: 'totalreclaw_import_from' },
+    );
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_import_batch
+    // ---------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: 'totalreclaw_import_batch',
+        label: 'Import Batch',
+        description:
+          'Process one batch of a conversation import. Call repeatedly with increasing offset for large imports. ' +
+          'Each call parses the file, extracts facts from a slice of chunks, and stores them on-chain. ' +
+          'For imports with >50 chunks, use sessions_spawn to run this in the background.',
+        parameters: {
+          type: 'object',
+          properties: {
+            source: {
+              type: 'string',
+              enum: ['gemini', 'chatgpt', 'claude'],
+              description: 'Source system (gemini: Google Takeout HTML; chatgpt: conversations.json; claude: memory text)',
+            },
+            file_path: {
+              type: 'string',
+              description: 'Path to the source file on disk',
+            },
+            content: {
+              type: 'string',
+              description: 'File content (for text-based sources)',
+            },
+            offset: {
+              type: 'number',
+              description: 'Starting chunk index (0-based). Increment by batch_size for each call.',
+            },
+            batch_size: {
+              type: 'number',
+              description: 'Number of chunks to process per call (default 25)',
+            },
+          },
+          required: ['source'],
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            await requireFullSetup(api.logger);
+            return handleBatchImport(params, api.logger);
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            return { error: message };
+          }
+        },
+      },
+      { name: 'totalreclaw_import_batch' },
     );
 
     // ---------------------------------------------------------------
