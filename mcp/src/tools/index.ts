@@ -4,6 +4,7 @@ export { forgetToolDefinition, handleForget } from './forget.js';
 export { exportToolDefinition, handleExport } from './export.js';
 export { importToolDefinition, handleImport } from './import.js';
 export { importFromToolDefinition, handleImportFrom } from './import-from.js';
+export { importBatchToolDefinition, handleImportBatch } from './import-batch.js';
 export { consolidateToolDefinition, handleConsolidate } from './consolidate.js';
 export { statusToolDefinition, handleStatus } from './status.js';
 export { upgradeToolDefinition, handleUpgrade } from './upgrade.js';

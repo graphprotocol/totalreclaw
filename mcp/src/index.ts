@@ -18,6 +18,7 @@ import {
   exportToolDefinition,
   importToolDefinition,
   importFromToolDefinition,
+  importBatchToolDefinition,
   consolidateToolDefinition,
   handleRemember,
   handleRecall,
@@ -25,6 +26,7 @@ import {
   handleExport,
   handleImport,
   handleImportFrom,
+  handleImportBatch,
   handleConsolidate,
   statusToolDefinition,
   upgradeToolDefinition,
@@ -1585,6 +1587,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     exportToolDefinition,
     importToolDefinition,
     importFromToolDefinition,
+    importBatchToolDefinition,
     consolidateToolDefinition,
     statusToolDefinition,
     upgradeToolDefinition,
@@ -1829,6 +1832,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'totalreclaw_import_from':
         return await handleImportFrom(client, args);
+
+      case 'totalreclaw_import_batch':
+        return await handleImportBatch(args);
 
       case 'totalreclaw_consolidate': {
         const result = await handleConsolidate(client, args);

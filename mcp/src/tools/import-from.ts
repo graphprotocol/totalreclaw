@@ -74,8 +74,8 @@ export const importFromToolDefinition = {
     properties: {
       source: {
         type: 'string',
-        enum: ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'memoclaw', 'generic-json', 'generic-csv'],
-        description: 'The source system to import from (chatgpt: conversations.json or memory text; claude: memory text)',
+        enum: ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini', 'memoclaw', 'generic-json', 'generic-csv'],
+        description: 'The source system to import from (gemini: Google Takeout HTML; chatgpt: conversations.json or memory text; claude: memory text)',
       },
       api_key: {
         type: 'string',
@@ -172,7 +172,7 @@ export async function handleImportFrom(
   const startTime = Date.now();
 
   // Validate source
-  const validSources: ImportSource[] = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'memoclaw', 'generic-json', 'generic-csv'];
+  const validSources: ImportSource[] = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini', 'memoclaw', 'generic-json', 'generic-csv'];
   if (!input.source || !validSources.includes(input.source)) {
     return errorResponse(`Invalid source. Must be one of: ${validSources.join(', ')}`);
   }
