@@ -14,16 +14,16 @@
  *   1:  string id                    (wire type 2)
  *   2:  string timestamp             (wire type 2)
  *   3:  string owner                 (wire type 2)
- *   4:  bytes encrypted_blob         (wire type 2)
+ *   4:  bytes encrypted_blob         (wire type 2) — XChaCha20-Poly1305 encrypted
  *   5:  repeated string blind_indices (wire type 2)
  *   6:  double decay_score           (wire type 1)
  *   7:  bool is_active               (wire type 0)
  *   8:  int32 version                (wire type 0)
- *   9:  string source                (wire type 2)
+ *   9:  (removed — encrypted in blob v3)
  *  10:  string content_fp            (wire type 2) — HMAC-SHA256 content fingerprint
- *  11:  string agent_id              (wire type 2) — agent identifier
+ *  11:  (removed — encrypted in blob v3)
  *  12:  int64 sequence_id            (wire type 0) — monotonic per-user (varint)
- *  13:  string encrypted_embedding   (wire type 2) — AES-256-GCM encrypted embedding (hex)
+ *  13:  string encrypted_embedding   (wire type 2) — XChaCha20-Poly1305 encrypted embedding (hex)
  */
 
 import { Bytes, BigDecimal, BigInt } from "@graphprotocol/graph-ts";
@@ -37,9 +37,7 @@ export class DecodedFact {
   decayScore: BigDecimal;
   isActive: boolean;
   version: i32;
-  source: string;
   contentFp: string;
-  agentId: string;
   sequenceId: i64;
   encryptedEmbedding: string;
 
@@ -52,9 +50,7 @@ export class DecodedFact {
     this.decayScore = BigDecimal.zero();
     this.isActive = true;
     this.version = 0;
-    this.source = "";
     this.contentFp = "";
-    this.agentId = "";
     this.sequenceId = 0;
     this.encryptedEmbedding = "";
   }
@@ -151,12 +147,8 @@ export function decodeFact(data: Bytes): DecodedFact {
         let indices = fact.blindIndices;
         indices.push(sliceBytes.toString());
         fact.blindIndices = indices;
-      } else if (fieldNumber == 9) {
-        fact.source = sliceBytes.toString();
       } else if (fieldNumber == 10) {
         fact.contentFp = sliceBytes.toString();
-      } else if (fieldNumber == 11) {
-        fact.agentId = sliceBytes.toString();
       } else if (fieldNumber == 13) {
         fact.encryptedEmbedding = sliceBytes.toString();
       }

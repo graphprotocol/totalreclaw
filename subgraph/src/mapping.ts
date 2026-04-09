@@ -2,7 +2,7 @@
  * Subgraph mapping for EventfulDataEdge.
  *
  * Handles Log(bytes) events emitted by the EventfulDataEdge contract.
- * Each event contains an encrypted Protobuf-serialized TotalReclawFact.
+ * Each event contains an XChaCha20-Poly1305 encrypted Protobuf-serialized TotalReclawFact (v3).
  * The mapping extracts metadata fields and stores them as Fact records
  * with inverted BlindIndex entities for efficient hash_in queries.
  *
@@ -117,9 +117,7 @@ export function handleLog(event: Log): void {
   fact!.decayScore = decoded.decayScore;
   fact!.isActive = decoded.decayScore.ge(INACTIVE_THRESHOLD);
   fact!.contentFp = decoded.contentFp;
-  fact!.agentId = decoded.agentId;
   fact!.version = decoded.version;
-  fact!.source = decoded.source;
   fact!.blockNumber = event.block.number;
   fact!.timestamp = event.block.timestamp;
   fact!.txHash = event.transaction.hash;

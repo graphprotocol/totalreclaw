@@ -1,15 +1,15 @@
 """
-TotalReclaw Subgraph Schema v2
-Key change: BlindIndex entities for efficient hash_in queries.
+TotalReclaw Subgraph Schema v3
+Key change: agentId and source removed — now encrypted inside blob (v3 privacy).
 """
 
 type Fact @entity(immutable: false) {
   id: ID!
   "Smart Account address (owner of this fact)"
   owner: Bytes!
-  "AES-256-GCM encrypted Protobuf blob"
+  "XChaCha20-Poly1305 encrypted blob (contains text + agentId + source)"
   encryptedBlob: Bytes!
-  "AES-256-GCM encrypted embedding vector (1024-dim Qwen3-Embedding-0.6B). Nullable for v1 facts."
+  "XChaCha20-Poly1305 encrypted embedding vector (640d Harrier). Nullable for v1/v2 facts."
   encryptedEmbedding: String
   "Decay score (0.0-1.0). Facts below 0.3 are considered inactive."
   decayScore: BigDecimal!
@@ -19,12 +19,8 @@ type Fact @entity(immutable: false) {
   contentFp: String!
   "Monotonic sequence ID for delta sync"
   sequenceId: BigInt!
-  "Agent identifier for multi-agent scenarios"
-  agentId: String!
   "Protobuf schema version"
   version: Int!
-  "Source: conversation, pre_compaction, explicit, recovery"
-  source: String!
   "Block number when this fact was written"
   blockNumber: BigInt!
   "Block timestamp"
