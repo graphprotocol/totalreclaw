@@ -457,18 +457,30 @@ Process one batch of a large conversation import. Call repeatedly with increasin
 
 **When to use:** For large imports (>50 chunks as reported by dry-run). For smaller imports, `totalreclaw_import_from` handles everything in one call.
 
-**Background import pattern (for large files):**
-1. Run `totalreclaw_import_from` with `dry_run=true` to get chunk count and estimate
-2. If >50 chunks, use `sessions_spawn` to run a background worker:
+**Import workflow (for the agent):**
+
+When the user asks to import conversation history:
+
+1. ALWAYS call `totalreclaw_import_from` with `dry_run=true` first
+2. Show the estimate to the user (conversations, estimated facts, time)
+3. Ask for confirmation
+4. If confirmed AND total_chunks <= 50: call `totalreclaw_import_from` without dry_run
+5. If confirmed AND total_chunks > 50: spawn a background worker:
+
+   Use `sessions_spawn` with this task:
    ```
    sessions_spawn({
-     task: "Import worker: call totalreclaw_import_batch repeatedly with source=gemini, file_path=/path/to/file.html. Start at offset=0, batch_size=25. Keep calling with offset+=25 until is_complete=true. Report final summary.",
-     label: "Gemini Import",
+     task: "You are a TotalReclaw import worker. Process the file at [FILE_PATH] using totalreclaw_import_batch with source=[SOURCE]. Start at offset=0 with batch_size=25. After each batch completes, immediately call the next batch with offset incremented by 25. Continue until the response contains is_complete=true. After all batches complete, report the total facts stored.",
+     label: "[SOURCE] Import",
      runTimeoutSeconds: 0
    })
    ```
-3. Report to user: "Importing in the background. Ask 'how's my import?' for progress."
-4. Check progress via `sessions_history` on the spawned session
+
+   Then tell the user: "I'm importing your [SOURCE] history in the background.
+   You can keep chatting normally. Ask 'how's my import going?' for a status update."
+
+6. When the user asks about import progress: use `sessions_history` on the
+   spawned session to read the latest batch result and report progress.
 
 ---
 
@@ -628,10 +640,12 @@ Use when:
 #### totalreclaw_import_from
 
 Use when:
-- The user mentions migrating from Mem0, MCP Memory Server, ChatGPT, Claude, or another AI memory tool
+- The user mentions importing from Gemini, ChatGPT, Claude, or another AI tool
+- The user provides an export file or mentions Google Takeout
+- The user asks about migrating memories from another service
+- The user mentions migrating from Mem0, MCP Memory Server, or another AI memory tool
 - The user wants to import memories from a file or API
 - The user asks to consolidate memories from multiple tools
-- The user mentions ChatGPT memories, conversations export, or Claude memory
 
 Always run with `dry_run=true` first and show the preview before importing. API keys are used in-memory only and never stored.
 

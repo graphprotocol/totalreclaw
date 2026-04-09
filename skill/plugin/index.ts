@@ -1514,18 +1514,31 @@ async function handlePluginImportFrom(
     // Dry run: report what was parsed (chunks or facts)
     if (params.dry_run) {
       if (hasChunks) {
+        const totalChunks = parseResult.chunks.length;
+        const EXTRACTION_RATIO = 2.5; // avg facts per chunk, from empirical data
+        const BATCH_SIZE = 25;
+        const SECONDS_PER_BATCH = 45; // ~30s extraction + ~15s embed+store
+        const estimatedFacts = Math.round(totalChunks * EXTRACTION_RATIO);
+        const estimatedBatches = Math.ceil(totalChunks / BATCH_SIZE);
+        const estimatedMinutes = Math.ceil(estimatedBatches * SECONDS_PER_BATCH / 60);
+
         return {
           success: true,
           dry_run: true,
           source,
-          total_chunks: parseResult.chunks.length,
+          total_chunks: totalChunks,
           total_messages: parseResult.totalMessages,
+          estimated_facts: estimatedFacts,
+          estimated_batches: estimatedBatches,
+          estimated_minutes: estimatedMinutes,
+          batch_size: BATCH_SIZE,
+          use_background: totalChunks > 50,
           preview: parseResult.chunks.slice(0, 5).map((c) => ({
             title: c.title,
             messages: c.messages.length,
             first_message: c.messages[0]?.text.slice(0, 100),
           })),
-          note: 'Chunks will be processed through LLM extraction (same quality as auto-extraction).',
+          note: `Estimated ${estimatedFacts} facts from ${totalChunks} chunks (~${estimatedMinutes} min).${totalChunks > 50 ? ' Recommended: background import via sessions_spawn.' : ''}`,
           warnings: parseResult.warnings,
         };
       }
