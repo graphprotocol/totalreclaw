@@ -19,7 +19,7 @@ export type { KeyDerivationParams } from './kdf';
 export {
   encrypt,
   decrypt,
-} from './aes';
+} from './cipher';
 
 export {
   generateBlindIndices,

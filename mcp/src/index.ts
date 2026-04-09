@@ -429,7 +429,7 @@ async function saveCredentials(path: string, credentials: { userId: string; salt
 /**
  * Encrypt an embedding vector for on-chain storage.
  *
- * Concatenates the float array into a Buffer, encrypts with AES-256-GCM,
+ * Concatenates the float array into a Buffer, encrypts with XChaCha20-Poly1305,
  * and returns base64. The subgraph stores this as a string field.
  */
 function encryptEmbedding(embedding: number[], encryptionKey: Buffer): string {

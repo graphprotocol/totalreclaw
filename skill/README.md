@@ -43,7 +43,7 @@ Most AI memory solutions force a tradeoff: **good recall OR privacy**. TotalRecl
 
 | | Recall@8 | Privacy | Encryption | Portable Export |
 |---|:---:|:---:|:---:|:---:|
-| **TotalReclaw (E2EE)** | **98.1%** | **100%** | AES-256-GCM | Yes |
+| **TotalReclaw (E2EE)** | **98.1%** | **100%** | XChaCha20-Poly1305 | Yes |
 | Plaintext vector search | 99.2% | 0% | None | Varies |
 | Mem0 (hosted) | ~95% | 0% | At-rest only | No |
 | Native OpenClaw QMD | ~90% | 50% | Partial | No |
@@ -52,7 +52,7 @@ Most AI memory solutions force a tradeoff: **good recall OR privacy**. TotalRecl
 
 ### Key Differentiators
 
-- **True end-to-end encryption**: AES-256-GCM encryption, Argon2id key derivation, HKDF-SHA256 auth. The server is cryptographically unable to read your memories.
+- **True end-to-end encryption**: XChaCha20-Poly1305 encryption, Argon2id key derivation, HKDF-SHA256 auth. The server is cryptographically unable to read your memories.
 - **Near-plaintext recall**: LSH blind indices with client-side BM25 + cosine + RRF reranking achieve 98.1% recall@8.
 - **No vendor lock-in**: One-click plaintext export in JSON or Markdown. Your data is always yours.
 - **Works everywhere**: Any MCP-compatible AI agent, not just OpenClaw.
@@ -61,7 +61,7 @@ Most AI memory solutions force a tradeoff: **good recall OR privacy**. TotalRecl
 
 ## Features
 
-- **End-to-End Encryption**: AES-256-GCM ensures the server never sees plaintext memories
+- **End-to-End Encryption**: XChaCha20-Poly1305 ensures the server never sees plaintext memories
 - **Intelligent Extraction**: Automatically extracts facts, preferences, and decisions from conversations
 - **Semantic Search**: LSH blind indices with client-side BM25 + cosine + RRF fusion reranking
 - **Lifecycle Hooks**: Seamlessly integrates with OpenClaw's agent lifecycle
@@ -315,7 +315,7 @@ All cryptographic operations are powered by [`@totalreclaw/core`](https://www.np
 TotalReclaw uses end-to-end encryption:
 
 1. **Key Derivation**: Recovery phrase is processed through Argon2id to derive encryption keys. The phrase is never sent to the server.
-2. **Encryption**: All memories are encrypted client-side using AES-256-GCM before transmission.
+2. **Encryption**: All memories are encrypted client-side using XChaCha20-Poly1305 before transmission.
 3. **Search**: LSH blind indices (SHA-256 hashed) enable server-side search without exposing plaintext.
 4. **Decryption**: Memories are decrypted client-side after retrieval.
 5. **Authentication**: HKDF-SHA256 for authentication tokens.

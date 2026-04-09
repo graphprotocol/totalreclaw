@@ -5,7 +5,7 @@
  * signatures as the previous pure-TS implementation so callers don't
  * need to change.
  *
- * The WASM module handles BIP-39 key derivation, AES-256-GCM encrypt/
+ * The WASM module handles BIP-39 key derivation, XChaCha20-Poly1305 encrypt/
  * decrypt, SHA-256 blind indices, HMAC-SHA256 content fingerprints,
  * and LSH seed derivation.
  *
@@ -165,21 +165,21 @@ export function computeAuthKeyHash(authKey: Buffer): string {
 }
 
 // ---------------------------------------------------------------------------
-// AES-256-GCM Encrypt / Decrypt
+// XChaCha20-Poly1305 Encrypt / Decrypt
 // ---------------------------------------------------------------------------
 
 /**
- * Encrypt a UTF-8 plaintext string with AES-256-GCM.
+ * Encrypt a UTF-8 plaintext string with XChaCha20-Poly1305.
  *
  * Wire format (base64-encoded):
- *   [iv: 12 bytes][tag: 16 bytes][ciphertext: variable]
+ *   [nonce: 24 bytes][tag: 16 bytes][ciphertext: variable]
  */
 export function encrypt(plaintext: string, encryptionKey: Buffer): string {
   return wasm.encrypt(plaintext, encryptionKey.toString('hex'));
 }
 
 /**
- * Decrypt a base64-encoded AES-256-GCM blob back to a UTF-8 string.
+ * Decrypt a base64-encoded XChaCha20-Poly1305 blob back to a UTF-8 string.
  */
 export function decrypt(encryptedBase64: string, encryptionKey: Buffer): string {
   return wasm.decrypt(encryptedBase64, encryptionKey.toString('hex'));

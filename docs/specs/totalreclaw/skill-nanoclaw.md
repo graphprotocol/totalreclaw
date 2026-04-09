@@ -336,7 +336,7 @@ adds:
 
 | Component | Path | Reusability | Notes |
 |-----------|------|-------------|-------|
-| AES-256-GCM | `/client/src/crypto/aes.ts` | **Direct** | None |
+| XChaCha20-Poly1305 | `/client/src/crypto/cipher.ts` | **Direct** | None |
 | Blind Indices | `/client/src/crypto/blind.ts` | **Direct** | None |
 | LSH Index | `/client/src/lsh/` | **Direct** | None |
 | ONNX Embedding | `/client/src/embedding/` | **Direct** | onnxruntime-node works in containers |
@@ -400,7 +400,7 @@ export interface NanoClawContext {
 
 | Component | Source | Reusability | Effort |
 |-----------|--------|-------------|--------|
-| AES encryption | `/client/src/crypto/aes.ts` | Direct | None |
+| XChaCha20-Poly1305 encryption | `/client/src/crypto/cipher.ts` | Direct | None |
 | Blind indices | `/client/src/crypto/blind.ts` | Direct | None |
 | LSH hashing | `/client/src/lsh/` | Direct | None |
 | Embedding generation | `/client/src/embedding/` | Direct | None |
@@ -1097,7 +1097,7 @@ TOTALRECLAW_MAX_CONTEXT=8
 
 ```
 /workspace/group/.totalreclaw/
-+-- credentials.enc    # Encrypted credentials (AES-256-GCM)
++-- credentials.enc    # Encrypted credentials (XChaCha20-Poly1305)
 +-- config.json        # Non-sensitive config (server URL, etc.)
 +-- salt.bin           # Argon2 salt for key derivation
 ```

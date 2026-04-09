@@ -333,7 +333,7 @@ Layer 6: Sampling for extraction      → Server-side fact extraction (where sup
 │    └─ totalreclaw_save      (batch store from conversation)      │
 │                                                                  │
 │  Internal:                                                       │
-│    ├─ E2EE crypto (AES-256-GCM, HKDF, blind indices)           │
+│    ├─ E2EE crypto (XChaCha20-Poly1305, HKDF, blind indices)    │
 │    ├─ LSH + embeddings (local Harrier-OSS-v1-270M)             │
 │    ├─ BM25 + cosine + RRF reranker                             │
 │    └─ TotalReclaw server client (HTTP)                           │

@@ -744,7 +744,7 @@
                         "type": "string",
                         "maxLength": 2097152,
                         "title": "Encrypted Blob",
-                        "description": "Hex-encoded AES-256-GCM ciphertext"
+                        "description": "Hex-encoded XChaCha20-Poly1305 ciphertext"
                     },
                     "blind_indices": {
                         "items": {

@@ -78,7 +78,7 @@ Client serializes to Uint8Array → sends as calldata in UserOp.
 ## 4. Client-Side Flow (OpenClaw Skill)
 On every store / update / decay / eviction:
 
-1. Encrypt payload (AES-256-GCM with seed-derived key).
+1. Encrypt payload (XChaCha20-Poly1305 with seed-derived key).
 2. Serialize to Protobuf.
 3. Build ERC-4337 UserOperation (target = EventfulDataEdge address, calldata = encrypted bytes).
 4. POST to your server /relay endpoint (simple JSON, no wallet UI).

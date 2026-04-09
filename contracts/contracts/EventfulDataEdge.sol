@@ -8,7 +8,7 @@ pragma solidity ^0.8.24;
  * Any call to this contract (via fallback) emits a Log(bytes) event containing
  * the raw calldata. The subgraph indexes these events.
  *
- * Writes are permissionless — all payloads are AES-256-GCM encrypted, so there
+ * Writes are permissionless — all payloads are XChaCha20-Poly1305 encrypted, so there
  * is no confidentiality risk from open writes. The subgraph filters events by
  * the `owner` field in the protobuf payload, ensuring each user only sees their
  * own data. Billing/quota enforcement happens at the relay API layer.
@@ -46,7 +46,7 @@ contract EventfulDataEdge {
      *      EntryPoint validates UserOp signature -> Smart Account ->
      *      Smart Account calls this contract -> fallback() emits Log(calldata).
      *
-     *      Security: payloads are E2E encrypted (AES-256-GCM). The server/relay
+     *      Security: payloads are E2E encrypted (XChaCha20-Poly1305). The server/relay
      *      never sees plaintext. Quota enforcement is at the relay API layer.
      */
     fallback() external payable {

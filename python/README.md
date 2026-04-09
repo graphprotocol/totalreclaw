@@ -6,7 +6,7 @@ Store, search, and recall memories across any AI agent with zero-knowledge encry
 
 ## Features
 
-- **End-to-end encrypted** -- AES-256-GCM encryption, HKDF key derivation from BIP-39 mnemonic
+- **End-to-end encrypted** -- XChaCha20-Poly1305 encryption, HKDF key derivation from BIP-39 mnemonic
 - **Portable** -- Same recovery phrase works across Hermes, OpenClaw, Claude Desktop, IronClaw
 - **Local embeddings** -- Harrier-OSS-v1-270M runs on-device (no API calls)
 - **Hybrid search** -- BM25 + cosine similarity + RRF reranking
@@ -101,7 +101,7 @@ The plugin registers automatically with Hermes Agent v0.5.0+. See the [Hermes se
 ## Architecture
 
 ```
-Plaintext → AES-256-GCM encrypt → Blind indices (SHA-256) → LSH buckets → On-chain via relay
+Plaintext → XChaCha20-Poly1305 encrypt → Blind indices (SHA-256) → LSH buckets → On-chain via relay
                                                                               ↓
 Query → Blind trapdoors → GraphQL search → Decrypt candidates → BM25+Cosine+RRF rerank → Top 8
 ```
@@ -113,7 +113,7 @@ All encryption happens client-side. The relay server and on-chain storage never 
 This Python client produces byte-for-byte identical outputs to the TypeScript implementation (`@totalreclaw/mcp-server`):
 
 - Key derivation (HKDF-SHA256)
-- AES-256-GCM wire format (iv || tag || ciphertext)
+- XChaCha20-Poly1305 wire format (nonce || tag || ciphertext)
 - Blind indices (SHA-256 + Porter stemming)
 - Content fingerprints (HMAC-SHA256)
 - LSH bucket hashes (32-bit x 20 tables)

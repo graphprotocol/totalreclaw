@@ -107,7 +107,7 @@
 
 Every client must implement this pipeline identically:
 
-1. **Encrypt** plaintext with AES-256-GCM → base64 → hex for protobuf
+1. **Encrypt** plaintext with XChaCha20-Poly1305 → base64 → hex for protobuf
 2. **Generate blind indices** — SHA-256 of lowercase tokens + Porter stems
 3. **Generate LSH bucket hashes** — if embedding available (32-bit × 20 tables)
 4. **Generate content fingerprint** — HMAC-SHA256(dedupKey, normalizeText(text))

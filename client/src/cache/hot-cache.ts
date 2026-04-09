@@ -5,7 +5,7 @@
  * auto-recall on conversation start. Also caches fact count, last-synced
  * block number, and Smart Account address.
  *
- * File format: [iv:12][tag:16][ciphertext] (AES-256-GCM)
+ * File format: [nonce:24][tag:16][ciphertext] (XChaCha20-Poly1305)
  * Default location: ~/.totalreclaw/cache.enc
  */
 

@@ -222,13 +222,13 @@ class Database:
         Args:
             fact_id: UUIDv7 fact identifier
             user_id: Owner's user ID
-            encrypted_blob: AES-256-GCM ciphertext
+            encrypted_blob: XChaCha20-Poly1305 ciphertext
             blind_indices: List of SHA-256 hashes
             decay_score: Initial importance score
             source: Origin of fact (conversation, explicit, etc.)
             content_fp: HMAC-SHA256 content fingerprint for dedup (v0.3.1b)
             agent_id: Identifier of the creating agent (v0.3.1b)
-            encrypted_embedding: AES-256-GCM encrypted embedding, hex-encoded (PoC v2)
+            encrypted_embedding: XChaCha20-Poly1305 encrypted embedding, hex-encoded (PoC v2)
 
         Returns:
             Created Fact object

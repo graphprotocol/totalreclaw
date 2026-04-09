@@ -128,7 +128,7 @@ The MCP server provides a prompt fragment to inject:
 const SYSTEM_PROMPT_FRAGMENT = `
 ## TotalReclaw: Your Encrypted Memory Vault
 
-You have access to an end-to-end encrypted memory system. The server never sees your memories in plaintext - everything is encrypted client-side with AES-256-GCM.
+You have access to an end-to-end encrypted memory system. The server never sees your memories in plaintext - everything is encrypted client-side with XChaCha20-Poly1305.
 
 ### Available Tools
 

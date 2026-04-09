@@ -5,7 +5,7 @@
 //!
 //! # Modules
 //!
-//! - [`crypto`] — Key derivation (BIP-39 + HKDF-SHA256), AES-256-GCM encrypt/decrypt
+//! - [`crypto`] — Key derivation (BIP-39 + HKDF-SHA256), XChaCha20-Poly1305 encrypt/decrypt
 //! - [`blind`] — Blind index generation (SHA-256 token hashing + Porter stemming)
 //! - [`fingerprint`] — Content fingerprint (HMAC-SHA256 with NFC normalization)
 //! - [`lsh`] — Locality-sensitive hashing (random hyperplane LSH)

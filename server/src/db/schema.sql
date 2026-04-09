@@ -38,7 +38,7 @@ CREATE INDEX idx_events_user ON raw_events(user_id, created_at DESC);
 
 -- ============ Facts Table ============
 -- Mutable view of memory facts
--- encrypted_blob contains AES-256-GCM ciphertext (doc + embedding + metadata)
+-- encrypted_blob contains XChaCha20-Poly1305 ciphertext (doc + embedding + metadata)
 -- blind_indices is an array of SHA-256 hashes for blind search
 
 CREATE TABLE facts (

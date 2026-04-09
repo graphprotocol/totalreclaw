@@ -38,7 +38,7 @@ After setup, the agent is on the free tier: 500 memories per month, unlimited re
 
 All encryption happens inside the MCP server process -- the TotalReclaw server only sees ciphertext and hashed tokens:
 
-- Facts encrypted with AES-256-GCM before leaving the container
+- Facts encrypted with XChaCha20-Poly1305 before leaving the container
 - Search uses blind indices (SHA-256 hashes), not plaintext
 - Recovery phrase derives all keys via BIP-39 seed + HKDF (managed service) or Argon2id + HKDF (self-hosted)
 - With the managed service, encrypted facts are stored on-chain (Gnosis Chain) and indexed by The Graph

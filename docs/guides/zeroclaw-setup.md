@@ -55,7 +55,7 @@ Your memories are always E2E encrypted at rest. The embedding choice only affect
 ## How It Works
 
 ```
-Your text → AES-256-GCM encrypt → Blind indices (SHA-256) + LSH buckets
+Your text → XChaCha20-Poly1305 encrypt → Blind indices (SHA-256) + LSH buckets
   → Protobuf encode → On-chain via relay → The Graph subgraph
 ```
 

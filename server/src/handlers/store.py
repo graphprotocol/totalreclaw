@@ -29,7 +29,7 @@ class FactJSON(BaseModel):
     """JSON representation of a fact."""
     id: str = Field(..., description="UUIDv7 fact identifier")
     timestamp: str = Field(..., description="ISO 8601 timestamp")
-    encrypted_blob: str = Field(..., description="Hex-encoded AES-256-GCM ciphertext", max_length=2097152)  # 2MB hex = 1MB binary
+    encrypted_blob: str = Field(..., description="Hex-encoded XChaCha20-Poly1305 ciphertext", max_length=2097152)  # 2MB hex = 1MB binary
     blind_indices: List[str] = Field(..., description="List of SHA-256 hashes for blind search", max_length=1000)
     decay_score: float = Field(1.0, description="Importance score", ge=0.0, le=10.0)
     is_active: bool = Field(True, description="Whether fact is active")
@@ -39,7 +39,7 @@ class FactJSON(BaseModel):
     content_fp: Optional[str] = Field(None, description="HMAC-SHA256 content fingerprint for dedup")
     agent_id: Optional[str] = Field(None, description="Identifier of the creating agent")
     # PoC v2 fields (LSH + reranking)
-    encrypted_embedding: Optional[str] = Field(None, description="Hex-encoded AES-256-GCM encrypted embedding vector", max_length=2097152)
+    encrypted_embedding: Optional[str] = Field(None, description="Hex-encoded XChaCha20-Poly1305 encrypted embedding vector", max_length=2097152)
 
 
 class StoreRequestJSON(BaseModel):

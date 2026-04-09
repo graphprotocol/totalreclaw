@@ -46,7 +46,7 @@ const keyDerivation = {
 const lshSeed = deriveLshSeed(TEST_MNEMONIC, keys.salt);
 const lshSeedHex = Buffer.from(lshSeed).toString('hex');
 
-// 3. AES-256-GCM
+// 3. XChaCha20-Poly1305
 const testPlaintext = 'The user prefers dark mode in all applications.';
 const fixedIv = Buffer.alloc(12, 0);
 

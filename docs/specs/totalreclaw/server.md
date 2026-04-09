@@ -62,7 +62,7 @@ Last updated: 2026-02-24
 │       └──► HKDF(pw, salt, "enc") ──► encryption_key             │
 │                   │                                              │
 │                   ▼                                              │
-│            AES-256-GCM Encrypt                                   │
+│            XChaCha20-Poly1305 Encrypt                             │
 │                   │                                              │
 │                   ▼                                              │
 │            Protobuf Request                                      │
@@ -99,7 +99,7 @@ message TotalReclawFact {
   string id = 1;                    // UUIDv7 (time-sortable)
   string timestamp = 2;             // ISO 8601
   string owner = 3;                 // user_id from auth
-  string encrypted_blob = 4;        // Base64 of AES-256-GCM (doc + embedding + metadata)
+  string encrypted_blob = 4;        // Base64 of XChaCha20-Poly1305 (doc + embedding + metadata)
   repeated string blind_indices = 5; // SHA-256(token) + SHA-256(LSH bucket)
   float decay_score = 6;
   bool is_active = 7;

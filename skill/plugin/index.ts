@@ -16,7 +16,7 @@
  * Also registers a `before_agent_start` hook that automatically injects
  * relevant memories into the agent's context.
  *
- * All data is encrypted client-side with AES-256-GCM. The server never
+ * All data is encrypted client-side with XChaCha20-Poly1305. The server never
  * sees plaintext.
  */
 

@@ -1,6 +1,6 @@
 # TotalReclaw: Your Encrypted Memory Vault
 
-You have access to an end-to-end encrypted memory system via the `totalreclaw` MCP server. The server never sees your memories in plaintext — everything is encrypted client-side with AES-256-GCM before leaving the container.
+You have access to an end-to-end encrypted memory system via the `totalreclaw` MCP server. The server never sees your memories in plaintext — everything is encrypted client-side with XChaCha20-Poly1305 before leaving the container.
 
 ## Available Tools
 
@@ -71,7 +71,7 @@ Call `mcp__totalreclaw__totalreclaw_export` when:
 
 ## Privacy
 
-Your memories are end-to-end encrypted with AES-256-GCM. The TotalReclaw server only sees:
+Your memories are end-to-end encrypted with XChaCha20-Poly1305. The TotalReclaw server only sees:
 - Encrypted blobs (ciphertext)
 - Blind indices (SHA-256 hashes of tokens, not the tokens themselves)
 - Content fingerprints (HMAC-SHA256 for dedup, not the content itself)

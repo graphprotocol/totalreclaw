@@ -145,7 +145,7 @@ The agent periodically extracts atomic facts from conversations across 7 categor
 - **Context** ("the project uses PostgreSQL")
 - **Summary** ("today we discussed the migration plan")
 
-Each fact is encrypted with AES-256-GCM before leaving the container. The server stores only ciphertext.
+Each fact is encrypted with XChaCha20-Poly1305 before leaving the container. The server stores only ciphertext.
 
 ### Namespaces
 
@@ -236,7 +236,7 @@ To upgrade, ask the agent: *"How do I upgrade TotalReclaw?"*
 - The recovery phrase derives all encryption keys. **Never share it** or commit it to version control.
 - Use secrets management (Docker secrets, platform secret store) rather than plaintext `.env` files in production.
 - The TotalReclaw server never sees plaintext data. Even if the server is compromised, your memories remain encrypted.
-- All encryption uses AES-256-GCM. Key derivation uses BIP-39 seed + HKDF-SHA256.
+- All encryption uses XChaCha20-Poly1305. Key derivation uses BIP-39 seed + HKDF-SHA256.
 
 ---
 

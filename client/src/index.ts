@@ -44,7 +44,7 @@ import {
 } from './types';
 import { deriveKeys, generateSalt, createAuthProof } from './crypto';
 import type { KeyDerivationParams } from './crypto';
-import { encrypt, decrypt } from './crypto/aes';
+import { encrypt, decrypt } from './crypto/cipher';
 import { generateBlindIndices, generateTrapdoors } from './crypto/blind';
 import { LSHHasher, mergeLSHConfig } from './lsh';
 import { deriveLshSeed } from './crypto/seed';

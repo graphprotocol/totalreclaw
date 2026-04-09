@@ -1,7 +1,7 @@
 /**
  * Hot cache wrapper for the plugin.
  *
- * Self-contained AES-256-GCM encrypted cache (same implementation as
+ * Self-contained XChaCha20-Poly1305 encrypted cache (same implementation as
  * client/src/cache/hot-cache.ts but without cross-package import).
  */
 

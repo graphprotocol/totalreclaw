@@ -80,7 +80,7 @@ The agent will show your tier, usage count, and storage mode.
 
 All encryption happens **inside the MCP server process** running in the NanoClaw container:
 
-- Facts are encrypted with AES-256-GCM before leaving the container
+- Facts are encrypted with XChaCha20-Poly1305 before leaving the container
 - Search uses blind indices (SHA-256 hashes) -- the server never sees your queries
 - The recovery phrase derives all keys via Argon2id + HKDF
 - With the managed service, encrypted facts are stored on-chain (Gnosis Chain) and indexed by The Graph
@@ -151,7 +151,7 @@ NanoClaw Container
 |           v                               |
 |  +-------------------------------------+ |
 |  | @totalreclaw/mcp-server (stdio)     | |
-|  | - AES-256-GCM encryption            | |
+|  | - XChaCha20-Poly1305 encryption            | |
 |  | - Blind index generation            | |
 |  | - Local embedding + re-ranking      | |
 |  +-------------------------------------+ |

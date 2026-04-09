@@ -597,7 +597,7 @@ section('Auth key hash (SHA-256)');
 // Test 11: Cross-encryption verification
 // Encrypt with one implementation's key, decrypt with the other's.
 // Since we proved the keys are identical (Test 3), this is a functional
-// sanity check that the AES-256-GCM encrypt/decrypt works with the derived keys.
+// sanity check that the XChaCha20-Poly1305 encrypt/decrypt works with the derived keys.
 // ---------------------------------------------------------------------------
 
 section('Cross-encryption with derived keys');

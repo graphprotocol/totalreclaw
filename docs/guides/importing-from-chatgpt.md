@@ -107,7 +107,7 @@ This parses your data and shows a preview of the first 10 facts without storing 
 Imported memories behave identically to natively stored ones:
 
 - **Searchable immediately** via `totalreclaw_recall`
-- **Encrypted** with your recovery phrase (AES-256-GCM)
+- **Encrypted** with your recovery phrase (XChaCha20-Poly1305)
 - **Tagged** with `import_source:chatgpt` for filtering
 - **Deduplicated** -- re-importing the same data skips duplicates automatically
 

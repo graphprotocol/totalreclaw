@@ -24,7 +24,7 @@ TotalReclaw is an end-to-end encrypted memory vault for AI agents. The project p
 | Component | Description | Tests |
 |-----------|-------------|-------|
 | Server | FastAPI + PostgreSQL, HKDF auth, blind index search, content dedup, /sync endpoint | 142 |
-| TypeScript client library | Argon2id KDF, AES-256-GCM, LSH buckets, BM25+cosine+RRF reranking, fingerprint dedup, sync client | 180 |
+| TypeScript client library | Argon2id KDF, XChaCha20-Poly1305, LSH buckets, BM25+cosine+RRF reranking, fingerprint dedup, sync client | 180 |
 | OpenClaw skill | Lifecycle hooks, fact extraction, export, host LLM injection | 309 |
 | NanoClaw skill + generic MCP server | 5 MCP tools, 3 hooks | 59 |
 | Python client library (`totalreclaw`) | E2EE crypto, LSH, embeddings, reranking, relay, UserOps | 209 |
@@ -325,7 +325,7 @@ Support hosted AI agents (IronClaw / NEAR AI Cloud, Windsurf, etc.) that cannot 
 
 **Thin HTTP MCP (Tier 1):** 3 server-side-safe tools (`totalreclaw_status`, `totalreclaw_upgrade`, `totalreclaw_recall_encrypted`). Relay authenticates via API key mapped to wallet address. No mnemonic on relay. Any hosted agent can connect via HTTPS URL + Bearer token.
 
-**Client in TEE (Tier 2):** Full 10-tool E2EE. Mnemonic stored in IronClaw's encrypted credential vault (AES-256-GCM, TEE-protected). `@totalreclaw/mcp-server` runs as stdio process inside the TEE, reads mnemonic from env var. Architecturally identical to local stdio model, but hardware-isolated.
+**Client in TEE (Tier 2):** Full 10-tool E2EE. Mnemonic stored in IronClaw's encrypted credential vault (XChaCha20-Poly1305, TEE-protected). `@totalreclaw/mcp-server` runs as stdio process inside the TEE, reads mnemonic from env var. Architecturally identical to local stdio model, but hardware-isolated.
 
 | Task | Description | Effort | Status |
 |------|-------------|--------|--------|
@@ -501,13 +501,13 @@ Encrypted local SQLite read cache in front of on-chain storage, specifically for
 - On-chain data remains source of truth; local SQLite is a read-through cache
 - Leverages ZeroClaw's existing SQLite infrastructure (reuse their DB layer)
 - Enables offline reads — the biggest UX weakness of the managed service
-- Same AES-256-GCM encryption for the local cache (keys never touch disk unencrypted)
+- Same XChaCha20-Poly1305 encryption for the local cache (keys never touch disk unencrypted)
 
 This makes ZeroClaw the best TotalReclaw platform: native Rust performance + encrypted local cache + on-chain portability.
 
 | Component | Description | Status |
 |-----------|-------------|--------|
-| Local encrypted cache | SQLite with AES-256-GCM encrypted facts | NOT DONE |
+| Local encrypted cache | SQLite with XChaCha20-Poly1305 encrypted facts | NOT DONE |
 | Read-through on recall | Check cache before subgraph query | NOT DONE |
 | Write-through on store | Cache locally after on-chain confirm | NOT DONE |
 | Startup sync | Pull new facts from subgraph on init | NOT DONE |

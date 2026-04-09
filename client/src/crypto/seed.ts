@@ -8,7 +8,7 @@
  * The user's 12-word mnemonic is the ONLY secret. From it we derive:
  *   1. A private key (for signing UserOperations)
  *   2. An EOA address (the owner of the Smart Account)
- *   3. An encryption key (for AES-256-GCM)
+ *   3. An encryption key (for XChaCha20-Poly1305)
  *   4. An auth key (for HMAC operations)
  *   5. A dedup key (for content fingerprinting)
  *   6. A Smart Account address (deterministic ERC-4337 address)
@@ -51,7 +51,7 @@ export interface SeedDerivedKeys {
   privateKey: Buffer;
   /** Ethereum EOA address (checksummed hex) -- the Smart Account owner */
   eoaAddress: string;
-  /** 32-byte encryption key for AES-256-GCM */
+  /** 32-byte encryption key for XChaCha20-Poly1305 */
   encryptionKey: Buffer;
   /** 32-byte auth key for HMAC operations */
   authKey: Buffer;
@@ -135,7 +135,7 @@ export function deriveLshSeed(mnemonic: string): Uint8Array {
  * keys needed for TotalReclaw operations:
  *   - privateKey: for signing ERC-4337 UserOperations
  *   - eoaAddress: the EOA that owns the Smart Account
- *   - encryptionKey: for AES-256-GCM encryption
+ *   - encryptionKey: for XChaCha20-Poly1305 encryption
  *   - authKey: for HMAC authentication
  *   - dedupKey: for content fingerprinting
  *   - salt: deterministic salt from seed

@@ -1,4 +1,4 @@
-//! Key derivation and AES-256-GCM encryption.
+//! Key derivation and XChaCha20-Poly1305 encryption.
 //!
 //! Delegates to `totalreclaw_core::crypto` — the canonical implementation.
 //! Re-exports all public items for backward compatibility.

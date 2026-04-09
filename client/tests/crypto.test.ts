@@ -12,7 +12,7 @@ import {
   createAuthProof,
   verifyAuthProof,
 } from '../src/crypto/kdf';
-import { encrypt, decrypt } from '../src/crypto/aes';
+import { encrypt, decrypt } from '../src/crypto/cipher';
 import {
   tokenize,
   sha256Hash,
@@ -114,7 +114,7 @@ describe('Crypto Module', () => {
     });
   });
 
-  describe('AES-256-GCM Encryption (base64 wire format)', () => {
+  describe('XChaCha20-Poly1305 Encryption (base64 wire format)', () => {
     test('should encrypt and decrypt strings correctly', async () => {
       const { encryptionKey } = await deriveKeys('test-password', generateSalt());
       const text = 'Hello, World!';

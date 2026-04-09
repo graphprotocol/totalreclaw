@@ -151,9 +151,9 @@ function randomUuid(): string {
 
 /**
  * Generate a synthetic encrypted blob that approximates the size of
- * AES-256-GCM ciphertext for `wordCount` words of plaintext.
+ * XChaCha20-Poly1305 ciphertext for `wordCount` words of plaintext.
  * Average English word = ~5 chars + 1 space = 6 bytes.
- * AES-GCM adds 12-byte IV + 16-byte auth tag = 28 bytes overhead.
+ * XChaCha20-Poly1305 adds 24-byte nonce + 16-byte auth tag = 40 bytes overhead.
  */
 function generateEncryptedBlob(wordCount: number): string {
   const plaintextSize = wordCount * 6;
@@ -314,7 +314,7 @@ function generateReport(results: GasResult[]): string {
   lines.push(`| Base L2 gas price | ${BASE_L2_GAS_PRICE_GWEI} gwei |`);
   lines.push(`| ETH price | ${formatUsd(ETH_PRICE_USD)} |`);
   lines.push(`| Embedding dims | 640 (float32) |`);
-  lines.push(`| Encryption overhead | 28 bytes (AES-256-GCM: 12B IV + 16B tag) |`);
+  lines.push(`| Encryption overhead | 40 bytes (XChaCha20-Poly1305: 24B nonce + 16B tag) |`);
   lines.push("");
 
   // Per-fact measurements

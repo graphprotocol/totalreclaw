@@ -87,7 +87,7 @@ class FactPayload:
     id: str
     timestamp: str
     owner: str
-    encrypted_blob: str  # Hex-encoded AES-256-GCM ciphertext
+    encrypted_blob: str  # Hex-encoded XChaCha20-Poly1305 ciphertext
     blind_indices: list[str] = field(default_factory=list)
     decay_score: float = 1.0
     source: str = ""

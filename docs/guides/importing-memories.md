@@ -26,7 +26,7 @@ Source System (e.g., Mem0)
 |   Your Device     |
 |                   |
 |  1. Fetch/parse   |
-|  2. Encrypt       |  ← AES-256-GCM with your key
+|  2. Encrypt       |  ← XChaCha20-Poly1305 with your key
 |  3. Generate LSH  |  ← Blind search indices
 |  4. Fingerprint   |  ← Content dedup hash
 |  5. Store         |
@@ -72,7 +72,7 @@ The agent calls the `totalreclaw_import_from` tool with:
 ### What Happens
 
 1. The tool fetches all memories from the Mem0 REST API (`GET /v1/memories/?user_id=...`), paginating automatically.
-2. Each memory's text is encrypted with your TotalReclaw encryption key (AES-256-GCM).
+2. Each memory's text is encrypted with your TotalReclaw encryption key (XChaCha20-Poly1305).
 3. Blind search indices (LSH buckets + word trapdoors) are generated so the encrypted memories are searchable.
 4. A content fingerprint (HMAC-SHA256) is generated to prevent future duplicates.
 5. Each encrypted memory is stored on the TotalReclaw server (or on-chain if using the managed service).

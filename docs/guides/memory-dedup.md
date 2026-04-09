@@ -88,7 +88,7 @@ New fact: "User prefers dark mode for all editors"
        |
        v
 +-------------------------------+
-| 4. Decrypt candidates         |  (client-side, AES-256-GCM)
+| 4. Decrypt candidates         |  (client-side, XChaCha20-Poly1305)
 |    Extract their embeddings   |
 +-------------------------------+
        |

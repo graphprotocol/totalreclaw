@@ -4,7 +4,7 @@
  * Migrates encrypted memories from Base Sepolia (free tier testnet) to
  * Gnosis mainnet (Pro tier) after a user upgrades.
  *
- * The encrypted data is chain-agnostic: same AES-256-GCM ciphertext works
+ * The encrypted data is chain-agnostic: same XChaCha20-Poly1305 ciphertext works
  * on any chain. Smart Account addresses are deterministic (CREATE2), so
  * the owner is the same on both chains. No re-encryption needed.
  *

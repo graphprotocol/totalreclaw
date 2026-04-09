@@ -18,7 +18,7 @@ TotalReclaw splits trust across three layers. Encryption and search intelligence
   Client (device)               Relay Service                 Open Network
  ┌──────────────────┐        ┌──────────────────┐        ┌──────────────────┐
  │ Key derivation    │        │ Stores encrypted  │        │ Gnosis Chain     │
- │ AES-256-GCM       │──────▸ │ blobs + blind     │──────▸ │ anchors data     │
+ │ XChaCha20-Poly1305│──────▸ │ blobs + blind     │──────▸ │ anchors data     │
  │ Embeddings + LSH  │ cipher │ indices           │ anchor │ permanently      │
  │ Re-ranking        │ text   │ GIN index search  │        │                  │
  │ Fact extraction   │◂────── │ Gas sponsorship   │◂────── │ The Graph        │
@@ -26,7 +26,7 @@ TotalReclaw splits trust across three layers. Encryption and search intelligence
                                                           └──────────────────┘
 ```
 
-Every operation that touches plaintext — encryption, embedding generation, search re-ranking — happens on the device. The relay only sees SHA-256 hashed tokens and AES-256-GCM ciphertext. Even if the relay is fully compromised, memories remain unreadable.
+Every operation that touches plaintext — encryption, embedding generation, search re-ranking — happens on the device. The relay only sees SHA-256 hashed tokens and XChaCha20-Poly1305 ciphertext. Even if the relay is fully compromised, memories remain unreadable.
 
 ---
 
@@ -55,15 +55,15 @@ HKDF(seed, "openmemory-dedup-v1")            → dedupKey
 | Key | Purpose | What the server sees |
 | --- | --- | --- |
 | `authKey` | Authenticates with the relay | SHA-256 hash only |
-| `encryptionKey` | Encrypts all memory content via AES-256-GCM | Nothing — never transmitted |
+| `encryptionKey` | Encrypts all memory content via XChaCha20-Poly1305 | Nothing — never transmitted |
 | `dedupKey` | Generates HMAC-SHA256 content fingerprints for dedup | Hash only |
 
-### AES-256-GCM Wire Format
+### XChaCha20-Poly1305 Wire Format
 
 Every memory is encrypted as a single blob:
 
 ```
-[IV: 12 bytes] [Auth Tag: 16 bytes] [Ciphertext: variable]
+[Nonce: 24 bytes] [Auth Tag: 16 bytes] [Ciphertext: variable]
 ```
 
 The 128-bit authentication tag ensures both confidentiality and integrity — any tampering is detected on decryption.
@@ -163,7 +163,7 @@ This returns 400–3,000 encrypted candidates in under 15ms. The relay has no id
 
 ### Step 3 — Decrypt and re-rank (client-side)
 
-Candidates are decrypted with AES-256-GCM, then scored across four signals:
+Candidates are decrypted with XChaCha20-Poly1305, then scored across four signals:
 
 | Signal | What it measures | Method |
 | --- | --- | --- |
@@ -222,7 +222,7 @@ The relay handles fast day-to-day reads and writes. The network layer is what tu
 
 | Component | Detail |
 | --- | --- |
-| Encryption | AES-256-GCM — 256-bit key, 96-bit IV, 128-bit auth tag |
+| Encryption | XChaCha20-Poly1305 — 256-bit key, 192-bit nonce, 128-bit auth tag |
 | KDF (password) | Argon2id — t=3, m=64 MB, p=4 |
 | KDF (mnemonic) | BIP-39 PBKDF2 — 2048 rounds → HKDF-SHA256 expansion |
 | Embeddings | Harrier-OSS-v1-270M — 640 dimensions, ONNX quantized (~164MB) |

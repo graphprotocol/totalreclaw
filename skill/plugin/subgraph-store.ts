@@ -89,7 +89,7 @@ export interface FactPayload {
   id: string;
   timestamp: string;
   owner: string;           // Smart Account address (hex)
-  encryptedBlob: string;   // Hex-encoded AES-256-GCM ciphertext
+  encryptedBlob: string;   // Hex-encoded XChaCha20-Poly1305 ciphertext
   blindIndices: string[];   // SHA-256 hashes (word + LSH)
   decayScore: number;
   source: string;

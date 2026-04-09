@@ -7,7 +7,7 @@
 | Component | Why it works |
 |-----------|-------------|
 | **BIP-39 mnemonic → HKDF key derivation** | Elegant, proven. One phrase = all keys. The "password manager" mental model is the right UX. |
-| **AES-256-GCM client-side encryption** | Non-negotiable for the value prop. Industry standard, well-audited. |
+| **XChaCha20-Poly1305 client-side encryption** | Non-negotiable for the value prop. Industry standard, well-audited. |
 | **Blind index search (SHA-256 token hashes)** | Simple, fast, server-blind. Zero-knowledge search that actually works. |
 | **Client-side reranking (BM25 + cosine + RRF)** | Keeping intelligence on the client is correct for the trust model. |
 | **Content fingerprint dedup (HMAC-SHA256)** | Cheap, effective server-side exact dedup without seeing plaintext. |
@@ -174,7 +174,7 @@ For frameworks with rich hook support (OpenClaw, ZeroClaw), keep thin adapter la
 
 | Value Proposition | Preserved? | How |
 |-------------------|:----------:|-----|
-| E2E encrypted | Yes | Same AES-256-GCM, same key derivation |
+| E2E encrypted | Yes | Same XChaCha20-Poly1305, same key derivation |
 | Portable | Yes | Same BIP-39 mnemonic, same cross-client support |
 | Server-blind | Yes | Relay never sees plaintext |
 | Export anytime | Yes | Same export API |

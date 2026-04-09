@@ -90,7 +90,7 @@ SHA-256 hashes of:
 
 ### Storage on TotalReclaw Server (per user, under one namespace)
 
-- Encrypted fact blobs (AES-256-GCM)
+- Encrypted fact blobs (XChaCha20-Poly1305)
 - Encrypted graph snapshot blobs
 - Encrypted embeddings (for vector KNN)
 - Blind indices (for exact keyword/entity match)
@@ -221,7 +221,7 @@ tool: {
 6. **For each fact + graph delta**:
    - Generate embedding (local or via TotalReclaw client).
    - Generate blind indices.
-   - AES-256-GCM encrypt (recovery phrase derived key using Argon2id).
+   - XChaCha20-Poly1305 encrypt (recovery phrase derived key using Argon2id).
    - Upload batch to TotalReclaw server (or queue if offline).
 7. **(Optional)** Append human-readable bullet list to daily Markdown.
 

@@ -11,7 +11,7 @@ Target platforms: AWS Nitro Enclaves or Intel TDX (Azure/Google Confidential VMs
 Key change: Server-side index lives entirely inside attested enclave → plaintext-level accuracy and speed while provider still cannot read data.
 2.1 Architecture Overview
 
-Data at rest: still AES-256-GCM with user master key (never leaves client).
+Data at rest: still XChaCha20-Poly1305 with user master key (never leaves client).
 Search: client sends encrypted query + session attestation.
 Enclave: decrypts query inside enclave, decrypts only the necessary vectors/docs on-the-fly or keeps hot index in enclave-protected RAM, runs full HNSW + BM25 + RRF inside enclave, returns only encrypted top-8 results.
 No LSH needed. Full corpus hybrid search.

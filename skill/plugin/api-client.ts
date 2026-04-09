@@ -25,7 +25,7 @@ export interface StoreFactPayload {
   id: string;
   /** ISO 8601 timestamp */
   timestamp: string;
-  /** Hex-encoded AES-256-GCM ciphertext (iv || tag || ciphertext) */
+  /** Hex-encoded XChaCha20-Poly1305 ciphertext (iv || tag || ciphertext) */
   encrypted_blob: string;
   /** SHA-256 hashes of tokens for blind search */
   blind_indices: string[];
@@ -37,7 +37,7 @@ export interface StoreFactPayload {
   content_fp?: string;
   /** Identifier of the creating agent */
   agent_id?: string;
-  /** Hex-encoded AES-256-GCM encrypted embedding vector (PoC v2) */
+  /** Hex-encoded XChaCha20-Poly1305 encrypted embedding vector (PoC v2) */
   encrypted_embedding?: string;
 }
 
@@ -48,13 +48,13 @@ export interface StoreFactPayload {
  */
 export interface SearchCandidate {
   fact_id: string;
-  /** Hex-encoded AES-256-GCM ciphertext */
+  /** Hex-encoded XChaCha20-Poly1305 ciphertext */
   encrypted_blob: string;
   decay_score: number;
   /** Unix milliseconds */
   timestamp: number;
   version: number;
-  /** Hex-encoded AES-256-GCM encrypted embedding vector (PoC v2, optional) */
+  /** Hex-encoded XChaCha20-Poly1305 encrypted embedding vector (PoC v2, optional) */
   encrypted_embedding?: string;
 }
 

@@ -77,20 +77,20 @@ pub fn wasm_compute_auth_key_hash(auth_key_hex: &str) -> Result<String, JsError>
 }
 
 // ---------------------------------------------------------------------------
-// AES-256-GCM
+// XChaCha20-Poly1305
 // ---------------------------------------------------------------------------
 
-/// Encrypt a UTF-8 plaintext with AES-256-GCM.
+/// Encrypt a UTF-8 plaintext with XChaCha20-Poly1305.
 ///
 /// `encryption_key_hex`: 64-char hex string (32 bytes).
-/// Returns base64-encoded ciphertext (wire format: iv || tag || ciphertext).
+/// Returns base64-encoded ciphertext (wire format: nonce || tag || ciphertext).
 #[wasm_bindgen(js_name = "encrypt")]
 pub fn wasm_encrypt(plaintext: &str, encryption_key_hex: &str) -> Result<String, JsError> {
     let key = parse_key_hex(encryption_key_hex, "encryption_key")?;
     crypto::encrypt(plaintext, &key).map_err(to_js_error)
 }
 
-/// Decrypt a base64-encoded AES-256-GCM blob.
+/// Decrypt a base64-encoded XChaCha20-Poly1305 blob.
 ///
 /// `encryption_key_hex`: 64-char hex string (32 bytes).
 /// Returns the plaintext UTF-8 string.

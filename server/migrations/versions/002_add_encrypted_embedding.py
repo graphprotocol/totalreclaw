@@ -4,7 +4,7 @@ Revision ID: 002
 Revises: 001
 Create Date: 2026-02-26
 
-Stores AES-256-GCM encrypted embedding vectors (hex-encoded).
+Stores XChaCha20-Poly1305 encrypted embedding vectors (hex-encoded).
 The server never decrypts this column -- it just stores and returns
 the opaque blob for client-side cosine similarity re-ranking.
 

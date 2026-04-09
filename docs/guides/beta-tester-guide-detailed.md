@@ -155,7 +155,7 @@ Your 12-word phrase is the single root of all your keys and identity. The deriva
 1. **BIP-39 seed** -- Your 12-word mnemonic produces a 512-bit master seed.
 2. **Private key** -- BIP-32 hierarchical derivation at path `m/44'/60'/0'/0/0` (the standard Ethereum path) produces a 256-bit private key.
 3. **EOA address** -- The standard Ethereum address derived from the private key. This is the "owner" of your Smart Account.
-4. **Encryption key** -- HKDF-SHA256 with info string `totalreclaw-encryption-key-v1` derives your AES-256-GCM encryption key.
+4. **Encryption key** -- HKDF-SHA256 with info string `totalreclaw-encryption-key-v1` derives your XChaCha20-Poly1305 encryption key.
 5. **Auth key** -- HKDF-SHA256 with info string `totalreclaw-auth-key-v1` derives an authentication key. Its SHA-256 hash is registered with the server as your identity.
 6. **Smart Account address** -- A deterministic ERC-4337 Smart Account address computed via CREATE2 from your EOA address. This is your on-chain identity.
 
@@ -239,7 +239,7 @@ Use this when you want to explicitly store something.
 
 **What happens behind the scenes:**
 1. The plugin extracts the fact from your message.
-2. It encrypts the fact with your key (AES-256-GCM).
+2. It encrypts the fact with your key (XChaCha20-Poly1305).
 3. It generates blind search indices (hashed keywords) so the server can find it later without seeing the plaintext.
 4. It generates a content fingerprint to prevent duplicates.
 5. It stores the encrypted blob on the server.

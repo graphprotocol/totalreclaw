@@ -84,16 +84,16 @@ fn compute_auth_key_hash(auth_key: &[u8]) -> PyResult<String> {
 // Encryption
 // ---------------------------------------------------------------------------
 
-/// Encrypt a UTF-8 plaintext string with AES-256-GCM.
+/// Encrypt a UTF-8 plaintext string with XChaCha20-Poly1305.
 ///
-/// Returns base64-encoded ciphertext (wire format: iv || tag || ciphertext).
+/// Returns base64-encoded ciphertext (wire format: nonce || tag || ciphertext).
 #[pyfunction]
 fn encrypt(plaintext: &str, encryption_key: &[u8]) -> PyResult<String> {
     let key = bytes_to_array32(encryption_key)?;
     crypto::encrypt(plaintext, &key).map_err(to_pyerr)
 }
 
-/// Decrypt a base64-encoded AES-256-GCM blob back to a UTF-8 string.
+/// Decrypt a base64-encoded XChaCha20-Poly1305 blob back to a UTF-8 string.
 #[pyfunction]
 fn decrypt(encrypted_base64: &str, encryption_key: &[u8]) -> PyResult<String> {
     let key = bytes_to_array32(encryption_key)?;
@@ -721,7 +721,7 @@ fn hex_blob_to_base64(hex_blob: &str) -> Option<String> {
 /// TotalReclaw core crypto primitives (Rust implementation).
 ///
 /// This module provides byte-for-byte compatible implementations of all
-/// TotalReclaw cryptographic operations: key derivation, AES-256-GCM
+/// TotalReclaw cryptographic operations: key derivation, XChaCha20-Poly1305
 /// encryption, blind indices, content fingerprinting, LSH hashing,
 /// protobuf encoding, and debrief parsing.
 #[pymodule]

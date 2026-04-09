@@ -79,7 +79,7 @@ NanoClaw agents get TotalReclaw memory automatically. Set `TOTALRECLAW_RECOVERY_
 ## How It Works
 
 1. **Your agent extracts facts** from conversations (preferences, decisions, context)
-2. **Everything is encrypted on your device** before leaving — AES-256-GCM, keys derived from your recovery phrase
+2. **Everything is encrypted on your device** before leaving — XChaCha20-Poly1305, keys derived from your recovery phrase
 3. **Encrypted data is stored on-chain** — the server only sees ciphertext and hashed search tokens
 4. **Search works over encrypted data** — blind indices let the server find relevant memories without reading them
 5. **Results are decrypted and ranked locally** — BM25 + semantic similarity + importance scoring

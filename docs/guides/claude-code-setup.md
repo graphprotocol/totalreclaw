@@ -159,7 +159,7 @@ The MCP server also instructs the agent to recall relevant memories at the start
 
 ## How it works
 
-1. **All encryption happens on your machine.** Memories are encrypted with AES-256-GCM before leaving your device. The server only ever sees ciphertext.
+1. **All encryption happens on your machine.** Memories are encrypted with XChaCha20-Poly1305 before leaving your device. The server only ever sees ciphertext.
 2. **Your recovery phrase is your identity.** It derives all encryption keys via Argon2id + HKDF. Same phrase on any device or agent = same memories.
 3. **Search is privacy-preserving.** Queries use blind indices (SHA-256 hashes) and locality-sensitive hashing -- the server never sees your search terms.
 4. **Free tier** stores unlimited memories on Base Sepolia testnet ($0, testnet data may be reset). **Pro** stores permanently on Gnosis mainnet ($3.99/month via Stripe). Check current pricing with `totalreclaw_status` or at [totalreclaw.xyz/pricing](https://totalreclaw.xyz/pricing/).

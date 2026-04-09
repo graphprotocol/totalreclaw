@@ -70,7 +70,7 @@ pub struct PreparedFact {
 /// # Arguments
 ///
 /// * `text` - Plaintext fact content.
-/// * `encryption_key` - 32-byte AES-256-GCM encryption key.
+/// * `encryption_key` - 32-byte XChaCha20-Poly1305 encryption key.
 /// * `dedup_key` - 32-byte HMAC-SHA256 dedup key.
 /// * `lsh_hasher` - Pre-initialized LSH hasher (seeded from mnemonic).
 /// * `embedding` - Pre-computed embedding vector (f32, e.g. 640d).

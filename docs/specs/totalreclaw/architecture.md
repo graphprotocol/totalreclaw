@@ -39,8 +39,8 @@ This gives ~92–96% recall@500 with 400–1,200 candidates → client reranks e
 @dataclass
 class MemoryItem:
     id: str                          # UUIDv7
-    encrypted_doc: bytes             # AES-256-GCM
-    encrypted_embedding: bytes       # AES-256-GCM (NEW)
+    encrypted_doc: bytes             # XChaCha20-Poly1305
+    encrypted_embedding: bytes       # XChaCha20-Poly1305
     blind_indices: list[str]         # SHA-256(token) + SHA-256(LSH_bucket)
     metadata: dict                   # source, timestamp, importance, etc.
 ```
@@ -465,8 +465,8 @@ def ingest(memory_item: dict, master_password: str):
 
     # 4. Encrypt BOTH doc and embedding
     key = derive_key(master_password)
-    enc_doc = aes_gcm_encrypt(memory_item["text"], key)
-    enc_emb = aes_gcm_encrypt(emb.tobytes(), key)
+    enc_doc = xchacha20_encrypt(memory_item["text"], key)
+    enc_emb = xchacha20_encrypt(emb.tobytes(), key)
 
     # 5. Upload
     server.upload({

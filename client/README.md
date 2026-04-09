@@ -29,7 +29,7 @@ This is the core cryptographic library used by [@totalreclaw/totalreclaw](https:
 
 ### Architecture
 
-All cryptographic operations (AES-256-GCM, HKDF key derivation, LSH hashing, blind indices, content fingerprinting) are powered by [`@totalreclaw/core`](https://www.npmjs.com/package/@totalreclaw/core) -- a unified Rust/WASM module that ensures byte-for-byte consistency across all TotalReclaw clients.
+All cryptographic operations (XChaCha20-Poly1305, HKDF key derivation, LSH hashing, blind indices, content fingerprinting) are powered by [`@totalreclaw/core`](https://www.npmjs.com/package/@totalreclaw/core) -- a unified Rust/WASM module that ensures byte-for-byte consistency across all TotalReclaw clients.
 
 ## Installation
 
@@ -39,7 +39,7 @@ npm install @totalreclaw/client
 
 ## Features
 
-- **AES-256-GCM encryption** -- All memories encrypted client-side
+- **XChaCha20-Poly1305 encryption** -- All memories encrypted client-side
 - **Blind index search** -- LSH-based blind indices for searching encrypted data
 - **Local embeddings** -- Harrier-OSS-v1-270M for semantic similarity (no API keys)
 - **BM25 + cosine reranking** -- Reciprocal rank fusion for high-quality retrieval
@@ -66,7 +66,7 @@ const results = await client.recall('what do I like to drink?');
 | Operation | Algorithm | Purpose |
 |-----------|-----------|---------|
 | Key derivation | Argon2id + HKDF-SHA256 | Memory-hard password hashing + auth key derivation |
-| Encryption | AES-256-GCM | Authenticated encryption of memories and embeddings |
+| Encryption | XChaCha20-Poly1305 | Authenticated encryption of memories and embeddings |
 | Blind indices | SHA-256 | Searchable encryption without exposing plaintext |
 | LSH | Random hyperplane | Approximate nearest neighbor search on encrypted data |
 | Embeddings | Harrier-OSS-v1-270M (640d) | Local semantic similarity (no API calls) |

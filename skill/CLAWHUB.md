@@ -60,7 +60,7 @@ Ensure the SKILL.md starts with this frontmatter for ClawHub:
 ```yaml
 ---
 name: totalreclaw
-description: "End-to-end encrypted memory for AI agents — portable, yours forever. AES-256-GCM E2EE: server never sees plaintext."
+description: "End-to-end encrypted memory for AI agents — portable, yours forever. XChaCha20-Poly1305 E2EE: server never sees plaintext."
 version: 1.5.1
 author: TotalReclaw Team
 license: MIT
@@ -117,7 +117,7 @@ The `TOTALRECLAW_RECOVERY_PHRASE` env var will likely trigger extra scrutiny fro
 
 ## Competitor Context
 
-ClawHub has one similar listing: **Everclaw** (also AES-256-GCM encrypted cloud memory, ~2,959 downloads). It is flagged as `suspicious` by the moderation system. TotalReclaw differentiates by:
+ClawHub has one similar listing: **Everclaw** (also XChaCha20-Poly1305 encrypted cloud memory, ~2,959 downloads). It is flagged as `suspicious` by the moderation system. TotalReclaw differentiates by:
 
 - Fully open-source (server + client)
 - On-chain data anchoring (Gnosis Chain + The Graph)

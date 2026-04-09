@@ -60,7 +60,7 @@ class Fact(Base):
 
     Stores:
     - id: UUIDv7 fact identifier
-    - encrypted_blob: AES-256-GCM ciphertext
+    - encrypted_blob: XChaCha20-Poly1305 ciphertext
     - blind_indices: Array of SHA-256 hashes for blind search
     - decay_score: Importance score (decreases over time)
     - version: For optimistic locking
@@ -106,7 +106,7 @@ class Fact(Base):
     # --- Added in PoC v2 (LSH + reranking) ---
     encrypted_embedding: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True
-    )  # AES-256-GCM encrypted embedding, hex-encoded. Server never decrypts.
+    )  # XChaCha20-Poly1305 encrypted embedding, hex-encoded. Server never decrypts.
 
     # Indexes
     __table_args__ = (

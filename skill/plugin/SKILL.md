@@ -1,6 +1,6 @@
 ---
 name: totalreclaw
-description: "End-to-end encrypted memory for AI agents — portable, yours forever. AES-256-GCM E2EE: server never sees plaintext."
+description: "End-to-end encrypted memory for AI agents — portable, yours forever. XChaCha20-Poly1305 E2EE: server never sees plaintext."
 version: 1.6.0
 author: TotalReclaw Team
 license: MIT
@@ -520,7 +520,7 @@ The agent proactively warns when quota usage exceeds 80%. If the limit is reache
 
 TotalReclaw is an end-to-end encrypted memory vault for AI agents. Think of it as a "password manager for AI memory" that provides:
 
-1. **End-to-End Encryption** - All memories are encrypted client-side using AES-256-GCM. The server never sees plaintext data.
+1. **End-to-End Encryption** - All memories are encrypted client-side using XChaCha20-Poly1305. The server never sees plaintext data.
 
 2. **Portable Memory** - Export all data as plaintext with one command. No vendor lock-in.
 

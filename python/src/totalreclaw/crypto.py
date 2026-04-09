@@ -50,22 +50,22 @@ def derive_lsh_seed(mnemonic: str, salt: bytes) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# AES-256-GCM Encryption / Decryption
+# XChaCha20-Poly1305 Encryption / Decryption
 # ---------------------------------------------------------------------------
 
 
 def encrypt(plaintext: str, encryption_key: bytes) -> str:
-    """Encrypt with AES-256-GCM.
+    """Encrypt with XChaCha20-Poly1305.
 
-    Wire format: iv(12) || tag(16) || ciphertext -> base64.
+    Wire format: nonce(24) || tag(16) || ciphertext -> base64.
     """
     return totalreclaw_core.encrypt(plaintext, encryption_key)
 
 
 def decrypt(encrypted_base64: str, encryption_key: bytes) -> str:
-    """Decrypt AES-256-GCM.
+    """Decrypt XChaCha20-Poly1305.
 
-    Expects wire format: iv(12) || tag(16) || ciphertext.
+    Expects wire format: nonce(24) || tag(16) || ciphertext.
     """
     return totalreclaw_core.decrypt(encrypted_base64, encryption_key)
 
@@ -107,7 +107,7 @@ def generate_content_fingerprint(plaintext: str, dedup_key: bytes) -> str:
 
 
 def encrypt_embedding(embedding: list[float], encryption_key: bytes) -> str:
-    """Encrypt embedding: pack as LE float32 array -> base64 -> AES encrypt."""
+    """Encrypt embedding: pack as LE float32 array -> base64 -> encrypt."""
     buf = struct.pack(f"<{len(embedding)}f", *embedding)
     return encrypt(base64.b64encode(buf).decode("ascii"), encryption_key)
 

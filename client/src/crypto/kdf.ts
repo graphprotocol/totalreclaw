@@ -89,7 +89,7 @@ export async function deriveAuthKey(
 /**
  * Derive the encryption key from recovery phrase using Argon2id + HKDF
  *
- * The encryption key is used for AES-256-GCM encryption of documents and embeddings.
+ * The encryption key is used for XChaCha20-Poly1305 encryption of documents and embeddings.
  *
  * @param masterPassword - User's recovery phrase
  * @param salt - Random salt

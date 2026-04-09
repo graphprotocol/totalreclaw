@@ -8,7 +8,7 @@ message TotalReclawFact {
   string id = 1;                    // UUIDv7 (time-sortable)
   string timestamp = 2;             // ISO 8601
   string owner = 3;                 // user_id from auth
-  bytes encrypted_blob = 4;         // AES-256-GCM encrypted (doc + embedding + metadata)
+  bytes encrypted_blob = 4;         // XChaCha20-Poly1305 encrypted (doc + embedding + metadata)
   repeated string blind_indices = 5; // SHA-256(token) + SHA-256(LSH bucket)
   double decay_score = 6;
   bool is_active = 7;
@@ -19,7 +19,7 @@ message TotalReclawFact {
   string agent_id = 11;             // identifier of the agent that created this fact
   int64 sequence_id = 12;           // monotonic per-user, for delta sync
   // --- Added in PoC v2 (LSH + reranking) ---
-  string encrypted_embedding = 13;  // AES-256-GCM encrypted embedding vector (hex-encoded)
+  string encrypted_embedding = 13;  // XChaCha20-Poly1305 encrypted embedding vector (hex-encoded)
 }
 
 enum ErrorCode {

@@ -137,7 +137,7 @@ TotalReclaw and IronClaw provide complementary security layers:
 |-------|----------|-------------|
 | **Runtime isolation** | TEE (Intel TDX) | -- |
 | **Tool sandboxing** | WASM sandbox | -- |
-| **Data encryption** | -- | AES-256-GCM (client-side) |
+| **Data encryption** | -- | XChaCha20-Poly1305 (client-side) |
 | **Key management** | Credential vault | Recovery phrase (BIP-39) |
 | **Storage** | PostgreSQL (TEE-locked) | On-chain (Gnosis Chain) |
 | **Portability** | Machine-locked | Any agent, any device |

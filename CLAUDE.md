@@ -5,7 +5,7 @@
 **TotalReclaw** is an end-to-end encrypted memory vault for AI agents -- the "password manager for AI memory."
 
 ### Core Value Proposition
-1. **Encrypted** -- End-to-end encrypted (AES-256-GCM). Server never sees plaintext.
+1. **Encrypted** -- End-to-end encrypted (XChaCha20-Poly1305). Server never sees plaintext.
 2. **Portable** -- One-click plain-text export. No vendor lock-in.
 3. **Universal** -- Works across OpenClaw, Claude Desktop, any MCP-compatible agent.
 
@@ -27,7 +27,7 @@ Managed Service uses a **dual-chain model**: Free tier stores on **Base Sepolia*
 +-------------------------------------------------------------------------+
 |  +--------------+  +--------------+  +--------------+  +-------------+ |
 |  | Fact Extract |->|   Encrypt    |->| Generate LSH |->| Blind Index | |
-|  |    (LLM)     |  |  (AES-GCM)  |  |   Buckets    |  |  (SHA-256)  | |
+|  |    (LLM)     |  | (XChaCha20) |  |   Buckets    |  |  (SHA-256)  | |
 |  +--------------+  +--------------+  +--------------+  +-------------+ |
 |                              |                                          |
 |                              v                                          |
