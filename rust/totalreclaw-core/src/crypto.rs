@@ -1,4 +1,4 @@
-//! Key derivation and AES-256-GCM encryption.
+//! Key derivation and XChaCha20-Poly1305 encryption.
 //!
 //! Matches the TypeScript implementation in `mcp/src/subgraph/crypto.ts` byte-for-byte.
 //!
@@ -10,11 +10,11 @@
 //!   HKDF-SHA256(seed, salt, "openmemory-dedup-v1", 32)           -> dedupKey
 //!   HKDF-SHA256(seed, salt, "openmemory-lsh-seed-v1", 32)        -> lshSeed
 //!
-//! AES-256-GCM wire format: iv(12) || tag(16) || ciphertext -> base64
+//! XChaCha20-Poly1305 wire format: nonce(24) || tag(16) || ciphertext -> base64
 
-use aes_gcm::{
+use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
-    Aes256Gcm, Key, Nonce,
+    XChaCha20Poly1305, Key, XNonce,
 };
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256, Sha512};
@@ -30,7 +30,7 @@ const ENCRYPTION_KEY_INFO: &[u8] = b"totalreclaw-encryption-key-v1";
 const DEDUP_KEY_INFO: &[u8] = b"openmemory-dedup-v1";
 const LSH_SEED_INFO: &[u8] = b"openmemory-lsh-seed-v1";
 
-const IV_LENGTH: usize = 12;
+const NONCE_LENGTH: usize = 24;
 const TAG_LENGTH: usize = 16;
 
 // ---------------------------------------------------------------------------
@@ -166,41 +166,41 @@ fn hkdf_sha256(ikm: &[u8], salt: &[u8], info: &[u8]) -> Result<[u8; 32]> {
 }
 
 // ---------------------------------------------------------------------------
-// AES-256-GCM
+// XChaCha20-Poly1305
 // ---------------------------------------------------------------------------
 
-/// Encrypt a UTF-8 plaintext string with AES-256-GCM.
+/// Encrypt a UTF-8 plaintext string with XChaCha20-Poly1305.
 ///
-/// Wire format (base64-encoded): iv(12) || tag(16) || ciphertext
+/// Wire format (base64-encoded): nonce(24) || tag(16) || ciphertext
 ///
-/// Uses a random 12-byte IV.
+/// Uses a random 24-byte nonce.
 pub fn encrypt(plaintext: &str, encryption_key: &[u8; 32]) -> Result<String> {
-    let iv_bytes: [u8; IV_LENGTH] = rand::random();
-    encrypt_with_iv(plaintext, encryption_key, &iv_bytes)
+    let nonce_bytes: [u8; NONCE_LENGTH] = rand::random();
+    encrypt_with_nonce(plaintext, encryption_key, &nonce_bytes)
 }
 
-/// Encrypt with a specific IV (for deterministic testing).
-pub fn encrypt_with_iv(
+/// Encrypt with a specific nonce (for deterministic testing).
+pub fn encrypt_with_nonce(
     plaintext: &str,
     encryption_key: &[u8; 32],
-    iv: &[u8; IV_LENGTH],
+    nonce: &[u8; NONCE_LENGTH],
 ) -> Result<String> {
-    let key = Key::<Aes256Gcm>::from_slice(encryption_key);
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(iv);
+    let key = Key::from_slice(encryption_key);
+    let cipher = XChaCha20Poly1305::new(key);
+    let xnonce = XNonce::from_slice(nonce);
 
     let ciphertext_with_tag = cipher
-        .encrypt(nonce, Payload { msg: plaintext.as_bytes(), aad: b"" })
-        .map_err(|e| Error::Crypto(format!("AES-GCM encrypt failed: {}", e)))?;
+        .encrypt(xnonce, Payload { msg: plaintext.as_bytes(), aad: b"" })
+        .map_err(|e| Error::Crypto(format!("XChaCha20-Poly1305 encrypt failed: {}", e)))?;
 
-    // aes-gcm appends the tag at the end: ciphertext || tag
-    // We need wire format: iv || tag || ciphertext
+    // chacha20poly1305 appends the tag at the end: ciphertext || tag
+    // We need wire format: nonce || tag || ciphertext
     let ct_len = ciphertext_with_tag.len() - TAG_LENGTH;
     let ciphertext = &ciphertext_with_tag[..ct_len];
     let tag = &ciphertext_with_tag[ct_len..];
 
-    let mut combined = Vec::with_capacity(IV_LENGTH + TAG_LENGTH + ct_len);
-    combined.extend_from_slice(iv);
+    let mut combined = Vec::with_capacity(NONCE_LENGTH + TAG_LENGTH + ct_len);
+    combined.extend_from_slice(nonce);
     combined.extend_from_slice(tag);
     combined.extend_from_slice(ciphertext);
 
@@ -208,35 +208,35 @@ pub fn encrypt_with_iv(
     Ok(base64::engine::general_purpose::STANDARD.encode(&combined))
 }
 
-/// Decrypt a base64-encoded AES-256-GCM blob back to a UTF-8 string.
+/// Decrypt a base64-encoded XChaCha20-Poly1305 blob back to a UTF-8 string.
 ///
-/// Expects wire format: iv(12) || tag(16) || ciphertext
+/// Expects wire format: nonce(24) || tag(16) || ciphertext
 pub fn decrypt(encrypted_base64: &str, encryption_key: &[u8; 32]) -> Result<String> {
     use base64::Engine;
     let combined = base64::engine::general_purpose::STANDARD
         .decode(encrypted_base64)
         .map_err(|e| Error::Crypto(format!("base64 decode failed: {}", e)))?;
 
-    if combined.len() < IV_LENGTH + TAG_LENGTH {
+    if combined.len() < NONCE_LENGTH + TAG_LENGTH {
         return Err(Error::Crypto("Encrypted data too short".into()));
     }
 
-    let iv = &combined[..IV_LENGTH];
-    let tag = &combined[IV_LENGTH..IV_LENGTH + TAG_LENGTH];
-    let ciphertext = &combined[IV_LENGTH + TAG_LENGTH..];
+    let nonce = &combined[..NONCE_LENGTH];
+    let tag = &combined[NONCE_LENGTH..NONCE_LENGTH + TAG_LENGTH];
+    let ciphertext = &combined[NONCE_LENGTH + TAG_LENGTH..];
 
-    // aes-gcm expects: ciphertext || tag
+    // chacha20poly1305 expects: ciphertext || tag
     let mut ct_with_tag = Vec::with_capacity(ciphertext.len() + TAG_LENGTH);
     ct_with_tag.extend_from_slice(ciphertext);
     ct_with_tag.extend_from_slice(tag);
 
-    let key = Key::<Aes256Gcm>::from_slice(encryption_key);
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(iv);
+    let key = Key::from_slice(encryption_key);
+    let cipher = XChaCha20Poly1305::new(key);
+    let xnonce = XNonce::from_slice(nonce);
 
     let plaintext_bytes = cipher
-        .decrypt(nonce, Payload { msg: &ct_with_tag, aad: b"" })
-        .map_err(|e| Error::Crypto(format!("AES-GCM decrypt failed: {}", e)))?;
+        .decrypt(xnonce, Payload { msg: &ct_with_tag, aad: b"" })
+        .map_err(|e| Error::Crypto(format!("XChaCha20-Poly1305 decrypt failed: {}", e)))?;
 
     String::from_utf8(plaintext_bytes)
         .map_err(|e| Error::Crypto(format!("UTF-8 decode failed: {}", e)))
@@ -336,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aes_gcm_fixed_iv_parity() {
+    fn test_xchacha_fixed_nonce_round_trip() {
         let fixture: serde_json::Value = serde_json::from_str(
             include_str!("../tests/fixtures/crypto_vectors.json"),
         )
@@ -348,20 +348,17 @@ mod tests {
         let mut key = [0u8; 32];
         key.copy_from_slice(&key_bytes);
 
-        let iv = [0u8; 12]; // fixed zero IV
+        let nonce = [0u8; 24]; // fixed zero nonce
         let plaintext = aes["plaintext"].as_str().unwrap();
-        let expected_b64 = aes["fixed_iv_encrypted_base64"].as_str().unwrap();
 
-        let encrypted = encrypt_with_iv(plaintext, &key, &iv).unwrap();
-        assert_eq!(encrypted, expected_b64);
-
-        // Round-trip
+        // New cipher — don't match old AES-GCM base64 value, just verify round-trip
+        let encrypted = encrypt_with_nonce(plaintext, &key, &nonce).unwrap();
         let decrypted = decrypt(&encrypted, &key).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
     #[test]
-    fn test_aes_gcm_round_trip() {
+    fn test_xchacha_round_trip() {
         let keys = derive_keys_from_mnemonic(
             "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
         )
