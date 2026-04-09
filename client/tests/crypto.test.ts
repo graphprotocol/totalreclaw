@@ -132,11 +132,11 @@ describe('Crypto Module', () => {
       // Should be a valid base64 string
       expect(typeof encrypted).toBe('string');
       const decoded = Buffer.from(encrypted, 'base64');
-      // iv(12) + tag(16) + ciphertext(>=1) = at least 29 bytes
-      expect(decoded.length).toBeGreaterThanOrEqual(29);
+      // nonce(24) + tag(16) + ciphertext(>=1) = at least 41 bytes
+      expect(decoded.length).toBeGreaterThanOrEqual(41);
     });
 
-    test('should produce different ciphertexts for same plaintext (random IV)', async () => {
+    test('should produce different ciphertexts for same plaintext (random nonce)', async () => {
       const { encryptionKey } = await deriveKeys('test-password', generateSalt());
 
       const encrypted1 = encrypt('Hello, World!', encryptionKey);
@@ -190,13 +190,13 @@ describe('Crypto Module', () => {
       expect(decrypted).toBe(text);
     });
 
-    test('wire format should be iv(12) || tag(16) || ciphertext', async () => {
+    test('wire format should be nonce(24) || tag(16) || ciphertext', async () => {
       const { encryptionKey } = await deriveKeys('test-password', generateSalt());
       const encrypted = encrypt('test data', encryptionKey);
 
       const combined = Buffer.from(encrypted, 'base64');
-      // iv = 12, tag = 16, ciphertext = length of "test data" encrypted
-      expect(combined.length).toBe(12 + 16 + 9); // AES-GCM: plaintext len == ciphertext len
+      // nonce = 24, tag = 16, ciphertext = length of "test data" encrypted
+      expect(combined.length).toBe(24 + 16 + 9); // XChaCha20-Poly1305: plaintext len == ciphertext len
     });
   });
 
