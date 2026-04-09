@@ -6,7 +6,9 @@
 //!   1: id (string), 2: timestamp (string), 3: owner (string),
 //!   4: encrypted_blob (bytes), 5: blind_indices (repeated string),
 //!   6: decay_score (double), 7: is_active (bool), 8: version (int32),
-//!   9: source (string), 10: content_fp (string), 11: agent_id (string),
+//!   9: (removed in v3 — now encrypted inside field 4),
+//!   10: content_fp (string),
+//!   11: (removed in v3 — now encrypted inside field 4),
 //!   12: sequence_id (int64, server-assigned), 13: encrypted_embedding (string)
 
 /// A fact payload ready for protobuf encoding and on-chain submission.
@@ -46,14 +48,11 @@ pub fn encode_fact_protobuf(fact: &FactPayload) -> Vec<u8> {
     write_double(&mut buf, 6, fact.decay_score);
     // Field 7: is_active (bool = varint 1)
     write_varint_field(&mut buf, 7, 1);
-    // Field 8: version (int32 = varint 2)
-    write_varint_field(&mut buf, 8, 2);
-    // Field 9: source (string)
-    write_string(&mut buf, 9, &fact.source);
+    // Field 8: version (int32 = varint 3)
+    write_varint_field(&mut buf, 8, 3);
+    // Fields 9 (source) and 11 (agent_id) removed in v3 — now encrypted inside field 4
     // Field 10: content_fp (string)
     write_string(&mut buf, 10, &fact.content_fp);
-    // Field 11: agent_id (string)
-    write_string(&mut buf, 11, &fact.agent_id);
     // Field 12: sequence_id — assigned by subgraph, not set client-side
     // Field 13: encrypted_embedding (string)
     if let Some(ref emb) = fact.encrypted_embedding {
@@ -76,9 +75,8 @@ pub fn encode_tombstone_protobuf(fact_id: &str, owner: &str) -> Vec<u8> {
     write_double(&mut buf, 6, 0.0);
     // is_active = false
     write_varint_field(&mut buf, 7, 0);
-    write_varint_field(&mut buf, 8, 2);
-    write_string(&mut buf, 9, "zeroclaw_tombstone");
-    write_string(&mut buf, 11, "zeroclaw");
+    write_varint_field(&mut buf, 8, 3);
+    // Fields 9 (source) and 11 (agent_id) removed in v3
 
     buf
 }

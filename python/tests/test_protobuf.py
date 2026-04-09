@@ -155,10 +155,11 @@ class TestEncodeFactProtobuf:
         result = encode_fact_protobuf(fact)
         assert b"\xca\xfe\xba\xbe" in result
 
-    def test_contains_source(self) -> None:
+    def test_source_not_in_wire_format(self) -> None:
+        """In v3, source is encrypted inside field 4, not written as field 9."""
         fact = _make_sample_fact()
         result = encode_fact_protobuf(fact)
-        assert b"python_test" in result
+        assert b"python_test" not in result
 
     def test_decay_score_encoding(self) -> None:
         """decay_score=1.0 should appear as a little-endian double."""
@@ -176,13 +177,13 @@ class TestEncodeFactProtobuf:
         val = encode_varint(1)
         assert tag + val in result
 
-    def test_version_always_two(self) -> None:
-        """version is hardcoded to 2."""
+    def test_version_always_three(self) -> None:
+        """version is hardcoded to 3 (XChaCha20 + encrypted metadata envelope)."""
         fact = _make_sample_fact()
         result = encode_fact_protobuf(fact)
-        # Field 8, wire type 0: tag = (8 << 3) | 0 = 64 = 0x40, value = 2
+        # Field 8, wire type 0: tag = (8 << 3) | 0 = 64 = 0x40, value = 3
         tag = encode_varint(0x40)
-        val = encode_varint(2)
+        val = encode_varint(3)
         assert tag + val in result
 
 
@@ -327,13 +328,15 @@ class TestEncodeTombstoneProtobuf:
         packed_zero = struct.pack("<d", 0.0)
         assert packed_zero in result
 
-    def test_source_is_python_forget(self) -> None:
+    def test_source_not_in_wire_format(self) -> None:
+        """In v3, source is encrypted inside field 4, not written as field 9."""
         result = encode_tombstone_protobuf("fact-123", "0xOwner")
-        assert b"python_forget" in result
+        assert b"python_forget" not in result
 
-    def test_agent_id_is_python_client(self) -> None:
+    def test_agent_id_not_in_wire_format(self) -> None:
+        """In v3, agent_id is encrypted inside field 4, not written as field 11."""
         result = encode_tombstone_protobuf("fact-123", "0xOwner")
-        assert b"python-client" in result
+        assert b"python-client" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -392,17 +395,25 @@ class TestRoundTripStructure:
         return fields
 
     def test_all_fields_present(self) -> None:
-        """A fully populated fact should have all expected field numbers."""
+        """A fully populated fact should have all expected field numbers.
+
+        In v3, fields 9 (source) and 11 (agent_id) are no longer written --
+        they are encrypted inside field 4.
+        """
         fact = _make_sample_fact(encrypted_embedding="enc_emb")
         data = encode_fact_protobuf(fact)
         fields = self._parse_fields(data)
 
         field_numbers = {f[0] for f in fields}
-        # Fields 1-11, 13 expected. Field 12 (sequence_id) is server-assigned.
-        expected = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13}
+        # Fields 1-8, 10, 13 expected. Fields 9, 11 removed in v3.
+        # Field 12 (sequence_id) is server-assigned.
+        expected = {1, 2, 3, 4, 5, 6, 7, 8, 10, 13}
         assert expected.issubset(field_numbers), (
             f"Missing fields: {expected - field_numbers}"
         )
+        # Fields 9 and 11 must NOT be present
+        assert 9 not in field_numbers, "Field 9 (source) should not be in v3 wire format"
+        assert 11 not in field_numbers, "Field 11 (agent_id) should not be in v3 wire format"
 
     def test_field_wire_types(self) -> None:
         """Verify each field uses the correct wire type."""
@@ -419,9 +430,8 @@ class TestRoundTripStructure:
             6: 1,   # decay_score: double (64-bit)
             7: 0,   # is_active: bool (varint)
             8: 0,   # version: int32 (varint)
-            9: 2,   # source: string
+            # 9 (source) and 11 (agent_id) removed in v3
             10: 2,  # content_fp: string
-            11: 2,  # agent_id: string
             13: 2,  # encrypted_embedding: string
         }
 
@@ -462,10 +472,11 @@ class TestRoundTripStructure:
         assert field_map[5] == [b"idx1", b"idx2"]
         assert field_map[6] == [0.75]
         assert field_map[7] == [1]   # is_active = true
-        assert field_map[8] == [2]   # version = 2
-        assert field_map[9] == [b"test_src"]
+        assert field_map[8] == [3]   # version = 3
+        # Fields 9 (source) and 11 (agent_id) removed in v3
+        assert 9 not in field_map, "Field 9 (source) should not be in v3 wire format"
+        assert 11 not in field_map, "Field 11 (agent_id) should not be in v3 wire format"
         assert field_map[10] == [b"fp123"]
-        assert field_map[11] == [b"agent-1"]
         assert field_map[13] == [b"emb_data"]
 
     def test_no_field_12(self) -> None:

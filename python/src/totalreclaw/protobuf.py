@@ -7,7 +7,9 @@ Field numbers match TotalReclawFact:
   1: id (string), 2: timestamp (string), 3: owner (string),
   4: encrypted_blob (bytes), 5: blind_indices (repeated string),
   6: decay_score (double), 7: is_active (bool), 8: version (int32),
-  9: source (string), 10: content_fp (string), 11: agent_id (string),
+  9: (removed in v3 -- now encrypted inside field 4),
+  10: content_fp (string),
+  11: (removed in v3 -- now encrypted inside field 4),
   12: sequence_id (int64 -- assigned by subgraph, not client),
   13: encrypted_embedding (string)
 """
@@ -118,10 +120,9 @@ def encode_fact_protobuf(fact: FactPayload) -> bytes:
 
     _write_double(parts, 6, fact.decay_score)
     _write_varint_field(parts, 7, 1)  # is_active = true
-    _write_varint_field(parts, 8, 2)  # version = 2
-    _write_string(parts, 9, fact.source)
+    _write_varint_field(parts, 8, 3)  # version = 3 (source/agent_id now encrypted inside field 4)
+    # Fields 9 (source) and 11 (agent_id) removed in v3 -- now encrypted inside field 4
     _write_string(parts, 10, fact.content_fp)
-    _write_string(parts, 11, fact.agent_id)
     # Field 12 (sequence_id) is assigned by the subgraph mapping, not the client
     if fact.encrypted_embedding:
         _write_string(parts, 13, fact.encrypted_embedding)
