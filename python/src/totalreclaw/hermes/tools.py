@@ -160,16 +160,81 @@ def setup(args: dict, state: "PluginState", **kwargs) -> str:
 # ── Import Tools ─────────────────────────────────────────────────────────────
 
 
+def _read_hermes_llm_config():
+    """Read the LLM provider config from Hermes's own config files.
+
+    Hermes stores its config in ~/.hermes/config.yaml (provider + model)
+    and ~/.hermes/.env (API keys). This reads both to build an LLM config
+    that matches what Hermes itself uses — no separate env vars needed.
+    """
+    import yaml
+    from pathlib import Path
+    from totalreclaw.agent.llm_client import LLMConfig
+
+    hermes_dir = Path.home() / ".hermes"
+    config_path = hermes_dir / "config.yaml"
+    env_path = hermes_dir / ".env"
+
+    if not config_path.exists():
+        return None
+
+    # Read config.yaml for provider + model
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f) or {}
+
+    model_cfg = cfg.get("model", {})
+    provider = model_cfg.get("provider", "")
+    model = model_cfg.get("model", "")
+
+    if not provider or not model:
+        return None
+
+    # Read .env for API keys
+    env_vars = {}
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    env_vars[k.strip()] = v.strip()
+
+    # Map Hermes provider names to API keys and base URLs
+    provider_key_map = {
+        "zai": (["ZAI_API_KEY", "GLM_API_KEY"], "https://api.z.ai/api/coding/paas/v4"),
+        "openai": (["OPENAI_API_KEY"], "https://api.openai.com/v1"),
+        "anthropic": (["ANTHROPIC_API_KEY"], "https://api.anthropic.com/v1"),
+        "openrouter": (["OPENROUTER_API_KEY"], "https://openrouter.ai/api/v1"),
+        "groq": (["GROQ_API_KEY"], "https://api.groq.com/openai/v1"),
+        "deepseek": (["DEEPSEEK_API_KEY"], "https://api.deepseek.com/v1"),
+        "mistral": (["MISTRAL_API_KEY"], "https://api.mistral.ai/v1"),
+    }
+
+    key_names, default_base_url = provider_key_map.get(provider.lower(), ([], ""))
+    api_key = None
+    for kn in key_names:
+        api_key = env_vars.get(kn) or os.environ.get(kn)
+        if api_key:
+            break
+
+    if not api_key:
+        return None
+
+    # Respect custom base URL from .env
+    base_url = env_vars.get("GLM_BASE_URL") or env_vars.get("OPENAI_BASE_URL") or default_base_url
+    api_format = "anthropic" if provider.lower() == "anthropic" else "openai"
+
+    return LLMConfig(api_key=api_key, base_url=base_url, model=model, api_format=api_format)
+
+
 def _make_extractor(state: "PluginState"):
-    """Build an async LLM extraction callable from the Hermes plugin state.
+    """Build an async LLM extraction callable using Hermes's own LLM config.
 
-    Returns an async function with signature::
-
-        async (messages: list[dict], timestamp: str) -> list[dict]
-
-    Uses the same extraction pipeline as the auto-extraction hooks
-    (``totalreclaw.agent.extraction``), which in turn uses the LLM client
-    auto-detected from environment variables.
+    Reads from ~/.hermes/config.yaml + ~/.hermes/.env to match the host
+    agent's configured provider. Falls back to detect_llm_config() for
+    non-Hermes environments.
     """
     from totalreclaw.agent.extraction import (
         EXTRACTION_SYSTEM_PROMPT,
@@ -179,8 +244,10 @@ def _make_extractor(state: "PluginState"):
     from totalreclaw.agent.llm_client import detect_llm_config, chat_completion
 
     async def extract(messages: list[dict], timestamp: str) -> list[dict]:
-        config = detect_llm_config()
+        # Try Hermes config first, fall back to env var detection
+        config = _read_hermes_llm_config() or detect_llm_config()
         if not config:
+            logger.warning("No LLM config found for extraction (checked Hermes config + env vars)")
             return []
 
         conversation_text = _truncate_messages(messages)
