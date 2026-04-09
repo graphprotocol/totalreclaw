@@ -95,3 +95,72 @@ SETUP = {
         },
     },
 }
+
+IMPORT_FROM = {
+    "name": "totalreclaw_import_from",
+    "description": (
+        "Import memories from other AI tools (Gemini, ChatGPT, Claude, Mem0, etc.) "
+        "into TotalReclaw's encrypted vault. Supports dry_run to preview what would "
+        "be imported. For large imports (>50 chunks), use totalreclaw_import_batch "
+        "to process in batches."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "source": {
+                "type": "string",
+                "enum": ["gemini", "chatgpt", "claude", "mem0", "mcp-memory", "generic-json"],
+                "description": "The source system to import from",
+            },
+            "file_path": {
+                "type": "string",
+                "description": "Path to the export file on disk (e.g. Gemini Takeout HTML, ChatGPT conversations.json)",
+            },
+            "content": {
+                "type": "string",
+                "description": "For file-based sources: the file content (pasted JSON, HTML, CSV)",
+            },
+            "dry_run": {
+                "type": "boolean",
+                "description": "Parse and estimate without importing. Shows chunk count and estimated facts. Default: false.",
+            },
+        },
+        "required": ["source"],
+    },
+}
+
+IMPORT_BATCH = {
+    "name": "totalreclaw_import_batch",
+    "description": (
+        "Process one batch of a large import. Call repeatedly with increasing "
+        "offset until is_complete is true. Each batch processes up to batch_size "
+        "conversation chunks, extracting and storing facts."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "source": {
+                "type": "string",
+                "enum": ["gemini", "chatgpt", "claude", "mem0", "mcp-memory", "generic-json"],
+                "description": "The source system to import from (must match the initial import_from call)",
+            },
+            "file_path": {
+                "type": "string",
+                "description": "Path to the export file on disk",
+            },
+            "content": {
+                "type": "string",
+                "description": "For file-based sources: the file content",
+            },
+            "offset": {
+                "type": "integer",
+                "description": "Chunk offset to start processing from (default: 0)",
+            },
+            "batch_size": {
+                "type": "integer",
+                "description": "Number of chunks to process in this batch (default: 25)",
+            },
+        },
+        "required": ["source"],
+    },
+}

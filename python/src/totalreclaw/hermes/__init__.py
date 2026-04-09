@@ -69,6 +69,22 @@ def register(ctx):
         handler=lambda args, **kw: tools.setup(args, state, **kw),
         description="Configure TotalReclaw credentials",
     )
+    ctx.register_tool(
+        name="totalreclaw_import_from",
+        toolset="totalreclaw",
+        schema=schemas.IMPORT_FROM,
+        handler=lambda args, **kw: tools.import_from(args, state, **kw),
+        is_async=True,
+        description="Import memories from other AI tools",
+    )
+    ctx.register_tool(
+        name="totalreclaw_import_batch",
+        toolset="totalreclaw",
+        schema=schemas.IMPORT_BATCH,
+        handler=lambda args, **kw: tools.import_batch(args, state, **kw),
+        is_async=True,
+        description="Process one batch of a large import",
+    )
 
     # Register hooks
     ctx.register_hook("on_session_start", lambda **kw: hooks.on_session_start(state, **kw))
@@ -76,4 +92,4 @@ def register(ctx):
     ctx.register_hook("post_llm_call", lambda **kw: hooks.post_llm_call(state, **kw))
     ctx.register_hook("on_session_end", lambda **kw: hooks.on_session_end(state, **kw))
 
-    logger.info("TotalReclaw plugin registered (6 tools, 4 hooks)")
+    logger.info("TotalReclaw plugin registered (8 tools, 4 hooks)")
