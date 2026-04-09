@@ -12,7 +12,7 @@
   },
   "encryption": {
     "plaintext": "The user prefers dark mode and uses Vim keybindings.",
-    "encrypted_base64": "0wdVQlKI1R3KRarwgZRxD/iiIrA7TiFECYDQht5Zn7fju0QnHoExHinRA809UvfjFUM6F0vWLIujgXgmsaBXE2by5vp+GT+H2jEz1ausvAk="
+    "encrypted_base64": "TMAt4Gr2NwynSeDF33+dIIS19XOHtAPGyyg49E+Pl+F3Uktr4OltR+aPeYkojI7iFO4ucLPJVi0u1tptojVaxSn4huVxSUx2TaznCQzlccIpgQbVj+O6PpFw9cA="
   },
   "blind_indices": {
     "input_text": "Alice likes distributed systems and Rust programming",
