@@ -350,6 +350,11 @@ Full CI/CD pipeline documented in `totalreclaw-internal/docs/ci-cd-pipeline.md`.
 2. **E2E tests gate production promotion.** At minimum, relay smoke tests must pass against staging before promoting.
 3. **npm packages tested against staging before publish.** Run `tests/verify-publish.sh` after every publish.
 4. **Subgraph deploys to staging first.** Verify indexing before deploying to production subgraph.
+5. **After every subgraph deploy, immediately update the relay's `SUBGRAPH_ENDPOINT` env var on Railway.** The relay queries the subgraph via this URL — a stale version means the relay reads from an outdated schema. Update both services:
+   - **Staging** (free tier, Base Sepolia): `railway variables set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/totalreclaw---base-sepolia/<new-version>" -s totalreclaw`
+   - **Production** (free tier, Base Sepolia): `railway variables set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/totalreclaw---base-sepolia/<new-version>" -s totalreclaw-production`
+   - **Production** (pro tier, Gnosis): `railway variables set "PRO_SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<new-version>" -s totalreclaw-production`
+   Setting env vars triggers an automatic Railway redeploy. Verify the relay restarts cleanly by checking `/health`.
 
 For deployment procedures, invoke the `deploy-totalreclaw` skill.
 
