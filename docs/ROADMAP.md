@@ -84,6 +84,7 @@ Cloudflare sits in front of the reverse proxy and provides DDoS mitigation, bot 
 |-----|-------------|---------------|
 | Prometheus metrics | /metrics endpoint with request counters, latency histograms, error rates, pool gauges, rate limit hits | **DONE** |
 | Alerting | No thresholds defined. Need alerts for: error rate >5%, p95 >500ms, pool exhaustion | NOT DONE — define after baseline established |
+| Uptime monitoring | External poller (UptimeRobot, Better Stack, or similar) hitting `/health/deep` every 60s. Alerts on downtime, degraded state, or slow response (>5s). Triggers Telegram notifications via the relay's `sendTelegramAlert()`. Currently, health checks only fire when manually hit — Railway restarts and transient outages go undetected. | NOT DONE |
 | Database migrations (Alembic) | alembic.ini + migrations/env.py + 001_initial_schema baseline | **DONE** — needs v0.3.1b migration for upgrades |
 | API versioning | /v1/ prefix on all API routes (breaking change, done before external users exist) | **DONE** (IN PROGRESS) |
 | Pagination on /export | Cursor-based pagination with limit + has_more | **DONE** (IN PROGRESS) |
@@ -452,10 +453,25 @@ Import conversation history and/or memory features from the major LLM providers.
 | **ChatGPT** (OpenAI) | Conversation history, memory | Data export (Settings → Export) or API |
 | **Gemini** (Google) | Conversation history, memory | Google Takeout or API |
 
+### 5.3 Smart Import Extraction (Two-Pass Pipeline) — IN PROGRESS
+
+Replace blind per-chunk fact extraction with a profiling-first approach. The import moment is the ONE chance to build intelligence about the user (everything is plaintext on-device before encryption).
+
+**Core module built** (`rust/totalreclaw-core/src/smart_import.rs`). Client integration pending.
+
+| Pass | What it does | Status |
+|------|-------------|--------|
+| **Pass 1: Hierarchical Profiling** | Batch-summarize ALL conversations (first+last messages, 50 per batch). Merge partial profiles into one `UserProfile` (identity, themes, projects, stack, decisions, interests, skip patterns). | Core: DONE. Client: NOT STARTED |
+| **Pass 1.5: Chunk Triage** | Classify each chunk as EXTRACT or SKIP based on profile. Skips generic Q&A (recipes, weather, translations). Saves 40-60% of extraction LLM calls. | Core: DONE. Client: NOT STARTED |
+| **Pass 2: Context-Enriched Extraction** | Inject user profile into extraction prompts. LLM knows WHO the user is, so it extracts what's relevant to THEM. | Core: DONE. Client: NOT STARTED |
+
+**Design:** `totalreclaw-internal/docs/plans/2026-04-11-smart-import-design.md`
+
 ### Design Considerations
 
 - All imports run **client-side** -- source data is decrypted/parsed locally, re-encrypted with the user's key, then stored. Server never sees plaintext.
 - Fact extraction uses the same LLM pipeline as normal memory capture (extract → deduplicate → encrypt → store).
+- Smart import profiling adds 2-3 extra LLM calls per import (~$0.02-0.06 with GPT-4o-mini) but reduces extraction calls by 40-60%.
 - Deduplication via content fingerprints prevents double-ingestion if an import is run multiple times.
 - Bulk import should support progress tracking and resumption for large histories.
 
