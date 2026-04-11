@@ -792,5 +792,8 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Consolidation / dedup
     crate::consolidation::register_python_functions(m)?;
 
+    // Smart import profiling
+    crate::smart_import::register_python_functions(m)?;
+
     Ok(())
 }

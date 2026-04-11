@@ -20,6 +20,7 @@
 //! - [`userop`] — ERC-4337 v0.7 UserOp building + signing (feature: `managed`)
 //! - [`hotcache`] — Generic in-memory hot cache for semantic query dedup (no WASM binding)
 //! - [`consolidation`] — Store-time near-duplicate detection + supersede logic
+//! - [`smart_import`] — Smart import profiling (prompt construction + response parsing)
 
 pub mod blind;
 pub mod consolidation;
@@ -30,6 +31,7 @@ pub mod hotcache;
 pub mod lsh;
 pub mod protobuf;
 pub mod reranker;
+pub mod smart_import;
 pub mod stemmer;
 pub mod store;
 pub mod wallet;
