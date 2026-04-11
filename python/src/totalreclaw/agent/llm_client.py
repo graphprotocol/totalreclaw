@@ -10,6 +10,7 @@ integration (Hermes, LangChain, CrewAI, or custom agents).
 """
 from __future__ import annotations
 
+import asyncio as _asyncio
 import json
 import logging
 import os
@@ -98,6 +99,12 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
     return None
 
 
+# Retry/backoff settings for LLM calls
+_MAX_RETRIES = 3
+_BACKOFF_DELAYS = [5.0, 10.0, 20.0]  # seconds between retries
+_LLM_TIMEOUT = 120.0  # seconds (extraction prompts with long conversation text need this)
+
+
 async def chat_completion(
     config: LLMConfig,
     system_prompt: str,
@@ -105,15 +112,35 @@ async def chat_completion(
     max_tokens: int = 2048,
     temperature: float = 0.0,
 ) -> Optional[str]:
-    """Call LLM chat completion. Returns assistant response text or None."""
-    try:
-        if config.api_format == "anthropic":
-            return await _call_anthropic(config, system_prompt, user_prompt, max_tokens, temperature)
-        else:
-            return await _call_openai(config, system_prompt, user_prompt, max_tokens, temperature)
-    except Exception as e:
-        logger.warning("LLM call failed: %s", e)
-        return None
+    """Call LLM chat completion with retry/backoff. Returns assistant response text or None."""
+    last_exc: Optional[Exception] = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            if config.api_format == "anthropic":
+                return await _call_anthropic(config, system_prompt, user_prompt, max_tokens, temperature)
+            else:
+                return await _call_openai(config, system_prompt, user_prompt, max_tokens, temperature)
+        except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
+            last_exc = e
+            # Retry on timeout or 429 rate limit
+            is_rate_limit = isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429
+            is_timeout = isinstance(e, httpx.TimeoutException)
+            if (is_rate_limit or is_timeout) and attempt < _MAX_RETRIES - 1:
+                delay = _BACKOFF_DELAYS[attempt] if attempt < len(_BACKOFF_DELAYS) else _BACKOFF_DELAYS[-1]
+                logger.warning(
+                    "LLM call failed (attempt %d/%d, retrying in %.0fs): %s",
+                    attempt + 1, _MAX_RETRIES, delay, repr(e),
+                )
+                await _asyncio.sleep(delay)
+                continue
+            logger.warning("LLM call failed (attempt %d/%d, no more retries): %s", attempt + 1, _MAX_RETRIES, repr(e))
+            return None
+        except Exception as e:
+            logger.warning("LLM call failed: %s", repr(e))
+            return None
+
+    logger.warning("LLM call exhausted all retries: %s", repr(last_exc))
+    return None
 
 
 async def _call_openai(
@@ -123,7 +150,7 @@ async def _call_openai(
     max_tokens: int,
     temperature: float,
 ) -> Optional[str]:
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
         resp = await client.post(
             f"{config.base_url}/chat/completions",
             headers={
@@ -152,7 +179,7 @@ async def _call_anthropic(
     max_tokens: int,
     temperature: float,
 ) -> Optional[str]:
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
         resp = await client.post(
             f"{config.base_url}/messages",
             headers={

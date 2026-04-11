@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from .llm_client import detect_llm_config, chat_completion
+from .llm_client import LLMConfig, detect_llm_config, chat_completion
 
 logger = logging.getLogger(__name__)
 
@@ -141,9 +141,17 @@ async def extract_facts_llm(
     messages: list[dict],
     mode: str = "turn",  # "turn" or "full"
     existing_memories: Optional[list[dict]] = None,
+    llm_config: Optional["LLMConfig"] = None,
 ) -> list[ExtractedFact]:
-    """Extract facts using LLM. Returns empty list if no LLM available."""
-    config = detect_llm_config()
+    """Extract facts using LLM. Returns empty list if no LLM available.
+
+    Parameters
+    ----------
+    llm_config : LLMConfig, optional
+        Pre-resolved LLM configuration. If not provided, falls back to
+        ``detect_llm_config()`` which auto-detects from environment variables.
+    """
+    config = llm_config or detect_llm_config()
     if not config:
         return []
 

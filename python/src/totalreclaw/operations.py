@@ -451,11 +451,26 @@ async def export_facts(
                         bytes.fromhex(encrypted_hex)
                     ).decode("ascii")
                     text = decrypt(encrypted_b64, keys.encryption_key)
+
+                    # Prefer createdAt (per-fact client timestamp) over
+                    # timestamp (block time). Both are BigInt strings from
+                    # the subgraph representing Unix seconds.
+                    raw_ts = fact.get("createdAt") or fact.get("timestamp") or ""
+                    formatted_ts = ""
+                    if raw_ts:
+                        try:
+                            ts_int = int(str(raw_ts))
+                            formatted_ts = datetime.fromtimestamp(
+                                ts_int, tz=timezone.utc
+                            ).strftime("%Y-%m-%d %H:%M:%S UTC")
+                        except (ValueError, OSError):
+                            formatted_ts = str(raw_ts)
+
                     results.append(
                         {
                             "id": fact["id"],
                             "text": text,
-                            "timestamp": fact.get("timestamp", ""),
+                            "timestamp": formatted_ts,
                             "importance": float(fact.get("decayScore", "0.5")),
                         }
                     )

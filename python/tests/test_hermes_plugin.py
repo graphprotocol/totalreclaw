@@ -466,7 +466,7 @@ class TestStoreTimeDedup:
              patch("totalreclaw.agent.lifecycle.extract_facts_heuristic"), \
              patch("totalreclaw.embedding.get_embedding", return_value=[1.0, 0.0, 0.0]):
 
-            async def llm_extract(messages, mode, existing_memories):
+            async def llm_extract(messages, mode, existing_memories, llm_config=None):
                 return [add_fact, update_fact]
 
             mock_llm.side_effect = llm_extract

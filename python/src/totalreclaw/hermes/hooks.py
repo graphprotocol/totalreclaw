@@ -24,6 +24,19 @@ from totalreclaw.agent.extraction import extract_facts_llm, extract_facts_heuris
 logger = logging.getLogger(__name__)
 
 
+def _get_hermes_llm_config():
+    """Get LLM config from Hermes's own config files.
+
+    Returns an LLMConfig from ~/.hermes/config.yaml + ~/.hermes/.env, or None.
+    Imported lazily to avoid circular imports.
+    """
+    try:
+        from .tools import _read_hermes_llm_config
+        return _read_hermes_llm_config()
+    except Exception:
+        return None
+
+
 def on_session_start(state: "PluginState", **kwargs) -> None:
     """Initialize client and check billing on session start."""
     session_id = kwargs.get("session_id", "")
@@ -99,9 +112,9 @@ def post_llm_call(state: "PluginState", **kwargs) -> None:
     if state.turn_count % extraction_interval != 0:
         return
 
-    # Extract and store facts
+    # Extract and store facts (use Hermes LLM config so model name is resolved)
     try:
-        _auto_extract(state, mode="turn")
+        _auto_extract(state, mode="turn", llm_config=_get_hermes_llm_config())
     except Exception as e:
         logger.warning("TotalReclaw post_llm_call extraction failed: %s", e)
 
@@ -117,7 +130,7 @@ def on_session_end(state: "PluginState", **kwargs) -> None:
     try:
         stored_fact_texts: list[str] = []
         try:
-            stored_fact_texts = _auto_extract(state, mode="full")
+            stored_fact_texts = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config())
         except Exception as e:
             logger.warning("TotalReclaw on_session_end flush failed: %s", e)
 

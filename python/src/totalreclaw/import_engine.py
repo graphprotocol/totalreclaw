@@ -26,6 +26,7 @@ Usage::
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import time
@@ -49,6 +50,7 @@ EXTRACTION_RATIO = 2.5     # Average facts per conversation chunk (empirical)
 SECONDS_PER_BATCH = 45     # Estimated seconds to process one batch
 DEFAULT_BATCH_SIZE = 25    # Chunks per batch
 CHUNK_SIZE = 20            # Messages per conversation chunk (matches adapters)
+INTER_CHUNK_DELAY = 2.0    # Seconds between LLM extraction calls (rate-limit mitigation)
 
 
 class ImportEngine:
@@ -228,10 +230,18 @@ class ImportEngine:
         facts_extracted = 0
         facts_stored = 0
         errors: list[str] = []
+        chunks_with_no_facts = 0
+        extraction_failures = 0
 
-        for chunk in batch:
+        for i, chunk in enumerate(batch):
+            # Rate-limit: add delay between LLM calls (skip before the first one)
+            if i > 0:
+                await asyncio.sleep(INTER_CHUNK_DELAY)
+
             try:
                 extracted = await self._extract_from_chunk(chunk)
+                if not extracted:
+                    chunks_with_no_facts += 1
                 facts_extracted += len(extracted)
 
                 for fact in extracted:
@@ -249,13 +259,26 @@ class ImportEngine:
                                 errors.append("Error limit reached (20). Remaining facts in this batch skipped.")
                                 break
             except Exception as e:
-                errors.append(f"Extraction failed for chunk '{chunk.title}': {e}")
+                extraction_failures += 1
+                errors.append(f"Extraction failed for chunk '{chunk.title}': {repr(e)}")
 
             if len(errors) >= 20:
                 break
 
+        # Surface extraction problems as warnings so the user gets feedback
+        if extraction_failures > 0:
+            errors.insert(0, f"{extraction_failures} chunk(s) failed during LLM extraction")
+        if chunks_with_no_facts > 0 and facts_extracted == 0:
+            errors.insert(0,
+                f"All {chunks_processed} chunks produced 0 facts. "
+                "This usually means LLM extraction calls failed (timeout or rate limit). "
+                "Check logs for details or retry the import."
+            )
+        elif chunks_with_no_facts > 0:
+            errors.append(f"{chunks_with_no_facts}/{chunks_processed} chunks produced 0 facts (possible LLM failures)")
+
         return BatchImportResult(
-            success=facts_stored > 0 or not errors,
+            success=facts_stored > 0 or (not errors and chunks_with_no_facts == 0),
             batch_offset=offset,
             batch_size=batch_size,
             chunks_processed=chunks_processed,

@@ -71,7 +71,7 @@ def _is_near_duplicate(
     return False
 
 
-def auto_extract(state: "AgentState", mode: str = "turn") -> list[str]:
+def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> list[str]:
     """Extract facts from conversation and store them.
 
     Tries LLM extraction first, falls back to heuristic if no LLM available.
@@ -81,6 +81,8 @@ def auto_extract(state: "AgentState", mode: str = "turn") -> list[str]:
     Args:
         state: The AgentState instance (must be configured).
         mode: "turn" for incremental extraction, "full" for session-end flush.
+        llm_config: Optional pre-resolved LLM configuration (e.g. from Hermes config).
+            If not provided, ``extract_facts_llm`` falls back to env var detection.
 
     Returns:
         List of stored fact texts (for debrief context).
@@ -112,7 +114,7 @@ def auto_extract(state: "AgentState", mode: str = "turn") -> list[str]:
         facts: list[ExtractedFact] = []
         try:
             facts = loop.run_until_complete(
-                extract_facts_llm(messages, mode=mode, existing_memories=existing_memories)
+                extract_facts_llm(messages, mode=mode, existing_memories=existing_memories, llm_config=llm_config)
             )
         except Exception as e:
             logger.debug("LLM extraction failed, falling back to heuristic: %s", e)
