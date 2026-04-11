@@ -37,7 +37,7 @@ interface ConversationMessage {
 // Extraction Prompt
 // ---------------------------------------------------------------------------
 
-const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction engine. Analyze the conversation and extract valuable long-term memories.
+export const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction engine. Analyze the conversation and extract valuable long-term memories.
 
 Rules:
 1. Each memory must be a single, self-contained piece of information
@@ -190,12 +190,14 @@ function parseFactsResponse(response: string): ExtractedFact[] {
  * @param rawMessages - The messages array from the hook event (unknown[])
  * @param mode - 'turn' for agent_end (recent only), 'full' for compaction/reset
  * @param existingMemories - Optional list of existing memories for dedup context
+ * @param profileContext - Optional enriched system prompt from smart import (replaces default)
  * @returns Array of extracted facts, or empty array on failure.
  */
 export async function extractFacts(
   rawMessages: unknown[],
   mode: 'turn' | 'full',
   existingMemories?: Array<{ id: string; text: string }>,
+  profileContext?: string,
 ): Promise<ExtractedFact[]> {
   const config = resolveLLMConfig();
   if (!config) return []; // No LLM available
@@ -230,9 +232,12 @@ export async function extractFacts(
       ? `Extract important facts from these recent conversation turns:\n\n${conversationText}${memoriesContext}`
       : `Extract ALL valuable long-term memories from this conversation before it is lost:\n\n${conversationText}${memoriesContext}`;
 
+  // Use enriched system prompt from smart import if provided, otherwise default
+  const systemPrompt = profileContext || EXTRACTION_SYSTEM_PROMPT;
+
   try {
     const response = await chatCompletion(config, [
-      { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ]);
 

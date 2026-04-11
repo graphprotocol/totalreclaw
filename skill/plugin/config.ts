@@ -73,6 +73,9 @@ export const CONFIG = {
   // Embedding model: "default" (640d, Harrier q4), "small" (384d, e5-small), or "large" (1024d, Qwen3)
   embeddingModel: (process.env.TOTALRECLAW_EMBEDDING_MODEL || 'default') as 'default' | 'small' | 'large',
 
+  // Observability — optional session ID for tracing QA runs in relay logs (Axiom)
+  sessionId: process.env.TOTALRECLAW_SESSION_ID || '',
+
   // Paths
   home,
   billingCachePath: path.join(home, '.totalreclaw', 'billing-cache.json'),

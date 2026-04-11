@@ -24,7 +24,9 @@ import { CONFIG } from './config.js';
 
 /**
  * Wrap a fetch-based JSON-RPC call with exponential backoff for HTTP 429
- * (rate limit) responses from Pimlico. Max 3 retries with 1s/2s/4s delays.
+ * (rate limit) responses from Pimlico. Max 5 retries with 5s base delay,
+ * doubling each attempt, capped at 60s, plus random jitter (0-1000ms).
+ * Total retry window: ~135s (5+10+20+40+60 plus jitter).
  * All other HTTP errors throw immediately.
  */
 async function rpcWithRetry(
@@ -33,7 +35,9 @@ async function rpcWithRetry(
   method: string,
   params: unknown[],
 ): Promise<any> {
-  const maxRetries = 3;
+  const maxRetries = 5;
+  const baseDelay = 5000;   // 5 seconds
+  const maxDelay = 60_000;  // 60 seconds cap
   const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params });
 
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
@@ -44,7 +48,7 @@ async function rpcWithRetry(
       if (json.error) {
         // Check if the RPC-level error message indicates a rate limit
         if (attempt <= maxRetries && /429|rate limit/i.test(json.error.message)) {
-          const delay = Math.pow(2, attempt - 1) * 1000;
+          const delay = Math.min(Math.pow(2, attempt - 1) * baseDelay, maxDelay) + Math.floor(Math.random() * 1000);
           console.error(`Pimlico rate limited, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})...`);
           await new Promise(r => setTimeout(r, delay));
           continue;
@@ -56,7 +60,7 @@ async function rpcWithRetry(
 
     // HTTP-level 429 — retry with backoff
     if (resp.status === 429 && attempt <= maxRetries) {
-      const delay = Math.pow(2, attempt - 1) * 1000;
+      const delay = Math.min(Math.pow(2, attempt - 1) * baseDelay, maxDelay) + Math.floor(Math.random() * 1000);
       console.error(`Pimlico rate limited, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})...`);
       await new Promise(r => setTimeout(r, delay));
       continue;
@@ -286,6 +290,7 @@ export async function submitFactOnChain(
   };
   if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
   if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
+  if (CONFIG.sessionId) headers['X-TotalReclaw-Session'] = CONFIG.sessionId;
 
   // Helper for JSON-RPC calls to relay bundler (with 429 retry)
   async function rpc(method: string, params: unknown[]): Promise<any> {
@@ -310,22 +315,33 @@ export async function submitFactOnChain(
   // 4. Check if Smart Account is deployed (needed for factory/factoryData)
   const { factory, factoryData } = await getInitCode(sender, eoa.address, rpcUrl);
 
-  // 5. Get nonce from EntryPoint via eth_call
+  // 5. Get nonce from EntryPoint via bundler RPC.
+  //    Routing through the bundler lets Pimlico account for pending mempool
+  //    UserOps, preventing AA25 nonce conflicts on rapid submissions.
+  //    Requires relay allowlist to include eth_call (added in relay v1.x).
+  //    Fallback: if bundler rejects eth_call (403/method_not_allowed), use public RPC.
   //    getNonce(address sender, uint192 key) — selector 0x35567e1a
   const senderPadded = sender.slice(2).toLowerCase().padStart(64, '0');
   const keyPadded = '0'.repeat(64);
   const nonceCalldata = `0x35567e1a${senderPadded}${keyPadded}`;
 
-  const nonceResp = await fetch(rpcUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0', id: 1, method: 'eth_call',
-      params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
-    }),
-  });
-  const nonceJson = await nonceResp.json() as { result?: string };
-  const nonce = nonceJson.result || '0x0';
+  let nonce: string;
+  try {
+    const nonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
+    nonce = nonceResult || '0x0';
+  } catch {
+    // Fallback to public RPC if bundler doesn't support eth_call
+    const nonceResp = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'eth_call',
+        params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
+      }),
+    });
+    const nonceJson = await nonceResp.json() as { result?: string };
+    nonce = nonceJson.result || '0x0';
+  }
 
   // 6. Build unsigned UserOp (v0.7 fields, camelCase for Rust JSON serde)
   const unsignedOp: Record<string, any> = {
@@ -354,8 +370,70 @@ export async function submitFactOnChain(
   const sigHex = getWasm().signUserOp(hashHex, eoa.private_key);
   unsignedOp.signature = `0x${sigHex}`;
 
-  // 9. Submit the signed UserOp
-  const userOpHash = await rpc('eth_sendUserOperation', [unsignedOp, entryPoint]);
+  // 9. Submit the signed UserOp (with AA25 nonce conflict retry)
+  let userOpHash: string;
+  try {
+    userOpHash = await rpc('eth_sendUserOperation', [unsignedOp, entryPoint]);
+  } catch (err: any) {
+    const msg = err?.message || '';
+    if (/AA25|AA10|invalid account nonce|already being processed/i.test(msg)) {
+      console.error('AA25/AA10 nonce conflict detected, rebuilding UserOp with fresh nonce...');
+      // Bust deployment cache so getInitCode re-checks on-chain
+      deployedAccounts.delete(sender.toLowerCase());
+
+      // Wait for previous UserOp to mine before retrying with fresh nonce.
+      // Public RPC won't reflect the new nonce until the tx is on-chain.
+      await new Promise(r => setTimeout(r, 15000));
+
+      // Re-fetch initCode and nonce
+      const { factory: retryFactory, factoryData: retryFactoryData } = await getInitCode(sender, eoa.address, rpcUrl);
+      let retryNonce: string;
+      try {
+        const retryNonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
+        retryNonce = retryNonceResult || '0x0';
+      } catch {
+        const retryNonceResp = await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0', id: 1, method: 'eth_call',
+            params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
+          }),
+        });
+        const retryNonceJson = await retryNonceResp.json() as { result?: string };
+        retryNonce = retryNonceJson.result || '0x0';
+      }
+
+      // Rebuild unsigned UserOp with fresh nonce and initCode
+      const retryOp: Record<string, any> = {
+        sender,
+        nonce: retryNonce,
+        callData,
+        callGasLimit: '0x0',
+        verificationGasLimit: '0x0',
+        preVerificationGas: '0x0',
+        maxFeePerGas: fast.maxFeePerGas,
+        maxPriorityFeePerGas: fast.maxPriorityFeePerGas,
+        signature: DUMMY_SIGNATURE,
+      };
+      if (retryFactory) {
+        retryOp.factory = retryFactory;
+        retryOp.factoryData = retryFactoryData;
+      }
+
+      // Re-sponsor and re-sign
+      const retrySponsor = await rpc('pm_sponsorUserOperation', [retryOp, entryPoint]);
+      Object.assign(retryOp, retrySponsor);
+      const retryOpJson = JSON.stringify(retryOp);
+      const retryHashHex = getWasm().hashUserOp(retryOpJson, entryPoint, BigInt(config.chainId));
+      const retrySigHex = getWasm().signUserOp(retryHashHex, eoa.private_key);
+      retryOp.signature = `0x${retrySigHex}`;
+
+      userOpHash = await rpc('eth_sendUserOperation', [retryOp, entryPoint]);
+    } else {
+      throw err;
+    }
+  }
 
   // 10. Wait for receipt (poll up to 120s)
   let receipt = null;
@@ -418,6 +496,7 @@ export async function submitFactBatchOnChain(
   };
   if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
   if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
+  if (CONFIG.sessionId) headers['X-TotalReclaw-Session'] = CONFIG.sessionId;
 
   // Helper for JSON-RPC calls to relay bundler (with 429 retry)
   async function rpc(method: string, params: unknown[]): Promise<any> {
@@ -443,21 +522,27 @@ export async function submitFactBatchOnChain(
   // Check if Smart Account is deployed (needed for factory/factoryData)
   const { factory, factoryData } = await getInitCode(sender, eoa.address, rpcUrl);
 
-  // Get nonce
+  // Get nonce via bundler (accounts for pending mempool UserOps) with public RPC fallback
   const senderPadded = sender.slice(2).toLowerCase().padStart(64, '0');
   const keyPadded = '0'.repeat(64);
   const nonceCalldata = `0x35567e1a${senderPadded}${keyPadded}`;
 
-  const nonceResp = await fetch(rpcUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0', id: 1, method: 'eth_call',
-      params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
-    }),
-  });
-  const nonceJson = await nonceResp.json() as { result?: string };
-  const nonce = nonceJson.result || '0x0';
+  let nonce: string;
+  try {
+    const nonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
+    nonce = nonceResult || '0x0';
+  } catch {
+    const nonceResp = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'eth_call',
+        params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
+      }),
+    });
+    const nonceJson = await nonceResp.json() as { result?: string };
+    nonce = nonceJson.result || '0x0';
+  }
 
   // Build unsigned UserOp
   const unsignedOp: Record<string, any> = {
@@ -476,7 +561,21 @@ export async function submitFactBatchOnChain(
     unsignedOp.factoryData = factoryData;
   }
 
-  // Paymaster sponsorship
+  // Gas estimation for batch operations — get accurate gas limits from Pimlico
+  // before paymaster sponsorship (can't bump after sponsorship as it invalidates
+  // the paymaster's signature, causing AA34).
+  if (protobufPayloads.length > 1) {
+    try {
+      const gasEstimate = await rpc('eth_estimateUserOperationGas', [unsignedOp, entryPoint]);
+      if (gasEstimate.callGasLimit) unsignedOp.callGasLimit = gasEstimate.callGasLimit;
+      if (gasEstimate.verificationGasLimit) unsignedOp.verificationGasLimit = gasEstimate.verificationGasLimit;
+      if (gasEstimate.preVerificationGas) unsignedOp.preVerificationGas = gasEstimate.preVerificationGas;
+    } catch {
+      // If estimation fails, let the paymaster handle it (default behavior)
+    }
+  }
+
+  // Paymaster sponsorship (uses gas limits from estimation above for batches)
   const sponsorResult = await rpc('pm_sponsorUserOperation', [unsignedOp, entryPoint]);
   Object.assign(unsignedOp, sponsorResult);
 
@@ -486,8 +585,70 @@ export async function submitFactBatchOnChain(
   const sigHex = getWasm().signUserOp(hashHex, eoa.private_key);
   unsignedOp.signature = `0x${sigHex}`;
 
-  // Submit
-  const userOpHash = await rpc('eth_sendUserOperation', [unsignedOp, entryPoint]);
+  // Submit (with AA25 nonce conflict retry)
+  let userOpHash: string;
+  try {
+    userOpHash = await rpc('eth_sendUserOperation', [unsignedOp, entryPoint]);
+  } catch (err: any) {
+    const msg = err?.message || '';
+    if (/AA25|AA10|invalid account nonce|already being processed/i.test(msg)) {
+      console.error('AA25/AA10 nonce conflict detected (batch), rebuilding UserOp with fresh nonce...');
+      // Bust deployment cache so getInitCode re-checks on-chain
+      deployedAccounts.delete(sender.toLowerCase());
+
+      // Wait for previous UserOp to mine before retrying with fresh nonce.
+      // Public RPC won't reflect the new nonce until the tx is on-chain.
+      await new Promise(r => setTimeout(r, 15000));
+
+      // Re-fetch initCode and nonce
+      const { factory: retryFactory, factoryData: retryFactoryData } = await getInitCode(sender, eoa.address, rpcUrl);
+      let retryNonce: string;
+      try {
+        const retryNonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
+        retryNonce = retryNonceResult || '0x0';
+      } catch {
+        const retryNonceResp = await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0', id: 1, method: 'eth_call',
+            params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
+          }),
+        });
+        const retryNonceJson = await retryNonceResp.json() as { result?: string };
+        retryNonce = retryNonceJson.result || '0x0';
+      }
+
+      // Rebuild unsigned UserOp with fresh nonce and initCode
+      const retryOp: Record<string, any> = {
+        sender,
+        nonce: retryNonce,
+        callData,
+        callGasLimit: '0x0',
+        verificationGasLimit: '0x0',
+        preVerificationGas: '0x0',
+        maxFeePerGas: fast.maxFeePerGas,
+        maxPriorityFeePerGas: fast.maxPriorityFeePerGas,
+        signature: DUMMY_SIGNATURE,
+      };
+      if (retryFactory) {
+        retryOp.factory = retryFactory;
+        retryOp.factoryData = retryFactoryData;
+      }
+
+      // Re-sponsor and re-sign
+      const retrySponsor = await rpc('pm_sponsorUserOperation', [retryOp, entryPoint]);
+      Object.assign(retryOp, retrySponsor);
+      const retryOpJson = JSON.stringify(retryOp);
+      const retryHashHex = getWasm().hashUserOp(retryOpJson, entryPoint, BigInt(config.chainId));
+      const retrySigHex = getWasm().signUserOp(retryHashHex, eoa.private_key);
+      retryOp.signature = `0x${retrySigHex}`;
+
+      userOpHash = await rpc('eth_sendUserOperation', [retryOp, entryPoint]);
+    } else {
+      throw err;
+    }
+  }
 
   // Wait for receipt (poll up to 120s)
   let receipt = null;

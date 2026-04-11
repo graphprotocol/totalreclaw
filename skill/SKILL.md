@@ -470,7 +470,7 @@ When the user asks to import conversation history:
    Use `sessions_spawn` with this task:
    ```
    sessions_spawn({
-     task: "You are a TotalReclaw import worker. Process the file at [FILE_PATH] using totalreclaw_import_batch with source=[SOURCE]. Start at offset=0 with batch_size=25. After each batch completes, immediately call the next batch with offset incremented by 25. Continue until the response contains is_complete=true. After all batches complete, report the total facts stored.",
+     task: "You are a TotalReclaw import worker. Do NOT call totalreclaw_setup — credentials are already configured. Just process the file at [FILE_PATH] using totalreclaw_import_batch with source=[SOURCE]. Start at offset=0 with batch_size=25. After each batch completes, immediately call the next batch with offset incremented by 25. Continue until the response contains is_complete=true. After all batches complete, report the total facts stored.",
      label: "[SOURCE] Import",
      runTimeoutSeconds: 0
    })
