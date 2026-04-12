@@ -96,6 +96,12 @@ import {
   type SubgraphStoreConfig,
 } from './subgraph/store.js';
 import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount } from './subgraph/search.js';
+import {
+  buildCanonicalClaim,
+  isDigestBlob,
+  readClaimFromBlob,
+  resolveClaimFormat,
+} from './claims-helper.js';
 
 import { validateMnemonic, generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
@@ -538,7 +544,10 @@ async function handleRememberSubgraph(
               try {
                 const blobHex = c.encryptedBlob.startsWith('0x') ? c.encryptedBlob.slice(2) : c.encryptedBlob;
                 const blobBase64 = Buffer.from(blobHex, 'hex').toString('base64');
-                const text = decrypt(blobBase64, state.encryptionKey);
+                const decryptedBlob = decrypt(blobBase64, state.encryptionKey);
+                if (isDigestBlob(decryptedBlob)) continue;
+                const doc = readClaimFromBlob(decryptedBlob);
+                const text = doc.text;
 
                 let candEmbedding: number[] | null = null;
                 if (c.encryptedEmbedding) {
@@ -548,7 +557,6 @@ async function handleRememberSubgraph(
                   } catch { /* skip */ }
                 }
 
-                // Re-embed if stored dimension differs from current model
                 if (candEmbedding && candEmbedding.length !== getEmbeddingDims()) {
                   try {
                     candEmbedding = await generateEmbedding(text);
@@ -559,7 +567,7 @@ async function handleRememberSubgraph(
                   id: c.id,
                   text,
                   embedding: candEmbedding,
-                  importance: Math.round(parseFloat(c.decayScore) * 10) || 5,
+                  importance: doc.importance,
                   decayScore: parseFloat(c.decayScore) || 0.5,
                   createdAt: parseInt(c.timestamp) || 0,
                   version: 1,
@@ -622,10 +630,18 @@ async function handleRememberSubgraph(
         }
       }
 
-      // 4. Encrypt the fact text
-      const encryptedBlob = encrypt(item.text, state.encryptionKey);
+      // 4. Build the blob: canonical Claim by default, raw text if legacy flag set
+      const claimFormat = resolveClaimFormat();
+      const blobPlaintext = claimFormat === 'legacy'
+        ? item.text
+        : buildCanonicalClaim({
+            fact: { text: item.text, type: 'fact' },
+            importance: effectiveImportance,
+            sourceAgent: 'mcp-server',
+          });
+      const encryptedBlob = encrypt(blobPlaintext, state.encryptionKey);
 
-      // 5. Generate content fingerprint for dedup
+      // 5. Generate content fingerprint for dedup (over plaintext text, not blob)
       const contentFp = generateContentFingerprint(item.text, state.dedupKey);
 
       // 6. Encrypt the embedding for on-chain storage
@@ -755,7 +771,15 @@ async function handleDebriefSubgraph(
       const lshIndices = state.lshHasher.hash(embedding);
       const allIndices = [...wordIndices, ...lshIndices];
 
-      const encryptedBlob = encrypt(item.text, state.encryptionKey);
+      const claimFormat = resolveClaimFormat();
+      const blobPlaintext = claimFormat === 'legacy'
+        ? item.text
+        : buildCanonicalClaim({
+            fact: { text: item.text, type: item.type },
+            importance: item.importance,
+            sourceAgent: 'mcp-server:debrief',
+          });
+      const encryptedBlob = encrypt(blobPlaintext, state.encryptionKey);
       const contentFp = generateContentFingerprint(item.text, state.dedupKey);
       const encryptedEmb = encryptEmbedding(embedding, state.encryptionKey);
 
@@ -909,12 +933,13 @@ async function handleRecallSubgraph(
     const decryptedCandidates = [];
     for (const c of candidates) {
       try {
-        // Decrypt the fact text (encryptedBlob is 0x-prefixed hex from subgraph)
         const blobHex = c.encryptedBlob.startsWith('0x') ? c.encryptedBlob.slice(2) : c.encryptedBlob;
         const blobBase64 = Buffer.from(blobHex, 'hex').toString('base64');
-        const text = decrypt(blobBase64, state.encryptionKey);
+        const decryptedBlob = decrypt(blobBase64, state.encryptionKey);
+        if (isDigestBlob(decryptedBlob)) continue;
+        const doc = readClaimFromBlob(decryptedBlob);
+        const text = doc.text;
 
-        // Decrypt embedding if available
         let embedding: number[] | undefined;
         if (c.encryptedEmbedding) {
           try {
@@ -924,15 +949,11 @@ async function handleRecallSubgraph(
           }
         }
 
-        // Dimension-check re-embedding: if stored embedding has a different
-        // dimension than the current model (e.g. 1024 from Qwen3 vs 640 from
-        // Harrier), re-embed the decrypted text with the current model so
-        // cosine reranking works correctly. In-memory only, no on-chain write.
         if (embedding && embedding.length !== getEmbeddingDims()) {
           try {
             embedding = await generateEmbedding(text);
           } catch {
-            embedding = undefined; // fall back to BM25-only reranking
+            embedding = undefined;
           }
         }
 

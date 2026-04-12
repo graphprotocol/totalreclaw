@@ -28,6 +28,13 @@ from .protobuf import FactPayload, encode_fact_protobuf, encode_tombstone_protob
 from .relay import RelayClient
 from .reranker import RerankerCandidate, RerankerResult, rerank
 from .userop import build_and_send_userop
+from .claims_helper import (
+    build_canonical_claim,
+    compute_entity_trapdoors,
+    is_digest_blob,
+    read_claim_from_blob,
+    resolve_claim_format,
+)
 
 # GraphQL queries — matching TypeScript search.ts
 SEARCH_QUERY = """
@@ -135,19 +142,17 @@ async def store_fact(
     eoa_address: Optional[str] = None,
     sender: Optional[str] = None,
     chain_id: int = 84532,
+    fact_type: str = "fact",
+    entities: Optional[list] = None,
+    confidence: float = 0.85,
+    extracted_at: Optional[str] = None,
 ) -> str:
     """Encrypt and store a fact on-chain via relay.
 
-    Parameters
-    ----------
-    eoa_private_key : bytes
-        32-byte EOA private key for UserOp signing.
-    eoa_address : str
-        EOA address that owns the Smart Account.
-    sender : str
-        Smart Account (CREATE2) address.  Falls back to ``owner`` if not set.
-    chain_id : int
-        Target chain (84532 = Base Sepolia, 100 = Gnosis).
+    KG Phase 1: when ``TOTALRECLAW_CLAIM_FORMAT != 'legacy'`` (default), the
+    encrypted blob is a canonical ``Claim`` JSON matching the plugin's format.
+    Entity trapdoors are added to blind indices regardless of format so new
+    facts are findable via entity-specific search once the read path is KG-aware.
 
     Returns the fact ID.
     """
@@ -160,20 +165,36 @@ async def store_fact(
     fact_id = str(uuid.uuid4())
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-    # Encrypt the plaintext
-    encrypted_blob = encrypt(text, keys.encryption_key)
-    # Convert base64 to hex for protobuf
+    claim_format = resolve_claim_format()
+    importance_int = max(1, min(10, int(round(importance * 10)) if importance <= 1 else int(importance)))
+    if claim_format == "claim":
+        fact_stub = {
+            "text": text,
+            "type": fact_type,
+            "confidence": confidence,
+            "entities": entities,
+        }
+        blob_plaintext = build_canonical_claim(
+            fact_stub,
+            importance=importance_int,
+            source_agent=source,
+            extracted_at=extracted_at or timestamp,
+        )
+    else:
+        blob_plaintext = text
+
+    encrypted_blob = encrypt(blob_plaintext, keys.encryption_key)
     encrypted_hex = base64.b64decode(encrypted_blob).hex()
 
-    # Generate blind indices (word trapdoors)
     word_indices = generate_blind_indices(text)
 
-    # Generate LSH bucket hashes if embedding available
     lsh_indices: list[str] = []
     if lsh_hasher and embedding:
         lsh_indices = lsh_hasher.hash(embedding)
 
-    all_indices = word_indices + lsh_indices
+    entity_trapdoors = compute_entity_trapdoors(entities) if entities else []
+
+    all_indices = word_indices + lsh_indices + entity_trapdoors
 
     # Content fingerprint
     content_fp = generate_content_fingerprint(text, keys.dedup_key)
@@ -323,7 +344,11 @@ async def search_facts(
             encrypted_b64 = base64.b64encode(bytes.fromhex(encrypted_blob_hex)).decode(
                 "ascii"
             )
-            text = decrypt(encrypted_b64, keys.encryption_key)
+            decrypted_blob = decrypt(encrypted_b64, keys.encryption_key)
+            if is_digest_blob(decrypted_blob):
+                continue
+            doc = read_claim_from_blob(decrypted_blob)
+            text = doc["text"]
 
             emb: Optional[list[float]] = None
             encrypted_emb = fact.get("encryptedEmbedding")
@@ -333,7 +358,6 @@ async def search_facts(
                 except Exception:
                     pass
 
-            # Re-embed if stored dimension differs from current model
             if emb and len(emb) != get_embedding_dims():
                 try:
                     emb = get_embedding(text)
@@ -450,7 +474,11 @@ async def export_facts(
                     encrypted_b64 = base64.b64encode(
                         bytes.fromhex(encrypted_hex)
                     ).decode("ascii")
-                    text = decrypt(encrypted_b64, keys.encryption_key)
+                    decrypted_blob = decrypt(encrypted_b64, keys.encryption_key)
+                    if is_digest_blob(decrypted_blob):
+                        continue
+                    doc = read_claim_from_blob(decrypted_blob)
+                    text = doc["text"]
 
                     # Prefer createdAt (per-fact client timestamp) over
                     # timestamp (block time). Both are BigInt strings from

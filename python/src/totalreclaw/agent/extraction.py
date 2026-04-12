@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, List, Optional
 
 from .llm_client import LLMConfig, detect_llm_config, chat_completion
 
@@ -21,6 +22,27 @@ logger = logging.getLogger(__name__)
 
 VALID_TYPES = {"fact", "preference", "decision", "episodic", "goal", "context", "summary"}
 VALID_ACTIONS = {"ADD", "UPDATE", "DELETE", "NOOP"}
+
+#: Allowed entity types — must match ``skill/plugin/extractor.ts``.
+VALID_ENTITY_TYPES = {"person", "project", "tool", "company", "concept", "place"}
+
+#: Default confidence score when the LLM response omits ``confidence``.
+#: Must match the plugin's ``DEFAULT_EXTRACTION_CONFIDENCE``.
+DEFAULT_EXTRACTION_CONFIDENCE: float = 0.85
+
+
+@dataclass
+class ExtractedEntity:
+    """A named entity referenced by an extracted fact.
+
+    Mirrors ``skill/plugin/extractor.ts`` ``ExtractedEntity``. The ``type``
+    field is one of :data:`VALID_ENTITY_TYPES`. ``role`` is optional free
+    text describing the entity's role in the claim (``"chooser"``, etc.).
+    """
+
+    name: str
+    type: str  # person | project | tool | company | concept | place
+    role: Optional[str] = None
 
 
 @dataclass
@@ -30,6 +52,56 @@ class ExtractedFact:
     importance: int  # 1-10
     action: str  # ADD, UPDATE, DELETE, NOOP
     existing_fact_id: Optional[str] = None
+    entities: Optional[List[ExtractedEntity]] = None
+    confidence: float = DEFAULT_EXTRACTION_CONFIDENCE
+
+
+def normalize_confidence(raw: Any) -> float:
+    """Clamp a raw confidence value to ``[0, 1]`` with default fallback.
+
+    Must match ``normalizeConfidence`` in ``skill/plugin/extractor.ts``:
+
+    - numeric in range → returned as-is
+    - numeric > 1 → clamped to 1
+    - numeric < 0 → clamped to 0
+    - non-finite / non-number (strings, None, NaN) → :data:`DEFAULT_EXTRACTION_CONFIDENCE`
+    """
+    if isinstance(raw, bool):
+        return DEFAULT_EXTRACTION_CONFIDENCE
+    if not isinstance(raw, (int, float)):
+        return DEFAULT_EXTRACTION_CONFIDENCE
+    f = float(raw)
+    if not math.isfinite(f):
+        return DEFAULT_EXTRACTION_CONFIDENCE
+    if f < 0:
+        return 0.0
+    if f > 1:
+        return 1.0
+    return f
+
+
+def _parse_entity(raw: Any) -> Optional[ExtractedEntity]:
+    """Parse a single entity dict from LLM output; return None if invalid.
+
+    Invalid entities are silently dropped so one bad entry never kills the
+    whole fact. Mirrors the plugin's ``parseEntity``.
+    """
+    if not isinstance(raw, dict):
+        return None
+    name = raw.get("name")
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
+    if not name:
+        return None
+    etype = str(raw.get("type", "")).lower()
+    if etype not in VALID_ENTITY_TYPES:
+        return None
+    entity = ExtractedEntity(name=name[:128], type=etype)
+    role = raw.get("role")
+    if isinstance(role, str) and role.strip():
+        entity.role = role.strip()[:128]
+    return entity
 
 
 # Same extraction prompt as OpenClaw plugin (skill/plugin/extractor.ts)
@@ -58,6 +130,13 @@ Extraction guidance:
 - For facts: Prefer specific over vague. "Lives in Lisbon" beats "lives in Europe".
 - Decisions and context should be importance >= 7 (they are high-value for future conversations).
 
+Entity extraction (new):
+- Each memory MAY include an "entities" array of named entities it references
+- Entity type must be one of: person | project | tool | company | concept | place
+- Use the user's name when a fact is about them (e.g. "Pedro")
+- role is optional free text ("chooser", "employer")
+- confidence (0.0-1.0) is your self-assessed certainty; default 0.85 if you're unsure
+
 Actions (compare against existing memories if provided):
 - ADD: New memory, no conflict with existing
 - UPDATE: Refines or corrects an existing memory (provide existingFactId)
@@ -65,7 +144,7 @@ Actions (compare against existing memories if provided):
 - NOOP: Already captured or not worth storing
 
 Return a JSON array (no markdown, no code fences):
-[{"text": "...", "type": "...", "importance": N, "action": "ADD|UPDATE|DELETE|NOOP", "existingFactId": "..."}, ...]
+[{"text": "...", "type": "...", "importance": N, "confidence": 0.9, "action": "ADD|UPDATE|DELETE|NOOP", "entities": [{"name": "PostgreSQL", "type": "tool"}], "existingFactId": "..."}, ...]
 
 If nothing is worth extracting, return: []"""
 
@@ -126,12 +205,25 @@ def _parse_response(response: str) -> list[ExtractedFact]:
 
         existing_id = item.get("existingFactId") or item.get("existing_fact_id")
 
+        # Parse entities (new, optional)
+        raw_entities = item.get("entities")
+        entities: Optional[List[ExtractedEntity]] = None
+        if isinstance(raw_entities, list):
+            parsed_entities = [e for e in (_parse_entity(r) for r in raw_entities) if e is not None]
+            if parsed_entities:
+                entities = parsed_entities
+
+        # Parse confidence (new, optional; defaults to 0.85)
+        confidence = normalize_confidence(item.get("confidence"))
+
         facts.append(ExtractedFact(
             text=text[:512],
             type=fact_type,
             importance=importance,
             action=action,
             existing_fact_id=str(existing_id) if existing_id else None,
+            entities=entities,
+            confidence=confidence,
         ))
 
     return facts
