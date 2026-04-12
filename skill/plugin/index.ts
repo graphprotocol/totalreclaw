@@ -1440,7 +1440,7 @@ async function storeExtractedFacts(
         const result = await submitFactBatchOnChain(slice, batchConfig);
         if (result.success) {
           stored += slice.length;
-          logger.info(`Batch ${Math.floor(i / BATCH_USEROP_SIZE) + 1}: submitted ${result.batchSize} payloads (tx=${result.txHash.slice(0, 10)}…)`);
+          logger.info(`Fact ${i + 1}/${pendingPayloads.length}: submitted on-chain (tx=${result.txHash.slice(0, 10)}…)`);
         } else {
           batchError = `On-chain batch submission failed (tx=${result.txHash.slice(0, 10)}…)`;
           logger.warn(batchError);
