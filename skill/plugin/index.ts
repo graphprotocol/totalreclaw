@@ -45,6 +45,25 @@ import {
   type DecryptedCandidate,
 } from './consolidation.js';
 import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, submitFactBatchOnChain, deriveSmartAccountAddress, type FactPayload } from './subgraph-store.js';
+import {
+  DIGEST_TRAPDOOR,
+  buildCanonicalClaim,
+  buildLegacyDoc,
+  computeEntityTrapdoors,
+  isDigestBlob,
+  readClaimFromBlob,
+  resolveClaimFormat,
+  resolveDigestMode,
+  type DigestMode,
+} from './claims-helper.js';
+import {
+  maybeInjectDigest,
+  recompileDigest,
+  fetchAllActiveClaims,
+  isRecompileInProgress,
+  tryBeginRecompile,
+  endRecompile,
+} from './digest-sync.js';
 import { searchSubgraph, searchSubgraphBroadened, getSubgraphFactCount } from './subgraph-search.js';
 import { PluginHotCache, type HotFact } from './hot-cache-wrapper.js';
 import { CONFIG, setRecoveryPhraseOverride } from './config.js';
@@ -804,7 +823,8 @@ async function searchForNearDuplicates(
       for (const result of results) {
         try {
           const docJson = decryptFromHex(result.encryptedBlob, encryptionKey);
-          const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+          if (isDigestBlob(docJson)) continue;
+          const doc = readClaimFromBlob(docJson);
 
           let embedding: number[] | null = null;
           if (result.encryptedEmbedding) {
@@ -817,9 +837,7 @@ async function searchForNearDuplicates(
             id: result.id,
             text: doc.text,
             embedding,
-            importance: doc.metadata?.importance
-              ? Math.round((doc.metadata.importance as number) * 10)
-              : 5,
+            importance: doc.importance,
             decayScore: 5,
             createdAt: result.timestamp ? parseInt(result.timestamp, 10) * 1000 : Date.now(),
             version: 1,
@@ -836,7 +854,8 @@ async function searchForNearDuplicates(
       for (const candidate of candidates) {
         try {
           const docJson = decryptFromHex(candidate.encrypted_blob, encryptionKey);
-          const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+          if (isDigestBlob(docJson)) continue;
+          const doc = readClaimFromBlob(docJson);
 
           let embedding: number[] | null = null;
           if (candidate.encrypted_embedding) {
@@ -849,9 +868,7 @@ async function searchForNearDuplicates(
             id: candidate.fact_id,
             text: doc.text,
             embedding,
-            importance: doc.metadata?.importance
-              ? Math.round((doc.metadata.importance as number) * 10)
-              : 5,
+            importance: doc.importance,
             decayScore: candidate.decay_score,
             createdAt: typeof candidate.timestamp === 'number'
               ? candidate.timestamp
@@ -888,6 +905,182 @@ async function searchForNearDuplicates(
 function encryptToHex(plaintext: string, key: Buffer): string {
   const b64 = encrypt(plaintext, key);
   return Buffer.from(b64, 'base64').toString('hex');
+}
+
+/**
+ * Log the active claim blob format the first time a fact is about to be stored.
+ * Lets operators confirm via the OpenClaw logs whether the new canonical Claim
+ * path or the TOTALRECLAW_CLAIM_FORMAT=legacy fallback is in use.
+ */
+let _loggedClaimFormat = false;
+function logClaimFormatOnce(format: 'claim' | 'legacy', logger: OpenClawPluginApi['logger']): void {
+  if (_loggedClaimFormat) return;
+  _loggedClaimFormat = true;
+  const msg =
+    format === 'legacy'
+      ? 'TotalReclaw: TOTALRECLAW_CLAIM_FORMAT=legacy — writing legacy {text, metadata} blobs'
+      : 'TotalReclaw: writing canonical Claim blobs';
+  logger.info(msg);
+}
+
+let _loggedDigestMode = false;
+function logDigestModeOnce(mode: DigestMode, logger: OpenClawPluginApi['logger']): void {
+  if (_loggedDigestMode) return;
+  _loggedDigestMode = true;
+  logger.info(`TotalReclaw: digest injection mode = ${mode}`);
+}
+
+/**
+ * How many active facts to pull into a digest recompilation.
+ * Digest compiler itself will apply DIGEST_CLAIM_CAP for the LLM path.
+ */
+const DIGEST_FETCH_LIMIT = 500;
+
+/**
+ * Schedule a background digest recompile. Fire-and-forget.
+ *
+ * The caller must check `!isRecompileInProgress()` before invoking.
+ * Errors are logged and swallowed; the guard flag is always released.
+ */
+function scheduleDigestRecompile(
+  previousClaimId: string | null,
+  logger: OpenClawPluginApi['logger'],
+): void {
+  if (!isRecompileInProgress()) {
+    if (!tryBeginRecompile()) return;
+  } else {
+    return;
+  }
+
+  const mode = resolveDigestMode();
+  const owner = subgraphOwner || userId;
+  const authKey = authKeyHex;
+  const encKey = encryptionKey;
+  const ownerForBatch = subgraphOwner ?? undefined;
+
+  if (!owner || !authKey || !encKey) {
+    endRecompile();
+    return;
+  }
+
+  // Capture llmFn from the current LLM config (cheap variant of the user's
+  // provider, already resolved by resolveLLMConfig).
+  const llmConfig = resolveLLMConfig();
+  const llmFn = llmConfig
+    ? async (prompt: string): Promise<string> => {
+        const out = await chatCompletion(
+          llmConfig,
+          [
+            { role: 'system', content: 'You return only valid JSON. No markdown fences, no commentary.' },
+            { role: 'user', content: prompt },
+          ],
+          { maxTokens: 800, temperature: 0 },
+        );
+        return out ?? '';
+      }
+    : null;
+
+  // Build the I/O deps closures. We capture the owner/auth/key values so the
+  // background task doesn't race with module-level state resets.
+  const fetchFn = () =>
+    fetchAllActiveClaims(
+      owner,
+      authKey,
+      encKey,
+      DIGEST_FETCH_LIMIT,
+      {
+        searchSubgraphBroadened: async (o, n, a) => searchSubgraphBroadened(o, n, a),
+        decryptFromHex: (hex, key) => decryptFromHex(hex, key),
+      },
+      logger,
+    );
+
+  const storeFn = async (canonicalClaimJson: string, compiledAt: string): Promise<void> => {
+    if (!isSubgraphMode()) {
+      // Self-hosted mode — store via the REST API.
+      if (!apiClient) throw new Error('apiClient not initialized');
+      const encryptedBlob = encryptToHex(canonicalClaimJson, encKey);
+      const contentFp = generateContentFingerprint(canonicalClaimJson, dedupKey!);
+      const payload: StoreFactPayload = {
+        id: crypto.randomUUID(),
+        timestamp: compiledAt,
+        encrypted_blob: encryptedBlob,
+        blind_indices: [DIGEST_TRAPDOOR],
+        decay_score: 10,
+        source: 'openclaw-plugin-digest',
+        content_fp: contentFp,
+        agent_id: 'openclaw-plugin-digest',
+      };
+      await apiClient.store(userId!, [payload], authKey);
+      return;
+    }
+
+    // Subgraph / managed-service mode — encrypt, encode, submit as a single-fact UserOp.
+    const encryptedBlob = encryptToHex(canonicalClaimJson, encKey);
+    const contentFp = generateContentFingerprint(canonicalClaimJson, dedupKey!);
+    const protobuf = encodeFactProtobuf({
+      id: crypto.randomUUID(),
+      timestamp: compiledAt,
+      owner,
+      encryptedBlob,
+      blindIndices: [DIGEST_TRAPDOOR],
+      decayScore: 10,
+      source: 'openclaw-plugin-digest',
+      contentFp,
+      agentId: 'openclaw-plugin-digest',
+    });
+    const config = { ...getSubgraphConfig(), authKeyHex: authKey, walletAddress: ownerForBatch };
+    const result = await submitFactBatchOnChain([protobuf], config);
+    if (!result.success) {
+      throw new Error('Digest store UserOp did not succeed on-chain');
+    }
+  };
+
+  const tombstoneFn = async (claimId: string): Promise<void> => {
+    if (!isSubgraphMode()) {
+      if (apiClient) {
+        try { await apiClient.deleteFact(claimId, authKey); } catch { /* best-effort */ }
+      }
+      return;
+    }
+    const tombstone: FactPayload = {
+      id: claimId,
+      timestamp: new Date().toISOString(),
+      owner,
+      encryptedBlob: '00',
+      blindIndices: [],
+      decayScore: 0,
+      source: 'tombstone',
+      contentFp: '',
+      agentId: 'openclaw-plugin-digest',
+    };
+    const protobuf = encodeFactProtobuf(tombstone);
+    const config = { ...getSubgraphConfig(), authKeyHex: authKey, walletAddress: ownerForBatch };
+    const result = await submitFactBatchOnChain([protobuf], config);
+    if (!result.success) {
+      throw new Error('Digest tombstone UserOp did not succeed on-chain');
+    }
+  };
+
+  void recompileDigest({
+    mode,
+    previousClaimId,
+    nowUnixSeconds: Math.floor(Date.now() / 1000),
+    deps: {
+      storeDigestClaim: storeFn,
+      tombstoneDigest: tombstoneFn,
+      fetchAllActiveClaimsFn: fetchFn,
+      llmFn,
+    },
+    logger,
+  })
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`Digest: background recompile threw: ${msg}`);
+    })
+    .finally(() => {
+      endRecompile();
+    });
 }
 
 /**
@@ -1079,7 +1272,8 @@ async function fetchExistingMemoriesForExtraction(
       for (const r of rawResults) {
         try {
           const docJson = decryptFromHex(r.encryptedBlob, encryptionKey);
-          const doc = JSON.parse(docJson) as { text: string };
+          if (isDigestBlob(docJson)) continue;
+          const doc = readClaimFromBlob(docJson);
           results.push({ id: r.id, text: doc.text });
         } catch { /* skip undecryptable */ }
       }
@@ -1088,7 +1282,8 @@ async function fetchExistingMemoriesForExtraction(
       for (const c of candidates) {
         try {
           const docJson = decryptFromHex(c.encrypted_blob, encryptionKey);
-          const doc = JSON.parse(docJson) as { text: string };
+          if (isDigestBlob(docJson)) continue;
+          const doc = readClaimFromBlob(docJson);
           results.push({ id: c.fact_id, text: doc.text });
         } catch { /* skip undecryptable */ }
       }
@@ -1235,15 +1430,19 @@ async function storeExtractedFacts(
   const pendingPayloads: Buffer[] = []; // Batched subgraph payloads
   let preparedForSubgraph = 0;
 
+  const claimFormat = resolveClaimFormat();
+  logClaimFormatOnce(claimFormat, logger);
+
   for (const fact of dedupedFacts) {
     try {
       const blindIndices = generateBlindIndices(fact.text);
+      const entityTrapdoors = computeEntityTrapdoors(fact.entities);
 
       // Use pre-computed embedding result if available.
       const embeddingResult = embeddingResultMap.get(fact.text) ?? null;
       const allIndices = embeddingResult
-        ? [...blindIndices, ...embeddingResult.lshBuckets]
-        : blindIndices;
+        ? [...blindIndices, ...embeddingResult.lshBuckets, ...entityTrapdoors]
+        : [...blindIndices, ...entityTrapdoors];
 
       // LLM-guided dedup: handle UPDATE/DELETE/NOOP actions.
       if (fact.action === 'NOOP') {
@@ -1365,22 +1564,28 @@ async function storeExtractedFacts(
         }
       }
 
-      const doc = {
-        text: fact.text,
-        metadata: {
-          type: fact.type,
-          importance: effectiveImportance / 10,
-          source: 'auto-extraction',
-          created_at: new Date().toISOString(),
-        },
-      };
+      const factSource = sourceOverride || 'auto-extraction';
 
-      const encryptedBlob = encryptToHex(JSON.stringify(doc), encryptionKey);
+      // Build the blob: canonical Claim JSON by default, legacy doc if the
+      // TOTALRECLAW_CLAIM_FORMAT=legacy fallback is set. Either way the result
+      // is decryptable via parseClaimOrLegacy on the read path.
+      const blobPlaintext =
+        claimFormat === 'legacy'
+          ? buildLegacyDoc({
+              fact,
+              importance: effectiveImportance,
+              source: 'auto-extraction',
+            })
+          : buildCanonicalClaim({
+              fact,
+              importance: effectiveImportance,
+              sourceAgent: factSource,
+            });
+
+      const encryptedBlob = encryptToHex(blobPlaintext, encryptionKey);
 
       const contentFp = generateContentFingerprint(fact.text, dedupKey);
       const factId = crypto.randomUUID();
-
-      const factSource = sourceOverride || 'auto-extraction';
       if (isSubgraphMode()) {
         const protobuf = encodeFactProtobuf({
           id: factId,
@@ -2405,7 +2610,8 @@ const plugin = {
               for (const result of subgraphResults) {
                 try {
                   const docJson = decryptFromHex(result.encryptedBlob, encryptionKey!);
-                  const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+                  if (isDigestBlob(docJson)) continue;
+                  const doc = readClaimFromBlob(docJson);
 
                   let decryptedEmbedding: number[] | undefined;
                   if (result.encryptedEmbedding) {
@@ -2418,7 +2624,6 @@ const plugin = {
                     }
                   }
 
-                  // Re-embed if stored dimension differs from current model
                   if (decryptedEmbedding && decryptedEmbedding.length !== getEmbeddingDims()) {
                     try {
                       decryptedEmbedding = await generateEmbedding(doc.text);
@@ -2431,13 +2636,13 @@ const plugin = {
                     id: result.id,
                     text: doc.text,
                     embedding: decryptedEmbedding,
-                    importance: (doc.metadata?.importance as number) ?? 0.5,
+                    importance: doc.importance / 10,
                     createdAt: result.timestamp ? parseInt(result.timestamp, 10) : undefined,
                   });
 
                   metaMap.set(result.id, {
                     metadata: doc.metadata ?? {},
-                    timestamp: Date.now(), // Subgraph doesn't return ms timestamp; use current
+                    timestamp: Date.now(),
                   });
                 } catch {
                   // Skip candidates we cannot decrypt.
@@ -2480,7 +2685,8 @@ const plugin = {
               for (const candidate of candidates) {
                 try {
                   const docJson = decryptFromHex(candidate.encrypted_blob, encryptionKey!);
-                  const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+                  if (isDigestBlob(docJson)) continue;
+                  const doc = readClaimFromBlob(docJson);
 
                   let decryptedEmbedding: number[] | undefined;
                   if (candidate.encrypted_embedding) {
@@ -2493,7 +2699,6 @@ const plugin = {
                     }
                   }
 
-                  // Re-embed if stored dimension differs from current model
                   if (decryptedEmbedding && decryptedEmbedding.length !== getEmbeddingDims()) {
                     try {
                       decryptedEmbedding = await generateEmbedding(doc.text);
@@ -2506,7 +2711,7 @@ const plugin = {
                     id: candidate.fact_id,
                     text: doc.text,
                     embedding: decryptedEmbedding,
-                    importance: (doc.metadata?.importance as number) ?? 0.5,
+                    importance: doc.importance / 10,
                     createdAt: typeof candidate.timestamp === 'number'
                       ? candidate.timestamp / 1000
                       : new Date(candidate.timestamp).getTime() / 1000,
@@ -2740,11 +2945,12 @@ const plugin = {
                     let hexBlob = fact.encryptedBlob;
                     if (hexBlob.startsWith('0x')) hexBlob = hexBlob.slice(2);
                     const docJson = decryptFromHex(hexBlob, encryptionKey!);
-                    const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+                    if (isDigestBlob(docJson)) continue;
+                    const doc = readClaimFromBlob(docJson);
                     allFacts.push({
                       id: fact.id,
                       text: doc.text,
-                      metadata: doc.metadata ?? {},
+                      metadata: doc.metadata,
                       created_at: new Date(parseInt(fact.timestamp) * 1000).toISOString(),
                     });
                   } catch {
@@ -2766,11 +2972,12 @@ const plugin = {
                 for (const fact of page.facts) {
                   try {
                     const docJson = decryptFromHex(fact.encrypted_blob, encryptionKey!);
-                    const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+                    if (isDigestBlob(docJson)) continue;
+                    const doc = readClaimFromBlob(docJson);
                     allFacts.push({
                       id: fact.id,
                       text: doc.text,
-                      metadata: doc.metadata ?? {},
+                      metadata: doc.metadata,
                       created_at: fact.created_at,
                     });
                   } catch {
@@ -2958,11 +3165,10 @@ const plugin = {
               for (const fact of page.facts) {
                 try {
                   const docJson = decryptFromHex(fact.encrypted_blob, encryptionKey);
-                  const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+                  if (isDigestBlob(docJson)) continue;
+                  const doc = readClaimFromBlob(docJson);
 
                   let embedding: number[] | null = null;
-                  // ExportedFact does not include encrypted_embedding — generate it on-the-fly.
-                  // For consolidation we need embeddings, so generate them.
                   try {
                     embedding = await generateEmbedding(doc.text);
                   } catch { /* skip — fact will not be clustered */ }
@@ -2971,9 +3177,7 @@ const plugin = {
                     id: fact.id,
                     text: doc.text,
                     embedding,
-                    importance: doc.metadata?.importance
-                      ? Math.round((doc.metadata.importance as number) * 10)
-                      : 5,
+                    importance: doc.importance,
                     decayScore: fact.decay_score,
                     createdAt: new Date(fact.created_at).getTime(),
                     version: fact.version,
@@ -3624,7 +3828,46 @@ const plugin = {
           }
 
           if (isSubgraphMode()) {
-            // --- Subgraph mode: hot cache first, then background refresh ---
+            // --- Subgraph mode: digest fast path → hot cache → background refresh ---
+
+            // Digest fast path (Stage 3b). When a digest exists and the mode is
+            // not 'off', inject its pre-compiled promptText instead of running
+            // the per-query search. A stale digest triggers a background
+            // recompile (non-blocking). Failures fall through to the legacy
+            // path silently.
+            const digestMode = resolveDigestMode();
+            logDigestModeOnce(digestMode, api.logger);
+            if (digestMode !== 'off' && encryptionKey && authKeyHex && (subgraphOwner || userId)) {
+              try {
+                const injectResult = await maybeInjectDigest({
+                  owner: subgraphOwner || userId!,
+                  authKeyHex: authKeyHex!,
+                  encryptionKey: encryptionKey!,
+                  mode: digestMode,
+                  nowMs: Date.now(),
+                  loadDeps: {
+                    searchSubgraph: async (o, tds, n, a) => searchSubgraph(o, tds, n, a),
+                    decryptFromHex: (hex, key) => decryptFromHex(hex, key),
+                  },
+                  probeDeps: {
+                    searchSubgraphBroadened: async (o, n, a) => searchSubgraphBroadened(o, n, a),
+                  },
+                  recompileFn: (prev) => scheduleDigestRecompile(prev, api.logger),
+                  logger: api.logger,
+                });
+                if (injectResult.promptText) {
+                  api.logger.info(`Digest injection: state=${injectResult.state}`);
+                  return {
+                    prependContext:
+                      `## Your Memory\n\n${injectResult.promptText}` + welcomeBack + billingWarning,
+                  };
+                }
+              } catch (err) {
+                // Never block session start on digest failure.
+                const msg = err instanceof Error ? err.message : String(err);
+                api.logger.warn(`Digest fast path failed: ${msg}`);
+              }
+            }
 
             // Initialize hot cache if needed.
             if (!pluginHotCache && encryptionKey) {
@@ -3729,7 +3972,10 @@ const plugin = {
             for (const result of subgraphResults) {
               try {
                 const docJson = decryptFromHex(result.encryptedBlob, encryptionKey!);
-                const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+                // Filter out digest infrastructure blobs — they have no user
+                // text and should never surface in recall results.
+                if (isDigestBlob(docJson)) continue;
+                const doc = readClaimFromBlob(docJson);
 
                 let decryptedEmbedding: number[] | undefined;
                 if (result.encryptedEmbedding) {
@@ -3742,21 +3988,17 @@ const plugin = {
                   }
                 }
 
-                const importanceRaw = (doc.metadata?.importance as number) ?? 0.5;
                 const createdAtSec = result.timestamp ? parseInt(result.timestamp, 10) : undefined;
                 rerankerCandidates.push({
                   id: result.id,
                   text: doc.text,
                   embedding: decryptedEmbedding,
-                  importance: importanceRaw,
+                  importance: doc.importance / 10,
                   createdAt: createdAtSec,
                 });
 
-                const importance = doc.metadata?.importance
-                  ? Math.round((doc.metadata.importance as number) * 10)
-                  : 5;
                 hookMetaMap.set(result.id, {
-                  importance,
+                  importance: doc.importance,
                   age: 'subgraph',
                 });
               } catch {
@@ -3860,9 +4102,10 @@ const plugin = {
           for (const candidate of candidates) {
             try {
               const docJson = decryptFromHex(candidate.encrypted_blob, encryptionKey!);
-              const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+              // Skip digest infrastructure blobs.
+              if (isDigestBlob(docJson)) continue;
+              const doc = readClaimFromBlob(docJson);
 
-              // Decrypt embedding if present.
               let decryptedEmbedding: number[] | undefined;
               if (candidate.encrypted_embedding) {
                 try {
@@ -3874,7 +4117,6 @@ const plugin = {
                 }
               }
 
-              const importanceRaw = (doc.metadata?.importance as number) ?? 0.5;
               const createdAtSec = typeof candidate.timestamp === 'number'
                 ? candidate.timestamp / 1000
                 : new Date(candidate.timestamp).getTime() / 1000;
@@ -3882,15 +4124,12 @@ const plugin = {
                 id: candidate.fact_id,
                 text: doc.text,
                 embedding: decryptedEmbedding,
-                importance: importanceRaw,
+                importance: doc.importance / 10,
                 createdAt: createdAtSec,
               });
 
-              const importance = doc.metadata?.importance
-                ? Math.round((doc.metadata.importance as number) * 10)
-                : 5;
               hookMetaMap.set(candidate.fact_id, {
-                importance,
+                importance: doc.importance,
                 age: relativeTime(candidate.timestamp),
               });
             } catch {
