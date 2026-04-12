@@ -23,7 +23,9 @@
 //! - [`smart_import`] — Smart import profiling (prompt construction + response parsing)
 
 pub mod blind;
+pub mod claims;
 pub mod consolidation;
+pub mod digest;
 pub mod crypto;
 pub mod debrief;
 pub mod fingerprint;

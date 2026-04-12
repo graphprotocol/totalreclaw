@@ -10,7 +10,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
-use crate::{blind, crypto, debrief, fingerprint, lsh, protobuf, reranker, store};
+use crate::{blind, claims, crypto, debrief, digest, fingerprint, lsh, protobuf, reranker, store};
 #[cfg(feature = "managed")]
 use crate::search;
 #[cfg(feature = "managed")]
@@ -715,6 +715,129 @@ fn hex_blob_to_base64(hex_blob: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Knowledge Graph Phase 1
+// ---------------------------------------------------------------------------
+
+// Inner (non-PyO3) implementations so unit tests can exercise logic without
+// linking against libpython. The pyfunction wrappers below just call these
+// and map String errors to PyValueError.
+
+fn kg_parse_claim_or_legacy_inner(decrypted: &str) -> Result<String, String> {
+    let claim = claims::parse_claim_or_legacy(decrypted);
+    serde_json::to_string(&claim).map_err(|e| e.to_string())
+}
+
+fn kg_canonicalize_claim_inner(claim_json: &str) -> Result<String, String> {
+    let claim: claims::Claim = serde_json::from_str(claim_json)
+        .map_err(|e| format!("invalid claim JSON: {}", e))?;
+    serde_json::to_string(&claim).map_err(|e| e.to_string())
+}
+
+fn kg_build_template_digest_inner(
+    claims_json: &str,
+    now_unix_seconds: i64,
+) -> Result<String, String> {
+    let parsed: Vec<claims::Claim> = serde_json::from_str(claims_json)
+        .map_err(|e| format!("invalid claims JSON: {}", e))?;
+    let d = digest::build_template_digest(&parsed, now_unix_seconds);
+    serde_json::to_string(&d).map_err(|e| e.to_string())
+}
+
+fn kg_build_digest_prompt_inner(claims_json: &str) -> Result<String, String> {
+    let parsed: Vec<claims::Claim> = serde_json::from_str(claims_json)
+        .map_err(|e| format!("invalid claims JSON: {}", e))?;
+    if parsed.is_empty() {
+        return Err("build_digest_prompt requires at least one claim".to_string());
+    }
+    Ok(digest::build_digest_prompt(&parsed))
+}
+
+fn kg_parse_digest_response_inner(raw: &str) -> Result<String, String> {
+    let parsed = digest::parse_digest_response(raw)?;
+    serde_json::to_string(&parsed).map_err(|e| e.to_string())
+}
+
+fn kg_assemble_digest_from_llm_inner(
+    parsed_json: &str,
+    claims_json: &str,
+    now_unix_seconds: i64,
+) -> Result<String, String> {
+    let parsed: digest::ParsedDigestResponse = serde_json::from_str(parsed_json)
+        .map_err(|e| format!("invalid ParsedDigestResponse JSON: {}", e))?;
+    let source_claims: Vec<claims::Claim> = serde_json::from_str(claims_json)
+        .map_err(|e| format!("invalid claims JSON: {}", e))?;
+    let d = digest::assemble_digest_from_llm(&parsed, &source_claims, now_unix_seconds)?;
+    serde_json::to_string(&d).map_err(|e| e.to_string())
+}
+
+/// Normalize an entity name (NFC, lowercase, trim, collapse whitespace).
+#[pyfunction]
+#[pyo3(name = "normalize_entity_name")]
+fn py_normalize_entity_name(name: &str) -> String {
+    claims::normalize_entity_name(name)
+}
+
+/// Deterministic entity ID from a name (first 8 bytes of SHA256 as hex).
+#[pyfunction]
+#[pyo3(name = "deterministic_entity_id")]
+fn py_deterministic_entity_id(name: &str) -> String {
+    claims::deterministic_entity_id(name)
+}
+
+/// Parse a decrypted blob as a Claim, falling back to legacy formats.
+/// Returns JSON-serialized Claim string.
+#[pyfunction]
+#[pyo3(name = "parse_claim_or_legacy")]
+fn py_parse_claim_or_legacy(decrypted: &str) -> PyResult<String> {
+    kg_parse_claim_or_legacy_inner(decrypted).map_err(PyValueError::new_err)
+}
+
+/// Canonicalize a Claim JSON: strict-parse as Claim, re-serialize to canonical bytes.
+/// Rejects legacy or malformed input. Use before encryption for byte-identical
+/// blobs across TS/Python/Rust.
+#[pyfunction]
+#[pyo3(name = "canonicalize_claim")]
+fn py_canonicalize_claim(claim_json: &str) -> PyResult<String> {
+    kg_canonicalize_claim_inner(claim_json).map_err(PyValueError::new_err)
+}
+
+/// Build a template digest from a JSON array of Claim.
+/// Returns JSON-serialized Digest.
+#[pyfunction]
+#[pyo3(name = "build_template_digest")]
+fn py_build_template_digest(claims_json: &str, now_unix_seconds: i64) -> PyResult<String> {
+    kg_build_template_digest_inner(claims_json, now_unix_seconds).map_err(PyValueError::new_err)
+}
+
+/// Build the LLM prompt for digest compilation.
+/// Claims array must be non-empty; empty raises ValueError.
+#[pyfunction]
+#[pyo3(name = "build_digest_prompt")]
+fn py_build_digest_prompt(claims_json: &str) -> PyResult<String> {
+    kg_build_digest_prompt_inner(claims_json).map_err(PyValueError::new_err)
+}
+
+/// Parse an LLM digest response string.
+/// Returns JSON-serialized ParsedDigestResponse.
+#[pyfunction]
+#[pyo3(name = "parse_digest_response")]
+fn py_parse_digest_response(raw: &str) -> PyResult<String> {
+    kg_parse_digest_response_inner(raw).map_err(PyValueError::new_err)
+}
+
+/// Assemble a full Digest from a parsed LLM response and source claims.
+#[pyfunction]
+#[pyo3(name = "assemble_digest_from_llm")]
+fn py_assemble_digest_from_llm(
+    parsed_json: &str,
+    claims_json: &str,
+    now_unix_seconds: i64,
+) -> PyResult<String> {
+    kg_assemble_digest_from_llm_inner(parsed_json, claims_json, now_unix_seconds)
+        .map_err(PyValueError::new_err)
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -789,6 +912,16 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(hex_blob_to_base64, m)?)?;
     }
 
+    // Knowledge Graph Phase 1
+    m.add_function(wrap_pyfunction!(py_normalize_entity_name, m)?)?;
+    m.add_function(wrap_pyfunction!(py_deterministic_entity_id, m)?)?;
+    m.add_function(wrap_pyfunction!(py_parse_claim_or_legacy, m)?)?;
+    m.add_function(wrap_pyfunction!(py_canonicalize_claim, m)?)?;
+    m.add_function(wrap_pyfunction!(py_build_template_digest, m)?)?;
+    m.add_function(wrap_pyfunction!(py_build_digest_prompt, m)?)?;
+    m.add_function(wrap_pyfunction!(py_parse_digest_response, m)?)?;
+    m.add_function(wrap_pyfunction!(py_assemble_digest_from_llm, m)?)?;
+
     // Consolidation / dedup
     crate::consolidation::register_python_functions(m)?;
 
@@ -796,4 +929,162 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     crate::smart_import::register_python_functions(m)?;
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests (direct Rust fn invocation, no Python interpreter needed)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_claim_json() -> &'static str {
+        r#"{"t":"prefers PostgreSQL","c":"pref","cf":0.9,"i":8,"sa":"oc","e":[{"n":"PostgreSQL","tp":"tool"}]}"#
+    }
+
+    fn two_claims_json() -> &'static str {
+        r#"[
+            {"t":"prefers PostgreSQL","c":"pref","cf":0.9,"i":8,"sa":"oc"},
+            {"t":"lives in Lisbon","c":"fact","cf":0.95,"i":9,"sa":"oc"}
+        ]"#
+    }
+
+    #[test]
+    fn py_normalize_entity_name_lowercases() {
+        assert_eq!(py_normalize_entity_name("PostgreSQL"), "postgresql");
+    }
+
+    #[test]
+    fn py_deterministic_entity_id_known_answer_pedro() {
+        assert_eq!(py_deterministic_entity_id("pedro"), "ee5cd7d5d96c8874");
+    }
+
+    #[test]
+    fn py_parse_claim_or_legacy_full_claim_roundtrips() {
+        let out = py_parse_claim_or_legacy(sample_claim_json()).unwrap();
+        let c: claims::Claim = serde_json::from_str(&out).unwrap();
+        assert_eq!(c.text, "prefers PostgreSQL");
+        assert_eq!(c.category, claims::ClaimCategory::Preference);
+    }
+
+    #[test]
+    fn py_parse_claim_or_legacy_legacy_object() {
+        let out = py_parse_claim_or_legacy(r#"{"t":"hello","a":"oc"}"#).unwrap();
+        let c: claims::Claim = serde_json::from_str(&out).unwrap();
+        assert_eq!(c.text, "hello");
+        assert_eq!(c.source_agent, "oc");
+        assert_eq!(c.category, claims::ClaimCategory::Fact);
+    }
+
+    #[test]
+    fn py_build_template_digest_empty_vault() {
+        let out = py_build_template_digest("[]", 1_700_000_000).unwrap();
+        let d: claims::Digest = serde_json::from_str(&out).unwrap();
+        assert_eq!(d.fact_count, 0);
+        assert!(!d.prompt_text.is_empty());
+    }
+
+    #[test]
+    fn py_build_template_digest_two_claims() {
+        let out = py_build_template_digest(two_claims_json(), 1_700_000_000).unwrap();
+        let d: claims::Digest = serde_json::from_str(&out).unwrap();
+        assert_eq!(d.fact_count, 2);
+    }
+
+    #[test]
+    fn py_build_digest_prompt_empty_is_error() {
+        let result = py_build_digest_prompt("[]");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn py_build_digest_prompt_one_claim_returns_prompt() {
+        let one = r#"[{"t":"prefers PostgreSQL","c":"pref","cf":0.9,"i":8,"sa":"oc"}]"#;
+        let prompt = py_build_digest_prompt(one).unwrap();
+        assert!(!prompt.is_empty());
+        assert!(prompt.contains("JSON"));
+    }
+
+    #[test]
+    fn py_parse_digest_response_valid_fenced() {
+        let raw = "```json\n{\"identity\":\"You are a developer.\",\"top_claim_indices\":[1],\"recent_decision_indices\":[],\"active_project_names\":[\"skynet\"]}\n```";
+        let out = py_parse_digest_response(raw).unwrap();
+        let p: digest::ParsedDigestResponse = serde_json::from_str(&out).unwrap();
+        assert_eq!(p.identity, "You are a developer.");
+        assert_eq!(p.top_claim_indices, vec![1]);
+        assert_eq!(p.active_project_names, vec!["skynet".to_string()]);
+    }
+
+    #[test]
+    fn py_parse_digest_response_invalid_is_error() {
+        let result = py_parse_digest_response("not valid json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn py_assemble_digest_from_llm_builds_digest() {
+        let parsed = r#"{"identity":"You are a developer.","top_claim_indices":[1],"recent_decision_indices":[],"active_project_names":["skynet"]}"#;
+        let one = r#"[{"t":"prefers PostgreSQL","c":"pref","cf":0.9,"i":8,"sa":"oc"}]"#;
+        let out = py_assemble_digest_from_llm(parsed, one, 1_700_000_000).unwrap();
+        let d: claims::Digest = serde_json::from_str(&out).unwrap();
+        assert_eq!(d.fact_count, 1);
+        assert_eq!(d.identity, "You are a developer.");
+    }
+
+    #[test]
+    fn py_canonicalize_claim_round_trips_canonical_input() {
+        let input = sample_claim_json();
+        let out = py_canonicalize_claim(input).unwrap();
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn py_canonicalize_claim_omits_default_status() {
+        let input = r#"{"t":"hi","c":"fact","cf":0.9,"i":5,"sa":"oc","st":"a"}"#;
+        let out = py_canonicalize_claim(input).unwrap();
+        assert!(!out.contains("\"st\""));
+    }
+
+    #[test]
+    fn py_canonicalize_claim_preserves_non_default_status() {
+        let input = r#"{"t":"hi","c":"fact","cf":0.9,"i":5,"sa":"oc","st":"s"}"#;
+        let out = py_canonicalize_claim(input).unwrap();
+        assert!(out.contains("\"st\":\"s\""));
+    }
+
+    #[test]
+    fn py_canonicalize_claim_omits_default_corroboration() {
+        let input = r#"{"t":"hi","c":"fact","cf":0.9,"i":5,"sa":"oc","cc":1}"#;
+        let out = py_canonicalize_claim(input).unwrap();
+        assert!(!out.contains("\"cc\""));
+    }
+
+    #[test]
+    fn py_canonicalize_claim_reorders_fields_to_struct_order() {
+        let input = r#"{"sa":"oc","i":5,"cf":0.9,"c":"fact","t":"hi"}"#;
+        let out = py_canonicalize_claim(input).unwrap();
+        assert_eq!(
+            out,
+            r#"{"t":"hi","c":"fact","cf":0.9,"i":5,"sa":"oc"}"#
+        );
+    }
+
+    #[test]
+    fn py_canonicalize_claim_rejects_malformed_json() {
+        let result = py_canonicalize_claim("{not valid");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn py_canonicalize_claim_rejects_missing_required_field() {
+        let result = py_canonicalize_claim(r#"{"t":"hi","cf":0.9,"i":5,"sa":"oc"}"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn py_canonicalize_claim_rejects_legacy_format() {
+        let result = py_canonicalize_claim(r#"{"t":"hi","a":"oc"}"#);
+        assert!(result.is_err());
+    }
 }
