@@ -126,7 +126,7 @@ export function createApiClient(serverUrl: string) {
     ): Promise<{ user_id: string }> {
       const res = await fetch(`${baseUrl}/v1/register`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-TotalReclaw-Client': 'openclaw-plugin' },
         body: JSON.stringify({ auth_key_hash: authKeyHash, salt: saltHex }),
       });
       await assertOk(res, 'register');

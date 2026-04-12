@@ -1426,17 +1426,16 @@ async function storeExtractedFacts(
     }
   }
 
-  // Batch-submit subgraph payloads in UserOps of up to 15 facts each.
-  // Submitting all facts in a single UserOp exceeds gas limits for large imports.
-  // Each batch awaits full receipt confirmation (up to 120s) before proceeding,
-  // so no inter-batch delay is needed — the nonce is consumed on-chain before
-  // the next batch fetches it.
-  const BATCH_USEROP_SIZE = 15;
+  // Submit subgraph payloads one fact at a time (sequential single-call UserOps).
+  // Batch executeBatch UserOps have persistent gas estimation issues on Base Sepolia
+  // that cause on-chain reverts. Single-fact UserOps use the simpler submitFactOnChain
+  // path which works reliably (same path as totalreclaw_remember). Each submission
+  // polls for receipt (120s) before proceeding, so nonce is consumed before the next.
   let batchError: string | undefined;
   if (pendingPayloads.length > 0 && isSubgraphMode()) {
     const batchConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
-    for (let i = 0; i < pendingPayloads.length; i += BATCH_USEROP_SIZE) {
-      const slice = pendingPayloads.slice(i, i + BATCH_USEROP_SIZE);
+    for (let i = 0; i < pendingPayloads.length; i++) {
+      const slice = [pendingPayloads[i]]; // Single fact per UserOp
       try {
         const result = await submitFactBatchOnChain(slice, batchConfig);
         if (result.success) {
@@ -3452,20 +3451,21 @@ const plugin = {
           properties: {
             recovery_phrase: {
               type: 'string',
-              description: 'A 12-word BIP-39 mnemonic recovery phrase. Generate one with `npx @totalreclaw/mcp-server setup --generate-only`, or let the user provide an existing one.',
+              description: 'Optional 12-word BIP-39 recovery phrase. If not provided, generates a new one automatically. For returning users, pass their existing phrase.',
             },
           },
-          required: ['recovery_phrase'],
           additionalProperties: false,
         },
-        async execute(_toolCallId: string, params: { recovery_phrase: string }) {
+        async execute(_toolCallId: string, params: { recovery_phrase?: string }) {
           try {
-            const mnemonic = params.recovery_phrase.trim();
+            let mnemonic = params.recovery_phrase?.trim() || '';
 
+            // Auto-generate if not provided
             if (!mnemonic) {
-              return {
-                content: [{ type: 'text', text: 'Error: recovery_phrase is required.' }],
-              };
+              const { generateMnemonic } = await import('@scure/bip39');
+              const { wordlist } = await import('@scure/bip39/wordlists/english');
+              mnemonic = generateMnemonic(wordlist, 128);
+              api.logger.info('totalreclaw_setup: generated new BIP-39 mnemonic');
             }
 
             // Guard: refuse to overwrite existing credentials with a DIFFERENT phrase
@@ -3514,11 +3514,13 @@ const plugin = {
               };
             }
 
+            const wasGenerated = !params.recovery_phrase?.trim();
             return {
               content: [{
                 type: 'text',
                 text: 'TotalReclaw setup complete! Encryption keys derived, server registration confirmed. ' +
                       'You can now use totalreclaw_remember, totalreclaw_recall, and all other tools immediately — no restart needed.\n\n' +
+                      (wasGenerated ? `Recovery phrase: ${mnemonic}\n\n` : '') +
                       'From now on, I will automatically remember important things from our conversations and recall relevant context at the start of each session.',
               }],
             };

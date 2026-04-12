@@ -495,9 +495,9 @@ The recovery phrase is a **12-word BIP-39 mnemonic**. It derives all encryption 
 Ask the user:
 > "Do you have an existing TotalReclaw recovery phrase you'd like to restore, or should I generate a new one?"
 
-- **New user:** Run `npx @totalreclaw/mcp-server setup` to generate a cryptographically valid recovery phrase. Do NOT generate the phrase yourself — LLMs cannot compute BIP-39 checksums correctly. The setup wizard will output the phrase and save credentials automatically. Then set the phrase as `TOTALRECLAW_RECOVERY_PHRASE`. Display it prominently with a warning:
+- **New user:** Call `totalreclaw_setup` WITHOUT a recovery phrase — the tool generates a valid BIP-39 mnemonic automatically, derives encryption keys, and registers with the relay. Do NOT use `npx @totalreclaw/mcp-server setup` or `exec` to run CLI tools — this creates credentials in an incompatible format. Do NOT generate the phrase yourself — LLMs cannot compute BIP-39 checksums correctly. After setup, display the phrase prominently with a warning:
   > "⚠️ SAVE YOUR RECOVERY PHRASE — it's the only way to recover your memories if you switch devices: `[phrase]`"
-- **Returning user:** Ask them to provide their existing 12-word phrase, then set it as `TOTALRECLAW_RECOVERY_PHRASE`.
+- **Returning user:** Ask them to provide their existing 12-word phrase, then call `totalreclaw_setup` with `recovery_phrase` set to their phrase.
 
 When setup is required, the plugin will automatically detect the host environment (macOS, Linux, or Docker) and provide the exact commands or config snippets needed to set the env vars. Follow those instructions.
 
