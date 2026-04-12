@@ -453,16 +453,16 @@ Import conversation history and/or memory features from the major LLM providers.
 | **ChatGPT** (OpenAI) | Conversation history, memory | Data export (Settings → Export) or API |
 | **Gemini** (Google) | Conversation history, memory | Google Takeout or API |
 
-### 5.3 Smart Import Extraction (Two-Pass Pipeline) — IN PROGRESS
+### 5.3 Smart Import Extraction (Two-Pass Pipeline) — COMPLETE
 
 Replace blind per-chunk fact extraction with a profiling-first approach. The import moment is the ONE chance to build intelligence about the user (everything is plaintext on-device before encryption).
 
-**Core module built** (`rust/totalreclaw-core/src/smart_import.rs`). Client integration pending.
+**QA validated** (OpenClaw round 10: 32 facts imported, Hermes: 26 facts imported).
 
 | Pass | What it does | Status |
 |------|-------------|--------|
-| **Pass 1: Hierarchical Profiling** | Batch-summarize ALL conversations (first+last messages, 50 per batch). Merge partial profiles into one `UserProfile` (identity, themes, projects, stack, decisions, interests, skip patterns). | Core: DONE. Client: NOT STARTED |
-| **Pass 1.5: Chunk Triage** | Classify each chunk as EXTRACT or SKIP based on profile. Skips generic Q&A (recipes, weather, translations). Saves 40-60% of extraction LLM calls. | Core: DONE. Client: NOT STARTED |
+| **Pass 1: Hierarchical Profiling** | Batch-summarize ALL conversations (first+last messages, 50 per batch). Merge partial profiles into one `UserProfile` (identity, themes, projects, stack, decisions, interests, skip patterns). | **DONE** (Core + OpenClaw) |
+| **Pass 1.5: Chunk Triage** | Classify each chunk as EXTRACT or SKIP based on profile. Skips generic Q&A (recipes, weather, translations). Saves 40-60% of extraction LLM calls. | **DONE** (Core + OpenClaw) |
 | **Pass 2: Context-Enriched Extraction** | Inject user profile into extraction prompts. LLM knows WHO the user is, so it extracts what's relevant to THEM. | Core: DONE. Client: NOT STARTED |
 
 **Design:** `totalreclaw-internal/docs/plans/2026-04-11-smart-import-design.md`
@@ -477,25 +477,56 @@ Replace blind per-chunk fact extraction with a profiling-first approach. The imp
 
 ---
 
-## Phase 6: Platform (Future)
+## Phase 6: Cross-Agent Knowledge Graph Platform — DESIGN COMPLETE
 
-**Goal:** Integrator ecosystem, knowledge graphs, and cross-agent intelligence.
+**Goal:** Transform TotalReclaw from an encrypted memory vault into the identity layer for AI agents — a portable, encrypted knowledge graph that makes users ONE person across ALL their agents.
 
-### 6.1 Supersession Graph (Pro)
+**Full spec:** `totalreclaw-internal/docs/plans/2026-04-12-cross-agent-knowledge-graph.md`
 
-Track fact replacement chains for memory history. When a fact is updated or superseded, maintain a linked chain of previous versions. Enables "what did I used to believe about X?" queries and audit trails.
+### 6.1 Structured Claims + Digest (Phase 1, ~4-6 weeks) — NOT STARTED
 
-- Foundation for the knowledge graph (6.2)
-- Pro tier feature -- free users see only current facts
-- Requires encrypted graph edges stored alongside facts
+Replace flat facts with structured claims (confidence, entities, provenance, temporal chain). Compile a coherent ~400-token digest for prompt injection instead of injecting individual facts.
 
-### 6.2 Knowledge Graph
+- Claim struct wraps existing extracted facts with metadata
+- Entity extraction on write path (pure functions in core module)
+- Entity trapdoors in blind indices for entity-specific search
+- Digest compilation (LLM-assisted identity summary, cached as special claim)
+- Backward compatible: old facts are valid claims with default metadata
 
-Build on the supersession graph foundation to create a full knowledge graph of entity relationships. Extract and maintain relationships between entities (people, tools, projects) from stored facts.
+### 6.2 Cross-Agent Contradiction Detection (~2-3 weeks) — NOT STARTED
 
-- Depends on supersession graph (6.1)
-- Client-side extraction during fact storage
-- Encrypted relationship edges (E2EE preserved)
+Detect and auto-resolve conflicts when different agents store conflicting facts. Unique capability — no single-agent system can do this.
+
+- Compare new claims against existing ones for same entity + category
+- Auto-resolve clear winners (recency + corroboration + confidence scoring)
+- Surface unresolved contradictions in digest
+- `totalreclaw_contradictions` tool for manual resolution
+
+### 6.3 Memory Browser (~3-4 weeks) — NOT STARTED
+
+Web app at `app.totalreclaw.xyz` for browsing and curating the knowledge graph. Client-side decryption only — static site, zero server processing.
+
+- Entity browser, timeline, contradiction dashboard, digest preview
+- Import/export (Gemini, ChatGPT, Claude, JSON, Markdown)
+- Obsidian plugin (stretch goal)
+
+### 6.4 LongMemEval Benchmark (~1-2 weeks) — NOT STARTED
+
+Benchmark TotalReclaw against LongMemEval and publish results. Maximem claims 90.2%. We need credibility numbers.
+
+### 6.5 Platform Integration
+
+Each agent platform gets the KG through the best mechanism for that platform:
+
+| Platform | KG Source | Navigation UI | Digest |
+|----------|-----------|--------------|--------|
+| OpenClaw | Wiki + TotalReclaw (bi-directional bridge) | Memory Wiki (local Markdown) | Via Wiki compile + TotalReclaw |
+| Hermes | TotalReclaw only | Memory Browser (web app) | Via TotalReclaw digest |
+| Claude Code / Cursor | TotalReclaw via MCP | Memory Browser (web app) | Via MCP session start |
+
+### 6.6 Supersession Graph (temporal knowledge)
+
+Track fact replacement chains for memory history. When a claim is superseded, maintain `supersedes` / `supersededBy` links. Enables "what did I used to believe about X?" queries. Built into the Claim struct from Phase 1.
 
 ### 6.3 Integrator Support
 
