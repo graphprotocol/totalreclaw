@@ -13,6 +13,16 @@ export { debriefToolDefinition, handleDebrief, parseDebriefResponse, DEBRIEF_SYS
 export { supportToolDefinition, handleSupport } from './support.js';
 export { accountToolDefinition, handleAccount } from './account.js';
 export {
+  pinToolDefinition,
+  unpinToolDefinition,
+  handlePin,
+  handleUnpin,
+  executePinOperation,
+  type PinOpDeps,
+  type PinOpResult,
+  type HumanStatus,
+} from './pin.js';
+export {
   fetchAllFactsFromSubgraph,
   fetchMainnetContentFps,
   fetchBlindIndicesForFacts,

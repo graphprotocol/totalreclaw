@@ -8,6 +8,8 @@
  *   - totalreclaw_export       -- export all memories (JSON or Markdown)
  *   - totalreclaw_status       -- check billing/subscription status
  *   - totalreclaw_consolidate  -- scan and merge near-duplicate memories
+ *   - totalreclaw_pin          -- pin a memory so auto-resolution can never supersede it
+ *   - totalreclaw_unpin        -- remove a pin, returning the memory to active status
  *   - totalreclaw_import_from  -- import memories from other tools (Mem0, MCP Memory, etc.)
  *   - totalreclaw_upgrade      -- create Stripe checkout for Pro upgrade
  *   - totalreclaw_migrate      -- migrate testnet memories to mainnet after Pro upgrade
@@ -49,6 +51,7 @@ import {
   DIGEST_TRAPDOOR,
   buildCanonicalClaim,
   buildLegacyDoc,
+  computeEntityTrapdoor,
   computeEntityTrapdoors,
   isDigestBlob,
   readClaimFromBlob,
@@ -64,7 +67,17 @@ import {
   tryBeginRecompile,
   endRecompile,
 } from './digest-sync.js';
-import { searchSubgraph, searchSubgraphBroadened, getSubgraphFactCount } from './subgraph-search.js';
+import {
+  detectAndResolveContradictions,
+  runWeightTuningLoop,
+  type ResolutionDecision as ContradictionDecision,
+} from './contradiction-sync.js';
+import { searchSubgraph, searchSubgraphBroadened, getSubgraphFactCount, fetchFactById } from './subgraph-search.js';
+import {
+  executePinOperation,
+  validatePinArgs,
+  type PinOpDeps,
+} from './pin.js';
 import { PluginHotCache, type HotFact } from './hot-cache-wrapper.js';
 import { CONFIG, setRecoveryPhraseOverride } from './config.js';
 import crypto from 'node:crypto';
@@ -1062,6 +1075,16 @@ function scheduleDigestRecompile(
     }
   };
 
+  // Slice 2f: run the weight-tuning loop as a fire-and-forget pre-compile step.
+  // This consumes any feedback.jsonl entries written since the last compile
+  // and nudges ~/.totalreclaw/weights.json, so the NEXT contradiction detection
+  // uses the adjusted weights. Rate-limited and idempotent — see
+  // runWeightTuningLoop for details. Failures are logged, never fatal.
+  void runWeightTuningLoop(Math.floor(Date.now() / 1000), logger).catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`Digest: tuning loop threw: ${msg}`);
+  });
+
   void recompileDigest({
     mode,
     previousClaimId,
@@ -1569,6 +1592,10 @@ async function storeExtractedFacts(
       // Build the blob: canonical Claim JSON by default, legacy doc if the
       // TOTALRECLAW_CLAIM_FORMAT=legacy fallback is set. Either way the result
       // is decryptable via parseClaimOrLegacy on the read path.
+      //
+      // We build it BEFORE the on-chain write so Phase 2 contradiction
+      // detection can inspect the same canonical Claim the write path will
+      // actually store. The string is encrypted byte-identically below.
       const blobPlaintext =
         claimFormat === 'legacy'
           ? buildLegacyDoc({
@@ -1582,10 +1609,111 @@ async function storeExtractedFacts(
               sourceAgent: factSource,
             });
 
-      const encryptedBlob = encryptToHex(blobPlaintext, encryptionKey);
-
-      const contentFp = generateContentFingerprint(fact.text, dedupKey);
       const factId = crypto.randomUUID();
+
+      // Phase 2 Slice 2d: contradiction detection + auto-resolution.
+      //
+      // Runs only when the canonical Claim format is active (legacy blobs
+      // carry no entity refs, so there is nothing to check), only for
+      // Subgraph / managed-service mode (self-hosted contradiction handling
+      // can come later), and only when the new fact has entities. The helper
+      // is a no-op in all other cases.
+      //
+      // Returns one decision per candidate contradicting claim:
+      //   - supersede_existing → queue a tombstone + proceed with the new write
+      //   - skip_new → do not write the new fact; record the skip reason
+      //   - empty list → no contradiction, proceed unchanged
+      //
+      // On any error (subgraph, decrypt, WASM), the helper returns [] and we
+      // fall back to Phase 1 behaviour.
+      let contradictionSkipNew = false;
+      if (
+        claimFormat !== 'legacy' &&
+        isSubgraphMode() &&
+        fact.entities &&
+        fact.entities.length > 0 &&
+        embeddingResult
+      ) {
+        const newClaimObj = JSON.parse(blobPlaintext) as Record<string, unknown>;
+        let decisions: ContradictionDecision[] = [];
+        try {
+          decisions = await detectAndResolveContradictions({
+            newClaim: newClaimObj,
+            newClaimId: factId,
+            newEmbedding: embeddingResult.embedding,
+            subgraphOwner: subgraphOwner || userId!,
+            authKeyHex: authKeyHex!,
+            encryptionKey: encryptionKey!,
+            deps: {
+              searchSubgraph: (owner, trapdoors, maxCandidates, authKey) =>
+                searchSubgraph(owner, trapdoors, maxCandidates, authKey).then((rows) =>
+                  rows.map((r) => ({
+                    id: r.id,
+                    encryptedBlob: r.encryptedBlob,
+                    encryptedEmbedding: r.encryptedEmbedding ?? null,
+                    timestamp: r.timestamp,
+                    isActive: r.isActive,
+                  })),
+                ),
+              decryptFromHex: (hex, key) => decryptFromHex(hex, key),
+            },
+            logger: {
+              info: (m) => logger.info(m),
+              warn: (m) => logger.warn(m),
+            },
+          });
+        } catch (crErr) {
+          // detectAndResolveContradictions is supposed to never throw — if
+          // it does, we log and continue with Phase 1 behaviour.
+          const msg = crErr instanceof Error ? crErr.message : String(crErr);
+          logger.warn(`Contradiction detection failed (proceeding with store): ${msg}`);
+          decisions = [];
+        }
+
+        for (const decision of decisions) {
+          if (decision.action === 'supersede_existing') {
+            const tombstone: FactPayload = {
+              id: decision.existingFactId,
+              timestamp: new Date().toISOString(),
+              owner: subgraphOwner || userId!,
+              encryptedBlob: '00',
+              blindIndices: [],
+              decayScore: 0,
+              source: 'tombstone',
+              contentFp: '',
+              agentId: 'openclaw-plugin-auto',
+            };
+            pendingPayloads.push(encodeFactProtobuf(tombstone));
+            superseded++;
+            logger.info(
+              `Auto-resolve: queued supersede for ${decision.existingFactId.slice(0, 10)}… ` +
+                `(sim=${decision.similarity.toFixed(3)}, entity=${decision.entityId})`,
+            );
+          } else if (decision.action === 'skip_new') {
+            if (decision.reason === 'existing_pinned') {
+              logger.warn(
+                `Auto-resolve: skipped new write — existing claim ${decision.existingFactId.slice(0, 10)}… is pinned ` +
+                  `(sim=${decision.similarity.toFixed(3)}, entity=${decision.entityId})`,
+              );
+            } else {
+              logger.info(
+                `Auto-resolve: skipped new write — existing ${decision.existingFactId.slice(0, 10)}… wins ` +
+                  `(sim=${decision.similarity.toFixed(3)}, entity=${decision.entityId})`,
+              );
+            }
+            contradictionSkipNew = true;
+          }
+        }
+      }
+
+      if (contradictionSkipNew) {
+        skipped++;
+        continue;
+      }
+
+      const encryptedBlob = encryptToHex(blobPlaintext, encryptionKey);
+      const contentFp = generateContentFingerprint(fact.text, dedupKey);
+
       if (isSubgraphMode()) {
         const protobuf = encodeFactProtobuf({
           id: factId,
@@ -3265,6 +3393,205 @@ const plugin = {
         },
       },
       { name: 'totalreclaw_consolidate' },
+    );
+
+    // ---------------------------------------------------------------
+    // Helper: build PinOpDeps bound to the live plugin state
+    // ---------------------------------------------------------------
+    // Wires the pure pin/unpin operation to the managed-service transport +
+    // crypto layer. Mirrors MCP's buildPinDepsFromState and Python's
+    // _change_claim_status argument plumbing.
+    const buildPinDeps = (): PinOpDeps => {
+      const owner = subgraphOwner || userId || '';
+      const config = {
+        ...getSubgraphConfig(),
+        authKeyHex: authKeyHex!,
+        walletAddress: subgraphOwner ?? undefined,
+      };
+      return {
+        owner,
+        sourceAgent: 'openclaw-plugin',
+        fetchFactById: (factId: string) => fetchFactById(owner, factId, authKeyHex!),
+        decryptBlob: (hex: string) => decryptFromHex(hex, encryptionKey!),
+        encryptBlob: (plaintext: string) => encryptToHex(plaintext, encryptionKey!),
+        submitBatch: async (payloads: Buffer[]) => {
+          const result = await submitFactBatchOnChain(payloads, config);
+          return { txHash: result.txHash, success: result.success };
+        },
+        generateIndices: async (text: string, entityNames: string[]) => {
+          if (!text) return { blindIndices: [] };
+          const wordIndices = generateBlindIndices(text);
+          let lshIndices: string[] = [];
+          let encryptedEmbedding: string | undefined;
+          try {
+            const embedding = await generateEmbedding(text);
+            const hasher = getLSHHasher(api.logger);
+            if (hasher) lshIndices = hasher.hash(embedding);
+            encryptedEmbedding = encryptToHex(JSON.stringify(embedding), encryptionKey!);
+          } catch {
+            // Best-effort: word + entity trapdoors alone still surface the claim.
+          }
+          const entityTrapdoors = entityNames.map((n) => computeEntityTrapdoor(n));
+          return {
+            blindIndices: [...wordIndices, ...lshIndices, ...entityTrapdoors],
+            encryptedEmbedding,
+          };
+        },
+      };
+    };
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_pin
+    // ---------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: 'totalreclaw_pin',
+        label: 'Pin',
+        description:
+          'Pin a memory so the auto-resolution engine will never override or supersede it. ' +
+          "Use when the user explicitly confirms a claim is still valid after you or another agent " +
+          "tried to retract/contradict it (e.g. 'wait, I still use Vim sometimes'). " +
+          'Takes fact_id (from a prior recall result). Pinning is idempotent — pinning an already-pinned ' +
+          'claim is a no-op. Cross-device: the pin propagates via the on-chain supersession chain.',
+        parameters: {
+          type: 'object',
+          properties: {
+            fact_id: {
+              type: 'string',
+              description: 'The ID of the fact to pin (from a totalreclaw_recall result).',
+            },
+            reason: {
+              type: 'string',
+              description: 'Optional human-readable reason for pinning (logged locally for tuning).',
+            },
+          },
+          required: ['fact_id'],
+          additionalProperties: false,
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            await requireFullSetup(api.logger);
+            if (!isSubgraphMode()) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: 'Pin/unpin is only supported with the managed service. Self-hosted mode does not yet implement the status-flip supersession flow.',
+                }],
+              };
+            }
+            const validation = validatePinArgs(params);
+            if (!validation.ok) {
+              return { content: [{ type: 'text', text: validation.error }] };
+            }
+            const deps = buildPinDeps();
+            const result = await executePinOperation(validation.factId, 'pinned', deps, validation.reason);
+            if (result.success && result.idempotent) {
+              api.logger.info(`totalreclaw_pin: ${result.fact_id} already pinned (no-op)`);
+              return {
+                content: [{ type: 'text', text: `Memory ${result.fact_id} is already pinned.` }],
+                details: result,
+              };
+            }
+            if (result.success) {
+              api.logger.info(`totalreclaw_pin: ${result.fact_id} → ${result.new_fact_id} (tx ${result.tx_hash?.slice(0, 10)})`);
+              return {
+                content: [{
+                  type: 'text',
+                  text: `Pinned memory ${result.fact_id}. New fact id: ${result.new_fact_id} (tx: ${result.tx_hash}).`,
+                }],
+                details: result,
+              };
+            }
+            api.logger.error(`totalreclaw_pin failed: ${result.error}`);
+            return {
+              content: [{ type: 'text', text: `Failed to pin memory: ${humanizeError(result.error ?? 'unknown error')}` }],
+              details: result,
+            };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            api.logger.error(`totalreclaw_pin failed: ${message}`);
+            return {
+              content: [{ type: 'text', text: `Failed to pin memory: ${humanizeError(message)}` }],
+            };
+          }
+        },
+      },
+      { name: 'totalreclaw_pin' },
+    );
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_unpin
+    // ---------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: 'totalreclaw_unpin',
+        label: 'Unpin',
+        description:
+          'Remove the pin from a previously pinned memory, returning it to active status so the ' +
+          'auto-resolution engine can supersede or retract it again. Takes fact_id. Idempotent — ' +
+          'unpinning a non-pinned claim is a no-op.',
+        parameters: {
+          type: 'object',
+          properties: {
+            fact_id: {
+              type: 'string',
+              description: 'The ID of the fact to unpin (from a totalreclaw_recall result).',
+            },
+          },
+          required: ['fact_id'],
+          additionalProperties: false,
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            await requireFullSetup(api.logger);
+            if (!isSubgraphMode()) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: 'Pin/unpin is only supported with the managed service. Self-hosted mode does not yet implement the status-flip supersession flow.',
+                }],
+              };
+            }
+            const validation = validatePinArgs(params);
+            if (!validation.ok) {
+              return { content: [{ type: 'text', text: validation.error }] };
+            }
+            const deps = buildPinDeps();
+            const result = await executePinOperation(validation.factId, 'active', deps);
+            if (result.success && result.idempotent) {
+              api.logger.info(`totalreclaw_unpin: ${result.fact_id} already active (no-op)`);
+              return {
+                content: [{ type: 'text', text: `Memory ${result.fact_id} is not pinned.` }],
+                details: result,
+              };
+            }
+            if (result.success) {
+              api.logger.info(`totalreclaw_unpin: ${result.fact_id} → ${result.new_fact_id} (tx ${result.tx_hash?.slice(0, 10)})`);
+              return {
+                content: [{
+                  type: 'text',
+                  text: `Unpinned memory ${result.fact_id}. New fact id: ${result.new_fact_id} (tx: ${result.tx_hash}).`,
+                }],
+                details: result,
+              };
+            }
+            api.logger.error(`totalreclaw_unpin failed: ${result.error}`);
+            return {
+              content: [{ type: 'text', text: `Failed to unpin memory: ${humanizeError(result.error ?? 'unknown error')}` }],
+              details: result,
+            };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            api.logger.error(`totalreclaw_unpin failed: ${message}`);
+            return {
+              content: [{ type: 'text', text: `Failed to unpin memory: ${humanizeError(message)}` }],
+            };
+          }
+        },
+      },
+      { name: 'totalreclaw_unpin' },
     );
 
     // ---------------------------------------------------------------

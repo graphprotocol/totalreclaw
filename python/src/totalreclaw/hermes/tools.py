@@ -94,6 +94,83 @@ async def forget(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": str(e)})
 
 
+async def pin(args: dict, state: "PluginState", **kwargs) -> str:
+    """Pin a memory so auto-resolution cannot supersede it.
+
+    Phase 2 knowledge-graph pinning semantics: the claim is rewritten with
+    ``status=pinned``, the old fact is tombstoned, and a new fact is
+    written that ``supersedes`` the old one. Idempotent on already-pinned
+    claims.
+    """
+    client = state.get_client()
+    if not client:
+        return json.dumps({"error": "TotalReclaw not configured. Run totalreclaw_setup first."})
+
+    raw = args.get("fact_id")
+    if not isinstance(raw, str):
+        return json.dumps({"error": "fact_id must be a string"})
+    fact_id = raw.strip()
+    if not fact_id:
+        return json.dumps({"error": "No fact_id provided"})
+
+    try:
+        result = await client.pin_fact(fact_id)
+        response = {
+            "pinned": True,
+            "fact_id": result.get("fact_id"),
+            "new_fact_id": result.get("new_fact_id"),
+            "previous_status": result.get("previous_status"),
+            "new_status": result.get("new_status"),
+        }
+        if result.get("idempotent"):
+            response["idempotent"] = True
+            response["message"] = "Claim was already pinned; no on-chain write."
+        return json.dumps(response)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        logger.error("totalreclaw_pin failed: %s", e)
+        return json.dumps({"error": str(e)})
+
+
+async def unpin(args: dict, state: "PluginState", **kwargs) -> str:
+    """Unpin a memory so auto-resolution can supersede it again.
+
+    Inverse of :func:`pin`. The claim is rewritten with ``status=active``
+    (the canonical default — the status field is omitted from the new
+    blob) and the supersession flow is identical to pinning.
+    """
+    client = state.get_client()
+    if not client:
+        return json.dumps({"error": "TotalReclaw not configured. Run totalreclaw_setup first."})
+
+    raw = args.get("fact_id")
+    if not isinstance(raw, str):
+        return json.dumps({"error": "fact_id must be a string"})
+    fact_id = raw.strip()
+    if not fact_id:
+        return json.dumps({"error": "No fact_id provided"})
+
+    try:
+        result = await client.unpin_fact(fact_id)
+        response = {
+            "unpinned": True,
+            "fact_id": result.get("fact_id"),
+            "new_fact_id": result.get("new_fact_id"),
+            "previous_status": result.get("previous_status"),
+            "new_status": result.get("new_status"),
+        }
+        if result.get("idempotent"):
+            response["idempotent"] = True
+            response["message"] = "Claim was already active; no on-chain write."
+        return json.dumps(response)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        logger.error("totalreclaw_unpin failed: %s", e)
+        return json.dumps({"error": str(e)})
+
+
 async def export_all(args: dict, state: "PluginState", **kwargs) -> str:
     """Export all memories from TotalReclaw."""
     client = state.get_client()

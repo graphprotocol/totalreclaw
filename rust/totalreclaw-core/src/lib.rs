@@ -25,6 +25,8 @@
 pub mod blind;
 pub mod claims;
 pub mod consolidation;
+pub mod contradiction;
+pub mod feedback_log;
 pub mod digest;
 pub mod crypto;
 pub mod debrief;

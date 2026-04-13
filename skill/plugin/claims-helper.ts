@@ -178,6 +178,28 @@ export function resolveDigestMode(): DigestMode {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-resolution mode (Phase 2 Slice 2d)
+// ---------------------------------------------------------------------------
+
+export type AutoResolveMode = 'active' | 'off' | 'shadow';
+
+/**
+ * Resolve TOTALRECLAW_AUTO_RESOLVE_MODE.
+ *
+ * - `active` (default, unset, unknown): full detection + auto-resolution.
+ * - `off`: skip contradiction detection entirely; Phase 1 behaviour.
+ * - `shadow`: detect + log decisions, but do not apply them (debug only).
+ *
+ * Read per-call so tests can toggle via env without module reload.
+ */
+export function resolveAutoResolveMode(): AutoResolveMode {
+  const raw = (process.env.TOTALRECLAW_AUTO_RESOLVE_MODE ?? '').trim().toLowerCase();
+  if (raw === 'off') return 'off';
+  if (raw === 'shadow') return 'shadow';
+  return 'active';
+}
+
+// ---------------------------------------------------------------------------
 // Decrypted blob reader — handles both new Claim ({t,c,i,...}) and
 // legacy {text, metadata: {importance: 0-1}} formats transparently.
 // Any decrypt site should use this instead of parsing doc.text directly.

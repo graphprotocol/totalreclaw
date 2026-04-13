@@ -306,6 +306,57 @@ export async function searchSubgraphBroadened(
 }
 
 /**
+ * Fetch a single fact by its client-generated UUID.
+ *
+ * Used by the pin/unpin tools to retrieve a known fact's encrypted blob and
+ * metadata for re-encryption with an updated status. Returns null if the fact
+ * is not found, has been tombstoned (isActive=false), or the owner does not
+ * match the caller's Smart Account address (defense against stale IDs from
+ * another user's recall results).
+ */
+export async function fetchFactById(
+  owner: string,
+  factId: string,
+  authKeyHex?: string,
+): Promise<(SubgraphSearchFact & { owner: string }) | null> {
+  const config = getSubgraphConfig();
+  const subgraphUrl = `${config.relayUrl}/v1/subgraph`;
+
+  const query = `
+    query GetFactById($id: ID!) {
+      fact(id: $id) {
+        id
+        owner
+        encryptedBlob
+        encryptedEmbedding
+        decayScore
+        timestamp
+        createdAt
+        isActive
+        contentFp
+        sequenceId
+        version
+      }
+    }
+  `;
+
+  const data = await gqlQuery<{ fact?: (SubgraphSearchFact & { owner: string }) | null }>(
+    subgraphUrl,
+    query,
+    { id: factId },
+    authKeyHex,
+  );
+
+  const fact = data?.fact;
+  if (!fact) return null;
+  if (fact.isActive === false) return null;
+  if (typeof fact.owner === 'string' && fact.owner.toLowerCase() !== owner.toLowerCase()) {
+    return null;
+  }
+  return fact;
+}
+
+/**
  * Get fact count from the subgraph for dynamic pool sizing.
  * Uses the globalStates entity for a lightweight single-row lookup
  * instead of fetching and counting individual fact IDs.

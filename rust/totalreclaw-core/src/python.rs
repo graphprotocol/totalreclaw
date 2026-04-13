@@ -10,7 +10,10 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
-use crate::{blind, claims, crypto, debrief, digest, fingerprint, lsh, protobuf, reranker, store};
+use crate::{
+    blind, claims, contradiction, crypto, debrief, digest, feedback_log, fingerprint, lsh,
+    protobuf, reranker, store,
+};
 #[cfg(feature = "managed")]
 use crate::search;
 #[cfg(feature = "managed")]
@@ -838,6 +841,272 @@ fn py_assemble_digest_from_llm(
 }
 
 // ---------------------------------------------------------------------------
+// Knowledge Graph Phase 2: contradiction detection + feedback log
+// ---------------------------------------------------------------------------
+
+/// Input shape for `detect_contradictions`: array of these as `existing_json`.
+#[derive(serde::Deserialize)]
+struct DetectContradictionsItem {
+    claim: claims::Claim,
+    id: String,
+    embedding: Vec<f32>,
+}
+
+fn kg_default_resolution_weights_inner() -> Result<String, String> {
+    let w = contradiction::default_weights();
+    serde_json::to_string(&w).map_err(|e| e.to_string())
+}
+
+fn kg_compute_score_components_inner(
+    claim_json: &str,
+    now_unix_seconds: i64,
+    weights_json: &str,
+) -> Result<String, String> {
+    let claim: claims::Claim = serde_json::from_str(claim_json)
+        .map_err(|e| format!("invalid claim JSON: {}", e))?;
+    let weights: contradiction::ResolutionWeights = serde_json::from_str(weights_json)
+        .map_err(|e| format!("invalid weights JSON: {}", e))?;
+    let sc = contradiction::compute_score_components(&claim, now_unix_seconds, &weights);
+    serde_json::to_string(&sc).map_err(|e| e.to_string())
+}
+
+fn kg_resolve_pair_inner(
+    claim_a_json: &str,
+    claim_a_id: &str,
+    claim_b_json: &str,
+    claim_b_id: &str,
+    now_unix_seconds: i64,
+    weights_json: &str,
+) -> Result<String, String> {
+    let claim_a: claims::Claim = serde_json::from_str(claim_a_json)
+        .map_err(|e| format!("invalid claim_a JSON: {}", e))?;
+    let claim_b: claims::Claim = serde_json::from_str(claim_b_json)
+        .map_err(|e| format!("invalid claim_b JSON: {}", e))?;
+    let weights: contradiction::ResolutionWeights = serde_json::from_str(weights_json)
+        .map_err(|e| format!("invalid weights JSON: {}", e))?;
+    let outcome = contradiction::resolve_pair(
+        &claim_a,
+        claim_a_id,
+        &claim_b,
+        claim_b_id,
+        now_unix_seconds,
+        &weights,
+    );
+    serde_json::to_string(&outcome).map_err(|e| e.to_string())
+}
+
+fn kg_detect_contradictions_inner(
+    new_claim_json: &str,
+    new_claim_id: &str,
+    new_embedding_json: &str,
+    existing_json: &str,
+    lower_threshold: f64,
+    upper_threshold: f64,
+) -> Result<String, String> {
+    let new_claim: claims::Claim = serde_json::from_str(new_claim_json)
+        .map_err(|e| format!("invalid new_claim JSON: {}", e))?;
+    let new_embedding: Vec<f32> = serde_json::from_str(new_embedding_json)
+        .map_err(|e| format!("invalid new_embedding JSON: {}", e))?;
+    let items: Vec<DetectContradictionsItem> = serde_json::from_str(existing_json)
+        .map_err(|e| format!("invalid existing JSON (expected array of {{claim, id, embedding}}): {}", e))?;
+    let existing: Vec<(claims::Claim, String, Vec<f32>)> = items
+        .into_iter()
+        .map(|it| (it.claim, it.id, it.embedding))
+        .collect();
+    let out = contradiction::detect_contradictions(
+        &new_claim,
+        new_claim_id,
+        &new_embedding,
+        &existing,
+        lower_threshold,
+        upper_threshold,
+    );
+    serde_json::to_string(&out).map_err(|e| e.to_string())
+}
+
+fn kg_apply_feedback_inner(
+    weights_json: &str,
+    counterexample_json: &str,
+) -> Result<String, String> {
+    let weights: contradiction::ResolutionWeights = serde_json::from_str(weights_json)
+        .map_err(|e| format!("invalid weights JSON: {}", e))?;
+    let ce: contradiction::Counterexample = serde_json::from_str(counterexample_json)
+        .map_err(|e| format!("invalid counterexample JSON: {}", e))?;
+    let new_weights = contradiction::apply_feedback(&weights, &ce);
+    serde_json::to_string(&new_weights).map_err(|e| e.to_string())
+}
+
+fn kg_default_weights_file_inner(now_unix_seconds: i64) -> Result<String, String> {
+    let f = feedback_log::default_weights_file(now_unix_seconds);
+    serde_json::to_string(&f).map_err(|e| e.to_string())
+}
+
+fn kg_serialize_weights_file_inner(file_json: &str) -> Result<String, String> {
+    let f: feedback_log::WeightsFile = serde_json::from_str(file_json)
+        .map_err(|e| format!("invalid weights file JSON: {}", e))?;
+    Ok(feedback_log::serialize_weights_file(&f))
+}
+
+fn kg_parse_weights_file_inner(content: &str) -> Result<String, String> {
+    let f = feedback_log::parse_weights_file(content)?;
+    serde_json::to_string(&f).map_err(|e| e.to_string())
+}
+
+fn kg_append_feedback_to_jsonl_inner(
+    existing: &str,
+    entry_json: &str,
+) -> Result<String, String> {
+    let entry: feedback_log::FeedbackEntry = serde_json::from_str(entry_json)
+        .map_err(|e| format!("invalid feedback entry JSON: {}", e))?;
+    Ok(feedback_log::append_to_jsonl(existing, &entry))
+}
+
+#[derive(serde::Serialize)]
+struct ReadFeedbackJsonlResult {
+    entries: Vec<feedback_log::FeedbackEntry>,
+    warnings: Vec<String>,
+}
+
+fn kg_read_feedback_jsonl_inner(content: &str) -> Result<String, String> {
+    let (entries, warnings) = feedback_log::read_jsonl(content);
+    let result = ReadFeedbackJsonlResult { entries, warnings };
+    serde_json::to_string(&result).map_err(|e| e.to_string())
+}
+
+fn kg_rotate_feedback_log_inner(content: &str, max_lines: i64) -> String {
+    let cap = if max_lines < 0 { 0usize } else { max_lines as usize };
+    feedback_log::rotate_if_needed(content, cap)
+}
+
+fn kg_feedback_to_counterexample_inner(entry_json: &str) -> Result<String, String> {
+    let entry: feedback_log::FeedbackEntry = serde_json::from_str(entry_json)
+        .map_err(|e| format!("invalid feedback entry JSON: {}", e))?;
+    match feedback_log::feedback_to_counterexample(&entry) {
+        Some(ce) => serde_json::to_string(&ce).map_err(|e| e.to_string()),
+        None => Ok("null".to_string()),
+    }
+}
+
+/// Default P2-3 resolution weights as JSON.
+#[pyfunction]
+#[pyo3(name = "default_resolution_weights")]
+fn py_default_resolution_weights() -> PyResult<String> {
+    kg_default_resolution_weights_inner().map_err(PyValueError::new_err)
+}
+
+/// Compute a claim's score components for contradiction resolution.
+#[pyfunction]
+#[pyo3(name = "compute_score_components")]
+fn py_compute_score_components(
+    claim_json: &str,
+    now_unix_seconds: i64,
+    weights_json: &str,
+) -> PyResult<String> {
+    kg_compute_score_components_inner(claim_json, now_unix_seconds, weights_json)
+        .map_err(PyValueError::new_err)
+}
+
+/// Run the resolution formula on two contradicting claims; returns ResolutionOutcome JSON.
+#[pyfunction]
+#[pyo3(name = "resolve_pair")]
+fn py_resolve_pair(
+    claim_a_json: &str,
+    claim_a_id: &str,
+    claim_b_json: &str,
+    claim_b_id: &str,
+    now_unix_seconds: i64,
+    weights_json: &str,
+) -> PyResult<String> {
+    kg_resolve_pair_inner(
+        claim_a_json,
+        claim_a_id,
+        claim_b_json,
+        claim_b_id,
+        now_unix_seconds,
+        weights_json,
+    )
+    .map_err(PyValueError::new_err)
+}
+
+/// Detect contradictions between a new claim and existing claims (array of {claim, id, embedding}).
+#[pyfunction]
+#[pyo3(name = "detect_contradictions")]
+fn py_detect_contradictions(
+    new_claim_json: &str,
+    new_claim_id: &str,
+    new_embedding_json: &str,
+    existing_json: &str,
+    lower_threshold: f64,
+    upper_threshold: f64,
+) -> PyResult<String> {
+    kg_detect_contradictions_inner(
+        new_claim_json,
+        new_claim_id,
+        new_embedding_json,
+        existing_json,
+        lower_threshold,
+        upper_threshold,
+    )
+    .map_err(PyValueError::new_err)
+}
+
+/// Apply a single counterexample to the weights; returns updated ResolutionWeights JSON.
+#[pyfunction]
+#[pyo3(name = "apply_feedback")]
+fn py_apply_feedback(weights_json: &str, counterexample_json: &str) -> PyResult<String> {
+    kg_apply_feedback_inner(weights_json, counterexample_json).map_err(PyValueError::new_err)
+}
+
+/// Build a fresh default WeightsFile JSON with the given timestamp.
+#[pyfunction]
+#[pyo3(name = "default_weights_file")]
+fn py_default_weights_file(now_unix_seconds: i64) -> PyResult<String> {
+    kg_default_weights_file_inner(now_unix_seconds).map_err(PyValueError::new_err)
+}
+
+/// Serialize a WeightsFile JSON to pretty-printed JSON (2-space indent).
+#[pyfunction]
+#[pyo3(name = "serialize_weights_file")]
+fn py_serialize_weights_file(file_json: &str) -> PyResult<String> {
+    kg_serialize_weights_file_inner(file_json).map_err(PyValueError::new_err)
+}
+
+/// Parse a WeightsFile from JSON; rejects unknown versions and malformed input.
+#[pyfunction]
+#[pyo3(name = "parse_weights_file")]
+fn py_parse_weights_file(content: &str) -> PyResult<String> {
+    kg_parse_weights_file_inner(content).map_err(PyValueError::new_err)
+}
+
+/// Append one feedback entry to existing JSONL content.
+#[pyfunction]
+#[pyo3(name = "append_feedback_to_jsonl")]
+fn py_append_feedback_to_jsonl(existing: &str, entry_json: &str) -> PyResult<String> {
+    kg_append_feedback_to_jsonl_inner(existing, entry_json).map_err(PyValueError::new_err)
+}
+
+/// Parse JSONL content. Returns JSON: `{"entries": [...], "warnings": [...]}`.
+#[pyfunction]
+#[pyo3(name = "read_feedback_jsonl")]
+fn py_read_feedback_jsonl(content: &str) -> PyResult<String> {
+    kg_read_feedback_jsonl_inner(content).map_err(PyValueError::new_err)
+}
+
+/// Keep only the most recent `max_lines` non-empty feedback log lines.
+#[pyfunction]
+#[pyo3(name = "rotate_feedback_log")]
+fn py_rotate_feedback_log(content: &str, max_lines: i64) -> String {
+    kg_rotate_feedback_log_inner(content, max_lines)
+}
+
+/// Convert a feedback entry into a counterexample; returns JSON or "null".
+#[pyfunction]
+#[pyo3(name = "feedback_to_counterexample")]
+fn py_feedback_to_counterexample(entry_json: &str) -> PyResult<String> {
+    kg_feedback_to_counterexample_inner(entry_json).map_err(PyValueError::new_err)
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -921,6 +1190,20 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_build_digest_prompt, m)?)?;
     m.add_function(wrap_pyfunction!(py_parse_digest_response, m)?)?;
     m.add_function(wrap_pyfunction!(py_assemble_digest_from_llm, m)?)?;
+
+    // Knowledge Graph Phase 2: contradiction detection + feedback log
+    m.add_function(wrap_pyfunction!(py_default_resolution_weights, m)?)?;
+    m.add_function(wrap_pyfunction!(py_compute_score_components, m)?)?;
+    m.add_function(wrap_pyfunction!(py_resolve_pair, m)?)?;
+    m.add_function(wrap_pyfunction!(py_detect_contradictions, m)?)?;
+    m.add_function(wrap_pyfunction!(py_apply_feedback, m)?)?;
+    m.add_function(wrap_pyfunction!(py_default_weights_file, m)?)?;
+    m.add_function(wrap_pyfunction!(py_serialize_weights_file, m)?)?;
+    m.add_function(wrap_pyfunction!(py_parse_weights_file, m)?)?;
+    m.add_function(wrap_pyfunction!(py_append_feedback_to_jsonl, m)?)?;
+    m.add_function(wrap_pyfunction!(py_read_feedback_jsonl, m)?)?;
+    m.add_function(wrap_pyfunction!(py_rotate_feedback_log, m)?)?;
+    m.add_function(wrap_pyfunction!(py_feedback_to_counterexample, m)?)?;
 
     // Consolidation / dedup
     crate::consolidation::register_python_functions(m)?;
@@ -1085,6 +1368,287 @@ mod tests {
     #[test]
     fn py_canonicalize_claim_rejects_legacy_format() {
         let result = py_canonicalize_claim(r#"{"t":"hi","a":"oc"}"#);
+        assert!(result.is_err());
+    }
+
+    // --- Phase 2 Slice 2c: contradiction bindings -----------------------
+
+    /// 2026-04-12T00:00:00Z — matches the contradiction module's test NOW.
+    const PHASE2_NOW: i64 = 1776211200;
+
+    fn iso_days_ago_str(days: i64) -> String {
+        let ts = PHASE2_NOW - days * 86400;
+        chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+            .unwrap()
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    }
+
+    #[test]
+    fn py_default_resolution_weights_matches_p2_3_defaults() {
+        let out = kg_default_resolution_weights_inner().unwrap();
+        let w: contradiction::ResolutionWeights = serde_json::from_str(&out).unwrap();
+        assert_eq!(w.confidence, 0.25);
+        assert_eq!(w.corroboration, 0.15);
+        assert_eq!(w.recency, 0.40);
+        assert_eq!(w.validation, 0.20);
+    }
+
+    #[test]
+    fn py_compute_score_components_known_answer() {
+        let claim = format!(
+            r#"{{"t":"x","c":"fact","cf":0.9,"i":5,"sa":"totalreclaw_remember","ea":"{}"}}"#,
+            iso_days_ago_str(0)
+        );
+        let weights = kg_default_resolution_weights_inner().unwrap();
+        let out = kg_compute_score_components_inner(&claim, PHASE2_NOW, &weights).unwrap();
+        let sc: contradiction::ScoreComponents = serde_json::from_str(&out).unwrap();
+        assert_eq!(sc.confidence, 0.9);
+        assert!((sc.corroboration - 1.0).abs() < 1e-12);
+        assert!((sc.recency - 1.0).abs() < 1e-12);
+        assert_eq!(sc.validation, 1.0);
+        assert!((sc.weighted_total - 0.975).abs() < 1e-12);
+    }
+
+    #[test]
+    fn py_compute_score_components_rejects_malformed_claim() {
+        let weights = kg_default_resolution_weights_inner().unwrap();
+        let result = kg_compute_score_components_inner("{not json", PHASE2_NOW, &weights);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn py_compute_score_components_rejects_malformed_weights() {
+        let claim = r#"{"t":"x","c":"fact","cf":0.9,"i":5,"sa":"oc"}"#;
+        let result = kg_compute_score_components_inner(claim, PHASE2_NOW, "{not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn py_resolve_pair_vim_vs_vscode_defaults_vscode_wins() {
+        let vim = format!(
+            r#"{{"t":"uses Vim","c":"fact","cf":0.8,"i":5,"sa":"oc","ea":"{}","cc":3,"e":[{{"n":"editor","tp":"tool"}}]}}"#,
+            iso_days_ago_str(60)
+        );
+        let vscode = format!(
+            r#"{{"t":"uses VS Code","c":"fact","cf":0.9,"i":5,"sa":"oc","ea":"{}","e":[{{"n":"editor","tp":"tool"}}]}}"#,
+            iso_days_ago_str(7)
+        );
+        let weights = kg_default_resolution_weights_inner().unwrap();
+        let out =
+            kg_resolve_pair_inner(&vim, "vim_id", &vscode, "vscode_id", PHASE2_NOW, &weights)
+                .unwrap();
+        let outcome: contradiction::ResolutionOutcome = serde_json::from_str(&out).unwrap();
+        assert_eq!(outcome.winner_id, "vscode_id");
+        assert_eq!(outcome.loser_id, "vim_id");
+        assert!(outcome.winner_score > outcome.loser_score);
+        assert!(outcome.score_delta > 0.0);
+    }
+
+    #[test]
+    fn py_resolve_pair_rejects_malformed_claim_a() {
+        let weights = kg_default_resolution_weights_inner().unwrap();
+        let good = r#"{"t":"x","c":"fact","cf":0.9,"i":5,"sa":"oc"}"#;
+        let result = kg_resolve_pair_inner("{bad", "a", good, "b", PHASE2_NOW, &weights);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn py_detect_contradictions_empty_existing_returns_empty_array() {
+        let new_claim = r#"{"t":"uses Vim","c":"fact","cf":0.8,"i":5,"sa":"oc","e":[{"n":"editor","tp":"tool"}]}"#;
+        let emb = serde_json::to_string(&vec![1.0f32, 0.0, 0.0, 0.0]).unwrap();
+        let out =
+            kg_detect_contradictions_inner(new_claim, "new_id", &emb, "[]", 0.3, 0.85).unwrap();
+        assert_eq!(out, "[]");
+    }
+
+    #[test]
+    fn py_detect_contradictions_single_in_band_returns_one() {
+        let new_claim = r#"{"t":"uses Vim","c":"fact","cf":0.8,"i":5,"sa":"oc","e":[{"n":"editor","tp":"tool"}]}"#;
+        let existing_claim_obj = r#"{"t":"uses Emacs","c":"fact","cf":0.8,"i":5,"sa":"oc","e":[{"n":"editor","tp":"tool"}]}"#;
+        let new_emb: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let mut ex_emb = vec![0.0f32; 8];
+        let cos = 0.5_f64;
+        let sin = (1.0 - cos * cos).sqrt();
+        ex_emb[0] = cos as f32;
+        ex_emb[1] = sin as f32;
+        let new_emb_json = serde_json::to_string(&new_emb).unwrap();
+        let existing_json = format!(
+            r#"[{{"claim":{},"id":"exist","embedding":{}}}]"#,
+            existing_claim_obj,
+            serde_json::to_string(&ex_emb).unwrap()
+        );
+        let out = kg_detect_contradictions_inner(
+            new_claim,
+            "new_id",
+            &new_emb_json,
+            &existing_json,
+            0.3,
+            0.85,
+        )
+        .unwrap();
+        let parsed: Vec<contradiction::Contradiction> = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].claim_a_id, "new_id");
+        assert_eq!(parsed[0].claim_b_id, "exist");
+        assert!((parsed[0].similarity - 0.5).abs() < 1e-6);
+        assert_eq!(parsed[0].entity_id, claims::deterministic_entity_id("editor"));
+    }
+
+    #[test]
+    fn py_detect_contradictions_rejects_malformed_existing_shape() {
+        let new_claim = r#"{"t":"uses Vim","c":"fact","cf":0.8,"i":5,"sa":"oc","e":[{"n":"editor","tp":"tool"}]}"#;
+        let emb = serde_json::to_string(&vec![1.0f32, 0.0]).unwrap();
+        let existing = r#"[{"claim":{"t":"x","c":"fact","cf":0.9,"i":5,"sa":"oc"}}]"#;
+        let result =
+            kg_detect_contradictions_inner(new_claim, "new_id", &emb, existing, 0.3, 0.85);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("existing"), "err: {}", err);
+    }
+
+    #[test]
+    fn py_apply_feedback_returns_clamped_weights() {
+        let weights = kg_default_resolution_weights_inner().unwrap();
+        let ce = r#"{
+            "formula_winner":{"confidence":0.9,"corroboration":3.0,"recency":1.0,"validation":1.0,"weighted_total":0.975},
+            "formula_loser":{"confidence":0.3,"corroboration":1.0,"recency":0.1,"validation":0.7,"weighted_total":0.24},
+            "user_pinned":"loser"
+        }"#;
+        let out = kg_apply_feedback_inner(&weights, ce).unwrap();
+        let new: contradiction::ResolutionWeights = serde_json::from_str(&out).unwrap();
+        for v in [new.confidence, new.corroboration, new.recency, new.validation] {
+            assert!(v >= 0.05 - 1e-12, "weight below clamp: {}", v);
+            assert!(v <= 0.60 + 1e-12, "weight above clamp: {}", v);
+        }
+        let sum = new.confidence + new.corroboration + new.recency + new.validation;
+        assert!(sum >= 0.9 - 1e-9 && sum <= 1.1 + 1e-9, "weight sum out of range: {}", sum);
+    }
+
+    // --- Phase 2 Slice 2c: feedback_log bindings ------------------------
+
+    fn phase2_sample_entry_json() -> String {
+        r#"{"ts":1776384000,"claim_a_id":"0xaaa","claim_b_id":"0xbbb","formula_winner":"a","user_decision":"pin_b","winner_components":{"confidence":0.8,"corroboration":1.732,"recency":0.333,"validation":0.7,"weighted_total":0.7331},"loser_components":{"confidence":0.6,"corroboration":1.0,"recency":0.125,"validation":0.5,"weighted_total":0.4025}}"#.to_string()
+    }
+
+    #[test]
+    fn py_default_weights_file_round_trips() {
+        let out = kg_default_weights_file_inner(1_776_384_000).unwrap();
+        let pretty = kg_serialize_weights_file_inner(&out).unwrap();
+        let back = kg_parse_weights_file_inner(&pretty).unwrap();
+        assert_eq!(back, out);
+    }
+
+    #[test]
+    fn py_serialize_weights_file_is_pretty() {
+        let out = kg_default_weights_file_inner(1_776_384_000).unwrap();
+        let pretty = kg_serialize_weights_file_inner(&out).unwrap();
+        assert!(pretty.contains('\n'), "pretty JSON must contain newlines");
+        assert!(pretty.contains("  "), "pretty JSON must use 2-space indent");
+    }
+
+    #[test]
+    fn py_parse_weights_file_rejects_malformed() {
+        let result = kg_parse_weights_file_inner("not-json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn py_parse_weights_file_rejects_unknown_version() {
+        let bad = r#"{"version":99,"updated_at":0,"weights":{"confidence":0.25,"corroboration":0.15,"recency":0.4,"validation":0.2},"threshold_lower":0.3,"threshold_upper":0.85,"feedback_count":0}"#;
+        let result = kg_parse_weights_file_inner(bad);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unsupported"));
+    }
+
+    #[test]
+    fn py_append_feedback_to_jsonl_empty_produces_one_line() {
+        let out = kg_append_feedback_to_jsonl_inner("", &phase2_sample_entry_json()).unwrap();
+        assert_eq!(out.matches('\n').count(), 1);
+        assert!(out.ends_with('\n'));
+    }
+
+    #[test]
+    fn py_append_feedback_to_jsonl_existing_produces_two_lines() {
+        let entry = phase2_sample_entry_json();
+        let first = kg_append_feedback_to_jsonl_inner("", &entry).unwrap();
+        let second = kg_append_feedback_to_jsonl_inner(&first, &entry).unwrap();
+        assert_eq!(second.matches('\n').count(), 2);
+    }
+
+    #[test]
+    fn py_read_feedback_jsonl_round_trip_many_entries() {
+        let mut content = String::new();
+        for _ in 0..3 {
+            content =
+                kg_append_feedback_to_jsonl_inner(&content, &phase2_sample_entry_json()).unwrap();
+        }
+        let out = kg_read_feedback_jsonl_inner(&content).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["entries"].as_array().unwrap().len(), 3);
+        assert_eq!(parsed["warnings"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn py_read_feedback_jsonl_surfaces_warnings_for_bad_lines() {
+        let content = "not-json\n".to_string() + &phase2_sample_entry_json() + "\n";
+        let out = kg_read_feedback_jsonl_inner(&content).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["warnings"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn py_rotate_feedback_log_drops_oldest_when_over_cap() {
+        let mut content = String::new();
+        for i in 0..5 {
+            let entry =
+                phase2_sample_entry_json().replace("1776384000", &format!("177638400{}", i));
+            content = kg_append_feedback_to_jsonl_inner(&content, &entry).unwrap();
+        }
+        let rotated = kg_rotate_feedback_log_inner(&content, 3);
+        let out = kg_read_feedback_jsonl_inner(&rotated).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let entries = parsed["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0]["ts"].as_i64().unwrap(), 1_776_384_002);
+        assert_eq!(entries[2]["ts"].as_i64().unwrap(), 1_776_384_004);
+    }
+
+    #[test]
+    fn py_rotate_feedback_log_preserves_content_below_cap() {
+        let content =
+            kg_append_feedback_to_jsonl_inner("", &phase2_sample_entry_json()).unwrap();
+        let rotated = kg_rotate_feedback_log_inner(&content, 10);
+        assert_eq!(rotated, content);
+    }
+
+    #[test]
+    fn py_feedback_to_counterexample_pin_b_when_formula_winner_a_returns_ce() {
+        let out = kg_feedback_to_counterexample_inner(&phase2_sample_entry_json()).unwrap();
+        assert_ne!(out, "null");
+        let ce: contradiction::Counterexample = serde_json::from_str(&out).unwrap();
+        assert_eq!(ce.user_pinned, contradiction::UserPinned::Loser);
+    }
+
+    #[test]
+    fn py_feedback_to_counterexample_pin_a_when_formula_winner_a_returns_null() {
+        let entry = phase2_sample_entry_json()
+            .replace("\"user_decision\":\"pin_b\"", "\"user_decision\":\"pin_a\"");
+        let out = kg_feedback_to_counterexample_inner(&entry).unwrap();
+        assert_eq!(out, "null");
+    }
+
+    #[test]
+    fn py_feedback_to_counterexample_unpin_returns_null() {
+        let entry = phase2_sample_entry_json()
+            .replace("\"user_decision\":\"pin_b\"", "\"user_decision\":\"unpin\"");
+        let out = kg_feedback_to_counterexample_inner(&entry).unwrap();
+        assert_eq!(out, "null");
+    }
+
+    #[test]
+    fn py_feedback_to_counterexample_rejects_malformed_entry() {
+        let result = kg_feedback_to_counterexample_inner("{not-an-entry");
         assert!(result.is_err());
     }
 }
