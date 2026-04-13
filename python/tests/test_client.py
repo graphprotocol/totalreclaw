@@ -37,8 +37,12 @@ class TestDeriveSmartAccountAddress:
 class TestTotalReclawClient:
     @pytest.fixture
     def client(self):
-        # Provide wallet_address to skip RPC call in unit tests
-        return TotalReclaw(mnemonic=TEST_MNEMONIC, wallet_address="0x2c0cf74b2b76110708ca431796367779e3738250")
+        # Provide wallet_address to skip RPC call in unit tests.
+        # Set _registered=True so _ensure_registered never POSTs to the relay —
+        # this fixture is strictly for unit tests and must not make network calls.
+        c = TotalReclaw(mnemonic=TEST_MNEMONIC, wallet_address="0x2c0cf74b2b76110708ca431796367779e3738250")
+        c._registered = True
+        return c
 
     def test_wallet_address(self, client):
         assert client.wallet_address.startswith("0x")
