@@ -292,7 +292,7 @@ Every new feature implementation MUST include:
 - **Storage overhead**: <=2.2x vs plaintext
 - **Server-blind**: Server NEVER sees plaintext
 - **Embedding model**: onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled)
-- **Extraction cap**: Max 15 facts per extraction cycle, unified 3-turn interval
+- **Extraction cap**: Max 15 facts per extraction cycle, unified 3-turn interval. **Agent-lifecycle only** (turn, pre-compaction, pre-reset) — does NOT apply to `totalreclaw_import_from` smart imports, which run uncapped.
 - **Memory types**: 7 categories -- fact, preference, decision (with reasoning), episodic, goal, context, summary
 
 ---

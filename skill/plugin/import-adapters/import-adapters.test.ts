@@ -699,7 +699,9 @@ async function runTests(): Promise<void> {
     assert(result.chunks[0].messages[0].role === 'user', 'ChatGPT: the surviving message is user');
   }
 
-  // --- chunks large conversations into batches of 20 ---
+  // --- short conversations (<80 messages) stay in a single chunk ---
+  // With CONVERSATION_CHUNK_SIZE bumped to 80 (docs/plans/2026-04-12-import-chunk-size-bump.md),
+  // short conversations are NOT fragmented — narrative preservation beats small batches.
   {
     // Build a conversation with 45 messages
     const mapping: Record<string, any> = {
@@ -725,13 +727,128 @@ async function runTests(): Promise<void> {
     const adapter = new ChatGPTAdapter();
     const result = await adapter.parse({ content: JSON.stringify(conversations) });
 
-    assert(result.chunks.length === 3, `ChatGPT: 45 messages -> 3 chunks (got ${result.chunks.length})`);
-    assert(result.chunks[0].messages.length === 20, `ChatGPT: first chunk has 20 messages (got ${result.chunks[0].messages.length})`);
-    assert(result.chunks[1].messages.length === 20, `ChatGPT: second chunk has 20 messages (got ${result.chunks[1].messages.length})`);
-    assert(result.chunks[2].messages.length === 5, `ChatGPT: third chunk has 5 messages (got ${result.chunks[2].messages.length})`);
-    assert(result.chunks[0].title.includes('part 1/3'), `ChatGPT: first chunk title has part indicator (got: ${result.chunks[0].title})`);
-    assert(result.chunks[2].title.includes('part 3/3'), `ChatGPT: last chunk title has part indicator (got: ${result.chunks[2].title})`);
+    assert(result.chunks.length === 1, `ChatGPT: 45 messages -> 1 chunk (got ${result.chunks.length})`);
+    assert(result.chunks[0].messages.length === 45, `ChatGPT: single chunk holds all 45 messages (got ${result.chunks[0].messages.length})`);
+    assert(!result.chunks[0].title.includes('part'), `ChatGPT: single chunk has no part indicator (got: ${result.chunks[0].title})`);
     assert(result.totalMessages === 45, `ChatGPT: totalMessages is 45 (got ${result.totalMessages})`);
+  }
+
+  // --- long conversations (>80 messages) split into windows of 80 ---
+  {
+    const mapping: Record<string, any> = {
+      root: { id: 'root', message: null, parent: null, children: ['msg-0'] },
+    };
+    for (let i = 0; i < 180; i++) {
+      const role = i % 2 === 0 ? 'user' : 'assistant';
+      mapping[`msg-${i}`] = {
+        id: `msg-${i}`,
+        message: {
+          id: `msg-${i}`,
+          author: { role },
+          content: { content_type: 'text', parts: [`short ${i}`] },
+        },
+        parent: i === 0 ? 'root' : `msg-${i - 1}`,
+        children: i < 179 ? [`msg-${i + 1}`] : [],
+      };
+    }
+    const result = await new ChatGPTAdapter().parse({ content: JSON.stringify([{ title: 'Big', mapping }]) });
+    assert(result.chunks.length === 3, `ChatGPT long: 180 messages -> 3 chunks of 80 (got ${result.chunks.length})`);
+    assert(result.chunks[0].messages.length === 80, `ChatGPT long: first chunk has 80 messages (got ${result.chunks[0].messages.length})`);
+    assert(result.chunks[1].messages.length === 80, `ChatGPT long: second chunk has 80 messages (got ${result.chunks[1].messages.length})`);
+    assert(result.chunks[2].messages.length === 20, `ChatGPT long: third chunk has 20 messages (got ${result.chunks[2].messages.length})`);
+    assert(result.chunks[0].title.includes('part 1/3'), `ChatGPT long: first chunk title has part 1/3 (got: ${result.chunks[0].title})`);
+  }
+
+  // --- token-budget splitter kicks in when messages are huge ---
+  {
+    const mapping: Record<string, any> = {
+      root: { id: 'root', message: null, parent: null, children: ['msg-0'] },
+    };
+    // 80 messages × 2500 chars each ≈ 200K chars ≈ 50K tokens — exceeds
+    // the 40K CHUNK_TOKEN_BUDGET, should be halved.
+    const huge = 'x'.repeat(2500);
+    for (let i = 0; i < 80; i++) {
+      const role = i % 2 === 0 ? 'user' : 'assistant';
+      mapping[`msg-${i}`] = {
+        id: `msg-${i}`,
+        message: {
+          id: `msg-${i}`,
+          author: { role },
+          content: { content_type: 'text', parts: [huge] },
+        },
+        parent: i === 0 ? 'root' : `msg-${i - 1}`,
+        children: i < 79 ? [`msg-${i + 1}`] : [],
+      };
+    }
+    const result = await new ChatGPTAdapter().parse({ content: JSON.stringify([{ title: 'Huge', mapping }]) });
+    assert(result.chunks.length >= 2, `ChatGPT token split: oversized 80-msg chunk halved (got ${result.chunks.length} chunks)`);
+    assert(result.chunks.every((c) => c.messages.length <= 80), `ChatGPT token split: no chunk exceeds 80 messages`);
+    assert(result.totalMessages === 80, `ChatGPT token split: totalMessages preserved (got ${result.totalMessages})`);
+  }
+
+  // --- branched thread picks the latest sibling (regenerated response) ---
+  {
+    // root → user msg → two assistant replies (old + new). New one (higher
+    // create_time) should be selected; the old one is excluded.
+    const mapping: Record<string, any> = {
+      root: { id: 'root', message: null, parent: null, children: ['u1'] },
+      u1: {
+        id: 'u1', parent: 'root', children: ['a1_old', 'a1_new'],
+        message: { id: 'u1', author: { role: 'user' }, content: { content_type: 'text', parts: ['question'] }, create_time: 1 },
+      },
+      a1_old: {
+        id: 'a1_old', parent: 'u1', children: [],
+        message: { id: 'a1_old', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['OLD response'] }, create_time: 2 },
+      },
+      a1_new: {
+        id: 'a1_new', parent: 'u1', children: [],
+        message: { id: 'a1_new', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['NEW response'] }, create_time: 3 },
+      },
+    };
+    const result = await new ChatGPTAdapter().parse({ content: JSON.stringify([{ title: 'Branched', mapping }]) });
+    assert(result.chunks.length === 1, `ChatGPT branch: 1 chunk (got ${result.chunks.length})`);
+    const msgs = result.chunks[0].messages;
+    assert(msgs.length === 2, `ChatGPT branch: 2 messages (got ${msgs.length})`);
+    assert(msgs[1].text === 'NEW response', `ChatGPT branch: picked latest sibling (got "${msgs[1].text}")`);
+  }
+
+  // --- short messages ("yes"/"no") are no longer dropped ---
+  {
+    const mapping: Record<string, any> = {
+      root: { id: 'root', message: null, parent: null, children: ['u'] },
+      u: {
+        id: 'u', parent: 'root', children: ['a'],
+        message: { id: 'u', author: { role: 'user' }, content: { content_type: 'text', parts: ['Should I?'] }, create_time: 1 },
+      },
+      a: {
+        id: 'a', parent: 'u', children: [],
+        message: { id: 'a', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['Yes.'] }, create_time: 2 },
+      },
+    };
+    const result = await new ChatGPTAdapter().parse({ content: JSON.stringify([{ title: 'Short', mapping }]) });
+    assert(result.chunks.length === 1, `ChatGPT short: 1 chunk (got ${result.chunks.length})`);
+    assert(result.chunks[0].messages.length === 2, `ChatGPT short: both messages kept (got ${result.chunks[0].messages.length})`);
+    assert(result.chunks[0].messages[1].text === 'Yes.', `ChatGPT short: short response preserved`);
+  }
+
+  // --- multi-root export: picks the root whose subtree starts earliest ---
+  {
+    const mapping: Record<string, any> = {
+      // Newer root (should be picked first in naive Object.entries order)
+      rootB: { id: 'rootB', message: null, parent: null, children: ['newB'] },
+      newB: {
+        id: 'newB', parent: 'rootB', children: [],
+        message: { id: 'newB', author: { role: 'user' }, content: { content_type: 'text', parts: ['NEWER'] }, create_time: 100 },
+      },
+      // Older root (we want this one)
+      rootA: { id: 'rootA', message: null, parent: null, children: ['oldA'] },
+      oldA: {
+        id: 'oldA', parent: 'rootA', children: [],
+        message: { id: 'oldA', author: { role: 'user' }, content: { content_type: 'text', parts: ['OLDER'] }, create_time: 10 },
+      },
+    };
+    const result = await new ChatGPTAdapter().parse({ content: JSON.stringify([{ title: 'MultiRoot', mapping }]) });
+    assert(result.chunks[0].messages[0].text === 'OLDER', `ChatGPT multi-root: picked earliest root (got "${result.chunks[0].messages[0].text}")`);
   }
 
   // --- handles single conversation object (not array) ---

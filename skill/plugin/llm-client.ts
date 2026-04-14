@@ -335,6 +335,49 @@ export function resolveLLMConfig(): LLMClientConfig | null {
 }
 
 /**
+ * Assert that the currently-resolved LLM endpoint is on localhost.
+ *
+ * Used by the `totalreclaw_import_from` path for sensitive/offline imports.
+ * When `TOTALRECLAW_IMPORT_LOCAL_ONLY=1`, plaintext extraction prompts must
+ * never leave the machine. Throws if the resolved baseUrl's host is anything
+ * other than `127.0.0.1`, `localhost`, or `::1`.
+ *
+ * No-op when `TOTALRECLAW_IMPORT_LOCAL_ONLY` is unset or not "1".
+ */
+export function assertLocalOnlyLLMConfig(context: string = 'import'): void {
+  if (process.env.TOTALRECLAW_IMPORT_LOCAL_ONLY !== '1') return;
+
+  const cfg = resolveLLMConfig();
+  if (!cfg) {
+    throw new Error(
+      `TOTALRECLAW_IMPORT_LOCAL_ONLY=1 is set but no LLM config resolved. ` +
+      `Configure OpenAI-compatible provider pointing at a local llama.cpp server ` +
+      `(e.g. OPENAI_BASE_URL=http://127.0.0.1:8080/v1, OPENAI_API_KEY=local).`,
+    );
+  }
+
+  let host: string;
+  try {
+    // URL.hostname returns IPv6 addresses wrapped in brackets (e.g. "[::1]").
+    // Strip them before comparing against the allowlist.
+    host = new URL(cfg.baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  } catch {
+    throw new Error(
+      `TOTALRECLAW_IMPORT_LOCAL_ONLY=1: cannot parse LLM baseUrl "${cfg.baseUrl}" for ${context}`,
+    );
+  }
+
+  const allowed = new Set(['127.0.0.1', 'localhost', '::1', '0.0.0.0']);
+  if (!allowed.has(host)) {
+    throw new Error(
+      `TOTALRECLAW_IMPORT_LOCAL_ONLY=1: refusing to ${context} — LLM endpoint ` +
+      `is not local (resolved host "${host}" from baseUrl "${cfg.baseUrl}"). ` +
+      `Point OPENAI_BASE_URL at http://127.0.0.1:<port>/v1 before retrying.`,
+    );
+  }
+}
+
+/**
  * Call the LLM chat completion endpoint.
  *
  * Supports both OpenAI-compatible format and Anthropic Messages API,

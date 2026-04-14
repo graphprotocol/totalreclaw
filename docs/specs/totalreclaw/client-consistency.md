@@ -8,8 +8,8 @@
 
 | Parameter | Value | Source | Notes |
 |-----------|-------|--------|-------|
-| Extraction interval | 3 turns (default) | Server-driven via `billing.features.extraction_interval` | Env override: `TOTALRECLAW_EXTRACT_INTERVAL` |
-| Max facts per extraction | 15 (default) | Server-driven via `billing.features.max_facts_per_extraction` | |
+| Extraction interval | 3 turns (default) | Server-driven via `billing.features.extraction_interval` | Env override: `TOTALRECLAW_EXTRACT_INTERVAL`. Applies to agent-lifecycle extraction only. |
+| Max facts per extraction | 15 (default) | Server-driven via `billing.features.max_facts_per_extraction` | **Agent-lifecycle extraction only** (turn, pre-compaction, pre-reset). **Does NOT apply to imports** — see "Import Extraction" below. |
 | Importance threshold | >= 6 (1-10 scale) | Prompt-level + parser-level | DELETE actions bypass threshold |
 | Importance storage | `importance / 10` (0.0-1.0) | All clients normalize | Stored as `decayScore` on-chain |
 | Message window (turn mode) | All unprocessed since last extraction | Bounded by extraction interval | Do NOT hardcode a number of messages |
@@ -17,6 +17,20 @@
 | Extraction prompt | See `skill/plugin/extractor.ts:40-74` | Canonical source of truth | Must be identical across all clients |
 | Memory types | fact, preference, decision, episodic, goal, context, summary | 7 types | |
 | Dedup actions | ADD, UPDATE, DELETE, NOOP | LLM-guided | Always enabled (all tiers) |
+
+### Import Extraction
+
+Smart-import adapters (`totalreclaw_import_from` for `chatgpt`, `gemini`, `claude`, etc.) use the same extraction prompt and 7-category taxonomy as agent-lifecycle extraction, but operate under different constraints:
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Max facts per chunk | **No cap** | The 15-fact `max_facts_per_extraction` ceiling does NOT apply. Each chunk returns whatever the LLM produces. |
+| Chunk size (conversation) | 80 messages (default) | Token-aware: split recursively if estimated input tokens > ~40K (chars / 4 heuristic). |
+| Chunk size (memories/plain-text) | 20 lines | Each line is an atomic fact; narrative preservation does not apply. |
+| Message window | Full conversation, walked via provider-specific tree/mapping | Chunker respects conversation boundaries; never splits a single user turn. |
+| Dedup | Same store-time cosine (>= 0.85) + server fingerprinting + LLM-guided dedup | Re-imports are safe. |
+
+**Rationale for no extraction cap on imports:** the 15-fact cap exists to (a) bound agent-turn latency and (b) prevent runaway extraction on dense conversations during live chat. Imports are batch operations — latency is amortized across a progress bar, and under-extraction (dropping facts) is a worse failure mode than over-extraction. Agents implementing new import adapters MUST NOT apply `getMaxFactsPerExtraction()` to import chunks.
 
 ### Auto-Recall
 

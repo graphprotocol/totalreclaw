@@ -31,7 +31,7 @@ import {
 } from './crypto.js';
 import { createApiClient, type StoreFactPayload } from './api-client.js';
 import { extractFacts, extractDebrief, EXTRACTION_SYSTEM_PROMPT, type ExtractedFact } from './extractor.js';
-import { initLLMClient, resolveLLMConfig, chatCompletion, generateEmbedding, getEmbeddingDims } from './llm-client.js';
+import { initLLMClient, resolveLLMConfig, chatCompletion, generateEmbedding, getEmbeddingDims, assertLocalOnlyLLMConfig } from './llm-client.js';
 import { LSHHasher } from './lsh.js';
 import { rerank, cosineSimilarity, detectQueryIntent, INTENT_WEIGHTS, type RerankerCandidate } from './reranker.js';
 import { deduplicateBatch } from './semantic-dedup.js';
@@ -1893,6 +1893,10 @@ async function handleBatchImport(
   const slice = parseResult.chunks.slice(offset, offset + batchSize);
   const remaining = Math.max(0, totalChunks - offset - slice.length);
 
+  // TOTALRECLAW_IMPORT_LOCAL_ONLY=1 — refuse to run if the LLM endpoint isn't
+  // on localhost. Same guard as handleChunkImport; kept for the batched path.
+  assertLocalOnlyLLMConfig(`batch import chunks from ${source}`);
+
   // --- Smart Import: Profile + Triage ---
   // Build profile from ALL chunks (not just the slice) for full context,
   // then triage only the current slice. For simplicity, we rebuild on every
@@ -1993,6 +1997,11 @@ async function handleChunkImport(
   let chunksSkipped = 0;
 
   let storeError: string | undefined;
+
+  // TOTALRECLAW_IMPORT_LOCAL_ONLY=1 — refuse to run if the LLM endpoint isn't
+  // on localhost. Protects sensitive datasets from accidentally hitting a
+  // remote LLM provider via stale config.
+  assertLocalOnlyLLMConfig(`import chunks from ${source}`);
 
   // --- Smart Import: Profile + Triage ---
   const smartCtx = await runSmartImportPipeline(chunks, logger);

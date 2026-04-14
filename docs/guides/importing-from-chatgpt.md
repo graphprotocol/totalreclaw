@@ -47,7 +47,7 @@ ChatGPT memories are already curated facts (e.g., "User prefers dark mode", "Use
 
 ## Method 2: Import conversations.json
 
-The full data export contains every conversation you have had with ChatGPT. TotalReclaw scans the user messages for fact-like statements using pattern matching (no LLM required).
+The full data export contains every conversation you have had with ChatGPT. TotalReclaw walks the conversation tree, chunks messages into batches, and uses your configured LLM to extract atomic facts (same smart-import pipeline used everywhere else).
 
 ### Step 1: Export your ChatGPT data
 
@@ -71,24 +71,20 @@ The agent calls `totalreclaw_import_from` with `source: "chatgpt"` and the file 
 
 ### How extraction works
 
-TotalReclaw scans your user messages (not assistant responses) for fact-like statements:
+The adapter traverses each conversation's mapping tree, collecting user and assistant messages in chronological order (assistant replies are kept because they give the LLM the context it needs to understand what the user meant). When a message has multiple children — for example, a regenerated assistant response — the adapter follows the latest sibling, matching the "current" branch you see in the ChatGPT UI.
 
-- **Personal info**: "I am...", "I work at...", "I live in...", "My name is..."
-- **Preferences**: "I like...", "I prefer...", "I don't like...", "My favorite..."
-- **Decisions**: "I decided...", "I chose...", "We agreed..."
-- **Goals**: "I want to...", "I plan to...", "I'm working on..."
+Messages are windowed into chunks of 80 for LLM extraction (narrative preservation beats small batches). If a chunk exceeds ~40K estimated input tokens — unusual but possible with very long messages — it's recursively halved until it fits. The extractor returns atomic facts across the full 7-category taxonomy (fact, preference, decision, episodic, goal, context, summary).
 
-Messages that are purely questions, greetings, or very short responses are skipped.
+Short/empty messages and non-text parts (images, tool calls) are skipped automatically. Empty conversations, system/tool messages, and orphaned mapping nodes are also skipped.
 
 ### What to expect
 
-The extraction is deliberately conservative -- it uses pattern matching, not an LLM, to keep things fast and deterministic. For a typical export with thousands of conversations, expect:
+- **Processing time**: Proportional to conversation count. Extraction is LLM-bound, so it's slower than memories-only imports — expect minutes, not seconds, for large exports.
+- **Cost**: Uses your own LLM API key (the one configured in your agent). Zero cost to TotalReclaw.
+- **Quality**: High — the LLM captures implicit facts, decisions with reasoning, and preferences that pattern matching would miss.
+- **Dedup**: Store-time cosine dedup + server-side fingerprinting kick in, so re-importing is safe.
 
-- **Processing time**: A few seconds (all local, no API calls)
-- **Extraction rate**: Roughly 1-5% of user messages contain extractable facts
-- **Quality**: Good for personal info and preferences; may miss subtle or implicit facts
-
-If you want higher-quality extraction, use Method 1 (ChatGPT memories) instead -- ChatGPT has already done the hard work of identifying what matters.
+If you want a fast, cheap first pass, start with Method 1 (ChatGPT memories). Method 2 is worth it when you want the full long-tail of context from years of conversations.
 
 ---
 
@@ -115,7 +111,68 @@ Imported memories behave identically to natively stored ones:
 
 ## Tips
 
-- **Start with memories, not conversations.** ChatGPT memories are pre-curated and import cleanly. The full conversation export is noisier.
+- **Start with memories for a fast first pass.** ChatGPT memories are small and pre-curated, so they import in seconds. Run `conversations.json` afterwards when you want the long-tail context.
 - **Review after import.** Run `totalreclaw_recall` with a few queries to verify the imported facts make sense.
 - **Use consolidate after large imports.** If you import from both methods, run `totalreclaw_consolidate` with `dry_run=true` to find and merge near-duplicates.
 - **Curate manually if needed.** Use `totalreclaw_forget` to remove any imported facts that are outdated or incorrect.
+
+---
+
+## Local-only import (sensitive datasets)
+
+If your ChatGPT export contains sensitive material and you don't want plaintext to ever leave your machine during extraction, run the import against a **fully local stack**: local llama.cpp server, local anvil chain, local subgraph, local relay shim. No remote LLM, no remote bundler, no remote subgraph.
+
+### 1. Bring up the local stack
+
+The `totalreclaw-internal/dev-stack/` directory has an orchestrated setup (docker-compose + scripts). From a fresh clone:
+
+```bash
+cd totalreclaw-internal/dev-stack
+make up     # anvil + graph-node + ipfs + postgres + subgraph deploy + devrelay
+make smoke  # round-trip encrypt → on-chain → subgraph → decrypt
+```
+
+### 2. Start a local LLM
+
+The launcher defaults to Unsloth Qwen3.5-9B (`UD-Q4_K_XL` quant, ~5.6 GB) — the same model the Gemini import used. First run downloads from HuggingFace; subsequent runs reuse the cache.
+
+```bash
+./scripts/start-llama-server.sh           # uses cached Qwen3.5-9B or auto-downloads
+./scripts/local-llm-preflight.ts          # /v1/models + JSON extraction + p50 latency check
+```
+
+The launcher binds strictly to `127.0.0.1:8001` (matches the Gemini import config) with:
+- **128K context** (`-c 131072`) — comfortably holds the 80-message / 40K-token chunk budget.
+- **Unsloth-recommended non-thinking sampling**: temp 0.7, top_p 0.8, top_k 20, min_p 0.0.
+- **Reasoning off** — Qwen3.5-9B's default mode. Thinking tokens are not emitted, so every output token goes toward the JSON extraction.
+- **Model alias** `unsloth/Qwen3.5-9B` — matches the hard-coded model name in `totalreclaw-internal/e2e/gemini-import/import-local.ts`.
+
+Override any of these via env: `LLAMA_PORT=9000 LLAMA_MODEL=/path/to/other.gguf ./scripts/start-llama-server.sh`.
+
+### 3. Configure the plugin
+
+Copy `dev-stack/.env.local.example` to `.env.local` and source it, or set these env vars in your OpenClaw session:
+
+```bash
+export TOTALRECLAW_SERVER_URL=http://127.0.0.1:8787
+export TOTALRECLAW_CHAIN_ID=31337
+export TOTALRECLAW_RPC_URL=http://127.0.0.1:8545
+export TOTALRECLAW_ENTRYPOINT_ADDRESS=0x0000000071727De22E5E9d8BAf0edAc6f37da032
+export TOTALRECLAW_DATA_EDGE_ADDRESS=0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca
+export OPENAI_BASE_URL=http://127.0.0.1:8001/v1
+export OPENAI_API_KEY=local
+export OPENAI_MODEL=unsloth/Qwen3.5-9B
+export TOTALRECLAW_IMPORT_LOCAL_ONLY=1   # <-- hard guard
+```
+
+### 4. The `TOTALRECLAW_IMPORT_LOCAL_ONLY=1` guard
+
+When this env var is set to `1`, `totalreclaw_import_from` refuses to run if the resolved LLM endpoint's hostname isn't `127.0.0.1`, `localhost`, or `::1`. A single misconfigured provider key (leftover `OPENAI_API_KEY` for cloud OpenAI, say) can't silently exfiltrate your prompts — the import path throws before any message leaves the process.
+
+### 5. Run the import
+
+Use a fresh, disposable BIP-39 recovery phrase for the vault (don't reuse your normal one). Dry-run first, inspect the profile + triage decisions, then run live:
+
+> "Import my ChatGPT conversations from /path/to/conversations.json with dry run first"
+
+During the run, you can verify hygiene with `lsof -iTCP -sTCP:ESTABLISHED` on the plugin process — it should only show connections to `127.0.0.1`.
