@@ -24,6 +24,7 @@ import {
   loadWeightsFile,
   parseCandidateClaim,
   resolveWithCore,
+  TIE_ZONE_SCORE_TOLERANCE,
   weightsFilePath,
   type CandidateClaim,
   type CanonicalClaim,
@@ -1037,6 +1038,191 @@ function makeVimVsVsCodeCandidate(): CandidateClaim {
 
 {
   assert(CONTRADICTION_CANDIDATE_CAP === 20, 'CONTRADICTION_CANDIDATE_CAP: documented value 20');
+}
+
+// ---------------------------------------------------------------------------
+// Tie-zone guard: near-identical scoring claims are left active.
+//
+// Reproduces the 2026-04-14 Postgres/DuckDB false positive (discovered during
+// KG QA on the VPS): two explicitly-stored, equally-recent, equally-confident
+// claims about complementary tech that share an entity. The formula produces
+// a supersede_existing decision with winner/loser scores differing by parts
+// per million — rounding noise. The guard converts this into tie_leave_both.
+// ---------------------------------------------------------------------------
+
+{
+  const tmp = setupTempStateDir('e2e-tie-zone');
+  const originalEnv = process.env.TOTALRECLAW_AUTO_RESOLVE_MODE;
+  delete process.env.TOTALRECLAW_AUTO_RESOLVE_MODE;
+  try {
+    // Existing and new: same confidence, same corroboration, same entity,
+    // ea 10 seconds apart — recency decay at days-scale makes the gap tiny.
+    const existingClaim = makeClaim({
+      t: 'Uses PostgreSQL for the primary OLTP database',
+      c: 'pref',
+      cf: 1.0,
+      i: 8,
+      ea: '2026-04-14T17:20:00Z',
+      sa: 'openclaw-plugin',
+      e: [{ n: 'database', tp: 'concept' }],
+    });
+    const existingEmb = embed([Math.cos(Math.PI / 4), Math.sin(Math.PI / 4), 0, 0], 8);
+
+    const trapdoor = computeEntityTrapdoor('database');
+    const search = fakeSubgraph({
+      [trapdoor]: [
+        {
+          id: 'existing-postgres',
+          encryptedBlob: fakeEncrypt(JSON.stringify(existingClaim)),
+          encryptedEmbedding: fakeEncrypt(JSON.stringify(existingEmb)),
+          isActive: true,
+        },
+      ],
+    });
+
+    const newClaim = makeClaim({
+      t: 'Uses DuckDB for analytics and reporting workloads',
+      c: 'pref',
+      cf: 1.0,
+      i: 8,
+      ea: '2026-04-14T17:20:10Z',
+      sa: 'openclaw-plugin',
+      e: [{ n: 'database', tp: 'concept' }],
+    });
+    const newEmb = embed([1.0, 0.0, 0.0, 0.0], 8); // cosine sim vs existing = 0.707
+
+    const cap = makeCaptureLogger();
+    const decisions = await detectAndResolveContradictions({
+      newClaim,
+      newClaimId: 'new-duckdb',
+      newEmbedding: newEmb,
+      subgraphOwner: '0xowner',
+      authKeyHex: 'authKey',
+      encryptionKey: Buffer.alloc(32),
+      deps: {
+        searchSubgraph: search,
+        decryptFromHex: fakeDecrypt,
+        nowUnixSeconds: Math.floor(new Date('2026-04-14T17:20:15Z').getTime() / 1000),
+      },
+      logger: cap.logger,
+    });
+
+    // The caller receives an EMPTY array — ties are filtered so the write path
+    // does not tombstone either claim.
+    assertEq(decisions, [], 'tie-zone: filtered decision list is empty (no supersede applied)');
+
+    // The decision log still has an audit row, but with action=tie_leave_both.
+    const log = fs.readFileSync(decisionsLogPath(), 'utf-8');
+    assert(log.includes('"action":"tie_leave_both"'), 'tie-zone: log row action=tie_leave_both');
+    assert(log.includes('"reason":"tie_below_tolerance"'), 'tie-zone: log row reason=tie_below_tolerance');
+    assert(
+      !log.includes('"action":"supersede_existing"'),
+      'tie-zone: no supersede_existing row written',
+    );
+
+    // A human-readable info line lets operators see the tie.
+    assert(
+      cap.infos.some((m) => m.startsWith('Contradiction: tie') && m.includes('leaving both active')),
+      'tie-zone: logger.info explains the tie',
+    );
+
+    // Sanity: the components should be carried through so the feedback loop
+    // can reconstruct the scores later.
+    const logRow = JSON.parse(log.trim().split('\n').pop() as string);
+    assert(typeof logRow.winner_score === 'number', 'tie-zone: winner_score preserved');
+    assert(typeof logRow.loser_score === 'number', 'tie-zone: loser_score preserved');
+    assert(
+      Math.abs(logRow.winner_score - logRow.loser_score) < TIE_ZONE_SCORE_TOLERANCE,
+      'tie-zone: gap is within tolerance',
+    );
+    assert(
+      typeof logRow.winner_components?.weighted_total === 'number',
+      'tie-zone: winner_components preserved',
+    );
+    assert(
+      typeof logRow.loser_components?.weighted_total === 'number',
+      'tie-zone: loser_components preserved',
+    );
+  } finally {
+    if (originalEnv !== undefined) process.env.TOTALRECLAW_AUTO_RESOLVE_MODE = originalEnv;
+    cleanupTempStateDir(tmp);
+  }
+}
+
+// Tie-zone: a LEGITIMATE wide-margin supersede still fires (regression guard).
+{
+  const tmp = setupTempStateDir('e2e-tie-zone-wide-margin');
+  const originalEnv = process.env.TOTALRECLAW_AUTO_RESOLVE_MODE;
+  delete process.env.TOTALRECLAW_AUTO_RESOLVE_MODE;
+  try {
+    // Stale, low-confidence existing vs fresh, high-confidence new. Wide gap.
+    const existingClaim = makeClaim({
+      t: 'I use Vim as my primary editor',
+      c: 'pref',
+      cf: 0.7,
+      i: 6,
+      ea: '2025-06-01T00:00:00Z', // ~10 months old
+      sa: 'auto-extraction',
+      e: [{ n: 'editor', tp: 'concept' }],
+    });
+    const existingEmb = embed([Math.cos(Math.PI / 4), Math.sin(Math.PI / 4), 0, 0], 8);
+    const trapdoor = computeEntityTrapdoor('editor');
+    const search = fakeSubgraph({
+      [trapdoor]: [
+        {
+          id: 'existing-vim-old',
+          encryptedBlob: fakeEncrypt(JSON.stringify(existingClaim)),
+          encryptedEmbedding: fakeEncrypt(JSON.stringify(existingEmb)),
+          isActive: true,
+        },
+      ],
+    });
+    const newClaim = makeClaim({
+      t: 'I have switched to VS Code full-time',
+      c: 'pref',
+      cf: 1.0,
+      i: 9,
+      ea: '2026-04-14T00:00:00Z',
+      sa: 'totalreclaw_remember',
+      e: [{ n: 'editor', tp: 'concept' }],
+    });
+    const decisions = await detectAndResolveContradictions({
+      newClaim,
+      newClaimId: 'new-vscode',
+      newEmbedding: embed([1, 0, 0, 0], 8),
+      subgraphOwner: '0xowner',
+      authKeyHex: 'authKey',
+      encryptionKey: Buffer.alloc(32),
+      deps: {
+        searchSubgraph: search,
+        decryptFromHex: fakeDecrypt,
+        nowUnixSeconds: Math.floor(new Date('2026-04-14T00:00:05Z').getTime() / 1000),
+      },
+      logger: silentLogger,
+    });
+    assert(decisions.length === 1, 'tie-zone: wide-margin case still returns one decision');
+    assert(
+      decisions[0].action === 'supersede_existing',
+      'tie-zone: wide-margin supersede NOT blocked by tie guard',
+    );
+    const log = fs.readFileSync(decisionsLogPath(), 'utf-8');
+    assert(
+      log.includes('"action":"supersede_existing"'),
+      'tie-zone: wide-margin supersede row written',
+    );
+    assert(
+      !log.includes('"action":"tie_leave_both"'),
+      'tie-zone: wide-margin case does not write tie row',
+    );
+  } finally {
+    if (originalEnv !== undefined) process.env.TOTALRECLAW_AUTO_RESOLVE_MODE = originalEnv;
+    cleanupTempStateDir(tmp);
+  }
+}
+
+// Tie-zone: TIE_ZONE_SCORE_TOLERANCE is documented at 1% (0.01).
+{
+  assert(TIE_ZONE_SCORE_TOLERANCE === 0.01, 'tie-zone: TIE_ZONE_SCORE_TOLERANCE documented at 0.01');
 }
 
 // ---------------------------------------------------------------------------

@@ -100,6 +100,24 @@ Entities:
 - Entity "role" is optional and describes the entity's role in the claim (e.g. "chooser", "employer", "target"); omit if not clear
 - If no entities are identifiable, omit the field or use an empty array
 
+Entity specificity (IMPORTANT for contradiction detection):
+- Prefer SPECIFIC product/tool names over umbrella categories. "PostgreSQL" beats "database"; "Neovim" beats "editor"; "TypeScript" beats "language".
+- Do NOT include umbrella concepts ("database", "editor", "language", "framework", "tool") as separate entities when a specific product is already listed. The specific name is enough.
+- When two memories describe different use cases of the same broader category (e.g. Postgres for OLTP and DuckDB for analytics), each memory's entities must be the SPECIFIC products involved in that memory — never a shared umbrella. Sharing an umbrella entity across complementary choices causes false-positive contradictions.
+- Examples of ENTITIES TO AVOID as standalone tags: "database", "editor", "IDE", "language", "framework", "library", "tool", "store", "datastore", "server", "client", "app".
+
+Few-shot example (complementary tech — two memories must not share an umbrella entity):
+
+Memory A: "Uses PostgreSQL as the primary OLTP database for user-facing workloads"
+  entities: [{"name": "PostgreSQL", "type": "tool", "role": "primary OLTP store"}, {"name": "Pedro", "type": "person"}]
+  (NOT: "database", "OLTP", or any umbrella term)
+
+Memory B: "Uses DuckDB for analytics and reporting workloads, roughly 20x faster than Postgres on aggregations"
+  entities: [{"name": "DuckDB", "type": "tool", "role": "analytics engine"}, {"name": "Pedro", "type": "person"}]
+  (NOT: "database", "analytics", or any umbrella term. PostgreSQL is mentioned as a comparison point and MAY appear as a separate entity, but the memory is about DuckDB.)
+
+These two memories are COMPLEMENTARY, not contradictory — Postgres serves OLTP and DuckDB serves OLAP. Because they do not share an umbrella entity, the contradiction-detection path correctly treats them as independent.
+
 Confidence:
 - Self-assess how sure you are this is a real, durable fact (0.0-1.0)
 - Use 0.9-1.0 when the user stated it directly and unambiguously
@@ -179,7 +197,7 @@ function truncateMessages(messages: Array<{ role: string; content: string }>, ma
  * Parse a single entity object from LLM output. Returns null if invalid.
  * Invalid entities are silently dropped so a bad entity never fails the whole fact.
  */
-function parseEntity(raw: unknown): ExtractedEntity | null {
+export function parseEntity(raw: unknown): ExtractedEntity | null {
   if (!raw || typeof raw !== 'object') return null;
   const e = raw as Record<string, unknown>;
   const name = typeof e.name === 'string' ? e.name.trim() : '';

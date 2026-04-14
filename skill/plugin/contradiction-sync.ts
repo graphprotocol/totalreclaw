@@ -62,6 +62,10 @@ export interface ScoreComponents {
  * - `no_contradiction`: nothing to do, proceed with the normal write.
  * - `supersede_existing`: the new claim wins, tombstone the named existing fact.
  * - `skip_new`: an existing claim wins (or is pinned) — skip the new write entirely.
+ * - `tie_leave_both`: the formula scores are within TIE_ZONE_SCORE_TOLERANCE;
+ *   treat the "contradiction" as rounding noise and leave both claims active.
+ *   Emitted by the TypeScript tie-zone guard after `resolveWithCore` returns,
+ *   never by the Rust core directly. The write path ignores this variant.
  */
 export type ResolutionDecision =
   | { action: 'no_contradiction' }
@@ -86,6 +90,16 @@ export type ResolutionDecision =
       loserScore?: number;
       winnerComponents?: ScoreComponents;
       loserComponents?: ScoreComponents;
+    }
+  | {
+      action: 'tie_leave_both';
+      existingFactId: string;
+      entityId: string;
+      similarity: number;
+      winnerScore: number;
+      loserScore: number;
+      winnerComponents: ScoreComponents;
+      loserComponents: ScoreComponents;
     };
 
 /** Row format for `decisions.jsonl`. */
@@ -95,8 +109,8 @@ export interface DecisionLogEntry {
   new_claim_id: string;
   existing_claim_id: string;
   similarity: number;
-  action: 'supersede_existing' | 'skip_new' | 'shadow';
-  reason?: 'existing_pinned' | 'existing_wins' | 'new_wins';
+  action: 'supersede_existing' | 'skip_new' | 'shadow' | 'tie_leave_both';
+  reason?: 'existing_pinned' | 'existing_wins' | 'new_wins' | 'tie_below_tolerance';
   winner_score?: number;
   loser_score?: number;
   /**
@@ -144,6 +158,28 @@ export const DECISION_LOG_MAX_LINES = 10_000;
 
 /** Soft cap on candidates fetched per entity during contradiction detection. */
 export const CONTRADICTION_CANDIDATE_CAP = 20;
+
+/**
+ * Minimum score gap required to auto-resolve a `supersede_existing` decision.
+ *
+ * When the formula winner beats the loser by less than this amount, the
+ * decision is treated as a tie and both claims stay active. The tie is still
+ * logged to decisions.jsonl (with action='tie_leave_both') for audit.
+ *
+ * Rationale: the scoring formula (confidence + corroboration + recency +
+ * validation) produces near-identical scores when two claims describe
+ * different use cases of the same overall concept (e.g., Postgres for OLTP
+ * and DuckDB for OLAP — both explicitly-stated, both recent, both with
+ * single-occurrence corroboration). Auto-superseding in this zone promotes
+ * rounding noise into "the user changed their mind" and produces false
+ * positives that the weight-tuning loop cannot correct (see project
+ * memory: tombstoned claims are unrecoverable via pin).
+ *
+ * 0.01 (1%) is a deliberately tight guard: it catches noise-margin ties
+ * without blocking genuine narrow wins. Calibrated against the 2026-04-14
+ * Postgres/DuckDB false positive where the gap was 9 parts per million.
+ */
+export const TIE_ZONE_SCORE_TOLERANCE = 0.01;
 
 /**
  * Append one entry to the decision log, rotating if it grows past the cap.
@@ -619,7 +655,7 @@ export async function detectAndResolveContradictions(
   }
   if (candidates.length === 0) return [];
 
-  const decisions = resolveWithCore({
+  const rawDecisions = resolveWithCore({
     newClaim,
     newClaimId,
     newEmbedding,
@@ -630,6 +666,34 @@ export async function detectAndResolveContradictions(
     nowUnixSeconds,
     mode,
     logger,
+  });
+
+  // Tie-zone guard: when the formula winner beats the loser by less than
+  // TIE_ZONE_SCORE_TOLERANCE, the "contradiction" is rounding noise between
+  // two complementary claims (e.g. Postgres for OLTP, DuckDB for OLAP — both
+  // recent, both explicit, both single-corroboration). Mark these as ties so
+  // the caller does not tombstone either claim. The tie is still logged for
+  // operator visibility and for future feedback-loop calibration.
+  //
+  // Only applies to `supersede_existing` decisions — `skip_new` is already a
+  // "leave existing alone" action and doesn't need this guard.
+  const decisions = rawDecisions.map((d): ResolutionDecision => {
+    if (
+      d.action === 'supersede_existing' &&
+      Math.abs(d.winnerScore - d.loserScore) < TIE_ZONE_SCORE_TOLERANCE
+    ) {
+      return {
+        action: 'tie_leave_both',
+        existingFactId: d.existingFactId,
+        entityId: d.entityId,
+        similarity: d.similarity,
+        winnerScore: d.winnerScore,
+        loserScore: d.loserScore,
+        winnerComponents: d.winnerComponents,
+        loserComponents: d.loserComponents,
+      };
+    }
+    return d;
   });
 
   // Append decision log rows. One row per non-trivial decision.
@@ -664,6 +728,24 @@ export async function detectAndResolveContradictions(
         loser_components: d.loserComponents,
         mode,
       });
+    } else if (d.action === 'tie_leave_both') {
+      await appendDecisionLog({
+        ts: nowUnixSeconds,
+        entity_id: d.entityId,
+        new_claim_id: newClaimId,
+        existing_claim_id: d.existingFactId,
+        similarity: d.similarity,
+        action: 'tie_leave_both',
+        reason: 'tie_below_tolerance',
+        winner_score: d.winnerScore,
+        loser_score: d.loserScore,
+        winner_components: d.winnerComponents,
+        loser_components: d.loserComponents,
+        mode,
+      });
+      logger.info(
+        `Contradiction: tie (gap=${Math.abs(d.winnerScore - d.loserScore).toFixed(6)} < ${TIE_ZONE_SCORE_TOLERANCE}, sim=${d.similarity.toFixed(3)}, entity=${d.entityId}) — leaving both active`,
+      );
     }
   }
 
@@ -671,7 +753,9 @@ export async function detectAndResolveContradictions(
   // captures what would have happened so operators can inspect it.
   if (mode === 'shadow') return [];
 
-  return decisions;
+  // Filter out ties so the caller does NOT tombstone a tied claim. The log
+  // above preserves the audit trail.
+  return decisions.filter((d) => d.action !== 'tie_leave_both');
 }
 
 // ---------------------------------------------------------------------------

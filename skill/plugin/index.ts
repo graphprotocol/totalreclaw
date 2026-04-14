@@ -32,7 +32,14 @@ import {
   generateContentFingerprint,
 } from './crypto.js';
 import { createApiClient, type StoreFactPayload } from './api-client.js';
-import { extractFacts, extractDebrief, EXTRACTION_SYSTEM_PROMPT, type ExtractedFact } from './extractor.js';
+import {
+  extractFacts,
+  extractDebrief,
+  parseEntity,
+  EXTRACTION_SYSTEM_PROMPT,
+  type ExtractedFact,
+  type ExtractedEntity,
+} from './extractor.js';
 import { initLLMClient, resolveLLMConfig, chatCompletion, generateEmbedding, getEmbeddingDims } from './llm-client.js';
 import { LSHHasher } from './lsh.js';
 import { rerank, cosineSimilarity, detectQueryIntent, INTENT_WEIGHTS, type RerankerCandidate } from './reranker.js';
@@ -2497,142 +2504,102 @@ const plugin = {
               type: 'number',
               minimum: 1,
               maximum: 10,
-              description: 'Importance score 1-10 (default: 5)',
+              description: 'Importance score 1-10 (default: 8 for explicit remember)',
+            },
+            entities: {
+              type: 'array',
+              description:
+                'Named entities this memory is about (people, projects, tools, companies, concepts, places). ' +
+                'Supplying entities enables Phase 2 contradiction detection against existing facts about the same entity. ' +
+                'Omit if unclear — a best-effort fallback will still store the memory.',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  type: {
+                    type: 'string',
+                    enum: ['person', 'project', 'tool', 'company', 'concept', 'place'],
+                  },
+                  role: { type: 'string' },
+                },
+                required: ['name', 'type'],
+                additionalProperties: false,
+              },
             },
           },
           required: ['text'],
           additionalProperties: false,
         },
-        async execute(_toolCallId: string, params: { text: string; type?: string; importance?: number }) {
+        async execute(
+          _toolCallId: string,
+          params: {
+            text: string;
+            type?: string;
+            importance?: number;
+            entities?: Array<{ name: string; type: string; role?: string }>;
+          },
+        ) {
           try {
             await requireFullSetup(api.logger);
 
-            const memoryType = params.type ?? 'fact';
-            let importance = params.importance ?? 5;
+            // Phase 2 wiring: route explicit remembers through the same canonical
+            // store path that auto-extraction uses (storeExtractedFacts). This
+            // ensures explicit tool calls build canonical Claims (not legacy doc
+            // blobs), emit entity trapdoors, and run through Phase 2 contradiction
+            // detection + auto-resolution. Historically this tool had its own
+            // inline dedup + legacy-blob path that bypassed Phase 2 entirely.
+            const validTypes: ExtractedFact['type'][] = [
+              'fact',
+              'preference',
+              'decision',
+              'episodic',
+              'goal',
+              'context',
+              'summary',
+            ];
+            const memoryType: ExtractedFact['type'] = validTypes.includes(
+              params.type as ExtractedFact['type'],
+            )
+              ? (params.type as ExtractedFact['type'])
+              : 'fact';
 
-            // Generate blind indices for server-side search.
-            const blindIndices = generateBlindIndices(params.text);
+            // Explicit remember defaults to importance 8 (above auto-extraction's
+            // typical 6-7), so store-time dedup's shouldSupersede prefers the
+            // explicit call when it collides with an auto-extracted claim.
+            const importance = Math.max(1, Math.min(10, params.importance ?? 8));
 
-            // Generate embedding + LSH bucket hashes (PoC v2).
-            // Falls back to word-only indices if embedding generation fails.
-            const embeddingResult = await generateEmbeddingAndLSH(params.text, api.logger);
+            const validatedEntities: ExtractedEntity[] = Array.isArray(params.entities)
+              ? params.entities
+                  .map((e) => parseEntity(e))
+                  .filter((e): e is ExtractedEntity => e !== null)
+              : [];
 
-            // Merge LSH bucket hashes into blind indices.
-            const allIndices = embeddingResult
-              ? [...blindIndices, ...embeddingResult.lshBuckets]
-              : blindIndices;
-
-            // Store-time dedup: for explicit remember, ALWAYS supersede
-            // (user explicitly wants this stored — just remove the old one).
-            let supersededId: string | undefined;
-            if (STORE_DEDUP_ENABLED && embeddingResult) {
-              const dupResult = await searchForNearDuplicates(
-                params.text,
-                embeddingResult.embedding,
-                allIndices,
-                api.logger,
-              );
-              if (dupResult) {
-                // Inherit higher importance from existing fact.
-                importance = Math.max(importance, dupResult.match.decayScore);
-                supersededId = dupResult.match.id;
-
-                if (isSubgraphMode()) {
-                  try {
-                    const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
-                    const tombstone: FactPayload = {
-                      id: dupResult.match.id,
-                      timestamp: new Date().toISOString(),
-                      owner: subgraphOwner || userId!,
-                      encryptedBlob: '00',
-                      blindIndices: [],
-                      decayScore: 0,
-                      source: 'tombstone',
-                      contentFp: '',
-                      agentId: 'openclaw-plugin',
-                    };
-                    const tombProtobuf = encodeFactProtobuf(tombstone);
-                    await submitFactOnChain(tombProtobuf, tombConfig);
-                    api.logger.info(
-                      `Remember dedup: superseded ${dupResult.match.id} on-chain (sim=${dupResult.similarity.toFixed(3)})`,
-                    );
-                  } catch (tombErr) {
-                    api.logger.warn(
-                      `Remember dedup: failed to tombstone ${dupResult.match.id}: ${tombErr instanceof Error ? tombErr.message : String(tombErr)}`,
-                    );
-                    supersededId = undefined;
-                  }
-                } else if (apiClient && authKeyHex) {
-                  try {
-                    await apiClient.deleteFact(dupResult.match.id, authKeyHex);
-                    api.logger.info(
-                      `Remember dedup: superseded ${dupResult.match.id} (sim=${dupResult.similarity.toFixed(3)})`,
-                    );
-                  } catch (delErr) {
-                    api.logger.warn(
-                      `Remember dedup: failed to delete superseded fact ${dupResult.match.id}: ${delErr instanceof Error ? delErr.message : String(delErr)}`,
-                    );
-                    supersededId = undefined; // Don't report supersession if delete failed
-                  }
-                }
-              }
-            }
-
-            // Build the document JSON that will be encrypted.
-            const doc = {
-              text: params.text,
-              metadata: {
-                type: memoryType,
-                importance: importance / 10, // normalise to 0-1 range
-                source: 'explicit',
-                created_at: new Date().toISOString(),
-              },
+            const fact: ExtractedFact = {
+              text: params.text.slice(0, 512),
+              type: memoryType,
+              importance,
+              action: 'ADD',
+              confidence: 1.0, // user explicitly asked to remember — highest confidence
             };
+            if (validatedEntities.length > 0) fact.entities = validatedEntities;
 
-            // Encrypt the document.
-            const encryptedBlob = encryptToHex(JSON.stringify(doc), encryptionKey!);
+            const stored = await storeExtractedFacts([fact], api.logger, 'explicit');
+            api.logger.info(
+              `totalreclaw_remember: routed to storeExtractedFacts (stored=${stored}, entities=${validatedEntities.length})`,
+            );
 
-            // Generate content fingerprint for dedup.
-            const contentFp = generateContentFingerprint(params.text, dedupKey!);
-
-            // Generate a unique fact ID.
-            const factId = crypto.randomUUID();
-
-            // Build the payload matching the server's FactJSON schema.
-            const factPayload: StoreFactPayload = {
-              id: factId,
-              timestamp: new Date().toISOString(),
-              encrypted_blob: encryptedBlob,
-              blind_indices: allIndices,
-              decay_score: importance,
-              source: 'explicit',
-              content_fp: contentFp,
-              agent_id: 'openclaw-plugin',
-              encrypted_embedding: embeddingResult?.encryptedEmbedding,
-            };
-
-            if (isSubgraphMode()) {
-              // Subgraph mode: encode as Protobuf and submit on-chain via relay UserOp
-              const config = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
-              const protobuf = encodeFactProtobuf({
-                id: factId,
-                timestamp: new Date().toISOString(),
-                owner: subgraphOwner || userId!,
-                encryptedBlob: encryptedBlob,
-                blindIndices: allIndices,
-                decayScore: importance,
-                source: 'explicit',
-                contentFp: contentFp,
-                agentId: 'openclaw-plugin',
-                encryptedEmbedding: embeddingResult?.encryptedEmbedding,
-              });
-              const result = await submitFactOnChain(protobuf, config);
-              if (!result.success) {
-                throw new Error(`On-chain submission failed (tx=${result.txHash?.slice(0, 10) || 'none'}…)`);
-              }
-              api.logger.info(`totalreclaw_remember: stored on-chain (tx=${result.txHash.slice(0, 10)}…)`);
-            } else {
-              await apiClient!.store(userId!, [factPayload], authKeyHex!);
+            if (stored === 0) {
+              // Dedup or supersession consumed the write. Treat as success from
+              // the user's perspective — the memory's content is already in the
+              // vault (possibly under a different ID).
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: 'Memory noted (matched existing content in vault).',
+                  },
+                ],
+              };
             }
 
             return {
