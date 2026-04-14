@@ -45,6 +45,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: jetli/wasm-pack-action@v0.4.0
+      - name: Build @totalreclaw/core (WASM)
+        run: |
+          cd rust/totalreclaw-core
+          wasm-pack build --target nodejs --out-dir pkg --features wasm
+          # wasm-pack emits package name "totalreclaw-core"; consumers expect "@totalreclaw/core"
+          node -e "const p=require('./pkg/package.json'); p.name='@totalreclaw/core'; require('fs').writeFileSync('./pkg/package.json', JSON.stringify(p,null,2)+'\n')"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -68,9 +76,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Build totalreclaw_core wheel from local source
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: rust/totalreclaw-core
+          args: build --release --features python-extension --out dist -i python3.12
+      - name: Install local totalreclaw_core wheel
+        run: pip install --force-reinstall rust/totalreclaw-core/dist/totalreclaw_core-*.whl
       - name: Install and test
         run: |
           cd python

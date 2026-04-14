@@ -121,6 +121,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: jetli/wasm-pack-action@v0.4.0
+
+      - name: Build @totalreclaw/core (WASM) for file: dep
+        run: |
+          cd rust/totalreclaw-core
+          wasm-pack build --target nodejs --out-dir pkg --features wasm
+          # wasm-pack emits package name "totalreclaw-core"; mcp consumes it as "@totalreclaw/core" via file: dep
+          node -e "const p=require('./pkg/package.json'); p.name='@totalreclaw/core'; require('fs').writeFileSync('./pkg/package.json', JSON.stringify(p,null,2)+'\n')"
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
