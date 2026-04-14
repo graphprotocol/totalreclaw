@@ -96,6 +96,50 @@ SETUP = {
     },
 }
 
+PIN = {
+    "name": "totalreclaw_pin",
+    "description": (
+        "Pin a memory so automatic resolution cannot supersede it. Use this "
+        "when the user marks a fact as canonical, foundational, or otherwise "
+        "protected — e.g. 'always remember my birthday is April 12'. Pinned "
+        "claims stay active even when new conflicting facts arrive. "
+        "Idempotent: pinning an already-pinned claim is a no-op."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "fact_id": {
+                "type": "string",
+                "description": "The UUID of the memory to pin.",
+            },
+            "reason": {
+                "type": "string",
+                "description": "Optional human-readable reason for pinning (not stored on-chain).",
+            },
+        },
+        "required": ["fact_id"],
+    },
+}
+
+UNPIN = {
+    "name": "totalreclaw_unpin",
+    "description": (
+        "Unpin a previously-pinned memory so automatic resolution can "
+        "supersede it again. Idempotent: unpinning an already-active claim "
+        "is a no-op."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "fact_id": {
+                "type": "string",
+                "description": "The UUID of the memory to unpin.",
+            },
+        },
+        "required": ["fact_id"],
+    },
+}
+
 IMPORT_FROM = {
     "name": "totalreclaw_import_from",
     "description": (

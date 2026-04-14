@@ -1,0 +1,802 @@
+/**
+ * Tests for the pure pin/unpin operation (Slice 2e-plugin).
+ *
+ * Mirrors MCP's tools/pin.test.ts coverage: idempotency, supersession,
+ * trapdoor regeneration, legacy-blob lift, and input validation.
+ *
+ * Run with: npx tsx pin-unpin.test.ts
+ */
+
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  executePinOperation,
+  parseBlobForPin,
+  validatePinArgs,
+  type PinOpDeps,
+} from './pin.js';
+import { buildCanonicalClaim, computeEntityTrapdoor } from './claims-helper.js';
+import {
+  appendDecisionLog,
+  decisionsLogPath,
+  feedbackLogPath,
+  type DecisionLogEntry,
+  type FeedbackEntry,
+} from './contradiction-sync.js';
+import type { SubgraphSearchFact } from './subgraph-search.js';
+import type { ExtractedFact } from './extractor.js';
+
+// Isolate the state dir so tests never touch the real ~/.totalreclaw/.
+const TEST_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-pin-test-'));
+process.env.TOTALRECLAW_STATE_DIR = TEST_STATE_DIR;
+
+let passed = 0;
+let failed = 0;
+
+function assert(condition: boolean, name: string): void {
+  const n = passed + failed + 1;
+  if (condition) {
+    console.log(`ok ${n} - ${name}`);
+    passed++;
+  } else {
+    console.log(`not ok ${n} - ${name}`);
+    failed++;
+  }
+}
+
+function assertEq<T>(actual: T, expected: T, name: string): void {
+  const ok = JSON.stringify(actual) === JSON.stringify(expected);
+  if (!ok) {
+    console.log(`  actual:   ${JSON.stringify(actual)}`);
+    console.log(`  expected: ${JSON.stringify(expected)}`);
+  }
+  assert(ok, name);
+}
+
+// ---------------------------------------------------------------------------
+// Mock-deps builder
+// ---------------------------------------------------------------------------
+
+interface MockState {
+  facts: Map<string, { blobPlain: string; hexBlob: string; fact: SubgraphSearchFact }>;
+  submittedBatches: Buffer[][];
+  shouldFailSubmit?: boolean;
+  submitThrow?: boolean;
+}
+
+/**
+ * Make a mock `PinOpDeps` over an in-memory Map.
+ *
+ * The fake "decrypt" is identity: `hexBlob` is the hex of the UTF-8 plaintext,
+ * and `encryptBlob(plaintext)` returns hex(plaintext). This lets us assert on
+ * the encrypted blob's contents without a real cipher.
+ */
+function makeDeps(state: MockState, overrides: Partial<PinOpDeps> = {}): PinOpDeps {
+  const deps: PinOpDeps = {
+    owner: '0xowner',
+    sourceAgent: 'openclaw-plugin',
+    fetchFactById: async (id: string) => {
+      const entry = state.facts.get(id);
+      return entry ? entry.fact : null;
+    },
+    decryptBlob: (hex: string) => {
+      // Identity: hex → UTF-8. Used with plaintexts we stored as hex above.
+      return Buffer.from(hex.startsWith('0x') ? hex.slice(2) : hex, 'hex').toString('utf8');
+    },
+    encryptBlob: (plaintext: string) => {
+      return Buffer.from(plaintext, 'utf8').toString('hex');
+    },
+    submitBatch: async (payloads: Buffer[]) => {
+      if (state.submitThrow) throw new Error('submit boom');
+      state.submittedBatches.push(payloads);
+      return {
+        txHash: '0x' + 'a'.repeat(64),
+        success: !state.shouldFailSubmit,
+      };
+    },
+    generateIndices: async (text: string, entityNames: string[]) => {
+      // Deterministic: word-like trapdoors + entity trapdoors so tests can grep.
+      const wordTrapdoors = text
+        .split(/\s+/)
+        .filter((w) => w.length > 0)
+        .map((w) => crypto.createHash('sha256').update(w.toLowerCase()).digest('hex'));
+      const entityTrapdoors = entityNames.map((n) => computeEntityTrapdoor(n));
+      return {
+        blindIndices: [...wordTrapdoors, ...entityTrapdoors],
+        encryptedEmbedding: 'deadbeef',
+      };
+    },
+    ...overrides,
+  };
+  return deps;
+}
+
+/** Seed a fact in the mock state, wrapping the plaintext blob. */
+function seedFact(
+  state: MockState,
+  id: string,
+  plaintext: string,
+): SubgraphSearchFact {
+  const hex = Buffer.from(plaintext, 'utf8').toString('hex');
+  const fact: SubgraphSearchFact = {
+    id,
+    encryptedBlob: hex,
+    encryptedEmbedding: null,
+    decayScore: '0.8',
+    timestamp: '1700000000',
+    isActive: true,
+  };
+  state.facts.set(id, { blobPlain: plaintext, hexBlob: hex, fact });
+  return fact;
+}
+
+// ---------------------------------------------------------------------------
+// parseBlobForPin — unit tests
+// ---------------------------------------------------------------------------
+
+{
+  const canonical = JSON.stringify({
+    t: 'Pedro uses Vim',
+    c: 'pref',
+    cf: 0.9,
+    i: 8,
+    sa: 'openclaw-plugin',
+    ea: '2026-04-12T10:00:00.000Z',
+  });
+  const parsed = parseBlobForPin(canonical);
+  assertEq(parsed.currentStatus, 'active', 'parse: canonical w/o st → active');
+  assertEq(parsed.isLegacy, false, 'parse: canonical is not legacy');
+  assertEq((parsed.claim as { t: string }).t, 'Pedro uses Vim', 'parse: text round-trip');
+}
+
+{
+  const pinned = JSON.stringify({
+    t: 'x', c: 'fact', cf: 0.9, i: 5, sa: 'a', ea: 'b', st: 'p',
+  });
+  const parsed = parseBlobForPin(pinned);
+  assertEq(parsed.currentStatus, 'pinned', 'parse: canonical st=p → pinned');
+}
+
+{
+  const legacy = JSON.stringify({
+    text: 'legacy fact',
+    metadata: { type: 'preference', importance: 0.8, source: 'auto-extraction' },
+  });
+  const parsed = parseBlobForPin(legacy);
+  assertEq(parsed.currentStatus, 'active', 'parse: legacy blob → active default');
+  assertEq(parsed.isLegacy, true, 'parse: legacy blob flagged');
+  assertEq((parsed.claim as { t: string }).t, 'legacy fact', 'parse: legacy text lifted');
+  assertEq((parsed.claim as { c: string }).c, 'pref', 'parse: legacy type mapped to pref');
+  assertEq((parsed.claim as { i: number }).i, 8, 'parse: legacy importance 0.8 → 8');
+}
+
+{
+  const parsed = parseBlobForPin('not valid json');
+  assertEq(parsed.currentStatus, 'active', 'parse: raw text → active');
+  assertEq(parsed.isLegacy, true, 'parse: raw text flagged legacy');
+  assertEq((parsed.claim as { t: string }).t, 'not valid json', 'parse: raw text lifted into t');
+}
+
+// ---------------------------------------------------------------------------
+// validatePinArgs — unit tests
+// ---------------------------------------------------------------------------
+
+{
+  const v = validatePinArgs({ fact_id: 'abc-123' });
+  assertEq(v.ok, true, 'validate: happy path ok');
+  assertEq(v.factId, 'abc-123', 'validate: happy path factId');
+}
+
+{
+  const v = validatePinArgs({ fact_id: '  trim-me  ', reason: 'because' });
+  assertEq(v.ok, true, 'validate: trim ok');
+  assertEq(v.factId, 'trim-me', 'validate: trims whitespace');
+  assertEq(v.reason, 'because', 'validate: reason passed through');
+}
+
+{
+  const v = validatePinArgs({});
+  assertEq(v.ok, false, 'validate: missing fact_id → fail');
+  assert(v.error.includes('fact_id'), 'validate: missing fact_id error message');
+}
+
+{
+  const v = validatePinArgs({ fact_id: 42 });
+  assertEq(v.ok, false, 'validate: non-string fact_id → fail');
+  assert(v.error.includes('non-empty string'), 'validate: non-string error message');
+}
+
+{
+  const v = validatePinArgs({ fact_id: '' });
+  assertEq(v.ok, false, 'validate: empty fact_id → fail');
+}
+
+{
+  const v = validatePinArgs(null);
+  assertEq(v.ok, false, 'validate: null args → fail');
+}
+
+{
+  const v = validatePinArgs('not an object');
+  assertEq(v.ok, false, 'validate: string args → fail');
+}
+
+// ---------------------------------------------------------------------------
+// executePinOperation — pin a canonical claim
+// ---------------------------------------------------------------------------
+
+async function runTests(): Promise<void> {
+  // Pin a canonical active claim → success + supersession
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const fact: ExtractedFact = {
+      text: 'Pedro uses Vim daily',
+      type: 'preference',
+      importance: 8,
+      action: 'ADD',
+      confidence: 0.92,
+      entities: [{ name: 'Pedro', type: 'person' }, { name: 'Vim', type: 'tool' }],
+    };
+    const canonical = buildCanonicalClaim({
+      fact,
+      importance: 8,
+      sourceAgent: 'openclaw-plugin',
+      extractedAt: '2026-04-12T10:00:00.000Z',
+    });
+    seedFact(state, 'old-id-1', canonical);
+
+    const deps = makeDeps(state);
+    const result = await executePinOperation('old-id-1', 'pinned', deps, 'user confirmed');
+
+    assertEq(result.success, true, 'pin canonical: success');
+    assertEq(result.fact_id, 'old-id-1', 'pin canonical: returns original id');
+    assert(typeof result.new_fact_id === 'string' && result.new_fact_id.length > 0, 'pin canonical: new_fact_id set');
+    assertEq(result.previous_status, 'active', 'pin canonical: previous_status active');
+    assertEq(result.new_status, 'pinned', 'pin canonical: new_status pinned');
+    assertEq(result.idempotent, undefined, 'pin canonical: not idempotent');
+    assertEq(result.reason, 'user confirmed', 'pin canonical: reason passed through');
+    assertEq(state.submittedBatches.length, 1, 'pin canonical: exactly 1 batch submitted');
+    assertEq(state.submittedBatches[0].length, 2, 'pin canonical: batch has 2 payloads (tombstone + new)');
+  }
+
+  // Idempotency: pin an already-pinned claim → no on-chain write
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const pinnedJson = JSON.stringify({
+      t: 'Pedro uses Vim',
+      c: 'pref',
+      cf: 0.9,
+      i: 8,
+      sa: 'openclaw-plugin',
+      ea: '2026-04-12T10:00:00.000Z',
+      st: 'p',
+    });
+    seedFact(state, 'pinned-1', pinnedJson);
+
+    const deps = makeDeps(state);
+    const result = await executePinOperation('pinned-1', 'pinned', deps);
+
+    assertEq(result.success, true, 'pin idempotent: success');
+    assertEq(result.idempotent, true, 'pin idempotent: idempotent flag set');
+    assertEq(result.fact_id, 'pinned-1', 'pin idempotent: fact_id unchanged');
+    assertEq(result.new_fact_id, undefined, 'pin idempotent: no new_fact_id');
+    assertEq(result.previous_status, 'pinned', 'pin idempotent: previous_status pinned');
+    assertEq(result.new_status, 'pinned', 'pin idempotent: new_status pinned');
+    assertEq(state.submittedBatches.length, 0, 'pin idempotent: zero on-chain writes');
+  }
+
+  // Unpin a pinned claim → status flipped to active, `st` omitted
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const pinnedJson = JSON.stringify({
+      t: 'Pedro uses Vim',
+      c: 'pref',
+      cf: 0.9,
+      i: 8,
+      sa: 'openclaw-plugin',
+      ea: '2026-04-12T10:00:00.000Z',
+      st: 'p',
+    });
+    seedFact(state, 'pinned-2', pinnedJson);
+
+    let capturedEncryptedHex: string | null = null;
+    const deps = makeDeps(state, {
+      encryptBlob: (plaintext: string) => {
+        capturedEncryptedHex = Buffer.from(plaintext, 'utf8').toString('hex');
+        return capturedEncryptedHex;
+      },
+    });
+    const result = await executePinOperation('pinned-2', 'active', deps);
+
+    assertEq(result.success, true, 'unpin pinned: success');
+    assertEq(result.previous_status, 'pinned', 'unpin pinned: previous_status pinned');
+    assertEq(result.new_status, 'active', 'unpin pinned: new_status active');
+    assertEq(result.idempotent, undefined, 'unpin pinned: not idempotent');
+    assert(typeof result.new_fact_id === 'string', 'unpin pinned: new_fact_id set');
+    assertEq(state.submittedBatches.length, 1, 'unpin pinned: one batch submitted');
+
+    // The new canonical blob must NOT contain "st":"a" or any st field.
+    assert(capturedEncryptedHex !== null, 'unpin pinned: encrypted blob captured');
+    const canonicalPlaintext = Buffer.from(capturedEncryptedHex!, 'hex').toString('utf8');
+    assert(!canonicalPlaintext.includes('"st":'), 'unpin pinned: st field omitted from canonical JSON');
+    assert(canonicalPlaintext.includes('"sup":"pinned-2"'), 'unpin pinned: sup field points to old id');
+  }
+
+  // Unpin a non-pinned claim → idempotent no-op
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const activeJson = JSON.stringify({
+      t: 'x', c: 'fact', cf: 0.9, i: 5, sa: 'a', ea: 'b',
+    });
+    seedFact(state, 'active-1', activeJson);
+
+    const deps = makeDeps(state);
+    const result = await executePinOperation('active-1', 'active', deps);
+
+    assertEq(result.success, true, 'unpin active: success');
+    assertEq(result.idempotent, true, 'unpin active: idempotent');
+    assertEq(state.submittedBatches.length, 0, 'unpin active: zero writes');
+  }
+
+  // Pin a legacy {text, metadata} blob → successfully lifts into canonical
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const legacyJson = JSON.stringify({
+      text: 'Pedro lives in Lisbon',
+      metadata: { type: 'fact', importance: 0.9, source: 'auto-extraction' },
+    });
+    seedFact(state, 'legacy-1', legacyJson);
+
+    let capturedNewBlob: string | null = null;
+    const deps = makeDeps(state, {
+      encryptBlob: (plaintext: string) => {
+        capturedNewBlob = plaintext;
+        return Buffer.from(plaintext, 'utf8').toString('hex');
+      },
+    });
+    const result = await executePinOperation('legacy-1', 'pinned', deps);
+
+    assertEq(result.success, true, 'pin legacy: success');
+    assertEq(result.previous_status, 'active', 'pin legacy: previous_status active (legacy default)');
+    assertEq(result.new_status, 'pinned', 'pin legacy: new_status pinned');
+    assert(capturedNewBlob !== null, 'pin legacy: new blob captured');
+    assert(capturedNewBlob!.includes('"t":"Pedro lives in Lisbon"'), 'pin legacy: text lifted into canonical t');
+    assert(capturedNewBlob!.includes('"st":"p"'), 'pin legacy: status flipped to pinned');
+    assert(capturedNewBlob!.includes('"sup":"legacy-1"'), 'pin legacy: sup points to old id');
+  }
+
+  // Fact not found → error
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const deps = makeDeps(state);
+    const result = await executePinOperation('does-not-exist', 'pinned', deps);
+    assertEq(result.success, false, 'pin missing: success=false');
+    assert(typeof result.error === 'string' && result.error.includes('not found'), 'pin missing: clear error message');
+    assertEq(state.submittedBatches.length, 0, 'pin missing: zero writes');
+  }
+
+  // On-chain submit failure → error with previous_status preserved
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [], shouldFailSubmit: true };
+    const canonical = JSON.stringify({
+      t: 'hello', c: 'fact', cf: 0.9, i: 5, sa: 'a', ea: 'b',
+    });
+    seedFact(state, 'will-fail', canonical);
+
+    const deps = makeDeps(state);
+    const result = await executePinOperation('will-fail', 'pinned', deps);
+    assertEq(result.success, false, 'pin submit-fail: success=false');
+    assertEq(result.previous_status, 'active', 'pin submit-fail: previous_status preserved');
+    assert(typeof result.error === 'string' && result.error.length > 0, 'pin submit-fail: error message set');
+  }
+
+  // Submit throws → caught and surfaced
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [], submitThrow: true };
+    const canonical = JSON.stringify({
+      t: 'hello', c: 'fact', cf: 0.9, i: 5, sa: 'a', ea: 'b',
+    });
+    seedFact(state, 'will-throw', canonical);
+
+    const deps = makeDeps(state);
+    const result = await executePinOperation('will-throw', 'pinned', deps);
+    assertEq(result.success, false, 'pin submit-throw: success=false');
+    assert(typeof result.error === 'string' && result.error.includes('submit'), 'pin submit-throw: error mentions submit');
+  }
+
+  // ── Trapdoor regeneration tests ────────────────────────────────────────────
+  //
+  // The new fact MUST carry blind indices so trapdoor search still surfaces it
+  // after the old fact is tombstoned. Mirrors the MCP + Python regen fix.
+
+  // Trapdoors on the new fact include SHA-256 of every word in the claim text
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const fact: ExtractedFact = {
+      text: 'Pedro uses Vim',
+      type: 'preference',
+      importance: 8,
+      action: 'ADD',
+      confidence: 0.92,
+    };
+    const canonical = buildCanonicalClaim({
+      fact,
+      importance: 8,
+      sourceAgent: 'openclaw-plugin',
+      extractedAt: '2026-04-12T10:00:00.000Z',
+    });
+    seedFact(state, 'trap-1', canonical);
+
+    // Capture the raw protobuf payload bytes for the new fact.
+    let capturedSecondPayload: Buffer | null = null;
+    const deps = makeDeps(state, {
+      submitBatch: async (payloads: Buffer[]) => {
+        state.submittedBatches.push(payloads);
+        capturedSecondPayload = payloads[1];
+        return { txHash: '0xfeed', success: true };
+      },
+    });
+
+    const result = await executePinOperation('trap-1', 'pinned', deps);
+    assertEq(result.success, true, 'trapdoor: pin succeeded');
+    assert(capturedSecondPayload !== null, 'trapdoor: captured new fact payload');
+
+    // Known word trapdoor: sha256("vim") — should appear in the protobuf bytes.
+    // We look for the raw 32-byte hash as a hex string inside the payload. The
+    // payload encodes the indices via plugin's protobuf encoder, which stores
+    // them as hex strings.
+    const vimTrapdoor = crypto.createHash('sha256').update('vim').digest('hex');
+    const pedroTrapdoor = crypto.createHash('sha256').update('pedro').digest('hex');
+    const payloadStr = capturedSecondPayload!.toString('binary');
+    assert(payloadStr.includes(vimTrapdoor), 'trapdoor: vim word trapdoor embedded in new fact');
+    assert(payloadStr.includes(pedroTrapdoor), 'trapdoor: pedro word trapdoor embedded in new fact');
+  }
+
+  // Entity trapdoors are included when the claim carries entities
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const fact: ExtractedFact = {
+      text: 'I prefer PostgreSQL',
+      type: 'preference',
+      importance: 8,
+      action: 'ADD',
+      confidence: 0.9,
+      entities: [{ name: 'PostgreSQL', type: 'tool' }],
+    };
+    const canonical = buildCanonicalClaim({
+      fact,
+      importance: 8,
+      sourceAgent: 'openclaw-plugin',
+      extractedAt: '2026-04-12T10:00:00.000Z',
+    });
+    seedFact(state, 'trap-entity-1', canonical);
+
+    let capturedSecondPayload: Buffer | null = null;
+    const deps = makeDeps(state, {
+      submitBatch: async (payloads: Buffer[]) => {
+        state.submittedBatches.push(payloads);
+        capturedSecondPayload = payloads[1];
+        return { txHash: '0xfeed', success: true };
+      },
+    });
+
+    const result = await executePinOperation('trap-entity-1', 'pinned', deps);
+    assertEq(result.success, true, 'entity trapdoor: pin succeeded');
+
+    const postgresEntityTrapdoor = computeEntityTrapdoor('PostgreSQL');
+    const payloadStr = capturedSecondPayload!.toString('binary');
+    assert(payloadStr.includes(postgresEntityTrapdoor), 'entity trapdoor: PostgreSQL entity trapdoor embedded');
+  }
+
+  // Non-empty blind indices guard: even without entities, new fact gets word trapdoors
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const canonical = JSON.stringify({
+      t: 'foo bar baz',
+      c: 'fact',
+      cf: 0.9,
+      i: 5,
+      sa: 'openclaw-plugin',
+      ea: '2026-04-12T10:00:00.000Z',
+    });
+    seedFact(state, 'trap-guard', canonical);
+
+    let indicesCaptured: string[] | null = null;
+    const deps = makeDeps(state, {
+      generateIndices: async (text, entityNames) => {
+        const words = text.split(/\s+/).filter((w) => w.length > 0);
+        const out = words.map((w) => crypto.createHash('sha256').update(w).digest('hex'));
+        indicesCaptured = out;
+        return { blindIndices: out, encryptedEmbedding: 'cafe' };
+      },
+    });
+    const result = await executePinOperation('trap-guard', 'pinned', deps);
+    assertEq(result.success, true, 'trap-guard: pin succeeded');
+    assert(indicesCaptured !== null && indicesCaptured!.length === 3, 'trap-guard: three word trapdoors generated');
+  }
+
+  // Defensive: if generateIndices throws, the op still succeeds with empty indices
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const canonical = JSON.stringify({
+      t: 'hello', c: 'fact', cf: 0.9, i: 5, sa: 'a', ea: 'b',
+    });
+    seedFact(state, 'trap-throws', canonical);
+
+    const deps = makeDeps(state, {
+      generateIndices: async () => {
+        throw new Error('embedding offline');
+      },
+    });
+    const result = await executePinOperation('trap-throws', 'pinned', deps);
+    assertEq(result.success, true, 'trap-throws: pin still succeeded');
+    assertEq(state.submittedBatches.length, 1, 'trap-throws: batch still submitted');
+  }
+
+  // Supersession link: the new canonical claim has `sup` equal to the old id
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const canonical = JSON.stringify({
+      t: 'hello world', c: 'fact', cf: 0.9, i: 5, sa: 'openclaw-plugin', ea: '2026-04-12T10:00:00.000Z',
+    });
+    seedFact(state, 'sup-link-1', canonical);
+
+    let capturedPlaintext: string | null = null;
+    const deps = makeDeps(state, {
+      encryptBlob: (plaintext: string) => {
+        capturedPlaintext = plaintext;
+        return Buffer.from(plaintext, 'utf8').toString('hex');
+      },
+    });
+    const result = await executePinOperation('sup-link-1', 'pinned', deps);
+    assertEq(result.success, true, 'sup-link: success');
+    assert(capturedPlaintext !== null, 'sup-link: plaintext captured');
+    assert(capturedPlaintext!.includes('"sup":"sup-link-1"'), 'sup-link: sup field set to old id');
+    assert(capturedPlaintext!.includes('"st":"p"'), 'sup-link: st set to p');
+    // ea must be refreshed (non-empty)
+    const match = capturedPlaintext!.match(/"ea":"([^"]+)"/);
+    assert(match !== null && match![1] !== '2026-04-12T10:00:00.000Z', 'sup-link: ea refreshed to a new timestamp');
+  }
+
+  // ── Slice 2f: pin → feedback.jsonl wiring ────────────────────────────────
+
+  function sampleComponents(weighted: number) {
+    return {
+      confidence: 0.85,
+      corroboration: 1.0,
+      recency: 0.5,
+      validation: 0.7,
+      weighted_total: weighted,
+    };
+  }
+
+  /** Reset the on-disk decisions + feedback logs between tests. */
+  function clearLogs() {
+    try { fs.rmSync(decisionsLogPath(), { force: true }); } catch {}
+    try { fs.rmSync(feedbackLogPath(), { force: true }); } catch {}
+  }
+
+  // Pinning a loser of a prior auto-resolution → feedback row is written
+  {
+    clearLogs();
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const canonical = JSON.stringify({
+      t: 'Pedro uses Vim',
+      c: 'pref',
+      cf: 0.9,
+      i: 8,
+      sa: 'openclaw-plugin',
+      ea: '2026-04-12T10:00:00.000Z',
+    });
+    seedFact(state, 'vim-loser-id', canonical);
+
+    // Seed a matching decisions.jsonl entry where vim-loser-id was tombstoned.
+    const decision: DecisionLogEntry = {
+      ts: 1_776_000_000,
+      entity_id: 'editor',
+      new_claim_id: 'vscode-winner-id',
+      existing_claim_id: 'vim-loser-id',
+      similarity: 0.5,
+      action: 'supersede_existing',
+      reason: 'new_wins',
+      winner_score: 0.83,
+      loser_score: 0.73,
+      winner_components: sampleComponents(0.83),
+      loser_components: sampleComponents(0.73),
+      mode: 'active',
+    };
+    await appendDecisionLog(decision);
+
+    const deps = makeDeps(state);
+    const result = await executePinOperation('vim-loser-id', 'pinned', deps);
+    assertEq(result.success, true, 'feedback-pin-loser: pin succeeded');
+
+    const fbContent = fs.readFileSync(feedbackLogPath(), 'utf-8');
+    const lines = fbContent.split('\n').filter((l) => l.length > 0);
+    assertEq(lines.length, 1, 'feedback-pin-loser: exactly one feedback line written');
+    const fb = JSON.parse(lines[0]) as FeedbackEntry;
+    assertEq(fb.claim_a_id, 'vim-loser-id', 'feedback-pin-loser: claim_a = loser (now pinned)');
+    assertEq(fb.claim_b_id, 'vscode-winner-id', 'feedback-pin-loser: claim_b = formula winner');
+    assertEq(fb.formula_winner, 'b', 'feedback-pin-loser: formula_winner=b (the loser is a)');
+    assertEq(fb.user_decision, 'pin_a', 'feedback-pin-loser: user_decision=pin_a');
+    assertEq(fb.winner_components.weighted_total, 0.83, 'feedback-pin-loser: winner components preserved');
+    assertEq(fb.loser_components.weighted_total, 0.73, 'feedback-pin-loser: loser components preserved');
+  }
+
+  // Voluntary pin (no matching decision row) → no feedback row written
+  {
+    clearLogs();
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const canonical = JSON.stringify({
+      t: 'My favorite color is teal',
+      c: 'pref',
+      cf: 0.9,
+      i: 8,
+      sa: 'openclaw-plugin',
+      ea: '2026-04-12T10:00:00.000Z',
+    });
+    seedFact(state, 'teal-id', canonical);
+
+    // Seed a decisions.jsonl that does NOT mention teal-id.
+    const decision: DecisionLogEntry = {
+      ts: 1_776_000_000,
+      entity_id: 'editor',
+      new_claim_id: 'vscode-id',
+      existing_claim_id: 'vim-id',
+      similarity: 0.5,
+      action: 'supersede_existing',
+      reason: 'new_wins',
+      winner_score: 0.83,
+      loser_score: 0.73,
+      winner_components: sampleComponents(0.83),
+      loser_components: sampleComponents(0.73),
+      mode: 'active',
+    };
+    await appendDecisionLog(decision);
+
+    const deps = makeDeps(state);
+    const result = await executePinOperation('teal-id', 'pinned', deps);
+    assertEq(result.success, true, 'feedback-voluntary-pin: pin succeeded');
+    assert(
+      !fs.existsSync(feedbackLogPath()) || fs.readFileSync(feedbackLogPath(), 'utf-8').trim() === '',
+      'feedback-voluntary-pin: feedback.jsonl stays empty',
+    );
+  }
+
+  // Unpin a formula winner → feedback row with user_decision=pin_b
+  {
+    clearLogs();
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const pinnedJson = JSON.stringify({
+      t: 'Pedro prefers VS Code',
+      c: 'pref',
+      cf: 0.9,
+      i: 8,
+      sa: 'openclaw-plugin',
+      ea: '2026-04-12T10:00:00.000Z',
+      st: 'p',
+    });
+    seedFact(state, 'vscode-winner-id-2', pinnedJson);
+
+    const decision: DecisionLogEntry = {
+      ts: 1_776_100_000,
+      entity_id: 'editor',
+      new_claim_id: 'vscode-winner-id-2',
+      existing_claim_id: 'vim-tombstoned-id',
+      similarity: 0.5,
+      action: 'supersede_existing',
+      reason: 'new_wins',
+      winner_score: 0.83,
+      loser_score: 0.73,
+      winner_components: sampleComponents(0.83),
+      loser_components: sampleComponents(0.73),
+      mode: 'active',
+    };
+    await appendDecisionLog(decision);
+
+    const deps = makeDeps(state);
+    const result = await executePinOperation('vscode-winner-id-2', 'active', deps);
+    assertEq(result.success, true, 'feedback-unpin-winner: unpin succeeded');
+
+    const fb = JSON.parse(
+      fs.readFileSync(feedbackLogPath(), 'utf-8').split('\n').filter((l) => l.length > 0)[0],
+    ) as FeedbackEntry;
+    assertEq(fb.user_decision, 'pin_b', 'feedback-unpin-winner: user_decision=pin_b');
+    assertEq(fb.claim_b_id, 'vscode-winner-id-2', 'feedback-unpin-winner: claim_b = formula winner');
+  }
+
+  // Pre-Slice-2f decision row (no components) → no feedback row written
+  {
+    clearLogs();
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const canonical = JSON.stringify({
+      t: 'Pedro uses Vim',
+      c: 'pref',
+      cf: 0.9,
+      i: 8,
+      sa: 'openclaw-plugin',
+      ea: '2026-04-12T10:00:00.000Z',
+    });
+    seedFact(state, 'old-loser-id', canonical);
+
+    // Legacy decision log row — predates winner_components/loser_components.
+    const legacy: DecisionLogEntry = {
+      ts: 1_776_000_000,
+      entity_id: 'editor',
+      new_claim_id: 'vscode-winner-id',
+      existing_claim_id: 'old-loser-id',
+      similarity: 0.5,
+      action: 'supersede_existing',
+      reason: 'new_wins',
+      winner_score: 0.83,
+      loser_score: 0.73,
+      mode: 'active',
+    };
+    await appendDecisionLog(legacy);
+
+    const deps = makeDeps(state);
+    const result = await executePinOperation('old-loser-id', 'pinned', deps);
+    assertEq(result.success, true, 'feedback-legacy-row: pin succeeded');
+    assert(
+      !fs.existsSync(feedbackLogPath()) || fs.readFileSync(feedbackLogPath(), 'utf-8').trim() === '',
+      'feedback-legacy-row: legacy rows without components produce no feedback',
+    );
+  }
+
+  // Idempotent pin (already pinned) → no feedback write
+  {
+    clearLogs();
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const pinnedJson = JSON.stringify({
+      t: 'x', c: 'fact', cf: 0.9, i: 5, sa: 'a', ea: 'b', st: 'p',
+    });
+    seedFact(state, 'already-pinned', pinnedJson);
+
+    // Even if there's a matching decision row, the idempotent early-exit
+    // path must not write feedback — no user override actually happened.
+    const decision: DecisionLogEntry = {
+      ts: 1_776_000_000,
+      entity_id: 'foo',
+      new_claim_id: 'bar',
+      existing_claim_id: 'already-pinned',
+      similarity: 0.5,
+      action: 'supersede_existing',
+      reason: 'new_wins',
+      winner_score: 0.83,
+      loser_score: 0.73,
+      winner_components: sampleComponents(0.83),
+      loser_components: sampleComponents(0.73),
+      mode: 'active',
+    };
+    await appendDecisionLog(decision);
+
+    const deps = makeDeps(state);
+    const result = await executePinOperation('already-pinned', 'pinned', deps);
+    assertEq(result.idempotent, true, 'feedback-idempotent: idempotent flag set');
+    assert(
+      !fs.existsSync(feedbackLogPath()) || fs.readFileSync(feedbackLogPath(), 'utf-8').trim() === '',
+      'feedback-idempotent: no feedback row on idempotent pin',
+    );
+  }
+
+  // Cleanup: remove the temp state dir.
+  try { fs.rmSync(TEST_STATE_DIR, { recursive: true, force: true }); } catch {}
+
+  // ── Summary ────────────────────────────────────────────────────────────────
+  console.log(`\n# ${passed}/${passed + failed} passed`);
+  if (failed > 0) {
+    console.log('\nSOME TESTS FAILED');
+    process.exit(1);
+  } else {
+    console.log('\nALL TESTS PASSED');
+  }
+}
+
+runTests().catch((err) => {
+  console.error('FATAL:', err);
+  process.exit(1);
+});
+
+export {};

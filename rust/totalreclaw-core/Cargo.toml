@@ -11,6 +11,9 @@ default = ["managed"]
 managed = ["dep:alloy-primitives", "dep:alloy-sol-types"]
 wasm = ["dep:wasm-bindgen", "dep:js-sys", "dep:serde-wasm-bindgen", "getrandom/js", "uuid/js"]
 python = ["dep:pyo3"]
+# maturin enables this on top of `python` when building the cdylib.
+# Keeping it separate lets `cargo test --features python` link cleanly.
+python-extension = ["python", "pyo3/extension-module"]
 
 [lib]
 crate-type = ["lib", "cdylib"]
@@ -63,4 +66,4 @@ js-sys = { version = "0.3", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 
 # Python bindings (feature-gated)
-pyo3 = { version = "0.25", optional = true, features = ["extension-module"] }
+pyo3 = { version = "0.25", optional = true }

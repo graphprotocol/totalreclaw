@@ -420,7 +420,9 @@ export async function submitFactLocal(
   });
 
   const calldata = `0x${protobufPayload.toString('hex')}` as Hex;
-  const txHash = await walletClient.sendTransaction({
+  // viem's SendTransactionParameters narrows to require `kzg` in some conditional branches;
+  // the cast avoids ts-jest tripping without a runtime impact (local-mode only path).
+  const txHash = await (walletClient.sendTransaction as unknown as (p: unknown) => Promise<Hex>)({
     to: dataEdgeAddress,
     data: calldata,
     value: 0n,

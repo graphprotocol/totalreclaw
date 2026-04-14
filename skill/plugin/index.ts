@@ -8,6 +8,8 @@
  *   - totalreclaw_export       -- export all memories (JSON or Markdown)
  *   - totalreclaw_status       -- check billing/subscription status
  *   - totalreclaw_consolidate  -- scan and merge near-duplicate memories
+ *   - totalreclaw_pin          -- pin a memory so auto-resolution can never supersede it
+ *   - totalreclaw_unpin        -- remove a pin, returning the memory to active status
  *   - totalreclaw_import_from  -- import memories from other tools (Mem0, MCP Memory, etc.)
  *   - totalreclaw_upgrade      -- create Stripe checkout for Pro upgrade
  *   - totalreclaw_migrate      -- migrate testnet memories to mainnet after Pro upgrade
@@ -30,7 +32,14 @@ import {
   generateContentFingerprint,
 } from './crypto.js';
 import { createApiClient, type StoreFactPayload } from './api-client.js';
-import { extractFacts, extractDebrief, EXTRACTION_SYSTEM_PROMPT, type ExtractedFact } from './extractor.js';
+import {
+  extractFacts,
+  extractDebrief,
+  parseEntity,
+  EXTRACTION_SYSTEM_PROMPT,
+  type ExtractedFact,
+  type ExtractedEntity,
+} from './extractor.js';
 import { initLLMClient, resolveLLMConfig, chatCompletion, generateEmbedding, getEmbeddingDims } from './llm-client.js';
 import { LSHHasher } from './lsh.js';
 import { rerank, cosineSimilarity, detectQueryIntent, INTENT_WEIGHTS, type RerankerCandidate } from './reranker.js';
@@ -45,7 +54,37 @@ import {
   type DecryptedCandidate,
 } from './consolidation.js';
 import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, submitFactBatchOnChain, deriveSmartAccountAddress, type FactPayload } from './subgraph-store.js';
-import { searchSubgraph, searchSubgraphBroadened, getSubgraphFactCount } from './subgraph-search.js';
+import {
+  DIGEST_TRAPDOOR,
+  buildCanonicalClaim,
+  buildLegacyDoc,
+  computeEntityTrapdoor,
+  computeEntityTrapdoors,
+  isDigestBlob,
+  readClaimFromBlob,
+  resolveClaimFormat,
+  resolveDigestMode,
+  type DigestMode,
+} from './claims-helper.js';
+import {
+  maybeInjectDigest,
+  recompileDigest,
+  fetchAllActiveClaims,
+  isRecompileInProgress,
+  tryBeginRecompile,
+  endRecompile,
+} from './digest-sync.js';
+import {
+  detectAndResolveContradictions,
+  runWeightTuningLoop,
+  type ResolutionDecision as ContradictionDecision,
+} from './contradiction-sync.js';
+import { searchSubgraph, searchSubgraphBroadened, getSubgraphFactCount, fetchFactById } from './subgraph-search.js';
+import {
+  executePinOperation,
+  validatePinArgs,
+  type PinOpDeps,
+} from './pin.js';
 import { PluginHotCache, type HotFact } from './hot-cache-wrapper.js';
 import { CONFIG, setRecoveryPhraseOverride } from './config.js';
 import crypto from 'node:crypto';
@@ -804,7 +843,8 @@ async function searchForNearDuplicates(
       for (const result of results) {
         try {
           const docJson = decryptFromHex(result.encryptedBlob, encryptionKey);
-          const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+          if (isDigestBlob(docJson)) continue;
+          const doc = readClaimFromBlob(docJson);
 
           let embedding: number[] | null = null;
           if (result.encryptedEmbedding) {
@@ -817,9 +857,7 @@ async function searchForNearDuplicates(
             id: result.id,
             text: doc.text,
             embedding,
-            importance: doc.metadata?.importance
-              ? Math.round((doc.metadata.importance as number) * 10)
-              : 5,
+            importance: doc.importance,
             decayScore: 5,
             createdAt: result.timestamp ? parseInt(result.timestamp, 10) * 1000 : Date.now(),
             version: 1,
@@ -836,7 +874,8 @@ async function searchForNearDuplicates(
       for (const candidate of candidates) {
         try {
           const docJson = decryptFromHex(candidate.encrypted_blob, encryptionKey);
-          const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+          if (isDigestBlob(docJson)) continue;
+          const doc = readClaimFromBlob(docJson);
 
           let embedding: number[] | null = null;
           if (candidate.encrypted_embedding) {
@@ -849,9 +888,7 @@ async function searchForNearDuplicates(
             id: candidate.fact_id,
             text: doc.text,
             embedding,
-            importance: doc.metadata?.importance
-              ? Math.round((doc.metadata.importance as number) * 10)
-              : 5,
+            importance: doc.importance,
             decayScore: candidate.decay_score,
             createdAt: typeof candidate.timestamp === 'number'
               ? candidate.timestamp
@@ -888,6 +925,192 @@ async function searchForNearDuplicates(
 function encryptToHex(plaintext: string, key: Buffer): string {
   const b64 = encrypt(plaintext, key);
   return Buffer.from(b64, 'base64').toString('hex');
+}
+
+/**
+ * Log the active claim blob format the first time a fact is about to be stored.
+ * Lets operators confirm via the OpenClaw logs whether the new canonical Claim
+ * path or the TOTALRECLAW_CLAIM_FORMAT=legacy fallback is in use.
+ */
+let _loggedClaimFormat = false;
+function logClaimFormatOnce(format: 'claim' | 'legacy', logger: OpenClawPluginApi['logger']): void {
+  if (_loggedClaimFormat) return;
+  _loggedClaimFormat = true;
+  const msg =
+    format === 'legacy'
+      ? 'TotalReclaw: TOTALRECLAW_CLAIM_FORMAT=legacy — writing legacy {text, metadata} blobs'
+      : 'TotalReclaw: writing canonical Claim blobs';
+  logger.info(msg);
+}
+
+let _loggedDigestMode = false;
+function logDigestModeOnce(mode: DigestMode, logger: OpenClawPluginApi['logger']): void {
+  if (_loggedDigestMode) return;
+  _loggedDigestMode = true;
+  logger.info(`TotalReclaw: digest injection mode = ${mode}`);
+}
+
+/**
+ * How many active facts to pull into a digest recompilation.
+ * Digest compiler itself will apply DIGEST_CLAIM_CAP for the LLM path.
+ */
+const DIGEST_FETCH_LIMIT = 500;
+
+/**
+ * Schedule a background digest recompile. Fire-and-forget.
+ *
+ * The caller must check `!isRecompileInProgress()` before invoking.
+ * Errors are logged and swallowed; the guard flag is always released.
+ */
+function scheduleDigestRecompile(
+  previousClaimId: string | null,
+  logger: OpenClawPluginApi['logger'],
+): void {
+  if (!isRecompileInProgress()) {
+    if (!tryBeginRecompile()) return;
+  } else {
+    return;
+  }
+
+  const mode = resolveDigestMode();
+  const owner = subgraphOwner || userId;
+  const authKey = authKeyHex;
+  const encKey = encryptionKey;
+  const ownerForBatch = subgraphOwner ?? undefined;
+
+  if (!owner || !authKey || !encKey) {
+    endRecompile();
+    return;
+  }
+
+  // Capture llmFn from the current LLM config (cheap variant of the user's
+  // provider, already resolved by resolveLLMConfig).
+  const llmConfig = resolveLLMConfig();
+  const llmFn = llmConfig
+    ? async (prompt: string): Promise<string> => {
+        const out = await chatCompletion(
+          llmConfig,
+          [
+            { role: 'system', content: 'You return only valid JSON. No markdown fences, no commentary.' },
+            { role: 'user', content: prompt },
+          ],
+          { maxTokens: 800, temperature: 0 },
+        );
+        return out ?? '';
+      }
+    : null;
+
+  // Build the I/O deps closures. We capture the owner/auth/key values so the
+  // background task doesn't race with module-level state resets.
+  const fetchFn = () =>
+    fetchAllActiveClaims(
+      owner,
+      authKey,
+      encKey,
+      DIGEST_FETCH_LIMIT,
+      {
+        searchSubgraphBroadened: async (o, n, a) => searchSubgraphBroadened(o, n, a),
+        decryptFromHex: (hex, key) => decryptFromHex(hex, key),
+      },
+      logger,
+    );
+
+  const storeFn = async (canonicalClaimJson: string, compiledAt: string): Promise<void> => {
+    if (!isSubgraphMode()) {
+      // Self-hosted mode — store via the REST API.
+      if (!apiClient) throw new Error('apiClient not initialized');
+      const encryptedBlob = encryptToHex(canonicalClaimJson, encKey);
+      const contentFp = generateContentFingerprint(canonicalClaimJson, dedupKey!);
+      const payload: StoreFactPayload = {
+        id: crypto.randomUUID(),
+        timestamp: compiledAt,
+        encrypted_blob: encryptedBlob,
+        blind_indices: [DIGEST_TRAPDOOR],
+        decay_score: 10,
+        source: 'openclaw-plugin-digest',
+        content_fp: contentFp,
+        agent_id: 'openclaw-plugin-digest',
+      };
+      await apiClient.store(userId!, [payload], authKey);
+      return;
+    }
+
+    // Subgraph / managed-service mode — encrypt, encode, submit as a single-fact UserOp.
+    const encryptedBlob = encryptToHex(canonicalClaimJson, encKey);
+    const contentFp = generateContentFingerprint(canonicalClaimJson, dedupKey!);
+    const protobuf = encodeFactProtobuf({
+      id: crypto.randomUUID(),
+      timestamp: compiledAt,
+      owner,
+      encryptedBlob,
+      blindIndices: [DIGEST_TRAPDOOR],
+      decayScore: 10,
+      source: 'openclaw-plugin-digest',
+      contentFp,
+      agentId: 'openclaw-plugin-digest',
+    });
+    const config = { ...getSubgraphConfig(), authKeyHex: authKey, walletAddress: ownerForBatch };
+    const result = await submitFactBatchOnChain([protobuf], config);
+    if (!result.success) {
+      throw new Error('Digest store UserOp did not succeed on-chain');
+    }
+  };
+
+  const tombstoneFn = async (claimId: string): Promise<void> => {
+    if (!isSubgraphMode()) {
+      if (apiClient) {
+        try { await apiClient.deleteFact(claimId, authKey); } catch { /* best-effort */ }
+      }
+      return;
+    }
+    const tombstone: FactPayload = {
+      id: claimId,
+      timestamp: new Date().toISOString(),
+      owner,
+      encryptedBlob: '00',
+      blindIndices: [],
+      decayScore: 0,
+      source: 'tombstone',
+      contentFp: '',
+      agentId: 'openclaw-plugin-digest',
+    };
+    const protobuf = encodeFactProtobuf(tombstone);
+    const config = { ...getSubgraphConfig(), authKeyHex: authKey, walletAddress: ownerForBatch };
+    const result = await submitFactBatchOnChain([protobuf], config);
+    if (!result.success) {
+      throw new Error('Digest tombstone UserOp did not succeed on-chain');
+    }
+  };
+
+  // Slice 2f: run the weight-tuning loop as a fire-and-forget pre-compile step.
+  // This consumes any feedback.jsonl entries written since the last compile
+  // and nudges ~/.totalreclaw/weights.json, so the NEXT contradiction detection
+  // uses the adjusted weights. Rate-limited and idempotent — see
+  // runWeightTuningLoop for details. Failures are logged, never fatal.
+  void runWeightTuningLoop(Math.floor(Date.now() / 1000), logger).catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`Digest: tuning loop threw: ${msg}`);
+  });
+
+  void recompileDigest({
+    mode,
+    previousClaimId,
+    nowUnixSeconds: Math.floor(Date.now() / 1000),
+    deps: {
+      storeDigestClaim: storeFn,
+      tombstoneDigest: tombstoneFn,
+      fetchAllActiveClaimsFn: fetchFn,
+      llmFn,
+    },
+    logger,
+  })
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`Digest: background recompile threw: ${msg}`);
+    })
+    .finally(() => {
+      endRecompile();
+    });
 }
 
 /**
@@ -1079,7 +1302,8 @@ async function fetchExistingMemoriesForExtraction(
       for (const r of rawResults) {
         try {
           const docJson = decryptFromHex(r.encryptedBlob, encryptionKey);
-          const doc = JSON.parse(docJson) as { text: string };
+          if (isDigestBlob(docJson)) continue;
+          const doc = readClaimFromBlob(docJson);
           results.push({ id: r.id, text: doc.text });
         } catch { /* skip undecryptable */ }
       }
@@ -1088,7 +1312,8 @@ async function fetchExistingMemoriesForExtraction(
       for (const c of candidates) {
         try {
           const docJson = decryptFromHex(c.encrypted_blob, encryptionKey);
-          const doc = JSON.parse(docJson) as { text: string };
+          if (isDigestBlob(docJson)) continue;
+          const doc = readClaimFromBlob(docJson);
           results.push({ id: c.fact_id, text: doc.text });
         } catch { /* skip undecryptable */ }
       }
@@ -1235,15 +1460,19 @@ async function storeExtractedFacts(
   const pendingPayloads: Buffer[] = []; // Batched subgraph payloads
   let preparedForSubgraph = 0;
 
+  const claimFormat = resolveClaimFormat();
+  logClaimFormatOnce(claimFormat, logger);
+
   for (const fact of dedupedFacts) {
     try {
       const blindIndices = generateBlindIndices(fact.text);
+      const entityTrapdoors = computeEntityTrapdoors(fact.entities);
 
       // Use pre-computed embedding result if available.
       const embeddingResult = embeddingResultMap.get(fact.text) ?? null;
       const allIndices = embeddingResult
-        ? [...blindIndices, ...embeddingResult.lshBuckets]
-        : blindIndices;
+        ? [...blindIndices, ...embeddingResult.lshBuckets, ...entityTrapdoors]
+        : [...blindIndices, ...entityTrapdoors];
 
       // LLM-guided dedup: handle UPDATE/DELETE/NOOP actions.
       if (fact.action === 'NOOP') {
@@ -1365,22 +1594,133 @@ async function storeExtractedFacts(
         }
       }
 
-      const doc = {
-        text: fact.text,
-        metadata: {
-          type: fact.type,
-          importance: effectiveImportance / 10,
-          source: 'auto-extraction',
-          created_at: new Date().toISOString(),
-        },
-      };
+      const factSource = sourceOverride || 'auto-extraction';
 
-      const encryptedBlob = encryptToHex(JSON.stringify(doc), encryptionKey);
+      // Build the blob: canonical Claim JSON by default, legacy doc if the
+      // TOTALRECLAW_CLAIM_FORMAT=legacy fallback is set. Either way the result
+      // is decryptable via parseClaimOrLegacy on the read path.
+      //
+      // We build it BEFORE the on-chain write so Phase 2 contradiction
+      // detection can inspect the same canonical Claim the write path will
+      // actually store. The string is encrypted byte-identically below.
+      const blobPlaintext =
+        claimFormat === 'legacy'
+          ? buildLegacyDoc({
+              fact,
+              importance: effectiveImportance,
+              source: 'auto-extraction',
+            })
+          : buildCanonicalClaim({
+              fact,
+              importance: effectiveImportance,
+              sourceAgent: factSource,
+            });
 
-      const contentFp = generateContentFingerprint(fact.text, dedupKey);
       const factId = crypto.randomUUID();
 
-      const factSource = sourceOverride || 'auto-extraction';
+      // Phase 2 Slice 2d: contradiction detection + auto-resolution.
+      //
+      // Runs only when the canonical Claim format is active (legacy blobs
+      // carry no entity refs, so there is nothing to check), only for
+      // Subgraph / managed-service mode (self-hosted contradiction handling
+      // can come later), and only when the new fact has entities. The helper
+      // is a no-op in all other cases.
+      //
+      // Returns one decision per candidate contradicting claim:
+      //   - supersede_existing → queue a tombstone + proceed with the new write
+      //   - skip_new → do not write the new fact; record the skip reason
+      //   - empty list → no contradiction, proceed unchanged
+      //
+      // On any error (subgraph, decrypt, WASM), the helper returns [] and we
+      // fall back to Phase 1 behaviour.
+      let contradictionSkipNew = false;
+      if (
+        claimFormat !== 'legacy' &&
+        isSubgraphMode() &&
+        fact.entities &&
+        fact.entities.length > 0 &&
+        embeddingResult
+      ) {
+        const newClaimObj = JSON.parse(blobPlaintext) as Record<string, unknown>;
+        let decisions: ContradictionDecision[] = [];
+        try {
+          decisions = await detectAndResolveContradictions({
+            newClaim: newClaimObj,
+            newClaimId: factId,
+            newEmbedding: embeddingResult.embedding,
+            subgraphOwner: subgraphOwner || userId!,
+            authKeyHex: authKeyHex!,
+            encryptionKey: encryptionKey!,
+            deps: {
+              searchSubgraph: (owner, trapdoors, maxCandidates, authKey) =>
+                searchSubgraph(owner, trapdoors, maxCandidates, authKey).then((rows) =>
+                  rows.map((r) => ({
+                    id: r.id,
+                    encryptedBlob: r.encryptedBlob,
+                    encryptedEmbedding: r.encryptedEmbedding ?? null,
+                    timestamp: r.timestamp,
+                    isActive: r.isActive,
+                  })),
+                ),
+              decryptFromHex: (hex, key) => decryptFromHex(hex, key),
+            },
+            logger: {
+              info: (m) => logger.info(m),
+              warn: (m) => logger.warn(m),
+            },
+          });
+        } catch (crErr) {
+          // detectAndResolveContradictions is supposed to never throw — if
+          // it does, we log and continue with Phase 1 behaviour.
+          const msg = crErr instanceof Error ? crErr.message : String(crErr);
+          logger.warn(`Contradiction detection failed (proceeding with store): ${msg}`);
+          decisions = [];
+        }
+
+        for (const decision of decisions) {
+          if (decision.action === 'supersede_existing') {
+            const tombstone: FactPayload = {
+              id: decision.existingFactId,
+              timestamp: new Date().toISOString(),
+              owner: subgraphOwner || userId!,
+              encryptedBlob: '00',
+              blindIndices: [],
+              decayScore: 0,
+              source: 'tombstone',
+              contentFp: '',
+              agentId: 'openclaw-plugin-auto',
+            };
+            pendingPayloads.push(encodeFactProtobuf(tombstone));
+            superseded++;
+            logger.info(
+              `Auto-resolve: queued supersede for ${decision.existingFactId.slice(0, 10)}… ` +
+                `(sim=${decision.similarity.toFixed(3)}, entity=${decision.entityId})`,
+            );
+          } else if (decision.action === 'skip_new') {
+            if (decision.reason === 'existing_pinned') {
+              logger.warn(
+                `Auto-resolve: skipped new write — existing claim ${decision.existingFactId.slice(0, 10)}… is pinned ` +
+                  `(sim=${decision.similarity.toFixed(3)}, entity=${decision.entityId})`,
+              );
+            } else {
+              logger.info(
+                `Auto-resolve: skipped new write — existing ${decision.existingFactId.slice(0, 10)}… wins ` +
+                  `(sim=${decision.similarity.toFixed(3)}, entity=${decision.entityId})`,
+              );
+            }
+            contradictionSkipNew = true;
+          }
+        }
+      }
+
+      if (contradictionSkipNew) {
+        skipped++;
+        continue;
+      }
+
+      const encryptedBlob = encryptToHex(blobPlaintext, encryptionKey);
+      const contentFp = generateContentFingerprint(fact.text, dedupKey);
+
       if (isSubgraphMode()) {
         const protobuf = encodeFactProtobuf({
           id: factId,
@@ -2164,142 +2504,102 @@ const plugin = {
               type: 'number',
               minimum: 1,
               maximum: 10,
-              description: 'Importance score 1-10 (default: 5)',
+              description: 'Importance score 1-10 (default: 8 for explicit remember)',
+            },
+            entities: {
+              type: 'array',
+              description:
+                'Named entities this memory is about (people, projects, tools, companies, concepts, places). ' +
+                'Supplying entities enables Phase 2 contradiction detection against existing facts about the same entity. ' +
+                'Omit if unclear — a best-effort fallback will still store the memory.',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  type: {
+                    type: 'string',
+                    enum: ['person', 'project', 'tool', 'company', 'concept', 'place'],
+                  },
+                  role: { type: 'string' },
+                },
+                required: ['name', 'type'],
+                additionalProperties: false,
+              },
             },
           },
           required: ['text'],
           additionalProperties: false,
         },
-        async execute(_toolCallId: string, params: { text: string; type?: string; importance?: number }) {
+        async execute(
+          _toolCallId: string,
+          params: {
+            text: string;
+            type?: string;
+            importance?: number;
+            entities?: Array<{ name: string; type: string; role?: string }>;
+          },
+        ) {
           try {
             await requireFullSetup(api.logger);
 
-            const memoryType = params.type ?? 'fact';
-            let importance = params.importance ?? 5;
+            // Phase 2 wiring: route explicit remembers through the same canonical
+            // store path that auto-extraction uses (storeExtractedFacts). This
+            // ensures explicit tool calls build canonical Claims (not legacy doc
+            // blobs), emit entity trapdoors, and run through Phase 2 contradiction
+            // detection + auto-resolution. Historically this tool had its own
+            // inline dedup + legacy-blob path that bypassed Phase 2 entirely.
+            const validTypes: ExtractedFact['type'][] = [
+              'fact',
+              'preference',
+              'decision',
+              'episodic',
+              'goal',
+              'context',
+              'summary',
+            ];
+            const memoryType: ExtractedFact['type'] = validTypes.includes(
+              params.type as ExtractedFact['type'],
+            )
+              ? (params.type as ExtractedFact['type'])
+              : 'fact';
 
-            // Generate blind indices for server-side search.
-            const blindIndices = generateBlindIndices(params.text);
+            // Explicit remember defaults to importance 8 (above auto-extraction's
+            // typical 6-7), so store-time dedup's shouldSupersede prefers the
+            // explicit call when it collides with an auto-extracted claim.
+            const importance = Math.max(1, Math.min(10, params.importance ?? 8));
 
-            // Generate embedding + LSH bucket hashes (PoC v2).
-            // Falls back to word-only indices if embedding generation fails.
-            const embeddingResult = await generateEmbeddingAndLSH(params.text, api.logger);
+            const validatedEntities: ExtractedEntity[] = Array.isArray(params.entities)
+              ? params.entities
+                  .map((e) => parseEntity(e))
+                  .filter((e): e is ExtractedEntity => e !== null)
+              : [];
 
-            // Merge LSH bucket hashes into blind indices.
-            const allIndices = embeddingResult
-              ? [...blindIndices, ...embeddingResult.lshBuckets]
-              : blindIndices;
-
-            // Store-time dedup: for explicit remember, ALWAYS supersede
-            // (user explicitly wants this stored — just remove the old one).
-            let supersededId: string | undefined;
-            if (STORE_DEDUP_ENABLED && embeddingResult) {
-              const dupResult = await searchForNearDuplicates(
-                params.text,
-                embeddingResult.embedding,
-                allIndices,
-                api.logger,
-              );
-              if (dupResult) {
-                // Inherit higher importance from existing fact.
-                importance = Math.max(importance, dupResult.match.decayScore);
-                supersededId = dupResult.match.id;
-
-                if (isSubgraphMode()) {
-                  try {
-                    const tombConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
-                    const tombstone: FactPayload = {
-                      id: dupResult.match.id,
-                      timestamp: new Date().toISOString(),
-                      owner: subgraphOwner || userId!,
-                      encryptedBlob: '00',
-                      blindIndices: [],
-                      decayScore: 0,
-                      source: 'tombstone',
-                      contentFp: '',
-                      agentId: 'openclaw-plugin',
-                    };
-                    const tombProtobuf = encodeFactProtobuf(tombstone);
-                    await submitFactOnChain(tombProtobuf, tombConfig);
-                    api.logger.info(
-                      `Remember dedup: superseded ${dupResult.match.id} on-chain (sim=${dupResult.similarity.toFixed(3)})`,
-                    );
-                  } catch (tombErr) {
-                    api.logger.warn(
-                      `Remember dedup: failed to tombstone ${dupResult.match.id}: ${tombErr instanceof Error ? tombErr.message : String(tombErr)}`,
-                    );
-                    supersededId = undefined;
-                  }
-                } else if (apiClient && authKeyHex) {
-                  try {
-                    await apiClient.deleteFact(dupResult.match.id, authKeyHex);
-                    api.logger.info(
-                      `Remember dedup: superseded ${dupResult.match.id} (sim=${dupResult.similarity.toFixed(3)})`,
-                    );
-                  } catch (delErr) {
-                    api.logger.warn(
-                      `Remember dedup: failed to delete superseded fact ${dupResult.match.id}: ${delErr instanceof Error ? delErr.message : String(delErr)}`,
-                    );
-                    supersededId = undefined; // Don't report supersession if delete failed
-                  }
-                }
-              }
-            }
-
-            // Build the document JSON that will be encrypted.
-            const doc = {
-              text: params.text,
-              metadata: {
-                type: memoryType,
-                importance: importance / 10, // normalise to 0-1 range
-                source: 'explicit',
-                created_at: new Date().toISOString(),
-              },
+            const fact: ExtractedFact = {
+              text: params.text.slice(0, 512),
+              type: memoryType,
+              importance,
+              action: 'ADD',
+              confidence: 1.0, // user explicitly asked to remember — highest confidence
             };
+            if (validatedEntities.length > 0) fact.entities = validatedEntities;
 
-            // Encrypt the document.
-            const encryptedBlob = encryptToHex(JSON.stringify(doc), encryptionKey!);
+            const stored = await storeExtractedFacts([fact], api.logger, 'explicit');
+            api.logger.info(
+              `totalreclaw_remember: routed to storeExtractedFacts (stored=${stored}, entities=${validatedEntities.length})`,
+            );
 
-            // Generate content fingerprint for dedup.
-            const contentFp = generateContentFingerprint(params.text, dedupKey!);
-
-            // Generate a unique fact ID.
-            const factId = crypto.randomUUID();
-
-            // Build the payload matching the server's FactJSON schema.
-            const factPayload: StoreFactPayload = {
-              id: factId,
-              timestamp: new Date().toISOString(),
-              encrypted_blob: encryptedBlob,
-              blind_indices: allIndices,
-              decay_score: importance,
-              source: 'explicit',
-              content_fp: contentFp,
-              agent_id: 'openclaw-plugin',
-              encrypted_embedding: embeddingResult?.encryptedEmbedding,
-            };
-
-            if (isSubgraphMode()) {
-              // Subgraph mode: encode as Protobuf and submit on-chain via relay UserOp
-              const config = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
-              const protobuf = encodeFactProtobuf({
-                id: factId,
-                timestamp: new Date().toISOString(),
-                owner: subgraphOwner || userId!,
-                encryptedBlob: encryptedBlob,
-                blindIndices: allIndices,
-                decayScore: importance,
-                source: 'explicit',
-                contentFp: contentFp,
-                agentId: 'openclaw-plugin',
-                encryptedEmbedding: embeddingResult?.encryptedEmbedding,
-              });
-              const result = await submitFactOnChain(protobuf, config);
-              if (!result.success) {
-                throw new Error(`On-chain submission failed (tx=${result.txHash?.slice(0, 10) || 'none'}…)`);
-              }
-              api.logger.info(`totalreclaw_remember: stored on-chain (tx=${result.txHash.slice(0, 10)}…)`);
-            } else {
-              await apiClient!.store(userId!, [factPayload], authKeyHex!);
+            if (stored === 0) {
+              // Dedup or supersession consumed the write. Treat as success from
+              // the user's perspective — the memory's content is already in the
+              // vault (possibly under a different ID).
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: 'Memory noted (matched existing content in vault).',
+                  },
+                ],
+              };
             }
 
             return {
@@ -2405,7 +2705,8 @@ const plugin = {
               for (const result of subgraphResults) {
                 try {
                   const docJson = decryptFromHex(result.encryptedBlob, encryptionKey!);
-                  const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+                  if (isDigestBlob(docJson)) continue;
+                  const doc = readClaimFromBlob(docJson);
 
                   let decryptedEmbedding: number[] | undefined;
                   if (result.encryptedEmbedding) {
@@ -2418,7 +2719,6 @@ const plugin = {
                     }
                   }
 
-                  // Re-embed if stored dimension differs from current model
                   if (decryptedEmbedding && decryptedEmbedding.length !== getEmbeddingDims()) {
                     try {
                       decryptedEmbedding = await generateEmbedding(doc.text);
@@ -2431,13 +2731,13 @@ const plugin = {
                     id: result.id,
                     text: doc.text,
                     embedding: decryptedEmbedding,
-                    importance: (doc.metadata?.importance as number) ?? 0.5,
+                    importance: doc.importance / 10,
                     createdAt: result.timestamp ? parseInt(result.timestamp, 10) : undefined,
                   });
 
                   metaMap.set(result.id, {
                     metadata: doc.metadata ?? {},
-                    timestamp: Date.now(), // Subgraph doesn't return ms timestamp; use current
+                    timestamp: Date.now(),
                   });
                 } catch {
                   // Skip candidates we cannot decrypt.
@@ -2480,7 +2780,8 @@ const plugin = {
               for (const candidate of candidates) {
                 try {
                   const docJson = decryptFromHex(candidate.encrypted_blob, encryptionKey!);
-                  const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+                  if (isDigestBlob(docJson)) continue;
+                  const doc = readClaimFromBlob(docJson);
 
                   let decryptedEmbedding: number[] | undefined;
                   if (candidate.encrypted_embedding) {
@@ -2493,7 +2794,6 @@ const plugin = {
                     }
                   }
 
-                  // Re-embed if stored dimension differs from current model
                   if (decryptedEmbedding && decryptedEmbedding.length !== getEmbeddingDims()) {
                     try {
                       decryptedEmbedding = await generateEmbedding(doc.text);
@@ -2506,7 +2806,7 @@ const plugin = {
                     id: candidate.fact_id,
                     text: doc.text,
                     embedding: decryptedEmbedding,
-                    importance: (doc.metadata?.importance as number) ?? 0.5,
+                    importance: doc.importance / 10,
                     createdAt: typeof candidate.timestamp === 'number'
                       ? candidate.timestamp / 1000
                       : new Date(candidate.timestamp).getTime() / 1000,
@@ -2740,11 +3040,12 @@ const plugin = {
                     let hexBlob = fact.encryptedBlob;
                     if (hexBlob.startsWith('0x')) hexBlob = hexBlob.slice(2);
                     const docJson = decryptFromHex(hexBlob, encryptionKey!);
-                    const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+                    if (isDigestBlob(docJson)) continue;
+                    const doc = readClaimFromBlob(docJson);
                     allFacts.push({
                       id: fact.id,
                       text: doc.text,
-                      metadata: doc.metadata ?? {},
+                      metadata: doc.metadata,
                       created_at: new Date(parseInt(fact.timestamp) * 1000).toISOString(),
                     });
                   } catch {
@@ -2766,11 +3067,12 @@ const plugin = {
                 for (const fact of page.facts) {
                   try {
                     const docJson = decryptFromHex(fact.encrypted_blob, encryptionKey!);
-                    const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+                    if (isDigestBlob(docJson)) continue;
+                    const doc = readClaimFromBlob(docJson);
                     allFacts.push({
                       id: fact.id,
                       text: doc.text,
-                      metadata: doc.metadata ?? {},
+                      metadata: doc.metadata,
                       created_at: fact.created_at,
                     });
                   } catch {
@@ -2958,11 +3260,10 @@ const plugin = {
               for (const fact of page.facts) {
                 try {
                   const docJson = decryptFromHex(fact.encrypted_blob, encryptionKey);
-                  const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+                  if (isDigestBlob(docJson)) continue;
+                  const doc = readClaimFromBlob(docJson);
 
                   let embedding: number[] | null = null;
-                  // ExportedFact does not include encrypted_embedding — generate it on-the-fly.
-                  // For consolidation we need embeddings, so generate them.
                   try {
                     embedding = await generateEmbedding(doc.text);
                   } catch { /* skip — fact will not be clustered */ }
@@ -2971,9 +3272,7 @@ const plugin = {
                     id: fact.id,
                     text: doc.text,
                     embedding,
-                    importance: doc.metadata?.importance
-                      ? Math.round((doc.metadata.importance as number) * 10)
-                      : 5,
+                    importance: doc.importance,
                     decayScore: fact.decay_score,
                     createdAt: new Date(fact.created_at).getTime(),
                     version: fact.version,
@@ -3061,6 +3360,205 @@ const plugin = {
         },
       },
       { name: 'totalreclaw_consolidate' },
+    );
+
+    // ---------------------------------------------------------------
+    // Helper: build PinOpDeps bound to the live plugin state
+    // ---------------------------------------------------------------
+    // Wires the pure pin/unpin operation to the managed-service transport +
+    // crypto layer. Mirrors MCP's buildPinDepsFromState and Python's
+    // _change_claim_status argument plumbing.
+    const buildPinDeps = (): PinOpDeps => {
+      const owner = subgraphOwner || userId || '';
+      const config = {
+        ...getSubgraphConfig(),
+        authKeyHex: authKeyHex!,
+        walletAddress: subgraphOwner ?? undefined,
+      };
+      return {
+        owner,
+        sourceAgent: 'openclaw-plugin',
+        fetchFactById: (factId: string) => fetchFactById(owner, factId, authKeyHex!),
+        decryptBlob: (hex: string) => decryptFromHex(hex, encryptionKey!),
+        encryptBlob: (plaintext: string) => encryptToHex(plaintext, encryptionKey!),
+        submitBatch: async (payloads: Buffer[]) => {
+          const result = await submitFactBatchOnChain(payloads, config);
+          return { txHash: result.txHash, success: result.success };
+        },
+        generateIndices: async (text: string, entityNames: string[]) => {
+          if (!text) return { blindIndices: [] };
+          const wordIndices = generateBlindIndices(text);
+          let lshIndices: string[] = [];
+          let encryptedEmbedding: string | undefined;
+          try {
+            const embedding = await generateEmbedding(text);
+            const hasher = getLSHHasher(api.logger);
+            if (hasher) lshIndices = hasher.hash(embedding);
+            encryptedEmbedding = encryptToHex(JSON.stringify(embedding), encryptionKey!);
+          } catch {
+            // Best-effort: word + entity trapdoors alone still surface the claim.
+          }
+          const entityTrapdoors = entityNames.map((n) => computeEntityTrapdoor(n));
+          return {
+            blindIndices: [...wordIndices, ...lshIndices, ...entityTrapdoors],
+            encryptedEmbedding,
+          };
+        },
+      };
+    };
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_pin
+    // ---------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: 'totalreclaw_pin',
+        label: 'Pin',
+        description:
+          'Pin a memory so the auto-resolution engine will never override or supersede it. ' +
+          "Use when the user explicitly confirms a claim is still valid after you or another agent " +
+          "tried to retract/contradict it (e.g. 'wait, I still use Vim sometimes'). " +
+          'Takes fact_id (from a prior recall result). Pinning is idempotent — pinning an already-pinned ' +
+          'claim is a no-op. Cross-device: the pin propagates via the on-chain supersession chain.',
+        parameters: {
+          type: 'object',
+          properties: {
+            fact_id: {
+              type: 'string',
+              description: 'The ID of the fact to pin (from a totalreclaw_recall result).',
+            },
+            reason: {
+              type: 'string',
+              description: 'Optional human-readable reason for pinning (logged locally for tuning).',
+            },
+          },
+          required: ['fact_id'],
+          additionalProperties: false,
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            await requireFullSetup(api.logger);
+            if (!isSubgraphMode()) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: 'Pin/unpin is only supported with the managed service. Self-hosted mode does not yet implement the status-flip supersession flow.',
+                }],
+              };
+            }
+            const validation = validatePinArgs(params);
+            if (!validation.ok) {
+              return { content: [{ type: 'text', text: validation.error }] };
+            }
+            const deps = buildPinDeps();
+            const result = await executePinOperation(validation.factId, 'pinned', deps, validation.reason);
+            if (result.success && result.idempotent) {
+              api.logger.info(`totalreclaw_pin: ${result.fact_id} already pinned (no-op)`);
+              return {
+                content: [{ type: 'text', text: `Memory ${result.fact_id} is already pinned.` }],
+                details: result,
+              };
+            }
+            if (result.success) {
+              api.logger.info(`totalreclaw_pin: ${result.fact_id} → ${result.new_fact_id} (tx ${result.tx_hash?.slice(0, 10)})`);
+              return {
+                content: [{
+                  type: 'text',
+                  text: `Pinned memory ${result.fact_id}. New fact id: ${result.new_fact_id} (tx: ${result.tx_hash}).`,
+                }],
+                details: result,
+              };
+            }
+            api.logger.error(`totalreclaw_pin failed: ${result.error}`);
+            return {
+              content: [{ type: 'text', text: `Failed to pin memory: ${humanizeError(result.error ?? 'unknown error')}` }],
+              details: result,
+            };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            api.logger.error(`totalreclaw_pin failed: ${message}`);
+            return {
+              content: [{ type: 'text', text: `Failed to pin memory: ${humanizeError(message)}` }],
+            };
+          }
+        },
+      },
+      { name: 'totalreclaw_pin' },
+    );
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_unpin
+    // ---------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: 'totalreclaw_unpin',
+        label: 'Unpin',
+        description:
+          'Remove the pin from a previously pinned memory, returning it to active status so the ' +
+          'auto-resolution engine can supersede or retract it again. Takes fact_id. Idempotent — ' +
+          'unpinning a non-pinned claim is a no-op.',
+        parameters: {
+          type: 'object',
+          properties: {
+            fact_id: {
+              type: 'string',
+              description: 'The ID of the fact to unpin (from a totalreclaw_recall result).',
+            },
+          },
+          required: ['fact_id'],
+          additionalProperties: false,
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            await requireFullSetup(api.logger);
+            if (!isSubgraphMode()) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: 'Pin/unpin is only supported with the managed service. Self-hosted mode does not yet implement the status-flip supersession flow.',
+                }],
+              };
+            }
+            const validation = validatePinArgs(params);
+            if (!validation.ok) {
+              return { content: [{ type: 'text', text: validation.error }] };
+            }
+            const deps = buildPinDeps();
+            const result = await executePinOperation(validation.factId, 'active', deps);
+            if (result.success && result.idempotent) {
+              api.logger.info(`totalreclaw_unpin: ${result.fact_id} already active (no-op)`);
+              return {
+                content: [{ type: 'text', text: `Memory ${result.fact_id} is not pinned.` }],
+                details: result,
+              };
+            }
+            if (result.success) {
+              api.logger.info(`totalreclaw_unpin: ${result.fact_id} → ${result.new_fact_id} (tx ${result.tx_hash?.slice(0, 10)})`);
+              return {
+                content: [{
+                  type: 'text',
+                  text: `Unpinned memory ${result.fact_id}. New fact id: ${result.new_fact_id} (tx: ${result.tx_hash}).`,
+                }],
+                details: result,
+              };
+            }
+            api.logger.error(`totalreclaw_unpin failed: ${result.error}`);
+            return {
+              content: [{ type: 'text', text: `Failed to unpin memory: ${humanizeError(result.error ?? 'unknown error')}` }],
+              details: result,
+            };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            api.logger.error(`totalreclaw_unpin failed: ${message}`);
+            return {
+              content: [{ type: 'text', text: `Failed to unpin memory: ${humanizeError(message)}` }],
+            };
+          }
+        },
+      },
+      { name: 'totalreclaw_unpin' },
     );
 
     // ---------------------------------------------------------------
@@ -3624,7 +4122,46 @@ const plugin = {
           }
 
           if (isSubgraphMode()) {
-            // --- Subgraph mode: hot cache first, then background refresh ---
+            // --- Subgraph mode: digest fast path → hot cache → background refresh ---
+
+            // Digest fast path (Stage 3b). When a digest exists and the mode is
+            // not 'off', inject its pre-compiled promptText instead of running
+            // the per-query search. A stale digest triggers a background
+            // recompile (non-blocking). Failures fall through to the legacy
+            // path silently.
+            const digestMode = resolveDigestMode();
+            logDigestModeOnce(digestMode, api.logger);
+            if (digestMode !== 'off' && encryptionKey && authKeyHex && (subgraphOwner || userId)) {
+              try {
+                const injectResult = await maybeInjectDigest({
+                  owner: subgraphOwner || userId!,
+                  authKeyHex: authKeyHex!,
+                  encryptionKey: encryptionKey!,
+                  mode: digestMode,
+                  nowMs: Date.now(),
+                  loadDeps: {
+                    searchSubgraph: async (o, tds, n, a) => searchSubgraph(o, tds, n, a),
+                    decryptFromHex: (hex, key) => decryptFromHex(hex, key),
+                  },
+                  probeDeps: {
+                    searchSubgraphBroadened: async (o, n, a) => searchSubgraphBroadened(o, n, a),
+                  },
+                  recompileFn: (prev) => scheduleDigestRecompile(prev, api.logger),
+                  logger: api.logger,
+                });
+                if (injectResult.promptText) {
+                  api.logger.info(`Digest injection: state=${injectResult.state}`);
+                  return {
+                    prependContext:
+                      `## Your Memory\n\n${injectResult.promptText}` + welcomeBack + billingWarning,
+                  };
+                }
+              } catch (err) {
+                // Never block session start on digest failure.
+                const msg = err instanceof Error ? err.message : String(err);
+                api.logger.warn(`Digest fast path failed: ${msg}`);
+              }
+            }
 
             // Initialize hot cache if needed.
             if (!pluginHotCache && encryptionKey) {
@@ -3729,7 +4266,10 @@ const plugin = {
             for (const result of subgraphResults) {
               try {
                 const docJson = decryptFromHex(result.encryptedBlob, encryptionKey!);
-                const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+                // Filter out digest infrastructure blobs — they have no user
+                // text and should never surface in recall results.
+                if (isDigestBlob(docJson)) continue;
+                const doc = readClaimFromBlob(docJson);
 
                 let decryptedEmbedding: number[] | undefined;
                 if (result.encryptedEmbedding) {
@@ -3742,21 +4282,17 @@ const plugin = {
                   }
                 }
 
-                const importanceRaw = (doc.metadata?.importance as number) ?? 0.5;
                 const createdAtSec = result.timestamp ? parseInt(result.timestamp, 10) : undefined;
                 rerankerCandidates.push({
                   id: result.id,
                   text: doc.text,
                   embedding: decryptedEmbedding,
-                  importance: importanceRaw,
+                  importance: doc.importance / 10,
                   createdAt: createdAtSec,
                 });
 
-                const importance = doc.metadata?.importance
-                  ? Math.round((doc.metadata.importance as number) * 10)
-                  : 5;
                 hookMetaMap.set(result.id, {
-                  importance,
+                  importance: doc.importance,
                   age: 'subgraph',
                 });
               } catch {
@@ -3860,9 +4396,10 @@ const plugin = {
           for (const candidate of candidates) {
             try {
               const docJson = decryptFromHex(candidate.encrypted_blob, encryptionKey!);
-              const doc = JSON.parse(docJson) as { text: string; metadata?: Record<string, unknown> };
+              // Skip digest infrastructure blobs.
+              if (isDigestBlob(docJson)) continue;
+              const doc = readClaimFromBlob(docJson);
 
-              // Decrypt embedding if present.
               let decryptedEmbedding: number[] | undefined;
               if (candidate.encrypted_embedding) {
                 try {
@@ -3874,7 +4411,6 @@ const plugin = {
                 }
               }
 
-              const importanceRaw = (doc.metadata?.importance as number) ?? 0.5;
               const createdAtSec = typeof candidate.timestamp === 'number'
                 ? candidate.timestamp / 1000
                 : new Date(candidate.timestamp).getTime() / 1000;
@@ -3882,15 +4418,12 @@ const plugin = {
                 id: candidate.fact_id,
                 text: doc.text,
                 embedding: decryptedEmbedding,
-                importance: importanceRaw,
+                importance: doc.importance / 10,
                 createdAt: createdAtSec,
               });
 
-              const importance = doc.metadata?.importance
-                ? Math.round((doc.metadata.importance as number) * 10)
-                : 5;
               hookMetaMap.set(candidate.fact_id, {
-                importance,
+                importance: doc.importance,
                 age: relativeTime(candidate.timestamp),
               });
             } catch {

@@ -25,9 +25,16 @@ from .crypto import (
     DerivedKeys,
 )
 from .lsh import LSHHasher
-from .relay import RelayClient, BillingStatus, DEFAULT_RELAY_URL
+from .relay import RelayClient, BillingStatus, _default_relay_url
 from .reranker import RerankerResult
-from .operations import store_fact, search_facts, forget_fact, export_facts
+from .operations import (
+    store_fact,
+    search_facts,
+    forget_fact,
+    export_facts,
+    pin_fact,
+    unpin_fact,
+)
 
 # Smart Account address derivation constants
 # These match the CREATE2 deterministic address generation used by
@@ -138,7 +145,7 @@ class TotalReclaw:
         self._lsh_seed = derive_lsh_seed(self._mnemonic, self._keys.salt)
         self._lsh_hasher: Optional[LSHHasher] = None
         self._auth_key_hex = self._keys.auth_key.hex()
-        resolved_url = server_url or relay_url or DEFAULT_RELAY_URL
+        resolved_url = server_url or relay_url or _default_relay_url()
         self._relay_url = resolved_url
 
         # Derive EOA account (address + private key) for UserOp signing
@@ -266,6 +273,50 @@ class TotalReclaw:
             fact_id,
             self._wallet_address,
             self._relay,
+            eoa_private_key=self._eoa_private_key,
+            eoa_address=self._eoa_address,
+            sender=self._wallet_address,
+        )
+
+    async def pin_fact(self, fact_id: str) -> dict:
+        """Pin a claim so auto-resolution cannot supersede it.
+
+        Delegates to :func:`totalreclaw.operations.pin_fact` with this
+        client's derived keys, wallet address, and EOA signing key.
+
+        Returns
+        -------
+        dict
+            ``{success, fact_id, new_fact_id, previous_status, new_status}``
+            where ``fact_id`` is the original tombstoned id and
+            ``new_fact_id`` is the replacement with pinned status. On
+            no-op: ``{success, fact_id, previous_status, new_status, idempotent: True}``.
+        """
+        await self._ensure_address()
+        await self._ensure_registered()
+        return await pin_fact(
+            fact_id=fact_id,
+            keys=self._keys,
+            owner=self._wallet_address,
+            relay=self._relay,
+            eoa_private_key=self._eoa_private_key,
+            eoa_address=self._eoa_address,
+            sender=self._wallet_address,
+        )
+
+    async def unpin_fact(self, fact_id: str) -> dict:
+        """Move a pinned claim back to ``active`` status.
+
+        Delegates to :func:`totalreclaw.operations.unpin_fact`. Idempotent
+        on claims that are already active.
+        """
+        await self._ensure_address()
+        await self._ensure_registered()
+        return await unpin_fact(
+            fact_id=fact_id,
+            keys=self._keys,
+            owner=self._wallet_address,
+            relay=self._relay,
             eoa_private_key=self._eoa_private_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,

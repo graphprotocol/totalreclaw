@@ -13,13 +13,38 @@ import { chatCompletion, resolveLLMConfig } from './llm-client.js';
 
 export type ExtractionAction = 'ADD' | 'UPDATE' | 'DELETE' | 'NOOP';
 
+export type EntityType = 'person' | 'project' | 'tool' | 'company' | 'concept' | 'place';
+
+export interface ExtractedEntity {
+  name: string;
+  type: EntityType;
+  role?: string;
+}
+
 export interface ExtractedFact {
   text: string;
   type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary';
   importance: number; // 1-10
   action: ExtractionAction;
   existingFactId?: string;
+  entities?: ExtractedEntity[];
+  confidence?: number; // 0.0-1.0, LLM self-assessed
 }
+
+const ALLOWED_ENTITY_TYPES: ReadonlySet<EntityType> = new Set([
+  'person',
+  'project',
+  'tool',
+  'company',
+  'concept',
+  'place',
+]);
+
+/**
+ * Default confidence when the LLM does not provide one.
+ * Mirrors the fallback used by other extraction clients.
+ */
+export const DEFAULT_EXTRACTION_CONFIDENCE = 0.85;
 
 interface ContentBlock {
   type?: string;
@@ -68,8 +93,40 @@ Actions (compare against existing memories if provided):
 - DELETE: Contradicts an existing memory -- the old one is now wrong (provide existingFactId)
 - NOOP: Already captured or not worth storing
 
+Entities:
+- List the named entities this memory is about (people, projects, tools, companies, concepts, places)
+- When a memory is about the user, include the user's own name as a "person" entity
+- Entity "type" must be one of: person | project | tool | company | concept | place
+- Entity "role" is optional and describes the entity's role in the claim (e.g. "chooser", "employer", "target"); omit if not clear
+- If no entities are identifiable, omit the field or use an empty array
+
+Entity specificity (IMPORTANT for contradiction detection):
+- Prefer SPECIFIC product/tool names over umbrella categories. "PostgreSQL" beats "database"; "Neovim" beats "editor"; "TypeScript" beats "language".
+- Do NOT include umbrella concepts ("database", "editor", "language", "framework", "tool") as separate entities when a specific product is already listed. The specific name is enough.
+- When two memories describe different use cases of the same broader category (e.g. Postgres for OLTP and DuckDB for analytics), each memory's entities must be the SPECIFIC products involved in that memory — never a shared umbrella. Sharing an umbrella entity across complementary choices causes false-positive contradictions.
+- Examples of ENTITIES TO AVOID as standalone tags: "database", "editor", "IDE", "language", "framework", "library", "tool", "store", "datastore", "server", "client", "app".
+
+Few-shot example (complementary tech — two memories must not share an umbrella entity):
+
+Memory A: "Uses PostgreSQL as the primary OLTP database for user-facing workloads"
+  entities: [{"name": "PostgreSQL", "type": "tool", "role": "primary OLTP store"}, {"name": "Pedro", "type": "person"}]
+  (NOT: "database", "OLTP", or any umbrella term)
+
+Memory B: "Uses DuckDB for analytics and reporting workloads, roughly 20x faster than Postgres on aggregations"
+  entities: [{"name": "DuckDB", "type": "tool", "role": "analytics engine"}, {"name": "Pedro", "type": "person"}]
+  (NOT: "database", "analytics", or any umbrella term. PostgreSQL is mentioned as a comparison point and MAY appear as a separate entity, but the memory is about DuckDB.)
+
+These two memories are COMPLEMENTARY, not contradictory — Postgres serves OLTP and DuckDB serves OLAP. Because they do not share an umbrella entity, the contradiction-detection path correctly treats them as independent.
+
+Confidence:
+- Self-assess how sure you are this is a real, durable fact (0.0-1.0)
+- Use 0.9-1.0 when the user stated it directly and unambiguously
+- Use 0.7-0.9 when you inferred it from context
+- Use 0.5-0.7 when it could be a misstatement or temporary state
+- Default to 0.85 if unsure
+
 Return a JSON array (no markdown, no code fences):
-[{"text": "...", "type": "...", "importance": N, "action": "ADD|UPDATE|DELETE|NOOP", "existingFactId": "..."}, ...]
+[{"text": "...", "type": "...", "importance": N, "confidence": 0.9, "action": "ADD|UPDATE|DELETE|NOOP", "existingFactId": "...", "entities": [{"name": "PostgreSQL", "type": "tool", "role": "chosen database"}]}, ...]
 
 If nothing is worth extracting, return: []`;
 
@@ -137,9 +194,37 @@ function truncateMessages(messages: Array<{ role: string; content: string }>, ma
 }
 
 /**
+ * Parse a single entity object from LLM output. Returns null if invalid.
+ * Invalid entities are silently dropped so a bad entity never fails the whole fact.
+ */
+export function parseEntity(raw: unknown): ExtractedEntity | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const e = raw as Record<string, unknown>;
+  const name = typeof e.name === 'string' ? e.name.trim() : '';
+  if (name.length === 0) return null;
+  const type = String(e.type ?? '').toLowerCase() as EntityType;
+  if (!ALLOWED_ENTITY_TYPES.has(type)) return null;
+  const entity: ExtractedEntity = { name: name.slice(0, 128), type };
+  if (typeof e.role === 'string' && e.role.trim().length > 0) {
+    entity.role = e.role.trim().slice(0, 128);
+  }
+  return entity;
+}
+
+/**
+ * Clamp a raw confidence value to [0, 1]. Returns the default when missing or NaN.
+ */
+export function normalizeConfidence(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return DEFAULT_EXTRACTION_CONFIDENCE;
+  if (raw < 0) return 0;
+  if (raw > 1) return 1;
+  return raw;
+}
+
+/**
  * Parse the LLM response into structured facts.
  */
-function parseFactsResponse(response: string): ExtractedFact[] {
+export function parseFactsResponse(response: string): ExtractedFact[] {
   // Strip markdown code fences if present
   let cleaned = response.trim();
   if (cleaned.startsWith('```')) {
@@ -164,7 +249,16 @@ function parseFactsResponse(response: string): ExtractedFact[] {
         const action = validActions.includes(String(fact.action) as ExtractionAction)
           ? (String(fact.action) as ExtractionAction)
           : 'ADD'; // Default to ADD for backward compatibility
-        return {
+
+        let entities: ExtractedEntity[] | undefined;
+        if (Array.isArray(fact.entities)) {
+          const validEntities = fact.entities
+            .map(parseEntity)
+            .filter((e): e is ExtractedEntity => e !== null);
+          if (validEntities.length > 0) entities = validEntities;
+        }
+
+        const result: ExtractedFact = {
           text: String(fact.text).slice(0, 512),
           type: (['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'].includes(String(fact.type))
             ? String(fact.type)
@@ -172,7 +266,10 @@ function parseFactsResponse(response: string): ExtractedFact[] {
           importance: Math.max(1, Math.min(10, Number(fact.importance) || 5)),
           action,
           existingFactId: typeof fact.existingFactId === 'string' ? fact.existingFactId : undefined,
+          confidence: normalizeConfidence(fact.confidence),
         };
+        if (entities) result.entities = entities;
+        return result;
       })
       .filter((f) => f.importance >= 6 || f.action === 'DELETE'); // DELETE actions pass regardless of importance
   } catch {

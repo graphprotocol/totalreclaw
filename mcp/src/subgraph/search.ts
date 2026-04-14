@@ -389,3 +389,48 @@ export async function getOwnerFactCount(
 
   return total;
 }
+
+/** Fetch a single fact by its ID (the client-generated UUID). Returns null if not found or inactive. */
+export async function fetchFactById(
+  owner: string,
+  factId: string,
+  relayUrl?: string,
+  authKeyHex?: string,
+): Promise<SubgraphSearchFact | null> {
+  const effectiveRelayUrl = relayUrl ?? getSubgraphConfig().relayUrl;
+  const subgraphUrl = process.env.TOTALRECLAW_SUBGRAPH_URL || `${effectiveRelayUrl}/v1/subgraph`;
+
+  const query = `
+    query GetFactById($id: ID!) {
+      fact(id: $id) {
+        id
+        owner
+        encryptedBlob
+        encryptedEmbedding
+        decayScore
+        timestamp
+        createdAt
+        isActive
+        contentFp
+        sequenceId
+        version
+      }
+    }
+  `;
+
+  const data = await gqlQuery<{ fact?: (SubgraphSearchFact & { owner: string }) | null }>(
+    subgraphUrl,
+    query,
+    { id: factId },
+    authKeyHex,
+  );
+
+  const fact = data?.fact;
+  if (!fact) return null;
+  if (fact.isActive === false) return null;
+  // Owner check (lowercase compare — subgraph stores bytes lowercase)
+  if (typeof fact.owner === 'string' && fact.owner.toLowerCase() !== owner.toLowerCase()) {
+    return null;
+  }
+  return fact;
+}

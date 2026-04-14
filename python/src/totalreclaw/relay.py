@@ -10,7 +10,25 @@ from typing import Any, Optional
 
 import httpx
 
-DEFAULT_RELAY_URL = "https://api.totalreclaw.xyz"
+_HARDCODED_PRODUCTION_URL = "https://api.totalreclaw.xyz"
+
+
+def _default_relay_url() -> str:
+    """Resolve the default relay URL at call time.
+
+    Respects ``TOTALRECLAW_SERVER_URL`` so tests and dev sessions can pin to
+    staging without editing code. Evaluated at every call (not at import) so
+    env changes after import take effect.
+    """
+    return os.environ.get("TOTALRECLAW_SERVER_URL") or _HARDCODED_PRODUCTION_URL
+
+
+# Backward-compat: preserve the old module attribute as a property-like
+# access via __getattr__ at import would complicate consumers, so we keep
+# it as a constant for direct reads but the client should prefer
+# _default_relay_url(). The constant itself is production to keep existing
+# behavior when no env var is set.
+DEFAULT_RELAY_URL = _default_relay_url()
 
 
 def _detect_client_id() -> str:

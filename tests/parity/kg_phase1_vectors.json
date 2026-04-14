@@ -1,0 +1,216 @@
+{
+  "assemble_digest_from_llm": [
+    {
+      "digest": "{\"version\":0,\"compiled_at\":\"2026-04-16T12:00:00Z\",\"fact_count\":3,\"entity_count\":0,\"contradiction_count\":0,\"identity\":\"You are a Rust dev in Lisbon.\",\"top_claims\":[{\"text\":\"lives in Lisbon\",\"category\":\"fact\",\"confidence\":0.85,\"age\":\"unknown\"},{\"text\":\"prefers PostgreSQL\",\"category\":\"pref\",\"confidence\":0.9,\"age\":\"unknown\"},{\"text\":\"chose Rust over Go for skynet-lite\",\"category\":\"dec\",\"confidence\":0.92,\"age\":\"unknown\"}],\"recent_decisions\":[{\"text\":\"chose Rust over Go for skynet-lite\",\"category\":\"dec\",\"confidence\":0.92,\"age\":\"unknown\"}],\"active_projects\":[\"skynet-lite\"],\"active_contradictions\":0,\"prompt_text\":\"You are a Rust dev in Lisbon.\\n\\nKey facts:\\n- lives in Lisbon\\n- prefers PostgreSQL\\n- chose Rust over Go for skynet-lite\\n\\nRecent decisions:\\n- chose Rust over Go for skynet-lite\\n\\nActive projects: skynet-lite\"}",
+      "input_claims": "[{\"t\":\"lives in Lisbon\",\"c\":\"fact\",\"cf\":0.85,\"i\":5,\"sa\":\"oc\"},{\"t\":\"prefers PostgreSQL\",\"c\":\"pref\",\"cf\":0.9,\"i\":5,\"sa\":\"oc\"},{\"t\":\"chose Rust over Go for skynet-lite\",\"c\":\"dec\",\"cf\":0.92,\"i\":5,\"sa\":\"oc\"}]",
+      "now_unix_seconds": 1776340800,
+      "parsed_response": "{\"identity\":\"You are a Rust dev in Lisbon.\",\"top_claim_indices\":[1,2,3],\"recent_decision_indices\":[3],\"active_project_names\":[\"skynet-lite\"]}"
+    }
+  ],
+  "claim_canonicalization": [
+    {
+      "canonical": "{\"t\":\"hi\",\"c\":\"fact\",\"cf\":0.9,\"i\":5,\"sa\":\"oc\"}",
+      "input": "{\"t\":\"hi\",\"c\":\"fact\",\"cf\":0.9,\"i\":5,\"sa\":\"oc\"}"
+    },
+    {
+      "canonical": "{\"t\":\"hi\",\"c\":\"fact\",\"cf\":0.9,\"i\":5,\"sa\":\"oc\"}",
+      "input": "{\"sa\":\"oc\",\"i\":5,\"cf\":0.9,\"c\":\"fact\",\"t\":\"hi\"}"
+    },
+    {
+      "canonical": "{\"t\":\"hi\",\"c\":\"fact\",\"cf\":0.9,\"i\":5,\"sa\":\"oc\"}",
+      "input": "{\"t\":\"hi\",\"c\":\"fact\",\"cf\":0.9,\"i\":5,\"sa\":\"oc\",\"st\":\"a\"}"
+    },
+    {
+      "canonical": "{\"t\":\"hi\",\"c\":\"fact\",\"cf\":0.9,\"i\":5,\"sa\":\"oc\"}",
+      "input": "{\"t\":\"hi\",\"c\":\"fact\",\"cf\":0.9,\"i\":5,\"sa\":\"oc\",\"cc\":1}"
+    },
+    {
+      "canonical": "{\"t\":\"old fact\",\"c\":\"fact\",\"cf\":0.8,\"i\":4,\"sa\":\"oc\",\"st\":\"s\"}",
+      "input": "{\"t\":\"old fact\",\"c\":\"fact\",\"cf\":0.8,\"i\":4,\"sa\":\"oc\",\"st\":\"s\"}"
+    },
+    {
+      "canonical": "{\"t\":\"x\",\"c\":\"pref\",\"cf\":0.9,\"i\":7,\"cc\":3,\"sa\":\"oc\"}",
+      "input": "{\"t\":\"x\",\"c\":\"pref\",\"cf\":0.9,\"i\":7,\"sa\":\"oc\",\"cc\":3}"
+    },
+    {
+      "canonical": "{\"t\":\"prefers PostgreSQL\",\"c\":\"pref\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"e\":[{\"n\":\"PostgreSQL\",\"tp\":\"tool\"}]}",
+      "input": "{\"e\":[{\"tp\":\"tool\",\"n\":\"PostgreSQL\"}],\"sa\":\"oc\",\"t\":\"prefers PostgreSQL\",\"i\":8,\"cf\":0.9,\"c\":\"pref\"}"
+    },
+    {
+      "canonical": "{\"t\":\"Pedro chose PostgreSQL\",\"c\":\"dec\",\"cf\":0.92,\"i\":9,\"cc\":3,\"sa\":\"openclaw-plugin\",\"sc\":\"conv-abc\",\"ea\":\"2026-04-12T10:00:00Z\",\"e\":[{\"n\":\"Pedro\",\"tp\":\"person\",\"r\":\"chooser\"},{\"n\":\"PostgreSQL\",\"tp\":\"tool\",\"r\":\"chosen\"}],\"sup\":\"0xabc\",\"vf\":\"2026-04-01T00:00:00Z\",\"st\":\"s\"}",
+      "input": "{\"t\":\"Pedro chose PostgreSQL\",\"c\":\"dec\",\"cf\":0.92,\"i\":9,\"cc\":3,\"sa\":\"openclaw-plugin\",\"sc\":\"conv-abc\",\"ea\":\"2026-04-12T10:00:00Z\",\"e\":[{\"n\":\"Pedro\",\"tp\":\"person\",\"r\":\"chooser\"},{\"n\":\"PostgreSQL\",\"tp\":\"tool\",\"r\":\"chosen\"}],\"sup\":\"0xabc\",\"vf\":\"2026-04-01T00:00:00Z\",\"st\":\"s\"}"
+    }
+  ],
+  "digest_prompt": [
+    {
+      "input_claims": "[{\"t\":\"prefers PostgreSQL\",\"c\":\"pref\",\"cf\":0.9,\"i\":5,\"sa\":\"oc\"}]",
+      "prompt": "You are compiling a knowledge digest for a user from their extracted memory claims.\nYour output will be injected into future AI agent conversations as identity context,\nso it must be accurate, concise, and first-person (\"you are...\").\n\nHere are the active claims:\n\n[1] (preference, conf 0.90, unknown) prefers PostgreSQL\n\nProduce a JSON object with this exact schema. Return ONLY the JSON, no markdown fences.\n\n{\n  \"identity\": \"a 1-2 sentence description of the user in second person. e.g. 'You are a software engineer in Lisbon working at Acme Corp on skynet-lite.'\",\n  \"top_claim_indices\": [1, 5, 3],\n  \"recent_decision_indices\": [2, 8],\n  \"active_project_names\": [\"skynet-lite\"]\n}\n\nRules:\n- identity must be in second person (\"You are...\")\n- Prefer claims that describe ongoing state (preferences, roles, projects) over one-off facts\n- Top claims should cover: role, location, employer, current projects, key preferences, recent decisions\n- If there are fewer than 10 active claims, return fewer indices\n- Indices are 1-based, matching the [N] markers above\n- Never invent information not in the claims"
+    },
+    {
+      "input_claims": "[{\"t\":\"lives in Lisbon\",\"c\":\"fact\",\"cf\":0.85,\"i\":5,\"sa\":\"oc\"},{\"t\":\"prefers PostgreSQL\",\"c\":\"pref\",\"cf\":0.9,\"i\":5,\"sa\":\"oc\"},{\"t\":\"chose Rust over Go for skynet-lite\",\"c\":\"dec\",\"cf\":0.92,\"i\":5,\"sa\":\"oc\"}]",
+      "prompt": "You are compiling a knowledge digest for a user from their extracted memory claims.\nYour output will be injected into future AI agent conversations as identity context,\nso it must be accurate, concise, and first-person (\"you are...\").\n\nHere are the active claims:\n\n[1] (fact, conf 0.85, unknown) lives in Lisbon\n[2] (preference, conf 0.90, unknown) prefers PostgreSQL\n[3] (decision, conf 0.92, unknown) chose Rust over Go for skynet-lite\n\nProduce a JSON object with this exact schema. Return ONLY the JSON, no markdown fences.\n\n{\n  \"identity\": \"a 1-2 sentence description of the user in second person. e.g. 'You are a software engineer in Lisbon working at Acme Corp on skynet-lite.'\",\n  \"top_claim_indices\": [1, 5, 3],\n  \"recent_decision_indices\": [2, 8],\n  \"active_project_names\": [\"skynet-lite\"]\n}\n\nRules:\n- identity must be in second person (\"You are...\")\n- Prefer claims that describe ongoing state (preferences, roles, projects) over one-off facts\n- Top claims should cover: role, location, employer, current projects, key preferences, recent decisions\n- If there are fewer than 10 active claims, return fewer indices\n- Indices are 1-based, matching the [N] markers above\n- Never invent information not in the claims"
+    }
+  ],
+  "entity_normalization": [
+    {
+      "entity_id": "ee5cd7d5d96c8874",
+      "input": "Pedro",
+      "normalized": "pedro"
+    },
+    {
+      "entity_id": "ee5cd7d5d96c8874",
+      "input": "  PEDRO  ",
+      "normalized": "pedro"
+    },
+    {
+      "entity_id": "ee5cd7d5d96c8874",
+      "input": "pedro",
+      "normalized": "pedro"
+    },
+    {
+      "entity_id": "324373d862ead39f",
+      "input": "Node.js",
+      "normalized": "node.js"
+    },
+    {
+      "entity_id": "a0105e7bfbc61920",
+      "input": "Node JS",
+      "normalized": "node js"
+    },
+    {
+      "entity_id": "a478b4566be5cb00",
+      "input": "PostgreSQL",
+      "normalized": "postgresql"
+    },
+    {
+      "entity_id": "a478b4566be5cb00",
+      "input": "postgreSQL",
+      "normalized": "postgresql"
+    },
+    {
+      "entity_id": "d994e1d001886fe5",
+      "input": "José",
+      "normalized": "josé"
+    },
+    {
+      "entity_id": "d994e1d001886fe5",
+      "input": "José",
+      "normalized": "josé"
+    },
+    {
+      "entity_id": "f80a52b06d67b576",
+      "input": "skynet-lite",
+      "normalized": "skynet-lite"
+    },
+    {
+      "entity_id": "bd732730bd39834d",
+      "input": "New York",
+      "normalized": "new york"
+    },
+    {
+      "entity_id": "e3b0c44298fc1c14",
+      "input": "",
+      "normalized": ""
+    },
+    {
+      "entity_id": "e3b0c44298fc1c14",
+      "input": "   \t\n   ",
+      "normalized": ""
+    },
+    {
+      "entity_id": "afcb46f4d2f80ee0",
+      "input": "PostgréSQL",
+      "normalized": "postgrésql"
+    },
+    {
+      "entity_id": "afcb46f4d2f80ee0",
+      "input": "PostgréSQL",
+      "normalized": "postgrésql"
+    },
+    {
+      "entity_id": "4821a4b9377aac24",
+      "input": "Emoji 🚀 project",
+      "normalized": "emoji 🚀 project"
+    },
+    {
+      "entity_id": "fbc1a9f858ea9e17",
+      "input": "Foo\t\nBar",
+      "normalized": "foo bar"
+    }
+  ],
+  "legacy_parser": [
+    {
+      "input": "{\"t\":\"prefers PostgreSQL\",\"c\":\"pref\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"e\":[{\"n\":\"PostgreSQL\",\"tp\":\"tool\"}]}",
+      "output": "{\"t\":\"prefers PostgreSQL\",\"c\":\"pref\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"e\":[{\"n\":\"PostgreSQL\",\"tp\":\"tool\"}]}"
+    },
+    {
+      "input": "{\"text\":\"prefers PostgreSQL\",\"metadata\":{\"type\":\"preference\",\"importance\":0.9,\"source\":\"auto-extraction\",\"created_at\":\"2026-03-01T00:00:00Z\"}}",
+      "output": "{\"t\":\"prefers PostgreSQL\",\"c\":\"fact\",\"cf\":0.7,\"i\":5,\"sa\":\"auto-extraction\"}"
+    },
+    {
+      "input": "{\"text\":\"lives in Lisbon\"}",
+      "output": "{\"t\":\"lives in Lisbon\",\"c\":\"fact\",\"cf\":0.7,\"i\":5,\"sa\":\"unknown\"}"
+    },
+    {
+      "input": "{\"t\":\"hello\",\"a\":\"oc\",\"s\":\"extract\"}",
+      "output": "{\"t\":\"hello\",\"c\":\"fact\",\"cf\":0.7,\"i\":5,\"sa\":\"oc\"}"
+    },
+    {
+      "input": "\"just text\"",
+      "output": "{\"t\":\"just text\",\"c\":\"fact\",\"cf\":0.7,\"i\":5,\"sa\":\"unknown\"}"
+    },
+    {
+      "input": "hello world",
+      "output": "{\"t\":\"hello world\",\"c\":\"fact\",\"cf\":0.7,\"i\":5,\"sa\":\"unknown\"}"
+    },
+    {
+      "input": "{not valid json",
+      "output": "{\"t\":\"{not valid json\",\"c\":\"fact\",\"cf\":0.7,\"i\":5,\"sa\":\"unknown\"}"
+    },
+    {
+      "input": "{\"a\":\"oc\"}",
+      "output": "{\"t\":\"{\\\"a\\\":\\\"oc\\\"}\",\"c\":\"fact\",\"cf\":0.7,\"i\":5,\"sa\":\"oc\"}"
+    }
+  ],
+  "meta": {
+    "description": "KG Phase 1 cross-language parity vectors. Rust outputs are canonical.",
+    "now_unix_seconds": 1776340800,
+    "version": 1
+  },
+  "parse_digest_response": [
+    {
+      "input": "{\"identity\":\"You are Pedro, a software engineer in Lisbon.\",\"top_claim_indices\":[1,2,3],\"recent_decision_indices\":[2],\"active_project_names\":[\"skynet-lite\"]}",
+      "output": "{\"identity\":\"You are Pedro, a software engineer in Lisbon.\",\"top_claim_indices\":[1,2,3],\"recent_decision_indices\":[2],\"active_project_names\":[\"skynet-lite\"]}"
+    },
+    {
+      "input": "```json\n{\"identity\":\"You are a Rust developer.\",\"top_claim_indices\":[1],\"recent_decision_indices\":[],\"active_project_names\":[]}\n```",
+      "output": "{\"identity\":\"You are a Rust developer.\",\"top_claim_indices\":[1],\"recent_decision_indices\":[],\"active_project_names\":[]}"
+    },
+    {
+      "input": "{\"identity\":\"You are someone.\"}",
+      "output": "{\"identity\":\"You are someone.\",\"top_claim_indices\":[],\"recent_decision_indices\":[],\"active_project_names\":[]}"
+    }
+  ],
+  "template_digest": [
+    {
+      "digest": "{\"version\":0,\"compiled_at\":\"2026-04-16T12:00:00Z\",\"fact_count\":0,\"entity_count\":0,\"contradiction_count\":0,\"identity\":\"\",\"top_claims\":[],\"recent_decisions\":[],\"active_projects\":[],\"active_contradictions\":0,\"prompt_text\":\"No memories stored yet. I'll learn about you as we chat.\"}",
+      "input_claims": "[]",
+      "now_unix_seconds": 1776340800
+    },
+    {
+      "digest": "{\"version\":1775908800,\"compiled_at\":\"2026-04-16T12:00:00Z\",\"fact_count\":1,\"entity_count\":1,\"contradiction_count\":0,\"identity\":\"\",\"top_claims\":[{\"text\":\"prefers PostgreSQL\",\"category\":\"pref\",\"confidence\":0.9,\"age\":\"5 days ago\"}],\"recent_decisions\":[],\"active_projects\":[],\"active_contradictions\":0,\"prompt_text\":\"Known facts about you:\\n1. prefers PostgreSQL\"}",
+      "input_claims": "[{\"t\":\"prefers PostgreSQL\",\"c\":\"pref\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\",\"e\":[{\"n\":\"PostgreSQL\",\"tp\":\"tool\"}]}]",
+      "now_unix_seconds": 1776340800
+    },
+    {
+      "digest": "{\"version\":1775908800,\"compiled_at\":\"2026-04-16T12:00:00Z\",\"fact_count\":3,\"entity_count\":2,\"contradiction_count\":0,\"identity\":\"\",\"top_claims\":[{\"text\":\"lives in Lisbon\",\"category\":\"fact\",\"confidence\":0.9,\"age\":\"5 days ago\"},{\"text\":\"prefers PostgreSQL\",\"category\":\"pref\",\"confidence\":0.9,\"age\":\"14 days ago\"},{\"text\":\"chose Rust over Go for skynet-lite\",\"category\":\"dec\",\"confidence\":0.9,\"age\":\"1 month ago\"}],\"recent_decisions\":[{\"text\":\"chose Rust over Go for skynet-lite\",\"category\":\"dec\",\"confidence\":0.9,\"age\":\"1 month ago\"}],\"active_projects\":[\"skynet-lite\"],\"active_contradictions\":0,\"prompt_text\":\"Known facts about you:\\n1. lives in Lisbon\\n2. prefers PostgreSQL\\n3. chose Rust over Go for skynet-lite\\n\\nRecent decisions:\\n- chose Rust over Go for skynet-lite\\n\\nActive projects: skynet-lite\"}",
+      "input_claims": "[{\"t\":\"lives in Lisbon\",\"c\":\"fact\",\"cf\":0.9,\"i\":7,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\"},{\"t\":\"prefers PostgreSQL\",\"c\":\"pref\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-02T12:00:00Z\",\"e\":[{\"n\":\"PostgreSQL\",\"tp\":\"tool\"}]},{\"t\":\"chose Rust over Go for skynet-lite\",\"c\":\"dec\",\"cf\":0.9,\"i\":9,\"sa\":\"oc\",\"ea\":\"2026-03-13T12:00:00Z\",\"e\":[{\"n\":\"skynet-lite\",\"tp\":\"project\"}]}]",
+      "now_unix_seconds": 1776340800
+    },
+    {
+      "digest": "{\"version\":1775908800,\"compiled_at\":\"2026-04-16T12:00:00Z\",\"fact_count\":12,\"entity_count\":0,\"contradiction_count\":0,\"identity\":\"\",\"top_claims\":[{\"text\":\"fact number 0\",\"category\":\"fact\",\"confidence\":0.9,\"age\":\"5 days ago\"},{\"text\":\"fact number 1\",\"category\":\"fact\",\"confidence\":0.9,\"age\":\"5 days ago\"},{\"text\":\"fact number 2\",\"category\":\"fact\",\"confidence\":0.9,\"age\":\"5 days ago\"},{\"text\":\"fact number 3\",\"category\":\"fact\",\"confidence\":0.9,\"age\":\"5 days ago\"},{\"text\":\"fact number 4\",\"category\":\"fact\",\"confidence\":0.9,\"age\":\"5 days ago\"},{\"text\":\"fact number 5\",\"category\":\"fact\",\"confidence\":0.9,\"age\":\"5 days ago\"},{\"text\":\"fact number 6\",\"category\":\"fact\",\"confidence\":0.9,\"age\":\"5 days ago\"},{\"text\":\"fact number 7\",\"category\":\"fact\",\"confidence\":0.9,\"age\":\"5 days ago\"},{\"text\":\"fact number 8\",\"category\":\"fact\",\"confidence\":0.9,\"age\":\"5 days ago\"},{\"text\":\"fact number 9\",\"category\":\"fact\",\"confidence\":0.9,\"age\":\"5 days ago\"}],\"recent_decisions\":[],\"active_projects\":[],\"active_contradictions\":0,\"prompt_text\":\"Known facts about you:\\n1. fact number 0\\n2. fact number 1\\n3. fact number 2\\n4. fact number 3\\n5. fact number 4\\n6. fact number 5\\n7. fact number 6\\n8. fact number 7\\n9. fact number 8\\n10. fact number 9\"}",
+      "input_claims": "[{\"t\":\"fact number 0\",\"c\":\"fact\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\"},{\"t\":\"fact number 1\",\"c\":\"fact\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\"},{\"t\":\"fact number 2\",\"c\":\"fact\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\"},{\"t\":\"fact number 3\",\"c\":\"fact\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\"},{\"t\":\"fact number 4\",\"c\":\"fact\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\"},{\"t\":\"fact number 5\",\"c\":\"fact\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\"},{\"t\":\"fact number 6\",\"c\":\"fact\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\"},{\"t\":\"fact number 7\",\"c\":\"fact\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\"},{\"t\":\"fact number 8\",\"c\":\"fact\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\"},{\"t\":\"fact number 9\",\"c\":\"fact\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\"},{\"t\":\"fact number 10\",\"c\":\"fact\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\"},{\"t\":\"fact number 11\",\"c\":\"fact\",\"cf\":0.9,\"i\":8,\"sa\":\"oc\",\"ea\":\"2026-04-11T12:00:00Z\"}]",
+      "now_unix_seconds": 1776340800
+    }
+  ]
+}

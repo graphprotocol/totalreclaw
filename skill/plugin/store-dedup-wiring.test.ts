@@ -20,10 +20,11 @@ import {
   STORE_DEDUP_MAX_CANDIDATES,
 } from './consolidation.js';
 import type { DecryptedCandidate } from './consolidation.js';
+import { parseEntity, type ExtractedEntity } from './extractor.js';
 
 let passed = 0;
 let failed = 0;
-const total = 18;
+const total = 23;
 
 function assert(condition: boolean, name: string): void {
   if (condition) {
@@ -93,12 +94,59 @@ console.log(`1..${total}`);
   assert(action === 'supersede', 'auto-extract: supersedes on equal importance (newer wins)');
 }
 
-// Scenario 6: Explicit remember always supersedes regardless of importance
+// Scenario 6: Explicit remember routes through storeExtractedFacts (Phase 2 fix)
 {
-  const existing = makeCandidate('critical', 'Critical existing', [1, 0, 0, 0], 10, 10);
-  // For explicit remember: we don't call shouldSupersede, we always supersede
-  // This documents the design: explicit remember = user intent, always honor it
-  assert(true, 'explicit-remember: always supersedes (by design, no shouldSupersede call)');
+  // Historic design (pre-2026-04-14): totalreclaw_remember had its own inline
+  // dedup path that always superseded, bypassing Phase 2 contradiction detection
+  // and storing legacy {text, metadata} blobs instead of canonical Claims.
+  //
+  // New design: the tool execute handler builds an ExtractedFact with
+  // action='ADD', confidence=1.0, importance=8, and calls storeExtractedFacts
+  // with source='explicit'. This routes through canonical Claim construction,
+  // entity trapdoor generation, store-time cosine dedup, AND Phase 2
+  // contradiction detection + auto-resolution — the exact same pipeline
+  // auto-extraction uses.
+  //
+  // Store-time shouldSupersede is still called in the path, but now with the
+  // explicit remember's importance=8 (above auto-extraction's typical 6-7),
+  // so an explicit remember wins over a weaker auto-extracted collision.
+  const weakerExisting = makeCandidate('auto', 'Auto-extracted fact', [1, 0, 0, 0], 6, 6);
+  assert(
+    shouldSupersede(8, weakerExisting) === 'supersede',
+    'explicit-remember: higher importance (8) supersedes weaker existing (6)',
+  );
+
+  const strongerExisting = makeCandidate('strong', 'Strong existing', [1, 0, 0, 0], 10, 10);
+  assert(
+    shouldSupersede(8, strongerExisting) === 'skip',
+    'explicit-remember: correctly skipped when existing is stronger (10 > 8)',
+  );
+}
+
+// Scenario 6b: parseEntity exported from extractor (regression guard for
+// the totalreclaw_remember → storeExtractedFacts wiring fix).
+//
+// The tool handler uses parseEntity to validate the optional `entities` tool
+// parameter before building the synthetic ExtractedFact. If this export
+// regresses, the tool silently drops all user-supplied entities and Phase 2
+// contradiction detection cannot run against the new claim.
+{
+  const validToolParam = { name: 'PostgreSQL', type: 'tool', role: 'primary OLTP store' };
+  const parsed = parseEntity(validToolParam);
+  assert(
+    parsed !== null && parsed.name === 'PostgreSQL' && parsed.type === 'tool',
+    'parseEntity: accepts valid {name, type, role}',
+  );
+  assert(
+    parsed?.role === 'primary OLTP store',
+    'parseEntity: preserves role field',
+  );
+
+  const missingName = parseEntity({ type: 'tool' });
+  assert(missingName === null, 'parseEntity: rejects when name is missing');
+
+  const invalidType = parseEntity({ name: 'foo', type: 'not-a-valid-type' });
+  assert(invalidType === null, 'parseEntity: rejects unknown entity type');
 }
 
 // Scenario 7: Importance inheritance — max(new, existing)
