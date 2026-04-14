@@ -38,9 +38,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: dtolnay/rust-toolchain@stable
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Build totalreclaw_core wheel from local source
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: rust/totalreclaw-core
+          args: --release --features python-extension --out dist -i python3.12
+
+      - name: Install local totalreclaw_core wheel
+        run: pip install --force-reinstall rust/totalreclaw-core/dist/totalreclaw_core-*.whl
 
       - name: Install and test
         run: |
