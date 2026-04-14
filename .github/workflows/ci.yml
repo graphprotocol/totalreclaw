@@ -84,7 +84,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           working-directory: rust/totalreclaw-core
-          args: build --release --features python-extension --out dist -i python3.12
+          args: --release --features python-extension --out dist -i python3.12
       - name: Install local totalreclaw_core wheel
         run: pip install --force-reinstall rust/totalreclaw-core/dist/totalreclaw_core-*.whl
       - name: Install and test
