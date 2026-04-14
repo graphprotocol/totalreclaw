@@ -125,7 +125,7 @@ jobs:
 
       - uses: jetli/wasm-pack-action@v0.4.0
 
-      - name: Build @totalreclaw/core (WASM) for file: dep
+      - name: "Build @totalreclaw/core (WASM) for file: dep"
         run: |
           cd rust/totalreclaw-core
           wasm-pack build --target nodejs --out-dir pkg --features wasm
