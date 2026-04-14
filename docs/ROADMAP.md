@@ -477,30 +477,43 @@ Replace blind per-chunk fact extraction with a profiling-first approach. The imp
 
 ---
 
-## Phase 6: Cross-Agent Knowledge Graph Platform — DESIGN COMPLETE
+## Phase 6: Cross-Agent Knowledge Graph Platform — PHASE 1+2 IMPLEMENTED (on `phase-1-knowledge-graph` branch, not yet merged)
 
 **Goal:** Transform TotalReclaw from an encrypted memory vault into the identity layer for AI agents — a portable, encrypted knowledge graph that makes users ONE person across ALL their agents.
 
 **Full spec:** `totalreclaw-internal/docs/plans/2026-04-12-cross-agent-knowledge-graph.md`
 
-### 6.1 Structured Claims + Digest (Phase 1, ~4-6 weeks) — NOT STARTED
+**Status as of 2026-04-14:** Phases 6.1 and 6.2 are implemented and validated end-to-end on the VPS via `/qa-totalreclaw`. Branch `phase-1-knowledge-graph` contains the full implementation plus three post-QA fixes at commit `7fcafb8`. Not yet merged to `main`, not yet published. Four follow-up items (Phase 2.1 pin-on-tombstone fix, 2.2 rule memory type, 2.3 compaction-aware extraction, 2.4 OpenClaw Wiki bridge) are specced at `totalreclaw-internal/docs/plans/2026-04-14-phase-2-followup-implementation.md` and deferred to a fresh implementation session after the merge+publish of Phase 1+2.
 
-Replace flat facts with structured claims (confidence, entities, provenance, temporal chain). Compile a coherent ~400-token digest for prompt injection instead of injecting individual facts.
+### 6.1 Structured Claims + Digest (Phase 1) — IMPLEMENTED
 
-- Claim struct wraps existing extracted facts with metadata
-- Entity extraction on write path (pure functions in core module)
+Replaces flat facts with structured claims (confidence, entities, provenance, temporal chain). Compiles a coherent ~400-token digest for prompt injection instead of injecting individual facts.
+
+- Claim struct wraps extracted facts with metadata (`@totalreclaw/core` Rust WASM, parity across TS/Python/Rust)
+- Entity extraction on write path via LLM (`EXTRACTION_SYSTEM_PROMPT` extended with entity guidance + specificity rules)
 - Entity trapdoors in blind indices for entity-specific search
-- Digest compilation (LLM-assisted identity summary, cached as special claim)
-- Backward compatible: old facts are valid claims with default metadata
+- Digest compilation (LLM-assisted identity summary, cached as special claim with `DIGEST_TRAPDOOR`)
+- Backward compatible: legacy `{text, metadata}` doc blobs are valid claims via `parse_claim_or_legacy`
+- Integrated across OpenClaw plugin, MCP server, Hermes (Python), NanoClaw
 
-### 6.2 Cross-Agent Contradiction Detection (~2-3 weeks) — NOT STARTED
+### 6.2 Cross-Agent Contradiction Detection (Phase 2) — IMPLEMENTED
 
-Detect and auto-resolve conflicts when different agents store conflicting facts. Unique capability — no single-agent system can do this.
+Detects and auto-resolves conflicts when different agents store conflicting facts. Unique capability — no single-agent system can do this.
 
-- Compare new claims against existing ones for same entity + category
-- Auto-resolve clear winners (recency + corroboration + confidence scoring)
-- Surface unresolved contradictions in digest
-- `totalreclaw_contradictions` tool for manual resolution
+- Compares new claims against existing ones for same entity + category via `collectCandidatesForEntities` + `resolveWithCore` (Rust WASM)
+- Auto-resolves clear winners via scoring formula (`confidence + corroboration + recency + validation`)
+- **Tie-zone guard** (`TIE_ZONE_SCORE_TOLERANCE = 0.01`): supersede decisions with score gaps under 1% are reclassified as `tie_leave_both` audit rows instead of tombstoning. Prevents false positives on complementary tech (Postgres for OLTP + DuckDB for OLAP).
+- `totalreclaw_pin` and `totalreclaw_unpin` tools for user overrides
+- `decisions.jsonl` audit log for every resolution (supersede_existing, skip_new, tie_leave_both, shadow)
+- Shadow mode via `TOTALRECLAW_AUTO_RESOLVE_MODE=shadow` for observer-only validation
+- All explicit `totalreclaw_remember` tool calls route through the same canonical Claim + contradiction pipeline as auto-extraction (Phase 2 wiring fix — see CHANGELOG 2026-04-14)
+
+**Known gaps deferred to Phase 2.1-2.4** (see `totalreclaw-internal/docs/plans/2026-04-14-phase-2-followup-implementation.md`):
+
+- **Phase 2.1**: Pin tool cannot decrypt tombstoned claims (`crypto error: Encrypted data too short`), making `feedback.jsonl` / weight-tuning loop structurally unreachable. Fix: carry `loser_claim_json` in `decisions.jsonl` row at decision time so pin tool can recover plaintext without decrypting the `0x00` blob. ~2-3 hours.
+- **Phase 2.2**: Add `rule` memory type (8th category) for operational rules / gotchas / debugging shortcuts — a class the current 7-type extraction pipeline under-captures. ~30 min + tests.
+- **Phase 2.3**: Replace the generic extraction prompt in the `before_compaction` hook with a compaction-specialized, format-agnostic prompt that treats bullet lists OR prose summaries as pre-distilled candidates. Uses a lower importance threshold (5 vs 6) since compaction is the last chance to extract before context is lost. ~2-4 hours.
+- **Phase 2.4**: OpenClaw Wiki bridge — file watcher at `~/.openclaw/workspace/wiki/` that ingests Wiki entries as canonical Claims with `source='openclaw-wiki'`, running them through the same Phase 2 pipeline. ~1-2 days. OpenClaw-specific.
 
 ### 6.3 Memory Browser (~3-4 weeks) — NOT STARTED
 
