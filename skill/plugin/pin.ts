@@ -2,7 +2,11 @@
 
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
-import { maybeWriteFeedbackForPin, type ContradictionLogger } from './contradiction-sync.js';
+import {
+  findLoserClaimInDecisionLog,
+  maybeWriteFeedbackForPin,
+  type ContradictionLogger,
+} from './contradiction-sync.js';
 import type { SubgraphSearchFact } from './subgraph-search.js';
 
 // Lazy-load WASM core (mirrors claims-helper.ts pattern — plays nicely under
@@ -210,17 +214,57 @@ export async function executePinOperation(
     ? existing.encryptedBlob.slice(2)
     : existing.encryptedBlob;
   let plaintext: string;
+  let recoveredFromDecisionLog = false;
   try {
     plaintext = deps.decryptBlob(blobHex);
   } catch (err) {
-    return {
-      success: false,
-      fact_id: factId,
-      error: `Failed to decrypt fact: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    // Phase 2.1 recovery path: if the on-chain blob is a tombstone (1-byte
+    // `0x00` written by an auto-resolved supersede), the cipher will fail
+    // because the ciphertext is shorter than the auth tag. Fall back to the
+    // canonical Claim JSON we stashed in `decisions.jsonl` at supersede time.
+    // Without this fallback, the user can never override an auto-resolution
+    // and the weight-tuning loop never receives gradient signal.
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const looksLikeTombstone =
+      blobHex === '00' ||
+      blobHex === '' ||
+      errMsg.includes('Encrypted data too short') ||
+      errMsg.includes('too short') ||
+      errMsg.includes('Cipher');
+    if (!looksLikeTombstone) {
+      return {
+        success: false,
+        fact_id: factId,
+        error: `Failed to decrypt fact: ${errMsg}`,
+      };
+    }
+    const recovered = findLoserClaimInDecisionLog(factId);
+    if (!recovered) {
+      return {
+        success: false,
+        fact_id: factId,
+        error:
+          `Failed to decrypt fact and no recovery row in decisions.jsonl: ${errMsg}. ` +
+          'The fact may have been tombstoned by an auto-resolution that predates Phase 2.1 ' +
+          '(when loser_claim_json was added to the decision log).',
+      };
+    }
+    plaintext = recovered;
+    recoveredFromDecisionLog = true;
+    deps.logger?.info?.(
+      `pin: recovered loser claim from decisions.jsonl for ${factId.slice(0, 10)}…`,
+    );
   }
 
   const parsed = parseBlobForPin(plaintext);
+  // Recovered claims always represent a fact the user is trying to override —
+  // never short-circuit the operation as idempotent because the `st` field on
+  // the recovered loser was whatever the original auto-resolution stored
+  // (typically active). Drop the previous status so the targetStatus check
+  // below produces a real on-chain write.
+  if (recoveredFromDecisionLog) {
+    parsed.currentStatus = 'active';
+  }
 
   // 3. Idempotent early-exit
   if (parsed.currentStatus === targetStatus) {

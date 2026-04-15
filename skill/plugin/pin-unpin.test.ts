@@ -781,6 +781,203 @@ async function runTests(): Promise<void> {
     );
   }
 
+  // ── Phase 2.1: pin-on-tombstone recovery via decisions.jsonl ──────────────
+
+  // Pin a tombstoned fact id: decryptBlob throws "Encrypted data too short",
+  // recovery from decisions.jsonl succeeds, the pin completes normally.
+  {
+    clearLogs();
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+
+    // Seed the on-chain "fact" with a 1-byte tombstone blob.
+    const tombstonedFact: SubgraphSearchFact = {
+      id: 'tombstoned-vim',
+      encryptedBlob: '00',
+      encryptedEmbedding: null,
+      decayScore: '0',
+      timestamp: '1700000000',
+      isActive: true, // subgraph still returns it by id
+    };
+    state.facts.set('tombstoned-vim', {
+      blobPlain: '',
+      hexBlob: '00',
+      fact: tombstonedFact,
+    });
+
+    // Seed a matching supersede row in decisions.jsonl carrying the loser
+    // canonical Claim JSON. This is what the auto-resolver writes at decision
+    // time per Phase 2.1.
+    const loserClaim = {
+      t: 'I use Neovim as my primary editor for everything',
+      c: 'pref',
+      cf: 0.95,
+      i: 8,
+      sa: 'auto-extraction',
+      ea: '2025-12-01T00:00:00Z',
+      e: [
+        { n: 'editor', tp: 'concept' },
+        { n: 'Neovim', tp: 'tool' },
+      ],
+    };
+    const decision: DecisionLogEntry = {
+      ts: 1_777_000_000,
+      entity_id: 'editor',
+      new_claim_id: 'new-vscode-id',
+      existing_claim_id: 'tombstoned-vim',
+      similarity: 0.55,
+      action: 'supersede_existing',
+      reason: 'new_wins',
+      winner_score: 0.91,
+      loser_score: 0.74,
+      winner_components: sampleComponents(0.91),
+      loser_components: sampleComponents(0.74),
+      loser_claim_json: JSON.stringify(loserClaim),
+      mode: 'active',
+    };
+    await appendDecisionLog(decision);
+
+    // Stub decryptBlob: throw on '00' (real cipher fails the same way), pass
+    // through valid hex blobs.
+    const recoveryInfos: string[] = [];
+    const deps = makeDeps(state, {
+      decryptBlob: (hex: string) => {
+        if (hex === '00' || hex === '') {
+          throw new Error('Encrypted data too short');
+        }
+        return Buffer.from(hex.startsWith('0x') ? hex.slice(2) : hex, 'hex').toString('utf8');
+      },
+      logger: {
+        info: (m: string) => recoveryInfos.push(m),
+        warn: () => undefined,
+      },
+    });
+
+    const result = await executePinOperation('tombstoned-vim', 'pinned', deps, 'user override');
+    assertEq(result.success, true, 'pin-tombstone: recovery path succeeds');
+    assertEq(result.fact_id, 'tombstoned-vim', 'pin-tombstone: returns original tombstoned id');
+    assertEq(result.previous_status, 'active', 'pin-tombstone: previous_status forced to active after recovery');
+    assertEq(result.new_status, 'pinned', 'pin-tombstone: new_status is pinned');
+    assert(
+      typeof result.new_fact_id === 'string' && result.new_fact_id!.length > 0,
+      'pin-tombstone: a fresh new_fact_id was minted',
+    );
+    assertEq(state.submittedBatches.length, 1, 'pin-tombstone: exactly 1 batch submitted');
+    assertEq(state.submittedBatches[0].length, 2, 'pin-tombstone: batch has tombstone + new payloads');
+
+    // Verify the recovery info log line fired so operators can audit the path.
+    assert(
+      recoveryInfos.some((m) => m.startsWith('pin: recovered loser claim')),
+      'pin-tombstone: info log line announces recovery',
+    );
+
+    // Verify a feedback row was written — this is the whole point of Phase 2.1
+    // (unblocking feedback.jsonl + the weight-tuning loop).
+    const fb = fs.readFileSync(feedbackLogPath(), 'utf-8').trim();
+    assert(fb.length > 0, 'pin-tombstone: feedback.jsonl is non-empty (tuning signal recorded)');
+    const fbRow = JSON.parse(fb.split('\n').filter((l) => l.length > 0)[0]) as FeedbackEntry;
+    assertEq(
+      fbRow.claim_a_id,
+      'tombstoned-vim',
+      'pin-tombstone: feedback row claim_a = recovered loser id',
+    );
+    assertEq(
+      fbRow.user_decision,
+      'pin_a',
+      'pin-tombstone: feedback row user_decision=pin_a',
+    );
+  }
+
+  // Pin a tombstoned fact id with NO matching decisions.jsonl row → returns
+  // a clear error message, does NOT silently succeed.
+  {
+    clearLogs();
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const tombstonedFact: SubgraphSearchFact = {
+      id: 'orphan-tombstone',
+      encryptedBlob: '00',
+      encryptedEmbedding: null,
+      decayScore: '0',
+      timestamp: '1700000000',
+      isActive: true,
+    };
+    state.facts.set('orphan-tombstone', {
+      blobPlain: '',
+      hexBlob: '00',
+      fact: tombstonedFact,
+    });
+
+    // No appendDecisionLog call → empty log file.
+    const deps = makeDeps(state, {
+      decryptBlob: () => {
+        throw new Error('Encrypted data too short');
+      },
+    });
+
+    const result = await executePinOperation('orphan-tombstone', 'pinned', deps);
+    assertEq(result.success, false, 'pin-tombstone-orphan: no recovery → success=false');
+    assert(
+      typeof result.error === 'string' && result.error!.includes('decisions.jsonl'),
+      'pin-tombstone-orphan: error mentions decisions.jsonl recovery path',
+    );
+    assertEq(
+      state.submittedBatches.length,
+      0,
+      'pin-tombstone-orphan: no on-chain submission attempted',
+    );
+  }
+
+  // Non-tombstone decrypt failure (real corruption) → does NOT trigger recovery,
+  // surfaces the original error.
+  {
+    clearLogs();
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const corruptedFact: SubgraphSearchFact = {
+      id: 'corrupted-fact',
+      encryptedBlob: 'cafebabedeadbeef0123456789abcdef',
+      encryptedEmbedding: null,
+      decayScore: '0.8',
+      timestamp: '1700000000',
+      isActive: true,
+    };
+    state.facts.set('corrupted-fact', {
+      blobPlain: '',
+      hexBlob: 'cafebabedeadbeef0123456789abcdef',
+      fact: corruptedFact,
+    });
+
+    // Even if we seed a matching decision row, a non-tombstone-shaped decrypt
+    // failure must NOT take the recovery path — that path is reserved for
+    // tombstoned blobs. Real corruption is a genuine error.
+    await appendDecisionLog({
+      ts: 1_777_000_000,
+      entity_id: 'x',
+      new_claim_id: 'y',
+      existing_claim_id: 'corrupted-fact',
+      similarity: 0.5,
+      action: 'supersede_existing',
+      reason: 'new_wins',
+      loser_claim_json: '{"t":"recovered","c":"pref","cf":0.9,"i":7,"sa":"a","ea":"b"}',
+      mode: 'active',
+    });
+
+    const deps = makeDeps(state, {
+      decryptBlob: () => {
+        throw new Error('AEAD authentication failed');
+      },
+    });
+
+    const result = await executePinOperation('corrupted-fact', 'pinned', deps);
+    assertEq(result.success, false, 'pin-tombstone-real-corruption: success=false');
+    assert(
+      typeof result.error === 'string' && result.error!.includes('AEAD authentication failed'),
+      'pin-tombstone-real-corruption: original decrypt error surfaced',
+    );
+    assert(
+      typeof result.error === 'string' && !result.error!.includes('decisions.jsonl'),
+      'pin-tombstone-real-corruption: error does NOT mention recovery (path not taken)',
+    );
+  }
+
   // Cleanup: remove the temp state dir.
   try { fs.rmSync(TEST_STATE_DIR, { recursive: true, force: true }); } catch {}
 
