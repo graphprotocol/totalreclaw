@@ -242,59 +242,140 @@ export function normalizeConfidence(raw: unknown): number {
 }
 
 /**
- * Parse the LLM response into structured facts.
+ * Minimal logger shape accepted by the extraction pipeline. Matches the
+ * OpenClaw plugin logger so callers can pass `api.logger` directly.
+ *
+ * All methods are optional so tests can pass a partial object and callers
+ * that don't care about observability can omit the argument entirely.
  */
-export function parseFactsResponse(response: string): ExtractedFact[] {
-  // Strip markdown code fences if present
+export interface ExtractorLogger {
+  info?: (msg: string) => void;
+  warn?: (msg: string) => void;
+}
+
+/**
+ * Parse the LLM response into structured facts.
+ *
+ * Hardened in Phase 2.2.5 to handle the three failure modes that previously
+ * caused silent empty returns:
+ *   1. Thinking-model outputs with `<think>...</think>` or `<thinking>...</thinking>`
+ *      prefix — stripped before the JSON parse attempt.
+ *   2. Prose-wrapped JSON ("Here are the facts: [...]") — extracted via a
+ *      greedy regex match on the first/last `[` / `]` pair.
+ *   3. Hard JSON.parse failures — now logged at WARN level with a preview of
+ *      the response so operators can diagnose what the LLM actually produced,
+ *      instead of silently returning an empty array.
+ *
+ * The optional logger parameter is used only for observability; passing `undefined`
+ * restores the legacy silent behavior for any caller that prefers it.
+ */
+export function parseFactsResponse(
+  response: string,
+  logger?: ExtractorLogger,
+): ExtractedFact[] {
+  const originalPreview = response.trim().slice(0, 200);
   let cleaned = response.trim();
+
+  // Phase 2.2.5: strip <think>...</think> and <thinking>...</thinking> tags
+  // before any other cleanup. Thinking models (glm-5/glm-5.1, claude reasoning,
+  // gpt-o1) prefix their output with the reasoning trace; the old parser
+  // handed that straight to JSON.parse and silently returned []. Both tag
+  // variants are matched case-insensitively; nested tags are not supported
+  // but neither are they produced by current models.
+  cleaned = cleaned
+    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '')
+    .trim();
+
+  // Strip markdown code fences if present
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
   }
 
-  try {
-    const parsed = JSON.parse(cleaned);
-    if (!Array.isArray(parsed)) return [];
+  // Phase 2.2.5: if the cleaned output is not pure JSON (e.g. a model wrapped
+  // the array in conversational prose like "Here are the facts: [...]"), try
+  // to extract the JSON array directly via a greedy match on the first/last
+  // bracket pair. This is a best-effort fallback — we still prefer the clean
+  // path above, but it's better to recover than to silently return [].
+  const tryParse = (input: string): unknown => {
+    try {
+      return JSON.parse(input);
+    } catch {
+      return undefined;
+    }
+  };
 
-    return parsed
-      .filter(
-        (f: unknown) =>
-          f &&
-          typeof f === 'object' &&
-          typeof (f as ExtractedFact).text === 'string' &&
-          (f as ExtractedFact).text.length >= 5,
-      )
-      .map((f: unknown) => {
-        const fact = f as Record<string, unknown>;
-        const validActions: ExtractionAction[] = ['ADD', 'UPDATE', 'DELETE', 'NOOP'];
-        const action = validActions.includes(String(fact.action) as ExtractionAction)
-          ? (String(fact.action) as ExtractionAction)
-          : 'ADD'; // Default to ADD for backward compatibility
+  let parsed = tryParse(cleaned);
+  let recoveryUsed: 'none' | 'bracket-scan' = 'none';
+  if (parsed === undefined) {
+    // Fallback: scan for a JSON array anywhere in the cleaned output.
+    const match = cleaned.match(/\[[\s\S]*\]/);
+    if (match) {
+      parsed = tryParse(match[0]);
+      if (parsed !== undefined) recoveryUsed = 'bracket-scan';
+    }
+  }
 
-        let entities: ExtractedEntity[] | undefined;
-        if (Array.isArray(fact.entities)) {
-          const validEntities = fact.entities
-            .map(parseEntity)
-            .filter((e): e is ExtractedEntity => e !== null);
-          if (validEntities.length > 0) entities = validEntities;
-        }
-
-        const result: ExtractedFact = {
-          text: String(fact.text).slice(0, 512),
-          type: (['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary', 'rule'].includes(String(fact.type))
-            ? String(fact.type)
-            : 'fact') as ExtractedFact['type'],
-          importance: Math.max(1, Math.min(10, Number(fact.importance) || 5)),
-          action,
-          existingFactId: typeof fact.existingFactId === 'string' ? fact.existingFactId : undefined,
-          confidence: normalizeConfidence(fact.confidence),
-        };
-        if (entities) result.entities = entities;
-        return result;
-      })
-      .filter((f) => f.importance >= 6 || f.action === 'DELETE'); // DELETE actions pass regardless of importance
-  } catch {
+  if (parsed === undefined) {
+    logger?.warn?.(
+      `parseFactsResponse: could not parse LLM output as JSON. Preview: ${JSON.stringify(
+        originalPreview,
+      )}`,
+    );
     return [];
   }
+
+  if (recoveryUsed === 'bracket-scan') {
+    logger?.info?.(
+      `parseFactsResponse: recovered JSON array via bracket-scan fallback (original had ${cleaned.length - (cleaned.match(/\[[\s\S]*\]/)?.[0].length ?? 0)} bytes of prose wrapper)`,
+    );
+  }
+
+  if (!Array.isArray(parsed)) {
+    logger?.warn?.(
+      `parseFactsResponse: parsed value is not an array (type=${typeof parsed})`,
+    );
+    return [];
+  }
+
+  const facts = (parsed as unknown[])
+    .filter(
+      (f: unknown) =>
+        f &&
+        typeof f === 'object' &&
+        typeof (f as ExtractedFact).text === 'string' &&
+        (f as ExtractedFact).text.length >= 5,
+    )
+    .map((f: unknown) => {
+      const fact = f as Record<string, unknown>;
+      const validActions: ExtractionAction[] = ['ADD', 'UPDATE', 'DELETE', 'NOOP'];
+      const action = validActions.includes(String(fact.action) as ExtractionAction)
+        ? (String(fact.action) as ExtractionAction)
+        : 'ADD'; // Default to ADD for backward compatibility
+
+      let entities: ExtractedEntity[] | undefined;
+      if (Array.isArray(fact.entities)) {
+        const validEntities = fact.entities
+          .map(parseEntity)
+          .filter((e): e is ExtractedEntity => e !== null);
+        if (validEntities.length > 0) entities = validEntities;
+      }
+
+      const result: ExtractedFact = {
+        text: String(fact.text).slice(0, 512),
+        type: (['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary', 'rule'].includes(String(fact.type))
+          ? String(fact.type)
+          : 'fact') as ExtractedFact['type'],
+        importance: Math.max(1, Math.min(10, Number(fact.importance) || 5)),
+        action,
+        existingFactId: typeof fact.existingFactId === 'string' ? fact.existingFactId : undefined,
+        confidence: normalizeConfidence(fact.confidence),
+      };
+      if (entities) result.entities = entities;
+      return result;
+    })
+    .filter((f) => f.importance >= 6 || f.action === 'DELETE'); // DELETE actions pass regardless of importance
+
+  return facts;
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +389,11 @@ export function parseFactsResponse(response: string): ExtractedFact[] {
  * @param mode - 'turn' for agent_end (recent only), 'full' for compaction/reset
  * @param existingMemories - Optional list of existing memories for dedup context
  * @param profileContext - Optional enriched system prompt from smart import (replaces default)
+ * @param logger - Optional logger for Phase 2.2.5 observability. When provided,
+ *                 the function logs why it returned an empty array (no LLM,
+ *                 no messages, chatCompletion threw, parse failed) instead of
+ *                 silently swallowing failures. Pass `api.logger` from the
+ *                 OpenClaw plugin runtime, or omit in tests that don't care.
  * @returns Array of extracted facts, or empty array on failure.
  */
 export async function extractFacts(
@@ -315,16 +401,23 @@ export async function extractFacts(
   mode: 'turn' | 'full',
   existingMemories?: Array<{ id: string; text: string }>,
   profileContext?: string,
+  logger?: ExtractorLogger,
 ): Promise<ExtractedFact[]> {
   const config = resolveLLMConfig();
-  if (!config) return []; // No LLM available
+  if (!config) {
+    logger?.info?.('extractFacts: no LLM config resolved (skipping extraction)');
+    return [];
+  }
 
   // Parse messages
   const parsed = rawMessages
     .map(messageToText)
     .filter((m): m is { role: string; content: string } => m !== null);
 
-  if (parsed.length === 0) return [];
+  if (parsed.length === 0) {
+    logger?.info?.(`extractFacts: no parseable messages (raw count=${rawMessages.length})`);
+    return [];
+  }
 
   // For 'turn' mode, only look at last 6 messages (3 turns)
   // For 'full' mode, use all messages but truncate to fit token budget
@@ -333,7 +426,12 @@ export async function extractFacts(
   // Truncate to ~3000 tokens worth of text
   const conversationText = truncateMessages(relevantMessages, 12_000);
 
-  if (conversationText.length < 20) return [];
+  if (conversationText.length < 20) {
+    logger?.info?.(
+      `extractFacts: conversation too short (${conversationText.length} chars < 20, parsed=${parsed.length}, mode=${mode})`,
+    );
+    return [];
+  }
 
   // Build existing memories context if available
   let memoriesContext = '';
@@ -352,18 +450,27 @@ export async function extractFacts(
   // Use enriched system prompt from smart import if provided, otherwise default
   const systemPrompt = profileContext || EXTRACTION_SYSTEM_PROMPT;
 
+  let response: string | null | undefined;
   try {
-    const response = await chatCompletion(config, [
+    response = await chatCompletion(config, [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ]);
-
-    if (!response) return [];
-
-    return parseFactsResponse(response);
-  } catch {
-    return []; // Fail silently -- hooks must never break the agent
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.warn?.(`extractFacts: chatCompletion threw: ${msg}`);
+    return []; // Fail gracefully -- hooks must never break the agent
   }
+
+  if (!response) {
+    logger?.info?.('extractFacts: chatCompletion returned null/empty response');
+    return [];
+  }
+
+  logger?.info?.(
+    `extractFacts: LLM returned ${response.length} chars; handing to parseFactsResponse`,
+  );
+  return parseFactsResponse(response, logger);
 }
 
 // ---------------------------------------------------------------------------

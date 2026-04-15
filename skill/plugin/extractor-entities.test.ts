@@ -239,6 +239,145 @@ function assertEq<T>(actual: T, expected: T, name: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 2.2.5: thinking-tag stripping, prose-wrapper recovery, observability
+// ---------------------------------------------------------------------------
+
+function makeCaptureLogger() {
+  const infos: string[] = [];
+  const warns: string[] = [];
+  return {
+    logger: {
+      info: (m: string) => infos.push(m),
+      warn: (m: string) => warns.push(m),
+    },
+    infos,
+    warns,
+  };
+}
+
+// 2.2.5: strip <think>...</think> prefix produced by thinking models.
+{
+  const raw =
+    '<think>The user mentioned preferring dark mode. I should extract that as a preference with high confidence.</think>\n' +
+    JSON.stringify([
+      { text: 'User prefers dark mode', type: 'preference', importance: 7, action: 'ADD' },
+    ]);
+  const cap = makeCaptureLogger();
+  const facts = parseFactsResponse(raw, cap.logger);
+  assert(facts.length === 1, 'think-tag: still parses 1 fact');
+  assert(facts[0].type === 'preference', 'think-tag: type round-trips');
+  assert(facts[0].text === 'User prefers dark mode', 'think-tag: text round-trips');
+  assert(cap.warns.length === 0, 'think-tag: no parse-error warning');
+}
+
+// 2.2.5: strip <thinking>...</thinking> (longer variant) case-insensitively.
+{
+  const raw =
+    '<THINKING>\nLet me think step by step.\nThe gateway shutdown rule is a classic operational gotcha.\n</THINKING>' +
+    JSON.stringify([
+      {
+        text: 'Stop the gateway before rm -rf to avoid async-flush race',
+        type: 'rule',
+        importance: 8,
+        action: 'ADD',
+      },
+    ]);
+  const cap = makeCaptureLogger();
+  const facts = parseFactsResponse(raw, cap.logger);
+  assert(facts.length === 1, 'thinking-tag uppercase: parses 1 fact');
+  assert(facts[0].type === 'rule', 'thinking-tag uppercase: rule type preserved');
+  assert(cap.warns.length === 0, 'thinking-tag uppercase: no parse-error warning');
+}
+
+// 2.2.5: multi-tag + markdown-fence combo.
+{
+  const raw =
+    '<think>first thought</think>\n' +
+    '<think>second thought</think>\n' +
+    '```json\n' +
+    JSON.stringify([
+      { text: 'The sky is blue on this planet', type: 'fact', importance: 7, action: 'ADD' },
+    ]) +
+    '\n```';
+  const cap = makeCaptureLogger();
+  const facts = parseFactsResponse(raw, cap.logger);
+  assert(facts.length === 1, 'multi-tag + fence: parses');
+  assert(cap.warns.length === 0, 'multi-tag + fence: no parse-error warning');
+}
+
+// 2.2.5: bracket-scan recovery — prose wraps a valid JSON array.
+{
+  const raw =
+    'Here are the extracted facts I found in this conversation:\n\n' +
+    JSON.stringify([
+      { text: 'Always check d.get(errors) on subgraph queries', type: 'rule', importance: 8, action: 'ADD' },
+    ]) +
+    '\n\nLet me know if you want me to add more.';
+  const cap = makeCaptureLogger();
+  const facts = parseFactsResponse(raw, cap.logger);
+  assert(facts.length === 1, 'prose-wrapper: recovered 1 fact via bracket-scan');
+  assert(facts[0].type === 'rule', 'prose-wrapper: rule type preserved');
+  assert(
+    cap.infos.some((m) => m.includes('bracket-scan fallback')),
+    'prose-wrapper: info log announces recovery path',
+  );
+  assert(cap.warns.length === 0, 'prose-wrapper: no parse-error warning on successful recovery');
+}
+
+// 2.2.5: genuine parse failure — logs WARN with preview, returns empty.
+{
+  const raw = 'The model just rambled and never emitted any JSON at all. Nothing to parse here.';
+  const cap = makeCaptureLogger();
+  const facts = parseFactsResponse(raw, cap.logger);
+  assert(facts.length === 0, 'parse-failure: returns empty array');
+  assert(
+    cap.warns.some((m) => m.startsWith('parseFactsResponse: could not parse')),
+    'parse-failure: warn-level log surfaces the failure',
+  );
+  assert(
+    cap.warns.some((m) => m.includes('rambled')),
+    'parse-failure: preview includes actual response content',
+  );
+}
+
+// 2.2.5: legacy silent behavior preserved when no logger is passed.
+{
+  const raw = 'nothing parseable here';
+  const facts = parseFactsResponse(raw); // no logger
+  assert(facts.length === 0, 'no-logger: returns empty array (legacy silent path)');
+}
+
+// 2.2.5: parsed value that is not an array (e.g. LLM returns a single object).
+{
+  const raw = JSON.stringify({ text: 'A single object, not an array', type: 'fact', importance: 7 });
+  const cap = makeCaptureLogger();
+  const facts = parseFactsResponse(raw, cap.logger);
+  assert(facts.length === 0, 'non-array: returns empty');
+  assert(
+    cap.warns.some((m) => m.includes('not an array')),
+    'non-array: warn log mentions type mismatch',
+  );
+}
+
+// 2.2.5: thinking tag that wraps WITHOUT closing — should not break the parser.
+// (Some models emit malformed tags when they hit a token limit.)
+{
+  const raw =
+    '<think>unterminated reasoning that goes on forever but eventually' +
+    JSON.stringify([
+      { text: 'Fallback content that should still extract', type: 'fact', importance: 7, action: 'ADD' },
+    ]);
+  const cap = makeCaptureLogger();
+  const facts = parseFactsResponse(raw, cap.logger);
+  // Unclosed think tag won't match the strip regex; we rely on bracket-scan fallback.
+  assert(facts.length === 1, 'unclosed-think: bracket-scan fallback recovers the JSON');
+  assert(
+    cap.infos.some((m) => m.includes('bracket-scan')),
+    'unclosed-think: info log announces recovery',
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 
