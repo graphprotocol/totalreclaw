@@ -121,6 +121,21 @@ export interface DecisionLogEntry {
   winner_components?: ScoreComponents;
   /** Per-component score breakdown for the formula loser. See winner_components. */
   loser_components?: ScoreComponents;
+  /**
+   * Full canonical Claim JSON for the formula loser (the existing claim that
+   * got tombstoned by `supersede_existing`). Populated only on supersede rows;
+   * `tie_leave_both` and `skip_new` rows leave this undefined.
+   *
+   * Recovery use case: the on-chain blob for a superseded fact becomes a 1-byte
+   * `0x00` tombstone, which is unrecoverable via decryption. When the user later
+   * pins the tombstoned fact id (overriding the auto-resolution), the pin tool
+   * needs the original plaintext to rebuild a canonical Claim. Carrying the
+   * loser JSON here at decision time gives the pin tool a recovery path that
+   * does not depend on a live blob. Without this field, `feedback.jsonl` is
+   * structurally unreachable for the override-after-supersede case, and the
+   * weight-tuning loop never receives gradient signal from real corrections.
+   */
+  loser_claim_json?: string;
   mode: AutoResolveMode;
 }
 
@@ -699,6 +714,17 @@ export async function detectAndResolveContradictions(
   // Append decision log rows. One row per non-trivial decision.
   for (const d of decisions) {
     if (d.action === 'supersede_existing') {
+      // Carry the loser plaintext through so the pin tool can recover from
+      // a tombstoned blob later. See DecisionLogEntry.loser_claim_json doc.
+      // d.existingClaim is the canonical Claim we already decrypted in
+      // collectCandidatesForEntities — serializing here costs ~300-500 bytes
+      // per supersede row.
+      let loserClaimJson: string | undefined;
+      try {
+        loserClaimJson = JSON.stringify(d.existingClaim);
+      } catch {
+        loserClaimJson = undefined;
+      }
       await appendDecisionLog({
         ts: nowUnixSeconds,
         entity_id: d.entityId,
@@ -711,6 +737,7 @@ export async function detectAndResolveContradictions(
         loser_score: d.loserScore,
         winner_components: d.winnerComponents,
         loser_components: d.loserComponents,
+        loser_claim_json: loserClaimJson,
         mode,
       });
     } else if (d.action === 'skip_new') {
@@ -770,8 +797,35 @@ export function feedbackLogPath(): string {
 /** Cap on feedback.jsonl lines; oldest dropped above this. */
 export const FEEDBACK_LOG_MAX_LINES = 10_000;
 
-/** Minimum seconds between consecutive tuning-loop runs (rate limit). */
+/**
+ * Default minimum seconds between consecutive tuning-loop runs.
+ *
+ * Production uses one hour to protect against hot loops during rapid debugging.
+ * QA workflows that need to validate a feedback → weight-tuning cycle in a
+ * single agent session can override this via
+ * `TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS`. The override is
+ * unbounded — set it to 1 if you want every pin to immediately tune.
+ */
 export const TUNING_LOOP_MIN_INTERVAL_SECONDS = 3600;
+
+/**
+ * Read the effective tuning-loop rate-limit interval, honouring the QA override.
+ *
+ * Reads the env var per-call so tests can flip it without module reload.
+ * Returns `TUNING_LOOP_MIN_INTERVAL_SECONDS` if the override is missing,
+ * empty, non-numeric, or negative.
+ */
+export function getTuningLoopMinIntervalSeconds(): number {
+  const raw = process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS;
+  if (raw === undefined || raw === null || raw === '') {
+    return TUNING_LOOP_MIN_INTERVAL_SECONDS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return TUNING_LOOP_MIN_INTERVAL_SECONDS;
+  }
+  return parsed;
+}
 
 /** A single row from feedback.jsonl — matches Rust `FeedbackEntry`. */
 export interface FeedbackEntry {
@@ -816,6 +870,50 @@ export function findDecisionForPin(
     if (!entry.winner_components || !entry.loser_components) continue;
     if (role === 'loser' && entry.existing_claim_id === factId) return entry;
     if (role === 'winner' && entry.new_claim_id === factId) return entry;
+  }
+  return null;
+}
+
+/**
+ * Walk `decisions.jsonl` in reverse and return the most recent canonical Claim
+ * JSON for a fact that was tombstoned by a `supersede_existing` decision.
+ *
+ * Used by the pin tool's recovery path: when `decryptBlob` fails on a
+ * tombstoned (`0x00`) on-chain blob, the pin tool falls back to this lookup
+ * to reconstruct the loser plaintext from the decision log instead of failing
+ * outright. See Phase 2.1 in the implementation plan.
+ *
+ * Reads `decisions.jsonl` synchronously from the active state dir. Returns
+ * null when the log is missing, empty, or has no matching row. Never throws —
+ * the recovery path treats any failure as "no recovery available".
+ *
+ * Only matches `supersede_existing` rows (not `tie_leave_both` or `skip_new`)
+ * because those are the only rows that actually tombstone the existing fact.
+ * Only returns rows that have `loser_claim_json` populated — pre-Phase-2.1
+ * supersede rows do not carry the field and cannot be recovered from.
+ */
+export function findLoserClaimInDecisionLog(factId: string): string | null {
+  let logContent = '';
+  try {
+    logContent = fs.readFileSync(decisionsLogPath(), 'utf-8');
+  } catch {
+    return null;
+  }
+  if (!logContent || logContent.length === 0) return null;
+  const lines = logContent.split('\n').filter((l) => l.length > 0);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let entry: DecisionLogEntry;
+    try {
+      entry = JSON.parse(lines[i]) as DecisionLogEntry;
+    } catch {
+      continue;
+    }
+    if (entry.action !== 'supersede_existing') continue;
+    if (entry.existing_claim_id !== factId) continue;
+    if (typeof entry.loser_claim_json !== 'string' || entry.loser_claim_json.length === 0) {
+      continue;
+    }
+    return entry.loser_claim_json;
   }
   return null;
 }
@@ -959,13 +1057,15 @@ export async function runWeightTuningLoop(
 
   // Rate limit: if the weights file was touched very recently and there is a
   // last_tuning_ts, skip — protects against hot loops during rapid debugging.
+  // QA can lower the interval via TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS.
   const updatedAt = typeof weightsFile.updated_at === 'number' ? weightsFile.updated_at : 0;
   const priorTuningTs =
     typeof weightsFile.last_tuning_ts === 'number' ? weightsFile.last_tuning_ts : 0;
+  const minInterval = getTuningLoopMinIntervalSeconds();
   if (
     priorTuningTs > 0 &&
     updatedAt > 0 &&
-    nowUnixSeconds - updatedAt < TUNING_LOOP_MIN_INTERVAL_SECONDS
+    nowUnixSeconds - updatedAt < minInterval
   ) {
     return {
       processed: 0,

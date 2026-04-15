@@ -20,11 +20,14 @@ import {
   decisionsLogPath,
   detectAndResolveContradictions,
   DecisionLogEntry,
+  findLoserClaimInDecisionLog,
+  getTuningLoopMinIntervalSeconds,
   isPinnedClaim,
   loadWeightsFile,
   parseCandidateClaim,
   resolveWithCore,
   TIE_ZONE_SCORE_TOLERANCE,
+  TUNING_LOOP_MIN_INTERVAL_SECONDS,
   weightsFilePath,
   type CandidateClaim,
   type CanonicalClaim,
@@ -1223,6 +1226,447 @@ function makeVimVsVsCodeCandidate(): CandidateClaim {
 // Tie-zone: TIE_ZONE_SCORE_TOLERANCE is documented at 1% (0.01).
 {
   assert(TIE_ZONE_SCORE_TOLERANCE === 0.01, 'tie-zone: TIE_ZONE_SCORE_TOLERANCE documented at 0.01');
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2.1: loser_claim_json on supersede rows + findLoserClaimInDecisionLog
+// ---------------------------------------------------------------------------
+
+// supersede_existing rows now carry loser_claim_json with the original loser
+// canonical Claim JSON, so the pin tool can recover from a tombstoned blob.
+{
+  const tmp = setupTempStateDir('e2e-loser-json');
+  const originalEnv = process.env.TOTALRECLAW_AUTO_RESOLVE_MODE;
+  delete process.env.TOTALRECLAW_AUTO_RESOLVE_MODE;
+  try {
+    const existingClaim = makeClaim({
+      t: 'I use Vim as my primary editor for everything',
+      c: 'pref',
+      ea: '2025-06-01T00:00:00Z',
+      sa: 'auto-extraction',
+      e: [
+        { n: 'editor', tp: 'concept' },
+        { n: 'Vim', tp: 'tool' },
+      ],
+    });
+    const existingEmb = embed([Math.cos(Math.PI / 4), Math.sin(Math.PI / 4), 0, 0], 8);
+    const trapdoor = computeEntityTrapdoor('editor');
+    const search = fakeSubgraph({
+      [trapdoor]: [
+        {
+          id: 'existing-vim-loser',
+          encryptedBlob: fakeEncrypt(JSON.stringify(existingClaim)),
+          encryptedEmbedding: fakeEncrypt(JSON.stringify(existingEmb)),
+          isActive: true,
+        },
+      ],
+    });
+    const newClaim = makeClaim({
+      t: 'I have switched to VS Code full-time',
+      c: 'pref',
+      ea: '2026-04-10T00:00:00Z',
+      sa: 'totalreclaw_remember',
+    });
+
+    const decisions = await detectAndResolveContradictions({
+      newClaim,
+      newClaimId: 'new-vscode',
+      newEmbedding: embed([1, 0, 0, 0], 8),
+      subgraphOwner: '0xowner',
+      authKeyHex: 'authKey',
+      encryptionKey: Buffer.alloc(32),
+      deps: {
+        searchSubgraph: search,
+        decryptFromHex: fakeDecrypt,
+        nowUnixSeconds: 1_777_000_000,
+      },
+      logger: silentLogger,
+    });
+    assert(decisions.length === 1, 'loser-json: produced one decision');
+    assert(
+      decisions[0].action === 'supersede_existing',
+      'loser-json: action is supersede_existing',
+    );
+
+    const log = fs.readFileSync(decisionsLogPath(), 'utf-8');
+    const lastLine = log.trim().split('\n').pop() as string;
+    const row = JSON.parse(lastLine) as DecisionLogEntry;
+    assert(row.action === 'supersede_existing', 'loser-json: log row is supersede');
+    assert(
+      typeof row.loser_claim_json === 'string' && row.loser_claim_json.length > 0,
+      'loser-json: loser_claim_json field is present + non-empty',
+    );
+
+    const recoveredClaim = JSON.parse(row.loser_claim_json!) as CanonicalClaim;
+    assertEq(
+      recoveredClaim.t,
+      'I use Vim as my primary editor for everything',
+      'loser-json: recovered text matches the original loser',
+    );
+    assertEq(
+      recoveredClaim.c,
+      'pref',
+      'loser-json: recovered category matches the original loser',
+    );
+    assert(
+      Array.isArray(recoveredClaim.e) && recoveredClaim.e.length === 2,
+      'loser-json: recovered entities preserved (2 entries)',
+    );
+    assertEq(
+      recoveredClaim.e[0].n,
+      'editor',
+      'loser-json: first entity name preserved',
+    );
+    assertEq(
+      recoveredClaim.e[1].n,
+      'Vim',
+      'loser-json: second entity name preserved',
+    );
+  } finally {
+    if (originalEnv !== undefined) process.env.TOTALRECLAW_AUTO_RESOLVE_MODE = originalEnv;
+    cleanupTempStateDir(tmp);
+  }
+}
+
+// tie_leave_both rows do NOT carry loser_claim_json (no recovery needed —
+// nothing got tombstoned in the first place).
+{
+  const tmp = setupTempStateDir('e2e-tie-no-loser-json');
+  const originalEnv = process.env.TOTALRECLAW_AUTO_RESOLVE_MODE;
+  delete process.env.TOTALRECLAW_AUTO_RESOLVE_MODE;
+  try {
+    // Reproduce the Postgres/DuckDB tie scenario from the existing tie-zone test.
+    const existingClaim = makeClaim({
+      t: 'Uses PostgreSQL for the primary OLTP database',
+      c: 'pref',
+      cf: 1.0,
+      i: 8,
+      ea: '2026-04-14T17:20:00Z',
+      sa: 'openclaw-plugin',
+      e: [{ n: 'database', tp: 'concept' }],
+    });
+    const existingEmb = embed([Math.cos(Math.PI / 4), Math.sin(Math.PI / 4), 0, 0], 8);
+    const trapdoor = computeEntityTrapdoor('database');
+    const search = fakeSubgraph({
+      [trapdoor]: [
+        {
+          id: 'existing-postgres',
+          encryptedBlob: fakeEncrypt(JSON.stringify(existingClaim)),
+          encryptedEmbedding: fakeEncrypt(JSON.stringify(existingEmb)),
+          isActive: true,
+        },
+      ],
+    });
+    const newClaim = makeClaim({
+      t: 'Uses DuckDB for analytics workloads',
+      c: 'pref',
+      cf: 1.0,
+      i: 8,
+      ea: '2026-04-14T17:20:10Z',
+      sa: 'openclaw-plugin',
+      e: [{ n: 'database', tp: 'concept' }],
+    });
+    await detectAndResolveContradictions({
+      newClaim,
+      newClaimId: 'new-duckdb',
+      newEmbedding: embed([1, 0, 0, 0], 8),
+      subgraphOwner: '0xowner',
+      authKeyHex: 'authKey',
+      encryptionKey: Buffer.alloc(32),
+      deps: {
+        searchSubgraph: search,
+        decryptFromHex: fakeDecrypt,
+        nowUnixSeconds: Math.floor(new Date('2026-04-14T17:20:15Z').getTime() / 1000),
+      },
+      logger: silentLogger,
+    });
+    const log = fs.readFileSync(decisionsLogPath(), 'utf-8');
+    const lastLine = log.trim().split('\n').pop() as string;
+    const row = JSON.parse(lastLine) as DecisionLogEntry;
+    assert(row.action === 'tie_leave_both', 'loser-json (tie): row is tie_leave_both');
+    assert(
+      row.loser_claim_json === undefined,
+      'loser-json (tie): tie rows do NOT carry loser_claim_json',
+    );
+  } finally {
+    if (originalEnv !== undefined) process.env.TOTALRECLAW_AUTO_RESOLVE_MODE = originalEnv;
+    cleanupTempStateDir(tmp);
+  }
+}
+
+// findLoserClaimInDecisionLog: returns the loser claim when a matching
+// supersede row exists in decisions.jsonl.
+{
+  const tmp = setupTempStateDir('find-loser-happy');
+  try {
+    const loserText = 'I use Neovim daily';
+    await appendDecisionLog({
+      ts: 1_777_000_000,
+      entity_id: 'editor',
+      new_claim_id: 'new-vscode-id',
+      existing_claim_id: 'tombstoned-neovim',
+      similarity: 0.55,
+      action: 'supersede_existing',
+      reason: 'new_wins',
+      winner_score: 0.91,
+      loser_score: 0.74,
+      loser_claim_json: JSON.stringify({
+        t: loserText,
+        c: 'pref',
+        cf: 0.95,
+        i: 8,
+        sa: 'auto-extraction',
+        ea: '2025-12-01T00:00:00Z',
+        e: [{ n: 'Neovim', tp: 'tool' }],
+      }),
+      mode: 'active',
+    });
+    const recovered = findLoserClaimInDecisionLog('tombstoned-neovim');
+    assert(recovered !== null, 'find-loser-happy: returns the loser_claim_json string');
+    if (recovered !== null) {
+      const claim = JSON.parse(recovered) as CanonicalClaim;
+      assertEq(claim.t, loserText, 'find-loser-happy: recovered text matches');
+      assertEq(claim.c, 'pref', 'find-loser-happy: recovered category matches');
+      assert(
+        Array.isArray(claim.e) && claim.e[0].n === 'Neovim',
+        'find-loser-happy: recovered entities matches',
+      );
+    }
+  } finally {
+    cleanupTempStateDir(tmp);
+  }
+}
+
+// findLoserClaimInDecisionLog: returns null when no matching row exists.
+{
+  const tmp = setupTempStateDir('find-loser-none');
+  try {
+    await appendDecisionLog({
+      ts: 1_777_000_000,
+      entity_id: 'editor',
+      new_claim_id: 'new-vscode-id',
+      existing_claim_id: 'different-id',
+      similarity: 0.55,
+      action: 'supersede_existing',
+      reason: 'new_wins',
+      loser_claim_json: '{"t":"other claim","c":"pref","cf":0.9,"i":7,"sa":"x","ea":"y"}',
+      mode: 'active',
+    });
+    const recovered = findLoserClaimInDecisionLog('does-not-exist');
+    assert(recovered === null, 'find-loser-none: returns null when no row matches');
+  } finally {
+    cleanupTempStateDir(tmp);
+  }
+}
+
+// findLoserClaimInDecisionLog: returns null for tie rows, even if existing_claim_id
+// matches (ties don't tombstone, so there's nothing to recover).
+{
+  const tmp = setupTempStateDir('find-loser-skip-tie');
+  try {
+    await appendDecisionLog({
+      ts: 1_777_000_000,
+      entity_id: 'database',
+      new_claim_id: 'new-duckdb',
+      existing_claim_id: 'tied-postgres',
+      similarity: 0.74,
+      action: 'tie_leave_both',
+      reason: 'tie_below_tolerance',
+      mode: 'active',
+    });
+    const recovered = findLoserClaimInDecisionLog('tied-postgres');
+    assert(
+      recovered === null,
+      'find-loser-skip-tie: tie rows are not considered recoverable',
+    );
+  } finally {
+    cleanupTempStateDir(tmp);
+  }
+}
+
+// findLoserClaimInDecisionLog: returns null for pre-Phase-2.1 rows that have
+// no loser_claim_json field (backwards-compat with old logs).
+{
+  const tmp = setupTempStateDir('find-loser-pre-2-1');
+  try {
+    await appendDecisionLog({
+      ts: 1_777_000_000,
+      entity_id: 'editor',
+      new_claim_id: 'new-id',
+      existing_claim_id: 'old-loser-no-json',
+      similarity: 0.55,
+      action: 'supersede_existing',
+      reason: 'new_wins',
+      // intentionally no loser_claim_json — pre-Phase-2.1 row
+      mode: 'active',
+    });
+    const recovered = findLoserClaimInDecisionLog('old-loser-no-json');
+    assert(
+      recovered === null,
+      'find-loser-pre-2-1: pre-Phase-2.1 rows return null (no field to recover)',
+    );
+  } finally {
+    cleanupTempStateDir(tmp);
+  }
+}
+
+// findLoserClaimInDecisionLog: when the log has multiple matching supersede
+// rows for the same factId, return the MOST RECENT one (last in the file).
+{
+  const tmp = setupTempStateDir('find-loser-most-recent');
+  try {
+    await appendDecisionLog({
+      ts: 1_776_000_000,
+      entity_id: 'editor',
+      new_claim_id: 'first-new',
+      existing_claim_id: 'multi-loser',
+      similarity: 0.55,
+      action: 'supersede_existing',
+      reason: 'new_wins',
+      loser_claim_json: '{"t":"first version","c":"pref","cf":0.9,"i":7,"sa":"a","ea":"b"}',
+      mode: 'active',
+    });
+    await appendDecisionLog({
+      ts: 1_777_000_000,
+      entity_id: 'editor',
+      new_claim_id: 'second-new',
+      existing_claim_id: 'multi-loser',
+      similarity: 0.55,
+      action: 'supersede_existing',
+      reason: 'new_wins',
+      loser_claim_json: '{"t":"second version","c":"pref","cf":0.9,"i":7,"sa":"a","ea":"b"}',
+      mode: 'active',
+    });
+    const recovered = findLoserClaimInDecisionLog('multi-loser');
+    assert(recovered !== null, 'find-loser-most-recent: returns a row');
+    if (recovered !== null) {
+      const claim = JSON.parse(recovered) as CanonicalClaim;
+      assertEq(
+        claim.t,
+        'second version',
+        'find-loser-most-recent: returns the most recent (last) matching row',
+      );
+    }
+  } finally {
+    cleanupTempStateDir(tmp);
+  }
+}
+
+// findLoserClaimInDecisionLog: returns null when decisions.jsonl is missing.
+{
+  const tmp = setupTempStateDir('find-loser-no-file');
+  try {
+    // Don't create decisions.jsonl at all.
+    const recovered = findLoserClaimInDecisionLog('any-id');
+    assert(
+      recovered === null,
+      'find-loser-no-file: returns null when log file does not exist',
+    );
+  } finally {
+    cleanupTempStateDir(tmp);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2.1: TUNING_LOOP_MIN_INTERVAL_OVERRIDE_SECONDS env var
+// ---------------------------------------------------------------------------
+
+// Default: env unset → returns the production constant (3600).
+{
+  const original = process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS;
+  delete process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS;
+  try {
+    assertEq(
+      getTuningLoopMinIntervalSeconds(),
+      TUNING_LOOP_MIN_INTERVAL_SECONDS,
+      'tuning-override: unset env returns default 3600',
+    );
+    assertEq(
+      TUNING_LOOP_MIN_INTERVAL_SECONDS,
+      3600,
+      'tuning-override: default is documented at 3600',
+    );
+  } finally {
+    if (original !== undefined) {
+      process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS = original;
+    }
+  }
+}
+
+// Override: env set to a small number → QA short interval.
+{
+  const original = process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS;
+  process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS = '10';
+  try {
+    assertEq(
+      getTuningLoopMinIntervalSeconds(),
+      10,
+      'tuning-override: env=10 returns 10',
+    );
+  } finally {
+    if (original !== undefined) {
+      process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS = original;
+    } else {
+      delete process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS;
+    }
+  }
+}
+
+// Invalid override (NaN) → falls back to default.
+{
+  const original = process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS;
+  process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS = 'not-a-number';
+  try {
+    assertEq(
+      getTuningLoopMinIntervalSeconds(),
+      TUNING_LOOP_MIN_INTERVAL_SECONDS,
+      'tuning-override: NaN env falls back to default',
+    );
+  } finally {
+    if (original !== undefined) {
+      process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS = original;
+    } else {
+      delete process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS;
+    }
+  }
+}
+
+// Negative override → falls back to default (negative intervals would be a bug).
+{
+  const original = process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS;
+  process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS = '-5';
+  try {
+    assertEq(
+      getTuningLoopMinIntervalSeconds(),
+      TUNING_LOOP_MIN_INTERVAL_SECONDS,
+      'tuning-override: negative env falls back to default',
+    );
+  } finally {
+    if (original !== undefined) {
+      process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS = original;
+    } else {
+      delete process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS;
+    }
+  }
+}
+
+// Zero override is allowed — useful for tests that want immediate tuning.
+{
+  const original = process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS;
+  process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS = '0';
+  try {
+    assertEq(
+      getTuningLoopMinIntervalSeconds(),
+      0,
+      'tuning-override: zero env returns 0 (allowed)',
+    );
+  } finally {
+    if (original !== undefined) {
+      process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS = original;
+    } else {
+      delete process.env.TOTALRECLAW_TUNING_MIN_INTERVAL_OVERRIDE_SECONDS;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
