@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/totalreclaw",
-  "version": "2.9.0",
+  "version": "2.9.1",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. Automatic extraction, semantic search, and on-chain storage",
   "type": "module",
   "keywords": [
