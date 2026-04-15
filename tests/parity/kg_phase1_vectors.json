@@ -39,6 +39,10 @@
     {
       "canonical": "{\"t\":\"Pedro chose PostgreSQL\",\"c\":\"dec\",\"cf\":0.92,\"i\":9,\"cc\":3,\"sa\":\"openclaw-plugin\",\"sc\":\"conv-abc\",\"ea\":\"2026-04-12T10:00:00Z\",\"e\":[{\"n\":\"Pedro\",\"tp\":\"person\",\"r\":\"chooser\"},{\"n\":\"PostgreSQL\",\"tp\":\"tool\",\"r\":\"chosen\"}],\"sup\":\"0xabc\",\"vf\":\"2026-04-01T00:00:00Z\",\"st\":\"s\"}",
       "input": "{\"t\":\"Pedro chose PostgreSQL\",\"c\":\"dec\",\"cf\":0.92,\"i\":9,\"cc\":3,\"sa\":\"openclaw-plugin\",\"sc\":\"conv-abc\",\"ea\":\"2026-04-12T10:00:00Z\",\"e\":[{\"n\":\"Pedro\",\"tp\":\"person\",\"r\":\"chooser\"},{\"n\":\"PostgreSQL\",\"tp\":\"tool\",\"r\":\"chosen\"}],\"sup\":\"0xabc\",\"vf\":\"2026-04-01T00:00:00Z\",\"st\":\"s\"}"
+    },
+    {
+      "canonical": "{\"t\":\"Stop the OpenClaw gateway before rm -rf ~/.totalreclaw/\",\"c\":\"rule\",\"cf\":1.0,\"i\":7,\"sa\":\"oc\",\"e\":[{\"n\":\"OpenClaw gateway\",\"tp\":\"tool\"}]}",
+      "input": "{\"t\":\"Stop the OpenClaw gateway before rm -rf ~/.totalreclaw/\",\"c\":\"rule\",\"cf\":1.0,\"i\":7,\"sa\":\"oc\",\"e\":[{\"n\":\"OpenClaw gateway\",\"tp\":\"tool\"}]}"
     }
   ],
   "digest_prompt": [

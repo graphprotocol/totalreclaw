@@ -274,6 +274,7 @@ pub fn build_digest_prompt(active_claims: &[Claim]) -> String {
             ClaimCategory::Goal => "goal",
             ClaimCategory::Context => "context",
             ClaimCategory::Summary => "summary",
+            ClaimCategory::Rule => "rule",
             ClaimCategory::Entity => "entity",
             ClaimCategory::Digest => "digest",
         };

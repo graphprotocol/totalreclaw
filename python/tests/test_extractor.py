@@ -143,13 +143,35 @@ class TestParseResponse:
 
     def test_all_valid_types(self):
         items = []
-        for t in ["fact", "preference", "decision", "episodic", "goal", "context", "summary"]:
+        # Phase 2.2: 8 memory types, including the new "rule" category.
+        for t in ["fact", "preference", "decision", "episodic", "goal", "context", "summary", "rule"]:
             items.append({"text": f"Test {t} memory value", "type": t, "importance": 8, "action": "ADD"})
         response = json.dumps(items)
         facts = _parse_response(response)
-        assert len(facts) == 7
+        assert len(facts) == 8
         types = {f.type for f in facts}
-        assert types == {"fact", "preference", "decision", "episodic", "goal", "context", "summary"}
+        assert types == {"fact", "preference", "decision", "episodic", "goal", "context", "summary", "rule"}
+
+    def test_rule_type_round_trip(self):
+        """Phase 2.2: rule-typed facts pass parsing, retain entities, and stay above the importance floor."""
+        response = json.dumps([
+            {
+                "text": "Stop the OpenClaw gateway before rm -rf ~/.totalreclaw/ — async flush can recreate stale files",
+                "type": "rule",
+                "importance": 8,
+                "confidence": 1.0,
+                "action": "ADD",
+                "entities": [{"name": "OpenClaw gateway", "type": "tool"}],
+            },
+        ])
+        facts = _parse_response(response)
+        assert len(facts) == 1
+        assert facts[0].type == "rule"
+        assert facts[0].importance == 8
+        assert facts[0].confidence == 1.0
+        assert facts[0].entities is not None
+        assert len(facts[0].entities) == 1
+        assert facts[0].entities[0].name == "OpenClaw gateway"
 
     def test_all_valid_actions(self):
         items = [

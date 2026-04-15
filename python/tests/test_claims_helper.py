@@ -77,6 +77,7 @@ class _Fact:
         ("goal", "goal"),
         ("context", "ctx"),
         ("summary", "sum"),
+        ("rule", "rule"),  # Phase 2.2: 8th memory type
     ],
 )
 def test_map_type_to_category(fact_type: str, category: str) -> None:

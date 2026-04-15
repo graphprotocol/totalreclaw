@@ -83,6 +83,10 @@ TYPE_TO_CATEGORY: Dict[str, str] = {
     "goal": "goal",
     "context": "ctx",
     "summary": "sum",
+    # Phase 2.2: rule = reusable operational rule, gotcha, debugging shortcut, or
+    # convention the user wants to remember for next time. Distinct from decision
+    # (which has reasoning for a specific choice) and preference (personal taste).
+    "rule": "rule",
 }
 
 

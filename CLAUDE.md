@@ -160,7 +160,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Decay handling | -- | -- | -- | -- | -- | Yes (via ZeroClaw) | ZeroClaw applies 7-day half-life at retrieval time |
 | Conflict resolution | -- | -- | -- | -- | -- | Yes (via ZeroClaw) | ZeroClaw checks semantic similarity before storing Core |
 | **Extraction** | | | | | | | |
-| Expanded memory types (7 categories) | Yes | Yes (via prompt) | Yes | Yes (LLM or heuristic) | Yes (via prompt) | Yes (category mapping) | fact, preference, decision, episodic, goal, context, summary |
+| Expanded memory types (8 categories) | Yes | Yes (via prompt) | Yes | Yes (LLM or heuristic) | Yes (via prompt) | Yes (category mapping) | fact, preference, decision, episodic, goal, context, summary, rule (Phase 2.2) |
 | Decision reasoning extraction | Yes | Yes (via prompt) | Yes | Yes (LLM or heuristic) | Yes (via prompt) | Yes (via ZeroClaw) | Extraction prompts require "chose X because Y" |
 | **Dedup** | | | | | | |
 | Content fingerprint (exact) | Yes | Yes | Yes | Yes | Yes (via MCP) | Yes | Server-side HMAC-SHA256 |
@@ -293,7 +293,7 @@ Every new feature implementation MUST include:
 - **Server-blind**: Server NEVER sees plaintext
 - **Embedding model**: onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled)
 - **Extraction cap**: Max 15 facts per extraction cycle, unified 3-turn interval
-- **Memory types**: 7 categories -- fact, preference, decision (with reasoning), episodic, goal, context, summary
+- **Memory types**: 8 categories -- fact, preference, decision (with reasoning), episodic, goal, context, summary, rule
 
 ---
 

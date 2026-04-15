@@ -23,7 +23,7 @@ export interface ExtractedEntity {
 
 export interface ExtractedFact {
   text: string;
-  type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary';
+  type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary' | 'rule';
   importance: number; // 1-10
   action: ExtractionAction;
   existingFactId?: string;
@@ -79,12 +79,14 @@ Types:
 - goal: Objectives, targets, or plans ("wants to launch public beta by end of Q1")
 - context: Active project/task context ("working on TotalReclaw v1.2, staging on Base Sepolia")
 - summary: Key outcome or conclusion from a discussion ("agreed to use phased rollout for migration")
+- rule: A reusable operational rule, non-obvious gotcha, debugging shortcut, or convention the user wants to remember for next time. Distinct from decisions (which have reasoning for a specific choice) and preferences (which are personal tastes). Rules are impersonal, actionable, and transferable — they would help anyone in the same situation. Examples: "Always check the systemd unit file for environment pins before wiping state", "The subgraph schema uses sequenceId not seqId", "Don't open large JSON files in Neovim — use jq instead".
 
 Extraction guidance:
 - For decisions: ALWAYS include the reasoning. "Chose X" is weak. "Chose X because Y" is strong.
 - For context: Capture what the user is actively working on, including versions, environments, and status.
 - For summaries: Only extract when a conversation reaches a clear conclusion or agreement.
 - For facts: Prefer specific over vague. "Lives in Lisbon" beats "lives in Europe".
+- For rules: ALWAYS extract when the user explicitly signals "remember this", "gotcha", "rule of thumb", "always", "never", or describes a non-obvious learning. Importance >= 7 when the rule prevented a real bug or wasted time. Include the specific context (which tool, which error, which version) so the rule is actionable later. The boundary test: would this apply to anyone in the same situation? Rules generalize; decisions and preferences don't.
 - Decisions and context should be importance >= 7 (they are high-value for future conversations).
 
 Actions (compare against existing memories if provided):
@@ -117,6 +119,24 @@ Memory B: "Uses DuckDB for analytics and reporting workloads, roughly 20x faster
   (NOT: "database", "analytics", or any umbrella term. PostgreSQL is mentioned as a comparison point and MAY appear as a separate entity, but the memory is about DuckDB.)
 
 These two memories are COMPLEMENTARY, not contradictory — Postgres serves OLTP and DuckDB serves OLAP. Because they do not share an umbrella entity, the contradiction-detection path correctly treats them as independent.
+
+Few-shot examples (rule type — when to use it and when NOT to use it):
+
+Example 1 — rule embedded in a debugging narrative:
+  User: "Ugh, spent two hours earlier today because the subgraph query silently failed and I thought we had zero facts on chain. Turns out the schema field is sequenceId, not seqId — my Python wrapper swallowed the GraphQL error and I read it as 'no data'. Note to self: always check d.get('errors') before trusting an empty facts array."
+  Extract:
+  [{"text": "Subgraph Fact schema uses sequenceId, not seqId — check d.get('errors') before trusting an empty facts array", "type": "rule", "importance": 8, "confidence": 1.0, "entities": [{"name": "subgraph", "type": "tool"}, {"name": "GraphQL", "type": "tool"}]}]
+
+Example 2 — user stating a convention as a rule:
+  User: "Convention for the team: before any rm -rf on the VPS state dir, stop the gateway first. Otherwise an async flush can recreate stale files mid-cleanup and you'll chase phantom state."
+  Extract:
+  [{"text": "Stop the OpenClaw gateway before rm -rf ~/.totalreclaw/ — async flush can recreate stale files mid-cleanup", "type": "rule", "importance": 7, "confidence": 1.0, "entities": [{"name": "OpenClaw gateway", "type": "tool"}]}]
+
+Example 3 — rule vs decision (distinguishing them):
+  User: "We chose DuckDB over ClickHouse for analytics because DuckDB fits in a single-file deployment and our scale is small."
+  Extract:
+  [{"text": "Chose DuckDB over ClickHouse for analytics because single-file deployment fits small-scale use", "type": "decision", "importance": 8, "confidence": 1.0, "entities": [{"name": "DuckDB", "type": "tool", "role": "chosen"}, {"name": "ClickHouse", "type": "tool", "role": "rejected"}]}]
+  This is a DECISION, not a rule — it's a specific choice with reasoning, not a transferable pattern. The boundary test: it applies to THIS user's THIS analytics deployment, not to anyone in the same situation.
 
 Confidence:
 - Self-assess how sure you are this is a real, durable fact (0.0-1.0)
@@ -260,7 +280,7 @@ export function parseFactsResponse(response: string): ExtractedFact[] {
 
         const result: ExtractedFact = {
           text: String(fact.text).slice(0, 512),
-          type: (['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'].includes(String(fact.type))
+          type: (['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary', 'rule'].includes(String(fact.type))
             ? String(fact.type)
             : 'fact') as ExtractedFact['type'],
           importance: Math.max(1, Math.min(10, Number(fact.importance) || 5)),

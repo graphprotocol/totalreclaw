@@ -384,7 +384,7 @@ class ImportEngine:
                 continue
 
             fact_type = str(item.get("type", "fact"))
-            valid_types = {"fact", "preference", "decision", "episodic", "goal", "context", "summary"}
+            valid_types = {"fact", "preference", "decision", "episodic", "goal", "context", "summary", "rule"}
             if fact_type not in valid_types:
                 fact_type = "fact"
 
