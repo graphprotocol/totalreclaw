@@ -1393,9 +1393,19 @@ function filterByImportance(
     }
   }
 
-  if (dropped > 0) {
+  // Phase 2.2.5: always log the filter outcome so the agent_end path can
+  // distinguish "LLM returned 0 facts" from "LLM returned N facts all dropped
+  // below threshold" from "LLM returned N facts, all kept". Prior to 2.2.5
+  // this only logged on drops, which made empty-input invisible.
+  if (facts.length === 0) {
+    logger.info('Importance filter: input=0 (nothing to filter)');
+  } else if (dropped > 0) {
     logger.info(
       `Importance filter: dropped ${dropped}/${facts.length} facts below threshold ${MIN_IMPORTANCE_THRESHOLD}`,
+    );
+  } else {
+    logger.info(
+      `Importance filter: kept all ${facts.length} facts (threshold ${MIN_IMPORTANCE_THRESHOLD})`,
     );
   }
 
@@ -4517,13 +4527,38 @@ const plugin = {
           if (needsSetup) return { memoryHandled: true };
 
           // C3: Throttle auto-extraction to every N turns (configurable via env).
+          // Phase 2.2.5: every branch of the extraction pipeline now logs its
+          // outcome. Prior to 2.2.5, only the "stored N facts" happy path
+          // produced a log line, so silent JSON parse failures / chatCompletion
+          // timeouts / importance-filter-drops-everything scenarios left no
+          // trace whatsoever in the gateway log. See the investigation report
+          // in CHANGELOG for the full failure chain we uncovered.
           turnsSinceLastExtraction++;
-          if (turnsSinceLastExtraction >= getExtractInterval()) {
+          const extractInterval = getExtractInterval();
+          api.logger.info(
+            `agent_end: turn ${turnsSinceLastExtraction}/${extractInterval} (messages=${evt.messages.length})`,
+          );
+          if (turnsSinceLastExtraction >= extractInterval) {
             const existingMemories = isLlmDedupEnabled()
               ? await fetchExistingMemoriesForExtraction(api.logger, 20, evt.messages)
               : [];
-            const rawFacts = await extractFacts(evt.messages, 'turn', existingMemories);
-            const { kept: importanceFiltered } = filterByImportance(rawFacts, api.logger);
+            const rawFacts = await extractFacts(
+              evt.messages,
+              'turn',
+              existingMemories,
+              undefined,
+              api.logger,
+            );
+            api.logger.info(
+              `agent_end: extractFacts returned ${rawFacts.length} raw facts`,
+            );
+            const { kept: importanceFiltered, dropped } = filterByImportance(
+              rawFacts,
+              api.logger,
+            );
+            api.logger.info(
+              `agent_end: after importance filter: kept=${importanceFiltered.length}, dropped=${dropped}`,
+            );
             const maxFacts = getMaxFactsPerExtraction();
             if (importanceFiltered.length > maxFacts) {
               api.logger.info(
@@ -4534,6 +4569,11 @@ const plugin = {
             if (facts.length > 0) {
               await storeExtractedFacts(facts, api.logger);
               api.logger.info(`agent_end: stored ${facts.length} facts to encrypted vault`);
+            } else {
+              // Phase 2.2.5: no longer silent when extraction produces nothing.
+              api.logger.info(
+                `agent_end: extraction produced 0 storable facts (raw=${rawFacts.length}, after-importance=${importanceFiltered.length})`,
+              );
             }
             turnsSinceLastExtraction = 0;
           }
