@@ -182,6 +182,63 @@ function assertEq<T>(actual: T, expected: T, name: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 2.2: rule memory type
+// ---------------------------------------------------------------------------
+
+// parseFactsResponse accepts type='rule' and round-trips it.
+{
+  const raw = JSON.stringify([
+    {
+      text: 'Stop the OpenClaw gateway before rm -rf ~/.totalreclaw/ — async flush can recreate stale files',
+      type: 'rule',
+      importance: 8,
+      confidence: 1.0,
+      action: 'ADD',
+      entities: [{ name: 'OpenClaw gateway', type: 'tool' }],
+    },
+  ]);
+  const facts = parseFactsResponse(raw);
+  assert(facts.length === 1, 'rule type: parsed 1 fact');
+  assert(facts[0].type === 'rule', 'rule type: type round-trips as "rule"');
+  assert(facts[0].importance === 8, 'rule type: importance preserved');
+  assert(facts[0].entities?.length === 1, 'rule type: entities preserved');
+  assert(facts[0].entities?.[0].name === 'OpenClaw gateway', 'rule type: entity name preserved');
+}
+
+// All 8 valid types pass through (regression guard for the type filter).
+{
+  const types = ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary', 'rule'];
+  const raw = JSON.stringify(
+    types.map((t) => ({
+      text: `Test ${t} memory value`,
+      type: t,
+      importance: 8,
+      action: 'ADD',
+    })),
+  );
+  const facts = parseFactsResponse(raw);
+  assert(facts.length === 8, '8 valid types: all parse');
+  const parsedTypes = new Set(facts.map((f) => f.type));
+  assert(parsedTypes.size === 8, '8 valid types: all distinct');
+  assert(parsedTypes.has('rule'), '8 valid types: rule is one of them');
+}
+
+// Unknown type still falls back to 'fact' (existing behavior preserved).
+{
+  const raw = JSON.stringify([
+    {
+      text: 'Some test memory with an unknown type',
+      type: 'invented_category',
+      importance: 8,
+      action: 'ADD',
+    },
+  ]);
+  const facts = parseFactsResponse(raw);
+  assert(facts.length === 1, 'unknown type: still produces 1 fact');
+  assert(facts[0].type === 'fact', 'unknown type: falls back to "fact"');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

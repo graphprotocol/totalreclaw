@@ -129,6 +129,7 @@ function buildCanonicalObjectFromLegacy(
     goal: 'goal',
     context: 'ctx',
     summary: 'sum',
+    rule: 'rule',
   };
   const category = TYPE_TO_CATEGORY[typeStr] ?? 'fact';
   const impFloat = typeof meta.importance === 'number' ? meta.importance : 0.5;

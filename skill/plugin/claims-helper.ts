@@ -53,6 +53,7 @@ const TYPE_TO_CATEGORY: Record<ExtractedFact['type'], string> = {
   goal: 'goal',
   context: 'ctx',
   summary: 'sum',
+  rule: 'rule',
 };
 
 export function mapTypeToCategory(type: ExtractedFact['type']): string {

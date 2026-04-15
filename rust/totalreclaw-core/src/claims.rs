@@ -18,6 +18,12 @@ pub enum ClaimCategory {
     Context,
     #[serde(rename = "sum")]
     Summary,
+    /// A reusable operational rule, non-obvious gotcha, or convention the user
+    /// wants to remember for next time. Distinct from decisions (which have
+    /// reasoning for a specific choice) and preferences (personal tastes):
+    /// rules are impersonal, actionable, and transferable. Phase 2.2 addition.
+    #[serde(rename = "rule")]
+    Rule,
     #[serde(rename = "ent")]
     Entity,
     #[serde(rename = "dig")]
@@ -346,6 +352,7 @@ mod tests {
             (ClaimCategory::Goal, "goal"),
             (ClaimCategory::Context, "ctx"),
             (ClaimCategory::Summary, "sum"),
+            (ClaimCategory::Rule, "rule"),
             (ClaimCategory::Entity, "ent"),
             (ClaimCategory::Digest, "dig"),
         ];

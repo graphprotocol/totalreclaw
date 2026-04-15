@@ -20,7 +20,7 @@ from .llm_client import LLMConfig, detect_llm_config, chat_completion
 
 logger = logging.getLogger(__name__)
 
-VALID_TYPES = {"fact", "preference", "decision", "episodic", "goal", "context", "summary"}
+VALID_TYPES = {"fact", "preference", "decision", "episodic", "goal", "context", "summary", "rule"}
 VALID_ACTIONS = {"ADD", "UPDATE", "DELETE", "NOOP"}
 
 #: Allowed entity types — must match ``skill/plugin/extractor.ts``.
@@ -122,13 +122,33 @@ Types:
 - goal: Objectives, targets, or plans ("wants to launch public beta by end of Q1")
 - context: Active project/task context ("working on TotalReclaw v1.2, staging on Base Sepolia")
 - summary: Key outcome or conclusion from a discussion ("agreed to use phased rollout for migration")
+- rule: A reusable operational rule, non-obvious gotcha, debugging shortcut, or convention the user wants to remember for next time. Distinct from decisions (which have reasoning for a specific choice) and preferences (which are personal tastes). Rules are impersonal, actionable, and transferable — they would help anyone in the same situation. Examples: "Always check the systemd unit file for environment pins before wiping state", "The subgraph schema uses sequenceId not seqId", "Don't open large JSON files in Neovim — use jq instead".
 
 Extraction guidance:
 - For decisions: ALWAYS include the reasoning. "Chose X" is weak. "Chose X because Y" is strong.
 - For context: Capture what the user is actively working on, including versions, environments, and status.
 - For summaries: Only extract when a conversation reaches a clear conclusion or agreement.
 - For facts: Prefer specific over vague. "Lives in Lisbon" beats "lives in Europe".
+- For rules: ALWAYS extract when the user explicitly signals "remember this", "gotcha", "rule of thumb", "always", "never", or describes a non-obvious learning. Importance >= 7 when the rule prevented a real bug or wasted time. Include the specific context (which tool, which error, which version) so the rule is actionable later. The boundary test: would this apply to anyone in the same situation? Rules generalize; decisions and preferences don't.
 - Decisions and context should be importance >= 7 (they are high-value for future conversations).
+
+Few-shot examples (rule type — when to use it and when NOT to use it):
+
+Example 1 — rule embedded in a debugging narrative:
+  User: "Spent two hours debugging the subgraph because my Python wrapper silently swallowed a GraphQL error and I read it as 'no data'. Turns out the schema field is sequenceId, not seqId. Note to self: always check d.get('errors') before trusting an empty result."
+  Extract:
+  [{"text": "Subgraph Fact schema uses sequenceId, not seqId — check d.get('errors') before trusting an empty facts array", "type": "rule", "importance": 8, "confidence": 1.0, "entities": [{"name": "subgraph", "type": "tool"}, {"name": "GraphQL", "type": "tool"}]}]
+
+Example 2 — user stating a convention as a rule:
+  User: "Convention for the team: before any rm -rf on the VPS state dir, stop the gateway first. Otherwise an async flush can recreate stale files mid-cleanup."
+  Extract:
+  [{"text": "Stop the OpenClaw gateway before rm -rf ~/.totalreclaw/ — async flush can recreate stale files mid-cleanup", "type": "rule", "importance": 7, "confidence": 1.0, "entities": [{"name": "OpenClaw gateway", "type": "tool"}]}]
+
+Example 3 — rule vs decision (distinguishing them):
+  User: "We chose DuckDB over ClickHouse for analytics because DuckDB fits in a single-file deployment and our scale is small."
+  Extract:
+  [{"text": "Chose DuckDB over ClickHouse for analytics because single-file deployment fits small-scale use", "type": "decision", "importance": 8, "confidence": 1.0, "entities": [{"name": "DuckDB", "type": "tool", "role": "chosen"}, {"name": "ClickHouse", "type": "tool", "role": "rejected"}]}]
+  This is a DECISION, not a rule — it's a specific choice with reasoning, not a transferable pattern. The boundary test: it applies to THIS user's THIS analytics deployment, not to anyone in the same situation.
 
 Entity extraction (new):
 - Each memory MAY include an "entities" array of named entities it references
