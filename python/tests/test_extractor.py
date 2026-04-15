@@ -635,3 +635,53 @@ class TestExtractFactsHeuristic:
         assert f.importance == 7
         assert f.action == "ADD"
         assert f.existing_fact_id is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.2.6: lexical importance bump tests
+# ---------------------------------------------------------------------------
+
+class TestLexicalImportanceBump:
+    """Mirrors `extractor-entities.test.ts` Phase 2.2.6 bump tests."""
+
+    def _bump(self, fact_text: str, conversation_text: str) -> int:
+        from totalreclaw.agent.extraction import compute_lexical_importance_bump
+        return compute_lexical_importance_bump(fact_text, conversation_text)
+
+    def test_strong_intent_phrase_gives_bump(self):
+        conv = "[user]: I prefer Vim. Note to self: this is a rule of thumb for the team."
+        assert self._bump("User prefers Vim", conv) >= 1
+
+    def test_double_exclamation_gives_bump(self):
+        conv = "[user]: I really love dark mode!! Use dark mode in IDEs."
+        assert self._bump("User loves dark mode", conv) >= 1
+
+    def test_all_caps_phrase_plus_intent_caps_at_2(self):
+        conv = "[user]: NEVER FORGET DARK MODE. Always use it."
+        assert self._bump("User always uses dark mode", conv) >= 2
+
+    def test_repetition_via_word_match(self):
+        conv = (
+            "[user]: I prefer PostgreSQL. ... [user]: yeah PostgreSQL is right "
+            "for OLTP. ... [user]: PostgreSQL all the way."
+        )
+        # Even though the LLM-extracted fact says "User prefers" while the
+        # conversation says "I prefer", the shared word "postgresql" appears
+        # 3 times and triggers the repetition bump.
+        assert self._bump("User prefers PostgreSQL", conv) >= 1
+
+    def test_tentative_conversation_no_bump(self):
+        conv = "[user]: I think I might use VS Code. Not sure yet."
+        assert self._bump("User uses VS Code", conv) == 0
+
+    def test_capped_at_2_with_multiple_signals(self):
+        conv = (
+            "[user]: REMEMBER THIS!! Critical rule of thumb: never ever use "
+            "sudo rm -rf. NEVER FORGET that."
+        )
+        assert self._bump("Never use sudo rm -rf", conv) == 2
+
+    def test_short_fact_no_repetition_bump(self):
+        # Fact text has no words >= 5 chars; repetition signal can't fire.
+        conv = "[user]: a b c d. a b c d. a b c d."
+        assert self._bump("hi", conv) == 0

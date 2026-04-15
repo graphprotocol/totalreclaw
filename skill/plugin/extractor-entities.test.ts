@@ -378,6 +378,54 @@ function makeCaptureLogger() {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 2.2.6: lexical importance bump
+// ---------------------------------------------------------------------------
+
+import { computeLexicalImportanceBump } from './extractor.ts';
+
+{
+  const conv = '[user]: I prefer Vim. Note to self: this is a rule of thumb for the team.';
+  const bump = computeLexicalImportanceBump('User prefers Vim', conv);
+  assert(bump >= 1, 'bump: strong-intent ("rule of thumb", "note to self") gives +1');
+}
+
+{
+  const conv = '[user]: I really love dark mode!! Use dark mode in IDEs.';
+  const bump = computeLexicalImportanceBump('User loves dark mode', conv);
+  assert(bump >= 1, 'bump: !! emphasis gives +1');
+}
+
+{
+  const conv = '[user]: NEVER FORGET DARK MODE. Always use it.';
+  const bump = computeLexicalImportanceBump('User always uses dark mode', conv);
+  assert(bump >= 2, 'bump: ALL CAPS phrase + intent ("never forget") give +2');
+}
+
+{
+  const conv = '[user]: I prefer PostgreSQL. ... [user]: yeah PostgreSQL is right for OLTP. ... [user]: PostgreSQL all the way.';
+  const bump = computeLexicalImportanceBump('User prefers PostgreSQL', conv);
+  assert(bump >= 1, 'bump: repetition (3+ mentions) gives +1');
+}
+
+{
+  const conv = '[user]: I think I might use VS Code. Not sure yet.';
+  const bump = computeLexicalImportanceBump('User uses VS Code', conv);
+  assert(bump === 0, 'bump: tentative conversation gives 0');
+}
+
+{
+  const conv = '[user]: REMEMBER THIS!! Critical rule of thumb: never ever use sudo rm -rf. NEVER FORGET that.';
+  const bump = computeLexicalImportanceBump('Never use sudo rm -rf', conv);
+  assert(bump === 2, `bump: capped at +2 even with multiple signals (got ${bump})`);
+}
+
+{
+  const conv = '[user]: a b c d. a b c d. a b c d.';
+  const bump = computeLexicalImportanceBump('hi', conv); // fact text too short for fingerprint
+  assert(bump === 0, 'bump: short fact fingerprint (< 5 chars) skips repetition check');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

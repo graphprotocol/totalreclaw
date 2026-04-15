@@ -17,7 +17,16 @@ _SMALL_IMPORT_THRESHOLD = 50
 
 
 async def remember(args: dict, state: "PluginState", **kwargs) -> str:
-    """Store a memory in TotalReclaw."""
+    """Store a memory in TotalReclaw.
+
+    Phase 2.2.6: now forwards ``type`` + ``importance`` from the tool call to
+    the canonical Claim builder via ``client.remember``. Prior to 2.2.6 the
+    tool accepted only ``text`` + ``importance`` and stored everything as
+    ``type='fact'``, making the rule category structurally unreachable from
+    Hermes.
+    """
+    from totalreclaw.agent.extraction import VALID_MEMORY_TYPES
+
     client = state.get_client()
     if not client:
         return json.dumps({"error": "TotalReclaw not configured. Run totalreclaw_setup first."})
@@ -26,7 +35,20 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
     if not text:
         return json.dumps({"error": "No text provided"})
 
-    importance = args.get("importance", 0.5)
+    # Default importance to 8 for explicit remember (same convention as
+    # the OpenClaw plugin) — higher than auto-extraction's typical 6-7 so
+    # store-time dedup's shouldSupersede prefers the explicit call.
+    raw_importance = args.get("importance", 8)
+    try:
+        importance_val = float(raw_importance)
+    except (TypeError, ValueError):
+        importance_val = 8.0
+    # store_fact handles both 0.0-1.0 and 1-10 input, but we clamp to sensible range
+    importance_val = max(1.0, min(10.0, importance_val))
+
+    # Validate + default the type
+    fact_type_raw = args.get("type", "fact")
+    fact_type = fact_type_raw if fact_type_raw in VALID_MEMORY_TYPES else "fact"
 
     try:
         embedding = None
@@ -36,8 +58,14 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
         except Exception:
             pass
 
-        fact_id = await client.remember(text, embedding=embedding, importance=importance)
-        return json.dumps({"stored": True, "fact_id": fact_id})
+        fact_id = await client.remember(
+            text,
+            embedding=embedding,
+            importance=importance_val,
+            fact_type=fact_type,
+            confidence=1.0,  # explicit remember = highest confidence
+        )
+        return json.dumps({"stored": True, "fact_id": fact_id, "type": fact_type, "importance": importance_val})
     except Exception as e:
         logger.error("totalreclaw_remember failed: %s", e)
         return json.dumps({"error": str(e)})

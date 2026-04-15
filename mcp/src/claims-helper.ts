@@ -34,14 +34,16 @@ function getWasm(): typeof import('@totalreclaw/core') {
 // Types
 // ---------------------------------------------------------------------------
 
-export type FactType =
-  | 'fact'
-  | 'preference'
-  | 'decision'
-  | 'episodic'
-  | 'goal'
-  | 'context'
-  | 'summary';
+import type { MemoryType } from './memory-types.js';
+
+/**
+ * Legacy alias for `MemoryType`, preserved so existing code that imports
+ * `FactType` from this file keeps compiling. New code should import
+ * `MemoryType` directly from `./memory-types.js`.
+ *
+ * @deprecated Use `MemoryType` from `./memory-types.js` instead.
+ */
+export type FactType = MemoryType;
 
 export type EntityType = 'person' | 'project' | 'tool' | 'company' | 'concept' | 'place';
 
@@ -54,8 +56,8 @@ export interface ExtractedEntity {
 export interface ClaimInput {
   /** Human-readable fact text. */
   text: string;
-  /** One of the 7 memory types. Defaults to `fact` when absent. */
-  type?: FactType;
+  /** One of the 8 memory types. Defaults to `fact` when absent. */
+  type?: MemoryType;
   /** LLM-assessed confidence (0.0-1.0). Defaults to 0.85. */
   confidence?: number;
   /** Optional structured entities that surface on search. */
@@ -82,23 +84,15 @@ export function resolveClaimFormat(): ClaimFormat {
 }
 
 // ---------------------------------------------------------------------------
-// Category mapping (fact type → compact Claim category short key)
+// Category mapping — lives in memory-types.ts now (single source of truth for
+// the MCP package). Phase 2.2.6 eliminated the duplicate that used to be
+// defined in this file.
 // ---------------------------------------------------------------------------
 
-const TYPE_TO_CATEGORY: Record<FactType, string> = {
-  fact: 'fact',
-  preference: 'pref',
-  decision: 'dec',
-  episodic: 'epi',
-  goal: 'goal',
-  context: 'ctx',
-  summary: 'sum',
-};
+import { mapTypeToCategory } from './memory-types.js';
 
-export function mapTypeToCategory(type: FactType | undefined): string {
-  if (!type) return 'fact';
-  return TYPE_TO_CATEGORY[type] ?? 'fact';
-}
+// Re-export for backward compat with callers that imported from claims-helper.
+export { mapTypeToCategory };
 
 // ---------------------------------------------------------------------------
 // Canonical Claim builder

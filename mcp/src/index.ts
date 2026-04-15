@@ -112,6 +112,7 @@ import {
   readClaimFromBlob,
   resolveClaimFormat,
 } from './claims-helper.js';
+import { isValidMemoryType, type MemoryType } from './memory-types.js';
 
 import { validateMnemonic, generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
@@ -482,18 +483,32 @@ async function handleRememberSubgraph(
   const factText = (input?.fact as string) || '';
   const factsArray = input?.facts as Array<{ text: string; importance?: number; type?: string }> | undefined;
 
-  const textsToStore: Array<{ text: string; importance: number }> = [];
+  // Phase 2.2.6: thread `type` through from input → textsToStore → canonical
+  // Claim builder. Prior to 2.2.6, `type` was accepted in the tool schema but
+  // silently dropped here, and line ~648 passed a hardcoded 'fact' to
+  // buildCanonicalClaim — making `rule` and every other non-fact type
+  // structurally unreachable via the MCP remember tool.
+  const textsToStore: Array<{ text: string; importance: number; type: MemoryType }> = [];
+
+  const resolveType = (raw: unknown): MemoryType =>
+    isValidMemoryType(raw) ? raw : 'fact';
 
   if (factsArray && Array.isArray(factsArray) && factsArray.length > 0) {
     for (const f of factsArray) {
       if (f.text && typeof f.text === 'string' && f.text.trim().length > 0) {
-        textsToStore.push({ text: f.text.trim(), importance: f.importance ?? 5 });
+        textsToStore.push({
+          text: f.text.trim(),
+          importance: f.importance ?? 5,
+          type: resolveType(f.type),
+        });
       }
     }
   } else if (factText && typeof factText === 'string' && factText.trim().length > 0) {
+    const singleMetadata = input?.metadata as { type?: unknown } | undefined;
     textsToStore.push({
       text: factText.trim(),
       importance: (input?.importance as number) ?? 5,
+      type: resolveType(singleMetadata?.type),
     });
   }
 
@@ -641,11 +656,18 @@ async function handleRememberSubgraph(
       }
 
       // 4. Build the blob: canonical Claim by default, raw text if legacy flag set
+      //
+      // Phase 2.2.6: `item.type` is now threaded through from the tool input.
+      // Prior to 2.2.6 this was hardcoded to 'fact', making `rule` and every
+      // non-fact type structurally unreachable via the MCP remember tool even
+      // when the client passed the correct value. The MCP batch-mode debrief
+      // handler at line ~787 was already passing item.type correctly — this
+      // fixes the single-/batch-remember handler for parity.
       const claimFormat = resolveClaimFormat();
       const blobPlaintext = claimFormat === 'legacy'
         ? item.text
         : buildCanonicalClaim({
-            fact: { text: item.text, type: 'fact' },
+            fact: { text: item.text, type: item.type },
             importance: effectiveImportance,
             sourceAgent: 'mcp-server',
           });

@@ -9,6 +9,7 @@ import {
   STORE_DEDUP_MAX_CANDIDATES,
   type DecryptedCandidate,
 } from '../consolidation.js';
+import { VALID_MEMORY_TYPES, type MemoryType } from '../memory-types.js';
 
 // ── Single-fact input (backward compat) ──────────────────────────────────────
 
@@ -26,7 +27,7 @@ export interface RememberInputSingle {
 export interface BatchFact {
   text: string;
   importance?: number;
-  type?: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary';
+  type?: MemoryType;
 }
 
 export interface RememberInputBatch {
@@ -82,8 +83,10 @@ export const rememberToolDefinition = {
             },
             type: {
               type: 'string',
-              enum: ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'],
-              description: 'Category of the fact',
+              enum: [...VALID_MEMORY_TYPES],
+              description:
+                'Category of the fact. One of: fact, preference, decision, episodic, goal, context, summary, rule. ' +
+                'Use "rule" for reusable operational gotchas ("always X", "never Y"), conventions, and debugging shortcuts.',
             },
           },
           required: ['text'],
@@ -102,7 +105,7 @@ export const rememberToolDefinition = {
         properties: {
           type: {
             type: 'string',
-            enum: ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'],
+            enum: [...VALID_MEMORY_TYPES],
           },
           expires_at: {
             type: 'string',

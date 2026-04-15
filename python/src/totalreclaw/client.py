@@ -224,8 +224,19 @@ class TotalReclaw:
         embedding: Optional[list[float]] = None,
         importance: float = 0.5,
         source: str = "python-client",
+        fact_type: str = "fact",
+        entities: Optional[list] = None,
+        confidence: float = 0.85,
     ) -> str:
-        """Store a fact. Returns the fact ID."""
+        """Store a fact. Returns the fact ID.
+
+        Phase 2.2.6: now forwards ``fact_type``, ``entities``, and ``confidence``
+        through to ``store_fact``, so consumers like Hermes
+        ``tools.remember`` can route explicit remember calls through the
+        canonical Claim path (with a real type classification) instead of
+        storing everything as ``type='fact'``. Backward-compat defaults match
+        the prior silent behavior.
+        """
         await self._ensure_address()
         await self._ensure_registered()
         lsh = self._get_lsh_hasher() if embedding else None
@@ -238,6 +249,9 @@ class TotalReclaw:
             embedding=embedding,
             importance=importance,
             source=source,
+            fact_type=fact_type,
+            entities=entities,
+            confidence=confidence,
             eoa_private_key=self._eoa_private_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,

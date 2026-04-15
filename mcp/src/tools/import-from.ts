@@ -1,6 +1,7 @@
 import { TotalReclaw, FactMetadata } from '@totalreclaw/client';
 import { resolve } from 'node:path';
 import { IMPORT_FROM_TOOL_DESCRIPTION } from '../prompts.js';
+import { type MemoryType } from '../memory-types.js';
 
 // ── Types (mirrored from skill/plugin/import-adapters/types.ts) ─────────────
 // We define these locally to avoid importing from outside the MCP rootDir.
@@ -20,7 +21,7 @@ export interface ImportFromInput {
 
 export interface NormalizedFact {
   text: string;
-  type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary';
+  type: MemoryType;
   importance: number;
   source: ImportSource;
   sourceId?: string;
