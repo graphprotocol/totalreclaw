@@ -239,6 +239,36 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 
 ## Implementation Rules
 
+### Architectural Principle: shared core first, client-native only when justified
+
+**Default: any KG / memory feature that's pure computation belongs in `rust/totalreclaw-core/`** and is exposed to clients via WASM bindings (TS clients) and PyO3 bindings (Python clients). Client packages (skill/plugin, mcp, python/totalreclaw, rust/totalreclaw-memory) should be **thin adapters** that wire the core logic into their respective framework's lifecycle hooks, tool schemas, and storage.
+
+**The test for "shared core vs client-native":** *Would this same logic, given the same inputs, produce the same outputs regardless of which client is calling it?* Yes → core. No (depends on client framework state, hook shape, or schema format) → adapter.
+
+**What belongs in the shared Rust core:**
+- Canonical Claim construction (`buildCanonicalClaim`, type → category mapping, `VALID_MEMORY_TYPES` enum)
+- Phase 2 contradiction detection orchestration (`detectAndResolveContradictions`)
+- Store-time dedup logic (`findNearDuplicate`, `shouldSupersede`, threshold helpers)
+- Digest compilation pipeline
+- Pin status semantics (`isPinnedClaim`, supersede guards)
+- `EXTRACTION_SYSTEM_PROMPT` and any prompt templates
+- Importance scoring helpers (rubric thresholds, lexical bumps, comparative re-scoring formula)
+- Weight tuning loop math
+- Decision log / feedback log row schemas
+
+**What legitimately stays client-native (adapter layer):**
+- Lifecycle hook wiring (each framework has its own hook shape — `agent_end` in OpenClaw, `post_llm_call` in Hermes, etc.)
+- Tool schema definitions (MCP JSON Schema vs OpenAI function-calling vs OpenClaw's own format)
+- File-system layout for per-client state (`~/.openclaw/` vs `~/.hermes/`)
+- Logger interfaces (each framework has its own logger contract)
+- Any code that reads/writes live conversation state via client APIs
+
+**Why this matters:** the alternative (duplicating computation logic across TS plugin / TS MCP / Python / Rust) creates silent feature gaps. As of Phase 2.2.5, Phase 2 contradiction detection lives in OpenClaw plugin TypeScript only — MCP, Hermes, and ZeroClaw write facts to the same vault but skip the entire contradiction-detection pipeline. A user pinning a fact from MCP cannot trust that the OpenClaw plugin auto-extraction won't supersede it (because plugin runs Phase 2 + sees the pin) AND cannot trust that an MCP write won't trample a plugin-pinned fact (because MCP doesn't run Phase 2 at all). This kind of cross-client inconsistency is invisible to unit tests and only surfaces as user-visible weirdness in production.
+
+**The "move to core" backlog** lives at `totalreclaw-internal/docs/plans/core-hoist-backlog.md` and tracks every piece of computation that should be in core but isn't yet. Every new feature should default to shipping in core; any deviation must be justified in writing against the test above.
+
+**For new features**: start the implementation in `rust/totalreclaw-core/`, then write the WASM binding, then the PyO3 binding, then the thin client adapters last. Resist the temptation to "prototype in TS first and hoist later" — every "later" hoist costs ~3-5 days vs ~1 day if you start in core.
+
 ### New Feature Checklist
 
 Every new feature implementation MUST include:
