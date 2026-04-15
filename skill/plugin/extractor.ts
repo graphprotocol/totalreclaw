@@ -21,9 +21,51 @@ export interface ExtractedEntity {
   role?: string;
 }
 
+/**
+ * The 8 canonical memory types — single source of truth for this package.
+ *
+ * Any TypeScript consumer in `skill/plugin/` (tool schemas, type mappings,
+ * validation whitelists, canonical-claim builders) MUST import this constant
+ * — never re-declare the list inline. A cross-file parity check in
+ * `memory-types-parity.test.ts` enforces this at test time.
+ *
+ * When adding a new type, update ALL of:
+ *   - This constant
+ *   - `mcp/src/memory-types.ts` (`VALID_MEMORY_TYPES` — MCP package equivalent)
+ *   - `python/src/totalreclaw/agent/extraction.py` (`VALID_TYPES`)
+ *   - `python/src/totalreclaw/claims_helper.py` (`TYPE_TO_CATEGORY`)
+ *   - `rust/totalreclaw-core/src/claims.rs` (`ClaimCategory` enum + short-form test)
+ *   - `skill/plugin/claims-helper.ts` (`TYPE_TO_CATEGORY`)
+ *   - `skill/plugin/pin.ts` (legacy-blob-lift `TYPE_TO_CATEGORY`)
+ *   - The `EXTRACTION_SYSTEM_PROMPT` Types: list (both TS + Python)
+ *   - Parity fixtures in `tests/parity/kg_phase1_vectors.json`
+ */
+export const VALID_MEMORY_TYPES = [
+  'fact',
+  'preference',
+  'decision',
+  'episodic',
+  'goal',
+  'context',
+  'summary',
+  'rule',
+] as const;
+
+/** Type alias derived from the single-source-of-truth constant above. */
+export type MemoryType = (typeof VALID_MEMORY_TYPES)[number];
+
+/**
+ * Runtime type guard — returns whether an unknown value is a valid MemoryType.
+ * Prefer this over inline `.includes()` checks on `VALID_MEMORY_TYPES` so the
+ * single-source-of-truth invariant is enforced by grep in CI.
+ */
+export function isValidMemoryType(value: unknown): value is MemoryType {
+  return typeof value === 'string' && (VALID_MEMORY_TYPES as readonly string[]).includes(value);
+}
+
 export interface ExtractedFact {
   text: string;
-  type: 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary' | 'rule';
+  type: MemoryType;
   importance: number; // 1-10
   action: ExtractionAction;
   existingFactId?: string;
@@ -68,8 +110,18 @@ Rules:
 1. Each memory must be a single, self-contained piece of information
 2. Focus on user-specific information that would be useful in future conversations
 3. Skip generic knowledge, greetings, small talk, and ephemeral task coordination
-4. Score importance 1-10 (6+ = worth storing)
+4. Score importance 1-10 using the rubric below (6+ = worth storing)
 5. Only extract memories with importance >= 6
+
+Importance rubric (use the FULL 1-10 range, not just 7-8):
+- 10: Critical, core identity, never-forget content. The user explicitly says "remember this forever", "critical", "never forget", or it's a fundamental fact like name/birthday/relationships that defines who they are.
+- 9: Affects many future decisions or interactions. A high-impact rule, a major life decision with reasoning, a deeply held preference that shapes daily work.
+- 8: High-value preference, decision-with-reasoning, or operational rule. The user clearly cares about it AND it will be relevant in many future conversations.
+- 7: Specific durable fact about the user's setup, project, or context. Useful to remember but not life-changing.
+- 6: Borderline — barely passes the "worth storing" threshold. Generic facts, low-signal preferences. If you're hesitating between 5 and 6, prefer 5 (it gets dropped).
+- 5 or below: NOT WORTH STORING. Drop these. Casual mentions, ephemeral state, low-signal chatter.
+
+DO NOT cluster every fact at 7-8. Use 9-10 for high-signal content and 5-6 for borderline content. The system depends on the full range working — over-clustering at 7-8 produces tied scores in the contradiction resolver and makes ranking/decay impossible.
 
 Types:
 - fact: Objective information about the user (name, location, job, relationships)
@@ -362,9 +414,7 @@ export function parseFactsResponse(
 
       const result: ExtractedFact = {
         text: String(fact.text).slice(0, 512),
-        type: (['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary', 'rule'].includes(String(fact.type))
-          ? String(fact.type)
-          : 'fact') as ExtractedFact['type'],
+        type: (isValidMemoryType(fact.type) ? fact.type : 'fact') as MemoryType,
         importance: Math.max(1, Math.min(10, Number(fact.importance) || 5)),
         action,
         existingFactId: typeof fact.existingFactId === 'string' ? fact.existingFactId : undefined,
@@ -376,6 +426,98 @@ export function parseFactsResponse(
     .filter((f) => f.importance >= 6 || f.action === 'DELETE'); // DELETE actions pass regardless of importance
 
   return facts;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2.2.6: lexical importance bumps
+// ---------------------------------------------------------------------------
+
+/**
+ * Escape regex metacharacters so a string can be used as a literal pattern.
+ */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Compute a lexical importance bump (0-2) for a single fact based on signals
+ * in the surrounding conversation text.
+ *
+ * This is a Phase 2.2.6 quality fix complementing the prompt rubric tightening
+ * (item A). Where the rubric tells the LLM to use the full 1-10 range, the
+ * bump tells us *as a post-process*: when the user's actual phrasing carries
+ * strong "remember this" signals that the LLM may have under-weighted, push
+ * the score up.
+ *
+ * Signals detected (each adds +1, capped at +2 total):
+ *
+ *   1. **Strong intent phrases** anywhere in the conversation:
+ *      "remember this", "never forget", "rule of thumb", "critical",
+ *      "don't ever forget", explicit "always X" / "never Y" patterns.
+ *   2. **Emphasis markers**: `!!` (double exclamation), or 3+ all-caps words
+ *      in a row (e.g. "DO NOT FORGET", "VERY IMPORTANT").
+ *   3. **Repetition**: the fact's first ~20 chars appear at least twice in
+ *      the conversation text (paraphrased restating).
+ *
+ * The bump is additive on top of whatever the LLM scored; final importance
+ * is capped at 10.
+ *
+ * Final-importance ceiling: this never makes a fact pass the importance >= 6
+ * filter on its own — a fact still needs to have an LLM score >= 5 (because
+ * +2 from 5 = 7, above floor; +1 from 5 = 6, above floor). This is intentional:
+ * the bump is for "the LLM correctly identified this as worth storing but
+ * under-weighted it", not "the LLM said skip but we're overriding."
+ */
+export function computeLexicalImportanceBump(
+  factText: string,
+  conversationText: string,
+): number {
+  let bump = 0;
+  const lowerConv = conversationText.toLowerCase();
+
+  // Signal 1: strong intent phrases anywhere in the conversation
+  const strongIntent =
+    /\b(remember this|never forget|rule of thumb|don't (?:ever )?forget|critical|important|gotcha|note to self)\b/i;
+  if (strongIntent.test(lowerConv)) bump += 1;
+
+  // Signal 2: emphasis markers — double exclamation OR 3+ consecutive all-caps words
+  // (3+ chars each, to avoid false positives on acronyms like "AWS S3 IAM")
+  const doubleExclamation = /!!/;
+  const allCapsPhrase = /\b[A-Z]{3,}(?:\s+[A-Z]{3,}){2,}\b/;
+  if (doubleExclamation.test(conversationText) || allCapsPhrase.test(conversationText)) {
+    bump += 1;
+  }
+
+  // Signal 3: repetition — extract content words (length >= 5, not common stop
+  // words) from the fact, and check if any single one appears 2+ times in the
+  // conversation. This is more robust to LLM paraphrasing than a fingerprint
+  // match: "User prefers PostgreSQL" extracted from "I prefer PostgreSQL ...
+  // yeah PostgreSQL is right for OLTP" still triggers because "postgresql"
+  // appears multiple times even though the leading chars differ.
+  const lowerFact = factText.toLowerCase();
+  const stopWords = new Set([
+    'about', 'after', 'again', 'against', 'because', 'before', 'being',
+    'between', 'could', 'doing', 'during', 'every', 'further', 'having',
+    'their', 'these', 'those', 'through', 'under', 'until', 'where', 'which',
+    'while', 'would', 'should', 'about', 'thing', 'things', 'something',
+    'someone', 'always', 'never', 'often', 'still', 'really', 'maybe',
+    'using', 'works', 'work', 'user', 'users', 'with', 'from', 'into',
+    'like', 'just', 'than', 'them', 'they', 'will', 'when', 'what', 'were',
+    'this', 'that', 'have', 'this',
+  ]);
+  const factWords = lowerFact.split(/[^a-z0-9_]+/).filter((w) => w.length >= 5 && !stopWords.has(w));
+  let triggered = false;
+  for (const word of factWords) {
+    const occurrences = (lowerConv.match(new RegExp(`\\b${escapeRegExp(word)}\\b`, 'g')) || [])
+      .length;
+    if (occurrences >= 2) {
+      triggered = true;
+      break;
+    }
+  }
+  if (triggered) bump += 1;
+
+  return Math.min(bump, 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -470,7 +612,26 @@ export async function extractFacts(
   logger?.info?.(
     `extractFacts: LLM returned ${response.length} chars; handing to parseFactsResponse`,
   );
-  return parseFactsResponse(response, logger);
+  const facts = parseFactsResponse(response, logger);
+
+  // Phase 2.2.6: lexical importance bumps. After the LLM has scored each
+  // fact, post-process by scanning the original conversation text for strong
+  // intent signals ("never forget", "rule of thumb", "!!", repetition, etc.)
+  // and bump the importance score upward (+1 to +2, capped at 10) for facts
+  // that the user clearly cared about. The bump is additive on top of the
+  // LLM's score and never overrides the importance >= 6 filter on its own.
+  for (const f of facts) {
+    const bump = computeLexicalImportanceBump(f.text, conversationText);
+    if (bump > 0) {
+      const oldImportance = f.importance;
+      f.importance = Math.min(10, f.importance + bump);
+      logger?.info?.(
+        `extractFacts: lexical bump +${bump} for "${f.text.slice(0, 60)}..." (${oldImportance} → ${f.importance})`,
+      );
+    }
+  }
+
+  return facts;
 }
 
 // ---------------------------------------------------------------------------

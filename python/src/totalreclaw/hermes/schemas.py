@@ -1,11 +1,13 @@
 """Tool schemas for Hermes Agent (OpenAI function-calling format)."""
 
+from totalreclaw.agent.extraction import VALID_MEMORY_TYPES
+
 REMEMBER = {
     "name": "totalreclaw_remember",
     "description": (
         "Store a memory in TotalReclaw's encrypted vault. Use this to save important "
-        "facts, preferences, decisions, or context about the user. Memories are E2E "
-        "encrypted and portable across AI agents."
+        "facts, preferences, decisions, rules (reusable gotchas / conventions), or "
+        "context about the user. Memories are E2E encrypted and portable across AI agents."
     ),
     "parameters": {
         "type": "object",
@@ -14,9 +16,23 @@ REMEMBER = {
                 "type": "string",
                 "description": "The memory text to store",
             },
+            "type": {
+                "type": "string",
+                "enum": list(VALID_MEMORY_TYPES),
+                "description": (
+                    "Memory category. One of: fact, preference, decision, episodic, goal, "
+                    "context, summary, rule. Use 'rule' for reusable operational gotchas "
+                    '("always X", "never Y"), conventions, and debugging shortcuts the '
+                    "user wants to remember for next time. Default: fact."
+                ),
+            },
             "importance": {
                 "type": "number",
-                "description": "Importance score 0.0-1.0 (default 0.5)",
+                "description": (
+                    "Importance score 1-10 (default 8 for explicit remember). Use 8+ for "
+                    "content the user explicitly asked to remember. The 1-10 scale maps "
+                    "to the on-chain decayScore via /10."
+                ),
             },
         },
         "required": ["text"],

@@ -35,10 +35,13 @@ import { createApiClient, type StoreFactPayload } from './api-client.js';
 import {
   extractFacts,
   extractDebrief,
+  isValidMemoryType,
   parseEntity,
+  VALID_MEMORY_TYPES,
   EXTRACTION_SYSTEM_PROMPT,
   type ExtractedFact,
   type ExtractedEntity,
+  type MemoryType,
 } from './extractor.js';
 import { initLLMClient, resolveLLMConfig, chatCompletion, generateEmbedding, getEmbeddingDims } from './llm-client.js';
 import { LSHHasher } from './lsh.js';
@@ -2507,8 +2510,11 @@ const plugin = {
             },
             type: {
               type: 'string',
-              enum: ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'],
-              description: 'The kind of memory (default: fact)',
+              enum: [...VALID_MEMORY_TYPES],
+              description:
+                'The kind of memory. One of: fact, preference, decision, episodic, goal, context, summary, rule. ' +
+                'Use "rule" for reusable operational gotchas ("always X", "never Y"), conventions, and debugging ' +
+                'shortcuts. Default: fact.',
             },
             importance: {
               type: 'number',
@@ -2558,19 +2564,12 @@ const plugin = {
             // blobs), emit entity trapdoors, and run through Phase 2 contradiction
             // detection + auto-resolution. Historically this tool had its own
             // inline dedup + legacy-blob path that bypassed Phase 2 entirely.
-            const validTypes: ExtractedFact['type'][] = [
-              'fact',
-              'preference',
-              'decision',
-              'episodic',
-              'goal',
-              'context',
-              'summary',
-            ];
-            const memoryType: ExtractedFact['type'] = validTypes.includes(
-              params.type as ExtractedFact['type'],
-            )
-              ? (params.type as ExtractedFact['type'])
+            //
+            // Phase 2.2.6: use the single-source-of-truth `isValidMemoryType` guard
+            // from extractor.ts — no more inline whitelist drift. The rule type is
+            // reachable via this tool call now (was silently dropped pre-2.2.6).
+            const memoryType: MemoryType = isValidMemoryType(params.type)
+              ? params.type
               : 'fact';
 
             // Explicit remember defaults to importance 8 (above auto-extraction's

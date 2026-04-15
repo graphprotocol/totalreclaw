@@ -2,11 +2,13 @@
 
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
+import { mapTypeToCategory } from './claims-helper.js';
 import {
   findLoserClaimInDecisionLog,
   maybeWriteFeedbackForPin,
   type ContradictionLogger,
 } from './contradiction-sync.js';
+import { isValidMemoryType } from './extractor.js';
 import type { SubgraphSearchFact } from './subgraph-search.js';
 
 // Lazy-load WASM core (mirrors claims-helper.ts pattern — plays nicely under
@@ -120,18 +122,12 @@ function buildCanonicalObjectFromLegacy(
   text: string,
   meta: Record<string, unknown>,
 ): Record<string, unknown> {
+  // Phase 2.2.6: use the single-source-of-truth mapping from claims-helper
+  // instead of a local duplicate. Legacy blobs can carry arbitrary strings in
+  // `metadata.type`, so we validate via `isValidMemoryType` before mapping —
+  // unknown types fall back to 'fact'.
   const typeStr = typeof meta.type === 'string' ? meta.type : 'fact';
-  const TYPE_TO_CATEGORY: Record<string, string> = {
-    fact: 'fact',
-    preference: 'pref',
-    decision: 'dec',
-    episodic: 'epi',
-    goal: 'goal',
-    context: 'ctx',
-    summary: 'sum',
-    rule: 'rule',
-  };
-  const category = TYPE_TO_CATEGORY[typeStr] ?? 'fact';
+  const category = isValidMemoryType(typeStr) ? mapTypeToCategory(typeStr) : 'fact';
   const impFloat = typeof meta.importance === 'number' ? meta.importance : 0.5;
   const importance = Math.max(1, Math.min(10, Math.round(impFloat * 10)));
   const source = typeof meta.source === 'string' ? meta.source : 'openclaw-plugin';

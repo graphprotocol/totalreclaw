@@ -108,7 +108,10 @@ Each fact needs:
   - 5-6: Moderate facts (schedule, minor preferences)
   - 3-4: Low priority (casual mentions)
   - 1-2: Ephemeral (likely to change)
-- type: Category (optional) -- "fact", "preference", "decision", "episodic", "goal", "context", "summary"
+- type: Category (optional) -- "fact", "preference", "decision", "episodic", "goal", "context", "summary", "rule"
+  - Use "rule" for reusable operational gotchas, conventions, or debugging shortcuts the user
+    wants to remember for next time (e.g. "always check d.get(errors) before trusting empty
+    GraphQL results", "stop the gateway before rm -rf the state dir").
 
 The vault handles deduplication automatically. If a similar fact exists, it will be updated rather than duplicated.`;
 
