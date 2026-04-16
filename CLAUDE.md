@@ -162,10 +162,22 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | **Extraction** | | | | | | | |
 | Expanded memory types (8 categories) | Yes | Yes (via prompt) | Yes | Yes (LLM or heuristic) | Yes (via prompt) | Yes (category mapping) | fact, preference, decision, episodic, goal, context, summary, rule (Phase 2.2) |
 | Decision reasoning extraction | Yes | Yes (via prompt) | Yes | Yes (LLM or heuristic) | Yes (via prompt) | Yes (via ZeroClaw) | Extraction prompts require "chose X because Y" |
+| **Knowledge Graph (Core Hoist Tier 1)** | | | | | | | All via `@totalreclaw/core` 1.5.0 WASM/PyO3 with local fallbacks |
+| Store-time dedup (best-match) | Yes (core) | Yes (core) | Yes (via MCP) | Yes (core) | Yes (via MCP) | Yes (core) | `find_best_near_duplicate` — returns highest-similarity match, not first |
+| Bulk clustering | Yes (core) | Yes (core) | Yes (via MCP) | -- | Yes (via MCP) | -- | `cluster_facts` — greedy single-pass for consolidation tool |
+| Pin status semantics | Yes (core) | -- | -- | -- | -- | -- | `is_pinned_claim`, `respect_pin_in_resolution` — plugin only for now |
+| Contradiction detection orchestration | Yes (core) | -- | -- | -- | -- | -- | `resolve_with_candidates` — full pipeline: detect → pin check → resolve → tie-zone |
+| Decision log types | Yes (core) | -- | -- | -- | -- | -- | `DecisionLogEntry`, `find_loser_claim_in_decision_log` — enables pin-on-tombstone recovery |
+| Shadow mode filtering | Yes (core) | -- | -- | -- | -- | -- | `filter_shadow_mode` — observer-only validation mode |
+| Importance rubric (1-10 anchored) | Yes | Yes (via prompt) | Yes | Yes | Yes (via prompt) | Yes | Phase 2.2.6 — explicit band definitions in extraction prompt |
+| Lexical importance bump | Yes | -- | -- | Yes | -- | -- | Phase 2.2.6 — +1/+2 post-processing for intent/emphasis/repetition signals |
+| Bump cap (≥8 → max +1) | Yes | -- | -- | Yes | -- | -- | Phase 2.2.7 — prevents over-scoring already-high facts |
+| Type in recall results | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | -- | `[rule]` `[fact]` `[decision]` prefix tags in recall output |
+| Remember type+importance params | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | -- | Phase 2.2.6 — `type` and `importance` in totalreclaw_remember tool |
 | **Dedup** | | | | | | |
 | Content fingerprint (exact) | Yes | Yes | Yes | Yes | Yes (via MCP) | Yes | Server-side HMAC-SHA256 |
 | Within-batch semantic dedup | Yes | -- | -- | -- | -- | -- | Cosine >= 0.9, during extraction |
-| Store-time near-duplicate | Yes | Yes | Yes (via MCP) | Yes (cosine >= 0.85) | Yes (via MCP) | Yes (cosine >= 0.85) | `consolidation.ts` — both plugin and MCP; Python via generic agent layer; Rust checks 50 existing facts |
+| Store-time near-duplicate | Yes (core) | Yes (core) | Yes (via MCP) | Yes (core) | Yes (via MCP) | Yes (cosine >= 0.85) | Via `@totalreclaw/core` `findBestNearDuplicate` with local fallback |
 | LLM-guided dedup (ADD/UPDATE/DELETE) | Yes | -- | Yes | Yes | -- | -- | All tiers — uses user's own LLM API key, zero cost to us |
 | Bulk consolidation tool | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Self-hosted only (no batch delete on managed service) |
 | **Pro Tier Gating** | | | | | | |
@@ -234,6 +246,9 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | Debrief bypasses store-time dedup | LOW | MCP, NanoClaw, Hermes call `client.remember()` directly for debrief items (no cosine dedup). Only OpenClaw routes through `storeExtractedFacts()`. LLM-level dedup via prompt + server-side content fingerprint mitigate. |
 | Hermes debrief stores without embedding | LOW | `hooks.py` stores debrief items without embedding param — no LSH bucket hashes, search relies on word-level blind indices only. |
 | NanoClaw debrief no 8-message guard | LOW | `pre-compact.ts` triggers debrief based on extraction results, not conversation length. LLM prompt handles it, but no code-level guard like other clients. |
+| KG features plugin-only (partial) | MEDIUM | Contradiction detection, pin semantics, decision log, and shadow mode are in `@totalreclaw/core` 1.5.0 but only wired in the OpenClaw plugin adapter. MCP, Hermes, NanoClaw, ZeroClaw need adapter wiring to call these core functions. Store-time dedup (best-match) is wired in plugin + MCP + Hermes. |
+| Lexical importance bump not in MCP/NanoClaw | LOW | `computeLexicalImportanceBump` only runs in OpenClaw plugin and Python Hermes. MCP and NanoClaw don't have auto-extraction, so this is by-design for now. |
+| ZeroClaw no type in recall | LOW | ZeroClaw `recall()` doesn't surface memory type/category in results. Other clients do (Phase 2.2.6b). |
 
 ---
 
@@ -431,8 +446,8 @@ git checkout main
 - **Default mode**: Managed Service with dual-chain (free=Base Sepolia testnet, pro=Gnosis mainnet)
 - **Default chain ID**: 84532 (Base Sepolia) -- all clients default to free tier, auto-detect Pro (chain 100/Gnosis) from billing
 - **Embedding model**: onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled). e5-small (384d, ~34MB) available as fallback via TOTALRECLAW_EMBEDDING_MODEL=small.
-- **Crypto core**: `@totalreclaw/core` v1.0.0 (Rust WASM for npm, PyO3 for PyPI) -- 13 modules (crypto, reranker, wallet, userop, store, search, blind, lsh, fingerprint, hotcache, consolidation, debrief, stemmer). Single source of truth for all clients.
-- **Packages**: `@totalreclaw/core@1.0.0`, `@totalreclaw/client@1.1.0`, `@totalreclaw/mcp-server@2.2.0`, `@totalreclaw/totalreclaw@2.2.0` (OpenClaw plugin, ClawHub); `totalreclaw-core@1.0.0`, `totalreclaw@1.3.0` (PyPI)
+- **Crypto core**: `@totalreclaw/core` v1.5.0 (Rust WASM for npm, PyO3 for PyPI) -- 16 modules (crypto, reranker, wallet, userop, store, search, blind, lsh, fingerprint, hotcache, consolidation, debrief, stemmer, claims/pin, decision_log, contradiction orchestration). 423 tests. Single source of truth for all clients. Core Hoist Tier 1 complete: store-time dedup best-match, pin semantics, decision log types, contradiction orchestration loop.
+- **Packages**: `@totalreclaw/core@1.5.0`, `@totalreclaw/client@1.1.0`, `@totalreclaw/mcp-server@2.7.0`, `@totalreclaw/totalreclaw@2.11.2` (OpenClaw plugin, ClawHub); `totalreclaw-core@1.5.0`, `totalreclaw@1.9.0` (PyPI)
 - **OpenClaw integration**: Plugin installs without force flags (`openclaw plugins install`), hot-reload setup via `TOTALRECLAW_HOT_RELOAD=true`, auto-recall on `before_agent_start`, auto-extraction on `agent_end`, LLM config sourced from OpenClaw providers, plaintext fallback prevention
 - **Relay**: Billing, Pimlico sponsorship, dual-chain routing, and query proxying extracted to private `totalreclaw-relay` TypeScript repo (p-diogo/totalreclaw-relay). Public server retains only self-hosted functionality (storage, search, auth).
 - **Staging**: Base Sepolia (chain 84532) -- free testnet, no gas costs
