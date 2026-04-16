@@ -19,4 +19,4 @@ adds:
   - src/totalreclaw/extraction/*.ts
 
 npmDependencies:
-  - "@totalreclaw/mcp-server": "^1.0.0"
+  - "@totalreclaw/mcp-server": "^2.7.0"

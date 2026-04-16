@@ -22,7 +22,7 @@
   "license": "MIT",
   "dependencies": {
     "@totalreclaw/client": "file:../client",
-    "@totalreclaw/core": "^0.1.0"
+    "@totalreclaw/core": "^1.5.0"
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.81",
