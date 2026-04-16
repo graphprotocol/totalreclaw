@@ -9,7 +9,7 @@
 
 export type ExtractionAction = 'ADD' | 'UPDATE' | 'DELETE' | 'NOOP';
 
-export type FactType = 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary';
+export type FactType = 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary' | 'rule';
 
 export interface ExtractedFact {
   text: string;
@@ -36,12 +36,14 @@ Types:
 - goal: Objectives, targets, or plans ("wants to launch public beta by end of Q1")
 - context: Active project/task context ("working on TotalReclaw v1.2, staging on Base Sepolia")
 - summary: Key outcome or conclusion from a discussion ("agreed to use phased rollout for migration")
+- rule: A reusable operational rule, non-obvious gotcha, debugging shortcut, or convention the user wants to remember for next time. Distinct from decisions (which have reasoning for a specific choice) and preferences (which are personal tastes). Rules are impersonal, actionable, and transferable — they would help anyone in the same situation. Examples: "Always check the systemd unit file for environment pins before wiping state", "The subgraph schema uses sequenceId not seqId", "Don't open large JSON files in Neovim — use jq instead".
 
 Extraction guidance:
 - For decisions: ALWAYS include the reasoning. "Chose X" is weak. "Chose X because Y" is strong.
 - For context: Capture what the user is actively working on, including versions, environments, and status.
 - For summaries: Only extract when a conversation reaches a clear conclusion or agreement.
 - For facts: Prefer specific over vague. "Lives in Lisbon" beats "lives in Europe".
+- For rules: ALWAYS extract when the user explicitly signals "remember this", "gotcha", "rule of thumb", "always", "never", or describes a non-obvious learning. Importance >= 7 when the rule prevented a real bug or wasted time. Include the specific context (which tool, which error, which version) so the rule is actionable later. The boundary test: would this apply to anyone in the same situation? Rules generalize; decisions and preferences don't.
 - Decisions and context should be importance >= 7 (they are high-value for future conversations).
 
 Actions (compare against existing memories if provided):
@@ -237,7 +239,7 @@ export function validateExtractionResponse(response: unknown): {
     return { valid: false, errors: ['Response must have a "facts" array'] };
   }
 
-  const validTypes: FactType[] = ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary'];
+  const validTypes: FactType[] = ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary', 'rule'];
   const validActions: ExtractionAction[] = ['ADD', 'UPDATE', 'DELETE', 'NOOP'];
 
   const facts: ExtractedFact[] = [];
