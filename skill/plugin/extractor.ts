@@ -624,7 +624,8 @@ export async function extractFacts(
     const bump = computeLexicalImportanceBump(f.text, conversationText);
     if (bump > 0) {
       const oldImportance = f.importance;
-      f.importance = Math.min(10, f.importance + bump);
+      const effectiveBump = f.importance >= 8 ? Math.min(bump, 1) : bump;
+      f.importance = Math.min(10, f.importance + effectiveBump);
       logger?.info?.(
         `extractFacts: lexical bump +${bump} for "${f.text.slice(0, 60)}..." (${oldImportance} → ${f.importance})`,
       );

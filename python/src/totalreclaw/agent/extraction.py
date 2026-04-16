@@ -470,7 +470,8 @@ async def extract_facts_llm(
         bump = compute_lexical_importance_bump(f.text, conversation_text)
         if bump > 0:
             old_importance = f.importance
-            f.importance = min(10, f.importance + bump)
+            effective_bump = min(bump, 1) if f.importance >= 8 else bump
+            f.importance = min(10, f.importance + effective_bump)
             logger.info(
                 "extract_facts_llm: lexical bump +%d for %r (%d -> %d)",
                 bump,
