@@ -13,7 +13,7 @@
 //! - [`reranker`] — BM25 + Cosine + RRF fusion reranker
 //! - [`relay`] — HTTP client for TotalReclaw relay server
 //! - [`protobuf`] — Minimal protobuf encoder for fact payloads
-//! - [`store`] — Encrypt → index → encode → submit pipeline
+//! - [`store`] — Encrypt → index → encode → submit pipeline (with Phase 2 KG contradiction check)
 //! - [`search`] — Subgraph query → decrypt → rerank pipeline
 //! - [`backend`] — ZeroClaw Memory trait implementation
 //! - [`setup`] — First-use setup wizard (credentials + embedding config)
@@ -38,6 +38,23 @@ pub mod userop;
 pub mod wallet;
 
 pub use backend::{MemoryCategory, MemoryEntry, TotalReclawConfig, TotalReclawMemory};
+
+// Re-export core Phase 2 KG types for downstream consumers.
+pub use totalreclaw_core::claims::{
+    Claim, ClaimCategory, ClaimStatus, EntityRef, EntityType, ResolutionAction, SkipReason,
+    TIE_ZONE_SCORE_TOLERANCE, is_pinned_claim, is_pinned_json, respect_pin_in_resolution,
+};
+pub use totalreclaw_core::contradiction::{
+    Contradiction, ResolutionOutcome, ResolutionWeights, ScoreComponents,
+    resolve_with_candidates, resolve_pair, detect_contradictions, default_weights,
+    DEFAULT_LOWER_THRESHOLD, DEFAULT_UPPER_THRESHOLD,
+};
+pub use totalreclaw_core::decision_log::{
+    DecisionLogEntry, DECISION_LOG_MAX_LINES, CONTRADICTION_CANDIDATE_CAP,
+    find_loser_claim_in_decision_log, find_decision_for_pin,
+    build_feedback_from_decision, append_decision_entry,
+};
+pub use store::ContradictionStoreResult;
 
 /// Crate-level error type.
 #[derive(Debug, thiserror::Error)]

@@ -60,6 +60,59 @@ use crate::Result;
 /// Default relay URL.
 const DEFAULT_RELAY_URL: &str = "https://api.totalreclaw.xyz";
 
+/// Result of parsing the decrypted fact envelope (`{"t":..,"a":..,"s":..}`).
+struct DecryptedEnvelope {
+    text: String,
+    category: MemoryCategory,
+}
+
+/// Parse the decrypted JSON envelope and extract text + category.
+///
+/// The encrypted blob stores `{"t": text, "a": agent_id, "s": source}`.
+/// ZeroClaw stores source as `zeroclaw_{category}` (e.g. `zeroclaw_core`).
+/// Other clients use different source formats (e.g. `openclaw_extraction`).
+///
+/// Category mapping:
+///   - source contains "core"         -> Core
+///   - source contains "conversation" -> Conversation
+///   - source contains "daily"        -> Daily
+///   - source contains "debrief"      -> Core (debriefs are high-value)
+///   - anything else                  -> Core (safe default)
+fn parse_decrypted_envelope(decrypted: &str) -> DecryptedEnvelope {
+    // Try to parse as JSON envelope
+    if let Ok(obj) = serde_json::from_str::<serde_json::Value>(decrypted) {
+        let text = obj
+            .get("t")
+            .and_then(|v| v.as_str())
+            .unwrap_or(decrypted)
+            .to_string();
+        let source = obj
+            .get("s")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let category = category_from_source(source);
+        return DecryptedEnvelope { text, category };
+    }
+    // Fallback: treat entire decrypted content as text
+    DecryptedEnvelope {
+        text: decrypted.to_string(),
+        category: MemoryCategory::Core,
+    }
+}
+
+/// Map a source string to a ZeroClaw memory category.
+fn category_from_source(source: &str) -> MemoryCategory {
+    let lower = source.to_lowercase();
+    if lower.contains("conversation") || lower.contains("episodic") {
+        MemoryCategory::Conversation
+    } else if lower.contains("daily") || lower.contains("context") {
+        MemoryCategory::Daily
+    } else {
+        // Core covers: fact, preference, decision, goal, summary, rule, debrief, and unknown
+        MemoryCategory::Core
+    }
+}
+
 /// Auto-recall top_k constant (after reranking). Matches all other clients.
 const AUTO_RECALL_TOP_K: usize = 8;
 
@@ -464,6 +517,9 @@ impl TotalReclawMemory {
     }
 
     /// List all memories (paginated export).
+    ///
+    /// Parses each decrypted envelope to extract the correct category
+    /// (previously hardcoded to Core).
     pub async fn list(
         &self,
         _category: Option<&MemoryCategory>,
@@ -477,16 +533,18 @@ impl TotalReclawMemory {
                 Some(b) => b,
                 None => continue,
             };
-            let text = match crypto::decrypt(&blob_b64, &self.keys.encryption_key) {
+            let decrypted = match crypto::decrypt(&blob_b64, &self.keys.encryption_key) {
                 Ok(t) => t,
                 Err(_) => continue,
             };
 
+            let envelope = parse_decrypted_envelope(&decrypted);
+
             entries.push(MemoryEntry {
                 id: fact.id.clone(),
                 key: fact.id,
-                content: text,
-                category: MemoryCategory::Core,
+                content: envelope.text,
+                category: envelope.category,
                 timestamp: fact.timestamp.unwrap_or_default(),
                 session_id: None,
                 score: None,

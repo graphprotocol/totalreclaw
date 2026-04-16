@@ -66,7 +66,9 @@ mod tests {
     }
 
     #[test]
-    fn test_aes_gcm_fixed_iv_parity() {
+    fn test_xchacha20_fixed_nonce_round_trip() {
+        // XChaCha20-Poly1305 uses a 24-byte nonce.
+        // Use a deterministic zero nonce to verify encrypt_with_nonce + decrypt round-trip.
         let fixture: serde_json::Value = serde_json::from_str(
             include_str!("../tests/fixtures/crypto_vectors.json"),
         )
@@ -78,20 +80,18 @@ mod tests {
         let mut key = [0u8; 32];
         key.copy_from_slice(&key_bytes);
 
-        let iv = [0u8; 12]; // fixed zero IV
+        let nonce = [0u8; 24]; // fixed zero nonce (24 bytes for XChaCha20)
         let plaintext = aes["plaintext"].as_str().unwrap();
-        let expected_b64 = aes["fixed_iv_encrypted_base64"].as_str().unwrap();
 
-        let encrypted = encrypt_with_iv(plaintext, &key, &iv).unwrap();
-        assert_eq!(encrypted, expected_b64);
+        let encrypted = encrypt_with_nonce(plaintext, &key, &nonce).unwrap();
 
-        // Round-trip
+        // Round-trip: decrypt must recover the original plaintext
         let decrypted = decrypt(&encrypted, &key).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
     #[test]
-    fn test_aes_gcm_round_trip() {
+    fn test_xchacha20_round_trip() {
         let keys = derive_keys_from_mnemonic(
             "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
         )
