@@ -2824,6 +2824,7 @@ const plugin = {
                   metaMap.set(candidate.fact_id, {
                     metadata: doc.metadata ?? {},
                     timestamp: candidate.timestamp,
+                    category: doc.category,
                   });
                 } catch {
                   // Skip candidates we cannot decrypt (e.g. corrupted data).
@@ -2870,7 +2871,8 @@ const plugin = {
                 ? ` (importance: ${Math.round((meta.metadata.importance as number) * 10)}/10)`
                 : '';
               const age = meta ? relativeTime(meta.timestamp) : '';
-              return `${i + 1}. ${m.text}${imp} -- ${age} [ID: ${m.id}]`;
+              const typeTag = meta?.category ? `[${meta.category}] ` : '';
+              return `${i + 1}. ${typeTag}${m.text}${imp} -- ${age} [ID: ${m.id}]`;
             });
 
             const formatted = lines.join('\n');
@@ -4303,6 +4305,7 @@ const plugin = {
                 hookMetaMap.set(result.id, {
                   importance: doc.importance,
                   age: 'subgraph',
+                  category: doc.category,
                 });
               } catch {
                 // Skip un-decryptable candidates.
@@ -4357,7 +4360,8 @@ const plugin = {
               const meta = hookMetaMap.get(m.id);
               const importance = meta?.importance ?? 5;
               const age = meta?.age ?? '';
-              return `${i + 1}. ${m.text} (importance: ${importance}/10, ${age})`;
+              const typeTag = meta?.category ? `[${meta.category}] ` : '';
+              return `${i + 1}. ${typeTag}${m.text} (importance: ${importance}/10, ${age})`;
             });
             const contextString = `## Relevant Memories\n\n${lines.join('\n')}`;
 

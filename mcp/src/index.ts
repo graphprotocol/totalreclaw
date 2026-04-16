@@ -963,6 +963,7 @@ async function handleRecallSubgraph(
 
     // 5. Decrypt candidates
     const decryptedCandidates = [];
+    const categoryMap = new Map<string, string>();
     for (const c of candidates) {
       try {
         const blobHex = c.encryptedBlob.startsWith('0x') ? c.encryptedBlob.slice(2) : c.encryptedBlob;
@@ -989,6 +990,10 @@ async function handleRecallSubgraph(
           }
         }
 
+        if (doc.category) {
+          categoryMap.set(c.id, doc.category);
+        }
+
         decryptedCandidates.push({
           id: c.id,
           text,
@@ -1012,6 +1017,7 @@ async function handleRecallSubgraph(
     const memories = reranked.map(r => ({
       fact_id: r.id,
       fact_text: r.text,
+      type: categoryMap.get(r.id) ?? 'fact',
       score: r.rrfScore,
       cosine_similarity: r.cosineSimilarity ?? 0,
       importance: Math.round((r.importance ?? 0.5) * 10),

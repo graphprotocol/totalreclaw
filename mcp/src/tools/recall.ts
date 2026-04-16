@@ -95,9 +95,20 @@ export async function handleRecall(
       const ageMs = Date.now() - r.fact.createdAt.getTime();
       const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
 
+      // Best-effort category extraction: if the decrypted text is a claim
+      // JSON blob (e.g. {"t":"...","c":"rule",...}), extract the category.
+      let type = 'fact';
+      try {
+        const parsed = JSON.parse(r.fact.text) as Record<string, unknown>;
+        if (typeof parsed.c === 'string') type = parsed.c;
+      } catch {
+        // Not a JSON blob — default to 'fact'
+      }
+
       return {
         fact_id: r.fact.id,
         fact_text: r.fact.text,
+        type,
         score: r.score,
         importance: Math.round((r.fact.metadata.importance ?? 0.5) * 10),
         age_days: ageDays,

@@ -95,7 +95,7 @@ async def recall(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({
             "count": len(results),
             "memories": [
-                {"id": r.id, "text": r.text, "score": round(r.rrf_score, 4)}
+                {"id": r.id, "text": r.text, "type": r.category, "score": round(r.rrf_score, 4)}
                 for r in results
             ],
         })

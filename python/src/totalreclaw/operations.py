@@ -405,6 +405,7 @@ async def search_facts(
                     embedding=emb,
                     importance=decay,
                     created_at=created_at,
+                    category=doc.get("category", "fact"),
                 )
             )
         except Exception as e:

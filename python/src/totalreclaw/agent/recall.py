@@ -54,7 +54,7 @@ def auto_recall(
             loop.close()
 
         if results:
-            memories = "\n".join(f"- {r.text}" for r in results)
+            memories = "\n".join(f"- [{r.category}] {r.text}" for r in results)
             return f"## Relevant memories from TotalReclaw\n{memories}"
     except Exception as e:
         logger.warning("TotalReclaw auto-recall failed: %s", e)
@@ -87,7 +87,7 @@ async def auto_recall_async(
     try:
         results = await client.recall(query, top_k=top_k)
         if results:
-            memories = "\n".join(f"- {r.text}" for r in results)
+            memories = "\n".join(f"- [{r.category}] {r.text}" for r in results)
             return f"## Relevant memories from TotalReclaw\n{memories}"
     except Exception as e:
         logger.warning("TotalReclaw auto-recall failed: %s", e)

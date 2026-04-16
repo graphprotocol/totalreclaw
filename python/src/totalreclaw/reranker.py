@@ -267,6 +267,7 @@ class RerankerCandidate:
     embedding: Optional[list[float]] = None
     importance: Optional[float] = None
     created_at: Optional[float] = None  # Unix timestamp (seconds)
+    category: str = "fact"
 
 
 @dataclass
@@ -277,6 +278,7 @@ class RerankerResult:
     embedding: Optional[list[float]] = None
     importance: Optional[float] = None
     created_at: Optional[float] = None
+    category: str = "fact"
     rrf_score: float = 0.0
     cosine_sim: Optional[float] = None
 
@@ -475,6 +477,7 @@ def rerank(
                 embedding=c.embedding,
                 importance=c.importance,
                 created_at=c.created_at,
+                category=c.category,
                 rrf_score=item.score,
                 cosine_sim=cosine_scores.get(c.id),
             ))
