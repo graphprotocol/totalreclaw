@@ -176,12 +176,45 @@ pub enum ResolutionAction {
         new_id: String,
         similarity: f64,
         score_gap: f64,
+        /// Entity that triggered the contradiction (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        entity_id: Option<String>,
+        /// Winner's score (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        winner_score: Option<f64>,
+        /// Loser's score (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        loser_score: Option<f64>,
+        /// Winner's per-component score breakdown (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        winner_components: Option<crate::contradiction::ScoreComponents>,
+        /// Loser's per-component score breakdown (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        loser_components: Option<crate::contradiction::ScoreComponents>,
     },
     /// Skip the new claim (existing wins or is pinned).
     SkipNew {
         reason: SkipReason,
         existing_id: String,
         new_id: String,
+        /// Entity that triggered the contradiction (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        entity_id: Option<String>,
+        /// Similarity between the claims (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        similarity: Option<f64>,
+        /// Winner's score (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        winner_score: Option<f64>,
+        /// Loser's score (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        loser_score: Option<f64>,
+        /// Winner's per-component score breakdown (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        winner_components: Option<crate::contradiction::ScoreComponents>,
+        /// Loser's per-component score breakdown (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        loser_components: Option<crate::contradiction::ScoreComponents>,
     },
     /// Score gap is within tie-zone tolerance; keep both claims.
     TieLeaveBoth {
@@ -189,6 +222,21 @@ pub enum ResolutionAction {
         new_id: String,
         similarity: f64,
         score_gap: f64,
+        /// Entity that triggered the contradiction (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        entity_id: Option<String>,
+        /// Winner's score (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        winner_score: Option<f64>,
+        /// Loser's score (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        loser_score: Option<f64>,
+        /// Winner's per-component score breakdown (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        winner_components: Option<crate::contradiction::ScoreComponents>,
+        /// Loser's per-component score breakdown (populated by orchestration).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        loser_components: Option<crate::contradiction::ScoreComponents>,
     },
 }
 
@@ -226,6 +274,12 @@ pub fn respect_pin_in_resolution(
             reason: SkipReason::ExistingPinned,
             existing_id: existing_claim_id.to_string(),
             new_id: new_claim_id.to_string(),
+            entity_id: None,
+            similarity: None,
+            winner_score: None,
+            loser_score: None,
+            winner_components: None,
+            loser_components: None,
         };
     }
 
@@ -235,6 +289,12 @@ pub fn respect_pin_in_resolution(
             reason: SkipReason::ExistingWins,
             existing_id: existing_claim_id.to_string(),
             new_id: new_claim_id.to_string(),
+            entity_id: None,
+            similarity: None,
+            winner_score: None,
+            loser_score: None,
+            winner_components: None,
+            loser_components: None,
         };
     }
 
@@ -245,6 +305,11 @@ pub fn respect_pin_in_resolution(
             new_id: new_claim_id.to_string(),
             similarity,
             score_gap,
+            entity_id: None,
+            winner_score: None,
+            loser_score: None,
+            winner_components: None,
+            loser_components: None,
         };
     }
 
@@ -254,6 +319,11 @@ pub fn respect_pin_in_resolution(
         new_id: new_claim_id.to_string(),
         similarity,
         score_gap,
+        entity_id: None,
+        winner_score: None,
+        loser_score: None,
+        winner_components: None,
+        loser_components: None,
     }
 }
 
@@ -878,6 +948,12 @@ mod tests {
                 reason: SkipReason::ExistingPinned,
                 existing_id: "existing_id".to_string(),
                 new_id: "new_id".to_string(),
+                entity_id: None,
+                similarity: None,
+                winner_score: None,
+                loser_score: None,
+                winner_components: None,
+                loser_components: None,
             }
         );
     }
@@ -895,6 +971,12 @@ mod tests {
                 reason: SkipReason::ExistingWins,
                 existing_id: "existing_id".to_string(),
                 new_id: "new_id".to_string(),
+                entity_id: None,
+                similarity: None,
+                winner_score: None,
+                loser_score: None,
+                winner_components: None,
+                loser_components: None,
             }
         );
     }
@@ -936,6 +1018,11 @@ mod tests {
             new_id: "nw".to_string(),
             similarity: 0.7,
             score_gap: 0.15,
+            entity_id: None,
+            winner_score: None,
+            loser_score: None,
+            winner_components: None,
+            loser_components: None,
         };
         let json = serde_json::to_string(&action).unwrap();
         let back: ResolutionAction = serde_json::from_str(&json).unwrap();

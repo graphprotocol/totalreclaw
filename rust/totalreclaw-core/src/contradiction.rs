@@ -251,6 +251,280 @@ pub fn detect_contradictions(
     out
 }
 
+// ---------------------------------------------------------------------------
+// Step D: Contradiction Detection Orchestration
+// ---------------------------------------------------------------------------
+
+/// Core orchestration loop for contradiction resolution.
+///
+/// Given a new claim and a set of candidates (existing claims with embeddings),
+/// detect contradictions and resolve each one by checking pin status, running the
+/// resolution formula, and applying the tie-zone guard.
+///
+/// All I/O (subgraph queries, decryption, file reads) stays in client adapters.
+/// This function operates on pre-fetched, pre-decrypted data only.
+///
+/// Returns an empty vec when:
+/// - candidates is empty
+/// - new_embedding is empty
+/// - no contradictions are detected
+pub fn resolve_with_candidates(
+    new_claim: &Claim,
+    new_claim_id: &str,
+    new_embedding: &[f32],
+    candidates: &[(Claim, String, Vec<f32>)],
+    weights: &ResolutionWeights,
+    threshold_lower: f64,
+    threshold_upper: f64,
+    now_unix_seconds: i64,
+    tie_zone_tolerance: f64,
+) -> Vec<crate::claims::ResolutionAction> {
+    use crate::claims::{is_pinned_claim, ResolutionAction, SkipReason};
+
+    if candidates.is_empty() || new_embedding.is_empty() {
+        return Vec::new();
+    }
+
+    let contradictions = detect_contradictions(
+        new_claim,
+        new_claim_id,
+        new_embedding,
+        candidates,
+        threshold_lower,
+        threshold_upper,
+    );
+
+    if contradictions.is_empty() {
+        return Vec::new();
+    }
+
+    // Index candidates by id for fast lookup.
+    let by_id: std::collections::HashMap<&str, &(Claim, String, Vec<f32>)> = candidates
+        .iter()
+        .map(|c| (c.1.as_str(), c))
+        .collect();
+
+    let mut actions: Vec<ResolutionAction> = Vec::new();
+
+    for contradiction in &contradictions {
+        let Some(existing_tuple) = by_id.get(contradiction.claim_b_id.as_str()) else {
+            continue;
+        };
+        let existing_claim = &existing_tuple.0;
+        let existing_id = &existing_tuple.1;
+
+        // Pinned existing claims are untouchable.
+        if is_pinned_claim(existing_claim) {
+            actions.push(ResolutionAction::SkipNew {
+                reason: SkipReason::ExistingPinned,
+                existing_id: existing_id.clone(),
+                new_id: new_claim_id.to_string(),
+                entity_id: Some(contradiction.entity_id.clone()),
+                similarity: Some(contradiction.similarity),
+                winner_score: None,
+                loser_score: None,
+                winner_components: None,
+                loser_components: None,
+            });
+            continue;
+        }
+
+        // Run the resolution formula.
+        let outcome = resolve_pair(
+            new_claim,
+            new_claim_id,
+            existing_claim,
+            existing_id,
+            now_unix_seconds,
+            weights,
+        );
+
+        if outcome.winner_id == new_claim_id {
+            // New claim wins — check tie zone.
+            if outcome.score_delta.abs() < tie_zone_tolerance {
+                actions.push(ResolutionAction::TieLeaveBoth {
+                    existing_id: existing_id.clone(),
+                    new_id: new_claim_id.to_string(),
+                    similarity: contradiction.similarity,
+                    score_gap: outcome.score_delta,
+                    entity_id: Some(contradiction.entity_id.clone()),
+                    winner_score: Some(outcome.winner_score),
+                    loser_score: Some(outcome.loser_score),
+                    winner_components: Some(outcome.winner_components),
+                    loser_components: Some(outcome.loser_components),
+                });
+            } else {
+                actions.push(ResolutionAction::SupersedeExisting {
+                    existing_id: existing_id.clone(),
+                    new_id: new_claim_id.to_string(),
+                    similarity: contradiction.similarity,
+                    score_gap: outcome.score_delta,
+                    entity_id: Some(contradiction.entity_id.clone()),
+                    winner_score: Some(outcome.winner_score),
+                    loser_score: Some(outcome.loser_score),
+                    winner_components: Some(outcome.winner_components),
+                    loser_components: Some(outcome.loser_components),
+                });
+            }
+        } else {
+            // Existing claim wins.
+            actions.push(ResolutionAction::SkipNew {
+                reason: SkipReason::ExistingWins,
+                existing_id: existing_id.clone(),
+                new_id: new_claim_id.to_string(),
+                entity_id: Some(contradiction.entity_id.clone()),
+                similarity: Some(contradiction.similarity),
+                winner_score: Some(outcome.winner_score),
+                loser_score: Some(outcome.loser_score),
+                winner_components: Some(outcome.winner_components),
+                loser_components: Some(outcome.loser_components),
+            });
+        }
+    }
+
+    actions
+}
+
+/// Convert resolution actions + metadata into decision log entries.
+///
+/// For each action, builds a `DecisionLogEntry` with scores, entity, and mode.
+/// For `SupersedeExisting`, populates `loser_claim_json` from the provided map
+/// (enables pin-on-tombstone recovery).
+pub fn build_decision_log_entries(
+    actions: &[crate::claims::ResolutionAction],
+    _new_claim_json: &str,
+    existing_claims_json: &std::collections::HashMap<String, String>,
+    mode: &str,
+    now_unix: i64,
+) -> Vec<crate::decision_log::DecisionLogEntry> {
+    use crate::claims::ResolutionAction;
+    use crate::decision_log::DecisionLogEntry;
+
+    let mut entries = Vec::new();
+
+    for action in actions {
+        match action {
+            ResolutionAction::SupersedeExisting {
+                existing_id,
+                new_id,
+                similarity,
+                entity_id,
+                winner_score,
+                loser_score,
+                winner_components,
+                loser_components,
+                ..
+            } => {
+                let loser_json = existing_claims_json.get(existing_id).cloned();
+                entries.push(DecisionLogEntry {
+                    ts: now_unix,
+                    entity_id: entity_id.clone().unwrap_or_default(),
+                    new_claim_id: new_id.clone(),
+                    existing_claim_id: existing_id.clone(),
+                    similarity: *similarity,
+                    action: if mode == "shadow" {
+                        "shadow".to_string()
+                    } else {
+                        "supersede_existing".to_string()
+                    },
+                    reason: Some("new_wins".to_string()),
+                    winner_score: *winner_score,
+                    loser_score: *loser_score,
+                    winner_components: winner_components.clone(),
+                    loser_components: loser_components.clone(),
+                    loser_claim_json: loser_json,
+                    mode: mode.to_string(),
+                });
+            }
+            ResolutionAction::SkipNew {
+                reason,
+                existing_id,
+                new_id,
+                entity_id,
+                similarity,
+                winner_score,
+                loser_score,
+                winner_components,
+                loser_components,
+            } => {
+                entries.push(DecisionLogEntry {
+                    ts: now_unix,
+                    entity_id: entity_id.clone().unwrap_or_default(),
+                    new_claim_id: new_id.clone(),
+                    existing_claim_id: existing_id.clone(),
+                    similarity: similarity.unwrap_or(0.0),
+                    action: if mode == "shadow" {
+                        "shadow".to_string()
+                    } else {
+                        "skip_new".to_string()
+                    },
+                    reason: Some(serde_json::to_value(reason)
+                        .ok()
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        .unwrap_or_else(|| format!("{:?}", reason).to_lowercase())),
+                    winner_score: *winner_score,
+                    loser_score: *loser_score,
+                    winner_components: winner_components.clone(),
+                    loser_components: loser_components.clone(),
+                    loser_claim_json: None,
+                    mode: mode.to_string(),
+                });
+            }
+            ResolutionAction::TieLeaveBoth {
+                existing_id,
+                new_id,
+                similarity,
+                entity_id,
+                winner_score,
+                loser_score,
+                winner_components,
+                loser_components,
+                ..
+            } => {
+                entries.push(DecisionLogEntry {
+                    ts: now_unix,
+                    entity_id: entity_id.clone().unwrap_or_default(),
+                    new_claim_id: new_id.clone(),
+                    existing_claim_id: existing_id.clone(),
+                    similarity: *similarity,
+                    action: "tie_leave_both".to_string(),
+                    reason: Some("tie_below_tolerance".to_string()),
+                    winner_score: *winner_score,
+                    loser_score: *loser_score,
+                    winner_components: winner_components.clone(),
+                    loser_components: loser_components.clone(),
+                    loser_claim_json: None,
+                    mode: mode.to_string(),
+                });
+            }
+            ResolutionAction::NoContradiction => {
+                // No log entry for no-op actions.
+            }
+        }
+    }
+
+    entries
+}
+
+/// Filter resolution actions based on the auto-resolve mode.
+///
+/// - `"active"`: return actions as-is (but filter out ties, which are informational only)
+/// - `"shadow"`: return empty vec (log only, no side effects)
+/// - `"off"` or anything else: return empty vec
+pub fn filter_shadow_mode(
+    actions: Vec<crate::claims::ResolutionAction>,
+    mode: &str,
+) -> Vec<crate::claims::ResolutionAction> {
+    use crate::claims::ResolutionAction;
+    match mode {
+        "active" => actions
+            .into_iter()
+            .filter(|a| !matches!(a, ResolutionAction::TieLeaveBoth { .. }))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Apply a single counterexample to the weights via a small gradient step.
 /// See `FEEDBACK_STEP_SIZE`, `WEIGHT_MIN`, `WEIGHT_MAX`, and `WEIGHT_SUM_MIN`/`MAX`.
 ///
@@ -1089,5 +1363,448 @@ mod tests {
         let j = serde_json::to_string(&ce).unwrap();
         let back: Counterexample = serde_json::from_str(&j).unwrap();
         assert_eq!(ce, back);
+    }
+
+    // =========================================================================
+    // Step D: resolve_with_candidates
+    // =========================================================================
+
+    /// Helper: create a normalized embedding vector of the given dimension.
+    fn make_embedding(seed: f32, dim: usize) -> Vec<f32> {
+        let raw: Vec<f32> = (0..dim).map(|i| seed + i as f32 * 0.1).collect();
+        let norm: f32 = raw.iter().map(|x| x * x).sum::<f32>().sqrt();
+        raw.iter().map(|x| x / norm).collect()
+    }
+
+    /// Similar embedding (slightly perturbed).
+    fn perturb_embedding(base: &[f32], delta: f32) -> Vec<f32> {
+        let raw: Vec<f32> = base.iter().enumerate().map(|(i, &x)| {
+            if i == 0 { x + delta } else { x }
+        }).collect();
+        let norm: f32 = raw.iter().map(|x| x * x).sum::<f32>().sqrt();
+        raw.iter().map(|x| x / norm).collect()
+    }
+
+    #[test]
+    fn test_resolve_with_candidates_no_contradictions() {
+        // New claim and existing share no entities → no contradictions.
+        let new = make_claim("prefers Vim", 0.9, 1, "oc", Some(&iso_days_ago(1)), vec!["editor"]);
+        let existing = make_claim("likes Rust", 0.8, 1, "oc", Some(&iso_days_ago(5)), vec!["programming"]);
+        let emb = make_embedding(1.0, 10);
+        let candidates = vec![(existing, "exist_id".to_string(), emb.clone())];
+
+        let actions = resolve_with_candidates(
+            &new, "new_id", &emb, &candidates, &default_weights(),
+            DEFAULT_LOWER_THRESHOLD, DEFAULT_UPPER_THRESHOLD, NOW, 0.01,
+        );
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_with_candidates_empty_candidates() {
+        let new = make_claim("prefers Vim", 0.9, 1, "oc", Some(&iso_days_ago(1)), vec!["editor"]);
+        let emb = make_embedding(1.0, 10);
+        let candidates: Vec<(Claim, String, Vec<f32>)> = vec![];
+
+        let actions = resolve_with_candidates(
+            &new, "new_id", &emb, &candidates, &default_weights(),
+            DEFAULT_LOWER_THRESHOLD, DEFAULT_UPPER_THRESHOLD, NOW, 0.01,
+        );
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_with_candidates_empty_embedding() {
+        let new = make_claim("prefers Vim", 0.9, 1, "oc", Some(&iso_days_ago(1)), vec!["editor"]);
+        let existing = make_claim("uses VS Code", 0.8, 1, "oc", Some(&iso_days_ago(30)), vec!["editor"]);
+        let emb = make_embedding(1.0, 10);
+        let candidates = vec![(existing, "exist_id".to_string(), emb)];
+
+        let actions = resolve_with_candidates(
+            &new, "new_id", &[], &candidates, &default_weights(),
+            DEFAULT_LOWER_THRESHOLD, DEFAULT_UPPER_THRESHOLD, NOW, 0.01,
+        );
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_with_candidates_new_wins_supersede() {
+        // New claim: recent, high confidence. Existing: old, lower confidence.
+        // Both share entity "editor". Embeddings are similar but in the contradiction band.
+        let new = make_claim("uses VS Code", 0.95, 1, "totalreclaw_remember", Some(&iso_days_ago(1)), vec!["editor"]);
+        let existing = make_claim("prefers Vim", 0.6, 1, "oc", Some(&iso_days_ago(60)), vec!["editor"]);
+
+        let new_emb = make_embedding(1.0, 10);
+        let existing_emb = perturb_embedding(&new_emb, 0.3);
+        let candidates = vec![(existing, "exist_id".to_string(), existing_emb)];
+
+        let actions = resolve_with_candidates(
+            &new, "new_id", &new_emb, &candidates, &default_weights(),
+            0.0, 1.0, NOW, 0.01,
+        );
+
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            crate::claims::ResolutionAction::SupersedeExisting {
+                existing_id, new_id, winner_score, loser_score, entity_id, ..
+            } => {
+                assert_eq!(existing_id, "exist_id");
+                assert_eq!(new_id, "new_id");
+                assert!(winner_score.unwrap() > loser_score.unwrap());
+                assert!(entity_id.is_some());
+            }
+            other => panic!("expected SupersedeExisting, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_resolve_with_candidates_existing_wins_skip() {
+        // Existing claim: recent, explicit remember, high confidence.
+        // New claim: old, auto-extracted, lower confidence.
+        let new = make_claim("prefers Vim", 0.5, 1, "oc", Some(&iso_days_ago(60)), vec!["editor"]);
+        let existing = make_claim("uses VS Code", 0.95, 1, "totalreclaw_remember", Some(&iso_days_ago(1)), vec!["editor"]);
+
+        let new_emb = make_embedding(1.0, 10);
+        let existing_emb = perturb_embedding(&new_emb, 0.3);
+        let candidates = vec![(existing, "exist_id".to_string(), existing_emb)];
+
+        let actions = resolve_with_candidates(
+            &new, "new_id", &new_emb, &candidates, &default_weights(),
+            0.0, 1.0, NOW, 0.01,
+        );
+
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            crate::claims::ResolutionAction::SkipNew {
+                reason, existing_id, winner_score, loser_score, ..
+            } => {
+                assert_eq!(*reason, crate::claims::SkipReason::ExistingWins);
+                assert_eq!(existing_id, "exist_id");
+                assert!(winner_score.is_some());
+                assert!(loser_score.is_some());
+            }
+            other => panic!("expected SkipNew, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_resolve_with_candidates_pinned_existing_skip() {
+        let new = make_claim("uses VS Code", 0.95, 1, "totalreclaw_remember", Some(&iso_days_ago(1)), vec!["editor"]);
+        let mut existing = make_claim("prefers Vim", 0.6, 1, "oc", Some(&iso_days_ago(60)), vec!["editor"]);
+        existing.status = ClaimStatus::Pinned;
+
+        let new_emb = make_embedding(1.0, 10);
+        let existing_emb = perturb_embedding(&new_emb, 0.3);
+        let candidates = vec![(existing, "exist_id".to_string(), existing_emb)];
+
+        let actions = resolve_with_candidates(
+            &new, "new_id", &new_emb, &candidates, &default_weights(),
+            0.0, 1.0, NOW, 0.01,
+        );
+
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            crate::claims::ResolutionAction::SkipNew {
+                reason, existing_id, ..
+            } => {
+                assert_eq!(*reason, crate::claims::SkipReason::ExistingPinned);
+                assert_eq!(existing_id, "exist_id");
+            }
+            other => panic!("expected SkipNew ExistingPinned, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_resolve_with_candidates_tie_zone() {
+        // Two claims with near-identical scores → tie zone.
+        // Both have same confidence, corroboration, source, and very close recency.
+        let new = make_claim("prefers Postgres for OLTP", 0.85, 1, "oc", Some(&iso_days_ago(2)), vec!["database"]);
+        let existing = make_claim("prefers DuckDB for OLAP", 0.85, 1, "oc", Some(&iso_days_ago(2)), vec!["database"]);
+
+        let new_emb = make_embedding(1.0, 10);
+        let existing_emb = perturb_embedding(&new_emb, 0.3);
+        let candidates = vec![(existing, "exist_id".to_string(), existing_emb)];
+
+        // Use a very large tie_zone_tolerance to force a tie.
+        let actions = resolve_with_candidates(
+            &new, "new_id", &new_emb, &candidates, &default_weights(),
+            0.0, 1.0, NOW, 10.0, // huge tolerance → everything is a tie
+        );
+
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            crate::claims::ResolutionAction::TieLeaveBoth {
+                existing_id, new_id, entity_id, ..
+            } => {
+                assert_eq!(existing_id, "exist_id");
+                assert_eq!(new_id, "new_id");
+                assert!(entity_id.is_some());
+            }
+            other => panic!("expected TieLeaveBoth, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // Step D: build_decision_log_entries
+    // =========================================================================
+
+    #[test]
+    fn test_build_decision_log_entries_supersede_populates_loser_json() {
+        use crate::claims::ResolutionAction;
+        let actions = vec![ResolutionAction::SupersedeExisting {
+            existing_id: "0xold".to_string(),
+            new_id: "0xnew".to_string(),
+            similarity: 0.72,
+            score_gap: 0.15,
+            entity_id: Some("ent123".to_string()),
+            winner_score: Some(0.8),
+            loser_score: Some(0.65),
+            winner_components: None,
+            loser_components: None,
+        }];
+        let mut existing_map = std::collections::HashMap::new();
+        existing_map.insert("0xold".to_string(), r#"{"t":"old claim"}"#.to_string());
+
+        let entries = build_decision_log_entries(&actions, "{}", &existing_map, "active", 1_776_384_000);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].action, "supersede_existing");
+        assert_eq!(entries[0].entity_id, "ent123");
+        assert_eq!(entries[0].loser_claim_json.as_deref(), Some(r#"{"t":"old claim"}"#));
+        assert_eq!(entries[0].mode, "active");
+        assert_eq!(entries[0].reason.as_deref(), Some("new_wins"));
+    }
+
+    #[test]
+    fn test_build_decision_log_entries_skip_no_loser_json() {
+        use crate::claims::{ResolutionAction, SkipReason};
+        let actions = vec![ResolutionAction::SkipNew {
+            reason: SkipReason::ExistingWins,
+            existing_id: "0xold".to_string(),
+            new_id: "0xnew".to_string(),
+            entity_id: Some("ent123".to_string()),
+            similarity: Some(0.72),
+            winner_score: Some(0.8),
+            loser_score: Some(0.65),
+            winner_components: None,
+            loser_components: None,
+        }];
+        let existing_map = std::collections::HashMap::new();
+
+        let entries = build_decision_log_entries(&actions, "{}", &existing_map, "active", 1_776_384_000);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].action, "skip_new");
+        assert!(entries[0].loser_claim_json.is_none());
+        assert_eq!(entries[0].reason.as_deref(), Some("existing_wins"));
+    }
+
+    #[test]
+    fn test_build_decision_log_entries_tie() {
+        use crate::claims::ResolutionAction;
+        let actions = vec![ResolutionAction::TieLeaveBoth {
+            existing_id: "0xold".to_string(),
+            new_id: "0xnew".to_string(),
+            similarity: 0.72,
+            score_gap: 0.005,
+            entity_id: Some("ent123".to_string()),
+            winner_score: Some(0.7),
+            loser_score: Some(0.695),
+            winner_components: None,
+            loser_components: None,
+        }];
+        let existing_map = std::collections::HashMap::new();
+
+        let entries = build_decision_log_entries(&actions, "{}", &existing_map, "active", 1_776_384_000);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].action, "tie_leave_both");
+        assert_eq!(entries[0].reason.as_deref(), Some("tie_below_tolerance"));
+    }
+
+    #[test]
+    fn test_build_decision_log_entries_shadow_mode_overrides_action() {
+        use crate::claims::ResolutionAction;
+        let actions = vec![ResolutionAction::SupersedeExisting {
+            existing_id: "0xold".to_string(),
+            new_id: "0xnew".to_string(),
+            similarity: 0.72,
+            score_gap: 0.15,
+            entity_id: Some("ent123".to_string()),
+            winner_score: Some(0.8),
+            loser_score: Some(0.65),
+            winner_components: None,
+            loser_components: None,
+        }];
+        let existing_map = std::collections::HashMap::new();
+
+        let entries = build_decision_log_entries(&actions, "{}", &existing_map, "shadow", 1_776_384_000);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].action, "shadow");
+        assert_eq!(entries[0].mode, "shadow");
+    }
+
+    // =========================================================================
+    // Step D: filter_shadow_mode
+    // =========================================================================
+
+    #[test]
+    fn test_filter_shadow_mode_active_passes_through() {
+        use crate::claims::ResolutionAction;
+        let actions = vec![
+            ResolutionAction::SupersedeExisting {
+                existing_id: "a".to_string(),
+                new_id: "b".to_string(),
+                similarity: 0.7,
+                score_gap: 0.2,
+                entity_id: None,
+                winner_score: None,
+                loser_score: None,
+                winner_components: None,
+                loser_components: None,
+            },
+        ];
+        let filtered = filter_shadow_mode(actions, "active");
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_shadow_mode_active_removes_ties() {
+        use crate::claims::ResolutionAction;
+        let actions = vec![
+            ResolutionAction::TieLeaveBoth {
+                existing_id: "a".to_string(),
+                new_id: "b".to_string(),
+                similarity: 0.7,
+                score_gap: 0.005,
+                entity_id: None,
+                winner_score: None,
+                loser_score: None,
+                winner_components: None,
+                loser_components: None,
+            },
+            ResolutionAction::SupersedeExisting {
+                existing_id: "c".to_string(),
+                new_id: "d".to_string(),
+                similarity: 0.7,
+                score_gap: 0.2,
+                entity_id: None,
+                winner_score: None,
+                loser_score: None,
+                winner_components: None,
+                loser_components: None,
+            },
+        ];
+        let filtered = filter_shadow_mode(actions, "active");
+        assert_eq!(filtered.len(), 1);
+        match &filtered[0] {
+            ResolutionAction::SupersedeExisting { existing_id, .. } => {
+                assert_eq!(existing_id, "c");
+            }
+            other => panic!("expected SupersedeExisting, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_filter_shadow_mode_shadow_returns_empty() {
+        use crate::claims::ResolutionAction;
+        let actions = vec![ResolutionAction::SupersedeExisting {
+            existing_id: "a".to_string(),
+            new_id: "b".to_string(),
+            similarity: 0.7,
+            score_gap: 0.2,
+            entity_id: None,
+            winner_score: None,
+            loser_score: None,
+            winner_components: None,
+            loser_components: None,
+        }];
+        let filtered = filter_shadow_mode(actions, "shadow");
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_filter_shadow_mode_off_returns_empty() {
+        use crate::claims::ResolutionAction;
+        let actions = vec![ResolutionAction::SupersedeExisting {
+            existing_id: "a".to_string(),
+            new_id: "b".to_string(),
+            similarity: 0.7,
+            score_gap: 0.2,
+            entity_id: None,
+            winner_score: None,
+            loser_score: None,
+            winner_components: None,
+            loser_components: None,
+        }];
+        let filtered = filter_shadow_mode(actions, "off");
+        assert!(filtered.is_empty());
+    }
+
+    // =========================================================================
+    // Step D: Integration test — full pipeline
+    // =========================================================================
+
+    #[test]
+    fn test_full_pipeline_resolve_to_decision_log() {
+        // Full integration: resolve_with_candidates → build_decision_log_entries → filter
+        let new = make_claim("uses VS Code", 0.95, 1, "totalreclaw_remember", Some(&iso_days_ago(1)), vec!["editor"]);
+        let existing = make_claim("prefers Vim", 0.6, 1, "oc", Some(&iso_days_ago(60)), vec!["editor"]);
+
+        let new_emb = make_embedding(1.0, 10);
+        let existing_emb = perturb_embedding(&new_emb, 0.3);
+        let existing_json = serde_json::to_string(&existing).unwrap();
+        let candidates = vec![(existing, "0xold".to_string(), existing_emb)];
+
+        // Step 1: Resolve
+        let actions = resolve_with_candidates(
+            &new, "0xnew", &new_emb, &candidates, &default_weights(),
+            0.0, 1.0, NOW, 0.01,
+        );
+        assert!(!actions.is_empty());
+
+        // Step 2: Build decision log entries
+        let mut existing_map = std::collections::HashMap::new();
+        existing_map.insert("0xold".to_string(), existing_json.clone());
+        let entries = build_decision_log_entries(&actions, "{}", &existing_map, "active", NOW);
+        assert_eq!(entries.len(), actions.len());
+        // Verify the entry has the right shape.
+        let entry = &entries[0];
+        assert!(entry.ts == NOW);
+        assert!(!entry.entity_id.is_empty());
+        assert_eq!(entry.new_claim_id, "0xnew");
+        assert_eq!(entry.existing_claim_id, "0xold");
+
+        // Step 3: Filter for active mode
+        let filtered = filter_shadow_mode(actions.clone(), "active");
+        // Should have at least 1 actionable result (supersede or skip, no ties)
+        for a in &filtered {
+            assert!(!matches!(a, crate::claims::ResolutionAction::TieLeaveBoth { .. }));
+        }
+
+        // Step 4: Shadow mode returns empty
+        let shadow_filtered = filter_shadow_mode(actions, "shadow");
+        assert!(shadow_filtered.is_empty());
+
+        // Step 5: Decision log entry is serializable
+        let entry_json = serde_json::to_string(&entry).unwrap();
+        let _: crate::decision_log::DecisionLogEntry =
+            serde_json::from_str(&entry_json).unwrap();
+    }
+
+    #[test]
+    fn test_build_decision_log_skip_pinned_reason_format() {
+        // Verify the reason string format for ExistingPinned.
+        use crate::claims::{ResolutionAction, SkipReason};
+        let actions = vec![ResolutionAction::SkipNew {
+            reason: SkipReason::ExistingPinned,
+            existing_id: "0xold".to_string(),
+            new_id: "0xnew".to_string(),
+            entity_id: Some("ent".to_string()),
+            similarity: Some(0.7),
+            winner_score: None,
+            loser_score: None,
+            winner_components: None,
+            loser_components: None,
+        }];
+        let entries = build_decision_log_entries(&actions, "{}", &std::collections::HashMap::new(), "active", NOW);
+        assert_eq!(entries[0].reason.as_deref(), Some("existing_pinned"));
     }
 }

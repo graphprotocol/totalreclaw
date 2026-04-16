@@ -1257,6 +1257,131 @@ pub fn wasm_tie_zone_score_tolerance() -> f64 {
 }
 
 // ---------------------------------------------------------------------------
+// Step D: Contradiction orchestration bindings
+// ---------------------------------------------------------------------------
+
+fn kg_resolve_with_candidates_inner(
+    new_claim_json: &str,
+    new_claim_id: &str,
+    new_embedding_json: &str,
+    candidates_json: &str,
+    weights_json: &str,
+    threshold_lower: f64,
+    threshold_upper: f64,
+    now_unix: i64,
+    tie_tolerance: f64,
+) -> Result<String, String> {
+    let new_claim: claims::Claim = serde_json::from_str(new_claim_json)
+        .map_err(|e| format!("invalid new_claim JSON: {}", e))?;
+    let new_embedding: Vec<f32> = serde_json::from_str(new_embedding_json)
+        .map_err(|e| format!("invalid new_embedding JSON: {}", e))?;
+    let items: Vec<DetectContradictionsItem> = serde_json::from_str(candidates_json)
+        .map_err(|e| format!("invalid candidates JSON: {}", e))?;
+    let candidates: Vec<(claims::Claim, String, Vec<f32>)> = items
+        .into_iter()
+        .map(|it| (it.claim, it.id, it.embedding))
+        .collect();
+    let weights: contradiction::ResolutionWeights = serde_json::from_str(weights_json)
+        .map_err(|e| format!("invalid weights JSON: {}", e))?;
+    let actions = contradiction::resolve_with_candidates(
+        &new_claim,
+        new_claim_id,
+        &new_embedding,
+        &candidates,
+        &weights,
+        threshold_lower,
+        threshold_upper,
+        now_unix,
+        tie_tolerance,
+    );
+    serde_json::to_string(&actions).map_err(|e| e.to_string())
+}
+
+fn kg_build_decision_log_entries_inner(
+    actions_json: &str,
+    new_claim_json: &str,
+    existing_claims_json: &str,
+    mode: &str,
+    now_unix: i64,
+) -> Result<String, String> {
+    let actions: Vec<claims::ResolutionAction> = serde_json::from_str(actions_json)
+        .map_err(|e| format!("invalid actions JSON: {}", e))?;
+    let existing_map: std::collections::HashMap<String, String> =
+        serde_json::from_str(existing_claims_json)
+            .map_err(|e| format!("invalid existing_claims JSON: {}", e))?;
+    let _ = new_claim_json; // Available for future enrichment; currently unused.
+    let entries = contradiction::build_decision_log_entries(
+        &actions,
+        new_claim_json,
+        &existing_map,
+        mode,
+        now_unix,
+    );
+    serde_json::to_string(&entries).map_err(|e| e.to_string())
+}
+
+/// Orchestrate contradiction detection + resolution for a new claim against candidates.
+///
+/// Returns a JSON array of `ResolutionAction`.
+#[wasm_bindgen(js_name = "resolveWithCandidates")]
+pub fn wasm_resolve_with_candidates(
+    new_claim_json: &str,
+    new_claim_id: &str,
+    new_embedding_json: &str,
+    candidates_json: &str,
+    weights_json: &str,
+    threshold_lower: f64,
+    threshold_upper: f64,
+    now_unix: i64,
+    tie_tolerance: f64,
+) -> Result<String, JsError> {
+    kg_resolve_with_candidates_inner(
+        new_claim_json,
+        new_claim_id,
+        new_embedding_json,
+        candidates_json,
+        weights_json,
+        threshold_lower,
+        threshold_upper,
+        now_unix,
+        tie_tolerance,
+    )
+    .map_err(|e| JsError::new(&e))
+}
+
+/// Build decision log entries from resolution actions.
+///
+/// Returns a JSON array of `DecisionLogEntry`.
+#[wasm_bindgen(js_name = "buildDecisionLogEntries")]
+pub fn wasm_build_decision_log_entries(
+    actions_json: &str,
+    new_claim_json: &str,
+    existing_claims_json: &str,
+    mode: &str,
+    now_unix: i64,
+) -> Result<String, JsError> {
+    kg_build_decision_log_entries_inner(
+        actions_json,
+        new_claim_json,
+        existing_claims_json,
+        mode,
+        now_unix,
+    )
+    .map_err(|e| JsError::new(&e))
+}
+
+/// Filter resolution actions by mode ("active" passes through, "shadow"/"off" returns empty).
+///
+/// Returns a JSON array of `ResolutionAction`.
+#[wasm_bindgen(js_name = "filterShadowMode")]
+pub fn wasm_filter_shadow_mode(actions_json: &str, mode: &str) -> Result<String, JsError> {
+    let actions: Vec<claims::ResolutionAction> = serde_json::from_str(actions_json)
+        .map_err(|e| JsError::new(&format!("invalid actions JSON: {}", e)))?;
+    let filtered = contradiction::filter_shadow_mode(actions, mode);
+    serde_json::to_string(&filtered).map_err(|e| JsError::new(&e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
 // Tests (non-wasm runtime — direct Rust fn invocation)
 // ---------------------------------------------------------------------------
 
