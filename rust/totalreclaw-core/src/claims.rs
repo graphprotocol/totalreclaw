@@ -141,6 +141,122 @@ pub struct DigestClaim {
     pub age: String,
 }
 
+/// Tie-zone score tolerance for contradiction resolution.
+///
+/// When the formula winner beats the loser by less than this amount, the
+/// decision is treated as a tie and both claims stay active. Calibrated against
+/// the 2026-04-14 false-positive where the gap was 9 parts per million.
+pub const TIE_ZONE_SCORE_TOLERANCE: f64 = 0.01;
+
+/// Check whether a claim has pinned status.
+pub fn is_pinned_claim(claim: &Claim) -> bool {
+    matches!(claim.status, ClaimStatus::Pinned)
+}
+
+/// Check whether a JSON-serialized claim has pinned status.
+///
+/// Returns false on parse error or missing status field (which defaults to Active).
+pub fn is_pinned_json(claim_json: &str) -> bool {
+    match serde_json::from_str::<Claim>(claim_json) {
+        Ok(claim) => is_pinned_claim(&claim),
+        Err(_) => false,
+    }
+}
+
+/// The action to take after checking pin status and tie-zone guard during
+/// contradiction resolution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResolutionAction {
+    /// No contradiction detected — pass through.
+    NoContradiction,
+    /// New claim wins; supersede the existing claim.
+    SupersedeExisting {
+        existing_id: String,
+        new_id: String,
+        similarity: f64,
+        score_gap: f64,
+    },
+    /// Skip the new claim (existing wins or is pinned).
+    SkipNew {
+        reason: SkipReason,
+        existing_id: String,
+        new_id: String,
+    },
+    /// Score gap is within tie-zone tolerance; keep both claims.
+    TieLeaveBoth {
+        existing_id: String,
+        new_id: String,
+        similarity: f64,
+        score_gap: f64,
+    },
+}
+
+/// Why a new claim was skipped in favour of the existing one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipReason {
+    /// The existing claim is pinned and cannot be superseded.
+    ExistingPinned,
+    /// The existing claim scored higher than the new one.
+    ExistingWins,
+    /// The similarity was below the contradiction threshold.
+    BelowThreshold,
+}
+
+/// Apply pin-status and tie-zone checks to a resolution outcome.
+///
+/// - If the existing claim is pinned, returns `SkipNew { ExistingPinned }`.
+/// - If `resolution_winner` == `existing_claim_id`, returns `SkipNew { ExistingWins }`.
+/// - If `resolution_winner` == `new_claim_id` but `score_gap < tie_zone_tolerance`,
+///   returns `TieLeaveBoth`.
+/// - Otherwise returns `SupersedeExisting`.
+pub fn respect_pin_in_resolution(
+    existing_claim_json: &str,
+    new_claim_id: &str,
+    existing_claim_id: &str,
+    resolution_winner: &str,
+    score_gap: f64,
+    similarity: f64,
+    tie_zone_tolerance: f64,
+) -> ResolutionAction {
+    // Check if existing claim is pinned.
+    if is_pinned_json(existing_claim_json) {
+        return ResolutionAction::SkipNew {
+            reason: SkipReason::ExistingPinned,
+            existing_id: existing_claim_id.to_string(),
+            new_id: new_claim_id.to_string(),
+        };
+    }
+
+    // If the existing claim wins the formula, skip the new one.
+    if resolution_winner == existing_claim_id {
+        return ResolutionAction::SkipNew {
+            reason: SkipReason::ExistingWins,
+            existing_id: existing_claim_id.to_string(),
+            new_id: new_claim_id.to_string(),
+        };
+    }
+
+    // New claim wins — check tie zone.
+    if score_gap.abs() < tie_zone_tolerance {
+        return ResolutionAction::TieLeaveBoth {
+            existing_id: existing_claim_id.to_string(),
+            new_id: new_claim_id.to_string(),
+            similarity,
+            score_gap,
+        };
+    }
+
+    // New claim wins clearly.
+    ResolutionAction::SupersedeExisting {
+        existing_id: existing_claim_id.to_string(),
+        new_id: new_claim_id.to_string(),
+        similarity,
+        score_gap,
+    }
+}
+
 /// Normalize an entity name per §15.8: NFC(lowercase(trim(collapse_whitespace(name)))).
 pub fn normalize_entity_name(name: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
@@ -690,5 +806,152 @@ mod tests {
         c.corroboration_count = 5;
         let json = serde_json::to_string(&c).unwrap();
         assert!(json.contains("\"cc\":5"));
+    }
+
+    // === Pin status semantics ===
+
+    #[test]
+    fn test_is_pinned_claim_true_for_pinned() {
+        let mut c = minimal_claim();
+        c.status = ClaimStatus::Pinned;
+        assert!(is_pinned_claim(&c));
+    }
+
+    #[test]
+    fn test_is_pinned_claim_false_for_active() {
+        let c = minimal_claim();
+        assert!(!is_pinned_claim(&c));
+    }
+
+    #[test]
+    fn test_is_pinned_claim_false_for_superseded() {
+        let mut c = minimal_claim();
+        c.status = ClaimStatus::Superseded;
+        assert!(!is_pinned_claim(&c));
+    }
+
+    #[test]
+    fn test_is_pinned_json_valid_pinned() {
+        let mut c = minimal_claim();
+        c.status = ClaimStatus::Pinned;
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(is_pinned_json(&json));
+    }
+
+    #[test]
+    fn test_is_pinned_json_valid_active() {
+        let c = minimal_claim();
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(!is_pinned_json(&json));
+    }
+
+    #[test]
+    fn test_is_pinned_json_invalid_json() {
+        assert!(!is_pinned_json("not json at all"));
+    }
+
+    #[test]
+    fn test_is_pinned_json_missing_status_field() {
+        // Minimal JSON without status -> defaults to Active
+        let json = r#"{"t":"hi","c":"fact","cf":0.9,"i":5,"sa":"oc"}"#;
+        assert!(!is_pinned_json(json));
+    }
+
+    #[test]
+    fn test_is_pinned_json_empty_string() {
+        assert!(!is_pinned_json(""));
+    }
+
+    // === ResolutionAction / respect_pin_in_resolution ===
+
+    #[test]
+    fn test_respect_pin_pinned_existing_returns_skip() {
+        let mut c = minimal_claim();
+        c.status = ClaimStatus::Pinned;
+        let json = serde_json::to_string(&c).unwrap();
+        let action = respect_pin_in_resolution(
+            &json, "new_id", "existing_id", "new_id", 0.5, 0.7, TIE_ZONE_SCORE_TOLERANCE,
+        );
+        assert_eq!(
+            action,
+            ResolutionAction::SkipNew {
+                reason: SkipReason::ExistingPinned,
+                existing_id: "existing_id".to_string(),
+                new_id: "new_id".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_respect_pin_existing_wins_returns_skip() {
+        let c = minimal_claim();
+        let json = serde_json::to_string(&c).unwrap();
+        let action = respect_pin_in_resolution(
+            &json, "new_id", "existing_id", "existing_id", 0.5, 0.7, TIE_ZONE_SCORE_TOLERANCE,
+        );
+        assert_eq!(
+            action,
+            ResolutionAction::SkipNew {
+                reason: SkipReason::ExistingWins,
+                existing_id: "existing_id".to_string(),
+                new_id: "new_id".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_respect_pin_tie_zone_returns_tie() {
+        let c = minimal_claim();
+        let json = serde_json::to_string(&c).unwrap();
+        let action = respect_pin_in_resolution(
+            &json, "new_id", "existing_id", "new_id", 0.005, 0.7, TIE_ZONE_SCORE_TOLERANCE,
+        );
+        match &action {
+            ResolutionAction::TieLeaveBoth { score_gap, .. } => {
+                assert!(score_gap.abs() < TIE_ZONE_SCORE_TOLERANCE);
+            }
+            _ => panic!("expected TieLeaveBoth, got {:?}", action),
+        }
+    }
+
+    #[test]
+    fn test_respect_pin_clear_win_returns_supersede() {
+        let c = minimal_claim();
+        let json = serde_json::to_string(&c).unwrap();
+        let action = respect_pin_in_resolution(
+            &json, "new_id", "existing_id", "new_id", 0.15, 0.7, TIE_ZONE_SCORE_TOLERANCE,
+        );
+        match &action {
+            ResolutionAction::SupersedeExisting { score_gap, .. } => {
+                assert!(*score_gap > TIE_ZONE_SCORE_TOLERANCE);
+            }
+            _ => panic!("expected SupersedeExisting, got {:?}", action),
+        }
+    }
+
+    #[test]
+    fn test_resolution_action_serde_round_trip() {
+        let action = ResolutionAction::SupersedeExisting {
+            existing_id: "ex".to_string(),
+            new_id: "nw".to_string(),
+            similarity: 0.7,
+            score_gap: 0.15,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let back: ResolutionAction = serde_json::from_str(&json).unwrap();
+        assert_eq!(action, back);
+    }
+
+    #[test]
+    fn test_skip_reason_serde() {
+        let pairs = [
+            (SkipReason::ExistingPinned, "\"existing_pinned\""),
+            (SkipReason::ExistingWins, "\"existing_wins\""),
+            (SkipReason::BelowThreshold, "\"below_threshold\""),
+        ];
+        for (reason, expected) in pairs {
+            let json = serde_json::to_string(&reason).unwrap();
+            assert_eq!(json, expected);
+        }
     }
 }

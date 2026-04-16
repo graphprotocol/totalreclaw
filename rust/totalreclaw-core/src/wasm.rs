@@ -1163,6 +1163,100 @@ pub fn wasm_feedback_to_counterexample(entry_json: &str) -> Result<String, JsErr
 }
 
 // ---------------------------------------------------------------------------
+// Pin status + decision log (Steps B & C)
+// ---------------------------------------------------------------------------
+
+use crate::decision_log;
+
+/// Check whether a JSON-serialized claim has pinned status.
+#[wasm_bindgen(js_name = "isPinnedClaim")]
+pub fn wasm_is_pinned_claim(claim_json: &str) -> bool {
+    claims::is_pinned_json(claim_json)
+}
+
+/// Apply pin-status and tie-zone checks to a resolution outcome.
+/// Returns a JSON-serialized `ResolutionAction`.
+#[wasm_bindgen(js_name = "respectPinInResolution")]
+pub fn wasm_respect_pin_in_resolution(
+    existing_claim_json: &str,
+    new_claim_id: &str,
+    existing_claim_id: &str,
+    resolution_winner: &str,
+    score_gap: f64,
+    similarity: f64,
+    tie_tolerance: f64,
+) -> Result<String, JsError> {
+    let action = claims::respect_pin_in_resolution(
+        existing_claim_json,
+        new_claim_id,
+        existing_claim_id,
+        resolution_winner,
+        score_gap,
+        similarity,
+        tie_tolerance,
+    );
+    serde_json::to_string(&action).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Find the loser claim JSON from the decision log for a given fact ID.
+/// Returns the loser_claim_json string, or the literal string "null" if not found.
+#[wasm_bindgen(js_name = "findLoserClaimInDecisionLog")]
+pub fn wasm_find_loser_claim_in_decision_log(fact_id: &str, log_content: &str) -> String {
+    match decision_log::find_loser_claim_in_decision_log(fact_id, log_content) {
+        Some(json) => json,
+        None => "null".to_string(),
+    }
+}
+
+/// Find a decision-log entry matching a fact as winner or loser.
+/// Returns the JSON-serialized DecisionLogEntry, or the literal string "null".
+#[wasm_bindgen(js_name = "findDecisionForPin")]
+pub fn wasm_find_decision_for_pin(fact_id: &str, role: &str, log_content: &str) -> String {
+    match decision_log::find_decision_for_pin(fact_id, role, log_content) {
+        Some(json) => json,
+        None => "null".to_string(),
+    }
+}
+
+/// Build a FeedbackEntry JSON from a decision-log entry JSON + pin action.
+/// Returns the JSON string, or the literal string "null" on failure.
+#[wasm_bindgen(js_name = "buildFeedbackFromDecision")]
+pub fn wasm_build_feedback_from_decision(
+    decision_json: &str,
+    action: &str,
+    now_unix: i64,
+) -> String {
+    match decision_log::build_feedback_from_decision(decision_json, action, now_unix) {
+        Some(json) => json,
+        None => "null".to_string(),
+    }
+}
+
+/// Append one decision entry to existing JSONL content. Non-fallible.
+#[wasm_bindgen(js_name = "appendDecisionEntry")]
+pub fn wasm_append_decision_entry(existing_content: &str, entry_json: &str) -> String {
+    decision_log::append_decision_entry(existing_content, entry_json)
+}
+
+/// Decision log max lines constant.
+#[wasm_bindgen(js_name = "DECISION_LOG_MAX_LINES")]
+pub fn wasm_decision_log_max_lines() -> usize {
+    decision_log::DECISION_LOG_MAX_LINES
+}
+
+/// Contradiction candidate cap constant.
+#[wasm_bindgen(js_name = "CONTRADICTION_CANDIDATE_CAP")]
+pub fn wasm_contradiction_candidate_cap() -> usize {
+    decision_log::CONTRADICTION_CANDIDATE_CAP
+}
+
+/// Tie-zone score tolerance constant.
+#[wasm_bindgen(js_name = "TIE_ZONE_SCORE_TOLERANCE")]
+pub fn wasm_tie_zone_score_tolerance() -> f64 {
+    claims::TIE_ZONE_SCORE_TOLERANCE
+}
+
+// ---------------------------------------------------------------------------
 // Tests (non-wasm runtime — direct Rust fn invocation)
 // ---------------------------------------------------------------------------
 
