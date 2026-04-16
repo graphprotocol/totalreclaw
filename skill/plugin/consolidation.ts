@@ -19,6 +19,10 @@
 
 import { cosineSimilarity } from './reranker.js';
 
+// TODO: hoist findNearDuplicate, clusterFacts, pickRepresentative to
+// @totalreclaw/core WASM once findBestNearDuplicate / clusterFacts / pickRepresentative
+// bindings are published (pending core 1.5.0+ WASM bindings).
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------

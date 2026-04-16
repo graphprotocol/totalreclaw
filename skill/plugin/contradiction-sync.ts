@@ -313,9 +313,14 @@ export function parseCandidateClaim(decryptedJson: string): CanonicalClaim | nul
   return obj as CanonicalClaim;
 }
 
-/** Is this candidate claim pinned (status `p`)? */
+/** Is this candidate claim pinned (status `p`)? Delegates to WASM core. */
 export function isPinnedClaim(claim: CanonicalClaim): boolean {
-  return typeof claim.st === 'string' && claim.st === 'p';
+  try {
+    return getWasm().isPinnedClaim(JSON.stringify(claim));
+  } catch {
+    // Fallback: local check if WASM fails (e.g. malformed claim).
+    return typeof claim.st === 'string' && claim.st === 'p';
+  }
 }
 
 /**
@@ -432,6 +437,11 @@ export interface ResolveWithCoreInput {
 /**
  * Run WASM contradiction detection + resolution on in-memory data only.
  *
+ * Tries `core.resolveWithCandidates()` first (full pipeline in one call:
+ * detect contradictions + resolve pairs + pin check + tie-zone guard).
+ * Falls back to the legacy `detectContradictions` + `resolvePair` approach
+ * when `resolveWithCandidates` is not available (core < 1.5.0).
+ *
  * Split out from `detectAndResolveContradictions` so the write path can test
  * the decision logic without mocking file I/O or the subgraph.
  */
@@ -458,14 +468,119 @@ export function resolveWithCore(input: ResolveWithCoreInput): ResolutionDecision
 
   const core = getWasm();
 
-  // Build the WASM existing_json payload. Drop any candidate whose embedding
-  // is missing — detectContradictions already short-circuits on empty vectors
-  // but we also drop them from the decrypt-map so we don't waste a lookup.
+  // Build the WASM candidates payload. Drop any candidate whose embedding
+  // is missing — the core short-circuits on empty vectors but we also drop
+  // them from the lookup map so we don't waste a reference.
   const items: WasmExistingItem[] = candidates
     .filter((c) => c.embedding.length > 0)
     .map((c) => ({ claim: c.claim, id: c.id, embedding: c.embedding }));
 
   if (items.length === 0) return [];
+
+  // Index candidates by id for fast lookup during resolve.
+  const byId = new Map<string, CandidateClaim>();
+  for (const c of items) byId.set(c.id, { claim: c.claim, id: c.id, embedding: c.embedding });
+
+  // Try the unified core.resolveWithCandidates() (available in core >= 1.5.0).
+  // Falls back to legacy detectContradictions + resolvePair if not available.
+  if (typeof core.resolveWithCandidates === 'function') {
+    return _resolveWithCandidatesCore(core, input, items, byId);
+  }
+  return _resolveWithLegacyPipeline(core, input, items, byId);
+}
+
+/** Core >= 1.5.0 path: single resolveWithCandidates call. */
+function _resolveWithCandidatesCore(
+  core: ReturnType<typeof getWasm>,
+  input: ResolveWithCoreInput,
+  items: WasmExistingItem[],
+  byId: Map<string, CandidateClaim>,
+): ResolutionDecision[] {
+  const { newClaim, newClaimId, newEmbedding, weightsJson, thresholdLower, thresholdUpper, nowUnixSeconds, logger } = input;
+
+  let actionsJson: string;
+  try {
+    actionsJson = core.resolveWithCandidates(
+      JSON.stringify(newClaim),
+      newClaimId,
+      JSON.stringify(newEmbedding),
+      JSON.stringify(items),
+      weightsJson,
+      thresholdLower,
+      thresholdUpper,
+      Math.floor(nowUnixSeconds),
+      TIE_ZONE_SCORE_TOLERANCE,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`Contradiction: resolveWithCandidates failed: ${msg}`);
+    return [];
+  }
+
+  let actions: Array<Record<string, unknown>>;
+  try {
+    actions = JSON.parse(actionsJson);
+  } catch {
+    return [];
+  }
+  if (actions.length === 0) return [];
+
+  // Map core ResolutionAction (tagged enum with "type" field) → local ResolutionDecision.
+  const decisions: ResolutionDecision[] = [];
+  for (const action of actions) {
+    const type = action.type as string;
+    if (type === 'supersede_existing') {
+      const existing = byId.get(action.existing_id as string);
+      decisions.push({
+        action: 'supersede_existing',
+        existingFactId: action.existing_id as string,
+        existingClaim: existing?.claim ?? {},
+        entityId: (action.entity_id as string) ?? '',
+        similarity: (action.similarity as number) ?? 0,
+        winnerScore: (action.winner_score as number) ?? 0,
+        loserScore: (action.loser_score as number) ?? 0,
+        winnerComponents: action.winner_components as ScoreComponents,
+        loserComponents: action.loser_components as ScoreComponents,
+      });
+    } else if (type === 'skip_new') {
+      const reason = action.reason as string;
+      decisions.push({
+        action: 'skip_new',
+        reason: reason === 'existing_pinned' ? 'existing_pinned' : 'existing_wins',
+        existingFactId: action.existing_id as string,
+        entityId: (action.entity_id as string) ?? '',
+        similarity: (action.similarity as number) ?? 0,
+        winnerScore: action.winner_score as number | undefined,
+        loserScore: action.loser_score as number | undefined,
+        winnerComponents: action.winner_components as ScoreComponents | undefined,
+        loserComponents: action.loser_components as ScoreComponents | undefined,
+      });
+    } else if (type === 'tie_leave_both') {
+      decisions.push({
+        action: 'tie_leave_both',
+        existingFactId: action.existing_id as string,
+        entityId: (action.entity_id as string) ?? '',
+        similarity: (action.similarity as number) ?? 0,
+        winnerScore: (action.winner_score as number) ?? 0,
+        loserScore: (action.loser_score as number) ?? 0,
+        winnerComponents: action.winner_components as ScoreComponents,
+        loserComponents: action.loser_components as ScoreComponents,
+      });
+    }
+    // NoContradiction actions are ignored — same as before.
+  }
+
+  return decisions;
+}
+
+/** Legacy path (core < 1.5.0): detectContradictions + resolvePair loop. */
+function _resolveWithLegacyPipeline(
+  core: ReturnType<typeof getWasm>,
+  input: ResolveWithCoreInput,
+  items: WasmExistingItem[],
+  byId: Map<string, CandidateClaim>,
+): ResolutionDecision[] {
+  const { newClaim, newClaimId, newEmbedding, weightsJson, thresholdLower, thresholdUpper, nowUnixSeconds, logger } = input;
 
   let contradictionsJson: string;
   try {
@@ -496,10 +611,6 @@ export function resolveWithCore(input: ResolveWithCoreInput): ResolutionDecision
   }
   if (contradictions.length === 0) return [];
 
-  // Index candidates by id for fast lookup during resolve.
-  const byId = new Map<string, CandidateClaim>();
-  for (const c of items) byId.set(c.id, { claim: c.claim, id: c.id, embedding: c.embedding });
-
   const decisions: ResolutionDecision[] = [];
   const nowSecondsBig = BigInt(Math.floor(nowUnixSeconds));
 
@@ -507,8 +618,7 @@ export function resolveWithCore(input: ResolveWithCoreInput): ResolutionDecision
     const existing = byId.get(contradiction.claim_b_id);
     if (!existing) continue;
 
-    // Pinned existing claims are untouchable. Skip the new write and record
-    // a decision so the caller can log it.
+    // Pinned existing claims are untouchable.
     if (isPinnedClaim(existing.claim)) {
       decisions.push({
         action: 'skip_new',
@@ -690,8 +800,10 @@ export async function detectAndResolveContradictions(
   // the caller does not tombstone either claim. The tie is still logged for
   // operator visibility and for future feedback-loop calibration.
   //
-  // Only applies to `supersede_existing` decisions — `skip_new` is already a
-  // "leave existing alone" action and doesn't need this guard.
+  // When using core >= 1.5.0 (resolveWithCandidates), the tie-zone guard is
+  // already applied by the core and this map is a no-op (no supersede decisions
+  // with sub-tolerance gaps will appear). For the legacy path, this remains
+  // necessary.
   const decisions = rawDecisions.map((d): ResolutionDecision => {
     if (
       d.action === 'supersede_existing' &&
@@ -711,63 +823,147 @@ export async function detectAndResolveContradictions(
     return d;
   });
 
-  // Append decision log rows. One row per non-trivial decision.
+  // Build decision log entries. Try core.buildDecisionLogEntries (>= 1.5.0)
+  // first; fall back to inline logging if not available or on failure.
+  const core = getWasm();
+  const useCoreDecisionLog = typeof core.buildDecisionLogEntries === 'function';
+
+  if (useCoreDecisionLog) {
+    try {
+      const coreActions = _decisionsToCoreActions(decisions, newClaimId);
+      const existingClaimsMap: Record<string, string> = {};
+      for (const d of decisions) {
+        if (d.action === 'supersede_existing') {
+          try { existingClaimsMap[d.existingFactId] = JSON.stringify(d.existingClaim); } catch { /* skip */ }
+        }
+      }
+      const entriesJson = core.buildDecisionLogEntries(
+        JSON.stringify(coreActions),
+        JSON.stringify(newClaim),
+        JSON.stringify(existingClaimsMap),
+        mode === 'shadow' ? 'shadow' : mode,
+        Math.floor(nowUnixSeconds),
+      );
+      const entries: DecisionLogEntry[] = JSON.parse(entriesJson);
+      for (const entry of entries) {
+        await appendDecisionLog(entry);
+        if (entry.action === 'tie_leave_both') {
+          logger.info(
+            `Contradiction: tie (gap=${Math.abs((entry.winner_score ?? 0) - (entry.loser_score ?? 0)).toFixed(6)} < ${TIE_ZONE_SCORE_TOLERANCE}, sim=${entry.similarity.toFixed(3)}, entity=${entry.entity_id}) — leaving both active`,
+          );
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`Contradiction: buildDecisionLogEntries failed, falling back to inline: ${msg}`);
+      await _appendDecisionLogInline(decisions, newClaimId, nowUnixSeconds, mode, logger);
+    }
+  } else {
+    await _appendDecisionLogInline(decisions, newClaimId, nowUnixSeconds, mode, logger);
+  }
+
+  // Shadow mode filtering. Try core.filterShadowMode (>= 1.5.0) first.
+  if (typeof core.filterShadowMode === 'function') {
+    try {
+      const coreActions = _decisionsToCoreActions(decisions, newClaimId);
+      const filteredJson = core.filterShadowMode(JSON.stringify(coreActions), mode);
+      const filteredActions: Array<Record<string, unknown>> = JSON.parse(filteredJson);
+
+      const byExistingId = new Map<string, ResolutionDecision>();
+      for (const d of decisions) {
+        if (d.action === 'supersede_existing' || d.action === 'skip_new' || d.action === 'tie_leave_both') {
+          byExistingId.set(d.existingFactId, d);
+        }
+      }
+      return filteredActions
+        .map((a) => byExistingId.get(a.existing_id as string))
+        .filter((d): d is ResolutionDecision => d !== undefined);
+    } catch {
+      // Fall through to local filtering.
+    }
+  }
+
+  // Local fallback: shadow → empty, active → filter out ties.
+  if (mode === 'shadow') return [];
+  return decisions.filter((d) => d.action !== 'tie_leave_both');
+}
+
+/** Convert ResolutionDecision[] to core ResolutionAction JSON format. */
+function _decisionsToCoreActions(
+  decisions: ResolutionDecision[],
+  newClaimId: string,
+): Array<Record<string, unknown>> {
+  return decisions.map((d) => {
+    if (d.action === 'supersede_existing') {
+      return {
+        type: 'supersede_existing',
+        existing_id: d.existingFactId, new_id: newClaimId,
+        similarity: d.similarity, score_gap: Math.abs(d.winnerScore - d.loserScore),
+        entity_id: d.entityId, winner_score: d.winnerScore, loser_score: d.loserScore,
+        winner_components: d.winnerComponents, loser_components: d.loserComponents,
+      };
+    } else if (d.action === 'skip_new') {
+      return {
+        type: 'skip_new', reason: d.reason,
+        existing_id: d.existingFactId, new_id: newClaimId,
+        entity_id: d.entityId, similarity: d.similarity,
+        winner_score: d.winnerScore, loser_score: d.loserScore,
+        winner_components: d.winnerComponents, loser_components: d.loserComponents,
+      };
+    } else if (d.action === 'tie_leave_both') {
+      return {
+        type: 'tie_leave_both',
+        existing_id: d.existingFactId, new_id: newClaimId,
+        similarity: d.similarity, score_gap: Math.abs(d.winnerScore - d.loserScore),
+        entity_id: d.entityId, winner_score: d.winnerScore, loser_score: d.loserScore,
+        winner_components: d.winnerComponents, loser_components: d.loserComponents,
+      };
+    }
+    return { type: 'no_contradiction' };
+  });
+}
+
+/** Inline decision log building fallback (core < 1.5.0 or on failure). */
+async function _appendDecisionLogInline(
+  decisions: ResolutionDecision[],
+  newClaimId: string,
+  nowUnixSeconds: number,
+  mode: AutoResolveMode,
+  logger: ContradictionLogger,
+): Promise<void> {
   for (const d of decisions) {
     if (d.action === 'supersede_existing') {
-      // Carry the loser plaintext through so the pin tool can recover from
-      // a tombstoned blob later. See DecisionLogEntry.loser_claim_json doc.
-      // d.existingClaim is the canonical Claim we already decrypted in
-      // collectCandidatesForEntities — serializing here costs ~300-500 bytes
-      // per supersede row.
       let loserClaimJson: string | undefined;
-      try {
-        loserClaimJson = JSON.stringify(d.existingClaim);
-      } catch {
-        loserClaimJson = undefined;
-      }
+      try { loserClaimJson = JSON.stringify(d.existingClaim); } catch { loserClaimJson = undefined; }
       await appendDecisionLog({
-        ts: nowUnixSeconds,
-        entity_id: d.entityId,
-        new_claim_id: newClaimId,
-        existing_claim_id: d.existingFactId,
+        ts: nowUnixSeconds, entity_id: d.entityId,
+        new_claim_id: newClaimId, existing_claim_id: d.existingFactId,
         similarity: d.similarity,
         action: mode === 'shadow' ? 'shadow' : 'supersede_existing',
         reason: 'new_wins',
-        winner_score: d.winnerScore,
-        loser_score: d.loserScore,
-        winner_components: d.winnerComponents,
-        loser_components: d.loserComponents,
-        loser_claim_json: loserClaimJson,
-        mode,
+        winner_score: d.winnerScore, loser_score: d.loserScore,
+        winner_components: d.winnerComponents, loser_components: d.loserComponents,
+        loser_claim_json: loserClaimJson, mode,
       });
     } else if (d.action === 'skip_new') {
       await appendDecisionLog({
-        ts: nowUnixSeconds,
-        entity_id: d.entityId,
-        new_claim_id: newClaimId,
-        existing_claim_id: d.existingFactId,
+        ts: nowUnixSeconds, entity_id: d.entityId,
+        new_claim_id: newClaimId, existing_claim_id: d.existingFactId,
         similarity: d.similarity,
         action: mode === 'shadow' ? 'shadow' : 'skip_new',
         reason: d.reason,
-        winner_score: d.winnerScore,
-        loser_score: d.loserScore,
-        winner_components: d.winnerComponents,
-        loser_components: d.loserComponents,
+        winner_score: d.winnerScore, loser_score: d.loserScore,
+        winner_components: d.winnerComponents, loser_components: d.loserComponents,
         mode,
       });
     } else if (d.action === 'tie_leave_both') {
       await appendDecisionLog({
-        ts: nowUnixSeconds,
-        entity_id: d.entityId,
-        new_claim_id: newClaimId,
-        existing_claim_id: d.existingFactId,
+        ts: nowUnixSeconds, entity_id: d.entityId,
+        new_claim_id: newClaimId, existing_claim_id: d.existingFactId,
         similarity: d.similarity,
-        action: 'tie_leave_both',
-        reason: 'tie_below_tolerance',
-        winner_score: d.winnerScore,
-        loser_score: d.loserScore,
-        winner_components: d.winnerComponents,
-        loser_components: d.loserComponents,
+        action: 'tie_leave_both', reason: 'tie_below_tolerance',
+        winner_score: d.winnerScore, loser_score: d.loserScore,
+        winner_components: d.winnerComponents, loser_components: d.loserComponents,
         mode,
       });
       logger.info(
@@ -775,14 +971,6 @@ export async function detectAndResolveContradictions(
       );
     }
   }
-
-  // Shadow mode: never apply decisions, always return empty. The log above
-  // captures what would have happened so operators can inspect it.
-  if (mode === 'shadow') return [];
-
-  // Filter out ties so the caller does NOT tombstone a tied claim. The log
-  // above preserves the audit trail.
-  return decisions.filter((d) => d.action !== 'tie_leave_both');
 }
 
 // ---------------------------------------------------------------------------
@@ -858,20 +1046,27 @@ export function findDecisionForPin(
   logContent: string,
 ): DecisionLogEntry | null {
   if (!logContent || logContent.length === 0) return null;
-  const lines = logContent.split('\n').filter((l) => l.length > 0);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    let entry: DecisionLogEntry;
-    try {
-      entry = JSON.parse(lines[i]) as DecisionLogEntry;
-    } catch {
-      continue;
+  try {
+    const result = getWasm().findDecisionForPin(factId, role, logContent);
+    if (result === 'null') return null;
+    return JSON.parse(result) as DecisionLogEntry;
+  } catch {
+    // Fallback: local implementation if WASM fails.
+    const lines = logContent.split('\n').filter((l) => l.length > 0);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let entry: DecisionLogEntry;
+      try {
+        entry = JSON.parse(lines[i]) as DecisionLogEntry;
+      } catch {
+        continue;
+      }
+      if (entry.action !== 'supersede_existing') continue;
+      if (!entry.winner_components || !entry.loser_components) continue;
+      if (role === 'loser' && entry.existing_claim_id === factId) return entry;
+      if (role === 'winner' && entry.new_claim_id === factId) return entry;
     }
-    if (entry.action !== 'supersede_existing') continue;
-    if (!entry.winner_components || !entry.loser_components) continue;
-    if (role === 'loser' && entry.existing_claim_id === factId) return entry;
-    if (role === 'winner' && entry.new_claim_id === factId) return entry;
+    return null;
   }
-  return null;
 }
 
 /**
@@ -900,22 +1095,28 @@ export function findLoserClaimInDecisionLog(factId: string): string | null {
     return null;
   }
   if (!logContent || logContent.length === 0) return null;
-  const lines = logContent.split('\n').filter((l) => l.length > 0);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    let entry: DecisionLogEntry;
-    try {
-      entry = JSON.parse(lines[i]) as DecisionLogEntry;
-    } catch {
-      continue;
+  try {
+    const result = getWasm().findLoserClaimInDecisionLog(factId, logContent);
+    return result === 'null' ? null : result;
+  } catch {
+    // Fallback: local implementation if WASM fails.
+    const lines = logContent.split('\n').filter((l) => l.length > 0);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let entry: DecisionLogEntry;
+      try {
+        entry = JSON.parse(lines[i]) as DecisionLogEntry;
+      } catch {
+        continue;
+      }
+      if (entry.action !== 'supersede_existing') continue;
+      if (entry.existing_claim_id !== factId) continue;
+      if (typeof entry.loser_claim_json !== 'string' || entry.loser_claim_json.length === 0) {
+        continue;
+      }
+      return entry.loser_claim_json;
     }
-    if (entry.action !== 'supersede_existing') continue;
-    if (entry.existing_claim_id !== factId) continue;
-    if (typeof entry.loser_claim_json !== 'string' || entry.loser_claim_json.length === 0) {
-      continue;
-    }
-    return entry.loser_claim_json;
+    return null;
   }
-  return null;
 }
 
 /**
@@ -934,26 +1135,37 @@ export function buildFeedbackFromDecision(
   nowUnixSeconds: number,
 ): FeedbackEntry | null {
   if (!decision.winner_components || !decision.loser_components) return null;
-  if (action === 'pin_loser') {
+  try {
+    const result = getWasm().buildFeedbackFromDecision(
+      JSON.stringify(decision),
+      action,
+      Math.floor(nowUnixSeconds),
+    );
+    if (result === 'null') return null;
+    return JSON.parse(result) as FeedbackEntry;
+  } catch {
+    // Fallback: local implementation if WASM fails.
+    if (action === 'pin_loser') {
+      return {
+        ts: nowUnixSeconds,
+        claim_a_id: decision.existing_claim_id,
+        claim_b_id: decision.new_claim_id,
+        formula_winner: 'b',
+        user_decision: 'pin_a',
+        winner_components: decision.winner_components,
+        loser_components: decision.loser_components,
+      };
+    }
     return {
       ts: nowUnixSeconds,
       claim_a_id: decision.existing_claim_id,
       claim_b_id: decision.new_claim_id,
       formula_winner: 'b',
-      user_decision: 'pin_a',
+      user_decision: 'pin_b',
       winner_components: decision.winner_components,
       loser_components: decision.loser_components,
     };
   }
-  return {
-    ts: nowUnixSeconds,
-    claim_a_id: decision.existing_claim_id,
-    claim_b_id: decision.new_claim_id,
-    formula_winner: 'b',
-    user_decision: 'pin_b',
-    winner_components: decision.winner_components,
-    loser_components: decision.loser_components,
-  };
 }
 
 /**
