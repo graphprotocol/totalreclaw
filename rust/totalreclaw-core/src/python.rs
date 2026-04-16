@@ -1107,6 +1107,100 @@ fn py_feedback_to_counterexample(entry_json: &str) -> PyResult<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Pin status + decision log (Steps B & C)
+// ---------------------------------------------------------------------------
+
+use crate::decision_log;
+
+/// Check whether a JSON-serialized claim has pinned status.
+#[pyfunction]
+#[pyo3(name = "is_pinned_claim")]
+fn py_is_pinned_claim(claim_json: &str) -> bool {
+    claims::is_pinned_json(claim_json)
+}
+
+/// Apply pin-status and tie-zone checks to a resolution outcome.
+/// Returns a JSON-serialized ResolutionAction.
+#[pyfunction]
+#[pyo3(name = "respect_pin_in_resolution")]
+fn py_respect_pin_in_resolution(
+    existing_claim_json: &str,
+    new_claim_id: &str,
+    existing_claim_id: &str,
+    resolution_winner: &str,
+    score_gap: f64,
+    similarity: f64,
+    tie_tolerance: f64,
+) -> PyResult<String> {
+    let action = claims::respect_pin_in_resolution(
+        existing_claim_json,
+        new_claim_id,
+        existing_claim_id,
+        resolution_winner,
+        score_gap,
+        similarity,
+        tie_tolerance,
+    );
+    serde_json::to_string(&action).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Find the loser claim JSON from the decision log for a given fact ID.
+/// Returns the loser_claim_json string, or None.
+#[pyfunction]
+#[pyo3(name = "find_loser_claim_in_decision_log")]
+fn py_find_loser_claim_in_decision_log(fact_id: &str, log_content: &str) -> Option<String> {
+    decision_log::find_loser_claim_in_decision_log(fact_id, log_content)
+}
+
+/// Find a decision-log entry matching a fact as winner or loser.
+/// Returns the JSON-serialized DecisionLogEntry, or None.
+#[pyfunction]
+#[pyo3(name = "find_decision_for_pin")]
+fn py_find_decision_for_pin(fact_id: &str, role: &str, log_content: &str) -> Option<String> {
+    decision_log::find_decision_for_pin(fact_id, role, log_content)
+}
+
+/// Build a FeedbackEntry JSON from a decision-log entry JSON + pin action.
+/// Returns the JSON string, or None on failure.
+#[pyfunction]
+#[pyo3(name = "build_feedback_from_decision")]
+fn py_build_feedback_from_decision(
+    decision_json: &str,
+    action: &str,
+    now_unix: i64,
+) -> Option<String> {
+    decision_log::build_feedback_from_decision(decision_json, action, now_unix)
+}
+
+/// Append one decision entry to existing JSONL content.
+#[pyfunction]
+#[pyo3(name = "append_decision_entry")]
+fn py_append_decision_entry(existing_content: &str, entry_json: &str) -> String {
+    decision_log::append_decision_entry(existing_content, entry_json)
+}
+
+/// Decision log max lines constant.
+#[pyfunction]
+#[pyo3(name = "decision_log_max_lines")]
+fn py_decision_log_max_lines() -> usize {
+    decision_log::DECISION_LOG_MAX_LINES
+}
+
+/// Contradiction candidate cap constant.
+#[pyfunction]
+#[pyo3(name = "contradiction_candidate_cap")]
+fn py_contradiction_candidate_cap() -> usize {
+    decision_log::CONTRADICTION_CANDIDATE_CAP
+}
+
+/// Tie-zone score tolerance constant.
+#[pyfunction]
+#[pyo3(name = "tie_zone_score_tolerance")]
+fn py_tie_zone_score_tolerance() -> f64 {
+    claims::TIE_ZONE_SCORE_TOLERANCE
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -1204,6 +1298,17 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_read_feedback_jsonl, m)?)?;
     m.add_function(wrap_pyfunction!(py_rotate_feedback_log, m)?)?;
     m.add_function(wrap_pyfunction!(py_feedback_to_counterexample, m)?)?;
+
+    // Pin status + decision log (Steps B & C)
+    m.add_function(wrap_pyfunction!(py_is_pinned_claim, m)?)?;
+    m.add_function(wrap_pyfunction!(py_respect_pin_in_resolution, m)?)?;
+    m.add_function(wrap_pyfunction!(py_find_loser_claim_in_decision_log, m)?)?;
+    m.add_function(wrap_pyfunction!(py_find_decision_for_pin, m)?)?;
+    m.add_function(wrap_pyfunction!(py_build_feedback_from_decision, m)?)?;
+    m.add_function(wrap_pyfunction!(py_append_decision_entry, m)?)?;
+    m.add_function(wrap_pyfunction!(py_decision_log_max_lines, m)?)?;
+    m.add_function(wrap_pyfunction!(py_contradiction_candidate_cap, m)?)?;
+    m.add_function(wrap_pyfunction!(py_tie_zone_score_tolerance, m)?)?;
 
     // Consolidation / dedup
     crate::consolidation::register_python_functions(m)?;
