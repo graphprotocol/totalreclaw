@@ -52,22 +52,57 @@ def _is_near_duplicate(
     """Check if a fact's embedding is a near-duplicate of any existing memory.
 
     Returns True if cosine similarity >= threshold with any existing memory.
+
+    Delegates to ``totalreclaw_core.find_best_near_duplicate`` (Rust/PyO3) when
+    available, falling back to a pure-Python cosine loop otherwise.
     """
     if not embedding:
         return False
 
+    # Filter to memories that actually have embeddings
+    existing_with_emb = [
+        m for m in existing_memories
+        if m.get("embedding") and len(m["embedding"]) > 0
+    ]
+    if not existing_with_emb:
+        return False
+
+    try:
+        import json as _json
+        import totalreclaw_core
+
+        new_embedding_json = _json.dumps(embedding)
+        existing_json = _json.dumps([
+            {"id": m.get("id", ""), "embedding": m["embedding"]}
+            for m in existing_with_emb
+        ])
+        result = totalreclaw_core.find_best_near_duplicate(
+            new_embedding_json, existing_json, threshold,
+        )
+        if result is not None:
+            match = _json.loads(result)
+            logger.debug(
+                "Near-duplicate detected via core (sim=%.3f >= %.3f, fact=%s): skipping store",
+                match.get("similarity", 0.0), threshold, match.get("fact_id", "?"),
+            )
+            return True
+        return False
+    except ImportError:
+        logger.debug("totalreclaw_core not available, using Python cosine fallback")
+    except Exception as exc:
+        logger.debug("Rust find_best_near_duplicate failed, falling back to Python: %s", exc)
+
+    # Fallback: pure-Python cosine similarity loop
     from totalreclaw.reranker import cosine_similarity
 
-    for mem in existing_memories:
-        mem_emb = mem.get("embedding")
-        if mem_emb and len(mem_emb) > 0:
-            sim = cosine_similarity(embedding, mem_emb)
-            if sim >= threshold:
-                logger.debug(
-                    "Near-duplicate detected (sim=%.3f >= %.3f): skipping store",
-                    sim, threshold,
-                )
-                return True
+    for mem in existing_with_emb:
+        sim = cosine_similarity(embedding, mem["embedding"])
+        if sim >= threshold:
+            logger.debug(
+                "Near-duplicate detected (sim=%.3f >= %.3f): skipping store",
+                sim, threshold,
+            )
+            return True
     return False
 
 
