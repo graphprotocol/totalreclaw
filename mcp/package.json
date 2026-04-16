@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/mcp-server",
-  "version": "2.6.1",
+  "version": "2.7.0",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. MCP server with XChaCha20-Poly1305 E2EE, semantic search, import/export, and on-chain storage",
   "homepage": "https://totalreclaw.xyz",
   "main": "dist/index.js",
