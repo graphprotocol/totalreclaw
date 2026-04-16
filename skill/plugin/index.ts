@@ -2747,6 +2747,7 @@ const plugin = {
                   metaMap.set(result.id, {
                     metadata: doc.metadata ?? {},
                     timestamp: Date.now(),
+                    category: doc.category,
                   });
                 } catch {
                   // Skip candidates we cannot decrypt.
