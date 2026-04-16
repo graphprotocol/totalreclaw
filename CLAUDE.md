@@ -165,10 +165,10 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | **Knowledge Graph (Core Hoist Tier 1)** | | | | | | | All via `@totalreclaw/core` 1.5.0 WASM/PyO3 with local fallbacks |
 | Store-time dedup (best-match) | Yes (core) | Yes (core) | Yes (via MCP) | Yes (core) | Yes (via MCP) | Yes (core) | `find_best_near_duplicate` — returns highest-similarity match, not first |
 | Bulk clustering | Yes (core) | Yes (core) | Yes (via MCP) | -- | Yes (via MCP) | -- | `cluster_facts` — greedy single-pass for consolidation tool |
-| Pin status semantics | Yes (core) | -- | -- | -- | -- | -- | `is_pinned_claim`, `respect_pin_in_resolution` — plugin only for now |
-| Contradiction detection orchestration | Yes (core) | -- | -- | -- | -- | -- | `resolve_with_candidates` — full pipeline: detect → pin check → resolve → tie-zone |
-| Decision log types | Yes (core) | -- | -- | -- | -- | -- | `DecisionLogEntry`, `find_loser_claim_in_decision_log` — enables pin-on-tombstone recovery |
-| Shadow mode filtering | Yes (core) | -- | -- | -- | -- | -- | `filter_shadow_mode` — observer-only validation mode |
+| Pin status semantics | Yes (core) | -- | -- | -- | -- | Yes (core) | `is_pinned_claim`, `respect_pin_in_resolution` |
+| Contradiction detection orchestration | Yes (core) | -- | -- | Yes (core) | -- | Yes (core) | `resolve_with_candidates` — full pipeline: detect → pin check → resolve → tie-zone |
+| Decision log types | Yes (core) | -- | -- | -- | -- | Yes (core) | `DecisionLogEntry`, `find_loser_claim_in_decision_log` — enables pin-on-tombstone recovery |
+| Shadow mode filtering | Yes (core) | -- | -- | -- | -- | Yes (core) | `filter_shadow_mode` — observer-only validation mode |
 | Importance rubric (1-10 anchored) | Yes | Yes (via prompt) | Yes | Yes | Yes (via prompt) | Yes | Phase 2.2.6 — explicit band definitions in extraction prompt |
 | Lexical importance bump | Yes | -- | -- | Yes | -- | -- | Phase 2.2.6 — +1/+2 post-processing for intent/emphasis/repetition signals |
 | Bump cap (≥8 → max +1) | Yes | -- | -- | Yes | -- | -- | Phase 2.2.7 — prevents over-scoring already-high facts |
@@ -246,9 +246,9 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | Debrief bypasses store-time dedup | LOW | MCP, NanoClaw, Hermes call `client.remember()` directly for debrief items (no cosine dedup). Only OpenClaw routes through `storeExtractedFacts()`. LLM-level dedup via prompt + server-side content fingerprint mitigate. |
 | Hermes debrief stores without embedding | LOW | `hooks.py` stores debrief items without embedding param — no LSH bucket hashes, search relies on word-level blind indices only. |
 | NanoClaw debrief no 8-message guard | LOW | `pre-compact.ts` triggers debrief based on extraction results, not conversation length. LLM prompt handles it, but no code-level guard like other clients. |
-| KG features plugin-only (partial) | MEDIUM | Contradiction detection, pin semantics, decision log, and shadow mode are in `@totalreclaw/core` 1.5.0 but only wired in the OpenClaw plugin adapter. MCP, Hermes, NanoClaw, ZeroClaw need adapter wiring to call these core functions. Store-time dedup (best-match) is wired in plugin + MCP + Hermes. |
+| KG features MCP/NanoClaw-only dedup | LOW | MCP and NanoClaw have core-backed store-time dedup but not contradiction detection or pin semantics (no auto-extraction pipeline to wire them into). OpenClaw, Hermes, and ZeroClaw have full KG wiring. |
 | Lexical importance bump not in MCP/NanoClaw | LOW | `computeLexicalImportanceBump` only runs in OpenClaw plugin and Python Hermes. MCP and NanoClaw don't have auto-extraction, so this is by-design for now. |
-| ZeroClaw no type in recall | LOW | ZeroClaw `recall()` doesn't surface memory type/category in results. Other clients do (Phase 2.2.6b). |
+| ZeroClaw no type in recall | RESOLVED | ZeroClaw now parses category from decrypted envelope and surfaces it in recall results. |
 
 ---
 
