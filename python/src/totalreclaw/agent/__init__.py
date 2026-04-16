@@ -42,7 +42,9 @@ from .extraction import (
     ExtractedFact,
     extract_facts_llm,
     extract_facts_heuristic,
+    extract_facts_compaction,
     EXTRACTION_SYSTEM_PROMPT,
+    COMPACTION_SYSTEM_PROMPT,
 )
 from .recall import auto_recall, auto_recall_async
 from .debrief import (
@@ -71,7 +73,9 @@ __all__ = [
     "ExtractedFact",
     "extract_facts_llm",
     "extract_facts_heuristic",
+    "extract_facts_compaction",
     "EXTRACTION_SYSTEM_PROMPT",
+    "COMPACTION_SYSTEM_PROMPT",
     # Recall
     "auto_recall",
     "auto_recall_async",

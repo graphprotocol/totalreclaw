@@ -636,6 +636,340 @@ export async function extractFacts(
 }
 
 // ---------------------------------------------------------------------------
+// Compaction-Aware Extraction (Phase 2.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compaction-specific system prompt. This fires when the conversation context
+ * is about to be compacted (truncated to fit the context window). It is the
+ * LAST CHANCE to capture knowledge before it is lost, so the threshold is
+ * lower (importance >= 5 instead of 6) and the prompt is more aggressive
+ * about extracting context, decisions, and episodic memories.
+ *
+ * Key differences from EXTRACTION_SYSTEM_PROMPT:
+ *   - Opening framing emphasizes urgency ("last chance")
+ *   - Format-agnostic: handles bullet lists, prose, mixed formats
+ *   - Importance threshold lowered to 5
+ *   - More aggressive on context/episodic/decision types
+ *   - Anti-pattern: don't skip content just because it's in a summary
+ *   - Two few-shot examples: bullet-list and prose formats
+ */
+export const COMPACTION_SYSTEM_PROMPT = `You are extracting memories from a conversation that is about to be compacted. The conversation context will be lost after this point — this is your LAST CHANCE to capture everything worth remembering. Be more aggressive than usual: err on the side of storing.
+
+Rules:
+1. Each memory must be a single, self-contained piece of information
+2. Focus on user-specific information that would be useful in future conversations
+3. Skip generic knowledge, greetings, small talk, and ephemeral task coordination
+4. Score importance 1-10 using the rubric below (5+ = worth storing for compaction)
+5. Only extract memories with importance >= 5
+
+Importance rubric (use the FULL 1-10 range, not just 7-8):
+- 10: Critical, core identity, never-forget content. The user explicitly says "remember this forever", "critical", "never forget", or it's a fundamental fact like name/birthday/relationships that defines who they are.
+- 9: Affects many future decisions or interactions. A high-impact rule, a major life decision with reasoning, a deeply held preference that shapes daily work.
+- 8: High-value preference, decision-with-reasoning, or operational rule. The user clearly cares about it AND it will be relevant in many future conversations.
+- 7: Specific durable fact about the user's setup, project, or context. Useful to remember but not life-changing.
+- 6: Borderline in normal extraction — but worth storing during compaction since this context will be lost.
+- 5: Would normally be dropped, but during compaction we capture it as a safety net. Low-signal context, minor preferences, ephemeral project state that may still be useful if the conversation is lost.
+- 4 or below: NOT WORTH STORING even during compaction. Drop these. Greetings, filler, already-known common knowledge.
+
+DO NOT cluster every fact at 7-8. Use 9-10 for high-signal content and 5-6 for borderline content. The system depends on the full range working.
+
+Format-agnostic parsing (IMPORTANT):
+The conversation may contain bullet lists, numbered lists, section headers with paragraphs, code snippets, or plain prose. Treat ALL formats as potential sources of extractable memory:
+- If bullets/list items: each item is a candidate memory.
+- If section headers (Context, Decisions, Key Learnings, Open Questions, etc.): use the header as a type hint (Context → context, Decisions → decision, Learnings → rule, Open Questions → goal).
+- If plain prose: parse each distinct assertion as a candidate memory, even if they run together in paragraph form.
+- If code snippets: extract any configuration choices, tool versions, or architectural decisions embedded in comments or code structure.
+- If mixed format: apply all of the above.
+
+Do NOT skip content just because it appears in a summary. The agent has already done the filtering — your job is to convert the content into structured memories, not to re-evaluate whether each item is worth storing.
+
+Types:
+- fact: Objective information about the user (name, location, job, relationships)
+- preference: Likes, dislikes, or preferences ("prefers dark mode", "allergic to peanuts")
+- decision: Choices WITH reasoning ("chose PostgreSQL because data is relational and needs ACID")
+- episodic: Notable events or experiences ("deployed v1.0 to production on March 15")
+- goal: Objectives, targets, or plans ("wants to launch public beta by end of Q1")
+- context: Active project/task context ("working on TotalReclaw v1.2, staging on Base Sepolia")
+- summary: Key outcome or conclusion from a discussion ("agreed to use phased rollout for migration")
+- rule: A reusable operational rule, non-obvious gotcha, debugging shortcut, or convention the user wants to remember for next time.
+
+Extraction guidance (compaction-specific):
+- Pay special attention to active project context, decisions in progress, and current working state — these are especially valuable to preserve before compaction.
+- For decisions: ALWAYS include the reasoning. "Chose X" is weak. "Chose X because Y" is strong.
+- For context: Capture what the user is actively working on, including versions, environments, and status. During compaction, even minor project state is worth preserving.
+- For summaries: Extract clear conclusions or agreements — compaction is the perfect time since the conversation is being summarized.
+- For rules: Extract non-obvious learnings, gotchas, and conventions. Include specific context (which tool, which error, which version).
+- Decisions and context should be importance >= 7 (they are high-value for future conversations).
+
+Actions (compare against existing memories if provided):
+- ADD: New memory, no conflict with existing
+- UPDATE: Refines or corrects an existing memory (provide existingFactId)
+- DELETE: Contradicts an existing memory -- the old one is now wrong (provide existingFactId)
+- NOOP: Already captured or not worth storing
+
+Entities:
+- List the named entities this memory is about (people, projects, tools, companies, concepts, places)
+- When a memory is about the user, include the user's own name as a "person" entity
+- Entity "type" must be one of: person | project | tool | company | concept | place
+- Entity "role" is optional and describes the entity's role in the claim
+- Prefer SPECIFIC product/tool names over umbrella categories. "PostgreSQL" beats "database"; "Neovim" beats "editor".
+
+Confidence:
+- Self-assess how sure you are this is a real, durable fact (0.0-1.0)
+- Use 0.9-1.0 when the user stated it directly and unambiguously
+- Use 0.7-0.9 when you inferred it from context
+- Use 0.5-0.7 when it could be a misstatement or temporary state
+- Default to 0.85 if unsure
+
+Few-shot example (bullet-list compaction summary):
+
+Input:
+User: I think we're ready to wrap up. What did we cover?
+Assistant: Here's a condensed summary:
+
+Context:
+- Migrating from Heroku to Fly.io for a Django monolith
+- Sarah championing the migration, user skeptical about Celery workers
+
+Decisions:
+- Will run a 2-week spike on Fly.io with one Celery worker first
+- Using Fly Machines for Celery, Fly Apps for the web tier
+
+Key learnings:
+- Fly.io's internal DNS doesn't resolve the same way as Heroku's — service discovery needs explicit config
+- Celery task routing broke on our Redis setup because Fly Redis uses a different connection pool model
+
+Output:
+[
+  {"text": "Migrating from Heroku to Fly.io, Django monolith", "type": "context", "importance": 7, "confidence": 0.9, "action": "ADD", "entities": [{"name": "Heroku", "type": "tool"}, {"name": "Fly.io", "type": "tool"}, {"name": "Django", "type": "tool"}]},
+  {"text": "Sarah is championing the Fly.io migration; user skeptical about Celery workers", "type": "context", "importance": 6, "confidence": 0.85, "action": "ADD", "entities": [{"name": "Sarah", "type": "person"}, {"name": "Celery", "type": "tool"}]},
+  {"text": "Will run a 2-week spike on Fly.io with one Celery worker first", "type": "decision", "importance": 8, "confidence": 0.95, "action": "ADD", "entities": [{"name": "Fly.io", "type": "tool"}, {"name": "Celery", "type": "tool"}]},
+  {"text": "Using Fly Machines for Celery, Fly Apps for the web tier", "type": "decision", "importance": 8, "confidence": 0.95, "action": "ADD", "entities": [{"name": "Fly Machines", "type": "tool"}, {"name": "Fly Apps", "type": "tool"}, {"name": "Celery", "type": "tool"}]},
+  {"text": "Fly.io internal DNS doesn't resolve the same as Heroku — service discovery needs explicit config", "type": "rule", "importance": 8, "confidence": 1.0, "action": "ADD", "entities": [{"name": "Fly.io", "type": "tool"}]},
+  {"text": "Celery task routing broke on Fly Redis because Fly Redis uses a different connection pool model than Heroku Redis", "type": "rule", "importance": 8, "confidence": 1.0, "action": "ADD", "entities": [{"name": "Celery", "type": "tool"}, {"name": "Fly Redis", "type": "tool"}]}
+]
+
+Few-shot example (prose compaction summary):
+
+Input:
+User: Can you give me a quick summary of what we figured out?
+Assistant: Sure. We went through the auth system debugging and landed on a few things. The root cause of the 401 errors was that our JWT tokens weren't being refreshed before expiry because the refresh handler had an off-by-one error in the expiry check. We fixed that and added a 30-second buffer to be safe. You also mentioned that going forward you want to use refresh tokens with sliding expiry rather than fixed expiry. One thing worth remembering for next time: the Flask-JWT-Extended library's default config is fixed expiry, and sliding requires explicit enablement via JWT_REFRESH_TOKEN_EXPIRES_DELTA. For now we're on fixed but should revisit after the Q2 security review.
+
+Output:
+[
+  {"text": "JWT tokens were producing 401 errors due to an off-by-one error in the refresh handler's expiry check", "type": "episodic", "importance": 7, "confidence": 0.95, "action": "ADD", "entities": [{"name": "JWT", "type": "tool"}]},
+  {"text": "Fixed the JWT refresh off-by-one bug and added a 30-second buffer to the expiry check", "type": "decision", "importance": 8, "confidence": 0.95, "action": "ADD", "entities": [{"name": "JWT", "type": "tool"}]},
+  {"text": "User wants to move to refresh tokens with sliding expiry rather than fixed expiry going forward", "type": "preference", "importance": 7, "confidence": 0.9, "action": "ADD", "entities": [{"name": "JWT", "type": "tool"}]},
+  {"text": "Flask-JWT-Extended defaults to fixed expiry; sliding expiry requires JWT_REFRESH_TOKEN_EXPIRES_DELTA to be set explicitly", "type": "rule", "importance": 8, "confidence": 1.0, "action": "ADD", "entities": [{"name": "Flask-JWT-Extended", "type": "tool"}]},
+  {"text": "Revisit the JWT fixed-vs-sliding expiry decision after the Q2 security review", "type": "goal", "importance": 7, "confidence": 0.9, "action": "ADD", "entities": [{"name": "JWT", "type": "tool"}]}
+]
+
+Return a JSON array (no markdown, no code fences):
+[{"text": "...", "type": "...", "importance": N, "confidence": 0.9, "action": "ADD|UPDATE|DELETE|NOOP", "existingFactId": "...", "entities": [{"name": "PostgreSQL", "type": "tool", "role": "chosen database"}]}, ...]
+
+If nothing is worth extracting, return: []`;
+
+/**
+ * Parse facts for compaction context (importance threshold 5 instead of 6).
+ *
+ * Identical to `parseFactsResponse` except the importance floor is 5 instead
+ * of 6 — compaction is the last chance to capture context, so we accept
+ * borderline facts that would normally be dropped.
+ */
+export function parseFactsResponseForCompaction(
+  response: string,
+  logger?: ExtractorLogger,
+): ExtractedFact[] {
+  const originalPreview = response.trim().slice(0, 200);
+  let cleaned = response.trim();
+
+  // Strip <think>...</think> and <thinking>...</thinking> tags
+  cleaned = cleaned
+    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '')
+    .trim();
+
+  // Strip markdown code fences if present
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+  }
+
+  const tryParse = (input: string): unknown => {
+    try {
+      return JSON.parse(input);
+    } catch {
+      return undefined;
+    }
+  };
+
+  let parsed = tryParse(cleaned);
+  let recoveryUsed: 'none' | 'bracket-scan' = 'none';
+  if (parsed === undefined) {
+    const match = cleaned.match(/\[[\s\S]*\]/);
+    if (match) {
+      parsed = tryParse(match[0]);
+      if (parsed !== undefined) recoveryUsed = 'bracket-scan';
+    }
+  }
+
+  if (parsed === undefined) {
+    logger?.warn?.(
+      `parseFactsResponseForCompaction: could not parse LLM output as JSON. Preview: ${JSON.stringify(
+        originalPreview,
+      )}`,
+    );
+    return [];
+  }
+
+  if (recoveryUsed === 'bracket-scan') {
+    logger?.info?.(
+      `parseFactsResponseForCompaction: recovered JSON array via bracket-scan fallback`,
+    );
+  }
+
+  if (!Array.isArray(parsed)) {
+    logger?.warn?.(
+      `parseFactsResponseForCompaction: parsed value is not an array (type=${typeof parsed})`,
+    );
+    return [];
+  }
+
+  const facts = (parsed as unknown[])
+    .filter(
+      (f: unknown) =>
+        f &&
+        typeof f === 'object' &&
+        typeof (f as ExtractedFact).text === 'string' &&
+        (f as ExtractedFact).text.length >= 5,
+    )
+    .map((f: unknown) => {
+      const fact = f as Record<string, unknown>;
+      const validActions: ExtractionAction[] = ['ADD', 'UPDATE', 'DELETE', 'NOOP'];
+      const action = validActions.includes(String(fact.action) as ExtractionAction)
+        ? (String(fact.action) as ExtractionAction)
+        : 'ADD';
+
+      let entities: ExtractedEntity[] | undefined;
+      if (Array.isArray(fact.entities)) {
+        const validEntities = fact.entities
+          .map(parseEntity)
+          .filter((e): e is ExtractedEntity => e !== null);
+        if (validEntities.length > 0) entities = validEntities;
+      }
+
+      const result: ExtractedFact = {
+        text: String(fact.text).slice(0, 512),
+        type: (isValidMemoryType(fact.type) ? fact.type : 'fact') as MemoryType,
+        importance: Math.max(1, Math.min(10, Number(fact.importance) || 5)),
+        action,
+        existingFactId: typeof fact.existingFactId === 'string' ? fact.existingFactId : undefined,
+        confidence: normalizeConfidence(fact.confidence),
+      };
+      if (entities) result.entities = entities;
+      return result;
+    })
+    .filter((f) => f.importance >= 5 || f.action === 'DELETE'); // Compaction: importance >= 5 (not 6)
+
+  return facts;
+}
+
+/**
+ * Extract facts using the compaction-aware prompt.
+ *
+ * This is called from the `before_compaction` hook — the LAST CHANCE to
+ * capture knowledge before conversation context is lost. Key differences
+ * from `extractFacts`:
+ *   - Uses `COMPACTION_SYSTEM_PROMPT` (lower threshold, format-agnostic, more aggressive)
+ *   - Always processes the full conversation (`mode: 'full'`)
+ *   - Importance filter is >= 5 instead of >= 6
+ *   - Lexical importance bumps still apply
+ *
+ * @param rawMessages - The messages array from the hook event (unknown[])
+ * @param existingMemories - Optional list of existing memories for dedup context
+ * @param logger - Optional logger for observability
+ * @returns Array of extracted facts, or empty array on failure.
+ */
+export async function extractFactsForCompaction(
+  rawMessages: unknown[],
+  existingMemories?: Array<{ id: string; text: string }>,
+  logger?: ExtractorLogger,
+): Promise<ExtractedFact[]> {
+  const config = resolveLLMConfig();
+  if (!config) {
+    logger?.info?.('extractFactsForCompaction: no LLM config resolved (skipping extraction)');
+    return [];
+  }
+
+  // Parse messages
+  const parsed = rawMessages
+    .map(messageToText)
+    .filter((m): m is { role: string; content: string } => m !== null);
+
+  if (parsed.length === 0) {
+    logger?.info?.(`extractFactsForCompaction: no parseable messages (raw count=${rawMessages.length})`);
+    return [];
+  }
+
+  // Always full mode — process entire conversation for compaction
+  const conversationText = truncateMessages(parsed, 12_000);
+
+  if (conversationText.length < 20) {
+    logger?.info?.(
+      `extractFactsForCompaction: conversation too short (${conversationText.length} chars < 20)`,
+    );
+    return [];
+  }
+
+  // Build existing memories context if available
+  let memoriesContext = '';
+  if (existingMemories && existingMemories.length > 0) {
+    const memoriesStr = existingMemories
+      .map((m) => `[ID: ${m.id}] ${m.text}`)
+      .join('\n');
+    memoriesContext = `\n\nExisting memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n${memoriesStr}`;
+  }
+
+  const userPrompt = `Extract ALL valuable long-term memories from this conversation before it is compacted and lost:\n\n${conversationText}${memoriesContext}`;
+
+  let response: string | null | undefined;
+  try {
+    response = await chatCompletion(config, [
+      { role: 'system', content: COMPACTION_SYSTEM_PROMPT },
+      { role: 'user', content: userPrompt },
+    ]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.warn?.(`extractFactsForCompaction: chatCompletion threw: ${msg}`);
+    return [];
+  }
+
+  if (!response) {
+    logger?.info?.('extractFactsForCompaction: chatCompletion returned null/empty response');
+    return [];
+  }
+
+  logger?.info?.(
+    `extractFactsForCompaction: LLM returned ${response.length} chars; handing to parseFactsResponseForCompaction`,
+  );
+  const facts = parseFactsResponseForCompaction(response, logger);
+
+  // Lexical importance bumps (same as regular extraction)
+  for (const f of facts) {
+    const bump = computeLexicalImportanceBump(f.text, conversationText);
+    if (bump > 0) {
+      const oldImportance = f.importance;
+      const effectiveBump = f.importance >= 8 ? Math.min(bump, 1) : bump;
+      f.importance = Math.min(10, f.importance + effectiveBump);
+      logger?.info?.(
+        `extractFactsForCompaction: lexical bump +${bump} for "${f.text.slice(0, 60)}..." (${oldImportance} → ${f.importance})`,
+      );
+    }
+  }
+
+  return facts;
+}
+
+// ---------------------------------------------------------------------------
 // Debrief Extraction
 // ---------------------------------------------------------------------------
 

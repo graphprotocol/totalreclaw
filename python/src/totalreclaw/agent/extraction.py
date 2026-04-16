@@ -203,6 +203,82 @@ Return a JSON array (no markdown, no code fences):
 If nothing is worth extracting, return: []"""
 
 
+# ---------------------------------------------------------------------------
+# Compaction-Aware Extraction Prompt (Phase 2.3)
+# ---------------------------------------------------------------------------
+#
+# Mirrors COMPACTION_SYSTEM_PROMPT from skill/plugin/extractor.ts.
+# Used when the conversation is about to be compacted — last chance to capture
+# knowledge. Importance threshold is 5 (not 6).
+
+COMPACTION_SYSTEM_PROMPT = """You are extracting memories from a conversation that is about to be compacted. The conversation context will be lost after this point — this is your LAST CHANCE to capture everything worth remembering. Be more aggressive than usual: err on the side of storing.
+
+Rules:
+1. Each memory must be a single, self-contained piece of information
+2. Focus on user-specific information that would be useful in future conversations
+3. Skip generic knowledge, greetings, small talk, and ephemeral task coordination
+4. Score importance 1-10 using the rubric below (5+ = worth storing for compaction)
+5. Only extract memories with importance >= 5
+
+Importance rubric (use the FULL 1-10 range, not just 7-8):
+- 10: Critical, core identity, never-forget content. The user explicitly says "remember this forever", "critical", "never forget", or it's a fundamental fact like name/birthday/relationships that defines who they are.
+- 9: Affects many future decisions or interactions. A high-impact rule, a major life decision with reasoning, a deeply held preference that shapes daily work.
+- 8: High-value preference, decision-with-reasoning, or operational rule. The user clearly cares about it AND it will be relevant in many future conversations.
+- 7: Specific durable fact about the user's setup, project, or context. Useful to remember but not life-changing.
+- 6: Borderline in normal extraction — but worth storing during compaction since this context will be lost.
+- 5: Would normally be dropped, but during compaction we capture it as a safety net. Low-signal context, minor preferences, ephemeral project state that may still be useful if the conversation is lost.
+- 4 or below: NOT WORTH STORING even during compaction. Drop these. Greetings, filler, already-known common knowledge.
+
+DO NOT cluster every fact at 7-8. Use 9-10 for high-signal content and 5-6 for borderline content. The system depends on the full range working.
+
+Format-agnostic parsing (IMPORTANT):
+The conversation may contain bullet lists, numbered lists, section headers with paragraphs, code snippets, or plain prose. Treat ALL formats as potential sources of extractable memory:
+- If bullets/list items: each item is a candidate memory.
+- If section headers (Context, Decisions, Key Learnings, Open Questions, etc.): use the header as a type hint (Context → context, Decisions → decision, Learnings → rule, Open Questions → goal).
+- If plain prose: parse each distinct assertion as a candidate memory, even if they run together in paragraph form.
+- If code snippets: extract any configuration choices, tool versions, or architectural decisions embedded in comments or code structure.
+- If mixed format: apply all of the above.
+
+Do NOT skip content just because it appears in a summary. The agent has already done the filtering — your job is to convert the content into structured memories, not to re-evaluate whether each item is worth storing.
+
+Types:
+- fact: Objective information about the user (name, location, job, relationships)
+- preference: Likes, dislikes, or preferences ("prefers dark mode", "allergic to peanuts")
+- decision: Choices WITH reasoning ("chose PostgreSQL because data is relational and needs ACID")
+- episodic: Notable events or experiences ("deployed v1.0 to production on March 15")
+- goal: Objectives, targets, or plans ("wants to launch public beta by end of Q1")
+- context: Active project/task context ("working on TotalReclaw v1.2, staging on Base Sepolia")
+- summary: Key outcome or conclusion from a discussion ("agreed to use phased rollout for migration")
+- rule: A reusable operational rule, non-obvious gotcha, debugging shortcut, or convention the user wants to remember for next time.
+
+Extraction guidance (compaction-specific):
+- Pay special attention to active project context, decisions in progress, and current working state — these are especially valuable to preserve before compaction.
+- For decisions: ALWAYS include the reasoning. "Chose X" is weak. "Chose X because Y" is strong.
+- For context: Capture what the user is actively working on, including versions, environments, and status. During compaction, even minor project state is worth preserving.
+- For summaries: Extract clear conclusions or agreements — compaction is the perfect time since the conversation is being summarized.
+- For rules: Extract non-obvious learnings, gotchas, and conventions. Include specific context (which tool, which error, which version).
+- Decisions and context should be importance >= 7 (they are high-value for future conversations).
+
+Actions (compare against existing memories if provided):
+- ADD: New memory, no conflict with existing
+- UPDATE: Refines or corrects an existing memory (provide existingFactId)
+- DELETE: Contradicts an existing memory -- the old one is now wrong (provide existingFactId)
+- NOOP: Already captured or not worth storing
+
+Entity extraction:
+- Each memory MAY include an "entities" array of named entities it references
+- Entity type must be one of: person | project | tool | company | concept | place
+- Use the user's name when a fact is about them
+- role is optional free text ("chooser", "employer")
+- Prefer SPECIFIC product/tool names over umbrella categories. "PostgreSQL" beats "database".
+- confidence (0.0-1.0) is your self-assessed certainty; default 0.85 if you're unsure
+
+Return a JSON array (no markdown, no code fences):
+[{"text": "...", "type": "...", "importance": N, "confidence": 0.9, "action": "ADD|UPDATE|DELETE|NOOP", "entities": [{"name": "PostgreSQL", "type": "tool"}], "existingFactId": "..."}, ...]
+
+If nothing is worth extracting, return: []"""
+
+
 def _truncate_messages(messages: list[dict], max_chars: int = 12000) -> str:
     """Format and truncate messages to fit token budget."""
     lines = []
@@ -517,5 +593,194 @@ def extract_facts_heuristic(messages: list[dict], max_facts: int) -> list[Extrac
                         importance=importance,
                         action="ADD",
                     ))
+
+    return facts
+
+
+# ---------------------------------------------------------------------------
+# Compaction-Aware Extraction (Phase 2.3)
+# ---------------------------------------------------------------------------
+
+
+def _parse_response_compaction(response: str) -> list[ExtractedFact]:
+    """Parse the LLM extraction response with compaction threshold (importance >= 5).
+
+    Identical to ``_parse_response`` except the importance floor is 5 instead
+    of 6. During compaction, we accept borderline facts that would normally be
+    dropped — this is the last chance to capture them.
+    """
+    original_preview = response.strip()[:200]
+    cleaned = response.strip()
+
+    # Strip <think>...</think> and <thinking>...</thinking> tags
+    cleaned = re.sub(r"<think(?:ing)?>[\s\S]*?</think(?:ing)?>", "", cleaned, flags=re.IGNORECASE).strip()
+
+    # Strip markdown code fences if present
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+
+    parsed: object = None
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        m = re.search(r"\[[\s\S]*\]", cleaned)
+        if m:
+            try:
+                parsed = json.loads(m.group(0))
+                logger.info(
+                    "_parse_response_compaction: recovered JSON array via bracket-scan fallback"
+                )
+            except json.JSONDecodeError:
+                parsed = None
+
+    if parsed is None:
+        logger.warning(
+            "_parse_response_compaction: could not parse LLM output as JSON. Preview: %r",
+            original_preview,
+        )
+        return []
+
+    if not isinstance(parsed, list):
+        logger.warning(
+            "_parse_response_compaction: parsed value is not an array (type=%s)",
+            type(parsed).__name__,
+        )
+        return []
+
+    facts = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text", "")).strip()
+        if len(text) < 5:
+            continue
+
+        fact_type = str(item.get("type", "fact"))
+        if fact_type not in VALID_TYPES:
+            fact_type = "fact"
+
+        importance = item.get("importance", 5)
+        try:
+            importance = max(1, min(10, int(importance)))
+        except (ValueError, TypeError):
+            importance = 5
+
+        action = str(item.get("action", "ADD")).upper()
+        if action not in VALID_ACTIONS:
+            action = "ADD"
+
+        # Compaction threshold: importance >= 5 (not 6)
+        # DELETE actions pass regardless of importance
+        if importance < 5 and action != "DELETE":
+            continue
+
+        existing_id = item.get("existingFactId") or item.get("existing_fact_id")
+
+        raw_entities = item.get("entities")
+        entities: Optional[List[ExtractedEntity]] = None
+        if isinstance(raw_entities, list):
+            parsed_entities = [e for e in (_parse_entity(r) for r in raw_entities) if e is not None]
+            if parsed_entities:
+                entities = parsed_entities
+
+        confidence = normalize_confidence(item.get("confidence"))
+
+        facts.append(ExtractedFact(
+            text=text[:512],
+            type=fact_type,
+            importance=importance,
+            action=action,
+            existing_fact_id=str(existing_id) if existing_id else None,
+            entities=entities,
+            confidence=confidence,
+        ))
+
+    return facts
+
+
+async def extract_facts_compaction(
+    messages: list[dict],
+    existing_memories: Optional[list[dict]] = None,
+    llm_config: Optional["LLMConfig"] = None,
+) -> list[ExtractedFact]:
+    """Extract facts using the compaction-aware prompt (importance >= 5).
+
+    This is the Python equivalent of ``extractFactsForCompaction`` in the
+    OpenClaw plugin. It uses ``COMPACTION_SYSTEM_PROMPT`` and processes the
+    full conversation (not just recent turns). The importance filter is >= 5
+    instead of >= 6, capturing borderline facts before context is lost.
+
+    Hermes does not currently have a compaction hook (it uses
+    ``on_session_end`` instead), but this function is exported and available
+    for future integration.
+
+    Parameters
+    ----------
+    messages : list[dict]
+        All conversation messages to extract from.
+    existing_memories : list[dict], optional
+        Recent memories for LLM dedup context.
+    llm_config : LLMConfig, optional
+        Pre-resolved LLM configuration. Falls back to ``detect_llm_config()``.
+    """
+    config = llm_config or detect_llm_config()
+    if not config:
+        logger.info("extract_facts_compaction: no LLM config resolved (skipping extraction)")
+        return []
+
+    conversation_text = _truncate_messages(messages)
+    if len(conversation_text) < 20:
+        logger.info(
+            "extract_facts_compaction: conversation too short (%d chars < 20, messages=%d)",
+            len(conversation_text),
+            len(messages),
+        )
+        return []
+
+    # Build existing memories context
+    memories_ctx = ""
+    if existing_memories:
+        mem_lines = [f"[ID: {m['id']}] {m['text']}" for m in existing_memories[:50]]
+        memories_ctx = (
+            "\n\nExisting memories (classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n"
+            + "\n".join(mem_lines)
+        )
+
+    user_prompt = (
+        f"Extract ALL valuable long-term memories from this conversation before it is compacted and lost:\n\n"
+        f"{conversation_text}{memories_ctx}"
+    )
+
+    try:
+        response = await chat_completion(config, COMPACTION_SYSTEM_PROMPT, user_prompt)
+    except Exception as e:
+        logger.warning("extract_facts_compaction: chat_completion threw: %s", e)
+        return []
+
+    if not response:
+        logger.info("extract_facts_compaction: chat_completion returned None/empty")
+        return []
+
+    logger.info(
+        "extract_facts_compaction: LLM returned %d chars; handing to _parse_response_compaction",
+        len(response),
+    )
+    facts = _parse_response_compaction(response)
+
+    # Lexical importance bumps (same as regular extraction)
+    for f in facts:
+        bump = compute_lexical_importance_bump(f.text, conversation_text)
+        if bump > 0:
+            old_importance = f.importance
+            effective_bump = min(bump, 1) if f.importance >= 8 else bump
+            f.importance = min(10, f.importance + effective_bump)
+            logger.info(
+                "extract_facts_compaction: lexical bump +%d for %r (%d -> %d)",
+                bump,
+                f.text[:60],
+                old_importance,
+                f.importance,
+            )
 
     return facts

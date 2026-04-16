@@ -39,6 +39,7 @@ import {
   parseEntity,
   VALID_MEMORY_TYPES,
   EXTRACTION_SYSTEM_PROMPT,
+  extractFactsForCompaction,
   type ExtractedFact,
   type ExtractedEntity,
   type MemoryType,
@@ -4608,13 +4609,13 @@ const plugin = {
           if (needsSetup) return;
 
           api.logger.info(
-            `Pre-compaction extraction: processing ${evt.messages.length} messages`,
+            `pre_compaction: using compaction-aware extraction (importance >= 5), processing ${evt.messages.length} messages`,
           );
 
           const existingMemories = isLlmDedupEnabled()
             ? await fetchExistingMemoriesForExtraction(api.logger, 50, evt.messages)
             : [];
-          const rawCompactFacts = await extractFacts(evt.messages, 'full', existingMemories);
+          const rawCompactFacts = await extractFactsForCompaction(evt.messages, existingMemories, api.logger);
           const { kept: compactImportanceFiltered } = filterByImportance(rawCompactFacts, api.logger);
           const maxFactsCompact = getMaxFactsPerExtraction();
           if (compactImportanceFiltered.length > maxFactsCompact) {
