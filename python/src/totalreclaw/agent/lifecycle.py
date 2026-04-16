@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .state import AgentState
 
 from .extraction import ExtractedFact, extract_facts_llm, extract_facts_heuristic
+from .contradiction import detect_and_resolve_contradictions
 from .debrief import generate_debrief
 
 logger = logging.getLogger(__name__)
@@ -163,6 +164,14 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
 
         # Cap to max_facts
         facts = facts[:max_facts]
+
+        # Contradiction detection: filter out facts that lose to existing vault claims
+        try:
+            facts = loop.run_until_complete(
+                detect_and_resolve_contradictions(facts, client, logger)
+            )
+        except Exception as exc:
+            logger.debug("Contradiction detection failed (proceeding with all facts): %s", exc)
 
         for fact in facts:
             try:
