@@ -349,7 +349,8 @@ def test_compute_entity_trapdoors_skips_bad_names() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Digest mode flag (digest compilation is orthogonal to v0/v1 taxonomy)
+# Digest mode flag — v1 env cleanup: TOTALRECLAW_DIGEST_MODE was removed.
+# resolve_digest_mode() always returns "on" regardless of env var.
 # ---------------------------------------------------------------------------
 
 
@@ -359,23 +360,15 @@ def test_resolve_digest_mode_default(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.parametrize(
-    "value,expected",
-    [
-        ("on", "on"),
-        ("ON", "on"),
-        ("off", "off"),
-        ("OFF", "off"),
-        ("template", "template"),
-        ("TEMPLATE", "template"),
-        ("nonsense", "on"),
-        ("", "on"),
-    ],
+    "value",
+    ["on", "off", "OFF", "template", "TEMPLATE", "nonsense", ""],
 )
-def test_resolve_digest_mode_values(
-    monkeypatch: pytest.MonkeyPatch, value: str, expected: str
+def test_resolve_digest_mode_env_has_no_effect(
+    monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
+    """TOTALRECLAW_DIGEST_MODE was removed in v1 env cleanup — env var has no effect."""
     monkeypatch.setenv("TOTALRECLAW_DIGEST_MODE", value)
-    assert resolve_digest_mode() == expected
+    assert resolve_digest_mode() == "on"
 
 
 # ---------------------------------------------------------------------------

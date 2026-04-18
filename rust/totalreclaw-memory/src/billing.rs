@@ -39,6 +39,14 @@ const DEFAULT_CANDIDATE_POOL_PRO: usize = 250;
 // ---------------------------------------------------------------------------
 
 /// Feature flags parsed from the billing status response.
+///
+/// The relay returns these in the `features` JSON blob on the billing
+/// status endpoint. Clients consult them at the call-site when resolving
+/// tuning knobs; env-var fallbacks are retained for self-hosted deployments.
+///
+/// See `docs/guides/env-vars-reference.md` — as of the v1 env var cleanup,
+/// managed-service clients read tuning knobs from this struct and never
+/// from env vars.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FeatureFlags {
     pub llm_dedup: Option<bool>,
@@ -47,6 +55,17 @@ pub struct FeatureFlags {
     pub max_candidate_pool: Option<usize>,
     pub custom_extract_interval: Option<bool>,
     pub min_extract_interval: Option<u32>,
+
+    // Tuning knobs moved to server-side delivery in the v1 env cleanup.
+    // Optional — when absent, clients fall back to their built-in defaults
+    // (or their self-hosted env-var overrides).
+    pub cosine_threshold: Option<f64>,
+    pub relevance_threshold: Option<f64>,
+    pub semantic_skip_threshold: Option<f64>,
+    pub min_importance: Option<u32>,
+    pub cache_ttl_ms: Option<u64>,
+    pub trapdoor_batch_size: Option<usize>,
+    pub subgraph_page_size: Option<usize>,
 }
 
 // ---------------------------------------------------------------------------

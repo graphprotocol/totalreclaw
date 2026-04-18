@@ -163,7 +163,10 @@ See [`docs/specs/totalreclaw/memory-taxonomy-v1.md`](../docs/specs/totalreclaw/m
 | `TOTALRECLAW_RECOVERY_PHRASE` | 12-word BIP-39 recovery phrase | Required |
 | `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL (only needed for self-hosted) | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_SELF_HOSTED` | Use a self-hosted server instead of the managed service | `false` |
-| `TOTALRECLAW_CHAIN_ID` | Chain ID (100=Gnosis mainnet, 84532=Base Sepolia staging) | `100` |
+| `TOTALRECLAW_CREDENTIALS_PATH` | Override credentials file location | `~/.totalreclaw/credentials.json` |
+| `TOTALRECLAW_CACHE_PATH` | Override encrypted cache file location | `~/.totalreclaw/cache.enc` |
+
+> **v1 env cleanup:** `TOTALRECLAW_CHAIN_ID`, `TOTALRECLAW_EMBEDDING_MODEL`, `TOTALRECLAW_STORE_DEDUP`, `TOTALRECLAW_LLM_MODEL`, `TOTALRECLAW_SESSION_ID`, `TOTALRECLAW_TAXONOMY_VERSION`, `TOTALRECLAW_CLAIM_FORMAT`, and `TOTALRECLAW_DIGEST_MODE` were removed. Chain is auto-detected from billing tier (free = Base Sepolia, Pro = Gnosis). The MCP server silently ignores these vars for a transition period. See the [env vars reference](../docs/guides/env-vars-reference.md).
 
 ## Free Tier & Pricing
 

@@ -117,13 +117,11 @@ import {
   handleSetScopeWithDeps,
 } from './tools/set-scope.js';
 import {
-  buildCanonicalClaim,
   buildV1ClaimBlob,
   computeEntityTrapdoor,
   isDigestBlob,
   readBlobUnified,
   readClaimFromBlob,
-  resolveClaimFormat,
 } from './claims-helper.js';
 import { isValidMemoryType, type MemoryType } from './memory-types.js';
 import {
@@ -157,6 +155,27 @@ import type { SavedCredentials } from './cli/setup.js';
 const SERVER_URL = process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz';
 const MASTER_PASSWORD = process.env.TOTALRECLAW_RECOVERY_PHRASE;
 
+// v1 env var cleanup — warn once if any removed env var is still set.
+// See docs/guides/env-vars-reference.md for the canonical list.
+(() => {
+  const removed = [
+    'TOTALRECLAW_CHAIN_ID',
+    'TOTALRECLAW_EMBEDDING_MODEL',
+    'TOTALRECLAW_STORE_DEDUP',
+    'TOTALRECLAW_LLM_MODEL',
+    'TOTALRECLAW_SESSION_ID',
+    'TOTALRECLAW_TAXONOMY_VERSION',
+    'TOTALRECLAW_CLAIM_FORMAT',
+    'TOTALRECLAW_DIGEST_MODE',
+  ].filter((name) => process.env[name] !== undefined);
+  if (removed.length > 0) {
+    console.error(
+      `TotalReclaw MCP: ignoring removed env var(s): ${removed.join(', ')}. ` +
+        `See docs/guides/env-vars-reference.md for the v1 env var surface.`,
+    );
+  }
+})();
+
 // ── Client identification ──────────────────────────────────────────────────
 import { setClientId, getClientId } from './client-id.js';
 let clientIdentifierResolved = false;
@@ -186,8 +205,9 @@ function resolveMnemonic(): string | undefined {
 
 let currentMode: ServerMode = 'unconfigured';
 
-// Store-time near-duplicate detection (consolidation module)
-const STORE_DEDUP_ENABLED = process.env.TOTALRECLAW_STORE_DEDUP !== 'false';
+// Store-time near-duplicate detection is always ON in v1.
+// The TOTALRECLAW_STORE_DEDUP env var was removed.
+const STORE_DEDUP_ENABLED = true;
 
 // ── Billing cache (in-memory, for server-side candidate pool) ───────────────
 
@@ -323,15 +343,14 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
 
   const smartAccountAddress = smartAccount.address.toLowerCase();
 
-  // Determine chain ID: env var override > billing tier > default (Base Sepolia).
+  // Determine chain ID: always auto-detect from billing tier.
   // Free tier → Base Sepolia (84532, testnet — Pimlico sponsors gas for free).
   // Pro tier  → Gnosis mainnet (100, permanent on-chain storage).
-  let chainId = process.env.TOTALRECLAW_CHAIN_ID
-    ? parseInt(process.env.TOTALRECLAW_CHAIN_ID)
-    : 84532; // default free tier
+  // TOTALRECLAW_CHAIN_ID user-facing override was removed in v1.
+  let chainId = 84532; // default free tier
 
-  // Auto-detect Pro tier from billing endpoint (if no env override).
-  if (!process.env.TOTALRECLAW_CHAIN_ID) {
+  // Auto-detect Pro tier from billing endpoint.
+  {
     try {
       const billingUrl = `${SERVER_URL.replace(/\/+$/, '')}/v1/billing/status?wallet_address=${encodeURIComponent(smartAccountAddress)}`;
       const resp = await fetch(billingUrl, {
@@ -508,9 +527,9 @@ async function handleRememberSubgraph(
   }> | undefined;
 
   // Phase 2.2.6 + v1: accept both legacy 8-type and v1 6-type inputs. The
-  // managed-service path always writes v1 inner blobs (protobuf wrapper v4);
-  // the internal legacy `MemoryType` is still tracked for the legacy
-  // `buildCanonicalClaim` fallback used when TOTALRECLAW_CLAIM_FORMAT=legacy.
+  // managed-service path always writes v1 inner blobs (protobuf wrapper v4).
+  // The legacy `MemoryType` is still tracked for backward compat with any
+  // downstream reader that consults the v0 short-key value.
   const textsToStore: Array<{
     text: string;
     importance: number;
@@ -710,37 +729,27 @@ async function handleRememberSubgraph(
 
       // 4. Build the blob.
       //
-      // Memory Taxonomy v1 (MCP server v3.0.0): the managed-service write path
-      // emits v1 inner blobs by default. Outer protobuf wrapper becomes v4 so
-      // readers know the inner payload is v1 JSON (see protobuf-v4-design.md).
-      //
-      // `TOTALRECLAW_CLAIM_FORMAT=legacy` still produces the v0 `{t,c,i,...}`
-      // canonical claim for back-compat tests. The `raw text` mode is gone.
+      // Memory Taxonomy v1 (MCP server v3.0.0+): the managed-service write
+      // path unconditionally emits v1 inner blobs. Outer protobuf wrapper is
+      // v4 so readers know the inner payload is v1 JSON (see
+      // protobuf-v4-design.md). The v0 `{t,c,i,...}` canonical and raw-text
+      // legacy blobs are no longer produced — `TOTALRECLAW_CLAIM_FORMAT`
+      // was removed in v1.
       //
       // `source` defaults to:
       //   - `'user'` when the tool was called in single-fact (explicit) mode
       //   - `'user-inferred'` when called via the batch path (extraction)
       // Host agents typically have the best provenance signal; this is a
       // conservative default the extraction pipeline can override later.
-      const claimFormat = resolveClaimFormat();
-      let blobPlaintext: string;
-      if (claimFormat === 'legacy') {
-        blobPlaintext = buildCanonicalClaim({
-          fact: { text: item.text, type: item.type },
-          importance: effectiveImportance,
-          sourceAgent: 'mcp-server',
-        });
-      } else {
-        const source = isExplicitRemember ? 'user' : 'user-inferred';
-        blobPlaintext = buildV1ClaimBlob({
-          text: item.text,
-          type: item.typeV1,
-          source,
-          scope: item.scope,
-          reasoning: item.reasoning,
-          importance: effectiveImportance,
-        });
-      }
+      const source = isExplicitRemember ? 'user' : 'user-inferred';
+      const blobPlaintext = buildV1ClaimBlob({
+        text: item.text,
+        type: item.typeV1,
+        source,
+        scope: item.scope,
+        reasoning: item.reasoning,
+        importance: effectiveImportance,
+      });
       const encryptedBlob = encrypt(blobPlaintext, state.encryptionKey);
 
       // 5. Generate content fingerprint for dedup (over plaintext text, not blob)
@@ -873,23 +882,21 @@ async function handleDebriefSubgraph(
       const lshIndices = state.lshHasher.hash(embedding);
       const allIndices = [...wordIndices, ...lshIndices];
 
-      // Memory Taxonomy v1 (MCP server v3.0.0):
-      //   - Default: emit v1 inner blob with `type: 'summary'` (both tool-level
-      //     'summary' and 'context' map here — per spec §type-semantics, summary
-      //     absorbs session-level synthesis regardless of whether the tool
-      //     called it "summary" or "context"). `source: 'derived'` marks this
-      //     as a derived-from-conversation claim (spec requires summary ∈
-      //     {derived, assistant}; derived is the better fit here).
-      //   - TOTALRECLAW_CLAIM_FORMAT=legacy: legacy raw-text blob (pre-v3).
-      const claimFormat = resolveClaimFormat();
-      const blobPlaintext = claimFormat === 'legacy'
-        ? item.text
-        : buildV1ClaimBlob({
-            text: item.text,
-            type: 'summary',
-            source: 'derived',
-            importance: item.importance,
-          });
+      // Memory Taxonomy v1: emit v1 inner blob with `type: 'summary'` (both
+      // tool-level 'summary' and 'context' map here — per spec §type-semantics,
+      // summary absorbs session-level synthesis regardless of whether the tool
+      // called it "summary" or "context"). `source: 'derived'` marks this as a
+      // derived-from-conversation claim (spec requires summary ∈ {derived,
+      // assistant}; derived is the better fit here).
+      //
+      // TOTALRECLAW_CLAIM_FORMAT=legacy was removed in v1; raw-text blobs are
+      // no longer produced on the write path.
+      const blobPlaintext = buildV1ClaimBlob({
+        text: item.text,
+        type: 'summary',
+        source: 'derived',
+        importance: item.importance,
+      });
       const encryptedBlob = encrypt(blobPlaintext, state.encryptionKey);
       const contentFp = generateContentFingerprint(item.text, state.dedupKey);
       const encryptedEmb = encryptEmbedding(embedding, state.encryptionKey);

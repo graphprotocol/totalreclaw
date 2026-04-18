@@ -380,36 +380,37 @@ class TestDetectLLMConfig:
             assert config is not None
             assert "groq.com" in config.base_url
 
-    def test_extraction_model_override(self):
-        """TOTALRECLAW_EXTRACTION_MODEL overrides everything."""
+    def test_extraction_model_env_has_no_effect(self):
+        """TOTALRECLAW_EXTRACTION_MODEL was removed in v1 — env var ignored."""
         with patch.dict(os.environ, {
             "OPENAI_API_KEY": "sk-test",
-            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",
+            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",  # removed env var
         }, clear=True):
             config = detect_llm_config(configured_model="test-model")
             assert config is not None
-            assert config.model == "gpt-4.1-nano"
+            # configured_model wins now that the override env var is gone.
+            assert config.model == "test-model"
 
-    def test_extraction_model_overrides_configured_model(self):
-        """TOTALRECLAW_EXTRACTION_MODEL beats configured_model param."""
+    def test_configured_model_wins_over_removed_env(self):
+        """configured_model is the canonical source in v1 (no env override)."""
         with patch.dict(os.environ, {
             "OPENAI_API_KEY": "sk-test",
-            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",
+            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",  # removed env var
         }, clear=True):
             config = detect_llm_config(configured_model="agent-default-model")
             assert config is not None
-            assert config.model == "gpt-4.1-nano"
+            assert config.model == "agent-default-model"
 
-    def test_extraction_model_overrides_env_model(self):
-        """TOTALRECLAW_EXTRACTION_MODEL beats OPENAI_MODEL env var."""
+    def test_openai_model_env_used_when_configured_is_none(self):
+        """With TOTALRECLAW_EXTRACTION_MODEL removed, OPENAI_MODEL is the env fallback."""
         with patch.dict(os.environ, {
             "OPENAI_API_KEY": "sk-test",
-            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",
+            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",  # removed — ignored
             "OPENAI_MODEL": "gpt-4o",
         }, clear=True):
             config = detect_llm_config()
             assert config is not None
-            assert config.model == "gpt-4.1-nano"
+            assert config.model == "gpt-4o"
 
 
 # ---------------------------------------------------------------------------

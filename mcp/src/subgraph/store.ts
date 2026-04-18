@@ -468,11 +468,14 @@ export function isSubgraphMode(override?: boolean): boolean {
  * Get subgraph configuration from environment variables, with optional
  * overrides for constructor injection from MCP server state.
  *
- * After the relay refactor, clients only need:
+ * After the v1 env var cleanup, clients only need:
  *   - TOTALRECLAW_RECOVERY_PHRASE -- BIP-39 mnemonic
  *   - TOTALRECLAW_SERVER_URL -- relay server URL (default: https://api.totalreclaw.xyz)
  *   - TOTALRECLAW_SELF_HOSTED -- set "true" for self-hosted HTTP mode (default: managed service)
- *   - TOTALRECLAW_CHAIN_ID -- optional, defaults to 100 (Gnosis mainnet)
+ *
+ * Chain ID is no longer user-configurable — auto-detected from billing tier
+ * (free = Base Sepolia, Pro = Gnosis mainnet). Callers inject the resolved
+ * chain ID via the `overrides` argument from `initSubgraphState`.
  *
  * Removed from client-side config (now server-side only):
  *   - PIMLICO_API_KEY
@@ -486,7 +489,7 @@ export function getSubgraphConfig(overrides?: Partial<SubgraphStoreConfig>): Sub
     relayUrl: process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz',
     mnemonic: process.env.TOTALRECLAW_RECOVERY_PHRASE || '',
     cachePath: process.env.TOTALRECLAW_CACHE_PATH || `${process.env.HOME}/.totalreclaw/cache.enc`,
-    chainId: parseInt(process.env.TOTALRECLAW_CHAIN_ID || '84532'),
+    chainId: 84532,
     dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || DEFAULT_DATA_EDGE_ADDRESS,
     entryPointAddress: process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || DEFAULT_ENTRYPOINT_ADDRESS,
   };

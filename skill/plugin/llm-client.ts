@@ -161,11 +161,14 @@ let _logger: { warn: (msg: string) => void } | null = null;
  * Called once from the plugin's `register()` function.
  *
  * Resolution order (highest priority first):
- *   1. TOTALRECLAW_LLM_MODEL env var (power user override for model)
- *   2. Plugin config `extraction.model` (if provided)
- *   3. Auto-derived from provider heuristic using env var API keys
- *   4. OpenClaw's model provider config (api.config.models.providers)
- *   5. Fallback: try common env vars (ZAI_API_KEY, OPENAI_API_KEY) for dev/test
+ *   1. Plugin config `extraction.model` (if provided)
+ *   2. Auto-derived from provider heuristic using env var API keys
+ *   3. OpenClaw's model provider config (api.config.models.providers)
+ *   4. Fallback: try common env vars (ZAI_API_KEY, OPENAI_API_KEY) for dev/test
+ *
+ * The `TOTALRECLAW_LLM_MODEL` user-facing override was removed in v1 —
+ * `deriveCheapModel(provider)` covers the 99% case and a model-level knob
+ * was adding config surface for no tangible win.
  */
 export function initLLMClient(options: {
   primaryModel?: string;
@@ -214,9 +217,8 @@ export function initLLMClient(options: {
       }
 
       if (apiKey && baseUrl) {
-        // Determine model: env override > plugin config > auto-derived
+        // Determine model: plugin config > auto-derived
         const model =
-          CONFIG.llmModel ||
           (typeof extraction?.model === 'string' ? extraction.model : null) ||
           deriveCheapModel(provider, modelName);
 
@@ -241,7 +243,6 @@ export function initLLMClient(options: {
       // Pick a model from the provider's configured models, or use our default
       const firstModelId = providerConfig.models?.[0]?.id;
       const model =
-        CONFIG.llmModel ||
         (typeof extraction?.model === 'string' ? extraction.model : null) ||
         (firstModelId ? deriveCheapModel(provider, firstModelId) : null);
 
@@ -268,7 +269,7 @@ export function initLLMClient(options: {
   for (const [provider, keyName, defaultModel] of fallbackProviders) {
     const apiKey = CONFIG.llmApiKeys[keyName];
     if (apiKey) {
-      const model = CONFIG.llmModel ||
+      const model =
         (typeof extraction?.model === 'string' ? extraction.model : null) ||
         defaultModel;
 
@@ -310,8 +311,7 @@ export function resolveLLMConfig(): LLMClientConfig | null {
   const zaiKey = CONFIG.llmApiKeys.zai;
   const openaiKey = CONFIG.llmApiKeys.openai;
 
-  const model = CONFIG.llmModel
-    || (zaiKey ? 'glm-4.5-flash' : 'gpt-4.1-mini');
+  const model = zaiKey ? 'glm-4.5-flash' : 'gpt-4.1-mini';
 
   if (zaiKey) {
     return {

@@ -41,25 +41,6 @@ function getWasm() {
 }
 
 // ---------------------------------------------------------------------------
-// Feature flag
-// ---------------------------------------------------------------------------
-
-export type ClaimFormat = 'claim' | 'legacy';
-
-/**
- * Resolve the claim-format mode from the TOTALRECLAW_CLAIM_FORMAT env var.
- *
- * - `claim`  (default, or unset): new canonical Claim blob, entity trapdoors added.
- * - `legacy`: old {text, metadata} doc shape; entity trapdoors still added.
- *
- * Read on every call (cheap) so tests can toggle via env without module reload.
- */
-export function resolveClaimFormat(): ClaimFormat {
-  const raw = (process.env.TOTALRECLAW_CLAIM_FORMAT ?? '').trim().toLowerCase();
-  return raw === 'legacy' ? 'legacy' : 'claim';
-}
-
-// ---------------------------------------------------------------------------
 // Category mapping (ExtractedFact.type → compact Claim category short key)
 // ---------------------------------------------------------------------------
 
@@ -396,36 +377,6 @@ export function buildCanonicalClaimRouted(input: BuildClaimInput): string {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy {text, metadata} doc shape (unchanged from pre-KG storeExtractedFacts).
-// ---------------------------------------------------------------------------
-
-export interface BuildLegacyDocInput {
-  fact: ExtractedFact;
-  importance: number;
-  source: string;
-  createdAt?: string;
-}
-
-/**
- * Build the legacy `{text, metadata}` document shape.
- *
- * Kept so the TOTALRECLAW_CLAIM_FORMAT=legacy fallback can write blobs that
- * the existing parseClaimOrLegacy path has always handled.
- */
-export function buildLegacyDoc(input: BuildLegacyDocInput): string {
-  const { fact, importance, source, createdAt } = input;
-  return JSON.stringify({
-    text: fact.text,
-    metadata: {
-      type: fact.type,
-      importance: importance / 10,
-      source,
-      created_at: createdAt ?? new Date().toISOString(),
-    },
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Digest helpers (Stage 3b read path)
 // ---------------------------------------------------------------------------
 
@@ -456,36 +407,38 @@ export const DIGEST_CLAIM_CAP = 200;
 export type DigestMode = 'on' | 'off' | 'template';
 
 /**
- * Resolve TOTALRECLAW_DIGEST_MODE.
+ * Digest injection is always ON in v1. The TOTALRECLAW_DIGEST_MODE env var
+ * was removed — the G-pipeline ships a digest on every recall with an LLM
+ * template fallback baked into the digest compiler. Kept as a function
+ * returning `'on'` so legacy call-sites continue to compile.
  *
- * - `on` (default, unset, unknown): digest injection + LLM compilation when
- *   an LLM is configured, template fallback otherwise.
- * - `off`: legacy individual-fact search path, no digest injection.
- * - `template`: digest injection but skip LLM entirely (template only).
- *
- * Read per-call so tests can toggle via env without module reload.
+ * @deprecated v1 always returns `'on'`.
  */
 export function resolveDigestMode(): DigestMode {
-  const raw = (process.env.TOTALRECLAW_DIGEST_MODE ?? '').trim().toLowerCase();
-  if (raw === 'off') return 'off';
-  if (raw === 'template') return 'template';
   return 'on';
 }
 
 // ---------------------------------------------------------------------------
-// Auto-resolution mode (Phase 2 Slice 2d)
+// Auto-resolution mode — INTERNAL DEBUG KILL-SWITCH
+//
+// Not a user-facing env var. This is kept as an emergency off-switch for
+// auto-contradiction-resolution if we have to disable it in production
+// without a redeploy. It is NOT documented in the env var reference and
+// MUST NOT be surfaced in any client README / SKILL.md.
+//
+// See `contradiction-sync.ts` for the read site.
 // ---------------------------------------------------------------------------
 
 export type AutoResolveMode = 'active' | 'off' | 'shadow';
 
 /**
- * Resolve TOTALRECLAW_AUTO_RESOLVE_MODE.
+ * Internal kill-switch for the auto-resolution loop.
  *
  * - `active` (default, unset, unknown): full detection + auto-resolution.
  * - `off`: skip contradiction detection entirely; Phase 1 behaviour.
  * - `shadow`: detect + log decisions, but do not apply them (debug only).
  *
- * Read per-call so tests can toggle via env without module reload.
+ * @internal Not public config — emergency kill-switch only.
  */
 export function resolveAutoResolveMode(): AutoResolveMode {
   const raw = (process.env.TOTALRECLAW_AUTO_RESOLVE_MODE ?? '').trim().toLowerCase();

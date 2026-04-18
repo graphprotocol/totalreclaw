@@ -226,8 +226,9 @@ const AUTO_EXTRACT_EVERY_TURNS_ENV = CONFIG.extractInterval;
 // Hard cap on facts per extraction to prevent LLM over-extraction from dense conversations
 const MAX_FACTS_PER_EXTRACTION = 15;
 
-// Store-time near-duplicate detection (consolidation module)
-const STORE_DEDUP_ENABLED = CONFIG.storeDedupEnabled;
+// Store-time near-duplicate detection is always ON in v1.
+// The TOTALRECLAW_STORE_DEDUP env var was removed.
+const STORE_DEDUP_ENABLED = true;
 
 // One-time welcome-back message for returning Pro users (set during init, consumed by first before_agent_start)
 let welcomeBackMessage: string | null = null;

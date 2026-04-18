@@ -356,7 +356,10 @@ export async function getBillingContext(): Promise<BillingContext | null> {
 
   try {
     const authKeyHex = deriveAuthKeyHex(mnemonic);
-    const chainId = parseInt(process.env.TOTALRECLAW_CHAIN_ID || '84532', 10);
+    // Chain ID is not user-configurable in v1 — Smart Account derivation is
+    // deterministic via CREATE2 so the address is the same on every chain;
+    // tier routing (free = Base Sepolia, Pro = Gnosis) happens at the relay.
+    const chainId = 84532;
     const walletAddress = await getWalletAddress(mnemonic, chainId);
 
     // Register auth key with relay (idempotent — relay returns 200 for existing users).

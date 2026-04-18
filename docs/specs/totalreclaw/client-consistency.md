@@ -45,15 +45,23 @@
 
 ### Env Vars
 
+After the v1 env cleanup the surface is minimal. See
+[`docs/guides/env-vars-reference.md`](../../guides/env-vars-reference.md)
+for the canonical list.
+
 | Env Var | Purpose | Used By |
 |---------|---------|---------|
 | `TOTALRECLAW_RECOVERY_PHRASE` | BIP-39 mnemonic | All clients |
 | `TOTALRECLAW_SERVER_URL` | Relay URL (default: `https://api.totalreclaw.xyz`) | All clients |
-| `TOTALRECLAW_EXTRACT_INTERVAL` | Override extraction interval | All clients |
-| `TOTALRECLAW_MIN_IMPORTANCE` | Override minimum importance | All clients |
-| `TOTALRECLAW_LLM_MODEL` | Override extraction model | Clients with LLM extraction |
 | `TOTALRECLAW_SELF_HOSTED` | Set "true" for self-hosted mode | All clients |
+| `TOTALRECLAW_CREDENTIALS_PATH` | Override credentials file location | All clients |
+| `TOTALRECLAW_CACHE_PATH` | Override encrypted cache file location | All clients |
 | `TOTALRECLAW_TEST` | Set "true" to mark as test client | Test suites only |
+
+Tuning knobs (`TOTALRECLAW_EXTRACT_INTERVAL`, `TOTALRECLAW_MIN_IMPORTANCE`,
+`TOTALRECLAW_COSINE_THRESHOLD`, etc.) are still read by clients but only as
+env-var fallbacks for self-hosted deployments. On managed service, the
+relay billing response carries these values — see the tables below.
 
 ### Client Identification
 

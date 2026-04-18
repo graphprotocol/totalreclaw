@@ -208,8 +208,9 @@ export function setOnRememberCallback(cb: OnRememberCallback): void {
   _onRememberCallback = cb;
 }
 
-// Store-time dedup feature flag
-const STORE_DEDUP_ENABLED = process.env.TOTALRECLAW_STORE_DEDUP !== 'false';
+// Store-time dedup is always ON in v1.
+// TOTALRECLAW_STORE_DEDUP user-facing toggle was removed.
+const STORE_DEDUP_ENABLED = true;
 
 // ── Internal: search for near-duplicates in HTTP mode ─────────────────────────
 

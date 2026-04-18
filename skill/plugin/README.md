@@ -241,16 +241,21 @@ const result = await skill.onPreCompaction(context);
 
 ### Environment Variables
 
+See [`docs/guides/env-vars-reference.md`](../../docs/guides/env-vars-reference.md)
+for the complete, authoritative list. The v1-launch cleanup reduced the
+user-facing surface to 5 vars plus LLM provider keys. The short version:
+
 | Variable | Required | Default | Description |
 |----------|:---:|---------|-------------|
-| `TOTALRECLAW_SERVER_URL` | **Yes** | `http://127.0.0.1:8080` | TotalReclaw server URL |
 | `TOTALRECLAW_RECOVERY_PHRASE` | **Yes** | -- | 12-word BIP-39 recovery phrase (never sent to server) |
-| `TOTALRECLAW_AUTO_EXTRACT_EVERY_TURNS` | No | `3` | Turns between automatic extractions |
-| `TOTALRECLAW_MIN_IMPORTANCE` | No | `6` | Minimum importance (1-10) to auto-store |
-| `TOTALRECLAW_MAX_MEMORIES` | No | `8` | Maximum memories to inject into context |
-| `TOTALRECLAW_FORGET_THRESHOLD` | No | `0.3` | Decay score threshold for eviction |
-| `TOTALRECLAW_RERANKER_MODEL` | No | `BAAI/bge-reranker-base` | ONNX reranker model path |
-| `TOTALRECLAW_USER_ID` | No | -- | Existing user ID (skips registration) |
+| `TOTALRECLAW_SERVER_URL` | No | `https://api.totalreclaw.xyz` | Relay URL (override for self-hosted / staging) |
+| `TOTALRECLAW_SELF_HOSTED` | No | `false` | Set `true` if running against a self-hosted PostgreSQL server |
+| `TOTALRECLAW_CREDENTIALS_PATH` | No | `~/.totalreclaw/credentials.json` | Credential file location |
+| `TOTALRECLAW_CACHE_PATH` | No | `~/.totalreclaw/cache.enc` | Encrypted cache file location |
+
+Tuning knobs (extraction interval, importance threshold, cosine thresholds)
+now come from the relay billing response. Self-hosted operators can still
+set the env-var equivalents as fallbacks — see the env vars reference.
 
 ### Configuration Sources (Priority Order)
 

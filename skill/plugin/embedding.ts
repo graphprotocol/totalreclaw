@@ -4,17 +4,15 @@
  * Generates text embeddings locally using an ONNX model. No API key needed,
  * no data leaves the machine. Preserves the E2EE guarantee.
  *
- * Three model options (selected via CONFIG.embeddingModel):
- *   - "default": onnx-community/harrier-oss-v1-270m-ONNX (640d, q4 ~344MB)
- *   - "small": Xenova/multilingual-e5-small (384d, q8 ~34MB, low-resource fallback)
- *   - "large": onnx-community/Qwen3-Embedding-0.6B-ONNX (1024d, q8 ~600MB, legacy)
+ * Locked to Harrier-OSS-v1-270M (640d, q4, ~344MB, pre-pooled). Changing the
+ * embedding model breaks search across an existing vault, so the
+ * `TOTALRECLAW_EMBEDDING_MODEL` user-facing env var was removed in v1.
  *
  * Dependencies: @huggingface/transformers
  */
 
 // @ts-ignore - @huggingface/transformers types may not be perfect
 import { AutoTokenizer, AutoModel, pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
-import { CONFIG } from './config.js';
 
 interface ModelConfig {
   id: string;
@@ -26,33 +24,16 @@ interface ModelConfig {
   dtype: string;
 }
 
-const MODELS: Record<string, ModelConfig> = {
-  default: {
-    id: 'onnx-community/harrier-oss-v1-270m-ONNX',
-    dims: 640,
-    pooling: 'sentence_embedding',
-    size: '~344MB',
-    dtype: 'q4',
-  },
-  small: {
-    id: 'Xenova/multilingual-e5-small',
-    dims: 384,
-    pooling: 'mean',
-    size: '~34MB',
-    dtype: 'q8',
-  },
-  large: {
-    id: 'onnx-community/Qwen3-Embedding-0.6B-ONNX',
-    dims: 1024,
-    pooling: 'last_token',
-    size: '~600MB',
-    dtype: 'q8',
-  },
+const HARRIER_MODEL: ModelConfig = {
+  id: 'onnx-community/harrier-oss-v1-270m-ONNX',
+  dims: 640,
+  pooling: 'sentence_embedding',
+  size: '~344MB',
+  dtype: 'q4',
 };
 
 function getModelConfig(): ModelConfig {
-  const key = CONFIG.embeddingModel || 'default';
-  return MODELS[key] || MODELS.default;
+  return HARRIER_MODEL;
 }
 
 /** Lazily initialized model instances. */

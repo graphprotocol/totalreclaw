@@ -73,23 +73,23 @@ def _js_round(x: float) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Feature flags (digest mode only — claim-format gate removed in 2.0.0)
+# Feature flags (deprecated — all gates removed as of v1 env cleanup)
 # ---------------------------------------------------------------------------
 
 DigestMode = Literal["on", "off", "template"]
 
 
 def resolve_digest_mode() -> DigestMode:
-    """Resolve ``TOTALRECLAW_DIGEST_MODE`` — "on" (default), "off", "template".
+    """Digest injection is always ON in v1.
 
-    Digest compilation is orthogonal to the v0/v1 taxonomy split; this
-    setting stays. See ``docs/specs/totalreclaw/retrieval-improvements-v3.md``.
+    The ``TOTALRECLAW_DIGEST_MODE`` env var was removed in the v1 env
+    cleanup — digest compilation is part of the G pipeline and not a
+    user-configurable knob. Kept as a function returning ``"on"`` so any
+    legacy Python call-site continues to compile.
+
+    .. deprecated:: 2.1
+        Env var has no effect; function always returns ``"on"``.
     """
-    raw = (os.environ.get("TOTALRECLAW_DIGEST_MODE") or "").strip().lower()
-    if raw == "off":
-        return "off"
-    if raw == "template":
-        return "template"
     return "on"
 
 

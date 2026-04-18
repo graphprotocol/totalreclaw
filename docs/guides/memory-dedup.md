@@ -191,13 +191,13 @@ Cluster 2 (3 facts → 1):
 
 ## Configuration
 
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `TOTALRECLAW_STORE_DEDUP` | `true` | Enable/disable store-time dedup. Set to `false` to skip cross-session duplicate detection. |
+Dedup is not user-configurable. Store-time near-duplicate detection,
+exact-fingerprint dedup, and within-batch dedup are always on in v1 — the
+`TOTALRECLAW_STORE_DEDUP` env var was removed in the v1 env cleanup. Bulk
+consolidation is an on-demand tool with no persistent configuration — just
+call `totalreclaw_consolidate` when needed.
 
-No configuration is needed for exact fingerprint dedup (always on, server-side) or within-batch dedup (always on during extraction).
-
-Bulk consolidation is an on-demand tool with no persistent configuration -- just call `totalreclaw_consolidate` when needed.
+See [`docs/guides/env-vars-reference.md`](./env-vars-reference.md).
 
 ---
 
@@ -239,7 +239,7 @@ All semantic analysis -- embedding comparison, cosine similarity calculation, im
 | **How do I know dedup is working?** | Store-time dedup is invisible by design. If you store similar facts across sessions, you won't see duplicates in your export. Run `totalreclaw_export` to inspect your vault. |
 | **I see duplicates in my export** | They may be below the 0.85 similarity threshold (semantically distinct enough to keep). Or they were stored before store-time dedup was enabled. Run `totalreclaw_consolidate` to clean them up. |
 | **Can dedup accidentally delete important memories?** | Store-time dedup never deletes -- it either supersedes (replaces with a better version) or skips (keeps the existing better version). Bulk consolidation soft-deletes, which is reversible. |
-| **Does disabling store-time dedup affect other layers?** | No. `TOTALRECLAW_STORE_DEDUP=false` only disables Layer 3. Exact fingerprint (Layer 1) and within-batch dedup (Layer 2) remain active. |
+| **Can I disable store-time dedup?** | Not in v1. The `TOTALRECLAW_STORE_DEDUP` env var was removed — dedup is always on. If you need to bypass it for a specific test, consult the self-hosted server docs. |
 | **How does dedup work with the managed service?** | Store-time dedup works identically in both managed service and self-hosted modes -- candidates are fetched and compared client-side either way. Bulk consolidation is self-hosted (HTTP) only for now. |
 | **What if embedding generation fails?** | The system fails open. The fact is stored normally without dedup. This is intentional -- losing a memory is worse than having a duplicate. |
 | **Does importing trigger dedup?** | Yes. Imported memories go through exact fingerprint dedup (prevents identical re-imports) and store-time dedup (catches semantic overlaps with existing vault contents). |

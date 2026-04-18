@@ -59,38 +59,25 @@ function assertEq<T>(actual: T, expected: T, name: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// resolveDigestMode — env var handling
+// resolveDigestMode — v1 always returns 'on' regardless of env var.
+// TOTALRECLAW_DIGEST_MODE was removed; this test asserts the env var
+// has zero effect.
 // ---------------------------------------------------------------------------
 
 {
   const original = process.env.TOTALRECLAW_DIGEST_MODE;
   try {
     delete process.env.TOTALRECLAW_DIGEST_MODE;
-    assert(resolveDigestMode() === 'on', 'digestMode: unset → on (default)');
-
-    process.env.TOTALRECLAW_DIGEST_MODE = 'on';
-    assert(resolveDigestMode() === 'on', 'digestMode: explicit on');
-
-    process.env.TOTALRECLAW_DIGEST_MODE = 'ON';
-    assert(resolveDigestMode() === 'on', 'digestMode: case-insensitive ON');
+    assert(resolveDigestMode() === 'on', 'digestMode: unset → on');
 
     process.env.TOTALRECLAW_DIGEST_MODE = 'off';
-    assert(resolveDigestMode() === 'off', 'digestMode: off');
-
-    process.env.TOTALRECLAW_DIGEST_MODE = 'OFF';
-    assert(resolveDigestMode() === 'off', 'digestMode: case-insensitive OFF');
+    assert(resolveDigestMode() === 'on', 'digestMode: env var removed, "off" ignored');
 
     process.env.TOTALRECLAW_DIGEST_MODE = 'template';
-    assert(resolveDigestMode() === 'template', 'digestMode: template');
-
-    process.env.TOTALRECLAW_DIGEST_MODE = 'TEMPLATE';
-    assert(resolveDigestMode() === 'template', 'digestMode: case-insensitive TEMPLATE');
+    assert(resolveDigestMode() === 'on', 'digestMode: env var removed, "template" ignored');
 
     process.env.TOTALRECLAW_DIGEST_MODE = 'nonsense';
-    assert(resolveDigestMode() === 'on', 'digestMode: unknown value → on');
-
-    process.env.TOTALRECLAW_DIGEST_MODE = '';
-    assert(resolveDigestMode() === 'on', 'digestMode: empty string → on');
+    assert(resolveDigestMode() === 'on', 'digestMode: env var removed, unknown ignored');
   } finally {
     if (original === undefined) delete process.env.TOTALRECLAW_DIGEST_MODE;
     else process.env.TOTALRECLAW_DIGEST_MODE = original;

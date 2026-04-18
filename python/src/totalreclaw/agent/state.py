@@ -25,6 +25,40 @@ BILLING_CACHE_TTL = 7200  # 2 hours
 STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity threshold for near-duplicate detection
 
 
+# v1 env var cleanup — warn once if any removed env var is still set.
+# See docs/guides/env-vars-reference.md for the canonical list.
+_REMOVED_ENV_VARS = (
+    "TOTALRECLAW_CHAIN_ID",
+    "TOTALRECLAW_EMBEDDING_MODEL",
+    "TOTALRECLAW_STORE_DEDUP",
+    "TOTALRECLAW_LLM_MODEL",
+    "TOTALRECLAW_EXTRACTION_MODEL",
+    "TOTALRECLAW_SESSION_ID",
+    "TOTALRECLAW_TAXONOMY_VERSION",
+    "TOTALRECLAW_CLAIM_FORMAT",
+    "TOTALRECLAW_DIGEST_MODE",
+)
+
+_warned_removed_env_vars = False
+
+
+def _warn_removed_env_vars_once() -> None:
+    global _warned_removed_env_vars
+    if _warned_removed_env_vars:
+        return
+    _warned_removed_env_vars = True
+    set_vars = [name for name in _REMOVED_ENV_VARS if os.environ.get(name) is not None]
+    if set_vars:
+        logger.warning(
+            "TotalReclaw: ignoring removed env var(s): %s. "
+            "See docs/guides/env-vars-reference.md for the v1 env var surface.",
+            ", ".join(set_vars),
+        )
+
+
+_warn_removed_env_vars_once()
+
+
 class AgentState:
     """Manages TotalReclaw client lifecycle, turn tracking, and message buffer.
 

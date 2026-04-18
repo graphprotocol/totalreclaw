@@ -310,7 +310,6 @@ export async function submitFactOnChain(
   };
   if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
   if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
-  if (CONFIG.sessionId) headers['X-TotalReclaw-Session'] = CONFIG.sessionId;
 
   // Helper for JSON-RPC calls to relay bundler (with 429 retry)
   async function rpc(method: string, params: unknown[]): Promise<any> {
@@ -516,7 +515,6 @@ export async function submitFactBatchOnChain(
   };
   if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
   if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
-  if (CONFIG.sessionId) headers['X-TotalReclaw-Session'] = CONFIG.sessionId;
 
   // Helper for JSON-RPC calls to relay bundler (with 429 retry)
   async function rpc(method: string, params: unknown[]): Promise<any> {
@@ -712,11 +710,13 @@ export function isSubgraphMode(): boolean {
 /**
  * Get subgraph configuration from environment variables.
  *
- * After the relay refactor, clients only need:
+ * After the v1 env var cleanup, clients only need:
  *   - TOTALRECLAW_RECOVERY_PHRASE -- BIP-39 mnemonic
  *   - TOTALRECLAW_SERVER_URL -- relay server URL (default: https://api.totalreclaw.xyz)
  *   - TOTALRECLAW_SELF_HOSTED -- set "true" to use self-hosted server (default: managed service)
- *   - TOTALRECLAW_CHAIN_ID -- optional, defaults to 84532 (Base Sepolia)
+ *
+ * Chain ID is no longer configurable via env — it is auto-detected from the
+ * relay billing response (free = Base Sepolia, Pro = Gnosis mainnet).
  */
 export function getSubgraphConfig(): SubgraphStoreConfig {
   return {

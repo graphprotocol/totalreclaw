@@ -316,7 +316,7 @@ Every new feature implementation MUST include:
 | Per-fact timestamps | RESOLVED | Subgraph decodes protobuf field 2 (client-generated ISO 8601) into `createdAt: BigInt!` (Unix seconds). Batched facts now retain individual timestamps. `timestamp` (block time) kept for on-chain confirmation time. |
 | LSH parameters | RESOLVED | 32-bit x 20 tables, 98.1% Recall@8 on real data |
 | Authentication | RESOLVED | HKDF auth with SHA-256 key hashing |
-| Embedding model | RESOLVED | Migrated to onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled). e5-small (384d) available as fallback via TOTALRECLAW_EMBEDDING_MODEL=small. |
+| Embedding model | RESOLVED | Locked to onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled). `TOTALRECLAW_EMBEDDING_MODEL` env var was removed in the v1 env cleanup — switching models at runtime breaks search across existing vaults. |
 | Client batching (A2) | RESOLVED | Implemented in client/src/userop/batcher.ts -- batch multiple facts per UserOp |
 | Candidate pool sizing | RESOLVED | Server-configurable via relay billing endpoint (`max_candidate_pool` in FeatureFlags). Env overrides: `CANDIDATE_POOL_MAX_FREE`, `CANDIDATE_POOL_MAX_PRO`. |
 | Load testing | RESOLVED | Managed service load test at `totalreclaw-internal/e2e/load-test-managed/`. Client-side <140ms p95 PASS up to 10K facts. |

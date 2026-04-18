@@ -74,25 +74,6 @@ export interface ClaimInput {
 }
 
 // ---------------------------------------------------------------------------
-// Feature flag — TOTALRECLAW_CLAIM_FORMAT
-// ---------------------------------------------------------------------------
-
-export type ClaimFormat = 'claim' | 'legacy';
-
-/**
- * Resolve the claim-format mode from the TOTALRECLAW_CLAIM_FORMAT env var.
- *
- * - `claim`  (default, or unset): new canonical Claim blob, entity trapdoors added.
- * - `legacy`: old {text, metadata} doc shape; entity trapdoors still added.
- *
- * Read on every call so tests can toggle via env without module reload.
- */
-export function resolveClaimFormat(): ClaimFormat {
-  const raw = (process.env.TOTALRECLAW_CLAIM_FORMAT ?? '').trim().toLowerCase();
-  return raw === 'legacy' ? 'legacy' : 'claim';
-}
-
-// ---------------------------------------------------------------------------
 // Category mapping — lives in memory-types.ts now (single source of truth for
 // the MCP package). Phase 2.2.6 eliminated the duplicate that used to be
 // defined in this file.
@@ -148,36 +129,6 @@ export function buildCanonicalClaim(input: BuildClaimInput): string {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy {text, metadata} doc shape (unchanged from pre-KG MCP store path).
-// ---------------------------------------------------------------------------
-
-export interface BuildLegacyDocInput {
-  fact: ClaimInput;
-  importance: number;
-  source: string;
-  createdAt?: string;
-}
-
-/**
- * Build the legacy `{text, metadata}` document shape.
- *
- * Kept so the TOTALRECLAW_CLAIM_FORMAT=legacy fallback writes blobs that
- * the existing parseClaimOrLegacy read path has always handled.
- */
-export function buildLegacyDoc(input: BuildLegacyDocInput): string {
-  const { fact, importance, source, createdAt } = input;
-  return JSON.stringify({
-    text: fact.text,
-    metadata: {
-      type: fact.type ?? 'fact',
-      importance: importance / 10,
-      source,
-      created_at: createdAt ?? new Date().toISOString(),
-    },
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Digest helpers (read-only in MCP scope)
 // ---------------------------------------------------------------------------
 
@@ -201,21 +152,16 @@ export const DIGEST_SOURCE_AGENT = 'mcp-server-digest';
 export type DigestMode = 'on' | 'off' | 'template';
 
 /**
- * Resolve TOTALRECLAW_DIGEST_MODE.
+ * Digest injection is always ON in v1. TOTALRECLAW_DIGEST_MODE was removed
+ * from the user-facing env var surface — the G-pipeline ships a digest on
+ * every recall with a template fallback.
  *
- * - `on` (default, unset, unknown): digest injection when a compiled digest
- *   is available in the vault.
- * - `off`: legacy individual-fact search path, no digest injection.
- * - `template`: same as `on` for MCP (MCP never compiles digests — the flag
- *   is accepted for parity with the plugin so operators can use the same env
- *   var across clients).
+ * Kept as a function returning `'on'` so any legacy call-site continues to
+ * compile.
  *
- * Read per-call so tests can toggle via env without module reload.
+ * @deprecated v1 always returns `'on'`.
  */
 export function resolveDigestMode(): DigestMode {
-  const raw = (process.env.TOTALRECLAW_DIGEST_MODE ?? '').trim().toLowerCase();
-  if (raw === 'off') return 'off';
-  if (raw === 'template') return 'template';
   return 'on';
 }
 

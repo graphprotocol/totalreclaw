@@ -35,6 +35,8 @@ RUN npm install -g @totalreclaw/mcp-server
 | `TOTALRECLAW_RECOVERY_PHRASE` | Yes | — (12-word BIP-39 recovery phrase) |
 | `TOTALRECLAW_SERVER_URL` | No | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_SELF_HOSTED` | No | `false` (managed service with on-chain storage via The Graph) |
-| `TOTALRECLAW_NAMESPACE` | No | Group folder name |
 | `TOTALRECLAW_CREDENTIALS_PATH` | No | `/workspace/.totalreclaw/credentials.json` |
-| `TOTALRECLAW_CHAIN_ID` | No | `100` (Gnosis mainnet) |
+| `TOTALRECLAW_CACHE_PATH` | No | `/workspace/.totalreclaw/cache.enc` |
+
+Chain ID is no longer user-configurable (auto-detected from billing tier:
+free = Base Sepolia, Pro = Gnosis). See [`docs/guides/env-vars-reference.md`](../../docs/guides/env-vars-reference.md).

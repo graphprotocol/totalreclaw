@@ -929,13 +929,18 @@ Default configuration values:
 
 ### Memory Consolidation Configuration
 
-Environment variables for controlling near-duplicate detection and consolidation:
+Store-time near-duplicate detection is always on — the `TOTALRECLAW_STORE_DEDUP`
+user-facing toggle was removed in v1. Advanced thresholds can still be tuned
+via env var for self-hosted deployments:
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
-| `TOTALRECLAW_STORE_DEDUP` | `true` | Enable/disable store-time near-duplicate detection |
 | `TOTALRECLAW_STORE_DEDUP_THRESHOLD` | `0.85` | Cosine similarity threshold for store-time dedup (0-1) |
 | `TOTALRECLAW_CONSOLIDATION_THRESHOLD` | `0.88` | Cosine similarity threshold for bulk consolidation (0-1) |
+
+Managed-service tenants receive the tuning values from the relay billing
+response — these env vars act as fallbacks only. See
+[`docs/guides/env-vars-reference.md`](../../docs/guides/env-vars-reference.md).
 
 ---
 

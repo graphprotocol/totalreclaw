@@ -318,11 +318,18 @@ This provides memory isolation between different contexts.
 | `TOTALRECLAW_RECOVERY_PHRASE` | 12-word BIP-39 recovery phrase | Required |
 | `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL (only needed for self-hosted) | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_SELF_HOSTED` | Set to `true` to use your own server instead of the managed service | `false` |
-| `TOTALRECLAW_NAMESPACE` | Default namespace | Group folder name |
-| `TOTALRECLAW_EXTRACT_INTERVAL` | Turns between automatic extractions | `3` |
-| `TOTALRECLAW_MIN_IMPORTANCE` | Minimum importance for auto-store | `6` |
-| `TOTALRECLAW_CHAIN_ID` | Chain ID (100=Gnosis mainnet, 84532=Base Sepolia staging) | `100` |
-| `TOTALRECLAW_WALLET_ADDRESS` | Smart Account address override (auto-derived if not set) | Auto-derived |
+| `TOTALRECLAW_CREDENTIALS_PATH` | Credential file location | `~/.totalreclaw/credentials.json` |
+| `TOTALRECLAW_CACHE_PATH` | Encrypted cache file location | `~/.totalreclaw/cache.enc` |
+
+The v1 env cleanup removed the following user-facing vars: `TOTALRECLAW_CHAIN_ID`
+(chain is auto-detected from billing tier), `TOTALRECLAW_EMBEDDING_MODEL`,
+`TOTALRECLAW_STORE_DEDUP`, `TOTALRECLAW_LLM_MODEL`, `TOTALRECLAW_SESSION_ID`,
+`TOTALRECLAW_TAXONOMY_VERSION`, `TOTALRECLAW_CLAIM_FORMAT`,
+`TOTALRECLAW_DIGEST_MODE`. Tuning knobs like `TOTALRECLAW_EXTRACT_INTERVAL`
+and `TOTALRECLAW_MIN_IMPORTANCE` are now delivered via the relay billing
+response; env-var fallbacks are still honoured for self-hosted deployments.
+See [`docs/guides/env-vars-reference.md`](../docs/guides/env-vars-reference.md)
+for the canonical list.
 
 ---
 

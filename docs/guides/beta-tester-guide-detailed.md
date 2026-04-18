@@ -138,8 +138,8 @@ Set the following environment variables in your OpenClaw configuration (e.g., wo
 TOTALRECLAW_RECOVERY_PHRASE="word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12"
 
 # --- Managed service is the default (no env var needed) ---
-# Set TOTALRECLAW_SELF_HOSTED="true" only if using your own server
-# TOTALRECLAW_CHAIN_ID="100"  # Gnosis mainnet (default, no need to set)
+# Set TOTALRECLAW_SELF_HOSTED="true" only if using your own server.
+# Chain (Base Sepolia vs Gnosis) is auto-detected from your billing tier.
 ```
 
 Replace `word1 word2 ...` with your actual 12-word phrase. Keep the quotes around it. These can be set in your OpenClaw workspace environment settings, your shell profile, or any method your OpenClaw instance supports for environment variables.
@@ -697,17 +697,21 @@ The OpenClaw plugin auto-detects your agent's LLM provider and API key for fact 
 | `TOTALRECLAW_RELEVANCE_THRESHOLD` | Minimum cosine relevance score for auto-injecting memories into context. | `0.3` |
 | `TOTALRECLAW_SEMANTIC_SKIP_THRESHOLD` | Cosine similarity threshold for deduplication. Facts too similar to existing ones are skipped. | `0.85` |
 | `TOTALRECLAW_CACHE_TTL_MS` | Hot cache time-to-live in milliseconds. Cached results within this window are reused for similar queries. | `300000` (5 minutes) |
-| `TOTALRECLAW_LLM_MODEL` | **Advanced.** Override the auto-detected extraction model. TotalReclaw automatically derives a cheap model from your agent's provider (e.g., Anthropic → `claude-haiku-4-5`, OpenAI → `gpt-4.1-mini`). Only set this if the auto-derived model doesn't work for you. | Auto-detected |
+(`TOTALRECLAW_LLM_MODEL` was removed in the v1 env cleanup — the extraction
+model is auto-derived from your provider, with `OPENAI_MODEL` /
+`ANTHROPIC_MODEL` as generic fallbacks. See
+[`docs/guides/env-vars-reference.md`](./env-vars-reference.md).)
 
-### On-Chain Storage Variables (Advanced)
+### On-Chain Storage Variables (Advanced / self-hosted only)
 
-These variables control on-chain storage via the managed service. **The default (managed service with on-chain storage) requires no extra configuration -- recommended for most users.**
+These variables are for operators running against their own chain / self-hosted
+relay. The default (managed service on Base Sepolia / Gnosis) requires none
+of them — chain ID is auto-detected from your billing tier.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TOTALRECLAW_SELF_HOSTED` | Set to `true` to use your own self-hosted server with PostgreSQL instead of the managed service. When not set (or `false`), TotalReclaw uses the managed service with on-chain storage via The Graph. | `false` (managed service) |
-| `TOTALRECLAW_CHAIN_ID` | Chain ID for on-chain transactions. `100` = Gnosis mainnet (Pro), `84532` = Base Sepolia testnet (Free). | `100` |
-| `TOTALRECLAW_DATA_EDGE_ADDRESS` | Address of the EventfulDataEdge smart contract on Gnosis mainnet. | `0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca` |
+| `TOTALRECLAW_DATA_EDGE_ADDRESS` | Address of the EventfulDataEdge smart contract. | Built-in |
 | `TOTALRECLAW_ENTRYPOINT_ADDRESS` | ERC-4337 EntryPoint v0.7 address. Same on all chains. | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` |
 | `TOTALRECLAW_SUBGRAPH_PAGE_SIZE` | Maximum results per subgraph query page (Graph Studio limit: 1000). | `1000` |
 | `TOTALRECLAW_TRAPDOOR_BATCH_SIZE` | Number of trapdoors per batch in subgraph queries. | `5` |

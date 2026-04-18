@@ -7,7 +7,7 @@
  * 3. Always supersedes for explicit (single-fact) remember
  * 4. Calls forget() to delete superseded facts
  * 5. Inherits higher importance from existing facts
- * 6. Respects the TOTALRECLAW_STORE_DEDUP env flag
+ * 6. Ignores the removed TOTALRECLAW_STORE_DEDUP env flag (v1 always ON)
  *
  * Run with:
  *   npx jest tests/remember-dedup.test.ts --no-cache
@@ -201,32 +201,33 @@ describe('Store-time dedup wiring: batch mode', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Feature flag — TOTALRECLAW_STORE_DEDUP=false disables dedup search
+// v1 env var cleanup: TOTALRECLAW_STORE_DEDUP was removed. Store-time dedup
+// is always on. Setting the env var has no effect.
 // ---------------------------------------------------------------------------
 
-describe('Store-time dedup: feature flag', () => {
-  it('should skip dedup search when TOTALRECLAW_STORE_DEDUP=false', async () => {
+describe('Store-time dedup: TOTALRECLAW_STORE_DEDUP removed in v1', () => {
+  it('runs dedup search even when TOTALRECLAW_STORE_DEDUP=false', async () => {
+    const saved = process.env.TOTALRECLAW_STORE_DEDUP;
     process.env.TOTALRECLAW_STORE_DEDUP = 'false';
-    // Need to re-require to pick up env change (STORE_DEDUP_ENABLED is a const)
-    jest.resetModules();
+    try {
+      jest.resetModules();
+      jest.mock('@totalreclaw/client', () => ({
+        TotalReclaw: jest.fn(),
+      }));
 
-    // Re-apply the mock after resetModules clears it
-    jest.mock('@totalreclaw/client', () => ({
-      TotalReclaw: jest.fn(),
-    }));
+      const { handleRemember } = require('../src/tools/remember');
 
-    const { handleRemember } = require('../src/tools/remember');
+      const client = createMockClient();
+      const result = await handleRemember(client, { fact: 'Test fact' });
+      const parsed = JSON.parse(result.content[0].text);
 
-    const client = createMockClient();
-    const result = await handleRemember(client, { fact: 'Test fact' });
-    const parsed = JSON.parse(result.content[0].text);
-
-    expect(parsed.action).toBe('created');
-    // recall should NOT be called for dedup (only remember is called)
-    expect(mockRecall).not.toHaveBeenCalled();
-
-    // Restore for subsequent tests
-    process.env.TOTALRECLAW_STORE_DEDUP = 'true';
+      expect(parsed.action).toBe('created');
+      // STORE_DEDUP env var is ignored — recall IS still called for dedup.
+      expect(mockRecall).toHaveBeenCalled();
+    } finally {
+      if (saved === undefined) delete process.env.TOTALRECLAW_STORE_DEDUP;
+      else process.env.TOTALRECLAW_STORE_DEDUP = saved;
+    }
   });
 });
 

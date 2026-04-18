@@ -32,7 +32,9 @@ class LLMConfig:
 
 # Provider detection: (provider, env_vars, default_base_url, api_format)
 # No hardcoded model names — uses whatever the user configured via their
-# agent framework. Override with TOTALRECLAW_EXTRACTION_MODEL if needed.
+# agent framework. The TOTALRECLAW_EXTRACTION_MODEL / TOTALRECLAW_LLM_MODEL
+# user-facing override was removed in the v1 env cleanup. Model selection
+# goes through agent-framework config + `OPENAI_MODEL` / `ANTHROPIC_MODEL`.
 PROVIDERS = [
     ("zai", ["ZAI_API_KEY", "GLM_API_KEY", "Z_AI_API_KEY"], "https://api.z.ai/api/coding/paas/v4", "openai"),
     ("anthropic", ["ANTHROPIC_API_KEY"], "https://api.anthropic.com/v1", "anthropic"),
@@ -54,15 +56,17 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
     to maintain — just uses whatever the user set up.
 
     Model priority:
-      1. TOTALRECLAW_EXTRACTION_MODEL (optional override for power users)
-      2. configured_model (passed from agent framework)
-      3. OPENAI_MODEL / ANTHROPIC_MODEL (common env vars)
+      1. configured_model (passed from agent framework)
+      2. OPENAI_MODEL / ANTHROPIC_MODEL / LLM_MODEL (generic env vars)
+
+    The ``TOTALRECLAW_EXTRACTION_MODEL`` / ``TOTALRECLAW_LLM_MODEL`` overrides
+    were removed in the v1 env cleanup — agent-framework config is now the
+    single source of truth for the extraction model.
 
     Base URL priority:
       1. OPENAI_BASE_URL (for OpenAI-compatible custom providers)
       2. Provider default
     """
-    override_model = os.environ.get("TOTALRECLAW_EXTRACTION_MODEL")
     openai_base_url = os.environ.get("OPENAI_BASE_URL")
     # Common env vars for configured model name
     env_model = (
@@ -75,11 +79,11 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
         for env_var in env_vars:
             api_key = os.environ.get(env_var)
             if api_key:
-                model = override_model or configured_model or env_model
+                model = configured_model or env_model
                 if not model:
                     logger.warning(
                         "TotalReclaw: %s API key found but no model configured. "
-                        "Set TOTALRECLAW_EXTRACTION_MODEL or OPENAI_MODEL.",
+                        "Set OPENAI_MODEL or configure the model via your agent framework.",
                         _provider,
                     )
                     continue

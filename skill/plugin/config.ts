@@ -6,11 +6,51 @@
  * OpenClaw's security scanner flags files that contain BOTH process.env reads
  * AND network calls. By centralizing all env reads here, no other file needs
  * to touch process.env directly.
+ *
+ * v1 env var cleanup — see `docs/guides/env-vars-reference.md`.
+ * Removed user-facing vars: TOTALRECLAW_CHAIN_ID, TOTALRECLAW_EMBEDDING_MODEL,
+ * TOTALRECLAW_STORE_DEDUP, TOTALRECLAW_LLM_MODEL, TOTALRECLAW_SESSION_ID,
+ * TOTALRECLAW_TAXONOMY_VERSION.
+ * Removed legacy gates: TOTALRECLAW_CLAIM_FORMAT, TOTALRECLAW_DIGEST_MODE,
+ * TOTALRECLAW_AUTO_RESOLVE_MODE (the last one moved to an internal debug
+ * module; see `contradiction-sync.ts`).
+ *
+ * Tuning knobs (cosine threshold, min importance, cache TTL, etc.) are now
+ * delivered via the relay billing response. Env-var fallbacks are kept only
+ * for self-hosted deployments where the server may not surface those values.
  */
 
 import path from 'node:path';
 
 const home = process.env.HOME ?? '/home/node';
+
+/**
+ * Removed env vars — warn once per process if still set so operators know
+ * their config is a no-op. The removal list matches `docs/guides/env-vars-reference.md`.
+ */
+const REMOVED_ENV_VARS = [
+  'TOTALRECLAW_CHAIN_ID',
+  'TOTALRECLAW_EMBEDDING_MODEL',
+  'TOTALRECLAW_STORE_DEDUP',
+  'TOTALRECLAW_LLM_MODEL',
+  'TOTALRECLAW_SESSION_ID',
+  'TOTALRECLAW_TAXONOMY_VERSION',
+  'TOTALRECLAW_CLAIM_FORMAT',
+  'TOTALRECLAW_DIGEST_MODE',
+] as const;
+
+function warnRemovedEnvVars(warn: (msg: string) => void = console.warn): void {
+  const set = REMOVED_ENV_VARS.filter((name) => process.env[name] !== undefined);
+  if (set.length === 0) return;
+  warn(
+    `TotalReclaw: ignoring removed env var(s): ${set.join(', ')}. ` +
+      `See docs/guides/env-vars-reference.md for the v1 env var surface.`,
+  );
+}
+
+// Emit the warning once at import time. Safe because this module is loaded
+// exactly once per process.
+warnRemovedEnvVars();
 
 /** Runtime override for recovery phrase (set by hot-reload after setup). */
 let _recoveryPhraseOverride: string | null = null;
@@ -34,16 +74,23 @@ export const CONFIG = {
   selfHosted: process.env.TOTALRECLAW_SELF_HOSTED === 'true',
   credentialsPath: process.env.TOTALRECLAW_CREDENTIALS_PATH || path.join(home, '.totalreclaw', 'credentials.json'),
 
-  // Chain
-  chainId: parseInt(process.env.TOTALRECLAW_CHAIN_ID || '84532', 10),
+  // Chain — chainId is no longer user-configurable. It is auto-detected from
+  // the relay billing response (free = Base Sepolia / 84532, Pro = Gnosis /
+  // 100). The default here is used only before the first billing fetch
+  // completes. Self-hosted users can still point at a custom DataEdge via
+  // TOTALRECLAW_DATA_EDGE_ADDRESS / TOTALRECLAW_ENTRYPOINT_ADDRESS /
+  // TOTALRECLAW_RPC_URL (undocumented; internal knobs).
+  chainId: 84532,
   dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || '',
   entryPointAddress: process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || '',
   rpcUrl: process.env.TOTALRECLAW_RPC_URL || '',
 
-  // Tuning
+  // Tuning knobs — default values used only as local fallback for
+  // self-hosted mode. Managed-service clients override these from the relay
+  // billing response via `resolveTuning(...)`.
+  // See: docs/specs/totalreclaw/client-consistency.md
   cosineThreshold: parseFloat(process.env.TOTALRECLAW_COSINE_THRESHOLD ?? '0.15'),
   extractInterval: parseInt(process.env.TOTALRECLAW_EXTRACT_INTERVAL ?? process.env.TOTALRECLAW_EXTRACT_EVERY_TURNS ?? '3', 10),
-  storeDedupEnabled: process.env.TOTALRECLAW_STORE_DEDUP !== 'false',
   relevanceThreshold: parseFloat(process.env.TOTALRECLAW_RELEVANCE_THRESHOLD ?? '0.3'),
   semanticSkipThreshold: parseFloat(process.env.TOTALRECLAW_SEMANTIC_SKIP_THRESHOLD ?? '0.85'),
   cacheTtlMs: parseInt(process.env.TOTALRECLAW_CACHE_TTL_MS ?? String(5 * 60 * 1000), 10),
@@ -51,10 +98,12 @@ export const CONFIG = {
   trapdoorBatchSize: parseInt(process.env.TOTALRECLAW_TRAPDOOR_BATCH_SIZE ?? '5', 10),
   pageSize: parseInt(process.env.TOTALRECLAW_SUBGRAPH_PAGE_SIZE ?? '1000', 10),
 
-  // LLM override
-  llmModel: process.env.TOTALRECLAW_LLM_MODEL || '',
+  // Store-time dedup is always ON. TOTALRECLAW_STORE_DEDUP was removed in v1.
+  storeDedupEnabled: true,
 
-  // LLM provider API keys (read once, passed to llm-client)
+  // LLM provider API keys (read once, passed to llm-client). Model selection
+  // is entirely automatic via `deriveCheapModel(provider)` — the
+  // TOTALRECLAW_LLM_MODEL override was removed in v1.
   llmApiKeys: {
     zai: process.env.ZAI_API_KEY || '',
     anthropic: process.env.ANTHROPIC_API_KEY || '',
@@ -70,15 +119,64 @@ export const CONFIG = {
     cerebras: process.env.CEREBRAS_API_KEY || '',
   } as Record<string, string>,
 
-  // Embedding model: "default" (640d, Harrier q4), "small" (384d, e5-small), or "large" (1024d, Qwen3)
-  embeddingModel: (process.env.TOTALRECLAW_EMBEDDING_MODEL || 'default') as 'default' | 'small' | 'large',
-
-  // Observability — optional session ID for tracing QA runs in relay logs (Axiom)
-  sessionId: process.env.TOTALRECLAW_SESSION_ID || '',
-
   // Paths
   home,
   billingCachePath: path.join(home, '.totalreclaw', 'billing-cache.json'),
   cachePath: process.env.TOTALRECLAW_CACHE_PATH || path.join(home, '.totalreclaw', 'cache.enc'),
   openclawWorkspace: path.join(home, '.openclaw', 'workspace'),
 } as const;
+
+// ---------------------------------------------------------------------------
+// Server-side tuning resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Optional tuning fields delivered via the relay billing response.
+ *
+ * Relay may populate these in `features` (same cache consumed by
+ * `isLlmDedupEnabled`, `getExtractInterval`, etc.). When present, they
+ * override the env/defaults resolved above. When absent (self-hosted or
+ * pre-rollout relay), clients fall back to `CONFIG` values.
+ */
+export interface BillingTuning {
+  cosine_threshold?: number;
+  relevance_threshold?: number;
+  semantic_skip_threshold?: number;
+  min_importance?: number;
+  cache_ttl_ms?: number;
+  trapdoor_batch_size?: number;
+  subgraph_page_size?: number;
+}
+
+/**
+ * Merge a billing-response tuning block with the local fallback values.
+ *
+ * Use this at the call-site that needs a threshold, passing the features
+ * blob from the billing cache. No I/O here — callers read the cache once
+ * and hand the features in.
+ */
+export function resolveTuning(features?: BillingTuning | null): {
+  cosineThreshold: number;
+  relevanceThreshold: number;
+  semanticSkipThreshold: number;
+  minImportance: number;
+  cacheTtlMs: number;
+  trapdoorBatchSize: number;
+  pageSize: number;
+} {
+  return {
+    cosineThreshold: features?.cosine_threshold ?? CONFIG.cosineThreshold,
+    relevanceThreshold: features?.relevance_threshold ?? CONFIG.relevanceThreshold,
+    semanticSkipThreshold: features?.semantic_skip_threshold ?? CONFIG.semanticSkipThreshold,
+    minImportance: features?.min_importance ?? CONFIG.minImportance,
+    cacheTtlMs: features?.cache_ttl_ms ?? CONFIG.cacheTtlMs,
+    trapdoorBatchSize: features?.trapdoor_batch_size ?? CONFIG.trapdoorBatchSize,
+    pageSize: features?.subgraph_page_size ?? CONFIG.pageSize,
+  };
+}
+
+// Exposed for tests that want to assert the removed-var warning behaviour.
+export const __internal = {
+  REMOVED_ENV_VARS,
+  warnRemovedEnvVars,
+};

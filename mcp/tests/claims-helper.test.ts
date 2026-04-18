@@ -1,16 +1,19 @@
 /**
  * Tests for the MCP server's canonical Claim builder, entity trapdoors,
- * digest helpers, and the TOTALRECLAW_CLAIM_FORMAT feature flag.
+ * and digest helpers.
  *
  * Mirrors skill/plugin/claim-format.test.ts so any behavioral drift between
  * the plugin and MCP implementations shows up as a failing test.
+ *
+ * v1 env var cleanup: the TOTALRECLAW_CLAIM_FORMAT and TOTALRECLAW_DIGEST_MODE
+ * env vars were removed. `resolveDigestMode` still exists and unconditionally
+ * returns `'on'`; `resolveClaimFormat` and `buildLegacyDoc` were deleted.
  */
 
 import crypto from 'node:crypto';
 import {
   buildCanonicalClaim,
   buildDigestClaim,
-  buildLegacyDoc,
   computeEntityTrapdoor,
   computeEntityTrapdoors,
   DIGEST_CATEGORY,
@@ -19,7 +22,6 @@ import {
   isDigestBlob,
   mapTypeToCategory,
   readClaimFromBlob,
-  resolveClaimFormat,
   resolveDigestMode,
   type ClaimInput,
 } from '../src/claims-helper.js';
@@ -188,65 +190,48 @@ describe('computeEntityTrapdoors', () => {
   });
 });
 
-describe('resolveClaimFormat', () => {
-  const savedEnv = process.env.TOTALRECLAW_CLAIM_FORMAT;
-  afterEach(() => {
-    if (savedEnv === undefined) delete process.env.TOTALRECLAW_CLAIM_FORMAT;
-    else process.env.TOTALRECLAW_CLAIM_FORMAT = savedEnv;
-  });
-
-  test.each([
-    [undefined, 'claim'],
-    ['', 'claim'],
-    ['claim', 'claim'],
-    ['CLAIM', 'claim'],
-    ['legacy', 'legacy'],
-    ['LEGACY', 'legacy'],
-    ['nonsense', 'claim'],
-  ] as const)('resolves %s -> %s', (value, expected) => {
-    if (value === undefined) delete process.env.TOTALRECLAW_CLAIM_FORMAT;
-    else process.env.TOTALRECLAW_CLAIM_FORMAT = value;
-    expect(resolveClaimFormat()).toBe(expected);
-  });
-});
-
-describe('resolveDigestMode', () => {
+describe('resolveDigestMode (v1 — env var removed, always on)', () => {
   const savedEnv = process.env.TOTALRECLAW_DIGEST_MODE;
   afterEach(() => {
     if (savedEnv === undefined) delete process.env.TOTALRECLAW_DIGEST_MODE;
     else process.env.TOTALRECLAW_DIGEST_MODE = savedEnv;
   });
 
+  // TOTALRECLAW_DIGEST_MODE was removed in v1. The function must unconditionally
+  // return 'on' regardless of what the env var is set to.
   test.each([
     [undefined, 'on'],
     ['', 'on'],
     ['on', 'on'],
-    ['ON', 'on'],
-    ['off', 'off'],
-    ['OFF', 'off'],
-    ['template', 'template'],
-    ['TEMPLATE', 'template'],
+    ['off', 'on'],       // was 'off' — now ignored
+    ['template', 'on'],  // was 'template' — now ignored
     ['nonsense', 'on'],
-  ] as const)('resolves %s -> %s', (value, expected) => {
+  ] as const)('env=%s -> resolveDigestMode=%s (env var has no effect)', (value, expected) => {
     if (value === undefined) delete process.env.TOTALRECLAW_DIGEST_MODE;
     else process.env.TOTALRECLAW_DIGEST_MODE = value;
     expect(resolveDigestMode()).toBe(expected);
   });
 });
 
-describe('buildLegacyDoc', () => {
-  test('byte-identical to historical MCP format', () => {
-    const fact: ClaimInput = { text: 'Hello world.', type: 'fact' };
-    const doc = buildLegacyDoc({
-      fact,
-      importance: 7,
-      source: 'mcp_remember',
-      createdAt: '2026-04-12T10:00:00Z',
-    });
-    const expected =
-      '{"text":"Hello world.","metadata":{"type":"fact","importance":0.7,' +
-      '"source":"mcp_remember","created_at":"2026-04-12T10:00:00Z"}}';
-    expect(doc).toBe(expected);
+describe('v1 env var cleanup — removed vars have no effect', () => {
+  test('TOTALRECLAW_CLAIM_FORMAT=legacy does not flip the write path', () => {
+    const saved = process.env.TOTALRECLAW_CLAIM_FORMAT;
+    try {
+      process.env.TOTALRECLAW_CLAIM_FORMAT = 'legacy';
+      // buildCanonicalClaim should produce the v0 canonical blob regardless
+      // — there is no longer a legacy raw-text fallback exposed.
+      const blob = buildCanonicalClaim({
+        fact: { text: 'test', type: 'fact' },
+        importance: 7,
+        sourceAgent: 'mcp-server',
+      });
+      const parsed = JSON.parse(blob);
+      expect(parsed.t).toBe('test');
+      expect(parsed.c).toBe('fact');
+    } finally {
+      if (saved === undefined) delete process.env.TOTALRECLAW_CLAIM_FORMAT;
+      else process.env.TOTALRECLAW_CLAIM_FORMAT = saved;
+    }
   });
 });
 
