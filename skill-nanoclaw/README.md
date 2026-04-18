@@ -21,9 +21,11 @@
 
 ---
 
-Automatic encrypted memory for NanoClaw agents, powered by the `@totalreclaw/mcp-server`. Memories are encrypted inside the container before leaving -- no server, service, or third party can read them.
+Automatic encrypted memory + knowledge graph for NanoClaw agents, powered by the `@totalreclaw/mcp-server`. Memories are encrypted inside the container before leaving -- no server, service, or third party can read them.
 
 Once configured, your NanoClaw agent automatically extracts facts from conversations, recalls relevant memories at the start of each session, and preserves context before compaction. No manual action needed from end users.
+
+**v3.0.0 ships Memory Taxonomy v1** — every memory is typed (`claim` / `preference` / `directive` / `commitment` / `episode` / `summary`) and tagged with source, scope, and volatility. Inherits the four new MCP tools (`totalreclaw_pin`, `totalreclaw_unpin`, `totalreclaw_retype`, `totalreclaw_set_scope`) from the underlying MCP server. See the [memory types guide](../docs/guides/memory-types-guide.md).
 
 ## Quick Start
 
@@ -116,20 +118,24 @@ This provides memory isolation between different NanoClaw groups. Memories store
 | `TOTALRECLAW_SELF_HOSTED` | Set to `true` for self-hosted mode | `false` |
 | `TOTALRECLAW_NAMESPACE` | Default namespace | Group folder name |
 | `TOTALRECLAW_AUTO_EXTRACT` | Enable automatic fact extraction | `true` |
-| `TOTALRECLAW_EXTRACT_INTERVAL` | Turns between extractions | `3` |
-| `TOTALRECLAW_CHAIN_ID` | Chain ID (100=Gnosis mainnet, 84532=Base Sepolia staging) | `100` |
+
+> **v3.0.0 env cleanup:** `TOTALRECLAW_CHAIN_ID` and `TOTALRECLAW_EXTRACT_INTERVAL` were removed. Chain is auto-detected from billing tier; extraction interval is server-tuned via the relay billing response. See the [env vars reference](../docs/guides/env-vars-reference.md).
 
 ## Available Tools
 
-The MCP server provides these tools to the NanoClaw agent:
+The MCP server provides 19 tools to the NanoClaw agent (v3.0.0 adds v1 taxonomy tools):
 
 | Tool | Description |
 |------|-------------|
-| `totalreclaw_remember` | Store a fact in encrypted memory |
-| `totalreclaw_recall` | Search memories by natural language query |
-| `totalreclaw_forget` | Delete a specific memory by ID |
+| `totalreclaw_remember` | Store a memory with v1 taxonomy (type, source, scope, reasoning) |
+| `totalreclaw_recall` | Search memories; results reranked by source weight (v1 Tier 1) |
+| `totalreclaw_forget` | Delete a specific memory by ID or query |
 | `totalreclaw_export` | Export all memories decrypted as Markdown or JSON |
 | `totalreclaw_status` | Check billing status and quota usage |
+| `totalreclaw_pin` | **New in v1** — lock a memory against auto-supersession |
+| `totalreclaw_unpin` | **New in v1** — remove pin lock |
+| `totalreclaw_retype` | **New in v1** — change memory type |
+| `totalreclaw_set_scope` | **New in v1** — assign memory to a scope |
 | `totalreclaw_import` | Re-import previously exported memories |
 | `totalreclaw_import_from` | Import from Mem0 or MCP Memory Server |
 | `totalreclaw_upgrade` | Get a link to upgrade to Pro |

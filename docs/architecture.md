@@ -1,8 +1,10 @@
 # Architecture
 
-A technical deep dive into how TotalReclaw provides semantic search over fully encrypted memories — without ever seeing the data.
+A technical deep dive into how TotalReclaw provides semantic search + knowledge-graph memory over fully encrypted storage — without ever seeing the data.
 
 > This document covers the full system design. For a high-level overview, see the [README](../README.md).
+>
+> **v1 additions** (April 2026): the encrypted blob now contains a [v1 taxonomy claim](specs/totalreclaw/memory-taxonomy-v1.md) (6 speech-act types + source / scope / volatility axes). The reranker applies [Tier 1 source-weighted scoring](specs/totalreclaw/tiered-retrieval.md). Outer protobuf bumped to v4 — subgraph schema unchanged.
 
 <p align="center">
   <img src="assets/architecture.svg" alt="TotalReclaw Architecture" />

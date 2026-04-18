@@ -1,10 +1,12 @@
 # TotalReclaw Skill for OpenClaw
 
-> **End-to-end encrypted memory for AI agents -- portable, yours forever.**
+> **End-to-end encrypted memory + knowledge graph for AI agents -- portable, yours forever.**
 >
 > Your AI remembers everything. Your server sees nothing.
 
-TotalReclaw gives any [OpenClaw](https://github.com/openclaw/openclaw) agent persistent, encrypted long-term memory. Preferences, decisions, and context carry across every conversation -- fully end-to-end encrypted so the server **never** sees plaintext.
+TotalReclaw gives any [OpenClaw](https://github.com/openclaw/openclaw) agent persistent, encrypted long-term memory. Preferences, decisions, commitments, rules, and context carry across every conversation -- fully end-to-end encrypted so the server **never** sees plaintext.
+
+**v3.0.0 ships Memory Taxonomy v1**: every memory is typed (`claim` / `preference` / `directive` / `commitment` / `episode` / `summary`) and tagged with source, scope, and volatility. Recall uses source-weighted reranking so user-authored claims consistently rank above assistant-regurgitated noise. See [`docs/guides/memory-types-guide.md`](../../docs/guides/memory-types-guide.md).
 
 ## Installation
 
@@ -20,14 +22,13 @@ Or via terminal:
 openclaw skills install totalreclaw
 ```
 
-Then set your environment variables:
+Then set one environment variable:
 
 ```bash
-export TOTALRECLAW_SERVER_URL="http://your-totalreclaw-server:8080"
 export TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
 ```
 
-That's it. TotalReclaw hooks into your agent automatically.
+That's it. TotalReclaw hooks into your agent automatically. The server URL defaults to `https://api.totalreclaw.xyz` (managed service) -- only set `TOTALRECLAW_SERVER_URL` if you are self-hosting. See the [env vars reference](../../docs/guides/env-vars-reference.md) for the full (short) list.
 
 ### Alternative: npm
 
@@ -62,9 +63,12 @@ Most AI memory solutions force a tradeoff: **good recall OR privacy**. TotalRecl
 ## Features
 
 - **End-to-End Encryption**: XChaCha20-Poly1305 ensures the server never sees plaintext memories
-- **Intelligent Extraction**: Automatically extracts facts, preferences, and decisions from conversations
+- **Memory Taxonomy v1**: 6 speech-act types + source / scope / volatility axes on every memory. [Learn more](../../docs/guides/memory-types-guide.md)
+- **Intelligent Extraction**: G-pipeline — single merged-topic LLM call, provenance filter, comparative rescoring, volatility heuristic. v1 is the only write path.
 - **Semantic Search**: LSH blind indices with client-side BM25 + cosine + RRF fusion reranking
-- **Lifecycle Hooks**: Seamlessly integrates with OpenClaw's agent lifecycle
+- **Retrieval v2 Tier 1**: Source-weighted reranking — user=1.0, user-inferred=0.9, derived/external=0.7, assistant=0.55
+- **Lifecycle Hooks**: Seamlessly integrates with OpenClaw's agent lifecycle (before_agent_start, agent_end, pre_compaction, before_reset)
+- **Natural-language overrides**: "pin that", "that was actually a rule, not a preference", "file that under work" — agent calls the right tool automatically
 - **Portable Export**: One-click plaintext export -- no vendor lock-in
 - **Decay Management**: Automatic memory decay with configurable thresholds
 
@@ -92,20 +96,19 @@ openclaw plugins install @totalreclaw/totalreclaw
 
 ### 2. Configure
 
-Set the required environment variables:
+Set one environment variable:
 
 ```bash
-# Required
-export TOTALRECLAW_SERVER_URL="http://your-totalreclaw-server:8080"
 export TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
+```
 
-# Optional
-export TOTALRECLAW_AUTO_EXTRACT_EVERY_TURNS=3
-export TOTALRECLAW_MIN_IMPORTANCE=6
-export TOTALRECLAW_MAX_MEMORIES=8
-export TOTALRECLAW_FORGET_THRESHOLD=0.3
-export TOTALRECLAW_RERANKER_MODEL="BAAI/bge-reranker-base"
-export TOTALRECLAW_USER_ID="user-123"
+**That's it.** v1 is the default extraction and write path. Extraction cadence, importance floor, candidate pool size, and dedup thresholds are all server-tuned via the relay's billing response -- no client env vars to set. See [env vars reference](../../docs/guides/env-vars-reference.md).
+
+For self-hosted deployments:
+
+```bash
+export TOTALRECLAW_SERVER_URL="http://your-totalreclaw-server:8080"
+export TOTALRECLAW_SELF_HOSTED=true
 ```
 
 ### 3. Use
@@ -130,17 +133,19 @@ You can also use the tools directly in conversation:
 
 ## Tools
 
-TotalReclaw provides four tools:
+The plugin exposes these tools to your OpenClaw agent. Most invocations happen via natural language -- the agent picks the right tool from context.
 
 ### totalreclaw_remember
 
-Explicitly store a memory.
+Explicitly store a memory. Accepts v1 taxonomy fields.
 
 ```typescript
 const result = await skill.remember({
   text: 'User prefers dark mode',
-  type: 'preference',  // optional: fact, preference, decision, episodic, goal
-  importance: 7,       // optional: 1-10, default is minImportanceForAutoStore
+  type: 'preference',  // v1 types: claim, preference, directive, commitment, episode, summary
+  source: 'user',      // v1 sources: user, user-inferred, assistant, external, derived
+  scope: 'personal',   // v1 scopes: work, personal, health, family, creative, finance, misc, unspecified
+  importance: 7,       // 1-10 (see importance rubric)
 });
 
 console.log(result); // "Memory stored successfully with ID: fact-123"

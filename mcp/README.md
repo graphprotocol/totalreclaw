@@ -24,6 +24,8 @@
 
 End-to-end encrypted memory vault as an MCP server. Your memories are encrypted on your device before leaving -- no one can read them, not even us.
 
+**v3.0.0 ships Memory Taxonomy v1** — 6 speech-act types + source / scope / volatility axes on every memory. Four new tools (`totalreclaw_pin`, `totalreclaw_unpin`, `totalreclaw_retype`, `totalreclaw_set_scope`) let agents override categorization via natural language. Source-weighted reranking ranks user-authored claims above assistant-regurgitated noise. See [memory types guide](../docs/guides/memory-types-guide.md).
+
 **Requirements:** Node.js 18+
 
 ## Quick Start
@@ -117,6 +119,8 @@ The server only ever sees ciphertext and hashed tokens.
 
 ## Available Tools
 
+All 19 tools are invoked by the host agent from natural language context. Tool schemas include v1 taxonomy fields (`type`, `source`, `scope`, `reasoning`).
+
 | Tool | Description |
 |------|-------------|
 | `totalreclaw_remember` | Store a fact in encrypted memory. Supports v1 taxonomy (`type`, `scope`, `reasoning`) + legacy types for migration |
@@ -130,6 +134,7 @@ The server only ever sees ciphertext and hashed tokens.
 | `totalreclaw_status` | Check billing status and quota usage |
 | `totalreclaw_import` | Re-import previously exported memories |
 | `totalreclaw_import_from` | Import from Mem0, MCP Memory Server, ChatGPT, Claude, or generic JSON/CSV |
+| `totalreclaw_import_batch` | Batch import with background polling |
 | `totalreclaw_consolidate` | Merge duplicate and related memories |
 | `totalreclaw_debrief` | End-of-conversation summary to capture broader context |
 | `totalreclaw_upgrade` | Get a link to upgrade to Pro |
@@ -137,6 +142,8 @@ The server only ever sees ciphertext and hashed tokens.
 | `totalreclaw_account` | View account details (wallet, tier, quota, phrase hint) |
 | `totalreclaw_support` | Troubleshooting help + contact links |
 | `totalreclaw_setup` | Generate or import a recovery phrase (first-run flow) |
+
+Users invoke the new v1 tools naturally: *"pin that"*, *"that was actually a rule, not a preference"*, *"file that under work"*. Tool descriptions teach the host LLM to match utterances to tools.
 
 ### Memory Taxonomy v1 (`@totalreclaw/core 2.0`)
 
@@ -187,10 +194,14 @@ npm run lint     # Lint
 
 ## Learn More
 
-- [Getting Started Guide](../docs/guides/beta-tester-guide.md)
-- [IronClaw Setup Guide](../docs/guides/ironclaw-setup.md) -- full walkthrough for IronClaw (NEAR AI) agents
+- [Client setup guide (v1)](../docs/guides/client-setup-v1.md) — one install command per client
+- [Memory types guide](../docs/guides/memory-types-guide.md) — what gets stored and natural-language overrides
+- [v1 migration guide](../docs/guides/v1-migration.md) — upgrading from v0
+- [Environment variables](../docs/guides/env-vars-reference.md) — the 5 env vars that matter
+- [Feature comparison](../docs/guides/feature-comparison.md) — what works on each client
+- [IronClaw setup guide](../docs/guides/ironclaw-setup.md) — full walkthrough for IronClaw (NEAR AI) agents
 - [totalreclaw.xyz](https://totalreclaw.xyz)
-- [Main Repository](https://github.com/p-diogo/totalreclaw)
+- [Main repository](https://github.com/p-diogo/totalreclaw)
 
 ## License
 

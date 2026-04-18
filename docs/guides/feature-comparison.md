@@ -1,6 +1,8 @@
 # Feature Comparison -- TotalReclaw Integrations
 
-TotalReclaw works across multiple AI agent platforms. The core encryption, storage, and search pipeline is identical everywhere -- the differences are in automation (lifecycle hooks) and available tools. This table shows what each platform supports.
+TotalReclaw works across multiple AI agent platforms. The core encryption, storage, search pipeline, and v1 taxonomy are identical everywhere -- the differences are in automation (lifecycle hooks) and available tools. This table shows what each platform supports.
+
+All clients below ship v1 (core 2.0.0, plugin 3.0.0, mcp-server 3.0.0, nanoclaw 3.0.0, python 2.0.0, ZeroClaw 2.0.0).
 
 ---
 
@@ -8,14 +10,23 @@ TotalReclaw works across multiple AI agent platforms. The core encryption, stora
 
 | Feature | OpenClaw | MCP (Claude Desktop, Cursor, Windsurf) | NanoClaw | Hermes (Python) | IronClaw (NEAR AI) | ZeroClaw (Rust) |
 |---------|:-:|:-:|:-:|:-:|:-:|:-:|
+| **Memory Taxonomy v1** | | | | | | |
+| 6-type taxonomy (claim/preference/directive/commitment/episode/summary) | Yes (default) | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes |
+| source / scope / volatility axes | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes |
+| reasoning field for decision-style claims | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes |
+| Retrieval v2 Tier 1 (source-weighted rerank) | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes |
+| Protobuf v4 outer wrapper | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes |
 | **Automatic Memory** | | | | | | |
 | Auto-recall (every message) | Yes | -- | Yes | Yes | -- | Yes |
-| Auto-extract (every 3 turns) | Yes | -- | Yes | Yes | -- | Yes |
+| Auto-extract (G-pipeline, every 3 turns) | Yes | -- | Yes | Yes | -- | Yes |
 | Pre-compaction flush | Yes | -- | Yes | -- | -- | -- |
-| Session debrief | Yes | Yes (tool) | Yes | Yes | Yes (tool) | Yes |
+| Session debrief (v1 `summary`, source=derived) | Yes | Yes (tool) | Yes | Yes | Yes (tool) | Yes |
 | **Explicit Tools** | | | | | | |
 | Remember / Recall / Forget / Export | Yes | Yes | Yes | Yes | Yes | Yes |
 | Status (billing & usage) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Pin / Unpin (v1) | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- |
+| Retype (v1) | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- |
+| Set scope (v1) | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- |
 | Import from Mem0 / ChatGPT / Claude | Yes | Yes | Yes | -- | Yes | -- |
 | Upgrade to Pro | Yes | Yes | Yes | -- | Yes | -- |
 | Migrate (testnet to mainnet) | Yes | Yes | Yes | -- | Yes | -- |
@@ -26,6 +37,7 @@ TotalReclaw works across multiple AI agent platforms. The core encryption, stora
 | Content fingerprint (exact match) | Yes | Yes | Yes | Yes | Yes | Yes |
 | **Search** | | | | | | |
 | BM25 + Cosine + RRF reranking | Yes | Yes | Yes | Yes | Yes | Yes |
+| Source-weighted final score (v1 Tier 1) | Yes | Yes | Yes | Yes | Yes | Yes |
 | Broadened search fallback | Yes | Yes | Yes | Yes | Yes | Yes |
 | Hot cache (skip remote on repeat) | Yes | -- | -- | -- | -- | Yes |
 

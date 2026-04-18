@@ -102,7 +102,11 @@ Specs are organized by product area under `docs/specs/`:
 | Spec | File | Status |
 |------|------|--------|
 | E2EE Architecture (LSH + Blind Buckets) | `architecture.md` | Implemented, validated |
+| **Memory Taxonomy v1** | `memory-taxonomy-v1.md` | **Shipped 2026-04-18 across 5 clients + core 2.0.0** |
+| **Retrieval v2 (Tier 1 source-weighted)** | `retrieval-v2.md` | **Tier 1 shipped in core 2.0.0; Tier 2-4 designed** |
+| **Tiered Retrieval (impl deep dive)** | `tiered-retrieval.md` | Shipped |
 | Server PoC v0.3.1b (Auth + Dedup) | `server.md` | Partially implemented |
+| Client Consistency | `client-consistency.md` | Canonical reference for all 5 clients |
 | OpenClaw Skill | `skill-openclaw.md` | Implemented |
 | NanoClaw Skill | `skill-nanoclaw.md` | Implemented |
 | MCP Server | `mcp-server.md` | Implemented |
@@ -111,7 +115,7 @@ Specs are organized by product area under `docs/specs/`:
 | Benchmark Harness (OMBH) | `benchmark.md` | Implemented |
 | LSH Tuning (Multi-Tenant SaaS) | `lsh-tuning.md` | Complete |
 | Conflict Resolution v0.3.2 | `conflict-resolution.md` | Design complete, not implemented |
-| Retrieval Improvements v3 | `retrieval-improvements-v3.md` | Implemented |
+| Retrieval Improvements v3 | `retrieval-improvements-v3.md` | Implemented (superseded by retrieval-v2 in v1) |
 
 ### Subgraph (Decentralized) -- `docs/specs/subgraph/`
 | Spec | File | Status |
@@ -160,8 +164,15 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Decay handling | -- | -- | -- | -- | -- | Yes (via ZeroClaw) | ZeroClaw applies 7-day half-life at retrieval time |
 | Conflict resolution | -- | -- | -- | -- | -- | Yes (via ZeroClaw) | ZeroClaw checks semantic similarity before storing Core |
 | **Extraction** | | | | | | | |
-| Expanded memory types (8 categories) | Yes | Yes (via prompt) | Yes | Yes (LLM or heuristic) | Yes (via prompt) | Yes (category mapping) | fact, preference, decision, episodic, goal, context, summary, rule (Phase 2.2) |
+| Expanded memory types (8 categories, v0 legacy) | Read-only | Read-only | Read-only | Read-only | Read-only | Read-only | fact, preference, decision, episodic, goal, context, summary, rule — reads only, coerced to v1 on recall |
+| **Memory Taxonomy v1 (6 types)** | Yes (write default) | Yes (write default) | Yes (write default, via MCP) | Yes (write default) | Yes (via MCP) | Yes (write via `store_v1`) | `claim / preference / directive / commitment / episode / summary`. v1 is the only write path. |
+| `source` field (provenance) | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes | user / user-inferred / assistant / external / derived |
+| `scope` field (life domain) | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes | work/personal/health/family/creative/finance/misc/unspecified |
+| `volatility` field | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes | stable / updatable / ephemeral |
+| `reasoning` field (decision-style claims) | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes | Separate field; `claim` type with `reasoning` replaces v0 `decision` |
 | Decision reasoning extraction | Yes | Yes (via prompt) | Yes | Yes (LLM or heuristic) | Yes (via prompt) | Yes (via ZeroClaw) | Extraction prompts require "chose X because Y" |
+| Protobuf v4 outer wrapper | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes | `version = 4` signals v1 inner JSON blob; subgraph schema unchanged |
+| G-pipeline extraction | Yes | -- | Yes (hook) | Yes | -- | Yes (store pipeline) | Merged-topic prompt + provenance filter lax + comparative rescore + volatility heuristic |
 | **Knowledge Graph (Core Hoist Tier 1)** | | | | | | | All via `@totalreclaw/core` 1.5.0 WASM/PyO3 with local fallbacks |
 | Store-time dedup (best-match) | Yes (core) | Yes (core) | Yes (via MCP) | Yes (core) | Yes (via MCP) | Yes (core) | `find_best_near_duplicate` — returns highest-similarity match, not first |
 | Bulk clustering | Yes (core) | Yes (core) | Yes (via MCP) | -- | Yes (via MCP) | -- | `cluster_facts` — greedy single-pass for consolidation tool |
@@ -174,6 +185,11 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Bump cap (≥8 → max +1) | Yes | -- | -- | Yes | -- | -- | Phase 2.2.7 — prevents over-scoring already-high facts |
 | Type in recall results | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | -- | `[rule]` `[fact]` `[decision]` prefix tags in recall output |
 | Remember type+importance params | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | -- | Phase 2.2.6 — `type` and `importance` in totalreclaw_remember tool |
+| **Retrieval v2 — Tier 1 source-weighted rerank** | Yes (core) | Yes (core) | Yes (via MCP) | Yes (core) | Yes (via MCP) | Yes (core) | All via `@totalreclaw/core@2.0.0` `rerankWithConfig` — user=1.0, user-inferred=0.9, derived/external=0.7, assistant=0.55, legacy=0.85 |
+| `totalreclaw_pin` tool | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | New in v1 — locks memory against auto-supersession |
+| `totalreclaw_unpin` tool | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | New in v1 |
+| `totalreclaw_retype` tool | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | New in v1 — change memory type (e.g. preference → directive) |
+| `totalreclaw_set_scope` tool | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | New in v1 — assign memory to a scope |
 | **Dedup** | | | | | | |
 | Content fingerprint (exact) | Yes | Yes | Yes | Yes | Yes (via MCP) | Yes | Server-side HMAC-SHA256 |
 | Within-batch semantic dedup | Yes | -- | -- | -- | -- | -- | Cosine >= 0.9, during extraction |
@@ -249,6 +265,9 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | KG features MCP/NanoClaw-only dedup | LOW | MCP and NanoClaw have core-backed store-time dedup but not contradiction detection or pin semantics (no auto-extraction pipeline to wire them into). OpenClaw, Hermes, and ZeroClaw have full KG wiring. |
 | Lexical importance bump not in MCP/NanoClaw | LOW | `computeLexicalImportanceBump` only runs in OpenClaw plugin and Python Hermes. MCP and NanoClaw don't have auto-extraction, so this is by-design for now. |
 | ZeroClaw no type in recall | RESOLVED | ZeroClaw now parses category from decrypted envelope and surfaces it in recall results. |
+| v1 taxonomy adoption | RESOLVED (2026-04-18) | All 5 clients ship v1 (core 2.0.0, plugin 3.0.0, mcp-server 3.0.0, nanoclaw 3.0.0, python 2.0.0, totalreclaw-memory 2.0.0). No env-var gating. Legacy v0 writes are no longer possible. |
+| v1 VPS QA | PENDING | End-to-end validation on VPS per `totalreclaw-internal/docs/plans/2026-04-18-v1-vps-qa-plan.md`. 8 scenarios + cross-client interop + Bangkok recall test. Gates production promotion. |
+| Cross-client parity tests | PENDING | `tests/parity/` cross-language v1 round-trip tests pass in isolation; `totalreclaw-internal/e2e/cross-client/` multi-client parity bed still queued. |
 
 ---
 
@@ -441,15 +460,18 @@ git checkout main
 
 ## Current Status
 
-- **Version**: v1.0-beta
-- **Phase**: Private Beta
+- **Version**: v1 (taxonomy v1 + Retrieval v2 Tier 1) — shipped April 2026
+- **Phase**: Private Beta; v1 is the default extraction + write path across every client with zero env-var toggles
 - **Default mode**: Managed Service with dual-chain (free=Base Sepolia testnet, pro=Gnosis mainnet)
-- **Default chain ID**: 84532 (Base Sepolia) -- all clients default to free tier, auto-detect Pro (chain 100/Gnosis) from billing
-- **Embedding model**: onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled). e5-small (384d, ~34MB) available as fallback via TOTALRECLAW_EMBEDDING_MODEL=small.
-- **Crypto core**: `@totalreclaw/core` v1.5.0 (Rust WASM for npm, PyO3 for PyPI) -- 16 modules (crypto, reranker, wallet, userop, store, search, blind, lsh, fingerprint, hotcache, consolidation, debrief, stemmer, claims/pin, decision_log, contradiction orchestration). 423 tests. Single source of truth for all clients. Core Hoist Tier 1 complete: store-time dedup best-match, pin semantics, decision log types, contradiction orchestration loop.
-- **Packages**: `@totalreclaw/core@1.5.0`, `@totalreclaw/client@1.1.0`, `@totalreclaw/mcp-server@2.7.0`, `@totalreclaw/totalreclaw@2.11.2` (OpenClaw plugin, ClawHub); `totalreclaw-core@1.5.0`, `totalreclaw@1.9.0` (PyPI)
+- **Default chain ID**: auto-detected from billing tier. Free = 84532 (Base Sepolia), Pro = 100 (Gnosis). `TOTALRECLAW_CHAIN_ID` env var removed in v1.
+- **Embedding model**: onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled). Only supported model in v1; `TOTALRECLAW_EMBEDDING_MODEL` env var removed.
+- **Memory taxonomy**: v1 (6 types: claim / preference / directive / commitment / episode / summary + 3 axes: source / scope / volatility). See `docs/specs/totalreclaw/memory-taxonomy-v1.md`.
+- **Outer protobuf**: v4 (inner blob now v1 JSON; subgraph schema unchanged). See `totalreclaw-internal/docs/plans/2026-04-18-protobuf-v4-design.md`.
+- **Crypto core**: `@totalreclaw/core@2.0.0` (Rust WASM for npm, PyO3 for PyPI) — adds `MemoryClaimV1` types, `validateMemoryClaimV1`, `rerankWithConfig` (Tier 1 source-weighted reranker), `parseMemoryTypeV1` / `parseMemorySource`. 455 native + 498 WASM + 508 PyO3 tests pass. Legacy v0 `rerank()` preserved for back-compat.
+- **Packages (v1)**: `@totalreclaw/core@2.0.0`, `@totalreclaw/totalreclaw@3.0.0` (OpenClaw plugin, ClawHub), `@totalreclaw/mcp-server@3.0.0` (with 19 tools including `pin`/`unpin`/`retype`/`set_scope`), `@totalreclaw/skill-nanoclaw@3.0.0`; `totalreclaw-core@2.0.0`, `totalreclaw@2.0.0` (PyPI); `totalreclaw-memory@2.0.0` (crates.io)
 - **OpenClaw integration**: Plugin installs without force flags (`openclaw plugins install`), hot-reload setup via `TOTALRECLAW_HOT_RELOAD=true`, auto-recall on `before_agent_start`, auto-extraction on `agent_end`, LLM config sourced from OpenClaw providers, plaintext fallback prevention
 - **Relay**: Billing, Pimlico sponsorship, dual-chain routing, and query proxying extracted to private `totalreclaw-relay` TypeScript repo (p-diogo/totalreclaw-relay). Public server retains only self-hosted functionality (storage, search, auth).
+- **Server-side tuning**: Relay billing response carries `extraction_interval`, `max_facts_per_extraction`, `max_candidate_pool`, and (planned) `ephemeral_ttl_days`. Clients read these from the billing cache — no npm/PyPI publish required to retune.
 - **Staging**: Base Sepolia (chain 84532) -- free testnet, no gas costs
 - **Production**: Gnosis mainnet (chain 100) -- Pro tier only
 - **All releases via CI**: GitHub Actions workflows for npm, PyPI, and ClawHub. Never publish manually.
