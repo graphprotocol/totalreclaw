@@ -1,15 +1,25 @@
 """
-TotalReclaw — Knowledge Graph helpers for the write + read path (Phase 1).
+TotalReclaw — Knowledge Graph helpers for the write + read path.
 
 Mirrors ``skill/plugin/claims-helper.ts`` function-for-function in Python so
-that client-produced Claim blobs are byte-identical across TypeScript and
+that client-produced claim blobs are byte-equivalent across TypeScript and
 Python. All canonicalization is delegated to ``totalreclaw_core``; this module
-only handles feature flags, category mapping, entity trapdoor hashing, and
-helpers for reading already-decrypted blobs.
+only handles category mapping, entity trapdoor hashing, and helpers for
+reading already-decrypted blobs.
 
-Canonical Claim schema uses compact short keys (``t, c, cf, i, sa, ea, e, ...``).
-The field order the core serializer emits matches the Rust golden tests and the
-plugin's reference test vectors.
+As of ``totalreclaw`` 2.0.0 / ``@totalreclaw/core`` 2.0.0:
+
+* Memory Taxonomy v1 is the DEFAULT and ONLY write path — no env-var toggles.
+  Extraction emits v1 JSON blobs (long-form fields + ``schema_version: "1.0"``).
+* The legacy ``TOTALRECLAW_CLAIM_FORMAT=legacy`` fallback has been removed —
+  ``build_canonical_claim`` always forwards to :func:`build_canonical_claim_v1`.
+* The legacy v0 short-key ``{t, c, cf, i, sa, ea}`` claim format is read-only:
+  :func:`read_claim_from_blob` still decodes it transparently for pre-v1
+  vault entries, but no Python caller produces it.
+
+The outer protobuf wrapper's ``version`` field MUST be set to
+:data:`PROTOBUF_VERSION_V4` (``4``) when storing a v1 payload — see
+``operations.py::store_fact``.
 """
 from __future__ import annotations
 
@@ -17,6 +27,39 @@ import hashlib
 import json
 import math
 import os
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Literal, Optional, Sequence
+
+import totalreclaw_core as _core
+
+from .agent.extraction import (
+    LEGACY_V0_MEMORY_TYPES,
+    V0_TO_V1_TYPE,
+    VALID_MEMORY_SCOPES,
+    VALID_MEMORY_SOURCES,
+    VALID_MEMORY_TYPES,
+    VALID_MEMORY_VOLATILITIES,
+    is_valid_memory_type,
+    normalize_to_v1_type,
+)
+
+
+# ---------------------------------------------------------------------------
+# Version + schema markers
+# ---------------------------------------------------------------------------
+
+#: Memory Taxonomy v1 schema-version string (matches plugin's V1_SCHEMA_VERSION).
+V1_SCHEMA_VERSION: str = "1.0"
+
+#: Outer protobuf wrapper version tags.
+#:
+#: * ``DEFAULT_PROTOBUF_VERSION`` (3) — legacy callers; inner blob is the
+#:   pre-v1 short-key binary envelope.
+#: * ``PROTOBUF_VERSION_V4`` (4) — Memory Taxonomy v1; inner blob is a JSON
+#:   payload with ``schema_version: "1.0"``.
+DEFAULT_PROTOBUF_VERSION: int = 3
+PROTOBUF_VERSION_V4: int = 4
 
 
 def _js_round(x: float) -> int:
@@ -28,40 +71,19 @@ def _js_round(x: float) -> int:
     """
     return math.floor(x + 0.5)
 
-from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence
-
-import totalreclaw_core as _core
-
 
 # ---------------------------------------------------------------------------
-# Feature flags
+# Feature flags (digest mode only — claim-format gate removed in 2.0.0)
 # ---------------------------------------------------------------------------
 
-ClaimFormat = Literal["claim", "legacy"]
 DigestMode = Literal["on", "off", "template"]
-
-
-def resolve_claim_format() -> ClaimFormat:
-    """Resolve ``TOTALRECLAW_CLAIM_FORMAT`` — "claim" (default) or "legacy".
-
-    - ``claim`` (default, unset, or unknown): new canonical Claim blob.
-    - ``legacy``: old ``{text, metadata}`` doc shape; entity trapdoors are
-      still added to blind indices even in legacy mode.
-
-    Read on every call so tests can toggle via env without module reload.
-    """
-    raw = (os.environ.get("TOTALRECLAW_CLAIM_FORMAT") or "").strip().lower()
-    return "legacy" if raw == "legacy" else "claim"
 
 
 def resolve_digest_mode() -> DigestMode:
     """Resolve ``TOTALRECLAW_DIGEST_MODE`` — "on" (default), "off", "template".
 
-    - ``on`` (default, unset, or unknown): digest injection + LLM compilation
-      when an LLM is configured; template fallback otherwise.
-    - ``off``: legacy individual-fact recall path, no digest injection.
-    - ``template``: digest injection but skip LLM entirely.
+    Digest compilation is orthogonal to the v0/v1 taxonomy split; this
+    setting stays. See ``docs/specs/totalreclaw/retrieval-improvements-v3.md``.
     """
     raw = (os.environ.get("TOTALRECLAW_DIGEST_MODE") or "").strip().lower()
     if raw == "off":
@@ -72,10 +94,12 @@ def resolve_digest_mode() -> DigestMode:
 
 
 # ---------------------------------------------------------------------------
-# Category mapping
+# Category mapping (type → compact Claim category short key for display)
 # ---------------------------------------------------------------------------
 
-TYPE_TO_CATEGORY: Dict[str, str] = {
+#: Legacy v0 type → compact category short key. Kept for decoding pre-v1
+#: vault entries whose decrypted blob still carries a v0 token string.
+TYPE_TO_CATEGORY_V0: Dict[str, str] = {
     "fact": "fact",
     "preference": "pref",
     "decision": "dec",
@@ -83,87 +107,217 @@ TYPE_TO_CATEGORY: Dict[str, str] = {
     "goal": "goal",
     "context": "ctx",
     "summary": "sum",
-    # Phase 2.2: rule = reusable operational rule, gotcha, debugging shortcut, or
-    # convention the user wants to remember for next time. Distinct from decision
-    # (which has reasoning for a specific choice) and preference (personal taste).
     "rule": "rule",
+}
+
+#: v1 type → compact category short key for recall display. Matches the
+#: plugin's ``TYPE_TO_CATEGORY_V1``. ``directive`` / ``commitment`` map onto
+#: the ``rule`` / ``goal`` display tags so the recall UI is consistent with
+#: the pre-v1 category labels the user is used to seeing.
+TYPE_TO_CATEGORY_V1: Dict[str, str] = {
+    "claim": "claim",
+    "preference": "pref",
+    "directive": "rule",
+    "commitment": "goal",
+    "episode": "epi",
+    "summary": "sum",
+}
+
+#: Backward-compat alias — prefer the versioned maps in new code.
+TYPE_TO_CATEGORY: Dict[str, str] = {
+    **TYPE_TO_CATEGORY_V0,
+    **TYPE_TO_CATEGORY_V1,
 }
 
 
 def map_type_to_category(fact_type: str) -> str:
-    """Map an ExtractedFact type string → the compact Claim category short key.
+    """Map any memory type (v1 or legacy v0) to the compact category short key.
 
-    Unknown types fall back to ``"fact"`` so a bad LLM response never crashes
-    the write path.
+    v1 types take priority; unknown tokens fall through to the v0 table for
+    pre-v1 vault entries; anything else returns ``"fact"``.
     """
-    return TYPE_TO_CATEGORY.get(fact_type, "fact")
+    if fact_type in TYPE_TO_CATEGORY_V1:
+        return TYPE_TO_CATEGORY_V1[fact_type]
+    return TYPE_TO_CATEGORY_V0.get(fact_type, "fact")
 
 
 # ---------------------------------------------------------------------------
-# Canonical Claim builder
+# Canonical Claim builder (v1 — plugin v3.0.0 / python 2.0.0 default)
 # ---------------------------------------------------------------------------
 
 
 def _now_iso() -> str:
-    """Current time as ``YYYY-MM-DDTHH:MM:SS.sssZ`` (same shape as plugin)."""
-    # Plugin uses ``new Date().toISOString()`` → millisecond precision + ``Z``.
+    """Current time as ``YYYY-MM-DDTHH:MM:SS.sssZ`` (same shape as the TS plugin)."""
     now = datetime.now(timezone.utc)
     return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
+
+
+def build_canonical_claim_v1(
+    fact: Any,
+    importance: int,
+    created_at: Optional[str] = None,
+    superseded_by: Optional[str] = None,
+    expires_at: Optional[str] = None,
+    claim_id: Optional[str] = None,
+) -> str:
+    """Build a v1 ``MemoryClaimV1`` JSON blob.
+
+    Mirrors the TS plugin's ``buildCanonicalClaimV1`` function-for-function.
+
+    The pipeline:
+
+      1. Build the full v1 payload object (including plugin-only extras
+         like ``volatility`` and ``schema_version``).
+      2. Validate the core-required subset through
+         :func:`totalreclaw_core.validate_memory_claim_v1` (throws on
+         invalid type, source, or missing id).
+      3. Re-attach plugin-only extras (``schema_version``, ``volatility``)
+         to the validated canonical payload and return as a JSON string.
+
+    The outer protobuf wrapper's ``version`` field must be set to
+    :data:`PROTOBUF_VERSION_V4` (4) when storing the returned payload.
+
+    Raises
+    ------
+    ValueError
+        If the fact does not have a valid v1 ``source`` set — v1 requires
+        every claim to carry provenance.
+    """
+    text = _attr(fact, "text")
+    fact_type = normalize_to_v1_type(_attr(fact, "type", "claim"))
+    source = _attr(fact, "source")
+    scope = _attr(fact, "scope", "unspecified")
+    reasoning = _attr(fact, "reasoning", None)
+    entities = _attr(fact, "entities", None)
+    confidence_raw = _attr(fact, "confidence", 0.85)
+    volatility = _attr(fact, "volatility", None)
+
+    if not source:
+        raise ValueError(
+            "build_canonical_claim_v1: fact.source is required (v1 taxonomy mandates provenance)"
+        )
+    if source not in VALID_MEMORY_SOURCES:
+        raise ValueError(f"build_canonical_claim_v1: invalid source {source!r}")
+
+    resolved_id = claim_id or str(uuid.uuid4())
+    resolved_created_at = created_at or _now_iso()
+    resolved_importance = max(1, min(10, _js_round(float(importance))))
+    resolved_confidence = 0.85 if confidence_raw is None else float(confidence_raw)
+    resolved_confidence = max(0.0, min(1.0, resolved_confidence))
+
+    # Core-canonical subset sent through validate_memory_claim_v1.
+    core_payload: Dict[str, Any] = {
+        "id": resolved_id,
+        "text": text,
+        "type": fact_type,
+        "source": source,
+        "created_at": resolved_created_at,
+        "importance": resolved_importance,
+        "confidence": resolved_confidence,
+    }
+
+    if scope and scope in VALID_MEMORY_SCOPES:
+        core_payload["scope"] = scope
+    if isinstance(reasoning, str) and reasoning:
+        core_payload["reasoning"] = reasoning[:256]
+    if entities:
+        ent_list: List[Dict[str, Any]] = []
+        for e in list(entities)[:8]:
+            name = _attr(e, "name")
+            etype = _attr(e, "type")
+            role = _attr(e, "role", None)
+            if not (isinstance(name, str) and isinstance(etype, str)):
+                continue
+            entry: Dict[str, Any] = {"name": name, "type": etype}
+            if role:
+                entry["role"] = role
+            ent_list.append(entry)
+        if ent_list:
+            core_payload["entities"] = ent_list
+    if expires_at:
+        core_payload["expires_at"] = expires_at
+    if superseded_by:
+        core_payload["superseded_by"] = superseded_by
+
+    # Attach schema_version BEFORE validation — core's v1 struct requires it.
+    core_payload["schema_version"] = V1_SCHEMA_VERSION
+
+    validated = _core.validate_memory_claim_v1(
+        json.dumps(core_payload, ensure_ascii=False, separators=(",", ":"))
+    )
+    canonical = json.loads(validated)
+    if not isinstance(canonical, dict):
+        raise RuntimeError("validate_memory_claim_v1 did not return an object")
+
+    # Re-attach plugin-only extras not round-tripped by core's validator.
+    canonical["schema_version"] = V1_SCHEMA_VERSION
+    if volatility and volatility in VALID_MEMORY_VOLATILITIES:
+        canonical["volatility"] = volatility
+
+    return json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
 
 
 def build_canonical_claim(
     fact: Any,
     importance: int,
-    source_agent: str,
+    source_agent: str = "",
     extracted_at: Optional[str] = None,
 ) -> str:
-    """Construct a canonical Claim JSON string from an ExtractedFact-like object.
+    """Construct a canonical claim JSON string from an ExtractedFact-like object.
 
-    The input ``fact`` can be either an ``ExtractedFact`` dataclass-like object
-    (with ``text``, ``type``, optional ``confidence``, optional ``entities``) or
-    a plain dict with the same keys. The output is byte-identical to what the
-    plugin's TypeScript ``buildCanonicalClaim`` produces for the same logical
-    claim — field order, default omission rules, everything.
+    As of ``totalreclaw`` 2.0.0 this unconditionally emits a Memory Taxonomy
+    v1 JSON blob (``schema_version == "1.0"``) — forwarded to
+    :func:`build_canonical_claim_v1`. The legacy v0 short-key
+    ``{t, c, cf, i, sa, ea}`` format is no longer produced on the write path.
 
-    Encrypt the returned string directly; do not re-stringify it.
+    The outer protobuf wrapper's ``version`` field MUST be set to
+    :data:`PROTOBUF_VERSION_V4` when storing the returned payload.
+
+    ``source_agent`` is retained on the signature for legacy back-compat but
+    is ignored — v1 provenance lives in ``fact.source``. When the input fact
+    has no ``source`` set we supply ``"user-inferred"`` as a defensive
+    default so a misconfigured extraction path does not drop the write.
     """
-    text = _attr(fact, "text")
-    fact_type = _attr(fact, "type")
-    confidence = _attr(fact, "confidence", 0.85)
-    if confidence is None:
-        confidence = 0.85
-    entities = _attr(fact, "entities", None)
+    # Defensive: ensure fact.source is populated before v1 validation.
+    fact_source = _attr(fact, "source")
+    if not fact_source:
+        if isinstance(fact, dict):
+            fact = dict(fact)
+            fact["source"] = "user-inferred"
+        else:
+            # dataclass: set the attribute in place
+            try:
+                setattr(fact, "source", "user-inferred")
+            except Exception:
+                fact = {**_fact_to_dict(fact), "source": "user-inferred"}
 
-    claim: Dict[str, Any] = {
-        "t": text,
-        "c": map_type_to_category(fact_type),
-        "cf": confidence,
-        "i": importance,
-        "sa": source_agent,
-        "ea": extracted_at if extracted_at is not None else _now_iso(),
-    }
+    return build_canonical_claim_v1(
+        fact,
+        importance=importance,
+        created_at=extracted_at,
+    )
 
-    if entities:
-        e_list: List[Dict[str, Any]] = []
-        for e in entities:
-            name = _attr(e, "name")
-            etype = _attr(e, "type")
-            role = _attr(e, "role", None)
-            entry: Dict[str, Any] = {"n": name, "tp": etype}
-            if role:
-                entry["r"] = role
-            e_list.append(entry)
-        if e_list:
-            claim["e"] = e_list
 
-    # json.dumps preserves insertion order for dicts — the canonical_claim
-    # core function reparses and re-emits in the core's own canonical order
-    # anyway, so intermediate dict ordering is irrelevant to correctness.
-    return _core.canonicalize_claim(json.dumps(claim, ensure_ascii=False, separators=(",", ":")))
+def _fact_to_dict(fact: Any) -> Dict[str, Any]:
+    """Last-resort dataclass→dict conversion for the defensive source default."""
+    if isinstance(fact, dict):
+        return dict(fact)
+    out: Dict[str, Any] = {}
+    for key in (
+        "text", "type", "importance", "action", "confidence", "entities",
+        "source", "scope", "reasoning", "volatility",
+    ):
+        if hasattr(fact, key):
+            out[key] = getattr(fact, key)
+    return out
 
 
 # ---------------------------------------------------------------------------
-# Legacy ``{text, metadata}`` doc shape (pre-KG fallback)
+# Legacy ``{text, metadata}`` doc shape — retained for fixture decoding ONLY.
+#
+# Python 2.0.0 does not produce legacy docs; they exist only so pre-v1
+# vault entries remain decodable. Kept here so existing external tests
+# that reference ``build_legacy_doc`` still compile, but tagged deprecated.
 # ---------------------------------------------------------------------------
 
 
@@ -173,11 +327,11 @@ def build_legacy_doc(
     source: str,
     created_at: Optional[str] = None,
 ) -> str:
-    """Build the legacy ``{text, metadata}`` document.
+    """Build a legacy ``{text, metadata}`` doc.
 
-    Kept so the ``TOTALRECLAW_CLAIM_FORMAT=legacy`` fallback emits blobs the
-    existing ``parseClaimOrLegacy`` path has always handled. Output must be
-    byte-identical to the plugin's ``buildLegacyDoc``.
+    .. deprecated:: 2.0.0
+        No Python caller produces legacy docs; v1 is the default write path.
+        This helper is retained only for back-compat decoding tests.
     """
     text = _attr(fact, "text")
     fact_type = _attr(fact, "type")
@@ -197,44 +351,55 @@ def build_legacy_doc(
 # Digest helpers (Stage 3b read path)
 # ---------------------------------------------------------------------------
 
-#: Plain SHA-256("type:digest") as hex. The ``type:`` namespace prefix keeps
-#: it distinct from any user word trapdoor. Uses plain SHA-256 (not HMAC) so
-#: it lives in the existing ``blind_indices`` array alongside word/stem trapdoors.
 DIGEST_TRAPDOOR: str = hashlib.sha256(b"type:digest").hexdigest()
-
-#: Compact category short key for digest claims (ClaimCategory::Digest).
 DIGEST_CATEGORY: str = "dig"
-
-#: Distinctive source marker so operators can grep for Python-origin digest writes.
 DIGEST_SOURCE_AGENT: str = "hermes-agent-digest"
-
-#: Hard ceiling on claim count for LLM-assisted digest compilation.
-#: Above this, the template path is forced to keep token cost bounded.
 DIGEST_CLAIM_CAP: int = 200
 
 
 # ---------------------------------------------------------------------------
-# Decrypted blob reader — handles both new Claim and legacy shapes
+# Decrypted blob reader — handles v1 JSON, v0 short-key Claims, and legacy docs
 # ---------------------------------------------------------------------------
 
 
-def read_claim_from_blob(decrypted_json: str) -> Dict[str, Any]:
-    """Read a decrypted blob as a logical ``{text, importance, category, metadata}``.
+def is_v1_blob(decrypted: str) -> bool:
+    """Heuristic: does a decrypted blob look like a v1 JSON payload?
 
-    Handles:
-
-      * new canonical Claim format with compact short keys (``t, c, i, ...``)
-      * legacy plugin ``{text, metadata: {importance: 0-1}}`` format
-      * malformed JSON and other edge cases
-
-    Output is intentionally the same shape as the plugin's ``readClaimFromBlob``
-    so search / export / re-rank code can be written once and share.
+    Checks for the ``schema_version`` marker plus the long-form ``text`` and
+    ``type`` fields. Returns ``False`` on any parse error.
     """
     try:
-        obj = json.loads(decrypted_json)
+        obj = json.loads(decrypted)
+    except (ValueError, TypeError):
+        return False
+    return (
+        isinstance(obj, dict)
+        and isinstance(obj.get("text"), str)
+        and isinstance(obj.get("type"), str)
+        and isinstance(obj.get("schema_version"), str)
+        and obj["schema_version"].startswith("1.")
+    )
+
+
+def read_blob_unified(decrypted: str) -> Dict[str, Any]:
+    """Unified decrypted blob reader with v1-first precedence.
+
+    Tries in order:
+      1. **v1 JSON** — long-form fields + ``schema_version`` "1.x".
+      2. **v0 short-key Claim** — ``{t, c, cf, i, sa, ea, ...}``.
+      3. **Legacy plugin doc** — ``{text, metadata: {...}}``.
+      4. **Raw text fallback** — unrecognized shape returned as-is.
+
+    Returns the same ``{text, importance, category, metadata}`` shape as the
+    plugin's :func:`readClaimFromBlob`. ``metadata`` carries the v1 source
+    /scope /volatility /reasoning /schema_version when available, so callers
+    applying Tier 1 source-weighted reranking can read the source directly.
+    """
+    try:
+        obj = json.loads(decrypted)
     except (ValueError, TypeError):
         return {
-            "text": decrypted_json,
+            "text": decrypted,
             "importance": 5,
             "category": "fact",
             "metadata": {},
@@ -242,46 +407,68 @@ def read_claim_from_blob(decrypted_json: str) -> Dict[str, Any]:
 
     if not isinstance(obj, dict):
         return {
-            "text": decrypted_json,
+            "text": decrypted,
             "importance": 5,
             "category": "fact",
             "metadata": {},
         }
 
-    # New canonical Claim format: short keys
-    t = obj.get("t")
-    c = obj.get("c")
-    if isinstance(t, str) and isinstance(c, str):
+    # 1. v1 JSON payload: long-form fields + schema_version "1.x"
+    schema_version = obj.get("schema_version")
+    if (
+        isinstance(obj.get("text"), str)
+        and isinstance(obj.get("type"), str)
+        and isinstance(schema_version, str)
+        and schema_version.startswith("1.")
+    ):
+        imp_raw = obj.get("importance")
+        if isinstance(imp_raw, (int, float)) and not isinstance(imp_raw, bool):
+            importance = max(1, min(10, _js_round(float(imp_raw))))
+        else:
+            importance = 5
+        return {
+            "text": obj["text"],
+            "importance": importance,
+            "category": map_type_to_category(obj["type"]),
+            "metadata": {
+                "type": obj["type"],
+                "source": obj.get("source", "user-inferred") if isinstance(obj.get("source"), str) else "user-inferred",
+                "scope": obj.get("scope", "unspecified") if isinstance(obj.get("scope"), str) else "unspecified",
+                "volatility": obj.get("volatility", "updatable") if isinstance(obj.get("volatility"), str) else "updatable",
+                "reasoning": obj.get("reasoning") if isinstance(obj.get("reasoning"), str) else None,
+                "importance": importance / 10,
+                "created_at": obj.get("created_at", "") if isinstance(obj.get("created_at"), str) else "",
+                "schema_version": schema_version,
+            },
+        }
+
+    # 2. v0 canonical Claim format: compact short keys {t, c, ...}
+    t_val = obj.get("t")
+    c_val = obj.get("c")
+    if isinstance(t_val, str) and isinstance(c_val, str):
         raw_i = obj.get("i")
         if isinstance(raw_i, (int, float)) and not isinstance(raw_i, bool):
             importance = max(1, min(10, _js_round(float(raw_i))))
         else:
             importance = 5
-        sa = obj.get("sa")
-        ea = obj.get("ea")
         return {
-            "text": t,
+            "text": t_val,
             "importance": importance,
-            "category": c,
+            "category": c_val,
             "metadata": {
-                "type": c,
+                "type": c_val,
                 "importance": importance / 10,
-                "source": sa if isinstance(sa, str) else "auto-extraction",
-                "created_at": ea if isinstance(ea, str) else "",
+                "source": obj.get("sa") if isinstance(obj.get("sa"), str) else "auto-extraction",
+                "created_at": obj.get("ea") if isinstance(obj.get("ea"), str) else "",
             },
         }
 
-    # Legacy plugin {text, metadata: {importance: 0-1}} format
+    # 3. Legacy plugin {text, metadata: {importance: 0-1}} format
     legacy_text = obj.get("text")
     if isinstance(legacy_text, str):
-        meta = obj.get("metadata")
-        if not isinstance(meta, dict):
-            meta = {}
+        meta = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
         raw_imp = meta.get("importance")
-        if isinstance(raw_imp, (int, float)) and not isinstance(raw_imp, bool):
-            imp_float = float(raw_imp)
-        else:
-            imp_float = 0.5
+        imp_float = float(raw_imp) if isinstance(raw_imp, (int, float)) and not isinstance(raw_imp, bool) else 0.5
         importance = max(1, min(10, _js_round(imp_float * 10)))
         category = meta.get("type") if isinstance(meta.get("type"), str) else "fact"
         return {
@@ -291,21 +478,23 @@ def read_claim_from_blob(decrypted_json: str) -> Dict[str, Any]:
             "metadata": meta,
         }
 
-    # Fallback: unrecognized JSON object shape.
+    # 4. Unrecognized JSON object shape — fall back.
     return {
-        "text": decrypted_json,
+        "text": decrypted,
         "importance": 5,
         "category": "fact",
         "metadata": {},
     }
 
 
-def is_digest_blob(decrypted: str) -> bool:
-    """Does this decrypted blob look like a digest claim?
+#: Back-compat alias — prefer :func:`read_blob_unified` in new code.
+def read_claim_from_blob(decrypted_json: str) -> Dict[str, Any]:
+    """Back-compat alias for :func:`read_blob_unified`."""
+    return read_blob_unified(decrypted_json)
 
-    Returns True only for canonical Claim JSON with ``c == "dig"``.
-    Returns False for legacy docs, malformed JSON, or any other shape.
-    """
+
+def is_digest_blob(decrypted: str) -> bool:
+    """Does this decrypted blob look like a digest claim?"""
     try:
         obj = json.loads(decrypted)
     except (ValueError, TypeError):
@@ -319,10 +508,9 @@ def build_digest_claim(
 ) -> str:
     """Wrap a Digest JSON as a canonical Claim with category ``dig``.
 
-    Stores the raw Digest JSON as the claim's ``t`` field. Reader path is
-    ``parse_claim_or_legacy → extract_digest_from_claim``. Digest claims
-    deliberately carry no entity refs — otherwise entity trapdoors would
-    surface the digest blob in normal recall queries.
+    Digest claims use the v0 short-key format — they are an internal
+    read-path artifact, not a user-facing memory, so they do not need to
+    be in the v1 taxonomy.
     """
     claim: Dict[str, Any] = {
         "t": digest_json,
@@ -340,9 +528,8 @@ def build_digest_claim(
 def extract_digest_from_claim(canonical_claim_json: str) -> Optional[Dict[str, Any]]:
     """Inverse of :func:`build_digest_claim`.
 
-    Given a canonical Claim JSON (as returned by ``parse_claim_or_legacy``),
-    return the wrapped Digest object, or ``None`` if the claim is not a
-    digest or the inner JSON fails to parse.
+    Given a canonical Claim JSON, return the wrapped Digest object,
+    or ``None`` if the claim is not a digest / inner JSON fails to parse.
     """
     try:
         claim = json.loads(canonical_claim_json)
@@ -361,7 +548,6 @@ def extract_digest_from_claim(canonical_claim_json: str) -> Optional[Dict[str, A
         return None
     if not isinstance(digest, dict):
         return None
-    # Minimal shape check: a Digest must at least have prompt_text.
     if not isinstance(digest.get("prompt_text"), str):
         return None
     return digest
@@ -373,15 +559,8 @@ def extract_digest_from_claim(canonical_claim_json: str) -> Optional[Dict[str, A
 
 
 def hours_since(compiled_at_iso: str, now_ms: int) -> float:
-    """Hours between ``compiled_at_iso`` and ``now_ms``.
-
-    Returns ``float('inf')`` if the timestamp is unparseable (forces a
-    recompile, the safe default). Returns 0 for future dates (clock-skew
-    defensive).
-    """
+    """Hours between ``compiled_at_iso`` and ``now_ms``."""
     try:
-        # Python's fromisoformat handles +00:00 but not 'Z' before 3.11;
-        # we're on >=3.11 per pyproject but normalize anyway.
         normalized = compiled_at_iso
         if normalized.endswith("Z"):
             normalized = normalized[:-1] + "+00:00"
@@ -398,16 +577,11 @@ def hours_since(compiled_at_iso: str, now_ms: int) -> float:
 
 
 def is_digest_stale(digest_version: int, current_max_created_at_unix: int) -> bool:
-    """The digest is stale if new claims have been written since compilation.
-
-    Both inputs are Unix seconds. Equal or regressing values (clock skew,
-    empty vault) return False — we only recompile on strictly-newer evidence.
-    """
     return current_max_created_at_unix > digest_version
 
 
 def should_recompile(count_new_claims: int, hours_since_compilation: float) -> bool:
-    """Recompile guard (plan §15.10): 10+ new claims OR 24h+ elapsed."""
+    """Recompile guard: 10+ new claims OR 24h+ elapsed."""
     return count_new_claims >= 10 or hours_since_compilation >= 24
 
 
@@ -417,15 +591,6 @@ def should_recompile(count_new_claims: int, hours_since_compilation: float) -> b
 
 
 def compute_entity_trapdoor(name: str) -> str:
-    """Compute a single entity trapdoor: ``sha256("entity:" + normalized)`` as hex.
-
-    Uses plain SHA-256 (not HMAC) — the same primitive as word/stem
-    trapdoors in ``rust/totalreclaw-core/src/blind.rs`` — so entity
-    trapdoors live in the same ``blind_indices`` array and are findable
-    by the existing search pipeline. The ``entity:`` prefix namespaces the
-    hash so a user named "postgresql" never collides with the word
-    trapdoor for the token "postgresql".
-    """
     normalized = _core.normalize_entity_name(name)
     return hashlib.sha256(b"entity:" + normalized.encode("utf-8")).hexdigest()
 
@@ -433,11 +598,6 @@ def compute_entity_trapdoor(name: str) -> str:
 def compute_entity_trapdoors(
     entities: Optional[Sequence[Any]],
 ) -> List[str]:
-    """Compute trapdoors for every entity on a fact, deduplicated.
-
-    Returns an empty list when the input is ``None`` or empty. Input can be
-    a list of dicts (``{"name": ..., "type": ...}``) or dataclass instances.
-    """
     if not entities:
         return []
     seen: set[str] = set()

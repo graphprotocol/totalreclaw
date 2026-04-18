@@ -268,6 +268,10 @@ class RerankerCandidate:
     importance: Optional[float] = None
     created_at: Optional[float] = None  # Unix timestamp (seconds)
     category: str = "fact"
+    #: v1 provenance source ("user", "user-inferred", "assistant",
+    #: "external", "derived"). When None, the candidate is treated as a
+    #: pre-v1 legacy blob and receives the legacy-claim fallback weight.
+    source: Optional[str] = None
 
 
 @dataclass
@@ -281,6 +285,8 @@ class RerankerResult:
     category: str = "fact"
     rrf_score: float = 0.0
     cosine_sim: Optional[float] = None
+    source: Optional[str] = None
+    source_weight: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -363,12 +369,48 @@ def apply_mmr(
 # Combined Re-Ranker
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Retrieval v2 Tier 1 — source-weighted reranking (v1 taxonomy)
+# ---------------------------------------------------------------------------
+
+#: Weight for a legacy (pre-v1) candidate whose source is unknown.
+#: Mirrors ``reranker::LEGACY_CLAIM_FALLBACK_WEIGHT`` in the Rust core.
+LEGACY_CLAIM_FALLBACK_WEIGHT: float = 0.85
+
+
+def source_weight(source: Optional[str]) -> float:
+    """Return the Tier 1 provenance weight for a given v1 source string.
+
+    Unknown / missing source falls back to the legacy weight (0.85) so a
+    pre-v1 blob does not get nuked at retrieval time.
+
+    Delegates to :func:`totalreclaw_core.source_weight` when available so
+    the weight table stays in lockstep with the Rust core; the pure-Python
+    fallback mirrors the table in ``rust/totalreclaw-core/src/reranker.rs``.
+    """
+    if source is None:
+        return LEGACY_CLAIM_FALLBACK_WEIGHT
+    try:
+        return float(totalreclaw_core.source_weight(source))
+    except Exception:
+        # Fallback — keep in sync with ``MemorySource`` → weight table.
+        table = {
+            "user": 1.0,
+            "user-inferred": 0.9,
+            "external": 0.7,
+            "derived": 0.7,
+            "assistant": 0.55,
+        }
+        return table.get(source, 0.9)  # unknown ≈ user-inferred
+
+
 def rerank(
     query: str,
     query_embedding: Optional[list[float]],
     candidates: list[RerankerCandidate],
     top_k: int = 8,
     weights: Optional[RankingWeights] = None,
+    apply_source_weights: bool = False,
 ) -> list[RerankerResult]:
     """Re-rank decrypted candidates using BM25 + Cosine + Importance + Recency
     with Weighted RRF fusion and MMR diversity.
@@ -471,6 +513,11 @@ def rerank(
     for item in fused:
         c = candidate_map.get(item.id)
         if c:
+            # Retrieval v2 Tier 1: multiply the fused RRF score by the v1
+            # source weight when requested. Candidates without a v1 source
+            # (pre-v1 legacy blobs) receive LEGACY_CLAIM_FALLBACK_WEIGHT.
+            sw = source_weight(c.source) if apply_source_weights else None
+            final_score = item.score * sw if sw is not None else item.score
             rrf_results.append(RerankerResult(
                 id=c.id,
                 text=c.text,
@@ -478,9 +525,16 @@ def rerank(
                 importance=c.importance,
                 created_at=c.created_at,
                 category=c.category,
-                rrf_score=item.score,
+                rrf_score=final_score,
                 cosine_sim=cosine_scores.get(c.id),
+                source=c.source,
+                source_weight=sw,
             ))
+
+    # Re-sort after the source-weight multiply so top-k reflects the
+    # weighted order, not the pre-weight order.
+    if apply_source_weights:
+        rrf_results.sort(key=lambda r: r.rrf_score, reverse=True)
 
     # --- Step 9: Apply MMR for diversity, then return top-k ---
     return apply_mmr(rrf_results, lam=0.7, top_k=top_k)

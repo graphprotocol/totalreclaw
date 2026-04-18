@@ -4,10 +4,14 @@ End-to-end encrypted memory for AI agents -- the "password manager for AI memory
 
 Store, search, and recall memories across any AI agent with zero-knowledge encryption. Your data is encrypted on-device before it leaves -- the server never sees plaintext.
 
+As of **2.0.0**, the client uses **Memory Taxonomy v1** (6 canonical types: `claim | preference | directive | commitment | episode | summary`) and **Retrieval v2 Tier 1** source-weighted reranking (user-sourced facts rank higher than assistant-sourced facts on tied BM25 + cosine scores). See the [TS plugin 3.0.0 migration notes](https://github.com/p-diogo/totalreclaw/blob/main/skill/plugin/CHANGELOG.md) — the Python client follows the same pattern. Existing pre-v1 vault entries decrypt transparently.
+
 ## Features
 
 - **End-to-end encrypted** -- XChaCha20-Poly1305 encryption, HKDF key derivation from BIP-39 mnemonic
 - **Portable** -- Same recovery phrase works across Hermes, OpenClaw, Claude Desktop, IronClaw
+- **Memory Taxonomy v1** -- 6-type schema with required provenance (`user | user-inferred | assistant | external | derived`) and 8 life-domain scopes
+- **Tier 1 source-weighted reranking** -- user-sourced facts rank higher than assistant-sourced facts on tied scores
 - **Local embeddings** -- Harrier-OSS-v1-270M runs on-device (no API calls)
 - **Hybrid search** -- BM25 + cosine similarity + RRF reranking
 - **LSH bucketing** -- Locality-sensitive hashing for encrypted search
@@ -38,8 +42,14 @@ async def main():
     await client.resolve_address()
     await client.register()
 
-    # Store a memory (importance is a float from 0.0 to 1.0)
-    fact_id = await client.remember("Pedro prefers dark mode for all editors", importance=0.8)
+    # Store a memory — v1 taxonomy defaults: type="claim", source="user", scope="unspecified".
+    # Importance is 1-10 (int) or 0-1 (float, auto-normalized).
+    fact_id = await client.remember(
+        "Pedro prefers dark mode for all editors",
+        fact_type="preference",
+        scope="personal",
+        importance=8,
+    )
 
     # Search memories
     results = await client.recall("What does Pedro prefer?")

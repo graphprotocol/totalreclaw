@@ -1,13 +1,24 @@
 """Tool schemas for Hermes Agent (OpenAI function-calling format)."""
 
-from totalreclaw.agent.extraction import VALID_MEMORY_TYPES
+from totalreclaw.agent.extraction import (
+    LEGACY_V0_MEMORY_TYPES,
+    VALID_MEMORY_SCOPES,
+    VALID_MEMORY_TYPES,
+)
+
+# Accept both v1 tokens and legacy v0 tokens — the ``normalize_to_v1_type``
+# coercion inside ``remember`` maps v0 → v1 transparently.
+_REMEMBER_TYPE_ENUM = list(VALID_MEMORY_TYPES) + list(LEGACY_V0_MEMORY_TYPES)
 
 REMEMBER = {
     "name": "totalreclaw_remember",
     "description": (
         "Store a memory in TotalReclaw's encrypted vault. Use this to save important "
         "facts, preferences, decisions, rules (reusable gotchas / conventions), or "
-        "context about the user. Memories are E2E encrypted and portable across AI agents."
+        "context about the user. Memories are E2E encrypted and portable across AI agents. "
+        "Uses Memory Taxonomy v1 (claim | preference | directive | commitment | episode | "
+        "summary); legacy v0 tokens (fact, decision, episodic, goal, context, rule) are "
+        "coerced transparently."
     ),
     "parameters": {
         "type": "object",
@@ -18,12 +29,28 @@ REMEMBER = {
             },
             "type": {
                 "type": "string",
-                "enum": list(VALID_MEMORY_TYPES),
+                "enum": _REMEMBER_TYPE_ENUM,
                 "description": (
-                    "Memory category. One of: fact, preference, decision, episodic, goal, "
-                    "context, summary, rule. Use 'rule' for reusable operational gotchas "
-                    '("always X", "never Y"), conventions, and debugging shortcuts the '
-                    "user wants to remember for next time. Default: fact."
+                    "Memory Taxonomy v1 type. Preferred values: claim (factual assertion), "
+                    "preference (likes/dislikes), directive (reusable rule like 'always X'), "
+                    "commitment (future intent), episode (notable event), summary (derived "
+                    "synthesis). Legacy v0 tokens (fact, decision, episodic, goal, context, "
+                    "rule) are accepted and coerced to the v1 equivalent. Default: claim."
+                ),
+            },
+            "scope": {
+                "type": "string",
+                "enum": list(VALID_MEMORY_SCOPES),
+                "description": (
+                    "v1 life-domain scope. One of: work, personal, health, family, "
+                    "creative, finance, misc, unspecified. Default: unspecified."
+                ),
+            },
+            "reasoning": {
+                "type": "string",
+                "description": (
+                    "For decision-style claims (type=claim with a 'because Y' clause), "
+                    "the WHY of the decision. Max 256 chars. Optional."
                 ),
             },
             "importance": {

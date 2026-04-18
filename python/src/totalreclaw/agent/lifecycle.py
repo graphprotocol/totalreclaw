@@ -201,12 +201,23 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
                         logger.debug("Skipping near-duplicate fact: %s", fact.text[:80])
                         continue
 
+                # v1 write path — forward the taxonomy fields the extractor
+                # populated (source/scope/reasoning/volatility). Defensive
+                # fallback for source matches the plugin's
+                # ``storeExtractedFacts`` handling.
                 loop.run_until_complete(
                     client.remember(
                         fact.text,
                         embedding=embedding,
                         importance=fact.importance / 10.0,  # Normalize 1-10 to 0.0-1.0
                         source="hermes-auto",
+                        fact_type=fact.type,
+                        entities=fact.entities,
+                        confidence=fact.confidence,
+                        provenance=fact.source or "user-inferred",
+                        scope=fact.scope or "unspecified",
+                        reasoning=fact.reasoning,
+                        volatility=fact.volatility,
                     )
                 )
                 stored_texts.append(fact.text)
@@ -257,11 +268,18 @@ def session_debrief(state: "AgentState", stored_fact_texts: Optional[list[str]] 
             if debrief_items:
                 for item in debrief_items:
                     try:
+                        # v1 debrief items are summaries with derived
+                        # provenance — the assistant-side debrief pipeline
+                        # synthesized them from the conversation, so the
+                        # v1 source is always "derived" (plugin parity).
                         loop.run_until_complete(
                             client.remember(
                                 item.text,
                                 importance=item.importance / 10.0,
                                 source="hermes_debrief",
+                                fact_type="summary",
+                                provenance="derived",
+                                scope="unspecified",
                             )
                         )
                     except Exception as e:

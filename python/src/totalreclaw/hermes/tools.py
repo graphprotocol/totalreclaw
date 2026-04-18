@@ -17,15 +17,19 @@ _SMALL_IMPORT_THRESHOLD = 50
 
 
 async def remember(args: dict, state: "PluginState", **kwargs) -> str:
-    """Store a memory in TotalReclaw.
+    """Store a memory in TotalReclaw (v1 taxonomy).
 
-    Phase 2.2.6: now forwards ``type`` + ``importance`` from the tool call to
-    the canonical Claim builder via ``client.remember``. Prior to 2.2.6 the
-    tool accepted only ``text`` + ``importance`` and stored everything as
-    ``type='fact'``, making the rule category structurally unreachable from
-    Hermes.
+    Accepts v1 taxonomy fields: ``type`` (claim | preference | directive |
+    commitment | episode | summary), optional ``scope``, optional
+    ``reasoning`` for decision-style claims, plus the legacy ``importance``
+    slider. Legacy v0 tokens (fact, decision, episodic, goal, context,
+    rule) are coerced transparently via :func:`normalize_to_v1_type`.
     """
-    from totalreclaw.agent.extraction import VALID_MEMORY_TYPES
+    from totalreclaw.agent.extraction import (
+        VALID_MEMORY_TYPES,
+        VALID_MEMORY_SCOPES,
+        normalize_to_v1_type,
+    )
 
     client = state.get_client()
     if not client:
@@ -35,20 +39,24 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
     if not text:
         return json.dumps({"error": "No text provided"})
 
-    # Default importance to 8 for explicit remember (same convention as
-    # the OpenClaw plugin) — higher than auto-extraction's typical 6-7 so
-    # store-time dedup's shouldSupersede prefers the explicit call.
+    # Default importance to 8 for explicit remember (matches plugin).
     raw_importance = args.get("importance", 8)
     try:
         importance_val = float(raw_importance)
     except (TypeError, ValueError):
         importance_val = 8.0
-    # store_fact handles both 0.0-1.0 and 1-10 input, but we clamp to sensible range
     importance_val = max(1.0, min(10.0, importance_val))
 
-    # Validate + default the type
-    fact_type_raw = args.get("type", "fact")
-    fact_type = fact_type_raw if fact_type_raw in VALID_MEMORY_TYPES else "fact"
+    # Validate + normalize the v1 type (legacy v0 tokens coerced).
+    fact_type_raw = args.get("type", "claim")
+    fact_type = normalize_to_v1_type(fact_type_raw)
+
+    # v1 scope + reasoning (both optional)
+    scope_raw = str(args.get("scope", "unspecified")).lower()
+    scope = scope_raw if scope_raw in VALID_MEMORY_SCOPES else "unspecified"
+    reasoning = args.get("reasoning")
+    if reasoning is not None and not isinstance(reasoning, str):
+        reasoning = None
 
     try:
         embedding = None
@@ -63,9 +71,18 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
             embedding=embedding,
             importance=importance_val,
             fact_type=fact_type,
+            provenance="user",  # explicit remember → user provenance
+            scope=scope,
+            reasoning=reasoning,
             confidence=1.0,  # explicit remember = highest confidence
         )
-        return json.dumps({"stored": True, "fact_id": fact_id, "type": fact_type, "importance": importance_val})
+        return json.dumps({
+            "stored": True,
+            "fact_id": fact_id,
+            "type": fact_type,
+            "scope": scope,
+            "importance": importance_val,
+        })
     except Exception as e:
         logger.error("totalreclaw_remember failed: %s", e)
         return json.dumps({"error": str(e)})
@@ -345,7 +362,7 @@ def _make_extractor(state: "PluginState"):
     from totalreclaw.agent.extraction import (
         EXTRACTION_SYSTEM_PROMPT,
         _truncate_messages,
-        _parse_response,
+        parse_facts_response,
     )
     from totalreclaw.agent.llm_client import detect_llm_config, chat_completion
 
@@ -373,13 +390,17 @@ def _make_extractor(state: "PluginState"):
         if not response:
             return []
 
-        parsed = _parse_response(response)
+        # v1 parser returns facts with source/scope/reasoning populated.
+        parsed = parse_facts_response(response)
         return [
             {
                 "text": f.text,
                 "type": f.type,
                 "importance": f.importance,
                 "action": f.action,
+                "source": f.source,
+                "scope": f.scope,
+                "reasoning": f.reasoning,
             }
             for f in parsed
         ]

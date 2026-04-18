@@ -1,11 +1,22 @@
 """
-LLM-guided and heuristic fact extraction for TotalReclaw.
+LLM-guided fact extraction for TotalReclaw (Memory Taxonomy v1).
 
-Uses the same extraction prompt as the OpenClaw plugin for parity.
-Falls back to heuristic extraction if no LLM is available.
+Mirrors the v1 G-pipeline from the OpenClaw plugin's ``extractor.ts``:
 
-This module is framework-agnostic and can be used by any Python agent
-integration (Hermes, LangChain, CrewAI, or custom agents).
+  1. Single merged-topic LLM call → ``{topics, facts}``
+  2. ``apply_provenance_filter_lax`` (tag-don't-drop; assistant-sourced facts
+     are capped at importance 7 rather than filtered out)
+  3. ``comparative_rescore_v1`` (forces re-rank when ``facts >= 5``)
+  4. ``default_volatility`` heuristic fallback
+  5. Lexical importance bumps
+
+As of ``totalreclaw`` 2.0.0 v1 is the DEFAULT AND ONLY extraction path — no
+env-var gate. Legacy v0 tokens (fact, decision, episodic, goal, context,
+rule) are coerced to v1 via ``V0_TO_V1_TYPE`` on the read side so pre-2.0
+vault entries still deserialize, but extraction emits v1 unconditionally.
+
+This module is framework-agnostic — any Python agent integration (Hermes,
+LangChain, CrewAI, or custom agents) can import from here.
 """
 from __future__ import annotations
 
@@ -20,18 +31,68 @@ from .llm_client import LLMConfig, detect_llm_config, chat_completion
 
 logger = logging.getLogger(__name__)
 
-#: The 8 canonical memory types — single source of truth for the Python
-#: package. Keep in sync with ``skill/plugin/extractor.ts`` (VALID_MEMORY_TYPES),
-#: ``mcp/src/memory-types.ts`` (VALID_MEMORY_TYPES), and the Rust
-#: ``ClaimCategory`` enum in ``rust/totalreclaw-core/src/claims.rs``. A cross-
-#: language parity test at ``tests/parity/test_kg_phase1_parity.py`` enforces
-#: this stays in sync.
-#:
-#: Any Python consumer (tool schemas, type mappings, validation whitelists,
-#: canonical-claim builders) MUST import from this constant — never re-declare
-#: the list inline. See ``claims_helper.TYPE_TO_CATEGORY`` for the compact
-#: short-form mapping.
+# ---------------------------------------------------------------------------
+# Memory Taxonomy v1 — the 6 canonical memory types.
+#
+# Plugin 3.0.0 / python 2.0.0 adopt v1 as the ONLY taxonomy. Legacy v0 tokens
+# are retained as ``LEGACY_V0_MEMORY_TYPES`` + ``V0_TO_V1_TYPE`` for the
+# read path (pre-v1 vault entries still carry v0 strings). Extraction and
+# write paths emit v1 exclusively.
+#
+# When adding a new v1 type, update ALL of:
+#   * ``skill/plugin/extractor.ts`` VALID_MEMORY_TYPES
+#   * ``mcp/src/v1-types.ts`` VALID_MEMORY_TYPES
+#   * ``python/src/totalreclaw/agent/extraction.py`` (this constant)
+#   * ``rust/totalreclaw-core/src/claims.rs`` MemoryTypeV1 enum
+#   * ``skill/plugin/claims-helper.ts`` TYPE_TO_CATEGORY_V1
+#   * ``python/src/totalreclaw/claims_helper.py`` TYPE_TO_CATEGORY_V1
+#   * The EXTRACTION_SYSTEM_PROMPT "TYPE" section
+# ---------------------------------------------------------------------------
+
+#: The 6 canonical v1 memory types.
 VALID_MEMORY_TYPES: tuple[str, ...] = (
+    "claim",
+    "preference",
+    "directive",
+    "commitment",
+    "episode",
+    "summary",
+)
+
+#: Backward-compat alias — prefer ``VALID_MEMORY_TYPES`` in new code.
+VALID_TYPES: frozenset[str] = frozenset(VALID_MEMORY_TYPES)
+
+#: The 5 v1 provenance sources.
+VALID_MEMORY_SOURCES: tuple[str, ...] = (
+    "user",
+    "user-inferred",
+    "assistant",
+    "external",
+    "derived",
+)
+
+#: The 8 v1 life-domain scopes.
+VALID_MEMORY_SCOPES: tuple[str, ...] = (
+    "work",
+    "personal",
+    "health",
+    "family",
+    "creative",
+    "finance",
+    "misc",
+    "unspecified",
+)
+
+#: The 3 v1 volatility classes.
+VALID_MEMORY_VOLATILITIES: tuple[str, ...] = (
+    "stable",
+    "updatable",
+    "ephemeral",
+)
+
+#: Legacy v0 memory types — retained so ``read_claim_from_blob`` / legacy
+#: fixtures can still decode pre-v1 vault entries. Do NOT emit on the write path.
+LEGACY_V0_MEMORY_TYPES: tuple[str, ...] = (
     "fact",
     "preference",
     "decision",
@@ -42,8 +103,17 @@ VALID_MEMORY_TYPES: tuple[str, ...] = (
     "rule",
 )
 
-#: Backward-compat alias — prefer ``VALID_MEMORY_TYPES`` in new code.
-VALID_TYPES: frozenset[str] = frozenset(VALID_MEMORY_TYPES)
+#: Legacy v0 → v1 type mapping used on the read path.
+V0_TO_V1_TYPE: dict[str, str] = {
+    "fact": "claim",
+    "preference": "preference",
+    "decision": "claim",
+    "episodic": "episode",
+    "goal": "commitment",
+    "context": "claim",
+    "summary": "summary",
+    "rule": "directive",
+}
 
 VALID_ACTIONS = {"ADD", "UPDATE", "DELETE", "NOOP"}
 
@@ -55,41 +125,64 @@ VALID_ENTITY_TYPES = {"person", "project", "tool", "company", "concept", "place"
 DEFAULT_EXTRACTION_CONFIDENCE: float = 0.85
 
 
+def is_valid_memory_type(value: Any) -> bool:
+    """v1 type guard — returns True iff ``value`` is one of the 6 v1 types."""
+    return isinstance(value, str) and value in VALID_MEMORY_TYPES
+
+
+def normalize_to_v1_type(raw: Any) -> str:
+    """Normalize any type token (v1 or legacy v0) to a v1 type.
+
+    v1 tokens pass through. Legacy v0 tokens are mapped via
+    ``V0_TO_V1_TYPE``. Unknown input falls back to ``"claim"``.
+    """
+    token = str(raw or "").lower()
+    if token in VALID_MEMORY_TYPES:
+        return token
+    return V0_TO_V1_TYPE.get(token, "claim")
+
+
 @dataclass
 class ExtractedEntity:
     """A named entity referenced by an extracted fact.
 
     Mirrors ``skill/plugin/extractor.ts`` ``ExtractedEntity``. The ``type``
     field is one of :data:`VALID_ENTITY_TYPES`. ``role`` is optional free
-    text describing the entity's role in the claim (``"chooser"``, etc.).
+    text describing the entity's role in the claim ("chooser", "employer").
     """
 
     name: str
-    type: str  # person | project | tool | company | concept | place
+    type: str
     role: Optional[str] = None
 
 
 @dataclass
 class ExtractedFact:
+    """Extracted fact carrying full v1 taxonomy fields.
+
+    Mirrors the TS ``ExtractedFact`` (v1). ``source`` is optional on the
+    dataclass but required on the write path — upstream pipelines
+    (:func:`apply_provenance_filter_lax`) tag it during extraction;
+    defensive callers supply ``"user-inferred"`` when upstream fails.
+    """
+
     text: str
-    type: str  # fact, preference, decision, episodic, goal, context, summary
+    type: str  # v1: claim | preference | directive | commitment | episode | summary
     importance: int  # 1-10
-    action: str  # ADD, UPDATE, DELETE, NOOP
+    action: str  # ADD | UPDATE | DELETE | NOOP
     existing_fact_id: Optional[str] = None
     entities: Optional[List[ExtractedEntity]] = None
     confidence: float = DEFAULT_EXTRACTION_CONFIDENCE
+    # v1 additions (all optional at the dataclass level; the write path
+    # populates missing ``source`` with "user-inferred" defensively).
+    source: Optional[str] = None
+    scope: Optional[str] = None
+    reasoning: Optional[str] = None
+    volatility: Optional[str] = None
 
 
 def normalize_confidence(raw: Any) -> float:
-    """Clamp a raw confidence value to ``[0, 1]`` with default fallback.
-
-    Must match ``normalizeConfidence`` in ``skill/plugin/extractor.ts``:
-
-    - numeric in range → returned as-is
-    - numeric > 1 → clamped to 1
-    - numeric < 0 → clamped to 0
-    - non-finite / non-number (strings, None, NaN) → :data:`DEFAULT_EXTRACTION_CONFIDENCE`
-    """
+    """Clamp a raw confidence value to ``[0, 1]`` with default fallback."""
     if isinstance(raw, bool):
         return DEFAULT_EXTRACTION_CONFIDENCE
     if not isinstance(raw, (int, float)):
@@ -128,155 +221,196 @@ def _parse_entity(raw: Any) -> Optional[ExtractedEntity]:
     return entity
 
 
-# Same extraction prompt as OpenClaw plugin (skill/plugin/extractor.ts)
-EXTRACTION_SYSTEM_PROMPT = """You are a memory extraction engine. Analyze the conversation and extract valuable long-term memories.
+# ---------------------------------------------------------------------------
+# Extraction system prompts (v1 merged-topic pipeline)
+# ---------------------------------------------------------------------------
+
+EXTRACTION_SYSTEM_PROMPT = """You are a memory extraction engine using Memory Taxonomy v1. Work in TWO explicit phases within one response:
+
+PHASE 1 — Topic identification.
+Before extracting any fact, identify the 2-3 main topics the user was engaging with. Topics should be short phrases (2-5 words each). If the conversation has no clear user-focused topic, use an empty topics array.
+
+PHASE 2 — Fact extraction anchored to those topics.
+Extract valuable memories. Prefer facts that directly relate to the identified topics (importance 7-9 range). Tangential facts may still be extracted but score lower (6-7 range).
 
 Rules:
-1. Each memory must be a single, self-contained piece of information
-2. Focus on user-specific information that would be useful in future conversations
-3. Skip generic knowledge, greetings, small talk, and ephemeral task coordination
-4. Score importance 1-10 using the rubric below (6+ = worth storing)
-5. Only extract memories with importance >= 6
+1. Each memory = single self-contained piece of information
+2. Focus on user-specific info useful in future conversations
+3. Skip generic knowledge, greetings, small talk, ephemeral task coordination
+4. Score importance 1-10 (6+ = worth storing)
+5. Every memory MUST attribute a source (provenance critical)
 
-Importance rubric (use the FULL 1-10 range, not just 7-8):
-- 10: Critical, core identity, never-forget content. The user explicitly says "remember this forever", "critical", "never forget", or it's a fundamental fact like name/birthday/relationships that defines who they are.
-- 9: Affects many future decisions or interactions. A high-impact rule, a major life decision with reasoning, a deeply held preference that shapes daily work.
-- 8: High-value preference, decision-with-reasoning, or operational rule. The user clearly cares about it AND it will be relevant in many future conversations.
-- 7: Specific durable fact about the user's setup, project, or context. Useful to remember but not life-changing.
-- 6: Borderline — barely passes the "worth storing" threshold. Generic facts, low-signal preferences. If you're hesitating between 5 and 6, prefer 5 (it gets dropped).
-- 5 or below: NOT WORTH STORING. Drop these. Casual mentions, ephemeral state, low-signal chatter.
+Importance rubric (use FULL 1-10 range):
+- 10: Critical, core identity, never-forget content
+- 9: Affects many future decisions
+- 8: High-value preference/decision/rule
+- 7: Specific durable fact
+- 6: Borderline
+- 5 or below: NOT worth storing — drop
 
-DO NOT cluster every fact at 7-8. Use 9-10 for high-signal content and 5-6 for borderline content. The system depends on the full range working — over-clustering at 7-8 produces tied scores in the contradiction resolver and makes ranking/decay impossible.
+DO NOT cluster everything at 7-8-9.
 
-Types:
-- fact: Objective information about the user (name, location, job, relationships)
-- preference: Likes, dislikes, or preferences ("prefers dark mode", "allergic to peanuts")
-- decision: Choices WITH reasoning ("chose PostgreSQL because data is relational and needs ACID")
-- episodic: Notable events or experiences ("deployed v1.0 to production on March 15")
-- goal: Objectives, targets, or plans ("wants to launch public beta by end of Q1")
-- context: Active project/task context ("working on TotalReclaw v1.2, staging on Base Sepolia")
-- summary: Key outcome or conclusion from a discussion ("agreed to use phased rollout for migration")
-- rule: A reusable operational rule, non-obvious gotcha, debugging shortcut, or convention the user wants to remember for next time. Distinct from decisions (which have reasoning for a specific choice) and preferences (which are personal tastes). Rules are impersonal, actionable, and transferable — they would help anyone in the same situation. Examples: "Always check the systemd unit file for environment pins before wiping state", "The subgraph schema uses sequenceId not seqId", "Don't open large JSON files in Neovim — use jq instead".
+═══════════════════════════════════════════════════════════════
+TYPE (6 values)
+═══════════════════════════════════════════════════════════════
+- claim: factual assertion (absorbs fact/context/decision; decisions populate reasoning field)
+- preference: likes/dislikes/tastes
+- directive: imperative rule ("always X", "never Y")
+- commitment: future intent ("will do X")
+- episode: notable event
+- summary: derived synthesis (source must be derived|assistant) — do NOT emit for turn-extraction
 
-Extraction guidance:
-- For decisions: ALWAYS include the reasoning. "Chose X" is weak. "Chose X because Y" is strong.
-- For context: Capture what the user is actively working on, including versions, environments, and status.
-- For summaries: Only extract when a conversation reaches a clear conclusion or agreement.
-- For facts: Prefer specific over vague. "Lives in Lisbon" beats "lives in Europe".
-- For rules: ALWAYS extract when the user explicitly signals "remember this", "gotcha", "rule of thumb", "always", "never", or describes a non-obvious learning. Importance >= 7 when the rule prevented a real bug or wasted time. Include the specific context (which tool, which error, which version) so the rule is actionable later. The boundary test: would this apply to anyone in the same situation? Rules generalize; decisions and preferences don't.
-- Decisions and context should be importance >= 7 (they are high-value for future conversations).
+═══════════════════════════════════════════════════════════════
+SOURCE (provenance, CRITICAL)
+═══════════════════════════════════════════════════════════════
+- user: user explicitly stated it (in [user]: turns)
+- user-inferred: extractor inferred from user signals
+- assistant: assistant authored content — DOWNGRADE unless user affirmed/quoted/used it
+- external, derived: rare
 
-Few-shot examples (rule type — when to use it and when NOT to use it):
+IF fact substance appears ONLY in [assistant]: turns without user affirmation → source:assistant
 
-Example 1 — rule embedded in a debugging narrative:
-  User: "Spent two hours debugging the subgraph because my Python wrapper silently swallowed a GraphQL error and I read it as 'no data'. Turns out the schema field is sequenceId, not seqId. Note to self: always check d.get('errors') before trusting an empty result."
-  Extract:
-  [{"text": "Subgraph Fact schema uses sequenceId, not seqId — check d.get('errors') before trusting an empty facts array", "type": "rule", "importance": 8, "confidence": 1.0, "entities": [{"name": "subgraph", "type": "tool"}, {"name": "GraphQL", "type": "tool"}]}]
+═══════════════════════════════════════════════════════════════
+SCOPE (life domain)
+═══════════════════════════════════════════════════════════════
+work | personal | health | family | creative | finance | misc | unspecified
 
-Example 2 — user stating a convention as a rule:
-  User: "Convention for the team: before any rm -rf on the VPS state dir, stop the gateway first. Otherwise an async flush can recreate stale files mid-cleanup."
-  Extract:
-  [{"text": "Stop the OpenClaw gateway before rm -rf ~/.totalreclaw/ — async flush can recreate stale files mid-cleanup", "type": "rule", "importance": 7, "confidence": 1.0, "entities": [{"name": "OpenClaw gateway", "type": "tool"}]}]
+═══════════════════════════════════════════════════════════════
+ENTITIES
+═══════════════════════════════════════════════════════════════
+- type ∈ {person, project, tool, company, concept, place}
+- prefer specific names ("PostgreSQL" not "database")
+- omit umbrella categories when specific name is present
 
-Example 3 — rule vs decision (distinguishing them):
-  User: "We chose DuckDB over ClickHouse for analytics because DuckDB fits in a single-file deployment and our scale is small."
-  Extract:
-  [{"text": "Chose DuckDB over ClickHouse for analytics because single-file deployment fits small-scale use", "type": "decision", "importance": 8, "confidence": 1.0, "entities": [{"name": "DuckDB", "type": "tool", "role": "chosen"}, {"name": "ClickHouse", "type": "tool", "role": "rejected"}]}]
-  This is a DECISION, not a rule — it's a specific choice with reasoning, not a transferable pattern. The boundary test: it applies to THIS user's THIS analytics deployment, not to anyone in the same situation.
+═══════════════════════════════════════════════════════════════
+REASONING (only for claims that are decisions)
+═══════════════════════════════════════════════════════════════
+For type=claim where the user expressed a decision-with-reasoning, populate "reasoning" with the WHY clause.
 
-Entity extraction (new):
-- Each memory MAY include an "entities" array of named entities it references
-- Entity type must be one of: person | project | tool | company | concept | place
-- Use the user's name when a fact is about them (e.g. "Pedro")
-- role is optional free text ("chooser", "employer")
-- confidence (0.0-1.0) is your self-assessed certainty; default 0.85 if you're unsure
+═══════════════════════════════════════════════════════════════
+OUTPUT FORMAT (no markdown, no code fences)
+═══════════════════════════════════════════════════════════════
+{
+  "topics": ["topic 1", "topic 2"],
+  "facts": [
+    {
+      "text": "...",
+      "type": "claim|preference|directive|commitment|episode",
+      "source": "user|user-inferred|assistant",
+      "scope": "work|personal|health|...",
+      "importance": N,
+      "confidence": 0.9,
+      "action": "ADD",
+      "reasoning": "...",     // optional, only for claim+decision
+      "entities": [{"name": "...", "type": "tool"}]
+    }
+  ]
+}
 
-Actions (compare against existing memories if provided):
-- ADD: New memory, no conflict with existing
-- UPDATE: Refines or corrects an existing memory (provide existingFactId)
-- DELETE: Contradicts an existing memory -- the old one is now wrong (provide existingFactId)
-- NOOP: Already captured or not worth storing
+If nothing worth extracting: {"topics": [], "facts": []}"""
 
-Return a JSON array (no markdown, no code fences):
-[{"text": "...", "type": "...", "importance": N, "confidence": 0.9, "action": "ADD|UPDATE|DELETE|NOOP", "entities": [{"name": "PostgreSQL", "type": "tool"}], "existingFactId": "..."}, ...]
 
-If nothing is worth extracting, return: []"""
+COMPACTION_SYSTEM_PROMPT = """You are extracting memories from a conversation that is about to be compacted. The context will be LOST after this point — this is your LAST CHANCE to capture everything worth remembering. Be more aggressive than usual: err on the side of storing.
+
+Work in TWO explicit phases within one response:
+
+PHASE 1 — Topic identification.
+Identify the 2-3 main topics the user was engaging with before extracting any fact. Topics should be short phrases (2-5 words each). If there's no clear user-focused topic, use an empty topics array.
+
+PHASE 2 — Fact extraction anchored to those topics (plus preserve active context).
+Extract valuable memories. Prefer facts that directly relate to the identified topics (importance 7-9 range). Active project context, decisions in progress, and current working state score 6-8 during compaction — capture them even when they'd normally be marginal.
+
+Rules:
+1. Each memory = single self-contained piece of information
+2. Focus on user-specific info useful in future conversations
+3. Skip generic knowledge, greetings, small talk
+4. Score importance 1-10 (5+ = worth storing during compaction)
+5. Every memory MUST attribute a source (provenance critical)
+
+Importance rubric (full 1-10 range, NOT just 7-8):
+- 10: Core identity, never-forget ("remember this forever", name/birthday)
+- 9: Affects many future decisions / high-impact rules
+- 8: Preference / decision-with-reasoning / operational rule
+- 7: Specific durable fact
+- 6: Borderline — during compaction, capture anyway
+- 5: Would normally drop; keep as compaction safety net
+- 4 or below: DROP (greetings, filler)
+
+═══════════════════════════════════════════════════════════════
+TYPE (6 values)
+═══════════════════════════════════════════════════════════════
+- claim: factual assertion (absorbs v0 fact/context/decision; decisions populate reasoning)
+- preference: likes/dislikes/tastes
+- directive: imperative rule ("always X", "never Y")
+- commitment: future intent ("will do X")
+- episode: notable event
+- summary: derived synthesis (source must be derived|assistant)
+
+═══════════════════════════════════════════════════════════════
+SOURCE (provenance, CRITICAL)
+═══════════════════════════════════════════════════════════════
+- user: user explicitly stated it (in [user]: turns)
+- user-inferred: extractor inferred from user signals
+- assistant: assistant authored — DOWNGRADE unless user affirmed/quoted.
+- external, derived: rare.
+
+IF fact substance appears ONLY in [assistant]: turns without user affirmation → source:assistant.
+
+═══════════════════════════════════════════════════════════════
+SCOPE
+═══════════════════════════════════════════════════════════════
+work | personal | health | family | creative | finance | misc | unspecified
+
+═══════════════════════════════════════════════════════════════
+ENTITIES
+═══════════════════════════════════════════════════════════════
+- type ∈ {person, project, tool, company, concept, place}
+- prefer specific names ("PostgreSQL" not "database")
+- omit umbrella categories when specific name is present
+
+═══════════════════════════════════════════════════════════════
+REASONING (only for claims that are decisions)
+═══════════════════════════════════════════════════════════════
+For type=claim where the user expressed a decision-with-reasoning, populate "reasoning" with the WHY clause.
+
+═══════════════════════════════════════════════════════════════
+FORMAT-AGNOSTIC PARSING (IMPORTANT)
+═══════════════════════════════════════════════════════════════
+The conversation may contain bullet lists, numbered lists, section headers, code snippets, or plain prose. Treat ALL formats as potential sources of extractable memory:
+- Bullets/list items: each item is a candidate.
+- Section headers (Context, Decisions, Key Learnings, Open Questions): use the header as a TYPE HINT (Context → claim, Decisions → claim+reasoning, Learnings → directive, Open Questions → commitment).
+- Plain prose: parse each distinct assertion as a candidate.
+- Code snippets: extract config choices, tool versions, architectural decisions embedded in comments or structure.
+- Mixed format: apply all of the above.
+
+Do NOT skip content just because it's in a summary. The agent has already filtered — your job is to convert into structured memories, not to re-evaluate worth.
+
+═══════════════════════════════════════════════════════════════
+OUTPUT FORMAT (no markdown, no code fences)
+═══════════════════════════════════════════════════════════════
+{
+  "topics": ["topic 1", "topic 2"],
+  "facts": [
+    {
+      "text": "...",
+      "type": "claim|preference|directive|commitment|episode",
+      "source": "user|user-inferred|assistant",
+      "scope": "work|personal|health|...",
+      "importance": N,
+      "confidence": 0.9,
+      "action": "ADD",
+      "reasoning": "...",    // optional, only for claim+decision
+      "entities": [{"name": "...", "type": "tool"}]
+    }
+  ]
+}
+
+If nothing worth extracting: {"topics": [], "facts": []}"""
 
 
 # ---------------------------------------------------------------------------
-# Compaction-Aware Extraction Prompt (Phase 2.3)
+# Helpers — message formatting + response parsing
 # ---------------------------------------------------------------------------
-#
-# Mirrors COMPACTION_SYSTEM_PROMPT from skill/plugin/extractor.ts.
-# Used when the conversation is about to be compacted — last chance to capture
-# knowledge. Importance threshold is 5 (not 6).
-
-COMPACTION_SYSTEM_PROMPT = """You are extracting memories from a conversation that is about to be compacted. The conversation context will be lost after this point — this is your LAST CHANCE to capture everything worth remembering. Be more aggressive than usual: err on the side of storing.
-
-Rules:
-1. Each memory must be a single, self-contained piece of information
-2. Focus on user-specific information that would be useful in future conversations
-3. Skip generic knowledge, greetings, small talk, and ephemeral task coordination
-4. Score importance 1-10 using the rubric below (5+ = worth storing for compaction)
-5. Only extract memories with importance >= 5
-
-Importance rubric (use the FULL 1-10 range, not just 7-8):
-- 10: Critical, core identity, never-forget content. The user explicitly says "remember this forever", "critical", "never forget", or it's a fundamental fact like name/birthday/relationships that defines who they are.
-- 9: Affects many future decisions or interactions. A high-impact rule, a major life decision with reasoning, a deeply held preference that shapes daily work.
-- 8: High-value preference, decision-with-reasoning, or operational rule. The user clearly cares about it AND it will be relevant in many future conversations.
-- 7: Specific durable fact about the user's setup, project, or context. Useful to remember but not life-changing.
-- 6: Borderline in normal extraction — but worth storing during compaction since this context will be lost.
-- 5: Would normally be dropped, but during compaction we capture it as a safety net. Low-signal context, minor preferences, ephemeral project state that may still be useful if the conversation is lost.
-- 4 or below: NOT WORTH STORING even during compaction. Drop these. Greetings, filler, already-known common knowledge.
-
-DO NOT cluster every fact at 7-8. Use 9-10 for high-signal content and 5-6 for borderline content. The system depends on the full range working.
-
-Format-agnostic parsing (IMPORTANT):
-The conversation may contain bullet lists, numbered lists, section headers with paragraphs, code snippets, or plain prose. Treat ALL formats as potential sources of extractable memory:
-- If bullets/list items: each item is a candidate memory.
-- If section headers (Context, Decisions, Key Learnings, Open Questions, etc.): use the header as a type hint (Context → context, Decisions → decision, Learnings → rule, Open Questions → goal).
-- If plain prose: parse each distinct assertion as a candidate memory, even if they run together in paragraph form.
-- If code snippets: extract any configuration choices, tool versions, or architectural decisions embedded in comments or code structure.
-- If mixed format: apply all of the above.
-
-Do NOT skip content just because it appears in a summary. The agent has already done the filtering — your job is to convert the content into structured memories, not to re-evaluate whether each item is worth storing.
-
-Types:
-- fact: Objective information about the user (name, location, job, relationships)
-- preference: Likes, dislikes, or preferences ("prefers dark mode", "allergic to peanuts")
-- decision: Choices WITH reasoning ("chose PostgreSQL because data is relational and needs ACID")
-- episodic: Notable events or experiences ("deployed v1.0 to production on March 15")
-- goal: Objectives, targets, or plans ("wants to launch public beta by end of Q1")
-- context: Active project/task context ("working on TotalReclaw v1.2, staging on Base Sepolia")
-- summary: Key outcome or conclusion from a discussion ("agreed to use phased rollout for migration")
-- rule: A reusable operational rule, non-obvious gotcha, debugging shortcut, or convention the user wants to remember for next time.
-
-Extraction guidance (compaction-specific):
-- Pay special attention to active project context, decisions in progress, and current working state — these are especially valuable to preserve before compaction.
-- For decisions: ALWAYS include the reasoning. "Chose X" is weak. "Chose X because Y" is strong.
-- For context: Capture what the user is actively working on, including versions, environments, and status. During compaction, even minor project state is worth preserving.
-- For summaries: Extract clear conclusions or agreements — compaction is the perfect time since the conversation is being summarized.
-- For rules: Extract non-obvious learnings, gotchas, and conventions. Include specific context (which tool, which error, which version).
-- Decisions and context should be importance >= 7 (they are high-value for future conversations).
-
-Actions (compare against existing memories if provided):
-- ADD: New memory, no conflict with existing
-- UPDATE: Refines or corrects an existing memory (provide existingFactId)
-- DELETE: Contradicts an existing memory -- the old one is now wrong (provide existingFactId)
-- NOOP: Already captured or not worth storing
-
-Entity extraction:
-- Each memory MAY include an "entities" array of named entities it references
-- Entity type must be one of: person | project | tool | company | concept | place
-- Use the user's name when a fact is about them
-- role is optional free text ("chooser", "employer")
-- Prefer SPECIFIC product/tool names over umbrella categories. "PostgreSQL" beats "database".
-- confidence (0.0-1.0) is your self-assessed certainty; default 0.85 if you're unsure
-
-Return a JSON array (no markdown, no code fences):
-[{"text": "...", "type": "...", "importance": N, "confidence": 0.9, "action": "ADD|UPDATE|DELETE|NOOP", "entities": [{"name": "PostgreSQL", "type": "tool"}], "existingFactId": "..."}, ...]
-
-If nothing is worth extracting, return: []"""
 
 
 def _truncate_messages(messages: list[dict], max_chars: int = 12000) -> str:
@@ -292,139 +426,431 @@ def _truncate_messages(messages: list[dict], max_chars: int = 12000) -> str:
     return "\n\n".join(lines)
 
 
-def _parse_response(response: str) -> list[ExtractedFact]:
-    """Parse the LLM extraction response into ExtractedFact objects.
+def _build_fact(
+    raw: dict, default_type: str = "claim", importance_floor: int = 6
+) -> Optional[ExtractedFact]:
+    """Construct an ``ExtractedFact`` from a single raw JSON dict.
 
-    Phase 2.2.6 hardened this function against the three failure modes the
-    Phase 2.2.5 investigation uncovered on the TypeScript side (same issues
-    existed silently in Python):
+    Returns None for items that fail type/text validation. Filters by
+    importance threshold (preserves DELETE actions).
+    """
+    text = str(raw.get("text", "")).strip()
+    if len(text) < 5:
+        return None
 
-    1. **Thinking-model prefix stripping.** Models like glm-5/glm-5.1, Claude
-       reasoning, and gpt-o1 prefix their output with a ``<think>...</think>``
-       or ``<thinking>...</thinking>`` reasoning trace. The old parser handed
-       that straight to ``json.loads`` which silently returned ``[]``.
-       We now strip these tags (case-insensitive) before any parse attempt.
+    # Accept both v1 tokens and legacy v0 tokens — coerce v0 via V0_TO_V1_TYPE.
+    raw_type = str(raw.get("type", default_type)).lower()
+    fact_type = normalize_to_v1_type(raw_type)
 
-    2. **Prose-wrapped JSON.** Models sometimes respond with conversational
-       framing like "Here are the extracted facts: [...]". The old parser
-       would fail the JSON parse. We now fall back to a regex scan for the
-       first ``[...]`` block if the direct parse fails.
+    raw_source = str(raw.get("source", "user-inferred")).lower()
+    source = raw_source if raw_source in VALID_MEMORY_SOURCES else "user-inferred"
 
-    3. **Silent parse failures.** The old parser had a blanket
-       ``except json.JSONDecodeError: return []`` with zero logging. Genuine
-       parse failures now log at WARNING level with a preview of the LLM
-       response so operators can see what the model actually produced.
+    raw_scope = str(raw.get("scope", "unspecified")).lower()
+    scope = raw_scope if raw_scope in VALID_MEMORY_SCOPES else "unspecified"
+
+    reasoning_raw = raw.get("reasoning")
+    reasoning = reasoning_raw[:256] if isinstance(reasoning_raw, str) and reasoning_raw else None
+
+    try:
+        importance = max(1, min(10, int(raw.get("importance", 5))))
+    except (ValueError, TypeError):
+        importance = 5
+
+    action = str(raw.get("action", "ADD")).upper()
+    if action not in VALID_ACTIONS:
+        action = "ADD"
+
+    # Reject illegal type:summary + source:user combination
+    if fact_type == "summary" and source == "user":
+        return None
+
+    # Importance floor (DELETE always passes)
+    if importance < importance_floor and action != "DELETE":
+        return None
+
+    existing_id = raw.get("existingFactId") or raw.get("existing_fact_id")
+
+    raw_entities = raw.get("entities")
+    entities: Optional[List[ExtractedEntity]] = None
+    if isinstance(raw_entities, list):
+        parsed_entities = [e for e in (_parse_entity(r) for r in raw_entities) if e is not None]
+        if parsed_entities:
+            entities = parsed_entities
+
+    confidence = normalize_confidence(raw.get("confidence"))
+
+    volatility_raw = raw.get("volatility")
+    volatility = (
+        volatility_raw if isinstance(volatility_raw, str) and volatility_raw in VALID_MEMORY_VOLATILITIES
+        else None
+    )
+
+    return ExtractedFact(
+        text=text[:512],
+        type=fact_type,
+        importance=importance,
+        action=action,
+        existing_fact_id=str(existing_id) if existing_id else None,
+        entities=entities,
+        confidence=confidence,
+        source=source,
+        scope=scope,
+        reasoning=reasoning,
+        volatility=volatility,
+    )
+
+
+def parse_merged_response_v1(response: str) -> tuple[list[str], list[ExtractedFact]]:
+    """Parse a v1 merged-topic LLM response into ``(topics, facts)``.
+
+    Accepts:
+      - The canonical ``{"topics": [...], "facts": [...]}`` merged shape.
+      - A bare JSON array of fact objects (legacy / test-fixture shape;
+        wrapped into ``{"topics": [], "facts": [...]}`` before validation).
+      - A single fact object without a wrapper (wrapped the same way).
+
+    Invalid entities, unknown sources/scopes, and legacy v0 type tokens are
+    all coerced transparently; the downstream ``_build_fact`` applies type
+    normalization and the importance >= 6 floor.
     """
     original_preview = response.strip()[:200]
     cleaned = response.strip()
 
-    # Phase 2.2.6: strip <think>...</think> and <thinking>...</thinking> tags
-    # (case-insensitive) BEFORE any other cleanup. Multi-tag, nested-line, and
-    # mixed-with-markdown-fence variants all handled by the same regex.
-    cleaned = re.sub(r"<think(?:ing)?>[\s\S]*?</think(?:ing)?>", "", cleaned, flags=re.IGNORECASE).strip()
+    # Strip <think>...</think> (case-insensitive, multiline)
+    cleaned = re.sub(
+        r"<think(?:ing)?>[\s\S]*?</think(?:ing)?>", "", cleaned, flags=re.IGNORECASE
+    ).strip()
 
-    # Strip markdown code fences if present
+    # Strip markdown code fences
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\n?", "", cleaned)
         cleaned = re.sub(r"\n?```$", "", cleaned).strip()
 
-    parsed: object = None
+    parsed: Any = None
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError:
-        # Fallback: scan for a JSON array anywhere in the cleaned output
-        # (handles prose-wrapped "Here are the facts: [...]" cases).
-        m = re.search(r"\[[\s\S]*\]", cleaned)
-        if m:
+        # First try outermost-array greedy match (bare-array legacy shape).
+        m_arr = re.search(r"\[[\s\S]*\]", cleaned)
+        if m_arr:
             try:
-                parsed = json.loads(m.group(0))
-                logger.info(
-                    "parseFactsResponse: recovered JSON array via bracket-scan fallback"
-                )
+                parsed = json.loads(m_arr.group(0))
+                logger.info("parse_merged_response_v1: recovered JSON via bracket-scan fallback")
             except json.JSONDecodeError:
                 parsed = None
+        if parsed is None:
+            # Fall back to outermost-object greedy match (merged wrapper).
+            m_obj = re.search(r"\{[\s\S]*\}", cleaned)
+            if m_obj:
+                try:
+                    parsed = json.loads(m_obj.group(0))
+                    logger.info("parse_merged_response_v1: recovered JSON via bracket-scan fallback")
+                except json.JSONDecodeError:
+                    parsed = None
 
     if parsed is None:
         logger.warning(
-            "parseFactsResponse: could not parse LLM output as JSON. Preview: %r",
+            "parse_merged_response_v1: could not parse LLM output as JSON. Preview: %r",
+            original_preview,
+        )
+        return [], []
+
+    # Dual-format acceptance.
+    if isinstance(parsed, list):
+        obj: dict = {"topics": [], "facts": parsed}
+    elif isinstance(parsed, dict) and "facts" not in parsed and isinstance(parsed.get("text"), str):
+        # Single fact object without a wrapper.
+        obj = {"topics": [], "facts": [parsed]}
+    elif isinstance(parsed, dict):
+        obj = parsed
+    else:
+        logger.warning(
+            "parse_merged_response_v1: parsed value is %s, not object/array",
+            type(parsed).__name__,
+        )
+        return [], []
+
+    raw_topics = obj.get("topics")
+    topics: list[str] = []
+    if isinstance(raw_topics, list):
+        topics = [t for t in raw_topics if isinstance(t, str) and t][:3]
+
+    raw_facts = obj.get("facts")
+    if not isinstance(raw_facts, list):
+        return topics, []
+
+    facts: list[ExtractedFact] = []
+    for raw in raw_facts:
+        if not isinstance(raw, dict):
+            continue
+        fact = _build_fact(raw, default_type="claim", importance_floor=6)
+        if fact is not None:
+            facts.append(fact)
+
+    return topics, facts
+
+
+def parse_facts_response(response: str) -> list[ExtractedFact]:
+    """Thin wrapper: discard topics, return the flat fact list."""
+    _, facts = parse_merged_response_v1(response)
+    return facts
+
+
+def parse_facts_response_for_compaction(response: str) -> list[ExtractedFact]:
+    """Parse facts for the compaction prompt (importance floor 5, not 6).
+
+    Same JSON-cleaning + recovery logic as :func:`parse_merged_response_v1`
+    but admits borderline facts (importance >= 5) that would normally be
+    filtered — compaction is the last chance to capture them.
+    """
+    original_preview = response.strip()[:200]
+    cleaned = response.strip()
+
+    cleaned = re.sub(
+        r"<think(?:ing)?>[\s\S]*?</think(?:ing)?>", "", cleaned, flags=re.IGNORECASE
+    ).strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+
+    parsed: Any = None
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        m_arr = re.search(r"\[[\s\S]*\]", cleaned)
+        if m_arr:
+            try:
+                parsed = json.loads(m_arr.group(0))
+                logger.info(
+                    "parse_facts_response_for_compaction: recovered JSON via bracket-scan fallback"
+                )
+            except json.JSONDecodeError:
+                parsed = None
+        if parsed is None:
+            m_obj = re.search(r"\{[\s\S]*\}", cleaned)
+            if m_obj:
+                try:
+                    parsed = json.loads(m_obj.group(0))
+                    logger.info(
+                        "parse_facts_response_for_compaction: recovered JSON via bracket-scan fallback"
+                    )
+                except json.JSONDecodeError:
+                    parsed = None
+
+    if parsed is None:
+        logger.warning(
+            "parse_facts_response_for_compaction: could not parse LLM output as JSON. Preview: %r",
             original_preview,
         )
         return []
 
-    if not isinstance(parsed, list):
+    raw_facts: list
+    if isinstance(parsed, list):
+        raw_facts = parsed
+    elif isinstance(parsed, dict):
+        raw_facts = parsed.get("facts") if isinstance(parsed.get("facts"), list) else []
+    else:
         logger.warning(
-            "parseFactsResponse: parsed value is not an array (type=%s)",
-            type(parsed).__name__,
+            "parse_facts_response_for_compaction: parsed value is %s", type(parsed).__name__
         )
         return []
 
-    facts = []
-    for item in parsed:
-        if not isinstance(item, dict):
+    facts: list[ExtractedFact] = []
+    for raw in raw_facts:
+        if not isinstance(raw, dict):
             continue
-        text = str(item.get("text", "")).strip()
-        if len(text) < 5:
+        fact = _build_fact(raw, default_type="claim", importance_floor=5)
+        if fact is not None:
+            facts.append(fact)
+    return facts
+
+
+# ---------------------------------------------------------------------------
+# v1 provenance filter (tag-don't-drop) + volatility defaults
+# ---------------------------------------------------------------------------
+
+
+def apply_provenance_filter_lax(
+    facts: list[ExtractedFact], conversation_text: str
+) -> list[ExtractedFact]:
+    """Tag-don't-drop provenance filter (pipeline G / F).
+
+    For each fact:
+      - If source is already ``"assistant"``, cap importance at 7.
+      - Otherwise, keyword-match the fact against user turns. If <30% of
+        content words (length >= 4) appear in user turns AND source != "user",
+        tag source as ``"assistant"`` and cap importance at 7 (keep the fact).
+      - Drop facts below importance 5 unless DELETE action.
+    """
+    # Join all user turns for keyword matching.
+    user_turns_lower = " ".join(
+        line for line in conversation_text.split("\n\n") if line.startswith("[user]:")
+    ).lower()
+
+    out: list[ExtractedFact] = []
+    for f in facts:
+        if f.source == "assistant":
+            f.importance = min(f.importance, 7)
+            out.append(f)
             continue
 
-        fact_type = str(item.get("type", "fact"))
-        if fact_type not in VALID_TYPES:
-            fact_type = "fact"
+        # Content words from the fact (length >= 4)
+        fact_words = [
+            w for w in re.sub(r"[^a-z0-9\s]", " ", f.text.lower()).split() if len(w) >= 4
+        ]
+        matched = sum(1 for w in fact_words if w in user_turns_lower)
+        match_ratio = (matched / len(fact_words)) if fact_words else 0.0
 
-        importance = item.get("importance", 5)
-        try:
-            importance = max(1, min(10, int(importance)))
-        except (ValueError, TypeError):
-            importance = 5
+        if match_ratio < 0.3 and f.source != "user":
+            f.source = "assistant"
+            f.importance = min(f.importance, 7)
 
-        action = str(item.get("action", "ADD")).upper()
-        if action not in VALID_ACTIONS:
-            action = "ADD"
+        out.append(f)
 
-        # DELETE actions pass regardless of importance
-        if importance < 6 and action != "DELETE":
-            continue
+    return [f for f in out if f.importance >= 5 or f.action == "DELETE"]
 
-        existing_id = item.get("existingFactId") or item.get("existing_fact_id")
 
-        # Parse entities (new, optional)
-        raw_entities = item.get("entities")
-        entities: Optional[List[ExtractedEntity]] = None
-        if isinstance(raw_entities, list):
-            parsed_entities = [e for e in (_parse_entity(r) for r in raw_entities) if e is not None]
-            if parsed_entities:
-                entities = parsed_entities
+def default_volatility(fact: ExtractedFact) -> str:
+    """Heuristic fallback volatility when the LLM doesn't assign one.
 
-        # Parse confidence (new, optional; defaults to 0.85)
-        confidence = normalize_confidence(item.get("confidence"))
+    Mirrors the TS ``defaultVolatility``.
+    """
+    if fact.type == "commitment":
+        return "updatable"
+    if fact.type == "episode":
+        return "stable"
+    if fact.type == "directive":
+        return "stable"
+    if fact.scope in ("health", "family"):
+        return "stable"
+    return "updatable"
 
-        facts.append(ExtractedFact(
-            text=text[:512],
-            type=fact_type,
-            importance=importance,
-            action=action,
-            existing_fact_id=str(existing_id) if existing_id else None,
-            entities=entities,
-            confidence=confidence,
-        ))
+
+COMPARATIVE_PROMPT_V1 = """You are a memory re-ranker for the v1 taxonomy. You receive facts already extracted from one conversation, each with initial importance. Your job is twofold:
+
+1. RE-RANK importance to spread across the 1-10 range (avoid clustering at 7-8-9)
+2. ASSIGN volatility to each fact
+
+Re-ranking rules:
+- Top 1/3 of facts (most significant for this user): importance 9-10
+- Middle 1/3: importance 7-8
+- Bottom 1/3: importance 5-6 (borderline, may be dropped)
+- A fact may stay at 10 if it's clearly identity-defining (name, birthday) or marked as "never forget"
+- Never raise without justification; never lower below 5 unless clearly noise
+- You MUST produce a spread
+
+Volatility rules:
+- stable: unlikely to change for years (name, allergies, birthplace, fundamental traits)
+- updatable: changes occasionally (current job, active project, partner's name, address)
+- ephemeral: short-lived state (today's task, this week's plan, current trip itinerary)
+
+Use the FULL conversation context to judge volatility — a single claim may be ambiguous, but in context you can usually tell.
+
+Return JSON array, same order as input, ONLY with importance + volatility fields:
+[{"importance": N, "volatility": "stable|updatable|ephemeral"}, ...]
+No markdown."""
+
+
+async def comparative_rescore_v1(
+    facts: list[ExtractedFact],
+    conversation_text: str,
+    llm_config: Optional[LLMConfig] = None,
+) -> list[ExtractedFact]:
+    """Comparative re-scoring pass.
+
+    Forces LLM re-rank when ``len(facts) >= 5`` to spread importance across
+    the 1-10 range. When ``len(facts) < 5`` (or no LLM), fills any missing
+    volatility via :func:`default_volatility` and returns.
+    """
+    # G-tuned behavior: force rescore when >= 5 facts
+    if len(facts) < 2 or len(facts) < 5:
+        for f in facts:
+            if f.volatility is None:
+                f.volatility = default_volatility(f)
+        return facts
+
+    config = llm_config or detect_llm_config()
+    if not config:
+        for f in facts:
+            f.volatility = f.volatility or default_volatility(f)
+        return facts
+
+    facts_for_prompt = "\n".join(
+        f"{i + 1}. [imp: {f.importance}] [type: {f.type}] [scope: {f.scope or 'unspecified'}] {f.text}"
+        for i, f in enumerate(facts)
+    )
+    user_prompt = (
+        f"Conversation context:\n{conversation_text}\n\n"
+        f"Extracted facts:\n{facts_for_prompt}\n\n"
+        f"Return {len(facts)} JSON objects, each with \"importance\" + \"volatility\". Match input order."
+    )
+
+    try:
+        response = await chat_completion(config, COMPARATIVE_PROMPT_V1, user_prompt)
+    except Exception as e:
+        logger.warning("comparative_rescore_v1: chat_completion threw: %s", e)
+        for f in facts:
+            f.volatility = default_volatility(f)
+        return facts
+
+    if not response:
+        for f in facts:
+            f.volatility = default_volatility(f)
+        return facts
+
+    cleaned = response.strip()
+    cleaned = re.sub(
+        r"<think(?:ing)?>[\s\S]*?</think(?:ing)?>", "", cleaned, flags=re.IGNORECASE
+    ).strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+    m = re.search(r"\[[\s\S]*\]", cleaned)
+    if m:
+        cleaned = m.group(0)
+
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        for f in facts:
+            f.volatility = default_volatility(f)
+        return facts
+    if not isinstance(parsed, list):
+        for f in facts:
+            f.volatility = default_volatility(f)
+        return facts
+
+    for i, f in enumerate(facts):
+        entry = parsed[i] if i < len(parsed) and isinstance(parsed[i], dict) else {}
+        raw_imp = entry.get("importance")
+        raw_vol = str(entry.get("volatility", "")).lower()
+
+        if isinstance(raw_imp, (int, float)) and not isinstance(raw_imp, bool):
+            new_imp = max(5, min(10, round(float(raw_imp))))
+            f.importance = int(new_imp)
+
+        if raw_vol in VALID_MEMORY_VOLATILITIES:
+            f.volatility = raw_vol
+        elif f.volatility is None:
+            f.volatility = default_volatility(f)
 
     return facts
 
 
+# ---------------------------------------------------------------------------
+# Phase 2.2.6: lexical importance bumps
+# ---------------------------------------------------------------------------
+
+
 def compute_lexical_importance_bump(fact_text: str, conversation_text: str) -> int:
-    """Phase 2.2.6: post-process bump for under-weighted facts.
+    """Phase 2.2.6: post-process bump (0..2) for under-weighted facts.
 
     Mirrors ``computeLexicalImportanceBump`` in ``skill/plugin/extractor.ts``.
-    See that function's docstring for the full design rationale and signal list.
-
-    Returns an integer in [0, 2] representing how much to add to the LLM's
-    importance score. The bump is additive and never overrides the importance
-    >= 6 filter on its own (a fact still needs to score >= 5 from the LLM to
-    benefit, since +2 from 5 = 7).
+    See that function for the full signal rationale.
     """
     bump = 0
     lower_conv = conversation_text.lower()
 
-    # Signal 1: strong intent phrases anywhere in the conversation
     strong_intent = re.compile(
         r"\b(remember this|never forget|rule of thumb|don't (?:ever )?forget|critical|important|gotcha|note to self)\b",
         re.IGNORECASE,
@@ -432,16 +858,11 @@ def compute_lexical_importance_bump(fact_text: str, conversation_text: str) -> i
     if strong_intent.search(lower_conv):
         bump += 1
 
-    # Signal 2: emphasis markers — double exclamation OR 3+ consecutive all-caps words (3+ chars each)
     double_excl = "!!"
     all_caps_phrase = re.compile(r"\b[A-Z]{3,}(?:\s+[A-Z]{3,}){2,}\b")
     if double_excl in conversation_text or all_caps_phrase.search(conversation_text):
         bump += 1
 
-    # Signal 3: repetition — extract content words (length >= 5, not stop words)
-    # from the fact and check if any single one appears 2+ times in the
-    # conversation. This is more robust to LLM paraphrasing than a leading-chars
-    # fingerprint.
     lower_fact = fact_text.lower()
     stop_words = {
         "about", "after", "again", "against", "because", "before", "being",
@@ -459,7 +880,6 @@ def compute_lexical_importance_bump(fact_text: str, conversation_text: str) -> i
     ]
     triggered = False
     for word in fact_words:
-        # \b word boundary; re.escape handles any regex meta chars
         occurrences = len(re.findall(rf"\b{re.escape(word)}\b", lower_conv))
         if occurrences >= 2:
             triggered = True
@@ -470,35 +890,46 @@ def compute_lexical_importance_bump(fact_text: str, conversation_text: str) -> i
     return min(bump, 2)
 
 
+# ---------------------------------------------------------------------------
+# Main extraction entry points
+# ---------------------------------------------------------------------------
+
+
 async def extract_facts_llm(
     messages: list[dict],
     mode: str = "turn",  # "turn" or "full"
     existing_memories: Optional[list[dict]] = None,
-    llm_config: Optional["LLMConfig"] = None,
+    llm_config: Optional[LLMConfig] = None,
 ) -> list[ExtractedFact]:
-    """Extract facts using LLM. Returns empty list if no LLM available.
+    """Extract facts using the v1 G-pipeline. Returns [] if no LLM available.
 
-    Phase 2.2.6 added observability: every early-return branch now logs at
-    INFO or WARNING level so the auto-extraction path can be diagnosed from
-    the gateway log without having to reproduce the exact failure. Prior to
-    this, silent ``return []`` paths made debugging near-impossible (see
-    QA-PHASE-2-2-5-20260415 for the multi-hour ghost-bug hunt this prevents).
+    Pipeline: single merged-topic LLM call → ``apply_provenance_filter_lax``
+    → ``comparative_rescore_v1`` (forces re-rank when >= 5 facts) →
+    ``default_volatility`` fallback → lexical importance bumps.
 
     Parameters
     ----------
+    messages : list[dict]
+        Conversation turns (role + content).
+    mode : {"turn", "full"}
+        Only affects the user-prompt framing (turn vs full-session).
+    existing_memories : list[dict], optional
+        Used for LLM-side dedup context. Caller should pre-filter.
     llm_config : LLMConfig, optional
-        Pre-resolved LLM configuration. If not provided, falls back to
-        ``detect_llm_config()`` which auto-detects from environment variables.
+        Pre-resolved LLM config (e.g. from Hermes). Falls back to env-var
+        detection via :func:`detect_llm_config` when not provided.
     """
     config = llm_config or detect_llm_config()
     if not config:
         logger.info("extract_facts_llm: no LLM config resolved (skipping extraction)")
         return []
 
-    # Use all provided messages — the caller (hooks.py) already scopes
-    # to unprocessed messages via state.get_unprocessed_messages().
-    # Turn vs full mode only affects the user prompt framing.
-    relevant = messages
+    if not messages:
+        logger.info("extract_facts_llm: no messages to process")
+        return []
+
+    # 'turn' mode trims to the last 6 messages (matches TS extractFacts).
+    relevant = messages[-6:] if mode == "turn" else messages
     conversation_text = _truncate_messages(relevant)
     if len(conversation_text) < 20:
         logger.info(
@@ -509,12 +940,11 @@ async def extract_facts_llm(
         )
         return []
 
-    # Build existing memories context
     memories_ctx = ""
     if existing_memories:
         mem_lines = [f"[ID: {m['id']}] {m['text']}" for m in existing_memories[:50]]
         memories_ctx = (
-            "\n\nExisting memories (classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n"
+            "\n\nExisting memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n"
             + "\n".join(mem_lines)
         )
 
@@ -535,166 +965,35 @@ async def extract_facts_llm(
         return []
 
     logger.info(
-        "extract_facts_llm: LLM returned %d chars; handing to _parse_response",
+        "extract_facts_llm: LLM returned %d chars; parsing merged response",
         len(response),
     )
-    facts = _parse_response(response)
+    topics, raw_facts = parse_merged_response_v1(response)
+    if topics:
+        logger.info("extract_facts_llm: topics = %s", topics)
 
-    # Phase 2.2.6: lexical importance bumps. Mirrors the TS extractor — see
-    # `compute_lexical_importance_bump` docstring for the full signal list.
+    # Provenance filter (tag-don't-drop).
+    facts = apply_provenance_filter_lax(raw_facts, conversation_text)
+
+    # Comparative rescore — forces re-rank when >= 5 facts.
+    facts = await comparative_rescore_v1(facts, conversation_text, llm_config=config)
+
+    # Defensive: ensure every fact has a volatility.
+    for f in facts:
+        if f.volatility is None:
+            f.volatility = default_volatility(f)
+
+    # Lexical importance bumps.
     for f in facts:
         bump = compute_lexical_importance_bump(f.text, conversation_text)
         if bump > 0:
-            old_importance = f.importance
-            effective_bump = min(bump, 1) if f.importance >= 8 else bump
-            f.importance = min(10, f.importance + effective_bump)
+            old = f.importance
+            effective = min(bump, 1) if f.importance >= 8 else bump
+            f.importance = min(10, f.importance + effective)
             logger.info(
                 "extract_facts_llm: lexical bump +%d for %r (%d -> %d)",
-                bump,
-                f.text[:60],
-                old_importance,
-                f.importance,
+                bump, f.text[:60], old, f.importance,
             )
-
-    return facts
-
-
-def extract_facts_heuristic(messages: list[dict], max_facts: int) -> list[ExtractedFact]:
-    """Simple heuristic fact extraction (no LLM needed).
-
-    Looks for patterns like:
-    - "I prefer/like/want..."
-    - "My name is..."
-    - "Remember that..."
-    - Decisions: "I chose/decided..."
-    - Facts stated by the user
-    """
-    facts: list[ExtractedFact] = []
-    patterns = [
-        (r"(?:I|my)\s+(?:prefer|like|want|need|use|enjoy|love|hate)\s+(.+)", "preference", 7),
-        (r"(?:my name is|I'm called|call me)\s+(.+)", "fact", 8),
-        (r"(?:remember|don't forget|keep in mind)\s+(?:that\s+)?(.+)", "fact", 7),
-        (r"(?:I chose|I decided|we decided|decision:)\s+(.+)", "decision", 7),
-        (r"(?:I work|I'm a|my job|my role)\s+(.+)", "fact", 7),
-    ]
-
-    for msg in messages:
-        if msg.get("role") != "user":
-            continue
-        content = msg.get("content", "")
-        for pattern, category, importance in patterns:
-            matches = re.findall(pattern, content, re.IGNORECASE)
-            for match in matches:
-                text = match.strip().rstrip(".")
-                if len(text) > 10 and len(facts) < max_facts:
-                    facts.append(ExtractedFact(
-                        text=text[:512],
-                        type=category,
-                        importance=importance,
-                        action="ADD",
-                    ))
-
-    return facts
-
-
-# ---------------------------------------------------------------------------
-# Compaction-Aware Extraction (Phase 2.3)
-# ---------------------------------------------------------------------------
-
-
-def _parse_response_compaction(response: str) -> list[ExtractedFact]:
-    """Parse the LLM extraction response with compaction threshold (importance >= 5).
-
-    Identical to ``_parse_response`` except the importance floor is 5 instead
-    of 6. During compaction, we accept borderline facts that would normally be
-    dropped — this is the last chance to capture them.
-    """
-    original_preview = response.strip()[:200]
-    cleaned = response.strip()
-
-    # Strip <think>...</think> and <thinking>...</thinking> tags
-    cleaned = re.sub(r"<think(?:ing)?>[\s\S]*?</think(?:ing)?>", "", cleaned, flags=re.IGNORECASE).strip()
-
-    # Strip markdown code fences if present
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\n?", "", cleaned)
-        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
-
-    parsed: object = None
-    try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError:
-        m = re.search(r"\[[\s\S]*\]", cleaned)
-        if m:
-            try:
-                parsed = json.loads(m.group(0))
-                logger.info(
-                    "_parse_response_compaction: recovered JSON array via bracket-scan fallback"
-                )
-            except json.JSONDecodeError:
-                parsed = None
-
-    if parsed is None:
-        logger.warning(
-            "_parse_response_compaction: could not parse LLM output as JSON. Preview: %r",
-            original_preview,
-        )
-        return []
-
-    if not isinstance(parsed, list):
-        logger.warning(
-            "_parse_response_compaction: parsed value is not an array (type=%s)",
-            type(parsed).__name__,
-        )
-        return []
-
-    facts = []
-    for item in parsed:
-        if not isinstance(item, dict):
-            continue
-        text = str(item.get("text", "")).strip()
-        if len(text) < 5:
-            continue
-
-        fact_type = str(item.get("type", "fact"))
-        if fact_type not in VALID_TYPES:
-            fact_type = "fact"
-
-        importance = item.get("importance", 5)
-        try:
-            importance = max(1, min(10, int(importance)))
-        except (ValueError, TypeError):
-            importance = 5
-
-        action = str(item.get("action", "ADD")).upper()
-        if action not in VALID_ACTIONS:
-            action = "ADD"
-
-        # Compaction threshold: importance >= 5 (not 6)
-        # DELETE actions pass regardless of importance
-        if importance < 5 and action != "DELETE":
-            continue
-
-        existing_id = item.get("existingFactId") or item.get("existing_fact_id")
-
-        raw_entities = item.get("entities")
-        entities: Optional[List[ExtractedEntity]] = None
-        if isinstance(raw_entities, list):
-            parsed_entities = [e for e in (_parse_entity(r) for r in raw_entities) if e is not None]
-            if parsed_entities:
-                entities = parsed_entities
-
-        confidence = normalize_confidence(item.get("confidence"))
-
-        facts.append(ExtractedFact(
-            text=text[:512],
-            type=fact_type,
-            importance=importance,
-            action=action,
-            existing_fact_id=str(existing_id) if existing_id else None,
-            entities=entities,
-            confidence=confidence,
-        ))
 
     return facts
 
@@ -702,27 +1001,12 @@ def _parse_response_compaction(response: str) -> list[ExtractedFact]:
 async def extract_facts_compaction(
     messages: list[dict],
     existing_memories: Optional[list[dict]] = None,
-    llm_config: Optional["LLMConfig"] = None,
+    llm_config: Optional[LLMConfig] = None,
 ) -> list[ExtractedFact]:
-    """Extract facts using the compaction-aware prompt (importance >= 5).
+    """Compaction-aware extraction (importance floor 5, not 6).
 
-    This is the Python equivalent of ``extractFactsForCompaction`` in the
-    OpenClaw plugin. It uses ``COMPACTION_SYSTEM_PROMPT`` and processes the
-    full conversation (not just recent turns). The importance filter is >= 5
-    instead of >= 6, capturing borderline facts before context is lost.
-
-    Hermes does not currently have a compaction hook (it uses
-    ``on_session_end`` instead), but this function is exported and available
-    for future integration.
-
-    Parameters
-    ----------
-    messages : list[dict]
-        All conversation messages to extract from.
-    existing_memories : list[dict], optional
-        Recent memories for LLM dedup context.
-    llm_config : LLMConfig, optional
-        Pre-resolved LLM configuration. Falls back to ``detect_llm_config()``.
+    Uses :data:`COMPACTION_SYSTEM_PROMPT` and always processes the full
+    conversation. Mirrors ``extractFactsForCompaction`` in the TS plugin.
     """
     config = llm_config or detect_llm_config()
     if not config:
@@ -738,12 +1022,11 @@ async def extract_facts_compaction(
         )
         return []
 
-    # Build existing memories context
     memories_ctx = ""
     if existing_memories:
         mem_lines = [f"[ID: {m['id']}] {m['text']}" for m in existing_memories[:50]]
         memories_ctx = (
-            "\n\nExisting memories (classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n"
+            "\n\nExisting memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n"
             + "\n".join(mem_lines)
         )
 
@@ -763,24 +1046,90 @@ async def extract_facts_compaction(
         return []
 
     logger.info(
-        "extract_facts_compaction: LLM returned %d chars; handing to _parse_response_compaction",
+        "extract_facts_compaction: LLM returned %d chars; parsing merged response",
         len(response),
     )
-    facts = _parse_response_compaction(response)
+    facts = parse_facts_response_for_compaction(response)
 
-    # Lexical importance bumps (same as regular extraction)
+    # Provenance filter — same tag-don't-drop, importance floor 5 baked in.
+    facts = apply_provenance_filter_lax(facts, conversation_text)
+
+    # Comparative rescore (same trigger as regular extraction).
+    facts = await comparative_rescore_v1(facts, conversation_text, llm_config=config)
+
+    # Defensive: ensure every fact has a volatility.
+    for f in facts:
+        if f.volatility is None:
+            f.volatility = default_volatility(f)
+
+    # Lexical importance bumps.
     for f in facts:
         bump = compute_lexical_importance_bump(f.text, conversation_text)
         if bump > 0:
-            old_importance = f.importance
-            effective_bump = min(bump, 1) if f.importance >= 8 else bump
-            f.importance = min(10, f.importance + effective_bump)
+            old = f.importance
+            effective = min(bump, 1) if f.importance >= 8 else bump
+            f.importance = min(10, f.importance + effective)
             logger.info(
                 "extract_facts_compaction: lexical bump +%d for %r (%d -> %d)",
-                bump,
-                f.text[:60],
-                old_importance,
-                f.importance,
+                bump, f.text[:60], old, f.importance,
             )
 
     return facts
+
+
+# ---------------------------------------------------------------------------
+# Heuristic fallback (no LLM required)
+# ---------------------------------------------------------------------------
+
+
+def extract_facts_heuristic(messages: list[dict], max_facts: int) -> list[ExtractedFact]:
+    """Simple heuristic extraction (no LLM needed).
+
+    Used only when the LLM path is unavailable. Emits v1-shaped facts with
+    ``source="user"`` (patterns all match on the user's own turns) and a
+    best-guess v1 type.
+    """
+    facts: list[ExtractedFact] = []
+    # (pattern, v1 type, importance)
+    patterns: list[tuple[str, str, int]] = [
+        (r"(?:I|my)\s+(?:prefer|like|want|need|use|enjoy|love|hate)\s+(.+)", "preference", 7),
+        (r"(?:my name is|I'm called|call me)\s+(.+)", "claim", 8),
+        (r"(?:remember|don't forget|keep in mind)\s+(?:that\s+)?(.+)", "claim", 7),
+        (r"(?:I chose|I decided|we decided|decision:)\s+(.+)", "claim", 7),
+        (r"(?:I work|I'm a|my job|my role)\s+(.+)", "claim", 7),
+    ]
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        for pattern, fact_type, importance in patterns:
+            for match in re.findall(pattern, content, re.IGNORECASE):
+                text = match.strip().rstrip(".")
+                if len(text) > 10 and len(facts) < max_facts:
+                    facts.append(
+                        ExtractedFact(
+                            text=text[:512],
+                            type=fact_type,
+                            importance=importance,
+                            action="ADD",
+                            source="user",
+                            scope="unspecified",
+                            volatility="updatable",
+                        )
+                    )
+    return facts
+
+
+# ---------------------------------------------------------------------------
+# Back-compat shims — renamed parsers. Prefer the new names in new code.
+# ---------------------------------------------------------------------------
+
+
+def _parse_response(response: str) -> list[ExtractedFact]:
+    """Deprecated: use :func:`parse_facts_response` instead."""
+    return parse_facts_response(response)
+
+
+def _parse_response_compaction(response: str) -> list[ExtractedFact]:
+    """Deprecated: use :func:`parse_facts_response_for_compaction`."""
+    return parse_facts_response_for_compaction(response)

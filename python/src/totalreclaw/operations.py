@@ -34,11 +34,12 @@ from .reranker import RerankerCandidate, RerankerResult, rerank
 from .tuning_loop import maybe_write_feedback_for_pin
 from .userop import build_and_send_userop
 from .claims_helper import (
-    build_canonical_claim,
+    PROTOBUF_VERSION_V4,
+    build_canonical_claim_v1,
     compute_entity_trapdoors,
     is_digest_blob,
+    read_blob_unified,
     read_claim_from_blob,
-    resolve_claim_format,
 )
 
 # GraphQL queries — matching TypeScript search.ts
@@ -163,19 +164,42 @@ async def store_fact(
     eoa_address: Optional[str] = None,
     sender: Optional[str] = None,
     chain_id: int = 84532,
-    fact_type: str = "fact",
+    fact_type: str = "claim",
     entities: Optional[list] = None,
     confidence: float = 0.85,
     extracted_at: Optional[str] = None,
+    # v1 taxonomy fields (default path as of totalreclaw 2.0.0)
+    provenance: str = "user",
+    scope: str = "unspecified",
+    reasoning: Optional[str] = None,
+    volatility: Optional[str] = None,
 ) -> str:
     """Encrypt and store a fact on-chain via relay.
 
-    KG Phase 1: when ``TOTALRECLAW_CLAIM_FORMAT != 'legacy'`` (default), the
-    encrypted blob is a canonical ``Claim`` JSON matching the plugin's format.
-    Entity trapdoors are added to blind indices regardless of format so new
-    facts are findable via entity-specific search once the read path is KG-aware.
+    As of ``totalreclaw`` 2.0.0 this unconditionally emits a Memory Taxonomy
+    v1 JSON blob and tags the outer protobuf wrapper with
+    :data:`PROTOBUF_VERSION_V4`. Legacy v0 tokens in ``fact_type`` (e.g.
+    ``"fact"``, ``"decision"``, ``"episodic"``) are coerced to v1 via the
+    v0→v1 map inside :func:`build_canonical_claim_v1`.
 
-    Returns the fact ID.
+    Parameters
+    ----------
+    provenance : str, default "user"
+        v1 source field — one of user | user-inferred | assistant | external |
+        derived. The explicit ``client.remember()`` path defaults to
+        ``"user"`` because the caller explicitly typed the text. Auto-
+        extraction should pass the source tagged by ``apply_provenance_filter_lax``.
+    scope : str, default "unspecified"
+        v1 life-domain scope.
+    reasoning : str, optional
+        "because Y" clause for decision-style claims (v1 claim type).
+    volatility : str, optional
+        Post-extraction rescored volatility; omitted on explicit tool writes.
+
+    Returns
+    -------
+    str
+        The UUID assigned to the stored fact.
     """
     if eoa_private_key is None or eoa_address is None:
         raise ValueError(
@@ -186,23 +210,26 @@ async def store_fact(
     fact_id = str(uuid.uuid4())
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-    claim_format = resolve_claim_format()
     importance_int = max(1, min(10, int(round(importance * 10)) if importance <= 1 else int(importance)))
-    if claim_format == "claim":
-        fact_stub = {
-            "text": text,
-            "type": fact_type,
-            "confidence": confidence,
-            "entities": entities,
-        }
-        blob_plaintext = build_canonical_claim(
-            fact_stub,
-            importance=importance_int,
-            source_agent=source,
-            extracted_at=extracted_at or timestamp,
-        )
-    else:
-        blob_plaintext = text
+
+    # v1 canonical claim (unconditional). source_agent is carried as
+    # ``provenance`` — the v1 `source` field on the claim itself.
+    fact_stub = {
+        "text": text,
+        "type": fact_type,
+        "source": provenance,
+        "scope": scope,
+        "reasoning": reasoning,
+        "confidence": confidence,
+        "entities": entities,
+        "volatility": volatility,
+    }
+    blob_plaintext = build_canonical_claim_v1(
+        fact_stub,
+        importance=importance_int,
+        created_at=extracted_at or timestamp,
+        claim_id=fact_id,
+    )
 
     encrypted_blob = encrypt(blob_plaintext, keys.encryption_key)
     encrypted_hex = base64.b64decode(encrypted_blob).hex()
@@ -225,7 +252,7 @@ async def store_fact(
     if embedding:
         encrypted_emb = encrypt_embedding(embedding, keys.encryption_key)
 
-    # Build protobuf payload
+    # Build protobuf payload — v1 writes ALWAYS tag the outer wrapper v4.
     payload = FactPayload(
         id=fact_id,
         timestamp=timestamp,
@@ -237,6 +264,7 @@ async def store_fact(
         content_fp=content_fp,
         agent_id=agent_id,
         encrypted_embedding=encrypted_emb,
+        version=PROTOBUF_VERSION_V4,
     )
 
     protobuf_bytes = encode_fact_protobuf(payload)
@@ -398,6 +426,13 @@ async def search_facts(
                 except Exception:
                     pass
 
+            # Surface the v1 source from decrypted blob metadata so Tier 1
+            # source-weighted reranking can multiply the fused score.
+            # Legacy v0 blobs have no v1 source — set None so the reranker
+            # applies LEGACY_CLAIM_FALLBACK_WEIGHT (0.85).
+            meta = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+            candidate_source: Optional[str] = meta.get("source") if isinstance(meta.get("source"), str) else None
+
             candidates.append(
                 RerankerCandidate(
                     id=fact_id,
@@ -406,6 +441,7 @@ async def search_facts(
                     importance=decay,
                     created_at=created_at,
                     category=doc.get("category", "fact"),
+                    source=candidate_source,
                 )
             )
         except Exception as e:
@@ -415,7 +451,9 @@ async def search_facts(
     if not candidates:
         return []
 
-    return rerank(query, query_embedding, candidates, top_k=top_k)
+    # Retrieval v2 Tier 1: source-weighted reranking is always ON as of
+    # totalreclaw 2.0.0, matching the TS plugin's default path.
+    return rerank(query, query_embedding, candidates, top_k=top_k, apply_source_weights=True)
 
 
 async def forget_fact(

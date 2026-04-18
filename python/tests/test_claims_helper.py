@@ -1,17 +1,21 @@
-"""Tests for claims_helper.py — the KG Phase 1 Python write + read helpers.
+"""Tests for claims_helper.py — v1 write + read helpers (python 2.0.0).
 
-Mirrors ``skill/plugin/claim-format.test.ts`` and the relevant parts of
-``skill/plugin/digest-injection.test.ts``. Every assertion that touches bytes
-(canonical output, trapdoor hashes) has a hardcoded expected value so the
-test double-checks the core's output has not drifted.
+Mirrors ``skill/plugin/claim-format.test.ts`` (v1 round-trip assertions) and
+keeps the digest / entity-trapdoor parity anchors that were byte-exact
+before the v1 switch.
+
+What changed from python 1.x:
+  * ``build_canonical_claim`` now emits a v1 JSON blob unconditionally.
+  * The ``TOTALRECLAW_CLAIM_FORMAT=legacy`` env-var gate was removed.
+  * Byte-exact reference fixtures for the v0 short-key format are gone —
+    the v1 round-trip assertions replace them.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import math
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 import pytest
@@ -22,7 +26,11 @@ from totalreclaw.claims_helper import (
     DIGEST_CLAIM_CAP,
     DIGEST_SOURCE_AGENT,
     DIGEST_TRAPDOOR,
+    PROTOBUF_VERSION_V4,
+    TYPE_TO_CATEGORY_V1,
+    V1_SCHEMA_VERSION,
     build_canonical_claim,
+    build_canonical_claim_v1,
     build_digest_claim,
     build_legacy_doc,
     compute_entity_trapdoor,
@@ -31,16 +39,17 @@ from totalreclaw.claims_helper import (
     hours_since,
     is_digest_blob,
     is_digest_stale,
+    is_v1_blob,
     map_type_to_category,
+    read_blob_unified,
     read_claim_from_blob,
-    resolve_claim_format,
     resolve_digest_mode,
     should_recompile,
 )
 
 
 # ---------------------------------------------------------------------------
-# Fact fixtures (dataclass-like, mirroring the plugin's ExtractedFact type)
+# Test fixtures (dataclass mirrors the Python ExtractedFact shape)
 # ---------------------------------------------------------------------------
 
 
@@ -60,11 +69,33 @@ class _Fact:
     confidence: Optional[float] = None
     entities: Optional[List[_Entity]] = None
     existing_fact_id: Optional[str] = None
+    # v1 fields
+    source: Optional[str] = "user"
+    scope: Optional[str] = "unspecified"
+    reasoning: Optional[str] = None
+    volatility: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
-# map_type_to_category
+# map_type_to_category — v1 types map to display tags used by the recall UI.
+# Legacy v0 tokens still decode (read path), so their category short keys
+# are retained in ``TYPE_TO_CATEGORY_V0``.
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "fact_type,category",
+    [
+        ("claim", "claim"),
+        ("preference", "pref"),
+        ("directive", "rule"),
+        ("commitment", "goal"),
+        ("episode", "epi"),
+        ("summary", "sum"),
+    ],
+)
+def test_map_type_to_category_v1(fact_type: str, category: str) -> None:
+    assert map_type_to_category(fact_type) == category
 
 
 @pytest.mark.parametrize(
@@ -77,140 +108,158 @@ class _Fact:
         ("goal", "goal"),
         ("context", "ctx"),
         ("summary", "sum"),
-        ("rule", "rule"),  # Phase 2.2: 8th memory type
+        ("rule", "rule"),
     ],
 )
-def test_map_type_to_category(fact_type: str, category: str) -> None:
-    assert map_type_to_category(fact_type) == category
+def test_map_type_to_category_v0_still_decodes(fact_type: str, category: str) -> None:
+    """Legacy v0 tokens still map to a category so pre-v1 blobs stay decodable."""
+    # v1 map takes priority for overlap: "preference" and "summary" are in both.
+    expected = TYPE_TO_CATEGORY_V1.get(fact_type, category)
+    assert map_type_to_category(fact_type) == expected
 
 
 def test_map_type_to_category_unknown_falls_back_to_fact() -> None:
-    # Plugin uses a strict index; Python version is defensive for LLM output.
     assert map_type_to_category("nonsense") == "fact"
 
 
 # ---------------------------------------------------------------------------
-# build_canonical_claim
+# build_canonical_claim / build_canonical_claim_v1 — v1 write path
 # ---------------------------------------------------------------------------
 
 
-def test_build_canonical_claim_byte_identical_reference() -> None:
-    """Byte-for-byte match against the plugin's claim-format.test.ts reference."""
-    fact = _Fact(
-        text="Pedro chose PostgreSQL because it is relational and needs ACID.",
-        type="decision",
-        importance=8,
-        confidence=0.92,
-        entities=[
-            _Entity(name="Pedro", type="person", role="chooser"),
-            _Entity(name="PostgreSQL", type="tool"),
-        ],
-    )
-    canonical = build_canonical_claim(
-        fact,
-        importance=8,
-        source_agent="openclaw-plugin",
-        extracted_at="2026-04-12T10:00:00Z",
-    )
-    expected = (
-        '{"t":"Pedro chose PostgreSQL because it is relational and needs ACID.",'
-        '"c":"dec","cf":0.92,"i":8,"sa":"openclaw-plugin","ea":"2026-04-12T10:00:00Z",'
-        '"e":[{"n":"Pedro","tp":"person","r":"chooser"},{"n":"PostgreSQL","tp":"tool"}]}'
-    )
-    assert canonical == expected
-
-
-def test_build_canonical_claim_round_trips_through_core() -> None:
+def test_build_canonical_claim_emits_v1_schema_version() -> None:
+    """Default path writes a v1 JSON blob with schema_version '1.0'."""
     fact = _Fact(
         text="The user lives in Lisbon.",
-        type="fact",
+        type="claim",
         importance=7,
         confidence=0.9,
+        source="user",
+        scope="personal",
     )
     canonical = build_canonical_claim(
         fact,
         importance=7,
-        source_agent="oc",
-        extracted_at="2026-04-12T10:00:00Z",
+        source_agent="python-client",  # ignored in v1
+        extracted_at="2026-04-17T10:00:00.000Z",
     )
-    parsed = json.loads(core.parse_claim_or_legacy(canonical))
-    assert parsed["t"] == fact.text
-    assert parsed["c"] == "fact"
-    assert parsed["cf"] == 0.9
-    assert parsed["i"] == 7
+    payload = json.loads(canonical)
+    assert payload["schema_version"] == V1_SCHEMA_VERSION
+    assert payload["text"] == fact.text
+    assert payload["type"] == "claim"
+    assert payload["source"] == "user"
+    assert payload["scope"] == "personal"
+    assert payload["importance"] == 7
+    assert payload["created_at"] == "2026-04-17T10:00:00.000Z"
 
 
-def test_build_canonical_claim_omits_entities_field_when_empty() -> None:
-    fact = _Fact(text="No entities here.", type="fact", importance=7)
-    canonical = build_canonical_claim(
+def test_build_canonical_claim_v1_with_reasoning() -> None:
+    fact = {
+        "text": "Chose PostgreSQL over MongoDB for data that needs ACID",
+        "type": "claim",
+        "source": "user",
+        "scope": "work",
+        "reasoning": "Transactional integrity matters more than schema flexibility",
+        "confidence": 0.95,
+    }
+    canonical = build_canonical_claim_v1(
         fact,
-        importance=7,
-        source_agent="oc",
-        extracted_at="2026-04-12T10:00:00Z",
+        importance=9,
+        created_at="2026-04-17T10:00:00.000Z",
     )
-    assert '"e":' not in canonical
-
-
-def test_build_canonical_claim_defaults_confidence_to_0_85() -> None:
-    fact = _Fact(text="No confidence supplied.", type="fact", importance=7)
-    canonical = build_canonical_claim(
-        fact,
-        importance=7,
-        source_agent="oc",
-        extracted_at="2026-04-12T10:00:00Z",
+    payload = json.loads(canonical)
+    assert payload["reasoning"] == (
+        "Transactional integrity matters more than schema flexibility"
     )
-    assert '"cf":0.85' in canonical
+    assert payload["scope"] == "work"
+    assert payload["importance"] == 9
 
 
-def test_build_canonical_claim_drops_role_when_absent() -> None:
-    fact = _Fact(
-        text="Pedro works at Acme.",
-        type="fact",
-        importance=7,
-        confidence=0.9,
-        entities=[_Entity(name="Acme", type="company")],
+def test_build_canonical_claim_v1_legacy_v0_types_coerced() -> None:
+    """Legacy v0 type tokens map to their v1 equivalent at write time."""
+    fact = {"text": "x", "type": "decision", "source": "user"}
+    payload = json.loads(
+        build_canonical_claim_v1(fact, importance=7, created_at="2026-04-17T00:00:00.000Z")
     )
-    canonical = build_canonical_claim(
-        fact,
-        importance=7,
-        source_agent="oc",
-        extracted_at="2026-04-12T10:00:00Z",
+    assert payload["type"] == "claim"  # decision → claim
+
+    fact["type"] = "rule"
+    payload = json.loads(
+        build_canonical_claim_v1(fact, importance=7, created_at="2026-04-17T00:00:00.000Z")
     )
-    assert '"e":[{"n":"Acme","tp":"company"}]' in canonical
+    assert payload["type"] == "directive"
+
+    fact["type"] = "goal"
+    payload = json.loads(
+        build_canonical_claim_v1(fact, importance=7, created_at="2026-04-17T00:00:00.000Z")
+    )
+    assert payload["type"] == "commitment"
 
 
-def test_build_canonical_claim_accepts_dict_input() -> None:
-    """Dict input must produce the same bytes as dataclass input."""
-    fact_dict = {
-        "text": "Pedro chose PostgreSQL because it is relational and needs ACID.",
-        "type": "decision",
-        "importance": 8,
-        "confidence": 0.92,
+def test_build_canonical_claim_v1_requires_source() -> None:
+    """A v1 claim without a source must raise — provenance is mandatory."""
+    fact = {"text": "x", "type": "claim"}  # no source
+    with pytest.raises(ValueError, match="source is required"):
+        build_canonical_claim_v1(fact, importance=5, created_at="2026-04-17T00:00:00.000Z")
+
+
+def test_build_canonical_claim_defaults_missing_source_to_user_inferred() -> None:
+    """The back-compat entry point supplies user-inferred when source is missing."""
+    fact_dict = {"text": "x", "type": "claim"}  # no source key
+    canonical = build_canonical_claim(fact_dict, importance=7, source_agent="whatever")
+    payload = json.loads(canonical)
+    assert payload["source"] == "user-inferred"
+
+
+def test_build_canonical_claim_v1_entities_passed_through() -> None:
+    fact = {
+        "text": "Pedro chose PostgreSQL",
+        "type": "claim",
+        "source": "user",
         "entities": [
             {"name": "Pedro", "type": "person", "role": "chooser"},
             {"name": "PostgreSQL", "type": "tool"},
         ],
     }
-    canonical = build_canonical_claim(
-        fact_dict,
-        importance=8,
-        source_agent="openclaw-plugin",
-        extracted_at="2026-04-12T10:00:00Z",
+    payload = json.loads(
+        build_canonical_claim_v1(fact, importance=8, created_at="2026-04-17T00:00:00.000Z")
     )
-    expected = (
-        '{"t":"Pedro chose PostgreSQL because it is relational and needs ACID.",'
-        '"c":"dec","cf":0.92,"i":8,"sa":"openclaw-plugin","ea":"2026-04-12T10:00:00Z",'
-        '"e":[{"n":"Pedro","tp":"person","r":"chooser"},{"n":"PostgreSQL","tp":"tool"}]}'
+    assert len(payload["entities"]) == 2
+    assert payload["entities"][0]["name"] == "Pedro"
+    assert payload["entities"][0]["role"] == "chooser"
+    assert payload["entities"][1]["name"] == "PostgreSQL"
+    assert "role" not in payload["entities"][1]
+
+
+def test_build_canonical_claim_v1_volatility_preserved() -> None:
+    fact = {
+        "text": "x",
+        "type": "claim",
+        "source": "user",
+        "volatility": "stable",
+    }
+    payload = json.loads(
+        build_canonical_claim_v1(fact, importance=7, created_at="2026-04-17T00:00:00.000Z")
     )
-    assert canonical == expected
+    assert payload["volatility"] == "stable"
+
+
+def test_build_canonical_claim_v1_rejects_invalid_source() -> None:
+    fact = {"text": "x", "type": "claim", "source": "bogus"}
+    with pytest.raises(ValueError, match="invalid source"):
+        build_canonical_claim_v1(fact, importance=5, created_at="2026-04-17T00:00:00.000Z")
+
+
+def test_protobuf_version_v4_constant_is_4() -> None:
+    assert PROTOBUF_VERSION_V4 == 4
 
 
 # ---------------------------------------------------------------------------
-# build_legacy_doc
+# Legacy doc builder — kept for back-compat, not on the default write path
 # ---------------------------------------------------------------------------
 
 
-def test_build_legacy_doc_byte_identical() -> None:
+def test_build_legacy_doc_still_works_for_back_compat() -> None:
     fact = _Fact(text="Hello world.", type="fact", importance=7)
     doc = build_legacy_doc(
         fact,
@@ -226,12 +275,10 @@ def test_build_legacy_doc_byte_identical() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Entity trapdoors
+# Entity trapdoors — byte-exact cross-client parity anchors
 # ---------------------------------------------------------------------------
 
 
-# Hardcoded expected value — computed once and pinned so this test also
-# detects any future drift in the normalization pipeline.
 POSTGRES_TRAPDOOR_HEX = hashlib.sha256(b"entity:postgresql").hexdigest()
 
 
@@ -241,7 +288,6 @@ def test_compute_entity_trapdoor_postgresql_hardcoded() -> None:
         compute_entity_trapdoor("PostgreSQL")
         == "1e364278f621eefbf64332d67597c5f2366b8527f46301dbe288b63920e89569"
     )
-    # Also exactly what the documented primitive says.
     assert compute_entity_trapdoor("PostgreSQL") == POSTGRES_TRAPDOOR_HEX
 
 
@@ -295,53 +341,15 @@ def test_compute_entity_trapdoors_skips_bad_names() -> None:
     td = compute_entity_trapdoors(
         [
             _Entity(name="", type="person"),
-            _Entity(name="   ", type="person"),  # whitespace-only → normalizes to ""
+            _Entity(name="   ", type="person"),
             _Entity(name="Real", type="person"),
         ]
     )
-    # "   " normalizes to "" at the core layer but we still hash it because
-    # we can't tell empty-after-normalize from a user who actually typed
-    # nothing meaningful. What we guarantee is that "Real" produces one
-    # entry and the result does not contain duplicates.
     assert any(t == compute_entity_trapdoor("Real") for t in td)
 
 
 # ---------------------------------------------------------------------------
-# Claim format feature flag
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_claim_format_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TOTALRECLAW_CLAIM_FORMAT", raising=False)
-    assert resolve_claim_format() == "claim"
-
-
-def test_resolve_claim_format_explicit_claim(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TOTALRECLAW_CLAIM_FORMAT", "claim")
-    assert resolve_claim_format() == "claim"
-
-
-def test_resolve_claim_format_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TOTALRECLAW_CLAIM_FORMAT", "CLAIM")
-    assert resolve_claim_format() == "claim"
-    monkeypatch.setenv("TOTALRECLAW_CLAIM_FORMAT", "LEGACY")
-    assert resolve_claim_format() == "legacy"
-
-
-def test_resolve_claim_format_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TOTALRECLAW_CLAIM_FORMAT", "legacy")
-    assert resolve_claim_format() == "legacy"
-
-
-def test_resolve_claim_format_unknown_falls_back_to_claim(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("TOTALRECLAW_CLAIM_FORMAT", "nonsense")
-    assert resolve_claim_format() == "claim"
-
-
-# ---------------------------------------------------------------------------
-# Digest mode flag
+# Digest mode flag (digest compilation is orthogonal to v0/v1 taxonomy)
 # ---------------------------------------------------------------------------
 
 
@@ -371,12 +379,55 @@ def test_resolve_digest_mode_values(
 
 
 # ---------------------------------------------------------------------------
-# read_claim_from_blob — decrypted blob reader
+# read_blob_unified / read_claim_from_blob — unified decrypt reader
 # ---------------------------------------------------------------------------
 
 
-def test_read_claim_from_blob_new_format() -> None:
-    out = read_claim_from_blob(
+def test_read_blob_unified_v1_payload() -> None:
+    """v1 JSON blob is decoded with all v1 metadata surfaced."""
+    v1 = json.dumps({
+        "id": "abc",
+        "text": "prefers dark mode",
+        "type": "preference",
+        "source": "user",
+        "scope": "personal",
+        "volatility": "stable",
+        "reasoning": None,
+        "importance": 8,
+        "confidence": 0.95,
+        "created_at": "2026-04-17T00:00:00.000Z",
+        "schema_version": "1.0",
+    })
+    out = read_blob_unified(v1)
+    assert out["text"] == "prefers dark mode"
+    assert out["importance"] == 8
+    assert out["category"] == "pref"
+    assert out["metadata"]["source"] == "user"
+    assert out["metadata"]["scope"] == "personal"
+    assert out["metadata"]["volatility"] == "stable"
+    assert out["metadata"]["schema_version"] == "1.0"
+
+
+def test_is_v1_blob_detects_v1() -> None:
+    v1 = json.dumps({
+        "id": "abc", "text": "x", "type": "claim", "source": "user",
+        "importance": 5, "created_at": "2026-04-17T00:00:00Z",
+        "schema_version": "1.0",
+    })
+    assert is_v1_blob(v1) is True
+
+
+def test_is_v1_blob_rejects_legacy() -> None:
+    v0 = json.dumps({"t": "x", "c": "fact", "cf": 0.9, "i": 5, "sa": "oc"})
+    assert is_v1_blob(v0) is False
+    legacy = json.dumps({"text": "x", "metadata": {}})
+    assert is_v1_blob(legacy) is False
+    assert is_v1_blob("not json") is False
+
+
+def test_read_blob_unified_v0_short_key_still_works() -> None:
+    """Pre-v1 vault entries still decode via the v0 short-key branch."""
+    out = read_blob_unified(
         json.dumps({"t": "prefers PostgreSQL", "c": "pref", "cf": 0.9, "i": 8, "sa": "oc"})
     )
     assert out["text"] == "prefers PostgreSQL"
@@ -384,8 +435,8 @@ def test_read_claim_from_blob_new_format() -> None:
     assert out["category"] == "pref"
 
 
-def test_read_claim_from_blob_new_format_with_entities() -> None:
-    out = read_claim_from_blob(
+def test_read_blob_unified_v0_with_entities() -> None:
+    out = read_blob_unified(
         json.dumps(
             {
                 "t": "lives in Lisbon",
@@ -402,22 +453,22 @@ def test_read_claim_from_blob_new_format_with_entities() -> None:
     assert out["category"] == "fact"
 
 
-def test_read_claim_from_blob_clamps_high_importance() -> None:
-    out = read_claim_from_blob(
+def test_read_blob_unified_clamps_high_importance() -> None:
+    out = read_blob_unified(
         json.dumps({"t": "x", "c": "fact", "cf": 0.9, "i": 99, "sa": "oc"})
     )
     assert out["importance"] == 10
 
 
-def test_read_claim_from_blob_clamps_low_importance() -> None:
-    out = read_claim_from_blob(
+def test_read_blob_unified_clamps_low_importance() -> None:
+    out = read_blob_unified(
         json.dumps({"t": "x", "c": "fact", "cf": 0.9, "i": 0, "sa": "oc"})
     )
     assert out["importance"] == 1
 
 
-def test_read_claim_from_blob_legacy_format() -> None:
-    out = read_claim_from_blob(
+def test_read_blob_unified_legacy_format() -> None:
+    out = read_blob_unified(
         json.dumps(
             {
                 "text": "legacy fact",
@@ -434,8 +485,8 @@ def test_read_claim_from_blob_legacy_format() -> None:
     assert out["category"] == "fact"
 
 
-def test_read_claim_from_blob_legacy_rounds_0_85_to_9() -> None:
-    out = read_claim_from_blob(
+def test_read_blob_unified_legacy_rounds_0_85_to_9() -> None:
+    out = read_blob_unified(
         json.dumps(
             {
                 "text": "prefers dark mode",
@@ -447,25 +498,25 @@ def test_read_claim_from_blob_legacy_rounds_0_85_to_9() -> None:
     assert out["category"] == "preference"
 
 
-def test_read_claim_from_blob_bare_legacy() -> None:
-    out = read_claim_from_blob(json.dumps({"text": "bare"}))
+def test_read_blob_unified_bare_legacy() -> None:
+    out = read_blob_unified(json.dumps({"text": "bare"}))
     assert out["text"] == "bare"
     assert out["importance"] == 5
 
 
-def test_read_claim_from_blob_malformed_json_falls_back() -> None:
-    out = read_claim_from_blob("not valid json")
+def test_read_blob_unified_malformed_json_falls_back() -> None:
+    out = read_blob_unified("not valid json")
     assert out["text"] == "not valid json"
     assert out["importance"] == 5
 
 
-def test_read_claim_from_blob_empty_object_falls_back() -> None:
-    out = read_claim_from_blob("{}")
+def test_read_blob_unified_empty_object_falls_back() -> None:
+    out = read_blob_unified("{}")
     assert out["text"] == "{}"
 
 
-def test_read_claim_from_blob_digest_blob_new_format() -> None:
-    out = read_claim_from_blob(
+def test_read_blob_unified_digest_blob() -> None:
+    out = read_blob_unified(
         json.dumps(
             {
                 "t": '{"prompt_text":"You are..."}',
@@ -480,8 +531,14 @@ def test_read_claim_from_blob_digest_blob_new_format() -> None:
     assert out["importance"] == 10
 
 
+def test_read_claim_from_blob_back_compat_alias() -> None:
+    """read_claim_from_blob remains a back-compat alias for read_blob_unified."""
+    v0 = json.dumps({"t": "x", "c": "fact", "cf": 0.9, "i": 5, "sa": "oc"})
+    assert read_claim_from_blob(v0) == read_blob_unified(v0)
+
+
 # ---------------------------------------------------------------------------
-# DIGEST_TRAPDOOR + constants
+# DIGEST_TRAPDOOR + constants (unchanged from v0)
 # ---------------------------------------------------------------------------
 
 
@@ -489,11 +546,9 @@ def test_digest_trapdoor_matches_documented_primitive() -> None:
     expected = hashlib.sha256(b"type:digest").hexdigest()
     assert DIGEST_TRAPDOOR == expected
     assert len(DIGEST_TRAPDOOR) == 64
-    assert all(c in "0123456789abcdef" for c in DIGEST_TRAPDOOR)
 
 
 def test_digest_trapdoor_hardcoded_value() -> None:
-    # Hardcoded so if either side (Python or plugin) drifts, this screams.
     assert DIGEST_TRAPDOOR == (
         "5e6dcf483f027cb81f78f05474a4986c236af915dcb48cd8a376485eec5598ba"
     )
@@ -502,8 +557,6 @@ def test_digest_trapdoor_hardcoded_value() -> None:
 def test_digest_constants() -> None:
     assert DIGEST_CATEGORY == "dig"
     assert DIGEST_CLAIM_CAP == 200
-    # Python side uses a distinctive marker so operators can identify
-    # Python-origin digest writes.
     assert DIGEST_SOURCE_AGENT == "hermes-agent-digest"
 
 
@@ -524,7 +577,6 @@ def test_build_digest_claim_round_trips() -> None:
     assert round_tripped["sa"] == DIGEST_SOURCE_AGENT
     assert round_tripped["ea"] == compiled_at
     assert round_tripped["t"] == digest_json
-    # Must not carry entity refs.
     assert "e" not in round_tripped or len(round_tripped["e"]) == 0
 
 
@@ -554,7 +606,6 @@ def test_extract_digest_from_claim_non_digest_returns_none() -> None:
 
 
 def test_extract_digest_from_claim_malformed_inner_json_returns_none() -> None:
-    # Hand-build a dig claim whose t field is not a valid Digest object.
     broken = json.dumps(
         {
             "t": "not a digest object",
@@ -608,7 +659,7 @@ def test_is_digest_blob_garbage_returns_false() -> None:
 
 
 def test_hours_since_zero_when_equal() -> None:
-    now_ms = 1776000000000  # 2026-04-12T13:20:00Z in ms
+    now_ms = 1776000000000
     import datetime as dt
 
     iso = dt.datetime.fromtimestamp(now_ms / 1000, tz=dt.timezone.utc).isoformat().replace("+00:00", "Z")
@@ -638,7 +689,6 @@ def test_hours_since_invalid_returns_infinity() -> None:
 
 
 def test_hours_since_future_date_clamped_to_zero() -> None:
-    # Future date → clock skew defensive, return 0
     assert hours_since("2030-01-01T00:00:00Z", 1776000000000) == 0
 
 
@@ -664,21 +714,48 @@ def test_is_digest_stale_both_zero_not_stale() -> None:
 
 
 # ---------------------------------------------------------------------------
-# should_recompile — guard conditions
+# should_recompile
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "count,hours,expected",
     [
-        (10, 1, True),  # exactly 10 new claims
-        (9, 1, False),  # 9 under threshold
-        (0, 24, True),  # exactly 24 hours
-        (1, 23, False),  # 23h + 1 claim → skip
-        (100, 48, True),  # both conditions
-        (0, 0, False),  # nothing
-        (0, math.inf, True),  # infinity hours → recompile
+        (10, 1, True),
+        (9, 1, False),
+        (0, 24, True),
+        (1, 23, False),
+        (100, 48, True),
+        (0, 0, False),
+        (0, math.inf, True),
     ],
 )
 def test_should_recompile(count: int, hours: float, expected: bool) -> None:
     assert should_recompile(count, hours) is expected
+
+
+# ---------------------------------------------------------------------------
+# Explicit env-var absence: v1 is the default, no gates
+# ---------------------------------------------------------------------------
+
+
+def test_no_taxonomy_version_env_var_referenced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TOTALRECLAW_TAXONOMY_VERSION should have zero effect (removed in 2.0.0)."""
+    # Set the legacy env var to a value that would have flipped to v0
+    monkeypatch.setenv("TOTALRECLAW_TAXONOMY_VERSION", "v0")
+    fact = {"text": "x", "type": "claim", "source": "user"}
+    payload = json.loads(
+        build_canonical_claim_v1(fact, importance=7, created_at="2026-04-17T00:00:00Z")
+    )
+    # Must still emit v1 (schema_version "1.0")
+    assert payload["schema_version"] == V1_SCHEMA_VERSION
+
+
+def test_no_claim_format_env_var_referenced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TOTALRECLAW_CLAIM_FORMAT=legacy should have zero effect (removed in 2.0.0)."""
+    monkeypatch.setenv("TOTALRECLAW_CLAIM_FORMAT", "legacy")
+    fact = {"text": "x", "type": "claim", "source": "user"}
+    canonical = build_canonical_claim(fact, importance=7)
+    # Even with the env var, we emit v1 — no legacy doc.
+    assert '"schema_version"' in canonical
+    assert '"text":"x"' in canonical

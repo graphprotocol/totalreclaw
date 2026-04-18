@@ -4,14 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "totalreclaw"
-version = "1.10.0"
-description = "End-to-end encrypted memory for AI agents — Python client"
+version = "2.0.0"
+description = "End-to-end encrypted memory for AI agents — Python client (Memory Taxonomy v1)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [{ name = "TotalReclaw Team" }]
 dependencies = [
-    "totalreclaw-core>=1.1.0",
+    # Memory Taxonomy v1 + Retrieval v2 Tier 1 reranker live in core 2.0.
+    "totalreclaw-core>=2.0.0",
     "httpx>=0.27",
     "onnxruntime>=1.24",
     "numpy>=1.26",

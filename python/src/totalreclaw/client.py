@@ -224,18 +224,52 @@ class TotalReclaw:
         embedding: Optional[list[float]] = None,
         importance: float = 0.5,
         source: str = "python-client",
-        fact_type: str = "fact",
+        fact_type: str = "claim",
         entities: Optional[list] = None,
         confidence: float = 0.85,
+        # v1 taxonomy fields — part of the default write path as of 2.0.0.
+        provenance: str = "user",
+        scope: str = "unspecified",
+        reasoning: Optional[str] = None,
+        volatility: Optional[str] = None,
     ) -> str:
         """Store a fact. Returns the fact ID.
 
-        Phase 2.2.6: now forwards ``fact_type``, ``entities``, and ``confidence``
-        through to ``store_fact``, so consumers like Hermes
-        ``tools.remember`` can route explicit remember calls through the
-        canonical Claim path (with a real type classification) instead of
-        storing everything as ``type='fact'``. Backward-compat defaults match
-        the prior silent behavior.
+        Memory Taxonomy v1 is the default (and only) write path. The stored
+        blob is a v1 JSON payload (``schema_version == "1.0"``) and the
+        outer protobuf wrapper is tagged ``version == 4``.
+
+        Parameters
+        ----------
+        text : str
+            The fact text (max 512 chars after v1 normalization).
+        embedding : list[float], optional
+            Pre-computed embedding. When supplied, LSH trapdoors are generated.
+        importance : float
+            1-10 integer, or 0-1 float (auto-normalized). Defaults to 0.5 → 5.
+        source : str
+            The client-source tag written to the outer protobuf ``source``
+            field (legacy / server-side analytics field). For v1 provenance
+            (user vs assistant), use ``provenance`` below.
+        fact_type : str, default "claim"
+            v1 type (claim | preference | directive | commitment | episode
+            | summary). Legacy v0 tokens (fact, decision, episodic, goal,
+            context, rule) are coerced transparently.
+        entities : list, optional
+            List of entity dicts or ``ExtractedEntity`` instances.
+        confidence : float, default 0.85
+            LLM-self-reported confidence.
+        provenance : str, default "user"
+            v1 source field written into the canonical claim. Default
+            ``"user"`` since the explicit tool path means the caller typed it.
+        scope : str, default "unspecified"
+            v1 life-domain scope.
+        reasoning : str, optional
+            "because Y" clause — only meaningful for decision-style claims
+            (type=claim with an explicit reasoning clause).
+        volatility : str, optional
+            Post-extraction rescored volatility; usually left blank on
+            explicit remember calls (the store path picks a default).
         """
         await self._ensure_address()
         await self._ensure_registered()
@@ -252,6 +286,10 @@ class TotalReclaw:
             fact_type=fact_type,
             entities=entities,
             confidence=confidence,
+            provenance=provenance,
+            scope=scope,
+            reasoning=reasoning,
+            volatility=volatility,
             eoa_private_key=self._eoa_private_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,

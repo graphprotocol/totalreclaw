@@ -76,12 +76,25 @@ def _write_varint_field(parts: list[bytes], field_number: int, value: int) -> No
 # ---------------------------------------------------------------------------
 
 
+#: Default outer protobuf schema version (v3, for legacy callers).
+DEFAULT_PROTOBUF_VERSION: int = 3
+
+#: Memory Taxonomy v1 outer protobuf schema version. Signals that the
+#: inner encrypted blob is a v1 JSON payload with ``schema_version == "1.0"``.
+PROTOBUF_VERSION_V4: int = 4
+
+
 @dataclass
 class FactPayload:
     """Client-side fact payload ready for protobuf encoding.
 
     Mirrors the TypeScript ``FactPayload`` interface in
     ``mcp/src/subgraph/store.ts``.
+
+    As of ``totalreclaw`` 2.0.0, ``version`` carries the outer protobuf
+    schema version — 3 for legacy writes, 4 for v1 taxonomy writes.
+    A value of 0 (unset) is treated as ``DEFAULT_PROTOBUF_VERSION`` (3)
+    so the existing v3 call sites keep working.
     """
 
     id: str
@@ -94,6 +107,7 @@ class FactPayload:
     content_fp: str = ""
     agent_id: str = ""
     encrypted_embedding: Optional[str] = None
+    version: int = 0  # 0 → default (v3) for back-compat
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +134,8 @@ def encode_fact_protobuf(fact: FactPayload) -> bytes:
 
     _write_double(parts, 6, fact.decay_score)
     _write_varint_field(parts, 7, 1)  # is_active = true
-    _write_varint_field(parts, 8, 3)  # version = 3 (source/agent_id now encrypted inside field 4)
+    version = fact.version if fact.version else DEFAULT_PROTOBUF_VERSION
+    _write_varint_field(parts, 8, version)  # 3 = legacy, 4 = v1 taxonomy
     # Fields 9 (source) and 11 (agent_id) removed in v3 -- now encrypted inside field 4
     _write_string(parts, 10, fact.content_fp)
     # Field 12 (sequence_id) is assigned by the subgraph mapping, not the client
@@ -130,12 +145,19 @@ def encode_fact_protobuf(fact: FactPayload) -> bytes:
     return b"".join(parts)
 
 
-def encode_tombstone_protobuf(fact_id: str, owner: str) -> bytes:
+def encode_tombstone_protobuf(
+    fact_id: str, owner: str, version: int = DEFAULT_PROTOBUF_VERSION
+) -> bytes:
     """Encode a tombstone payload for soft-deleting a fact on-chain.
 
     Sets ``decay_score=0`` and ``encrypted_blob`` to the bytes of
     ``"tombstone"`` (hex-encoded), matching the managed-service delete
     convention used by the TypeScript client.
+
+    ``version`` is the outer protobuf schema version (3 legacy, 4 v1
+    taxonomy). Tombstones don't carry v1 payloads themselves — ``v4`` is
+    only meaningful when the tombstone terminates a v1-era fact chain
+    (e.g. after a pin/unpin). Default 3 preserves pre-2.0.0 behavior.
     """
     tombstone = FactPayload(
         id=fact_id,
@@ -147,5 +169,6 @@ def encode_tombstone_protobuf(fact_id: str, owner: str) -> bytes:
         source="python_forget",
         content_fp="",
         agent_id="python-client",
+        version=version,
     )
     return encode_fact_protobuf(tombstone)

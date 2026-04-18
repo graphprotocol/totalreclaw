@@ -74,12 +74,45 @@ async def detect_and_resolve_contradictions(
     try:
         from totalreclaw.embedding import get_embedding
         from totalreclaw.claims_helper import (
-            build_canonical_claim,
+            TYPE_TO_CATEGORY_V1,
             compute_entity_trapdoor,
         )
     except ImportError:
         log.debug("Required modules not available — skipping contradiction detection")
         return list(new_facts)
+
+    def _short_key_claim_for_resolver(
+        *, text: str, fact_type: str, importance: int, confidence: float,
+        source_agent: str, created_at: str,
+    ) -> dict:
+        """Build a short-key canonical claim for core.resolve_with_candidates().
+
+        The resolver accepts the v0 short-key format (``{t, c, cf, i, sa,
+        ea}``) — the v1 claim shape is NOT accepted by core 2.0.0's resolver
+        as of the plugin-v3 pairing. We emit short keys only for the
+        resolver's transient input; the actual on-chain write goes through
+        ``build_canonical_claim_v1`` which emits a v1 JSON blob.
+        """
+        # Map v1 type → short-key category expected by the resolver.
+        # ``TYPE_TO_CATEGORY_V1`` gives v1 type → display short tag; we need
+        # a category the Rust ``ClaimCategory`` enum accepts.
+        v1_to_short = {
+            "claim": "fact",
+            "preference": "pref",
+            "directive": "rule",
+            "commitment": "goal",
+            "episode": "epi",
+            "summary": "sum",
+        }
+        c_key = v1_to_short.get(fact_type, "fact")
+        return {
+            "t": text,
+            "c": c_key,
+            "cf": confidence,
+            "i": importance,
+            "sa": source_agent,
+            "ea": created_at,
+        }
 
     # Load default resolution weights once
     try:
@@ -152,23 +185,19 @@ async def detect_and_resolve_contradictions(
             importance_int = max(1, min(10, int(round(
                 fact.importance if fact.importance > 1 else fact.importance * 10
             ))))
-            fact_stub = {
-                "text": fact.text,
-                "type": fact.type,
-                "confidence": fact.confidence,
-                "entities": [
-                    {
-                        "name": e.name if hasattr(e, "name") else e.get("name", ""),
-                        "type": e.type if hasattr(e, "type") else e.get("type", "concept"),
-                    }
-                    for e in fact.entities
-                ] if fact.entities else None,
-            }
-            new_claim_json = build_canonical_claim(
-                fact_stub,
+            # Build a short-key claim for the resolver only. The on-chain
+            # write pipeline still emits v1 JSON; this transient short-key
+            # shape is the format ``core.resolve_with_candidates`` accepts
+            # as of core 2.0.0.
+            new_claim_json_obj = _short_key_claim_for_resolver(
+                text=fact.text,
+                fact_type=fact.type,
                 importance=importance_int,
+                confidence=fact.confidence,
                 source_agent="hermes-auto",
+                created_at=time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
             )
+            new_claim_json = json.dumps(new_claim_json_obj, ensure_ascii=False, separators=(",", ":"))
             new_claim_id = f"pending-{id(fact)}"
 
             # Build candidates array for the resolver
@@ -181,24 +210,23 @@ async def detect_and_resolve_contradictions(
                 # The results come from the reranker as RerankerResult with
                 # .text, .id, .embedding, .importance, .category
                 try:
-                    # Build a minimal canonical claim for the existing fact
-                    existing_stub = {
-                        "text": result.text,
-                        "type": result.category or "fact",
-                        "confidence": 0.85,
-                        "entities": None,
-                    }
                     existing_importance = max(1, min(10, int(round(
                         result.importance * 10 if result.importance <= 1 else result.importance
                     ))))
-                    existing_claim_json = build_canonical_claim(
-                        existing_stub,
+                    existing_short = _short_key_claim_for_resolver(
+                        text=result.text,
+                        fact_type=result.category or "claim",
                         importance=existing_importance,
+                        confidence=0.85,
                         source_agent="unknown",
+                        created_at=time.strftime(
+                            "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(result.created_at)
+                        ) if getattr(result, "created_at", None) else time.strftime(
+                            "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()
+                        ),
                     )
-                    existing_claim = json.loads(existing_claim_json)
                     candidates.append({
-                        "claim": existing_claim,
+                        "claim": existing_short,
                         "id": result.id,
                         "embedding": list(result.embedding),
                     })
@@ -210,10 +238,9 @@ async def detect_and_resolve_contradictions(
                 kept.append(fact)
                 continue
 
-            # Call the Rust core resolver
-            new_claim_obj = json.loads(new_claim_json)
+            # Call the Rust core resolver — short-key claim format.
             actions_json = totalreclaw_core.resolve_with_candidates(
-                json.dumps(new_claim_obj, ensure_ascii=False, separators=(",", ":")),
+                new_claim_json,
                 new_claim_id,
                 json.dumps(embedding),
                 json.dumps(candidates, ensure_ascii=False, separators=(",", ":")),

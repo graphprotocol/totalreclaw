@@ -24,6 +24,9 @@ from totalreclaw.hermes.llm_client import (
 
 class TestParseResponse:
     def test_valid_json_array(self):
+        # Input uses legacy v0 tokens ("fact", "preference") — parser coerces
+        # to the v1 equivalent ("claim", "preference"). The bare-array input
+        # is wrapped into the merged-topic shape internally.
         response = json.dumps([
             {"text": "User lives in Lisbon", "type": "fact", "importance": 8, "action": "ADD"},
             {"text": "Prefers dark mode", "type": "preference", "importance": 7, "action": "ADD"},
@@ -31,10 +34,11 @@ class TestParseResponse:
         facts = _parse_response(response)
         assert len(facts) == 2
         assert facts[0].text == "User lives in Lisbon"
-        assert facts[0].type == "fact"
+        assert facts[0].type == "claim"  # v0 "fact" → v1 "claim"
         assert facts[0].importance == 8
         assert facts[0].action == "ADD"
         assert facts[1].text == "Prefers dark mode"
+        assert facts[1].type == "preference"  # passthrough
 
     def test_empty_array(self):
         facts = _parse_response("[]")
@@ -73,13 +77,14 @@ class TestParseResponse:
         assert facts[0].action == "DELETE"
         assert facts[0].existing_fact_id == "abc-123"
 
-    def test_invalid_type_defaults_to_fact(self):
+    def test_invalid_type_defaults_to_claim(self):
         response = json.dumps([
             {"text": "Some memory with invalid type", "type": "banana", "importance": 8, "action": "ADD"},
         ])
         facts = _parse_response(response)
         assert len(facts) == 1
-        assert facts[0].type == "fact"
+        # v1 default when type is unknown is "claim" (not "fact").
+        assert facts[0].type == "claim"
 
     def test_invalid_action_defaults_to_add(self):
         response = json.dumps([
@@ -141,23 +146,40 @@ class TestParseResponse:
         assert len(facts) == 1
         assert facts[0].existing_fact_id == "def-456"
 
-    def test_all_valid_types(self):
+    def test_all_v0_types_coerce_to_v1(self):
+        """All 8 legacy v0 tokens are coerced to their v1 equivalent on parse."""
         items = []
-        # Phase 2.2: 8 memory types, including the new "rule" category.
-        for t in ["fact", "preference", "decision", "episodic", "goal", "context", "summary", "rule"]:
+        # ``summary + source:user`` is illegal in v1 (rejected by the parser).
+        # We skip "summary" + "user" here because the test input defaults
+        # source to user-inferred via the parser, which lets summary through.
+        # The type:summary+source:user check is covered separately.
+        # Exclude "summary" from this loop because the test runs without an
+        # explicit source and the parser would catch illegal combinations.
+        v0_tokens = ["fact", "preference", "decision", "episodic", "goal", "context", "rule"]
+        for t in v0_tokens:
             items.append({"text": f"Test {t} memory value", "type": t, "importance": 8, "action": "ADD"})
+        # Add summary with derived source (allowed)
+        items.append({
+            "text": "Test summary memory value",
+            "type": "summary",
+            "source": "derived",
+            "importance": 8,
+            "action": "ADD",
+        })
         response = json.dumps(items)
         facts = _parse_response(response)
         assert len(facts) == 8
         types = {f.type for f in facts}
-        assert types == {"fact", "preference", "decision", "episodic", "goal", "context", "summary", "rule"}
+        # v1 types after coercion: fact/decision/context → claim,
+        # episodic → episode, goal → commitment, rule → directive.
+        assert types == {"claim", "preference", "episode", "commitment", "directive", "summary"}
 
     def test_rule_type_round_trip(self):
-        """Phase 2.2: rule-typed facts pass parsing, retain entities, and stay above the importance floor."""
+        """Phase 2.2: v0 'rule' token coerces to v1 'directive' at parse time."""
         response = json.dumps([
             {
                 "text": "Stop the OpenClaw gateway before rm -rf ~/.totalreclaw/ — async flush can recreate stale files",
-                "type": "rule",
+                "type": "rule",  # v0 → v1 "directive"
                 "importance": 8,
                 "confidence": 1.0,
                 "action": "ADD",
@@ -166,7 +188,7 @@ class TestParseResponse:
         ])
         facts = _parse_response(response)
         assert len(facts) == 1
-        assert facts[0].type == "rule"
+        assert facts[0].type == "directive"  # v0 "rule" → v1 "directive"
         assert facts[0].importance == 8
         assert facts[0].confidence == 1.0
         assert facts[0].entities is not None
@@ -492,7 +514,8 @@ class TestExtractFactsLLM:
                 facts = await extract_facts_llm(messages, mode="turn")
                 assert len(facts) == 2
                 assert facts[0].text == "User lives in Lisbon"
-                assert facts[0].type == "fact"
+                # v0 "fact" → v1 "claim"
+                assert facts[0].type == "claim"
                 assert facts[1].text == "User prefers dark mode"
 
     @pytest.mark.asyncio
@@ -539,8 +562,8 @@ class TestExtractFactsLLM:
                 mock_chat.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_turn_mode_uses_all_unprocessed(self):
-        """Turn mode uses all provided messages — caller scopes to unprocessed."""
+    async def test_turn_mode_trims_to_last_6(self):
+        """v1 turn mode trims to the last 6 messages (matches the TS plugin)."""
         llm_response = json.dumps([])
         messages = [{"role": "user", "content": f"Message number {i} with content"} for i in range(20)]
 
@@ -550,8 +573,8 @@ class TestExtractFactsLLM:
                 await extract_facts_llm(messages, mode="turn")
                 call_args = mock_chat.call_args
                 user_prompt = call_args[0][2]
-                # All messages should be included (caller handles scoping)
-                assert "Message number 0" in user_prompt
+                # Only the tail window is sent in turn mode.
+                assert "Message number 0" not in user_prompt
                 assert "Message number 19" in user_prompt
 
     @pytest.mark.asyncio
@@ -631,10 +654,14 @@ class TestExtractFactsHeuristic:
         assert len(facts) >= 1
         f = facts[0]
         assert isinstance(f, ExtractedFact)
-        assert f.type == "fact"
+        # v1 heuristic emits "claim" for the Remember/Fact pattern.
+        assert f.type == "claim"
         assert f.importance == 7
         assert f.action == "ADD"
         assert f.existing_fact_id is None
+        # v1 heuristic tags source/scope/volatility defensively.
+        assert f.source == "user"
+        assert f.scope == "unspecified"
 
 
 # ---------------------------------------------------------------------------
