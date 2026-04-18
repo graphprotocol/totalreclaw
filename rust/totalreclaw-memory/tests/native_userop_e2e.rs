@@ -87,6 +87,7 @@ async fn test_native_store_and_recall() {
         content_fp,
         agent_id: "native-userop-e2e".to_string(),
         encrypted_embedding: None,
+        version: totalreclaw_memory::protobuf::DEFAULT_PROTOBUF_VERSION,
     };
 
     let protobuf = totalreclaw_memory::protobuf::encode_fact_protobuf(&payload);
@@ -227,6 +228,7 @@ async fn test_batch_store_and_recall() {
             content_fp,
             agent_id: "batch-e2e".to_string(),
             encrypted_embedding: None,
+            version: totalreclaw_memory::protobuf::DEFAULT_PROTOBUF_VERSION,
         };
 
         protobuf_payloads.push(totalreclaw_memory::protobuf::encode_fact_protobuf(&payload));

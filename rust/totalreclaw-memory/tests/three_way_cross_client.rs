@@ -345,6 +345,7 @@ async fn store_via_rust(mnemonic: &str, fact_text: &str) -> bool {
         content_fp,
         agent_id: "cross-client-e2e".to_string(),
         encrypted_embedding: None,
+        version: totalreclaw_memory::protobuf::DEFAULT_PROTOBUF_VERSION,
     };
 
     let protobuf = totalreclaw_memory::protobuf::encode_fact_protobuf(&payload);

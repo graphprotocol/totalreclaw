@@ -332,6 +332,7 @@ fn test_auto_recall_top_k_is_8() {
             text: format!("test fact about dark mode preference number {}", i),
             embedding: vec![i as f32 / 20.0; 4],
             timestamp: String::new(),
+            source: None,
         })
         .collect();
 

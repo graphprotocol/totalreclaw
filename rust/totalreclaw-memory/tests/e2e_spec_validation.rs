@@ -156,6 +156,7 @@ async fn test_e2e_store_recall_with_dedup() {
         content_fp,
         agent_id: "e2e-spec-validation".to_string(),
         encrypted_embedding: None,
+        version: totalreclaw_memory::protobuf::DEFAULT_PROTOBUF_VERSION,
     };
 
     let protobuf = totalreclaw_memory::protobuf::encode_fact_protobuf(&payload);

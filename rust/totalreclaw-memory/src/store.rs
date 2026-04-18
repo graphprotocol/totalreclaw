@@ -17,7 +17,10 @@
 use base64::Engine;
 
 use totalreclaw_core::blind;
-use totalreclaw_core::claims::{Claim, ResolutionAction};
+use totalreclaw_core::claims::{
+    Claim, MemoryClaimV1, MemoryScope, MemorySource, MemoryTypeV1, MemoryVolatility,
+    ResolutionAction, MEMORY_CLAIM_V1_SCHEMA_VERSION,
+};
 use totalreclaw_core::consolidation;
 use totalreclaw_core::contradiction;
 use totalreclaw_core::crypto;
@@ -209,6 +212,9 @@ pub async fn store_fact_batch(
 }
 
 /// Store a tombstone on-chain (soft-delete a fact).
+///
+/// Legacy (v3 outer protobuf). For Memory Taxonomy v1 vaults, prefer
+/// `store_tombstone_v1()` so the tombstone protobuf carries `version = 4`.
 pub async fn store_tombstone(
     fact_id: &str,
     relay: &RelayClient,
@@ -222,6 +228,179 @@ pub async fn store_tombstone(
         relay.submit_protobuf(&protobuf).await?;
     }
     Ok(())
+}
+
+/// Store a Memory Taxonomy v1 tombstone on-chain.
+///
+/// Emits `version = 4` on the outer protobuf so the subgraph indexes this
+/// tombstone under the v1 taxonomy. Semantically identical to
+/// `store_tombstone()`.
+pub async fn store_tombstone_v1(
+    fact_id: &str,
+    relay: &RelayClient,
+    private_key: Option<&[u8; 32]>,
+) -> Result<()> {
+    let protobuf = core_store::prepare_tombstone_v1(fact_id, relay.wallet_address());
+
+    if let Some(pk) = private_key {
+        relay.submit_fact_native(&protobuf, pk).await?;
+    } else {
+        relay.submit_protobuf(&protobuf).await?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Memory Taxonomy v1 store path
+// ---------------------------------------------------------------------------
+
+/// Input for building a v1 memory claim from ZeroClaw's high-level API.
+///
+/// The ZeroClaw Memory trait deals in `(key, content, category, session_id)`.
+/// `V1StoreInput` is the adapter shape that maps those plus explicit v1
+/// provenance (`source`, `scope`, `volatility`) onto the canonical
+/// `MemoryClaimV1` the core write path expects.
+#[derive(Debug, Clone)]
+pub struct V1StoreInput {
+    /// Plaintext body of the claim (5-512 UTF-8 chars).
+    pub text: String,
+    /// v1 memory type (claim | preference | directive | commitment |
+    /// episode | summary).
+    pub memory_type: MemoryTypeV1,
+    /// v1 provenance source.
+    pub source: MemorySource,
+    /// Importance on the 1-10 scale. Normalized to 0.0-1.0 on-chain.
+    pub importance: u8,
+    /// Life-domain scope. Defaults to `Unspecified`.
+    pub scope: MemoryScope,
+    /// Stability signal. Defaults to `Updatable`.
+    pub volatility: MemoryVolatility,
+    /// Decision-with-reasoning clause (only meaningful for `type: claim`).
+    pub reasoning: Option<String>,
+}
+
+impl V1StoreInput {
+    /// Convenience constructor for a plain claim with default scope + volatility.
+    pub fn new_claim(text: impl Into<String>, importance: u8) -> Self {
+        Self {
+            text: text.into(),
+            memory_type: MemoryTypeV1::Claim,
+            source: MemorySource::UserInferred,
+            importance,
+            scope: MemoryScope::Unspecified,
+            volatility: MemoryVolatility::Updatable,
+            reasoning: None,
+        }
+    }
+}
+
+/// Build a canonical `MemoryClaimV1` from a `V1StoreInput`.
+///
+/// Populates `id` (UUIDv7) and `created_at` (RFC 3339 UTC) and threads the
+/// rest through verbatim. The resulting claim is the JSON envelope that
+/// `prepare_fact_v1()` encrypts into the outer v4 protobuf.
+pub fn build_memory_claim_v1(input: &V1StoreInput) -> MemoryClaimV1 {
+    MemoryClaimV1 {
+        id: uuid::Uuid::now_v7().to_string(),
+        text: input.text.clone(),
+        memory_type: input.memory_type,
+        source: input.source,
+        created_at: chrono::Utc::now()
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        schema_version: MEMORY_CLAIM_V1_SCHEMA_VERSION.to_string(),
+        scope: input.scope,
+        volatility: input.volatility,
+        entities: Vec::new(),
+        reasoning: input.reasoning.clone(),
+        expires_at: None,
+        importance: Some(input.importance),
+        confidence: None,
+        superseded_by: None,
+    }
+}
+
+/// Store a Memory Taxonomy v1 claim on-chain.
+///
+/// Full v1 pipeline:
+///  1. Build canonical `MemoryClaimV1`
+///  2. Serialize to JSON envelope (the inner blob)
+///  3. Content fingerprint exact-dedup check (tombstone v4 if match)
+///  4. Generate embedding
+///  5. Best-match near-duplicate dedup (tombstone v4 if match, cosine ≥ 0.85)
+///  6. `core::prepare_fact_v1()` — encrypt envelope, build blind indices,
+///     encrypt embedding, emit v4 protobuf
+///  7. Submit via native UserOp (or legacy if no private key)
+///
+/// Returns the fact_id of the stored claim.
+pub async fn store_fact_v1(
+    input: &V1StoreInput,
+    keys: &crypto::DerivedKeys,
+    lsh_hasher: &LshHasher,
+    embedding_provider: &dyn EmbeddingProvider,
+    relay: &RelayClient,
+    private_key: Option<&[u8; 32]>,
+) -> Result<String> {
+    // 1. Build canonical v1 claim
+    let claim = build_memory_claim_v1(input);
+
+    // 2. Serialize envelope
+    let envelope_json = serde_json::to_string(&claim)
+        .map_err(|e| crate::Error::Crypto(format!("v1 envelope serialize: {e}")))?;
+
+    // 3. Exact-dedup via content fingerprint
+    let content_fp = fingerprint::generate_content_fingerprint(&claim.text, &keys.dedup_key);
+    if let Ok(Some(dup)) =
+        search::search_by_fingerprint(relay, relay.wallet_address(), &content_fp).await
+    {
+        // v1 vaults emit v4 tombstones
+        let _ = store_tombstone_v1(&dup.id, relay, private_key).await;
+    }
+
+    // 4. Generate embedding
+    let embedding = embedding_provider.embed(&claim.text).await?;
+
+    // 5. Best-match near-duplicate supersede
+    if let Some(dup) = find_best_duplicate(&claim.text, &embedding, keys, relay).await {
+        let _ = store_tombstone_v1(&dup.fact_id, relay, private_key).await;
+    }
+
+    // 6. Prepare v1 fact (encrypt envelope + v4 protobuf)
+    //    Source tag for on-chain analytics uses the v1 provenance token
+    //    (e.g. `zeroclaw_v1_user-inferred`).
+    let source_tag = format!("zeroclaw_v1_{}", v1_source_to_str(input.source));
+    let prepared = core_store::prepare_fact_v1(
+        &envelope_json,
+        &claim.text,
+        &keys.encryption_key,
+        &keys.dedup_key,
+        lsh_hasher,
+        &embedding,
+        input.importance as f64,
+        &source_tag,
+        relay.wallet_address(),
+        "zeroclaw",
+    )
+    .map_err(|e| crate::Error::Crypto(e.to_string()))?;
+
+    // 7. Submit
+    if let Some(pk) = private_key {
+        relay.submit_fact_native(&prepared.protobuf_bytes, pk).await?;
+    } else {
+        relay.submit_protobuf(&prepared.protobuf_bytes).await?;
+    }
+
+    Ok(prepared.fact_id)
+}
+
+/// Render a `MemorySource` enum value to its kebab-case wire token.
+fn v1_source_to_str(src: MemorySource) -> &'static str {
+    match src {
+        MemorySource::User => "user",
+        MemorySource::UserInferred => "user-inferred",
+        MemorySource::Assistant => "assistant",
+        MemorySource::External => "external",
+        MemorySource::Derived => "derived",
+    }
 }
 
 // ---------------------------------------------------------------------------

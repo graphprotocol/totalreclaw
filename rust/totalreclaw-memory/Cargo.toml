@@ -1,8 +1,8 @@
 [package]
 name = "totalreclaw-memory"
-version = "0.1.0"
+version = "2.0.0"
 edition = "2021"
-description = "TotalReclaw memory backend — E2EE crypto, LSH, embeddings, reranker"
+description = "TotalReclaw memory backend — E2EE crypto, LSH, embeddings, reranker (Memory Taxonomy v1)"
 license = "MIT"
 repository = "https://github.com/p-diogo/totalreclaw"
 

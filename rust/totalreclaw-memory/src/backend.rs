@@ -50,53 +50,115 @@ use crate::crypto::{self, DerivedKeys};
 use crate::embedding::{self, EmbeddingMode, EmbeddingProvider};
 use crate::hotcache::HotCache;
 use crate::lsh::LshHasher;
-use crate::reranker::{self, Candidate};
+use crate::reranker::{self, Candidate, RerankerConfig};
 use crate::relay::{RelayClient, RelayConfig};
 use crate::search;
 use crate::store;
 use crate::wallet;
 use crate::Result;
+use totalreclaw_core::claims::MemorySource;
 
 /// Default relay URL.
 const DEFAULT_RELAY_URL: &str = "https://api.totalreclaw.xyz";
 
-/// Result of parsing the decrypted fact envelope (`{"t":..,"a":..,"s":..}`).
+/// Result of parsing the decrypted fact envelope.
+///
+/// ZeroClaw reads both envelope shapes:
+///  * **v0 (pre-2.0)**: `{"t": text, "a": agent_id, "s": source_tag}`
+///    (source_tag is `zeroclaw_{category}` or `openclaw_extraction` etc.)
+///  * **v1 (Memory Taxonomy v1)**: full v1 `ClaimPayload` with `text`,
+///    `type`, `source` (one of `user|user-inferred|assistant|external|derived`),
+///    `scope`, optional `reasoning`, `volatility`, `entities`, `importance`.
 struct DecryptedEnvelope {
     text: String,
     category: MemoryCategory,
+    /// Memory Taxonomy v1 provenance source if the envelope is v1; `None`
+    /// for v0 envelopes (read-side back-compat). Used by `rerank_with_config`
+    /// to apply Retrieval v2 Tier 1 source weights.
+    v1_source: Option<MemorySource>,
 }
 
-/// Parse the decrypted JSON envelope and extract text + category.
+/// Parse the decrypted fact envelope.
 ///
-/// The encrypted blob stores `{"t": text, "a": agent_id, "s": source}`.
-/// ZeroClaw stores source as `zeroclaw_{category}` (e.g. `zeroclaw_core`).
-/// Other clients use different source formats (e.g. `openclaw_extraction`).
-///
-/// Category mapping:
-///   - source contains "core"         -> Core
-///   - source contains "conversation" -> Conversation
-///   - source contains "daily"        -> Daily
-///   - source contains "debrief"      -> Core (debriefs are high-value)
-///   - anything else                  -> Core (safe default)
+/// Tries v1 first (ClaimPayload JSON), falls back to v0 (`{t,a,s}` envelope)
+/// on parse failure so pre-2.0 vault entries still decode.
 fn parse_decrypted_envelope(decrypted: &str) -> DecryptedEnvelope {
-    // Try to parse as JSON envelope
+    // Try v1 ClaimPayload JSON first. A v1 envelope has `text` and `type`
+    // fields at top level; v0 envelopes use `t`/`a`/`s` short keys.
     if let Ok(obj) = serde_json::from_str::<serde_json::Value>(decrypted) {
+        let is_v1 = obj.get("text").is_some() && obj.get("type").is_some();
+        if is_v1 {
+            let text = obj
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or(decrypted)
+                .to_string();
+            // v1 source field: literal enum string
+            let v1_source = obj
+                .get("source")
+                .and_then(|v| v.as_str())
+                .and_then(parse_v1_source);
+            // v1 "type" → ZeroClaw category mapping
+            let v1_type = obj
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("claim");
+            let category = v1_type_to_category(v1_type);
+            return DecryptedEnvelope {
+                text,
+                category,
+                v1_source,
+            };
+        }
+
+        // v0 envelope path (pre-2.0)
         let text = obj
             .get("t")
             .and_then(|v| v.as_str())
             .unwrap_or(decrypted)
             .to_string();
-        let source = obj
-            .get("s")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let source = obj.get("s").and_then(|v| v.as_str()).unwrap_or("");
         let category = category_from_source(source);
-        return DecryptedEnvelope { text, category };
+        return DecryptedEnvelope {
+            text,
+            category,
+            v1_source: None,
+        };
     }
     // Fallback: treat entire decrypted content as text
     DecryptedEnvelope {
         text: decrypted.to_string(),
         category: MemoryCategory::Core,
+        v1_source: None,
+    }
+}
+
+/// Parse a v1 memory source literal to the core `MemorySource` enum.
+fn parse_v1_source(raw: &str) -> Option<MemorySource> {
+    match raw {
+        "user" => Some(MemorySource::User),
+        "user-inferred" => Some(MemorySource::UserInferred),
+        "assistant" => Some(MemorySource::Assistant),
+        "external" => Some(MemorySource::External),
+        "derived" => Some(MemorySource::Derived),
+        _ => None,
+    }
+}
+
+/// Map a v1 memory type to a ZeroClaw memory category.
+///
+/// Category rules:
+///  * claim, preference, directive, commitment → Core (durable)
+///  * episode → Conversation (7-day decay)
+///  * summary → Core (synthesis is high-value)
+///  * anything else → Core (safe default)
+fn v1_type_to_category(v1_type: &str) -> MemoryCategory {
+    match v1_type {
+        "episode" => MemoryCategory::Conversation,
+        "claim" | "preference" | "directive" | "commitment" | "summary" => {
+            MemoryCategory::Core
+        }
+        _ => MemoryCategory::Core,
     }
 }
 
@@ -429,7 +491,7 @@ impl TotalReclawMemory {
             }
         }
 
-        // 8. Decrypt candidates and build reranker input
+        // 8. Decrypt candidates and build reranker input (with v1 provenance)
         let mut rerank_candidates = Vec::new();
         for fact in &candidates {
             // Decrypt content
@@ -437,10 +499,16 @@ impl TotalReclawMemory {
                 Some(b) => b,
                 None => continue,
             };
-            let text = match crypto::decrypt(&blob_b64, &self.keys.encryption_key) {
+            let decrypted = match crypto::decrypt(&blob_b64, &self.keys.encryption_key) {
                 Ok(t) => t,
                 Err(_) => continue,
             };
+
+            // Parse the envelope to extract the display text + v1 source.
+            // v1 blobs carry `source` (Retrieval v2 Tier 1 weighting signal);
+            // v0 blobs don't — reranker falls back to the legacy claim weight.
+            let envelope = parse_decrypted_envelope(&decrypted);
+            let text = envelope.text;
 
             // Decrypt embedding (if available)
             let mut emb = fact
@@ -474,11 +542,22 @@ impl TotalReclawMemory {
                 text: text.clone(),
                 embedding: emb,
                 timestamp: fact.timestamp.clone().unwrap_or_default(),
+                source: envelope.v1_source,
             });
         }
 
-        // 9. Rerank
-        let ranked = reranker::rerank(query, &query_embedding, &rerank_candidates, limit)?;
+        // 9. Rerank with Retrieval v2 Tier 1 source weights enabled.
+        // v1 blobs carry a MemorySource; v0 blobs fall through to the legacy
+        // claim weight so pre-2.0 vaults aren't penalized.
+        let ranked = reranker::rerank_with_config(
+            query,
+            &query_embedding,
+            &rerank_candidates,
+            limit,
+            RerankerConfig {
+                apply_source_weights: true,
+            },
+        )?;
 
         // 10. Convert to MemoryEntry
         let results: Vec<MemoryEntry> = ranked
@@ -555,9 +634,97 @@ impl TotalReclawMemory {
     }
 
     /// Forget (soft-delete) a memory entry using native UserOp.
+    ///
+    /// Emits a Memory Taxonomy v1 tombstone (outer protobuf `version = 4`)
+    /// so the subgraph can distinguish v1 deletes from legacy v3 deletes.
     pub async fn forget(&self, key: &str) -> Result<bool> {
-        store::store_tombstone(key, &self.relay, Some(&self.private_key)).await?;
+        store::store_tombstone_v1(key, &self.relay, Some(&self.private_key)).await?;
         Ok(true)
+    }
+
+    // -----------------------------------------------------------------------
+    // Memory Taxonomy v1 extensions
+    // -----------------------------------------------------------------------
+
+    /// Store a Memory Taxonomy v1 claim (explicit v1 write path).
+    ///
+    /// Use this when the caller has full v1 context (type, source, scope,
+    /// volatility, optional reasoning). Produces a v4 protobuf envelope
+    /// with the canonical `MemoryClaimV1` JSON inner blob.
+    ///
+    /// For the ZeroClaw `Memory` trait's simpler `(key, content, category)`
+    /// shape, `store_with_importance()` remains the primary entry point
+    /// and continues to emit v3 envelopes during the v0→v1 migration
+    /// window. Switch your agent to `store_v1()` when you want v1
+    /// provenance-weighted reranking at recall time.
+    pub async fn store_v1(&self, input: &store::V1StoreInput) -> Result<String> {
+        let fact_id = store::store_fact_v1(
+            input,
+            &self.keys,
+            &self.lsh_hasher,
+            self.embedding_provider.as_ref(),
+            &self.relay,
+            Some(&self.private_key),
+        )
+        .await?;
+
+        // Invalidate hot cache after v1 store
+        if let Ok(mut cache) = self.hot_cache.lock() {
+            cache.clear();
+        }
+        Ok(fact_id)
+    }
+
+    /// Pin a memory claim — supersede it with a new v1 blob whose
+    /// `volatility: stable` signals "never auto-supersede".
+    ///
+    /// ZeroClaw implements pin as a supersede operation: fetch the fact,
+    /// re-store it as a v1 claim with `volatility: stable`, then tombstone
+    /// the prior version. The new claim's `superseded_by` field tracks the
+    /// previous id so a future unpin can reverse the chain.
+    ///
+    /// Not-yet-implemented: this method returns an error advising the
+    /// caller to run the MCP server's `totalreclaw_pin` tool instead.
+    /// See ZeroClaw 2.0 Known Gaps in CLAUDE.md.
+    pub async fn pin(&self, _memory_id: &str) -> Result<()> {
+        Err(crate::Error::Crypto(
+            "pin: not yet implemented in ZeroClaw — use the MCP totalreclaw_pin tool \
+             from your agent. See CLAUDE.md Known Gaps."
+                .into(),
+        ))
+    }
+
+    /// Retype a memory claim — change its v1 `type` (claim → directive, etc.)
+    /// via supersede.
+    ///
+    /// Not-yet-implemented in ZeroClaw's native trait. The MCP server's
+    /// `totalreclaw_retype` tool is the canonical path.
+    pub async fn retype(
+        &self,
+        _memory_id: &str,
+        _new_type: MemorySource,
+    ) -> Result<()> {
+        Err(crate::Error::Crypto(
+            "retype: not yet implemented in ZeroClaw — use the MCP \
+             totalreclaw_retype tool. See CLAUDE.md Known Gaps."
+                .into(),
+        ))
+    }
+
+    /// Set or change the v1 `scope` of a memory claim via supersede.
+    ///
+    /// Not-yet-implemented in ZeroClaw's native trait. The MCP server's
+    /// `totalreclaw_set_scope` tool is the canonical path.
+    pub async fn set_scope(
+        &self,
+        _memory_id: &str,
+        _new_scope: totalreclaw_core::claims::MemoryScope,
+    ) -> Result<()> {
+        Err(crate::Error::Crypto(
+            "set_scope: not yet implemented in ZeroClaw — use the MCP \
+             totalreclaw_set_scope tool. See CLAUDE.md Known Gaps."
+                .into(),
+        ))
     }
 
     /// Count active memories.

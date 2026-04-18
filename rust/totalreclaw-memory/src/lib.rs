@@ -44,6 +44,12 @@ pub use totalreclaw_core::claims::{
     Claim, ClaimCategory, ClaimStatus, EntityRef, EntityType, ResolutionAction, SkipReason,
     TIE_ZONE_SCORE_TOLERANCE, is_pinned_claim, is_pinned_json, respect_pin_in_resolution,
 };
+// Memory Taxonomy v1 types. As of totalreclaw-memory 2.0 these are the
+// canonical taxonomy; v0 categories remain for pre-2.0 vault back-compat.
+pub use totalreclaw_core::claims::{
+    MemoryClaimV1, MemoryEntityV1, MemorySource, MemoryScope, MemoryTypeV1,
+    MemoryVolatility, MEMORY_CLAIM_V1_SCHEMA_VERSION,
+};
 pub use totalreclaw_core::contradiction::{
     Contradiction, ResolutionOutcome, ResolutionWeights, ScoreComponents,
     resolve_with_candidates, resolve_pair, detect_contradictions, default_weights,
