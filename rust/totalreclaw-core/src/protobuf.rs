@@ -24,7 +24,19 @@ pub struct FactPayload {
     pub content_fp: String,
     pub agent_id: String,
     pub encrypted_embedding: Option<String>,
+    /// Outer protobuf schema version.
+    /// - 3 = legacy (inner blob is the pre-v1 binary format).
+    /// - 4 = Memory Taxonomy v1 (inner blob is a v1 JSON payload).
+    /// A value of 0 is treated as `DEFAULT_PROTOBUF_VERSION` for back-compat.
+    pub version: u32,
 }
+
+/// Default outer protobuf schema version (v3, for legacy callers).
+pub const DEFAULT_PROTOBUF_VERSION: u32 = 3;
+
+/// Memory Taxonomy v1 outer protobuf schema version.
+/// Signals that the inner encrypted blob is a v1 JSON payload.
+pub const PROTOBUF_VERSION_V4: u32 = 4;
 
 /// Encode a fact payload as minimal protobuf wire format.
 pub fn encode_fact_protobuf(fact: &FactPayload) -> Vec<u8> {
@@ -48,8 +60,13 @@ pub fn encode_fact_protobuf(fact: &FactPayload) -> Vec<u8> {
     write_double(&mut buf, 6, fact.decay_score);
     // Field 7: is_active (bool = varint 1)
     write_varint_field(&mut buf, 7, 1);
-    // Field 8: version (int32 = varint 3)
-    write_varint_field(&mut buf, 8, 3);
+    // Field 8: version (int32) — 3 legacy, 4 for v1 taxonomy. 0 → default 3.
+    let version = if fact.version == 0 {
+        DEFAULT_PROTOBUF_VERSION
+    } else {
+        fact.version
+    };
+    write_varint_field(&mut buf, 8, version);
     // Fields 9 (source) and 11 (agent_id) removed in v3 — now encrypted inside field 4
     // Field 10: content_fp (string)
     write_string(&mut buf, 10, &fact.content_fp);
@@ -63,7 +80,10 @@ pub fn encode_fact_protobuf(fact: &FactPayload) -> Vec<u8> {
 }
 
 /// Encode a tombstone protobuf for soft-deleting a fact.
-pub fn encode_tombstone_protobuf(fact_id: &str, owner: &str) -> Vec<u8> {
+///
+/// `version`: outer protobuf schema version (3 legacy, 4 for v1 taxonomy).
+/// A value of 0 defaults to `DEFAULT_PROTOBUF_VERSION` (3) for back-compat.
+pub fn encode_tombstone_protobuf(fact_id: &str, owner: &str, version: u32) -> Vec<u8> {
     let mut buf = Vec::with_capacity(128);
 
     write_string(&mut buf, 1, fact_id);
@@ -75,7 +95,12 @@ pub fn encode_tombstone_protobuf(fact_id: &str, owner: &str) -> Vec<u8> {
     write_double(&mut buf, 6, 0.0);
     // is_active = false
     write_varint_field(&mut buf, 7, 0);
-    write_varint_field(&mut buf, 8, 3);
+    let v = if version == 0 {
+        DEFAULT_PROTOBUF_VERSION
+    } else {
+        version
+    };
+    write_varint_field(&mut buf, 8, v);
     // Fields 9 (source) and 11 (agent_id) removed in v3
 
     buf
@@ -154,10 +179,52 @@ mod tests {
             content_fp: "fp123".into(),
             agent_id: "zeroclaw".into(),
             encrypted_embedding: None,
+            version: 0, // 0 → default (v3)
         };
         let encoded = encode_fact_protobuf(&payload);
         assert!(!encoded.is_empty());
         // Should contain the string "test-id" somewhere
         assert!(encoded.windows(7).any(|w| w == b"test-id"));
+    }
+
+    #[test]
+    fn test_encode_fact_protobuf_v3_vs_v4() {
+        let base = FactPayload {
+            id: "test-id".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            owner: "0xABCD".into(),
+            encrypted_blob_hex: "deadbeef".into(),
+            blind_indices: vec![],
+            decay_score: 0.8,
+            source: "".into(),
+            content_fp: "fp".into(),
+            agent_id: "".into(),
+            encrypted_embedding: None,
+            version: DEFAULT_PROTOBUF_VERSION,
+        };
+        let mut v4 = base.clone();
+        v4.version = PROTOBUF_VERSION_V4;
+        let encoded_v3 = encode_fact_protobuf(&base);
+        let encoded_v4 = encode_fact_protobuf(&v4);
+        assert_ne!(encoded_v3, encoded_v4);
+        // Field 8 tag byte = (8<<3)|0 = 0x40
+        assert!(encoded_v3.windows(2).any(|w| w == [0x40, 3]));
+        assert!(encoded_v4.windows(2).any(|w| w == [0x40, 4]));
+    }
+
+    #[test]
+    fn test_encode_tombstone_protobuf_version() {
+        // Note: encode_tombstone_protobuf uses `chrono::Utc::now()` internally
+        // so successive calls differ on the timestamp bytes. We verify the
+        // version tag byte rather than byte-for-byte equality across calls.
+        let ts_v3 = encode_tombstone_protobuf("id", "0xABCD", DEFAULT_PROTOBUF_VERSION);
+        let ts_v4 = encode_tombstone_protobuf("id", "0xABCD", PROTOBUF_VERSION_V4);
+        let ts_default = encode_tombstone_protobuf("id", "0xABCD", 0);
+        assert!(ts_v3.windows(2).any(|w| w == [0x40, 3]));
+        assert!(ts_v4.windows(2).any(|w| w == [0x40, 4]));
+        // Default (0) → v3 tag
+        assert!(ts_default.windows(2).any(|w| w == [0x40, 3]));
+        // v4 tag not present in v3 output
+        assert!(!ts_v3.windows(2).any(|w| w == [0x40, 4]));
     }
 }

@@ -340,6 +340,7 @@ pub fn decrypt_and_rerank(
             text,
             embedding: emb,
             timestamp: fact.timestamp.clone().unwrap_or_default(),
+            source: None,
         });
     }
 
@@ -380,6 +381,7 @@ pub fn decrypt_and_rerank_with_key(
             text,
             embedding: emb,
             timestamp: fact.timestamp.clone().unwrap_or_default(),
+            source: None,
         });
     }
 
@@ -396,11 +398,7 @@ pub fn decrypt_and_rerank_with_key(
 fn decrypt_embedding(encrypted: Option<&str>, encryption_key: &[u8; 32]) -> Vec<f32> {
     encrypted
         .and_then(|e| crypto::decrypt(e, encryption_key).ok())
-        .and_then(|b64| {
-            base64::engine::general_purpose::STANDARD
-                .decode(&b64)
-                .ok()
-        })
+        .and_then(|b64| base64::engine::general_purpose::STANDARD.decode(&b64).ok())
         .map(|bytes| {
             bytes
                 .chunks_exact(4)
@@ -457,14 +455,23 @@ mod tests {
         let lsh_hasher = LshHasher::new(&lsh_seed, 640).unwrap();
 
         let embedding = vec![0.5f32; 640];
-        let trapdoors = generate_search_trapdoors("dark mode preference", &embedding, &lsh_hasher).unwrap();
+        let trapdoors =
+            generate_search_trapdoors("dark mode preference", &embedding, &lsh_hasher).unwrap();
 
         // Should have word hashes + stem hashes + 20 LSH bucket hashes
-        assert!(trapdoors.len() > 20, "Should have word + stem + LSH trapdoors, got {}", trapdoors.len());
+        assert!(
+            trapdoors.len() > 20,
+            "Should have word + stem + LSH trapdoors, got {}",
+            trapdoors.len()
+        );
 
         // All should be hex strings
         for t in &trapdoors {
-            assert!(hex::decode(t).is_ok(), "Trapdoor should be valid hex: {}", t);
+            assert!(
+                hex::decode(t).is_ok(),
+                "Trapdoor should be valid hex: {}",
+                t
+            );
         }
     }
 
@@ -592,14 +599,8 @@ mod tests {
 
     #[test]
     fn test_decrypt_and_rerank_empty() {
-        let results = decrypt_and_rerank(
-            &[],
-            "query",
-            &[0.5f32; 4],
-            &hex::encode([0u8; 32]),
-            3,
-        )
-        .unwrap();
+        let results =
+            decrypt_and_rerank(&[], "query", &[0.5f32; 4], &hex::encode([0u8; 32]), 3).unwrap();
         assert!(results.is_empty());
     }
 
@@ -621,12 +622,16 @@ mod tests {
 
         let envelope1 = serde_json::json!({"t": text1, "a": "test", "s": "test"});
         let enc1 = crypto::encrypt(&envelope1.to_string(), &keys.encryption_key).unwrap();
-        let enc1_bytes = base64::engine::general_purpose::STANDARD.decode(&enc1).unwrap();
+        let enc1_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&enc1)
+            .unwrap();
         let enc1_hex = format!("0x{}", hex::encode(&enc1_bytes));
 
         let envelope2 = serde_json::json!({"t": text2, "a": "test", "s": "test"});
         let enc2 = crypto::encrypt(&envelope2.to_string(), &keys.encryption_key).unwrap();
-        let enc2_bytes = base64::engine::general_purpose::STANDARD.decode(&enc2).unwrap();
+        let enc2_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&enc2)
+            .unwrap();
         let enc2_hex = format!("0x{}", hex::encode(&enc2_bytes));
 
         let facts = vec![
@@ -674,27 +679,19 @@ mod tests {
     fn test_decrypt_and_rerank_skips_undecryptable() {
         let encryption_key_hex = hex::encode([0u8; 32]);
 
-        let facts = vec![
-            SubgraphFact {
-                id: "bad_fact".to_string(),
-                encrypted_blob: "0xdeadbeef".to_string(), // Not valid AES-GCM
-                encrypted_embedding: None,
-                decay_score: None,
-                timestamp: None,
-                created_at: None,
-                is_active: Some(true),
-                content_fp: None,
-            },
-        ];
+        let facts = vec![SubgraphFact {
+            id: "bad_fact".to_string(),
+            encrypted_blob: "0xdeadbeef".to_string(), // Not valid AES-GCM
+            encrypted_embedding: None,
+            decay_score: None,
+            timestamp: None,
+            created_at: None,
+            is_active: Some(true),
+            content_fp: None,
+        }];
 
-        let results = decrypt_and_rerank(
-            &facts,
-            "query",
-            &[0.5f32; 4],
-            &encryption_key_hex,
-            3,
-        )
-        .unwrap();
+        let results =
+            decrypt_and_rerank(&facts, "query", &[0.5f32; 4], &encryption_key_hex, 3).unwrap();
 
         // Undecryptable fact should be silently skipped
         assert!(results.is_empty());
@@ -724,7 +721,9 @@ mod tests {
         let text = "User prefers dark mode";
         let envelope = serde_json::json!({"t": text, "a": "test", "s": "test"});
         let enc = crypto::encrypt(&envelope.to_string(), &keys.encryption_key).unwrap();
-        let enc_bytes = base64::engine::general_purpose::STANDARD.decode(&enc).unwrap();
+        let enc_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&enc)
+            .unwrap();
         let enc_hex = format!("0x{}", hex::encode(&enc_bytes));
 
         let facts = vec![SubgraphFact {
@@ -738,14 +737,9 @@ mod tests {
             content_fp: None,
         }];
 
-        let results = decrypt_and_rerank_with_key(
-            &facts,
-            "dark mode",
-            &[0.5f32; 4],
-            &keys.encryption_key,
-            1,
-        )
-        .unwrap();
+        let results =
+            decrypt_and_rerank_with_key(&facts, "dark mode", &[0.5f32; 4], &keys.encryption_key, 1)
+                .unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].text, text);

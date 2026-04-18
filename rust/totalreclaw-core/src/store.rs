@@ -136,6 +136,7 @@ pub fn prepare_fact(
         content_fp: content_fp.clone(),
         agent_id: agent_id.to_string(),
         encrypted_embedding: Some(encrypted_embedding.clone()),
+        version: protobuf::DEFAULT_PROTOBUF_VERSION,
     };
 
     let protobuf_bytes = protobuf::encode_fact_protobuf(&payload);
@@ -207,6 +208,7 @@ pub fn prepare_fact_with_decay_score(
         content_fp: content_fp.clone(),
         agent_id: agent_id.to_string(),
         encrypted_embedding: Some(encrypted_embedding.clone()),
+        version: protobuf::DEFAULT_PROTOBUF_VERSION,
     };
 
     let protobuf_bytes = protobuf::encode_fact_protobuf(&payload);
@@ -249,8 +251,95 @@ pub fn build_batch_calldata(prepared: &[PreparedFact]) -> Result<Vec<u8>> {
 /// Prepare a tombstone (soft-delete) protobuf for on-chain submission.
 ///
 /// Returns raw protobuf bytes. The host wraps in a UserOp or submits directly.
+///
+/// Legacy callers (v3 outer protobuf). Prefer `prepare_tombstone_v1()` for
+/// Memory Taxonomy v1 writes.
 pub fn prepare_tombstone(fact_id: &str, owner: &str) -> Vec<u8> {
-    protobuf::encode_tombstone_protobuf(fact_id, owner)
+    protobuf::encode_tombstone_protobuf(fact_id, owner, protobuf::DEFAULT_PROTOBUF_VERSION)
+}
+
+/// Prepare a Memory Taxonomy v1 tombstone (outer protobuf version = 4).
+///
+/// Semantically identical to `prepare_tombstone()` but emits `version = 4`
+/// on field 8 so the subgraph can differentiate v1 tombstones from v3
+/// legacy tombstones during indexing.
+pub fn prepare_tombstone_v1(fact_id: &str, owner: &str) -> Vec<u8> {
+    protobuf::encode_tombstone_protobuf(fact_id, owner, protobuf::PROTOBUF_VERSION_V4)
+}
+
+/// Prepare a Memory Taxonomy v1 fact with a JSON envelope inner blob and
+/// outer protobuf version = 4.
+///
+/// The `envelope_json` argument is the serialized v1 `ClaimPayload` (as
+/// produced by `claims-helper.ts::buildCanonicalClaimV1` or the equivalent
+/// Rust/PyO3 path). The caller is responsible for shaping the JSON per the
+/// v1 spec — this function just encrypts the envelope and wires it into a
+/// v4-tagged protobuf.
+///
+/// Everything else (LSH buckets, blind indices, embedding encryption,
+/// content fingerprint, decay score normalization) matches `prepare_fact()`.
+pub fn prepare_fact_v1(
+    envelope_json: &str,
+    text_for_blind_indices: &str,
+    encryption_key: &[u8; 32],
+    dedup_key: &[u8; 32],
+    lsh_hasher: &LshHasher,
+    embedding: &[f32],
+    importance: f64,
+    source: &str,
+    owner: &str,
+    agent_id: &str,
+) -> Result<PreparedFact> {
+    let fact_id = uuid::Uuid::now_v7().to_string();
+    let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+
+    // Encrypt the v1 JSON envelope directly (no wrapper "t"/"a"/"s" — the
+    // envelope IS the v1 ClaimPayload).
+    let encrypted_blob_b64 = crypto::encrypt(envelope_json, encryption_key)?;
+    let encrypted_blob_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&encrypted_blob_b64)
+        .map_err(|e| crate::Error::Crypto(e.to_string()))?;
+    let encrypted_blob_hex = hex::encode(&encrypted_blob_bytes);
+
+    let mut blind_indices = blind::generate_blind_indices(text_for_blind_indices);
+    let embedding_f64: Vec<f64> = embedding.iter().map(|&f| f as f64).collect();
+    let lsh_buckets = lsh_hasher.hash(&embedding_f64)?;
+    blind_indices.extend(lsh_buckets);
+
+    let content_fp = fingerprint::generate_content_fingerprint(text_for_blind_indices, dedup_key);
+    let encrypted_embedding = encrypt_embedding(embedding, encryption_key)?;
+
+    let decay_score = (importance / 10.0).clamp(0.0, 1.0);
+
+    let payload = FactPayload {
+        id: fact_id.clone(),
+        timestamp: timestamp.clone(),
+        owner: owner.to_string(),
+        encrypted_blob_hex: encrypted_blob_hex.clone(),
+        blind_indices: blind_indices.clone(),
+        decay_score,
+        source: source.to_string(),
+        content_fp: content_fp.clone(),
+        agent_id: agent_id.to_string(),
+        encrypted_embedding: Some(encrypted_embedding.clone()),
+        version: protobuf::PROTOBUF_VERSION_V4,
+    };
+
+    let protobuf_bytes = protobuf::encode_fact_protobuf(&payload);
+
+    Ok(PreparedFact {
+        fact_id,
+        timestamp,
+        owner: owner.to_string(),
+        encrypted_blob_hex,
+        blind_indices,
+        decay_score,
+        source: source.to_string(),
+        content_fp,
+        agent_id: agent_id.to_string(),
+        encrypted_embedding: Some(encrypted_embedding),
+        protobuf_bytes,
+    })
 }
 
 /// Compute the content fingerprint for a text (for dedup checks).

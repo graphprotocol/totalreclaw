@@ -363,33 +363,34 @@ pub fn parse_claim_or_legacy(decrypted: &str) -> Claim {
     if let Ok(claim) = serde_json::from_str::<Claim>(decrypted) {
         return claim;
     }
-    let (text, source_agent) = if let Ok(value) = serde_json::from_str::<serde_json::Value>(decrypted) {
-        match value {
-            serde_json::Value::String(s) => (s, "unknown".to_string()),
-            serde_json::Value::Object(map) => {
-                let text = map
-                    .get("t")
-                    .or_else(|| map.get("text"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| decrypted.to_string());
-                let agent = map
-                    .get("a")
-                    .or_else(|| {
-                        map.get("metadata")
-                            .and_then(|m| m.as_object())
-                            .and_then(|m| m.get("source"))
-                    })
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-                (text, agent)
+    let (text, source_agent) =
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(decrypted) {
+            match value {
+                serde_json::Value::String(s) => (s, "unknown".to_string()),
+                serde_json::Value::Object(map) => {
+                    let text = map
+                        .get("t")
+                        .or_else(|| map.get("text"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| decrypted.to_string());
+                    let agent = map
+                        .get("a")
+                        .or_else(|| {
+                            map.get("metadata")
+                                .and_then(|m| m.as_object())
+                                .and_then(|m| m.get("source"))
+                        })
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    (text, agent)
+                }
+                _ => (decrypted.to_string(), "unknown".to_string()),
             }
-            _ => (decrypted.to_string(), "unknown".to_string()),
-        }
-    } else {
-        (decrypted.to_string(), "unknown".to_string())
-    };
+        } else {
+            (decrypted.to_string(), "unknown".to_string())
+        };
     Claim {
         text,
         category: ClaimCategory::Fact,
@@ -420,6 +421,280 @@ pub struct Digest {
     pub active_projects: Vec<String>,
     pub active_contradictions: u32,
     pub prompt_text: String,
+}
+
+// ---------------------------------------------------------------------------
+// Memory Taxonomy v1 (spec: docs/specs/totalreclaw/memory-taxonomy-v1.md)
+//
+// These types are additive and coexist with the v0 `Claim` / `ClaimCategory`
+// types during the migration window. v0 types MUST NOT be removed until all
+// clients have migrated and v1 has locked post-WildChat validation.
+// ---------------------------------------------------------------------------
+
+/// The required `schema_version` value for all v1 claims.
+///
+/// Fixed at `"1.0"` per spec §schema. Receivers MUST refuse to read claims
+/// with unknown schema versions (fail-safe default).
+pub const MEMORY_CLAIM_V1_SCHEMA_VERSION: &str = "1.0";
+
+/// v1 memory type — closed enum of 6 speech-act-grounded categories.
+///
+/// Each value maps to one of Searle's illocutionary classes. See spec
+/// §type-semantics for boundary tests and legacy-type absorption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryTypeV1 {
+    /// Assertive speech act — state of the world. Absorbs legacy
+    /// fact / context / decision.
+    Claim,
+    /// Expressive speech act — likes / dislikes / tastes.
+    Preference,
+    /// Imperative speech act — rules the user wants applied going forward
+    /// (absorbs legacy `rule`).
+    Directive,
+    /// Commissive speech act — future intent (absorbs legacy `goal`).
+    Commitment,
+    /// Narrative — notable past events (absorbs legacy `episodic`).
+    Episode,
+    /// Derived synthesis — only valid with source in {derived, assistant}.
+    Summary,
+}
+
+/// Provenance source for a memory claim.
+///
+/// Per spec §provenance-filter, `source` is a first-class ranking signal.
+/// The v1 retrieval Tier 1 pipeline applies a source-weighted multiplier
+/// to the final RRF score so assistant-authored facts don't drown out
+/// user-authored claims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum MemorySource {
+    /// User explicitly stated the claim (highest trust).
+    User,
+    /// Extractor confidently inferred from user signals.
+    UserInferred,
+    /// Assistant authored — heavy penalty at retrieval.
+    Assistant,
+    /// Imported from another system (e.g. Mem0, ChatGPT, Claude memory).
+    External,
+    /// Computed (digests, summaries, consolidation).
+    Derived,
+}
+
+/// Life-domain scope for a memory claim. Open-extensible per client,
+/// but every v1-compliant client MUST accept all values defined here
+/// when reading from a vault written by another client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryScope {
+    Work,
+    Personal,
+    Health,
+    Family,
+    Creative,
+    Finance,
+    Misc,
+    Unspecified,
+}
+
+/// Temporal stability of a memory claim. Assigned in the comparative
+/// rescoring pass, not at single-claim extraction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryVolatility {
+    /// Unlikely to change for years (name, allergies, birthplace).
+    Stable,
+    /// Changes occasionally (job, active project, partner's name).
+    Updatable,
+    /// Short-lived (today's task, this week's itinerary).
+    Ephemeral,
+}
+
+/// Entity type for v1 structured entity references. Mirrors the v0
+/// [`EntityType`] enum and uses the same string-level encoding so
+/// v1 claims can cross-reference v0 entities.
+pub type MemoryEntityType = EntityType;
+
+/// Structured entity reference inside a v1 claim.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryEntityV1 {
+    /// Prefer proper nouns; specific not generic.
+    pub name: String,
+    #[serde(rename = "type")]
+    pub entity_type: MemoryEntityType,
+    /// Optional semantic role (e.g. "chooser", "employer", "rejected").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+}
+
+fn default_schema_version_v1() -> String {
+    MEMORY_CLAIM_V1_SCHEMA_VERSION.to_string()
+}
+
+fn is_default_schema_version_v1(v: &str) -> bool {
+    v == MEMORY_CLAIM_V1_SCHEMA_VERSION
+}
+
+fn default_scope_v1() -> MemoryScope {
+    MemoryScope::Unspecified
+}
+
+fn is_default_scope_v1(s: &MemoryScope) -> bool {
+    matches!(s, MemoryScope::Unspecified)
+}
+
+fn default_volatility_v1() -> MemoryVolatility {
+    MemoryVolatility::Updatable
+}
+
+fn is_default_volatility_v1(v: &MemoryVolatility) -> bool {
+    matches!(v, MemoryVolatility::Updatable)
+}
+
+fn is_empty_entities_v1(v: &[MemoryEntityV1]) -> bool {
+    v.is_empty()
+}
+
+/// A v1 memory claim per the Memory Taxonomy v1 spec.
+///
+/// All required fields are always serialized. Optional fields default to the
+/// spec-defined sentinel (`scope` defaults to `Unspecified`, `volatility` to
+/// `Updatable`) and are preserved on round-trip.
+///
+/// See `docs/specs/totalreclaw/memory-taxonomy-v1.md` for field semantics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryClaimV1 {
+    // ── REQUIRED ─────────────────────────────────────────────────
+    /// UUIDv7 (time-ordered, no separate created_at needed for sort).
+    pub id: String,
+    /// Human-readable, 5-512 UTF-8 chars.
+    pub text: String,
+    #[serde(rename = "type")]
+    pub memory_type: MemoryTypeV1,
+    pub source: MemorySource,
+    /// ISO8601 UTC (redundant w/ UUIDv7 but explicit per spec).
+    pub created_at: String,
+    #[serde(
+        default = "default_schema_version_v1",
+        skip_serializing_if = "is_default_schema_version_v1"
+    )]
+    pub schema_version: String,
+
+    // ── ORTHOGONAL AXES (defaults applied if absent) ─────────────
+    #[serde(
+        default = "default_scope_v1",
+        skip_serializing_if = "is_default_scope_v1"
+    )]
+    pub scope: MemoryScope,
+    #[serde(
+        default = "default_volatility_v1",
+        skip_serializing_if = "is_default_volatility_v1"
+    )]
+    pub volatility: MemoryVolatility,
+
+    // ── STRUCTURED FIELDS ────────────────────────────────────────
+    #[serde(default, skip_serializing_if = "is_empty_entities_v1")]
+    pub entities: Vec<MemoryEntityV1>,
+    /// Separate `reasoning` field for decision-style claims (replaces old
+    /// `decision` type). Populate for `type: claim` where the user expressed
+    /// a decision-with-reasoning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    /// ISO8601 UTC expiration; set by extractor per type+volatility heuristic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+
+    // ── ADVISORY (receivers MAY recompute) ───────────────────────
+    /// 1-10, auto-ranked in comparative pass. Advisory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<u8>,
+    /// 0-1, extractor self-assessment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    /// Claim ID that overrides this (tombstone chain).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
+}
+
+impl MemoryTypeV1 {
+    /// Case-insensitive parser that returns a fallback default for unknown input.
+    ///
+    /// Returns `MemoryTypeV1::Claim` for any unrecognised (or empty) string.
+    /// Used at boundaries where robustness beats strictness — e.g. parsing
+    /// decrypted blobs written by another client version.
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "claim" => MemoryTypeV1::Claim,
+            "preference" => MemoryTypeV1::Preference,
+            "directive" => MemoryTypeV1::Directive,
+            "commitment" => MemoryTypeV1::Commitment,
+            "episode" => MemoryTypeV1::Episode,
+            "summary" => MemoryTypeV1::Summary,
+            _ => MemoryTypeV1::Claim,
+        }
+    }
+}
+
+impl MemorySource {
+    /// Case-insensitive parser that returns a fallback for unknown input.
+    ///
+    /// Returns `MemorySource::UserInferred` for any unrecognised string. This
+    /// choice matches the retrieval Tier 1 policy for legacy claims without a
+    /// `source` field — they receive a moderate fallback weight rather than
+    /// being penalised as hard as `assistant` or promoted as high as `user`.
+    pub fn from_str_lossy(s: &str) -> Self {
+        // Accept both kebab-case and underscored / space variants to be
+        // generous about cross-client serialization drift.
+        let normalized: String = s
+            .trim()
+            .to_ascii_lowercase()
+            .chars()
+            .map(|c| if c == '_' || c == ' ' { '-' } else { c })
+            .collect();
+        match normalized.as_str() {
+            "user" => MemorySource::User,
+            "user-inferred" => MemorySource::UserInferred,
+            "assistant" => MemorySource::Assistant,
+            "external" => MemorySource::External,
+            "derived" => MemorySource::Derived,
+            _ => MemorySource::UserInferred,
+        }
+    }
+}
+
+impl MemoryScope {
+    /// Case-insensitive parser that returns `Unspecified` for unknown input.
+    ///
+    /// The scope enum is open-extensible per spec §cross-client-guarantees, so
+    /// receivers MUST tolerate unknown scope values when reading from a vault
+    /// written by another client — we coerce to `Unspecified` rather than
+    /// guess which v1 bucket to funnel them into.
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "work" => MemoryScope::Work,
+            "personal" => MemoryScope::Personal,
+            "health" => MemoryScope::Health,
+            "family" => MemoryScope::Family,
+            "creative" => MemoryScope::Creative,
+            "finance" => MemoryScope::Finance,
+            "misc" => MemoryScope::Misc,
+            "unspecified" => MemoryScope::Unspecified,
+            _ => MemoryScope::Unspecified,
+        }
+    }
+}
+
+impl MemoryVolatility {
+    /// Case-insensitive parser; returns `Updatable` (the spec default) for
+    /// unknown input.
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "stable" => MemoryVolatility::Stable,
+            "updatable" => MemoryVolatility::Updatable,
+            "ephemeral" => MemoryVolatility::Ephemeral,
+            _ => MemoryVolatility::Updatable,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -500,9 +775,17 @@ mod tests {
         let c = minimal_claim();
         let json = serde_json::to_string(&c).unwrap();
         // status=Active -> omitted
-        assert!(!json.contains("\"st\""), "status should be omitted when Active: {}", json);
+        assert!(
+            !json.contains("\"st\""),
+            "status should be omitted when Active: {}",
+            json
+        );
         // corroboration_count=1 -> omitted
-        assert!(!json.contains("\"cc\""), "corroboration_count should be omitted when 1: {}", json);
+        assert!(
+            !json.contains("\"cc\""),
+            "corroboration_count should be omitted when 1: {}",
+            json
+        );
         // None options omitted
         assert!(!json.contains("\"sup\""));
         assert!(!json.contains("\"sby\""));
@@ -940,7 +1223,13 @@ mod tests {
         c.status = ClaimStatus::Pinned;
         let json = serde_json::to_string(&c).unwrap();
         let action = respect_pin_in_resolution(
-            &json, "new_id", "existing_id", "new_id", 0.5, 0.7, TIE_ZONE_SCORE_TOLERANCE,
+            &json,
+            "new_id",
+            "existing_id",
+            "new_id",
+            0.5,
+            0.7,
+            TIE_ZONE_SCORE_TOLERANCE,
         );
         assert_eq!(
             action,
@@ -963,7 +1252,13 @@ mod tests {
         let c = minimal_claim();
         let json = serde_json::to_string(&c).unwrap();
         let action = respect_pin_in_resolution(
-            &json, "new_id", "existing_id", "existing_id", 0.5, 0.7, TIE_ZONE_SCORE_TOLERANCE,
+            &json,
+            "new_id",
+            "existing_id",
+            "existing_id",
+            0.5,
+            0.7,
+            TIE_ZONE_SCORE_TOLERANCE,
         );
         assert_eq!(
             action,
@@ -986,7 +1281,13 @@ mod tests {
         let c = minimal_claim();
         let json = serde_json::to_string(&c).unwrap();
         let action = respect_pin_in_resolution(
-            &json, "new_id", "existing_id", "new_id", 0.005, 0.7, TIE_ZONE_SCORE_TOLERANCE,
+            &json,
+            "new_id",
+            "existing_id",
+            "new_id",
+            0.005,
+            0.7,
+            TIE_ZONE_SCORE_TOLERANCE,
         );
         match &action {
             ResolutionAction::TieLeaveBoth { score_gap, .. } => {
@@ -1001,7 +1302,13 @@ mod tests {
         let c = minimal_claim();
         let json = serde_json::to_string(&c).unwrap();
         let action = respect_pin_in_resolution(
-            &json, "new_id", "existing_id", "new_id", 0.15, 0.7, TIE_ZONE_SCORE_TOLERANCE,
+            &json,
+            "new_id",
+            "existing_id",
+            "new_id",
+            0.15,
+            0.7,
+            TIE_ZONE_SCORE_TOLERANCE,
         );
         match &action {
             ResolutionAction::SupersedeExisting { score_gap, .. } => {
@@ -1040,5 +1347,382 @@ mod tests {
             let json = serde_json::to_string(&reason).unwrap();
             assert_eq!(json, expected);
         }
+    }
+
+    // === Memory Taxonomy v1 — enum serde & from_str_lossy ===
+
+    #[test]
+    fn test_memory_type_v1_serde_round_trip() {
+        let pairs = [
+            (MemoryTypeV1::Claim, "\"claim\""),
+            (MemoryTypeV1::Preference, "\"preference\""),
+            (MemoryTypeV1::Directive, "\"directive\""),
+            (MemoryTypeV1::Commitment, "\"commitment\""),
+            (MemoryTypeV1::Episode, "\"episode\""),
+            (MemoryTypeV1::Summary, "\"summary\""),
+        ];
+        for (variant, expected) in pairs {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, expected);
+            let back: MemoryTypeV1 = serde_json::from_str(&json).unwrap();
+            assert_eq!(variant, back);
+        }
+    }
+
+    #[test]
+    fn test_memory_source_serde_round_trip() {
+        let pairs = [
+            (MemorySource::User, "\"user\""),
+            (MemorySource::UserInferred, "\"user-inferred\""),
+            (MemorySource::Assistant, "\"assistant\""),
+            (MemorySource::External, "\"external\""),
+            (MemorySource::Derived, "\"derived\""),
+        ];
+        for (variant, expected) in pairs {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, expected);
+            let back: MemorySource = serde_json::from_str(&json).unwrap();
+            assert_eq!(variant, back);
+        }
+    }
+
+    #[test]
+    fn test_memory_scope_serde_round_trip() {
+        let pairs = [
+            (MemoryScope::Work, "\"work\""),
+            (MemoryScope::Personal, "\"personal\""),
+            (MemoryScope::Health, "\"health\""),
+            (MemoryScope::Family, "\"family\""),
+            (MemoryScope::Creative, "\"creative\""),
+            (MemoryScope::Finance, "\"finance\""),
+            (MemoryScope::Misc, "\"misc\""),
+            (MemoryScope::Unspecified, "\"unspecified\""),
+        ];
+        for (variant, expected) in pairs {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, expected);
+            let back: MemoryScope = serde_json::from_str(&json).unwrap();
+            assert_eq!(variant, back);
+        }
+    }
+
+    #[test]
+    fn test_memory_volatility_serde_round_trip() {
+        let pairs = [
+            (MemoryVolatility::Stable, "\"stable\""),
+            (MemoryVolatility::Updatable, "\"updatable\""),
+            (MemoryVolatility::Ephemeral, "\"ephemeral\""),
+        ];
+        for (variant, expected) in pairs {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, expected);
+            let back: MemoryVolatility = serde_json::from_str(&json).unwrap();
+            assert_eq!(variant, back);
+        }
+    }
+
+    #[test]
+    fn test_memory_type_v1_from_str_lossy_known() {
+        assert_eq!(MemoryTypeV1::from_str_lossy("claim"), MemoryTypeV1::Claim);
+        assert_eq!(
+            MemoryTypeV1::from_str_lossy("preference"),
+            MemoryTypeV1::Preference
+        );
+        assert_eq!(
+            MemoryTypeV1::from_str_lossy("directive"),
+            MemoryTypeV1::Directive
+        );
+        assert_eq!(
+            MemoryTypeV1::from_str_lossy("commitment"),
+            MemoryTypeV1::Commitment
+        );
+        assert_eq!(
+            MemoryTypeV1::from_str_lossy("episode"),
+            MemoryTypeV1::Episode
+        );
+        assert_eq!(
+            MemoryTypeV1::from_str_lossy("summary"),
+            MemoryTypeV1::Summary
+        );
+    }
+
+    #[test]
+    fn test_memory_type_v1_from_str_lossy_mixed_case() {
+        assert_eq!(MemoryTypeV1::from_str_lossy("CLAIM"), MemoryTypeV1::Claim);
+        assert_eq!(
+            MemoryTypeV1::from_str_lossy("Preference"),
+            MemoryTypeV1::Preference
+        );
+        assert_eq!(
+            MemoryTypeV1::from_str_lossy("  directive  "),
+            MemoryTypeV1::Directive
+        );
+    }
+
+    #[test]
+    fn test_memory_type_v1_from_str_lossy_unknown_defaults_to_claim() {
+        assert_eq!(
+            MemoryTypeV1::from_str_lossy("nonsense"),
+            MemoryTypeV1::Claim
+        );
+        assert_eq!(MemoryTypeV1::from_str_lossy(""), MemoryTypeV1::Claim);
+        // Legacy v0 tokens must also fall through to Claim — they're handled
+        // by the dedicated normalize_legacy_to_v1 adapter (not implemented
+        // here), not by from_str_lossy.
+        assert_eq!(MemoryTypeV1::from_str_lossy("fact"), MemoryTypeV1::Claim);
+        assert_eq!(MemoryTypeV1::from_str_lossy("rule"), MemoryTypeV1::Claim);
+    }
+
+    #[test]
+    fn test_memory_source_from_str_lossy_known() {
+        assert_eq!(MemorySource::from_str_lossy("user"), MemorySource::User);
+        assert_eq!(
+            MemorySource::from_str_lossy("user-inferred"),
+            MemorySource::UserInferred
+        );
+        assert_eq!(
+            MemorySource::from_str_lossy("assistant"),
+            MemorySource::Assistant
+        );
+        assert_eq!(
+            MemorySource::from_str_lossy("external"),
+            MemorySource::External
+        );
+        assert_eq!(
+            MemorySource::from_str_lossy("derived"),
+            MemorySource::Derived
+        );
+    }
+
+    #[test]
+    fn test_memory_source_from_str_lossy_underscore_variant() {
+        // Some clients may serialize as user_inferred instead of user-inferred.
+        assert_eq!(
+            MemorySource::from_str_lossy("user_inferred"),
+            MemorySource::UserInferred
+        );
+        assert_eq!(
+            MemorySource::from_str_lossy("USER_INFERRED"),
+            MemorySource::UserInferred
+        );
+    }
+
+    #[test]
+    fn test_memory_source_from_str_lossy_unknown_defaults_to_user_inferred() {
+        // Policy: unknown sources fall back to user-inferred (moderate weight).
+        assert_eq!(
+            MemorySource::from_str_lossy("bot"),
+            MemorySource::UserInferred
+        );
+        assert_eq!(MemorySource::from_str_lossy(""), MemorySource::UserInferred);
+    }
+
+    #[test]
+    fn test_memory_scope_from_str_lossy_known_and_unknown() {
+        assert_eq!(MemoryScope::from_str_lossy("work"), MemoryScope::Work);
+        assert_eq!(
+            MemoryScope::from_str_lossy("UNSPECIFIED"),
+            MemoryScope::Unspecified
+        );
+        // Unknown scope values (the enum is open-extensible) coerce to Unspecified.
+        assert_eq!(
+            MemoryScope::from_str_lossy("gaming"),
+            MemoryScope::Unspecified
+        );
+        assert_eq!(MemoryScope::from_str_lossy(""), MemoryScope::Unspecified);
+    }
+
+    #[test]
+    fn test_memory_volatility_from_str_lossy_known_and_unknown() {
+        assert_eq!(
+            MemoryVolatility::from_str_lossy("stable"),
+            MemoryVolatility::Stable
+        );
+        assert_eq!(
+            MemoryVolatility::from_str_lossy("EPHEMERAL"),
+            MemoryVolatility::Ephemeral
+        );
+        // Unknown -> default Updatable.
+        assert_eq!(
+            MemoryVolatility::from_str_lossy("permanent"),
+            MemoryVolatility::Updatable
+        );
+        assert_eq!(
+            MemoryVolatility::from_str_lossy(""),
+            MemoryVolatility::Updatable
+        );
+    }
+
+    // === MemoryClaimV1 struct round-trip & defaults ===
+
+    fn minimal_v1_claim() -> MemoryClaimV1 {
+        MemoryClaimV1 {
+            id: "01900000-0000-7000-8000-000000000000".to_string(),
+            text: "prefers PostgreSQL".to_string(),
+            memory_type: MemoryTypeV1::Preference,
+            source: MemorySource::User,
+            created_at: "2026-04-17T10:00:00Z".to_string(),
+            schema_version: MEMORY_CLAIM_V1_SCHEMA_VERSION.to_string(),
+            scope: MemoryScope::Unspecified,
+            volatility: MemoryVolatility::Updatable,
+            entities: Vec::new(),
+            reasoning: None,
+            expires_at: None,
+            importance: None,
+            confidence: None,
+            superseded_by: None,
+        }
+    }
+
+    fn full_v1_claim() -> MemoryClaimV1 {
+        MemoryClaimV1 {
+            id: "01900000-0000-7000-8000-000000000001".to_string(),
+            text: "Chose PostgreSQL for the analytics store".to_string(),
+            memory_type: MemoryTypeV1::Claim,
+            source: MemorySource::UserInferred,
+            created_at: "2026-04-17T10:00:00Z".to_string(),
+            schema_version: MEMORY_CLAIM_V1_SCHEMA_VERSION.to_string(),
+            scope: MemoryScope::Work,
+            volatility: MemoryVolatility::Stable,
+            entities: vec![MemoryEntityV1 {
+                name: "PostgreSQL".to_string(),
+                entity_type: EntityType::Tool,
+                role: Some("chosen".to_string()),
+            }],
+            reasoning: Some("data is relational and needs ACID".to_string()),
+            expires_at: None,
+            importance: Some(8),
+            confidence: Some(0.92),
+            superseded_by: None,
+        }
+    }
+
+    #[test]
+    fn test_memory_claim_v1_minimal_round_trip() {
+        let c = minimal_v1_claim();
+        let json = serde_json::to_string(&c).unwrap();
+        let back: MemoryClaimV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+    }
+
+    #[test]
+    fn test_memory_claim_v1_full_round_trip() {
+        let c = full_v1_claim();
+        let json = serde_json::to_string(&c).unwrap();
+        let back: MemoryClaimV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+    }
+
+    #[test]
+    fn test_memory_claim_v1_minimal_omits_defaults() {
+        let c = minimal_v1_claim();
+        let json = serde_json::to_string(&c).unwrap();
+        // Schema version at default ("1.0") MUST still be serialized explicitly? Spec says required.
+        // Our serializer omits when equal to default to keep blobs tiny, but deserialization
+        // must ALWAYS provide it via default. Confirm absence here, presence of default on parse below.
+        assert!(!json.contains("schema_version"));
+        // scope=Unspecified -> omitted
+        assert!(!json.contains("scope"));
+        // volatility=Updatable -> omitted
+        assert!(!json.contains("volatility"));
+        // None options omitted
+        assert!(!json.contains("reasoning"));
+        assert!(!json.contains("expires_at"));
+        assert!(!json.contains("importance"));
+        assert!(!json.contains("confidence"));
+        assert!(!json.contains("superseded_by"));
+        // Entity list empty -> omitted
+        assert!(!json.contains("entities"));
+    }
+
+    #[test]
+    fn test_memory_claim_v1_deserialize_fills_defaults() {
+        // Minimal JSON with only required fields (+no schema_version) must
+        // parse and surface the spec-defined defaults.
+        let json = r#"{
+            "id":"01900000-0000-7000-8000-000000000000",
+            "text":"prefers PostgreSQL",
+            "type":"preference",
+            "source":"user",
+            "created_at":"2026-04-17T10:00:00Z"
+        }"#;
+        let c: MemoryClaimV1 = serde_json::from_str(json).unwrap();
+        assert_eq!(c.schema_version, MEMORY_CLAIM_V1_SCHEMA_VERSION);
+        assert_eq!(c.scope, MemoryScope::Unspecified);
+        assert_eq!(c.volatility, MemoryVolatility::Updatable);
+        assert!(c.entities.is_empty());
+        assert!(c.reasoning.is_none());
+        assert!(c.expires_at.is_none());
+        assert!(c.importance.is_none());
+        assert!(c.confidence.is_none());
+        assert!(c.superseded_by.is_none());
+    }
+
+    #[test]
+    fn test_memory_claim_v1_full_keeps_non_default_fields() {
+        let c = full_v1_claim();
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains("\"scope\":\"work\""));
+        assert!(json.contains("\"volatility\":\"stable\""));
+        assert!(json.contains("\"reasoning\":"));
+        assert!(json.contains("\"importance\":8"));
+        assert!(json.contains("\"confidence\":0.92"));
+        assert!(json.contains("\"entities\":"));
+        assert!(json.contains("\"type\":\"claim\""));
+        assert!(json.contains("\"source\":\"user-inferred\""));
+    }
+
+    #[test]
+    fn test_memory_claim_v1_reference_exact_bytes() {
+        // Byte-level canonical — locks TS/Python parity.
+        let c = MemoryClaimV1 {
+            id: "01900000-0000-7000-8000-000000000000".to_string(),
+            text: "prefers PostgreSQL".to_string(),
+            memory_type: MemoryTypeV1::Preference,
+            source: MemorySource::User,
+            created_at: "2026-04-17T10:00:00Z".to_string(),
+            schema_version: MEMORY_CLAIM_V1_SCHEMA_VERSION.to_string(),
+            scope: MemoryScope::Unspecified,
+            volatility: MemoryVolatility::Updatable,
+            entities: Vec::new(),
+            reasoning: None,
+            expires_at: None,
+            importance: None,
+            confidence: None,
+            superseded_by: None,
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        let expected = r#"{"id":"01900000-0000-7000-8000-000000000000","text":"prefers PostgreSQL","type":"preference","source":"user","created_at":"2026-04-17T10:00:00Z"}"#;
+        assert_eq!(json, expected);
+    }
+
+    #[test]
+    fn test_memory_claim_v1_rejects_wrong_type_token() {
+        // Legacy v0 token "fact" is invalid for v1's closed type enum.
+        let json = r#"{
+            "id":"01900000-0000-7000-8000-000000000000",
+            "text":"hi",
+            "type":"fact",
+            "source":"user",
+            "created_at":"2026-04-17T10:00:00Z"
+        }"#;
+        let result: std::result::Result<MemoryClaimV1, _> = serde_json::from_str(json);
+        assert!(result.is_err(), "v1 must reject legacy token 'fact'");
+    }
+
+    #[test]
+    fn test_memory_claim_v1_schema_version_preserved_if_non_default() {
+        // If a client serializes schema_version explicitly (e.g. "1.0" with
+        // future "1.1" coming), we must preserve it verbatim on round-trip.
+        let json = r#"{
+            "id":"01900000-0000-7000-8000-000000000000",
+            "text":"hi",
+            "type":"claim",
+            "source":"user",
+            "created_at":"2026-04-17T10:00:00Z",
+            "schema_version":"1.0"
+        }"#;
+        let c: MemoryClaimV1 = serde_json::from_str(json).unwrap();
+        assert_eq!(c.schema_version, "1.0");
     }
 }

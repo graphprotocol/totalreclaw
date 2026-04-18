@@ -10,14 +10,14 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
-use crate::{
-    blind, claims, contradiction, crypto, debrief, digest, feedback_log, fingerprint, lsh,
-    protobuf, reranker, store,
-};
 #[cfg(feature = "managed")]
 use crate::search;
 #[cfg(feature = "managed")]
 use crate::userop;
+use crate::{
+    blind, claims, contradiction, crypto, debrief, digest, feedback_log, fingerprint, lsh,
+    protobuf, reranker, store,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -70,7 +70,11 @@ fn keys_to_dict(py: Python<'_>, keys: &crypto::DerivedKeys) -> PyResult<PyObject
 ///
 /// Returns bytes (32 bytes).
 #[pyfunction]
-fn derive_lsh_seed<'py>(py: Python<'py>, mnemonic: &str, salt: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+fn derive_lsh_seed<'py>(
+    py: Python<'py>,
+    mnemonic: &str,
+    salt: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
     let salt_arr = bytes_to_array32(salt)?;
     let seed = crypto::derive_lsh_seed(mnemonic, &salt_arr).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &seed))
@@ -266,6 +270,11 @@ fn encode_fact_protobuf<'py>(py: Python<'py>, json_str: &str) -> PyResult<Bound<
             .get("encrypted_embedding")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        version: obj
+            .get("version")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(protobuf::DEFAULT_PROTOBUF_VERSION),
     };
 
     let encoded = protobuf::encode_fact_protobuf(&payload);
@@ -277,12 +286,24 @@ fn encode_fact_protobuf<'py>(py: Python<'py>, json_str: &str) -> PyResult<Bound<
 /// Args:
 ///     fact_id: The fact ID to tombstone.
 ///     owner: The owner address.
+///     version: Outer protobuf schema version (optional, default 3).
+///         Pass 4 for Memory Taxonomy v1 tombstones.
 ///
 /// Returns:
 ///     bytes (protobuf wire format).
 #[pyfunction]
-fn encode_tombstone_protobuf<'py>(py: Python<'py>, fact_id: &str, owner: &str) -> PyResult<Bound<'py, PyBytes>> {
-    let encoded = protobuf::encode_tombstone_protobuf(fact_id, owner);
+#[pyo3(signature = (fact_id, owner, version=None))]
+fn encode_tombstone_protobuf<'py>(
+    py: Python<'py>,
+    fact_id: &str,
+    owner: &str,
+    version: Option<u32>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let encoded = protobuf::encode_tombstone_protobuf(
+        fact_id,
+        owner,
+        version.unwrap_or(protobuf::DEFAULT_PROTOBUF_VERSION),
+    );
     Ok(PyBytes::new(py, &encoded))
 }
 
@@ -319,25 +340,130 @@ fn get_debrief_system_prompt() -> &'static str {
 // Reranker
 // ---------------------------------------------------------------------------
 
-/// Rerank candidates using BM25 + Cosine + RRF fusion.
+/// Rerank candidates using BM25 + Cosine + RRF fusion (v0-compatible).
 ///
 /// Args:
 ///     query: Search query text.
 ///     query_embedding: Query embedding vector (list of floats).
-///     candidates_json: JSON array of ``{ id, text, embedding, timestamp }`` objects.
+///     candidates_json: JSON array of ``{ id, text, embedding, timestamp, source? }`` objects.
 ///     top_k: Number of top results to return.
 ///
 /// Returns:
 ///     JSON string of ranked results.
 #[pyfunction]
 #[pyo3(name = "rerank")]
-fn py_rerank(query: &str, query_embedding: Vec<f32>, candidates_json: &str, top_k: usize) -> PyResult<String> {
-    let candidates: Vec<reranker::Candidate> = serde_json::from_str(candidates_json)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+fn py_rerank(
+    query: &str,
+    query_embedding: Vec<f32>,
+    candidates_json: &str,
+    top_k: usize,
+) -> PyResult<String> {
+    let candidates: Vec<reranker::Candidate> =
+        serde_json::from_str(candidates_json).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let results = reranker::rerank(query, &query_embedding, &candidates, top_k)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
     serde_json::to_string(&results)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Rerank candidates with a config flag (Retrieval v2 Tier 1).
+///
+/// When ``apply_source_weights`` is True, each candidate's final fused score is
+/// multiplied by the provenance weight derived from its ``source`` field.
+/// Legacy candidates without ``source`` receive the v0 fallback weight.
+///
+/// Args:
+///     query: Search query text.
+///     query_embedding: Query embedding vector (list of floats).
+///     candidates_json: JSON array of ``{ id, text, embedding, timestamp, source? }`` objects.
+///     top_k: Number of top results to return.
+///     apply_source_weights: If True, apply v1 source weighting.
+///
+/// Returns:
+///     JSON string of ranked results including ``source_weight``.
+#[pyfunction]
+#[pyo3(name = "rerank_with_config")]
+fn py_rerank_with_config(
+    query: &str,
+    query_embedding: Vec<f32>,
+    candidates_json: &str,
+    top_k: usize,
+    apply_source_weights: bool,
+) -> PyResult<String> {
+    let candidates: Vec<reranker::Candidate> =
+        serde_json::from_str(candidates_json).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let config = reranker::RerankerConfig {
+        apply_source_weights,
+    };
+    let results = reranker::rerank_with_config(query, &query_embedding, &candidates, top_k, config)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    serde_json::to_string(&results)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Return the source weight multiplier for a given source string.
+///
+/// Accepted values: ``"user" | "user-inferred" | "assistant" | "external" | "derived"``.
+///
+/// Unknown input is routed through ``MemorySource::from_str_lossy`` which
+/// falls back to ``user-inferred`` (weight 0.90). Callers who want the
+/// "no source field at all" fallback (weight 0.85) should call
+/// :func:`legacy_claim_fallback_weight` instead.
+#[pyfunction]
+#[pyo3(name = "source_weight")]
+fn py_source_weight(source: &str) -> f64 {
+    let src = crate::claims::MemorySource::from_str_lossy(source);
+    reranker::source_weight(src)
+}
+
+/// Return the v1 legacy-claim fallback weight (applied to candidates that
+/// have no ``source`` field).
+#[pyfunction]
+#[pyo3(name = "legacy_claim_fallback_weight")]
+fn py_legacy_claim_fallback_weight() -> f64 {
+    reranker::LEGACY_CLAIM_FALLBACK_WEIGHT
+}
+
+/// Validate a Memory Taxonomy v1 claim (JSON in, canonical JSON out).
+///
+/// Raises ``ValueError`` on any schema violation (wrong type token, missing
+/// required field, unsupported schema_version).
+#[pyfunction]
+#[pyo3(name = "validate_memory_claim_v1")]
+fn py_validate_memory_claim_v1(claim_json: &str) -> PyResult<String> {
+    let claim: crate::claims::MemoryClaimV1 = serde_json::from_str(claim_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid v1 claim: {}", e)))?;
+    if claim.schema_version != crate::claims::MEMORY_CLAIM_V1_SCHEMA_VERSION {
+        return Err(PyValueError::new_err(format!(
+            "unsupported schema_version {}: only {} is supported",
+            claim.schema_version,
+            crate::claims::MEMORY_CLAIM_V1_SCHEMA_VERSION
+        )));
+    }
+    serde_json::to_string(&claim)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Case-insensitive parse of a memory type string. Unknown input returns "claim".
+#[pyfunction]
+#[pyo3(name = "parse_memory_type_v1")]
+fn py_parse_memory_type_v1(s: &str) -> String {
+    let t = crate::claims::MemoryTypeV1::from_str_lossy(s);
+    serde_json::to_string(&t)
+        .unwrap_or_else(|_| "\"claim\"".to_string())
+        .trim_matches('"')
+        .to_string()
+}
+
+/// Case-insensitive parse of a memory source string. Unknown input returns "user-inferred".
+#[pyfunction]
+#[pyo3(name = "parse_memory_source")]
+fn py_parse_memory_source(s: &str) -> String {
+    let src = crate::claims::MemorySource::from_str_lossy(s);
+    serde_json::to_string(&src)
+        .unwrap_or_else(|_| "\"user-inferred\"".to_string())
+        .trim_matches('"')
+        .to_string()
 }
 
 /// Cosine similarity between two f32 vectors.
@@ -365,8 +491,7 @@ fn py_cosine_similarity(a: Vec<f32>, b: Vec<f32>) -> f64 {
 #[pyfunction]
 fn derive_eoa(mnemonic: &str) -> PyResult<String> {
     let w = crate::wallet::derive_eoa(mnemonic).map_err(to_pyerr)?;
-    serde_json::to_string(&w)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    serde_json::to_string(&w).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
 /// Derive just the Ethereum EOA address from a BIP-39 mnemonic.
@@ -404,9 +529,12 @@ fn encode_single_call<'py>(py: Python<'py>, protobuf_payload: &[u8]) -> Bound<'p
 ///     bytes (ABI-encoded calldata).
 #[cfg(feature = "managed")]
 #[pyfunction]
-fn encode_batch_call<'py>(py: Python<'py>, payloads: Vec<Vec<u8>>) -> PyResult<Bound<'py, PyBytes>> {
-    let encoded = userop::encode_batch_call(&payloads)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+fn encode_batch_call<'py>(
+    py: Python<'py>,
+    payloads: Vec<Vec<u8>>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let encoded =
+        userop::encode_batch_call(&payloads).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(PyBytes::new(py, &encoded))
 }
 
@@ -453,8 +581,7 @@ fn sign_userop<'py>(
         .try_into()
         .map_err(|_| PyValueError::new_err(format!("Hash must be 32 bytes, got {}", hash.len())))?;
     let pk = bytes_to_array32(private_key)?;
-    let sig = userop::sign_userop(&h, &pk)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let sig = userop::sign_userop(&h, &pk).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(PyBytes::new(py, &sig))
 }
 
@@ -581,8 +708,8 @@ fn build_batch_calldata_from_prepared<'py>(
 ) -> PyResult<Bound<'py, PyBytes>> {
     let prepared: Vec<store::PreparedFact> = serde_json::from_str(prepared_array_json)
         .map_err(|e| PyValueError::new_err(format!("Invalid PreparedFact array JSON: {}", e)))?;
-    let calldata = store::build_batch_calldata(&prepared)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let calldata =
+        store::build_batch_calldata(&prepared).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(PyBytes::new(py, &calldata))
 }
 
@@ -620,8 +747,7 @@ fn generate_search_trapdoors(
     query_embedding: Vec<f32>,
     lsh_hasher: &PyLshHasher,
 ) -> PyResult<Vec<String>> {
-    search::generate_search_trapdoors(query, &query_embedding, &lsh_hasher.inner)
-        .map_err(to_pyerr)
+    search::generate_search_trapdoors(query, &query_embedding, &lsh_hasher.inner).map_err(to_pyerr)
 }
 
 /// Parse a blind index search GraphQL response into SubgraphFact list.
@@ -731,8 +857,8 @@ fn kg_parse_claim_or_legacy_inner(decrypted: &str) -> Result<String, String> {
 }
 
 fn kg_canonicalize_claim_inner(claim_json: &str) -> Result<String, String> {
-    let claim: claims::Claim = serde_json::from_str(claim_json)
-        .map_err(|e| format!("invalid claim JSON: {}", e))?;
+    let claim: claims::Claim =
+        serde_json::from_str(claim_json).map_err(|e| format!("invalid claim JSON: {}", e))?;
     serde_json::to_string(&claim).map_err(|e| e.to_string())
 }
 
@@ -740,15 +866,15 @@ fn kg_build_template_digest_inner(
     claims_json: &str,
     now_unix_seconds: i64,
 ) -> Result<String, String> {
-    let parsed: Vec<claims::Claim> = serde_json::from_str(claims_json)
-        .map_err(|e| format!("invalid claims JSON: {}", e))?;
+    let parsed: Vec<claims::Claim> =
+        serde_json::from_str(claims_json).map_err(|e| format!("invalid claims JSON: {}", e))?;
     let d = digest::build_template_digest(&parsed, now_unix_seconds);
     serde_json::to_string(&d).map_err(|e| e.to_string())
 }
 
 fn kg_build_digest_prompt_inner(claims_json: &str) -> Result<String, String> {
-    let parsed: Vec<claims::Claim> = serde_json::from_str(claims_json)
-        .map_err(|e| format!("invalid claims JSON: {}", e))?;
+    let parsed: Vec<claims::Claim> =
+        serde_json::from_str(claims_json).map_err(|e| format!("invalid claims JSON: {}", e))?;
     if parsed.is_empty() {
         return Err("build_digest_prompt requires at least one claim".to_string());
     }
@@ -767,8 +893,8 @@ fn kg_assemble_digest_from_llm_inner(
 ) -> Result<String, String> {
     let parsed: digest::ParsedDigestResponse = serde_json::from_str(parsed_json)
         .map_err(|e| format!("invalid ParsedDigestResponse JSON: {}", e))?;
-    let source_claims: Vec<claims::Claim> = serde_json::from_str(claims_json)
-        .map_err(|e| format!("invalid claims JSON: {}", e))?;
+    let source_claims: Vec<claims::Claim> =
+        serde_json::from_str(claims_json).map_err(|e| format!("invalid claims JSON: {}", e))?;
     let d = digest::assemble_digest_from_llm(&parsed, &source_claims, now_unix_seconds)?;
     serde_json::to_string(&d).map_err(|e| e.to_string())
 }
@@ -862,10 +988,10 @@ fn kg_compute_score_components_inner(
     now_unix_seconds: i64,
     weights_json: &str,
 ) -> Result<String, String> {
-    let claim: claims::Claim = serde_json::from_str(claim_json)
-        .map_err(|e| format!("invalid claim JSON: {}", e))?;
-    let weights: contradiction::ResolutionWeights = serde_json::from_str(weights_json)
-        .map_err(|e| format!("invalid weights JSON: {}", e))?;
+    let claim: claims::Claim =
+        serde_json::from_str(claim_json).map_err(|e| format!("invalid claim JSON: {}", e))?;
+    let weights: contradiction::ResolutionWeights =
+        serde_json::from_str(weights_json).map_err(|e| format!("invalid weights JSON: {}", e))?;
     let sc = contradiction::compute_score_components(&claim, now_unix_seconds, &weights);
     serde_json::to_string(&sc).map_err(|e| e.to_string())
 }
@@ -878,12 +1004,12 @@ fn kg_resolve_pair_inner(
     now_unix_seconds: i64,
     weights_json: &str,
 ) -> Result<String, String> {
-    let claim_a: claims::Claim = serde_json::from_str(claim_a_json)
-        .map_err(|e| format!("invalid claim_a JSON: {}", e))?;
-    let claim_b: claims::Claim = serde_json::from_str(claim_b_json)
-        .map_err(|e| format!("invalid claim_b JSON: {}", e))?;
-    let weights: contradiction::ResolutionWeights = serde_json::from_str(weights_json)
-        .map_err(|e| format!("invalid weights JSON: {}", e))?;
+    let claim_a: claims::Claim =
+        serde_json::from_str(claim_a_json).map_err(|e| format!("invalid claim_a JSON: {}", e))?;
+    let claim_b: claims::Claim =
+        serde_json::from_str(claim_b_json).map_err(|e| format!("invalid claim_b JSON: {}", e))?;
+    let weights: contradiction::ResolutionWeights =
+        serde_json::from_str(weights_json).map_err(|e| format!("invalid weights JSON: {}", e))?;
     let outcome = contradiction::resolve_pair(
         &claim_a,
         claim_a_id,
@@ -907,8 +1033,13 @@ fn kg_detect_contradictions_inner(
         .map_err(|e| format!("invalid new_claim JSON: {}", e))?;
     let new_embedding: Vec<f32> = serde_json::from_str(new_embedding_json)
         .map_err(|e| format!("invalid new_embedding JSON: {}", e))?;
-    let items: Vec<DetectContradictionsItem> = serde_json::from_str(existing_json)
-        .map_err(|e| format!("invalid existing JSON (expected array of {{claim, id, embedding}}): {}", e))?;
+    let items: Vec<DetectContradictionsItem> =
+        serde_json::from_str(existing_json).map_err(|e| {
+            format!(
+                "invalid existing JSON (expected array of {{claim, id, embedding}}): {}",
+                e
+            )
+        })?;
     let existing: Vec<(claims::Claim, String, Vec<f32>)> = items
         .into_iter()
         .map(|it| (it.claim, it.id, it.embedding))
@@ -928,8 +1059,8 @@ fn kg_apply_feedback_inner(
     weights_json: &str,
     counterexample_json: &str,
 ) -> Result<String, String> {
-    let weights: contradiction::ResolutionWeights = serde_json::from_str(weights_json)
-        .map_err(|e| format!("invalid weights JSON: {}", e))?;
+    let weights: contradiction::ResolutionWeights =
+        serde_json::from_str(weights_json).map_err(|e| format!("invalid weights JSON: {}", e))?;
     let ce: contradiction::Counterexample = serde_json::from_str(counterexample_json)
         .map_err(|e| format!("invalid counterexample JSON: {}", e))?;
     let new_weights = contradiction::apply_feedback(&weights, &ce);
@@ -942,8 +1073,8 @@ fn kg_default_weights_file_inner(now_unix_seconds: i64) -> Result<String, String
 }
 
 fn kg_serialize_weights_file_inner(file_json: &str) -> Result<String, String> {
-    let f: feedback_log::WeightsFile = serde_json::from_str(file_json)
-        .map_err(|e| format!("invalid weights file JSON: {}", e))?;
+    let f: feedback_log::WeightsFile =
+        serde_json::from_str(file_json).map_err(|e| format!("invalid weights file JSON: {}", e))?;
     Ok(feedback_log::serialize_weights_file(&f))
 }
 
@@ -952,10 +1083,7 @@ fn kg_parse_weights_file_inner(content: &str) -> Result<String, String> {
     serde_json::to_string(&f).map_err(|e| e.to_string())
 }
 
-fn kg_append_feedback_to_jsonl_inner(
-    existing: &str,
-    entry_json: &str,
-) -> Result<String, String> {
+fn kg_append_feedback_to_jsonl_inner(existing: &str, entry_json: &str) -> Result<String, String> {
     let entry: feedback_log::FeedbackEntry = serde_json::from_str(entry_json)
         .map_err(|e| format!("invalid feedback entry JSON: {}", e))?;
     Ok(feedback_log::append_to_jsonl(existing, &entry))
@@ -974,7 +1102,11 @@ fn kg_read_feedback_jsonl_inner(content: &str) -> Result<String, String> {
 }
 
 fn kg_rotate_feedback_log_inner(content: &str, max_lines: i64) -> String {
-    let cap = if max_lines < 0 { 0usize } else { max_lines as usize };
+    let cap = if max_lines < 0 {
+        0usize
+    } else {
+        max_lines as usize
+    };
     feedback_log::rotate_if_needed(content, cap)
 }
 
@@ -1225,8 +1357,8 @@ fn kg_resolve_with_candidates_inner(
         .into_iter()
         .map(|it| (it.claim, it.id, it.embedding))
         .collect();
-    let weights: contradiction::ResolutionWeights = serde_json::from_str(weights_json)
-        .map_err(|e| format!("invalid weights JSON: {}", e))?;
+    let weights: contradiction::ResolutionWeights =
+        serde_json::from_str(weights_json).map_err(|e| format!("invalid weights JSON: {}", e))?;
     let actions = contradiction::resolve_with_candidates(
         &new_claim,
         new_claim_id,
@@ -1248,8 +1380,8 @@ fn kg_build_decision_log_entries_inner(
     mode: &str,
     now_unix: i64,
 ) -> Result<String, String> {
-    let actions: Vec<claims::ResolutionAction> = serde_json::from_str(actions_json)
-        .map_err(|e| format!("invalid actions JSON: {}", e))?;
+    let actions: Vec<claims::ResolutionAction> =
+        serde_json::from_str(actions_json).map_err(|e| format!("invalid actions JSON: {}", e))?;
     let existing_map: std::collections::HashMap<String, String> =
         serde_json::from_str(existing_claims_json)
             .map_err(|e| format!("invalid existing_claims JSON: {}", e))?;
@@ -1364,6 +1496,12 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Reranker
     m.add_function(wrap_pyfunction!(py_rerank, m)?)?;
+    m.add_function(wrap_pyfunction!(py_rerank_with_config, m)?)?;
+    m.add_function(wrap_pyfunction!(py_source_weight, m)?)?;
+    m.add_function(wrap_pyfunction!(py_legacy_claim_fallback_weight, m)?)?;
+    m.add_function(wrap_pyfunction!(py_validate_memory_claim_v1, m)?)?;
+    m.add_function(wrap_pyfunction!(py_parse_memory_type_v1, m)?)?;
+    m.add_function(wrap_pyfunction!(py_parse_memory_source, m)?)?;
     m.add_function(wrap_pyfunction!(py_cosine_similarity, m)?)?;
 
     // Wallet derivation
@@ -1581,10 +1719,7 @@ mod tests {
     fn py_canonicalize_claim_reorders_fields_to_struct_order() {
         let input = r#"{"sa":"oc","i":5,"cf":0.9,"c":"fact","t":"hi"}"#;
         let out = py_canonicalize_claim(input).unwrap();
-        assert_eq!(
-            out,
-            r#"{"t":"hi","c":"fact","cf":0.9,"i":5,"sa":"oc"}"#
-        );
+        assert_eq!(out, r#"{"t":"hi","c":"fact","cf":0.9,"i":5,"sa":"oc"}"#);
     }
 
     #[test]
@@ -1668,9 +1803,8 @@ mod tests {
             iso_days_ago_str(7)
         );
         let weights = kg_default_resolution_weights_inner().unwrap();
-        let out =
-            kg_resolve_pair_inner(&vim, "vim_id", &vscode, "vscode_id", PHASE2_NOW, &weights)
-                .unwrap();
+        let out = kg_resolve_pair_inner(&vim, "vim_id", &vscode, "vscode_id", PHASE2_NOW, &weights)
+            .unwrap();
         let outcome: contradiction::ResolutionOutcome = serde_json::from_str(&out).unwrap();
         assert_eq!(outcome.winner_id, "vscode_id");
         assert_eq!(outcome.loser_id, "vim_id");
@@ -1725,7 +1859,10 @@ mod tests {
         assert_eq!(parsed[0].claim_a_id, "new_id");
         assert_eq!(parsed[0].claim_b_id, "exist");
         assert!((parsed[0].similarity - 0.5).abs() < 1e-6);
-        assert_eq!(parsed[0].entity_id, claims::deterministic_entity_id("editor"));
+        assert_eq!(
+            parsed[0].entity_id,
+            claims::deterministic_entity_id("editor")
+        );
     }
 
     #[test]
@@ -1733,8 +1870,7 @@ mod tests {
         let new_claim = r#"{"t":"uses Vim","c":"fact","cf":0.8,"i":5,"sa":"oc","e":[{"n":"editor","tp":"tool"}]}"#;
         let emb = serde_json::to_string(&vec![1.0f32, 0.0]).unwrap();
         let existing = r#"[{"claim":{"t":"x","c":"fact","cf":0.9,"i":5,"sa":"oc"}}]"#;
-        let result =
-            kg_detect_contradictions_inner(new_claim, "new_id", &emb, existing, 0.3, 0.85);
+        let result = kg_detect_contradictions_inner(new_claim, "new_id", &emb, existing, 0.3, 0.85);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("existing"), "err: {}", err);
@@ -1750,12 +1886,21 @@ mod tests {
         }"#;
         let out = kg_apply_feedback_inner(&weights, ce).unwrap();
         let new: contradiction::ResolutionWeights = serde_json::from_str(&out).unwrap();
-        for v in [new.confidence, new.corroboration, new.recency, new.validation] {
+        for v in [
+            new.confidence,
+            new.corroboration,
+            new.recency,
+            new.validation,
+        ] {
             assert!(v >= 0.05 - 1e-12, "weight below clamp: {}", v);
             assert!(v <= 0.60 + 1e-12, "weight above clamp: {}", v);
         }
         let sum = new.confidence + new.corroboration + new.recency + new.validation;
-        assert!(sum >= 0.9 - 1e-9 && sum <= 1.1 + 1e-9, "weight sum out of range: {}", sum);
+        assert!(
+            sum >= 0.9 - 1e-9 && sum <= 1.1 + 1e-9,
+            "weight sum out of range: {}",
+            sum
+        );
     }
 
     // --- Phase 2 Slice 2c: feedback_log bindings ------------------------
@@ -1850,8 +1995,7 @@ mod tests {
 
     #[test]
     fn py_rotate_feedback_log_preserves_content_below_cap() {
-        let content =
-            kg_append_feedback_to_jsonl_inner("", &phase2_sample_entry_json()).unwrap();
+        let content = kg_append_feedback_to_jsonl_inner("", &phase2_sample_entry_json()).unwrap();
         let rotated = kg_rotate_feedback_log_inner(&content, 10);
         assert_eq!(rotated, content);
     }
@@ -1884,5 +2028,124 @@ mod tests {
     fn py_feedback_to_counterexample_rejects_malformed_entry() {
         let result = kg_feedback_to_counterexample_inner("{not-an-entry");
         assert!(result.is_err());
+    }
+
+    // === Retrieval v2 Tier 1 bindings ===
+
+    #[test]
+    fn py_source_weight_known_values() {
+        // Direct call — no GIL needed because py_source_weight returns f64.
+        assert_eq!(py_source_weight("user"), 1.00);
+        assert_eq!(py_source_weight("user-inferred"), 0.90);
+        assert_eq!(py_source_weight("derived"), 0.70);
+        assert_eq!(py_source_weight("external"), 0.70);
+        assert_eq!(py_source_weight("assistant"), 0.55);
+    }
+
+    #[test]
+    fn py_source_weight_unknown_returns_fallback() {
+        // Policy: unknown source string -> user-inferred (0.90), not 0.85.
+        // 0.85 is ONLY the fallback for missing-source candidates in the
+        // reranker. The binding here maps string -> MemorySource -> weight,
+        // and from_str_lossy routes unknowns to UserInferred.
+        assert_eq!(py_source_weight("bot"), 0.90);
+        assert_eq!(py_source_weight(""), 0.90);
+    }
+
+    #[test]
+    fn py_legacy_claim_fallback_weight_value() {
+        assert_eq!(py_legacy_claim_fallback_weight(), 0.85);
+    }
+
+    #[test]
+    fn py_parse_memory_type_v1_returns_string_values() {
+        assert_eq!(py_parse_memory_type_v1("CLAIM"), "claim");
+        assert_eq!(py_parse_memory_type_v1("directive"), "directive");
+        // unknown -> claim
+        assert_eq!(py_parse_memory_type_v1("fact"), "claim");
+    }
+
+    #[test]
+    fn py_parse_memory_source_returns_string_values() {
+        assert_eq!(py_parse_memory_source("user"), "user");
+        assert_eq!(py_parse_memory_source("user-inferred"), "user-inferred");
+        assert_eq!(py_parse_memory_source("USER_INFERRED"), "user-inferred");
+        // unknown -> user-inferred
+        assert_eq!(py_parse_memory_source("bot"), "user-inferred");
+    }
+
+    // Validate + rerank_with_config return PyResult<String>; constructing PyErr
+    // requires the GIL so we stick to is_err() / is_ok() checks in unit tests.
+    // Full integration tests live in tests/python_parity_test.py.
+
+    #[test]
+    fn py_validate_memory_claim_v1_accepts_valid_claim() {
+        let json = r#"{"id":"01900000-0000-7000-8000-000000000000","text":"prefers PostgreSQL","type":"preference","source":"user","created_at":"2026-04-17T10:00:00Z"}"#;
+        let out = py_validate_memory_claim_v1(json).unwrap();
+        assert!(out.contains("\"text\":\"prefers PostgreSQL\""));
+        assert!(out.contains("\"type\":\"preference\""));
+    }
+
+    #[test]
+    fn py_validate_memory_claim_v1_rejects_unknown_schema_version() {
+        let json = r#"{"id":"01900000-0000-7000-8000-000000000000","text":"hi","type":"claim","source":"user","created_at":"2026-04-17T10:00:00Z","schema_version":"2.0"}"#;
+        let result = py_validate_memory_claim_v1(json);
+        assert!(result.is_err(), "unknown schema_version must be rejected");
+    }
+
+    #[test]
+    fn py_validate_memory_claim_v1_rejects_legacy_type_token() {
+        let json = r#"{"id":"01900000-0000-7000-8000-000000000000","text":"hi","type":"fact","source":"user","created_at":"2026-04-17T10:00:00Z"}"#;
+        let result = py_validate_memory_claim_v1(json);
+        assert!(result.is_err(), "legacy token 'fact' must be rejected");
+    }
+
+    #[test]
+    fn py_rerank_with_config_flag_on_prefers_user() {
+        let candidates = r#"[
+            {"id":"a","text":"dark mode preference","embedding":[0.9,0.1,0.0,0.0],"timestamp":"","source":"assistant"},
+            {"id":"u","text":"dark mode preference","embedding":[0.9,0.1,0.0,0.0],"timestamp":"","source":"user"}
+        ]"#;
+        let out = py_rerank_with_config(
+            "dark mode",
+            vec![0.9f32, 0.1, 0.0, 0.0],
+            candidates,
+            10,
+            true,
+        )
+        .unwrap();
+        // User must come first — the JSON array is ordered by score desc.
+        let first_u = out.find("\"id\":\"u\"").unwrap_or(usize::MAX);
+        let first_a = out.find("\"id\":\"a\"").unwrap_or(usize::MAX);
+        assert!(
+            first_u < first_a,
+            "user must rank before assistant: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn py_rerank_with_config_flag_off_ignores_source() {
+        // With flag OFF the same input must behave like the v0 rerank.
+        let candidates_json = r#"[
+            {"id":"a","text":"dark mode preference","embedding":[0.9,0.1,0.0,0.0],"timestamp":"","source":"assistant"},
+            {"id":"u","text":"dark mode preference","embedding":[0.9,0.1,0.0,0.0],"timestamp":"","source":"user"}
+        ]"#;
+        let off = py_rerank_with_config(
+            "dark mode",
+            vec![0.9f32, 0.1, 0.0, 0.0],
+            candidates_json,
+            10,
+            false,
+        )
+        .unwrap();
+        let v0 = py_rerank(
+            "dark mode",
+            vec![0.9f32, 0.1, 0.0, 0.0],
+            candidates_json,
+            10,
+        )
+        .unwrap();
+        assert_eq!(off, v0, "flag OFF must equal v0 rerank output");
     }
 }

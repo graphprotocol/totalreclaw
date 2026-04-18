@@ -12,7 +12,7 @@ local-embeddings = ["dep:ort", "dep:tokenizers"]
 
 [dependencies]
 # Core crypto primitives (shared with WASM/PyO3 builds)
-totalreclaw-core = { path = "../totalreclaw-core", version = "1.5" }
+totalreclaw-core = { path = "../totalreclaw-core", version = "2.0" }
 
 # BIP-39 + CSPRNG (used by setup.rs for mnemonic generation)
 bip39 = "2"

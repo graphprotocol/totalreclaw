@@ -18,9 +18,9 @@ use crate::fingerprint;
 use crate::lsh;
 use crate::protobuf;
 use crate::reranker;
-use crate::store;
 #[cfg(feature = "managed")]
 use crate::search;
+use crate::store;
 #[cfg(feature = "managed")]
 use crate::userop;
 use crate::wallet;
@@ -54,9 +54,13 @@ pub fn wasm_derive_keys_from_mnemonic_lenient(mnemonic: &str) -> Result<JsValue,
 /// Returns hex-encoded 32-byte seed.
 #[wasm_bindgen(js_name = "deriveLshSeed")]
 pub fn wasm_derive_lsh_seed(mnemonic: &str, salt_hex: &str) -> Result<String, JsError> {
-    let salt_bytes = hex::decode(salt_hex).map_err(|e| JsError::new(&format!("invalid salt hex: {}", e)))?;
+    let salt_bytes =
+        hex::decode(salt_hex).map_err(|e| JsError::new(&format!("invalid salt hex: {}", e)))?;
     if salt_bytes.len() != 32 {
-        return Err(JsError::new(&format!("salt must be 32 bytes, got {}", salt_bytes.len())));
+        return Err(JsError::new(&format!(
+            "salt must be 32 bytes, got {}",
+            salt_bytes.len()
+        )));
     }
     let mut salt = [0u8; 32];
     salt.copy_from_slice(&salt_bytes);
@@ -73,7 +77,10 @@ pub fn wasm_compute_auth_key_hash(auth_key_hex: &str) -> Result<String, JsError>
     let key_bytes = hex::decode(auth_key_hex)
         .map_err(|e| JsError::new(&format!("invalid auth_key hex: {}", e)))?;
     if key_bytes.len() != 32 {
-        return Err(JsError::new(&format!("auth_key must be 32 bytes, got {}", key_bytes.len())));
+        return Err(JsError::new(&format!(
+            "auth_key must be 32 bytes, got {}",
+            key_bytes.len()
+        )));
     }
     let mut key = [0u8; 32];
     key.copy_from_slice(&key_bytes);
@@ -161,8 +168,8 @@ impl WasmLshHasher {
     /// `dims`: embedding dimensionality (e.g. 640).
     #[wasm_bindgen(constructor)]
     pub fn new(seed_hex: &str, dims: usize) -> Result<WasmLshHasher, JsError> {
-        let seed = hex::decode(seed_hex)
-            .map_err(|e| JsError::new(&format!("invalid seed hex: {}", e)))?;
+        let seed =
+            hex::decode(seed_hex).map_err(|e| JsError::new(&format!("invalid seed hex: {}", e)))?;
         let inner = lsh::LshHasher::new(&seed, dims).map_err(to_js_error)?;
         Ok(WasmLshHasher { inner })
     }
@@ -180,10 +187,10 @@ impl WasmLshHasher {
         n_tables: usize,
         n_bits: usize,
     ) -> Result<WasmLshHasher, JsError> {
-        let seed = hex::decode(seed_hex)
-            .map_err(|e| JsError::new(&format!("invalid seed hex: {}", e)))?;
-        let inner = lsh::LshHasher::with_params(&seed, dims, n_tables, n_bits)
-            .map_err(to_js_error)?;
+        let seed =
+            hex::decode(seed_hex).map_err(|e| JsError::new(&format!("invalid seed hex: {}", e)))?;
+        let inner =
+            lsh::LshHasher::with_params(&seed, dims, n_tables, n_bits).map_err(to_js_error)?;
         Ok(WasmLshHasher { inner })
     }
 
@@ -234,8 +241,8 @@ impl WasmLshHasher {
 /// Returns the protobuf bytes as a Uint8Array.
 #[wasm_bindgen(js_name = "encodeFactProtobuf")]
 pub fn wasm_encode_fact_protobuf(json: &str) -> Result<Vec<u8>, JsError> {
-    let payload: FactPayloadJson = serde_json::from_str(json)
-        .map_err(|e| JsError::new(&format!("invalid JSON: {}", e)))?;
+    let payload: FactPayloadJson =
+        serde_json::from_str(json).map_err(|e| JsError::new(&format!("invalid JSON: {}", e)))?;
 
     let fact = protobuf::FactPayload {
         id: payload.id,
@@ -248,6 +255,7 @@ pub fn wasm_encode_fact_protobuf(json: &str) -> Result<Vec<u8>, JsError> {
         content_fp: payload.content_fp,
         agent_id: payload.agent_id,
         encrypted_embedding: payload.encrypted_embedding,
+        version: payload.version.unwrap_or(protobuf::DEFAULT_PROTOBUF_VERSION),
     };
 
     Ok(protobuf::encode_fact_protobuf(&fact))
@@ -255,10 +263,17 @@ pub fn wasm_encode_fact_protobuf(json: &str) -> Result<Vec<u8>, JsError> {
 
 /// Encode a tombstone protobuf for soft-deleting a fact.
 ///
+/// `version` is optional; missing/0 defaults to `DEFAULT_PROTOBUF_VERSION` (3).
+/// Pass `4` to emit a v1-taxonomy tombstone (outer protobuf version = 4).
+///
 /// Returns the protobuf bytes as a Uint8Array.
 #[wasm_bindgen(js_name = "encodeTombstoneProtobuf")]
-pub fn wasm_encode_tombstone_protobuf(fact_id: &str, owner: &str) -> Vec<u8> {
-    protobuf::encode_tombstone_protobuf(fact_id, owner)
+pub fn wasm_encode_tombstone_protobuf(fact_id: &str, owner: &str, version: Option<u32>) -> Vec<u8> {
+    protobuf::encode_tombstone_protobuf(
+        fact_id,
+        owner,
+        version.unwrap_or(protobuf::DEFAULT_PROTOBUF_VERSION),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -321,16 +336,107 @@ pub fn wasm_debrief_source() -> String {
 
 /// Rerank candidates using BM25 + Cosine + RRF fusion.
 ///
-/// `candidates_json`: JSON array of `{ id, text, embedding, timestamp }` objects.
+/// `candidates_json`: JSON array of `{ id, text, embedding, timestamp, source? }` objects.
 /// Returns a JsValue (array of `RankedResult` objects).
 #[wasm_bindgen(js_name = "rerank")]
-pub fn wasm_rerank(query: &str, query_embedding: &[f32], candidates_json: &str, top_k: usize) -> Result<JsValue, JsError> {
+pub fn wasm_rerank(
+    query: &str,
+    query_embedding: &[f32],
+    candidates_json: &str,
+    top_k: usize,
+) -> Result<JsValue, JsError> {
     let candidates: Vec<reranker::Candidate> = serde_json::from_str(candidates_json)
         .map_err(|e| JsError::new(&format!("Invalid candidates JSON: {}", e)))?;
     let results = reranker::rerank(query, query_embedding, &candidates, top_k)
         .map_err(|e| JsError::new(&e.to_string()))?;
-    serde_wasm_bindgen::to_value(&results)
-        .map_err(|e| JsError::new(&e.to_string()))
+    serde_wasm_bindgen::to_value(&results).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Rerank candidates with a config flag (Retrieval v2 Tier 1).
+///
+/// When `apply_source_weights` is `true`, each candidate's final score is
+/// multiplied by the provenance weight from its `source` field (legacy
+/// candidates without `source` use the v0 fallback weight).
+///
+/// `candidates_json`: JSON array of `{ id, text, embedding, timestamp, source? }` objects.
+/// Returns a JsValue (array of `RankedResult` objects including `source_weight`).
+#[wasm_bindgen(js_name = "rerankWithConfig")]
+pub fn wasm_rerank_with_config(
+    query: &str,
+    query_embedding: &[f32],
+    candidates_json: &str,
+    top_k: usize,
+    apply_source_weights: bool,
+) -> Result<JsValue, JsError> {
+    let candidates: Vec<reranker::Candidate> = serde_json::from_str(candidates_json)
+        .map_err(|e| JsError::new(&format!("Invalid candidates JSON: {}", e)))?;
+    let config = reranker::RerankerConfig {
+        apply_source_weights,
+    };
+    let results = reranker::rerank_with_config(query, query_embedding, &candidates, top_k, config)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    serde_wasm_bindgen::to_value(&results).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Return the source weight multiplier for a given source string.
+///
+/// Accepted values: "user" | "user-inferred" | "assistant" | "external" | "derived".
+///
+/// Unknown input is routed through `MemorySource::from_str_lossy` which
+/// falls back to `user-inferred` (weight 0.90). Callers who need the
+/// "no source field at all" fallback (weight 0.85) should call
+/// `legacyClaimFallbackWeight()` instead.
+#[wasm_bindgen(js_name = "sourceWeight")]
+pub fn wasm_source_weight(source: &str) -> f64 {
+    let src = crate::claims::MemorySource::from_str_lossy(source);
+    reranker::source_weight(src)
+}
+
+/// Return the v1 legacy-claim fallback weight (applied to candidates that
+/// have no `source` field).
+#[wasm_bindgen(js_name = "legacyClaimFallbackWeight")]
+pub fn wasm_legacy_claim_fallback_weight() -> f64 {
+    reranker::LEGACY_CLAIM_FALLBACK_WEIGHT
+}
+
+/// Validate a Memory Taxonomy v1 claim (JSON in, JSON out — canonicalised).
+///
+/// Returns the canonical JSON encoding on success. Throws on any schema
+/// violation (wrong type token, missing required field, wrong schema_version).
+///
+/// See `docs/specs/totalreclaw/memory-taxonomy-v1.md`.
+#[wasm_bindgen(js_name = "validateMemoryClaimV1")]
+pub fn wasm_validate_memory_claim_v1(claim_json: &str) -> Result<String, JsError> {
+    let claim: crate::claims::MemoryClaimV1 = serde_json::from_str(claim_json)
+        .map_err(|e| JsError::new(&format!("invalid v1 claim: {}", e)))?;
+    if claim.schema_version != crate::claims::MEMORY_CLAIM_V1_SCHEMA_VERSION {
+        return Err(JsError::new(&format!(
+            "unsupported schema_version {}: only {} is supported",
+            claim.schema_version,
+            crate::claims::MEMORY_CLAIM_V1_SCHEMA_VERSION
+        )));
+    }
+    serde_json::to_string(&claim).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Case-insensitive parse of a memory type string. Unknown input returns "claim".
+#[wasm_bindgen(js_name = "parseMemoryTypeV1")]
+pub fn wasm_parse_memory_type_v1(s: &str) -> String {
+    let t = crate::claims::MemoryTypeV1::from_str_lossy(s);
+    serde_json::to_string(&t)
+        .unwrap_or_else(|_| "\"claim\"".to_string())
+        .trim_matches('"')
+        .to_string()
+}
+
+/// Case-insensitive parse of a memory source string. Unknown input returns "user-inferred".
+#[wasm_bindgen(js_name = "parseMemorySource")]
+pub fn wasm_parse_memory_source(s: &str) -> String {
+    let src = crate::claims::MemorySource::from_str_lossy(s);
+    serde_json::to_string(&src)
+        .unwrap_or_else(|_| "\"user-inferred\"".to_string())
+        .trim_matches('"')
+        .to_string()
 }
 
 /// Cosine similarity between two f32 vectors.
@@ -560,9 +666,7 @@ pub fn wasm_prepare_fact_with_decay_score(
 /// Returns ABI-encoded calldata (Uint8Array).
 #[cfg(feature = "managed")]
 #[wasm_bindgen(js_name = "buildSingleCalldataFromPrepared")]
-pub fn wasm_build_single_calldata_from_prepared(
-    prepared_json: &str,
-) -> Result<Vec<u8>, JsError> {
+pub fn wasm_build_single_calldata_from_prepared(prepared_json: &str) -> Result<Vec<u8>, JsError> {
     let prepared: store::PreparedFact = serde_json::from_str(prepared_json)
         .map_err(|e| JsError::new(&format!("Invalid PreparedFact JSON: {}", e)))?;
     Ok(store::build_single_calldata(&prepared))
@@ -579,8 +683,7 @@ pub fn wasm_build_batch_calldata_from_prepared(
 ) -> Result<Vec<u8>, JsError> {
     let prepared: Vec<store::PreparedFact> = serde_json::from_str(prepared_array_json)
         .map_err(|e| JsError::new(&format!("Invalid PreparedFact array JSON: {}", e)))?;
-    store::build_batch_calldata(&prepared)
-        .map_err(|e| JsError::new(&e.to_string()))
+    store::build_batch_calldata(&prepared).map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Prepare a tombstone (soft-delete) protobuf.
@@ -672,8 +775,9 @@ pub fn wasm_decrypt_and_rerank(
 ) -> Result<JsValue, JsError> {
     let facts: Vec<search::SubgraphFact> = serde_json::from_str(facts_json)
         .map_err(|e| JsError::new(&format!("Invalid SubgraphFact array JSON: {}", e)))?;
-    let results = search::decrypt_and_rerank(&facts, query, query_embedding, encryption_key_hex, top_k)
-        .map_err(to_js_error)?;
+    let results =
+        search::decrypt_and_rerank(&facts, query, query_embedding, encryption_key_hex, top_k)
+            .map_err(to_js_error)?;
     serde_wasm_bindgen::to_value(&results).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -739,10 +843,18 @@ fn keys_to_js(keys: &crypto::DerivedKeys) -> Result<JsValue, JsError> {
     let obj = js_sys::Object::new();
     js_sys::Reflect::set(&obj, &"auth_key".into(), &hex::encode(keys.auth_key).into())
         .map_err(|_| JsError::new("failed to set auth_key"))?;
-    js_sys::Reflect::set(&obj, &"encryption_key".into(), &hex::encode(keys.encryption_key).into())
-        .map_err(|_| JsError::new("failed to set encryption_key"))?;
-    js_sys::Reflect::set(&obj, &"dedup_key".into(), &hex::encode(keys.dedup_key).into())
-        .map_err(|_| JsError::new("failed to set dedup_key"))?;
+    js_sys::Reflect::set(
+        &obj,
+        &"encryption_key".into(),
+        &hex::encode(keys.encryption_key).into(),
+    )
+    .map_err(|_| JsError::new("failed to set encryption_key"))?;
+    js_sys::Reflect::set(
+        &obj,
+        &"dedup_key".into(),
+        &hex::encode(keys.dedup_key).into(),
+    )
+    .map_err(|_| JsError::new("failed to set dedup_key"))?;
     js_sys::Reflect::set(&obj, &"salt".into(), &hex::encode(keys.salt).into())
         .map_err(|_| JsError::new("failed to set salt"))?;
     Ok(obj.into())
@@ -782,6 +894,10 @@ struct FactPayloadJson {
     content_fp: String,
     agent_id: String,
     encrypted_embedding: Option<String>,
+    /// Optional outer protobuf version (3 legacy, 4 for v1 taxonomy).
+    /// Missing/0 defaults to legacy v3 for back-compat.
+    #[serde(default)]
+    version: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -809,8 +925,8 @@ fn kg_parse_claim_or_legacy_inner(decrypted: &str) -> Result<String, String> {
 }
 
 fn kg_canonicalize_claim_inner(claim_json: &str) -> Result<String, String> {
-    let claim: claims::Claim = serde_json::from_str(claim_json)
-        .map_err(|e| format!("invalid claim JSON: {}", e))?;
+    let claim: claims::Claim =
+        serde_json::from_str(claim_json).map_err(|e| format!("invalid claim JSON: {}", e))?;
     serde_json::to_string(&claim).map_err(|e| e.to_string())
 }
 
@@ -818,15 +934,15 @@ fn kg_build_template_digest_inner(
     claims_json: &str,
     now_unix_seconds: i64,
 ) -> Result<String, String> {
-    let parsed: Vec<claims::Claim> = serde_json::from_str(claims_json)
-        .map_err(|e| format!("invalid claims JSON: {}", e))?;
+    let parsed: Vec<claims::Claim> =
+        serde_json::from_str(claims_json).map_err(|e| format!("invalid claims JSON: {}", e))?;
     let d = digest::build_template_digest(&parsed, now_unix_seconds);
     serde_json::to_string(&d).map_err(|e| e.to_string())
 }
 
 fn kg_build_digest_prompt_inner(claims_json: &str) -> Result<String, String> {
-    let parsed: Vec<claims::Claim> = serde_json::from_str(claims_json)
-        .map_err(|e| format!("invalid claims JSON: {}", e))?;
+    let parsed: Vec<claims::Claim> =
+        serde_json::from_str(claims_json).map_err(|e| format!("invalid claims JSON: {}", e))?;
     if parsed.is_empty() {
         return Err("build_digest_prompt requires at least one claim".to_string());
     }
@@ -845,8 +961,8 @@ fn kg_assemble_digest_from_llm_inner(
 ) -> Result<String, String> {
     let parsed: digest::ParsedDigestResponse = serde_json::from_str(parsed_json)
         .map_err(|e| format!("invalid ParsedDigestResponse JSON: {}", e))?;
-    let source_claims: Vec<claims::Claim> = serde_json::from_str(claims_json)
-        .map_err(|e| format!("invalid claims JSON: {}", e))?;
+    let source_claims: Vec<claims::Claim> =
+        serde_json::from_str(claims_json).map_err(|e| format!("invalid claims JSON: {}", e))?;
     let d = digest::assemble_digest_from_llm(&parsed, &source_claims, now_unix_seconds)?;
     serde_json::to_string(&d).map_err(|e| e.to_string())
 }
@@ -923,10 +1039,10 @@ fn kg_compute_score_components_inner(
     now_unix_seconds: i64,
     weights_json: &str,
 ) -> Result<String, String> {
-    let claim: claims::Claim = serde_json::from_str(claim_json)
-        .map_err(|e| format!("invalid claim JSON: {}", e))?;
-    let weights: contradiction::ResolutionWeights = serde_json::from_str(weights_json)
-        .map_err(|e| format!("invalid weights JSON: {}", e))?;
+    let claim: claims::Claim =
+        serde_json::from_str(claim_json).map_err(|e| format!("invalid claim JSON: {}", e))?;
+    let weights: contradiction::ResolutionWeights =
+        serde_json::from_str(weights_json).map_err(|e| format!("invalid weights JSON: {}", e))?;
     let sc = contradiction::compute_score_components(&claim, now_unix_seconds, &weights);
     serde_json::to_string(&sc).map_err(|e| e.to_string())
 }
@@ -939,12 +1055,12 @@ fn kg_resolve_pair_inner(
     now_unix_seconds: i64,
     weights_json: &str,
 ) -> Result<String, String> {
-    let claim_a: claims::Claim = serde_json::from_str(claim_a_json)
-        .map_err(|e| format!("invalid claim_a JSON: {}", e))?;
-    let claim_b: claims::Claim = serde_json::from_str(claim_b_json)
-        .map_err(|e| format!("invalid claim_b JSON: {}", e))?;
-    let weights: contradiction::ResolutionWeights = serde_json::from_str(weights_json)
-        .map_err(|e| format!("invalid weights JSON: {}", e))?;
+    let claim_a: claims::Claim =
+        serde_json::from_str(claim_a_json).map_err(|e| format!("invalid claim_a JSON: {}", e))?;
+    let claim_b: claims::Claim =
+        serde_json::from_str(claim_b_json).map_err(|e| format!("invalid claim_b JSON: {}", e))?;
+    let weights: contradiction::ResolutionWeights =
+        serde_json::from_str(weights_json).map_err(|e| format!("invalid weights JSON: {}", e))?;
     let outcome = contradiction::resolve_pair(
         &claim_a,
         claim_a_id,
@@ -968,8 +1084,13 @@ fn kg_detect_contradictions_inner(
         .map_err(|e| format!("invalid new_claim JSON: {}", e))?;
     let new_embedding: Vec<f32> = serde_json::from_str(new_embedding_json)
         .map_err(|e| format!("invalid new_embedding JSON: {}", e))?;
-    let items: Vec<DetectContradictionsItem> = serde_json::from_str(existing_json)
-        .map_err(|e| format!("invalid existing JSON (expected array of {{claim, id, embedding}}): {}", e))?;
+    let items: Vec<DetectContradictionsItem> =
+        serde_json::from_str(existing_json).map_err(|e| {
+            format!(
+                "invalid existing JSON (expected array of {{claim, id, embedding}}): {}",
+                e
+            )
+        })?;
     let existing: Vec<(claims::Claim, String, Vec<f32>)> = items
         .into_iter()
         .map(|it| (it.claim, it.id, it.embedding))
@@ -989,8 +1110,8 @@ fn kg_apply_feedback_inner(
     weights_json: &str,
     counterexample_json: &str,
 ) -> Result<String, String> {
-    let weights: contradiction::ResolutionWeights = serde_json::from_str(weights_json)
-        .map_err(|e| format!("invalid weights JSON: {}", e))?;
+    let weights: contradiction::ResolutionWeights =
+        serde_json::from_str(weights_json).map_err(|e| format!("invalid weights JSON: {}", e))?;
     let ce: contradiction::Counterexample = serde_json::from_str(counterexample_json)
         .map_err(|e| format!("invalid counterexample JSON: {}", e))?;
     let new_weights = contradiction::apply_feedback(&weights, &ce);
@@ -1003,8 +1124,8 @@ fn kg_default_weights_file_inner(now_unix_seconds: i64) -> Result<String, String
 }
 
 fn kg_serialize_weights_file_inner(file_json: &str) -> Result<String, String> {
-    let f: feedback_log::WeightsFile = serde_json::from_str(file_json)
-        .map_err(|e| format!("invalid weights file JSON: {}", e))?;
+    let f: feedback_log::WeightsFile =
+        serde_json::from_str(file_json).map_err(|e| format!("invalid weights file JSON: {}", e))?;
     Ok(feedback_log::serialize_weights_file(&f))
 }
 
@@ -1013,10 +1134,7 @@ fn kg_parse_weights_file_inner(content: &str) -> Result<String, String> {
     serde_json::to_string(&f).map_err(|e| e.to_string())
 }
 
-fn kg_append_feedback_to_jsonl_inner(
-    existing: &str,
-    entry_json: &str,
-) -> Result<String, String> {
+fn kg_append_feedback_to_jsonl_inner(existing: &str, entry_json: &str) -> Result<String, String> {
     let entry: feedback_log::FeedbackEntry = serde_json::from_str(entry_json)
         .map_err(|e| format!("invalid feedback entry JSON: {}", e))?;
     Ok(feedback_log::append_to_jsonl(existing, &entry))
@@ -1035,7 +1153,11 @@ fn kg_read_feedback_jsonl_inner(content: &str) -> Result<String, String> {
 }
 
 fn kg_rotate_feedback_log_inner(content: &str, max_lines: i64) -> String {
-    let cap = if max_lines < 0 { 0usize } else { max_lines as usize };
+    let cap = if max_lines < 0 {
+        0usize
+    } else {
+        max_lines as usize
+    };
     feedback_log::rotate_if_needed(content, cap)
 }
 
@@ -1136,10 +1258,7 @@ pub fn wasm_parse_weights_file(content: &str) -> Result<String, JsError> {
 
 /// Append one feedback entry to existing JSONL content.
 #[wasm_bindgen(js_name = "appendFeedbackToJsonl")]
-pub fn wasm_append_feedback_to_jsonl(
-    existing: &str,
-    entry_json: &str,
-) -> Result<String, JsError> {
+pub fn wasm_append_feedback_to_jsonl(existing: &str, entry_json: &str) -> Result<String, JsError> {
     kg_append_feedback_to_jsonl_inner(existing, entry_json).map_err(|e| JsError::new(&e))
 }
 
@@ -1281,8 +1400,8 @@ fn kg_resolve_with_candidates_inner(
         .into_iter()
         .map(|it| (it.claim, it.id, it.embedding))
         .collect();
-    let weights: contradiction::ResolutionWeights = serde_json::from_str(weights_json)
-        .map_err(|e| format!("invalid weights JSON: {}", e))?;
+    let weights: contradiction::ResolutionWeights =
+        serde_json::from_str(weights_json).map_err(|e| format!("invalid weights JSON: {}", e))?;
     let actions = contradiction::resolve_with_candidates(
         &new_claim,
         new_claim_id,
@@ -1304,8 +1423,8 @@ fn kg_build_decision_log_entries_inner(
     mode: &str,
     now_unix: i64,
 ) -> Result<String, String> {
-    let actions: Vec<claims::ResolutionAction> = serde_json::from_str(actions_json)
-        .map_err(|e| format!("invalid actions JSON: {}", e))?;
+    let actions: Vec<claims::ResolutionAction> =
+        serde_json::from_str(actions_json).map_err(|e| format!("invalid actions JSON: {}", e))?;
     let existing_map: std::collections::HashMap<String, String> =
         serde_json::from_str(existing_claims_json)
             .map_err(|e| format!("invalid existing_claims JSON: {}", e))?;
@@ -1408,10 +1527,7 @@ mod tests {
 
     #[test]
     fn wasm_deterministic_entity_id_known_answer_pedro() {
-        assert_eq!(
-            wasm_deterministic_entity_id("pedro"),
-            "ee5cd7d5d96c8874"
-        );
+        assert_eq!(wasm_deterministic_entity_id("pedro"), "ee5cd7d5d96c8874");
     }
 
     #[test]
@@ -1523,10 +1639,7 @@ mod tests {
         // Input fields in random order; canonical output must follow Claim struct field order.
         let input = r#"{"sa":"oc","i":5,"cf":0.9,"c":"fact","t":"hi"}"#;
         let out = kg_canonicalize_claim_inner(input).unwrap();
-        assert_eq!(
-            out,
-            r#"{"t":"hi","c":"fact","cf":0.9,"i":5,"sa":"oc"}"#
-        );
+        assert_eq!(out, r#"{"t":"hi","c":"fact","cf":0.9,"i":5,"sa":"oc"}"#);
     }
 
     #[test]
@@ -1613,9 +1726,8 @@ mod tests {
             iso_days_ago_str(7)
         );
         let weights = kg_default_resolution_weights_inner().unwrap();
-        let out =
-            kg_resolve_pair_inner(&vim, "vim_id", &vscode, "vscode_id", PHASE2_NOW, &weights)
-                .unwrap();
+        let out = kg_resolve_pair_inner(&vim, "vim_id", &vscode, "vscode_id", PHASE2_NOW, &weights)
+            .unwrap();
         let outcome: contradiction::ResolutionOutcome = serde_json::from_str(&out).unwrap();
         assert_eq!(outcome.winner_id, "vscode_id");
         assert_eq!(outcome.loser_id, "vim_id");
@@ -1672,7 +1784,10 @@ mod tests {
         assert_eq!(parsed[0].claim_b_id, "exist");
         assert!((parsed[0].similarity - 0.5).abs() < 1e-6);
         // Sanity: the returned entity_id is the deterministic id of "editor".
-        assert_eq!(parsed[0].entity_id, claims::deterministic_entity_id("editor"));
+        assert_eq!(
+            parsed[0].entity_id,
+            claims::deterministic_entity_id("editor")
+        );
     }
 
     #[test]
@@ -1681,8 +1796,7 @@ mod tests {
         let emb = serde_json::to_string(&vec![1.0f32, 0.0]).unwrap();
         // Wrong shape: missing "id" and "embedding" keys.
         let existing = r#"[{"claim":{"t":"x","c":"fact","cf":0.9,"i":5,"sa":"oc"}}]"#;
-        let result =
-            kg_detect_contradictions_inner(new_claim, "new_id", &emb, existing, 0.3, 0.85);
+        let result = kg_detect_contradictions_inner(new_claim, "new_id", &emb, existing, 0.3, 0.85);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("existing"), "err: {}", err);
@@ -1699,12 +1813,21 @@ mod tests {
         }"#;
         let out = kg_apply_feedback_inner(&weights, ce).unwrap();
         let new: contradiction::ResolutionWeights = serde_json::from_str(&out).unwrap();
-        for v in [new.confidence, new.corroboration, new.recency, new.validation] {
+        for v in [
+            new.confidence,
+            new.corroboration,
+            new.recency,
+            new.validation,
+        ] {
             assert!(v >= 0.05 - 1e-12, "weight below clamp: {}", v);
             assert!(v <= 0.60 + 1e-12, "weight above clamp: {}", v);
         }
         let sum = new.confidence + new.corroboration + new.recency + new.validation;
-        assert!(sum >= 0.9 - 1e-9 && sum <= 1.1 + 1e-9, "weight sum out of range: {}", sum);
+        assert!(
+            sum >= 0.9 - 1e-9 && sum <= 1.1 + 1e-9,
+            "weight sum out of range: {}",
+            sum
+        );
     }
 
     // --- Phase 2 Slice 2c: feedback_log bindings ------------------------
@@ -1815,14 +1938,16 @@ mod tests {
 
     #[test]
     fn wasm_feedback_to_counterexample_pin_a_when_formula_winner_a_returns_null() {
-        let entry = sample_entry_json().replace("\"user_decision\":\"pin_b\"", "\"user_decision\":\"pin_a\"");
+        let entry = sample_entry_json()
+            .replace("\"user_decision\":\"pin_b\"", "\"user_decision\":\"pin_a\"");
         let out = kg_feedback_to_counterexample_inner(&entry).unwrap();
         assert_eq!(out, "null");
     }
 
     #[test]
     fn wasm_feedback_to_counterexample_unpin_returns_null() {
-        let entry = sample_entry_json().replace("\"user_decision\":\"pin_b\"", "\"user_decision\":\"unpin\"");
+        let entry = sample_entry_json()
+            .replace("\"user_decision\":\"pin_b\"", "\"user_decision\":\"unpin\"");
         let out = kg_feedback_to_counterexample_inner(&entry).unwrap();
         assert_eq!(out, "null");
     }
