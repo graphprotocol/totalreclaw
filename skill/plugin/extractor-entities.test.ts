@@ -182,10 +182,10 @@ function assertEq<T>(actual: T, expected: T, name: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2.2: rule memory type
+// v1 taxonomy: legacy v0 tokens are coerced to v1 on parse
 // ---------------------------------------------------------------------------
 
-// parseFactsResponse accepts type='rule' and round-trips it.
+// parseFactsResponse accepts legacy v0 'rule' and coerces to v1 'directive'.
 {
   const raw = JSON.stringify([
     {
@@ -198,16 +198,26 @@ function assertEq<T>(actual: T, expected: T, name: string): void {
     },
   ]);
   const facts = parseFactsResponse(raw);
-  assert(facts.length === 1, 'rule type: parsed 1 fact');
-  assert(facts[0].type === 'rule', 'rule type: type round-trips as "rule"');
-  assert(facts[0].importance === 8, 'rule type: importance preserved');
-  assert(facts[0].entities?.length === 1, 'rule type: entities preserved');
-  assert(facts[0].entities?.[0].name === 'OpenClaw gateway', 'rule type: entity name preserved');
+  assert(facts.length === 1, 'v0 rule: parsed 1 fact');
+  assert(facts[0].type === 'directive', 'v0 rule → v1 directive');
+  assert(facts[0].importance === 8, 'v0 rule: importance preserved');
+  assert(facts[0].entities?.length === 1, 'v0 rule: entities preserved');
+  assert(facts[0].entities?.[0].name === 'OpenClaw gateway', 'v0 rule: entity name preserved');
 }
 
-// All 8 valid types pass through (regression guard for the type filter).
+// v0 → v1 coercion for the full 8-type legacy set.
 {
-  const types = ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary', 'rule'];
+  const legacyToV1: Record<string, string> = {
+    fact: 'claim',
+    preference: 'preference',
+    decision: 'claim',
+    episodic: 'episode',
+    goal: 'commitment',
+    context: 'claim',
+    summary: 'summary',
+    rule: 'directive',
+  };
+  const types = Object.keys(legacyToV1);
   const raw = JSON.stringify(
     types.map((t) => ({
       text: `Test ${t} memory value`,
@@ -217,13 +227,36 @@ function assertEq<T>(actual: T, expected: T, name: string): void {
     })),
   );
   const facts = parseFactsResponse(raw);
-  assert(facts.length === 8, '8 valid types: all parse');
-  const parsedTypes = new Set(facts.map((f) => f.type));
-  assert(parsedTypes.size === 8, '8 valid types: all distinct');
-  assert(parsedTypes.has('rule'), '8 valid types: rule is one of them');
+  assert(facts.length === 8, 'v0 coercion: all 8 tokens parse');
+  for (let i = 0; i < types.length; i++) {
+    const v0 = types[i];
+    const expected = legacyToV1[v0];
+    assert(facts[i].type === expected, `v0 "${v0}" → v1 "${expected}"`);
+  }
 }
 
-// Unknown type still falls back to 'fact' (existing behavior preserved).
+// v1 tokens pass through unchanged. Note: summary+source=user is an
+// illegal combination in v1 and is rejected by the parser, so we use
+// source='derived' for the summary case.
+{
+  const v1Types = ['claim', 'preference', 'directive', 'commitment', 'episode', 'summary'];
+  const raw = JSON.stringify(
+    v1Types.map((t) => ({
+      text: `Test ${t} memory value`,
+      type: t,
+      source: t === 'summary' ? 'derived' : 'user',
+      importance: 8,
+      action: 'ADD',
+    })),
+  );
+  const facts = parseFactsResponse(raw);
+  assert(facts.length === 6, 'v1 native: all 6 tokens parse');
+  for (let i = 0; i < v1Types.length; i++) {
+    assert(facts[i].type === v1Types[i], `v1 "${v1Types[i]}" preserved`);
+  }
+}
+
+// Unknown type falls back to v1 'claim'.
 {
   const raw = JSON.stringify([
     {
@@ -235,7 +268,7 @@ function assertEq<T>(actual: T, expected: T, name: string): void {
   ]);
   const facts = parseFactsResponse(raw);
   assert(facts.length === 1, 'unknown type: still produces 1 fact');
-  assert(facts[0].type === 'fact', 'unknown type: falls back to "fact"');
+  assert(facts[0].type === 'claim', 'unknown type: falls back to v1 "claim"');
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +318,7 @@ function makeCaptureLogger() {
   const cap = makeCaptureLogger();
   const facts = parseFactsResponse(raw, cap.logger);
   assert(facts.length === 1, 'thinking-tag uppercase: parses 1 fact');
-  assert(facts[0].type === 'rule', 'thinking-tag uppercase: rule type preserved');
+  assert(facts[0].type === 'directive', 'thinking-tag uppercase: v0 rule → v1 directive');
   assert(cap.warns.length === 0, 'thinking-tag uppercase: no parse-error warning');
 }
 
@@ -316,7 +349,7 @@ function makeCaptureLogger() {
   const cap = makeCaptureLogger();
   const facts = parseFactsResponse(raw, cap.logger);
   assert(facts.length === 1, 'prose-wrapper: recovered 1 fact via bracket-scan');
-  assert(facts[0].type === 'rule', 'prose-wrapper: rule type preserved');
+  assert(facts[0].type === 'directive', 'prose-wrapper: v0 rule → v1 directive');
   assert(
     cap.infos.some((m) => m.includes('bracket-scan fallback')),
     'prose-wrapper: info log announces recovery path',
@@ -347,16 +380,15 @@ function makeCaptureLogger() {
   assert(facts.length === 0, 'no-logger: returns empty array (legacy silent path)');
 }
 
-// 2.2.5: parsed value that is not an array (e.g. LLM returns a single object).
+// Single-object payload (not an array) — v1 parser auto-wraps it into a
+// 1-element fact list so marginal LLM outputs still recover gracefully.
 {
   const raw = JSON.stringify({ text: 'A single object, not an array', type: 'fact', importance: 7 });
   const cap = makeCaptureLogger();
   const facts = parseFactsResponse(raw, cap.logger);
-  assert(facts.length === 0, 'non-array: returns empty');
-  assert(
-    cap.warns.some((m) => m.includes('not an array')),
-    'non-array: warn log mentions type mismatch',
-  );
+  assert(facts.length === 1, 'single-object: auto-wrapped into 1 fact');
+  assert(facts[0].type === 'claim', 'single-object: v0 "fact" coerced to v1 "claim"');
+  assert(cap.warns.length === 0, 'single-object: no warn (graceful recovery)');
 }
 
 // 2.2.5: thinking tag that wraps WITHOUT closing — should not break the parser.

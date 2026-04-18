@@ -257,11 +257,49 @@ export interface RerankerCandidate {
   embedding?: number[];
   importance?: number;   // 0-1 normalized importance score
   createdAt?: number;    // Unix timestamp (seconds) when fact was created
+  /**
+   * Memory Taxonomy v1 provenance tag. Plugin v3.0.0+ surfaces this when a
+   * candidate was decrypted from a v1 blob. When present and
+   * `applySourceWeights: true` is passed to rerank(), the final RRF score
+   * is multiplied by the Retrieval v2 Tier 1 source weight from core.
+   */
+  source?: string;
 }
 
 export interface RerankerResult extends RerankerCandidate {
   rrfScore: number;
   cosineSimilarity?: number;
+  /** Source weight multiplier applied (1.0 = no weighting). */
+  sourceWeight?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Source-weight lookup (Retrieval v2 Tier 1)
+//
+// Mirrors the table in `rust/totalreclaw-core/src/reranker.rs` exactly so
+// the TypeScript reranker produces the same ordering as core rerankWithConfig
+// when `applySourceWeights: true` is passed.
+//
+// NOTE: this is duplicated here (vs calling core via WASM) because the
+// plugin's local reranker handles RRF + MMR on the client side with rich
+// candidate metadata. The core `rerankWithConfig` is the canonical source
+// of truth and will be used directly by MCP/Python adapters.
+// ---------------------------------------------------------------------------
+
+const SOURCE_WEIGHTS: Record<string, number> = {
+  'user': 1.0,
+  'user-inferred': 0.9,
+  'derived': 0.7,
+  'external': 0.7,
+  'assistant': 0.55,
+};
+
+const LEGACY_FALLBACK_WEIGHT = 0.85;
+
+export function getSourceWeight(source: string | undefined): number {
+  if (!source) return LEGACY_FALLBACK_WEIGHT;
+  const w = SOURCE_WEIGHTS[source.toLowerCase()];
+  return w ?? 0.85; // unknown source → moderate penalty
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +380,13 @@ export function applyMMR(
 /**
  * Re-rank decrypted candidates using BM25 + Cosine + Importance + Recency
  * with Weighted RRF fusion and MMR diversity.
+ *
+ * When `applySourceWeights` is true, the final RRF score for each candidate
+ * is multiplied by a Retrieval v2 Tier 1 source weight based on the
+ * candidate's `source` field (user=1.0, user-inferred=0.9, derived/external=0.7,
+ * assistant=0.55). Candidates without a `source` field use the legacy
+ * fallback weight (0.85). This is the flag equivalent of core
+ * `rerankWithConfig(.., apply_source_weights=true)`.
  */
 export function rerank(
   query: string,
@@ -349,6 +394,7 @@ export function rerank(
   candidates: RerankerCandidate[],
   topK: number = 8,
   weights?: Partial<RankingWeights>,
+  applySourceWeights: boolean = false,
 ): RerankerResult[] {
   if (candidates.length === 0) return [];
 
@@ -435,12 +481,24 @@ export function rerank(
   for (const item of fused) {
     const candidate = candidateMap.get(item.id);
     if (candidate) {
+      const sourceWeight = applySourceWeights
+        ? getSourceWeight(candidate.source)
+        : 1.0;
       rrfResults.push({
         ...candidate,
-        rrfScore: item.score,
+        rrfScore: item.score * sourceWeight,
         cosineSimilarity: cosineScores.get(item.id),
+        sourceWeight: applySourceWeights ? sourceWeight : undefined,
       });
     }
+  }
+
+  // When source weights are applied the RRF-scaled scores may no longer be in
+  // descending order (weighted=0.55 assistant could slip below a weighted=1.0
+  // user fact that was originally ranked lower). Re-sort so the top-K picked
+  // by MMR is meaningful.
+  if (applySourceWeights) {
+    rrfResults.sort((a, b) => b.rrfScore - a.rrfScore);
   }
 
   // --- Step 9: Apply MMR for diversity, then return top-k ---

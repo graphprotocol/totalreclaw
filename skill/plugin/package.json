@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/totalreclaw",
-  "version": "2.12.1",
+  "version": "3.0.0",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. Automatic extraction, semantic search, and on-chain storage",
   "type": "module",
   "keywords": [
@@ -25,7 +25,7 @@
   "license": "MIT",
   "dependencies": {
     "@totalreclaw/client": "^1.2.0",
-    "@totalreclaw/core": "^1.4.0",
+    "@totalreclaw/core": "file:../../rust/totalreclaw-core/pkg",
     "@huggingface/transformers": "^4.0.1",
     "onnxruntime-node": "^1.24.0"
   },

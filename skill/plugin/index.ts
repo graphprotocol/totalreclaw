@@ -38,11 +38,16 @@ import {
   isValidMemoryType,
   parseEntity,
   VALID_MEMORY_TYPES,
+  LEGACY_V0_MEMORY_TYPES,
+  VALID_MEMORY_SOURCES,
+  VALID_MEMORY_SCOPES,
   EXTRACTION_SYSTEM_PROMPT,
   extractFactsForCompaction,
   type ExtractedFact,
   type ExtractedEntity,
   type MemoryType,
+  type MemorySource,
+  type MemoryScope,
 } from './extractor.js';
 import { initLLMClient, resolveLLMConfig, chatCompletion, generateEmbedding, getEmbeddingDims } from './llm-client.js';
 import { LSHHasher } from './lsh.js';
@@ -57,16 +62,15 @@ import {
   STORE_DEDUP_MAX_CANDIDATES,
   type DecryptedCandidate,
 } from './consolidation.js';
-import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, submitFactBatchOnChain, deriveSmartAccountAddress, type FactPayload } from './subgraph-store.js';
+import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, submitFactBatchOnChain, deriveSmartAccountAddress, PROTOBUF_VERSION_V4, type FactPayload } from './subgraph-store.js';
 import {
   DIGEST_TRAPDOOR,
   buildCanonicalClaim,
-  buildLegacyDoc,
   computeEntityTrapdoor,
   computeEntityTrapdoors,
   isDigestBlob,
+  normalizeToV1Type,
   readClaimFromBlob,
-  resolveClaimFormat,
   resolveDigestMode,
   type DigestMode,
 } from './claims-helper.js';
@@ -931,21 +935,9 @@ function encryptToHex(plaintext: string, key: Buffer): string {
   return Buffer.from(b64, 'base64').toString('hex');
 }
 
-/**
- * Log the active claim blob format the first time a fact is about to be stored.
- * Lets operators confirm via the OpenClaw logs whether the new canonical Claim
- * path or the TOTALRECLAW_CLAIM_FORMAT=legacy fallback is in use.
- */
-let _loggedClaimFormat = false;
-function logClaimFormatOnce(format: 'claim' | 'legacy', logger: OpenClawPluginApi['logger']): void {
-  if (_loggedClaimFormat) return;
-  _loggedClaimFormat = true;
-  const msg =
-    format === 'legacy'
-      ? 'TotalReclaw: TOTALRECLAW_CLAIM_FORMAT=legacy — writing legacy {text, metadata} blobs'
-      : 'TotalReclaw: writing canonical Claim blobs';
-  logger.info(msg);
-}
+// Plugin v3.0.0 removed the legacy claim-format fallback. Write path
+// always emits Memory Taxonomy v1 JSON blobs. The logClaimFormatOnce
+// helper is gone along with TOTALRECLAW_CLAIM_FORMAT / TOTALRECLAW_TAXONOMY_VERSION.
 
 let _loggedDigestMode = false;
 function logDigestModeOnce(mode: DigestMode, logger: OpenClawPluginApi['logger']): void {
@@ -1052,6 +1044,7 @@ function scheduleDigestRecompile(
       source: 'openclaw-plugin-digest',
       contentFp,
       agentId: 'openclaw-plugin-digest',
+      version: PROTOBUF_VERSION_V4,
     });
     const config = { ...getSubgraphConfig(), authKeyHex: authKey, walletAddress: ownerForBatch };
     const result = await submitFactBatchOnChain([protobuf], config);
@@ -1077,6 +1070,7 @@ function scheduleDigestRecompile(
       source: 'tombstone',
       contentFp: '',
       agentId: 'openclaw-plugin-digest',
+      version: PROTOBUF_VERSION_V4,
     };
     const protobuf = encodeFactProtobuf(tombstone);
     const config = { ...getSubgraphConfig(), authKeyHex: authKey, walletAddress: ownerForBatch };
@@ -1474,8 +1468,9 @@ async function storeExtractedFacts(
   const pendingPayloads: Buffer[] = []; // Batched subgraph payloads
   let preparedForSubgraph = 0;
 
-  const claimFormat = resolveClaimFormat();
-  logClaimFormatOnce(claimFormat, logger);
+  // Plugin v3.0.0: always emit Memory Taxonomy v1 JSON blobs. The
+  // TOTALRECLAW_TAXONOMY_VERSION opt-in and the TOTALRECLAW_CLAIM_FORMAT
+  // legacy fallback have both been retired — v1 is the single write path.
 
   for (const fact of dedupedFacts) {
     try {
@@ -1508,6 +1503,7 @@ async function storeExtractedFacts(
             source: 'tombstone',
             contentFp: '',
             agentId: 'openclaw-plugin-auto',
+            version: PROTOBUF_VERSION_V4,
           };
           pendingPayloads.push(encodeFactProtobuf(tombstone));
           logger.info(`LLM dedup: DELETE — queued tombstone for ${fact.existingFactId}`);
@@ -1536,6 +1532,7 @@ async function storeExtractedFacts(
             source: 'tombstone',
             contentFp: '',
             agentId: 'openclaw-plugin-auto',
+            version: PROTOBUF_VERSION_V4,
           };
           pendingPayloads.push(encodeFactProtobuf(tombstone));
           logger.info(`LLM dedup: UPDATE — queued tombstone for ${fact.existingFactId}, storing replacement`);
@@ -1586,6 +1583,7 @@ async function storeExtractedFacts(
               source: 'tombstone',
               contentFp: '',
               agentId: 'openclaw-plugin-auto',
+              version: PROTOBUF_VERSION_V4,
             };
             pendingPayloads.push(encodeFactProtobuf(tombstone));
             logger.info(
@@ -1610,25 +1608,26 @@ async function storeExtractedFacts(
 
       const factSource = sourceOverride || 'auto-extraction';
 
-      // Build the blob: canonical Claim JSON by default, legacy doc if the
-      // TOTALRECLAW_CLAIM_FORMAT=legacy fallback is set. Either way the result
-      // is decryptable via parseClaimOrLegacy on the read path.
+      // Plugin v3.0.0: always build a Memory Taxonomy v1 JSON blob. The
+      // blob is decryptable by `readClaimFromBlob` which prefers v1 →
+      // falls back to v0 short-key → then plugin-legacy {text, metadata}
+      // for pre-v3 vault entries.
       //
       // We build it BEFORE the on-chain write so Phase 2 contradiction
       // detection can inspect the same canonical Claim the write path will
       // actually store. The string is encrypted byte-identically below.
-      const blobPlaintext =
-        claimFormat === 'legacy'
-          ? buildLegacyDoc({
-              fact,
-              importance: effectiveImportance,
-              source: 'auto-extraction',
-            })
-          : buildCanonicalClaim({
-              fact,
-              importance: effectiveImportance,
-              sourceAgent: factSource,
-            });
+      //
+      // Defensive: if the extraction hook didn't populate `fact.source`
+      // (e.g. explicit tool path, legacy caller), default to 'user-inferred'
+      // so v1 schema validation passes.
+      const factForBlob: ExtractedFact = fact.source
+        ? fact
+        : { ...fact, source: 'user-inferred' };
+      const blobPlaintext = buildCanonicalClaim({
+        fact: factForBlob,
+        importance: effectiveImportance,
+        sourceAgent: factSource,
+      });
 
       const factId = crypto.randomUUID();
 
@@ -1649,7 +1648,6 @@ async function storeExtractedFacts(
       // fall back to Phase 1 behaviour.
       let contradictionSkipNew = false;
       if (
-        claimFormat !== 'legacy' &&
         isSubgraphMode() &&
         fact.entities &&
         fact.entities.length > 0 &&
@@ -1703,6 +1701,7 @@ async function storeExtractedFacts(
               source: 'tombstone',
               contentFp: '',
               agentId: 'openclaw-plugin-auto',
+              version: PROTOBUF_VERSION_V4,
             };
             pendingPayloads.push(encodeFactProtobuf(tombstone));
             superseded++;
@@ -1746,6 +1745,7 @@ async function storeExtractedFacts(
           source: factSource,
           contentFp: contentFp,
           agentId: 'openclaw-plugin-auto',
+          version: PROTOBUF_VERSION_V4,
           encryptedEmbedding: embeddingResult?.encryptedEmbedding,
         });
         pendingPayloads.push(protobuf);
@@ -2511,11 +2511,35 @@ const plugin = {
             },
             type: {
               type: 'string',
-              enum: [...VALID_MEMORY_TYPES],
+              enum: [...VALID_MEMORY_TYPES, ...LEGACY_V0_MEMORY_TYPES],
               description:
-                'The kind of memory. One of: fact, preference, decision, episodic, goal, context, summary, rule. ' +
-                'Use "rule" for reusable operational gotchas ("always X", "never Y"), conventions, and debugging ' +
-                'shortcuts. Default: fact.',
+                'Memory Taxonomy v1 type: claim, preference, directive, commitment, episode, summary. ' +
+                'Use "claim" for factual assertions and decisions (populate `reasoning` with the why clause). ' +
+                'Use "directive" for imperative rules ("always X", "never Y"), "commitment" for future intent, ' +
+                'and "episode" for notable events. Legacy v0 tokens (fact, decision, episodic, goal, context, ' +
+                'rule) are silently coerced to their v1 equivalents. Default: claim.',
+            },
+            source: {
+              type: 'string',
+              enum: [...VALID_MEMORY_SOURCES],
+              description:
+                'v1 provenance tag. "user" = user explicitly stated it, "user-inferred" = inferred from user ' +
+                'signals, "assistant" = assistant-authored (downgrade unless user affirmed), "external" / ' +
+                '"derived" = rare. Explicit remembers default to "user".',
+            },
+            scope: {
+              type: 'string',
+              enum: [...VALID_MEMORY_SCOPES],
+              description:
+                'v1 life-domain scope: work, personal, health, family, creative, finance, misc, unspecified. ' +
+                'Default: unspecified.',
+            },
+            reasoning: {
+              type: 'string',
+              description:
+                'For type=claim expressing a decision, the WHY clause ("because Y"). Max 256 chars. ' +
+                'Omit for non-decision claims.',
+              maxLength: 256,
             },
             importance: {
               type: 'number',
@@ -2552,6 +2576,9 @@ const plugin = {
           params: {
             text: string;
             type?: string;
+            source?: string;
+            scope?: string;
+            reasoning?: string;
             importance?: number;
             entities?: Array<{ name: string; type: string; role?: string }>;
           },
@@ -2559,19 +2586,38 @@ const plugin = {
           try {
             await requireFullSetup(api.logger);
 
-            // Phase 2 wiring: route explicit remembers through the same canonical
-            // store path that auto-extraction uses (storeExtractedFacts). This
-            // ensures explicit tool calls build canonical Claims (not legacy doc
-            // blobs), emit entity trapdoors, and run through Phase 2 contradiction
-            // detection + auto-resolution. Historically this tool had its own
-            // inline dedup + legacy-blob path that bypassed Phase 2 entirely.
+            // v1 taxonomy: route explicit remembers through the same canonical
+            // store path that auto-extraction uses (`storeExtractedFacts`). This
+            // emits a Memory Taxonomy v1 JSON blob, generates entity trapdoors,
+            // and runs through the Phase 2 contradiction-resolution pipeline.
             //
-            // Phase 2.2.6: use the single-source-of-truth `isValidMemoryType` guard
-            // from extractor.ts — no more inline whitelist drift. The rule type is
-            // reachable via this tool call now (was silently dropped pre-2.2.6).
-            const memoryType: MemoryType = isValidMemoryType(params.type)
-              ? params.type
-              : 'fact';
+            // Accept legacy v0 tokens on input and coerce to v1 via
+            // `normalizeToV1Type` so agents that still emit the pre-v3
+            // taxonomy keep working.
+            const rawType = typeof params.type === 'string' ? params.type.toLowerCase() : 'claim';
+            const memoryType: MemoryType = isValidMemoryType(rawType)
+              ? rawType
+              : normalizeToV1Type(rawType);
+
+            // Source defaults to 'user' for explicit remembers (the user is
+            // the author by definition). Ignored if the caller passes an
+            // invalid value.
+            const rawSource = typeof params.source === 'string' ? params.source.toLowerCase() : 'user';
+            const memorySource: MemorySource =
+              (VALID_MEMORY_SOURCES as readonly string[]).includes(rawSource)
+                ? (rawSource as MemorySource)
+                : 'user';
+
+            const rawScope = typeof params.scope === 'string' ? params.scope.toLowerCase() : 'unspecified';
+            const memoryScope: MemoryScope =
+              (VALID_MEMORY_SCOPES as readonly string[]).includes(rawScope)
+                ? (rawScope as MemoryScope)
+                : 'unspecified';
+
+            const reasoning =
+              typeof params.reasoning === 'string' && params.reasoning.length > 0
+                ? params.reasoning.slice(0, 256)
+                : undefined;
 
             // Explicit remember defaults to importance 8 (above auto-extraction's
             // typical 6-7), so store-time dedup's shouldSupersede prefers the
@@ -2587,6 +2633,9 @@ const plugin = {
             const fact: ExtractedFact = {
               text: params.text.slice(0, 512),
               type: memoryType,
+              source: memorySource,
+              scope: memoryScope,
+              reasoning,
               importance,
               action: 'ADD',
               confidence: 1.0, // user explicitly asked to remember — highest confidence
@@ -2743,6 +2792,9 @@ const plugin = {
                     embedding: decryptedEmbedding,
                     importance: doc.importance / 10,
                     createdAt: result.timestamp ? parseInt(result.timestamp, 10) : undefined,
+                    // Retrieval v2 Tier 1: surface v1 source so applySourceWeights
+                    // can multiply the final RRF score by the source weight.
+                    source: typeof doc.metadata?.source === 'string' ? doc.metadata.source : undefined,
                   });
 
                   metaMap.set(result.id, {
@@ -2821,6 +2873,7 @@ const plugin = {
                     createdAt: typeof candidate.timestamp === 'number'
                       ? candidate.timestamp / 1000
                       : new Date(candidate.timestamp).getTime() / 1000,
+                    source: typeof doc.metadata?.source === 'string' ? doc.metadata.source : undefined,
                   });
 
                   metaMap.set(candidate.fact_id, {
@@ -2842,6 +2895,7 @@ const plugin = {
               rerankerCandidates,
               k,
               INTENT_WEIGHTS[queryIntent],
+              /* applySourceWeights (Retrieval v2 Tier 1) */ true,
             );
 
             if (reranked.length === 0) {
@@ -2939,6 +2993,7 @@ const plugin = {
                 source: 'tombstone',
                 contentFp: '',
                 agentId: 'openclaw-plugin',
+                version: PROTOBUF_VERSION_V4,
               };
               const protobuf = encodeFactProtobuf(tombstone);
               const result = await submitFactOnChain(protobuf, config);
@@ -3889,6 +3944,7 @@ const plugin = {
                 contentFp: fact.contentFp || '',
                 agentId: fact.agentId || 'openclaw-plugin',
                 encryptedEmbedding: fact.encryptedEmbedding || undefined,
+                version: PROTOBUF_VERSION_V4,
               };
               payloads.push(encodeFactProtobuf(factPayload));
             }
@@ -4302,6 +4358,7 @@ const plugin = {
                   embedding: decryptedEmbedding,
                   importance: doc.importance / 10,
                   createdAt: createdAtSec,
+                  source: typeof doc.metadata?.source === 'string' ? doc.metadata.source : undefined,
                 });
 
                 hookMetaMap.set(result.id, {
@@ -4322,6 +4379,7 @@ const plugin = {
               rerankerCandidates,
               8,
               INTENT_WEIGHTS[hookQueryIntent],
+              /* applySourceWeights (Retrieval v2 Tier 1) */ true,
             );
 
             // Update hot cache with reranked results.
@@ -4435,6 +4493,7 @@ const plugin = {
                 embedding: decryptedEmbedding,
                 importance: doc.importance / 10,
                 createdAt: createdAtSec,
+                source: typeof doc.metadata?.source === 'string' ? doc.metadata.source : undefined,
               });
 
               hookMetaMap.set(candidate.fact_id, {
@@ -4454,7 +4513,8 @@ const plugin = {
             rerankerCandidates,
             8,
             INTENT_WEIGHTS[srvHookIntent],
-          );
+            /* applySourceWeights (Retrieval v2 Tier 1) */ true,
+            );
 
           if (reranked.length === 0) return undefined;
 
@@ -4629,14 +4689,19 @@ const plugin = {
           }
           turnsSinceLastExtraction = 0; // Reset C3 counter on compaction.
 
-          // Session debrief — after regular extraction
+          // Session debrief — after regular extraction.
+          // v1 mapping: DebriefItem { type: 'summary'|'context' } →
+          //   v1 type 'summary' (always, since context → claim would lose
+          //   the "this is a session summary" signal) + source 'derived'
+          //   (session debrief is a derived synthesis by definition).
           try {
             const storedTexts = facts.map((f) => f.text);
             const debriefItems = await extractDebrief(evt.messages, storedTexts);
             if (debriefItems.length > 0) {
               const debriefFacts: ExtractedFact[] = debriefItems.map((d) => ({
                 text: d.text,
-                type: d.type as ExtractedFact['type'],
+                type: 'summary' as MemoryType,
+                source: 'derived' as MemorySource,
                 importance: d.importance,
                 action: 'ADD' as const,
               }));
@@ -4689,14 +4754,19 @@ const plugin = {
           }
           turnsSinceLastExtraction = 0; // Reset C3 counter on reset.
 
-          // Session debrief — after regular extraction
+          // Session debrief — after regular extraction.
+          // v1 mapping: DebriefItem { type: 'summary'|'context' } →
+          //   v1 type 'summary' (always, since context → claim would lose
+          //   the "this is a session summary" signal) + source 'derived'
+          //   (session debrief is a derived synthesis by definition).
           try {
             const storedTexts = facts.map((f) => f.text);
             const debriefItems = await extractDebrief(evt.messages, storedTexts);
             if (debriefItems.length > 0) {
               const debriefFacts: ExtractedFact[] = debriefItems.map((d) => ({
                 text: d.text,
-                type: d.type as ExtractedFact['type'],
+                type: 'summary' as MemoryType,
+                source: 'derived' as MemorySource,
                 importance: d.importance,
                 action: 'ADD' as const,
               }));

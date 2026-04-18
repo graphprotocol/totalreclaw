@@ -100,7 +100,21 @@ export interface FactPayload {
   contentFp: string;
   agentId: string;
   encryptedEmbedding?: string;
+  /**
+   * Outer protobuf schema version. Plugin v3.0.0 writes Memory Taxonomy v1
+   * JSON inner blobs, so this defaults to `PROTOBUF_VERSION_V4` (4). Omitting
+   * the field (or passing 0) yields the legacy `DEFAULT_PROTOBUF_VERSION`
+   * (3), which is retained so tombstone rows stay wire-compatible with
+   * pre-v3 readers if ever needed.
+   */
+  version?: number;
 }
+
+/** Legacy protobuf wrapper schema version (v0/v1-binary inner blob). */
+export const PROTOBUF_VERSION_LEGACY = 3;
+
+/** Memory Taxonomy v1 protobuf wrapper schema version. */
+export const PROTOBUF_VERSION_V4 = 4;
 
 // Stub 65-byte signature for gas estimation (pm_sponsorUserOperation).
 // Must be a structurally valid ECDSA signature (r,s,v) so that ecrecover does
@@ -121,6 +135,11 @@ const DUMMY_SIGNATURE =
  * Encode a fact payload as a minimal Protobuf wire format via WASM core.
  *
  * Field numbers match server/proto/totalreclaw.proto.
+ *
+ * As of plugin v3.0.0 the outer protobuf `version` field is written as 4
+ * when the caller passes `version: PROTOBUF_VERSION_V4`. Omitting the field
+ * preserves legacy v3 semantics (e.g. for tombstone tombstone rows that
+ * should round-trip through pre-v3 readers).
  */
 export function encodeFactProtobuf(fact: FactPayload): Buffer {
   const json = JSON.stringify({
@@ -134,6 +153,7 @@ export function encodeFactProtobuf(fact: FactPayload): Buffer {
     content_fp: fact.contentFp,
     agent_id: fact.agentId,
     encrypted_embedding: fact.encryptedEmbedding || null,
+    version: fact.version ?? PROTOBUF_VERSION_LEGACY,
   });
   return Buffer.from(getWasm().encodeFactProtobuf(json));
 }

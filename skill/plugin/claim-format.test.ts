@@ -1,6 +1,13 @@
 /**
  * Tests for the canonical Claim builder, entity trapdoors, and the
- * TOTALRECLAW_CLAIM_FORMAT feature flag.
+ * v1-default blob/read path.
+ *
+ * As of plugin v3.0.0:
+ *   - `buildCanonicalClaim` unconditionally emits Memory Taxonomy v1 JSON
+ *     (no more env gating). The v0 short-key format is gone from the write
+ *     path; it only survives in `readClaimFromBlob` for legacy vault reads.
+ *   - The `TOTALRECLAW_TAXONOMY_VERSION` + `TOTALRECLAW_CLAIM_FORMAT` env
+ *     toggles are retired. No env-var gate tests remain.
  *
  * Run with: npx tsx claim-format.test.ts
  */
@@ -8,16 +15,12 @@
 import crypto from 'node:crypto';
 import {
   buildCanonicalClaim,
-  buildLegacyDoc,
   computeEntityTrapdoor,
   computeEntityTrapdoors,
   mapTypeToCategory,
   readClaimFromBlob,
-  resolveClaimFormat,
 } from './claims-helper.js';
 import type { ExtractedFact } from './extractor.js';
-
-import * as core from '@totalreclaw/core';
 
 let passed = 0;
 let failed = 0;
@@ -43,25 +46,36 @@ function assertEq<T>(actual: T, expected: T, name: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// mapTypeToCategory
+// mapTypeToCategory — accepts both v1 and legacy v0 tokens
 // ---------------------------------------------------------------------------
 
-assert(mapTypeToCategory('fact') === 'fact', 'category: fact → fact');
-assert(mapTypeToCategory('preference') === 'pref', 'category: preference → pref');
-assert(mapTypeToCategory('decision') === 'dec', 'category: decision → dec');
-assert(mapTypeToCategory('episodic') === 'epi', 'category: episodic → epi');
-assert(mapTypeToCategory('goal') === 'goal', 'category: goal → goal');
-assert(mapTypeToCategory('context') === 'ctx', 'category: context → ctx');
-assert(mapTypeToCategory('summary') === 'sum', 'category: summary → sum');
+// v1 type → short category
+assert(mapTypeToCategory('claim') === 'claim', 'category: v1 claim → claim');
+assert(mapTypeToCategory('preference') === 'pref', 'category: v1 preference → pref');
+assert(mapTypeToCategory('directive') === 'rule', 'category: v1 directive → rule');
+assert(mapTypeToCategory('commitment') === 'goal', 'category: v1 commitment → goal');
+assert(mapTypeToCategory('episode') === 'epi', 'category: v1 episode → epi');
+assert(mapTypeToCategory('summary') === 'sum', 'category: v1 summary → sum');
+
+// Legacy v0 type → short category (read-side backward compat)
+assert(mapTypeToCategory('fact') === 'fact', 'category: v0 fact → fact');
+assert(mapTypeToCategory('decision') === 'dec', 'category: v0 decision → dec');
+assert(mapTypeToCategory('episodic') === 'epi', 'category: v0 episodic → epi');
+assert(mapTypeToCategory('goal') === 'goal', 'category: v0 goal → goal');
+assert(mapTypeToCategory('context') === 'ctx', 'category: v0 context → ctx');
+assert(mapTypeToCategory('rule') === 'rule', 'category: v0 rule → rule');
 
 // ---------------------------------------------------------------------------
-// buildCanonicalClaim
+// buildCanonicalClaim — v1 output
 // ---------------------------------------------------------------------------
 
 {
   const fact: ExtractedFact = {
     text: 'Pedro chose PostgreSQL because it is relational and needs ACID.',
-    type: 'decision',
+    type: 'claim',
+    source: 'user',
+    scope: 'work',
+    reasoning: 'relational and needs ACID',
     importance: 8,
     confidence: 0.92,
     action: 'ADD',
@@ -77,54 +91,58 @@ assert(mapTypeToCategory('summary') === 'sum', 'category: summary → sum');
     extractedAt: '2026-04-12T10:00:00Z',
   });
 
-  const expected =
-    '{"t":"Pedro chose PostgreSQL because it is relational and needs ACID.",' +
-    '"c":"dec","cf":0.92,"i":8,"sa":"openclaw-plugin","ea":"2026-04-12T10:00:00Z",' +
-    '"e":[{"n":"Pedro","tp":"person","r":"chooser"},{"n":"PostgreSQL","tp":"tool"}]}';
-  assertEq(canonical, expected, 'canonical: decision with entities byte-identical');
-
-  // Round-trip via parseClaimOrLegacy confirms the core agrees it's valid.
-  const parsed = JSON.parse(core.parseClaimOrLegacy(canonical));
-  assert(parsed.t === fact.text, 'canonical: round-trip preserves text');
-  assert(parsed.c === 'dec', 'canonical: round-trip preserves category');
-  assert(parsed.e.length === 2, 'canonical: round-trip preserves entities');
+  // v1 emits long-form JSON with schema_version and long field names.
+  const parsed = JSON.parse(canonical) as Record<string, unknown>;
+  assertEq(parsed.text, fact.text, 'v1: text preserved');
+  assertEq(parsed.type, 'claim', 'v1: type preserved');
+  assertEq(parsed.source, 'user', 'v1: source preserved');
+  assertEq(parsed.scope, 'work', 'v1: scope preserved');
+  assertEq(parsed.reasoning, 'relational and needs ACID', 'v1: reasoning preserved');
+  assertEq(parsed.importance, 8, 'v1: importance preserved');
+  assertEq(parsed.confidence, 0.92, 'v1: confidence preserved');
+  assertEq(parsed.created_at, '2026-04-12T10:00:00Z', 'v1: created_at preserved');
+  assertEq(parsed.schema_version, '1.0', 'v1: schema_version = 1.0');
+  assert(Array.isArray(parsed.entities), 'v1: entities is array');
+  assert((parsed.entities as unknown[]).length === 2, 'v1: 2 entities preserved');
 }
 
-// Claim without entities: `e` field omitted entirely.
+// Defensive: missing `fact.source` is auto-filled to 'user-inferred'.
 {
   const fact: ExtractedFact = {
     text: 'The user lives in Lisbon.',
-    type: 'fact',
+    type: 'claim',
     importance: 7,
     action: 'ADD',
   };
   const canonical = buildCanonicalClaim({
     fact,
     importance: 7,
-    sourceAgent: 'openclaw-plugin',
+    sourceAgent: 'auto-extraction',
     extractedAt: '2026-04-12T10:00:00Z',
   });
-  assert(!canonical.includes('"e":'), 'canonical: entities omitted when empty');
-  assert(canonical.includes('"cf":0.85'), 'canonical: default confidence 0.85 when fact has none');
+  const parsed = JSON.parse(canonical) as Record<string, unknown>;
+  assertEq(parsed.source, 'user-inferred', 'v1: missing source defaults to user-inferred');
+  assert(!('entities' in parsed), 'v1: entities field omitted when empty');
 }
 
-// Claim with empty-string role: treated as undefined (canonicalizeClaim is strict).
+// Legacy v0 type tokens are accepted (normalized via V0_TO_V1_TYPE).
 {
   const fact: ExtractedFact = {
-    text: 'Pedro works at Acme.',
-    type: 'fact',
-    importance: 7,
-    confidence: 0.9,
+    text: 'Chose DuckDB for analytics.',
+    // This is a legacy v0 token; buildCanonicalClaim should coerce it.
+    type: 'decision' as unknown as ExtractedFact['type'],
+    source: 'user',
+    importance: 8,
     action: 'ADD',
-    entities: [{ name: 'Acme', type: 'company' }],
   };
   const canonical = buildCanonicalClaim({
     fact,
-    importance: 7,
-    sourceAgent: 'openclaw-plugin',
+    importance: 8,
+    sourceAgent: 'legacy-caller',
     extractedAt: '2026-04-12T10:00:00Z',
   });
-  assert(canonical.includes('"e":[{"n":"Acme","tp":"company"}]'), 'canonical: role omitted when absent');
+  const parsed = JSON.parse(canonical) as Record<string, unknown>;
+  assertEq(parsed.type, 'claim', 'v1: legacy "decision" coerced to "claim"');
 }
 
 // ---------------------------------------------------------------------------
@@ -176,85 +194,61 @@ assert(mapTypeToCategory('summary') === 'sum', 'category: summary → sum');
 }
 
 // ---------------------------------------------------------------------------
-// Claim format feature flag
+// readClaimFromBlob — decrypted blob reader handles v1, v0 short-key,
+// and plugin-legacy {text, metadata} formats transparently.
 // ---------------------------------------------------------------------------
 
+// v1 blob (long-form with schema_version).
 {
-  const original = process.env.TOTALRECLAW_CLAIM_FORMAT;
-  try {
-    delete process.env.TOTALRECLAW_CLAIM_FORMAT;
-    assert(resolveClaimFormat() === 'claim', 'flag: unset → claim (default)');
-
-    process.env.TOTALRECLAW_CLAIM_FORMAT = 'claim';
-    assert(resolveClaimFormat() === 'claim', 'flag: explicit claim');
-
-    process.env.TOTALRECLAW_CLAIM_FORMAT = 'CLAIM';
-    assert(resolveClaimFormat() === 'claim', 'flag: case-insensitive CLAIM');
-
-    process.env.TOTALRECLAW_CLAIM_FORMAT = 'legacy';
-    assert(resolveClaimFormat() === 'legacy', 'flag: legacy');
-
-    process.env.TOTALRECLAW_CLAIM_FORMAT = 'LEGACY';
-    assert(resolveClaimFormat() === 'legacy', 'flag: case-insensitive LEGACY');
-
-    process.env.TOTALRECLAW_CLAIM_FORMAT = 'nonsense';
-    assert(resolveClaimFormat() === 'claim', 'flag: unknown value → claim');
-  } finally {
-    if (original === undefined) delete process.env.TOTALRECLAW_CLAIM_FORMAT;
-    else process.env.TOTALRECLAW_CLAIM_FORMAT = original;
-  }
-}
-
-// Legacy doc shape matches the pre-KG format byte-for-byte.
-{
-  const fact: ExtractedFact = {
-    text: 'Hello world.',
-    type: 'fact',
-    importance: 7,
-    action: 'ADD',
-  };
-  const doc = buildLegacyDoc({
-    fact,
-    importance: 7,
-    source: 'auto-extraction',
-    createdAt: '2026-04-12T10:00:00Z',
+  const v1Blob = JSON.stringify({
+    id: '0191abcd-0000-7000-8000-000000000000',
+    text: 'prefers PostgreSQL',
+    type: 'preference',
+    source: 'user',
+    scope: 'work',
+    volatility: 'stable',
+    created_at: '2026-04-12T10:00:00Z',
+    importance: 8,
+    schema_version: '1.0',
   });
-  const expected =
-    '{"text":"Hello world.","metadata":{"type":"fact","importance":0.7,' +
-    '"source":"auto-extraction","created_at":"2026-04-12T10:00:00Z"}}';
-  assertEq(doc, expected, 'legacy: byte-identical doc shape');
+  const out = readClaimFromBlob(v1Blob);
+  assertEq(out.text, 'prefers PostgreSQL', 'readClaim: v1 text');
+  assertEq(out.importance, 8, 'readClaim: v1 importance');
+  assertEq(out.category, 'pref', 'readClaim: v1 preference → pref category');
+  assertEq(out.metadata.type, 'preference', 'readClaim: v1 metadata.type');
+  assertEq(out.metadata.source, 'user', 'readClaim: v1 metadata.source');
+  assertEq(out.metadata.scope, 'work', 'readClaim: v1 metadata.scope');
+  assertEq(out.metadata.volatility, 'stable', 'readClaim: v1 metadata.volatility');
 }
 
-// ---------------------------------------------------------------------------
-// readClaimFromBlob — decrypted blob reader (handles new + legacy formats)
-// ---------------------------------------------------------------------------
-
+// Legacy v0 canonical Claim format — short keys.
 {
-  // New canonical Claim format
   const outNew = readClaimFromBlob(
     JSON.stringify({ t: 'prefers PostgreSQL', c: 'pref', cf: 0.9, i: 8, sa: 'oc' }),
   );
-  assertEq(outNew.text, 'prefers PostgreSQL', 'readClaim: new format text');
-  assertEq(outNew.importance, 8, 'readClaim: new format importance');
-  assertEq(outNew.category, 'pref', 'readClaim: new format category');
+  assertEq(outNew.text, 'prefers PostgreSQL', 'readClaim: v0 short-key text');
+  assertEq(outNew.importance, 8, 'readClaim: v0 short-key importance');
+  assertEq(outNew.category, 'pref', 'readClaim: v0 short-key category');
 
-  // New format with entities
+  // v0 with entities
   const outEntities = readClaimFromBlob(
     JSON.stringify({
       t: 'lives in Lisbon', c: 'fact', cf: 0.95, i: 9, sa: 'oc',
       e: [{ n: 'Lisbon', tp: 'place' }],
     }),
   );
-  assertEq(outEntities.text, 'lives in Lisbon', 'readClaim: new+entities text');
-  assertEq(outEntities.importance, 9, 'readClaim: new+entities importance');
+  assertEq(outEntities.text, 'lives in Lisbon', 'readClaim: v0 short-key + entities text');
+  assertEq(outEntities.importance, 9, 'readClaim: v0 short-key + entities importance');
 
   // Importance clamping (defensive — importance should be 1..10)
   const outHigh = readClaimFromBlob(JSON.stringify({ t: 'x', c: 'fact', cf: 0.9, i: 99, sa: 'oc' }));
   assertEq(outHigh.importance, 10, 'readClaim: clamps importance > 10');
   const outLow = readClaimFromBlob(JSON.stringify({ t: 'x', c: 'fact', cf: 0.9, i: 0, sa: 'oc' }));
   assertEq(outLow.importance, 1, 'readClaim: clamps importance < 1');
+}
 
-  // Legacy plugin {text, metadata} format
+// Plugin-legacy {text, metadata} format.
+{
   const outLegacy = readClaimFromBlob(
     JSON.stringify({
       text: 'legacy fact',
@@ -286,7 +280,7 @@ assert(mapTypeToCategory('summary') === 'sum', 'category: summary → sum');
   const outEmpty = readClaimFromBlob('{}');
   assertEq(outEmpty.text, '{}', 'readClaim: empty object → raw fallback');
 
-  // Digest blob (new canonical with c='dig')
+  // Digest blob (v0 canonical with c='dig')
   const outDigest = readClaimFromBlob(
     JSON.stringify({
       t: '{"prompt_text":"You are..."}',
@@ -298,6 +292,62 @@ assert(mapTypeToCategory('summary') === 'sum', 'category: summary → sum');
   );
   assertEq(outDigest.category, 'dig', 'readClaim: digest blob category');
   assertEq(outDigest.importance, 10, 'readClaim: digest blob importance');
+}
+
+// ---------------------------------------------------------------------------
+// Env-var gate assertion
+// ---------------------------------------------------------------------------
+//
+// Plugin v3.0.0 removed both TOTALRECLAW_TAXONOMY_VERSION and
+// TOTALRECLAW_CLAIM_FORMAT. buildCanonicalClaim ALWAYS emits v1 regardless
+// of these env vars. This test confirms the env vars have no effect on
+// the write-path output.
+
+{
+  const original = {
+    taxonomy: process.env.TOTALRECLAW_TAXONOMY_VERSION,
+    claim: process.env.TOTALRECLAW_CLAIM_FORMAT,
+  };
+  try {
+    const fact: ExtractedFact = {
+      text: 'gate-bypass test',
+      type: 'claim',
+      source: 'user',
+      importance: 7,
+      action: 'ADD',
+    };
+    const input = {
+      fact,
+      importance: 7,
+      sourceAgent: 'test',
+      extractedAt: '2026-04-12T10:00:00Z',
+    };
+
+    // With "v1" gate: should emit v1.
+    process.env.TOTALRECLAW_TAXONOMY_VERSION = 'v1';
+    const withFlag = JSON.parse(buildCanonicalClaim(input));
+    assertEq(withFlag.schema_version, '1.0', 'gate removed: TAXONOMY=v1 still yields v1');
+
+    // Unset: default path should ALSO emit v1 (the whole point of v3.0.0).
+    delete process.env.TOTALRECLAW_TAXONOMY_VERSION;
+    const defaultPath = JSON.parse(buildCanonicalClaim(input));
+    assertEq(defaultPath.schema_version, '1.0', 'gate removed: default path emits v1 (not v0)');
+
+    // With "v0" (legacy): should STILL emit v1 — no toggle, no fallback.
+    process.env.TOTALRECLAW_TAXONOMY_VERSION = 'v0';
+    const v0Flag = JSON.parse(buildCanonicalClaim(input));
+    assertEq(v0Flag.schema_version, '1.0', 'gate removed: TAXONOMY=v0 ignored, v1 emitted');
+
+    // CLAIM_FORMAT=legacy: should ALSO be ignored; v1 still emitted.
+    process.env.TOTALRECLAW_CLAIM_FORMAT = 'legacy';
+    const legacyFlag = JSON.parse(buildCanonicalClaim(input));
+    assertEq(legacyFlag.schema_version, '1.0', 'gate removed: CLAIM_FORMAT=legacy ignored, v1 emitted');
+  } finally {
+    if (original.taxonomy === undefined) delete process.env.TOTALRECLAW_TAXONOMY_VERSION;
+    else process.env.TOTALRECLAW_TAXONOMY_VERSION = original.taxonomy;
+    if (original.claim === undefined) delete process.env.TOTALRECLAW_CLAIM_FORMAT;
+    else process.env.TOTALRECLAW_CLAIM_FORMAT = original.claim;
+  }
 }
 
 // ---------------------------------------------------------------------------

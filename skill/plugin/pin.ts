@@ -93,7 +93,22 @@ export function parseBlobForPin(decrypted: string): ParsedBlob {
     };
   }
 
-  // New canonical Claim — short keys present.
+  // v1 payload (plugin v3.0.0+): long-form fields + schema_version "1.x".
+  // Convert to the short-key shape pin.ts operates on so the rest of the
+  // pipeline (st, sup, trapdoor regeneration) keeps working unchanged.
+  if (
+    typeof obj.text === 'string' &&
+    typeof obj.type === 'string' &&
+    typeof obj.schema_version === 'string' &&
+    obj.schema_version.startsWith('1.')
+  ) {
+    const shortObj = v1ToShortKeyClaim(obj);
+    const st = typeof shortObj.st === 'string' ? shortObj.st : 'a';
+    const human = SHORT_TO_HUMAN[st] ?? 'active';
+    return { claim: shortObj, currentStatus: human, isLegacy: false };
+  }
+
+  // v0 canonical Claim — short keys present.
   if (typeof obj.t === 'string' && typeof obj.c === 'string') {
     const st = typeof obj.st === 'string' ? obj.st : 'a';
     const human = SHORT_TO_HUMAN[st] ?? 'active';
@@ -116,6 +131,54 @@ export function parseBlobForPin(decrypted: string): ParsedBlob {
     currentStatus: 'active',
     isLegacy: true,
   };
+}
+
+/**
+ * Convert a Memory Taxonomy v1 blob object into the short-key shape that
+ * the rest of pin.ts manipulates. Pin operations tombstone the existing
+ * fact and write a fresh one with the short-key format; the v1 inner blob
+ * is not round-tripped through pin (that would require upgrading every
+ * downstream read site). Since pin already rewrites the fact with new
+ * indices, round-trip fidelity isn't required.
+ */
+function v1ToShortKeyClaim(v1: Record<string, unknown>): Record<string, unknown> {
+  const text = typeof v1.text === 'string' ? v1.text : '';
+  const type = typeof v1.type === 'string' ? v1.type : 'claim';
+  // Map v1 type to the short category key used by the v0 format.
+  const category = isValidMemoryType(type) ? mapTypeToCategory(type) : 'fact';
+  const impNum = typeof v1.importance === 'number' ? v1.importance : 5;
+  const importance = Math.max(1, Math.min(10, Math.round(impNum)));
+  const confidence = typeof v1.confidence === 'number' ? v1.confidence : 0.85;
+  const source = typeof v1.source === 'string' ? v1.source : 'openclaw-plugin';
+  const createdAt = typeof v1.created_at === 'string' ? v1.created_at : new Date().toISOString();
+
+  const out: Record<string, unknown> = {
+    t: text,
+    c: category,
+    cf: confidence,
+    i: importance,
+    sa: source,
+    ea: createdAt,
+  };
+
+  if (Array.isArray(v1.entities) && v1.entities.length > 0) {
+    out.e = (v1.entities as unknown[])
+      .map((e) => {
+        if (!e || typeof e !== 'object') return null;
+        const entity = e as Record<string, unknown>;
+        const name = typeof entity.name === 'string' ? entity.name : '';
+        const entType = typeof entity.type === 'string' ? entity.type : 'concept';
+        if (!name) return null;
+        const short: Record<string, unknown> = { n: name, tp: entType };
+        if (typeof entity.role === 'string' && entity.role.length > 0) {
+          short.r = entity.role;
+        }
+        return short;
+      })
+      .filter((e): e is Record<string, unknown> => e !== null);
+  }
+
+  return out;
 }
 
 function buildCanonicalObjectFromLegacy(

@@ -49,8 +49,8 @@ assert(
 );
 
 assert(
-  COMPACTION_SYSTEM_PROMPT.includes('importance >= 5'),
-  'prompts: compaction prompt mentions importance >= 5 threshold',
+  COMPACTION_SYSTEM_PROMPT.includes('5+ = worth storing'),
+  'prompts: compaction prompt mentions importance 5+ threshold',
 );
 
 assert(
@@ -59,7 +59,7 @@ assert(
 );
 
 assert(
-  COMPACTION_SYSTEM_PROMPT.includes('Format-agnostic'),
+  COMPACTION_SYSTEM_PROMPT.toLowerCase().includes('format-agnostic'),
   'prompts: compaction prompt includes format-agnostic guidance',
 );
 
@@ -74,7 +74,7 @@ assert(
 );
 
 assert(
-  COMPACTION_SYSTEM_PROMPT.includes('Do NOT skip content just because it appears in a summary'),
+  COMPACTION_SYSTEM_PROMPT.includes("Do NOT skip content just because it's in a summary"),
   'prompts: compaction prompt includes anti-pattern guidance',
 );
 
@@ -177,16 +177,16 @@ assert(
   const facts = parseFactsResponseForCompaction(bulletListResponse);
   assert(facts.length === 3, 'bullet-list: all 3 facts extracted');
 
+  // v1 coercion: context → claim, decision → claim, rule → directive
   const types = facts.map((f) => f.type).sort();
-  assert(types.includes('context'), 'bullet-list: context type present');
-  assert(types.includes('decision'), 'bullet-list: decision type present');
-  assert(types.includes('rule'), 'bullet-list: rule type present');
+  assert(types.includes('claim'), 'bullet-list: claim type present (v0 context/decision → v1 claim)');
+  assert(types.includes('directive'), 'bullet-list: directive type present (v0 rule → v1 directive)');
 
-  // Entities preserved
-  const contextFact = facts.find((f) => f.type === 'context');
+  // Entities preserved — look for a claim fact with 3 entities (the v0 context).
+  const entityRich = facts.find((f) => f.entities && f.entities.length === 3);
   assert(
-    contextFact?.entities?.length === 3,
-    'bullet-list: context fact has 3 entities',
+    entityRich !== undefined,
+    'bullet-list: the entity-rich fact has 3 entities',
   );
 }
 
@@ -238,12 +238,13 @@ assert(
   const facts = parseFactsResponseForCompaction(proseResponse);
   assert(facts.length === 5, 'prose: all 5 facts extracted from prose-style response');
 
+  // v1 coercion: episodic → episode, decision → claim, rule → directive, goal → commitment
   const typeSet = new Set(facts.map((f) => f.type));
-  assert(typeSet.has('episodic'), 'prose: episodic type present');
-  assert(typeSet.has('decision'), 'prose: decision type present');
-  assert(typeSet.has('preference'), 'prose: preference type present');
-  assert(typeSet.has('rule'), 'prose: rule type present');
-  assert(typeSet.has('goal'), 'prose: goal type present');
+  assert(typeSet.has('episode'), 'prose: episode type present (v0 episodic → v1 episode)');
+  assert(typeSet.has('claim'), 'prose: claim type present (v0 decision → v1 claim)');
+  assert(typeSet.has('preference'), 'prose: preference type preserved');
+  assert(typeSet.has('directive'), 'prose: directive type present (v0 rule → v1 directive)');
+  assert(typeSet.has('commitment'), 'prose: commitment type present (v0 goal → v1 commitment)');
 }
 
 // ---------------------------------------------------------------------------
