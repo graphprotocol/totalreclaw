@@ -1,0 +1,162 @@
+name: Publish to crates.io
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: 'Crate to publish'
+        required: true
+        type: choice
+        options:
+          - totalreclaw-core
+          - totalreclaw-memory
+          - all
+        default: all
+      dry-run:
+        description: 'Dry run (package only, no publish)'
+        required: false
+        type: boolean
+        default: false
+
+# Publish order matters: totalreclaw-memory depends on totalreclaw-core, so core must
+# exist on crates.io before memory is published. The two jobs below encode that ordering.
+
+jobs:
+  publish-core:
+    if: >
+      github.event_name == 'push' ||
+      inputs.crate == 'totalreclaw-core' ||
+      inputs.crate == 'all'
+    name: Publish totalreclaw-core
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/totalreclaw-core/target
+          key: ${{ runner.os }}-cargo-core-${{ hashFiles('rust/totalreclaw-core/Cargo.lock') }}
+
+      - name: Report version
+        id: version
+        run: |
+          cd rust/totalreclaw-core
+          VERSION=$(cargo metadata --format-version 1 --no-deps | python3 -c "import sys,json; d=json.load(sys.stdin); print(next(p['version'] for p in d['packages'] if p['name']=='totalreclaw-core'))")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing totalreclaw-core@$VERSION"
+
+      - name: Cargo package (dry-run sanity check)
+        run: cd rust/totalreclaw-core && cargo package --allow-dirty
+
+      - name: Publish
+        if: >
+          github.event_name == 'push' ||
+          inputs.dry-run == false
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          cd rust/totalreclaw-core
+          VERSION="${{ steps.version.outputs.version }}"
+          # Tolerate "already uploaded" — publish is idempotent per version
+          set +e
+          OUT=$(cargo publish --allow-dirty 2>&1)
+          CODE=$?
+          set -e
+          echo "$OUT"
+          if [ $CODE -eq 0 ]; then
+            echo "Published totalreclaw-core@$VERSION"
+          elif echo "$OUT" | grep -qE "(already uploaded|already exists|crate version .* is already uploaded)"; then
+            echo "totalreclaw-core@$VERSION already published, continuing"
+          else
+            exit $CODE
+          fi
+
+  publish-memory:
+    needs: [publish-core]
+    if: >
+      always() &&
+      (needs.publish-core.result == 'success' || needs.publish-core.result == 'skipped') &&
+      (
+        github.event_name == 'push' ||
+        inputs.crate == 'totalreclaw-memory' ||
+        inputs.crate == 'all'
+      )
+    name: Publish totalreclaw-memory
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/totalreclaw-memory/target
+          key: ${{ runner.os }}-cargo-memory-${{ hashFiles('rust/totalreclaw-memory/Cargo.lock') }}
+
+      - name: Wait for core to be queryable on crates.io
+        if: needs.publish-core.result == 'success'
+        run: |
+          # crates.io index propagation can take a few seconds after publish.
+          # Poll until the version we depend on shows up (or bail after ~2 min).
+          CORE_VERSION=$(python3 -c "import tomllib,sys; d=tomllib.load(open('rust/totalreclaw-core/Cargo.toml','rb')); print(d['package']['version'])")
+          echo "Waiting for totalreclaw-core@$CORE_VERSION on crates.io..."
+          for i in $(seq 1 24); do
+            if curl -sSf "https://crates.io/api/v1/crates/totalreclaw-core/$CORE_VERSION" >/dev/null 2>&1; then
+              echo "totalreclaw-core@$CORE_VERSION is live"
+              exit 0
+            fi
+            echo "Not yet (attempt $i/24), sleeping 5s..."
+            sleep 5
+          done
+          echo "Timed out waiting for crates.io propagation"
+          exit 1
+
+      - name: Report version
+        id: version
+        run: |
+          cd rust/totalreclaw-memory
+          VERSION=$(cargo metadata --format-version 1 --no-deps | python3 -c "import sys,json; d=json.load(sys.stdin); print(next(p['version'] for p in d['packages'] if p['name']=='totalreclaw-memory'))")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing totalreclaw-memory@$VERSION"
+
+      - name: Cargo package (dry-run sanity check)
+        run: cd rust/totalreclaw-memory && cargo package --allow-dirty
+
+      - name: Publish
+        if: >
+          github.event_name == 'push' ||
+          inputs.dry-run == false
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          cd rust/totalreclaw-memory
+          VERSION="${{ steps.version.outputs.version }}"
+          set +e
+          OUT=$(cargo publish --allow-dirty 2>&1)
+          CODE=$?
+          set -e
+          echo "$OUT"
+          if [ $CODE -eq 0 ]; then
+            echo "Published totalreclaw-memory@$VERSION"
+          elif echo "$OUT" | grep -qE "(already uploaded|already exists|crate version .* is already uploaded)"; then
+            echo "totalreclaw-memory@$VERSION already published, continuing"
+          else
+            exit $CODE
+          fi

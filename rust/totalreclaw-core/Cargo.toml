@@ -5,6 +5,10 @@ edition = "2021"
 description = "TotalReclaw core — E2EE crypto, reranker, wallet, UserOp, store/search pipelines. Single source of truth for all clients."
 license = "MIT"
 repository = "https://github.com/p-diogo/totalreclaw"
+homepage = "https://totalreclaw.xyz"
+readme = "README.md"
+keywords = ["e2ee", "memory", "crypto", "erc4337", "ai"]
+categories = ["cryptography", "api-bindings"]
 
 [features]
 default = ["managed"]
