@@ -58,8 +58,24 @@ export interface FactPayload {
 }
 
 // ---------------------------------------------------------------------------
-// Protobuf encoding (unchanged)
+// Protobuf encoding
 // ---------------------------------------------------------------------------
+
+/**
+ * Memory Taxonomy v1 outer protobuf wrapper version.
+ *
+ * The v1 contract (shipped 2026-04-18) mandates that all clients write
+ * `version = 4` on the outer protobuf so the subgraph + cross-client
+ * readers can recognize the inner blob as a v1 JSON `MemoryClaim`.
+ *
+ * Canonical source: `rust/totalreclaw-core/src/protobuf.rs`
+ * (`PROTOBUF_VERSION_V4 = 4`). The WASM/PyO3 bindings do not re-export
+ * this constant to TS today — when they do, replace this literal with
+ * an import from `@totalreclaw/core`.
+ *
+ * TODO: import from @totalreclaw/core once the constant is re-exported.
+ */
+export const PROTOBUF_VERSION_V4 = 4;
 
 /**
  * Encode a fact payload as a minimal Protobuf wire format.
@@ -70,6 +86,11 @@ export interface FactPayload {
  *   6: decay_score (double), 7: is_active (bool), 8: version (int32),
  *   9: source (string), 10: content_fp (string), 11: agent_id (string),
  *   12: sequence_id (int64), 13: encrypted_embedding (string)
+ *
+ * Field 8 (`version`) is written as `PROTOBUF_VERSION_V4` (4) to match
+ * the Memory Taxonomy v1 contract. All other v1 clients (plugin, python,
+ * rust/totalreclaw-memory) write 4 here — writing anything else breaks
+ * cross-client uniformity.
  */
 export function encodeFactProtobuf(fact: FactPayload): Buffer {
   const parts: Buffer[] = [];
@@ -120,7 +141,7 @@ export function encodeFactProtobuf(fact: FactPayload): Buffer {
 
   writeDouble(6, fact.decayScore);
   writeVarintField(7, 1); // is_active = true
-  writeVarintField(8, 2); // version = 2
+  writeVarintField(8, PROTOBUF_VERSION_V4); // version = 4 (Memory Taxonomy v1)
   writeString(9, fact.source);
   writeString(10, fact.contentFp);
   writeString(11, fact.agentId);
