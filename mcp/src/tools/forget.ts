@@ -1,9 +1,18 @@
 import { TotalReclaw } from '@totalreclaw/client';
 import { FORGET_TOOL_DESCRIPTION } from '../prompts.js';
+import { VALID_MEMORY_SCOPES } from '../v1-types.js';
 
 export interface ForgetIntput {
   fact_id?: string;
   query?: string;
+  /**
+   * v1 scope hint for query-based forgets. Not yet enforced server-side
+   * (the self-hosted recall path doesn't support scope-filtered blind
+   * indices). The LLM should still supply it so future versions can
+   * restrict deletion to one life-domain — the param is accepted in the
+   * schema today to avoid a breaking change later.
+   */
+  scope?: typeof VALID_MEMORY_SCOPES[number];
 }
 
 export interface ForgetOutput {
@@ -19,11 +28,19 @@ export const forgetToolDefinition = {
     properties: {
       fact_id: {
         type: 'string',
-        description: 'The ID of the fact to forget',
+        description:
+          'The ID of a specific memory to forget (from a prior totalreclaw_recall result). Preferred over `query` — avoids over-deletion.',
       },
       query: {
         type: 'string',
-        description: 'Or forget by semantic query',
+        description:
+          'Semantic search string — every matching memory (up to 50) is tombstoned. Use sparingly; confirm with the user first.',
+      },
+      scope: {
+        type: 'string',
+        enum: [...VALID_MEMORY_SCOPES],
+        description:
+          'Optional v1 scope hint for query-based forgets. Not yet enforced server-side, but supplying it lets future versions restrict deletion to one life-domain (e.g. `scope="health"` to forget only diet-related memories). No effect when `fact_id` is given.',
       },
     },
   },

@@ -10,6 +10,16 @@ import {
   type DecryptedCandidate,
 } from '../consolidation.js';
 import { VALID_MEMORY_TYPES, type MemoryType } from '../memory-types.js';
+import {
+  VALID_MEMORY_TYPES_V1,
+  VALID_MEMORY_SCOPES,
+  type MemoryTypeV1,
+  type MemoryScope,
+  type MemorySource,
+  LEGACY_TYPE_TO_V1,
+  isValidMemoryTypeV1,
+  isValidMemoryScope,
+} from '../v1-types.js';
 
 // ── Single-fact input (backward compat) ──────────────────────────────────────
 
@@ -27,7 +37,11 @@ export interface RememberInputSingle {
 export interface BatchFact {
   text: string;
   importance?: number;
-  type?: MemoryType;
+  type?: MemoryType | MemoryTypeV1;
+  /** v1 scope axis — life-domain tag. */
+  scope?: MemoryScope;
+  /** v1 reasoning field for decision-style claims. */
+  reasoning?: string;
 }
 
 export interface RememberInputBatch {
@@ -56,6 +70,13 @@ export interface BatchRememberOutput {
   dedup_superseded?: number;
 }
 
+// Union of legacy v0 types + v1 types. The tool accepts both so host agents
+// migrating from older MCP versions keep working; the managed-service write
+// path normalizes to v1 via LEGACY_TYPE_TO_V1 before encrypting.
+const ACCEPTED_TYPE_ENUM = Array.from(
+  new Set<string>([...VALID_MEMORY_TYPES, ...VALID_MEMORY_TYPES_V1]),
+);
+
 export const rememberToolDefinition = {
   name: 'totalreclaw_remember',
   description: REMEMBER_TOOL_DESCRIPTION,
@@ -83,10 +104,28 @@ export const rememberToolDefinition = {
             },
             type: {
               type: 'string',
-              enum: [...VALID_MEMORY_TYPES],
+              enum: ACCEPTED_TYPE_ENUM,
               description:
-                'Category of the fact. One of: fact, preference, decision, episodic, goal, context, summary, rule. ' +
-                'Use "rule" for reusable operational gotchas ("always X", "never Y"), conventions, and debugging shortcuts.',
+                'Memory taxonomy v1 type. One of: claim, preference, directive, commitment, episode, summary. ' +
+                'Boundary tests: claim = assertive state-of-world ("lives in Lisbon", "chose PostgreSQL"). ' +
+                'preference = expressive taste ("likes dark mode", "prefers coffee over tea"). ' +
+                'directive = imperative rule the user wants enforced ("always check d.get(errors)", "never rm -rf the state dir without stopping gateway"). ' +
+                'commitment = future intent ("will ship v2 Friday", "planning to migrate to Postgres"). ' +
+                'episode = notable past event ("deployed v1.0 on March 15", "had surgery last summer"). ' +
+                'summary = session synthesis (only for debrief pipelines). ' +
+                'Legacy v0 types (fact, context, decision, rule, goal, episodic) are still accepted and auto-mapped.',
+            },
+            scope: {
+              type: 'string',
+              enum: [...VALID_MEMORY_SCOPES],
+              description:
+                'Life-domain scope. One of: work, personal, health, family, creative, finance, misc, unspecified. ' +
+                'Optional — defaults to "unspecified".',
+            },
+            reasoning: {
+              type: 'string',
+              description:
+                'Optional "why" clause for decision-style claims. Populate when the user expresses a decision with rationale: text="Chose PostgreSQL for the analytics store", reasoning="data is relational and needs ACID guarantees".',
             },
           },
           required: ['text'],
@@ -100,13 +139,29 @@ export const rememberToolDefinition = {
         default: 5,
         description: 'Importance score 1-10 (only for single-fact mode)',
       },
+      scope: {
+        type: 'string',
+        enum: [...VALID_MEMORY_SCOPES],
+        description:
+          'Life-domain scope (single-fact mode). One of: work, personal, health, family, creative, finance, misc, unspecified.',
+      },
+      reasoning: {
+        type: 'string',
+        description:
+          'Optional "why" clause for decision-style claims (single-fact mode). See facts[].reasoning.',
+      },
       metadata: {
         type: 'object',
         properties: {
           type: {
             type: 'string',
-            enum: [...VALID_MEMORY_TYPES],
+            enum: ACCEPTED_TYPE_ENUM,
           },
+          scope: {
+            type: 'string',
+            enum: [...VALID_MEMORY_SCOPES],
+          },
+          reasoning: { type: 'string' },
           expires_at: {
             type: 'string',
             description: 'ISO timestamp for time-limited facts',
@@ -121,6 +176,28 @@ export const rememberToolDefinition = {
     idempotentHint: true,
   },
 };
+
+/**
+ * Normalize any accepted `type` value (v1 or legacy v0) to the v1 enum.
+ *
+ * Returns `'claim'` when the input is missing, unknown, or is a plain string.
+ * The MCP host agent typically doesn't know whether it's on a v1 or v0 vault,
+ * so we accept both and normalize here — the inner encrypted blob is always
+ * written as v1 on the managed service path.
+ */
+export function normalizeTypeToV1(raw: unknown): MemoryTypeV1 {
+  if (typeof raw !== 'string') return 'claim';
+  const trimmed = raw.trim().toLowerCase();
+  if (isValidMemoryTypeV1(trimmed)) return trimmed;
+  if (trimmed in LEGACY_TYPE_TO_V1) return LEGACY_TYPE_TO_V1[trimmed];
+  return 'claim';
+}
+
+/** Narrow an unknown arg into a {@link MemoryScope} (defaulting to unspecified). */
+export function normalizeScope(raw: unknown): MemoryScope {
+  if (isValidMemoryScope(raw)) return raw;
+  return 'unspecified';
+}
 
 // Notify callback type for cache invalidation
 export type OnRememberCallback = () => void;
@@ -213,7 +290,9 @@ async function storeSingleFact(
   importance: number,
   factType: string | undefined,
   isExplicitRemember: boolean,
-  expiresAt?: string
+  expiresAt?: string,
+  scope?: string,
+  reasoning?: string,
 ): Promise<RememberOutput> {
   // Store-time dedup check (HTTP mode)
   let supersededId: string | undefined;
@@ -260,10 +339,18 @@ async function storeSingleFact(
     }
   }
 
+  // v1 tool fields are forwarded via metadata.tags so the self-hosted path
+  // retains enough info to surface them in recall (HTTP mode doesn't yet write
+  // the v1 blob — managed-service path does; see handleRememberSubgraph).
+  const tags: string[] = [];
+  if (factType) tags.push(factType);
+  if (scope && scope !== 'unspecified') tags.push(`scope:${scope}`);
+  if (reasoning && reasoning.trim().length > 0) tags.push(`reasoning:${reasoning.trim().slice(0, 128)}`);
+
   const metadata: FactMetadata = {
     importance: effectiveImportance / 10,
     source: 'mcp_remember',
-    tags: factType ? [factType] : [],
+    tags,
   };
 
   if (expiresAt) {
@@ -345,6 +432,9 @@ export async function handleRemember(
           imp,
           f.type,
           false, // batch mode: not explicit remember
+          undefined, // expiresAt (not in batch item)
+          f.scope,
+          f.reasoning,
         );
 
         if (result.action === 'skipped' && result.was_duplicate) {
@@ -421,13 +511,29 @@ export async function handleRemember(
   }
 
   try {
+    // Support both top-level and metadata-nested scope/reasoning for flexibility.
+    const topLevelScope = typeof (input as Record<string, unknown>).scope === 'string'
+      ? (input as Record<string, unknown>).scope as string
+      : undefined;
+    const topLevelReasoning = typeof (input as Record<string, unknown>).reasoning === 'string'
+      ? (input as Record<string, unknown>).reasoning as string
+      : undefined;
+    const metaScope = typeof (singleInput.metadata as Record<string, unknown> | undefined)?.scope === 'string'
+      ? ((singleInput.metadata as Record<string, unknown>).scope as string)
+      : undefined;
+    const metaReasoning = typeof (singleInput.metadata as Record<string, unknown> | undefined)?.reasoning === 'string'
+      ? ((singleInput.metadata as Record<string, unknown>).reasoning as string)
+      : undefined;
+
     const result = await storeSingleFact(
       client,
       singleInput.fact,
       singleInput.importance ?? 5,
       singleInput.metadata?.type,
       true, // single-fact mode: explicit remember, always supersede
-      singleInput.metadata?.expires_at
+      singleInput.metadata?.expires_at,
+      topLevelScope ?? metaScope,
+      topLevelReasoning ?? metaReasoning,
     );
 
     if (_onRememberCallback) {

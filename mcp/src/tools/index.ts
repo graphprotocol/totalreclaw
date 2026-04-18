@@ -23,6 +23,24 @@ export {
   type HumanStatus,
 } from './pin.js';
 export {
+  retypeToolDefinition,
+  handleRetype,
+  handleRetypeWithDeps,
+  executeRetype,
+  executeMetadataOp,
+  extractV1Fields,
+  validateRetypeArgs,
+  type MetadataOpDeps,
+  type MetadataOpResult,
+} from './retype.js';
+export {
+  setScopeToolDefinition,
+  handleSetScope,
+  handleSetScopeWithDeps,
+  executeSetScope,
+  validateSetScopeArgs,
+} from './set-scope.js';
+export {
   fetchAllFactsFromSubgraph,
   fetchMainnetContentFps,
   fetchBlindIndicesForFacts,

@@ -119,16 +119,42 @@ The server only ever sees ciphertext and hashed tokens.
 
 | Tool | Description |
 |------|-------------|
-| `totalreclaw_remember` | Store a fact in encrypted memory |
-| `totalreclaw_recall` | Search memories by natural language query |
+| `totalreclaw_remember` | Store a fact in encrypted memory. Supports v1 taxonomy (`type`, `scope`, `reasoning`) + legacy types for migration |
+| `totalreclaw_recall` | Search memories by natural language query. Source-weighted ranking (Retrieval v2 Tier 1) |
 | `totalreclaw_forget` | Delete a specific memory by ID |
+| `totalreclaw_pin` | Pin a memory so auto-resolution never supersedes it. Accepts `fact_id` or `memory_id` |
+| `totalreclaw_unpin` | Remove the pin, returning the memory to active status |
+| `totalreclaw_retype` *(new in v3.0.0)* | Change the v1 type of a memory (e.g. `preference` → `directive`) via supersession |
+| `totalreclaw_set_scope` *(new in v3.0.0)* | Change the v1 scope of a memory (e.g. set to `work` / `personal`) |
 | `totalreclaw_export` | Export all memories decrypted as Markdown or JSON |
 | `totalreclaw_status` | Check billing status and quota usage |
 | `totalreclaw_import` | Re-import previously exported memories |
-| `totalreclaw_import_from` | Import from Mem0 or MCP Memory Server |
+| `totalreclaw_import_from` | Import from Mem0, MCP Memory Server, ChatGPT, Claude, or generic JSON/CSV |
 | `totalreclaw_consolidate` | Merge duplicate and related memories |
+| `totalreclaw_debrief` | End-of-conversation summary to capture broader context |
 | `totalreclaw_upgrade` | Get a link to upgrade to Pro |
 | `totalreclaw_migrate` | Migrate testnet memories to mainnet after Pro upgrade |
+| `totalreclaw_account` | View account details (wallet, tier, quota, phrase hint) |
+| `totalreclaw_support` | Troubleshooting help + contact links |
+| `totalreclaw_setup` | Generate or import a recovery phrase (first-run flow) |
+
+### Memory Taxonomy v1 (`@totalreclaw/core 2.0`)
+
+MCP server v3.0.0 writes v1 inner blobs (outer protobuf wrapper `version = 4`).
+The six v1 types correspond to Searle's speech-act classes:
+
+- **claim** — assertive ("lives in Lisbon", "chose PostgreSQL"). Absorbs legacy fact/context/decision.
+- **preference** — expressive ("likes dark mode").
+- **directive** — imperative ("always check d.get(errors)"). Replaces legacy `rule`.
+- **commitment** — commissive ("will ship v2 Friday"). Replaces legacy `goal`.
+- **episode** — narrative ("deployed v1.0 on March 15"). Replaces legacy `episodic`.
+- **summary** — derived synthesis (debrief pipelines only).
+
+v0 types (`fact`, `context`, `decision`, `rule`, `goal`, `episodic`) are still
+accepted by the `remember` tool and auto-mapped to v1 equivalents. Recall
+output includes `source` and `scope` when available.
+
+See [`docs/specs/totalreclaw/memory-taxonomy-v1.md`](../docs/specs/totalreclaw/memory-taxonomy-v1.md).
 
 ## Environment Variables
 

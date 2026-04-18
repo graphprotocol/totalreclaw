@@ -111,9 +111,17 @@ export function parseDebriefResponse(response: string): DebriefItem[] {
 export const debriefToolDefinition = {
   name: 'totalreclaw_debrief',
   description:
-    'Store a session debrief — broader context, outcomes, and conclusions that ' +
-    'individual memory storage may have missed. Call this at the END of substantive ' +
-    'conversations (not casual chat). Pass the key takeaways as facts.',
+    'Capture broader context/outcomes/open threads extraction missed. v1 summary, source=derived.\n' +
+    '\nINVOKE WHEN USER SAYS:\n' +
+    '- "goodbye" / "bye" / "thanks"\n' +
+    '- "that\'s all" / "I\'m done"\n' +
+    '- "wrapping up" / after long debug/plan session\n' +
+    '- before detected compaction/reset\n' +
+    '\nWHEN NOT TO USE:\n' +
+    '- casual chat / Q&A — adds noise\n' +
+    '- no prior totalreclaw_remember — no context\n' +
+    '- unsure → skip; debriefs rare\n' +
+    '\nMAX 5 (1-3 sentences, importance 7-8). type: summary|context.',
   inputSchema: {
     type: 'object',
     properties: {

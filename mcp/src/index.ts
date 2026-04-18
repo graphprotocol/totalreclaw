@@ -106,13 +106,31 @@ import {
   type PinOpDeps,
 } from './tools/pin.js';
 import {
+  retypeToolDefinition,
+  handleRetype,
+  handleRetypeWithDeps,
+  type MetadataOpDeps,
+} from './tools/retype.js';
+import {
+  setScopeToolDefinition,
+  handleSetScope,
+  handleSetScopeWithDeps,
+} from './tools/set-scope.js';
+import {
   buildCanonicalClaim,
+  buildV1ClaimBlob,
   computeEntityTrapdoor,
   isDigestBlob,
+  readBlobUnified,
   readClaimFromBlob,
   resolveClaimFormat,
 } from './claims-helper.js';
 import { isValidMemoryType, type MemoryType } from './memory-types.js';
+import {
+  normalizeTypeToV1,
+  normalizeScope,
+} from './tools/remember.js';
+import { type MemoryTypeV1, type MemoryScope } from './v1-types.js';
 
 import { validateMnemonic, generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
@@ -481,14 +499,26 @@ async function handleRememberSubgraph(
 
   // Support both single fact and batch mode (single only for subgraph for now)
   const factText = (input?.fact as string) || '';
-  const factsArray = input?.facts as Array<{ text: string; importance?: number; type?: string }> | undefined;
+  const factsArray = input?.facts as Array<{
+    text: string;
+    importance?: number;
+    type?: string;
+    scope?: string;
+    reasoning?: string;
+  }> | undefined;
 
-  // Phase 2.2.6: thread `type` through from input → textsToStore → canonical
-  // Claim builder. Prior to 2.2.6, `type` was accepted in the tool schema but
-  // silently dropped here, and line ~648 passed a hardcoded 'fact' to
-  // buildCanonicalClaim — making `rule` and every other non-fact type
-  // structurally unreachable via the MCP remember tool.
-  const textsToStore: Array<{ text: string; importance: number; type: MemoryType }> = [];
+  // Phase 2.2.6 + v1: accept both legacy 8-type and v1 6-type inputs. The
+  // managed-service path always writes v1 inner blobs (protobuf wrapper v4);
+  // the internal legacy `MemoryType` is still tracked for the legacy
+  // `buildCanonicalClaim` fallback used when TOTALRECLAW_CLAIM_FORMAT=legacy.
+  const textsToStore: Array<{
+    text: string;
+    importance: number;
+    type: MemoryType;         // v0 short-key (for legacy fallback)
+    typeV1: MemoryTypeV1;     // v1 canonical type
+    scope: MemoryScope;
+    reasoning?: string;
+  }> = [];
 
   const resolveType = (raw: unknown): MemoryType =>
     isValidMemoryType(raw) ? raw : 'fact';
@@ -500,15 +530,38 @@ async function handleRememberSubgraph(
           text: f.text.trim(),
           importance: f.importance ?? 5,
           type: resolveType(f.type),
+          typeV1: normalizeTypeToV1(f.type),
+          scope: normalizeScope(f.scope),
+          reasoning: typeof f.reasoning === 'string' && f.reasoning.trim().length > 0
+            ? f.reasoning.trim()
+            : undefined,
         });
       }
     }
   } else if (factText && typeof factText === 'string' && factText.trim().length > 0) {
-    const singleMetadata = input?.metadata as { type?: unknown } | undefined;
+    const singleMetadata = input?.metadata as {
+      type?: unknown;
+      scope?: unknown;
+      reasoning?: unknown;
+    } | undefined;
+    const topLevelScope = typeof (input as Record<string, unknown>)?.scope === 'string'
+      ? (input as Record<string, unknown>).scope
+      : undefined;
+    const topLevelReasoning = typeof (input as Record<string, unknown>)?.reasoning === 'string'
+      ? (input as Record<string, unknown>).reasoning as string
+      : undefined;
+    const resolvedScope = normalizeScope(topLevelScope ?? singleMetadata?.scope);
+    const resolvedReasoning =
+      topLevelReasoning ?? (typeof singleMetadata?.reasoning === 'string' ? singleMetadata.reasoning : undefined);
     textsToStore.push({
       text: factText.trim(),
       importance: (input?.importance as number) ?? 5,
       type: resolveType(singleMetadata?.type),
+      typeV1: normalizeTypeToV1(singleMetadata?.type),
+      scope: resolvedScope,
+      reasoning: resolvedReasoning && resolvedReasoning.trim().length > 0
+        ? resolvedReasoning.trim()
+        : undefined,
     });
   }
 
@@ -655,22 +708,39 @@ async function handleRememberSubgraph(
         }
       }
 
-      // 4. Build the blob: canonical Claim by default, raw text if legacy flag set
+      // 4. Build the blob.
       //
-      // Phase 2.2.6: `item.type` is now threaded through from the tool input.
-      // Prior to 2.2.6 this was hardcoded to 'fact', making `rule` and every
-      // non-fact type structurally unreachable via the MCP remember tool even
-      // when the client passed the correct value. The MCP batch-mode debrief
-      // handler at line ~787 was already passing item.type correctly — this
-      // fixes the single-/batch-remember handler for parity.
+      // Memory Taxonomy v1 (MCP server v3.0.0): the managed-service write path
+      // emits v1 inner blobs by default. Outer protobuf wrapper becomes v4 so
+      // readers know the inner payload is v1 JSON (see protobuf-v4-design.md).
+      //
+      // `TOTALRECLAW_CLAIM_FORMAT=legacy` still produces the v0 `{t,c,i,...}`
+      // canonical claim for back-compat tests. The `raw text` mode is gone.
+      //
+      // `source` defaults to:
+      //   - `'user'` when the tool was called in single-fact (explicit) mode
+      //   - `'user-inferred'` when called via the batch path (extraction)
+      // Host agents typically have the best provenance signal; this is a
+      // conservative default the extraction pipeline can override later.
       const claimFormat = resolveClaimFormat();
-      const blobPlaintext = claimFormat === 'legacy'
-        ? item.text
-        : buildCanonicalClaim({
-            fact: { text: item.text, type: item.type },
-            importance: effectiveImportance,
-            sourceAgent: 'mcp-server',
-          });
+      let blobPlaintext: string;
+      if (claimFormat === 'legacy') {
+        blobPlaintext = buildCanonicalClaim({
+          fact: { text: item.text, type: item.type },
+          importance: effectiveImportance,
+          sourceAgent: 'mcp-server',
+        });
+      } else {
+        const source = isExplicitRemember ? 'user' : 'user-inferred';
+        blobPlaintext = buildV1ClaimBlob({
+          text: item.text,
+          type: item.typeV1,
+          source,
+          scope: item.scope,
+          reasoning: item.reasoning,
+          importance: effectiveImportance,
+        });
+      }
       const encryptedBlob = encrypt(blobPlaintext, state.encryptionKey);
 
       // 5. Generate content fingerprint for dedup (over plaintext text, not blob)
@@ -803,13 +873,22 @@ async function handleDebriefSubgraph(
       const lshIndices = state.lshHasher.hash(embedding);
       const allIndices = [...wordIndices, ...lshIndices];
 
+      // Memory Taxonomy v1 (MCP server v3.0.0):
+      //   - Default: emit v1 inner blob with `type: 'summary'` (both tool-level
+      //     'summary' and 'context' map here — per spec §type-semantics, summary
+      //     absorbs session-level synthesis regardless of whether the tool
+      //     called it "summary" or "context"). `source: 'derived'` marks this
+      //     as a derived-from-conversation claim (spec requires summary ∈
+      //     {derived, assistant}; derived is the better fit here).
+      //   - TOTALRECLAW_CLAIM_FORMAT=legacy: legacy raw-text blob (pre-v3).
       const claimFormat = resolveClaimFormat();
       const blobPlaintext = claimFormat === 'legacy'
         ? item.text
-        : buildCanonicalClaim({
-            fact: { text: item.text, type: item.type },
+        : buildV1ClaimBlob({
+            text: item.text,
+            type: 'summary',
+            source: 'derived',
             importance: item.importance,
-            sourceAgent: 'mcp-server:debrief',
           });
       const encryptedBlob = encrypt(blobPlaintext, state.encryptionKey);
       const contentFp = generateContentFingerprint(item.text, state.dedupKey);
@@ -961,16 +1040,21 @@ async function handleRecallSubgraph(
       };
     }
 
-    // 5. Decrypt candidates
+    // 5. Decrypt candidates. Surfaces v1 provenance (`source`) when the blob
+    //    carries it so Retrieval v2 Tier 1 can apply the source-weighted
+    //    multiplier in core's `rerankWithConfig`.
     const decryptedCandidates = [];
     const categoryMap = new Map<string, string>();
+    const sourceMap = new Map<string, string>(); // v1 source, when available
+    const scopeMap = new Map<string, string>();
+    const importanceRaw = new Map<string, number>();
     for (const c of candidates) {
       try {
         const blobHex = c.encryptedBlob.startsWith('0x') ? c.encryptedBlob.slice(2) : c.encryptedBlob;
         const blobBase64 = Buffer.from(blobHex, 'hex').toString('base64');
         const decryptedBlob = decrypt(blobBase64, state.encryptionKey);
         if (isDigestBlob(decryptedBlob)) continue;
-        const doc = readClaimFromBlob(decryptedBlob);
+        const doc = readBlobUnified(decryptedBlob);
         const text = doc.text;
 
         let embedding: number[] | undefined;
@@ -993,6 +1077,11 @@ async function handleRecallSubgraph(
         if (doc.category) {
           categoryMap.set(c.id, doc.category);
         }
+        if (doc.v1) {
+          sourceMap.set(c.id, doc.v1.source);
+          if (doc.v1.scope) scopeMap.set(c.id, doc.v1.scope);
+        }
+        importanceRaw.set(c.id, doc.importance);
 
         decryptedCandidates.push({
           id: c.id,
@@ -1000,6 +1089,7 @@ async function handleRecallSubgraph(
           embedding,
           importance: parseFloat(c.decayScore) || 0.5,
           createdAt: parseInt(c.timestamp) || undefined,
+          source: sourceMap.get(c.id),
         });
       } catch {
         // Skip candidates that fail to decrypt (e.g., wrong key, corrupt data)
@@ -1011,14 +1101,35 @@ async function handleRecallSubgraph(
     const weights = INTENT_WEIGHTS[intent];
 
     // 7. Rerank with BM25 + cosine + importance + recency via weighted RRF
+    //    (+ MMR diversity). Then apply Retrieval v2 Tier 1 source weights via
+    //    core's `rerankWithConfig` using only the bm25/cosine components (the
+    //    MCP-side recency + MMR + intent weighting remain in TS for now).
+    //    Strategy: run the TS reranker to produce the top-K ordering; use
+    //    core's source-weight helper to nudge the final score so assistant-
+    //    authored claims drop behind user-authored ones with comparable text.
     const reranked = rerank(query.trim(), queryEmbedding, decryptedCandidates, k, weights);
+    const core = require('@totalreclaw/core') as typeof import('@totalreclaw/core');
+    const weighted = reranked
+      .map((r) => {
+        const s = sourceMap.get(r.id);
+        const w = s
+          ? core.sourceWeight(s)
+          : core.legacyClaimFallbackWeight();
+        return { r, weightedScore: r.rrfScore * w, sourceWeight: w };
+      })
+      .sort((a, b) => b.weightedScore - a.weightedScore)
+      .slice(0, k);
 
     // 8. Format results
-    const memories = reranked.map(r => ({
+    const memories = weighted.map(({ r, weightedScore, sourceWeight }) => ({
       fact_id: r.id,
       fact_text: r.text,
       type: categoryMap.get(r.id) ?? 'fact',
-      score: r.rrfScore,
+      source: sourceMap.get(r.id),
+      scope: scopeMap.get(r.id),
+      score: weightedScore,
+      rrf_score: r.rrfScore,
+      source_weight: sourceWeight,
       cosine_similarity: r.cosineSimilarity ?? 0,
       importance: Math.round((r.importance ?? 0.5) * 10),
       age_days: r.createdAt
@@ -1182,6 +1293,23 @@ function buildPinDepsFromState(state: SubgraphState): PinOpDeps {
         encryptedEmbedding,
       };
     },
+  };
+}
+
+/** Build MetadataOpDeps (retype + set_scope) bound to the live subgraph state. */
+function buildMetadataOpDepsFromState(state: SubgraphState): MetadataOpDeps {
+  // MetadataOpDeps is structurally compatible with PinOpDeps (minus the
+  // status-flip specifics). Reuse the pin deps factory and narrow to the
+  // fields `executeMetadataOp` needs.
+  const pinDeps = buildPinDepsFromState(state);
+  return {
+    owner: pinDeps.owner,
+    sourceAgent: pinDeps.sourceAgent,
+    fetchFactById: pinDeps.fetchFactById,
+    decryptBlob: pinDeps.decryptBlob,
+    encryptBlob: pinDeps.encryptBlob,
+    submitBatch: pinDeps.submitBatch,
+    generateIndices: pinDeps.generateIndices,
   };
 }
 
@@ -1723,6 +1851,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     accountToolDefinition,
     pinToolDefinition,
     unpinToolDefinition,
+    retypeToolDefinition,
+    setScopeToolDefinition,
   ],
 }));
 
@@ -1942,6 +2072,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
 
+        case 'totalreclaw_retype': {
+          try {
+            const deps = buildMetadataOpDepsFromState(subgraphState);
+            const result = await handleRetypeWithDeps(args, deps);
+            invalidateMemoryContextCache();
+            server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
+            return result;
+          } catch (error) {
+            if (isQuotaExceededError(error)) {
+              return quotaExceededResponse();
+            }
+            throw error;
+          }
+        }
+
+        case 'totalreclaw_set_scope': {
+          try {
+            const deps = buildMetadataOpDepsFromState(subgraphState);
+            const result = await handleSetScopeWithDeps(args, deps);
+            invalidateMemoryContextCache();
+            server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
+            return result;
+          } catch (error) {
+            if (isQuotaExceededError(error)) {
+              return quotaExceededResponse();
+            }
+            throw error;
+          }
+        }
+
         default:
           return {
             content: [{
@@ -2017,6 +2177,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'totalreclaw_unpin':
         return await handleUnpin(args);
+
+      case 'totalreclaw_retype':
+        return await handleRetype(args);
+
+      case 'totalreclaw_set_scope':
+        return await handleSetScope(args);
 
       default:
         return {

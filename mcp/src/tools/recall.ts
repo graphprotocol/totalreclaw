@@ -1,5 +1,13 @@
 import { TotalReclaw, RerankedResult } from '@totalreclaw/client';
 import { RECALL_TOOL_DESCRIPTION } from '../prompts.js';
+import { MEMORY_CLAIM_V1_SCHEMA_VERSION } from '../v1-types.js';
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+let _wasm: typeof import('@totalreclaw/core') | null = null;
+function getWasm(): typeof import('@totalreclaw/core') {
+  if (!_wasm) _wasm = require('@totalreclaw/core') as typeof import('@totalreclaw/core');
+  return _wasm!;
+}
 
 export interface RecallInput {
   query: string;
@@ -91,25 +99,67 @@ export async function handleRecall(
       );
     }
 
-    const memories = filtered.map((r: RerankedResult) => {
-      const ageMs = Date.now() - r.fact.createdAt.getTime();
-      const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
-
-      // Best-effort category extraction: if the decrypted text is a claim
-      // JSON blob (e.g. {"t":"...","c":"rule",...}), extract the category.
-      let type = 'fact';
+    // Best-effort category + source extraction. v1 blobs carry `type` +
+    // `source` directly; v0 canonical blobs use `c` (short-key); plugin-legacy
+    // blobs have `metadata.type`. We surface whatever we find so callers can
+    // filter or display it.
+    const parsedMap = filtered.map((r: RerankedResult) => {
+      let category = 'fact';
+      let source: string | undefined;
+      let scope: string | undefined;
       try {
         const parsed = JSON.parse(r.fact.text) as Record<string, unknown>;
-        if (typeof parsed.c === 'string') type = parsed.c;
+        const v1Types = new Set<string>([
+          'claim',
+          'preference',
+          'directive',
+          'commitment',
+          'episode',
+          'summary',
+        ]);
+        const isV1 =
+          typeof parsed.text === 'string' &&
+          typeof parsed.type === 'string' &&
+          v1Types.has(String(parsed.type)) &&
+          (typeof parsed.schema_version !== 'string' ||
+            parsed.schema_version === MEMORY_CLAIM_V1_SCHEMA_VERSION);
+        if (isV1) {
+          category = String(parsed.type);
+          if (typeof parsed.source === 'string') source = parsed.source;
+          if (typeof parsed.scope === 'string') scope = parsed.scope;
+        } else if (typeof parsed.c === 'string') {
+          category = parsed.c;
+        } else if (typeof parsed.metadata === 'object' && parsed.metadata !== null) {
+          const meta = parsed.metadata as Record<string, unknown>;
+          if (typeof meta.type === 'string') category = meta.type;
+        }
       } catch {
         // Not a JSON blob — default to 'fact'
       }
+      return { r, category, source, scope };
+    });
 
+    // Retrieval v2 Tier 1: multiply final score by source weight from core.
+    const core = getWasm();
+    const weighted = parsedMap
+      .map(({ r, category, source, scope }) => {
+        const w = source ? core.sourceWeight(source) : core.legacyClaimFallbackWeight();
+        return { r, category, source, scope, weightedScore: r.score * w, sourceWeight: w };
+      })
+      .sort((a, b) => b.weightedScore - a.weightedScore);
+
+    const memories = weighted.map(({ r, category, source, scope, weightedScore, sourceWeight }) => {
+      const ageMs = Date.now() - r.fact.createdAt.getTime();
+      const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
       return {
         fact_id: r.fact.id,
         fact_text: r.fact.text,
-        type,
-        score: r.score,
+        type: category,
+        source,
+        scope,
+        score: weightedScore,
+        base_score: r.score,
+        source_weight: sourceWeight,
         importance: Math.round((r.fact.metadata.importance ?? 0.5) * 10),
         age_days: ageDays,
         decay_score: r.decayAdjustedScore,

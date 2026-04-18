@@ -15,6 +15,15 @@
  */
 
 import crypto from 'node:crypto';
+import type {
+  MemoryTypeV1,
+  MemorySource,
+  MemoryScope,
+  MemoryVolatility,
+  MemoryEntityV1,
+  MemoryClaimV1,
+} from './v1-types.js';
+import { MEMORY_CLAIM_V1_SCHEMA_VERSION } from './v1-types.js';
 
 // The core WASM package ships as CJS. Jest (ts-jest) compiles MCP sources to
 // commonjs so a plain `require` works there; TSC with `NodeNext` rewrites
@@ -369,3 +378,180 @@ export function computeEntityTrapdoors(
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// v1 taxonomy — canonical blob builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Input shape for building a Memory Taxonomy v1 blob. All fields mirror the
+ * MemoryClaimV1 schema; the builder fills in required timestamps/UUIDs so
+ * callers can pass the subset they know about.
+ */
+export interface BuildV1ClaimInput {
+  text: string;
+  type: MemoryTypeV1;
+  source: MemorySource;
+  id?: string;                     // UUIDv7 (generated when absent)
+  createdAt?: string;              // ISO8601 UTC (now when absent)
+  scope?: MemoryScope;
+  volatility?: MemoryVolatility;
+  reasoning?: string;
+  entities?: MemoryEntityV1[];
+  expiresAt?: string;
+  importance?: number;             // 1-10 (optional advisory)
+  confidence?: number;             // 0-1
+  supersededBy?: string;           // claim id override
+}
+
+/**
+ * Construct a v1 canonical claim JSON string, validated through the core
+ * `validateMemoryClaimV1` WASM export. The output is UTF-8 JSON ready to be
+ * encrypted as the inner blob of a protobuf-v4 fact (wrapper `version = 4`).
+ *
+ * Returns the canonical JSON (not the parsed object) so callers can encrypt
+ * it directly without risking non-deterministic key ordering.
+ *
+ * Throws if the input is malformed (missing required field, invalid enum
+ * value). The MCP tool handlers narrow with `isValidMemoryTypeV1` etc. before
+ * calling in, so this should be unreachable from the tool schema path.
+ */
+export function buildV1ClaimBlob(input: BuildV1ClaimInput): string {
+  const claim: MemoryClaimV1 = {
+    id: input.id ?? crypto.randomUUID(),
+    text: input.text,
+    type: input.type,
+    source: input.source,
+    created_at: input.createdAt ?? new Date().toISOString(),
+    schema_version: MEMORY_CLAIM_V1_SCHEMA_VERSION,
+  };
+
+  if (input.scope && input.scope !== 'unspecified') claim.scope = input.scope;
+  if (input.volatility && input.volatility !== 'updatable') claim.volatility = input.volatility;
+  if (input.entities && input.entities.length > 0) claim.entities = input.entities;
+  if (input.reasoning) claim.reasoning = input.reasoning;
+  if (input.expiresAt) claim.expires_at = input.expiresAt;
+  if (typeof input.importance === 'number') claim.importance = input.importance;
+  if (typeof input.confidence === 'number') claim.confidence = input.confidence;
+  if (input.supersededBy) claim.superseded_by = input.supersededBy;
+
+  // Canonicalise + validate via core. Throws on any schema violation.
+  return getWasm().validateMemoryClaimV1(JSON.stringify(claim));
+}
+
+/**
+ * Per-blob read result surfaced through the legacy-friendly reader. Extends
+ * `BlobReadResult` with v1-specific fields when present.
+ */
+export interface V1BlobReadResult {
+  /** The decrypted text payload. */
+  text: string;
+  /** 1-10 normalized importance. Defaults to 5. */
+  importance: number;
+  /**
+   * Category short-key for back-compat reporting (e.g. `pref`, `rule`). For v1
+   * blobs this is derived from the v1 `type` via V1_TYPE_TO_SHORT_CATEGORY.
+   */
+  category: string;
+  /** Raw v1 metadata when the blob is a MemoryClaimV1. */
+  v1?: {
+    type: MemoryTypeV1;
+    source: MemorySource;
+    scope?: MemoryScope;
+    volatility?: MemoryVolatility;
+    reasoning?: string;
+    expires_at?: string;
+    confidence?: number;
+    superseded_by?: string;
+    entities?: MemoryEntityV1[];
+    created_at: string;
+  };
+  /** Whatever metadata the blob carried (v0 or v1). Used by callers that want raw access. */
+  metadata: Record<string, unknown>;
+}
+
+/**
+ * Parse a decrypted blob into a uniform structure supporting v1, canonical v0
+ * (`{t, c, i, ...}`), and legacy plugin (`{text, metadata: {...}}`).
+ *
+ * The v0 reader at `readClaimFromBlob` is retained as a separate function so
+ * the pin-chain logic in `pin.ts` (which mutates short-key claims) keeps its
+ * exact behaviour. Callers that need the full v1 surface should use this one.
+ */
+export function readBlobUnified(decryptedJson: string): V1BlobReadResult {
+  try {
+    const obj = JSON.parse(decryptedJson) as Record<string, unknown>;
+
+    // v1 path: presence of top-level `text` + `type` (closed 6-value enum)
+    // is the v1 signature. `schema_version` is omitted when it equals the
+    // default (per skip_serializing_if in the Rust struct), so we can't
+    // require it — any v1 enum value distinguishes v1 from legacy.
+    const v1Types = new Set<string>([
+      'claim',
+      'preference',
+      'directive',
+      'commitment',
+      'episode',
+      'summary',
+    ]);
+    if (
+      typeof obj.text === 'string' &&
+      typeof obj.type === 'string' &&
+      v1Types.has(String(obj.type)) &&
+      // Optional `schema_version`: when present must be the v1 constant.
+      (typeof obj.schema_version !== 'string' ||
+        obj.schema_version === MEMORY_CLAIM_V1_SCHEMA_VERSION)
+    ) {
+      const importance =
+        typeof obj.importance === 'number' ? Math.max(1, Math.min(10, Math.round(obj.importance))) : 5;
+      const typeStr = String(obj.type);
+      const sourceStr = typeof obj.source === 'string' ? obj.source : 'user-inferred';
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const wasm = require('@totalreclaw/core') as typeof import('@totalreclaw/core');
+      // `parseMemoryTypeV1` returns the enum string unwrapped (e.g. "directive"),
+      // not JSON — do not JSON.parse the return value.
+      const v1Type = wasm.parseMemoryTypeV1(typeStr) as MemoryTypeV1;
+      const v1Source = wasm.parseMemorySource(sourceStr) as MemorySource;
+
+      // Map v1 type to legacy short-key for recall display. Inline import to
+      // avoid a circular dep between v1-types and claims-helper.
+      const shortMap: Record<string, string> = {
+        claim: 'claim',
+        preference: 'pref',
+        directive: 'rule',
+        commitment: 'goal',
+        episode: 'epi',
+        summary: 'sum',
+      };
+      const short = shortMap[v1Type] ?? 'claim';
+
+      return {
+        text: obj.text,
+        importance,
+        category: short,
+        v1: {
+          type: v1Type,
+          source: v1Source,
+          scope: typeof obj.scope === 'string' ? (obj.scope as MemoryScope) : undefined,
+          volatility:
+            typeof obj.volatility === 'string' ? (obj.volatility as MemoryVolatility) : undefined,
+          reasoning: typeof obj.reasoning === 'string' ? obj.reasoning : undefined,
+          expires_at: typeof obj.expires_at === 'string' ? obj.expires_at : undefined,
+          confidence: typeof obj.confidence === 'number' ? obj.confidence : undefined,
+          superseded_by:
+            typeof obj.superseded_by === 'string' ? obj.superseded_by : undefined,
+          entities: Array.isArray(obj.entities) ? (obj.entities as MemoryEntityV1[]) : undefined,
+          created_at: typeof obj.created_at === 'string' ? obj.created_at : '',
+        },
+        metadata: obj as Record<string, unknown>,
+      };
+    }
+  } catch {
+    // fall through to v0 / legacy parser
+  }
+
+  // Fall back to the legacy parser for v0 canonical + plugin-legacy shapes.
+  // This preserves the older category mapping (`fact`, `pref`, etc.).
+  return readClaimFromBlob(decryptedJson);
+}
+

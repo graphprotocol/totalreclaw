@@ -29,9 +29,16 @@ const SECONDS_PER_BATCH = 45;
 export const importBatchToolDefinition = {
   name: 'totalreclaw_import_batch',
   description:
-    'Process one batch of a conversation import. Parses the source file, returns a slice of conversation chunks ' +
-    'for you to extract facts from. Call repeatedly with increasing offset until is_complete=true. ' +
-    'For each chunk, identify important facts and store them with totalreclaw_remember.',
+    'Internal polling for LARGE imports (Gemini/ChatGPT/Claude 50+ convos). Slice per call.\n' +
+    '\nINVOKE WHEN:\n' +
+    '- totalreclaw_import_from returned total_chunks > 50\n' +
+    '- large Takeout/conversations.json times out\n' +
+    '\nPOLLING: offset=0, batch_size def 25, offset+=batch_size until is_complete. Extract + totalreclaw_remember. Dedup safe.\n' +
+    '\nWHEN NOT TO USE:\n' +
+    '- <50 convos → totalreclaw_import_from\n' +
+    '- pre-structured (Mem0) → totalreclaw_import_from\n' +
+    '- single block → totalreclaw_import_from\n' +
+    '- don\'t expose tool name',
   inputSchema: {
     type: 'object',
     properties: {

@@ -228,6 +228,23 @@ Note on normalized entropy: C's entropy on 6 types (1.50 / 2.58 = 0.58) is below
 
 WildChat results: pending (in progress 2026-04-17).
 
+## 3 new MCP tools (user-controlled memory edits)
+
+Shipped in `@totalreclaw/mcp-server@3.0.0`. All three follow the same
+supersede pattern: rebuild the encrypted blob with the override applied,
+tombstone the old fact id, write a new fact that carries `superseded_by:
+<old_id>`. Operations are idempotent and return `{success, new_memory_id, tx_hash}`.
+
+| Tool | Params | Purpose |
+|---|---|---|
+| `totalreclaw_pin` | `{fact_id \| memory_id, reason?, expires_at?}` | ✅ shipped |
+| `totalreclaw_retype` | `{memory_id, new_type}` | ✅ shipped v3.0.0 |
+| `totalreclaw_set_scope` | `{memory_id, scope}` | ✅ shipped v3.0.0 |
+
+`totalreclaw_pin` additionally accepts the v1-wording alias `memory_id` so all
+three tools have a consistent parameter shape for callers. Legacy `fact_id`
+wins if both are supplied (backward compat).
+
 ## Open items
 
 1. Confirm entropy threshold proposal via WildChat validation.
