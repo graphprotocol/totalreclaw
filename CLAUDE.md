@@ -136,7 +136,9 @@ Specs are organized by product area under `docs/specs/`:
 
 ### Platform Support
 
-Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw (`skill-nanoclaw/`), Hermes Agent (`python/`), IronClaw (via MCP server), and ZeroClaw (`rust/totalreclaw-memory/`).
+Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw (`skill-nanoclaw/`), Hermes Agent (`python/`), IronClaw (via MCP server — **WIP, paused as of 2026-04-18**), and ZeroClaw (`rust/totalreclaw-memory/`).
+
+**IronClaw status (2026-04-18)**: paused. Functional via MCP server but lacks first-class CLI integration (`nearai mcp add` / `ironclaw mcp add` does not exist) + no lifecycle hooks (uses routine engine). Existing column kept in the matrix for historical reference; no new IronClaw work tracked until further notice.
 
 | Feature | OpenClaw Plugin | MCP Server | NanoClaw | Hermes | IronClaw | ZeroClaw | Notes |
 |---------|:-:|:-:|:-:|:-:|:-:|:-:|-------|
@@ -245,8 +247,7 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 |-----|----------|-------------|
 | Bulk consolidation not on managed service | LOW | Bulk consolidation tool requires batch-delete, which has no on-chain equivalent. Store-time dedup supersession now works via tombstones. |
 | MCP no auto-memory | By design | MCP has no lifecycle hooks. Host agent (Claude, Cursor) must call tools explicitly. Documented in beta guide. |
-| IronClaw no lifecycle hooks | By design | IronClaw uses routines engine (cron/event-driven) instead of lifecycle hooks. Auto-extraction requires routine setup. Documented in ironclaw-setup.md. |
-| IronClaw CLI no MCP support | MEDIUM | `nearai mcp add` / `ironclaw mcp add` CLI does not exist. Users must manually configure MCP server in NEAR AI agent config. |
+| IronClaw integration paused (WIP) | LOW | All IronClaw work paused 2026-04-18. MCP server route still functional. CLI integration + lifecycle hooks deferred indefinitely. |
 | Export/import not on managed service (MCP) | LOW | MCP server's export and import tools are self-hosted only. OpenClaw plugin handles both modes. |
 | Crypto payments removed | LOW | Coinbase Commerce sunset March 31, 2026. Removed from relay, tools, and website. Stripe (fiat) is the sole payment method. |
 | Hermes not on PyPI (hermes-agent) | RESOLVED | `totalreclaw` 1.2.0 on PyPI includes generic agent layer (no hermes-agent dependency). OPENAI_BASE_URL fix + model detection included. |
