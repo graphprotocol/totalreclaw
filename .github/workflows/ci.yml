@@ -36,18 +36,32 @@ jobs:
         with:
           node-version: '20'
 
-      # Plugin has no test script yet — just verify deps install cleanly
+      # Plugin has no test script yet — just verify deps install cleanly.
+      # We delete the lockfile because it was last regenerated against a local
+      # `file:` dep for `@totalreclaw/core`; the current `package.json` uses
+      # `^2.0.0` from npm and a fresh install resolves against the registry.
+      # Once the lockfile is regenerated after `@totalreclaw/core@2.x` is
+      # published, this can switch back to `npm ci`.
       - name: Install dependencies
-        run: cd skill/plugin && npm ci --legacy-peer-deps
+        run: cd skill/plugin && rm -f package-lock.json && npm install --legacy-peer-deps
 
   mcp-tests:
     name: MCP Server Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # NOTE: The `mcp` package now depends on `@totalreclaw/core@^2.0.0` from
+      # npm (previously a `file:` dep against the local wasm-pack output). The
+      # local WASM build below is now dead code — `npm install` resolves core
+      # from the registry, never from the local `pkg/` directory. It is kept
+      # transitionally so this job continues to green out on branches that
+      # still carry the old `file:` dep. Once `@totalreclaw/core@2.x` is live
+      # on npm AND no branch references the `file:` dep, the
+      # `dtolnay/rust-toolchain`, `wasm-pack-action`, and
+      # `Build @totalreclaw/core (WASM)` steps can be removed in a cleanup PR.
       - uses: dtolnay/rust-toolchain@stable
       - uses: jetli/wasm-pack-action@v0.4.0
-      - name: Build @totalreclaw/core (WASM)
+      - name: Build @totalreclaw/core (WASM) [transitional — safe to drop once core@2.x is on npm]
         run: |
           cd rust/totalreclaw-core
           wasm-pack build --target nodejs --out-dir pkg --features wasm

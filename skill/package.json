@@ -23,7 +23,7 @@
   "author": "TotalReclaw Team",
   "license": "MIT",
   "dependencies": {
-    "@totalreclaw/client": "file:../client",
+    "@totalreclaw/client": "^1.2.0",
     "onnxruntime-node": "^1.24.0",
     "uuid": "^9.0.0"
   },

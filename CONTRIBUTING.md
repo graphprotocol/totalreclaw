@@ -27,6 +27,42 @@ cd skill/plugin && npm install
 pip install -r requirements.txt -r server/requirements.txt
 ```
 
+### Developing against a local `@totalreclaw/core`
+
+All TypeScript client packages (`skill/plugin`, `mcp`, `skill-nanoclaw`) depend on the published `@totalreclaw/core` from npm (currently `^2.0.0`). For day-to-day contribution work this is what you want — `npm install` will pull the released build.
+
+If you are changing Rust code in `rust/totalreclaw-core/` and need to test the resulting WASM bindings in a TypeScript client **before** publishing to npm, use [`npm link`](https://docs.npmjs.com/cli/v10/commands/npm-link) to override the published dep with your local wasm-pack output:
+
+```bash
+# 1. Build the WASM package locally
+cd rust/totalreclaw-core
+./build-wasm.sh
+
+# 2. Register it as a linkable package
+cd pkg
+npm link
+
+# 3. In each consuming package, override the npm dep with your local link
+cd ../../../skill/plugin   # or `mcp/`, or `skill-nanoclaw/`
+npm link @totalreclaw/core
+
+# 4. When you're done, restore the published version
+npm unlink @totalreclaw/core --no-save
+npm install
+```
+
+Never commit a `file:` reference to `rust/totalreclaw-core/pkg` in `package.json` or `package-lock.json` — the `pkg/` directory is a build artifact (not checked in), and a `file:` dep inside a published tarball dangles on end-user machines. Prefer the `npm link` workflow above for any local override.
+
+Python contributors can use the equivalent editable install when hacking on PyO3 bindings:
+
+```bash
+# From the repo root
+cd rust/totalreclaw-core
+maturin develop --features python-extension --release
+```
+
+This builds the PyO3 extension and installs it into the active virtualenv, shadowing the `totalreclaw-core` package that `pip install totalreclaw` would pull from PyPI.
+
 ## Development
 
 ### Project Structure

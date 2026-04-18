@@ -22,7 +22,7 @@
   "license": "MIT",
   "dependencies": {
     "@totalreclaw/client": "^1.2.0",
-    "@totalreclaw/core": "file:../rust/totalreclaw-core/pkg"
+    "@totalreclaw/core": "^2.0.0"
   },
   "peerDependencies": {
     "@totalreclaw/mcp-server": "^3.0.0"
