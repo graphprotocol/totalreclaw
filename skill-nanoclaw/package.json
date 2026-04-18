@@ -1,7 +1,7 @@
 {
   "name": "@totalreclaw/skill-nanoclaw",
-  "version": "0.3.0",
-  "description": "NanoClaw skill for TotalReclaw integration",
+  "version": "3.0.0",
+  "description": "NanoClaw skill for TotalReclaw integration — Memory Taxonomy v1 default",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -21,8 +21,14 @@
   "author": "TotalReclaw Team",
   "license": "MIT",
   "dependencies": {
-    "@totalreclaw/client": "file:../client",
-    "@totalreclaw/core": "^1.5.0"
+    "@totalreclaw/client": "^1.2.0",
+    "@totalreclaw/core": "file:../rust/totalreclaw-core/pkg"
+  },
+  "peerDependencies": {
+    "@totalreclaw/mcp-server": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@totalreclaw/mcp-server": { "optional": true }
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.81",

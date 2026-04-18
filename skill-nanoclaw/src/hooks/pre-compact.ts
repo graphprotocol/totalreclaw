@@ -1,13 +1,31 @@
 import type { TotalReclaw, FactMetadata } from '@totalreclaw/client';
 import type { LLMClient } from './agent-end';
-import type { ExtractedFact } from '../extraction/prompts';
+import type { ExtractedFact, MemoryType } from '../extraction/prompts';
 import {
   PRE_COMPACTION_PROMPT,
   DEBRIEF_SYSTEM_PROMPT,
+  V0_TO_V1_TYPE,
   validateExtractionResponse,
   parseDebriefResponse,
 } from '../extraction/prompts';
 import { handleQuotaError } from '../billing.js';
+
+/**
+ * Build v1 metadata tags for a stored fact. In addition to the namespace
+ * + type tags (used for on-device filtering), v1 provenance fields
+ * (`source`, `scope`) are surfaced as `source:X` / `scope:Y` tags so
+ * downstream recall surfaces have the full v1 taxonomy available without
+ * decrypting the envelope.
+ */
+function buildV1Tags(fact: ExtractedFact, namespace: string): string[] {
+  const tags = [
+    `namespace:${namespace}`,
+    fact.type,
+  ];
+  if (fact.source) tags.push(`source:${fact.source}`);
+  if (fact.scope && fact.scope !== 'unspecified') tags.push(`scope:${fact.scope}`);
+  return tags;
+}
 
 export interface PreCompactInput {
   transcript: string;
@@ -63,13 +81,12 @@ export async function preCompact(
     for (const fact of validation.facts!) {
       if (quotaExceeded) break;
 
+      // Defensive default for source (v1 write path requires it).
+      if (!fact.source) fact.source = 'user-inferred';
       const metadata: FactMetadata = {
         importance: fact.importance / 10,
         source: 'pre_compaction',
-        tags: [
-          `namespace:${input.groupFolder}`,
-          fact.type,
-        ],
+        tags: buildV1Tags(fact, input.groupFolder),
       };
 
       switch (fact.action) {
@@ -127,12 +144,16 @@ export async function preCompact(
         const debriefItems = parseDebriefResponse(debriefResponse);
         for (const item of debriefItems) {
           if (quotaExceeded) break;
+          // Coerce legacy "context" to v1 "claim"; "summary" passes through.
+          const v1Type: MemoryType =
+            item.type === 'context' ? V0_TO_V1_TYPE.context : 'summary';
           const debriefMetadata: FactMetadata = {
             importance: item.importance / 10,
             source: 'nanoclaw_debrief',
             tags: [
               `namespace:${input.groupFolder}`,
-              item.type,
+              v1Type,
+              'source:derived',
             ],
           };
           try {

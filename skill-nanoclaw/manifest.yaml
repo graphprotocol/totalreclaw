@@ -1,6 +1,6 @@
 name: add-totalreclaw
-version: 0.3.0
-description: Add end-to-end encrypted memory to NanoClaw
+version: 3.0.0
+description: Add end-to-end encrypted memory to NanoClaw (Memory Taxonomy v1)
 author: TotalReclaw Team
 
 dependencies:
@@ -19,4 +19,4 @@ adds:
   - src/totalreclaw/extraction/*.ts
 
 npmDependencies:
-  - "@totalreclaw/mcp-server": "^2.7.0"
+  - "@totalreclaw/mcp-server": "^3.0.0"

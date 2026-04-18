@@ -1,61 +1,231 @@
 /**
- * TotalReclaw NanoClaw Skill - LLM Prompts for Fact Extraction
+ * TotalReclaw NanoClaw Skill — LLM Prompts for Fact Extraction (v1 taxonomy).
  *
- * Prompts follow Mem0-style ADD/UPDATE/DELETE/NOOP pattern for
- * intelligent deduplication and conflict resolution.
+ * As of NanoClaw 3.0.0, Memory Taxonomy v1 is the only extraction path.
+ * The 6 canonical types (claim, preference, directive, commitment, episode,
+ * summary) replace the legacy v0 8-type list. Legacy v0 tokens are still
+ * accepted on the read/parse side via ``V0_TO_V1_TYPE`` so pre-v1 vault
+ * entries still round-trip.
  *
- * Aligned to the canonical extraction prompt from skill/plugin/extractor.ts.
+ * Aligned with the canonical extraction prompt from
+ * ``skill/plugin/extractor.ts`` (plugin v3.0.0).
  */
 
 export type ExtractionAction = 'ADD' | 'UPDATE' | 'DELETE' | 'NOOP';
 
-export type FactType = 'fact' | 'preference' | 'decision' | 'episodic' | 'goal' | 'context' | 'summary' | 'rule';
+// ---------------------------------------------------------------------------
+// Memory Taxonomy v1 — 6 canonical memory types. Single source of truth.
+// Keep in sync with: skill/plugin/extractor.ts, mcp/src/v1-types.ts,
+// python/src/totalreclaw/agent/extraction.py, rust/totalreclaw-core/src/claims.rs.
+// ---------------------------------------------------------------------------
 
+export const VALID_MEMORY_TYPES = [
+  'claim',
+  'preference',
+  'directive',
+  'commitment',
+  'episode',
+  'summary',
+] as const;
+
+export type MemoryType = (typeof VALID_MEMORY_TYPES)[number];
+
+/** @deprecated Use {@link VALID_MEMORY_TYPES} directly. Back-compat alias only. */
+export const VALID_MEMORY_TYPES_V1: readonly MemoryType[] = VALID_MEMORY_TYPES;
+/** @deprecated Use {@link MemoryType}. Back-compat alias only. */
+export type MemoryTypeV1 = MemoryType;
+
+/** Runtime type guard for the 6 v1 types. */
+export function isValidMemoryType(value: unknown): value is MemoryType {
+  return typeof value === 'string' && (VALID_MEMORY_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Legacy v0 memory types — retained so pre-v1 vault entries still decode,
+ * and so v0 LLM outputs are coerced rather than dropped.
+ */
+export const LEGACY_V0_MEMORY_TYPES = [
+  'fact',
+  'preference',
+  'decision',
+  'episodic',
+  'goal',
+  'context',
+  'summary',
+  'rule',
+] as const;
+export type MemoryTypeV0 = (typeof LEGACY_V0_MEMORY_TYPES)[number];
+
+/** Back-compat alias used by downstream hooks; `FactType` was the v0 name. */
+export type FactType = MemoryType | MemoryTypeV0;
+
+/** Legacy v0 → v1 type mapping. Mirrors plugin / Python / core. */
+export const V0_TO_V1_TYPE: Record<MemoryTypeV0, MemoryType> = {
+  fact: 'claim',
+  preference: 'preference',
+  decision: 'claim',
+  episodic: 'episode',
+  goal: 'commitment',
+  context: 'claim',
+  summary: 'summary',
+  rule: 'directive',
+};
+
+/** Normalise any incoming type token (v1 or legacy v0) to a v1 type. */
+export function normalizeToV1Type(raw: unknown): MemoryType {
+  const token = String(raw ?? '').toLowerCase();
+  if (isValidMemoryType(token)) return token;
+  if ((LEGACY_V0_MEMORY_TYPES as readonly string[]).includes(token)) {
+    return V0_TO_V1_TYPE[token as MemoryTypeV0];
+  }
+  return 'claim';
+}
+
+export type MemorySource =
+  | 'user'
+  | 'user-inferred'
+  | 'assistant'
+  | 'external'
+  | 'derived';
+
+export const VALID_MEMORY_SOURCES: readonly MemorySource[] = [
+  'user',
+  'user-inferred',
+  'assistant',
+  'external',
+  'derived',
+];
+
+export type MemoryScope =
+  | 'work'
+  | 'personal'
+  | 'health'
+  | 'family'
+  | 'creative'
+  | 'finance'
+  | 'misc'
+  | 'unspecified';
+
+export const VALID_MEMORY_SCOPES: readonly MemoryScope[] = [
+  'work',
+  'personal',
+  'health',
+  'family',
+  'creative',
+  'finance',
+  'misc',
+  'unspecified',
+];
+
+export type MemoryVolatility = 'stable' | 'updatable' | 'ephemeral';
+
+export const VALID_MEMORY_VOLATILITIES: readonly MemoryVolatility[] = [
+  'stable',
+  'updatable',
+  'ephemeral',
+];
+
+/**
+ * Extracted fact carrying full v1 taxonomy fields. The write path (hooks)
+ * defaults `source` to `'user-inferred'` when upstream omits it.
+ */
 export interface ExtractedFact {
   text: string;
-  type: FactType;
+  type: MemoryType;
   importance: number; // 1-10
   action: ExtractionAction;
   existingFactId?: string;
+  source?: MemorySource;
+  scope?: MemoryScope;
+  reasoning?: string;
+  volatility?: MemoryVolatility;
 }
 
-const BASE_SYSTEM_PROMPT = `You are a memory extraction engine. Analyze the conversation and extract valuable long-term memories.
+// ---------------------------------------------------------------------------
+// v1 merged-topic extraction prompt
+// ---------------------------------------------------------------------------
+
+const BASE_SYSTEM_PROMPT = `You are a memory extraction engine using Memory Taxonomy v1. Work in TWO explicit phases within one response:
+
+PHASE 1 — Topic identification.
+Before extracting any fact, identify the 2-3 main topics the user was engaging with. Topics should be short phrases (2-5 words each). If the conversation has no clear user-focused topic, use an empty topics array.
+
+PHASE 2 — Fact extraction anchored to those topics.
+Extract valuable memories. Prefer facts that directly relate to the identified topics (importance 7-9 range). Tangential facts may still be extracted but score lower (6-7 range).
 
 Rules:
-1. Each memory must be a single, self-contained piece of information
-2. Focus on user-specific information that would be useful in future conversations
-3. Skip generic knowledge, greetings, small talk, and ephemeral task coordination
+1. Each memory = single self-contained piece of information
+2. Focus on user-specific info useful in future conversations
+3. Skip generic knowledge, greetings, small talk, ephemeral task coordination
 4. Score importance 1-10 (6+ = worth storing)
-5. Only extract memories with importance >= 6
+5. Every memory MUST attribute a source (provenance critical)
 
-Types:
-- fact: Objective information about the user (name, location, job, relationships)
-- preference: Likes, dislikes, or preferences ("prefers dark mode", "allergic to peanuts")
-- decision: Choices WITH reasoning ("chose PostgreSQL because data is relational and needs ACID")
-- episodic: Notable events or experiences ("deployed v1.0 to production on March 15")
-- goal: Objectives, targets, or plans ("wants to launch public beta by end of Q1")
-- context: Active project/task context ("working on TotalReclaw v1.2, staging on Base Sepolia")
-- summary: Key outcome or conclusion from a discussion ("agreed to use phased rollout for migration")
-- rule: A reusable operational rule, non-obvious gotcha, debugging shortcut, or convention the user wants to remember for next time. Distinct from decisions (which have reasoning for a specific choice) and preferences (which are personal tastes). Rules are impersonal, actionable, and transferable — they would help anyone in the same situation. Examples: "Always check the systemd unit file for environment pins before wiping state", "The subgraph schema uses sequenceId not seqId", "Don't open large JSON files in Neovim — use jq instead".
+Importance rubric (use FULL 1-10 range):
+- 10: Critical, core identity, never-forget content
+- 9: Affects many future decisions
+- 8: High-value preference/decision/rule
+- 7: Specific durable fact
+- 6: Borderline
+- 5 or below: NOT worth storing — drop
 
-Extraction guidance:
-- For decisions: ALWAYS include the reasoning. "Chose X" is weak. "Chose X because Y" is strong.
-- For context: Capture what the user is actively working on, including versions, environments, and status.
-- For summaries: Only extract when a conversation reaches a clear conclusion or agreement.
-- For facts: Prefer specific over vague. "Lives in Lisbon" beats "lives in Europe".
-- For rules: ALWAYS extract when the user explicitly signals "remember this", "gotcha", "rule of thumb", "always", "never", or describes a non-obvious learning. Importance >= 7 when the rule prevented a real bug or wasted time. Include the specific context (which tool, which error, which version) so the rule is actionable later. The boundary test: would this apply to anyone in the same situation? Rules generalize; decisions and preferences don't.
-- Decisions and context should be importance >= 7 (they are high-value for future conversations).
+DO NOT cluster everything at 7-8-9.
+
+═══════════════════════════════════════════════════════════════
+TYPE (6 values)
+═══════════════════════════════════════════════════════════════
+- claim: factual assertion (absorbs fact/context/decision; decisions populate reasoning field)
+- preference: likes/dislikes/tastes
+- directive: imperative rule ("always X", "never Y")
+- commitment: future intent ("will do X")
+- episode: notable event
+- summary: derived synthesis (source must be derived|assistant) — do NOT emit for turn-extraction
+
+═══════════════════════════════════════════════════════════════
+SOURCE (provenance, CRITICAL)
+═══════════════════════════════════════════════════════════════
+- user: user explicitly stated it (in [user]: turns)
+- user-inferred: extractor inferred from user signals
+- assistant: assistant authored content — DOWNGRADE unless user affirmed/quoted/used it
+- external, derived: rare
+
+IF fact substance appears ONLY in [assistant]: turns without user affirmation → source:assistant
+
+═══════════════════════════════════════════════════════════════
+SCOPE (life domain)
+═══════════════════════════════════════════════════════════════
+work | personal | health | family | creative | finance | misc | unspecified
+
+═══════════════════════════════════════════════════════════════
+REASONING (only for claims that are decisions)
+═══════════════════════════════════════════════════════════════
+For type=claim where the user expressed a decision-with-reasoning, populate "reasoning" with the WHY clause.
 
 Actions (compare against existing memories if provided):
 - ADD: New memory, no conflict with existing
 - UPDATE: Refines or corrects an existing memory (provide existingFactId)
-- DELETE: Contradicts an existing memory -- the old one is now wrong (provide existingFactId)
+- DELETE: Contradicts an existing memory — the old one is now wrong (provide existingFactId)
 - NOOP: Already captured or not worth storing
 
-Return a JSON object with a "facts" array (no markdown, no code fences):
-{"facts": [{"text": "...", "type": "...", "importance": N, "action": "ADD|UPDATE|DELETE|NOOP", "existingFactId": "..."}, ...]}
+═══════════════════════════════════════════════════════════════
+OUTPUT FORMAT (no markdown, no code fences)
+═══════════════════════════════════════════════════════════════
+{
+  "topics": ["topic 1", "topic 2"],
+  "facts": [
+    {
+      "text": "...",
+      "type": "claim|preference|directive|commitment|episode|summary",
+      "source": "user|user-inferred|assistant",
+      "scope": "work|personal|health|...",
+      "importance": N,
+      "action": "ADD|UPDATE|DELETE|NOOP",
+      "reasoning": "...",      // optional, only for claim+decision
+      "existingFactId": "..."  // only for UPDATE/DELETE
+    }
+  ]
+}
 
-If nothing is worth extracting, return: {"facts": []}`;
+If nothing worth extracting: {"topics": [], "facts": []}`;
 
 export const PRE_COMPACTION_PROMPT = {
   system: BASE_SYSTEM_PROMPT,
@@ -164,6 +334,11 @@ If the conversation was too short or trivial to warrant a debrief, return: []`;
 
 export interface DebriefItem {
   text: string;
+  /**
+   * Debrief items are always high-level wrap-up. `summary` is the v1 canonical
+   * type; `context` is legacy v0 — at write time it is coerced to `claim` via
+   * {@link V0_TO_V1_TYPE}. The literal set is kept for prompt fidelity.
+   */
   type: 'summary' | 'context';
   importance: number;
 }
@@ -215,37 +390,58 @@ export function formatConversationHistory(
 }
 
 /**
- * Parse and validate an extraction response.
+ * Parse and validate an extraction response (v1 merged-topic shape).
  *
- * Expects: { facts: [{ text, type, importance, action, existingFactId? }, ...] }
+ * Accepts either:
+ *   - v1 merged object: `{ topics: [...], facts: [...] }`
+ *   - legacy bare object: `{ facts: [...] }`
+ *   - legacy bare array: `[ {...}, {...} ]` (wrapped as `{ topics: [], facts: [...] }`)
  *
- * Also accepts "factText" as an alias for "text" for robustness.
- * Does NOT filter by importance -- callers are responsible for their own thresholds.
+ * Each fact is coerced to v1 via {@link normalizeToV1Type}. `source` defaults
+ * to `'user-inferred'`, `scope` to `'unspecified'`. Legacy `factText` is
+ * still accepted as a fallback for `text` for robustness.
+ *
+ * Does NOT filter by importance — callers apply their own thresholds.
  */
 export function validateExtractionResponse(response: unknown): {
   valid: boolean;
   errors: string[];
   facts?: ExtractedFact[];
+  topics?: string[];
 } {
   const errors: string[] = [];
 
-  if (!response || typeof response !== 'object') {
-    return { valid: false, errors: ['Response must be an object'] };
+  if (!response || (typeof response !== 'object' && !Array.isArray(response))) {
+    return { valid: false, errors: ['Response must be an object or array'] };
   }
 
-  const obj = response as Record<string, unknown>;
+  // Normalise to { topics, facts } shape.
+  let topics: string[] = [];
+  let rawFacts: unknown[];
 
-  if (!Array.isArray(obj.facts)) {
-    return { valid: false, errors: ['Response must have a "facts" array'] };
+  if (Array.isArray(response)) {
+    rawFacts = response;
+  } else {
+    const obj = response as Record<string, unknown>;
+    if (Array.isArray(obj.topics)) {
+      topics = (obj.topics as unknown[])
+        .filter((t): t is string => typeof t === 'string' && t.length > 0)
+        .slice(0, 10);
+    }
+    if (!Array.isArray(obj.facts)) {
+      return { valid: false, errors: ['Response must have a "facts" array'] };
+    }
+    rawFacts = obj.facts as unknown[];
   }
 
-  const validTypes: FactType[] = ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary', 'rule'];
   const validActions: ExtractionAction[] = ['ADD', 'UPDATE', 'DELETE', 'NOOP'];
 
   const facts: ExtractedFact[] = [];
 
-  for (let i = 0; i < obj.facts.length; i++) {
-    const fact = obj.facts[i] as Record<string, unknown>;
+  for (let i = 0; i < rawFacts.length; i++) {
+    const raw = rawFacts[i];
+    if (!raw || typeof raw !== 'object') continue;
+    const fact = raw as Record<string, unknown>;
     const factErrors: string[] = [];
 
     // Accept both "text" and "factText" field names for robustness
@@ -254,9 +450,8 @@ export function validateExtractionResponse(response: unknown): {
       factErrors.push(`facts[${i}].text must be a non-empty string`);
     }
 
-    if (!validTypes.includes(fact.type as FactType)) {
-      factErrors.push(`facts[${i}].type must be one of: ${validTypes.join(', ')}`);
-    }
+    // Accept v1 tokens directly; coerce legacy v0 tokens via V0_TO_V1_TYPE.
+    const type = normalizeToV1Type(fact.type);
 
     if (typeof fact.importance !== 'number' || fact.importance < 1 || fact.importance > 10) {
       factErrors.push(`facts[${i}].importance must be a number between 1 and 10`);
@@ -269,22 +464,46 @@ export function validateExtractionResponse(response: unknown): {
       factErrors.push(`facts[${i}].action must be one of: ${validActions.join(', ')}`);
     }
 
+    // v1 provenance fields
+    const rawSource = String(fact.source ?? 'user-inferred').toLowerCase();
+    const source: MemorySource = (VALID_MEMORY_SOURCES as readonly string[]).includes(rawSource)
+      ? (rawSource as MemorySource)
+      : 'user-inferred';
+
+    const rawScope = String(fact.scope ?? 'unspecified').toLowerCase();
+    const scope: MemoryScope = (VALID_MEMORY_SCOPES as readonly string[]).includes(rawScope)
+      ? (rawScope as MemoryScope)
+      : 'unspecified';
+
+    const reasoning = typeof fact.reasoning === 'string'
+      ? fact.reasoning.slice(0, 256)
+      : undefined;
+
     if (factErrors.length > 0) {
       errors.push(...factErrors);
-    } else {
-      facts.push({
-        text: String(textValue).slice(0, 512),
-        type: fact.type as FactType,
-        importance: Math.max(1, Math.min(10, Math.round(fact.importance as number))),
-        action: action!,
-        existingFactId: typeof fact.existingFactId === 'string' ? fact.existingFactId : undefined,
-      });
+      continue;
     }
+
+    // Reject illegal type:summary + source:user combinations (per v1 spec).
+    if (type === 'summary' && source === 'user') {
+      continue;
+    }
+
+    facts.push({
+      text: String(textValue).slice(0, 512),
+      type,
+      importance: Math.max(1, Math.min(10, Math.round(fact.importance as number))),
+      action: action!,
+      existingFactId: typeof fact.existingFactId === 'string' ? fact.existingFactId : undefined,
+      source,
+      scope,
+      reasoning,
+    });
   }
 
   if (errors.length > 0) {
     return { valid: false, errors };
   }
 
-  return { valid: true, errors: [], facts };
+  return { valid: true, errors: [], facts, topics };
 }

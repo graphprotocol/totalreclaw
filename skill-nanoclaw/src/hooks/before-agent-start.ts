@@ -38,12 +38,15 @@ export async function beforeAgentStart(
              (!tags.some(t => t.startsWith('namespace:')) && input.groupFolder === 'default');
     });
 
+    // Accept both v1 (plugin v3.0.0 / nanoclaw 3.0.0+) and legacy v0 type tags.
+    const V1_TYPES = ['claim', 'preference', 'directive', 'commitment', 'episode', 'summary'];
+    const V0_TYPES = ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary', 'rule'];
+    const ALL_TYPES = new Set<string>([...V1_TYPES, ...V0_TYPES]);
+
     const memories = filtered.map(r => ({
       text: r.fact.text,
       score: r.score,
-      type: r.fact.metadata.tags?.find(t =>
-        ['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary', 'rule'].includes(t)
-      ) || 'fact',
+      type: r.fact.metadata.tags?.find(t => ALL_TYPES.has(t)) || 'claim',
     }));
 
     // --- Billing check ---

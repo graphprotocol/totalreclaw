@@ -11,6 +11,23 @@ import {
   handleQuotaError,
 } from '../billing.js';
 
+/**
+ * Build v1 metadata tags for a stored fact. In addition to the namespace
+ * + type tags (used for on-device filtering), v1 provenance fields
+ * (`source`, `scope`) are surfaced as `source:X` / `scope:Y` tags so
+ * downstream recall surfaces have the full v1 taxonomy available without
+ * decrypting the envelope.
+ */
+function buildV1Tags(fact: ExtractedFact, namespace: string): string[] {
+  const tags = [
+    `namespace:${namespace}`,
+    fact.type,
+  ];
+  if (fact.source) tags.push(`source:${fact.source}`);
+  if (fact.scope && fact.scope !== 'unspecified') tags.push(`scope:${fact.scope}`);
+  return tags;
+}
+
 export interface AgentEndInput {
   conversationHistory: Array<{
     role: 'user' | 'assistant';
@@ -89,13 +106,12 @@ export async function agentEnd(
     }
     for (const fact of factsToProcess) {
       if (fact.action === 'ADD' && fact.importance >= MIN_IMPORTANCE) {
+        // Defensive default for source (v1 write path requires it).
+        if (!fact.source) fact.source = 'user-inferred';
         const metadata: FactMetadata = {
           importance: fact.importance / 10,
           source: 'agent_end_extraction',
-          tags: [
-            `namespace:${input.groupFolder}`,
-            fact.type,
-          ],
+          tags: buildV1Tags(fact, input.groupFolder),
         };
 
         try {
