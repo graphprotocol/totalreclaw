@@ -142,6 +142,23 @@ Memories stored by the Python client can be recalled by the MCP server, and vice
 - [Hermes setup guide](https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md)
 - [Feature comparison](https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/feature-comparison.md)
 
+## Recent changes
+
+### 2.0.1 — 2026-04-18
+
+- Fixed `wallet_address` property returning the EOA placeholder before
+  `resolve_address()` ran. The property now raises `RuntimeError` if read
+  before resolution; accessing it after `await client.resolve_address()` or
+  after the first `remember/recall/forget/export` call works as before.
+- Added `await client.get_wallet_address()` async getter that resolves
+  lazily and returns the Smart Account address in one call — preferred for
+  introspection code that doesn't want to sequence a separate
+  `resolve_address()` step.
+- **Not a data-loss bug.** UserOps mined correctly in 2.0.0; facts land
+  on-chain under the correct Smart Account. Only the introspection API
+  was wrong, which misled QA tooling into querying the subgraph with the
+  EOA.
+
 ## License
 
 MIT

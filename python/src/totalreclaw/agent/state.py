@@ -154,7 +154,11 @@ class AgentState:
         creds_path.write_text(json.dumps({"recovery_phrase": mnemonic}))
         creds_path.chmod(0o600)
 
-        logger.info("TotalReclaw configured: wallet=%s", self._client.wallet_address)
+        # Do NOT read `self._client.wallet_address` here — it raises until
+        # `resolve_address()` has run, and `configure()` is synchronous. The
+        # EOA is what we have at this point; the Smart Account address is
+        # resolved lazily on the first remember/recall call.
+        logger.info("TotalReclaw configured: eoa=%s", self._client._eoa_address)
 
     def is_configured(self) -> bool:
         """Return True if the client is configured and ready."""

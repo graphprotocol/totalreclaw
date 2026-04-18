@@ -214,7 +214,9 @@ class TestTools:
         assert result["configured"] is True
         assert result["generated"] is True
         assert len(result["recovery_phrase"].split()) == 12
-        assert result["wallet_address"].startswith("0x")
+        # SA is resolved lazily; setup returns the EOA.
+        assert result["eoa_address"].startswith("0x")
+        assert result["wallet_address_pending"] is True
 
     def test_setup_success(self):
         from totalreclaw.hermes.tools import setup
@@ -226,7 +228,8 @@ class TestTools:
              patch.object(Path, "mkdir", return_value=None):
             result = json.loads(setup({"recovery_phrase": mnemonic}, state))
         assert result["configured"] is True
-        assert result["wallet_address"].startswith("0x")
+        assert result["eoa_address"].startswith("0x")
+        assert result["wallet_address_pending"] is True
 
 
 class TestHooks:

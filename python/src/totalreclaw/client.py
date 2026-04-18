@@ -153,9 +153,19 @@ class TotalReclaw:
         self._eoa_address: str = eoa_acct.address
         self._eoa_private_key: bytes = bytes(eoa_acct.key)
 
-        # Use provided address, or fall back to EOA (resolve_address fixes it later)
-        self._wallet_address = (wallet_address or self._eoa_address).lower()
-        self._address_resolved = wallet_address is not None
+        # Store Smart Account address. If provided at construction time, mark as
+        # resolved. Otherwise, leave as None — callers MUST call
+        # ``await client.resolve_address()`` (or any remember/recall/forget/export,
+        # which lazily triggers resolution) before reading ``.wallet_address``.
+        # We intentionally do NOT fall back to the EOA placeholder here: silently
+        # exposing the EOA misled QA tooling in v2.0.0 into querying the subgraph
+        # with the wrong address. See DIAG-PYTHON-V2-20260418.md.
+        if wallet_address is not None:
+            self._wallet_address: Optional[str] = wallet_address.lower()
+            self._address_resolved = True
+        else:
+            self._wallet_address = None
+            self._address_resolved = False
         self._relay = RelayClient(
             relay_url=resolved_url,
             auth_key_hex=self._auth_key_hex,
@@ -168,9 +178,10 @@ class TotalReclaw:
         """Resolve the CREATE2 Smart Account address via RPC.
 
         Must be called before remember/recall/forget/export if wallet_address
-        was not provided at construction time.
+        was not provided at construction time. Also called automatically by
+        remember/recall/forget/export via ``_ensure_address``.
         """
-        if self._address_resolved:
+        if self._address_resolved and self._wallet_address is not None:
             return self._wallet_address
 
         self._wallet_address = await _derive_smart_account_address(self._mnemonic)
@@ -205,6 +216,51 @@ class TotalReclaw:
 
     @property
     def wallet_address(self) -> str:
+        """Return the CREATE2 Smart Account (SA) address.
+
+        **Contract:** this property is only valid once the SA has been
+        resolved. Resolution happens either:
+
+        * at construction time (if ``wallet_address=`` was passed in),
+        * explicitly via ``await client.resolve_address()``, or
+        * implicitly on the first ``remember/recall/forget/export`` call,
+          which internally calls ``_ensure_address``.
+
+        If you read this property before any of the above has happened it
+        will raise ``RuntimeError``. Historically (<=2.0.0) it silently
+        returned the EOA placeholder, which led QA tooling to query the
+        subgraph with the wrong address and report false negatives. See
+        DIAG-PYTHON-V2-20260418.md.
+
+        Returns
+        -------
+        str
+            The lowercase 0x-prefixed Smart Account address.
+
+        Raises
+        ------
+        RuntimeError
+            If called before the address has been resolved.
+        """
+        if not self._address_resolved or self._wallet_address is None:
+            raise RuntimeError(
+                "Smart Account address not yet resolved. Call "
+                "`await client.resolve_address()` before reading "
+                "`wallet_address`, or simply call `remember`/`recall`/"
+                "`forget`/`export` first (they resolve lazily). "
+                "See DIAG-PYTHON-V2-20260418.md for background."
+            )
+        return self._wallet_address
+
+    async def get_wallet_address(self) -> str:
+        """Async-safe getter that resolves the SA address if needed.
+
+        Prefer this in code that may run before any remember/recall call —
+        it guarantees you get the Smart Account address without needing
+        to sequence a separate ``await client.resolve_address()`` first.
+        """
+        await self._ensure_address()
+        assert self._wallet_address is not None  # _ensure_address guarantees this
         return self._wallet_address
 
     @property

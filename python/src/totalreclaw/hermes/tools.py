@@ -267,9 +267,19 @@ def setup(args: dict, state: "PluginState", **kwargs) -> str:
 
     try:
         state.configure(recovery_phrase)
+        client = state.get_client()
+        # The Smart Account address is resolved lazily on the first
+        # remember/recall call (requires async RPC). At setup time we only
+        # have the EOA — surface it as ``eoa_address`` and mark the SA as
+        # pending so callers don't confuse the two. See DIAG-PYTHON-V2.
         result = {
             "configured": True,
-            "wallet_address": state.get_client().wallet_address,
+            "eoa_address": client._eoa_address,
+            "wallet_address_pending": True,
+            "note": (
+                "Smart Account address will be resolved on the first "
+                "remember/recall call. Until then `wallet_address` is unset."
+            ),
         }
         if generated:
             result["recovery_phrase"] = recovery_phrase
