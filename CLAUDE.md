@@ -460,15 +460,15 @@ git checkout main
 
 ## Current Status
 
-- **Version**: v1 (taxonomy v1 + Retrieval v2 Tier 1) — shipped April 2026
+- **Version**: v1.0.0 — tagged and released on GitHub 2026-04-18 (https://github.com/p-diogo/totalreclaw/releases/tag/release-v1.0.0). Memory Taxonomy v1 + Retrieval v2 Tier 1 shipped to production.
 - **Phase**: Private Beta; v1 is the default extraction + write path across every client with zero env-var toggles
+- **Packages published (v1.0.0)**: `@totalreclaw/core@2.0.0` (npm), `totalreclaw-core@2.0.0` (PyPI + crates.io), `@totalreclaw/mcp-server@3.0.1` (npm, post-QA protobuf v=4 fix), `@totalreclaw/skill-nanoclaw@3.0.0` (npm), `@totalreclaw/totalreclaw@3.0.2` (ClawHub, post-QA lockfile regen), `totalreclaw@2.0.1` (PyPI, post-QA `wallet_address` property fix), `totalreclaw-memory@2.0.0` (crates.io — first Rust release).
 - **Default mode**: Managed Service with dual-chain (free=Base Sepolia testnet, pro=Gnosis mainnet)
 - **Default chain ID**: auto-detected from billing tier. Free = 84532 (Base Sepolia), Pro = 100 (Gnosis). `TOTALRECLAW_CHAIN_ID` env var removed in v1.
 - **Embedding model**: onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled). Only supported model in v1; `TOTALRECLAW_EMBEDDING_MODEL` env var removed.
 - **Memory taxonomy**: v1 (6 types: claim / preference / directive / commitment / episode / summary + 3 axes: source / scope / volatility). See `docs/specs/totalreclaw/memory-taxonomy-v1.md`.
 - **Outer protobuf**: v4 (inner blob now v1 JSON; subgraph schema unchanged). See `totalreclaw-internal/docs/plans/2026-04-18-protobuf-v4-design.md`.
 - **Crypto core**: `@totalreclaw/core@2.0.0` (Rust WASM for npm, PyO3 for PyPI) — adds `MemoryClaimV1` types, `validateMemoryClaimV1`, `rerankWithConfig` (Tier 1 source-weighted reranker), `parseMemoryTypeV1` / `parseMemorySource`. 455 native + 498 WASM + 508 PyO3 tests pass. Legacy v0 `rerank()` preserved for back-compat.
-- **Packages (v1)**: `@totalreclaw/core@2.0.0`, `@totalreclaw/totalreclaw@3.0.0` (OpenClaw plugin, ClawHub), `@totalreclaw/mcp-server@3.0.0` (with 19 tools including `pin`/`unpin`/`retype`/`set_scope`), `@totalreclaw/skill-nanoclaw@3.0.0`; `totalreclaw-core@2.0.0`, `totalreclaw@2.0.0` (PyPI); `totalreclaw-memory@2.0.0` (crates.io)
 - **OpenClaw integration**: Plugin installs without force flags (`openclaw plugins install`), hot-reload setup via `TOTALRECLAW_HOT_RELOAD=true`, auto-recall on `before_agent_start`, auto-extraction on `agent_end`, LLM config sourced from OpenClaw providers, plaintext fallback prevention
 - **Relay**: Billing, Pimlico sponsorship, dual-chain routing, and query proxying extracted to private `totalreclaw-relay` TypeScript repo (p-diogo/totalreclaw-relay). Public server retains only self-hosted functionality (storage, search, auth).
 - **Server-side tuning**: Relay billing response carries `extraction_interval`, `max_facts_per_extraction`, `max_candidate_pool`, and (planned) `ephemeral_ttl_days`. Clients read these from the billing cache — no npm/PyPI publish required to retune.
