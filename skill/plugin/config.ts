@@ -63,6 +63,28 @@ export function getRecoveryPhrase(): string {
   return _recoveryPhraseOverride ?? process.env.TOTALRECLAW_RECOVERY_PHRASE ?? '';
 }
 
+/**
+ * Runtime override for chain ID, set after the relay billing response is
+ * read. Free tier stays on 84532 (Base Sepolia); Pro tier flips to 100
+ * (Gnosis mainnet). The relay routes Pro writes to Gnosis, so Pro-tier
+ * UserOps MUST be signed against chain 100 — otherwise the bundler rejects
+ * the signature with AA23.
+ *
+ * See index.ts: after the billing fetch completes, call
+ * `setChainIdOverride(100)` for Pro users. Free users can leave the
+ * override unset.
+ */
+let _chainIdOverride: number | null = null;
+
+export function setChainIdOverride(chainId: number): void {
+  _chainIdOverride = chainId;
+}
+
+/** Reset the chain override — used by tests. */
+export function __resetChainIdOverrideForTests(): void {
+  _chainIdOverride = null;
+}
+
 export const CONFIG = {
   // Core — recoveryPhrase reads from override first, then env var.
   // Use getRecoveryPhrase() for dynamic access; this property is for
@@ -80,7 +102,14 @@ export const CONFIG = {
   // completes. Self-hosted users can still point at a custom DataEdge via
   // TOTALRECLAW_DATA_EDGE_ADDRESS / TOTALRECLAW_ENTRYPOINT_ADDRESS /
   // TOTALRECLAW_RPC_URL (undocumented; internal knobs).
-  chainId: 84532,
+  //
+  // Reads the runtime override set by the billing auto-detect in index.ts.
+  // Falls back to 84532 (free tier / pre-billing-fetch). Must be a getter,
+  // not a literal — a literal would freeze all Pro-tier UserOps to the
+  // wrong chainId and AA23 at the bundler.
+  get chainId(): number {
+    return _chainIdOverride ?? 84532;
+  },
   dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || '',
   entryPointAddress: process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || '',
   rpcUrl: process.env.TOTALRECLAW_RPC_URL || '',

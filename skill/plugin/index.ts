@@ -94,7 +94,7 @@ import {
   type PinOpDeps,
 } from './pin.js';
 import { PluginHotCache, type HotFact } from './hot-cache-wrapper.js';
-import { CONFIG, setRecoveryPhraseOverride } from './config.js';
+import { CONFIG, setRecoveryPhraseOverride, setChainIdOverride } from './config.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -260,11 +260,34 @@ interface BillingCache {
   checked_at: number;
 }
 
+/**
+ * Apply the billing tier to the runtime chain override.
+ *
+ * Pro tier → chain 100 (Gnosis mainnet). Free tier (or unknown) stays on
+ * 84532 (Base Sepolia). The relay routes Pro UserOps to Gnosis, so the
+ * client MUST sign them against chain 100 — otherwise the bundler returns
+ * AA23 (invalid signature). See MCP's equivalent path in mcp/src/index.ts.
+ *
+ * Called from `readBillingCache` and `writeBillingCache` so that every cache
+ * read or write keeps the chain override in sync with the cached tier.
+ * Idempotent — calling with the same tier is a no-op.
+ */
+function syncChainIdFromTier(tier: string | undefined): void {
+  if (tier === 'pro') {
+    setChainIdOverride(100);
+  } else {
+    // Free or unknown → reset to the default free-tier chain.
+    setChainIdOverride(84532);
+  }
+}
+
 function readBillingCache(): BillingCache | null {
   try {
     if (!fs.existsSync(BILLING_CACHE_PATH)) return null;
     const raw = JSON.parse(fs.readFileSync(BILLING_CACHE_PATH, 'utf-8')) as BillingCache;
     if (!raw.checked_at || Date.now() - raw.checked_at > BILLING_CACHE_TTL) return null;
+    // Keep chain override in sync with persisted tier across process restarts.
+    syncChainIdFromTier(raw.tier);
     return raw;
   } catch {
     return null;
@@ -279,6 +302,9 @@ function writeBillingCache(cache: BillingCache): void {
   } catch {
     // Best-effort — don't block on cache write failure.
   }
+  // Sync chain override AFTER the write so in-process UserOp signing picks
+  // up the correct chain immediately, even if the disk write failed.
+  syncChainIdFromTier(cache.tier);
 }
 
 /**

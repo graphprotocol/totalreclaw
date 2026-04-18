@@ -13,7 +13,13 @@
  *   npx tsx config.test.ts
  */
 
-import { resolveTuning, CONFIG, __internal } from './config.js';
+import {
+  resolveTuning,
+  CONFIG,
+  __internal,
+  setChainIdOverride,
+  __resetChainIdOverrideForTests,
+} from './config.js';
 
 let passed = 0;
 let failed = 0;
@@ -131,6 +137,36 @@ function assertEq<T>(actual: T, expected: T, name: string): void {
   );
 
   delete process.env.TOTALRECLAW_CHAIN_ID;
+}
+
+// ---------------------------------------------------------------------------
+// Chain ID auto-detect override
+//
+// Regression test for the P0 latent bug where Pro-tier users would sign
+// UserOps against chain 84532 (Base Sepolia) while the relay routed their
+// writes to chain 100 (Gnosis mainnet). The bundler would reject the sig
+// with AA23. Fix: CONFIG.chainId is a getter that reads a runtime override
+// set from the billing response. See syncChainIdFromTier in index.ts.
+// ---------------------------------------------------------------------------
+
+{
+  __resetChainIdOverrideForTests();
+  assertEq(CONFIG.chainId, 84532, 'chainId: defaults to 84532 with no override');
+
+  setChainIdOverride(100);
+  assertEq(CONFIG.chainId, 100, 'chainId: reflects Pro tier override (Gnosis)');
+
+  setChainIdOverride(84532);
+  assertEq(CONFIG.chainId, 84532, 'chainId: reflects Free tier override (Base Sepolia)');
+
+  // Pro → Free downgrade flow: override flips back correctly.
+  setChainIdOverride(100);
+  assertEq(CONFIG.chainId, 100, 'chainId: Pro override set');
+  setChainIdOverride(84532);
+  assertEq(CONFIG.chainId, 84532, 'chainId: downgrade to Free flips override back');
+
+  __resetChainIdOverrideForTests();
+  assertEq(CONFIG.chainId, 84532, 'chainId: reset returns to 84532 default');
 }
 
 // ---------------------------------------------------------------------------

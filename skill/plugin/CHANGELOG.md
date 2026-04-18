@@ -4,6 +4,28 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.4] — 2026-04-18
+
+### Fixed
+
+- **Pro-tier UserOp signatures now sign against chain 100 (Gnosis).** Before this
+  release, `CONFIG.chainId` was a hardcoded literal `84532`, so Pro-tier writes
+  were signed for Base Sepolia even though the relay routed them to Gnosis
+  mainnet. The bundler rejected the signature with AA23 — a silent failure
+  where every `remember()` looked OK but nothing landed on-chain. There are no
+  Pro users in production today, so this never hit a user, but any Pro upgrade
+  would have broken every subsequent write. (Hermes Gap 2 equivalent — same
+  root cause as the Python client bug fixed in `totalreclaw` 2.0.2.)
+- `CONFIG.chainId` is now a getter that reads a runtime override set from the
+  billing response. `syncChainIdFromTier(tier)` is called on every
+  `writeBillingCache` / `readBillingCache` so the chain flips to 100 for Pro
+  tier and stays at 84532 for Free. All existing `getSubgraphConfig()` call
+  sites pick up the correct chain automatically because they read
+  `CONFIG.chainId` at call time, not at module load.
+- Added 6 regression tests in `config.test.ts` covering the default, the
+  Pro-tier flip, the Free-tier default, the Pro→Free downgrade path, and the
+  test reset helper. Full config suite: 27/27 passing.
+
 ## [3.0.0] — 2026-04-18
 
 Major release adopting **Memory Taxonomy v1** and **Retrieval v2 Tier 1** source-weighted reranking — now the DEFAULT and ONLY extraction path.
