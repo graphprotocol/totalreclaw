@@ -761,7 +761,7 @@ export async function detectAndResolveContradictions(
   const thresholdUpper =
     typeof weightsFile.threshold_upper === 'number' ? weightsFile.threshold_upper : 0.85;
 
-  // Fetch + decrypt candidates.
+  // Retrieve + decrypt candidates.
   let candidates: CandidateClaim[];
   try {
     candidates = await collectCandidatesForEntities(
@@ -775,7 +775,7 @@ export async function detectAndResolveContradictions(
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`Contradiction: candidate fetch failed: ${msg}`);
+    logger.warn(`Contradiction: candidate retrieval failed: ${msg}`);
     return [];
   }
   if (candidates.length === 0) return [];

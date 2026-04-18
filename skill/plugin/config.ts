@@ -76,7 +76,7 @@ export const CONFIG = {
 
   // Chain — chainId is no longer user-configurable. It is auto-detected from
   // the relay billing response (free = Base Sepolia / 84532, Pro = Gnosis /
-  // 100). The default here is used only before the first billing fetch
+  // 100). The default here is used only before the first billing lookup
   // completes. Self-hosted users can still point at a custom DataEdge via
   // TOTALRECLAW_DATA_EDGE_ADDRESS / TOTALRECLAW_ENTRYPOINT_ADDRESS /
   // TOTALRECLAW_RPC_URL (undocumented; internal knobs).

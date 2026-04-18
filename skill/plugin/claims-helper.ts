@@ -174,7 +174,7 @@ export interface BuildClaimV1Input {
  *
  * Plugin-only extras (not round-tripped by core's validator as of v2.0.0):
  *   - `schema_version` — version marker the decrypt path reads
- *   - `volatility` — stable | updatable | ephemeral (post-extraction rescore)
+ *   - `volatility` — stable | updatable | ephemeral (re-scored after extraction)
  *
  * The outer protobuf wrapper's `version` field must be set to 4 when storing
  * the returned payload (see subgraph-store.ts).
