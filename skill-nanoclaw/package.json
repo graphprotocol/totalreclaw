@@ -43,7 +43,11 @@
   },
   "files": [
     "dist",
+    "mcp",
     "manifest.yaml",
     "SKILL.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }
