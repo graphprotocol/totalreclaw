@@ -57,26 +57,28 @@ Before you begin, make sure you have:
 
 **For MCP users (Claude Desktop / Cursor):** Skip to [Section 11](#11-mcp-server-setup-claude-desktop--cursor) for the fastest setup path.
 
-### Install the OpenClaw Skill
+### Install the OpenClaw Plugin
 
-The easiest way is to tell your OpenClaw agent:
-
-> "Install the TotalReclaw skill from ClawHub"
-
-Or via terminal:
-
-```
-openclaw skills install totalreclaw
-```
-
-The skill registers itself with the ID `totalreclaw` and sets up automatically on first run. Verify it appears in your OpenClaw skill list -- you should see **TotalReclaw** described as "End-to-end encrypted memory vault for AI agents."
-
-<details>
-<summary>Alternative: install via npm</summary>
+The quickest path is a single command that pulls the plugin from npm:
 
 ```
 openclaw plugins install @totalreclaw/totalreclaw
 ```
+
+This registers the plugin with your gateway under the ID `totalreclaw` and sets it up automatically on first run. Verify it appears in your OpenClaw skill/plugin list -- you should see **TotalReclaw** described as "End-to-end encrypted memory vault for AI agents."
+
+<details>
+<summary>Alternative: install from source (ClawHub + local path)</summary>
+
+```
+openclaw skills install totalreclaw
+openclaw plugins install ~/.openclaw/workspace/skills/totalreclaw
+```
+
+`openclaw skills install` pulls the plugin source from ClawHub into your workspace skills directory, then `openclaw plugins install <local-path>` registers it with your gateway. Use this path if the npm install fails or if you want to pin a specific ClawHub version.
+
+You can also ask your OpenClaw agent: *"Install the TotalReclaw skill from ClawHub"*.
+
 </details>
 
 ---

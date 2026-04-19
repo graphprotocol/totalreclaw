@@ -6,10 +6,26 @@ TotalReclaw gives your OpenClaw agent encrypted, persistent memory. Facts, prefe
 
 ## Install
 
+The quickest path -- one command, install from npm:
+
+```bash
+openclaw plugins install @totalreclaw/totalreclaw
+```
+
+<details>
+<summary>Alternative: install from source (ClawHub + local path)</summary>
+
 ```bash
 openclaw skills install totalreclaw
 openclaw plugins install ~/.openclaw/workspace/skills/totalreclaw
 ```
+
+`openclaw skills install` pulls the plugin source from ClawHub into your
+workspace skills directory, then `openclaw plugins install <local-path>`
+registers it with your gateway. Use this path if the npm install fails
+or if you want to pin a specific ClawHub version.
+
+</details>
 
 Then start a conversation and tell your agent:
 
