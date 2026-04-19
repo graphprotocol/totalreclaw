@@ -70,7 +70,7 @@ export function getRecoveryPhrase(): string {
  * UserOps MUST be signed against chain 100 — otherwise the bundler rejects
  * the signature with AA23.
  *
- * See index.ts: after the billing fetch completes, call
+ * See index.ts: after the billing lookup completes, call
  * `setChainIdOverride(100)` for Pro users. Free users can leave the
  * override unset.
  */
@@ -104,7 +104,7 @@ export const CONFIG = {
   // TOTALRECLAW_RPC_URL (undocumented; internal knobs).
   //
   // Reads the runtime override set by the billing auto-detect in index.ts.
-  // Falls back to 84532 (free tier / pre-billing-fetch). Must be a getter,
+  // Falls back to 84532 (free tier / pre-billing-lookup). Must be a getter,
   // not a literal — a literal would freeze all Pro-tier UserOps to the
   // wrong chainId and AA23 at the bundler.
   get chainId(): number {

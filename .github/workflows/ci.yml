@@ -45,6 +45,12 @@ jobs:
       - name: Install dependencies
         run: cd skill/plugin && rm -f package-lock.json && npm install --legacy-peer-deps
 
+      # Simulate OpenClaw's `env-harvesting` scanner rule so a JSDoc comment
+      # with "fetch" in a file that reads process.env never makes it to
+      # ClawHub again. See docs/notes/INVESTIGATION-OPENCLAW-SCANNER-*.
+      - name: Scanner-sim (env-harvesting false-positive check)
+        run: node skill/scripts/check-scanner.mjs
+
   mcp-tests:
     name: MCP Server Tests
     runs-on: ubuntu-latest

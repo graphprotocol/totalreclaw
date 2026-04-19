@@ -4,6 +4,24 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.5] — 2026-04-19
+
+### Fixed
+
+- **OpenClaw scanner false-positive on `openclaw plugins install`.** 3.0.4
+  centralized `process.env` reads into `config.ts` so no other file tripped
+  the built-in `env-harvesting` rule — but two JSDoc/inline comments in
+  `config.ts` itself used the word "fetch" ("billing fetch completes" at
+  line 73 and "pre-billing-fetch" at line 107), which re-trips the rule
+  (`process.env` + case-insensitive `\bfetch\b` in the same file →
+  installation blocked). Reworded both to "lookup". No runtime behavior
+  change. See `docs/notes/INVESTIGATION-OPENCLAW-SCANNER-EXEMPTION-20260418.md`
+  for the full investigation.
+- Added `skill/scripts/check-scanner.mjs` + wired it into `ci.yml` and
+  `publish-clawhub.yml` so any future file that reads `process.env` AND
+  contains `fetch`/`post`/`http.request` (even in a comment) fails CI
+  before it can reach ClawHub.
+
 ## [3.0.4] — 2026-04-18
 
 ### Fixed

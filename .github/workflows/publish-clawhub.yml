@@ -34,6 +34,14 @@ jobs:
         with:
           node-version: '22'
 
+      # Block the publish if any plugin file would trip OpenClaw's
+      # `env-harvesting` scanner rule. Cheaper to fail here than to ship a
+      # broken plugin to ClawHub and have new users hit "installation blocked"
+      # on `openclaw plugins install ~/.openclaw/workspace/skills/totalreclaw`.
+      # See docs/notes/INVESTIGATION-OPENCLAW-SCANNER-*.
+      - name: Scanner-sim (env-harvesting false-positive check)
+        run: node skill/scripts/check-scanner.mjs
+
       - name: Install ClawHub CLI
         run: npm install -g clawhub
 

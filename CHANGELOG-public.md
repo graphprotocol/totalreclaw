@@ -1,5 +1,9 @@
 # TotalReclaw Changelog
 
+## plugin v3.0.5 (April 2026)
+- Fix OpenClaw scanner false-positive from JSDoc "fetch" wording in `config.ts`. No behavior change.
+- Added `scanner-sim` CI check to prevent regressions.
+
 ## v1.0-beta (March 2026) -- Private Beta
 - End-to-end encrypted memory vault for AI agents (AES-256-GCM, HKDF key derivation)
 - Dual-chain storage: Free tier on Base Sepolia testnet, Pro tier on Gnosis mainnet

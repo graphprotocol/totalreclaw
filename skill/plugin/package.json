@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/totalreclaw",
-  "version": "3.0.4",
+  "version": "3.0.5",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. Automatic extraction, semantic search, and on-chain storage",
   "type": "module",
   "keywords": [
@@ -40,6 +40,10 @@
     "CLAWHUB.md",
     "skill.json"
   ],
+  "scripts": {
+    "check-scanner": "node ../scripts/check-scanner.mjs",
+    "prepublishOnly": "node ../scripts/check-scanner.mjs"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
