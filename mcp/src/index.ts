@@ -97,6 +97,10 @@ import {
 } from './subgraph/store.js';
 import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, fetchFactById } from './subgraph/search.js';
 import {
+  detectAndResolveContradictions,
+  type ResolutionDecision,
+} from './contradiction-sync.js';
+import {
   pinToolDefinition,
   unpinToolDefinition,
   handlePin,
@@ -750,6 +754,109 @@ async function handleRememberSubgraph(
         reasoning: item.reasoning,
         importance: effectiveImportance,
       });
+
+      // Build the fact id up-front so contradiction detection can reference it.
+      const factId = crypto.randomUUID();
+
+      // Phase 2 Slice 2d: contradiction detection + auto-resolution.
+      //
+      // Mirrors the plugin's pattern at `skill/plugin/index.ts:1661-1754`. Runs
+      // only when the new claim has entities (the core contradiction primitive
+      // is entity-anchored), and only emits decisions when Rust core's
+      // `resolve_with_candidates` identifies a contradiction in the
+      // [threshold_lower, threshold_upper) similarity band.
+      //
+      // Pin respect is handled inside the Rust core via
+      // `respect_pin_in_resolution` — when an existing claim's status is
+      // pinned, the action emitted is `skip_new` with reason `existing_pinned`
+      // and the new write is dropped.
+      //
+      // Returns one decision per candidate contradicting claim:
+      //   - supersede_existing → queue a tombstone + proceed with the new write
+      //   - skip_new → do not write the new fact; record the skip reason
+      //   - empty list → no contradiction, proceed unchanged
+      //
+      // Never throws: on any error (subgraph, decrypt, WASM), returns [] and
+      // falls back to pre-Phase-2 behaviour.
+      let contradictionSkipNew = false;
+      try {
+        const newClaimObj = JSON.parse(blobPlaintext) as Record<string, unknown>;
+        const authKeyHex = Buffer.from(state.authKey).toString('hex');
+        const decisions: ResolutionDecision[] = await detectAndResolveContradictions({
+          newClaim: newClaimObj,
+          newClaimId: factId,
+          newEmbedding: embedding,
+          subgraphOwner: state.smartAccountAddress,
+          authKeyHex,
+          encryptionKey: state.encryptionKey,
+          deps: {
+            searchSubgraph: (owner, trapdoors, maxCandidates, authKey) =>
+              searchSubgraph(owner, trapdoors, maxCandidates, state.serverUrl, authKey).then((rows) =>
+                rows.map((r) => ({
+                  id: r.id,
+                  encryptedBlob: r.encryptedBlob,
+                  encryptedEmbedding: r.encryptedEmbedding ?? null,
+                  timestamp: r.timestamp,
+                  isActive: r.isActive,
+                })),
+              ),
+            decryptFromHex: (hex, key) => {
+              const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
+              const base64 = Buffer.from(clean, 'hex').toString('base64');
+              return decrypt(base64, key);
+            },
+          },
+          logger: {
+            info: (m) => console.error(m),
+            warn: (m) => console.error(m),
+          },
+        });
+
+        for (const decision of decisions) {
+          if (decision.action === 'supersede_existing') {
+            const tombstonePayload: FactPayload = {
+              id: decision.existingFactId,
+              timestamp: new Date().toISOString(),
+              owner: state.smartAccountAddress,
+              encryptedBlob: Buffer.from('tombstone').toString('hex'),
+              blindIndices: [],
+              decayScore: 0,
+              source: 'mcp_contradiction',
+              contentFp: '',
+              agentId: 'mcp-server',
+            };
+            pendingPayloads.push(encodeFactProtobuf(tombstonePayload));
+            console.error(
+              `Auto-resolve: queued supersede for ${decision.existingFactId.slice(0, 10)}… ` +
+                `(sim=${decision.similarity.toFixed(3)}, entity=${decision.entityId})`,
+            );
+          } else if (decision.action === 'skip_new') {
+            if (decision.reason === 'existing_pinned') {
+              console.error(
+                `Auto-resolve: skipped new write — existing claim ${decision.existingFactId.slice(0, 10)}… is pinned ` +
+                  `(sim=${decision.similarity.toFixed(3)}, entity=${decision.entityId})`,
+              );
+            } else {
+              console.error(
+                `Auto-resolve: skipped new write — existing ${decision.existingFactId.slice(0, 10)}… wins ` +
+                  `(sim=${decision.similarity.toFixed(3)}, entity=${decision.entityId})`,
+              );
+            }
+            contradictionSkipNew = true;
+          }
+        }
+      } catch (crErr) {
+        // detectAndResolveContradictions is supposed to never throw — if it
+        // does, we log and continue with pre-Phase-2 behaviour.
+        const msg = crErr instanceof Error ? crErr.message : String(crErr);
+        console.error(`Contradiction detection failed (proceeding with store): ${msg}`);
+      }
+
+      if (contradictionSkipNew) {
+        results.push({ success: true, fact_id: factId, action: 'skipped_contradiction' });
+        continue;
+      }
+
       const encryptedBlob = encrypt(blobPlaintext, state.encryptionKey);
 
       // 5. Generate content fingerprint for dedup (over plaintext text, not blob)
@@ -759,7 +866,6 @@ async function handleRememberSubgraph(
       const encryptedEmb = encryptEmbedding(embedding, state.encryptionKey);
 
       // 7. Build fact payload
-      const factId = crypto.randomUUID();
       const factPayload: FactPayload = {
         id: factId,
         timestamp: new Date().toISOString(),
