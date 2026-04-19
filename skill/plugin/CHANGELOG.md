@@ -4,6 +4,16 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0-canary.0] — 2026-04-20
+
+Canary build of 3.1.0 for ClawHub scanner validation. **Not for production.**
+Source-identical to 3.1.0; only `package.json` `name` / `version` /
+`description` differ. Published as `@totalreclaw/totalreclaw-canary` to
+probe ClawHub's multi-layer publish pipeline (`runStaticPublishScan` +
+VirusTotal `vtAnalysis` + LLM `llmAnalysis`) without risking a taint on
+the real `totalreclaw` slug. This branch
+(`plugin-canary-clawhub-scan-test`) does not merge to `main`.
+
 ## [3.1.0] — 2026-04-20
 
 Runtime fixes surfaced by the first auto-QA run against an RC artifact

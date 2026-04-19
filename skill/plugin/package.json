@@ -1,7 +1,7 @@
 {
-  "name": "@totalreclaw/totalreclaw",
-  "version": "3.1.0",
-  "description": "End-to-end encrypted, agent-portable memory for OpenClaw and any LLM-agent runtime. XChaCha20-Poly1305 with protobuf v4 + on-chain Memory Taxonomy v1 (claim / preference / directive / commitment / episode / summary).",
+  "name": "@totalreclaw/totalreclaw-canary",
+  "version": "3.1.0-canary.0",
+  "description": "Canary build of @totalreclaw/totalreclaw for ClawHub scanner validation. Do not install in production. Source-identical to 3.1.0; only package name/version/description differ so we can probe ClawHub's multi-layer publish pipeline (static + VirusTotal + LLM) without tainting the real `totalreclaw` slug.",
   "type": "module",
   "keywords": [
     "totalreclaw",
