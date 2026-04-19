@@ -1,6 +1,6 @@
 [package]
 name = "totalreclaw-memory"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2021"
 description = "TotalReclaw memory backend — E2EE crypto, LSH, embeddings, reranker (Memory Taxonomy v1)"
 license = "MIT"
@@ -16,7 +16,7 @@ local-embeddings = ["dep:ort", "dep:tokenizers"]
 
 [dependencies]
 # Core crypto primitives (shared with WASM/PyO3 builds)
-totalreclaw-core = { path = "../totalreclaw-core", version = "2.0" }
+totalreclaw-core = { path = "../totalreclaw-core", version = "^2.1.0" }
 
 # BIP-39 + CSPRNG (used by setup.rs for mnemonic generation)
 bip39 = "2"

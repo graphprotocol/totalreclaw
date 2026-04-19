@@ -21,6 +21,7 @@
 //! - [`hotcache`] — Generic in-memory hot cache for semantic query dedup (no WASM binding)
 //! - [`consolidation`] — Store-time near-duplicate detection + supersede logic
 //! - [`smart_import`] — Smart import profiling (prompt construction + response parsing)
+//! - [`memory_types`] — Memory Taxonomy v1 string-level constants + runtime guard
 
 pub mod blind;
 pub mod claims;
@@ -34,6 +35,7 @@ pub mod debrief;
 pub mod fingerprint;
 pub mod hotcache;
 pub mod lsh;
+pub mod memory_types;
 pub mod protobuf;
 pub mod reranker;
 pub mod smart_import;

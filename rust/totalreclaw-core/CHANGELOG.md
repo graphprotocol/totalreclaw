@@ -5,6 +5,43 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-04-19
+
+### Added
+
+- **Memory Taxonomy v1 string-level exports** — the six canonical v1 memory
+  types and their compact-category mapping are now first-class exports of
+  core, eliminating client-side duplication (previously mirrored in
+  `skill/plugin/extractor.ts`, `mcp/src/memory-types.ts`,
+  `mcp/src/v1-types.ts`, `skill-nanoclaw/src/extraction/prompts.ts`, and
+  `python/src/totalreclaw/agent/extraction.py`). New module
+  [`memory_types`](./src/memory_types.rs) exposes:
+  - `VALID_MEMORY_TYPES: [&str; 6]` — the closed enum in spec order
+    (`claim, preference, directive, commitment, episode, summary`).
+  - `TYPE_TO_CATEGORY: &[(&str, &str)]` — long-form v1 type → compact
+    display short key used by the on-chain `c` field and recall tags.
+  - `is_valid_memory_type(&str) -> bool` — case-sensitive runtime guard.
+  - `map_type_to_category(&str) -> Option<&'static str>` — lookup helper.
+- **WASM bindings** (feature `wasm`): `getValidMemoryTypes`,
+  `getTypeToCategory`, `mapTypeToCategory`, `isValidMemoryType`.
+- **PyO3 bindings** (feature `python`): `get_valid_memory_types`,
+  `get_type_to_category`, `py_map_type_to_category`,
+  `py_is_valid_memory_type`.
+
+### Notes / Compatibility
+
+- The existing internal `MemoryTypeV1` enum in `claims.rs` is unchanged;
+  tests in `memory_types::tests` guard against drift between the enum
+  variants and the new string-level exports. Clients that already wire
+  through `parseMemoryTypeV1` / `parse_memory_type_v1` continue to work
+  without modification.
+- No breaking changes. Minor-version bump.
+
+### References
+
+- Backlog: [Tier 2 items #5, #6, #8](../../docs/plans/core-hoist-backlog.md)
+- Audit: `docs/notes/ROADMAP-AUDIT-20260419.md` (internal) §7.1 Agent A
+
 ## [2.0.0] - 2026-04-17
 
 ### Added

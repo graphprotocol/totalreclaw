@@ -1,5 +1,18 @@
 # Changelog — totalreclaw-memory (ZeroClaw)
 
+## 2.0.1 — 2026-04-19
+
+Patch release: tracks `totalreclaw-core` bump to 2.1.0. No behavioural
+changes in ZeroClaw itself; rebuild picks up the new string-level v1
+taxonomy exports (`VALID_MEMORY_TYPES`, `TYPE_TO_CATEGORY`,
+`is_valid_memory_type`) transitively via the core dependency.
+
+### Changed
+
+- `totalreclaw-core` dependency tightened from `"2.0"` to `"^2.1.0"` to
+  pull in the Tier 2 hoist additions. No API surface change in
+  `totalreclaw-memory`.
+
 ## 2.0.0 — 2026-04-18
 
 Memory Taxonomy v1 lands in the ZeroClaw Rust backend. The legacy v0

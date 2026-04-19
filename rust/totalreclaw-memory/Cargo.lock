@@ -3199,7 +3199,7 @@ dependencies = [
 
 [[package]]
 name = "totalreclaw-core"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -3225,7 +3225,7 @@ dependencies = [
 
 [[package]]
 name = "totalreclaw-memory"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "base64 0.22.1",
  "bip39",
