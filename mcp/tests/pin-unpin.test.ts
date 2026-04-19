@@ -200,7 +200,7 @@ describe('executePinOperation — pin', () => {
     expect(deps._submitted).toHaveLength(0);
   });
 
-  test('new blob on-chain is valid canonical Claim with status=pinned', async () => {
+  test('new blob on-chain is valid v1.1 MemoryClaim with pin_status=pinned', async () => {
     const activeBlob = buildFixtureClaim('a');
     let capturedNewBlobPlaintext: string | null = null;
     const deps = makeDeps({
@@ -217,11 +217,17 @@ describe('executePinOperation — pin', () => {
 
     expect(capturedNewBlobPlaintext).not.toBeNull();
     const parsed = JSON.parse(capturedNewBlobPlaintext!);
-    expect(parsed.t).toBe('prefers coffee over tea');
-    expect(parsed.c).toBe('pref');
-    expect(parsed.st).toBe('p');
-    // supersedes link points to the old fact id
-    expect(parsed.sup).toBe('old-id');
+    // v1.1 canonical fields — long-form, schema_version 1.0, pin_status.
+    expect(parsed.text).toBe('prefers coffee over tea');
+    expect(parsed.type).toBe('preference');
+    expect(parsed.schema_version).toBe('1.0');
+    expect(parsed.pin_status).toBe('pinned');
+    expect(parsed.superseded_by).toBe('old-id');
+    // v0 short-key fields MUST NOT leak.
+    expect(parsed.t).toBeUndefined();
+    expect(parsed.c).toBeUndefined();
+    expect(parsed.st).toBeUndefined();
+    expect(parsed.sup).toBeUndefined();
   });
 
   test('pin works on a legacy {text, metadata} blob', async () => {
@@ -245,10 +251,14 @@ describe('executePinOperation — pin', () => {
     expect(result.success).toBe(true);
     expect(result.previous_status).toBe('active');
     expect(result.new_status).toBe('pinned');
-    // Output is a canonical Claim now
+    // v1.1 output: legacy blob is UPGRADED to v1.
     const parsed = JSON.parse(capturedPlaintext!);
-    expect(parsed.t).toBe('lives in Lisbon');
-    expect(parsed.st).toBe('p');
+    expect(parsed.text).toBe('lives in Lisbon');
+    expect(parsed.schema_version).toBe('1.0');
+    expect(parsed.pin_status).toBe('pinned');
+    expect(parsed.superseded_by).toBe('legacy-id');
+    // v0 legacy type "fact" → v1 type "claim".
+    expect(parsed.type).toBe('claim');
   });
 
   test('stores reason in metadata when provided (does not affect canonical blob)', async () => {
@@ -288,11 +298,15 @@ describe('executePinOperation — unpin', () => {
     expect(result.new_fact_id).toBeDefined();
     expect(result.new_fact_id).not.toBe('pinned-id');
 
-    // New blob has no "st" field (status=active is the default, omitted)
+    // v1.1 unpin: explicit pin_status=unpinned, superseded_by on v1 field.
     expect(capturedPlaintext).not.toBeNull();
     const parsed = JSON.parse(capturedPlaintext!);
+    expect(parsed.schema_version).toBe('1.0');
+    expect(parsed.pin_status).toBe('unpinned');
+    expect(parsed.superseded_by).toBe('pinned-id');
+    // v0 short-key fields MUST NOT leak.
     expect(parsed.st).toBeUndefined();
-    expect(parsed.sup).toBe('pinned-id');
+    expect(parsed.sup).toBeUndefined();
 
     // Submitted 2 payloads
     expect(deps._submitted[0]).toHaveLength(2);
@@ -628,5 +642,147 @@ describe('Slice 2f: executePinOperation writes feedback on override', () => {
     const fb = JSON.parse(content.split('\n').filter((l) => l.length > 0)[0]) as FeedbackEntry;
     expect(fb.user_decision).toBe('pin_b');
     expect(fb.claim_b_id).toBe('was-winner');
+  });
+});
+
+// ─── v1.1 pin_status end-to-end ──────────────────────────────────────────────
+
+describe('executePinOperation — v1.1 pin_status', () => {
+  function buildV1Blob(overrides: Partial<Record<string, unknown>> = {}): string {
+    const base = {
+      id: '01900000-0000-7000-8000-000000000099',
+      text: 'prefers PostgreSQL over MongoDB for transactional workloads',
+      type: 'preference',
+      source: 'user',
+      created_at: '2026-04-19T10:00:00.000Z',
+      schema_version: '1.0',
+      scope: 'work',
+      volatility: 'stable',
+      importance: 9,
+      confidence: 0.95,
+    };
+    return JSON.stringify({ ...base, ...overrides });
+  }
+
+  test('pin on v1 blob preserves all v1 fields + sets pin_status=pinned', async () => {
+    const v1Blob = buildV1Blob({
+      reasoning: 'ACID guarantees matter for OrbitLedger',
+    });
+    let capturedPlaintext: string | null = null;
+    const deps = makeDeps({
+      async fetchFactById(id) { return makeFact(id, v1Blob); },
+      encryptBlob(plaintext: string) {
+        capturedPlaintext = plaintext;
+        return Buffer.from(plaintext, 'utf-8').toString('hex');
+      },
+    });
+    const result = await executePinOperation('v1-src', 'pinned', deps);
+    expect(result.success).toBe(true);
+    const parsed = JSON.parse(capturedPlaintext!);
+    expect(parsed.schema_version).toBe('1.0');
+    expect(parsed.pin_status).toBe('pinned');
+    expect(parsed.type).toBe('preference');
+    expect(parsed.source).toBe('user');
+    expect(parsed.scope).toBe('work');
+    expect(parsed.volatility).toBe('stable');
+    expect(parsed.reasoning).toContain('ACID');
+    expect(parsed.superseded_by).toBe('v1-src');
+    expect(parsed.t).toBeUndefined();
+    expect(parsed.st).toBeUndefined();
+  });
+
+  test('unpin on v1 pinned blob → pin_status=unpinned', async () => {
+    const v1PinnedBlob = buildV1Blob({
+      type: 'directive',
+      pin_status: 'pinned',
+    });
+    let capturedPlaintext: string | null = null;
+    const deps = makeDeps({
+      async fetchFactById(id) { return makeFact(id, v1PinnedBlob); },
+      encryptBlob(plaintext: string) {
+        capturedPlaintext = plaintext;
+        return Buffer.from(plaintext, 'utf-8').toString('hex');
+      },
+    });
+    const result = await executePinOperation('v1-pinned', 'active', deps);
+    expect(result.success).toBe(true);
+    expect(result.previous_status).toBe('pinned');
+    expect(result.new_status).toBe('active');
+    const parsed = JSON.parse(capturedPlaintext!);
+    expect(parsed.pin_status).toBe('unpinned');
+    expect(parsed.type).toBe('directive');
+    expect(parsed.superseded_by).toBe('v1-pinned');
+  });
+
+  test('idempotent pin on v1.1 pinned blob → no on-chain write', async () => {
+    const v1PinnedBlob = buildV1Blob({ pin_status: 'pinned' });
+    const deps = makeDeps({
+      async fetchFactById(id) { return makeFact(id, v1PinnedBlob); },
+    });
+    const result = await executePinOperation('already-pinned-v1', 'pinned', deps);
+    expect(result.success).toBe(true);
+    expect(result.idempotent).toBe(true);
+    expect(deps._submitted).toHaveLength(0);
+  });
+
+  test('cross-impl parity: canonical field shape matches plugin output', async () => {
+    const v1Source = buildV1Blob({
+      // Minimal shape used by the plugin parity test.
+      text: 'cross-client parity test',
+      type: 'claim',
+      source: 'user',
+      scope: undefined,
+      volatility: undefined,
+      importance: undefined,
+      confidence: undefined,
+    });
+    let capturedPlaintext: string | null = null;
+    const deps = makeDeps({
+      async fetchFactById(id) { return makeFact(id, v1Source); },
+      encryptBlob(plaintext: string) {
+        capturedPlaintext = plaintext;
+        return Buffer.from(plaintext, 'utf-8').toString('hex');
+      },
+    });
+    await executePinOperation('parity-src', 'pinned', deps);
+    const parsed = JSON.parse(capturedPlaintext!);
+    // Required v1 fields present.
+    expect(typeof parsed.id).toBe('string');
+    expect(typeof parsed.text).toBe('string');
+    expect(typeof parsed.type).toBe('string');
+    expect(typeof parsed.source).toBe('string');
+    expect(typeof parsed.created_at).toBe('string');
+    expect(parsed.schema_version).toBe('1.0');
+    expect(parsed.pin_status).toBe('pinned');
+    expect(parsed.superseded_by).toBe('parity-src');
+    // No v0 leak.
+    expect(parsed.t).toBeUndefined();
+    expect(parsed.c).toBeUndefined();
+    expect(parsed.st).toBeUndefined();
+    expect(parsed.sup).toBeUndefined();
+  });
+
+  test('v1 source with entities round-trips entities on pin', async () => {
+    const v1WithEntities = buildV1Blob({
+      entities: [
+        { name: 'PostgreSQL', type: 'tool', role: 'chosen' },
+        { name: 'OrbitLedger', type: 'company' },
+      ],
+    });
+    let capturedPlaintext: string | null = null;
+    const deps = makeDeps({
+      async fetchFactById(id) { return makeFact(id, v1WithEntities); },
+      encryptBlob(plaintext: string) {
+        capturedPlaintext = plaintext;
+        return Buffer.from(plaintext, 'utf-8').toString('hex');
+      },
+    });
+    await executePinOperation('v1-entities', 'pinned', deps);
+    const parsed = JSON.parse(capturedPlaintext!);
+    expect(Array.isArray(parsed.entities)).toBe(true);
+    expect(parsed.entities).toHaveLength(2);
+    expect(parsed.entities[0].name).toBe('PostgreSQL');
+    expect(parsed.entities[0].type).toBe('tool');
+    expect(parsed.entities[0].role).toBe('chosen');
   });
 });

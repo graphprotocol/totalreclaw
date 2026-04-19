@@ -1,6 +1,6 @@
 [package]
 name = "totalreclaw-core"
-version = "2.1.0"
+version = "2.1.1"
 edition = "2021"
 description = "TotalReclaw core — E2EE crypto, reranker, wallet, UserOp, store/search pipelines. Single source of truth for all clients."
 license = "MIT"

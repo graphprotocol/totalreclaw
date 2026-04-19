@@ -466,6 +466,27 @@ fn py_parse_memory_source(s: &str) -> String {
         .to_string()
 }
 
+/// Case-insensitive parse of a v1.1 pin_status string. Unknown input returns "unpinned".
+#[pyfunction]
+#[pyo3(name = "parse_pin_status")]
+fn py_parse_pin_status(s: &str) -> String {
+    let st = crate::claims::PinStatus::from_str_lossy(s);
+    serde_json::to_string(&st)
+        .unwrap_or_else(|_| "\"unpinned\"".to_string())
+        .trim_matches('"')
+        .to_string()
+}
+
+/// Check whether a JSON-encoded claim is pinned.
+///
+/// Recognises both the v0 short-key sentinel (``st == "p"``) and the v1.1
+/// field (``pin_status == "pinned"``). Returns ``False`` on any parse failure.
+#[pyfunction]
+#[pyo3(name = "is_pinned_claim_json")]
+fn py_is_pinned_claim_json(claim_json: &str) -> bool {
+    crate::claims::is_pinned_json(claim_json)
+}
+
 /// Cosine similarity between two f32 vectors.
 ///
 /// Args:
@@ -1502,6 +1523,8 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_validate_memory_claim_v1, m)?)?;
     m.add_function(wrap_pyfunction!(py_parse_memory_type_v1, m)?)?;
     m.add_function(wrap_pyfunction!(py_parse_memory_source, m)?)?;
+    m.add_function(wrap_pyfunction!(py_parse_pin_status, m)?)?;
+    m.add_function(wrap_pyfunction!(py_is_pinned_claim_json, m)?)?;
     m.add_function(wrap_pyfunction!(py_cosine_similarity, m)?)?;
 
     // Wallet derivation

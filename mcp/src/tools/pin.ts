@@ -1,10 +1,28 @@
-/** Pin/unpin tools for TotalReclaw MCP server — Slice 2e-mcp, Phase 2. */
+/** Pin/unpin tools for TotalReclaw MCP server — v1.1 taxonomy.
+ *
+ * As of core 2.1.1 / MCP 3.2.0 (2026-04-19) the pin/unpin operation emits
+ * a canonical v1.1 MemoryClaimV1 JSON blob (schema_version "1.0", additive
+ * `pin_status` field) wrapped in the outer protobuf at `version = 4`. The
+ * prior behavior — emitting v0 short-key blobs — broke the v1 on-chain
+ * contract (RC QA bug #2). v0 blobs continue to READ correctly via
+ * parseBlobForPin's fallback, so mixed-version vaults stay uniform from the
+ * user's point of view.
+ */
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { buildV1ClaimBlob, readBlobUnified, type PinStatus } from '../claims-helper.js';
 import { findLoserClaimInDecisionLog } from '../decision-log-reader.js';
+import type {
+  MemoryTypeV1,
+  MemorySource,
+  MemoryScope,
+  MemoryVolatility,
+  MemoryEntityV1,
+} from '../v1-types.js';
+import { LEGACY_TYPE_TO_V1 } from '../v1-types.js';
 import type { SubgraphSearchFact } from '../subgraph/search.js';
 import { encodeFactProtobuf } from '../subgraph/store.js';
 
@@ -301,7 +319,45 @@ export function parseBlobForPin(decrypted: string): ParsedBlob {
     };
   }
 
-  // New canonical Claim — short keys present
+  // v1.1+ payload: long-form `text` + `type` + schema_version "1.x".
+  //
+  // We detect pin status through the v1.1 `pin_status` field. The ParsedBlob
+  // return shape is the legacy short-key projection so existing callers that
+  // dereference `claim.t` / `claim.e` keep working — the actual REWRITE path
+  // in executePinOperation uses `plaintext` directly (re-parsed via
+  // projectToV1) so no data loss.
+  if (
+    typeof obj.text === 'string' &&
+    typeof obj.type === 'string' &&
+    typeof obj.schema_version === 'string' &&
+    obj.schema_version.startsWith('1.')
+  ) {
+    const rawPin = typeof obj.pin_status === 'string' ? obj.pin_status : undefined;
+    const human: HumanStatus = rawPin === 'pinned' ? 'pinned' : 'active';
+    // Build a v0-shape projection for legacy callers (tests, etc) that inspect
+    // `parsed.claim.t` / `parsed.claim.c`. Pin/unpin's rewrite path does NOT
+    // use this projection — it re-parses the plaintext via projectToV1().
+    const v1Type = String(obj.type);
+    const shortCategory = ((): string => {
+      const map: Record<string, string> = {
+        claim: 'claim', preference: 'pref', directive: 'rule',
+        commitment: 'goal', episode: 'epi', summary: 'sum',
+      };
+      return map[v1Type] ?? 'claim';
+    })();
+    const claimProjection: Record<string, unknown> = {
+      t: obj.text,
+      c: shortCategory,
+      cf: typeof obj.confidence === 'number' ? obj.confidence : 0.85,
+      i: typeof obj.importance === 'number' ? obj.importance : 5,
+      sa: typeof obj.source === 'string' ? obj.source : 'mcp-server',
+      ea: typeof obj.created_at === 'string' ? obj.created_at : new Date().toISOString(),
+    };
+    if (rawPin === 'pinned') claimProjection.st = 'p';
+    return { claim: claimProjection, currentStatus: human, isLegacy: false };
+  }
+
+  // v0 canonical Claim — short keys present.
   if (typeof obj.t === 'string' && typeof obj.c === 'string') {
     const st = typeof obj.st === 'string' ? obj.st : 'a';
     const human = SHORT_TO_HUMAN[st] ?? 'active';
@@ -354,6 +410,122 @@ function buildCanonicalObjectFromLegacy(
     i: importance,
     sa: source,
     ea: createdAt,
+  };
+}
+
+// ─── v1 projection for pin/unpin rewrite ──────────────────────────────────────
+
+/** Subset of v1 fields needed to drive `buildV1ClaimBlob`. */
+interface V1Projection {
+  text: string;
+  type: MemoryTypeV1;
+  source: MemorySource;
+  scope?: MemoryScope;
+  volatility?: MemoryVolatility;
+  reasoning?: string;
+  entities?: MemoryEntityV1[];
+  importance?: number;
+  confidence?: number;
+}
+
+/**
+ * Project a decrypted blob (v1 or v0 / legacy) into a v1 shape suitable for
+ * rebuilding via `buildV1ClaimBlob`. v1 blobs pass through their fields;
+ * v0 / legacy blobs are UPGRADED via the spec's legacy-mapping table
+ * (`fact|context|decision → claim`, `rule → directive`, `goal → commitment`).
+ *
+ * Mirrors `skill/plugin/pin.ts::projectToV1` — MCP + plugin produce the same
+ * v1 JSON for identical source blobs (cross-client parity).
+ */
+function projectToV1(
+  plaintext: string,
+  parsed: ParsedBlob,
+  defaultSourceAgent: string,
+): V1Projection {
+  // Fast path: try the unified reader. If the blob is v1 it returns the
+  // full surface; if it's v0 / legacy it returns only `{text, importance,
+  // category, metadata}` and we upgrade.
+  const unified = readBlobUnified(plaintext);
+  if (unified.v1) {
+    return {
+      text: unified.text,
+      type: unified.v1.type,
+      source: unified.v1.source,
+      scope: unified.v1.scope,
+      volatility: unified.v1.volatility,
+      reasoning: unified.v1.reasoning,
+      entities: unified.v1.entities,
+      importance: unified.importance,
+      confidence: unified.v1.confidence,
+    };
+  }
+
+  // v0 / legacy path — upgrade.
+  const v0Category = parsed.claim.c;
+  const v0TypeToken = ((): string => {
+    if (typeof v0Category !== 'string') return 'fact';
+    // Inverse of the v0 short-key → v0 type map.
+    const CATEGORY_TO_V0_TYPE: Record<string, string> = {
+      fact: 'fact',
+      pref: 'preference',
+      dec: 'decision',
+      epi: 'episodic',
+      goal: 'goal',
+      ctx: 'context',
+      sum: 'summary',
+      rule: 'rule',
+      ent: 'fact', // entity records don't round-trip; fall back
+      dig: 'summary',
+      claim: 'claim',
+    };
+    return CATEGORY_TO_V0_TYPE[v0Category] ?? 'fact';
+  })();
+  const v1Type: MemoryTypeV1 =
+    (LEGACY_TYPE_TO_V1[v0TypeToken] as MemoryTypeV1 | undefined) ?? 'claim';
+
+  // Heuristic: upgrade v0 `sa` (source agent) → v1 MemorySource.
+  // Legacy blobs don't carry real provenance; default "user-inferred" matches
+  // the core's Tier 1 fallback weight policy.
+  const sa = typeof parsed.claim.sa === 'string' ? (parsed.claim.sa as string) : defaultSourceAgent;
+  let v1Source: MemorySource = 'user-inferred';
+  const saLower = sa.toLowerCase();
+  if (saLower.includes('derived') || saLower.includes('digest') || saLower.includes('consolidat')) {
+    v1Source = 'derived';
+  } else if (saLower.includes('assistant')) {
+    v1Source = 'assistant';
+  } else if (saLower.includes('extern') || saLower.includes('mem0') || saLower.includes('import')) {
+    v1Source = 'external';
+  }
+
+  const text = typeof parsed.claim.t === 'string' ? (parsed.claim.t as string) : unified.text;
+  const importance = typeof parsed.claim.i === 'number' ? (parsed.claim.i as number) : unified.importance;
+
+  // Map v0 short-key entities → v1 entity shape when present.
+  const rawEntities = Array.isArray(parsed.claim.e) ? parsed.claim.e : [];
+  const entities: MemoryEntityV1[] | undefined = rawEntities.length > 0
+    ? rawEntities
+        .map((e: unknown) => {
+          if (!e || typeof e !== 'object') return null;
+          const entity = e as Record<string, unknown>;
+          const name = typeof entity.n === 'string' ? entity.n : '';
+          const entType = typeof entity.tp === 'string' ? (entity.tp as string) : 'concept';
+          if (!name) return null;
+          const out: MemoryEntityV1 = {
+            name,
+            type: entType as MemoryEntityV1['type'],
+          };
+          if (typeof entity.r === 'string' && entity.r.length > 0) out.role = entity.r;
+          return out;
+        })
+        .filter((x): x is MemoryEntityV1 => x !== null)
+    : undefined;
+
+  return {
+    text,
+    type: v1Type,
+    source: v1Source,
+    importance,
+    entities,
   };
 }
 
@@ -488,30 +660,40 @@ export async function executePinOperation(
     };
   }
 
-  // 4. Build the new canonical claim with updated status + supersedes link
-  const newClaimObj = { ...parsed.claim };
-  if (targetStatus === 'active') {
-    // Default — omit the "st" field entirely
-    delete newClaimObj.st;
-  } else {
-    newClaimObj.st = HUMAN_TO_SHORT[targetStatus];
-  }
-  newClaimObj.sup = factId;
-  // Refresh extraction timestamp so downstream consumers can tell this is a new event
-  newClaimObj.ea = new Date().toISOString();
-  // Carry the source agent forward if present, otherwise stamp it
-  if (typeof newClaimObj.sa !== 'string' || newClaimObj.sa.length === 0) {
-    newClaimObj.sa = deps.sourceAgent;
-  }
+  // 4. Build the new canonical v1.1 claim with pin_status + superseded_by link.
+  //
+  // The new blob is ALWAYS v1.1 shaped (schema_version "1.0", pin_status
+  // present) regardless of the source blob format. v0 sources are upgraded
+  // to v1 on the pin path (category → type, sa heuristic → MemorySource);
+  // v1 sources round-trip their metadata (source, scope, reasoning,
+  // entities, volatility).
+  const pinStatus: PinStatus = targetStatus === 'pinned' ? 'pinned' : 'unpinned';
+  const newFactId = crypto.randomUUID();
+
+  const v1View = projectToV1(plaintext, parsed, deps.sourceAgent);
 
   let canonicalJson: string;
   try {
-    canonicalJson = getWasm().canonicalizeClaim(JSON.stringify(newClaimObj));
+    canonicalJson = buildV1ClaimBlob({
+      id: newFactId,
+      text: v1View.text,
+      type: v1View.type,
+      source: v1View.source,
+      scope: v1View.scope,
+      volatility: v1View.volatility,
+      reasoning: v1View.reasoning,
+      entities: v1View.entities,
+      importance: v1View.importance,
+      confidence: v1View.confidence,
+      createdAt: new Date().toISOString(),
+      supersededBy: factId,
+      pinStatus,
+    });
   } catch (err) {
     return {
       success: false,
       fact_id: factId,
-      error: `Failed to canonicalize updated claim: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Failed to build v1 claim blob: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 
@@ -528,20 +710,24 @@ export async function executePinOperation(
   }
 
   // 5b. Regenerate trapdoors so the new fact is findable by the same text.
-  const newClaimText = typeof parsed.claim.t === 'string' ? parsed.claim.t : '';
-  const entityNames: string[] = Array.isArray(parsed.claim.e)
-    ? parsed.claim.e
-        .map((e: unknown) => (e && typeof (e as { n?: unknown }).n === 'string' ? (e as { n: string }).n : ''))
-        .filter((n: string): n is string => n.length > 0)
+  const entityNames: string[] = v1View.entities
+    ? v1View.entities.map((e) => e.name).filter((n): n is string => typeof n === 'string' && n.length > 0)
     : [];
   let regenerated: { blindIndices: string[]; encryptedEmbedding?: string };
   try {
-    regenerated = await deps.generateIndices(newClaimText, entityNames);
+    regenerated = await deps.generateIndices(v1View.text, entityNames);
   } catch {
     regenerated = { blindIndices: [] };
   }
 
-  // 6. Build tombstone + new protobuf payloads
+  // 6. Build tombstone + new protobuf payloads.
+  //
+  // Note: encodeFactProtobuf in `subgraph/store.ts` hardcodes the outer
+  // protobuf `version` field to PROTOBUF_VERSION_V4 (4) for all MCP writes,
+  // so the new v1 blob is already wrapped at v=4. The tombstone row also
+  // goes out at v=4 in MCP (unlike the plugin which writes tombstones at
+  // legacy v3). This is fine — readers ignore the version field on tombstone
+  // rows since they carry no decryptable inner blob.
   const tombstonePayload: FactPayloadMinimal = {
     id: factId,
     timestamp: new Date().toISOString(),
@@ -554,7 +740,6 @@ export async function executePinOperation(
     agentId: deps.sourceAgent,
   };
 
-  const newFactId = crypto.randomUUID();
   const newPayload: FactPayloadMinimal = {
     id: newFactId,
     timestamp: new Date().toISOString(),

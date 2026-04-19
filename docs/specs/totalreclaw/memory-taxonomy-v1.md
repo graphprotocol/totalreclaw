@@ -1,9 +1,14 @@
 # MCP Memory Taxonomy v1
 
-**Version:** 1.0.0-draft (pending benchmark validation + lock)
-**Status:** DRAFT. Validated on Gemini corpus (Pipeline C). WildChat cross-validation in progress (2026-04-17). Lock after WildChat results confirm.
+**Version:** 1.1.0-draft (additive `pin_status` extension over 1.0)
+**Status:** DRAFT. 1.0 validated on Gemini corpus (Pipeline C). WildChat cross-validation in progress (2026-04-17). 1.1 adds `pin_status` without breaking 1.0 readers. Lock after WildChat results confirm.
 **Owner:** TotalReclaw (pedro@thegraph.foundation)
 **Intended publication:** `totalreclaw.xyz/spec/memory-v1` + PR to MCP spec repo as optional `@modelcontextprotocol/memory-taxonomy/v1` extension.
+
+## Version history
+
+- **1.0.0** (2026-04-17) — initial v1 taxonomy lock-candidate. Six-type closed enum, provenance-as-first-class-field, open-extensible scope, advisory importance.
+- **1.1.0** (2026-04-19) — additive `pin_status` field (`"pinned" | "unpinned"`). No breaking changes: 1.0 blobs continue to validate, and 1.0 readers ignore the new field. The on-wire `schema_version` string remains `"1.0"` so existing strict validators are unaffected (the field is optional; absence is equivalent to `"unpinned"`). Implementations that understand 1.1 MUST honor `pin_status == "pinned"` as immunity from auto-supersede and surface it via the same helpers (`is_pinned_claim`, `respect_pin_in_resolution`) that already recognize the legacy v0 `st == "p"` sentinel. `pin_status` is intentionally additive rather than gated behind a `schema_version` bump because (a) the field is optional and ignorable, and (b) we want cross-client pin to work the moment any client ships the new field — not after every client agrees to accept `"1.1"`.
 
 ---
 
@@ -56,7 +61,18 @@ interface MemoryClaimV1 {
   importance?: number;           // 1-10, auto-ranked in comparative pass
   confidence?: number;           // 0-1, extractor self-assessment
   superseded_by?: string;        // claim id that overrides this (tombstone chain)
+
+  // ── PIN STATE (v1.1, additive) ───────────────────────────────
+  pin_status?: PinStatus;        // default "unpinned" when absent. Pinned claims
+                                 // are immune to auto-supersede / auto-retract.
 }
+
+type PinStatus =
+  | "pinned"      // user explicitly pinned — MUST NOT be auto-superseded by
+                  //   contradiction resolution, compaction, or digest pruning.
+                  //   Cross-references the v0 `st == "p"` sentinel so that
+                  //   `is_pinned_claim(&claim)` returns true for either shape.
+  | "unpinned";   // default. Standard supersede/retract rules apply.
 
 type MemoryType = 
   | "claim"        // assertive speech act: absorbs fact, context, decision
@@ -126,6 +142,36 @@ For `type: claim` where the user expressed a decision-with-reasoning, populate `
 ```
 
 Separate field (not embedded in text) enables structured queries like "show me all my decisions with their reasoning."
+
+## Pin semantics (normative, v1.1)
+
+A **pinned** claim is one the user has explicitly marked as ground truth: it MUST NOT be auto-superseded by contradiction resolution, compaction, digest pruning, or any other implicit write path. Pinning is always user-initiated (via `totalreclaw_pin` or equivalent) and always reversible (via `totalreclaw_unpin`).
+
+### Representation
+
+- **v1.1+**: `pin_status: "pinned"` on the canonical claim. Absence or `"unpinned"` = unpinned.
+- **v0 legacy**: the compact `st == "p"` sentinel on the short-key claim (`{t, c, ..., st: "p"}`). Implementations MUST continue to recognize this for vaults that predate v1.1.
+
+### Implementation contract
+
+Every v1.1-compliant client MUST:
+
+1. **Detect**: `is_pinned_claim(claim)` returns `true` when EITHER the v1 field `pin_status == "pinned"` OR the v0 sentinel `st == "p"` is present. The Rust core helpers in `rust/totalreclaw-core/src/claims.rs` (`is_pinned_claim`, `is_pinned_json`) are the normative reference implementation.
+2. **Respect during auto-resolution**: `respect_pin_in_resolution` (or equivalent) MUST return `SkipNew { reason: ExistingPinned }` when the existing claim is pinned, regardless of score.
+3. **Write on pin**: pinning a fact produces a NEW claim with `pin_status == "pinned"` that supersedes the original via the standard tombstone + new-fact pattern (same pattern as `retype` and `set_scope`). The new claim is wrapped in the v1 outer protobuf (`version = 4`) with `schema_version = "1.0"` inner JSON.
+4. **Write on unpin**: unpinning produces a NEW claim with `pin_status == "unpinned"` (or omits the field — both are equivalent) and supersedes the pinned one.
+5. **Round-trip**: readers at any compliance level MUST preserve the `pin_status` field on round-trip (read → write) so a fact pinned by one client does not silently lose its pinned status when surfaced by another.
+
+### Cross-client compatibility
+
+Clients that still emit v0 short-key blobs (legacy) continue to use `st: "p"`. Clients on v1.1 emit `pin_status: "pinned"` in the canonical v1 claim. Readers at both shapes, via `is_pinned_claim`, return identical pin-detection semantics — no silent drift, no cross-client override.
+
+See also:
+
+- `rust/totalreclaw-core/src/claims.rs::is_pinned_claim` / `is_pinned_json` — normative detection.
+- `rust/totalreclaw-core/src/claims.rs::respect_pin_in_resolution` — normative auto-resolution guard.
+- `skill/plugin/pin.ts::executePinOperation` — TypeScript reference implementation.
+- `mcp/src/tools/pin.ts::executePinOperation` — TypeScript mirror for the MCP server.
 
 ## Provenance filter (normative)
 
@@ -244,6 +290,13 @@ tombstone the old fact id, write a new fact that carries `superseded_by:
 `totalreclaw_pin` additionally accepts the v1-wording alias `memory_id` so all
 three tools have a consistent parameter shape for callers. Legacy `fact_id`
 wins if both are supplied (backward compat).
+
+**v1.1 note (2026-04-19)**: `totalreclaw_pin` / `totalreclaw_unpin` emit v1.1
+canonical claims with `pin_status ∈ {pinned, unpinned}` and the outer protobuf
+wrapper set to `version = 4`. Prior shipped behavior (pre-v1.1) emitted legacy
+v0 short-key blobs at `version = 3` on the pin path — bug identified in the
+2026-04-19 RC QA and fixed in core 2.1.1 + mcp 3.2.0 + plugin pin fixes landed
+together. `retype` / `set_scope` already emitted v1 blobs and are unaffected.
 
 ## Open items
 

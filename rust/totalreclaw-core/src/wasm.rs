@@ -439,6 +439,26 @@ pub fn wasm_parse_memory_source(s: &str) -> String {
         .to_string()
 }
 
+/// Case-insensitive parse of a v1.1 pin_status string. Unknown input returns "unpinned".
+#[wasm_bindgen(js_name = "parsePinStatus")]
+pub fn wasm_parse_pin_status(s: &str) -> String {
+    let st = crate::claims::PinStatus::from_str_lossy(s);
+    serde_json::to_string(&st)
+        .unwrap_or_else(|_| "\"unpinned\"".to_string())
+        .trim_matches('"')
+        .to_string()
+}
+
+/// Check whether a JSON-encoded claim is pinned, recognizing both the v0
+/// short-key sentinel (`st == "p"`) and the v1.1 field (`pin_status ==
+/// "pinned"`). Returns `false` on any parse failure.
+///
+/// Wrapper around [`crate::claims::is_pinned_json`] for TS clients.
+#[wasm_bindgen(js_name = "isPinnedClaimJson")]
+pub fn wasm_is_pinned_claim_json(claim_json: &str) -> bool {
+    crate::claims::is_pinned_json(claim_json)
+}
+
 /// Cosine similarity between two f32 vectors.
 #[wasm_bindgen(js_name = "cosineSimilarity")]
 pub fn wasm_cosine_similarity(a: &[f32], b: &[f32]) -> f64 {

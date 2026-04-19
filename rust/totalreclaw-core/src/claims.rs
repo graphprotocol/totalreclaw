@@ -148,15 +148,48 @@ pub struct DigestClaim {
 /// the 2026-04-14 false-positive where the gap was 9 parts per million.
 pub const TIE_ZONE_SCORE_TOLERANCE: f64 = 0.01;
 
-/// Check whether a claim has pinned status.
+/// Check whether a v0 [`Claim`] has pinned status.
+///
+/// v0 pin state is carried by the compact `st == "p"` sentinel
+/// ([`ClaimStatus::Pinned`]). For v1 claims use
+/// [`is_pinned_memory_claim_v1`] or the JSON-level [`is_pinned_json`].
 pub fn is_pinned_claim(claim: &Claim) -> bool {
     matches!(claim.status, ClaimStatus::Pinned)
 }
 
-/// Check whether a JSON-serialized claim has pinned status.
+/// Check whether a v1.1 [`MemoryClaimV1`] is pinned.
 ///
-/// Returns false on parse error or missing status field (which defaults to Active).
+/// Returns `true` when [`MemoryClaimV1::pin_status`] is `Some(PinStatus::Pinned)`.
+/// `None` and `Some(PinStatus::Unpinned)` both mean unpinned (spec §pin-semantics).
+pub fn is_pinned_memory_claim_v1(claim: &MemoryClaimV1) -> bool {
+    matches!(claim.pin_status, Some(PinStatus::Pinned))
+}
+
+/// Check whether a JSON-serialized claim has pinned status, recognizing both
+/// the legacy v0 [`Claim`] shape (`st == "p"`) and the v1.1
+/// [`MemoryClaimV1`] shape (`pin_status == "pinned"`).
+///
+/// Dispatch rule: if the JSON parses as a `MemoryClaimV1` (it contains the
+/// required v1 fields `id`, `text`, `type`, `source`, `created_at` with a
+/// closed-enum `type` token), the v1 check is authoritative. Otherwise we
+/// fall through to the v0 parser. Returns `false` for any JSON that fails
+/// both parsers or has neither sentinel set.
+///
+/// Guarantee: for every input accepted by pre-v1.1 `is_pinned_json`, the
+/// return value is unchanged. New return: `true` when the input is a v1.1
+/// blob with `pin_status == "pinned"`.
 pub fn is_pinned_json(claim_json: &str) -> bool {
+    // Try v1.1 first — a well-formed MemoryClaimV1 won't match the v0 shape
+    // (different required fields, different type enum), so no ambiguity.
+    if let Ok(v1) = serde_json::from_str::<MemoryClaimV1>(claim_json) {
+        if is_pinned_memory_claim_v1(&v1) {
+            return true;
+        }
+        // Parsed as v1 but pin_status != pinned — authoritative, do NOT
+        // fall through to the v0 parser (would be a type error anyway).
+        return false;
+    }
+    // Fall back to v0 short-key parser.
     match serde_json::from_str::<Claim>(claim_json) {
         Ok(claim) => is_pinned_claim(&claim),
         Err(_) => false,
@@ -510,6 +543,37 @@ pub enum MemoryVolatility {
     Ephemeral,
 }
 
+/// Pin state for a v1.1 memory claim.
+///
+/// Added as an additive extension in spec v1.1 (2026-04-19) so the pin path
+/// can emit canonical v1 blobs (outer protobuf `version = 4`, inner
+/// `schema_version = "1.0"`) while still carrying the user's explicit pin
+/// intent. See `docs/specs/totalreclaw/memory-taxonomy-v1.md#pin-semantics`.
+///
+/// Absence of the field is equivalent to `Unpinned` — readers MUST tolerate
+/// either representation. [`is_pinned_claim`] / [`is_pinned_json`] also return
+/// `true` for legacy v0 short-key blobs where `st == "p"`, so cross-version
+/// vaults produce uniform pin-detection semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum PinStatus {
+    /// User explicitly pinned — immune to auto-supersede / auto-retract.
+    Pinned,
+    /// Standard behavior (default when absent).
+    Unpinned,
+}
+
+impl PinStatus {
+    /// Case-insensitive parser; returns `Unpinned` for unknown input.
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "pinned" => PinStatus::Pinned,
+            "unpinned" => PinStatus::Unpinned,
+            _ => PinStatus::Unpinned,
+        }
+    }
+}
+
 /// Entity type for v1 structured entity references. Mirrors the v0
 /// [`EntityType`] enum and uses the same string-level encoding so
 /// v1 claims can cross-reference v0 entities.
@@ -614,6 +678,16 @@ pub struct MemoryClaimV1 {
     /// Claim ID that overrides this (tombstone chain).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub superseded_by: Option<String>,
+
+    // ── PIN STATE (v1.1, additive) ───────────────────────────────
+    /// User-controlled pin state. When `Some(PinStatus::Pinned)`, the claim
+    /// is immune to auto-supersede / auto-retract — see
+    /// [`respect_pin_in_resolution`]. Absence is equivalent to `Unpinned` on
+    /// the wire; [`is_pinned_claim`] also honors the legacy v0 sentinel
+    /// (`Claim::status == ClaimStatus::Pinned`) so mixed-version vaults
+    /// produce uniform pin-detection semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_status: Option<PinStatus>,
 }
 
 impl MemoryTypeV1 {
@@ -1571,6 +1645,7 @@ mod tests {
             importance: None,
             confidence: None,
             superseded_by: None,
+            pin_status: None,
         }
     }
 
@@ -1594,6 +1669,7 @@ mod tests {
             importance: Some(8),
             confidence: Some(0.92),
             superseded_by: None,
+            pin_status: None,
         }
     }
 
@@ -1633,6 +1709,8 @@ mod tests {
         assert!(!json.contains("superseded_by"));
         // Entity list empty -> omitted
         assert!(!json.contains("entities"));
+        // pin_status = None -> omitted (v1.1 additive, absence == "unpinned")
+        assert!(!json.contains("pin_status"));
     }
 
     #[test]
@@ -1656,6 +1734,7 @@ mod tests {
         assert!(c.importance.is_none());
         assert!(c.confidence.is_none());
         assert!(c.superseded_by.is_none());
+        assert!(c.pin_status.is_none());
     }
 
     #[test]
@@ -1690,6 +1769,7 @@ mod tests {
             importance: None,
             confidence: None,
             superseded_by: None,
+            pin_status: None,
         };
         let json = serde_json::to_string(&c).unwrap();
         let expected = r#"{"id":"01900000-0000-7000-8000-000000000000","text":"prefers PostgreSQL","type":"preference","source":"user","created_at":"2026-04-17T10:00:00Z"}"#;
@@ -1724,5 +1804,212 @@ mod tests {
         }"#;
         let c: MemoryClaimV1 = serde_json::from_str(json).unwrap();
         assert_eq!(c.schema_version, "1.0");
+    }
+
+    // === Pin status (v1.1, additive) ===
+
+    #[test]
+    fn test_pin_status_serde_round_trip() {
+        let pairs = [
+            (PinStatus::Pinned, "\"pinned\""),
+            (PinStatus::Unpinned, "\"unpinned\""),
+        ];
+        for (variant, expected) in pairs {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, expected);
+            let back: PinStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(variant, back);
+        }
+    }
+
+    #[test]
+    fn test_pin_status_from_str_lossy() {
+        assert_eq!(PinStatus::from_str_lossy("pinned"), PinStatus::Pinned);
+        assert_eq!(PinStatus::from_str_lossy("PINNED"), PinStatus::Pinned);
+        assert_eq!(PinStatus::from_str_lossy("unpinned"), PinStatus::Unpinned);
+        assert_eq!(PinStatus::from_str_lossy(""), PinStatus::Unpinned);
+        assert_eq!(PinStatus::from_str_lossy("bogus"), PinStatus::Unpinned);
+    }
+
+    #[test]
+    fn test_memory_claim_v1_pin_status_absent_by_default() {
+        // Minimal v1 blob MUST omit pin_status when None.
+        let c = minimal_v1_claim();
+        assert!(c.pin_status.is_none());
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(
+            !json.contains("pin_status"),
+            "pin_status should be omitted when None: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_memory_claim_v1_pinned_round_trip() {
+        // A pinned v1 blob round-trips cleanly and keeps the field.
+        let mut c = minimal_v1_claim();
+        c.pin_status = Some(PinStatus::Pinned);
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains("\"pin_status\":\"pinned\""));
+        let back: MemoryClaimV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+    }
+
+    #[test]
+    fn test_memory_claim_v1_unpinned_round_trip_explicit() {
+        // Explicit "unpinned" is preserved verbatim on round-trip (NOT dropped).
+        let mut c = minimal_v1_claim();
+        c.pin_status = Some(PinStatus::Unpinned);
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains("\"pin_status\":\"unpinned\""));
+        let back: MemoryClaimV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+        assert_eq!(back.pin_status, Some(PinStatus::Unpinned));
+    }
+
+    #[test]
+    fn test_memory_claim_v1_deserialize_without_pin_status_field() {
+        // A v1 blob that predates v1.1 has no pin_status field. Deserialize
+        // must tolerate it and default to None.
+        let json = r#"{
+            "id":"01900000-0000-7000-8000-000000000000",
+            "text":"hi",
+            "type":"claim",
+            "source":"user",
+            "created_at":"2026-04-17T10:00:00Z"
+        }"#;
+        let c: MemoryClaimV1 = serde_json::from_str(json).unwrap();
+        assert!(c.pin_status.is_none());
+    }
+
+    #[test]
+    fn test_is_pinned_memory_claim_v1_true_when_pinned() {
+        let mut c = minimal_v1_claim();
+        c.pin_status = Some(PinStatus::Pinned);
+        assert!(is_pinned_memory_claim_v1(&c));
+    }
+
+    #[test]
+    fn test_is_pinned_memory_claim_v1_false_when_unpinned_or_absent() {
+        let c = minimal_v1_claim();
+        assert!(!is_pinned_memory_claim_v1(&c));
+        let mut c2 = minimal_v1_claim();
+        c2.pin_status = Some(PinStatus::Unpinned);
+        assert!(!is_pinned_memory_claim_v1(&c2));
+    }
+
+    // === is_pinned_json — unified v0 + v1.1 ===
+
+    #[test]
+    fn test_is_pinned_json_v1_pinned() {
+        let mut c = minimal_v1_claim();
+        c.pin_status = Some(PinStatus::Pinned);
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(is_pinned_json(&json), "v1 pinned blob must be detected");
+    }
+
+    #[test]
+    fn test_is_pinned_json_v1_unpinned() {
+        let mut c = minimal_v1_claim();
+        c.pin_status = Some(PinStatus::Unpinned);
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(!is_pinned_json(&json), "v1 unpinned blob must NOT be detected as pinned");
+    }
+
+    #[test]
+    fn test_is_pinned_json_v1_no_pin_status_field() {
+        // Pre-v1.1 v1 blob without pin_status — not pinned.
+        let json = r#"{
+            "id":"01900000-0000-7000-8000-000000000000",
+            "text":"hi",
+            "type":"claim",
+            "source":"user",
+            "created_at":"2026-04-17T10:00:00Z"
+        }"#;
+        assert!(!is_pinned_json(json));
+    }
+
+    #[test]
+    fn test_is_pinned_json_v0_pinned_backcompat() {
+        // Legacy v0 short-key blob with st=p — MUST still be detected.
+        let mut c = minimal_claim();
+        c.status = ClaimStatus::Pinned;
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(is_pinned_json(&json), "v0 st=p must still trigger is_pinned_json");
+    }
+
+    #[test]
+    fn test_is_pinned_json_v0_active_backcompat() {
+        let c = minimal_claim();
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(!is_pinned_json(&json));
+    }
+
+    #[test]
+    fn test_is_pinned_json_invalid_input_returns_false() {
+        assert!(!is_pinned_json(""));
+        assert!(!is_pinned_json("not json"));
+        assert!(!is_pinned_json("{}"));
+        assert!(!is_pinned_json("[1,2,3]"));
+    }
+
+    #[test]
+    fn test_is_pinned_json_v1_dispatch_does_not_fall_through_to_v0() {
+        // A v1 blob that parses successfully but isn't pinned MUST NOT be
+        // re-parsed via the v0 path (different semantics — `st` field is
+        // absent on v1 blobs but a stray `st` key on an otherwise-v1 JSON
+        // blob could be interpreted as the v0 sentinel if we fell through).
+        //
+        // Craft a v1 blob with a literal `st: "p"` field. The v1 parser
+        // ignores unknown fields — wait, serde's default is to reject unknown
+        // fields NO — the default is to IGNORE unknown fields unless
+        // deny_unknown_fields is set. MemoryClaimV1 doesn't deny, so it will
+        // accept the v1 blob with st=p and, per the dispatch rule, return
+        // the v1 answer (not pinned) without falling through.
+        let json = r#"{
+            "id":"01900000-0000-7000-8000-000000000000",
+            "text":"hi",
+            "type":"claim",
+            "source":"user",
+            "created_at":"2026-04-17T10:00:00Z",
+            "st":"p"
+        }"#;
+        assert!(
+            !is_pinned_json(json),
+            "v1-shaped blob with stray v0 sentinel must NOT be treated as pinned"
+        );
+    }
+
+    #[test]
+    fn test_respect_pin_in_resolution_v1_pinned_blob() {
+        // Use respect_pin_in_resolution with a v1 pinned blob — the existing
+        // claim should be detected as pinned through the unified is_pinned_json.
+        let mut c = minimal_v1_claim();
+        c.pin_status = Some(PinStatus::Pinned);
+        let json = serde_json::to_string(&c).unwrap();
+        let action = respect_pin_in_resolution(
+            &json,
+            "new_id",
+            "existing_id",
+            "new_id",
+            0.5,
+            0.7,
+            TIE_ZONE_SCORE_TOLERANCE,
+        );
+        assert_eq!(
+            action,
+            ResolutionAction::SkipNew {
+                reason: SkipReason::ExistingPinned,
+                existing_id: "existing_id".to_string(),
+                new_id: "new_id".to_string(),
+                entity_id: None,
+                similarity: None,
+                winner_score: None,
+                loser_score: None,
+                winner_components: None,
+                loser_components: None,
+            },
+            "v1 pinned blob must trigger SkipNew::ExistingPinned"
+        );
     }
 }

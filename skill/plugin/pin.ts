@@ -1,14 +1,30 @@
-/** Pin/unpin pure operation for OpenClaw plugin — Slice 2e-plugin, Phase 2. */
+/** Pin/unpin pure operation for OpenClaw plugin — v1.1 taxonomy.
+ *
+ * As of core 2.1.1 / plugin pin path v1.1 (2026-04-19) the pin/unpin operation
+ * emits a canonical v1.1 MemoryClaimV1 JSON blob (schema_version "1.0",
+ * `pin_status` additive field) wrapped in the outer protobuf at `version = 4`.
+ * The prior behavior — emitting v0 short-key blobs at `version = 3` on the
+ * pin path — broke the v1 on-chain contract (RC QA bug #2). v0 blobs continue
+ * to be READ correctly (via parseBlobForPin's fall-through), so mixed-version
+ * vaults remain uniform from the user's point of view.
+ */
 
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
-import { mapTypeToCategory } from './claims-helper.js';
+import {
+  buildV1ClaimBlob,
+  mapTypeToCategory,
+  readV1Blob,
+  type PinStatus,
+} from './claims-helper.js';
 import {
   findLoserClaimInDecisionLog,
   maybeWriteFeedbackForPin,
   type ContradictionLogger,
 } from './contradiction-sync.js';
-import { isValidMemoryType } from './extractor.js';
+import { isValidMemoryType, V0_TO_V1_TYPE } from './extractor.js';
+import type { MemoryType, MemorySource, MemoryScope, MemoryVolatility } from './extractor.js';
+import { PROTOBUF_VERSION_V4 } from './subgraph-store.js';
 import type { SubgraphSearchFact } from './subgraph-search.js';
 
 // Lazy-load WASM core (mirrors claims-helper.ts pattern — plays nicely under
@@ -34,8 +50,15 @@ export interface FactPayload {
   encryptedEmbedding?: string;
 }
 
-/** Encode a FactPayload as the minimal Protobuf wire format via WASM core. */
-function encodeFactProtobufLocal(fact: FactPayload): Buffer {
+/**
+ * Encode a FactPayload as the minimal Protobuf wire format via WASM core.
+ *
+ * The `version` field is threaded through so callers can opt into
+ * `PROTOBUF_VERSION_V4` (Memory Taxonomy v1) for the new-fact write and leave
+ * tombstone rows at the default (legacy v3). When omitted, defaults to v1
+ * (`PROTOBUF_VERSION_V4`) — pin/unpin is a v1 write path.
+ */
+function encodeFactProtobufLocal(fact: FactPayload, version: number = PROTOBUF_VERSION_V4): Buffer {
   const json = JSON.stringify({
     id: fact.id,
     timestamp: fact.timestamp,
@@ -47,6 +70,7 @@ function encodeFactProtobufLocal(fact: FactPayload): Buffer {
     content_fp: fact.contentFp,
     agent_id: fact.agentId,
     encrypted_embedding: fact.encryptedEmbedding || null,
+    version,
   });
   return Buffer.from(getWasm().encodeFactProtobuf(json));
 }
@@ -73,11 +97,49 @@ const HUMAN_TO_SHORT: Record<HumanStatus, string> = {
 
 // ─── Blob parsing ─────────────────────────────────────────────────────────────
 
+/** Shape of a v1 blob normalized for downstream pin-path rewrite. */
+export interface V1PinBlob {
+  kind: 'v1';
+  text: string;
+  type: MemoryType;
+  source: MemorySource;
+  scope?: MemoryScope;
+  volatility?: MemoryVolatility;
+  reasoning?: string;
+  entities?: Array<{ name: string; type: string; role?: string }>;
+  importance: number;
+  confidence: number;
+  createdAt: string;
+  expiresAt?: string;
+  id?: string;
+  /** Previously-stored pin_status on the blob (v1.1). */
+  pinStatus?: PinStatus;
+}
+
+/** Shape of a v0 (short-key) blob or a legacy {text, metadata} blob. */
+export interface V0PinBlob {
+  kind: 'v0';
+  /** The short-key claim object (with t, c, cf, i, sa, ea, ...). */
+  claim: Record<string, unknown>;
+}
+
 /** Result of parsing a decrypted blob for pin/unpin mutation. */
 export interface ParsedBlob {
-  claim: Record<string, unknown>;
+  /**
+   * Either a v1 normalized view or a v0 short-key claim object. Pin path
+   * always emits v1.1 on output regardless of source — see
+   * `executePinOperation`.
+   */
+  source: V1PinBlob | V0PinBlob;
   currentStatus: HumanStatus;
   isLegacy: boolean;
+  /**
+   * Legacy field — kept for existing test/downstream code that dereferences
+   * `parsed.claim`. For v1 blobs this is a short-key projection (same as
+   * pre-v1.1 behavior); for v0 blobs it's the untouched short-key claim.
+   * Do NOT mutate when you intend to write — use the `source` view instead.
+   */
+  claim: Record<string, unknown>;
 }
 
 /** Parse a decrypted blob into a canonical mutable Claim + current human status. */
@@ -86,26 +148,51 @@ export function parseBlobForPin(decrypted: string): ParsedBlob {
   try {
     obj = JSON.parse(decrypted) as Record<string, unknown>;
   } catch {
+    const shortClaim = buildCanonicalObjectFromLegacy(decrypted, {});
     return {
-      claim: buildCanonicalObjectFromLegacy(decrypted, {}),
+      source: { kind: 'v0', claim: shortClaim },
+      claim: shortClaim,
       currentStatus: 'active',
       isLegacy: true,
     };
   }
 
   // v1 payload (plugin v3.0.0+): long-form fields + schema_version "1.x".
-  // Convert to the short-key shape pin.ts operates on so the rest of the
-  // pipeline (st, sup, trapdoor regeneration) keeps working unchanged.
+  // Preserve the v1 structure so the pin path can emit v1 on output.
   if (
     typeof obj.text === 'string' &&
     typeof obj.type === 'string' &&
     typeof obj.schema_version === 'string' &&
     obj.schema_version.startsWith('1.')
   ) {
-    const shortObj = v1ToShortKeyClaim(obj);
-    const st = typeof shortObj.st === 'string' ? shortObj.st : 'a';
-    const human = SHORT_TO_HUMAN[st] ?? 'active';
-    return { claim: shortObj, currentStatus: human, isLegacy: false };
+    const v1 = readV1Blob(decrypted);
+    if (v1) {
+      // Current status = pinStatus if present, else active.
+      const human: HumanStatus = v1.pinStatus === 'pinned' ? 'pinned' : 'active';
+      const shortProjection = v1ToShortKeyClaim(obj);
+      return {
+        source: {
+          kind: 'v1',
+          text: v1.text,
+          type: v1.type,
+          source: v1.source,
+          scope: v1.scope,
+          volatility: v1.volatility,
+          reasoning: v1.reasoning,
+          entities: v1.entities,
+          importance: v1.importance,
+          confidence: v1.confidence,
+          createdAt: v1.createdAt,
+          expiresAt: v1.expiresAt,
+          id: v1.id,
+          pinStatus: v1.pinStatus,
+        },
+        claim: shortProjection,
+        currentStatus: human,
+        isLegacy: false,
+      };
+    }
+    // readV1Blob returned null — fall through to v0 path.
   }
 
   // v0 canonical Claim — short keys present.
@@ -113,21 +200,30 @@ export function parseBlobForPin(decrypted: string): ParsedBlob {
     const st = typeof obj.st === 'string' ? obj.st : 'a';
     const human = SHORT_TO_HUMAN[st] ?? 'active';
     const cloned = JSON.parse(JSON.stringify(obj)) as Record<string, unknown>;
-    return { claim: cloned, currentStatus: human, isLegacy: false };
+    return {
+      source: { kind: 'v0', claim: cloned },
+      claim: cloned,
+      currentStatus: human,
+      isLegacy: false,
+    };
   }
 
   // Legacy {text, metadata: {importance: 0-1}} shape.
   if (typeof obj.text === 'string') {
     const meta = (obj.metadata as Record<string, unknown>) ?? {};
+    const shortClaim = buildCanonicalObjectFromLegacy(obj.text, meta);
     return {
-      claim: buildCanonicalObjectFromLegacy(obj.text, meta),
+      source: { kind: 'v0', claim: shortClaim },
+      claim: shortClaim,
       currentStatus: 'active',
       isLegacy: true,
     };
   }
 
+  const shortClaim = buildCanonicalObjectFromLegacy(decrypted, {});
   return {
-    claim: buildCanonicalObjectFromLegacy(decrypted, {}),
+    source: { kind: 'v0', claim: shortClaim },
+    claim: shortClaim,
     currentStatus: 'active',
     isLegacy: true,
   };
@@ -202,6 +298,113 @@ function buildCanonicalObjectFromLegacy(
     i: importance,
     sa: source,
     ea: createdAt,
+  };
+}
+
+// ─── v1 projection ────────────────────────────────────────────────────────────
+
+/** v1 shape used to drive buildV1ClaimBlob from a (v0 or v1) source. */
+interface V1Projection {
+  text: string;
+  type: MemoryType;
+  source: MemorySource;
+  scope?: MemoryScope;
+  volatility?: MemoryVolatility;
+  reasoning?: string;
+  entities?: Array<{ name: string; type: string; role?: string }>;
+  importance: number;
+  confidence: number;
+}
+
+/**
+ * Project a source blob (v1 or v0 short-key) into the v1 shape needed by
+ * `buildV1ClaimBlob`. For v1 sources this is identity; for v0 sources we
+ * upgrade the category / source fields per the spec's legacy-mapping table
+ * (`fact|context|decision → claim`, `rule → directive`, `goal → commitment`,
+ * etc.). Anything we can't determine falls back to a sensible default so the
+ * build call doesn't throw.
+ */
+function projectToV1(src: V1PinBlob | V0PinBlob, defaultSourceAgent: string): V1Projection {
+  if (src.kind === 'v1') {
+    return {
+      text: src.text,
+      type: src.type,
+      source: src.source,
+      scope: src.scope,
+      volatility: src.volatility,
+      reasoning: src.reasoning,
+      entities: src.entities,
+      importance: src.importance,
+      confidence: src.confidence,
+    };
+  }
+
+  // v0 path — upgrade short-key claim to v1.
+  const claim = src.claim;
+  const text = typeof claim.t === 'string' ? claim.t : '';
+  const v0Category = typeof claim.c === 'string' ? claim.c : 'fact';
+  // Legacy short category keys back to type names (reverse of TYPE_TO_CATEGORY_V0).
+  const V0_CATEGORY_TO_V0_TYPE: Record<string, string> = {
+    fact: 'fact',
+    pref: 'preference',
+    dec: 'decision',
+    epi: 'episodic',
+    goal: 'goal',
+    ctx: 'context',
+    sum: 'summary',
+    rule: 'rule',
+    ent: 'fact', // entity records don't round-trip as v1 claims; fall back
+    dig: 'summary',
+    claim: 'claim',
+  };
+  const v0TypeToken = V0_CATEGORY_TO_V0_TYPE[v0Category] ?? 'fact';
+  // Use the shared v0→v1 map for the upgrade.
+  const v1Type: MemoryType = (V0_TO_V1_TYPE as Record<string, MemoryType>)[v0TypeToken] ?? 'claim';
+
+  const importance = typeof claim.i === 'number'
+    ? Math.max(1, Math.min(10, Math.round(claim.i as number)))
+    : 5;
+  const confidence = typeof claim.cf === 'number' ? (claim.cf as number) : 0.85;
+
+  // v0 `sa` isn't a provenance source — it's a "source agent" string like
+  // "openclaw-plugin". Map heuristically: if it looks like an agent-style
+  // string (contains "plugin"/"agent"/"derived"), mark it as appropriate;
+  // otherwise default to "user-inferred" so Tier 1 reranker doesn't give it
+  // "user" trust (which would be wrong for legacy blobs with no provenance
+  // signal).
+  const sa = typeof claim.sa === 'string' ? claim.sa : defaultSourceAgent;
+  let v1Source: MemorySource = 'user-inferred';
+  const saLower = sa.toLowerCase();
+  if (saLower.includes('derived') || saLower.includes('digest') || saLower.includes('consolidat')) {
+    v1Source = 'derived';
+  } else if (saLower.includes('assistant')) {
+    v1Source = 'assistant';
+  } else if (saLower.includes('extern') || saLower.includes('mem0') || saLower.includes('import')) {
+    v1Source = 'external';
+  }
+
+  const entities = Array.isArray(claim.e)
+    ? (claim.e as unknown[])
+        .map((e) => {
+          if (!e || typeof e !== 'object') return null;
+          const entity = e as Record<string, unknown>;
+          const name = typeof entity.n === 'string' ? entity.n : '';
+          const entType = typeof entity.tp === 'string' ? entity.tp : 'concept';
+          if (!name) return null;
+          const out: { name: string; type: string; role?: string } = { name, type: entType };
+          if (typeof entity.r === 'string' && entity.r.length > 0) out.role = entity.r;
+          return out;
+        })
+        .filter((x): x is { name: string; type: string; role?: string } => x !== null)
+    : undefined;
+
+  return {
+    text,
+    type: v1Type,
+    source: v1Source,
+    importance,
+    confidence,
+    entities,
   };
 }
 
@@ -338,30 +541,41 @@ export async function executePinOperation(
     };
   }
 
-  // 4. Build the new canonical claim with updated status + supersedes link
-  const newClaimObj = { ...parsed.claim };
-  if (targetStatus === 'active') {
-    // Active is the canonical default — omit `st` entirely.
-    delete newClaimObj.st;
-  } else {
-    newClaimObj.st = HUMAN_TO_SHORT[targetStatus];
-  }
-  newClaimObj.sup = factId;
-  // Refresh extraction timestamp so downstream consumers can tell this is a new event.
-  newClaimObj.ea = new Date().toISOString();
-  // Carry source agent forward if present, else stamp it.
-  if (typeof newClaimObj.sa !== 'string' || newClaimObj.sa.length === 0) {
-    newClaimObj.sa = deps.sourceAgent;
-  }
+  // 4. Build the new canonical v1.1 claim with pin_status + superseded_by link.
+  //
+  // The new blob is ALWAYS v1.1 shaped (schema_version "1.0", pin_status
+  // present) regardless of the source blob's format. v0 sources are upgraded
+  // to v1 on the pin path; v1 sources round-trip their metadata (source,
+  // scope, reasoning, entities, volatility) into the new blob.
+  const pinStatus: PinStatus = targetStatus === 'pinned' ? 'pinned' : 'unpinned';
+  const newFactId = crypto.randomUUID();
+
+  // Project the source blob into v1 shape. For v0 sources we upgrade on the
+  // fly: short-key `c` → v1 type, `sa` → source (heuristic), etc.
+  const v1View = projectToV1(parsed.source, deps.sourceAgent);
 
   let canonicalJson: string;
   try {
-    canonicalJson = getWasm().canonicalizeClaim(JSON.stringify(newClaimObj));
+    canonicalJson = buildV1ClaimBlob({
+      id: newFactId,
+      text: v1View.text,
+      type: v1View.type,
+      source: v1View.source,
+      scope: v1View.scope,
+      volatility: v1View.volatility,
+      reasoning: v1View.reasoning,
+      entities: v1View.entities,
+      importance: v1View.importance,
+      confidence: v1View.confidence,
+      createdAt: new Date().toISOString(),
+      supersededBy: factId,
+      pinStatus,
+    });
   } catch (err) {
     return {
       success: false,
       fact_id: factId,
-      error: `Failed to canonicalize updated claim: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Failed to build v1 claim blob: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 
@@ -378,22 +592,22 @@ export async function executePinOperation(
   }
 
   // 5b. Regenerate trapdoors so the new fact is findable by the same text.
-  const newClaimText = typeof parsed.claim.t === 'string' ? parsed.claim.t : '';
-  const entityNames: string[] = Array.isArray(parsed.claim.e)
-    ? (parsed.claim.e as unknown[])
-        .map((e) => (e && typeof (e as { n?: unknown }).n === 'string' ? (e as { n: string }).n : ''))
-        .filter((n): n is string => n.length > 0)
+  const entityNames: string[] = v1View.entities
+    ? v1View.entities.map((e) => e.name).filter((n): n is string => typeof n === 'string' && n.length > 0)
     : [];
   let regenerated: { blindIndices: string[]; encryptedEmbedding?: string };
   try {
-    regenerated = await deps.generateIndices(newClaimText, entityNames);
+    regenerated = await deps.generateIndices(v1View.text, entityNames);
   } catch {
     regenerated = { blindIndices: [] };
   }
 
   // 6. Build tombstone + new protobuf payloads.
-  // Plugin tombstone convention matches the rest of the plugin: `encryptedBlob: '00'`,
-  // empty indices, decayScore=0, source='tombstone'.
+  //
+  // Tombstone: empty blob ('00'), empty indices, decayScore=0, source='tombstone'.
+  // Written at the DEFAULT protobuf version (legacy v3) because tombstone rows
+  // carry no inner blob — the version field is irrelevant for readers and
+  // writing v3 keeps round-trip compat with any pre-v1 tombstone parser.
   const tombstonePayload: FactPayload = {
     id: factId,
     timestamp: new Date().toISOString(),
@@ -406,7 +620,6 @@ export async function executePinOperation(
     agentId: deps.sourceAgent,
   };
 
-  const newFactId = crypto.randomUUID();
   const newPayload: FactPayload = {
     id: newFactId,
     timestamp: new Date().toISOString(),
@@ -420,7 +633,13 @@ export async function executePinOperation(
     encryptedEmbedding: regenerated.encryptedEmbedding,
   };
 
-  const payloads = [encodeFactProtobufLocal(tombstonePayload), encodeFactProtobufLocal(newPayload)];
+  // Outer protobuf version: v=4 for the new v1 claim, default (legacy v3)
+  // for the tombstone. This is the core of the bug-2 fix — previously both
+  // payloads went out at version=3 and the inner blob was v0 short-key.
+  const payloads = [
+    encodeFactProtobufLocal(tombstonePayload, /* version = legacy v3 */ 3),
+    encodeFactProtobufLocal(newPayload, PROTOBUF_VERSION_V4),
+  ];
 
   // 6b. Slice 2f: consult decisions.jsonl to see if this pin/unpin contradicts
   // a prior auto-resolution. If so, append a counterexample to feedback.jsonl

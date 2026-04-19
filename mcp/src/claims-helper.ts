@@ -330,6 +330,13 @@ export function computeEntityTrapdoors(
 // ---------------------------------------------------------------------------
 
 /**
+ * v1.1 pin state. `"pinned"` = user explicitly pinned (immune to
+ * auto-supersede); `"unpinned"` = explicit unpin (resets a prior pin);
+ * undefined = field absent, receivers treat as unpinned.
+ */
+export type PinStatus = 'pinned' | 'unpinned';
+
+/**
  * Input shape for building a Memory Taxonomy v1 blob. All fields mirror the
  * MemoryClaimV1 schema; the builder fills in required timestamps/UUIDs so
  * callers can pass the subset they know about.
@@ -348,6 +355,12 @@ export interface BuildV1ClaimInput {
   importance?: number;             // 1-10 (optional advisory)
   confidence?: number;             // 0-1
   supersededBy?: string;           // claim id override
+  /**
+   * v1.1 additive field. When `"pinned"`, the claim is immune to
+   * auto-supersede. When `"unpinned"`, an explicit unpin event; receivers
+   * treat absence as equivalent. Only emitted in the output when provided.
+   */
+  pinStatus?: PinStatus;
 }
 
 /**
@@ -380,9 +393,24 @@ export function buildV1ClaimBlob(input: BuildV1ClaimInput): string {
   if (typeof input.importance === 'number') claim.importance = input.importance;
   if (typeof input.confidence === 'number') claim.confidence = input.confidence;
   if (input.supersededBy) claim.superseded_by = input.supersededBy;
+  // v1.1: pin_status is additive — only emitted when the caller opts in.
+  if (input.pinStatus === 'pinned' || input.pinStatus === 'unpinned') {
+    // Cast: MemoryClaimV1 interface is defined in v1-types.ts and pre-dates
+    // the v1.1 field. The Rust core accepts pin_status via serde; TS-side
+    // shape drift is handled by the validator's JSON round-trip.
+    (claim as unknown as Record<string, unknown>).pin_status = input.pinStatus;
+  }
 
   // Canonicalise + validate via core. Throws on any schema violation.
-  return getWasm().validateMemoryClaimV1(JSON.stringify(claim));
+  //
+  // Rust core's serde config drops `schema_version` on serialize when it
+  // equals the default ("1.0") — that shrinks blobs but loses a field MCP
+  // consumers (and the audit trail in export) expect on the wire. We
+  // re-attach it here so pin/unpin output matches the plugin byte-for-byte.
+  const validated = getWasm().validateMemoryClaimV1(JSON.stringify(claim));
+  const parsed = JSON.parse(validated) as Record<string, unknown>;
+  parsed.schema_version = MEMORY_CLAIM_V1_SCHEMA_VERSION;
+  return JSON.stringify(parsed);
 }
 
 /**
@@ -411,6 +439,11 @@ export interface V1BlobReadResult {
     superseded_by?: string;
     entities?: MemoryEntityV1[];
     created_at: string;
+    /**
+     * v1.1 pin state. Absent when the blob is a v1.0 payload or when the
+     * writer explicitly omitted the field (receivers treat as "unpinned").
+     */
+    pin_status?: PinStatus;
   };
   /** Whatever metadata the blob carried (v0 or v1). Used by callers that want raw access. */
   metadata: Record<string, unknown>;
@@ -471,6 +504,13 @@ export function readBlobUnified(decryptedJson: string): V1BlobReadResult {
       };
       const short = shortMap[v1Type] ?? 'claim';
 
+      // v1.1 pin_status (additive). Accept either canonical value; reject
+      // anything else so garbage on the wire doesn't propagate.
+      const rawPinStatus =
+        typeof obj.pin_status === 'string' ? obj.pin_status : undefined;
+      const pinStatus: PinStatus | undefined =
+        rawPinStatus === 'pinned' || rawPinStatus === 'unpinned' ? rawPinStatus : undefined;
+
       return {
         text: obj.text,
         importance,
@@ -488,6 +528,7 @@ export function readBlobUnified(decryptedJson: string): V1BlobReadResult {
             typeof obj.superseded_by === 'string' ? obj.superseded_by : undefined,
           entities: Array.isArray(obj.entities) ? (obj.entities as MemoryEntityV1[]) : undefined,
           created_at: typeof obj.created_at === 'string' ? obj.created_at : '',
+          pin_status: pinStatus,
         },
         metadata: obj as Record<string, unknown>,
       };

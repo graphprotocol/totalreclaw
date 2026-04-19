@@ -5,6 +5,46 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-04-19
+
+### Added
+
+- **Memory Taxonomy v1.1 — additive `pin_status` field** on
+  [`MemoryClaimV1`](./src/claims.rs). New enum `PinStatus` with variants
+  `Pinned` / `Unpinned` (serde kebab → `"pinned"` / `"unpinned"`).
+  The field is `Option<PinStatus>` with `#[serde(skip_serializing_if =
+  "Option::is_none")]` so pre-v1.1 blobs continue to round-trip byte-for-byte.
+- **Unified pin detection** — [`is_pinned_json`](./src/claims.rs) now
+  recognizes BOTH the legacy v0 short-key sentinel (`st == "p"`) AND the
+  new v1.1 field (`pin_status == "pinned"`). Dispatch: try `MemoryClaimV1`
+  first; if that parses successfully, it is authoritative (no fall-through
+  to the v0 parser). Back-compat: every input accepted by pre-2.1.1
+  `is_pinned_json` returns an unchanged result.
+- New helper [`is_pinned_memory_claim_v1`](./src/claims.rs) for v1-only
+  callers that have already parsed the blob.
+- **WASM bindings**: `parsePinStatus`, `isPinnedClaimJson`.
+- **PyO3 bindings**: `parse_pin_status`, `is_pinned_claim_json`.
+- Spec: `docs/specs/totalreclaw/memory-taxonomy-v1.md` bumped to v1.1
+  (additive — on-wire `schema_version` stays `"1.0"` so existing strict
+  validators are unaffected).
+
+### Notes / Compatibility
+
+- Patch-version bump (additive serde field only). No breaking changes.
+- Motivated by 2026-04-19 RC QA bug #2: `totalreclaw_pin` shipped v0
+  short-key blobs at protobuf `version = 3`, breaking the "v1 on-chain"
+  contract for new pins. Rust core gains the field; plugin + mcp pin
+  paths are rewired in parallel (plugin 3.1.0 + mcp 3.2.0). See
+  `mcp/AUDIT-v1-tools.md` §A2 for the original deferred gap note.
+- Existing `ClaimStatus::Pinned` sentinel (v0) is UNCHANGED — v0 blobs
+  continue to decode and `is_pinned_claim(&Claim)` still returns `true`
+  for them.
+
+### References
+
+- Spec: [`docs/specs/totalreclaw/memory-taxonomy-v1.md`](../../docs/specs/totalreclaw/memory-taxonomy-v1.md) §pin-semantics (v1.1)
+- QA: `totalreclaw-internal/docs/notes/QA-openclaw-RC-3.0.7-rc.1-20260420.md` bug #2
+
 ## [2.1.0] - 2026-04-19
 
 ### Added

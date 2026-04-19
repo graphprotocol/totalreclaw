@@ -289,12 +289,14 @@ describe('executePinOperation — pin-on-tombstone recovery', () => {
     expect(deps._submitted).toHaveLength(1);
     expect(deps._submitted[0]).toHaveLength(2);
 
-    // The new blob reflects the RECOVERED claim text + flipped status.
+    // The new blob reflects the RECOVERED claim text + flipped pin_status.
+    // v1.1: long-form fields, schema_version "1.0", pin_status, superseded_by.
     expect(capturedNewPlaintext).not.toBeNull();
     const parsed = JSON.parse(capturedNewPlaintext!);
-    expect(parsed.t).toBe('I use Neovim as my primary editor');
-    expect(parsed.st).toBe('p');
-    expect(parsed.sup).toBe('tombstoned-vim');
+    expect(parsed.text).toBe('I use Neovim as my primary editor');
+    expect(parsed.schema_version).toBe('1.0');
+    expect(parsed.pin_status).toBe('pinned');
+    expect(parsed.superseded_by).toBe('tombstoned-vim');
   });
 
   test('returns error when tombstone blob has no matching decisions.jsonl row', async () => {
@@ -456,10 +458,12 @@ describe('executePinOperation — pin-on-tombstone recovery', () => {
     expect(result.new_status).toBe('pinned');
 
     // The re-pinned fact MUST match the pre-forget claim's text + type.
+    // v1.1: long-form fields + pin_status + superseded_by.
     const parsed = JSON.parse(capturedPlaintext!);
-    expect(parsed.t).toBe('My preferred editor is Neovim');
-    expect(parsed.c).toBe('pref');
-    expect(parsed.st).toBe('p');
-    expect(parsed.sup).toBe(f1Id);
+    expect(parsed.text).toBe('My preferred editor is Neovim');
+    // Legacy v0 type "preference" → v1 type "preference" (identity mapping).
+    expect(parsed.type).toBe('preference');
+    expect(parsed.pin_status).toBe('pinned');
+    expect(parsed.superseded_by).toBe(f1Id);
   });
 });
