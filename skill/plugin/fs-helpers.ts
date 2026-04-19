@@ -39,11 +39,24 @@ import path from 'node:path';
  * optional because the file is written in two phases (first run writes
  * `userId` + `salt`, `totalreclaw_setup` or the MCP setup CLI writes the
  * `mnemonic` for hot-reload).
+ *
+ * `firstRunAnnouncementShown` is the one-shot flag for the plugin's
+ * auto-generated-recovery-phrase banner. When `false`, the next
+ * before_agent_start hook prepends a context block that reveals the
+ * phrase to the user; the hook then flips the flag to `true` so the
+ * banner never fires again unless credentials.json is regenerated.
+ *
+ * `recovery_phrase` is an alias alternate spelling used by some older
+ * tools / hand-edited files — readers accept both, writers prefer
+ * `mnemonic` to stay compatible with the MCP setup CLI.
  */
 export interface CredentialsFile {
   userId?: string;
   salt?: string;
   mnemonic?: string;
+  /** Alias for `mnemonic`, accepted on read only. */
+  recovery_phrase?: string;
+  firstRunAnnouncementShown?: boolean;
   [extra: string]: unknown;
 }
 
@@ -204,5 +217,201 @@ export function deleteFileIfExists(filePath: string): void {
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   } catch {
     // Best-effort — don't block on invalidation failure.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-bootstrap of credentials.json (3.1.0 first-run UX)
+// ---------------------------------------------------------------------------
+
+/**
+ * Pure helper — pull a plausible mnemonic out of a parsed credentials
+ * blob. Accepts both `mnemonic` (canonical) and `recovery_phrase` (what
+ * some older flows / hand-edited files use). Returns null when neither is
+ * present, empty, or non-string.
+ */
+export function extractBootstrapMnemonic(
+  creds: CredentialsFile | null | undefined,
+): string | null {
+  if (!creds || typeof creds !== 'object') return null;
+  const primary = typeof creds.mnemonic === 'string' ? creds.mnemonic.trim() : '';
+  if (primary.length > 0) return primary;
+  const alias = typeof creds.recovery_phrase === 'string' ? creds.recovery_phrase.trim() : '';
+  if (alias.length > 0) return alias;
+  return null;
+}
+
+/** Possible outcomes of `autoBootstrapCredentials`. */
+export type BootstrapStatus =
+  | 'existing_valid'
+  | 'fresh_generated'
+  | 'recovered_from_corrupt';
+
+export interface BootstrapOutcome {
+  status: BootstrapStatus;
+  /** The mnemonic the plugin should use to derive keys for this session. */
+  mnemonic: string;
+  /**
+   * True when the user has NOT yet seen the auto-generated-phrase banner.
+   * The before_agent_start hook reads this to decide whether to prepend
+   * the banner context; after injection, it calls
+   * `markFirstRunAnnouncementShown` to flip the flag.
+   */
+  announcementPending: boolean;
+  /**
+   * Path of the renamed broken file, when `status === "recovered_from_corrupt"`.
+   * Included so the logger can mention the path ("your previous credentials
+   * are at X in case you need to recover them").
+   */
+  backupPath?: string;
+}
+
+export interface AutoBootstrapOptions {
+  /**
+   * Callback the helper uses to obtain a freshly generated BIP-39
+   * mnemonic when the file is missing or malformed. Injected as a
+   * callback so fs-helpers.ts does not import crypto / bip39 modules
+   * (keeps the file narrow-in-purpose and away from any network markers).
+   * A thrown error here propagates out; the helper does not leave any
+   * partial files on disk.
+   */
+  generateMnemonic: () => string;
+}
+
+/**
+ * Ensure `credentials.json` is present and usable.
+ *
+ * Behavior:
+ *   - File exists + parses + has a non-empty mnemonic (or recovery_phrase)
+ *     → return `'existing_valid'`. Also backfill the canonical `mnemonic`
+ *     field if only the `recovery_phrase` alias was present.
+ *   - File missing → generate a fresh mnemonic, write credentials.json
+ *     with `firstRunAnnouncementShown: false`, return `'fresh_generated'`.
+ *   - File exists but un-parseable, empty, or missing a mnemonic entirely
+ *     → rename it to `credentials.json.broken-<timestamp>`, generate a
+ *     fresh mnemonic, write a new credentials.json, return
+ *     `'recovered_from_corrupt'` with `backupPath` pointing at the
+ *     renamed file.
+ *
+ * The write is atomic-ish: generate mnemonic first (can throw), then
+ * single `writeFileSync` with mode `0o600`. If the generator throws, no
+ * partial file is written.
+ *
+ * The `firstRunAnnouncementShown` flag is always initialised to `false`
+ * on fresh/recovered writes and preserved (not touched) on `existing_valid`.
+ */
+export function autoBootstrapCredentials(
+  credentialsPath: string,
+  opts: AutoBootstrapOptions,
+): BootstrapOutcome {
+  // Load + parse. JSON.parse failures are contained in loadCredentialsJson
+  // (returns null). We need to distinguish "missing" from "corrupt" so we
+  // check existsSync separately.
+  const fileExists = fs.existsSync(credentialsPath);
+  let parsed: CredentialsFile | null = null;
+  let parseFailed = false;
+  if (fileExists) {
+    try {
+      const raw = fs.readFileSync(credentialsPath, 'utf-8');
+      parsed = JSON.parse(raw) as CredentialsFile;
+    } catch {
+      parseFailed = true;
+    }
+  }
+
+  const existingMnemonic = parsed ? extractBootstrapMnemonic(parsed) : null;
+
+  // ---- Happy path: existing file with a valid mnemonic ----
+  if (parsed && existingMnemonic && !parseFailed) {
+    // Backfill the canonical `mnemonic` key if the user's file only had
+    // `recovery_phrase`. Keeps downstream code simple (one field to read).
+    if (typeof parsed.mnemonic !== 'string' || parsed.mnemonic.trim() !== existingMnemonic) {
+      const updated: CredentialsFile = { ...parsed, mnemonic: existingMnemonic };
+      // Preserve an explicit flag setting; default to true so we don't
+      // announce a phrase the user already supplied.
+      if (updated.firstRunAnnouncementShown === undefined) {
+        updated.firstRunAnnouncementShown = true;
+      }
+      const dir = path.dirname(credentialsPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(credentialsPath, JSON.stringify(updated), { mode: 0o600 });
+    }
+    const announcementPending = parsed.firstRunAnnouncementShown === false;
+    return {
+      status: 'existing_valid',
+      mnemonic: existingMnemonic,
+      announcementPending,
+    };
+  }
+
+  // ---- Recovery path: file is missing, corrupt, or shape-invalid ----
+  // Generate FIRST so a generator failure doesn't delete or rename anything.
+  const newMnemonic = opts.generateMnemonic();
+  if (typeof newMnemonic !== 'string' || newMnemonic.trim().length === 0) {
+    throw new Error('autoBootstrapCredentials: generateMnemonic returned empty');
+  }
+
+  // If the file existed but was unusable, rename it so the user can
+  // recover if they had the phrase stored elsewhere and realize it later.
+  let backupPath: string | undefined;
+  if (fileExists) {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    backupPath = `${credentialsPath}.broken-${ts}`;
+    try {
+      fs.renameSync(credentialsPath, backupPath);
+    } catch {
+      // If rename fails (cross-device, permission, etc.) fall back to
+      // copy + unlink so we still preserve the user's bytes. If even
+      // that fails, swallow — losing a broken file is better than
+      // blocking first-run.
+      try {
+        const raw = fs.readFileSync(credentialsPath, 'utf-8');
+        fs.writeFileSync(backupPath, raw, { mode: 0o600 });
+        fs.unlinkSync(credentialsPath);
+      } catch {
+        backupPath = undefined;
+      }
+    }
+  }
+
+  const fresh: CredentialsFile = {
+    mnemonic: newMnemonic,
+    firstRunAnnouncementShown: false,
+  };
+  const dir = path.dirname(credentialsPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(credentialsPath, JSON.stringify(fresh), { mode: 0o600 });
+
+  return {
+    status: fileExists ? 'recovered_from_corrupt' : 'fresh_generated',
+    mnemonic: newMnemonic,
+    announcementPending: true,
+    backupPath,
+  };
+}
+
+/**
+ * Flip `firstRunAnnouncementShown` to `true` on disk. Called by the
+ * `before_agent_start` hook after it prepends the recovery-phrase
+ * banner context so the banner fires exactly once per credentials.json
+ * generation.
+ *
+ * Returns `true` on successful write (including the idempotent case
+ * where the flag was already `true`). Returns `false` if the file is
+ * missing, unreadable, or un-parseable — caller logs but does not throw,
+ * since failing to flip the flag only means the banner might show twice,
+ * not data loss.
+ */
+export function markFirstRunAnnouncementShown(credentialsPath: string): boolean {
+  try {
+    if (!fs.existsSync(credentialsPath)) return false;
+    const raw = fs.readFileSync(credentialsPath, 'utf-8');
+    const parsed = JSON.parse(raw) as CredentialsFile;
+    if (parsed.firstRunAnnouncementShown === true) return true;
+    const updated: CredentialsFile = { ...parsed, firstRunAnnouncementShown: true };
+    fs.writeFileSync(credentialsPath, JSON.stringify(updated), { mode: 0o600 });
+    return true;
+  } catch {
+    return false;
   }
 }

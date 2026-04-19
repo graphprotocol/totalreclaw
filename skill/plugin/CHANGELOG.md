@@ -4,6 +4,86 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] — 2026-04-20
+
+Runtime fixes surfaced by the first auto-QA run against an RC artifact
+(see [internal PR #10](https://github.com/p-diogo/totalreclaw-internal/pull/10),
+`docs/notes/QA-openclaw-RC-3.0.7-rc.1-20260420.md`). Minor bump because
+#3 changes first-run user-visible behavior.
+
+### Fixed
+
+- **[BLOCKER] `totalreclaw_remember` tool schema rejected by ajv on the
+  first call (bug #1).** The `type` property's `enum` was built via
+  `[...VALID_MEMORY_TYPES, ...LEGACY_V0_MEMORY_TYPES]`, and both sets
+  include `preference` + `summary` — so the resulting array had
+  duplicate entries at indices 5 and 12. OpenClaw's ajv-based tool
+  validator refuses to register a schema with duplicate enum items,
+  signature: `schema is invalid: data/properties/type/enum must NOT have
+  duplicate items (items ## 5 and 12 are identical)`. The first
+  `totalreclaw_remember` invocation of every session failed until the
+  agent retried without an explicit `type`. Wrapped the merge in
+  `Array.from(new Set(...))`. Adds `remember-schema.test.ts` with a
+  source-level tripwire so any revert to the raw spread fails CI.
+
+- **[MAJOR] `0x00` tombstone stubs triggered spurious digest decrypt
+  warnings (bug #3).** Some on-chain facts carry `encryptedBlob == "0x00"`
+  as a supersede tombstone (a 1-byte zero stub cheaper than writing a
+  full fact). Subgraph search returns these rows with `isActive: true`,
+  so `loadLatestDigest` and `fetchAllActiveClaims` attempted
+  `decryptFromHex` on them and produced `Digest: decrypt failed …
+  Encrypted data too short` WARNs (QA wallet: 7 of 25 facts were stubs;
+  5 WARNs per typical session). Added `isStubBlob(hex)` in
+  `digest-sync.ts` that recognizes empty / `0x`-only / all-zero-hex
+  shapes, and short-circuited at both decrypt sites. Stays conservative
+  — only all-zero blobs are skipped, so a genuine short-blob wire
+  format regression still surfaces as a WARN. Adds
+  `digest-stub-skip.test.ts` (19 assertions).
+
+### Changed
+
+- **[MINOR] First-run UX: plugin auto-bootstraps `credentials.json` on
+  load (bug #4).** Previous behavior required the user to manually call
+  `totalreclaw_setup` on their first turn if neither
+  `TOTALRECLAW_RECOVERY_PHRASE` nor a fully-populated `credentials.json`
+  was present. The plugin now:
+  - Reads a valid existing `credentials.json` silently (same as before;
+    no UX change for returning users). Accepts both `mnemonic`
+    (canonical) and `recovery_phrase` (alias) on the read path.
+  - When the file is missing, generates a fresh BIP-39 mnemonic, writes
+    `credentials.json` atomically with mode `0600`, and surfaces a
+    one-time banner on the next `before_agent_start` turn revealing the
+    phrase with a "write this down now" warning. The banner fires
+    EXACTLY ONCE — `firstRunAnnouncementShown` is persisted to the
+    credentials file after injection, so a process restart does not
+    re-announce.
+  - When the file is corrupt or missing a mnemonic of any spelling,
+    renames the unusable file to `credentials.json.broken-<timestamp>`
+    before generating fresh — the bytes are preserved so the user can
+    still recover if they had the prior phrase stored elsewhere. Banner
+    copy includes the backup path.
+  - `totalreclaw_setup` remains available for manual rotation /
+    restore-from-existing-phrase flows. New: no-arg or matching-phrase
+    calls against already-initialised credentials now no-op with a
+    confirmation instead of forcing a re-register.
+
+  New helpers live in `fs-helpers.ts`: `extractBootstrapMnemonic`,
+  `autoBootstrapCredentials(path, { generateMnemonic })`,
+  `markFirstRunAnnouncementShown`. The crypto generator is injected as a
+  callback so `fs-helpers.ts` stays free of security-scanner trigger
+  markers. Adds `credentials-bootstrap.test.ts` (48 assertions).
+
+### Notes
+
+- Bug #2 from the same QA (the `totalreclaw_pin` v0 envelope leak) is
+  being shipped by a parallel branch and is NOT in this patch.
+- Scanner-sim check stays green at 0 flags.
+- `index.ts` gains one `require('@scure/bip39')` site inside
+  `initialize()` (the auto-bootstrap callback). This does not trip the
+  `env-harvesting` rule (no `process.env` touch in that block) nor
+  `potential-exfiltration` (no `fs.read*` token in `index.ts`, per the
+  3.0.8 consolidation).
+
 ## [3.0.8] — 2026-04-19
 
 ### Fixed

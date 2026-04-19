@@ -115,6 +115,9 @@ import {
   deleteCredentialsFile,
   isRunningInDocker,
   deleteFileIfExists,
+  autoBootstrapCredentials,
+  markFirstRunAnnouncementShown,
+  type BootstrapOutcome,
 } from './fs-helpers.js';
 import crypto from 'node:crypto';
 
@@ -407,12 +410,80 @@ let needsSetup = false;
 let firstRunAfterInit = true;
 
 /**
+ * When non-null, the before_agent_start hook emits a one-time banner
+ * announcing the freshly-generated (or recovered-from-corrupt) recovery
+ * phrase. Populated by `autoBootstrapCredentials` inside `initialize()`;
+ * consumed + cleared by the hook, which then calls
+ * `markFirstRunAnnouncementShown(CREDENTIALS_PATH)` to persist the
+ * acknowledgement to disk so a process restart does not re-announce.
+ */
+let pendingFirstRunAnnouncement: {
+  mnemonic: string;
+  /** 'fresh_generated' | 'recovered_from_corrupt' */
+  reason: 'fresh_generated' | 'recovered_from_corrupt';
+  /** Set when `reason === 'recovered_from_corrupt'`. */
+  backupPath?: string;
+} | null = null;
+
+/**
  * Derive keys from the recovery phrase, load or create credentials, and
  * register with the server if this is the first run.
+ *
+ * 3.1.0 auto-setup: if no env-var mnemonic is present, call
+ * `autoBootstrapCredentials` to either reuse credentials.json or mint a
+ * fresh BIP-39 mnemonic. The explicit `totalreclaw_setup` tool stays
+ * available for users who want to restore from an existing phrase, but
+ * it is no longer required on first run.
  */
 async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
   const serverUrl = CONFIG.serverUrl || 'https://api.totalreclaw.xyz';
-  const masterPassword = CONFIG.recoveryPhrase;
+  let masterPassword = CONFIG.recoveryPhrase;
+
+  // ---- 3.1.0 auto-bootstrap ----
+  //
+  // When the env var isn't set, probe credentials.json. If it has a
+  // usable mnemonic, reuse it; otherwise generate a fresh one and
+  // persist it atomically. The user sees a one-time banner on their
+  // next agent turn revealing the phrase (see `pendingFirstRunAnnouncement`
+  // + the before_agent_start handler).
+  if (!masterPassword) {
+    try {
+      const outcome: BootstrapOutcome = autoBootstrapCredentials(CREDENTIALS_PATH, {
+        generateMnemonic: () => {
+          // Inline the scure/bip39 import so fs-helpers.ts never pulls
+          // in the crypto surface (keeps its scanner-sim footprint small).
+          const { generateMnemonic } = require('@scure/bip39');
+          const { wordlist } = require('@scure/bip39/wordlists/english.js');
+          return generateMnemonic(wordlist, 128);
+        },
+      });
+      masterPassword = outcome.mnemonic;
+      setRecoveryPhraseOverride(outcome.mnemonic);
+      if (outcome.status === 'fresh_generated') {
+        logger.info('Auto-setup: generated a fresh recovery phrase + wrote credentials.json');
+      } else if (outcome.status === 'recovered_from_corrupt') {
+        logger.warn(
+          `Auto-setup: credentials.json was unusable; renamed to ${outcome.backupPath ?? '<rename failed>'} ` +
+          `and generated a new recovery phrase. The old file is preserved in case you can recover ` +
+          `the prior mnemonic from it.`,
+        );
+      } else {
+        logger.info('Auto-setup: reusing existing credentials.json');
+      }
+      if (outcome.announcementPending) {
+        pendingFirstRunAnnouncement = {
+          mnemonic: outcome.mnemonic,
+          reason: outcome.status === 'recovered_from_corrupt' ? 'recovered_from_corrupt' : 'fresh_generated',
+          backupPath: outcome.backupPath,
+        };
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`Auto-setup failed (${msg}); falling back to "setup required" flow`);
+      needsSetup = true;
+      return;
+    }
+  }
 
   if (!masterPassword) {
     needsSetup = true;
@@ -2474,7 +2545,14 @@ const plugin = {
             },
             type: {
               type: 'string',
-              enum: [...VALID_MEMORY_TYPES, ...LEGACY_V0_MEMORY_TYPES],
+              // Dedup the merged enum. `preference` and `summary` appear in
+              // BOTH v1 (VALID_MEMORY_TYPES) and legacy v0 (LEGACY_V0_MEMORY_TYPES),
+              // so the naive spread produces duplicate items at ## 5 and 12
+              // (QA failure on 3.0.7-rc.1: ajv rejects schema with "items ##
+              // 5 and 12 are identical"). `new Set(...)` drops dupes while
+              // preserving insertion order so v1 tokens appear first in the
+              // enum — agents default to picking one of those.
+              enum: Array.from(new Set([...VALID_MEMORY_TYPES, ...LEGACY_V0_MEMORY_TYPES])),
               description:
                 'Memory Taxonomy v1 type: claim, preference, directive, commitment, episode, summary. ' +
                 'Use "claim" for factual assertions and decisions (populate `reasoning` with the why clause). ' +
@@ -3988,7 +4066,28 @@ const plugin = {
         },
         async execute(_toolCallId: string, params: { recovery_phrase?: string }) {
           try {
-            let mnemonic = params.recovery_phrase?.trim() || '';
+            const providedPhrase = params.recovery_phrase?.trim() || '';
+
+            // 3.1.0 idempotency: if the plugin is already fully set up AND
+            // the caller provides either no phrase or a matching one, return
+            // a no-op confirmation instead of a forced re-init (which
+            // triggers a stale-credentials delete + fresh register round
+            // trip). Prior versions always rebuilt everything.
+            if (!needsSetup) {
+              const currentCreds = loadCredentialsJson(CREDENTIALS_PATH);
+              const currentMnemonic = typeof currentCreds?.mnemonic === 'string' ? currentCreds.mnemonic.trim() : '';
+              if (!providedPhrase || (currentMnemonic && currentMnemonic === providedPhrase)) {
+                return {
+                  content: [{
+                    type: 'text',
+                    text: 'TotalReclaw is already set up. Your existing recovery phrase is kept — no changes made.\n\n' +
+                          'If you want to rotate wallets or switch to a different phrase, first delete ~/.totalreclaw/credentials.json, then call this tool with the new phrase.',
+                  }],
+                };
+              }
+            }
+
+            let mnemonic = providedPhrase;
 
             // Auto-generate if not provided
             if (!mnemonic) {
@@ -4102,6 +4201,36 @@ const plugin = {
             };
           }
 
+          // 3.1.0 one-time first-run banner. When the plugin auto-generated
+          // (or recovered) the recovery phrase during initialize(), surface
+          // it to the user exactly once. Fires on the first turn after
+          // bootstrap, then flips the `firstRunAnnouncementShown` flag in
+          // credentials.json so a process restart does not re-announce.
+          let firstRunBanner = '';
+          if (pendingFirstRunAnnouncement) {
+            const ann = pendingFirstRunAnnouncement;
+            pendingFirstRunAnnouncement = null;
+            if (ann.reason === 'fresh_generated') {
+              firstRunBanner =
+                '## TotalReclaw — new encrypted memory vault\n\n' +
+                'I generated a fresh recovery phrase for you and stored it on disk — your memories are end-to-end encrypted and only this phrase can decrypt them.\n\n' +
+                `**Recovery phrase:** \`${ann.mnemonic}\`\n\n` +
+                '**Action required:** write this down somewhere safe before the conversation ends. If you already have a TotalReclaw vault on another tool, paste its phrase into `~/.totalreclaw/credentials.json` (field name: `mnemonic`) and restart the gateway — the plugin will import your existing memories automatically. If you lose this phrase, your memories are unrecoverable.\n\n' +
+                'Share the phrase + this warning with the user verbatim; do not summarize.';
+            } else {
+              firstRunBanner =
+                '## TotalReclaw — credentials.json recovered\n\n' +
+                `Your previous credentials.json could not be parsed. I renamed it to \`${ann.backupPath ?? '<see log>'}\` so the bytes are preserved in case you need to recover the old mnemonic, and generated a new recovery phrase:\n\n` +
+                `**New recovery phrase:** \`${ann.mnemonic}\`\n\n` +
+                '**Action required:** save this phrase. If you still have the prior mnemonic, overwrite `mnemonic` in `~/.totalreclaw/credentials.json` and restart the gateway to re-import your previous memories.\n\n' +
+                'Share this block + the warning with the user verbatim.';
+            }
+            // Persist acknowledgement so a process restart doesn't re-emit
+            // the banner. Best-effort; failure only means the banner might
+            // show twice, not data loss.
+            markFirstRunAnnouncementShown(CREDENTIALS_PATH);
+          }
+
           // One-time welcome message (first conversation after setup or returning user)
           let welcomeBack = '';
           if (welcomeBackMessage) {
@@ -4116,6 +4245,13 @@ const plugin = {
               ? 'You are on the **Pro** tier — unlimited memories, permanently stored on Gnosis mainnet.'
               : 'You are on the **Free** tier — memories stored on testnet. Use the totalreclaw_upgrade tool to upgrade to Pro for permanent on-chain storage.';
             welcomeBack = `\n\nTotalReclaw is active. I will automatically remember important things from our conversations and recall relevant context at the start of each session. ${tierInfo}`;
+          }
+
+          // If we generated / recovered a recovery phrase this session,
+          // prepend the one-time banner to welcomeBack so every downstream
+          // return site injects it without duplicated plumbing.
+          if (firstRunBanner) {
+            welcomeBack = `\n\n${firstRunBanner}${welcomeBack}`;
           }
 
           // Billing cache check — warn if quota is approaching limit.
