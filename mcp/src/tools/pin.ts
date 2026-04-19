@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { findLoserClaimInDecisionLog } from '../decision-log-reader.js';
 import type { SubgraphSearchFact } from '../subgraph/search.js';
 import { encodeFactProtobuf } from '../subgraph/store.js';
 
@@ -50,6 +51,14 @@ export interface DecisionLogEntry {
   loser_score?: number;
   winner_components?: ScoreComponents;
   loser_components?: ScoreComponents;
+  /**
+   * Canonical Claim JSON of the loser (the fact that got tombstoned).
+   * Populated on `supersede_existing` rows from Phase 2.1 onwards.
+   * Used by the pin tool's recovery path — see `findLoserClaimInDecisionLog`
+   * in `../decision-log-reader.ts`. Optional for backward compat with
+   * pre-Phase-2.1 log rows.
+   */
+  loser_claim_json?: string;
   mode?: string;
 }
 
@@ -413,17 +422,59 @@ export async function executePinOperation(
     ? existing.encryptedBlob.slice(2)
     : existing.encryptedBlob;
   let plaintext: string;
+  let recoveredFromDecisionLog = false;
   try {
     plaintext = deps.decryptBlob(blobHex);
   } catch (err) {
-    return {
-      success: false,
-      fact_id: factId,
-      error: `Failed to decrypt fact: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    // Phase 2.1 recovery path: if the on-chain blob is a tombstone (1-byte
+    // `0x00` written by an auto-resolved supersede — or by a prior forget on
+    // another client), the cipher will fail because the ciphertext is shorter
+    // than the auth tag. Fall back to the canonical Claim JSON stashed in
+    // `decisions.jsonl` at supersede time.
+    //
+    // Without this fallback, a cross-client flow like "pin in OpenClaw →
+    // forget in MCP → re-pin in MCP" cannot recover: MCP has no way to read
+    // the pre-tombstone claim. Mirrors the plugin's recovery path at
+    // `skill/plugin/pin.ts:277` so behavior is consistent across clients.
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const looksLikeTombstone =
+      blobHex === '00' ||
+      blobHex === '' ||
+      errMsg.includes('Encrypted data too short') ||
+      errMsg.includes('too short') ||
+      errMsg.includes('Cipher');
+    if (!looksLikeTombstone) {
+      return {
+        success: false,
+        fact_id: factId,
+        error: `Failed to decrypt fact: ${errMsg}`,
+      };
+    }
+    const recovered = findLoserClaimInDecisionLog(factId);
+    if (!recovered) {
+      return {
+        success: false,
+        fact_id: factId,
+        error:
+          `Failed to decrypt fact and no recovery row in decisions.jsonl: ${errMsg}. ` +
+          'The fact may have been tombstoned by an auto-resolution that predates Phase 2.1 ' +
+          '(when loser_claim_json was added to the decision log), or by a client that ' +
+          'did not write to the shared state dir.',
+      };
+    }
+    plaintext = recovered;
+    recoveredFromDecisionLog = true;
   }
 
   const parsed = parseBlobForPin(plaintext);
+  // Recovered claims always represent a fact the user is trying to override —
+  // never short-circuit the operation as idempotent. The `st` field on the
+  // recovered loser reflects the state at supersede time (typically active),
+  // not the state now; drop it so the targetStatus check below produces a
+  // real on-chain write. Mirrors `skill/plugin/pin.ts:325`.
+  if (recoveredFromDecisionLog) {
+    parsed.currentStatus = 'active';
+  }
 
   // 3. Idempotent early-exit
   if (parsed.currentStatus === targetStatus) {
