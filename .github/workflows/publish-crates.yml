@@ -15,6 +15,19 @@ on:
           - totalreclaw-memory
           - all
         default: all
+      release-type:
+        description: 'stable or rc (appends -rc.<N>; cargo treats as pre-release, users pin explicitly)'
+        required: false
+        type: choice
+        options:
+          - stable
+          - rc
+        default: stable
+      rc-number:
+        description: 'RC increment (1, 2, 3...) — only used when release-type=rc'
+        required: false
+        type: number
+        default: 1
       dry-run:
         description: 'Dry run (package only, no publish)'
         required: false
@@ -23,6 +36,16 @@ on:
 
 # Publish order matters: totalreclaw-memory depends on totalreclaw-core, so core must
 # exist on crates.io before memory is published. The two jobs below encode that ordering.
+#
+# RC mode (`release-type: rc`, added 2026-04-20 — see docs/guides/release-process.md):
+#   - Core: Cargo.toml `version` gets `-rc.<N>` appended in-workflow (not committed).
+#   - Memory: Cargo.toml `version` gets `-rc.<N>` appended AND the `totalreclaw-core`
+#     dep's `version = "2.0"` field is rewritten to the exact RC version string,
+#     otherwise cargo's pre-release semver rule will refuse to resolve the dep.
+#   - Users opt into RC explicitly with `cargo add totalreclaw-core@=2.1.0-rc.1`
+#     or a `[dependencies] totalreclaw-core = "=2.1.0-rc.1"` entry.
+#   - `cargo install --version` also works. No dist-tag on crates.io (unlike npm),
+#     so "pre-release" is purely semver semantics.
 
 jobs:
   publish-core:
@@ -47,6 +70,31 @@ jobs:
             ~/.cargo/git
             rust/totalreclaw-core/target
           key: ${{ runner.os }}-cargo-core-${{ hashFiles('rust/totalreclaw-core/Cargo.lock') }}
+
+      - name: Apply RC version suffix (rc mode only)
+        if: inputs.release-type == 'rc'
+        run: |
+          cd rust/totalreclaw-core
+          # Rewrite Cargo.toml in place: strip any existing -rc.<N>, append fresh.
+          # This is ephemeral to the workflow run; we do NOT commit it.
+          python3 <<'PY'
+          import re, pathlib
+          p = pathlib.Path('Cargo.toml')
+          text = p.read_text()
+          rc_num = "${{ inputs.rc-number }}"
+          def repl(m):
+              base = re.sub(r'-rc\.\d+$', '', m.group(2))
+              return f'{m.group(1)}"{base}-rc.{rc_num}"'
+          new_text = re.sub(
+              r'(^version\s*=\s*)"([^"]+)"',
+              repl,
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          p.write_text(new_text)
+          print(new_text.splitlines()[:10])
+          PY
 
       - name: Report version
         id: version
@@ -109,6 +157,50 @@ jobs:
             ~/.cargo/git
             rust/totalreclaw-memory/target
           key: ${{ runner.os }}-cargo-memory-${{ hashFiles('rust/totalreclaw-memory/Cargo.lock') }}
+
+      - name: Apply RC version suffix + pin core dep to RC (rc mode only)
+        if: inputs.release-type == 'rc'
+        run: |
+          # Bump memory's own version AND rewrite its `totalreclaw-core` dep
+          # from `version = "2.0"` to the exact `-rc.<N>` string, because
+          # cargo's semver pre-release rule refuses to resolve `"2.0"` against
+          # a pre-release like `2.1.0-rc.1`. We read the RC'd core version
+          # straight from core's Cargo.toml (same workflow run mutated it).
+          python3 <<'PY'
+          import re, pathlib
+          rc_num = "${{ inputs.rc-number }}"
+
+          # Read the core version that the publish-core job just set.
+          core_toml = pathlib.Path('rust/totalreclaw-core/Cargo.toml').read_text()
+          core_version_m = re.search(r'^version\s*=\s*"([^"]+)"', core_toml, re.MULTILINE)
+          core_version = core_version_m.group(1)
+          print(f"core @ {core_version}")
+
+          # Mutate memory's own version.
+          mem_path = pathlib.Path('rust/totalreclaw-memory/Cargo.toml')
+          mem_text = mem_path.read_text()
+          def mem_version_repl(m):
+              base = re.sub(r'-rc\.\d+$', '', m.group(2))
+              return f'{m.group(1)}"{base}-rc.{rc_num}"'
+          mem_text = re.sub(
+              r'(^version\s*=\s*)"([^"]+)"',
+              mem_version_repl,
+              mem_text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+
+          # Rewrite the core dep line so its `version = "…"` points at the RC.
+          # Match: totalreclaw-core = { path = "…", version = "2.0" }
+          mem_text = re.sub(
+              r'(totalreclaw-core\s*=\s*\{[^}]*version\s*=\s*)"[^"]+"',
+              rf'\1"={core_version}"',
+              mem_text,
+          )
+          mem_path.write_text(mem_text)
+          print("memory Cargo.toml head:")
+          print('\n'.join(mem_text.splitlines()[:20]))
+          PY
 
       - name: Wait for core to be queryable on crates.io
         if: needs.publish-core.result == 'success'

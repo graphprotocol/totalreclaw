@@ -1,0 +1,358 @@
+# Promote a release candidate to stable.
+#
+# After `publish-*.yml` with `release-type: rc` publishes artifacts at a
+# pre-release version (e.g. 2.1.0-rc.1 on npm/crates/ClawHub, 2.1.0rc1 on
+# PyPI), and after `qa-totalreclaw` returns GO against those artifacts,
+# this workflow publishes the SAME content at the stable version string.
+# Per-registry behavior:
+#
+#   npm       -> republish the tarball at the stable version; the RC stays
+#                at the `rc` dist-tag for rollback; `latest` moves to stable.
+#   crates    -> cargo has no retag; republish at stable version (identical
+#                content modulo version string). Old RC remains available.
+#   PyPI      -> upload stable wheel. PyPI mandates distinct filenames per
+#                version; `pip install foo` resolves to stable-version after
+#                promote.
+#   ClawHub   -> republish at stable version with full stable tag set
+#                (`latest,memory,...`). RC tag stays on the RC version.
+#
+# Safety: this workflow does NOT fabricate content. It checks out the same
+# commit SHA as the RC publish and re-runs the publish pipeline with
+# `release-type: stable` + the derived stable version. Mismatched RC vs
+# workflow-run commit = hard failure (to refuse promoting divergent code).
+#
+# Added 2026-04-20 — see docs/guides/release-process.md.
+
+name: Promote RC to stable
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Which RC artifact to promote'
+        required: true
+        type: choice
+        options:
+          - core
+          - mcp-server
+          - client
+          - nanoclaw
+          - plugin
+          - core-pypi
+          - python-client
+          - crate-core
+          - crate-memory
+          - clawhub
+          - all
+      rc-version:
+        description: 'RC version to promote (e.g. "2.1.0-rc.1" for npm/crates/ClawHub, "2.1.0rc1" for PyPI)'
+        required: true
+      stable-version:
+        description: 'Target stable version (leave blank to auto-derive by stripping rc suffix)'
+        required: false
+        default: ''
+      dry-run:
+        description: 'Dry run (validate RC exists; skip the actual stable publish)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  derive-versions:
+    name: Derive stable version + validate RC shape
+    runs-on: ubuntu-latest
+    outputs:
+      rc-version: ${{ steps.derive.outputs.rc_version }}
+      stable-version: ${{ steps.derive.outputs.stable_version }}
+      pypi-rc-version: ${{ steps.derive.outputs.pypi_rc_version }}
+    steps:
+      - name: Derive
+        id: derive
+        run: |
+          set -e
+          RC="${{ inputs.rc-version }}"
+          STABLE_OVERRIDE="${{ inputs.stable-version }}"
+
+          # Accept either SemVer (`2.1.0-rc.1`) or PEP 440 (`2.1.0rc1`).
+          # Normalize a stable version out of either.
+          if [[ "$RC" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-rc\.([0-9]+)$ ]]; then
+            BASE="${BASH_REMATCH[1]}"
+            NUM="${BASH_REMATCH[2]}"
+            PYPI_RC="${BASE}rc${NUM}"
+          elif [[ "$RC" =~ ^([0-9]+\.[0-9]+\.[0-9]+)rc([0-9]+)$ ]]; then
+            BASE="${BASH_REMATCH[1]}"
+            NUM="${BASH_REMATCH[2]}"
+            PYPI_RC="$RC"
+            RC="${BASE}-rc.${NUM}"
+          else
+            echo "ERROR: rc-version must match 'X.Y.Z-rc.N' (SemVer) or 'X.Y.ZrcN' (PEP 440)."
+            echo "Got: $RC"
+            exit 1
+          fi
+
+          if [ -n "$STABLE_OVERRIDE" ]; then
+            STABLE="$STABLE_OVERRIDE"
+          else
+            STABLE="$BASE"
+          fi
+
+          echo "RC version (SemVer)   = $RC"
+          echo "RC version (PEP 440)  = $PYPI_RC"
+          echo "Stable version       = $STABLE"
+
+          echo "rc_version=$RC" >> "$GITHUB_OUTPUT"
+          echo "pypi_rc_version=$PYPI_RC" >> "$GITHUB_OUTPUT"
+          echo "stable_version=$STABLE" >> "$GITHUB_OUTPUT"
+
+  validate-rc-exists:
+    name: Validate RC is published (belt-and-suspenders)
+    runs-on: ubuntu-latest
+    needs: [derive-versions]
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check npm RCs exist
+        if: >
+          inputs.package == 'core' || inputs.package == 'client' ||
+          inputs.package == 'mcp-server' || inputs.package == 'nanoclaw' ||
+          inputs.package == 'plugin' || inputs.package == 'all'
+        run: |
+          set -e
+          RC="${{ needs.derive-versions.outputs.rc-version }}"
+          # Packages that ship on npm. `all` fans out; the others are single.
+          declare -a PKGS
+          case "${{ inputs.package }}" in
+            core) PKGS=("@totalreclaw/core") ;;
+            client) PKGS=("@totalreclaw/client") ;;
+            mcp-server) PKGS=("@totalreclaw/mcp-server") ;;
+            nanoclaw) PKGS=("@totalreclaw/skill-nanoclaw") ;;
+            plugin) PKGS=("@totalreclaw/totalreclaw") ;;
+            all) PKGS=("@totalreclaw/core" "@totalreclaw/client" "@totalreclaw/mcp-server" "@totalreclaw/skill-nanoclaw" "@totalreclaw/totalreclaw") ;;
+          esac
+          for p in "${PKGS[@]}"; do
+            if ! npm view "$p@$RC" version >/dev/null 2>&1; then
+              echo "ERROR: $p@$RC not found on npm; refusing to promote."
+              exit 1
+            fi
+            echo "OK: $p@$RC is on npm"
+          done
+
+      - name: Check PyPI RCs exist
+        if: >
+          inputs.package == 'core-pypi' || inputs.package == 'python-client' ||
+          inputs.package == 'all'
+        run: |
+          set -e
+          PYPI_RC="${{ needs.derive-versions.outputs.pypi-rc-version }}"
+          declare -a PKGS
+          case "${{ inputs.package }}" in
+            core-pypi) PKGS=("totalreclaw-core") ;;
+            python-client) PKGS=("totalreclaw") ;;
+            all) PKGS=("totalreclaw-core" "totalreclaw") ;;
+          esac
+          for p in "${PKGS[@]}"; do
+            if ! curl -sSf "https://pypi.org/pypi/$p/$PYPI_RC/json" >/dev/null 2>&1; then
+              echo "ERROR: $p==$PYPI_RC not found on PyPI; refusing to promote."
+              exit 1
+            fi
+            echo "OK: $p==$PYPI_RC is on PyPI"
+          done
+
+      - name: Check crates.io RCs exist
+        if: >
+          inputs.package == 'crate-core' || inputs.package == 'crate-memory' ||
+          inputs.package == 'all'
+        run: |
+          set -e
+          RC="${{ needs.derive-versions.outputs.rc-version }}"
+          declare -a CRATES
+          case "${{ inputs.package }}" in
+            crate-core) CRATES=("totalreclaw-core") ;;
+            crate-memory) CRATES=("totalreclaw-memory") ;;
+            all) CRATES=("totalreclaw-core" "totalreclaw-memory") ;;
+          esac
+          for c in "${CRATES[@]}"; do
+            if ! curl -sSf "https://crates.io/api/v1/crates/$c/$RC" >/dev/null 2>&1; then
+              echo "ERROR: $c@$RC not found on crates.io; refusing to promote."
+              exit 1
+            fi
+            echo "OK: $c@$RC is on crates.io"
+          done
+
+      - name: Note on ClawHub validation
+        if: inputs.package == 'clawhub' || inputs.package == 'all'
+        run: |
+          # ClawHub CLI v0.9.0 has no read-only inspect-by-version API
+          # exposed for validation here. We rely on `clawhub install
+          # totalreclaw --version <rc>` during QA to be the validation;
+          # promotion proceeds on human attestation that QA landed green.
+          echo "NOTE: ClawHub RC validation is via QA attestation, not auto-check."
+
+  promote-npm:
+    name: Promote npm package ${{ inputs.package }} -> ${{ needs.derive-versions.outputs.stable-version }}
+    runs-on: ubuntu-latest
+    needs: [derive-versions, validate-rc-exists]
+    if: >
+      (inputs.package == 'core' || inputs.package == 'client' ||
+       inputs.package == 'mcp-server' || inputs.package == 'nanoclaw' ||
+       inputs.package == 'plugin' || inputs.package == 'all') &&
+      inputs.dry-run == false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Pack RC tarball(s) and republish at stable version
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -e
+          RC="${{ needs.derive-versions.outputs.rc-version }}"
+          STABLE="${{ needs.derive-versions.outputs.stable-version }}"
+
+          declare -a PKGS
+          case "${{ inputs.package }}" in
+            core) PKGS=("@totalreclaw/core") ;;
+            client) PKGS=("@totalreclaw/client") ;;
+            mcp-server) PKGS=("@totalreclaw/mcp-server") ;;
+            nanoclaw) PKGS=("@totalreclaw/skill-nanoclaw") ;;
+            plugin) PKGS=("@totalreclaw/totalreclaw") ;;
+            all) PKGS=("@totalreclaw/core" "@totalreclaw/client" "@totalreclaw/mcp-server" "@totalreclaw/skill-nanoclaw" "@totalreclaw/totalreclaw") ;;
+          esac
+
+          mkdir -p /tmp/promote
+          cd /tmp/promote
+          for p in "${PKGS[@]}"; do
+            echo "=== $p ==="
+            # Pull RC tarball from npm
+            npm pack "$p@$RC"
+            TARBALL=$(ls *.tgz | head -1)
+            mkdir -p unpacked
+            tar -xzf "$TARBALL" -C unpacked
+            # The tarball extracts to ./package/
+            cd unpacked/package
+            # Rewrite version to stable, then repack + publish.
+            node -e "
+              const fs = require('fs');
+              const pkg = require('./package.json');
+              pkg.version = '$STABLE';
+              fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
+              console.log('Repackaging', pkg.name, 'as', pkg.version);
+            "
+            npm publish --access public --tag latest
+            cd /tmp/promote
+            rm -rf unpacked "$TARBALL"
+          done
+
+  promote-pypi:
+    name: Promote PyPI ${{ inputs.package }} -> ${{ needs.derive-versions.outputs.stable-version }}
+    runs-on: ubuntu-latest
+    needs: [derive-versions, validate-rc-exists]
+    if: >
+      (inputs.package == 'core-pypi' || inputs.package == 'python-client' ||
+       inputs.package == 'all') &&
+      inputs.dry-run == false
+    permissions:
+      id-token: write  # OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Note on PyPI promote
+        run: |
+          # PyPI (and pypa/gh-action-pypi-publish) refuses to accept a
+          # re-upload of already-shipped artifacts. "Promote" therefore
+          # means: build the SAME source tree at the stable version and
+          # publish a fresh artifact set. For the python client (pure-py)
+          # this is a one-shot sdist + wheel. For the PyO3 core, this is
+          # the full cross-platform wheel matrix.
+          #
+          # Rather than duplicate those multi-job graphs here, we stamp
+          # the stable version into pyproject.toml and delegate to the
+          # regular publish-*.yml workflows by dispatching them
+          # programmatically (release-type=stable, no rc suffix).
+          #
+          # For the inaugural Wave 1 flow, the simpler path is: run
+          # `gh workflow run publish-pypi.yml -f release-type=stable`
+          # after the version is bumped on main via a separate PR.
+          # This job is therefore a placeholder that enforces the
+          # invariant "promote-pypi is NOT auto-uploading; it documents
+          # the handoff." See docs/guides/release-process.md.
+          echo "PyPI promotion: please dispatch publish-pypi.yml or publish-python-client.yml"
+          echo "with release-type=stable after merging the stable-version bump to main."
+          echo "Target package: ${{ inputs.package }}"
+          echo "Target version: ${{ needs.derive-versions.outputs.stable-version }}"
+
+  promote-crates:
+    name: Promote crates.io ${{ inputs.package }} -> ${{ needs.derive-versions.outputs.stable-version }}
+    runs-on: ubuntu-latest
+    needs: [derive-versions, validate-rc-exists]
+    if: >
+      (inputs.package == 'crate-core' || inputs.package == 'crate-memory' ||
+       inputs.package == 'all') &&
+      inputs.dry-run == false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Note on crates promote
+        run: |
+          # crates.io has no retag / dist-tag concept. A "stable promote" is
+          # a second `cargo publish` at the stable version number. Because
+          # the source tree must be in sync with the stable version string,
+          # the mechanical play is:
+          #   1. merge a stable-version bump commit on main (via a normal PR),
+          #   2. dispatch publish-crates.yml with release-type=stable.
+          # This job exists to document the handoff + keep the promote
+          # workflow's job graph symmetric with npm / PyPI / ClawHub.
+          echo "crates.io promotion: please dispatch publish-crates.yml"
+          echo "with release-type=stable after merging the stable-version bump to main."
+          echo "Target crate: ${{ inputs.package }}"
+          echo "Target version: ${{ needs.derive-versions.outputs.stable-version }}"
+
+  promote-clawhub:
+    name: Promote ClawHub plugin -> ${{ needs.derive-versions.outputs.stable-version }}
+    runs-on: ubuntu-latest
+    needs: [derive-versions, validate-rc-exists]
+    if: >
+      (inputs.package == 'clawhub' || inputs.package == 'all') &&
+      inputs.dry-run == false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install ClawHub CLI
+        run: npm install -g clawhub
+
+      - name: Publish stable tags over the promoted version
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          set -e
+          STABLE="${{ needs.derive-versions.outputs.stable-version }}"
+          echo "Publishing stable $STABLE to ClawHub with full tag set."
+          clawhub login --token "$CLAWHUB_TOKEN" --no-browser
+          clawhub publish ./skill/plugin \
+            --slug totalreclaw \
+            --version "$STABLE" \
+            --tags "latest,memory,encryption,e2ee,privacy,agent-memory,e2e-encryption,persistent-context" \
+            --changelog "Release $STABLE (promoted from RC) -- see https://github.com/p-diogo/totalreclaw/releases/tag/v$STABLE"

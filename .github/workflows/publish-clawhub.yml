@@ -11,6 +11,17 @@
 #   3. Trigger:
 #        git tag v1.5.0 && git push --tags   # auto-publishes
 #        or use "Run workflow" button in GitHub Actions (manual dispatch)
+#
+# RC mode (`release-type: rc`, added 2026-04-20 — see
+# docs/guides/release-process.md): ClawHub CLI v0.9.0 `publish` has no
+# dedicated pre-release channel. We simulate one by:
+#   1. Appending `-rc.<N>` to the published version (SemVer pre-release),
+#   2. Tagging the release with `rc` (and omitting `latest` from the tag list)
+#      so the ClawHub UI/search does not surface it as the current version,
+#   3. Documenting the opt-in install path for QA:
+#        clawhub install totalreclaw --version 3.1.0-rc.1
+# Stable promotion (via `promote-rc.yml`) republishes the same content at
+# the stable version with the full `latest,memory,encryption,...` tag set.
 
 name: Publish to ClawHub
 
@@ -21,8 +32,21 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (e.g., 1.4.0)'
+        description: 'Version to publish (e.g., 1.4.0). For RC, provide the BASE version; `-rc.<N>` is appended automatically.'
         required: true
+      release-type:
+        description: 'stable (tag `latest`) or rc (append -rc.<N>, tag `rc` only)'
+        required: false
+        type: choice
+        options:
+          - stable
+          - rc
+        default: stable
+      rc-number:
+        description: 'RC increment (1, 2, 3...) — only used when release-type=rc'
+        required: false
+        type: number
+        default: 1
 
 jobs:
   publish:
@@ -49,15 +73,40 @@ jobs:
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
         run: |
-          VERSION="${{ github.event.inputs.version || github.ref_name }}"
-          VERSION="${VERSION#v}"  # Strip 'v' prefix if present
+          set -e
+          BASE_VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          BASE_VERSION="${BASE_VERSION#v}"                 # Strip 'v' prefix if present
+          BASE_VERSION="${BASE_VERSION%-rc.*}"             # Strip any existing -rc.<N>
+
+          RELEASE_TYPE="${{ github.event.inputs.release-type }}"
+          RC_NUMBER="${{ github.event.inputs.rc-number }}"
+          RELEASE_TYPE="${RELEASE_TYPE:-stable}"
+
+          if [ "$RELEASE_TYPE" = "rc" ]; then
+            VERSION="${BASE_VERSION}-rc.${RC_NUMBER}"
+            # `rc`-only tags; do NOT set `latest` so the ClawHub front page
+            # keeps pointing at the last stable version until promote-rc
+            # republishes the same content as `latest`.
+            TAGS="rc"
+            CHANGELOG="Release candidate $VERSION -- testing build, not recommended for production. See https://github.com/p-diogo/totalreclaw/releases"
+          else
+            VERSION="$BASE_VERSION"
+            TAGS="latest,memory,encryption,e2ee,privacy,agent-memory,e2e-encryption,persistent-context"
+            CHANGELOG="Release $VERSION -- see https://github.com/p-diogo/totalreclaw/releases/tag/v$VERSION"
+          fi
+
+          echo "Publishing to ClawHub: version=$VERSION tags=$TAGS"
 
           clawhub login --token "$CLAWHUB_TOKEN" --no-browser
           clawhub publish ./skill/plugin \
             --slug totalreclaw \
             --version "$VERSION" \
-            --tags "latest,memory,encryption,e2ee,privacy,agent-memory,e2e-encryption,persistent-context" \
-            --changelog "Release $VERSION -- see https://github.com/p-diogo/totalreclaw/releases/tag/v$VERSION"
+            --tags "$TAGS" \
+            --changelog "$CHANGELOG"
+
+          # Surface the published version for downstream jobs / notifications.
+          echo "published_version=$VERSION" >> "$GITHUB_OUTPUT"
+        id: publish
 
       - name: Notify on Telegram
         if: success()
@@ -69,9 +118,15 @@ jobs:
             echo "Telegram secrets not configured, skipping notification"
             exit 0
           fi
-          VERSION="${{ github.event.inputs.version || github.ref_name }}"
-          VERSION="${VERSION#v}"
+          VERSION="${{ steps.publish.outputs.published_version }}"
+          RELEASE_TYPE="${{ github.event.inputs.release-type }}"
+          RELEASE_TYPE="${RELEASE_TYPE:-stable}"
+          if [ "$RELEASE_TYPE" = "rc" ]; then
+            MSG="TotalReclaw v${VERSION} (RC) published to ClawHub"
+          else
+            MSG="TotalReclaw v${VERSION} published to ClawHub"
+          fi
           curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d "chat_id=${TELEGRAM_CHAT_ID}" \
-            -d "text=TotalReclaw v${VERSION} published to ClawHub" \
+            -d "text=${MSG}" \
             -d "parse_mode=HTML" || true

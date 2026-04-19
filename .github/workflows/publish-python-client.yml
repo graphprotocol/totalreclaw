@@ -3,11 +3,30 @@ name: Publish totalreclaw Python client to PyPI
 on:
   workflow_dispatch:
     inputs:
+      release-type:
+        description: 'stable or rc (appends rc<N>; pip install ignores pre-release by default, users pin explicitly)'
+        required: false
+        type: choice
+        options:
+          - stable
+          - rc
+        default: stable
+      rc-number:
+        description: 'RC increment (1, 2, 3...) — only used when release-type=rc'
+        required: false
+        type: number
+        default: 1
       dry-run:
         description: 'Dry run (build only, no publish)'
         required: false
         type: boolean
         default: false
+
+# RC mode (added 2026-04-20 — see docs/guides/release-process.md):
+#   - Appends `rc<N>` (PEP 440) to python/pyproject.toml version.
+#   - `pip install totalreclaw` ignores the RC by default. Users opt in with
+#     `pip install totalreclaw==2.1.0rc1`.
+#   - Mutation is ephemeral; not committed back to main.
 
 jobs:
   build:
@@ -22,6 +41,30 @@ jobs:
 
       - name: Install build tools
         run: pip install build
+
+      - name: Apply RC version suffix (rc mode only)
+        if: inputs.release-type == 'rc'
+        run: |
+          cd python
+          python3 <<'PY'
+          import re, pathlib
+          rc_num = "${{ inputs.rc-number }}"
+          p = pathlib.Path('pyproject.toml')
+          text = p.read_text()
+          def repl(m):
+              base = re.sub(r'rc\d+$', '', m.group(2))
+              return f'{m.group(1)}"{base}rc{rc_num}"'
+          new_text = re.sub(
+              r'(^version\s*=\s*)"([^"]+)"',
+              repl,
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          p.write_text(new_text)
+          print("pyproject.toml head:")
+          print('\n'.join(new_text.splitlines()[:10]))
+          PY
 
       - name: Build sdist and wheel
         run: cd python && python -m build
