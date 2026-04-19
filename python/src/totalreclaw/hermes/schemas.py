@@ -237,6 +237,55 @@ IMPORT_FROM = {
     },
 }
 
+UPGRADE = {
+    "name": "totalreclaw_upgrade",
+    "description": (
+        "Start the TotalReclaw Pro upgrade flow — creates a Stripe "
+        "Checkout session and returns the URL the user opens to pay. "
+        "\n\nINVOKE WHEN USER SAYS:\n"
+        "- 'upgrade to Pro' / 'I want Pro' / 'how do I upgrade'\n"
+        "- 'I hit the free limit' / 'pay for more memories' / 'unlimited'\n"
+        "- 'subscribe' / 'how much does Pro cost'\n"
+        "\nAfter calling this tool, read the returned ``message`` aloud — "
+        "it contains the checkout URL the user must open in their browser. "
+        "Do NOT call this tool speculatively; only when the user has "
+        "explicitly asked to upgrade, pay, or hit the quota limit. Pro "
+        "tier routes writes to Gnosis mainnet (permanent) instead of "
+        "Base Sepolia (testnet) and removes the free-write cap."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+    },
+}
+
+DEBRIEF = {
+    "name": "totalreclaw_debrief",
+    "description": (
+        "Capture broader context, outcomes, and open threads that "
+        "turn-by-turn auto-extraction missed. Writes a small number of "
+        "``summary`` facts (v1 type=summary, provenance=derived) that a "
+        "future session can use to reconstruct what happened overall. "
+        "\n\nINVOKE WHEN USER SAYS:\n"
+        "- 'goodbye' / 'bye' / 'thanks' / 'that's all'\n"
+        "- 'I'm done' / 'wrapping up' / 'let's end here'\n"
+        "- after a long debug, plan, or decision session\n"
+        "- before a detected context compaction / reset\n"
+        "\nWHEN NOT TO USE:\n"
+        "- casual chat or pure Q&A — adds noise, no broader context\n"
+        "- when no memories were stored this session — nothing to synthesize\n"
+        "- if unsure → skip; debriefs are meant to be rare + high-signal.\n"
+        "\nThe tool reuses the same extraction pipeline as the automatic "
+        "``on_session_end`` hook, so the resulting facts are identical in "
+        "shape (type=summary, provenance=derived, scope=unspecified). "
+        "Returns ``stored`` count + ``fact_ids`` so the agent can confirm."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+    },
+}
+
 IMPORT_BATCH = {
     "name": "totalreclaw_import_batch",
     "description": (

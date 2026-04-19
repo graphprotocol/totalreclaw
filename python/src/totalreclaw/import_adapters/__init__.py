@@ -23,12 +23,14 @@ from .base_adapter import BaseImportAdapter
 from .gemini_adapter import GeminiAdapter
 from .chatgpt_adapter import ChatGPTAdapter
 from .claude_adapter import ClaudeAdapter
+from .mem0_adapter import Mem0Adapter
 
 
 _ADAPTERS: dict[str, type[BaseImportAdapter]] = {
     'gemini': GeminiAdapter,
     'chatgpt': ChatGPTAdapter,
     'claude': ClaudeAdapter,
+    'mem0': Mem0Adapter,
 }
 
 
@@ -36,8 +38,8 @@ def get_adapter(source: str) -> BaseImportAdapter:
     """
     Get an import adapter by source name.
 
-    Currently supported: 'gemini'
-    (ChatGPT, Claude, Mem0 adapters to be ported from TypeScript)
+    Currently supported: 'gemini', 'chatgpt', 'claude', 'mem0'.
+    (MCP Memory adapter to be ported from TypeScript in Phase B.)
 
     Raises ValueError if the source is not supported.
     """
@@ -60,6 +62,7 @@ __all__ = [
     'GeminiAdapter',
     'ChatGPTAdapter',
     'ClaudeAdapter',
+    'Mem0Adapter',
     'ImportSource',
     'NormalizedFact',
     'ConversationChunk',

@@ -87,6 +87,23 @@ def register(ctx):
         is_async=True,
         description="Process one batch of a large import",
     )
+    # v2.1.0 Phase A parity additions — Stripe checkout + explicit debrief.
+    ctx.register_tool(
+        name="totalreclaw_upgrade",
+        toolset="totalreclaw",
+        schema=schemas.UPGRADE,
+        handler=lambda args, **kw: tools.upgrade(args, state, **kw),
+        is_async=True,
+        description=schemas.UPGRADE["description"],
+    )
+    ctx.register_tool(
+        name="totalreclaw_debrief",
+        toolset="totalreclaw",
+        schema=schemas.DEBRIEF,
+        handler=lambda args, **kw: tools.debrief(args, state, **kw),
+        is_async=True,
+        description=schemas.DEBRIEF["description"],
+    )
 
     # Register hooks
     ctx.register_hook("on_session_start", lambda **kw: hooks.on_session_start(state, **kw))
@@ -94,4 +111,4 @@ def register(ctx):
     ctx.register_hook("post_llm_call", lambda **kw: hooks.post_llm_call(state, **kw))
     ctx.register_hook("on_session_end", lambda **kw: hooks.on_session_end(state, **kw))
 
-    logger.info("TotalReclaw plugin registered (8 tools, 4 hooks)")
+    logger.info("TotalReclaw plugin registered (10 tools, 4 hooks)")

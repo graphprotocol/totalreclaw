@@ -290,6 +290,117 @@ def setup(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": str(e)})
 
 
+# ── Billing Upgrade ──────────────────────────────────────────────────────────
+
+
+async def upgrade(args: dict, state: "PluginState", **kwargs) -> str:
+    """Create a Stripe Checkout session for upgrading to Pro tier.
+
+    Thin wrapper around :meth:`RelayClient.create_checkout` — the relay
+    already resolves wallet + auth headers from the client state, so the
+    tool takes no user-facing arguments. Returns the checkout URL plus a
+    user-visible ``message`` the agent should read back verbatim (the URL
+    is the whole point of calling this tool).
+    """
+    client = state.get_client()
+    if not client:
+        return json.dumps(
+            {"error": "TotalReclaw not configured. Run totalreclaw_setup first."}
+        )
+
+    try:
+        # Ensure the relay has the resolved Smart Account address before
+        # asking for a checkout — otherwise the ``wallet_address`` field
+        # in the POST body is null and the relay rejects with 400. The
+        # public client methods (remember/recall/status) all hit
+        # ``_ensure_address()`` internally; create_checkout is one of the
+        # few that doesn't need a fact write so we thread the address
+        # resolution explicitly.
+        ensure_addr = getattr(client, "_ensure_address", None)
+        if callable(ensure_addr):
+            try:
+                await ensure_addr()
+            except Exception:
+                # Non-fatal — the relay may still accept the checkout if
+                # ``self._wallet_address`` was populated elsewhere.
+                pass
+
+        checkout = await client._relay.create_checkout()
+        return json.dumps({
+            "checkout_url": checkout.checkout_url,
+            "session_id": checkout.session_id,
+            "message": (
+                f"Open this URL in your browser to complete the upgrade "
+                f"to Pro: {checkout.checkout_url}"
+            ),
+        })
+    except Exception as e:
+        logger.error("totalreclaw_upgrade failed: %s", e)
+        return json.dumps({"error": f"Failed to create checkout session: {e}"})
+
+
+# ── Debrief (explicit invocation) ────────────────────────────────────────────
+
+
+async def debrief(args: dict, state: "PluginState", **kwargs) -> str:
+    """Run the session debrief on demand.
+
+    Reuses :func:`totalreclaw.agent.lifecycle.session_debrief` — the same
+    function the automatic ``on_session_end`` hook calls — so the stored
+    summary facts are indistinguishable from the auto-flow output
+    (``type=summary``, ``provenance=derived``, ``scope=unspecified``).
+
+    Returns a JSON object with ``stored`` (count), ``fact_ids``, and
+    ``skipped=true`` when the session is too short (< 4 turns).
+    """
+    client = state.get_client()
+    if not client:
+        return json.dumps(
+            {"error": "TotalReclaw not configured. Run totalreclaw_setup first."}
+        )
+
+    # Short-circuit guard so the tool returns a clear explanation to the
+    # agent rather than an empty debrief. Mirrors the < 8-message gate in
+    # ``session_debrief`` itself.
+    all_messages = state.get_all_messages() if hasattr(state, "get_all_messages") else []
+    if len(all_messages) < 8:
+        return json.dumps({
+            "stored": 0,
+            "count": 0,
+            "fact_ids": [],
+            "skipped": True,
+            "message": (
+                "Session is too short for a debrief (need at least 4 turns). "
+                "Keep chatting, or re-invoke after a longer session."
+            ),
+        })
+
+    try:
+        # ``session_debrief`` is synchronous (drives its own ``run_sync``
+        # under the hood — see ``agent/loop_runner.py``). Call it via an
+        # executor so we do not block the Hermes async runtime loop.
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        from totalreclaw.agent.lifecycle import session_debrief
+        fact_ids: list[str] = await loop.run_in_executor(
+            None, session_debrief, state, None
+        ) or []
+        return json.dumps({
+            "stored": len(fact_ids),
+            "count": len(fact_ids),
+            "fact_ids": fact_ids,
+            "message": (
+                f"Stored {len(fact_ids)} debrief summary fact(s) on-chain."
+                if fact_ids
+                else "No debrief items were generated (conversation may not have enough signal)."
+            ),
+        })
+    except Exception as e:
+        logger.error("totalreclaw_debrief failed: %s", e)
+        return json.dumps({"error": str(e)})
+
+
 # ── Import Tools ─────────────────────────────────────────────────────────────
 
 

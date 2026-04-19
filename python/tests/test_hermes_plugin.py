@@ -490,8 +490,8 @@ class TestRegister:
         with patch.dict(os.environ, {}, clear=True):
             with patch.object(Path, "exists", return_value=False):
                 register(ctx)
-        # Should register 8 tools and 4 hooks
-        assert ctx.register_tool.call_count == 8
+        # v2.1.0 — 10 tools (+ totalreclaw_upgrade, totalreclaw_debrief).
+        assert ctx.register_tool.call_count == 10
         assert ctx.register_hook.call_count == 4
 
         # Check tool names
@@ -504,6 +504,8 @@ class TestRegister:
         assert "totalreclaw_setup" in tool_names
         assert "totalreclaw_import_from" in tool_names
         assert "totalreclaw_import_batch" in tool_names
+        assert "totalreclaw_upgrade" in tool_names
+        assert "totalreclaw_debrief" in tool_names
 
         # Check hook names
         hook_names = [call.args[0] for call in ctx.register_hook.call_args_list]

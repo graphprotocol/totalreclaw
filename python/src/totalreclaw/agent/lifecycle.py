@@ -232,28 +232,40 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
     return stored_texts
 
 
-def session_debrief(state: "AgentState", stored_fact_texts: Optional[list[str]] = None) -> None:
+def session_debrief(
+    state: "AgentState",
+    stored_fact_texts: Optional[list[str]] = None,
+) -> list[str]:
     """Run session debrief: extract broader context and store it.
 
     Args:
         state: The AgentState instance (must be configured).
         stored_fact_texts: Optional list of already-stored fact texts for dedup.
             If None, an empty list is used.
+
+    Returns:
+        List of newly-stored debrief fact ids. Empty on short sessions,
+        unconfigured state, LLM unavailability, or any interior failure.
+        The return type widened from ``None`` in 2.1.0 so the explicit
+        ``totalreclaw_debrief`` tool can surface per-fact ids back to the
+        user. The auto ``on_session_end`` path ignores the return value —
+        behavior-compatible.
     """
     if not state.is_configured():
-        return
+        return []
 
     all_messages = state.get_all_messages()
     if len(all_messages) < 8:  # Minimum 4 turns
-        return
+        return []
 
     if stored_fact_texts is None:
         stored_fact_texts = []
 
     client = state.get_client()
     if not client:
-        return
+        return []
 
+    stored_fact_ids: list[str] = []
     try:
         debrief_items = run_sync(generate_debrief(all_messages, stored_fact_texts))
         if debrief_items:
@@ -263,7 +275,7 @@ def session_debrief(state: "AgentState", stored_fact_texts: Optional[list[str]] 
                     # provenance — the assistant-side debrief pipeline
                     # synthesized them from the conversation, so the
                     # v1 source is always "derived" (plugin parity).
-                    run_sync(
+                    fact_id = run_sync(
                         client.remember(
                             item.text,
                             importance=item.importance / 10.0,
@@ -273,7 +285,10 @@ def session_debrief(state: "AgentState", stored_fact_texts: Optional[list[str]] 
                             scope="unspecified",
                         )
                     )
+                    if fact_id:
+                        stored_fact_ids.append(fact_id)
                 except Exception as e:
                     logger.warning("Failed to store debrief item: %s", e)
     except Exception as e:
         logger.warning("Session debrief failed: %s", e)
+    return stored_fact_ids

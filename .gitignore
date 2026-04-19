@@ -106,6 +106,14 @@ docker-compose.override.yml
 # Internal coordination files (not for public repo)
 TASKS.md
 CHANGELOG.md
+# Package-level CHANGELOGs ARE tracked — they ship with the package.
+!python/CHANGELOG.md
+!mcp/CHANGELOG.md
+!rust/totalreclaw-core/CHANGELOG.md
+!rust/totalreclaw-memory/CHANGELOG.md
+!skill/plugin/CHANGELOG.md
+!skill-nanoclaw/CHANGELOG.md
+!CHANGELOG-public.md
 
 # Misc
 *.tgz
