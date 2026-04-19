@@ -1,5 +1,5 @@
 {
-  "name": "@totalreclaw/totalreclaw-canary",
+  "name": "totalreclaw-canary",
   "version": "3.1.0-canary.0",
   "description": "Canary build of @totalreclaw/totalreclaw for ClawHub scanner validation. Do not install in production. Source-identical to 3.1.0; only package name/version/description differ so we can probe ClawHub's multi-layer publish pipeline (static + VirusTotal + LLM) without tainting the real `totalreclaw` slug.",
   "type": "module",
