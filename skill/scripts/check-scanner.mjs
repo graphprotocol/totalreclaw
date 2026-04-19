@@ -15,15 +15,16 @@
  *      `config.ts`.
  *
  *   2. `potential-exfiltration` — a file contains BOTH:
- *        - an `fs.read*` call (`fs.readFileSync`, `fs.readFile`,
- *          `fs.promises.readFile`, or a bare `readFile(` from `fs/promises`),
- *          AND
+ *        - the substring `readFileSync` or `readFile` (NO `fs.` prefix —
+ *          the real scanner matches any occurrence, including comments,
+ *          function names, and string literals), AND
  *        - a case-insensitive word-boundary match for `fetch`, `post`,
- *          `http.request`, `axios`, or `XMLHttpRequest` anywhere in the
- *          same file.
+ *          or `http.request` anywhere in the same file.
  *      Fixed in 3.0.7 by extracting `readBillingCache` / `writeBillingCache`
- *      into `billing-cache.ts` (no network-capable trigger markers allowed
- *      in that file).
+ *      into `billing-cache.ts`; fixed definitively in 3.0.8 by moving ALL
+ *      `fs.*` calls out of `index.ts` into `fs-helpers.ts`. The real
+ *      scanner is first-found (reports one line per file at most), so
+ *      incremental extractions played whack-a-mole until 3.0.8.
  *
  *   Both checks are whole-file (per file), so even a comment containing one
  *   of the trigger words will trip the rule if the same file reads env or
@@ -59,13 +60,16 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', 'pkg', '.git', 'coverage']);
 const ENV_PATTERN = /process\.env/;
 const CONTEXT_PATTERN = /\bfetch\b|\bpost\b|http\.request/i;
 
-// Mirrors OpenClaw SOURCE_RULES[potential-exfiltration]:
-//   pattern:         fs.read* (sync, callback, or fs/promises forms)
-//   requiresContext: /\bfetch\b|\bpost\b|http\.request|\baxios\b|\bXMLHttpRequest\b/i
-// Trigger set intentionally wider than env-harvesting because axios and
-// XMLHttpRequest also qualify as network-send for exfiltration risk.
-const FS_READ_PATTERN = /fs\.readFileSync|fs\.readFile\b|fs\.promises\.readFile|\breadFile\s*\(/;
-const EXFIL_CONTEXT_PATTERN = /\bfetch\b|\bpost\b|http\.request|\baxios\b|\bXMLHttpRequest\b/i;
+// Mirrors OpenClaw SOURCE_RULES[potential-exfiltration] EXACTLY — the real
+// scanner uses the bare substrings `readFileSync` and `readFile` with NO
+// `fs.` prefix. That means any string containing `readFile` anywhere in
+// the file matches (including comments, function names, and test helpers).
+// The trigger set is the SAME as env-harvesting (fetch/post/http.request) —
+// NOT the wider axios/XMLHttpRequest set we used to use. Confirmed
+// 2026-04-19 by inspecting `/app/dist/skill-scanner-*.js` inside the
+// OpenClaw 2026.3.7 Docker image.
+const FS_READ_PATTERN = /readFileSync|readFile/;
+const EXFIL_CONTEXT_PATTERN = /\bfetch\b|\bpost\b|http\.request/i;
 
 const ALLOW_COMMENT = /^\s*(?:\/\/|\*|\/\*).*scanner-sim:\s*allow/i;
 
