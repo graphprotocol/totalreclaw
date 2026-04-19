@@ -28,6 +28,8 @@ mkdir -p ~/.hermes/plugins/totalreclaw
 cp -r $(python -c "import totalreclaw.hermes; print(totalreclaw.hermes.__path__[0])")/* ~/.hermes/plugins/totalreclaw/
 ```
 
+> **Current stable:** `totalreclaw==2.2.1` on PyPI. 2.2.0 added ERC-4337 `executeBatch` (up to 15 facts per UserOp) and 2.2.1 wired auto-extraction through the batched path, cutting typical extraction-to-on-chain latency from ~60s to ~8s. Older 2.0.x releases had several auto-flow regressions (`Event loop is closed` on `status` / `export`, missing session-id tracing); upgrade fixes them.
+
 > **Ubuntu/Debian/Docker note:** Add `--break-system-packages` if you see "externally-managed-environment" errors:
 > ```bash
 > pip install --break-system-packages totalreclaw
@@ -62,7 +64,7 @@ You should see:
 
 ```
 Plugins (1+):
-  ✓ totalreclaw v1.0.0 (8 tools, 4 hooks)
+  ✓ totalreclaw v2.2.1 (8 tools, 4 hooks)
 ```
 
 ## 3. Start chatting
@@ -124,6 +126,7 @@ The plugin recognizes 7 memory types:
 |----------|---------|-------------|
 | `TOTALRECLAW_RECOVERY_PHRASE` | -- | Import an existing recovery phrase. If not set, the agent generates one on first use. |
 | `TOTALRECLAW_SERVER_URL` | `https://api.totalreclaw.xyz` | Override for self-hosted deployments. Most users don't need this. |
+| `TOTALRECLAW_SESSION_ID` | auto-generated | Stable session identifier for log tracing in Axiom. Supported since Python client 2.0.2; if you're still on an older release you may see an "ignoring removed env var" log line — upgrade to clear it. |
 
 TotalReclaw automatically uses whatever LLM provider you configured for Hermes. It picks a fast/cheap model from the same provider for fact extraction -- no extra API keys or model settings needed.
 

@@ -6,36 +6,65 @@ TotalReclaw gives your OpenClaw agent encrypted, persistent memory. Facts, prefe
 
 ## Install
 
-The quickest path -- one command, install from npm:
+One command -- install from npm:
 
 ```bash
 openclaw plugins install @totalreclaw/totalreclaw
 ```
 
+The OpenClaw CLI resolves `@totalreclaw/totalreclaw` from the npm registry, activates the plugin, and wires it into your gateway. On first load the plugin auto-generates a recovery phrase if one is not already configured -- you do not need to run a separate setup command.
+
+> **Note:** TotalReclaw is distributed via the npm registry. Future CLI resolvers may surface it via additional registries.
+
+> **Note:** The first interaction downloads a ~344MB embedding model. This is cached locally and only happens once.
+
 <details>
-<summary>Alternative: install from source (ClawHub + local path)</summary>
+<summary>Developer / from-source install (non-primary)</summary>
+
+If you are working from a fork or want to pin a specific local source tree, clone the repo and point `openclaw plugins install` at the local path:
 
 ```bash
-openclaw skills install totalreclaw
-openclaw plugins install ~/.openclaw/workspace/skills/totalreclaw
+git clone https://github.com/p-diogo/totalreclaw.git
+openclaw plugins install ./totalreclaw/skill/plugin
 ```
 
-`openclaw skills install` pulls the plugin source from ClawHub into your
-workspace skills directory, then `openclaw plugins install <local-path>`
-registers it with your gateway. Use this path if the npm install fails
-or if you want to pin a specific ClawHub version.
+This is for plugin development only. Users following this guide should stick with the one-line npm install above.
 
 </details>
 
-Then start a conversation and tell your agent:
+---
 
-> "Set up TotalReclaw for me. Generate a new recovery phrase."
+## Your recovery phrase
 
-Write down the 12-word phrase and store it safely. There is no password reset -- this phrase is the only key to your memories.
+TotalReclaw is keyed by a 12-word BIP-39 recovery phrase. The plugin handles generation automatically the first time it loads.
 
-**Returning user?** Say: *"I have an existing TotalReclaw recovery phrase: word1 word2 ... word12"* and your existing memories become accessible immediately.
+**Where it is stored:** `~/.openclaw/extensions/totalreclaw/credentials.json` (owner-only permissions). This file contains your recovery phrase plus derived identifiers.
 
-> **Note:** The first interaction downloads a ~344MB embedding model. This is cached locally and only happens once.
+**You must save it somewhere safe.** It is the only key to your memories and the only way to use the same vault from another agent (Claude Desktop, Cursor, Hermes, etc.). There is no password reset, no recovery email, no support ticket that can recover lost memories.
+
+> **Use a dedicated phrase.** Never reuse a recovery phrase that has been used for a blockchain wallet or any on-chain activity. TotalReclaw keys are memory-only -- they should not share entropy with funds.
+
+### How to retrieve your phrase (current behavior, v3.1.0)
+
+When the plugin generates a fresh phrase, it is written to the credentials file above. Depending on your LLM provider, the phrase may *also* appear in your first chat response via a one-time banner. **This surfacing is LLM-dependent -- it may or may not happen.** Either way, the phrase is saved on disk.
+
+To retrieve it reliably:
+
+```bash
+cat ~/.openclaw/extensions/totalreclaw/credentials.json
+```
+
+Copy the `mnemonic` field and store it somewhere safe (password manager, offline paper backup -- not a plaintext note in the cloud).
+
+> **Heads up:** v3.2.0 will improve onboarding so the phrase is surfaced outside the LLM channel. Until that ships, the `cat` command above is the source of truth.
+
+### Returning user
+
+If you already have a phrase from another client (Hermes, MCP, NanoClaw, etc.), tell the agent before the first extraction:
+
+> "I have an existing TotalReclaw recovery phrase: word1 word2 ... word12"
+
+The plugin will use it to re-derive your keys and your existing memories become accessible immediately. Alternatively, write the phrase into `credentials.json` yourself before first load.
 
 ---
 
@@ -54,15 +83,23 @@ Once set up, memory is fully automatic. You do not need to do anything.
 
 ## Explicit Tools
 
-You can also use memory directly by asking your agent:
+You can also drive memory directly by asking your agent. The v1 taxonomy adds pin / retype / set_scope for when you want to curate a memory rather than let the automatic flow decide.
 
-| Tool | Example prompt |
-|------|---------------|
-| **Remember** | "Remember that I prefer PostgreSQL over MySQL" |
-| **Recall** | "What do you remember about my database choices?" |
-| **Forget** | "Forget what you know about my old email address" |
-| **Export** | "Export all my TotalReclaw memories as plain text" |
-| **Status** | "What's my TotalReclaw subscription status?" |
+| Tool | What it does | Example prompt |
+|------|--------------|---------------|
+| **Remember** | Store a specific fact now | "Remember that I prefer PostgreSQL over MySQL" |
+| **Recall** | Search your vault | "What do you remember about my database choices?" |
+| **Forget** | Delete a memory | "Forget what you know about my old email address" |
+| **Pin** | Mark a memory as permanent (won't decay / auto-evict) | "Pin that -- it's important" |
+| **Unpin** | Remove the permanent flag | "Unpin the note about my old editor" |
+| **Retype** | Reclassify an existing memory (`claim`, `preference`, `directive`, `commitment`, `episode`, `summary`) | "That should be a preference, not a fact" |
+| **Set scope** | Reassign a memory to a scope (`work`, `personal`, `health`, `family`, `creative`, `finance`, `misc`) | "File that under work" |
+| **Export** | Download everything as text / JSON | "Export all my TotalReclaw memories as plain text" |
+| **Status** | Tier + usage | "What's my TotalReclaw status?" |
+| **Import from** | Pull memories in from Mem0 / ChatGPT / Claude / Gemini | "Import my Gemini history from ~/Downloads/..." |
+| **Setup** | Re-run setup (no-op when credentials already match) | "Set up TotalReclaw for me" |
+
+> **Note on `setup`:** since v3.1.0, a fresh vault is bootstrapped automatically on first load. The `setup` tool remains available for explicit re-setup (e.g., switching recovery phrases) but is a no-op when your credentials are already in place.
 
 ---
 
@@ -96,11 +133,13 @@ Upgrade by asking your agent: *"Upgrade my TotalReclaw subscription."*
 | Problem | Fix |
 |---------|-----|
 | Plugin not loading | Restart the gateway. On first install, npm dependencies may still be installing in the background -- restart once more after a minute. |
-| "1 suspicious code pattern" warning | Normal. The plugin reads config and makes encrypted network calls. |
+| I can't find my recovery phrase | `cat ~/.openclaw/extensions/totalreclaw/credentials.json` -- the `mnemonic` field is your phrase. The LLM banner that prints the phrase on first load is not guaranteed to surface; the file is. |
 | Tools not appearing in conversations | Ensure your gateway config includes `"tools": { "allow": ["totalreclaw", "group:plugins"] }`. Rebuild the Docker image if using Docker. |
-| "Not authenticated" / 401 | Check your recovery phrase -- exact words, exact order. |
+| "Not authenticated" / 401 | Check your recovery phrase -- exact words, exact order, all lowercase, single spaces. |
 | Memories not appearing | Try an explicit recall: *"What do you remember about X?"* |
 | Quota exceeded (403) | Upgrade to Pro for permanent mainnet storage. |
+
+> **Security scanner:** since plugin 3.1.0 (which builds on the 3.0.7 / 3.0.8 fs-helpers consolidation), `openclaw security audit --deep` reports **0 `code_safety` warnings** for totalreclaw. If you see a scanner warning on an older version, upgrade with `openclaw plugins install @totalreclaw/totalreclaw@latest`.
 
 For detailed technical reference (environment variables, configuration, architecture), see the [detailed guide](beta-tester-guide-detailed.md).
 

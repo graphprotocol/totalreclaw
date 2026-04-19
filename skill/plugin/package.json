@@ -1,19 +1,26 @@
 {
   "name": "@totalreclaw/totalreclaw",
   "version": "3.1.0",
-  "description": "End-to-end encrypted memory for AI agents — portable, yours forever. Automatic extraction, semantic search, and on-chain storage",
+  "description": "End-to-end encrypted, agent-portable memory for OpenClaw and any LLM-agent runtime. XChaCha20-Poly1305 with protobuf v4 + on-chain Memory Taxonomy v1 (claim / preference / directive / commitment / episode / summary).",
   "type": "module",
   "keywords": [
     "totalreclaw",
     "openclaw",
     "ai-memory",
     "ai-agent",
+    "agent-memory",
+    "portable-memory",
     "e2e-encryption",
     "encryption",
     "e2ee",
+    "xchacha20-poly1305",
+    "bip39",
+    "erc-4337",
     "lsh",
     "semantic-search",
-    "memory"
+    "memory",
+    "memory-taxonomy",
+    "v1"
   ],
   "homepage": "https://totalreclaw.xyz",
   "repository": {

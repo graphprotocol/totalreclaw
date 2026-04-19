@@ -59,27 +59,44 @@ Before you begin, make sure you have:
 
 ### Install the OpenClaw Plugin
 
-The quickest path is a single command that pulls the plugin from npm:
+One command, installed from npm:
 
 ```
 openclaw plugins install @totalreclaw/totalreclaw
 ```
 
-This registers the plugin with your gateway under the ID `totalreclaw` and sets it up automatically on first run. Verify it appears in your OpenClaw skill/plugin list -- you should see **TotalReclaw** described as "End-to-end encrypted memory vault for AI agents."
+This registers the plugin with your gateway under the ID `totalreclaw` and sets it up automatically on first run. Verify it appears in your OpenClaw skill/plugin list -- you should see **TotalReclaw** described as "End-to-end encrypted, agent-portable memory for OpenClaw and any LLM-agent runtime."
+
+**Scanner status (plugin 3.1.0):** `openclaw security audit --deep` reports **0 `code_safety` warnings** for totalreclaw. The install completes without any `--dangerously-force-unsafe-install` flag. Earlier 3.0.x releases could trip a false-positive `potential-exfiltration` warning -- that was resolved in 3.0.8 / 3.1.0 by consolidating filesystem helpers.
+
+> **TotalReclaw is distributed via npm.** Future CLI resolvers may surface it via additional registries.
 
 <details>
-<summary>Alternative: install from source (ClawHub + local path)</summary>
+<summary>Developer / from-source install (plugin contributors only)</summary>
+
+If you are working from a fork or want to pin a specific local source tree, clone the repo and point `openclaw plugins install` at the local path:
 
 ```
-openclaw skills install totalreclaw
-openclaw plugins install ~/.openclaw/workspace/skills/totalreclaw
+git clone https://github.com/p-diogo/totalreclaw.git
+openclaw plugins install ./totalreclaw/skill/plugin
 ```
 
-`openclaw skills install` pulls the plugin source from ClawHub into your workspace skills directory, then `openclaw plugins install <local-path>` registers it with your gateway. Use this path if the npm install fails or if you want to pin a specific ClawHub version.
-
-You can also ask your OpenClaw agent: *"Install the TotalReclaw skill from ClawHub"*.
+This is for plugin development only. Users following this guide should stick with the one-line npm install above.
 
 </details>
+
+### What you get in plugin 3.1.0 (release notes)
+
+Plugin 3.1.0 is the first v1-taxonomy-complete stable release after the 3.0.x stabilization wave. Relative to 3.0.4, it fixes the following user-visible issues:
+
+| Fix | Description |
+|-----|-------------|
+| Scanner-clean install | No `potential-exfiltration` warnings; one-line install works without any force flags. |
+| Auto-bootstrap credentials | Plugin generates a recovery phrase automatically on first load when `credentials.json` is missing -- no explicit `totalreclaw_setup` call needed. |
+| Digest stubs populated | Session digests flushed to storage carry the fields downstream consumers expect (schema fix). |
+| `pin_status` round-trips on-chain | Pinning / unpinning through the natural-language tools emits v1 protobuf blobs with `pin_status` set; cross-client verified against core 2.1.1. |
+
+Paired with `@totalreclaw/core@2.1.1`, these close out the post-v1.0.0 stabilization items tracked in the project's Wave 1 verdict.
 
 ---
 
@@ -102,7 +119,21 @@ npx @totalreclaw/mcp-server setup
 
 The wizard will ask if you already have a recovery phrase. If you are a new user, it generates one, displays it, and asks you to confirm you have saved it before proceeding. It then registers you with the relay server and saves your credentials to `~/.totalreclaw/credentials.json`. See [Section 11](#11-mcp-server-setup-claude-desktop--cursor) for the full MCP setup flow.
 
-**OpenClaw plugin users:** Open a terminal and run:
+**OpenClaw plugin users (v3.1.0+):** Auto-bootstrap handles this for you. On the first conversation turn after install, if `~/.openclaw/extensions/totalreclaw/credentials.json` does not exist, the plugin generates a 12-word phrase, writes it to that file, and continues. You do not need to run any `generate-mnemonic` command or explicitly ask the agent to set TotalReclaw up.
+
+The phrase **may** also appear in the agent's first chat reply via a one-time banner -- but this surfacing is LLM-dependent. To retrieve your phrase reliably:
+
+```bash
+cat ~/.openclaw/extensions/totalreclaw/credentials.json
+```
+
+Copy the `mnemonic` field and store it somewhere safe.
+
+> **Known UX limitation (v3.1.0):** the first-turn phrase banner goes through the LLM channel, so (a) it is visible to your LLM provider, and (b) the LLM may choose not to surface it to you. v3.2.0 ships an onboarding flow that keeps the phrase off the LLM channel. Until then, `cat ~/.openclaw/extensions/totalreclaw/credentials.json` is the source of truth.
+
+> **Do not reuse a blockchain wallet mnemonic.** TotalReclaw keys are memory-only. Using a recovery phrase that has funds or on-chain history attached increases your blast radius with no benefit.
+
+If you prefer to generate a phrase outside the plugin (e.g., to pre-provision it before first run), you can still run:
 
 ```
 npx @totalreclaw/totalreclaw generate-mnemonic

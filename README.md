@@ -10,8 +10,9 @@
 
 <p align="center">
   <a href="https://totalreclaw.xyz">Website</a> ·
-  <a href="https://clawhub.ai/skills/totalreclaw">ClawHub</a> ·
-  <a href="https://www.npmjs.com/package/@totalreclaw/totalreclaw">npm</a> ·
+  <a href="https://www.npmjs.com/package/@totalreclaw/totalreclaw">npm (plugin)</a> ·
+  <a href="https://www.npmjs.com/package/@totalreclaw/mcp-server">npm (MCP)</a> ·
+  <a href="https://pypi.org/project/totalreclaw/">PyPI</a> ·
   <a href="docs/guides/client-setup-v1.md">Getting Started</a> ·
   <a href="docs/architecture.md">Architecture</a>
 </p>
@@ -41,7 +42,7 @@ One command per client. v1 is the default — no env toggles, no feature flags.
 
 | Client | Install |
 |---|---|
-| **OpenClaw** | `openclaw skills install totalreclaw` |
+| **OpenClaw** | `openclaw plugins install @totalreclaw/totalreclaw` |
 | **Claude Desktop / Cursor / Windsurf** | `npx @totalreclaw/mcp-server setup` |
 | **NanoClaw** | add `TOTALRECLAW_RECOVERY_PHRASE` to deployment env |
 | **Python / Hermes** | `pip install totalreclaw` |
@@ -95,7 +96,7 @@ Supported sources: **ChatGPT** (memories or conversations.json), **Claude** (mem
 
 | Package | Description | Install |
 | --- | --- | --- |
-| [@totalreclaw/totalreclaw](https://clawhub.ai/skills/totalreclaw) | OpenClaw skill — automatic encrypted memory | `openclaw skills install totalreclaw` |
+| [@totalreclaw/totalreclaw](https://www.npmjs.com/package/@totalreclaw/totalreclaw) | OpenClaw plugin — automatic encrypted memory | `openclaw plugins install @totalreclaw/totalreclaw` |
 | [@totalreclaw/mcp-server](https://www.npmjs.com/package/@totalreclaw/mcp-server) | MCP server for Claude Desktop and other MCP clients | `npx @totalreclaw/mcp-server setup` |
 | [@totalreclaw/client](https://www.npmjs.com/package/@totalreclaw/client) | Client library (encryption, indexing, search, re-ranking) | `npm install @totalreclaw/client` |
 | [totalreclaw](https://pypi.org/project/totalreclaw/) | Python client + Hermes Agent plugin | `pip install totalreclaw` |
