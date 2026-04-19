@@ -6,6 +6,51 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-04-19
+
+Hermes parity Gap 3: client-side batching. Drops 15-fact extraction
+latency from ~60s to ~8s by submitting one ERC-4337 UserOperation
+per extraction cycle instead of N sequential ones.
+
+### Added
+
+- `TotalReclaw.remember_batch(facts)` — public async API that stores up
+  to 15 facts in a single UserOperation via
+  `SimpleAccount.executeBatch(...)`. Paymaster / bundler / inclusion
+  costs paid once.
+- `operations.store_fact_batch(facts, ...)` — internal batch path that
+  mirrors `store_fact` per-fact (same encryption, trapdoor generation,
+  v1 canonical claim, protobuf v4 wrapper), then wraps all N payloads
+  into one UserOp.
+- `userop.build_and_send_userop_batch(...)` — batched UserOp submitter
+  mirroring `build_and_send_userop` with the same AA25/AA10 retry loop.
+- `userop.encode_execute_batch_calldata_for_data_edge(payloads)` +
+  `userop.MAX_BATCH_SIZE` (= 15) — thin wrappers around the Rust core's
+  `totalreclaw_core.encode_batch_call`, byte-identical to the TS
+  plugin's `encodeBatchCalls`.
+- `tests/test_userop_batch.py` — byte-match parity fixtures for N = 1 /
+  3 / 5 / 10 / 15, empty-batch + oversize-batch validation, mocked
+  relay retry tests, and an optional staging-integration test (runs
+  only when `TOTALRECLAW_STAGING_INTEGRATION=1`).
+- `tests/fixtures/batch_calldata_vectors.{py,json}` — fixture generator
+  + baked expected-calldata vectors from the shared Rust core.
+
+### Notes
+
+- Part of the Hermes parity roadmap
+  ([`docs/plans/2026-04-18-hermes-parity-roadmap.md`][hermes-parity],
+  Gap 3). Closes the UX cliff where auto-extraction after a long
+  conversation appeared to freeze the agent for 45–75s.
+- The `agent/lifecycle.py::auto_extract` store loop is still per-fact
+  on disk in this release — wiring it to `remember_batch` lives in a
+  separate follow-up so Phase A (Hermes plugin / adapters) and Gap 3
+  (batching) could merge independently. The new public API is fully
+  shipped and importable today.
+- `encode_batch_call` in the Rust core folds a batch of 1 back to
+  `execute(...)` rather than `executeBatch(...)`, so a 1-element batch
+  is byte-identical to the single-fact path. No correctness penalty
+  for callers that unconditionally batch.
+
 ## [2.1.0] - 2026-04-19
 
 Phase A of the Hermes parity roadmap

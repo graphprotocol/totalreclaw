@@ -32,7 +32,7 @@ from .protobuf import FactPayload, encode_fact_protobuf, encode_tombstone_protob
 from .relay import RelayClient
 from .reranker import RerankerCandidate, RerankerResult, rerank
 from .tuning_loop import maybe_write_feedback_for_pin
-from .userop import build_and_send_userop
+from .userop import build_and_send_userop, build_and_send_userop_batch, MAX_BATCH_SIZE
 from .claims_helper import (
     PROTOBUF_VERSION_V4,
     build_canonical_claim_v1,
@@ -284,6 +284,212 @@ async def store_fact(
     )
 
     return fact_id
+
+
+# ---------------------------------------------------------------------------
+# Hermes parity Gap 3 — batched writes (v2.2.0)
+# ---------------------------------------------------------------------------
+
+
+async def store_fact_batch(
+    facts: list[dict],
+    keys: DerivedKeys,
+    owner: str,
+    relay: RelayClient,
+    lsh_hasher: Optional[LSHHasher] = None,
+    eoa_private_key: Optional[bytes] = None,
+    eoa_address: Optional[str] = None,
+    sender: Optional[str] = None,
+    chain_id: int = 84532,
+    source: str = "python-client",
+    agent_id: str = "python-client",
+) -> list[str]:
+    """Encrypt and store N facts in a single batched on-chain UserOp.
+
+    The Python analogue of the TS ``storeFactsBatch`` path. Mirrors
+    :func:`store_fact` per-fact (same encryption, same trapdoor
+    generation, same canonical v1 JSON claim + protobuf v4 wrapper),
+    then wraps all N encoded protobuf payloads into a single
+    ``executeBatch`` UserOperation via
+    :func:`totalreclaw.userop.build_and_send_userop_batch`.
+
+    Each element of ``facts`` is a dict in the shape produced by
+    :class:`totalreclaw.TotalReclaw.remember_batch`::
+
+        {
+            "text": str,                      # required
+            "importance": float,              # optional, default 0.5
+            "embedding": list[float],         # optional
+            "fact_type": str,                 # default "claim"
+            "entities": list,                 # optional
+            "confidence": float,              # default 0.85
+            "provenance": str,                # default "user"
+            "scope": str,                     # default "unspecified"
+            "reasoning": str,                 # optional
+            "volatility": str,                # optional
+            "extracted_at": str,              # optional ISO timestamp
+        }
+
+    Parameters
+    ----------
+    facts : list[dict]
+        1..``MAX_BATCH_SIZE`` (15) fact dicts. Empty or oversized lists
+        raise ``ValueError``.
+    keys, owner, relay, lsh_hasher, eoa_private_key, eoa_address,
+    sender, chain_id, source, agent_id
+        Same semantics as :func:`store_fact`. All facts share signing
+        credentials, relay config, and chain — batches do not support
+        mixed owners.
+
+    Returns
+    -------
+    list[str]
+        Pre-assigned UUID fact IDs, one per input fact, in the same
+        order as ``facts``. The IDs are stamped into each protobuf
+        payload before submission so the subgraph indexes them under
+        the same IDs this function returns. Subsequent
+        ``client.forget(id)`` / ``client.pin_fact(id)`` calls therefore
+        work against these IDs immediately — you don't need to wait
+        for any per-fact userOpHash round-trip.
+
+    Raises
+    ------
+    ValueError
+        If ``facts`` is empty, larger than ``MAX_BATCH_SIZE``, missing
+        EOA signing credentials, or contains an entry with no/empty
+        ``text``.
+    RuntimeError
+        Propagated from :func:`build_and_send_userop_batch` on
+        paymaster or bundler rejection.
+    """
+    if not facts:
+        raise ValueError("store_fact_batch: at least one fact is required")
+    if len(facts) > MAX_BATCH_SIZE:
+        raise ValueError(
+            f"store_fact_batch: batch size {len(facts)} exceeds maximum "
+            f"of {MAX_BATCH_SIZE}"
+        )
+    if eoa_private_key is None or eoa_address is None:
+        raise ValueError(
+            "eoa_private_key and eoa_address are required for UserOp signing"
+        )
+
+    smart_account = sender or owner
+    shared_timestamp = datetime.now(timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S.000Z"
+    )
+
+    fact_ids: list[str] = []
+    protobuf_payloads: list[bytes] = []
+
+    for idx, raw in enumerate(facts):
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"store_fact_batch: fact at index {idx} is not a dict"
+            )
+        text = raw.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError(
+                f"store_fact_batch: fact at index {idx} has empty/missing text"
+            )
+
+        importance_raw = raw.get("importance", 0.5)
+        # Accept either a 1-10 int or a 0-1 float — identical to
+        # ``store_fact``'s coercion logic.
+        importance_int = max(
+            1,
+            min(
+                10,
+                int(round(importance_raw * 10))
+                if importance_raw <= 1
+                else int(importance_raw),
+            ),
+        )
+
+        fact_id = str(uuid.uuid4())
+        fact_ids.append(fact_id)
+
+        embedding = raw.get("embedding")
+        fact_type = raw.get("fact_type") or "claim"
+        entities = raw.get("entities")
+        confidence = raw.get("confidence", 0.85)
+        provenance = raw.get("provenance", "user")
+        scope = raw.get("scope", "unspecified")
+        reasoning = raw.get("reasoning")
+        volatility = raw.get("volatility")
+        extracted_at = raw.get("extracted_at")
+
+        # v1 canonical claim — identical shape to ``store_fact``.
+        fact_stub = {
+            "text": text,
+            "type": fact_type,
+            "source": provenance,
+            "scope": scope,
+            "reasoning": reasoning,
+            "confidence": confidence,
+            "entities": entities,
+            "volatility": volatility,
+        }
+        blob_plaintext = build_canonical_claim_v1(
+            fact_stub,
+            importance=importance_int,
+            created_at=extracted_at or shared_timestamp,
+            claim_id=fact_id,
+        )
+
+        encrypted_blob = encrypt(blob_plaintext, keys.encryption_key)
+        encrypted_hex = base64.b64decode(encrypted_blob).hex()
+
+        word_indices = generate_blind_indices(text)
+
+        lsh_indices: list[str] = []
+        if lsh_hasher and embedding:
+            lsh_indices = lsh_hasher.hash(embedding)
+
+        entity_trapdoors = (
+            compute_entity_trapdoors(entities) if entities else []
+        )
+
+        all_indices = word_indices + lsh_indices + entity_trapdoors
+
+        content_fp = generate_content_fingerprint(text, keys.dedup_key)
+
+        encrypted_emb: Optional[str] = None
+        if embedding:
+            encrypted_emb = encrypt_embedding(embedding, keys.encryption_key)
+
+        payload = FactPayload(
+            id=fact_id,
+            timestamp=shared_timestamp,
+            owner=owner,
+            encrypted_blob=encrypted_hex,
+            blind_indices=all_indices,
+            decay_score=importance_raw if importance_raw <= 1 else importance_raw / 10.0,
+            source=source,
+            content_fp=content_fp,
+            agent_id=agent_id,
+            encrypted_embedding=encrypted_emb,
+            version=PROTOBUF_VERSION_V4,
+        )
+
+        protobuf_payloads.append(encode_fact_protobuf(payload))
+
+    # One UserOp for all N facts — ~8s regardless of N, vs 15 × ~4s
+    # sequential = 60s for the single-fact path.
+    await build_and_send_userop_batch(
+        sender=smart_account,
+        eoa_address=eoa_address,
+        eoa_private_key=eoa_private_key,
+        protobuf_payloads=protobuf_payloads,
+        relay_url=relay._relay_url,
+        auth_key_hex=relay._auth_key_hex or "",
+        wallet_address=smart_account,
+        chain_id=chain_id,
+        client_id=relay._client_id,
+        session_id=getattr(relay, "_session_id", None),
+    )
+
+    return fact_ids
 
 
 async def search_facts(

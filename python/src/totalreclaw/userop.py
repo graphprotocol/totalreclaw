@@ -85,6 +85,53 @@ def encode_execute_calldata_for_data_edge(protobuf_payload: bytes) -> str:
     return "0x" + calldata_bytes.hex()
 
 
+# Max batch size mirrors the Rust ``MAX_BATCH_SIZE`` constant and the TS
+# ``skill/plugin/store.ts`` batcher. Going higher risks hitting block gas
+# limits on some chains (e.g. Gnosis) and strains the bundler.
+MAX_BATCH_SIZE: int = 15
+
+
+def encode_execute_batch_calldata_for_data_edge(
+    protobuf_payloads: list[bytes],
+) -> str:
+    """ABI-encode ``SimpleAccount.executeBatch(dests, values, datas)`` calldata.
+
+    Delegates to :func:`totalreclaw_core.encode_batch_call` which hardcodes
+    the DataEdge address (same target for every call) and ``value=0``.
+    The Rust core returns ``execute(...)`` calldata (not ``executeBatch``)
+    when ``len(protobuf_payloads) == 1`` so a batch-of-1 is byte-identical
+    to the single-fact fast path — this preserves gas parity with the TS
+    plugin's ``encodeBatchCalls`` helper.
+
+    Parameters
+    ----------
+    protobuf_payloads : list of bytes
+        One raw protobuf payload per fact. Must contain 1..15 entries.
+
+    Returns
+    -------
+    str
+        0x-prefixed hex calldata to assign to ``userOp["callData"]``.
+
+    Raises
+    ------
+    ValueError
+        If the batch is empty or exceeds :data:`MAX_BATCH_SIZE`. The
+        Rust core raises the same errors; we defensively check here too
+        so the failure mode is a stable Python ``ValueError`` regardless
+        of core version.
+    """
+    if not protobuf_payloads:
+        raise ValueError("Batch must contain at least 1 payload")
+    if len(protobuf_payloads) > MAX_BATCH_SIZE:
+        raise ValueError(
+            f"Batch size {len(protobuf_payloads)} exceeds maximum of "
+            f"{MAX_BATCH_SIZE}"
+        )
+    calldata_bytes = totalreclaw_core.encode_batch_call(protobuf_payloads)
+    return "0x" + calldata_bytes.hex()
+
+
 def encode_factory_data(owner_address: str, salt: int = 0) -> str:
     """ABI-encode ``SimpleAccountFactory.createAccount(address, uint256)``."""
     owner = _pad32(owner_address)
@@ -416,6 +463,259 @@ async def build_and_send_userop(
                         "AA25/AA10 nonce or sender conflict (attempt %d/%d), retrying...",
                         attempt + 1,
                         _MAX_NONCE_RETRIES,
+                    )
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                raise
+
+
+async def build_and_send_userop_batch(
+    sender: str,
+    eoa_address: str,
+    eoa_private_key: bytes,
+    protobuf_payloads: list[bytes],
+    relay_url: str,
+    auth_key_hex: str,
+    wallet_address: str,
+    chain_id: int = 84532,
+    client_id: str = "python-client",
+    session_id: Optional[str] = None,
+) -> str:
+    """Build, sign, and submit a BATCHED UserOperation through the relay.
+
+    Mirrors :func:`build_and_send_userop` but wraps N protobuf payloads
+    into a single ``SimpleAccount.executeBatch(...)`` call rather than
+    emitting N sequential UserOps. Each element of ``protobuf_payloads``
+    becomes one call to the DataEdge contract's ``fallback()`` and emits
+    an independent ``Log(bytes)`` event that the subgraph indexes
+    separately.
+
+    **Why batch?**
+
+    1. *UX*: a full 15-fact extraction cycle drops from ~60s to ~8s
+       because all the per-UserOp RPC overhead (nonce fetch, gas price,
+       sponsor call, bundler submit, inclusion wait) is paid once.
+    2. *Gas*: the ~21k base-tx cost is amortized across all N facts.
+    3. *Paymaster budget*: one UserOp counted, not N.
+    4. *Nonce safety*: collapses O(n) AA25 retry potential into O(1).
+
+    **Byte-parity with TS**: the underlying ABI encoding comes from the
+    shared Rust core (``totalreclaw_core.encode_batch_call``). The TS
+    plugin's ``encodeBatchCalls`` compiles to the same executeBatch
+    contract call, so a Python-encoded batch UserOp is byte-identical
+    to the TS equivalent for the same inputs. Verified in
+    ``tests/test_userop_batch.py::test_batch_calldata_fixture_parity``.
+
+    Parameters
+    ----------
+    sender : str
+        Smart Account (CREATE2) address. Same for every call in the batch.
+    eoa_address : str
+        EOA address that owns the Smart Account.
+    eoa_private_key : bytes
+        32-byte private key for the EOA.
+    protobuf_payloads : list[bytes]
+        1..15 raw encrypted protobuf payloads. Each becomes one
+        ``fallback()`` invocation on the DataEdge contract. A batch of
+        1 is byte-identical to :func:`build_and_send_userop` (the Rust
+        core folds it down to ``execute`` rather than ``executeBatch``).
+    relay_url : str
+        TotalReclaw relay URL (e.g. https://api.totalreclaw.xyz).
+    auth_key_hex : str
+        HKDF auth key in hex for Bearer auth.
+    wallet_address : str
+        Smart Account address for X-Wallet-Address header.
+    chain_id : int
+        Target chain (84532 = Base Sepolia, 100 = Gnosis).
+    client_id : str
+        Client identifier for X-TotalReclaw-Client header.
+    session_id : str, optional
+        QA-scoped session tag forwarded as ``X-TotalReclaw-Session``.
+
+    Returns
+    -------
+    str
+        The userOpHash returned by the bundler for the single batched
+        UserOperation. Callers who need per-fact subgraph IDs should use
+        the ``store_fact_batch`` wrapper, which generates UUIDs upstream
+        of this call.
+
+    Raises
+    ------
+    ValueError
+        If ``protobuf_payloads`` is empty or exceeds
+        :data:`MAX_BATCH_SIZE`.
+    RuntimeError
+        Paymaster or bundler rejection (propagated from
+        ``pm_sponsorUserOperation`` / ``eth_sendUserOperation``). AA25 /
+        AA10 nonce-or-sender conflicts are retried up to 3 times before
+        surfacing here; other bundler errors are not retried.
+    """
+    if not protobuf_payloads:
+        raise ValueError("Batch must contain at least 1 payload")
+    if len(protobuf_payloads) > MAX_BATCH_SIZE:
+        raise ValueError(
+            f"Batch size {len(protobuf_payloads)} exceeds maximum of "
+            f"{MAX_BATCH_SIZE}"
+        )
+
+    relay_url = relay_url.rstrip("/")
+    rpc_url = _rpc_url_for_chain(chain_id)
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {auth_key_hex}",
+        "X-TotalReclaw-Client": client_id,
+        "X-Wallet-Address": wallet_address,
+    }
+    if session_id:
+        headers["X-TotalReclaw-Session"] = session_id
+
+    _MAX_NONCE_RETRIES = 3
+
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        # 1. Encode the executeBatch calldata once. Independent of nonce,
+        #    so we compute it before the retry loop. Delegates to the
+        #    Rust core for byte-parity with the TS plugin.
+        call_data = encode_execute_batch_calldata_for_data_edge(
+            protobuf_payloads
+        )
+
+        # Retry loop for AA25 nonce conflicts.  When two UserOps race for
+        # the same nonce the bundler rejects one with AA25.  Re-fetching
+        # the nonce and rebuilding the UserOp resolves it. Collapses to
+        # O(1) retries for the batch path vs O(n) for sequential sends.
+        for attempt in range(_MAX_NONCE_RETRIES):
+            try:
+                # 2. Get nonce from EntryPoint
+                nonce = await get_nonce(http, sender, chain_id)
+                logger.debug(
+                    "Batch nonce for %s: %d (batch size %d)",
+                    sender, nonce, len(protobuf_payloads),
+                )
+
+                # 3. Check if account is already deployed
+                code = await _eth_get_code(http, rpc_url, sender)
+                is_deployed = code != "0x" and len(code) > 2
+
+                # 4. Build partial UserOp with stub signature for gas estimation.
+                _STUB_SIGNATURE = (
+                    "0x"
+                    "fffffffffffffffffffffffffffffff000000000000000000000000000000000"
+                    "7aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    "1c"
+                )
+                user_op: dict = {
+                    "sender": sender,
+                    "nonce": hex(nonce),
+                    "callData": call_data,
+                    "signature": _STUB_SIGNATURE,
+                }
+
+                if not is_deployed:
+                    user_op["factory"] = SIMPLE_ACCOUNT_FACTORY
+                    user_op["factoryData"] = encode_factory_data(eoa_address)
+                    logger.debug(
+                        "Batch: account not deployed; including factory data"
+                    )
+
+                # 5. Get gas prices from Pimlico
+                gas_data = await _relay_rpc(
+                    http,
+                    relay_url,
+                    headers,
+                    "pimlico_getUserOperationGasPrice",
+                    [],
+                    rpc_id=1,
+                )
+                if "result" in gas_data and gas_data["result"].get("fast"):
+                    fast = gas_data["result"]["fast"]
+                    user_op["maxFeePerGas"] = fast["maxFeePerGas"]
+                    user_op["maxPriorityFeePerGas"] = fast[
+                        "maxPriorityFeePerGas"
+                    ]
+                else:
+                    # Fallback gas prices — slightly higher than the
+                    # single-fact fallback because executeBatch gas
+                    # scales with batch size.
+                    user_op["maxFeePerGas"] = hex(2_000_000_000)
+                    user_op["maxPriorityFeePerGas"] = hex(1_500_000_000)
+
+                # 6. Sponsor the UserOperation via Pimlico's
+                #    pm_sponsorUserOperation. Sponsorship is per-UserOp
+                #    (not per-call), so the paymaster counts this as 1
+                #    op regardless of ``len(protobuf_payloads)``.
+                sponsor_data = await _relay_rpc(
+                    http,
+                    relay_url,
+                    headers,
+                    "pm_sponsorUserOperation",
+                    [user_op, ENTRYPOINT_V07],
+                    rpc_id=2,
+                )
+                if "result" in sponsor_data:
+                    sp = sponsor_data["result"]
+                    user_op["callGasLimit"] = sp["callGasLimit"]
+                    user_op["verificationGasLimit"] = sp[
+                        "verificationGasLimit"
+                    ]
+                    user_op["preVerificationGas"] = sp["preVerificationGas"]
+                    user_op["paymaster"] = sp["paymaster"]
+                    user_op["paymasterData"] = sp["paymasterData"]
+                    user_op["paymasterVerificationGasLimit"] = sp[
+                        "paymasterVerificationGasLimit"
+                    ]
+                    user_op["paymasterPostOpGasLimit"] = sp[
+                        "paymasterPostOpGasLimit"
+                    ]
+                elif "error" in sponsor_data:
+                    raise RuntimeError(
+                        f"Batch paymaster sponsorship failed: "
+                        f"{sponsor_data['error']}"
+                    )
+                else:
+                    raise RuntimeError(
+                        "pm_sponsorUserOperation returned no result or error"
+                    )
+
+                # 7. Compute UserOp hash and sign with EOA key.
+                #    Same hash shape as the single-fact path — only
+                #    callData differs. EntryPoint doesn't care whether
+                #    the inner SimpleAccount call is ``execute`` or
+                #    ``executeBatch``; both hash identically.
+                user_op_hash = compute_user_op_hash(
+                    user_op, ENTRYPOINT_V07, chain_id
+                )
+                user_op["signature"] = sign_user_op_hash(
+                    user_op_hash, eoa_private_key
+                )
+
+                # 8. Submit the signed batched UserOp to the bundler.
+                send_data = await _relay_rpc(
+                    http,
+                    relay_url,
+                    headers,
+                    "eth_sendUserOperation",
+                    [user_op, ENTRYPOINT_V07],
+                    rpc_id=3,
+                )
+
+                if "error" in send_data:
+                    raise RuntimeError(
+                        f"Batch UserOp submission failed: {send_data['error']}"
+                    )
+
+                return send_data.get("result", "")
+
+            except Exception as e:
+                err_str = str(e)
+                if ("AA25" in err_str or "AA10" in err_str) and attempt < _MAX_NONCE_RETRIES - 1:
+                    logger.warning(
+                        "Batch AA25/AA10 nonce or sender conflict "
+                        "(attempt %d/%d, batch size %d), retrying...",
+                        attempt + 1,
+                        _MAX_NONCE_RETRIES,
+                        len(protobuf_payloads),
                     )
                     await asyncio.sleep(2 ** attempt)
                     continue

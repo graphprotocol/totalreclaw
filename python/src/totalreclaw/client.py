@@ -31,12 +31,14 @@ from .relay import RelayClient, BillingStatus, _default_relay_url
 from .reranker import RerankerResult
 from .operations import (
     store_fact,
+    store_fact_batch,
     search_facts,
     forget_fact,
     export_facts,
     pin_fact,
     unpin_fact,
 )
+from .userop import MAX_BATCH_SIZE as _USEROP_MAX_BATCH_SIZE
 
 # Smart Account address derivation constants
 # These match the CREATE2 deterministic address generation used by
@@ -466,6 +468,107 @@ class TotalReclaw:
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,
+        )
+
+    async def remember_batch(
+        self,
+        facts: list[dict],
+        source: str = "python-client",
+    ) -> list[str]:
+        """Store N facts in a single batched on-chain UserOperation.
+
+        The batch analogue of :meth:`remember`. Mirrors the TS plugin's
+        ``storeFactsBatch`` path: one paymaster call, one signature,
+        one bundler submission, N ``Log(bytes)`` events — indexed by
+        the subgraph as N independent facts.
+
+        Use this when you have 2..15 facts to store at once (e.g.
+        auto-extraction output, bulk imports). For a single fact the
+        round-trip cost is identical to :meth:`remember` (the Rust core
+        folds a batch of 1 back to ``execute`` rather than
+        ``executeBatch``) — but for N=15 this drops extraction latency
+        from ~60s to ~8s.
+
+        Each element of ``facts`` is a dict with the same keys as
+        :meth:`remember`'s parameters::
+
+            {
+                "text": str,                   # required
+                "importance": float,           # default 0.5
+                "embedding": list[float],      # optional
+                "fact_type": str,              # default "claim"
+                "entities": list,              # optional
+                "confidence": float,           # default 0.85
+                "provenance": str,             # default "user"
+                "scope": str,                  # default "unspecified"
+                "reasoning": str,              # optional
+                "volatility": str,             # optional
+            }
+
+        Parameters
+        ----------
+        facts : list[dict]
+            1..15 fact dicts. An empty list raises ``ValueError``; the
+            upper bound matches
+            :data:`totalreclaw.userop.MAX_BATCH_SIZE`. Auto-extraction
+            already caps per-cycle output at 15, so this limit rarely
+            binds in practice.
+        source : str, default "python-client"
+            Shared ``source`` tag written to every protobuf's outer
+            wrapper. Per-fact provenance (user vs assistant) still
+            flows through each fact's ``provenance`` key.
+
+        Returns
+        -------
+        list[str]
+            Pre-assigned UUID fact IDs, in the same order as ``facts``.
+            Subsequent ``forget`` / ``pin_fact`` / ``unpin_fact`` calls
+            work against these IDs immediately.
+
+        Raises
+        ------
+        ValueError
+            If ``facts`` is empty or larger than 15, or if any entry is
+            missing ``text``.
+        RuntimeError
+            Propagated from the bundler / paymaster (AA25/AA10 are
+            retried up to 3 times before surfacing).
+
+        Examples
+        --------
+        >>> fact_ids = await client.remember_batch([
+        ...     {"text": "Pedro prefers dark mode",
+        ...      "fact_type": "preference"},
+        ...     {"text": "Pedro works at The Graph",
+        ...      "fact_type": "claim"},
+        ... ])
+        """
+        if not facts:
+            raise ValueError("remember_batch requires at least one fact")
+        if len(facts) > _USEROP_MAX_BATCH_SIZE:
+            raise ValueError(
+                f"remember_batch: {len(facts)} facts exceeds batch limit "
+                f"of {_USEROP_MAX_BATCH_SIZE}. Split into multiple calls."
+            )
+        await self._ensure_address()
+        await self._ensure_registered()
+        chain_id = await self._ensure_chain_id()
+        # LSH is needed iff at least one fact carries an embedding.
+        needs_lsh = any(
+            isinstance(f, dict) and f.get("embedding") for f in facts
+        )
+        lsh = self._get_lsh_hasher() if needs_lsh else None
+        return await store_fact_batch(
+            facts=facts,
+            keys=self._keys,
+            owner=self._wallet_address,
+            relay=self._relay,
+            lsh_hasher=lsh,
+            eoa_private_key=self._eoa_private_key,
+            eoa_address=self._eoa_address,
+            sender=self._wallet_address,
+            chain_id=chain_id,
+            source=source,
         )
 
     async def recall(
