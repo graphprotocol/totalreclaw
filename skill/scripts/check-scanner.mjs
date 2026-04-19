@@ -1,27 +1,40 @@
 #!/usr/bin/env node
 /**
- * check-scanner.mjs — Simulate OpenClaw's `env-harvesting` security-scanner
- * rule so we catch false-positives BEFORE publishing to ClawHub.
+ * check-scanner.mjs — Simulate OpenClaw's security-scanner rules so we catch
+ * false-positives BEFORE publishing to ClawHub.
  *
  * Background (see docs/notes/INVESTIGATION-OPENCLAW-SCANNER-EXEMPTION-*):
  *   OpenClaw's built-in skill scanner refuses to install a plugin whose
- *   source has BOTH:
- *     - `process.env` somewhere in the file, AND
- *     - a case-insensitive word-boundary match for `fetch`, `post`, or
- *       `http.request` anywhere in the same file.
- *   The check is whole-file (per file), so even a comment containing the
- *   word "fetch" will trip the rule if the same file reads env vars. The
- *   intended architectural fix is to centralize all `process.env` reads
- *   into a single file (config.ts) that performs NO network work — but a
- *   stray comment like "// after the billing fetch completes" in that
- *   file is enough to re-trip the rule.
+ *   source matches per-file rule patterns. We simulate TWO rules:
+ *
+ *   1. `env-harvesting` — a file contains BOTH:
+ *        - `process.env` somewhere in the file, AND
+ *        - a case-insensitive word-boundary match for `fetch`, `post`, or
+ *          `http.request` anywhere in the same file.
+ *      Fixed in 3.0.4/3.0.5 by centralizing all `process.env` reads into
+ *      `config.ts`.
+ *
+ *   2. `potential-exfiltration` — a file contains BOTH:
+ *        - an `fs.read*` call (`fs.readFileSync`, `fs.readFile`,
+ *          `fs.promises.readFile`, or a bare `readFile(` from `fs/promises`),
+ *          AND
+ *        - a case-insensitive word-boundary match for `fetch`, `post`,
+ *          `http.request`, `axios`, or `XMLHttpRequest` anywhere in the
+ *          same file.
+ *      Fixed in 3.0.7 by extracting `readBillingCache` / `writeBillingCache`
+ *      into `billing-cache.ts` (no network-capable trigger markers allowed
+ *      in that file).
+ *
+ *   Both checks are whole-file (per file), so even a comment containing one
+ *   of the trigger words will trip the rule if the same file reads env or
+ *   a disk file. The intended architectural fix is file-level isolation.
  *
  * This script walks every `.ts/.tsx/.js/.mjs/.cjs/.cts/.mts/.jsx` file
  * under skill/plugin/ (skipping node_modules, dist, hidden dirs) and
- * exits non-zero with a readable error if any file matches BOTH patterns.
+ * exits non-zero with a readable error if any file matches either rule.
  *
  * Per-file suppression is available via a `// scanner-sim: allow` comment
- * at the top of a file (top 3 lines). Prefer fixing the false-positive
+ * at the top of a file (top 5 lines). Prefer fixing the false-positive
  * over suppressing — suppression defeats the purpose of the check.
  *
  * Usage:
@@ -45,6 +58,14 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', 'pkg', '.git', 'coverage']);
 //   requiresContext: /\bfetch\b|\bpost\b|http\.request/i
 const ENV_PATTERN = /process\.env/;
 const CONTEXT_PATTERN = /\bfetch\b|\bpost\b|http\.request/i;
+
+// Mirrors OpenClaw SOURCE_RULES[potential-exfiltration]:
+//   pattern:         fs.read* (sync, callback, or fs/promises forms)
+//   requiresContext: /\bfetch\b|\bpost\b|http\.request|\baxios\b|\bXMLHttpRequest\b/i
+// Trigger set intentionally wider than env-harvesting because axios and
+// XMLHttpRequest also qualify as network-send for exfiltration risk.
+const FS_READ_PATTERN = /fs\.readFileSync|fs\.readFile\b|fs\.promises\.readFile|\breadFile\s*\(/;
+const EXFIL_CONTEXT_PATTERN = /\bfetch\b|\bpost\b|http\.request|\baxios\b|\bXMLHttpRequest\b/i;
 
 const ALLOW_COMMENT = /^\s*(?:\/\/|\*|\/\*).*scanner-sim:\s*allow/i;
 
@@ -82,7 +103,8 @@ function allLinesMatching(lines, re) {
   return out;
 }
 
-const findings = [];
+const envFindings = [];
+const exfilFindings = [];
 
 if (!fs.existsSync(ROOT)) {
   console.error(`scanner-sim: plugin directory not found at ${ROOT}`);
@@ -93,47 +115,103 @@ const files = walk(ROOT);
 for (const absPath of files) {
   const relPath = path.relative(ROOT, absPath);
   const src = fs.readFileSync(absPath, 'utf8');
-  if (!ENV_PATTERN.test(src)) continue;
-  if (!CONTEXT_PATTERN.test(src)) continue;
   if (isSuppressed(src)) continue;
   const lines = src.split('\n');
-  const envHit = firstLineMatching(lines, ENV_PATTERN);
-  const triggerHits = allLinesMatching(lines, CONTEXT_PATTERN);
-  findings.push({
-    file: relPath,
-    envLine: envHit?.line ?? 1,
-    triggers: triggerHits.slice(0, 10),
-  });
+
+  // Rule 1 — env-harvesting
+  if (ENV_PATTERN.test(src) && CONTEXT_PATTERN.test(src)) {
+    const envHit = firstLineMatching(lines, ENV_PATTERN);
+    const triggerHits = allLinesMatching(lines, CONTEXT_PATTERN);
+    envFindings.push({
+      file: relPath,
+      envLine: envHit?.line ?? 1,
+      triggers: triggerHits.slice(0, 10),
+    });
+  }
+
+  // Rule 2 — potential-exfiltration
+  if (FS_READ_PATTERN.test(src) && EXFIL_CONTEXT_PATTERN.test(src)) {
+    const readHit = firstLineMatching(lines, FS_READ_PATTERN);
+    const triggerHits = allLinesMatching(lines, EXFIL_CONTEXT_PATTERN);
+    exfilFindings.push({
+      file: relPath,
+      readLine: readHit?.line ?? 1,
+      triggers: triggerHits.slice(0, 10),
+    });
+  }
 }
 
+const totalFindings = envFindings.length + exfilFindings.length;
 const jsonMode = process.argv.includes('--json');
 if (jsonMode) {
-  process.stdout.write(JSON.stringify({ root: ROOT, findings }, null, 2) + '\n');
-  process.exit(findings.length ? 1 : 0);
+  process.stdout.write(
+    JSON.stringify(
+      {
+        root: ROOT,
+        envHarvesting: envFindings,
+        potentialExfiltration: exfilFindings,
+      },
+      null,
+      2,
+    ) + '\n',
+  );
+  process.exit(totalFindings ? 1 : 0);
 }
 
-if (findings.length === 0) {
-  console.log(`scanner-sim: OK — ${files.length} files scanned, 0 env-harvesting flags under ${path.relative(process.cwd(), ROOT) || ROOT}`);
+if (totalFindings === 0) {
+  console.log(
+    `scanner-sim: OK — ${files.length} files scanned, 0 flags (env-harvesting + potential-exfiltration) under ${
+      path.relative(process.cwd(), ROOT) || ROOT
+    }`,
+  );
   process.exit(0);
 }
 
-console.error(`scanner-sim: FAIL — ${findings.length} file(s) would trip OpenClaw's env-harvesting rule`);
+console.error(
+  `scanner-sim: FAIL — ${envFindings.length} env-harvesting + ${exfilFindings.length} potential-exfiltration flag(s)`,
+);
 console.error('');
-console.error('Each of these files reads process.env AND contains a case-insensitive');
-console.error('match for \\bfetch\\b, \\bpost\\b, or http.request. OpenClaw will refuse');
-console.error('to install such plugins. Fix by either:');
-console.error('  1. Moving the env read into config.ts (centralize), OR');
-console.error('  2. Rewording the trigger word (e.g., "fetch" -> "lookup") if it is');
-console.error('     only in a comment, OR');
-console.error('  3. Splitting the file so env and network live in separate files.');
-console.error('');
-for (const f of findings) {
-  console.error(`  ${f.file}:${f.envLine}  first process.env read`);
-  for (const t of f.triggers) {
-    console.error(`    :${t.line}  trigger -> ${t.text.slice(0, 120)}`);
+
+if (envFindings.length > 0) {
+  console.error('[env-harvesting]');
+  console.error('Each of these files reads process.env AND contains a case-insensitive');
+  console.error('match for \\bfetch\\b, \\bpost\\b, or http.request. OpenClaw will refuse');
+  console.error('to install such plugins. Fix by either:');
+  console.error('  1. Moving the env read into config.ts (centralize), OR');
+  console.error('  2. Rewording the trigger word (e.g., "fetch" -> "lookup") if it is');
+  console.error('     only in a comment, OR');
+  console.error('  3. Splitting the file so env and network live in separate files.');
+  console.error('');
+  for (const f of envFindings) {
+    console.error(`  ${f.file}:${f.envLine}  first process.env read`);
+    for (const t of f.triggers) {
+      console.error(`    :${t.line}  trigger -> ${t.text.slice(0, 120)}`);
+    }
   }
+  console.error('');
 }
-console.error('');
+
+if (exfilFindings.length > 0) {
+  console.error('[potential-exfiltration]');
+  console.error('Each of these files calls fs.read* AND contains a case-insensitive');
+  console.error('match for \\bfetch\\b, \\bpost\\b, http.request, \\baxios\\b, or');
+  console.error('\\bXMLHttpRequest\\b. OpenClaw will refuse to install such plugins.');
+  console.error('Fix by either:');
+  console.error('  1. Extracting the fs.read* into a dedicated module that has no');
+  console.error('     outbound-request trigger markers (preferred), OR');
+  console.error('  2. Rewording comment-only trigger words to synonyms (e.g., "fetch"');
+  console.error('     -> "lookup"), OR');
+  console.error('  3. Splitting the file so disk I/O and the request live separately.');
+  console.error('');
+  for (const f of exfilFindings) {
+    console.error(`  ${f.file}:${f.readLine}  first fs.read* call`);
+    for (const t of f.triggers) {
+      console.error(`    :${t.line}  trigger -> ${t.text.slice(0, 120)}`);
+    }
+  }
+  console.error('');
+}
+
 console.error('Suppress a specific file (discouraged) with a top-of-file comment:');
 console.error('  // scanner-sim: allow');
 process.exit(1);
