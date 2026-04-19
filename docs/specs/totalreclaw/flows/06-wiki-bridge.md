@@ -125,7 +125,7 @@ The dedup interaction between raw extractions and Wiki-curated claims deserves a
 3. **Store-time dedup** compares the new curated claim against the existing raw claim using cosine similarity. If sim ≥ 0.85, `shouldSupersede(0.95, 0.85)` returns `supersede` (higher confidence wins), so the raw claim gets tombstoned and the curated claim takes its place.
 4. **Recency** is tagged from the raw extraction's original timestamp, NOT the compile run's `Date.now()`. This stops a weekly Wiki recompile from re-dating all the old claims and wrecking the digest's chronological sort.
 
-The fourth step is the one that took spec discussion. Without it, recompiling Wiki would make every curated claim look brand new, drowning out fresh cross-agent claims in recency-weighted recall. The fix (§P2-10) is to have Wiki's `claims.jsonl` preserve the original `extractedAt` and pass it through to the canonical Claim's `ea` field.
+The fourth step is the one that took spec discussion. Without it, recompiling Wiki would make every curated claim look brand new, drowning out fresh cross-agent claims in recency-weighted recall. The fix (§P2-10) is to have Wiki's `claims.jsonl` preserve the original extraction timestamp and pass it through to the canonical v1 Claim's `created_at` field (legacy v0 blobs stored this in the `ea` short-key).
 
 ---
 

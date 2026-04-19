@@ -13,12 +13,12 @@ Source of truth:
 - `rust/totalreclaw-core/src/store.rs` — the pure-compute store pipeline (`prepare_fact`)
 - `rust/totalreclaw-core/src/blind.rs` — word + stem trapdoors
 - `rust/totalreclaw-core/src/lsh.rs` — LSH hasher (20 tables × 32 bits)
-- `rust/totalreclaw-core/src/claims.rs` — canonical Claim schema with compact short keys
+- `rust/totalreclaw-core/src/claims.rs` — `MemoryClaimV1` struct (canonical v1 Claim) + legacy v0 `Claim` read-path parser
 - `rust/totalreclaw-core/src/userop.rs` — ERC-4337 v0.7 UserOp construction + signing
 - `rust/totalreclaw-core/src/protobuf.rs` — fact protobuf encoding
 - `skill/plugin/index.ts` — `storeExtractedFacts` (TypeScript host for the whole pipeline)
 - `skill/plugin/extractor.ts` — LLM-driven extraction
-- `skill/plugin/claims-helper.ts` — `buildCanonicalClaim`, `computeEntityTrapdoor`, short-key mapping
+- `skill/plugin/claims-helper.ts` — `buildCanonicalClaim` (emits v1 JSON), `computeEntityTrapdoor`, v0 short-key mapping for legacy-blob reads
 
 ---
 
@@ -62,7 +62,7 @@ sequenceDiagram
 
     loop for each fact
         Plugin->>Core: buildCanonicalClaim(fact)
-        Core-->>Plugin: canonical Claim JSON<br/>{t, c, cf, i, sa, ea, e}
+        Core-->>Plugin: canonical v1 Claim JSON<br/>{schema_version: "1.0",<br/>id, text, type, source,<br/>created_at, scope, volatility,<br/>entities, importance, confidence}
         Plugin->>Core: generateEmbedding(text)
         Core-->>Plugin: 640-dim f32 vector
         Plugin->>Core: prepare_fact(claim, emb, keys)
@@ -96,44 +96,45 @@ sequenceDiagram
 
 ## Phase 1 — canonical Claim construction
 
-Before anything gets encrypted, each `ExtractedFact` becomes a canonical `Claim` JSON. This is the knowledge-graph data model introduced by the Phase 2 design; Phase 1 wrote arbitrary `{text, metadata}` blobs, and the read path has back-compat for both.
+Before anything gets encrypted, each `ExtractedFact` becomes a canonical v1 `MemoryClaimV1` JSON blob. This is the v1 Memory Taxonomy data model (spec: `docs/specs/totalreclaw/memory-taxonomy-v1.md`). Legacy pre-v1 vaults may contain v0 short-key blobs (`{t, c, cf, i, sa, ea, e}`) or even earlier `{text, metadata}` docs; the read path parses all three shapes, but every v1 client writes v1 only.
 
-The short-key mapping (see `claims.rs`):
+The v1 Claim shape (see `MemoryClaimV1` in `claims.rs`):
 
-| Short key | Meaning | Example |
-|---|---|---|
-| `t` | text | `"prefers dark mode"` |
-| `c` | category | `"fact" \| "pref" \| "dec" \| "epi" \| "goal" \| "ctx" \| "sum" \| "ent" \| "dig"` |
-| `cf` | confidence | `0.85` |
-| `i` | importance | `8` (integer 1-10) |
-| `cc` | corroboration count | `1` (omitted when 1) |
-| `sa` | source agent | `"openclaw-plugin"` |
-| `sc` | source conversation | `"conv-abc-123"` |
-| `ea` | extracted at | `"2026-04-12T10:00:00Z"` |
-| `e` | entities | `[{n, tp, r?}]` |
-| `sup` | supersedes | fact ID this replaces |
-| `sby` | superseded by | fact ID that replaces this |
-| `vf` | valid from | ISO timestamp |
-| `st` | status | `"a" \| "s" \| "r" \| "c" \| "p"` (omitted when "a") |
+| Field | Required | Meaning | Example |
+|---|---|---|---|
+| `schema_version` | yes | Fixed at `"1.0"` (omitted on-the-wire when equal to default; readers restore it) | `"1.0"` |
+| `id` | yes | UUIDv7, time-ordered | `"01900000-0000-7000-8000-..."` |
+| `text` | yes | Human-readable claim, 5-512 UTF-8 chars | `"prefers dark mode in VS Code"` |
+| `type` | yes | Closed enum: `claim \| preference \| directive \| commitment \| episode \| summary` | `"preference"` |
+| `source` | yes | Provenance: `user \| user-inferred \| assistant \| external \| derived` | `"user"` |
+| `created_at` | yes | ISO8601 UTC | `"2026-04-18T10:00:00Z"` |
+| `scope` | default `"unspecified"` | Life domain: `work \| personal \| health \| family \| creative \| finance \| misc \| unspecified` (open-extensible) | `"work"` |
+| `volatility` | default `"updatable"` | Temporal stability: `stable \| updatable \| ephemeral` | `"updatable"` |
+| `entities` | optional | Structured references `[{name, type, role?}]` | `[{"name": "VS Code", "type": "tool"}]` |
+| `reasoning` | optional | WHY clause for decision-style claims (replaces old `decision` type) | `"data is relational and needs ACID"` |
+| `expires_at` | optional | ISO8601 UTC expiration; set by extractor per type + volatility heuristic | `"2026-05-02T10:00:00Z"` |
+| `importance` | advisory | 1-10, auto-ranked in comparative pass | `8` |
+| `confidence` | advisory | 0-1, extractor self-assessment | `0.85` |
+| `superseded_by` | optional | Claim ID that overrides this (tombstone chain) | `"01900000-..."` |
 
-Compact keys are a space optimization — the blob is encrypted, then hex-encoded, then wrapped in a protobuf, then ABI-encoded as calldata, then paid for in gas. Every byte matters. The defaults-omitted rule (`st=a` and `cc=1` are dropped from the JSON) keeps the median write under 200 bytes before encryption.
+Long-form keys make the blob self-documenting and cross-client portable — any v1-compatible agent can parse the claim without a short-key cheat sheet. Default-valued optional fields are omitted on serialization to keep the blob small (`schema_version == "1.0"`, `scope == "unspecified"`, `volatility == "updatable"` all drop from the JSON). The outer protobuf wrapper sets `version = 4` to signal an inner v1 payload (legacy wrappers used `version = 3` with a v0 short-key inner blob).
 
-The canonicalization step (`wasm.canonicalizeClaim`) matters: it guarantees that the Rust, TypeScript, and Python clients produce byte-identical JSON for the same logical Claim (stable key order, no extra whitespace, consistent omit rules). Byte identity is what makes the content fingerprint work across languages — a Claim written from Hermes can exact-match a Claim written from OpenClaw, because the fingerprint is HMAC-SHA256 over that exact byte string.
+The validation and serialization step (`validateMemoryClaimV1` on the TS/WASM side, `validate_memory_claim_v1` on the Python/PyO3 side, both backed by the Rust `MemoryClaimV1` serde derive) guarantees that the Rust, TypeScript, and Python clients produce byte-identical JSON for the same logical Claim (stable key order, no extra whitespace, consistent omit rules). Byte identity is what makes the content fingerprint work across languages — a Claim written from Hermes can exact-match a Claim written from OpenClaw, because the fingerprint is HMAC-SHA256 over that exact byte string.
 
 ---
 
 ## Phase 2 — encryption
 
-The canonical Claim JSON is wrapped in a lightweight envelope, encrypted with XChaCha20-Poly1305, then re-encoded for on-chain transport.
+The canonical v1 Claim JSON is encrypted with XChaCha20-Poly1305 and re-encoded for on-chain transport. As of protobuf `version = 4`, the v1 Claim JSON IS the encrypted payload — no additional envelope wrapping — because the v1 shape already carries `text`, `source`, `type`, and the other provenance fields that the read path needs.
 
 ```text
-envelope:       {"t": "...", "a": "openclaw-plugin", "s": "auto-extraction"}
+plaintext:      MemoryClaimV1 JSON  -- {schema_version, id, text, type, source, ...}
 XChaCha20:      nonce(24) || tag(16) || ciphertext  -- per crypto.rs wire format
 base64:         for transit back through the relay
 hex:            for storage in the subgraph (Graph Studio returns 0x-prefixed hex)
 ```
 
-The outer envelope exists so the decryption path can recover the text AND the source agent without parsing the inner Claim — that metadata is needed for provenance tagging in recall results (see [03 — Read Path](./03-read-path.md)).
+Legacy pre-v1 writes used a lightweight `{"t": text, "a": agentId, "s": source}` envelope wrapping an inner v0 short-key Claim. The read path still parses that envelope for back-compat (see `extract_text_from_blob` in `search.rs`), but new writes no longer produce it: provenance now lives in the v1 Claim's `source` field, and the recall layer reads it directly from the decrypted v1 JSON. See [03 — Read Path](./03-read-path.md) for the decrypt fallback logic.
 
 The embedding vector is encrypted separately with the same key but a different path:
 
@@ -378,4 +379,5 @@ flowchart TB
 - [07 — Storage Modes](./07-storage-modes.md) — self-hosted mode replaces the bundler path with an HTTP write
 - `docs/specs/totalreclaw/architecture.md` — architectural background
 - `docs/specs/totalreclaw/lsh-tuning.md` — why 20 × 32 bits hit 98.1% recall@8
-- `docs/plans/2026-04-13-phase-2-design.md` — the canonical Claim short-key schema (§15.7) and entity normalization (§15.8)
+- `docs/specs/totalreclaw/memory-taxonomy-v1.md` — the canonical v1 Claim schema (`MemoryClaimV1`), type enum, scope + volatility axes, and provenance filter requirements
+- `docs/plans/2026-04-13-phase-2-design.md` — historical record of the v0 short-key schema (§15.7) and entity normalization (§15.8); preserved for legacy-blob read-path reference only

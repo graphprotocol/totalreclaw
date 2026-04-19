@@ -358,7 +358,7 @@ Every new feature implementation MUST include:
 - **Server-blind**: Server NEVER sees plaintext
 - **Embedding model**: onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled)
 - **Extraction cap**: Max 15 facts per extraction cycle, unified 3-turn interval
-- **Memory types**: 8 categories -- fact, preference, decision (with reasoning), episodic, goal, context, summary, rule
+- **Memory types**: 6 v1 types -- claim, preference, directive, commitment, episode, summary (closed enum, per `docs/specs/totalreclaw/memory-taxonomy-v1.md`). v0 tokens (fact, context, decision, episodic, goal, rule) are read-only for pre-v1 vault entries and normalized to v1 on recall.
 
 ---
 

@@ -169,7 +169,7 @@ Nineteen diagrams, with the main thing each one clarifies:
 
 | Term | One-line definition |
 |---|---|
-| **Claim** | The canonical knowledge-graph record shape (`{t, c, cf, i, sa, ea, e, ...}`) with compact short keys. Defined in `rust/totalreclaw-core/src/claims.rs`. |
+| **Claim** | The canonical knowledge-graph record shape — a `MemoryClaimV1` JSON object (`{schema_version: "1.0", id, text, type, source, created_at, scope, volatility, entities, importance, confidence, ...}`) with long-form field names per the v1 taxonomy. Defined in `docs/specs/totalreclaw/memory-taxonomy-v1.md` and implemented in `rust/totalreclaw-core/src/claims.rs` (`MemoryClaimV1` struct). Legacy v0 short-key blobs (`{t, c, cf, i, sa, ea, e}`) are still read for pre-v1 vault entries. |
 | **Trapdoor** | A blind index — a hash computed client-side that the server can filter on without ever seeing the plaintext. |
 | **Blind index** | General term for trapdoors stored in the subgraph. Includes word, stem, entity, and LSH bucket variants. |
 | **Word trapdoor** | `SHA-256(token)` for each surviving (non-filtered) token in a fact or query. |
