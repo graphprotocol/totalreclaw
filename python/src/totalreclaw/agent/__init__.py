@@ -43,6 +43,8 @@ from .extraction import (
     extract_facts_llm,
     extract_facts_heuristic,
     extract_facts_compaction,
+    deduplicate_facts_by_embedding,
+    is_product_meta_request,
     EXTRACTION_SYSTEM_PROMPT,
     COMPACTION_SYSTEM_PROMPT,
 )
@@ -74,6 +76,8 @@ __all__ = [
     "extract_facts_llm",
     "extract_facts_heuristic",
     "extract_facts_compaction",
+    "deduplicate_facts_by_embedding",
+    "is_product_meta_request",
     "EXTRACTION_SYSTEM_PROMPT",
     "COMPACTION_SYSTEM_PROMPT",
     # Recall

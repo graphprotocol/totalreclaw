@@ -164,6 +164,13 @@ class ExtractedFact:
     dataclass but required on the write path — upstream pipelines
     (:func:`apply_provenance_filter_lax`) tag it during extraction;
     defensive callers supply ``"user-inferred"`` when upstream fails.
+
+    ``_embedding`` is a transient field populated by
+    :func:`deduplicate_facts_by_embedding` and consumed by the
+    lifecycle-layer store path. It is NOT serialized to the vault —
+    embeddings are computed from ``text`` on the write side. Kept on the
+    dataclass so in-batch cross-fact dedup doesn't have to recompute the
+    vector at store time.
     """
 
     text: str
@@ -179,6 +186,9 @@ class ExtractedFact:
     scope: Optional[str] = None
     reasoning: Optional[str] = None
     volatility: Optional[str] = None
+    # Transient — set by deduplicate_facts_by_embedding, read by the
+    # lifecycle store path. Not part of the v1 wire format.
+    _embedding: Optional[List[float]] = None
 
 
 def normalize_confidence(raw: Any) -> float:
@@ -239,6 +249,13 @@ Rules:
 3. Skip generic knowledge, greetings, small talk, ephemeral task coordination
 4. Score importance 1-10 (6+ = worth storing)
 5. Every memory MUST attribute a source (provenance critical)
+6. DO NOT extract setup / configuration / installation requests ABOUT the
+   TotalReclaw product itself. Utterances like "set up TotalReclaw",
+   "I want encrypted memory across my AI tools", "install the memory plugin",
+   or "configure the vault" are META-requests about the product — they are
+   NOT user preferences or claims worth storing. Genuine preferences that
+   happen to mention encryption (e.g., "I like using Signal because it's
+   encrypted") ARE valid and should be extracted.
 
 Importance rubric (use FULL 1-10 range):
 - 10: Critical, core identity, never-forget content
@@ -326,6 +343,12 @@ Rules:
 3. Skip generic knowledge, greetings, small talk
 4. Score importance 1-10 (5+ = worth storing during compaction)
 5. Every memory MUST attribute a source (provenance critical)
+6. DO NOT extract setup / configuration / installation requests ABOUT the
+   TotalReclaw product itself. Utterances like "set up TotalReclaw",
+   "I want encrypted memory across my AI tools", or "configure the
+   memory plugin" are META-requests about the product — NOT user
+   preferences worth storing. Genuine preferences that mention encryption
+   ("I prefer Signal because it's encrypted") ARE valid.
 
 Importance rubric (full 1-10 range, NOT just 7-8):
 - 10: Core identity, never-forget ("remember this forever", name/birthday)
@@ -891,6 +914,210 @@ def compute_lexical_importance_bump(fact_text: str, conversation_text: str) -> i
 
 
 # ---------------------------------------------------------------------------
+# Bug #8 — in-batch cosine dedup (v2.0.2)
+# ---------------------------------------------------------------------------
+
+
+def _cosine_similarity(a: List[float], b: List[float]) -> float:
+    """Pure-Python cosine similarity. Falls back from Rust core."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        norm_a += x * x
+        norm_b += y * y
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (math.sqrt(norm_a) * math.sqrt(norm_b))
+
+
+#: Cosine similarity threshold used by the store-time dedup. Mirrors
+#: ``agent.lifecycle.STORE_DEDUP_THRESHOLD`` but kept local so this module
+#: doesn't import from lifecycle (lifecycle imports extraction, not the
+#: other way around). Keep in sync with lifecycle.
+STORE_DEDUP_THRESHOLD = 0.85
+
+
+def deduplicate_facts_by_embedding(
+    facts: List[ExtractedFact],
+    existing_memories: List[dict],
+    threshold: float = STORE_DEDUP_THRESHOLD,
+) -> List[ExtractedFact]:
+    """Remove near-duplicate facts (cross-existing + in-batch).
+
+    Bug #8 (v2.0.2): the prior store-time dedup in ``agent.lifecycle``
+    only compared each new fact against the vault snapshot fetched ONCE
+    before the store loop. Three near-identical facts produced in the
+    same extraction batch would all persist because the loop's
+    ``existing_memories`` list was never refreshed.
+
+    This helper fixes that by running the dedup pass on the extracted
+    fact list BEFORE it reaches the store loop. Each surviving fact also
+    retains its embedding on ``fact._embedding`` so the lifecycle layer
+    doesn't have to recompute.
+
+    Rules:
+      * ``UPDATE`` / ``DELETE`` actions bypass dedup (they operate on
+        existing IDs and are intended to mutate the vault).
+      * Facts without an embedding or a computable one are kept
+        (we can't dedup without signal — be conservative).
+      * A fact is dropped if its cosine similarity to any earlier
+        surviving batch fact OR any ``existing_memories`` entry with an
+        embedding exceeds ``threshold``.
+
+    The first fact to appear wins — matches ``apply_mmr`` semantics
+    and is deterministic for a given input order.
+    """
+    if not facts:
+        return []
+
+    # Filter existing_memories to those that carry usable embeddings.
+    ex_with_emb = [
+        m for m in (existing_memories or [])
+        if isinstance(m, dict) and m.get("embedding") and len(m["embedding"]) > 0
+    ]
+
+    survivors: List[ExtractedFact] = []
+    for fact in facts:
+        # Pass-through for action types that bypass dedup.
+        if fact.action in ("UPDATE", "DELETE", "NOOP"):
+            survivors.append(fact)
+            continue
+
+        # Compute embedding lazily if not attached yet.
+        embedding = fact._embedding
+        if embedding is None:
+            try:
+                from totalreclaw.embedding import get_embedding
+                embedding = get_embedding(fact.text)
+                fact._embedding = embedding
+            except Exception as e:
+                logger.debug(
+                    "deduplicate_facts_by_embedding: embedding failed for %r: %s",
+                    fact.text[:40], e,
+                )
+                # No embedding → can't dedup → keep the fact.
+                survivors.append(fact)
+                continue
+
+        if not embedding:
+            survivors.append(fact)
+            continue
+
+        # Check against existing vault entries.
+        is_dup = False
+        for mem in ex_with_emb:
+            sim = _cosine_similarity(embedding, mem["embedding"])
+            if sim >= threshold:
+                logger.info(
+                    "deduplicate_facts_by_embedding: %r dropped (sim=%.3f to existing %s)",
+                    fact.text[:60], sim, mem.get("id", "?"),
+                )
+                is_dup = True
+                break
+        if is_dup:
+            continue
+
+        # Check against earlier surviving batch facts.
+        for earlier in survivors:
+            if earlier._embedding is None:
+                continue
+            sim = _cosine_similarity(embedding, earlier._embedding)
+            if sim >= threshold:
+                logger.info(
+                    "deduplicate_facts_by_embedding: %r dropped (sim=%.3f to batch-earlier %r)",
+                    fact.text[:60], sim, earlier.text[:40],
+                )
+                is_dup = True
+                break
+        if is_dup:
+            continue
+
+        survivors.append(fact)
+
+    return survivors
+
+
+# ---------------------------------------------------------------------------
+# Bug #9 — product-meta request filter (v2.0.2)
+# ---------------------------------------------------------------------------
+
+#: Hard-product markers: if the extracted fact text mentions setting up or
+#: installing THE PRODUCT or one of its components, it's a meta-request and
+#: should not persist as a "user preference". These are case-insensitive.
+_PRODUCT_META_NAME_PATTERNS = (
+    r"\btotalreclaw\b",
+    r"\btotal reclaw\b",
+    r"\btotal-reclaw\b",
+    r"\bhermes\s+plugin\b",
+    r"\bmemory\s+plugin\b",
+    r"\bmcp\s+memory\b",
+    r"\bopenclaw\b",
+)
+
+#: Setup-action phrases combined with meta/plugin/memory context.
+_PRODUCT_META_ACTION_PATTERNS = (
+    r"\bset(\s+)?up\b.*\b(memory|vault|plugin|totalreclaw|product)\b",
+    r"\b(install|configure)\b.*\b(memory|vault|plugin|totalreclaw)\b",
+    r"\b(the\s+)?(memory|vault)\s+plugin\b",
+    r"\bi\s+want\s+(encrypted\s+)?memory\s+across\s+my\s+(ai|agents|tools)\b",
+)
+
+
+def is_product_meta_request(text: str) -> bool:
+    """Return True if ``text`` is about setting up / asking for the product.
+
+    Used to filter spurious extractions where a setup prompt (e.g.
+    "I want encrypted memory across my AI tools") lands in the vault as
+    a "user preference". Matches the QA-reported phrase exactly while
+    letting genuine preferences ("I like encrypted tools",
+    "I prefer Signal because it's encrypted") pass through.
+
+    Heuristic:
+      1. Any mention of the product by name → meta.
+      2. Setup verbs ("set up", "install", "configure") combined with
+         "memory" / "vault" / "plugin" / "agent" targets → meta.
+      3. The specific QA-reported "I want (encrypted) memory across my
+         AI tools" idiom → meta.
+    """
+    if not isinstance(text, str) or not text:
+        return False
+    lower = text.lower().strip()
+
+    for pat in _PRODUCT_META_NAME_PATTERNS:
+        if re.search(pat, lower):
+            return True
+
+    for pat in _PRODUCT_META_ACTION_PATTERNS:
+        if re.search(pat, lower, flags=re.IGNORECASE):
+            return True
+
+    return False
+
+
+def _filter_product_meta_facts(facts: List[ExtractedFact]) -> List[ExtractedFact]:
+    """Drop facts whose text reads as a product-meta / setup request.
+
+    Bug #9 (v2.0.2). Runs as a final pass before the extracted facts are
+    returned. Meta-requests are logged at INFO so operators can verify
+    the filter isn't being over-aggressive.
+    """
+    kept: List[ExtractedFact] = []
+    for f in facts:
+        if is_product_meta_request(f.text):
+            logger.info(
+                "_filter_product_meta_facts: dropping meta-request fact: %r",
+                f.text[:80],
+            )
+            continue
+        kept.append(f)
+    return kept
+
+
+# ---------------------------------------------------------------------------
 # Main extraction entry points
 # ---------------------------------------------------------------------------
 
@@ -905,7 +1132,8 @@ async def extract_facts_llm(
 
     Pipeline: single merged-topic LLM call → ``apply_provenance_filter_lax``
     → ``comparative_rescore_v1`` (forces re-rank when >= 5 facts) →
-    ``default_volatility`` fallback → lexical importance bumps.
+    ``default_volatility`` fallback → lexical importance bumps →
+    product-meta filter (Bug #9) → in-batch embedding dedup (Bug #8).
 
     Parameters
     ----------
@@ -914,14 +1142,21 @@ async def extract_facts_llm(
     mode : {"turn", "full"}
         Only affects the user-prompt framing (turn vs full-session).
     existing_memories : list[dict], optional
-        Used for LLM-side dedup context. Caller should pre-filter.
+        Used for LLM-side dedup context AND by the new cosine dedup pass
+        (Bug #8). Entries need ``id``, ``text``, and ``embedding``.
     llm_config : LLMConfig, optional
         Pre-resolved LLM config (e.g. from Hermes). Falls back to env-var
         detection via :func:`detect_llm_config` when not provided.
     """
     config = llm_config or detect_llm_config()
     if not config:
-        logger.info("extract_facts_llm: no LLM config resolved (skipping extraction)")
+        # Bug #5: loud, actionable warning — no more silent extraction disable.
+        logger.warning(
+            "TotalReclaw extraction disabled: no LLM config resolved. "
+            "Hermes users should configure ~/.hermes/config.yaml + ~/.hermes/.env; "
+            "other agents can set OPENAI_MODEL + OPENAI_API_KEY (or an equivalent "
+            "provider pair). See docs/guides/env-vars-reference.md."
+        )
         return []
 
     if not messages:
@@ -995,6 +1230,18 @@ async def extract_facts_llm(
                 bump, f.text[:60], old, f.importance,
             )
 
+    # Bug #9: drop product-meta / setup requests before they hit the vault.
+    facts = _filter_product_meta_facts(facts)
+
+    # Bug #8: collapse near-identical facts within the batch, and against
+    # existing vault entries with embeddings. Runs last so importance
+    # bumps are already applied (the surviving fact wins with its final
+    # importance). Falls through gracefully when ``existing_memories`` is
+    # empty or facts have no computable embeddings.
+    facts = deduplicate_facts_by_embedding(
+        facts, existing_memories or [], threshold=STORE_DEDUP_THRESHOLD,
+    )
+
     return facts
 
 
@@ -1010,7 +1257,13 @@ async def extract_facts_compaction(
     """
     config = llm_config or detect_llm_config()
     if not config:
-        logger.info("extract_facts_compaction: no LLM config resolved (skipping extraction)")
+        # Bug #5: loud, actionable warning — no more silent extraction disable.
+        logger.warning(
+            "TotalReclaw compaction extraction disabled: no LLM config resolved. "
+            "Hermes users should configure ~/.hermes/config.yaml + ~/.hermes/.env; "
+            "other agents can set OPENAI_MODEL + OPENAI_API_KEY (or equivalent). "
+            "See docs/guides/env-vars-reference.md."
+        )
         return []
 
     conversation_text = _truncate_messages(messages)
@@ -1073,6 +1326,14 @@ async def extract_facts_compaction(
                 "extract_facts_compaction: lexical bump +%d for %r (%d -> %d)",
                 bump, f.text[:60], old, f.importance,
             )
+
+    # Bug #9: filter product-meta requests.
+    facts = _filter_product_meta_facts(facts)
+
+    # Bug #8: in-batch + cross-existing cosine dedup.
+    facts = deduplicate_facts_by_embedding(
+        facts, existing_memories or [], threshold=STORE_DEDUP_THRESHOLD,
+    )
 
     return facts
 

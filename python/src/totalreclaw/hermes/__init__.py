@@ -21,14 +21,16 @@ def register(ctx):
     """Called by Hermes plugin system at startup."""
     state = PluginState()
 
-    # Register tools
+    # Register tools. Descriptions mirror the schemas — they are the
+    # text the Hermes agent sees when selecting a tool, so they need to
+    # clearly distinguish TotalReclaw from any built-in 'memory' tool.
     ctx.register_tool(
         name="totalreclaw_remember",
         toolset="totalreclaw",
         schema=schemas.REMEMBER,
         handler=lambda args, **kw: tools.remember(args, state, **kw),
         is_async=True,
-        description="Store a memory in TotalReclaw",
+        description=schemas.REMEMBER["description"],
     )
     ctx.register_tool(
         name="totalreclaw_recall",
@@ -36,7 +38,7 @@ def register(ctx):
         schema=schemas.RECALL,
         handler=lambda args, **kw: tools.recall(args, state, **kw),
         is_async=True,
-        description="Search memories in TotalReclaw",
+        description=schemas.RECALL["description"],
     )
     ctx.register_tool(
         name="totalreclaw_forget",
@@ -44,7 +46,7 @@ def register(ctx):
         schema=schemas.FORGET,
         handler=lambda args, **kw: tools.forget(args, state, **kw),
         is_async=True,
-        description="Delete a memory from TotalReclaw",
+        description=schemas.FORGET["description"],
     )
     ctx.register_tool(
         name="totalreclaw_export",
@@ -52,7 +54,7 @@ def register(ctx):
         schema=schemas.EXPORT,
         handler=lambda args, **kw: tools.export_all(args, state, **kw),
         is_async=True,
-        description="Export all memories from TotalReclaw",
+        description=schemas.EXPORT["description"],
     )
     ctx.register_tool(
         name="totalreclaw_status",
@@ -60,14 +62,14 @@ def register(ctx):
         schema=schemas.STATUS,
         handler=lambda args, **kw: tools.status(args, state, **kw),
         is_async=True,
-        description="Check TotalReclaw billing status",
+        description=schemas.STATUS["description"],
     )
     ctx.register_tool(
         name="totalreclaw_setup",
         toolset="totalreclaw",
         schema=schemas.SETUP,
         handler=lambda args, **kw: tools.setup(args, state, **kw),
-        description="Configure TotalReclaw credentials",
+        description=schemas.SETUP["description"],
     )
     ctx.register_tool(
         name="totalreclaw_import_from",
