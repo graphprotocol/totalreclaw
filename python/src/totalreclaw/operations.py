@@ -280,6 +280,7 @@ async def store_fact(
         wallet_address=smart_account,
         chain_id=chain_id,
         client_id=relay._client_id,
+        session_id=getattr(relay, "_session_id", None),
     )
 
     return fact_id
@@ -497,6 +498,7 @@ async def forget_fact(
             wallet_address=smart_account,
             chain_id=chain_id,
             client_id=relay._client_id,
+            session_id=getattr(relay, "_session_id", None),
         )
         return True
     except Exception:
@@ -748,6 +750,7 @@ async def _change_claim_status(
         wallet_address=smart_account,
         chain_id=chain_id,
         client_id=relay._client_id,
+        session_id=getattr(relay, "_session_id", None),
     )
 
     new_protobuf = encode_fact_protobuf(payload)
@@ -761,6 +764,7 @@ async def _change_claim_status(
         wallet_address=smart_account,
         chain_id=chain_id,
         client_id=relay._client_id,
+        session_id=getattr(relay, "_session_id", None),
     )
 
     return {

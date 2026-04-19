@@ -9,9 +9,10 @@ integration (Hermes, LangChain, CrewAI, or custom agents).
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Optional, TYPE_CHECKING
+
+from .loop_runner import run_sync
 
 if TYPE_CHECKING:
     from .state import AgentState
@@ -26,8 +27,11 @@ def auto_recall(
 ) -> Optional[str]:
     """Search the vault and return formatted context string, or None.
 
-    This is a synchronous wrapper that creates an event loop internally,
-    suitable for use in agent hooks that may not be async.
+    This is a synchronous wrapper suitable for use in agent hooks that may
+    not be async. Uses the process-wide sync loop runner so that the
+    underlying ``httpx.AsyncClient`` (cached on the RelayClient) is never
+    orphaned across short-lived loops — historically the cause of
+    ``RuntimeError: Event loop is closed`` in v2.0.1 (QA-V1CLEAN-VPS-20260418).
 
     Args:
         query: The user's message or search query.
@@ -45,13 +49,7 @@ def auto_recall(
         return None
 
     try:
-        loop = asyncio.new_event_loop()
-        try:
-            results = loop.run_until_complete(
-                client.recall(query, top_k=top_k)
-            )
-        finally:
-            loop.close()
+        results = run_sync(client.recall(query, top_k=top_k))
 
         if results:
             memories = "\n".join(f"- [{r.category}] {r.text}" for r in results)

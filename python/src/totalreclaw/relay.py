@@ -2,13 +2,41 @@
 TotalReclaw Relay Client.
 
 Async HTTP client for the TotalReclaw relay service.
+
+Event-loop binding
+------------------
+``httpx.AsyncClient`` binds to the event loop that was running when it was
+constructed (via anyio / httpcore primitives). Sharing one instance across
+two different loops raises ``RuntimeError: Event loop is closed`` the
+moment any I/O is attempted on the "wrong" loop — see
+``python/src/totalreclaw/agent/loop_runner.py`` for the root-cause writeup.
+
+The Python client has at least two loop contexts in production:
+
+* The process-wide :class:`_SyncLoopRunner` loop, used by sync Hermes hook
+  callbacks (e.g. ``pre_llm_call`` auto-recall).
+* Hermes's own async runtime loop, used when it invokes async tool handlers
+  like ``totalreclaw_status``.
+
+Historically v2.0.1 cached a single ``httpx.AsyncClient`` on the RelayClient
+and returned it from ``_get_http`` regardless of which loop was calling.
+That tripped "Event loop is closed" as soon as the second loop tried to
+use the client (QA-V1CLEAN-VPS-20260418).
+
+The fix below keeps the convenience of a cached client but keys the cache
+by the currently-running event loop, so each loop gets its own, correctly
+loop-bound client. Old clients from orphaned loops are dropped.
 """
 from __future__ import annotations
+import asyncio
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 _HARDCODED_PRODUCTION_URL = "https://api.totalreclaw.xyz"
 
@@ -69,18 +97,96 @@ class RelayClient:
         auth_key_hex: Optional[str] = None,
         wallet_address: Optional[str] = None,
         is_test: bool = False,
+        session_id: Optional[str] = None,
     ):
         self._relay_url = relay_url.rstrip("/")
         self._auth_key_hex = auth_key_hex
         self._wallet_address = wallet_address
         self._client_id = _detect_client_id()
         self._is_test = is_test or os.environ.get("TOTALRECLAW_TEST", "").lower() == "true"
-        self._http: Optional[httpx.AsyncClient] = None
+        # Optional session tag forwarded to the relay as ``X-TotalReclaw-Session``
+        # for Axiom log tracing. Resolves at construction in this priority:
+        #
+        #   1. Explicit ``session_id=`` constructor argument.
+        #   2. ``TOTALRECLAW_SESSION_ID`` env var.
+        #   3. None (header omitted).
+        #
+        # The v1 env cleanup accidentally removed this in v2.0.1 and broke
+        # Axiom session-scoped log queries — QA-V1CLEAN-VPS-20260418 Bug #1.
+        # Restored in v2.0.2.
+        resolved_session = session_id
+        if resolved_session is None:
+            env_session = os.environ.get("TOTALRECLAW_SESSION_ID")
+            resolved_session = env_session if env_session else None
+        self._session_id: Optional[str] = resolved_session or None
+        # Cache httpx.AsyncClient per event loop. Sharing one client across
+        # loops is the root cause of "Event loop is closed" in v2.0.1 — see
+        # the module docstring. Keying by ``id(loop)`` means each loop gets
+        # its own client, correctly bound, and orphaned clients (from
+        # short-lived sync loops) are dropped transparently.
+        self._http_per_loop: dict[int, httpx.AsyncClient] = {}
 
     async def _get_http(self) -> httpx.AsyncClient:
-        if self._http is None or self._http.is_closed:
-            self._http = httpx.AsyncClient(timeout=30.0)
-        return self._http
+        """Return an ``httpx.AsyncClient`` bound to the current event loop.
+
+        If the loop we're running on already has a cached client, reuse it
+        (connection pooling is preserved within a loop). Otherwise build a
+        fresh one. We never try to carry an httpx client across loops —
+        that's the bug we're fixing.
+        """
+        loop = asyncio.get_running_loop()
+        loop_id = id(loop)
+        cached = self._http_per_loop.get(loop_id)
+        if cached is not None and not cached.is_closed:
+            return cached
+        if cached is not None and cached.is_closed:
+            # Best-effort cleanup of the stale entry — the client already
+            # released its own sockets when it closed, but we still want
+            # the dict key gone so it doesn't grow unbounded.
+            self._http_per_loop.pop(loop_id, None)
+        client = httpx.AsyncClient(timeout=30.0)
+        self._http_per_loop[loop_id] = client
+        return client
+
+    # Backward-compat shim: some legacy callers and tests read / write
+    # ``self._http`` directly (particularly tests that monkeypatch the
+    # transport). Expose it as a property mapped to the current loop's
+    # cached client so the old API keeps working.
+    @property
+    def _http(self) -> Optional[httpx.AsyncClient]:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop — return whichever entry exists (usually a
+            # test setting up state before a call). ``None`` if empty.
+            if self._http_per_loop:
+                return next(iter(self._http_per_loop.values()))
+            return None
+        return self._http_per_loop.get(id(loop))
+
+    @_http.setter
+    def _http(self, value: Optional[httpx.AsyncClient]) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Outside any loop — apply to all cache entries so tests that
+            # assign a mock transport before making an async call see the
+            # replacement from whichever loop their call runs on.
+            if value is None:
+                self._http_per_loop.clear()
+            else:
+                # Can't bind without a loop, but the caller explicitly set
+                # a value — trust it for the next .get on any loop.
+                # This path is only really used by tests that assign a
+                # MockTransport-backed client; using ``0`` as a sentinel
+                # key means ``_get_http`` will find+reuse it on first call
+                # inside a loop as long as it isn't closed.
+                self._http_per_loop[0] = value
+            return
+        if value is None:
+            self._http_per_loop.pop(id(loop), None)
+        else:
+            self._http_per_loop[id(loop)] = value
 
     def _base_headers(self) -> dict[str, str]:
         headers = {
@@ -91,6 +197,11 @@ class RelayClient:
             headers["X-TotalReclaw-Test"] = "true"
         if self._auth_key_hex:
             headers["Authorization"] = f"Bearer {self._auth_key_hex}"
+        # Forward QA-scoped session tag for Axiom log tracing (if set).
+        # Matches the relay's expected header name and the semantic the
+        # plugin used before the v1 env cleanup.
+        if self._session_id:
+            headers["X-TotalReclaw-Session"] = self._session_id
         return headers
 
     async def register(self, auth_key_hash: str, salt_hex: str) -> str:
@@ -101,6 +212,8 @@ class RelayClient:
         }
         if self._is_test:
             headers["X-TotalReclaw-Test"] = "true"
+        if self._session_id:
+            headers["X-TotalReclaw-Session"] = self._session_id
         resp = await http.post(
             f"{self._relay_url}/v1/register",
             headers=headers,
@@ -181,5 +294,23 @@ class RelayClient:
         return CheckoutResponse(checkout_url=data["checkout_url"], session_id=data["session_id"])
 
     async def close(self):
-        if self._http and not self._http.is_closed:
-            await self._http.aclose()
+        """Close any cached httpx clients across all loops we've touched.
+
+        Best-effort: clients from other loops cannot be closed from here
+        (aclose is loop-bound), so we only close the one for the
+        currently-running loop and drop references to the rest so they
+        get garbage-collected. In practice tests call ``close()`` on the
+        same loop they used to create the client, so this works.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        current_id = id(loop) if loop is not None else None
+        for loop_id, client in list(self._http_per_loop.items()):
+            if loop_id == current_id and not client.is_closed:
+                try:
+                    await client.aclose()
+                except Exception:  # pragma: no cover — best-effort teardown
+                    pass
+            self._http_per_loop.pop(loop_id, None)

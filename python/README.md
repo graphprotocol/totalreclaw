@@ -144,6 +144,37 @@ Memories stored by the Python client can be recalled by the MCP server, and vice
 
 ## Recent changes
 
+### 2.0.2 — 2026-04-19
+
+Real-user QA on a clean VPS install of 2.0.1 flagged four bugs that made
+the Python client effectively unusable for new users. All four are fixed
+in 2.0.2:
+
+- **`Event loop is closed`** across `totalreclaw_status`, `totalreclaw_export`,
+  and the `pre_llm_call` auto-recall hook. Root cause: sync hook callbacks
+  created a fresh `asyncio.new_event_loop()` per call, caching an
+  `httpx.AsyncClient` that got orphaned across loop boundaries. Fix:
+  process-wide background event loop (`totalreclaw.agent.loop_runner`) that
+  owns every async call from sync code, plus per-loop caching of the
+  internal `httpx.AsyncClient`.
+- **`totalreclaw_export` returning `count=0`** despite facts on-chain.
+  Same root cause as above — the subgraph query silently failed with
+  `Event loop is closed` and the outer `except` returned an empty list.
+  Fixed by the same per-loop httpx cache.
+- **`TOTALRECLAW_SESSION_ID` rejected as a removed env var** by 2.0.1's
+  v1 cleanup. Broke Axiom session-scoped log queries. Restored: the
+  `RelayClient` now accepts `session_id=` (or picks it up from the env
+  var) and forwards it as `X-TotalReclaw-Session` on every HTTP call.
+- **No chain-id auto-detect for Pro-tier users.** 2.0.1 hardcoded chain
+  `84532` (Base Sepolia), so Pro Python users had writes signed for the
+  wrong chain and the relay silently returned AA23. `resolve_chain_id()`
+  now reads `/v1/billing/status` once and switches to chain `100` (Gnosis)
+  for Pro accounts, matching MCP. Best-effort: network errors fall back
+  to free-tier chain so offline users keep working.
+
+No data-loss: existing facts on-chain remain intact; only the Python
+client's user-experience layer changed.
+
 ### 2.0.1 — 2026-04-18
 
 - Fixed `wallet_address` property returning the EOA placeholder before

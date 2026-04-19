@@ -27,13 +27,19 @@ STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity threshold for near-duplicate d
 
 # v1 env var cleanup — warn once if any removed env var is still set.
 # See docs/guides/env-vars-reference.md for the canonical list.
+#
+# NOTE: ``TOTALRECLAW_SESSION_ID`` was in this list in v2.0.1 and silently
+# rejected with a cryptic warning, which broke Axiom log tracing — QA
+# skill and internal docs rely on it (see
+# docs/notes/QA-V1CLEAN-VPS-20260418.md Bug #1). Restored in v2.0.2: the
+# RelayClient now reads it (or the equivalent constructor arg) and
+# forwards it to the relay as ``X-TotalReclaw-Session`` on every request.
 _REMOVED_ENV_VARS = (
     "TOTALRECLAW_CHAIN_ID",
     "TOTALRECLAW_EMBEDDING_MODEL",
     "TOTALRECLAW_STORE_DEDUP",
     "TOTALRECLAW_LLM_MODEL",
     "TOTALRECLAW_EXTRACTION_MODEL",
-    "TOTALRECLAW_SESSION_ID",
     "TOTALRECLAW_TAXONOMY_VERSION",
     "TOTALRECLAW_CLAIM_FORMAT",
     "TOTALRECLAW_DIGEST_MODE",

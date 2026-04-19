@@ -18,6 +18,8 @@ backwards compatibility but are deprecated.
 from __future__ import annotations
 from typing import Optional
 
+import httpx as _httpx
+
 from .crypto import (
     derive_keys_from_mnemonic,
     derive_lsh_seed,
@@ -41,6 +43,19 @@ from .operations import (
 # SimpleSmartAccount in the permissionless library
 SIMPLE_ACCOUNT_FACTORY = "0x91E60e0613810449d098b0b5Ec8b51A0FE8c8985"
 ENTRYPOINT_V07 = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
+
+# Default chain IDs for the two supported tiers.
+#
+# Free tier -> Base Sepolia (testnet, Pimlico sponsors gas).
+# Pro tier  -> Gnosis mainnet (permanent on-chain storage).
+#
+# The user-facing ``TOTALRECLAW_CHAIN_ID`` override was removed in the v1
+# env cleanup; chain selection is now derived from billing tier. See
+# :func:`TotalReclaw.resolve_chain_id` and the MCP equivalent at
+# ``mcp/src/index.ts`` line ~346 for the cross-implementation contract.
+DEFAULT_CHAIN_ID_FREE: int = 84532
+DEFAULT_CHAIN_ID_PRO: int = 100
+CHAIN_ID_AUTODETECT_TIMEOUT_SECONDS: float = 5.0
 
 
 def _get_eoa_account(mnemonic: str):
@@ -125,6 +140,11 @@ class TotalReclaw:
         Pre-resolved Smart Account address.
     is_test : bool
         Send ``X-TotalReclaw-Test: true`` header.
+    session_id : str, optional
+        Session tag forwarded to the relay as ``X-TotalReclaw-Session`` for
+        Axiom log tracing. If not provided, falls back to the
+        ``TOTALRECLAW_SESSION_ID`` env var. Useful for QA runs that want
+        session-scoped relay logs.
     """
 
     def __init__(
@@ -136,6 +156,7 @@ class TotalReclaw:
         *,
         mnemonic: Optional[str] = None,
         relay_url: Optional[str] = None,
+        session_id: Optional[str] = None,
     ):
         resolved_mnemonic = recovery_phrase or mnemonic
         if not resolved_mnemonic:
@@ -171,8 +192,16 @@ class TotalReclaw:
             auth_key_hex=self._auth_key_hex,
             wallet_address=self._wallet_address,
             is_test=is_test,
+            session_id=session_id,
         )
         self._registered = False
+        # Chain ID is auto-detected from billing tier on first write. Pro
+        # tier -> Gnosis (100); otherwise free-tier Base Sepolia (84532).
+        # Matches the MCP behavior (mcp/src/index.ts ~346). The former
+        # TOTALRECLAW_CHAIN_ID env var was removed in the v1 cleanup; no
+        # user override is exposed here.
+        self._chain_id: int = DEFAULT_CHAIN_ID_FREE
+        self._chain_id_resolved: bool = False
 
     async def resolve_address(self) -> str:
         """Resolve the CREATE2 Smart Account address via RPC.
@@ -208,6 +237,92 @@ class TotalReclaw:
         except Exception:
             # Best-effort — relay may be unreachable; will retry on next call.
             pass
+
+    async def resolve_chain_id(self) -> int:
+        """Auto-detect target chain ID from billing tier.
+
+        Mirrors the MCP behavior (``mcp/src/index.ts`` ~346). Makes a
+        best-effort ``GET /v1/billing/status?wallet_address=<sa>`` call and
+        returns:
+
+        * :data:`DEFAULT_CHAIN_ID_PRO` (100, Gnosis mainnet) if the
+          response's ``tier == "pro"``.
+        * :data:`DEFAULT_CHAIN_ID_FREE` (84532, Base Sepolia) otherwise.
+
+        Errors from the billing endpoint (network, auth, malformed JSON)
+        are swallowed — we fall back to the free-tier chain so the client
+        is usable offline. The result is cached on the client for the
+        lifetime of the instance.
+
+        Without this, Pro users' Python writes were signed for Base
+        Sepolia but the relay routed them to Gnosis, producing silent AA23
+        failures (QA-V1CLEAN-VPS-20260418 Bug #11).
+        """
+        if self._chain_id_resolved:
+            return self._chain_id
+        await self._ensure_address()
+        sa = self._wallet_address
+        assert sa is not None
+
+        # Use a short-lived httpx client — don't touch the RelayClient's
+        # per-loop cache since this runs very early (before register).
+        relay_url = self._relay._relay_url.rstrip("/")
+        billing_url = f"{relay_url}/v1/billing/status"
+        headers: dict[str, str] = {
+            "Authorization": f"Bearer {self._auth_key_hex}",
+            "X-TotalReclaw-Client": self._relay._client_id,
+        }
+        session_id = getattr(self._relay, "_session_id", None)
+        if session_id:
+            headers["X-TotalReclaw-Session"] = session_id
+
+        try:
+            async with _httpx.AsyncClient(
+                timeout=CHAIN_ID_AUTODETECT_TIMEOUT_SECONDS,
+            ) as http:
+                resp = await http.get(
+                    billing_url,
+                    params={"wallet_address": sa},
+                    headers=headers,
+                )
+            if resp.status_code == 200:
+                payload = resp.json()
+                if isinstance(payload, dict) and payload.get("tier") == "pro":
+                    self._chain_id = DEFAULT_CHAIN_ID_PRO
+                else:
+                    self._chain_id = DEFAULT_CHAIN_ID_FREE
+            else:
+                self._chain_id = DEFAULT_CHAIN_ID_FREE
+        except Exception:
+            # Best-effort — network, timeout, or auth issues all fall back
+            # to the free-tier chain. Matches the MCP "silently default"
+            # contract (mcp/src/index.ts line ~371).
+            self._chain_id = DEFAULT_CHAIN_ID_FREE
+
+        self._chain_id_resolved = True
+        return self._chain_id
+
+    async def _ensure_chain_id(self) -> int:
+        """Lazily resolve chain_id if not yet done."""
+        if not self._chain_id_resolved:
+            await self.resolve_chain_id()
+        return self._chain_id
+
+    @property
+    def chain_id(self) -> int:
+        """Return the resolved chain ID.
+
+        Raises ``RuntimeError`` if called before the chain has been
+        resolved (i.e. before any ``remember``/``forget``/``pin``/``unpin``
+        call, or an explicit ``await client.resolve_chain_id()``).
+        """
+        if not self._chain_id_resolved:
+            raise RuntimeError(
+                "Chain ID not yet resolved. Call `await client.resolve_chain_id()` "
+                "first, or just call `remember`/`forget`/`pin_fact`/`unpin_fact` "
+                "(they resolve lazily)."
+            )
+        return self._chain_id
 
     def _get_lsh_hasher(self, dims: int = 640) -> LSHHasher:
         if self._lsh_hasher is None:
@@ -329,6 +444,7 @@ class TotalReclaw:
         """
         await self._ensure_address()
         await self._ensure_registered()
+        chain_id = await self._ensure_chain_id()
         lsh = self._get_lsh_hasher() if embedding else None
         return await store_fact(
             text=text,
@@ -349,6 +465,7 @@ class TotalReclaw:
             eoa_private_key=self._eoa_private_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
+            chain_id=chain_id,
         )
 
     async def recall(
@@ -377,6 +494,7 @@ class TotalReclaw:
         """Soft-delete a fact by writing a tombstone."""
         await self._ensure_address()
         await self._ensure_registered()
+        chain_id = await self._ensure_chain_id()
         return await forget_fact(
             fact_id,
             self._wallet_address,
@@ -384,6 +502,7 @@ class TotalReclaw:
             eoa_private_key=self._eoa_private_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
+            chain_id=chain_id,
         )
 
     async def pin_fact(self, fact_id: str) -> dict:
@@ -402,6 +521,7 @@ class TotalReclaw:
         """
         await self._ensure_address()
         await self._ensure_registered()
+        chain_id = await self._ensure_chain_id()
         return await pin_fact(
             fact_id=fact_id,
             keys=self._keys,
@@ -410,6 +530,7 @@ class TotalReclaw:
             eoa_private_key=self._eoa_private_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
+            chain_id=chain_id,
         )
 
     async def unpin_fact(self, fact_id: str) -> dict:
@@ -420,6 +541,7 @@ class TotalReclaw:
         """
         await self._ensure_address()
         await self._ensure_registered()
+        chain_id = await self._ensure_chain_id()
         return await unpin_fact(
             fact_id=fact_id,
             keys=self._keys,
@@ -428,6 +550,7 @@ class TotalReclaw:
             eoa_private_key=self._eoa_private_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
+            chain_id=chain_id,
         )
 
     async def export_all(self) -> list[dict]:

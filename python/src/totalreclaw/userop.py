@@ -233,6 +233,7 @@ async def build_and_send_userop(
     wallet_address: str,
     chain_id: int = 84532,
     client_id: str = "python-client",
+    session_id: Optional[str] = None,
 ) -> str:
     """Build, sign, and submit a UserOperation through the relay.
 
@@ -256,6 +257,11 @@ async def build_and_send_userop(
         Target chain (84532 = Base Sepolia, 100 = Gnosis).
     client_id : str
         Client identifier for X-TotalReclaw-Client header.
+    session_id : str, optional
+        QA-scoped session tag forwarded as ``X-TotalReclaw-Session`` for
+        Axiom log tracing. Typically populated from
+        ``TOTALRECLAW_SESSION_ID`` at client construction time; see
+        :class:`totalreclaw.relay.RelayClient`.
 
     Returns
     -------
@@ -271,6 +277,8 @@ async def build_and_send_userop(
         "X-TotalReclaw-Client": client_id,
         "X-Wallet-Address": wallet_address,
     }
+    if session_id:
+        headers["X-TotalReclaw-Session"] = session_id
 
     _MAX_NONCE_RETRIES = 3
 

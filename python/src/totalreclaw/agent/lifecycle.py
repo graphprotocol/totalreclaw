@@ -6,10 +6,14 @@ called from any agent framework's lifecycle hooks.
 
 This module is framework-agnostic and can be used by any Python agent
 integration (Hermes, LangChain, CrewAI, or custom agents).
+
+All sync work is driven through ``totalreclaw.agent.loop_runner.run_sync``
+rather than per-call ``asyncio.new_event_loop`` pairs — see the module
+docstring there for the rationale (QA-V1CLEAN-VPS-20260418 "Event loop is
+closed" bug).
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Optional, TYPE_CHECKING
 
@@ -19,13 +23,14 @@ if TYPE_CHECKING:
 from .extraction import ExtractedFact, extract_facts_llm, extract_facts_heuristic
 from .contradiction import detect_and_resolve_contradictions
 from .debrief import generate_debrief
+from .loop_runner import run_sync
 
 logger = logging.getLogger(__name__)
 
 STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity for near-duplicate detection
 
 
-def _fetch_recent_memories(state: "AgentState", loop: asyncio.AbstractEventLoop) -> list[dict]:
+def _fetch_recent_memories(state: "AgentState") -> list[dict]:
     """Fetch recent memories from the vault for dedup context.
 
     Returns dicts with id, text, and embedding for both LLM dedup context and
@@ -36,9 +41,7 @@ def _fetch_recent_memories(state: "AgentState", loop: asyncio.AbstractEventLoop)
         return []
     try:
         # Use a generic query to get recent memories for dedup
-        results = loop.run_until_complete(
-            client.recall("recent context", top_k=50)
-        )
+        results = run_sync(client.recall("recent context", top_k=50))
         return [{"id": r.id, "text": r.text, "embedding": r.embedding} for r in results]
     except Exception as e:
         logger.debug("Failed to fetch recent memories for dedup: %s", e)
@@ -141,97 +144,89 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
         return []
 
     stored_texts: list[str] = []
-    loop = asyncio.new_event_loop()
+
+    # Fetch existing memories for both LLM dedup context and cosine dedup
+    existing_memories = _fetch_recent_memories(state)
+
+    # Try LLM extraction first
+    facts: list[ExtractedFact] = []
     try:
-        # Fetch existing memories for both LLM dedup context and cosine dedup
-        existing_memories = _fetch_recent_memories(state, loop)
+        facts = run_sync(
+            extract_facts_llm(messages, mode=mode, existing_memories=existing_memories, llm_config=llm_config)
+        )
+    except Exception as e:
+        logger.debug("LLM extraction failed, falling back to heuristic: %s", e)
 
-        # Try LLM extraction first
-        facts: list[ExtractedFact] = []
+    # Fall back to heuristic if LLM returned nothing
+    if not facts:
+        facts = extract_facts_heuristic(messages, max_facts)
+
+    if not facts:
+        state.mark_messages_processed()
+        return []
+
+    # Cap to max_facts
+    facts = facts[:max_facts]
+
+    # Contradiction detection: filter out facts that lose to existing vault claims
+    try:
+        facts = run_sync(detect_and_resolve_contradictions(facts, client, logger))
+    except Exception as exc:
+        logger.debug("Contradiction detection failed (proceeding with all facts): %s", exc)
+
+    for fact in facts:
         try:
-            facts = loop.run_until_complete(
-                extract_facts_llm(messages, mode=mode, existing_memories=existing_memories, llm_config=llm_config)
-            )
-        except Exception as e:
-            logger.debug("LLM extraction failed, falling back to heuristic: %s", e)
+            if fact.action == "NOOP":
+                continue
 
-        # Fall back to heuristic if LLM returned nothing
-        if not facts:
-            facts = extract_facts_heuristic(messages, max_facts)
+            if fact.action == "DELETE":
+                # Tombstone the old fact
+                if fact.existing_fact_id:
+                    run_sync(client.forget(fact.existing_fact_id))
+                continue
 
-        if not facts:
-            return []
-
-        # Cap to max_facts
-        facts = facts[:max_facts]
-
-        # Contradiction detection: filter out facts that lose to existing vault claims
-        try:
-            facts = loop.run_until_complete(
-                detect_and_resolve_contradictions(facts, client, logger)
-            )
-        except Exception as exc:
-            logger.debug("Contradiction detection failed (proceeding with all facts): %s", exc)
-
-        for fact in facts:
+            # For ADD and UPDATE: store the new fact
+            embedding = None
             try:
-                if fact.action == "NOOP":
+                from totalreclaw.embedding import get_embedding
+                embedding = get_embedding(fact.text)
+            except Exception:
+                pass
+
+            # Store-time near-duplicate detection (skip if cosine sim >= threshold)
+            # UPDATE actions always store (they supersede the old fact)
+            if fact.action != "UPDATE" and embedding and existing_memories:
+                if _is_near_duplicate(embedding, existing_memories):
+                    logger.debug("Skipping near-duplicate fact: %s", fact.text[:80])
                     continue
 
-                if fact.action == "DELETE":
-                    # Tombstone the old fact
-                    if fact.existing_fact_id:
-                        loop.run_until_complete(
-                            client.forget(fact.existing_fact_id)
-                        )
-                    continue
-
-                # For ADD and UPDATE: store the new fact
-                embedding = None
-                try:
-                    from totalreclaw.embedding import get_embedding
-                    embedding = get_embedding(fact.text)
-                except Exception:
-                    pass
-
-                # Store-time near-duplicate detection (skip if cosine sim >= threshold)
-                # UPDATE actions always store (they supersede the old fact)
-                if fact.action != "UPDATE" and embedding and existing_memories:
-                    if _is_near_duplicate(embedding, existing_memories):
-                        logger.debug("Skipping near-duplicate fact: %s", fact.text[:80])
-                        continue
-
-                # v1 write path — forward the taxonomy fields the extractor
-                # populated (source/scope/reasoning/volatility). Defensive
-                # fallback for source matches the plugin's
-                # ``storeExtractedFacts`` handling.
-                loop.run_until_complete(
-                    client.remember(
-                        fact.text,
-                        embedding=embedding,
-                        importance=fact.importance / 10.0,  # Normalize 1-10 to 0.0-1.0
-                        source="hermes-auto",
-                        fact_type=fact.type,
-                        entities=fact.entities,
-                        confidence=fact.confidence,
-                        provenance=fact.source or "user-inferred",
-                        scope=fact.scope or "unspecified",
-                        reasoning=fact.reasoning,
-                        volatility=fact.volatility,
-                    )
+            # v1 write path — forward the taxonomy fields the extractor
+            # populated (source/scope/reasoning/volatility). Defensive
+            # fallback for source matches the plugin's
+            # ``storeExtractedFacts`` handling.
+            run_sync(
+                client.remember(
+                    fact.text,
+                    embedding=embedding,
+                    importance=fact.importance / 10.0,  # Normalize 1-10 to 0.0-1.0
+                    source="hermes-auto",
+                    fact_type=fact.type,
+                    entities=fact.entities,
+                    confidence=fact.confidence,
+                    provenance=fact.source or "user-inferred",
+                    scope=fact.scope or "unspecified",
+                    reasoning=fact.reasoning,
+                    volatility=fact.volatility,
                 )
-                stored_texts.append(fact.text)
+            )
+            stored_texts.append(fact.text)
 
-                # For UPDATE: also tombstone the old fact after storing the new one
-                if fact.action == "UPDATE" and fact.existing_fact_id:
-                    loop.run_until_complete(
-                        client.forget(fact.existing_fact_id)
-                    )
+            # For UPDATE: also tombstone the old fact after storing the new one
+            if fact.action == "UPDATE" and fact.existing_fact_id:
+                run_sync(client.forget(fact.existing_fact_id))
 
-            except Exception as e:
-                logger.warning("Failed to store/process extracted fact: %s", e)
-    finally:
-        loop.close()
+        except Exception as e:
+            logger.warning("Failed to store/process extracted fact: %s", e)
 
     state.mark_messages_processed()
     return stored_texts
@@ -260,31 +255,25 @@ def session_debrief(state: "AgentState", stored_fact_texts: Optional[list[str]] 
         return
 
     try:
-        loop = asyncio.new_event_loop()
-        try:
-            debrief_items = loop.run_until_complete(
-                generate_debrief(all_messages, stored_fact_texts)
-            )
-            if debrief_items:
-                for item in debrief_items:
-                    try:
-                        # v1 debrief items are summaries with derived
-                        # provenance — the assistant-side debrief pipeline
-                        # synthesized them from the conversation, so the
-                        # v1 source is always "derived" (plugin parity).
-                        loop.run_until_complete(
-                            client.remember(
-                                item.text,
-                                importance=item.importance / 10.0,
-                                source="hermes_debrief",
-                                fact_type="summary",
-                                provenance="derived",
-                                scope="unspecified",
-                            )
+        debrief_items = run_sync(generate_debrief(all_messages, stored_fact_texts))
+        if debrief_items:
+            for item in debrief_items:
+                try:
+                    # v1 debrief items are summaries with derived
+                    # provenance — the assistant-side debrief pipeline
+                    # synthesized them from the conversation, so the
+                    # v1 source is always "derived" (plugin parity).
+                    run_sync(
+                        client.remember(
+                            item.text,
+                            importance=item.importance / 10.0,
+                            source="hermes_debrief",
+                            fact_type="summary",
+                            provenance="derived",
+                            scope="unspecified",
                         )
-                    except Exception as e:
-                        logger.warning("Failed to store debrief item: %s", e)
-        finally:
-            loop.close()
+                    )
+                except Exception as e:
+                    logger.warning("Failed to store debrief item: %s", e)
     except Exception as e:
         logger.warning("Session debrief failed: %s", e)
