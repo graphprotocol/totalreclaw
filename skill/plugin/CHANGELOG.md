@@ -4,6 +4,38 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.6] — 2026-04-19
+
+### Changed
+
+- **Internal refactor — memory consolidation now delegates to `@totalreclaw/core`
+  WASM.** `findNearDuplicate`, `shouldSupersede`, and `clusterFacts` in
+  `consolidation.ts` previously ran pure-TypeScript implementations of
+  cosine-similarity dedup, greedy single-pass clustering, and representative
+  selection. They now call the Rust core's WASM exports
+  (`findBestNearDuplicate`, `shouldSupersede`, `clusterFacts`) — the same
+  single source of truth already used by the MCP server
+  (`mcp/src/consolidation.ts:128-233`) and the Python client
+  (`python/src/totalreclaw/agent/lifecycle.py:73-94`). Public API, types,
+  thresholds, and return shapes are unchanged; no behavior change for callers.
+- **Dedup parity across clients.** OpenClaw plugin, MCP, and Python now all
+  emit byte-identical dedup decisions for the same inputs — previously plugin
+  had its own TS loop that was functionally equivalent but duplicated the
+  work. Cross-impl drift risk eliminated.
+- **Removed stale TODO.** The "hoist findNearDuplicate / clusterFacts /
+  pickRepresentative to @totalreclaw/core WASM once bindings are published"
+  comment at the top of `consolidation.ts` was shipped-ready — the core
+  WASM bindings have been live since `@totalreclaw/core` 1.5.0 (currently
+  2.0.0). Delivered.
+- **New parity tests.** `consolidation.test.ts` adds 6 tests that re-execute
+  representative inputs against the raw WASM API and assert the plugin
+  wrapper returns byte-identical results, so future drift between plugin
+  and core is caught at test time.
+
+### Fixed
+
+- Nothing. Pure internal refactor — no user-visible bug fixes.
+
 ## [3.0.5] — 2026-04-19
 
 ### Fixed
