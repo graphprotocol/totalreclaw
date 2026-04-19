@@ -6,6 +6,38 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-04-19
+
+Wire `auto_extract` to `remember_batch`; realizes the ~8x extraction latency win
+from 2.2.0. No new public API — internal call-site change only.
+
+### Changed
+
+- `agent/lifecycle.py::auto_extract` now submits ADD/UPDATE facts via
+  `client.remember_batch()` in chunks of 15 instead of looping
+  `client.remember()` per fact. DELETE and NOOP actions are unaffected.
+  For a 15-fact extraction cycle this drops relay round-trips from 15
+  separate UserOperations to 1, matching the ~60s → ~8s latency projection
+  from the Gap 3 notes in 2.2.0.
+- Per-fact error granularity is preserved: if `remember_batch` returns
+  fewer IDs than facts, the missing ones are logged at WARNING level so
+  the caller can diagnose. If the whole batch fails, each fact is logged
+  individually.
+- UPDATE tombstones (`client.forget(existing_fact_id)`) are still issued
+  individually after the batch that stored the replacement, preserving the
+  same ordering guarantee as the old loop.
+
+### Tests
+
+- +3 new tests (`tests/test_auto_extract_uses_batch.py`):
+  `test_auto_extract_5_facts_calls_remember_batch_once`,
+  `test_auto_extract_20_facts_calls_remember_batch_twice`,
+  `test_auto_extract_partial_failure_logs_failed_facts`.
+- Updated `tests/test_v1_hooks_integration.py` and
+  `tests/test_hermes_plugin.py` to assert on `remember_batch` instead of
+  `remember` for the auto-extraction path.
+- Full suite: 640 passing, 9 skipped, 1 xfailed.
+
 ## [2.2.0] - 2026-04-19
 
 Hermes parity Gap 3: client-side batching. Drops 15-fact extraction

@@ -31,6 +31,8 @@ def _make_state(**env_overrides):
     # Forge a fake client so is_configured() returns True.
     fake_client = MagicMock()
     fake_client.remember = AsyncMock(return_value="fact-uuid-abc")
+    # remember_batch returns a list of fact IDs (one per fact in the batch).
+    fake_client.remember_batch = AsyncMock(return_value=["fact-uuid-abc"])
     fake_client.recall = AsyncMock(return_value=[])
     fake_client.forget = AsyncMock(return_value=True)
     state._client = fake_client
@@ -42,8 +44,12 @@ def _make_state(**env_overrides):
 # ---------------------------------------------------------------------------
 
 
-def test_post_llm_call_forwards_v1_fields_to_remember() -> None:
-    """When auto_extract fires, client.remember receives v1 type/source/scope."""
+def test_post_llm_call_forwards_v1_fields_to_remember_batch() -> None:
+    """When auto_extract fires, client.remember_batch receives v1 type/source/scope.
+
+    As of v2.2.1 auto_extract calls remember_batch instead of remember per-fact.
+    We verify the batch dict payload carries all the v1 taxonomy fields.
+    """
     from totalreclaw.hermes.hooks import post_llm_call
 
     state, fake_client = _make_state()
@@ -91,18 +97,27 @@ def test_post_llm_call_forwards_v1_fields_to_remember() -> None:
                     for _ in range(DEFAULT_EXTRACTION_INTERVAL):
                         post_llm_call(state, user_message="u", assistant_response="a")
 
-    # Assert client.remember was called with v1 kwargs.
-    assert fake_client.remember.called, "client.remember should have been called"
-    call = fake_client.remember.call_args
-    kwargs = call.kwargs
+    # As of v2.2.1 auto_extract uses remember_batch (not remember per-fact).
+    assert fake_client.remember_batch.called, "client.remember_batch should have been called"
+    assert not fake_client.remember.called, (
+        "client.remember should NOT be called — auto_extract now uses remember_batch"
+    )
 
-    # The first positional is the text; then we check kwargs.
-    assert call.args[0] == fake_fact.text
-    assert kwargs["fact_type"] == "preference"
-    assert kwargs["provenance"] == "user"
-    assert kwargs["scope"] == "work"
-    assert kwargs["volatility"] == "stable"
-    assert kwargs["reasoning"] is None
+    # Inspect the batch dict payload for v1 taxonomy fields.
+    batch_call = fake_client.remember_batch.call_args
+    # First arg is the list of fact dicts.
+    fact_dicts = batch_call.args[0]
+    assert len(fact_dicts) == 1, f"expected 1 fact dict in batch, got {len(fact_dicts)}"
+    fd = fact_dicts[0]
+
+    assert fd["text"] == fake_fact.text
+    assert fd["fact_type"] == "preference"
+    assert fd["provenance"] == "user"
+    assert fd["scope"] == "work"
+    assert fd["volatility"] == "stable"
+    assert fd["reasoning"] is None
+    # source is passed as the shared kwarg, not per-dict
+    assert batch_call.kwargs.get("source") == "hermes-auto"
 
 
 # ---------------------------------------------------------------------------

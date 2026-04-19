@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 
 STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity for near-duplicate detection
 
+# Maximum facts per batched UserOperation — mirrors userop.MAX_BATCH_SIZE so
+# we don't need to import from userop here (avoids a circular-import risk).
+# If the userop constant ever changes, update both.
+_LIFECYCLE_MAX_BATCH = 15
+
 
 def _fetch_recent_memories(state: "AgentState") -> list[dict]:
     """Fetch recent memories from the vault for dedup context.
@@ -174,18 +179,30 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
     except Exception as exc:
         logger.debug("Contradiction detection failed (proceeding with all facts): %s", exc)
 
+    # -----------------------------------------------------------------------
+    # Two-pass approach:
+    #   Pass 1 — handle NOOP / DELETE actions individually (no batch needed).
+    #   Pass 2 — collect ADD / UPDATE facts that survive dedup into a pending
+    #            list, then submit in chunks of _LIFECYCLE_MAX_BATCH via
+    #            client.remember_batch().  UPDATE tombstones (forget old id)
+    #            are issued after the batch that stored the replacement.
+    # -----------------------------------------------------------------------
+
+    # pending_store: list of (fact, embedding, fact_dict) for batch submission
+    pending_store: list[tuple[ExtractedFact, Optional[list[float]], dict]] = []
+
     for fact in facts:
         try:
             if fact.action == "NOOP":
                 continue
 
             if fact.action == "DELETE":
-                # Tombstone the old fact
+                # Tombstone the old fact — one-at-a-time, no batch needed.
                 if fact.existing_fact_id:
                     run_sync(client.forget(fact.existing_fact_id))
                 continue
 
-            # For ADD and UPDATE: store the new fact
+            # For ADD and UPDATE: resolve embedding + run dedup, then enqueue.
             embedding = None
             try:
                 from totalreclaw.embedding import get_embedding
@@ -200,33 +217,75 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
                     logger.debug("Skipping near-duplicate fact: %s", fact.text[:80])
                     continue
 
+            # Build the fact dict — mirrors the kwargs passed to remember() so
+            # remember_batch() sees an identical payload.
+            fact_dict: dict = {
+                "text": fact.text,
+                "embedding": embedding,
+                "importance": fact.importance / 10.0,  # Normalize 1-10 to 0.0-1.0
+                "fact_type": fact.type,
+                "entities": fact.entities,
+                "confidence": fact.confidence,
+                "provenance": fact.source or "user-inferred",
+                "scope": fact.scope or "unspecified",
+                "reasoning": fact.reasoning,
+                "volatility": fact.volatility,
+            }
+            pending_store.append((fact, embedding, fact_dict))
+
+        except Exception as e:
+            logger.warning("Failed to prepare extracted fact for batch: %s", e)
+
+    # Submit pending ADD/UPDATE facts in chunks of _LIFECYCLE_MAX_BATCH.
+    for chunk_start in range(0, len(pending_store), _LIFECYCLE_MAX_BATCH):
+        chunk = pending_store[chunk_start : chunk_start + _LIFECYCLE_MAX_BATCH]
+        chunk_dicts = [fd for (_, _, fd) in chunk]
+
+        try:
             # v1 write path — forward the taxonomy fields the extractor
             # populated (source/scope/reasoning/volatility). Defensive
             # fallback for source matches the plugin's
             # ``storeExtractedFacts`` handling.
-            run_sync(
-                client.remember(
-                    fact.text,
-                    embedding=embedding,
-                    importance=fact.importance / 10.0,  # Normalize 1-10 to 0.0-1.0
-                    source="hermes-auto",
-                    fact_type=fact.type,
-                    entities=fact.entities,
-                    confidence=fact.confidence,
-                    provenance=fact.source or "user-inferred",
-                    scope=fact.scope or "unspecified",
-                    reasoning=fact.reasoning,
-                    volatility=fact.volatility,
-                )
+            fact_ids = run_sync(
+                client.remember_batch(chunk_dicts, source="hermes-auto")
             )
-            stored_texts.append(fact.text)
-
-            # For UPDATE: also tombstone the old fact after storing the new one
-            if fact.action == "UPDATE" and fact.existing_fact_id:
-                run_sync(client.forget(fact.existing_fact_id))
-
         except Exception as e:
-            logger.warning("Failed to store/process extracted fact: %s", e)
+            logger.warning(
+                "remember_batch failed for chunk of %d facts: %s", len(chunk), e
+            )
+            # On a total batch failure, none of the facts in this chunk landed.
+            # Log each one individually so the caller can diagnose.
+            for fact, _, _ in chunk:
+                logger.warning(
+                    "Fact not stored (batch failure): %s", fact.text[:80]
+                )
+            continue
+
+        # fact_ids is a list[str] in the same order as chunk_dicts.
+        # Process per-fact results: log stored facts and issue UPDATE tombstones.
+        for i, (fact, _, _) in enumerate(chunk):
+            try:
+                fact_id = fact_ids[i] if i < len(fact_ids) else None
+                if fact_id:
+                    stored_texts.append(fact.text)
+                    # For UPDATE: tombstone the old fact after the replacement
+                    # has been successfully stored.
+                    if fact.action == "UPDATE" and fact.existing_fact_id:
+                        try:
+                            run_sync(client.forget(fact.existing_fact_id))
+                        except Exception as fe:
+                            logger.warning(
+                                "Failed to tombstone old fact %s after UPDATE: %s",
+                                fact.existing_fact_id, fe,
+                            )
+                else:
+                    # remember_batch returned a short list — treat as failure.
+                    logger.warning(
+                        "Fact not stored (no id returned by batch): %s",
+                        fact.text[:80],
+                    )
+            except Exception as e:
+                logger.warning("Failed to process batch result for fact: %s", e)
 
     state.mark_messages_processed()
     return stored_texts

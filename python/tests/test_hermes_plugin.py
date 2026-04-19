@@ -434,14 +434,10 @@ class TestStoreTimeDedup:
         async def mock_recall(query, top_k=50):
             return [mock_recall_result]
 
-        async def mock_remember(*args, **kwargs):
-            return "new-id"
-
         async def mock_forget(fact_id):
             return True
 
         mock_client.recall = mock_recall
-        mock_client.remember = mock_remember
         mock_client.forget = mock_forget
 
         state.add_message("user", "I like dark mode")
@@ -456,14 +452,14 @@ class TestStoreTimeDedup:
             importance=9, action="UPDATE", existing_fact_id="existing-1"
         )
 
-        remember_calls = []
-        original_remember = mock_client.remember
+        # As of v2.2.1 auto_extract uses remember_batch instead of remember.
+        batch_calls = []
 
-        async def tracking_remember(*args, **kwargs):
-            remember_calls.append((args, kwargs))
-            return "new-id"
+        async def tracking_remember_batch(facts, source="python-client"):
+            batch_calls.append((facts, source))
+            return ["new-id"] * len(facts)
 
-        mock_client.remember = tracking_remember
+        mock_client.remember_batch = tracking_remember_batch
 
         with patch("totalreclaw.agent.lifecycle.extract_facts_llm") as mock_llm, \
              patch("totalreclaw.agent.lifecycle.extract_facts_heuristic"), \
@@ -478,9 +474,15 @@ class TestStoreTimeDedup:
 
             # ADD should be skipped (near-duplicate of existing [1,0,0])
             # UPDATE should go through (bypasses dedup)
-            # So we expect exactly 1 remember call (for the UPDATE)
-            assert len(remember_calls) == 1
-            assert remember_calls[0][1].get("source") == "hermes-auto"
+            # So we expect exactly 1 batch call with 1 fact dict (the UPDATE)
+            assert len(batch_calls) == 1, (
+                f"expected 1 remember_batch call, got {len(batch_calls)}"
+            )
+            facts_in_batch, source = batch_calls[0]
+            assert len(facts_in_batch) == 1, (
+                f"expected 1 fact in batch (UPDATE only), got {len(facts_in_batch)}"
+            )
+            assert source == "hermes-auto"
 
 
 class TestRegister:
