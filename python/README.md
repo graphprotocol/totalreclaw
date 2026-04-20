@@ -8,7 +8,7 @@ As of **2.0.0**, the client uses **Memory Taxonomy v1** (6 canonical types: `cla
 
 ## Features
 
-- **End-to-end encrypted** -- XChaCha20-Poly1305 encryption, HKDF key derivation from BIP-39 mnemonic
+- **End-to-end encrypted** -- XChaCha20-Poly1305 encryption, HKDF key derivation from a BIP-39 recovery phrase
 - **Portable** -- Same recovery phrase works across Hermes, OpenClaw, Claude Desktop, IronClaw, ZeroClaw
 - **Memory Taxonomy v1** -- 6 speech-act types + required provenance (`user | user-inferred | assistant | external | derived`) and 8 life-domain scopes. v1 is the only write path (no env-var gating).
 - **Retrieval v2 Tier 1** -- source-weighted reranking via `totalreclaw-core@2.0.0` PyO3 bindings (user-sourced facts rank higher on tied scores)

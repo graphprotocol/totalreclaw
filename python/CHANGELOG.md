@@ -6,6 +6,113 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-04-20
+
+First-run onboarding UX parity with plugin 3.3.0. Users switching between
+OpenClaw (plugin) and Hermes (Python) now see the same welcome, the same
+branch question, and the same canonical "recovery phrase" terminology.
+
+### Added
+
+- `totalreclaw.onboarding` (new module): synchronous, no-network
+  first-run detection + welcome copy.
+  - `detect_first_run(credentials_path)` — returns ``True`` when the
+    credentials file is missing, empty, malformed, or lacks a
+    recognised credentials key. Accepts both canonical ``mnemonic``
+    and legacy ``recovery_phrase`` keys on read (same back-compat
+    pattern as ``agent/state.py``).
+  - `build_welcome_message(mode)` — renders the full welcome +
+    branch-question copy for either ``local`` or ``remote`` mode.
+  - `detect_mode(relay_url)` — classifies the invocation context from
+    ``TOTALRECLAW_SERVER_URL`` / loopback hostnames / explicit
+    ``TOTALRECLAW_LOCAL_GATEWAY`` env flags.
+  - `maybe_emit_welcome(...)` — once-per-process emission guarded by
+    a module-level flag AND a best-effort sentinel file at
+    ``~/.totalreclaw/.welcome_shown`` so repeat command invocations
+    for a first-run user who deferred setup don't re-spam the banner.
+  - Verbatim copy constants exported at module level:
+    ``WELCOME_MESSAGE``, ``BRANCH_QUESTION``, ``LOCAL_MODE_INSTRUCTIONS``,
+    ``REMOTE_MODE_INSTRUCTIONS``, ``STORAGE_GUIDANCE``,
+    ``RESTORE_PROMPT``, ``GENERATED_CONFIRMATION``. Tests assert
+    byte-identity so future cross-client drift is caught.
+
+- `hermes` CLI (new console script via ``[project.scripts]``) —
+  interactive onboarding wizard mirroring plugin 3.3.0's
+  ``openclaw totalreclaw onboard``:
+  - `hermes setup` subcommand — asks the branch question, then
+    branches into a restore flow (12-word paste, BIP-39 checksum
+    validation via ``eth_account.Account.from_mnemonic``) or a
+    generate flow (fresh 12-word phrase, prints STORAGE_GUIDANCE
+    before showing the phrase grid, prints GENERATED_CONFIRMATION
+    after a last-3-words confirmation challenge).
+  - Overwrite guard: if credentials already exist, the wizard
+    prompts ``Account already set up at <path>. Overwrite? [y/N]``
+    and defaults to ``N``.
+  - Phrase banner goes to stderr so ``hermes setup > log.txt`` does
+    NOT capture the phrase into the log.
+  - Non-TTY stdin is tolerated (scripted installers work) but the
+    restore flow prints a clear warning that the phrase was visible.
+
+### Changed
+
+- `TotalReclaw.__init__` now accepts a ``suppress_welcome`` kwarg and
+  emits the 2.3.1 welcome message the first time a client is
+  constructed on a machine without credentials AND without an explicit
+  ``recovery_phrase`` / ``mnemonic`` argument. The welcome surface
+  points the user at ``hermes setup``. Backward-compatible: callers
+  who pass a phrase never see the welcome, and ``suppress_welcome=True``
+  opts out entirely.
+
+- `totalreclaw.hermes.register(ctx)` calls ``maybe_emit_welcome`` once
+  at plugin load time so Hermes-launched sessions on a clean machine
+  also surface the welcome.
+
+- `python/README.md`: updated the "End-to-end encrypted" bullet to say
+  ``BIP-39 recovery phrase`` instead of ``BIP-39 mnemonic`` —
+  matches the 2.3.1 canonical user-facing terminology. Internal
+  variable names, docstrings, and plugin-side ``mnemonic`` references
+  (e.g. ``derive_keys_from_mnemonic``) are unchanged — the sweep is
+  scoped to output strings only.
+
+- `python/pyproject.toml`: added ``[project.scripts]`` entry for the
+  ``hermes`` console script, version bumped ``2.3.0`` → ``2.3.1``.
+
+- `python/src/totalreclaw/__init__.py`: updated ``__version__``
+  fallback to ``"2.3.1"`` for editable installs where
+  ``importlib.metadata`` can't resolve the installed version.
+
+- `python/src/totalreclaw/hermes/plugin.yaml`: bumped
+  ``version: 2.3.0`` → ``2.3.1``.
+
+### Tests
+
+- `python/tests/test_onboarding.py` (new, 12 tests): detect_first_run
+  across missing / empty / invalid-JSON / valid-credentials / legacy
+  ``recovery_phrase``-keyed files; ``build_welcome_message`` local +
+  remote contents; ``detect_mode`` env-flag + URL classification;
+  module-level copy-constant parity; terminology sweep AST walker
+  that asserts no ``mnemonic`` / ``seed phrase`` / ``recovery code`` /
+  ``recovery key`` string literals are passed to ``print`` /
+  ``click.echo`` / ``logger.warning`` / ``logger.error`` call sites
+  under ``python/src/**/*.py``.
+- `python/tests/test_hermes_setup_cli.py` (new, 8 tests): happy-path
+  restore (mocked stdin 12 words → credentials.json written), happy-path
+  generate (mocked last-3-words confirmation → STORAGE_GUIDANCE +
+  GENERATED_CONFIRMATION printed + credentials written), overwrite-
+  confirmation reject, invalid 12-word input rejected, non-TTY stdin
+  tolerated in both flows, phrase-never-leaves-stderr assertion on the
+  generate flow.
+
+### Compatibility
+
+- No breaking changes to public Hermes API. All existing tool
+  signatures, schema shapes, and client constructor parameters remain
+  unchanged. ``suppress_welcome`` is a new keyword-only parameter with
+  a back-compat default.
+- The welcome message is emitted AT MOST ONCE per process (module-level
+  flag) AND at most once per host until the user completes setup
+  (sentinel file). No new noise for returning users.
+
 ## [2.3.0] - 2026-04-19
 
 ### Changed

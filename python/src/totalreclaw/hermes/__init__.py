@@ -21,6 +21,19 @@ def register(ctx):
     """Called by Hermes plugin system at startup."""
     state = PluginState()
 
+    # 2.3.1 first-run onboarding parity with plugin 3.3.0. Emit the
+    # welcome + branch-question copy to stdout the first time the
+    # plugin loads on a machine without credentials. ``maybe_emit_welcome``
+    # handles all suppression logic (per-process flag, sentinel file,
+    # already-onboarded short-circuit) — this call is a no-op for
+    # returning users. Never writes the phrase itself; only the welcome
+    # surface + ``hermes setup`` pointer.
+    try:
+        from totalreclaw.onboarding import maybe_emit_welcome
+        maybe_emit_welcome()
+    except Exception:  # pragma: no cover — welcome is best-effort
+        logger.debug("first-run welcome emission skipped", exc_info=True)
+
     # Register tools. Descriptions mirror the schemas — they are the
     # text the Hermes agent sees when selecting a tool, so they need to
     # clearly distinguish TotalReclaw from any built-in 'memory' tool.

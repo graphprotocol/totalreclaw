@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "totalreclaw"
-version = "2.3.0"
+version = "2.3.1"
 description = "End-to-end encrypted memory for AI agents — Python client (Memory Taxonomy v1)"
 readme = "README.md"
 license = "MIT"
@@ -35,6 +35,12 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-xdist>=3.5", "mnemonic>=0.
 
 [project.entry-points."hermes_agent.plugins"]
 totalreclaw = "totalreclaw.hermes"
+
+[project.scripts]
+# Hermes CLI for first-run onboarding ("hermes setup"). Mirrors the
+# plugin 3.3.0 onboarding flow so users switching between OpenClaw and
+# Hermes see the same branch question + recovery-phrase terminology.
+hermes = "totalreclaw.hermes.cli:main"
 
 [tool.setuptools.package-data]
 "totalreclaw.hermes" = ["plugin.yaml"]

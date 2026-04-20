@@ -159,9 +159,23 @@ class TotalReclaw:
         mnemonic: Optional[str] = None,
         relay_url: Optional[str] = None,
         session_id: Optional[str] = None,
+        suppress_welcome: bool = False,
     ):
         resolved_mnemonic = recovery_phrase or mnemonic
         if not resolved_mnemonic:
+            # First-run welcome: surface the plugin 3.3.0-parity welcome
+            # + branch question before the ``recovery_phrase is required``
+            # error. Users who hit this path on a clean machine get a
+            # pointer to ``hermes setup`` rather than a bare traceback.
+            # ``maybe_emit_welcome`` is a no-op if the flag is set or if
+            # the sentinel file says we've already onboarded / shown
+            # the welcome before.
+            if not suppress_welcome:
+                try:
+                    from .onboarding import maybe_emit_welcome
+                    maybe_emit_welcome(relay_url=server_url or relay_url)
+                except Exception:  # pragma: no cover — defensive
+                    pass
             raise ValueError("recovery_phrase is required")
         self._mnemonic = resolved_mnemonic.strip()
         self._keys = derive_keys_from_mnemonic(self._mnemonic)
