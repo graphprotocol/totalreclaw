@@ -4,6 +4,68 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0-rc.6] — 2026-04-20
+
+Sixth release candidate for 3.3.0. Single manifest-only fix for the
+root cause of every rc.2–rc.5 HTTP-route failure: the gateway's startup
+registry pin silently excluded our plugin because the manifest declared
+`kind: "memory"`. All prior fixes (scanner, auth literal, sync
+registration) are preserved. No code changes in `index.ts` or any other
+source file. No protocol / on-chain changes vs 3.3.0.
+
+See research report: `docs/notes/RESEARCH-openclaw-http-route-plumbing-20260420-1608.md`
+in `totalreclaw-internal`, and `totalreclaw-internal#21` comment 4282038854.
+
+### Fixed
+
+- **`skill/plugin/openclaw.plugin.json` — drop `"kind": "memory"`**.
+  `resolveGatewayStartupPluginIds` (channel-plugin-ids-*.js) excludes
+  plugins with `kind: "memory"` from the gateway's startup set unless
+  they also declare a configured channel. Because TotalReclaw has no
+  channel, `loadGatewayPlugins` (gateway-cli-*.js:19807–19813) took an
+  empty-list early return, passed an empty HTTP route registry to
+  `createGatewayRuntimeState`, and `pinActivePluginHttpRouteRegistry`
+  locked that empty registry. The plugin still loaded later via the
+  memory-backend path and pushed its 4 routes into a NEW registry, but
+  `setActivePluginRegistry`'s `syncTrackedSurface` early-returns when
+  `surface.pinned === true` (runtime-*.js:60–67). Net: every `/pair/*`
+  HTTP route returned 404/SPA-fallthrough at runtime despite
+  `httpRouteCount: 4` in `openclaw plugins inspect`.
+
+  Removing `"kind": "memory"` from the manifest restores startup
+  inclusion via the sidecar path (`hasRuntimeContractSurface` becomes
+  false), so the gateway pins a registry that already contains the 4
+  routes.
+
+  **The JS plugin definition (`index.ts` line ~2626) still returns
+  `kind: 'memory' as const`.** The OpenClaw loader re-merges the JS
+  definition into `record.kind` at line 2090, so memory-slot matching
+  via `config.slots.memory === "totalreclaw"` still works and all
+  memory-gated behavior is unchanged.
+
+  This is a workaround for an upstream OpenClaw bug — see "Upstream
+  OpenClaw bug" section in the linked PR for the bug report draft and
+  proposed proper fixes.
+
+### Added
+
+- **`skill/plugin/manifest-shape.test.ts`** — dual-assertion regression
+  guard documenting the intentional manifest/JS asymmetry:
+  1. `openclaw.plugin.json` does NOT contain `"kind": "memory"` (guard
+     against accidentally re-adding).
+  2. The exported plugin definition in `index.ts` DOES have
+     `kind: 'memory' as const` (guard against accidental removal from
+     JS, which would break memory-slot matching).
+
+### Unchanged
+
+No changes to: `index.ts`, `pair-http.ts`, or any other source file.
+Scanner-sim: 0 flags. Tarball contents: same files; diff is
+`openclaw.plugin.json` (1 line removed) + `package.json` version bump +
+`CHANGELOG.md`.
+
+---
+
 ## [3.3.0-rc.5] — 2026-04-20
 
 Fifth release candidate for 3.3.0. Single ship-stopper fix for rc.4's

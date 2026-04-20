@@ -36,7 +36,6 @@ jobs:
         with:
           node-version: '20'
 
-      # Plugin has no test script yet — just verify deps install cleanly.
       # We delete the lockfile because it was last regenerated against a local
       # `file:` dep for `@totalreclaw/core`; the current `package.json` uses
       # `^2.0.0` from npm and a fresh install resolves against the registry.
@@ -50,6 +49,13 @@ jobs:
       # ClawHub again. See docs/notes/INVESTIGATION-OPENCLAW-SCANNER-*.
       - name: Scanner-sim (env-harvesting false-positive check)
         run: node skill/scripts/check-scanner.mjs
+
+      # Manifest shape regression guard (3.3.0-rc.6): asserts that
+      # openclaw.plugin.json does NOT have "kind":"memory" (startup registry fix)
+      # AND that index.ts still declares kind:'memory' as const (memory-slot
+      # matching preserved). Uses npx tsx — available without a devDependency.
+      - name: Plugin manifest shape tests
+        run: cd skill/plugin && npm test
 
   mcp-tests:
     name: MCP Server Tests

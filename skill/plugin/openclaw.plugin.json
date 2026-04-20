@@ -1,7 +1,6 @@
 {
   "id": "totalreclaw",
   "name": "TotalReclaw",
-  "kind": "memory",
   "description": "End-to-end encrypted memory vault for AI agents",
   "configSchema": {
     "type": "object",
