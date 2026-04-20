@@ -204,6 +204,16 @@ interface OpenClawPluginApi {
       config?: unknown;
     }) => { text: string } | Promise<{ text: string }>;
   }): void;
+  /**
+   * 3.3.0 — register an HTTP route on the gateway's HTTP server.
+   * Used by the QR-pairing flow to serve the pairing page + the
+   * encrypted-payload respond endpoint. Path is exact-match against
+   * `new URL(req.url, ...).pathname`; no params supported.
+   */
+  registerHttpRoute?(params: {
+    path: string;
+    handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => Promise<void> | void;
+  }): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +254,70 @@ function humanizeError(rawMessage: string): string {
 
 /** Path where we persist userId + salt across restarts. */
 const CREDENTIALS_PATH = CONFIG.credentialsPath;
+
+// ---------------------------------------------------------------------------
+// 3.3.0 — pairing URL resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the full pairing URL (including `#pk=` fragment) for a fresh
+ * pairing session. Pulls gateway config from `api.config.gateway`.
+ *
+ * Resolution order (mirrors the device-pair extension):
+ *   1. pluginConfig.publicUrl (if the operator set it explicitly)
+ *   2. gateway.remote.url (if the gateway is marked remote)
+ *   3. gateway.bind=custom + customBindHost + port
+ *   4. gateway.bind=tailnet/lan is acknowledged but we do NOT probe
+ *      the host here (network calls); we fall back to localhost with
+ *      a warning log.
+ *   5. gateway.port default = 18789 + localhost.
+ *
+ * Always returns a working URL string; never throws. The caller can
+ * log a warning if the URL is localhost and the gateway is remote,
+ * but the CLI always prints whatever we give it.
+ */
+function buildPairingUrl(
+  api: Pick<OpenClawPluginApi, 'config' | 'pluginConfig' | 'logger'>,
+  session: { sid: string; pkGatewayB64: string },
+): string {
+  const cfg = api.config as {
+    gateway?: {
+      port?: number;
+      bind?: string;
+      customBindHost?: string;
+      tls?: { enabled?: boolean };
+      remote?: { url?: string };
+    };
+  } | undefined;
+  const pluginCfg = (api.pluginConfig ?? {}) as { publicUrl?: string };
+
+  const tlsEnabled = cfg?.gateway?.tls?.enabled === true;
+  const scheme = tlsEnabled ? 'https' : 'http';
+  const port = cfg?.gateway?.port ?? 18789;
+
+  let base: string;
+  if (typeof pluginCfg.publicUrl === 'string' && pluginCfg.publicUrl.trim()) {
+    base = pluginCfg.publicUrl.replace(/\/+$/, '');
+    // If the user gave us a ws:// URL, rewrite to http(s)://
+    base = base.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+  } else if (typeof cfg?.gateway?.remote?.url === 'string' && cfg.gateway.remote.url.trim()) {
+    base = cfg.gateway.remote.url.trim().replace(/\/+$/, '');
+    base = base.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+  } else if (cfg?.gateway?.bind === 'custom' && cfg.gateway.customBindHost) {
+    base = `${scheme}://${cfg.gateway.customBindHost}:${port}`;
+  } else {
+    const bind = cfg?.gateway?.bind;
+    if (bind === 'lan' || bind === 'tailnet') {
+      api.logger.warn(
+        `TotalReclaw: pairing URL is falling back to localhost because gateway.bind=${bind} without explicit host probe. ` +
+          'Set plugins.entries.totalreclaw.config.publicUrl to override.',
+      );
+    }
+    base = `${scheme}://localhost:${port}`;
+  }
+
+  return `${base}/plugin/totalreclaw/pair/finish?sid=${encodeURIComponent(session.sid)}#pk=${encodeURIComponent(session.pkGatewayB64)}`;
+}
 
 // ---------------------------------------------------------------------------
 // Cosine similarity threshold — skip injection when top result is below this
@@ -2557,6 +2631,14 @@ const plugin = {
             statePath: CONFIG.onboardingStatePath,
             logger: api.logger,
           });
+          // 3.3.0 — `openclaw totalreclaw pair [generate|import]` attaches
+          // alongside the existing `onboard` + `status` subcommands.
+          const { registerPairCli } = await import('./pair-cli.js');
+          registerPairCli(program as import('commander').Command, {
+            sessionsPath: CONFIG.pairSessionsPath,
+            renderPairingUrl: (session) => buildPairingUrl(api, session),
+            logger: api.logger,
+          });
         },
         { commands: ['totalreclaw'] },
       );
@@ -2564,6 +2646,69 @@ const plugin = {
       api.logger.warn(
         'api.registerCli is unavailable on this OpenClaw version — `openclaw totalreclaw onboard` will not work. ' +
           'Users can still set TOTALRECLAW_RECOVERY_PHRASE manually.',
+      );
+    }
+
+    // ---------------------------------------------------------------
+    // 3.3.0 — HTTP routes for QR-pairing (pair-http)
+    // ---------------------------------------------------------------
+    //
+    // Four endpoints under /plugin/totalreclaw/pair/ are registered on
+    // the gateway's HTTP server. Collectively they serve the browser
+    // pairing page, verify the 6-digit secondary code, accept the
+    // encrypted mnemonic payload, and expose a status polled by the
+    // CLI. See pair-http.ts and the 2026-04-20 design doc.
+    if (typeof api.registerHttpRoute === 'function') {
+      (async () => {
+        try {
+          const { buildPairRoutes } = await import('./pair-http.js');
+          const { validateMnemonic } = await import('@scure/bip39');
+          const { wordlist } = await import('@scure/bip39/wordlists/english.js');
+          const bundle = buildPairRoutes({
+            sessionsPath: CONFIG.pairSessionsPath,
+            apiBase: '/plugin/totalreclaw/pair',
+            logger: api.logger,
+            validateMnemonic: (p) => validateMnemonic(p, wordlist),
+            completePairing: async ({ mnemonic }) => {
+              // Write credentials.json + flip state to 'active' via
+              // fs-helpers. This centralizes disk I/O off the
+              // pair-http surface (scanner isolation).
+              const creds = loadCredentialsJson(CREDENTIALS_PATH) ?? {};
+              const next = { ...creds, mnemonic };
+              if (!writeCredentialsJson(CREDENTIALS_PATH, next)) {
+                return { state: 'error', error: 'credentials_write_failed' };
+              }
+              // Hot-reload: update the runtime override so existing
+              // in-memory state picks up the new phrase without a
+              // process restart.
+              setRecoveryPhraseOverride(mnemonic);
+              // Flip onboarding state. writeOnboardingState is in
+              // fs-helpers; dynamic import to keep it out of any
+              // potential scanner collision surface in this file.
+              const { writeOnboardingState } = await import('./fs-helpers.js');
+              writeOnboardingState(CONFIG.onboardingStatePath, {
+                onboardingState: 'active',
+                createdBy: 'generate',
+                credentialsCreatedAt: new Date().toISOString(),
+                version: '3.3.0',
+              });
+              return { state: 'active' };
+            },
+          });
+          api.registerHttpRoute!({ path: bundle.finishPath, handler: bundle.handlers.finish });
+          api.registerHttpRoute!({ path: bundle.startPath, handler: bundle.handlers.start });
+          api.registerHttpRoute!({ path: bundle.respondPath, handler: bundle.handlers.respond });
+          api.registerHttpRoute!({ path: bundle.statusPath, handler: bundle.handlers.status });
+          api.logger.info('TotalReclaw: registered 4 QR-pairing HTTP routes');
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          api.logger.error(`TotalReclaw: failed to register pairing HTTP routes: ${msg}`);
+        }
+      })();
+    } else {
+      api.logger.warn(
+        'api.registerHttpRoute is unavailable on this OpenClaw version — /totalreclaw pair will not work. ' +
+          'Use `openclaw totalreclaw onboard` on the gateway host instead.',
       );
     }
 
@@ -2583,17 +2728,48 @@ const plugin = {
         acceptsArgs: true,
         requireAuth: false,
         handler: async (ctx) => {
-          const sub = (ctx.args || '').trim().split(/\s+/)[0]?.toLowerCase() || 'help';
+          const args = (ctx.args || '').trim();
+          const parts = args.split(/\s+/).filter(Boolean);
+          const sub = (parts[0] || 'help').toLowerCase();
           if (sub === 'onboard' || sub === 'setup' || sub === 'init') {
             return {
               text:
-                'To set up TotalReclaw, open a terminal on this machine and run:\n\n' +
+                'To set up TotalReclaw on a local machine, run:\n\n' +
                 '    openclaw totalreclaw onboard\n\n' +
-                'Why a terminal? Your recovery phrase must never pass through the ' +
-                'LLM provider. This chat message is visible to the LLM, so we do ' +
-                'not show the phrase here. The wizard runs entirely on your local ' +
-                'machine — the phrase is generated, displayed, and stored on disk ' +
-                '(mode 0600) without ever touching the network.',
+                'For a REMOTE gateway (VPS, home server, etc.) use QR-pairing:\n\n' +
+                '    /totalreclaw pair\n\n' +
+                'Why not paste the phrase here? Chat messages are visible to the ' +
+                'LLM. Both flows keep your recovery phrase off the LLM transcript: ' +
+                'the CLI wizard runs on your terminal, and the QR-pair flow ' +
+                'encrypts the phrase in your browser before upload.',
+            };
+          }
+          if (sub === 'pair') {
+            // 3.3.0 — remote QR pairing. The slash command is a non-secret
+            // pointer: it tells the operator to run the CLI on the gateway
+            // host (which emits the QR + URL + code). Running the full
+            // pairing protocol directly from this handler would require
+            // sending the URL + code through the chat transcript, which
+            // the LLM would then see — acceptable for the URL + code (both
+            // are non-secret, because the gateway ephemeral pk lives in
+            // the URL fragment and the 6-digit code is one-shot), but
+            // requires the gateway to actually be reachable AND the user
+            // to type a code from chat into a browser on a different
+            // device. Design doc section 4a recommends the CLI path as
+            // primary. Chat-delivery is a future 3.4.0 enhancement.
+            return {
+              text:
+                'Remote pairing (QR):\n\n' +
+                '  On the gateway host, run:\n\n' +
+                '    openclaw totalreclaw pair         # generate new account\n' +
+                '    openclaw totalreclaw pair import  # import existing\n\n' +
+                'It will print a QR code + a 6-digit secondary code + a URL. ' +
+                'Scan the QR with your phone (or open the URL on any browser). ' +
+                'Enter the 6-digit code in the browser, write down (or paste) ' +
+                'your recovery phrase, and the gateway will activate.\n\n' +
+                'The phrase is generated (or pasted) in your BROWSER and ' +
+                'encrypted end-to-end before upload. It never touches the ' +
+                'LLM, this chat, or the relay server in plaintext.',
             };
           }
           if (sub === 'status') {
@@ -2610,13 +2786,14 @@ const plugin = {
                 `TotalReclaw onboarding state: ${stateLabel}.\n` +
                 (stateLabel === 'active'
                   ? 'Memory tools are active on this machine.'
-                  : 'Memory tools are gated. Run `openclaw totalreclaw onboard` in a terminal to complete setup.'),
+                  : 'Memory tools are gated. Run `openclaw totalreclaw onboard` (local) or `openclaw totalreclaw pair` (remote) to complete setup.'),
             };
           }
           return {
             text:
               'TotalReclaw slash commands:\n' +
               '  /totalreclaw onboard — how to set up TotalReclaw securely\n' +
+              '  /totalreclaw pair    — remote-gateway QR-pairing (3.3.0)\n' +
               '  /totalreclaw status  — current onboarding state',
           };
         },

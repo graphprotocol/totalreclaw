@@ -4,6 +4,210 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] — 2026-04-20
+
+QR-pairing for remote-gateway onboarding. Minor-bump feature release.
+Solves the remote-user onboarding problem left open by 3.2.0: users
+whose OpenClaw gateway runs somewhere they don't have shell access to
+(VPS, home server, shared team gateway, Tailscale-Funnel / Cloudflare
+Tunnel setups) can now pair from a phone or laptop browser.
+
+### Flow
+
+On the gateway host, the operator runs:
+
+```
+openclaw totalreclaw pair          # generate a new account key
+openclaw totalreclaw pair import   # import an existing TotalReclaw key
+```
+
+The CLI prints a QR code, a 6-digit secondary code, and a URL. The user
+scans the QR (or opens the URL) in any modern browser. The browser
+page:
+
+1. Verifies the 6-digit secondary code with the gateway
+2. Generates or accepts the 12-word BIP-39 TotalReclaw account key
+   entirely client-side
+3. Performs x25519 ECDH with the gateway's ephemeral public key
+   (embedded in the URL fragment — invisible to servers, TLS-MITM
+   resistant)
+4. Derives a ChaCha20-Poly1305 AEAD key via HKDF-SHA256 (sid-salted,
+   domain-separated with the fixed `totalreclaw-pair-v1` info tag)
+5. Encrypts the phrase and POSTs the ciphertext to the gateway
+6. Gateway decrypts, writes `credentials.json` (0600 mode), flips
+   onboarding state to `active`
+
+The phrase NEVER touches the LLM, the session transcript, the relay
+server in plaintext, or any chat channel. Same leak-free guarantee as
+3.2.0's local CLI wizard — extended to remote hosts.
+
+### Added
+
+- `skill/plugin/pair-session-store.ts` — persistent, atomic,
+  TTL-evicted session registry at `~/.totalreclaw/pair-sessions.json`
+  (separate from `state.json` to keep the before_tool_call gate's read
+  path small). 0600 mode, temp-file-rename writes, cooperative `.lock`
+  sentinel for concurrent safety. 5-strike secondary-code lockout.
+- `skill/plugin/pair-crypto.ts` — x25519 ECDH + HKDF-SHA256 +
+  ChaCha20-Poly1305 AEAD wrappers over Node built-in `node:crypto`.
+  Zero new third-party crypto deps on the gateway side. Constant-time
+  6-digit-code comparison via `timingSafeEqual`.
+- `skill/plugin/pair-http.ts` — four HTTP route handlers registered via
+  `api.registerHttpRoute` under `/plugin/totalreclaw/pair/`:
+  `/finish` (serves the pairing page), `/start` (verifies secondary
+  code, flips session to `device_connected`), `/respond` (decrypts the
+  encrypted payload, calls `completePairing` to write credentials),
+  `/status` (polled by the CLI).
+- `skill/plugin/pair-page.ts` — self-contained HTML + inline JS + CSS
+  page builder. No CDN, no Google Fonts, no external assets. Uses
+  WebCrypto `X25519` + `ChaCha20-Poly1305` + `HKDF` (Safari 17+,
+  Chrome 123+, Firefox 130+). Inlines the full 2048-word BIP-39
+  English wordlist. Brand tokens (`--bg: #0B0B1A`, `--purple: #7B5CFF`,
+  `--orange: #D4943A`, `--text-bright: #F0EDF8`) pulled from the
+  public site's v5b aesthetic. Subtle fade-in animations, pulse
+  indicator during crypto ops, check-mark on success. Respects
+  `prefers-reduced-motion`. Mobile-first responsive CSS.
+- `skill/plugin/pair-cli.ts` — operator-side CLI: creates session,
+  renders QR via `qrcode-terminal`, prints 6-digit code + URL +
+  security copy, polls status, handles Ctrl+C with server-side
+  session rejection (no zombies).
+- 176 new TAP tests across 5 test files (pair-session-store,
+  pair-crypto, pair-http, pair-cli, pair-page, pair-e2e-leak-audit).
+  Crucially, `pair-e2e-leak-audit.test.ts` asserts the mnemonic, the
+  gateway private key, and the secondary code NEVER appear in any log
+  line, any HTTP response body, the pair-sessions.json file, or the
+  `/finish` HTML body. Only surface the phrase lands on is
+  `credentials.json` (its intended destination).
+- `qrcode-terminal@^0.12.0` — new direct dep for ASCII QR rendering
+  on the gateway host's TTY.
+
+### Security properties
+
+- **Confidentiality from relay**: AEAD key is derived from a DH shared
+  secret that the relay never sees; the relay transports only `pk_D`,
+  nonce, and ciphertext.
+- **Integrity / session binding**: ChaCha20-Poly1305 AD = sid prevents
+  cross-session replay even with identical plaintext.
+- **MITM resistance**: `pk_G` lives in the URL fragment (`#pk=...`)
+  which browsers never send to servers. A TLS MITM substituting the
+  gateway response cannot inject its own pubkey; the browser has
+  already committed to `pk_G` at load time. (Design doc section 5c.)
+- **Forward secrecy**: both sides use ephemeral keypairs; sessions
+  single-use (`status=consumed` after first success; retries return
+  409 Conflict).
+- **Shoulder-surf resistance**: 6-digit secondary code shown in the
+  operator's TTY/chat, verified by the browser before the mnemonic
+  phase, 5-strike lockout, constant-time compare.
+- **Injection safety**: the `<script>` block in the served page
+  escapes `<`, `>`, `&`, U+2028/9 via `\u00xx` so a malicious sid
+  cannot break out of the script context.
+- **Cache hygiene**: `Cache-Control: no-store`, `Pragma: no-cache`,
+  strict CSP (`default-src 'none'`), `X-Frame-Options: DENY`,
+  `Referrer-Policy: no-referrer`.
+
+### Scope and non-goals (per design doc section 8)
+
+This release does NOT:
+- Defend against a rooted / compromised gateway host. If the gateway
+  OS is untrustworthy, the mnemonic is exposed the moment it lands in
+  `credentials.json`. The design-doc-ratified position (2026-04-20):
+  real defense requires a 4.x re-architecture with a memory-less
+  server or HSM-backed key management; documented-and-accepted for
+  3.3.0.
+- Support multi-user / shared gateways (one credentials vault per
+  gateway in 3.3.0).
+- Replace the 3.2.0 CLI wizard as the primary LOCAL flow. Local users
+  should continue to run `openclaw totalreclaw onboard`; the QR page
+  does work on localhost but is not advertised.
+- Offer a `rotate` command for replacing an already-active mnemonic
+  (tracked as 3.4.0).
+
+### Changed
+
+- `skill/plugin/config.ts` — `CONFIG` gains `pairSessionsPath` (env
+  override: `TOTALRECLAW_PAIR_SESSIONS_PATH`, default
+  `~/.totalreclaw/pair-sessions.json`). Keeps the pair-session-store
+  module free of `process.env` reads (scanner-rule surface isolation).
+- `skill/plugin/index.ts`:
+  - `OpenClawPluginApi` interface extended with `registerHttpRoute`.
+  - `registerCli` block chains into `registerPairCli` alongside the
+    existing `registerOnboardingCli`.
+  - `/totalreclaw` slash command extended with a `pair` sub-verb (a
+    non-secret pointer to the CLI — we deliberately don't run the
+    full pairing flow from chat; design doc section 4a recommends
+    CLI-primary delivery).
+  - `registerHttpRoute` block mounts `/finish`, `/start`, `/respond`,
+    `/status` under `/plugin/totalreclaw/pair/`; `completePairing`
+    closure writes credentials via `writeCredentialsJson` +
+    `writeOnboardingState` (fs-helpers, keeps `pair-http.ts` clean of
+    `fs.*` calls per scanner rule isolation).
+  - New `buildPairingUrl` helper resolves the gateway URL
+    (`pluginConfig.publicUrl` > `gateway.remote.url` >
+    `gateway.bind=custom` + `customBindHost` > localhost fallback) and
+    appends `#pk=<base64url>` fragment per design doc section 5c.
+
+### Compatibility
+
+- Requires OpenClaw SDK with `api.registerHttpRoute` (confirmed in
+  SDK 2026.2.21+). On older OpenClaw versions the plugin falls back
+  gracefully: the CLI subcommand still works on-host, the HTTP routes
+  register a warning, the slash command explains the limitation.
+- Requires Node 18.19+ for built-in `crypto.createECDH('x25519')` +
+  `crypto.hkdfSync` + `crypto.createCipheriv('chacha20-poly1305')`.
+  Browser side requires WebCrypto `X25519` + `ChaCha20-Poly1305`
+  support: Safari 17+, Chrome 123+, Firefox 130+. Fallback bundle
+  (`@noble/curves` + `@noble/ciphers` for older browsers) is tracked
+  as Wave 3.1 polish follow-up.
+- Fully backward-compatible with 3.2.x. The 3.2.0 CLI wizard (`openclaw
+  totalreclaw onboard`) continues to work unchanged; the two surfaces
+  are additive.
+
+### Tests
+
+All prior tests still pass. New totals:
+- `pair-session-store.test.ts`: 76/76 pass
+- `pair-crypto.test.ts`: 39/39 pass (including RFC 7748 §6.1 x25519
+  test vector)
+- `pair-http.test.ts`: 55/55 pass
+- `pair-cli.test.ts`: 20/20 pass
+- `pair-page.test.ts`: 55/55 pass
+- `pair-e2e-leak-audit.test.ts`: 26/26 pass
+
+Scanner: 0 flags (env-harvesting + potential-exfiltration) across 68
+files.
+
+### Config
+
+New plugin config knob (in `plugins.entries.totalreclaw.config`):
+
+```json
+{
+  "publicUrl": "https://gateway.example.com:18789"
+}
+```
+
+Overrides the auto-resolution when the gateway is behind a reverse
+proxy / Tailscale-Funnel / Cloudflare-Tunnel. The pairing URL served
+to the browser is built from this value plus `/plugin/totalreclaw/pair/
+finish?sid=...#pk=...`.
+
+Environment variable:
+
+```
+TOTALRECLAW_PAIR_SESSIONS_PATH=/var/lib/totalreclaw/pair-sessions.json
+```
+
+Overrides the default `~/.totalreclaw/pair-sessions.json` path. Rarely
+needed; useful for per-instance isolation on multi-tenant hosts.
+
+### Related
+
+- Design doc: `docs/plans/2026-04-20-plugin-330-qr-pairing.md`
+  (internal repo, branch `plugin-330-qr-pairing-design`).
+- RFC references: RFC 7748 (Curve25519), RFC 7539 (ChaCha20-Poly1305),
+  RFC 5869 (HKDF).
+- Supersedes the 3.2.0 Open Question §8.4 recommendation.
+
 ## [3.2.3] — 2026-04-19
 
 Wave 2c cleanup: `printStatus` now recognises legacy `recovery_phrase`

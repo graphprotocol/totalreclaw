@@ -99,6 +99,11 @@ export const CONFIG = {
   // never contains secrets. Loaded on every plugin init + on every
   // before_tool_call gate check.
   onboardingStatePath: process.env.TOTALRECLAW_STATE_PATH || path.join(home, '.totalreclaw', 'state.json'),
+  // 3.3.0 QR-pairing session store. Separate file from both credentials.json
+  // and state.json so the session-store module does not have to touch either
+  // (keeps scanner surface isolated). Contains ephemeral x25519 secret keys
+  // for 15-min TTL windows; 0600 mode.
+  pairSessionsPath: process.env.TOTALRECLAW_PAIR_SESSIONS_PATH || path.join(home, '.totalreclaw', 'pair-sessions.json'),
 
   // Chain — chainId is no longer user-configurable. It is auto-detected from
   // the relay billing response (free = Base Sepolia / 84532, Pro = Gnosis /

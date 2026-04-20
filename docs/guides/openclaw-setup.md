@@ -70,9 +70,46 @@ openclaw totalreclaw status
 
 If you ask the agent in chat "set up TotalReclaw for me", the LLM will call the `totalreclaw_onboarding_start` tool, which returns a pointer back to the CLI wizard. Similarly, typing `/totalreclaw onboard` as a slash command returns a pointer. **Neither surface ever shows your recovery phrase in chat** -- that would leak it to the LLM provider's logs.
 
-### Remote-gateway note
+### Remote-gateway setup (v3.3.0 QR-pairing)
 
-v3.2.0 onboarding works locally. If you run OpenClaw on a remote VPS and connect via `openclaw tui --url ws://...`, the wizard needs TTY access on the same machine that writes `credentials.json` -- SSH into the gateway host and run `openclaw totalreclaw onboard` there. Remote onboarding via QR-pairing is planned for v3.3.0.
+If you run OpenClaw on a remote VPS, home server, or shared team gateway -- anywhere you don't have a local TTY -- use the QR-pairing flow that shipped in v3.3.0.
+
+On the gateway host, run:
+
+```bash
+openclaw totalreclaw pair           # generate a new TotalReclaw account key
+openclaw totalreclaw pair import    # import an existing key
+```
+
+The CLI prints:
+
+1. An ASCII QR code
+2. A 6-digit secondary code (prevents a bystander from hijacking the session)
+3. A URL of the form `https://your-gateway/plugin/totalreclaw/pair/finish?sid=...#pk=...`
+
+On any phone or laptop browser:
+
+1. Scan the QR (or open the URL).
+2. Type the 6-digit code shown in your terminal.
+3. Write down (or paste) your 12-word TotalReclaw account key.
+4. The browser generates an ephemeral keypair, performs x25519 ECDH with the gateway's public key (embedded in the URL fragment -- invisible to any server on the path), encrypts the phrase with ChaCha20-Poly1305, and uploads the ciphertext. The gateway decrypts, writes `credentials.json`, and flips to active.
+
+The phrase never enters the LLM, the chat transcript, or the relay server in plaintext. If a TLS-MITM tampers with any server response, the browser aborts because it already committed to the gateway's public key from the URL fragment.
+
+Session TTL is 15 minutes by default (configurable 5-60 via plugin config). The QR is single-use: once you complete the flow (or hit Ctrl+C to cancel), the session invalidates.
+
+**Gateway URL resolution order (what the browser sees):**
+
+1. `plugins.entries.totalreclaw.config.publicUrl` if set -- recommended for gateways behind a reverse proxy, Tailscale Funnel, or Cloudflare Tunnel.
+2. `gateway.remote.url` if set.
+3. `gateway.bind = custom` + `gateway.customBindHost` if set.
+4. Falls back to `http(s)://localhost:<port>` with a warning log (useful for local testing only).
+
+**Browser support:** Safari 17+, Chrome 123+, Firefox 130+ (these ship WebCrypto x25519 + ChaCha20-Poly1305). Older browsers display an explanatory error on the pairing page.
+
+**If your gateway is WebSocket-only** (HTTP is stripped by a reverse proxy), fall back to SSH + the local CLI wizard (`openclaw totalreclaw onboard`). A WebSocket-native pairing channel is tracked for a future release.
+
+**Shared-gateway limitation:** v3.3.0 assumes a single-user gateway. If multiple users on the same OpenClaw gateway want separate encrypted vaults, that's a distinct feature (per-account credentials paths) tracked for v4.x.
 
 ### Retrieving your phrase later
 
