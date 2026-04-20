@@ -22,6 +22,7 @@
 //! - [`consolidation`] — Store-time near-duplicate detection + supersede logic
 //! - [`smart_import`] — Smart import profiling (prompt construction + response parsing)
 //! - [`memory_types`] — Memory Taxonomy v1 string-level constants + runtime guard
+//! - [`prompts`] — Canonical extraction + compaction system prompts (2.2.0)
 
 pub mod blind;
 pub mod claims;
@@ -36,6 +37,7 @@ pub mod fingerprint;
 pub mod hotcache;
 pub mod lsh;
 pub mod memory_types;
+pub mod prompts;
 pub mod protobuf;
 pub mod reranker;
 pub mod smart_import;

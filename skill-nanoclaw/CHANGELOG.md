@@ -1,5 +1,70 @@
 # Changelog — @totalreclaw/skill-nanoclaw
 
+## 3.1.0 — 2026-04-19
+
+### Canonical extraction prompt hoisted to core + ADD-only alignment
+
+NanoClaw now sources its extraction + compaction system prompts from the
+Rust core (`@totalreclaw/core` 2.2.0+) via `getExtractionSystemPrompt()` /
+`getCompactionSystemPrompt()`. Previously `BASE_SYSTEM_PROMPT` in
+`src/extraction/prompts.ts` was a local copy that had drifted from the
+plugin / Python canonical version (the 2026-04-18 v1 QA surfaced this —
+NanoClaw was missing the Rule 6 product-meta filter AND mis-listed
+`summary` in the emitter ADD output shape).
+
+**The hoisted prompt is ADD-only on the emitter side.** The output
+schema only lists `"action": "ADD"`. The accompanying investigation
+(`docs/notes/NANOCLAW-ACTION-FREQUENCY-20260419.md`) confirmed that
+pre-3.1 NanoClaw UPDATE / DELETE / NOOP code paths were never hit in
+production — `agent-end.ts` only ever stored ADDs (see
+`agent-end.ts` line ~108), and `pre-compact.ts` had branches that
+could fire but were rare / untested in practice.
+
+### Changed
+
+- `src/extraction/prompts.ts`:
+  - `BASE_SYSTEM_PROMPT` is now `wasm.getExtractionSystemPrompt()` —
+    evaluated at module load, byte-identical to the Python client's
+    `EXTRACTION_SYSTEM_PROMPT` and the canonical source in
+    `rust/totalreclaw-core/src/prompts/extraction.md`.
+  - New public const `COMPACTION_SYSTEM_PROMPT` sourced from
+    `wasm.getCompactionSystemPrompt()`. `PRE_COMPACTION_PROMPT.system`
+    now points at it (previously shared `BASE_SYSTEM_PROMPT`, which
+    used the turn-extraction floor-6 variant — this aligns with the
+    Python client that has had floor-5 compaction from day one).
+  - `ExtractionAction` type still includes all four tokens
+    (`'ADD' | 'UPDATE' | 'DELETE' | 'NOOP'`) on the parser side so
+    cached LLM outputs or custom drivers don't hard-fail validation.
+    Hooks silently ignore anything that isn't ADD.
+- `src/hooks/pre-compact.ts`:
+  - Switch statement replaced with `if (fact.action !== 'ADD') continue`.
+  - Debrief "already stored" context now filters by `action === 'ADD'`
+    only (previously included UPDATE as "stored").
+- `src/hooks/agent-end.ts`: unchanged in behavior — already ADD-only
+  (line ~108 `fact.action === 'ADD'` guard).
+- Prompt objects (`PRE_COMPACTION_PROMPT`, `POST_TURN_PROMPT`,
+  `EXPLICIT_COMMAND_PROMPT`): `.user` template no longer instructs the
+  LLM to "classify as UPDATE/DELETE/NOOP" in the existing-memories
+  section — reworded to "skip any fact that is already captured or
+  overlaps with an existing memory". Matches the ADD-only emitter.
+
+### Compatibility
+
+- `@totalreclaw/core` dependency floor bumps `^2.0.0 → ^2.2.0`. Pre-2.2.0
+  WASM builds do NOT export `getExtractionSystemPrompt` /
+  `getCompactionSystemPrompt`, so the import would fail at module load.
+- Tests updated: the three preCompact tests that previously asserted
+  UPDATE forget+remember / DELETE forget behavior now assert those
+  actions are silently ignored. agent-end UPDATE/DELETE/NOOP
+  silently-ignored tests pass unchanged.
+
+### Motivation
+
+- 2026-04-18 v1 QA → prompt-drift incident.
+- Removes the last "action-dispatch" complexity from NanoClaw, reducing
+  the surface area for prompt-regression bugs. Plugin + Python + NanoClaw
+  now share one prompt + one behavior contract.
+
 ## 3.0.0 — 2026-04-18
 
 Memory Taxonomy v1 is now the default (and only) extraction path. The legacy

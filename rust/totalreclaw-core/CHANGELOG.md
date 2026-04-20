@@ -5,6 +5,57 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-04-19
+
+### Added
+
+- **Canonical extraction + compaction system prompts now live in core**
+  ([`src/prompts.rs`](./src/prompts.rs)). Before 2.2.0 each client
+  (`skill/plugin`, `python/agent/extraction.py`, `skill-nanoclaw`) kept
+  its own copy — the 2026-04-18 v1 QA uncovered real prompt drift
+  between them (NanoClaw `BASE_SYSTEM_PROMPT` was missing the Rule 6
+  meta-request filter and mis-listed `summary` in the ADD output shape).
+  Hoisting into core makes byte-identity the compile-time default.
+- The canonical prompt text is embedded from `src/prompts/extraction.md`
+  and `src/prompts/compaction.md` via `include_str!`. The markdown
+  files are the source of truth — diffs there show up directly as
+  prompt changes. Shape comes from the plugin / Python pipeline
+  (includes Rule 6 meta-filter).
+- **Public Rust API**:
+  - [`prompts::EXTRACTION_SYSTEM_PROMPT`](./src/prompts.rs) /
+    [`prompts::COMPACTION_SYSTEM_PROMPT`](./src/prompts.rs) — static
+    `&str` constants.
+  - [`prompts::get_extraction_system_prompt`](./src/prompts.rs) /
+    [`prompts::get_compaction_system_prompt`](./src/prompts.rs) —
+    thin accessors (preferred for cross-client consumers).
+- **WASM bindings** (`crate::wasm`):
+  - `getExtractionSystemPrompt() -> string`
+  - `getCompactionSystemPrompt() -> string`
+- **PyO3 bindings** (`totalreclaw_core`):
+  - `get_extraction_system_prompt() -> str`
+  - `get_compaction_system_prompt() -> str`
+- Unit tests on `prompts::tests` verify the embedded bytes are
+  non-empty, stable across calls (same `as_ptr()`), contain the 6 v1
+  types, carry the two-phase merged-topic shape, and include Rule 6
+  in both variants. Compaction prompt additionally asserts the
+  importance-floor-5 language.
+- `Cargo.toml` now declares an explicit `package.include` list that
+  spells out `src/prompts/*.md` so future refactors can't accidentally
+  drop the canonical prompt files from the published tarball.
+
+### Notes / Compatibility
+
+- Minor-version bump (additive public surface only). No breaking changes.
+- Python `totalreclaw` (2.3.0) and NanoClaw (3.1.0) consume the hoisted
+  prompts via their respective bindings in this release wave. The
+  OpenClaw plugin keeps its local copy for this wave — the consumer
+  wire lands in plugin 3.3.0 (tracked separately to avoid colliding
+  with plugin 3.2.2 / 3.2.3 from the parallel pin-atomic-batch +
+  wave2c PRs).
+- Byte-identity between Python + WASM callers is load-bearing for
+  cross-client extraction parity. See
+  `docs/specs/totalreclaw/memory-taxonomy-v1.md` §"Canonical prompts".
+
 ## [2.1.1] - 2026-04-19
 
 ### Added

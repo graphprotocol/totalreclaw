@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "totalreclaw"
-version = "2.2.4"
+version = "2.3.0"
 description = "End-to-end encrypted memory for AI agents — Python client (Memory Taxonomy v1)"
 readme = "README.md"
 license = "MIT"
@@ -12,9 +12,14 @@ requires-python = ">=3.11"
 authors = [{ name = "TotalReclaw Team" }]
 dependencies = [
     # Memory Taxonomy v1 + Retrieval v2 Tier 1 reranker live in core 2.0.
-    # Pin to 2.x to match the TypeScript clients' `^2.0.0` semantics — a future
-    # core@3 will be a breaking change and must bump this constraint in lockstep.
-    "totalreclaw-core>=2.0.0,<3.0.0",
+    # 2.3.0 lifts the floor to core 2.2.0 because agent/extraction.py now
+    # imports the hoisted EXTRACTION_SYSTEM_PROMPT / COMPACTION_SYSTEM_PROMPT
+    # via `totalreclaw_core.get_*_system_prompt`. Pre-2.2.0 core wheels do
+    # NOT export those accessors and would fail at module import.
+    # Upper bound stays at <3.0.0 to match the TypeScript clients'
+    # `^2.0.0` semver semantics — a future core@3 will be a breaking
+    # change and must bump this constraint in lockstep.
+    "totalreclaw-core>=2.2.0,<3.0.0",
     "httpx>=0.27",
     "onnxruntime>=1.24",
     "numpy>=1.26",

@@ -81,6 +81,17 @@ export async function preCompact(
     for (const fact of validation.facts!) {
       if (quotaExceeded) break;
 
+      // NanoClaw 3.1.0: extraction is ADD-only. The hoisted core prompt
+      // no longer emits UPDATE/DELETE/NOOP, and the pre-3.1 branches for
+      // those were never hit in production (see
+      // docs/notes/NANOCLAW-ACTION-FREQUENCY-20260419.md). Any stray
+      // UPDATE/DELETE/NOOP that slips through (cached outputs, custom
+      // drivers) is silently ignored here — the parser still accepts
+      // them so we don't hard-fail, but we don't act on them.
+      if (fact.action !== 'ADD') {
+        continue;
+      }
+
       // Defensive default for source (v1 write path requires it).
       if (!fact.source) fact.source = 'user-inferred';
       const metadata: FactMetadata = {
@@ -89,38 +100,13 @@ export async function preCompact(
         tags: buildV1Tags(fact, input.groupFolder),
       };
 
-      switch (fact.action) {
-        case 'ADD':
-          try {
-            await client.remember(fact.text, metadata);
-            factsStored++;
-          } catch (err: unknown) {
-            if (handleQuotaError(err)) {
-              quotaExceeded = true;
-            }
-          }
-          break;
-
-        case 'UPDATE':
-        case 'DELETE':
-          if (fact.existingFactId) {
-            try {
-              await client.forget(fact.existingFactId);
-              if (fact.action === 'UPDATE') {
-                await client.remember(fact.text, metadata);
-                factsStored++;
-              }
-            } catch (err: unknown) {
-              if (handleQuotaError(err)) {
-                quotaExceeded = true;
-              }
-              // Skip if delete/update fails for other reasons
-            }
-          }
-          break;
-
-        case 'NOOP':
-          break;
+      try {
+        await client.remember(fact.text, metadata);
+        factsStored++;
+      } catch (err: unknown) {
+        if (handleQuotaError(err)) {
+          quotaExceeded = true;
+        }
       }
     }
 
@@ -128,8 +114,10 @@ export async function preCompact(
     let debriefStored = 0;
     if (llmClient && validation.facts && validation.facts.length > 0) {
       try {
+        // NanoClaw 3.1.0: ADD-only alignment — debrief context reflects
+        // only the facts that were actually stored by this hook.
         const storedTexts = validation.facts
-          .filter(f => f.action === 'ADD' || f.action === 'UPDATE')
+          .filter(f => f.action === 'ADD')
           .map(f => f.text);
         const alreadyStored = storedTexts.length > 0
           ? storedTexts.map(t => `- ${t}`).join('\n')

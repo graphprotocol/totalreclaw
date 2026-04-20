@@ -6,6 +6,38 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-04-19
+
+### Changed
+
+- **`EXTRACTION_SYSTEM_PROMPT` + `COMPACTION_SYSTEM_PROMPT` now sourced
+  from the Rust core** via the new `totalreclaw_core.get_extraction_system_prompt`
+  / `get_compaction_system_prompt` accessors (core 2.2.0+). The module-level
+  names + exported symbols in `totalreclaw.agent` are unchanged — existing
+  importers and the `test_v1_taxonomy.py` assertions keep working — but the
+  literal string contents now come from a single canonical source embedded
+  in `totalreclaw-core` via `include_str!`. This closes the cross-client
+  prompt-drift gap that the 2026-04-18 v1 QA surfaced (NanoClaw
+  `BASE_SYSTEM_PROMPT` was missing the Rule 6 meta-filter and mis-listed
+  `summary` in the ADD output shape). The TS plugin still keeps a local
+  copy for this release wave — the plugin consumer wire lands in a
+  follow-up (plugin 3.3.0) to avoid conflicting with the parallel
+  pin-atomic-batch (3.2.2) and wave2c (3.2.3) version bumps.
+
+### Compatibility
+
+- `totalreclaw-core>=2.2.0,<3.0.0` is now the hard dependency floor
+  (was `>=2.0.0`). Pre-2.2.0 core wheels do NOT export the prompt
+  accessors; `agent/extraction.py` imports them at module load so the
+  floor bump is load-bearing. `pip install totalreclaw==2.3.0` will
+  resolve a core 2.2.0+ wheel automatically.
+- Plugin.yaml bumped to 2.3.0 (previously diverged at 2.2.1 — PR #56
+  did not bump it; corrected here).
+- Prompts are byte-identical to 2.2.2's literal constants. This is
+  explicitly tested via the existing `test_extraction_prompt_mentions_v1_types`
+  / `test_extraction_system_prompt_is_merged_topic` /
+  `test_compaction_prompt_admits_floor_5` suite — assertions continue
+  to pass unchanged.
 ## [2.2.4] - 2026-04-19
 
 Wave 2c cleanup: expose `totalreclaw.__version__` at the package top-level

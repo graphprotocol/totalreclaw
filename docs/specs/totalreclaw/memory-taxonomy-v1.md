@@ -1,7 +1,7 @@
 # MCP Memory Taxonomy v1
 
-**Version:** 1.1.0-draft (additive `pin_status` extension over 1.0)
-**Status:** DRAFT. 1.0 validated on Gemini corpus (Pipeline C). WildChat cross-validation in progress (2026-04-17). 1.1 adds `pin_status` without breaking 1.0 readers. Lock after WildChat results confirm.
+**Version:** 1.2.0-draft (adds canonical-prompt location + NanoClaw ADD-only alignment; 1.1 pin_status extension carried forward)
+**Status:** DRAFT. 1.0 validated on Gemini corpus (Pipeline C). WildChat cross-validation in progress (2026-04-17). 1.1 adds `pin_status` without breaking 1.0 readers. 1.2 documents the canonical extraction/compaction prompt location hoisted into `totalreclaw-core 2.2.0` — no on-wire changes. Lock after WildChat results confirm.
 **Owner:** TotalReclaw (pedro@thegraph.foundation)
 **Intended publication:** `totalreclaw.xyz/spec/memory-v1` + PR to MCP spec repo as optional `@modelcontextprotocol/memory-taxonomy/v1` extension.
 
@@ -9,6 +9,7 @@
 
 - **1.0.0** (2026-04-17) — initial v1 taxonomy lock-candidate. Six-type closed enum, provenance-as-first-class-field, open-extensible scope, advisory importance.
 - **1.1.0** (2026-04-19) — additive `pin_status` field (`"pinned" | "unpinned"`). No breaking changes: 1.0 blobs continue to validate, and 1.0 readers ignore the new field. The on-wire `schema_version` string remains `"1.0"` so existing strict validators are unaffected (the field is optional; absence is equivalent to `"unpinned"`). Implementations that understand 1.1 MUST honor `pin_status == "pinned"` as immunity from auto-supersede and surface it via the same helpers (`is_pinned_claim`, `respect_pin_in_resolution`) that already recognize the legacy v0 `st == "p"` sentinel. `pin_status` is intentionally additive rather than gated behind a `schema_version` bump because (a) the field is optional and ignorable, and (b) we want cross-client pin to work the moment any client ships the new field — not after every client agrees to accept `"1.1"`.
+- **1.2.0** (2026-04-19) — documents the canonical-prompt location (new `Canonical prompts` section, normative for reference clients) and aligns NanoClaw to ADD-only extraction emission. No on-wire schema changes; `schema_version` stays `"1.0"`. Prompt bytes are hoisted into `totalreclaw-core` 2.2.0 via `include_str!` so cross-client byte-identity is enforced at compile time rather than by convention (closes the 2026-04-18 v1 QA prompt-drift gap). Emitter side drops `UPDATE | DELETE | NOOP` action tokens; parser side MAY still accept them for back-compat with cached LLM outputs but writers SHOULD silently ignore non-`ADD` actions at the store path. Motivated by the NanoClaw investigation (`docs/notes/NANOCLAW-ACTION-FREQUENCY-20260419.md`) confirming that pre-3.1 UPDATE/DELETE/NOOP code paths were never hit in production.
 
 ---
 
@@ -213,6 +214,78 @@ Retrieval decay (recall-time ranking penalty for old memories) is orthogonal to 
 3. **Scope enum is open.** Clients MAY define additional scope values for their own use, but MUST accept + preserve all v1-defined scopes when reading from a vault written by another client.
 4. **Importance is advisory.** Receivers MAY recompute. Writers SHOULD include it as hint, not ground truth.
 5. **Schema version field is required.** Clients encountering unknown versions MUST refuse to read (fail-safe, prevents silent drift).
+
+## Canonical prompts (normative, core 2.2.0+)
+
+The v1 merged-topic **extraction** and **compaction** system prompts are
+canonical — all TotalReclaw reference clients MUST use byte-identical
+prompt bytes. Drift between clients changes observable extraction
+semantics (types chosen, provenance tagging, importance ranges, meta-
+request filtering) and undermines cross-client parity.
+
+### Single source of truth
+
+Canonical prompt text lives in:
+
+- `rust/totalreclaw-core/src/prompts/extraction.md`
+- `rust/totalreclaw-core/src/prompts/compaction.md`
+
+Both are embedded into `totalreclaw-core` at compile time via
+`include_str!`. Cross-language consumers MUST source the prompt bytes
+via the public accessors rather than duplicating the strings:
+
+| Language / client      | Accessor                                              |
+| ---------------------- | ----------------------------------------------------- |
+| Rust                   | `totalreclaw_core::prompts::get_extraction_system_prompt` / `get_compaction_system_prompt` |
+| Python (PyO3)          | `totalreclaw_core.get_extraction_system_prompt()` / `get_compaction_system_prompt()` |
+| TypeScript (WASM)      | `@totalreclaw/core` → `getExtractionSystemPrompt()` / `getCompactionSystemPrompt()` |
+
+Prompt bytes are identical across all three surfaces (same
+`include_str!` source). Clients MUST NOT maintain their own inline
+copy of these prompts in v1.1+.
+
+**Compliance check**: a v1 client that computes `SHA-256` of its
+runtime extraction prompt bytes MUST produce the same digest as a
+peer client built against the same core minor version.
+
+### What the canonical prompts specify
+
+- **Emitter side is ADD-only** (v1.1+). The OUTPUT FORMAT section only
+  lists `"action": "ADD"`. Pre-1.1 clients emitted `UPDATE`, `DELETE`,
+  and `NOOP` as well; the v1.1 canonical prompts drop them because the
+  in-the-loop rewrite semantics (forget-old + store-new) proved rare,
+  under-tested, and lossy in cross-client scenarios. The parser side
+  MAY still accept the wider set for back-compat with cached LLM
+  outputs or custom drivers, but clients SHOULD silently ignore
+  non-ADD actions at the write path.
+- Two-phase merged-topic output (`{ topics, facts }`).
+- Importance rubric using the FULL 1-10 range, with explicit "do not
+  cluster at 7-8-9" instruction.
+- Rule 6 — **product-meta request filter**. Utterances of the form
+  "set up TotalReclaw", "install the memory plugin", "configure the
+  vault" are META-requests about the product and MUST NOT be stored
+  as user preferences. Genuine preferences that happen to mention
+  encryption (e.g. "I like Signal because it's encrypted") remain
+  valid. Motivated by the 2026-04-18 QA which found product setup
+  prompts leaking into the vault as preferences.
+- Provenance `source` required per fact (`user | user-inferred |
+  assistant | external | derived`).
+
+### Compaction variant (floor-5)
+
+The compaction prompt is distinct from turn extraction: it drops the
+importance floor to 5 (vs 6), adds "LAST CHANCE" framing, and includes
+a FORMAT-AGNOSTIC PARSING section for bullet lists / headers / prose.
+Used on end-of-context surfaces (pre-compaction hook, session-end
+debrief). Same byte-identity requirement across clients.
+
+### Version locking
+
+The canonical prompt content is tied to the `totalreclaw-core` minor
+version. Prompt edits MUST be shipped as a `totalreclaw-core` minor
+bump, with the change documented in `rust/totalreclaw-core/CHANGELOG.md`.
+Consumer clients inherit the new prompt by bumping their
+`@totalreclaw/core` / `totalreclaw-core` dependency floor.
 
 ## Compliance levels
 

@@ -337,6 +337,28 @@ fn get_debrief_system_prompt() -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
+// Canonical extraction + compaction system prompts (core 2.2.0 hoist)
+// ---------------------------------------------------------------------------
+
+/// Get the canonical v1 merged-topic extraction system prompt.
+///
+/// Single source of truth across Python (via this binding), TypeScript
+/// (via the WASM binding `getExtractionSystemPrompt`), and Rust callers.
+/// The prompt includes the Rule 6 meta-request filter.
+#[pyfunction]
+fn get_extraction_system_prompt() -> &'static str {
+    crate::prompts::get_extraction_system_prompt()
+}
+
+/// Get the canonical v1 compaction system prompt.
+///
+/// Used on the pre-compaction surface (importance floor 5, not 6).
+#[pyfunction]
+fn get_compaction_system_prompt() -> &'static str {
+    crate::prompts::get_compaction_system_prompt()
+}
+
+// ---------------------------------------------------------------------------
 // Reranker
 // ---------------------------------------------------------------------------
 
@@ -1514,6 +1536,10 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Debrief
     m.add_function(wrap_pyfunction!(parse_debrief_response, m)?)?;
     m.add_function(wrap_pyfunction!(get_debrief_system_prompt, m)?)?;
+
+    // Canonical extraction + compaction system prompts (core 2.2.0 hoist).
+    m.add_function(wrap_pyfunction!(get_extraction_system_prompt, m)?)?;
+    m.add_function(wrap_pyfunction!(get_compaction_system_prompt, m)?)?;
 
     // Reranker
     m.add_function(wrap_pyfunction!(py_rerank, m)?)?;

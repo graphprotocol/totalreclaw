@@ -27,6 +27,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
+import totalreclaw_core
+
 from .llm_client import LLMConfig, detect_llm_config, chat_completion
 
 logger = logging.getLogger(__name__)
@@ -233,202 +235,38 @@ def _parse_entity(raw: Any) -> Optional[ExtractedEntity]:
 
 # ---------------------------------------------------------------------------
 # Extraction system prompts (v1 merged-topic pipeline)
+#
+# As of totalreclaw 2.3.0 these prompts are sourced from the Rust core
+# (``totalreclaw_core.get_extraction_system_prompt`` /
+# ``get_compaction_system_prompt``, available since core 2.2.0). One
+# source → byte-identical prompt bytes across Python and the TypeScript
+# clients (skill/plugin + skill-nanoclaw via the WASM binding), so the
+# cross-client extraction parity that the v1 taxonomy depends on is
+# enforced at compile time rather than by convention. See
+# ``docs/specs/totalreclaw/memory-taxonomy-v1.md`` §"Canonical prompts".
+#
+# The names ``EXTRACTION_SYSTEM_PROMPT`` + ``COMPACTION_SYSTEM_PROMPT``
+# are preserved as module-level ``str`` constants so existing importers
+# and tests (``python/tests/test_v1_taxonomy.py``) continue to work
+# unchanged.
 # ---------------------------------------------------------------------------
 
-EXTRACTION_SYSTEM_PROMPT = """You are a memory extraction engine using Memory Taxonomy v1. Work in TWO explicit phases within one response:
+EXTRACTION_SYSTEM_PROMPT: str = totalreclaw_core.get_extraction_system_prompt()
+"""Canonical v1 merged-topic extraction prompt. Sourced from core 2.2.0+.
 
-PHASE 1 — Topic identification.
-Before extracting any fact, identify the 2-3 main topics the user was engaging with. Topics should be short phrases (2-5 words each). If the conversation has no clear user-focused topic, use an empty topics array.
+This binding is a static reference — the underlying bytes are embedded
+into ``totalreclaw-core`` via ``include_str!`` so the prompt is
+byte-identical across Python and the TypeScript clients (skill/plugin,
+skill-nanoclaw) that consume the same WASM binding.
+"""
 
-PHASE 2 — Fact extraction anchored to those topics.
-Extract valuable memories. Prefer facts that directly relate to the identified topics (importance 7-9 range). Tangential facts may still be extracted but score lower (6-7 range).
+COMPACTION_SYSTEM_PROMPT: str = totalreclaw_core.get_compaction_system_prompt()
+"""Canonical v1 compaction prompt. Sourced from core 2.2.0+.
 
-Rules:
-1. Each memory = single self-contained piece of information
-2. Focus on user-specific info useful in future conversations
-3. Skip generic knowledge, greetings, small talk, ephemeral task coordination
-4. Score importance 1-10 (6+ = worth storing)
-5. Every memory MUST attribute a source (provenance critical)
-6. DO NOT extract setup / configuration / installation requests ABOUT the
-   TotalReclaw product itself. Utterances like "set up TotalReclaw",
-   "I want encrypted memory across my AI tools", "install the memory plugin",
-   or "configure the vault" are META-requests about the product — they are
-   NOT user preferences or claims worth storing. Genuine preferences that
-   happen to mention encryption (e.g., "I like using Signal because it's
-   encrypted") ARE valid and should be extracted.
-
-Importance rubric (use FULL 1-10 range):
-- 10: Critical, core identity, never-forget content
-- 9: Affects many future decisions
-- 8: High-value preference/decision/rule
-- 7: Specific durable fact
-- 6: Borderline
-- 5 or below: NOT worth storing — drop
-
-DO NOT cluster everything at 7-8-9.
-
-═══════════════════════════════════════════════════════════════
-TYPE (6 values)
-═══════════════════════════════════════════════════════════════
-- claim: factual assertion (absorbs fact/context/decision; decisions populate reasoning field)
-- preference: likes/dislikes/tastes
-- directive: imperative rule ("always X", "never Y")
-- commitment: future intent ("will do X")
-- episode: notable event
-- summary: derived synthesis (source must be derived|assistant) — do NOT emit for turn-extraction
-
-═══════════════════════════════════════════════════════════════
-SOURCE (provenance, CRITICAL)
-═══════════════════════════════════════════════════════════════
-- user: user explicitly stated it (in [user]: turns)
-- user-inferred: extractor inferred from user signals
-- assistant: assistant authored content — DOWNGRADE unless user affirmed/quoted/used it
-- external, derived: rare
-
-IF fact substance appears ONLY in [assistant]: turns without user affirmation → source:assistant
-
-═══════════════════════════════════════════════════════════════
-SCOPE (life domain)
-═══════════════════════════════════════════════════════════════
-work | personal | health | family | creative | finance | misc | unspecified
-
-═══════════════════════════════════════════════════════════════
-ENTITIES
-═══════════════════════════════════════════════════════════════
-- type ∈ {person, project, tool, company, concept, place}
-- prefer specific names ("PostgreSQL" not "database")
-- omit umbrella categories when specific name is present
-
-═══════════════════════════════════════════════════════════════
-REASONING (only for claims that are decisions)
-═══════════════════════════════════════════════════════════════
-For type=claim where the user expressed a decision-with-reasoning, populate "reasoning" with the WHY clause.
-
-═══════════════════════════════════════════════════════════════
-OUTPUT FORMAT (no markdown, no code fences)
-═══════════════════════════════════════════════════════════════
-{
-  "topics": ["topic 1", "topic 2"],
-  "facts": [
-    {
-      "text": "...",
-      "type": "claim|preference|directive|commitment|episode",
-      "source": "user|user-inferred|assistant",
-      "scope": "work|personal|health|...",
-      "importance": N,
-      "confidence": 0.9,
-      "action": "ADD",
-      "reasoning": "...",     // optional, only for claim+decision
-      "entities": [{"name": "...", "type": "tool"}]
-    }
-  ]
-}
-
-If nothing worth extracting: {"topics": [], "facts": []}"""
-
-
-COMPACTION_SYSTEM_PROMPT = """You are extracting memories from a conversation that is about to be compacted. The context will be LOST after this point — this is your LAST CHANCE to capture everything worth remembering. Be more aggressive than usual: err on the side of storing.
-
-Work in TWO explicit phases within one response:
-
-PHASE 1 — Topic identification.
-Identify the 2-3 main topics the user was engaging with before extracting any fact. Topics should be short phrases (2-5 words each). If there's no clear user-focused topic, use an empty topics array.
-
-PHASE 2 — Fact extraction anchored to those topics (plus preserve active context).
-Extract valuable memories. Prefer facts that directly relate to the identified topics (importance 7-9 range). Active project context, decisions in progress, and current working state score 6-8 during compaction — capture them even when they'd normally be marginal.
-
-Rules:
-1. Each memory = single self-contained piece of information
-2. Focus on user-specific info useful in future conversations
-3. Skip generic knowledge, greetings, small talk
-4. Score importance 1-10 (5+ = worth storing during compaction)
-5. Every memory MUST attribute a source (provenance critical)
-6. DO NOT extract setup / configuration / installation requests ABOUT the
-   TotalReclaw product itself. Utterances like "set up TotalReclaw",
-   "I want encrypted memory across my AI tools", or "configure the
-   memory plugin" are META-requests about the product — NOT user
-   preferences worth storing. Genuine preferences that mention encryption
-   ("I prefer Signal because it's encrypted") ARE valid.
-
-Importance rubric (full 1-10 range, NOT just 7-8):
-- 10: Core identity, never-forget ("remember this forever", name/birthday)
-- 9: Affects many future decisions / high-impact rules
-- 8: Preference / decision-with-reasoning / operational rule
-- 7: Specific durable fact
-- 6: Borderline — during compaction, capture anyway
-- 5: Would normally drop; keep as compaction safety net
-- 4 or below: DROP (greetings, filler)
-
-═══════════════════════════════════════════════════════════════
-TYPE (6 values)
-═══════════════════════════════════════════════════════════════
-- claim: factual assertion (absorbs v0 fact/context/decision; decisions populate reasoning)
-- preference: likes/dislikes/tastes
-- directive: imperative rule ("always X", "never Y")
-- commitment: future intent ("will do X")
-- episode: notable event
-- summary: derived synthesis (source must be derived|assistant)
-
-═══════════════════════════════════════════════════════════════
-SOURCE (provenance, CRITICAL)
-═══════════════════════════════════════════════════════════════
-- user: user explicitly stated it (in [user]: turns)
-- user-inferred: extractor inferred from user signals
-- assistant: assistant authored — DOWNGRADE unless user affirmed/quoted.
-- external, derived: rare.
-
-IF fact substance appears ONLY in [assistant]: turns without user affirmation → source:assistant.
-
-═══════════════════════════════════════════════════════════════
-SCOPE
-═══════════════════════════════════════════════════════════════
-work | personal | health | family | creative | finance | misc | unspecified
-
-═══════════════════════════════════════════════════════════════
-ENTITIES
-═══════════════════════════════════════════════════════════════
-- type ∈ {person, project, tool, company, concept, place}
-- prefer specific names ("PostgreSQL" not "database")
-- omit umbrella categories when specific name is present
-
-═══════════════════════════════════════════════════════════════
-REASONING (only for claims that are decisions)
-═══════════════════════════════════════════════════════════════
-For type=claim where the user expressed a decision-with-reasoning, populate "reasoning" with the WHY clause.
-
-═══════════════════════════════════════════════════════════════
-FORMAT-AGNOSTIC PARSING (IMPORTANT)
-═══════════════════════════════════════════════════════════════
-The conversation may contain bullet lists, numbered lists, section headers, code snippets, or plain prose. Treat ALL formats as potential sources of extractable memory:
-- Bullets/list items: each item is a candidate.
-- Section headers (Context, Decisions, Key Learnings, Open Questions): use the header as a TYPE HINT (Context → claim, Decisions → claim+reasoning, Learnings → directive, Open Questions → commitment).
-- Plain prose: parse each distinct assertion as a candidate.
-- Code snippets: extract config choices, tool versions, architectural decisions embedded in comments or structure.
-- Mixed format: apply all of the above.
-
-Do NOT skip content just because it's in a summary. The agent has already filtered — your job is to convert into structured memories, not to re-evaluate worth.
-
-═══════════════════════════════════════════════════════════════
-OUTPUT FORMAT (no markdown, no code fences)
-═══════════════════════════════════════════════════════════════
-{
-  "topics": ["topic 1", "topic 2"],
-  "facts": [
-    {
-      "text": "...",
-      "type": "claim|preference|directive|commitment|episode",
-      "source": "user|user-inferred|assistant",
-      "scope": "work|personal|health|...",
-      "importance": N,
-      "confidence": 0.9,
-      "action": "ADD",
-      "reasoning": "...",    // optional, only for claim+decision
-      "entities": [{"name": "...", "type": "tool"}]
-    }
-  ]
-}
-
-If nothing worth extracting: {"topics": [], "facts": []}"""
+Compaction variant drops the importance floor to 5 (from the default 6)
+and adds a format-agnostic parsing section. Byte-identical across all
+TotalReclaw clients by construction.
+"""
 
 
 # ---------------------------------------------------------------------------

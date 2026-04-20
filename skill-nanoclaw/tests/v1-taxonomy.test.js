@@ -717,15 +717,25 @@ describe('Extraction prompts — v1 content', () => {
     expect(system).toContain('unspecified');
   });
 
-  it('pre-compaction prompt uses the same v1 system content', () => {
-    expect(prompts.PRE_COMPACTION_PROMPT.system).toBe(prompts.POST_TURN_PROMPT.system);
-  });
-
-  it('explicit-command prompt uses the same v1 system content', () => {
+  it('post-turn and explicit-command prompts share the v1 extraction system content', () => {
+    // POST_TURN + EXPLICIT_COMMAND both use the canonical extraction prompt
+    // (floor-6 / turn-extraction variant).
     expect(prompts.EXPLICIT_COMMAND_PROMPT.system).toBe(prompts.POST_TURN_PROMPT.system);
+    expect(prompts.POST_TURN_PROMPT.system).toBe(prompts.BASE_SYSTEM_PROMPT);
   });
 
-  it('format() produces a prompt containing the conversation and existing memories', () => {
+  it('pre-compaction prompt uses the dedicated v1 compaction system content', () => {
+    // NanoClaw 3.1.0: PRE_COMPACTION switches to the compaction prompt
+    // (floor-5 + format-agnostic section), aligning with the Python client
+    // which has had that variant since 2.0.0. Previously NanoClaw shared
+    // the single BASE_SYSTEM_PROMPT across all surfaces.
+    expect(prompts.PRE_COMPACTION_PROMPT.system).toBe(prompts.COMPACTION_SYSTEM_PROMPT);
+    expect(prompts.PRE_COMPACTION_PROMPT.system).not.toBe(prompts.POST_TURN_PROMPT.system);
+    // Compaction variant admits importance 5; extraction variant floors at 6.
+    expect(prompts.COMPACTION_SYSTEM_PROMPT).toContain('LAST CHANCE');
+  });
+
+  it('format() produces a prompt containing the conversation and existing-memories header', () => {
     const { POST_TURN_PROMPT } = prompts;
     const result = POST_TURN_PROMPT.format({
       conversationHistory: 'turn 1\nturn 2',
@@ -733,7 +743,11 @@ describe('Extraction prompts — v1 content', () => {
     });
     expect(result.user).toContain('turn 1');
     expect(result.user).toContain('[ID: abc] prior fact');
-    expect(result.user).toContain('dedup');
+    // NanoClaw 3.1.0: the existing-memories header no longer names
+    // UPDATE/DELETE/NOOP actions (extraction is ADD-only). Now it just
+    // instructs the LLM to skip already-captured facts.
+    expect(result.user).toContain('Existing memories');
+    expect(result.user).toContain('already captured');
   });
 
   it('debrief prompt lists v1 + v0 debrief types', () => {

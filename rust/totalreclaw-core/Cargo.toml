@@ -1,6 +1,6 @@
 [package]
 name = "totalreclaw-core"
-version = "2.1.1"
+version = "2.2.0"
 edition = "2021"
 description = "TotalReclaw core — E2EE crypto, reranker, wallet, UserOp, store/search pipelines. Single source of truth for all clients."
 license = "MIT"
@@ -9,6 +9,20 @@ homepage = "https://totalreclaw.xyz"
 readme = "README.md"
 keywords = ["e2ee", "memory", "crypto", "erc4337", "ai"]
 categories = ["cryptography", "api-bindings"]
+# Ensure the canonical extraction + compaction prompts ship with the
+# published crate. `src/prompts.rs` embeds these `.md` files via
+# `include_str!` at compile time — the Cargo default package rules
+# include files under `src/**`, but we spell it out so future
+# refactors (e.g. moving prompts outside `src/`) can't accidentally
+# drop them from the tarball. The plugin consumer wire (plugin 3.3.0)
+# depends on this.
+include = [
+    "src/**/*.rs",
+    "src/prompts/*.md",
+    "Cargo.toml",
+    "pyproject.toml",
+    "README.md",
+]
 
 [features]
 default = ["managed"]

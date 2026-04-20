@@ -297,6 +297,26 @@ pub fn wasm_get_debrief_system_prompt() -> String {
     debrief::DEBRIEF_SYSTEM_PROMPT.to_string()
 }
 
+/// Get the canonical v1 merged-topic extraction system prompt.
+///
+/// Single source of truth across all TotalReclaw clients — TS/WASM
+/// callers get the same bytes the Python `totalreclaw_core` module
+/// returns from `get_extraction_system_prompt()`. Includes the Rule 6
+/// meta-request filter (see the docstring on `prompts.rs`).
+#[wasm_bindgen(js_name = "getExtractionSystemPrompt")]
+pub fn wasm_get_extraction_system_prompt() -> String {
+    crate::prompts::get_extraction_system_prompt().to_string()
+}
+
+/// Get the canonical v1 compaction system prompt.
+///
+/// Used on end-of-context surfaces where the importance floor is 5 rather
+/// than the default 6.
+#[wasm_bindgen(js_name = "getCompactionSystemPrompt")]
+pub fn wasm_get_compaction_system_prompt() -> String {
+    crate::prompts::get_compaction_system_prompt().to_string()
+}
+
 /// Build the debrief prompt with already-stored facts filled in.
 ///
 /// `stored_facts_json`: JSON array of strings (fact texts already stored).
