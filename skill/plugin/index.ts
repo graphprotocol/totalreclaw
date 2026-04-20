@@ -214,6 +214,8 @@ interface OpenClawPluginApi {
   registerHttpRoute?(params: {
     path: string;
     handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => Promise<void> | void;
+    /** OpenClaw 2026.4.2+ — required; loader silently drops the route if absent. */
+    auth: 'gateway' | 'plugin';
   }): void;
 }
 
@@ -2745,10 +2747,10 @@ const plugin = {
               return { state: 'active' };
             },
           });
-          api.registerHttpRoute!({ path: bundle.finishPath, handler: bundle.handlers.finish });
-          api.registerHttpRoute!({ path: bundle.startPath, handler: bundle.handlers.start });
-          api.registerHttpRoute!({ path: bundle.respondPath, handler: bundle.handlers.respond });
-          api.registerHttpRoute!({ path: bundle.statusPath, handler: bundle.handlers.status });
+          api.registerHttpRoute!({ path: bundle.finishPath, handler: bundle.handlers.finish, auth: 'gateway' });
+          api.registerHttpRoute!({ path: bundle.startPath, handler: bundle.handlers.start, auth: 'gateway' });
+          api.registerHttpRoute!({ path: bundle.respondPath, handler: bundle.handlers.respond, auth: 'gateway' });
+          api.registerHttpRoute!({ path: bundle.statusPath, handler: bundle.handlers.status, auth: 'gateway' });
           api.logger.info('TotalReclaw: registered 4 QR-pairing HTTP routes');
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

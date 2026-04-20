@@ -4,6 +4,54 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0-rc.3] — 2026-04-20
+
+Third release candidate for 3.3.0. Sole change vs rc.2: adds the mandatory
+`auth` field to the 4 `registerHttpRoute` calls that were silently dropped by
+the OpenClaw 2026.4.2 loader. QR-pairing was end-to-end dead in rc.2 despite
+the scanner and all other gates passing. See internal QA report at
+`totalreclaw-internal#21`.
+
+### Fixed
+
+- `skill/plugin/index.ts` — added `auth: 'gateway'` to all 4
+  `api.registerHttpRoute!({...})` calls (lines 2750–2753). OpenClaw 2026.4.2
+  introduced a mandatory `auth` field; registrations without it are silently
+  dropped at load time. Affected routes: `/pair/finish`, `/pair/start`,
+  `/pair/respond`, `/pair/status`. The plugin's `logger.info('registered 4
+  QR-pairing HTTP routes')` still fired in rc.2, masking the failure — only
+  surfaced when `GET /plugin/totalreclaw/pair/finish` fell through to the SPA
+  and `POST /pair/respond` returned 404.
+- `skill/plugin/index.ts` `PluginApi` interface — `registerHttpRoute` param
+  type updated to include `auth: 'gateway' | 'plugin'` so TypeScript enforces
+  the field going forward.
+
+**Before:**
+```ts
+api.registerHttpRoute!({ path: bundle.finishPath, handler: bundle.handlers.finish });
+api.registerHttpRoute!({ path: bundle.startPath, handler: bundle.handlers.start });
+api.registerHttpRoute!({ path: bundle.respondPath, handler: bundle.handlers.respond });
+api.registerHttpRoute!({ path: bundle.statusPath, handler: bundle.handlers.status });
+```
+
+**After:**
+```ts
+api.registerHttpRoute!({ path: bundle.finishPath, handler: bundle.handlers.finish, auth: 'gateway' });
+api.registerHttpRoute!({ path: bundle.startPath, handler: bundle.handlers.start, auth: 'gateway' });
+api.registerHttpRoute!({ path: bundle.respondPath, handler: bundle.handlers.respond, auth: 'gateway' });
+api.registerHttpRoute!({ path: bundle.statusPath, handler: bundle.handlers.status, auth: 'gateway' });
+```
+
+### Added
+
+- `skill/plugin/pair-http-route-registration.test.ts` — new unit test (23
+  assertions) covering: 4 calls made, `auth` field present on every call,
+  `auth === 'gateway'`, paths contain `/pair/`, handlers are functions, all 4
+  endpoint segments covered (finish/start/respond/status), and no-throw when
+  `registerHttpRoute` is absent.
+
+---
+
 ## [3.3.0-rc.2] — 2026-04-20
 
 Second release candidate for 3.3.0. Bundles the scanner false-positive
