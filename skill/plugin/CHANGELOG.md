@@ -4,6 +4,104 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0-rc.5] — 2026-04-20
+
+Fifth release candidate for 3.3.0. Single ship-stopper fix for rc.4's
+QR-pairing flow, root-caused by the auto-QA run against rc.4 artifacts
+(report: `docs/notes/QA-plugin-3.3.0-rc.4-20260420-1517.md` in
+`totalreclaw-internal`, thread at `totalreclaw-internal#21` comment
+4281568050). rc.2 (scanner), rc.3 (auth literal path), and rc.4 (auth
+`'plugin'` literal + `ensureSessionsFileDir` mkdir before lock) fixes are
+all preserved. No protocol / on-chain changes vs 3.3.0.
+
+### Fixed
+
+- **`skill/plugin/index.ts` — register pair HTTP routes synchronously
+  (remove async IIFE)**. rc.2–rc.4 wrapped the 4 `api.registerHttpRoute`
+  calls in a fire-and-forget `(async () => { ... })()` block whose three
+  `await import(...)` calls (`./pair-http.js`, `@scure/bip39`, and
+  `@scure/bip39/wordlists/english.js`) settled one microtask AFTER the
+  SDK loader had already called `register()` and frozen the plugin's
+  HTTP-route registry. The 4 post-activation pushes landed on the
+  dispatcher's "inactive" copy and never reached the live router;
+  `openclaw plugins inspect totalreclaw --json | jq .httpRouteCount`
+  returned `0` on rc.4 despite both the `auth: 'plugin'` literal (rc.4)
+  and the `ensureSessionsFileDir` mkdir (rc.4) being correct. rc.5:
+
+  1. `buildPairRoutes`, `validateMnemonic`, and `wordlist` are now
+     **static top-of-file imports** (alongside the existing
+     `onboarding-cli.ts` / `generate-mnemonic.ts` static imports of the
+     same modules — no new deps, no circular-dep risk).
+  2. `writeOnboardingState` is added to the existing static
+     `./fs-helpers.js` import (it was the only dynamic import inside
+     the `completePairing` callback).
+  3. The async IIFE is deleted. `buildPairRoutes(...)` and the 4
+     `api.registerHttpRoute({...})` calls are now in the synchronous
+     body of `register(api)`, inside the existing
+     `if (typeof api.registerHttpRoute === 'function')` guard. The
+     `else` branch and warning are unchanged. The post-registration
+     info log now reads `'registered 4 QR-pairing HTTP routes
+     synchronously'` for clearer debug output.
+  4. `completePairing` remains `async` (it does disk I/O) — that is
+     fine because `registerHttpRoute` accepts async handlers. Only the
+     REGISTRATION had to be synchronous; the handler itself can
+     defer-to-microtask freely at runtime.
+
+  Scanner: static imports don't trigger any rule that dynamic imports
+  don't already trigger (verified via `node skill/scripts/check-scanner.mjs`,
+  0 flags, 72 files scanned).
+
+  **Before (rc.4):**
+  ```ts
+  if (typeof api.registerHttpRoute === 'function') {
+    (async () => {
+      try {
+        const { buildPairRoutes } = await import('./pair-http.js');
+        const { validateMnemonic } = await import('@scure/bip39');
+        const { wordlist } = await import('@scure/bip39/wordlists/english.js');
+        const bundle = buildPairRoutes({ /* ... */ });
+        api.registerHttpRoute!({ path: bundle.finishPath, /*...*/, auth: 'plugin' });
+        api.registerHttpRoute!({ path: bundle.startPath,  /*...*/, auth: 'plugin' });
+        api.registerHttpRoute!({ path: bundle.respondPath,/*...*/, auth: 'plugin' });
+        api.registerHttpRoute!({ path: bundle.statusPath, /*...*/, auth: 'plugin' });
+        // ^^ these 4 pushes happen AFTER register() has returned + the
+        //    SDK loader has already activated the (empty) route registry.
+      } catch (err) { /* ... */ }
+    })();
+  }
+  ```
+
+  **After (rc.5):**
+  ```ts
+  // top of file
+  import { buildPairRoutes } from './pair-http.js';
+  import { validateMnemonic } from '@scure/bip39';
+  import { wordlist } from '@scure/bip39/wordlists/english.js';
+  // ... fs-helpers import now also includes writeOnboardingState
+
+  // inside register(api)
+  if (typeof api.registerHttpRoute === 'function') {
+    const bundle = buildPairRoutes({ /* ... */ });
+    api.registerHttpRoute!({ path: bundle.finishPath,  /*...*/, auth: 'plugin' });
+    api.registerHttpRoute!({ path: bundle.startPath,   /*...*/, auth: 'plugin' });
+    api.registerHttpRoute!({ path: bundle.respondPath, /*...*/, auth: 'plugin' });
+    api.registerHttpRoute!({ path: bundle.statusPath,  /*...*/, auth: 'plugin' });
+    // ^^ these 4 pushes happen synchronously BEFORE register() returns,
+    //    i.e. BEFORE the SDK loader activates the registry.
+    api.logger.info('TotalReclaw: registered 4 QR-pairing HTTP routes synchronously');
+  }
+  ```
+
+- **`skill/plugin/pair-http-route-registration.test.ts` — rc.5 regression
+  guard**. The existing SIMULATION suite (27 assertions covering the 4
+  routes' `auth` literal, path shape, handler type) is preserved. Added
+  a new SYNCHRONY suite (14 assertions) that invokes `plugin.register(mockApi)`
+  with a minimal mocked OpenClaw API and asserts `mockApi.registerHttpRoute`
+  has been called 4 times IMMEDIATELY after `register()` returns — no
+  `await`, no tick wait. This assertion would fail under the rc.4 async-IIFE
+  implementation and guards against any future refactor that re-introduces
+  an async boundary at the registration site. Total: 41/41 passing.
+
 ## [3.3.0-rc.4] — 2026-04-20
 
 Fourth release candidate for 3.3.0. Two independent ship-stopper fixes for

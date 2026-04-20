@@ -133,10 +133,14 @@ import {
   isRunningInDocker,
   deleteFileIfExists,
   resolveOnboardingState,
+  writeOnboardingState,
   type OnboardingState,
 } from './fs-helpers.js';
 import { decideToolGate, isGatedToolName } from './tool-gating.js';
 import { detectFirstRun, buildWelcomePrepend, type GatewayMode } from './first-run.js';
+import { buildPairRoutes } from './pair-http.js';
+import { validateMnemonic } from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english.js';
 import crypto from 'node:crypto';
 
 // ---------------------------------------------------------------------------
@@ -2711,62 +2715,64 @@ const plugin = {
     // encrypted mnemonic payload, and expose a status polled by the
     // CLI. See pair-http.ts and the 2026-04-20 design doc.
     if (typeof api.registerHttpRoute === 'function') {
-      (async () => {
-        try {
-          const { buildPairRoutes } = await import('./pair-http.js');
-          const { validateMnemonic } = await import('@scure/bip39');
-          const { wordlist } = await import('@scure/bip39/wordlists/english.js');
-          const bundle = buildPairRoutes({
-            sessionsPath: CONFIG.pairSessionsPath,
-            apiBase: '/plugin/totalreclaw/pair',
-            logger: api.logger,
-            validateMnemonic: (p) => validateMnemonic(p, wordlist),
-            completePairing: async ({ mnemonic }) => {
-              // Write credentials.json + flip state to 'active' via
-              // fs-helpers. This centralizes disk I/O off the
-              // pair-http surface (scanner isolation).
-              const creds = loadCredentialsJson(CREDENTIALS_PATH) ?? {};
-              const next = { ...creds, mnemonic };
-              if (!writeCredentialsJson(CREDENTIALS_PATH, next)) {
-                return { state: 'error', error: 'credentials_write_failed' };
-              }
-              // Hot-reload: update the runtime override so existing
-              // in-memory state picks up the new phrase without a
-              // process restart.
-              setRecoveryPhraseOverride(mnemonic);
-              // Flip onboarding state. writeOnboardingState is in
-              // fs-helpers; dynamic import to keep it out of any
-              // potential scanner collision surface in this file.
-              const { writeOnboardingState } = await import('./fs-helpers.js');
-              writeOnboardingState(CONFIG.onboardingStatePath, {
-                onboardingState: 'active',
-                createdBy: 'generate',
-                credentialsCreatedAt: new Date().toISOString(),
-                version: '3.3.0',
-              });
-              return { state: 'active' };
-            },
+      // rc.5 — the 4 `registerHttpRoute` calls MUST happen synchronously inside
+      // `register(api)` because the SDK loader freezes the plugin's HTTP-route
+      // registry as soon as `register()` returns. In rc.2–rc.4 this block was
+      // wrapped in a fire-and-forget async IIFE whose `await import(...)`
+      // settled one microtask AFTER the loader had already activated the
+      // (empty) route list — the post-activation pushes landed on the
+      // dispatcher's "inactive" copy and `openclaw plugins inspect
+      // totalreclaw --json | jq .httpRouteCount` returned 0. See
+      // `docs/notes/QA-plugin-3.3.0-rc.4-20260420-1517.md` (internal#21).
+      // Moving `buildPairRoutes`, `@scure/bip39`, and `fs-helpers`
+      // `writeOnboardingState` to static top-of-file imports keeps the
+      // registration site synchronous and makes the call order deterministic.
+      // `completePairing` remains async (it does disk I/O) — that is fine,
+      // since `registerHttpRoute` accepts async handlers; only the
+      // REGISTRATION must be synchronous.
+      const bundle = buildPairRoutes({
+        sessionsPath: CONFIG.pairSessionsPath,
+        apiBase: '/plugin/totalreclaw/pair',
+        logger: api.logger,
+        validateMnemonic: (p) => validateMnemonic(p, wordlist),
+        completePairing: async ({ mnemonic }) => {
+          // Write credentials.json + flip state to 'active' via
+          // fs-helpers. This centralizes disk I/O off the
+          // pair-http surface (scanner isolation).
+          const creds = loadCredentialsJson(CREDENTIALS_PATH) ?? {};
+          const next = { ...creds, mnemonic };
+          if (!writeCredentialsJson(CREDENTIALS_PATH, next)) {
+            return { state: 'error', error: 'credentials_write_failed' };
+          }
+          // Hot-reload: update the runtime override so existing
+          // in-memory state picks up the new phrase without a
+          // process restart.
+          setRecoveryPhraseOverride(mnemonic);
+          // Flip onboarding state.
+          writeOnboardingState(CONFIG.onboardingStatePath, {
+            onboardingState: 'active',
+            createdBy: 'generate',
+            credentialsCreatedAt: new Date().toISOString(),
+            version: '3.3.0',
           });
-          // auth: 'plugin' — the 4 pair routes are reached from the operator's
-          // phone/laptop browser, which has no gateway bearer token. The plugin
-          // authenticates each request itself via (a) the in-memory pair session
-          // (sid + secondaryCode + single-use consumption), (b) ECDH + AEAD for
-          // the encrypted mnemonic payload. See gateway-cli dist
-          // `matchedPluginRoutesRequireGatewayAuth` / `enforcePluginRouteGatewayAuth`
-          // — routes with `auth: 'gateway'` require a bearer token and 401 any
-          // browser caller, which is the wrong semantic for QR-pair. rc.3
-          // shipped `auth: 'gateway'` and the QA agent confirmed the routes
-          // were unreachable from a browser (QA-plugin-3.3.0-rc.3 report).
-          api.registerHttpRoute!({ path: bundle.finishPath, handler: bundle.handlers.finish, auth: 'plugin' });
-          api.registerHttpRoute!({ path: bundle.startPath, handler: bundle.handlers.start, auth: 'plugin' });
-          api.registerHttpRoute!({ path: bundle.respondPath, handler: bundle.handlers.respond, auth: 'plugin' });
-          api.registerHttpRoute!({ path: bundle.statusPath, handler: bundle.handlers.status, auth: 'plugin' });
-          api.logger.info('TotalReclaw: registered 4 QR-pairing HTTP routes');
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          api.logger.error(`TotalReclaw: failed to register pairing HTTP routes: ${msg}`);
-        }
-      })();
+          return { state: 'active' };
+        },
+      });
+      // auth: 'plugin' — the 4 pair routes are reached from the operator's
+      // phone/laptop browser, which has no gateway bearer token. The plugin
+      // authenticates each request itself via (a) the in-memory pair session
+      // (sid + secondaryCode + single-use consumption), (b) ECDH + AEAD for
+      // the encrypted mnemonic payload. See gateway-cli dist
+      // `matchedPluginRoutesRequireGatewayAuth` / `enforcePluginRouteGatewayAuth`
+      // — routes with `auth: 'gateway'` require a bearer token and 401 any
+      // browser caller, which is the wrong semantic for QR-pair. rc.3
+      // shipped `auth: 'gateway'` and the QA agent confirmed the routes
+      // were unreachable from a browser (QA-plugin-3.3.0-rc.3 report).
+      api.registerHttpRoute!({ path: bundle.finishPath, handler: bundle.handlers.finish, auth: 'plugin' });
+      api.registerHttpRoute!({ path: bundle.startPath, handler: bundle.handlers.start, auth: 'plugin' });
+      api.registerHttpRoute!({ path: bundle.respondPath, handler: bundle.handlers.respond, auth: 'plugin' });
+      api.registerHttpRoute!({ path: bundle.statusPath, handler: bundle.handlers.status, auth: 'plugin' });
+      api.logger.info('TotalReclaw: registered 4 QR-pairing HTTP routes synchronously');
     } else {
       api.logger.warn(
         'api.registerHttpRoute is unavailable on this OpenClaw version — /totalreclaw pair will not work. ' +
