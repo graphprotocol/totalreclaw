@@ -13,6 +13,31 @@ TotalReclaw is an end-to-end encrypted memory vault for AI agents. The project p
 
 ---
 
+## Now / Next (Wave status, 2026-04-19)
+
+The phase breakdown below is the canonical long-term plan. This section surfaces what's live right now and what the next publish wave looks like, for users tracking against the CHANGELOG.
+
+### Shipped in Wave 1 -- v1 Stabilization (2026-04-19) — COMPLETE
+
+- `@totalreclaw/core@2.1.0` + `2.1.1` (npm + PyPI + crates.io) -- Tier 2 hoist of `VALID_MEMORY_TYPES` / `TYPE_TO_CATEGORY` + additive `pin_status` field on `MemoryClaimV1`. Spec v1.1 addendum.
+- `@totalreclaw/mcp-server@3.1.0` + `3.2.0` (npm) -- Phase 2 contradiction detection wired via core WASM; pin-on-tombstone recovery; `pin` / `unpin` emit v1 blobs with `pin_status`.
+- `@totalreclaw/totalreclaw@3.0.5` through `3.1.0` (ClawHub + npm) -- scanner false-positive fixes, consolidation delegated to Rust core, 4-bug stabilization wave in 3.1.0 (schema dedup, digest stub filter, auto-bootstrap credentials).
+- `totalreclaw@2.0.2` / `2.1.0` / `2.2.0` / `2.2.1` (PyPI) -- Python client + Hermes stabilization, Phase A parity (upgrade + debrief + Mem0 import), Gap 3 UserOp batching (`remember_batch`), lifecycle `auto_extract` wired through batching.
+- Infra: `publish-*.yml` workflows gained `release-type: stable | rc` + `rc-number`; new `promote-rc.yml`; public [`docs/guides/release-process.md`](guides/release-process.md).
+
+Known issues carried over: plugin 3.1.0 auto-bootstrap recovery-phrase LLM-leak risk (fix in 3.2.0), bundled-core version mismatch on older plugin tarballs (mitigation: 3.1.1 patch if needed), `totalreclaw-memory@2.0.1` crates.io publish blocked at dry-run (deferred).
+
+### Next
+
+- **Plugin 3.2.0 (secure onboarding CLI wizard)** -- replaces the 3.1.0 `prependContext` recovery-phrase banner with a CLI wizard. Design-in-progress. Closes the LLM-leak UX gap.
+- **Plugin 3.3.0 (QR-pairing for remote-gateway users)** -- QR-based handoff for users running the OpenClaw gateway remotely. Follow-on to the 3.2.0 wizard.
+- **`totalreclaw-memory@2.0.1` (crates.io) publish retry** -- deferred from Wave 1 after the cargo dry-run sanity check flagged a metadata mismatch. ZeroClaw continues on 2.0.0 until the retry lands.
+- **Python client Hermes parity Phase B/C** -- remaining tools (`retype`, `set_scope`, MCP adapter, `migrate`, `consolidate`, JSON re-import) to reach full Hermes feature parity with OpenClaw.
+- **PR #45 (prompt hoist + NanoClaw align)** -- rebase, merge, and publish the hoisted extraction prompt + NanoClaw alignment work.
+- **ClawHub reclassification path** -- either via a reclassification request to ClawHub, or by validating the `totalreclaw-canary@3.1.0-canary.0` slug against the scanner and then re-registering under a clean classification.
+
+---
+
 ## Phase 1: Proof of Concept (PoC) — COMPLETE
 
 **Goal:** Validate the E2EE architecture end-to-end. Test locally with friends.
@@ -295,7 +320,7 @@ Layers 1-2 are complete. Layers 3-4 are **largely superseded** by existing mecha
 | Embedding model | Migrated to Harrier-OSS-v1-270M (640d, 344MB, q4) | **DONE** |
 | QA on VPS | 6/7 PASS (Pimlico rate limit is infra constraint) | **DONE** |
 
-### 2.13 Hermes Integration QA — IN PROGRESS
+### 2.13 Hermes Integration QA — COMPLETE (Wave 1)
 
 **Goal:** Validate Hermes Agent with TotalReclaw hooks (auto-recall, auto-extraction, debrief).
 
@@ -304,8 +329,12 @@ Layers 1-2 are complete. Layers 3-4 are **largely superseded** by existing mecha
 | Install path | Two-step: pip + directory copy | **DONE** |
 | Python client | Remember, recall, forget, export, status all work | **DONE** |
 | Hooks | All 4 hooks fire (on_session_start, pre_llm_call, post_llm_call, on_session_end) | **DONE** |
-| OPENAI_BASE_URL | Fix LLM extraction to respect custom base URL | **IN PROGRESS** |
-| Full agent QA | Hermes CLI with hooks + auto-extraction | **IN PROGRESS** |
+| OPENAI_BASE_URL | Fix LLM extraction to respect custom base URL | **DONE** (in `totalreclaw@2.0.2`) |
+| Full agent QA | Hermes CLI with hooks + auto-extraction | **DONE** (`totalreclaw@2.2.1` -- lifecycle auto_extract via remember_batch) |
+| Phase A parity | upgrade + debrief + Mem0 import adapter | **DONE** (in `totalreclaw@2.1.0`) |
+| Gap 3 batching | `remember_batch` UserOp batching (~60s → ~8s for 15-fact batch) | **DONE** (in `totalreclaw@2.2.0`) |
+
+Phase B/C parity (retype, set_scope, MCP adapter, migrate, consolidate, JSON re-import) tracked under the "Now / Next" section at the top of this roadmap.
 
 ### 2.14 Bundler/Paymaster Scaling — PLANNED
 
@@ -510,13 +539,14 @@ Detects and auto-resolves conflicts when different agents store conflicting fact
 
 **Known gaps deferred to Phase 2.1-2.4** (see `totalreclaw-internal/docs/plans/2026-04-14-phase-2-followup-implementation.md`):
 
-- **Phase 2.1**: Pin tool cannot decrypt tombstoned claims (`crypto error: Encrypted data too short`), making `feedback.jsonl` / weight-tuning loop structurally unreachable. Fix: carry `loser_claim_json` in `decisions.jsonl` row at decision time so pin tool can recover plaintext without decrypting the `0x00` blob. ~2-3 hours.
+- **Phase 2.1**: Pin tool cannot decrypt tombstoned claims (`crypto error: Encrypted data too short`), making `feedback.jsonl` / weight-tuning loop structurally unreachable. Fix: carry `loser_claim_json` in `decisions.jsonl` row at decision time so pin tool can recover plaintext without decrypting the `0x00` blob. **SHIPPED** in `@totalreclaw/mcp-server@3.1.0` (pin-on-tombstone recovery) with the MCP v1 pin blob contract closed in `3.2.0` (pin/unpin emit v1 blobs with `pin_status`, core 2.1.1).
 - **Phase 2.2**: Add `rule` memory type (8th category) for operational rules / gotchas / debugging shortcuts — a class the current 7-type extraction pipeline under-captures. ~30 min + tests. **SHIPPED.**
 - **Phase 2.2.5**: Parser observability + robustness — strip `<think>`/`<thinking>` tag prefixes, bracket-scan prose-wrapped JSON recovery, log parse failures with preview, log every `extractFacts` early-return branch. **SHIPPED** (TS only initially).
 - **Phase 2.2.6**: Unified `totalreclaw_remember` API + importance overhaul (A + C). Adds `type` and `importance` parameters to the explicit remember tool across all clients; single source of truth for `VALID_MEMORY_TYPES` enforced by cross-package parity test; tightened `EXTRACTION_SYSTEM_PROMPT` with a 1-10 importance rubric and explicit "do not cluster at 7-8" instruction; new `computeLexicalImportanceBump` post-processor (strong-intent phrases / `!!` / ALL CAPS / word-level repetition, capped at +2); Python parser observability mirrored from 2.2.5; critical fix to `mcp/src/index.ts:648` which was hardcoding `type: 'fact'` on canonical claims regardless of caller intent. **SHIPPED.**
 - **Phase 2.2.7**: Importance bump cap — when LLM already scored >= 8, cap effective lexical bump at +1 (prevents over-scoring). Benchmark: 0 importance misses (was 2), 84% hit rate. **SHIPPED.**
 - **Phase 2.3**: Compaction-aware extraction — dedicated `COMPACTION_SYSTEM_PROMPT` for `before_compaction` hook with importance floor 5 (vs 6), format-agnostic parsing (bullet lists, prose, code, mixed), urgency framing. Mirrored in Python. 36 new tests. **SHIPPED.**
 - **Core Hoist Tier 1**: Store-time dedup best-match, pin semantics, decision log types, contradiction orchestration moved from plugin-only TS to `rust/totalreclaw-core` 1.5.0 (423 tests). All clients wired: OpenClaw (full KG), MCP (dedup), Hermes (dedup + contradiction), ZeroClaw (full KG), NanoClaw (via MCP). **SHIPPED.**
+- **Core Hoist Tier 2** (Wave 1, 2026-04-19): `VALID_MEMORY_TYPES`, `TYPE_TO_CATEGORY`, `isValidMemoryType` hoisted from per-client TS/Python into `rust/totalreclaw-core` 2.1.0 with WASM + PyO3 bindings; additive `pin_status` field + `PinStatus` enum + unified `is_pinned_json` (detects pin on both v0 and v1.1 claims) in core 2.1.1 with spec v1.1 addendum. **SHIPPED** across core + MCP + Python.
 - **Phase 2.4**: OpenClaw Wiki bridge — file watcher at `~/.openclaw/workspace/wiki/` that ingests Wiki entries as canonical Claims with `source='openclaw-wiki'`, running them through the same Phase 2 pipeline. ~1-2 days. OpenClaw-specific.
 
 ### 6.3 Memory Browser (~3-4 weeks) — NOT STARTED
