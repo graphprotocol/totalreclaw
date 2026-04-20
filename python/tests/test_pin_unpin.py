@@ -151,7 +151,7 @@ class TestPinFact:
             )
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_pin_active_claim_writes_new_fact(self, mock_send, keys):
         mock_send.return_value = "0xabc"
         relay = _build_relay_mock(
@@ -179,11 +179,17 @@ class TestPinFact:
         assert result["new_fact_id"] != "old-fact-id"
         assert result.get("idempotent") is not True
 
-        # Two on-chain writes: tombstone + new fact
-        assert mock_send.await_count == 2
+        # 2.2.3 atomic pin: ONE batched UserOp carrying BOTH the tombstone
+        # and the new pinned fact. Previously this was two sequential
+        # ``build_and_send_userop`` calls — the pre-2.2.3 mempool-race bug.
+        assert mock_send.await_count == 1
+        sent_kwargs = mock_send.await_args.kwargs
+        assert len(sent_kwargs["protobuf_payloads"]) == 2, (
+            "pin must send tombstone + new fact in a single executeBatch UserOp"
+        )
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_pin_already_pinned_is_idempotent(self, mock_send, keys):
         mock_send.return_value = "0xabc"
         relay = _build_relay_mock(
@@ -207,11 +213,11 @@ class TestPinFact:
         assert result["fact_id"] == "already-pinned"
         # No new fact id on idempotent no-op
         assert result.get("new_fact_id") is None
-        # No on-chain write
+        # No on-chain batch write
         assert mock_send.await_count == 0
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_pin_new_blob_parses_back_as_pinned(self, mock_send, keys):
         """Capture the ciphertext of the new fact (second UserOp), decrypt,
         and verify the canonical claim is a v1.1 MemoryClaimV1 JSON with
@@ -227,10 +233,10 @@ class TestPinFact:
             keys, fact_id="old-fact-id", text="Sarah loves Django", status=None
         )
 
-        captured_payloads: list[bytes] = []
+        captured_payload_lists: list[list[bytes]] = []
 
         async def capture(**kwargs):
-            captured_payloads.append(kwargs["protobuf_payload"])
+            captured_payload_lists.append(kwargs["protobuf_payloads"])
             return "0xok"
 
         mock_send.side_effect = capture
@@ -245,9 +251,12 @@ class TestPinFact:
             sender=OWNER,
         )
 
-        # Second call is the new-fact write; first is tombstone
-        assert len(captured_payloads) == 2
-        new_payload = captured_payloads[1]
+        # 2.2.3: exactly ONE batched UserOp carrying both payloads.
+        # Index 0 inside the batch = tombstone; index 1 = new-fact write.
+        assert len(captured_payload_lists) == 1
+        payloads = captured_payload_lists[0]
+        assert len(payloads) == 2
+        new_payload = payloads[1]
 
         encrypted_blob_bytes = _extract_protobuf_bytes_field(new_payload, field_number=4)
         assert encrypted_blob_bytes is not None
@@ -292,7 +301,7 @@ class TestUnpinFact:
             )
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_unpin_pinned_claim_writes_new_fact(self, mock_send, keys):
         mock_send.return_value = "0xabc"
         relay = _build_relay_mock(
@@ -316,11 +325,13 @@ class TestUnpinFact:
         assert "new_fact_id" in result
         assert result["new_fact_id"] != "pinned-fact"
         assert result.get("idempotent") is not True
-        # tombstone + new fact
-        assert mock_send.await_count == 2
+        # 2.2.3 atomic unpin: ONE batched UserOp (tombstone + new fact).
+        assert mock_send.await_count == 1
+        sent_kwargs = mock_send.await_args.kwargs
+        assert len(sent_kwargs["protobuf_payloads"]) == 2
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_unpin_already_active_is_idempotent(self, mock_send, keys):
         mock_send.return_value = "0xabc"
         relay = _build_relay_mock(
@@ -343,10 +354,11 @@ class TestUnpinFact:
         assert result["new_status"] == "active"
         assert result["fact_id"] == "active-fact"
         assert result.get("new_fact_id") is None
+        # No on-chain batch write on idempotent no-op.
         assert mock_send.await_count == 0
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_unpin_new_blob_has_explicit_unpinned_status(self, mock_send, keys):
         """When unpin writes a new v1.1 blob, ``pin_status`` is set
         explicitly to ``"unpinned"`` — matches ``skill/plugin/pin.ts``
@@ -360,10 +372,10 @@ class TestUnpinFact:
             keys, fact_id="pinned-fact", text="Likes TDD", status="p"
         )
 
-        captured_payloads: list[bytes] = []
+        captured_payload_lists: list[list[bytes]] = []
 
         async def capture(**kwargs):
-            captured_payloads.append(kwargs["protobuf_payload"])
+            captured_payload_lists.append(kwargs["protobuf_payloads"])
             return "0xok"
 
         mock_send.side_effect = capture
@@ -378,7 +390,9 @@ class TestUnpinFact:
             sender=OWNER,
         )
 
-        new_payload = captured_payloads[1]
+        # 2.2.3: single batched UserOp. Index 1 inside the batch is the new-fact write.
+        assert len(captured_payload_lists) == 1
+        new_payload = captured_payload_lists[0][1]
         encrypted_blob_bytes = _extract_protobuf_bytes_field(new_payload, field_number=4)
         encrypted_b64 = base64.b64encode(encrypted_blob_bytes).decode("ascii")
         plaintext = decrypt(encrypted_b64, keys.encryption_key)
@@ -635,7 +649,7 @@ class TestPinFeedbackWiring:
         return tmp_path
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_pin_loser_writes_feedback(self, mock_send, keys, isolated_state_dir):
         mock_send.return_value = "0xabc"
         _clear_logs(isolated_state_dir)
@@ -681,7 +695,7 @@ class TestPinFeedbackWiring:
         assert fb["loser_components"]["weighted_total"] == 0.73
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_voluntary_pin_writes_no_feedback(self, mock_send, keys, isolated_state_dir):
         mock_send.return_value = "0xabc"
         _clear_logs(isolated_state_dir)
@@ -714,7 +728,7 @@ class TestPinFeedbackWiring:
             assert feedback_file.read_text().strip() == ""
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_unpin_winner_writes_pin_b_feedback(self, mock_send, keys, isolated_state_dir):
         mock_send.return_value = "0xabc"
         _clear_logs(isolated_state_dir)
@@ -753,7 +767,7 @@ class TestPinFeedbackWiring:
         assert fb["claim_b_id"] == "vscode-winner-2"
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_idempotent_pin_writes_no_feedback(self, mock_send, keys, isolated_state_dir):
         mock_send.return_value = "0xabc"
         _clear_logs(isolated_state_dir)
@@ -787,7 +801,7 @@ class TestPinFeedbackWiring:
             assert feedback_file.read_text().strip() == ""
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_legacy_decision_row_without_components_no_feedback(
         self, mock_send, keys, isolated_state_dir
     ):

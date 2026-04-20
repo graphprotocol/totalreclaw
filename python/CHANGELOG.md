@@ -6,6 +6,97 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.3] - 2026-04-20
+
+Pin/unpin made atomic — patch. Fixes the Hermes 2.2.2 staging QA
+finding where pin operations occasionally stalled in Pimlico's
+mempool mid-operation, leaving the user's fact tombstoned on-chain
+with no pinned replacement ever surfacing.
+
+### Fixed
+
+- **Pin/unpin atomic on-chain write.** `_change_claim_status`
+  (which backs both `pin_fact` and `unpin_fact`) pre-2.2.3 issued
+  two sequential `build_and_send_userop` calls at nonces N and N+1:
+  one for the tombstone, one for the new pinned blob. Pimlico's
+  bundler occasionally accepted the nonce-N+1 UserOp (returning a
+  hash) but then never propagated it past its mempool, leaving the
+  user with a tombstoned old fact but no pinned replacement. This
+  is observed on staging during the Hermes 2.2.2 QA pass
+  (internal repo, issue #17).
+
+  2.2.3 refactors the helper to emit a single batched UserOp via
+  `build_and_send_userop_batch` (which wraps both protobuf payloads
+  in one `SimpleAccount.executeBatch(...)` call). The on-chain
+  shape is identical — the DataEdge contract emits one `Log(bytes)`
+  event per call, and the subgraph indexes each by `(txHash,
+  logIndex)` the same way as the pre-2.2.3 two-UserOp flow. What
+  changes:
+  - **Atomicity** — either both the tombstone AND the new v1 pinned
+    blob land in the same block, or neither does. No more half-pin
+    races.
+  - **Nonce safety** — one nonce, one submission, one retry path.
+    The AA25-retry behavior that previously applied per-UserOp now
+    applies to the whole pin operation.
+  - **Gas** — paymaster counts the pin as 1 UserOp rather than 2,
+    and the base transaction cost is amortized across both calls.
+  - **Latency** — one round-trip to Pimlico for gas + sponsorship
+    + submission rather than two.
+
+  The ordering within the batch is preserved: tombstone at index
+  0, new fact at index 1 — matches `skill/plugin/pin.ts::executePinOperation`
+  byte-for-byte, and plugin 3.2.2's parity test locks this in
+  cross-client.
+
+  **No API change.** `client.pin_fact()` / `client.unpin_fact()`
+  signatures and return shapes are unchanged. A caller observes
+  a single on-chain transaction hash instead of two, but the
+  existing return contract (`{success, fact_id, new_fact_id, ...}`)
+  carries no per-UserOp metadata so this is transparent.
+
+### Added
+
+- `python/tests/test_pin_batch_cross_impl_parity.py`: locks in
+  byte-identical pin batch calldata between Python (PyO3) and
+  plugin 3.2.2 (WASM) for identical pin inputs. Both paths delegate
+  to the same shared-Rust `userop::encode_batch_call`, so byte
+  parity is guaranteed at the ABI-encoding step — what the test
+  actually guards is the pin-path payload construction (protobuf
+  versions, field ordering, tombstone-vs-new-fact ordering in the
+  batch).
+
+### Changed
+
+- `operations.py::_change_claim_status`: step 6 now calls
+  `build_and_send_userop_batch(protobuf_payloads=[tombstone, new])`
+  instead of two sequential `build_and_send_userop` calls. The
+  docstring gains a "New in 2.2.3" block explaining the Pimlico
+  mempool race.
+- `pyproject.toml`: version bumped 2.2.2 → 2.2.3.
+
+### Tests
+
+- `python/tests/test_pin_unpin.py`: 26/26 pass. Existing assertions
+  updated from "two sequential writes" (`mock_send.await_count == 2`)
+  to "one batched write with two payloads"
+  (`mock_send.await_count == 1` +
+  `len(kwargs["protobuf_payloads"]) == 2`). Every other assertion
+  is unchanged.
+- `python/tests/test_wave2a_hermes_fixes.py`: 19/19 pass. The Bug
+  #8 regression tests (v=4 new-fact payload, `pin_status=pinned`,
+  v=3 tombstone) are preserved — they now inspect payloads inside
+  the batch rather than across two separate submissions.
+- `python/tests/test_pin_batch_cross_impl_parity.py`: 6/6 new
+  tests pass.
+- Full suite: 680 passed, 10 skipped, 1 xfailed — all pre-existing
+  green.
+
+### Related
+
+- Plugin 3.2.2 (`skill/plugin/CHANGELOG.md`): matching parity test
+  + cross-client byte-identity lock-in. No plugin code changes
+  required (the plugin's pin path has been batched since 3.0.0).
+
 ## [2.2.2] - 2026-04-20
 
 Wave 2a Hermes fix-up. Three bugs from the 2.2.1 VPS QA

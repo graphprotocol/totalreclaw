@@ -454,7 +454,7 @@ class TestBug8PinEmitsV4Pinned:
         return value
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_pin_emits_v4_for_new_fact(self, mock_send, keys, eoa):
         """The new-fact write (after the tombstone) MUST carry
         ``protobuf version = 4`` and an inner v1 MemoryClaimV1 JSON blob.
@@ -468,7 +468,9 @@ class TestBug8PinEmitsV4Pinned:
         captured: list[bytes] = []
 
         async def capture(**kwargs):
-            captured.append(kwargs["protobuf_payload"])
+            # 2.2.3: pin emits ONE batched UserOp; the batch carries both
+            # the tombstone and the new-fact write as ordered payloads.
+            captured.extend(kwargs["protobuf_payloads"])
             return "0xok"
 
         mock_send.side_effect = capture
@@ -485,7 +487,8 @@ class TestBug8PinEmitsV4Pinned:
 
         assert result["success"] is True
         assert result["new_status"] == "pinned"
-        assert len(captured) == 2, "expected tombstone + new-fact writes"
+        assert mock_send.await_count == 1, "pin must be a single batched UserOp"
+        assert len(captured) == 2, "batch must carry tombstone + new-fact writes"
 
         # Second payload = new fact. MUST be v=4 (per QA bug #8).
         new_payload = captured[1]
@@ -496,7 +499,7 @@ class TestBug8PinEmitsV4Pinned:
         )
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_pin_new_blob_carries_pin_status_pinned(self, mock_send, keys, eoa):
         """The inner blob of the new-fact v=4 payload must be a v1
         MemoryClaimV1 JSON with ``pin_status: "pinned"``.
@@ -511,7 +514,7 @@ class TestBug8PinEmitsV4Pinned:
         captured: list[bytes] = []
 
         async def capture(**kwargs):
-            captured.append(kwargs["protobuf_payload"])
+            captured.extend(kwargs["protobuf_payloads"])
             return "0xok"
 
         mock_send.side_effect = capture
@@ -526,6 +529,7 @@ class TestBug8PinEmitsV4Pinned:
             sender="0x0000000000000000000000000000000000001234",
         )
 
+        # One batched UserOp; index 1 within the batch = new-fact write.
         new_payload = captured[1]
         encrypted_blob = self._extract_encrypted_blob(new_payload)
         encrypted_b64 = base64.b64encode(encrypted_blob).decode("ascii")
@@ -549,7 +553,7 @@ class TestBug8PinEmitsV4Pinned:
         assert parsed.get("text") == "Sarah loves Django"
 
     @pytest.mark.asyncio
-    @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
     async def test_pin_tombstone_remains_v3(self, mock_send, keys, eoa):
         """The first payload (tombstone) should remain at v=3 — matches
         plugin's behavior exactly (``pin.ts`` line 640: ``version = legacy v3``).
@@ -563,7 +567,7 @@ class TestBug8PinEmitsV4Pinned:
         captured: list[bytes] = []
 
         async def capture(**kwargs):
-            captured.append(kwargs["protobuf_payload"])
+            captured.extend(kwargs["protobuf_payloads"])
             return "0xok"
 
         mock_send.side_effect = capture

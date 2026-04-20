@@ -981,8 +981,17 @@ async def _change_claim_status(
     5. Encrypt the new blob and build a ``FactPayload`` carrying it,
        with ``version=PROTOBUF_VERSION_V4`` so the outer protobuf wrapper
        tags the write as v1 taxonomy.
-    6. Submit tombstone (at default v=3; matches plugin behavior) + new
-       fact (at v=4) as two sequential UserOps.
+    6. **New in 2.2.3** — submit tombstone (at default v=3; matches
+       plugin behavior) + new fact (at v=4) as a SINGLE batched UserOp
+       via :func:`totalreclaw.userop.build_and_send_userop_batch` (which
+       wraps both calls in ``SimpleAccount.executeBatch(...)``). Prior to
+       2.2.3 the helper issued two sequential ``build_and_send_userop``
+       calls (nonces N and N+1), which raced against a Pimlico mempool
+       quirk: the bundler occasionally accepted the nonce-N+1 op,
+       returned a hash, and then never propagated it — leaving the user
+       with a tombstoned old fact but no pinned replacement. Batching
+       collapses the race (one nonce, one submission) and makes the pin
+       atomic on-chain.
 
     Prior to 2.2.2 this helper emitted a short-key blob at the default
     protobuf v=3 for the new fact, which violated the v1 on-chain
@@ -1173,31 +1182,48 @@ async def _change_claim_status(
         # Feedback wiring is best-effort — never block the pin operation.
         pass
 
-    # 6. Tombstone old (at v=3, legacy; matches plugin ``pin.ts``), then
-    # write new fact (at v=4). Order matters: if the new write fails
-    # after a successful tombstone, the caller will see the fact as
-    # deleted — acceptable trade-off vs. duplicating the fact live then
-    # tombstoning (which would surface both in recall on failure).
+    # 6. Submit tombstone + new fact as ONE batched UserOp via
+    # ``SimpleAccount.executeBatch(...)``. Collapses the pre-2.2.3 flow's
+    # two sequential ``build_and_send_userop`` calls (two nonces, two
+    # Pimlico round-trips, two paymaster sponsorships, back-to-back
+    # mempool submissions) into a single atomic UserOp.
+    #
+    # Why batch the pin path specifically:
+    #   1. Atomicity — either both the tombstone AND the new v1 pinned
+    #      blob land in the same block, or neither does. Pre-2.2.3 could
+    #      land the tombstone first and then have the new fact stick in
+    #      Pimlico's mempool forever, leaving the user with an
+    #      effectively-forgotten fact that still surfaces as pinned in
+    #      the UX. This was observed on staging during the Hermes 2.2.2
+    #      QA pass (internal repo, issue #17).
+    #   2. Pimlico mempool race — same-SA back-to-back UserOps at
+    #      nonce N and N+1 occasionally trip a Pimlico quirk where the
+    #      second op is accepted (hash returned) but never leaves the
+    #      mempool. One UserOp = no race.
+    #   3. Gas — paymaster counts the pin as 1 UserOp instead of 2. Base
+    #      tx cost amortized over both calls.
+    #   4. Nonce safety — the AA25 retry collapse noted in
+    #      :func:`build_and_send_userop_batch` applies here too: O(1)
+    #      retry vs O(n) for the prior sequential flow.
+    #
+    # Ordering within the batch is preserved: DataEdge emits one
+    # ``Log(bytes)`` event per call, and the subgraph indexes each by
+    # ``txHash + logIndex`` (ascending). Tombstone at index 0, new fact
+    # at index 1 — identical on-chain shape to the pre-2.2.3 two-UserOp
+    # flow from the subgraph's point of view.
+    #
+    # The outer protobuf versioning from the pre-2.2.3 flow is preserved
+    # verbatim: tombstone at v=3 (legacy; matches ``skill/plugin/pin.ts``
+    # byte-for-byte), new fact at v=4 (v1 taxonomy — Bug #8 fix from
+    # 2.2.2 still required).
     tombstone_bytes = encode_tombstone_protobuf(fact_id, owner)
-    await build_and_send_userop(
-        sender=smart_account,
-        eoa_address=eoa_address,
-        eoa_private_key=eoa_private_key,
-        protobuf_payload=tombstone_bytes,
-        relay_url=relay._relay_url,
-        auth_key_hex=relay._auth_key_hex or "",
-        wallet_address=smart_account,
-        chain_id=chain_id,
-        client_id=relay._client_id,
-        session_id=getattr(relay, "_session_id", None),
-    )
-
     new_protobuf = encode_fact_protobuf(payload)
-    await build_and_send_userop(
+
+    await build_and_send_userop_batch(
         sender=smart_account,
         eoa_address=eoa_address,
         eoa_private_key=eoa_private_key,
-        protobuf_payload=new_protobuf,
+        protobuf_payloads=[tombstone_bytes, new_protobuf],
         relay_url=relay._relay_url,
         auth_key_hex=relay._auth_key_hex or "",
         wallet_address=smart_account,

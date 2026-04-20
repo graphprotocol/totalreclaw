@@ -4,6 +4,62 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.2] — 2026-04-20
+
+Cross-client pin/unpin batch parity — patch. Ships alongside
+`totalreclaw==2.2.3` (Python client). Patches the Hermes 2.2.2 QA
+finding that pin/unpin on staging occasionally stalled in Pimlico's
+mempool mid-operation.
+
+### Context
+
+The plugin's pin path has been emitting pin as a single
+`SimpleAccount.executeBatch(...)` UserOp since 3.0.0 — the pure
+`executePinOperation` returns a 2-payload list (`[tombstone, new-pin]`)
+to `deps.submitBatch`, and the transport layer routes that through
+`submitFactBatchOnChain` → `encodeBatchCall` on the shared Rust core.
+No plugin-side regression was observed.
+
+The Python client (pre-2.2.3) took a different path: two sequential
+`build_and_send_userop` calls at nonces N and N+1. Pimlico's mempool
+occasionally accepted the nonce-N+1 op, returned a hash, and then
+never propagated it — leaving the user with a tombstoned old fact
+but no pinned replacement. Python 2.2.3 ports to the plugin's
+single-UserOp shape. This plugin patch adds a cross-impl parity test
+locking in byte-identical pin calldata between plugin (WASM) and
+Python (PyO3) paths.
+
+### Added
+
+- `skill/plugin/pin-batch-cross-impl-parity.test.ts`: builds the
+  pin-scenario 2-payload batch (fixed fact_id + owner + timestamps
+  + encrypted-blob stand-ins) and asserts the TS/WASM-produced
+  `encodeBatchCall` calldata is byte-identical to a golden string
+  that Python 2.2.3 tests against in
+  `python/tests/test_pin_batch_cross_impl_parity.py::EXPECTED_PIN_BATCH_CALLDATA_HEX`.
+  Guards against future drift in either side's protobuf encoder or
+  pin-path payload construction.
+
+### Changed
+
+- `package.json`: version bumped 3.2.1 → 3.2.2. No runtime code
+  changes — the plugin was already emitting pin as a single
+  `executeBatch` UserOp.
+
+### Tests
+
+- `skill/plugin/pin-unpin.test.ts`: 157/157 pass (no assertion
+  changes; the existing `submittedBatches.length === 1` +
+  `submittedBatches[0].length === 2` assertions already lock in
+  the single-UserOp-with-2-payloads contract).
+- `skill/plugin/pin-batch-cross-impl-parity.test.ts`: 3/3 pass.
+
+### Related
+
+- Python 2.2.3 (`python/CHANGELOG.md`): ports the pin path to a
+  single `build_and_send_userop_batch` call and adds the matching
+  parity golden.
+
 ## [3.2.1] — 2026-04-20
 
 Cross-client parity patch: bumps the `@totalreclaw/core` peer from
