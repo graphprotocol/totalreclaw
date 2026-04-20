@@ -6,10 +6,10 @@ End-to-end encrypted memory for NanoClaw agents, powered by the `@totalreclaw/mc
 
 ### Step 1: Recovery phrase
 
-The **recovery phrase** is a 12-word BIP-39 mnemonic that derives all encryption keys client-side. TotalReclaw never sends it to the server.
+The **recovery phrase** is a 12-word BIP-39 phrase that derives all encryption keys client-side. TotalReclaw never sends it to the server.
 
-- **New user:** Generate a 12-word BIP-39 mnemonic. Save it securely -- it is the only way to recover your memories.
-- **Returning user:** Use your existing phrase to restore memories on a new device.
+- **New user:** Generate a 12-word BIP-39 recovery phrase. Save it securely -- it is the only way to recover your memories.
+- **Returning user:** Use your existing recovery phrase to restore memories on a new device.
 
 ### Step 2: Configure environment
 

@@ -1,5 +1,87 @@
 # Changelog — @totalreclaw/skill-nanoclaw
 
+## 3.1.1-rc.1 — 2026-04-20
+
+### First-run onboarding UX parity
+
+Parity with OpenClaw plugin 3.3.0 (first-run welcome via `prependContext`)
+and Hermes 2.3.1 (first-run welcome via stdout). NanoClaw now surfaces a
+canonical welcome message + branch question when the credentials file is
+missing / empty / invalid on session startup. Gates on the
+`@anthropic-ai/claude-agent-sdk` `SessionStart` hook (`source='startup'`)
+and injects via `additionalContext` — the direct NanoClaw analog of the
+plugin's `prependContext`.
+
+### Added
+
+- `src/onboarding/first-run.ts` — library-shaped onboarding module:
+  - `detectFirstRun(credentialsPath)` — returns true when the credentials
+    file is missing, empty, unparseable, lacks a mnemonic field, or has the
+    wrong word count. Deep BIP-39 checksum validation is left to
+    `@totalreclaw/core` at key-derivation time.
+  - `buildWelcomeMessage()` — renders the canonical welcome + branch
+    question + NanoClaw-specific instructions + storage guidance.
+  - `maybeBuildFirstRunContext({ credentialsPath, source })` — full
+    check-and-inject. Gated by a process-scoped sentinel so we emit once
+    per Node process; skips `compact` source entirely (mid-session
+    compactions must NOT re-inject onboarding).
+  - Canonical copy constants exported as module top-level:
+    `WELCOME_MESSAGE`, `BRANCH_QUESTION`, `NANOCLAW_INSTRUCTIONS`,
+    `STORAGE_GUIDANCE`.
+  - `resolveCredentialsPath()` — precedence:
+    `$TOTALRECLAW_CREDENTIALS_PATH` → `$WORKSPACE_DIR/.totalreclaw/credentials.json`
+    → `$HOME/.totalreclaw/credentials.json`.
+- `src/onboarding/index.ts` — barrel re-export.
+- `src/index.ts` — re-exports onboarding module.
+- `tests/first-run.test.js` — 26 tests covering detect / build / hook /
+  path resolution / terminology parity / runner wiring.
+
+### Changed
+
+- `mcp/nanoclaw-agent-runner.ts` — inline first-run detection + SessionStart
+  hook registration. Logic mirrors `src/onboarding/first-run.ts`. The runner
+  is an overlay copied by the NanoClaw skill loader into
+  `container/agent-runner/src/index.ts`, so it cannot `require` the skill
+  package's `dist/` at runtime — duplication is intentional. Any bugfix
+  must be mirrored to the library module (enforced by `tests/first-run.test.js`
+  string-parity checks).
+- `SKILL.md` — terminology sweep: `BIP-39 mnemonic` → `BIP-39 recovery phrase`
+  in user-facing setup copy.
+
+### Hook API findings (research-phase output)
+
+- NanoClaw uses `@anthropic-ai/claude-agent-sdk` directly via `query()`.
+- Supported hooks include `SessionStart`, `UserPromptSubmit`, `PreCompact`,
+  `PostCompact`, `PreToolUse`, `PostToolUse`, `Stop`, `Setup`, etc.
+- `SessionStart` fires at the start of a session with
+  `source: 'startup' | 'resume' | 'clear' | 'compact'`.
+  `SessionStartHookSpecificOutput` carries `additionalContext?: string` —
+  direct analog of OpenClaw plugin's `prependContext`.
+- This IS a "genuine" context injection from a skill — no fallback workaround
+  was needed. SDK support exists and is stable.
+
+### Constraints respected
+
+- No changes to `skill/plugin/`, `python/`, `mcp/`, or `rust/`.
+- No regression to 3.1.0 v1 taxonomy behavior — extraction + recall paths
+  untouched.
+- `@totalreclaw/core` floor stays at `^2.2.0` (no new prompt hoisting).
+- MCP peer-dep stays at `^3.0.0`.
+
+### Known caveats
+
+- **No interactive wizard.** Unlike OpenClaw (`openclaw totalreclaw onboard`)
+  and Hermes (`hermes setup`), NanoClaw runs in a container with no TTY
+  affordance for a wizard. The welcome message directs users to either
+  generate the phrase via an external BIP-39 tool, hand-populate
+  `credentials.json`, or use the OpenClaw / Hermes CLI on a local machine
+  and copy the credentials file into the NanoClaw workspace.
+- **Session-scoped sentinel is in-memory.** The welcome emits once per Node
+  process. If the container restarts after credentials are populated,
+  detection correctly returns false on the next boot and no welcome is
+  emitted. If the container restarts with credentials still missing, the
+  welcome emits again — which is the right behavior.
+
 ## 3.1.0 — 2026-04-19
 
 ### Canonical extraction prompt hoisted to core + ADD-only alignment

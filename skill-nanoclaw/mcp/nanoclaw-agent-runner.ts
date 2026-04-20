@@ -22,7 +22,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { query, HookCallback, PreCompactHookInput, PreToolUseHookInput } from '@anthropic-ai/claude-agent-sdk';
+import { query, HookCallback, PreCompactHookInput, PreToolUseHookInput, SessionStartHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
 interface ContainerInput {
@@ -211,6 +211,98 @@ function createSanitizeBashHook(): HookCallback {
           ...(preInput.tool_input as Record<string, unknown>),
           command: unsetPrefix + command,
         },
+      },
+    };
+  };
+}
+
+// ---------------------------------------------------------------------------
+// First-run onboarding (NanoClaw 3.1.1) — parity with OpenClaw plugin 3.3.0
+// (prependContext) and Hermes 2.3.1 (stdout). The SessionStart hook is the
+// earliest lifecycle hook exposed by @anthropic-ai/claude-agent-sdk and its
+// hookSpecificOutput carries an `additionalContext` string that the SDK
+// injects before the first user prompt — the direct analog of the plugin's
+// `prependContext`.
+//
+// The logic here is intentionally duplicated from `src/onboarding/first-run.ts`
+// (which is the tested, library-shaped version exported from
+// `@totalreclaw/skill-nanoclaw`). The runner is copied into the NanoClaw
+// container's `container/agent-runner/src/index.ts` by the skill loader —
+// at which point it has no access to the skill package's compiled `dist/`.
+// Keeping the runner self-contained avoids that coupling. Any bugfix here
+// should be mirrored into `src/onboarding/first-run.ts` and vice versa.
+// ---------------------------------------------------------------------------
+
+const FIRST_RUN_WELCOME = `Welcome to TotalReclaw — encrypted, agent-portable memory.
+
+Your memories are stored end-to-end encrypted and on-chain. You can restore them on any agent — OpenClaw, Hermes, or NanoClaw — with a single recovery phrase.
+
+Let's set up your account. Do you already have a recovery phrase, or should we generate a new one?
+
+To set up: generate a recovery phrase with your preferred BIP39 tool, or provide one you already have. Save it to ~/.totalreclaw/credentials.json in this shape:
+  { "mnemonic": "word1 word2 ... word12", "scope_address": "0x..." }
+
+Or use the OpenClaw or Hermes CLI to generate one — the phrase will work across all three.
+
+Your recovery phrase is 12 words. Store it somewhere safe — a password manager works well. Use it only for TotalReclaw. Don't reuse it anywhere else. Don't put funds on it.`;
+
+let firstRunWelcomeEmitted = false;
+
+/**
+ * Returns true if the credentials file is missing / empty / invalid and we
+ * should trigger the first-run welcome. Any read/parse error counts as
+ * first-run (safe default — alternative is a cryptic MCP-server fail later).
+ */
+function isFirstRun(credentialsPath: string): boolean {
+  try {
+    if (!fs.existsSync(credentialsPath)) return true;
+    const raw = fs.readFileSync(credentialsPath, 'utf-8').trim();
+    if (raw.length === 0) return true;
+    let parsed: { mnemonic?: string };
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return true;
+    }
+    if (!parsed || typeof parsed !== 'object') return true;
+    const mnemonic = typeof parsed.mnemonic === 'string' ? parsed.mnemonic.trim() : '';
+    if (mnemonic.length === 0) return true;
+    const wordCount = mnemonic.split(/\s+/).filter(Boolean).length;
+    if (wordCount !== 12 && wordCount !== 24) return true;
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * SessionStart hook: inject the first-run welcome as `additionalContext`
+ * when the credentials file is missing. Gated by a process-scoped sentinel
+ * so we only emit once per Node process.
+ *
+ * Source filter: skip `compact` entirely (mid-session compaction must NOT
+ * re-inject onboarding, even if credentials somehow went missing mid-session
+ * — that indicates a different bug). `startup`, `resume`, and `clear` all
+ * count as first-contact candidates — on any of those, if credentials are
+ * still unavailable, the user needs to see the welcome.
+ */
+function createFirstRunHook(credentialsPath: string): HookCallback {
+  return async (input, _toolUseId, _context) => {
+    if (firstRunWelcomeEmitted) return {};
+    const hookInput = input as SessionStartHookInput;
+    const source = hookInput.source;
+    // Mid-session compaction must never re-emit onboarding.
+    if (source === 'compact') return {};
+    // Only `startup` is gated against in terminology-parity tests, but we
+    // accept startup/resume/clear here at runtime.
+    if (source !== 'startup' && source !== 'resume' && source !== 'clear') return {};
+    if (!isFirstRun(credentialsPath)) return {};
+    firstRunWelcomeEmitted = true;
+    log('First-run welcome: credentials missing, injecting welcome context');
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'SessionStart',
+        additionalContext: FIRST_RUN_WELCOME,
       },
     };
   };
@@ -472,6 +564,7 @@ async function runQuery(
         },
       },
       hooks: {
+        SessionStart: [{ hooks: [createFirstRunHook(path.join(WORKSPACE_ROOT, '.totalreclaw', 'credentials.json'))] }],
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
         PreToolUse: [{ matcher: 'Bash', hooks: [createSanitizeBashHook()] }],
       },
