@@ -6,6 +6,25 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.4] - 2026-04-19
+
+Wave 2c cleanup: expose `totalreclaw.__version__` at the package top-level
+so `import totalreclaw; print(totalreclaw.__version__)` works. Sourced from
+`importlib.metadata` when the package is installed, falls back to the
+hardcoded `"2.2.4"` string in editable / source-tree installs where
+metadata may not be available.
+
+### Added
+
+- `python/src/totalreclaw/__init__.py` — `__version__` exported via
+  `importlib.metadata.version("totalreclaw")` with a `"2.2.4"` fallback;
+  added to `__all__`.
+
+### Tests
+
+- `python/tests/test_version.py`: 4 assertions — non-empty string, semver
+  shape, presence in `__all__`, importable via `from totalreclaw import
+  __version__`.
 ## [2.2.3] - 2026-04-20
 
 Pin/unpin made atomic — patch. Fixes the Hermes 2.2.2 staging QA

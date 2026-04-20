@@ -4,6 +4,24 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.3] — 2026-04-19
+
+Wave 2c cleanup: `printStatus` now recognises legacy `recovery_phrase`
+credentials so `openclaw totalreclaw status` correctly reports "complete"
+for users whose credentials were written by an older client (or Hermes
+pre-2.2.4). No behaviour change for canonical `mnemonic` credentials.
+
+### Fixed
+
+- `onboarding-cli.ts::printStatus` — checked only the canonical `mnemonic`
+  key; users with legacy `recovery_phrase`-keyed credentials saw
+  "onboarding: not complete" even though all memory tools worked. Now checks
+  both keys (same back-compat pattern as `fs-helpers.ts::extractBootstrapMnemonic`).
+
+### Tests
+
+- `onboarding-cli.test.ts`: new test 11 — `printStatus` reports "complete"
+  for credentials containing only the legacy `recovery_phrase` key.
 ## [3.2.2] — 2026-04-20
 
 Cross-client pin/unpin batch parity — patch. Ships alongside

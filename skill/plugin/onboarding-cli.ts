@@ -472,7 +472,11 @@ export function printStatus(
   const stateFileExists = fs.existsSync(statePath);
   if (credExists) {
     const creds = loadCredentialsJson(credentialsPath);
-    const hasMnemonic = typeof creds?.mnemonic === 'string' && creds.mnemonic.trim().length > 0;
+    // Accept both canonical `mnemonic` and legacy `recovery_phrase` — same
+    // back-compat pattern used by fs-helpers.ts::extractBootstrapMnemonic.
+    const hasMnemonic =
+      (typeof creds?.mnemonic === 'string' && creds.mnemonic.trim().length > 0) ||
+      (typeof creds?.recovery_phrase === 'string' && creds.recovery_phrase.trim().length > 0);
     if (hasMnemonic) {
       out.write(COPY.statusActive);
       if (stateFileExists) {

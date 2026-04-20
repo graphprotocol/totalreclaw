@@ -403,7 +403,42 @@ const INVALID_PHRASE = 'not a valid phrase for anything not a valid phrase for a
 }
 
 // ---------------------------------------------------------------------------
-// 11. Copy strings — the scripted ones that tests depend on exist
+// 11. printStatus with legacy recovery_phrase key → reports "complete"
+// ---------------------------------------------------------------------------
+{
+  const tmp = mkTmp();
+  const credPath = path.join(tmp, 'credentials.json');
+  const statePath = path.join(tmp, 'state.json');
+  // Write credentials with the LEGACY key only (no `mnemonic` field).
+  fs.writeFileSync(credPath, JSON.stringify({ recovery_phrase: VALID_PHRASE }), { mode: 0o600 });
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({ onboardingState: 'active', createdBy: 'import', credentialsCreatedAt: '2026-04-19T00:00:00.000Z', version: '3.2.0' }),
+    { mode: 0o600 },
+  );
+
+  let buf = '';
+  const out = {
+    write(chunk: string | Uint8Array) {
+      buf += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf-8');
+      return true;
+    },
+  } as unknown as NodeJS.WritableStream;
+
+  printStatus(credPath, statePath, out);
+
+  assert(buf.includes('onboarding: complete'), 'status-legacy-key: prints "complete" for recovery_phrase creds');
+  assert(!buf.includes('not complete'), 'status-legacy-key: does NOT print "not complete"');
+  // Mnemonic words must never leak.
+  for (const w of VALID_PHRASE.split(' ')) {
+    assert(!buf.includes(w), `status-legacy-key: does NOT leak phrase word "${w}"`);
+  }
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// 13. Copy strings — the scripted ones that tests depend on exist
 // ---------------------------------------------------------------------------
 {
   assert(COPY.welcome.includes('TotalReclaw'), 'copy: welcome references product');
