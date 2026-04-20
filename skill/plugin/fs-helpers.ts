@@ -401,6 +401,10 @@ export function autoBootstrapCredentials(
  * missing, unreadable, or un-parseable — caller logs but does not throw,
  * since failing to flip the flag only means the banner might show twice,
  * not data loss.
+ *
+ * NOTE: retained for back-compat with pre-3.2.0 tests. 3.2.0 removes the
+ * prependContext banner entirely, so no production code path calls this
+ * helper anymore.
  */
 export function markFirstRunAnnouncementShown(credentialsPath: string): boolean {
   try {
@@ -414,4 +418,146 @@ export function markFirstRunAnnouncementShown(credentialsPath: string): boolean 
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Onboarding state file (3.2.0)
+// ---------------------------------------------------------------------------
+
+/**
+ * 3.2.0 onboarding state file — `~/.totalreclaw/state.json` (or the path
+ * overridden via `TOTALRECLAW_STATE_PATH`). Separate from `credentials.json`
+ * so the state blob never contains the mnemonic — callers can log / stat /
+ * copy this file freely.
+ *
+ * Two states only, per the user's "clean-slate, simplest possible" ratification:
+ *   - `fresh`  → no usable credentials; every memory tool is gated.
+ *   - `active` → credentials.json has a valid mnemonic; tools unblocked.
+ *
+ * The design doc's richer state machine (awaiting_onboarding_choice /
+ * skipped / active_unacked) was collapsed to these two on user's call.
+ * Re-expand only if a UX need emerges.
+ */
+export interface OnboardingState {
+  onboardingState: 'fresh' | 'active';
+  /** ISO-8601 timestamp credentials.json was first created / confirmed. */
+  credentialsCreatedAt?: string;
+  /** Which onboarding path produced the active state. */
+  createdBy?: 'generate' | 'import';
+  /** Schema version — bump when the shape changes. */
+  version?: string;
+}
+
+/** Default fresh state for a machine that has never onboarded. */
+export function defaultFreshState(): OnboardingState {
+  return { onboardingState: 'fresh', version: '3.2.0' };
+}
+
+/**
+ * Load the state file at `statePath`. Returns `null` on any I/O or parse
+ * failure. The caller decides whether to initialise a fresh state or treat
+ * the missing file as fresh.
+ */
+export function loadOnboardingState(statePath: string): OnboardingState | null {
+  try {
+    if (!fs.existsSync(statePath)) return null;
+    const raw = fs.readFileSync(statePath, 'utf-8');
+    const parsed = JSON.parse(raw) as Partial<OnboardingState>;
+    // Validate the one required field. Anything else may be absent.
+    if (parsed.onboardingState !== 'fresh' && parsed.onboardingState !== 'active') {
+      return null;
+    }
+    return {
+      onboardingState: parsed.onboardingState,
+      credentialsCreatedAt: typeof parsed.credentialsCreatedAt === 'string' ? parsed.credentialsCreatedAt : undefined,
+      createdBy: parsed.createdBy === 'generate' || parsed.createdBy === 'import' ? parsed.createdBy : undefined,
+      version: typeof parsed.version === 'string' ? parsed.version : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write the state file atomically (temp file + rename) with mode 0600.
+ * Returns `true` on success, `false` on any I/O error — caller logs but
+ * does not throw. Failing to persist state means the plugin will re-derive
+ * it from credentials.json on next load, which is safe.
+ *
+ * Atomicity matters here because the state file is consumed by the
+ * before_tool_call gate on every tool call: a half-written file would
+ * force-gate real memory operations.
+ */
+export function writeOnboardingState(statePath: string, state: OnboardingState): boolean {
+  try {
+    const dir = path.dirname(statePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const tmp = `${statePath}.tmp-${process.pid}-${Date.now()}`;
+    fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
+    fs.renameSync(tmp, statePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Derive the current onboarding state for this process by reading
+ * credentials.json. Used on plugin load + after CLI wizard writes.
+ *
+ * Rule (simplest possible, per user's clean-slate ratification):
+ *   - credentials.json exists + extractable mnemonic is a non-empty string
+ *     → `active`.
+ *   - credentials.json missing OR mnemonic missing/empty/non-string
+ *     → `fresh`.
+ *
+ * This is intentionally LAX about BIP-39 checksum validation — the wizard
+ * validates on write; at load time we trust the on-disk file. If the
+ * mnemonic has been hand-edited to garbage, `initialize()` will fail later
+ * at key-derivation time and surface the error via needsSetup.
+ *
+ * Does NOT require a pre-existing state file; 3.1.0 users (if any) with a
+ * valid credentials.json → active silently, no migration code path.
+ */
+export function deriveStateFromCredentials(credentialsPath: string): OnboardingState['onboardingState'] {
+  const creds = loadCredentialsJson(credentialsPath);
+  const mnemonic = extractBootstrapMnemonic(creds);
+  return mnemonic && mnemonic.length > 0 ? 'active' : 'fresh';
+}
+
+/**
+ * Compute the effective onboarding state at plugin-load time. Reads the
+ * persisted state file if it exists AND matches what credentials.json
+ * implies; otherwise recomputes and writes a fresh state file.
+ *
+ * The reason we still persist a state file (rather than deriving every
+ * call) is to carry the `createdBy` + `credentialsCreatedAt` fields through
+ * process restarts — those are small but useful for diagnostics + future
+ * migration paths.
+ *
+ * Returns the effective state. Does not throw.
+ */
+export function resolveOnboardingState(
+  credentialsPath: string,
+  statePath: string,
+): OnboardingState {
+  const implied = deriveStateFromCredentials(credentialsPath);
+  const persisted = loadOnboardingState(statePath);
+
+  // Happy path: persisted state matches what credentials imply → trust it.
+  if (persisted && persisted.onboardingState === implied) {
+    return persisted;
+  }
+
+  // Mismatch (or no persisted state): recompute from credentials, persist,
+  // and return. Do not overwrite a known `createdBy` if we're just
+  // upgrading a stale state file.
+  const next: OnboardingState = {
+    onboardingState: implied,
+    version: '3.2.0',
+    credentialsCreatedAt: persisted?.credentialsCreatedAt,
+    createdBy: persisted?.createdBy,
+  };
+  writeOnboardingState(statePath, next);
+  return next;
 }

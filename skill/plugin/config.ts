@@ -95,6 +95,10 @@ export const CONFIG = {
   serverUrl: (process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz').replace(/\/+$/, ''),
   selfHosted: process.env.TOTALRECLAW_SELF_HOSTED === 'true',
   credentialsPath: process.env.TOTALRECLAW_CREDENTIALS_PATH || path.join(home, '.totalreclaw', 'credentials.json'),
+  // 3.2.0 onboarding state file — separate from credentials.json so it
+  // never contains secrets. Loaded on every plugin init + on every
+  // before_tool_call gate check.
+  onboardingStatePath: process.env.TOTALRECLAW_STATE_PATH || path.join(home, '.totalreclaw', 'state.json'),
 
   // Chain — chainId is no longer user-configurable. It is auto-detected from
   // the relay billing response (free = Base Sepolia / 84532, Pro = Gnosis /

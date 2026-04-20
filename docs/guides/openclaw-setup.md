@@ -12,7 +12,7 @@ One command -- install from npm:
 openclaw plugins install @totalreclaw/totalreclaw
 ```
 
-The OpenClaw CLI resolves `@totalreclaw/totalreclaw` from the npm registry, activates the plugin, and wires it into your gateway. On first load the plugin auto-generates a recovery phrase if one is not already configured -- you do not need to run a separate setup command.
+The OpenClaw CLI resolves `@totalreclaw/totalreclaw` from the npm registry, activates the plugin, and wires it into your gateway. Starting in **v3.2.0**, first-run setup uses a secure CLI wizard that runs on your terminal -- the plugin does not auto-generate a recovery phrase silently, and it never asks the LLM to display one.
 
 > **Note:** TotalReclaw is distributed via the npm registry. Future CLI resolvers may surface it via additional registries.
 
@@ -36,35 +36,59 @@ This is for plugin development only. Users following this guide should stick wit
 
 ## Your recovery phrase
 
-TotalReclaw is keyed by a 12-word BIP-39 recovery phrase. The plugin handles generation automatically the first time it loads.
+TotalReclaw is keyed by a 12-word BIP-39 recovery phrase. **v3.2.0 introduces a secure CLI wizard** that generates or imports the phrase entirely on your terminal -- it never touches the LLM, never appears in a chat transcript, and never leaves your machine.
 
-**Where it is stored:** `~/.openclaw/extensions/totalreclaw/credentials.json` (owner-only permissions). This file contains your recovery phrase plus derived identifiers.
+**Where it is stored:** `~/.totalreclaw/credentials.json` (mode `0600`, owner-only). This file contains your recovery phrase plus derived identifiers. A separate `~/.totalreclaw/state.json` file tracks onboarding state; it never contains secrets.
 
-**You must save it somewhere safe.** It is the only key to your memories and the only way to use the same vault from another agent (Claude Desktop, Cursor, Hermes, etc.). There is no password reset, no recovery email, no support ticket that can recover lost memories.
+**You must save the phrase somewhere safe.** It is the only key to your memories and the only way to use the same vault from another agent (Claude Desktop, Cursor, Hermes, etc.). There is no password reset, no recovery email, no support ticket that can recover lost memories.
 
 > **Use a dedicated phrase.** Never reuse a recovery phrase that has been used for a blockchain wallet or any on-chain activity. TotalReclaw keys are memory-only -- they should not share entropy with funds.
 
-### How to retrieve your phrase (current behavior, v3.1.0)
+### First-time setup (v3.2.0)
 
-When the plugin generates a fresh phrase, it is written to the credentials file above. Depending on your LLM provider, the phrase may *also* appear in your first chat response via a one-time banner. **This surfacing is LLM-dependent -- it may or may not happen.** Either way, the phrase is saved on disk.
-
-To retrieve it reliably:
+After installing the plugin, open a terminal on the same machine as your OpenClaw gateway and run:
 
 ```bash
-cat ~/.openclaw/extensions/totalreclaw/credentials.json
+openclaw totalreclaw onboard
 ```
 
-Copy the `mnemonic` field and store it somewhere safe (password manager, offline paper backup -- not a plaintext note in the cloud).
+The wizard asks whether you want to:
 
-> **Heads up:** v3.2.0 will improve onboarding so the phrase is surfaced outside the LLM channel. Until that ships, the `cat` command above is the source of truth.
+1. **Generate** a new recovery phrase. The wizard prints a 3×4 word grid on your terminal, walks through a "write it down" warning, and requires you to retype three specific words to prove you saved it. On success, the phrase is persisted to `credentials.json` and memory tools become active. The phrase is displayed ONLY on your terminal -- it is not sent to the LLM, not written to any transcript, and not transmitted over the network.
+
+2. **Import** an existing TotalReclaw recovery phrase (if you already set up TotalReclaw on another client). The wizard accepts the 12-word phrase via hidden stdin (input is masked with `*`), validates the BIP-39 checksum, and persists it to `credentials.json`. Your existing memories become accessible immediately.
+
+3. **Skip** for now. Memory tools stay disabled until you re-run the wizard.
+
+After the wizard completes, go back to your chat session. You can check state at any time:
+
+```bash
+openclaw totalreclaw status
+```
+
+### In-chat prompts
+
+If you ask the agent in chat "set up TotalReclaw for me", the LLM will call the `totalreclaw_onboarding_start` tool, which returns a pointer back to the CLI wizard. Similarly, typing `/totalreclaw onboard` as a slash command returns a pointer. **Neither surface ever shows your recovery phrase in chat** -- that would leak it to the LLM provider's logs.
+
+### Remote-gateway note
+
+v3.2.0 onboarding works locally. If you run OpenClaw on a remote VPS and connect via `openclaw tui --url ws://...`, the wizard needs TTY access on the same machine that writes `credentials.json` -- SSH into the gateway host and run `openclaw totalreclaw onboard` there. Remote onboarding via QR-pairing is planned for v3.3.0.
+
+### Retrieving your phrase later
+
+To view your phrase on the same machine after setup:
+
+```bash
+cat ~/.totalreclaw/credentials.json
+```
+
+Copy the `mnemonic` field. On a new machine, run `openclaw totalreclaw onboard` and choose "import" with this phrase.
 
 ### Returning user
 
-If you already have a phrase from another client (Hermes, MCP, NanoClaw, etc.), tell the agent before the first extraction:
+Run the wizard, choose "import", and paste your existing phrase when prompted. The plugin re-derives your keys and your existing memories become accessible immediately.
 
-> "I have an existing TotalReclaw recovery phrase: word1 word2 ... word12"
-
-The plugin will use it to re-derive your keys and your existing memories become accessible immediately. Alternatively, write the phrase into `credentials.json` yourself before first load.
+Do **not** paste your phrase into the chat -- that ships it to the LLM provider. The hidden stdin prompt in the wizard is the only safe surface.
 
 ---
 
@@ -97,9 +121,9 @@ You can also drive memory directly by asking your agent. The v1 taxonomy adds pi
 | **Export** | Download everything as text / JSON | "Export all my TotalReclaw memories as plain text" |
 | **Status** | Tier + usage | "What's my TotalReclaw status?" |
 | **Import from** | Pull memories in from Mem0 / ChatGPT / Claude / Gemini | "Import my Gemini history from ~/Downloads/..." |
-| **Setup** | Re-run setup (no-op when credentials already match) | "Set up TotalReclaw for me" |
+| **Onboarding start** | Point the user at the secure CLI wizard (v3.2.0+) | "Set up TotalReclaw for me" |
 
-> **Note on `setup`:** since v3.1.0, a fresh vault is bootstrapped automatically on first load. The `setup` tool remains available for explicit re-setup (e.g., switching recovery phrases) but is a no-op when your credentials are already in place.
+> **Note on `setup`:** as of v3.2.0, onboarding moves to the `openclaw totalreclaw onboard` CLI wizard (see [First-time setup](#first-time-setup-v320) above). The legacy `totalreclaw_setup` tool is **deprecated** -- it now rejects phrase arguments and redirects to the CLI to prevent the phrase from leaking to the LLM provider. Use the `totalreclaw_onboarding_start` tool (or the `/totalreclaw onboard` slash command) if you want the agent to point the user at the wizard.
 
 ---
 

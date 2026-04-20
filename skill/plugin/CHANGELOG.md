@@ -4,6 +4,177 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] — 2026-04-19
+
+Secure leak-free onboarding for local users. **Breaking UX change:**
+first-run flow moves from an LLM-driven banner to a CLI wizard on the
+user's terminal. All returning users with a valid `~/.totalreclaw/credentials.json`
+continue working transparently; no migration action is required.
+
+### Security fix (root cause for the minor bump)
+
+The 3.1.0 onboarding flow leaked the BIP-39 recovery phrase to the LLM
+provider. Two paths shipped the phrase into HTTP bodies that Anthropic /
+OpenAI / ZAI (or any hosted model) logged:
+
+1. **`before_agent_start` `prependContext` banner.** When
+   `credentials.json` was freshly auto-generated, the hook injected a
+   block that contained the plaintext mnemonic and instructed the LLM to
+   surface it to the user. The block was part of the request body on
+   every subsequent turn until `firstRunAnnouncementShown` flipped. For a
+   product whose pitch is "encrypted memory the server cannot read", this
+   is incompatible with the threat model.
+
+2. **`totalreclaw_setup` tool response.** Called with no arg, the tool
+   auto-generated a mnemonic via `@scure/bip39` and returned
+   `Recovery phrase: ${mnemonic}` inside the tool content text. Every
+   returning session saw the same mnemonic in transcript history.
+
+Separately, QA observed that the LLM often ignored the banner entirely
+and answered the user's prompt instead — so some users had a
+credentials.json but no phrase backup at all.
+
+3.2.0 moves ALL phrase generation + display + import to a CLI wizard
+that runs entirely on the user's terminal. The phrase NEVER enters a
+request body, a tool response, a slash-command reply, or a transcript
+append. Design doc: `docs/plans/2026-04-20-plugin-320-secure-onboarding.md`
+in the internal repo (commit `dc6bddd`).
+
+### Added
+
+- **`openclaw totalreclaw onboard` CLI subcommand** — secure onboarding
+  wizard registered via `api.registerCli`. Interactive prompt:
+  `[1] generate` / `[2] import` / `[3] skip`.
+  * **Generate path** emits a fresh BIP-39 mnemonic via
+    `@scure/bip39`, prints it in a 3×4 grid on stdout, prints a
+    security warning ("this is the only key — write it down", "do NOT
+    reuse a blockchain wallet phrase"), then runs a 3-word retype-ack
+    challenge to force the user to demonstrate they saved it. On
+    success, writes `~/.totalreclaw/credentials.json` (mode `0600`) +
+    `~/.totalreclaw/state.json` (mode `0600`).
+  * **Import path** prints a "do NOT reuse a wallet phrase" warning,
+    accepts the 12-word phrase via hidden stdin (raw-mode TTY echo
+    suppression, `*`-masked), normalises whitespace / case /
+    zero-width chars, validates the BIP-39 checksum via
+    `validateMnemonic`, and writes `credentials.json` + `state.json`
+    on success. Invalid phrases are rejected with no on-disk side
+    effects.
+  * **Skip path** exits without writing anything. Memory tools stay
+    gated; user can re-run the wizard anytime.
+  * Print a next-step line on success: "Memory tools are now active.
+    Run `openclaw chat` to start."
+  * 3.3.0 remote-gateway note printed in both paths: importing on a
+    remote OpenClaw gateway requires QR-pairing, not yet shipped.
+- **`openclaw totalreclaw status` CLI subcommand** — prints the current
+  onboarding state (fresh / active / created-at / created-by). Never
+  displays the mnemonic; explicitly tested for phrase-word absence.
+- **`/totalreclaw` slash command** (via `api.registerCommand`) —
+  in-chat bridge. `/totalreclaw onboard` replies with a non-secret
+  pointer ("open a terminal, run `openclaw totalreclaw onboard`") +
+  a one-line explanation of WHY chat cannot show the phrase.
+  `/totalreclaw status` returns the state label. All replies are
+  non-secret; the phrase cannot flow through this surface.
+- **`totalreclaw_onboarding_start` tool** — pointer-only LLM tool. When
+  the user asks in chat to "set up memory", the LLM calls this tool and
+  receives a response that directs the user to the CLI wizard. Zero
+  secret material in the tool response.
+- **`before_tool_call` memory-tool gate** — intercepts calls to the 10
+  memory tools (remember / recall / forget / export / status /
+  consolidate / pin / unpin / import_from / import_batch) and blocks
+  them with a non-secret `blockReason` when onboarding state !=
+  `active`. The blockReason tells the LLM to call
+  `totalreclaw_onboarding_start`. Billing-adjacent tools
+  (`totalreclaw_upgrade`, `totalreclaw_migrate`, `totalreclaw_setup`)
+  are NOT gated so users can upgrade + migrate before having a vault.
+- **Onboarding state file** at `~/.totalreclaw/state.json` (override via
+  `TOTALRECLAW_STATE_PATH`). Schema: `{ onboardingState: 'fresh' |
+  'active', createdBy?: 'generate' | 'import', credentialsCreatedAt?,
+  version }`. Never contains the mnemonic.
+- **Non-secret onboarding hint** in `before_prompt_build`: when state is
+  fresh, the hook prepends a guidance block telling the LLM to call
+  `totalreclaw_onboarding_start` if the user asks about memory setup.
+  Contains ZERO secret material.
+
+### Removed
+
+- **3.1.0 phrase-leaking `before_agent_start` banner.** The block that
+  instructed the LLM to surface the mnemonic is gone. 3.2.0's
+  `before_prompt_build` emits only the non-secret pointer banner.
+- **`totalreclaw_setup` tool auto-generate path.** The tool no longer
+  calls `generateMnemonic` and no longer returns the phrase in its
+  response. Called with a phrase arg → rejected with a security
+  warning + redirect to CLI. Called with no arg + state=active →
+  no-op confirmation. Called with no arg + state=fresh → redirect to
+  CLI. The tool remains REGISTERED so LLMs that learned the name from
+  training data route users to the secure path rather than silently
+  failing.
+- **`autoBootstrapCredentials` wiring from `initialize()`.** The helper
+  stays in `fs-helpers.ts` (and its tests still pass) but no production
+  path calls it. If credentials.json is missing, `initialize()` flips
+  `needsSetup = true` and the tool-gate forces onboarding via the CLI.
+- **`markFirstRunAnnouncementShown` call from the hook.** Helper
+  retained for back-compat tests; no production code path exercises it.
+
+### Changed
+
+- **Plugin file-header JSDoc** updated to describe the 3.2.0 surface:
+  new tool + hook + CLI subcommands + security boundary.
+- **`totalreclaw_setup` tool description** flagged DEPRECATED; points
+  at the CLI wizard + `totalreclaw_onboarding_start` for the same
+  pointer in a more discoverable shape.
+
+### Migration
+
+**There is no migration code path.** This is intentional per user
+ratification (2026-04-19): assume clean-slate, simplest possible logic.
+In practice, a 3.1.0 user upgrading to 3.2.0:
+
+- If `~/.totalreclaw/credentials.json` exists with a valid mnemonic →
+  `resolveOnboardingState` classifies the machine as `active` on
+  first plugin load, writes a state.json, and tools unblock silently.
+  No onboarding prompt, no ceremony. (Covers both 3.1.0 auto-bootstrap
+  users AND pre-3.1.0 manual-setup users.)
+- If credentials.json is missing OR invalid → state=`fresh`, tools
+  gate, the user must run `openclaw totalreclaw onboard`.
+
+The `~/.totalreclaw/credentials.json` schema is unchanged; the plugin
+continues to read `mnemonic` (canonical) or `recovery_phrase` (alias).
+State file lives alongside, never contains secrets.
+
+### Notes for package authors
+
+- Remote-gateway users (OpenClaw running on a VPS, user connecting via
+  `openclaw tui --url ws://vps:18789`) are **not supported** for import
+  in 3.2.0 — the wizard needs TTY access on the machine that holds
+  `credentials.json`. Remote-gateway onboarding is planned for 3.3.0
+  via QR-pairing.
+- `@scure/bip39` is a dependency inherited from `@totalreclaw/core`
+  (no new top-level dep). `node:readline/promises` handles the
+  interactive prompts — no `inquirer`, no `readline-sync` added.
+
+### Tests
+
+- `onboarding-state.test.ts` — 39 assertions: state shape, atomic 0600
+  writes, JSON parse sanitisation, derive-from-credentials across
+  missing / empty / non-string / whitespace / alias / corrupt JSON
+  inputs, resolve happy-path + disagreement-rewrite + createdBy
+  preservation.
+- `onboarding-cli.test.ts` — 83 assertions: skip; generate happy path
+  with 0600 perms on both files; ack failure bails without persisting;
+  import happy path with real bip39 validate; import invalid rejects;
+  import normalisation (case / whitespace / zero-width); already-active
+  short-circuit; invalid menu choice; printStatus active + fresh +
+  phrase-word-absence; copy bundle.
+- `tool-gating.test.ts` — 85 assertions: every expected memory tool is
+  gated; billing tools are NOT gated; active state unblocks; fresh
+  state blocks; null state blocks (safer default); unknown tool names
+  pass; blockReason references CLI path + does not look like a 12-word
+  sequence; GATED_TOOL_NAMES is frozen.
+- `credentials-bootstrap.test.ts` — 48 assertions preserved for the
+  fs-helpers BootstrapOutcome surface (unused in prod but retained for
+  back-compat).
+- Scanner-sim: 56 files, 0 flags.
+
 ## [3.1.0] — 2026-04-20
 
 Runtime fixes surfaced by the first auto-QA run against an RC artifact
