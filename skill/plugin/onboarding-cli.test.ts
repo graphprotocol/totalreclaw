@@ -272,7 +272,8 @@ const INVALID_PHRASE = 'not a valid phrase for anything not a valid phrase for a
   assert(result.state === undefined, 'import-invalid: no state returned');
   assert(!fs.existsSync(credPath), 'import-invalid: credentials.json NOT written');
   assert(!fs.existsSync(statePath), 'import-invalid: state.json NOT written');
-  assert(io.stderrBuf.includes('Invalid BIP-39'), 'import-invalid: prints invalid phrase copy');
+  // 3.3.0-rc.2: "BIP-39 phrase" → "recovery phrase" in user-facing copy.
+  assert(io.stderrBuf.includes('Invalid recovery phrase'), 'import-invalid: prints invalid phrase copy');
 
   fs.rmSync(tmp, { recursive: true, force: true });
 }

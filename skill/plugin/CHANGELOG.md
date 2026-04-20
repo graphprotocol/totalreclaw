@@ -4,6 +4,130 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0-rc.2] — 2026-04-20
+
+Second release candidate for 3.3.0. Bundles the scanner false-positive
+fix that blocked rc.1 install with the first-run UX polish user approved
+alongside. No protocol / on-chain changes vs 3.3.0.
+
+### rc.1 context — why this RC exists
+
+Plugin 3.3.0-rc.1 was NO-GO for publication because OpenClaw's
+`plugins.code_safety / dynamic-code-execution` scanner rule refused to
+install the package. The rule regex `\beval\s*\(|new\s+Function\s*\(`
+matched a SINGLE LINE in `pair-http.ts`:
+
+```
+// Tight CSP — no external resources, no eval (inline scripts OK
+```
+
+The word `eval` followed by a space and an open-paren (which happens
+because the comment wraps mid-word into `(inline scripts OK`) is enough
+to fire the rule. The file never actually calls `eval()`. See the
+internal QA report at `totalreclaw-internal#21`.
+
+### Fixed
+
+- `skill/plugin/pair-http.ts` CSP comment rewritten to avoid the
+  `eval (` substring. New wording: "Tight CSP — no external resources.
+  Inline scripts are OK because everything is self-contained; no runtime
+  code evaluation is used." Same intent, no regex hit.
+- `skill/scripts/check-scanner.mjs` expanded to include the
+  `dynamic-code-execution` rule. The simulator now runs every pre-publish
+  against the FULL rule set (`env-harvesting` + `potential-exfiltration`
+  + `dynamic-code-execution`) so a comment-level false-positive cannot
+  reach ClawHub again. Confirmed to catch the rc.1 issue when run against
+  the published `@totalreclaw/totalreclaw@3.3.0-rc.1` tarball.
+- `check-scanner.mjs` learned a `--root PATH` flag so the simulator can
+  scan any tree — including the unpacked release tarball, not just the
+  source tree. `prepublishOnly` still runs it against the source tree;
+  the `--root` mode is for manual regression verification.
+- `skill/plugin/package.json` `files` array now includes `CHANGELOG.md`
+  so published artifacts carry the full release history.
+- Internal strings that contained the literal substring `eval(` or
+  `new Function(` have been swept and reworded where they were comments.
+  No runtime behaviour change.
+
+### Changed — user-facing copy
+
+3.3.0-rc.2 standardises all user-facing surfaces on the single term
+"recovery phrase". Previously the plugin mixed "account key",
+"mnemonic", "seed phrase", "BIP-39 phrase", and "recovery phrase"
+across the CLI wizard, the QR-pairing browser page, tool responses, and
+error messages. User feedback in the rc.1 QA window flagged this as
+confusing — rc.2 cleans it up.
+
+- `skill/plugin/onboarding-cli.ts` — "Invalid BIP-39 phrase" →
+  "Invalid recovery phrase"; internal error wording aligned.
+- `skill/plugin/pair-cli.ts` intro → "Your TotalReclaw recovery phrase
+  will be created (or imported) in your BROWSER…". `securityWarning`
+  updated accordingly.
+- `skill/plugin/pair-page.ts` browser page — "This is your TotalReclaw
+  account key" → "This is your TotalReclaw recovery phrase". "Import
+  your TotalReclaw account key" → "Import your TotalReclaw recovery
+  phrase". Invalid-phrase inline error updated. Upload progress copy
+  updated ("Uploading encrypted recovery phrase…").
+- `skill/plugin/subgraph-store.ts` on-chain error message →
+  "Recovery phrase (TOTALRECLAW_RECOVERY_PHRASE) is required…".
+- Internal variable names (`const mnemonic`, `credentials.mnemonic`
+  JSON field, `generateMnemonic128` JS function name, etc.) are
+  intentionally UNCHANGED — breaking the on-disk schema would cascade
+  across the MCP server + Python client + hand-edited user files.
+  Crypto code paths are unaffected.
+
+### Added — first-run UX (user ratification 2026-04-20)
+
+- `skill/plugin/first-run.ts` — new module, exports `detectFirstRun`
+  and `buildWelcomePrepend`. Single source of truth for the canonical
+  welcome / branch-question / storage-guidance / restore-prompt /
+  generated-confirmation copy (exported as `COPY` + individual named
+  constants so tests + other modules import the same text).
+- `index.ts` `before_agent_start` hook — when `needsSetup=true` AND the
+  welcome has not yet been shown this gateway session, the prepended
+  context now leads with a mode-aware welcome block:
+    - **Local gateway** → `openclaw plugin totalreclaw onboard restore`
+      (restore path) and `openclaw plugin totalreclaw onboard generate`
+      (generate path).
+    - **Remote gateway** → `openclaw plugin totalreclaw pair start`
+      (QR-pairing flow).
+  Local vs remote is resolved from `gateway.remote.url`, the
+  `publicUrl` plugin-config override, and the `gateway.bind` setting —
+  same resolution path `buildPairingUrl` uses for the pairing URL.
+- Welcome fires at most once per gateway process — a second
+  `before_agent_start` in the same gateway session finds the flag
+  flipped and skips.
+- Storage-guidance copy integrated into the existing onboarding-cli
+  generate flow (printed right after the phrase grid + before the ack
+  challenge) and the QR-pairing browser page's success screen.
+
+### Added — tests
+
+- `skill/plugin/first-run.test.ts` — 29 assertions covering
+  `detectFirstRun` (missing / empty / invalid-JSON / valid / legacy
+  `recovery_phrase` alias) and `buildWelcomePrepend` (local vs remote
+  copy, inclusion of brand WELCOME + BRANCH_QUESTION + STORAGE_GUIDANCE,
+  exact-match canonical copy constants).
+- `skill/plugin/terminology-parity.test.ts` — a gate that scans every
+  published `.ts` file in `skill/plugin/` and fails with `file:line`
+  hits whenever a user-facing string literal contains `mnemonic`,
+  `seed phrase`, `recovery code`, `recovery key`, or `BIP-39 phrase`.
+  A precise allowlist covers internal JSON field names (e.g.
+  `credentials.mnemonic`) and internal JS/CSS identifiers that live
+  inside template-literal source strings.
+
+### Caveats
+
+- The 3.3.0-rc.2 "tarball hardening" plan called for publishing only
+  `dist/` + metadata. The plugin does NOT have a TypeScript build step
+  and currently loads `./index.ts` directly via `openclaw.extensions`.
+  Moving to a compiled `dist/` is a separate architectural change that
+  would risk breaking the runtime loader; it is NOT in rc.2's scope.
+  The functional equivalent — preventing comment-level false-positives
+  from reaching the scanner — is achieved via the expanded
+  `check-scanner.mjs` simulator running in `prepublishOnly`, which
+  catches the rc.1 regex hit pre-publish. Migration to a real `dist/`
+  build is deferred to a future release.
+
 ## [3.3.0] — 2026-04-20
 
 QR-pairing for remote-gateway onboarding. Minor-bump feature release.

@@ -588,7 +588,7 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
       if (r.status === 404) { showInlineError("code-error", "Session not found. Start over from your terminal."); return; }
       if (!r.ok) { showInlineError("code-error", "Gateway error: " + r.status); return; }
       const meta = await r.json();
-      // Proceed to the mnemonic stage based on mode.
+      // Proceed to the recovery-phrase stage based on mode.
       if (MODE === "generate") await renderGenerateFlow(meta);
       else await renderImportFlow(meta);
     } catch (err) {
@@ -604,7 +604,7 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
     e.classList.remove("hidden");
   }
 
-  // Stage 2a: Generate a mnemonic in-browser, show it with safety copy + ack gate
+  // Stage 2a: Generate a recovery phrase in-browser, show it with safety copy + ack gate
   async function renderGenerateFlow(meta) {
     const mnemonic = await generateMnemonic128();
     const words = mnemonic.split(" ");
@@ -614,19 +614,20 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
     }
     const node = el(
       '<div>' +
-      '<h1>This is your TotalReclaw account key</h1>' +
-      '<p>Write it down before continuing. This 12-word phrase is the ONLY way to restore your memories if you switch machines or lose access.</p>' +
-      '<h2>Your key</h2>' +
+      '<h1>This is your TotalReclaw recovery phrase</h1>' +
+      '<p>A new recovery phrase has been generated. Write it down now, somewhere safe. This is the only way to restore your account later.</p>' +
+      '<h2>Your recovery phrase</h2>' +
       '<div class="mnemonic-grid">' + gridHtml + '</div>' +
       '<div class="btn-row"><button id="copy" class="secondary">Copy to clipboard</button></div>' +
-      '<div class="callout warn"><strong>Use it ONLY with TotalReclaw.</strong> <em>Never</em> reuse this phrase for a crypto wallet, banking, email, or any other service. TotalReclaw account keys must be dedicated.</div>' +
+      '<div class="callout warn"><strong>Use it ONLY with TotalReclaw.</strong> <em>Never</em> reuse this phrase for a crypto wallet, banking, email, or any other service. TotalReclaw recovery phrases must be dedicated.</div>' +
       '<h2>Store it somewhere safe</h2>' +
+      '<p>Your recovery phrase is 12 words. Store it somewhere safe — a password manager works well. Use it only for TotalReclaw. Don\'t reuse it anywhere else. Don\'t put funds on it.</p>' +
       '<ul>' +
       '<li>A password manager (1Password, Bitwarden, Apple Keychain, etc.)</li>' +
       '<li>An encrypted notes app (Notes with end-to-end encryption, Standard Notes, Obsidian vault)</li>' +
       '<li>Written on paper in a physical safe</li>' +
       '</ul>' +
-      '<h2>With this key you can:</h2>' +
+      '<h2>With this recovery phrase you can:</h2>' +
       '<ul>' +
       '<li>Restore your TotalReclaw account on any new device</li>' +
       '<li>Import your memories into Hermes, OpenClaw, the MCP client, or any other TotalReclaw-enabled agent</li>' +
@@ -694,9 +695,9 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
   async function renderImportFlow(meta) {
     const node = el(
       '<div>' +
-      '<h1>Import your TotalReclaw account key</h1>' +
-      '<p>Paste your existing 12-word TotalReclaw key below. It is processed ENTIRELY in your browser and encrypted before it leaves this page.</p>' +
-      '<div class="callout warn"><strong>Use it ONLY with TotalReclaw.</strong> Do <em>not</em> paste a phrase that controls a crypto wallet, banking account, email, or any other service. TotalReclaw account keys must be dedicated.</div>' +
+      '<h1>Import your TotalReclaw recovery phrase</h1>' +
+      '<p>Enter your 12-word recovery phrase to restore your account. It is processed ENTIRELY in your browser and encrypted before it leaves this page.</p>' +
+      '<div class="callout warn"><strong>Use it ONLY with TotalReclaw.</strong> Do <em>not</em> paste a phrase that controls a crypto wallet, banking account, email, or any other service. TotalReclaw recovery phrases must be dedicated.</div>' +
       '<textarea id="phrase" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="word1 word2 word3 ... word12"></textarea>' +
       '<div id="phrase-error" class="callout danger hidden"></div>' +
       '<p><small>Checksum is verified in your browser. Invalid phrases are rejected before upload.</small></p>' +
@@ -710,7 +711,7 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
       const raw = $("#phrase").value.normalize("NFKC").toLowerCase().trim().split(/\\s+/).join(" ");
       const ok = await validateMnemonic(raw);
       if (!ok) {
-        showInlineError("phrase-error", "That is not a valid 12-word BIP-39 phrase. Check spelling, word count, and that the checksum is intact.");
+        showInlineError("phrase-error", "That is not a valid 12-word recovery phrase. Check spelling, word count, and that the checksum is intact.");
         return;
       }
       $("#phrase-error").classList.add("hidden");
@@ -769,7 +770,7 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
       zeroBytes(kEnc); zeroBytes(shared); zeroBytes(ptBytes);
 
       // 7. Submit
-      render('<div class="center"><span class="pulse"></span><span>Uploading encrypted key\u2026</span></div>');
+      render('<div class="center"><span class="pulse"></span><span>Uploading encrypted recovery phrase\u2026</span></div>');
       const body = {
         v: 1,
         sid: SID,
@@ -802,10 +803,15 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
   }
 
   function renderSuccess(res) {
+    // 3.3.0-rc.2: success screen carries the canonical storage-guidance copy
+    // so users see it one more time right after submit (some skipped past
+    // it during the generate flow). Same wording as first-run.ts
+    // COPY.STORAGE_GUIDANCE.
     const node = el(
       '<div>' +
       '<h1><svg class="check" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 8.5l4 4 8-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Paired</h1>' +
       '<p>Your TotalReclaw account is now active on this gateway. You can close this tab and go back to your terminal or chat client.</p>' +
+      '<div class="callout warn">Your recovery phrase is 12 words. Store it somewhere safe &mdash; a password manager works well. Use it only for TotalReclaw. Don&#39;t reuse it anywhere else. Don&#39;t put funds on it.</div>' +
       '<p><small>Account id: <span class="mono">' + escapeHtml((res && res.accountId) || "(generated)") + '</span></small></p>' +
       '</div>'
     );

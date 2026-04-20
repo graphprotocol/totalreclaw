@@ -96,8 +96,8 @@ export function buildDefaultPairCliIo(): PairCliIo {
 const COPY = {
   intro:
     '\nTotalReclaw — Remote pairing\n\n' +
-    'Your TotalReclaw account key will be created (or imported) in your\n' +
-    'BROWSER and delivered to this gateway encrypted end-to-end. The key\n' +
+    'Your TotalReclaw recovery phrase will be created (or imported) in your\n' +
+    'BROWSER and delivered to this gateway encrypted end-to-end. The phrase\n' +
     'never touches the LLM, the session transcript, or the relay server\n' +
     'in plaintext.\n\n' +
     'Scan the QR code below with your phone, or open the URL on any\n' +
@@ -117,8 +117,8 @@ const COPY = {
     '\n\nSecurity:\n' +
     '  * Do NOT share your screen during pairing.\n' +
     '  * Do NOT screenshot this terminal.\n' +
-    '  * The browser page will warn you never to reuse this key for\n' +
-    '    wallets, banking, email, or any other service.\n',
+    '  * The browser page will warn you never to reuse this recovery\n' +
+    '    phrase for wallets, banking, email, or any other service.\n',
   awaiting: '\nWaiting for browser to connect… (press Ctrl+C to cancel)',
   deviceConnected: '\nBrowser connected. Waiting for encrypted payload…',
   completed: '\nPairing complete. Account is active.',

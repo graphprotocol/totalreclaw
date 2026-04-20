@@ -300,7 +300,7 @@ export async function submitFactOnChain(
   }
 
   if (!config.mnemonic) {
-    throw new Error('Mnemonic (TOTALRECLAW_RECOVERY_PHRASE) is required for on-chain submission');
+    throw new Error('Recovery phrase (TOTALRECLAW_RECOVERY_PHRASE) is required for on-chain submission');
   }
 
   const bundlerUrl = `${config.relayUrl}/v1/bundler`;
@@ -505,7 +505,7 @@ export async function submitFactBatchOnChain(
     throw new Error('Relay URL (TOTALRECLAW_SERVER_URL) is required for on-chain submission');
   }
   if (!config.mnemonic) {
-    throw new Error('Mnemonic (TOTALRECLAW_RECOVERY_PHRASE) is required for on-chain submission');
+    throw new Error('Recovery phrase (TOTALRECLAW_RECOVERY_PHRASE) is required for on-chain submission');
   }
 
   const bundlerUrl = `${config.relayUrl}/v1/bundler`;

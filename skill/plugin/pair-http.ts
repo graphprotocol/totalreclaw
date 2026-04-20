@@ -191,8 +191,8 @@ export function buildPairRoutes(cfg: PairHttpConfig): PairRouteBundle {
     // generate flow). Per design doc section 5b attack #11.
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
-    // Tight CSP — no external resources, no eval (inline scripts OK
-    // because everything is self-contained).
+    // Tight CSP — no external resources. Inline scripts are OK because
+    // everything is self-contained; no runtime code evaluation is used.
     res.setHeader(
       'Content-Security-Policy',
       "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
@@ -345,7 +345,7 @@ export function buildPairRoutes(cfg: PairHttpConfig): PairRouteBundle {
     // but defense-in-depth — never write garbage to credentials.json).
     if (!validate(mnemonic)) {
       await rejectPairSession(cfg.sessionsPath, sid, now);
-      cfg.logger.warn(`pair-http: session ${redactSid(sid)} invalid mnemonic payload`);
+      cfg.logger.warn(`pair-http: session ${redactSid(sid)} invalid recovery-phrase payload`);
       sendJson(res, 400, { error: 'invalid_mnemonic' });
       return;
     }

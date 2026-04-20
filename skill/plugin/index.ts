@@ -136,6 +136,7 @@ import {
   type OnboardingState,
 } from './fs-helpers.js';
 import { decideToolGate, isGatedToolName } from './tool-gating.js';
+import { detectFirstRun, buildWelcomePrepend, type GatewayMode } from './first-run.js';
 import crypto from 'node:crypto';
 
 // ---------------------------------------------------------------------------
@@ -317,6 +318,46 @@ function buildPairingUrl(
   }
 
   return `${base}/plugin/totalreclaw/pair/finish?sid=${encodeURIComponent(session.sid)}#pk=${encodeURIComponent(session.pkGatewayB64)}`;
+}
+
+/**
+ * Resolve whether this plugin is running on a `local` or `remote` gateway.
+ *
+ * Follows the same config surface `buildPairingUrl` uses:
+ *   - `pluginConfig.publicUrl` set + non-localhost     → remote
+ *   - `gateway.remote.url` set + non-localhost         → remote
+ *   - `gateway.bind === 'lan' | 'tailnet' | 'custom'`  → remote
+ *   - anything else                                    → local
+ *
+ * We treat a `publicUrl` or `remote.url` that points at `localhost` /
+ * `127.*` as local because that is what a dev-loopback override looks like;
+ * no one publishes a remote QR pairing for localhost.
+ */
+function resolveGatewayMode(
+  api: Pick<OpenClawPluginApi, 'config' | 'pluginConfig'>,
+): GatewayMode {
+  const cfg = api.config as
+    | { gateway?: { bind?: string; remote?: { url?: string } } }
+    | undefined;
+  const pluginCfg = (api.pluginConfig ?? {}) as { publicUrl?: string };
+  const looksLocal = (url: string | undefined): boolean => {
+    if (!url) return true;
+    const u = url.trim().toLowerCase();
+    if (u === '') return true;
+    return /^(?:wss?:\/\/|https?:\/\/)?(?:localhost|127\.|0\.0\.0\.0)/.test(u);
+  };
+  if (typeof pluginCfg.publicUrl === 'string' && !looksLocal(pluginCfg.publicUrl)) {
+    return 'remote';
+  }
+  const remoteUrl = cfg?.gateway?.remote?.url;
+  if (typeof remoteUrl === 'string' && !looksLocal(remoteUrl)) {
+    return 'remote';
+  }
+  const bind = cfg?.gateway?.bind;
+  if (bind === 'lan' || bind === 'tailnet' || bind === 'custom') {
+    return 'remote';
+  }
+  return 'local';
 }
 
 // ---------------------------------------------------------------------------
@@ -533,6 +574,15 @@ let needsSetup = false;
 let firstRunAfterInit = true;
 
 /**
+ * Once-per-gateway-session flag for the 3.3.0-rc.2 first-run welcome banner.
+ * The banner fires on the first `before_agent_start` after install when
+ * credentials.json is absent/empty — exactly once per gateway process.
+ * A second before_agent_start in the same session finds this flipped and
+ * skips. A fresh gateway restart resets it back to `false`.
+ */
+let firstRunWelcomeShown = false;
+
+/**
  * Derive keys from the recovery phrase, load credentials, and register with
  * the server if this is the first run.
  *
@@ -733,7 +783,7 @@ function buildSetupErrorMsg(): string {
 function buildSetupErrorMsgLegacy(): string {
   const base =
     'TotalReclaw setup required:\n' +
-    '1. Set TOTALRECLAW_RECOVERY_PHRASE — ask the user if they have an existing recovery phrase or generate a new 12-word BIP-39 mnemonic.\n' +
+    '1. Set TOTALRECLAW_RECOVERY_PHRASE — ask the user if they have an existing recovery phrase or generate a new 12-word recovery phrase.\n' +
     '2. Restart the gateway to apply changes.\n' +
     '   (Optional: set TOTALRECLAW_SELF_HOSTED=true if using your own server instead of the managed service.)\n\n';
 
@@ -4541,9 +4591,29 @@ const plugin = {
           // This contains ZERO secret material — the phrase never enters an
           // LLM request. The CLI wizard (`openclaw totalreclaw onboard`) is
           // the only surface that generates / reveals the recovery phrase.
+          //
+          // 3.3.0-rc.2: the FIRST time a fresh machine hits this branch we
+          // also include the welcome+branch-question banner (copy in
+          // `first-run.ts`). The flag is session-scoped so the welcome never
+          // fires twice in the same gateway process.
           if (needsSetup) {
+            let welcomeBlock = '';
+            try {
+              if (!firstRunWelcomeShown && (await detectFirstRun(CREDENTIALS_PATH))) {
+                const mode = resolveGatewayMode(api);
+                welcomeBlock = buildWelcomePrepend(mode) + '\n\n';
+                firstRunWelcomeShown = true;
+                api.logger.info(`TotalReclaw first-run welcome emitted (mode=${mode})`);
+              }
+            } catch (err) {
+              // Never block session start on the welcome — treat any failure
+              // as "skip the welcome, still emit the setup-pending banner".
+              const msg = err instanceof Error ? err.message : String(err);
+              api.logger.warn(`First-run welcome check failed: ${msg}`);
+            }
             return {
               prependContext:
+                welcomeBlock +
                 '## TotalReclaw setup pending\n\n' +
                 'TotalReclaw encrypted memory is installed but not yet set up on this machine. ' +
                 'If the user asks about memory features or wants to configure TotalReclaw, ' +

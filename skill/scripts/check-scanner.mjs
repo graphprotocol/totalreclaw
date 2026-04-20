@@ -3,9 +3,11 @@
  * check-scanner.mjs — Simulate OpenClaw's security-scanner rules so we catch
  * false-positives BEFORE publishing to ClawHub.
  *
- * Background (see docs/notes/INVESTIGATION-OPENCLAW-SCANNER-EXEMPTION-*):
+ * Background (see docs/notes/INVESTIGATION-OPENCLAW-SCANNER-EXEMPTION-*
+ * and internal#21 QA report for 3.3.0-rc.1 NO-GO):
  *   OpenClaw's built-in skill scanner refuses to install a plugin whose
- *   source matches per-file rule patterns. We simulate TWO rules:
+ *   source matches per-file rule patterns. We simulate the rules known to
+ *   have blocked prior releases:
  *
  *   1. `env-harvesting` — a file contains BOTH:
  *        - `process.env` somewhere in the file, AND
@@ -20,19 +22,27 @@
  *          function names, and string literals), AND
  *        - a case-insensitive word-boundary match for `fetch`, `post`,
  *          or `http.request` anywhere in the same file.
- *      Fixed in 3.0.7 by extracting `readBillingCache` / `writeBillingCache`
- *      into `billing-cache.ts`; fixed definitively in 3.0.8 by moving ALL
+ *      Fixed in 3.0.7 by extracting billing-cache reads into
+ *      `billing-cache.ts`; fixed definitively in 3.0.8 by moving ALL
  *      `fs.*` calls out of `index.ts` into `fs-helpers.ts`. The real
  *      scanner is first-found (reports one line per file at most), so
  *      incremental extractions played whack-a-mole until 3.0.8.
  *
- *   Both checks are whole-file (per file), so even a comment containing one
- *   of the trigger words will trip the rule if the same file reads env or
- *   a disk file. The intended architectural fix is file-level isolation.
+ *   3. `dynamic-code-execution` — a file contains ANY of:
+ *        - a match for `\beval\s*\(`, OR
+ *        - a match for `new\s+Function\s*\(`.
+ *      This is NOT gated by a context trigger — the scanner flags the
+ *      match outright. Severity: high; blocks install. Shipped 2026-04-20
+ *      after 3.3.0-rc.1 was blocked by a single comment line in
+ *      `pair-http.ts` that contained the literal substring `eval (`.
+ *
+ *   Rules 1 and 2 are whole-file AND'd (both conditions must hit). Rule 3
+ *   is a bare pattern — any single hit anywhere in the file trips it.
+ *   Even a comment containing the trigger words will fire.
  *
  * This script walks every `.ts/.tsx/.js/.mjs/.cjs/.cts/.mts/.jsx` file
  * under skill/plugin/ (skipping node_modules, dist, hidden dirs) and
- * exits non-zero with a readable error if any file matches either rule.
+ * exits non-zero with a readable error if any file matches any rule.
  *
  * Per-file suppression is available via a `// scanner-sim: allow` comment
  * at the top of a file (top 5 lines). Prefer fixing the false-positive
@@ -41,6 +51,8 @@
  * Usage:
  *   node skill/scripts/check-scanner.mjs            # exit 0 clean, 1 on any flag
  *   node skill/scripts/check-scanner.mjs --json     # emit structured findings
+ *   node skill/scripts/check-scanner.mjs --root PATH  # scan a custom tree
+ *                                                      (e.g. an unpacked tarball)
  */
 
 import fs from 'node:fs';
@@ -49,7 +61,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // skill/scripts/ -> skill/plugin/
-const ROOT = path.resolve(__dirname, '..', 'plugin');
+const DEFAULT_ROOT = path.resolve(__dirname, '..', 'plugin');
 
 const SCANNABLE_EXT = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs', '.cts', '.mts', '.jsx']);
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'pkg', '.git', 'coverage']);
@@ -70,6 +82,15 @@ const CONTEXT_PATTERN = /\bfetch\b|\bpost\b|http\.request/i;
 // OpenClaw 2026.3.7 Docker image.
 const FS_READ_PATTERN = /readFileSync|readFile/;
 const EXFIL_CONTEXT_PATTERN = /\bfetch\b|\bpost\b|http\.request/i;
+
+// Mirrors OpenClaw SOURCE_RULES[dynamic-code-execution]:
+//   pattern:         /\beval\s*\(|new\s+Function\s*\(/
+//   requiresContext: <none> — first hit blocks install.
+// Shipped 2026-04-20. The rc.1 NO-GO for 3.3.0-rc.1 was a single comment
+// line in `pair-http.ts` that contained the substring `eval (` (word
+// "eval", space, open-paren) because the comment wrapped mid-word. Even
+// though the file never actually CALLS eval, the regex fired.
+const DYNAMIC_CODE_PATTERN = /\beval\s*\(|new\s+Function\s*\(/;
 
 const ALLOW_COMMENT = /^\s*(?:\/\/|\*|\/\*).*scanner-sim:\s*allow/i;
 
@@ -107,11 +128,33 @@ function allLinesMatching(lines, re) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// CLI parsing
+// ---------------------------------------------------------------------------
+
+let ROOT = DEFAULT_ROOT;
+const jsonMode = process.argv.includes('--json');
+for (let i = 2; i < process.argv.length; i++) {
+  const a = process.argv[i];
+  if (a === '--root') {
+    const next = process.argv[i + 1];
+    if (!next) {
+      console.error('scanner-sim: --root requires a path argument');
+      process.exit(2);
+    }
+    ROOT = path.resolve(next);
+    i++;
+  } else if (a.startsWith('--root=')) {
+    ROOT = path.resolve(a.slice('--root='.length));
+  }
+}
+
 const envFindings = [];
 const exfilFindings = [];
+const dynCodeFindings = [];
 
 if (!fs.existsSync(ROOT)) {
-  console.error(`scanner-sim: plugin directory not found at ${ROOT}`);
+  console.error(`scanner-sim: root directory not found at ${ROOT}`);
   process.exit(2);
 }
 
@@ -143,10 +186,18 @@ for (const absPath of files) {
       triggers: triggerHits.slice(0, 10),
     });
   }
+
+  // Rule 3 — dynamic-code-execution (no context-trigger gate)
+  if (DYNAMIC_CODE_PATTERN.test(src)) {
+    const hits = allLinesMatching(lines, DYNAMIC_CODE_PATTERN);
+    dynCodeFindings.push({
+      file: relPath,
+      hits: hits.slice(0, 10),
+    });
+  }
 }
 
-const totalFindings = envFindings.length + exfilFindings.length;
-const jsonMode = process.argv.includes('--json');
+const totalFindings = envFindings.length + exfilFindings.length + dynCodeFindings.length;
 if (jsonMode) {
   process.stdout.write(
     JSON.stringify(
@@ -154,6 +205,7 @@ if (jsonMode) {
         root: ROOT,
         envHarvesting: envFindings,
         potentialExfiltration: exfilFindings,
+        dynamicCodeExecution: dynCodeFindings,
       },
       null,
       2,
@@ -164,7 +216,7 @@ if (jsonMode) {
 
 if (totalFindings === 0) {
   console.log(
-    `scanner-sim: OK — ${files.length} files scanned, 0 flags (env-harvesting + potential-exfiltration) under ${
+    `scanner-sim: OK — ${files.length} files scanned, 0 flags (env-harvesting + potential-exfiltration + dynamic-code-execution) under ${
       path.relative(process.cwd(), ROOT) || ROOT
     }`,
   );
@@ -172,7 +224,7 @@ if (totalFindings === 0) {
 }
 
 console.error(
-  `scanner-sim: FAIL — ${envFindings.length} env-harvesting + ${exfilFindings.length} potential-exfiltration flag(s)`,
+  `scanner-sim: FAIL — ${envFindings.length} env-harvesting + ${exfilFindings.length} potential-exfiltration + ${dynCodeFindings.length} dynamic-code-execution flag(s)`,
 );
 console.error('');
 
@@ -198,9 +250,8 @@ if (envFindings.length > 0) {
 if (exfilFindings.length > 0) {
   console.error('[potential-exfiltration]');
   console.error('Each of these files calls fs.read* AND contains a case-insensitive');
-  console.error('match for \\bfetch\\b, \\bpost\\b, http.request, \\baxios\\b, or');
-  console.error('\\bXMLHttpRequest\\b. OpenClaw will refuse to install such plugins.');
-  console.error('Fix by either:');
+  console.error('match for \\bfetch\\b, \\bpost\\b, or http.request. OpenClaw will refuse');
+  console.error('to install such plugins. Fix by either:');
   console.error('  1. Extracting the fs.read* into a dedicated module that has no');
   console.error('     outbound-request trigger markers (preferred), OR');
   console.error('  2. Rewording comment-only trigger words to synonyms (e.g., "fetch"');
@@ -211,6 +262,25 @@ if (exfilFindings.length > 0) {
     console.error(`  ${f.file}:${f.readLine}  first fs.read* call`);
     for (const t of f.triggers) {
       console.error(`    :${t.line}  trigger -> ${t.text.slice(0, 120)}`);
+    }
+  }
+  console.error('');
+}
+
+if (dynCodeFindings.length > 0) {
+  console.error('[dynamic-code-execution]');
+  console.error('Each of these files contains at least one match for \\beval\\s*\\( or');
+  console.error('new\\s+Function\\s*\\(. OpenClaw will refuse to install such plugins even');
+  console.error('if the match is a COMMENT. Fix by either:');
+  console.error('  1. Rewording the comment so it does not contain the literal substring');
+  console.error('     "eval(" or "new Function(" (add a word-break, e.g. "no runtime');
+  console.error('     code evaluation"), OR');
+  console.error('  2. Removing the call entirely if it is actual runtime code.');
+  console.error('');
+  for (const f of dynCodeFindings) {
+    console.error(`  ${f.file}`);
+    for (const t of f.hits) {
+      console.error(`    :${t.line}  hit -> ${t.text.slice(0, 120)}`);
     }
   }
   console.error('');

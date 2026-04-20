@@ -124,7 +124,7 @@ export const COPY = {
     '\nWord mismatch. Please write the phrase down carefully and run this\n' +
     'wizard again. No credentials have been written.\n',
   importInvalid:
-    '\nInvalid BIP-39 phrase (12 words required, checksum must match).\n' +
+    '\nInvalid recovery phrase (12 words required, checksum must match).\n' +
     'No credentials have been written. Run the wizard again with the\n' +
     'correct phrase.\n',
   existingPhraseHint:
@@ -407,12 +407,19 @@ export async function runOnboardingWizard(deps: WizardDeps): Promise<WizardResul
     io.stdout.write(COPY.importRemoteLimitation);
     const mnemonic = genMnemonic();
     if (typeof mnemonic !== 'string' || mnemonic.trim().split(/\s+/).length !== 12) {
-      io.stderr.write('\nInternal error: mnemonic generator returned an invalid phrase.\n');
+      io.stderr.write('\nInternal error: recovery phrase generator returned an invalid phrase.\n');
       return { choice, error: 'generator-invalid' };
     }
 
     io.stdout.write('\nYour recovery phrase (WRITE THIS DOWN):\n\n');
     printMnemonicGrid(mnemonic, io.stdout);
+    // 3.3.0-rc.2: storage guidance canonical copy — emitted verbatim so
+    // the CLI, the browser page, and any future surface share identical
+    // wording. See first-run.ts COPY.STORAGE_GUIDANCE.
+    io.stdout.write(
+      '\n' +
+        'Your recovery phrase is 12 words. Store it somewhere safe — a password manager works well. Use it only for TotalReclaw. Don\'t reuse it anywhere else. Don\'t put funds on it.\n',
+    );
     io.stdout.write(COPY.clipboardHint);
     io.stdout.write('\n');
 

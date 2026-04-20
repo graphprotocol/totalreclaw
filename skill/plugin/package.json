@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/totalreclaw",
-  "version": "3.3.0",
+  "version": "3.3.0-rc.2",
   "description": "End-to-end encrypted, agent-portable memory for OpenClaw and any LLM-agent runtime. XChaCha20-Poly1305 with protobuf v4 + on-chain Memory Taxonomy v1 (claim / preference / directive / commitment / episode / summary).",
   "type": "module",
   "keywords": [
@@ -45,6 +45,7 @@
     "openclaw.plugin.json",
     "SKILL.md",
     "README.md",
+    "CHANGELOG.md",
     "CLAWHUB.md",
     "skill.json"
   ],

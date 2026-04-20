@@ -84,7 +84,8 @@ function assert(cond: boolean, name: string): void {
   const html = renderPairPage({
     sid: 's', mode: 'generate', expiresAtMs: 0, apiBase: '/', nowMs: 0,
   });
-  assert(html.includes('TotalReclaw account key'), 'copy: "account key" framing');
+  // 3.3.0-rc.2: terminology standardised on "recovery phrase" (was "account key").
+  assert(html.includes('TotalReclaw recovery phrase'), 'copy: "recovery phrase" framing');
   assert(html.includes('Use it ONLY with TotalReclaw'), 'copy: only-with-TR warning');
   assert(html.includes('crypto wallet'), 'copy: wallet-reuse warning');
   assert(html.includes('banking'), 'copy: banking-reuse warning');
@@ -93,12 +94,15 @@ function assert(cond: boolean, name: string): void {
   assert(html.includes('password manager'), 'copy: password manager suggestion');
   assert(html.includes('encrypted notes'), 'copy: encrypted notes suggestion');
   assert(html.includes('physical safe') || html.includes('Written on paper in a physical safe'), 'copy: physical safe suggestion');
-  assert(html.includes('With this key you can'), 'copy: capabilities header');
+  assert(html.includes('With this recovery phrase you can'), 'copy: capabilities header');
   assert(html.includes('Hermes'), 'copy: mentions Hermes');
   assert(html.includes('MCP'), 'copy: mentions MCP');
   assert(html.includes('OpenClaw'), 'copy: mentions OpenClaw');
   assert(html.includes('permanently lose'), 'copy: "Without it" permanent loss warning');
   assert(html.includes('have saved it'), 'copy: ack button text');
+  // 3.3.0-rc.2: storage-guidance canonical copy must appear on the generate page.
+  assert(html.includes('Your recovery phrase is 12 words'), 'copy: storage-guidance canonical text');
+  assert(html.includes('Don&#39;t put funds on it') || html.includes("Don't put funds on it"), 'copy: storage-guidance "no funds" line');
 }
 
 // ---------------------------------------------------------------------------
