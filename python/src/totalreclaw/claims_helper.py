@@ -152,6 +152,12 @@ def _now_iso() -> str:
     return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
 
 
+#: Valid values for the v1.1 ``pin_status`` additive field. Kept here rather
+#: than in ``agent/extraction`` because it is a write-path concern, not a
+#: taxonomy concern — ``pin_status`` is user-controlled state, not provenance.
+VALID_PIN_STATUSES: tuple[str, ...] = ("pinned", "unpinned")
+
+
 def build_canonical_claim_v1(
     fact: Any,
     importance: int,
@@ -159,6 +165,7 @@ def build_canonical_claim_v1(
     superseded_by: Optional[str] = None,
     expires_at: Optional[str] = None,
     claim_id: Optional[str] = None,
+    pin_status: Optional[str] = None,
 ) -> str:
     """Build a v1 ``MemoryClaimV1`` JSON blob.
 
@@ -177,11 +184,22 @@ def build_canonical_claim_v1(
     The outer protobuf wrapper's ``version`` field must be set to
     :data:`PROTOBUF_VERSION_V4` (4) when storing the returned payload.
 
+    Parameters
+    ----------
+    pin_status : {"pinned", "unpinned"}, optional
+        The v1.1 additive ``pin_status`` field. Used exclusively on the
+        pin/unpin write path — ``"pinned"`` marks the claim as
+        user-pinned so auto-resolution won't supersede it; ``"unpinned"``
+        marks an explicit user un-pin. ``None`` omits the field entirely
+        (wire-equivalent to "unpinned" per spec §pin-semantics). Bug #8
+        (Wave 2a, QA 2026-04-20).
+
     Raises
     ------
     ValueError
         If the fact does not have a valid v1 ``source`` set — v1 requires
-        every claim to carry provenance.
+        every claim to carry provenance. Also raised when ``pin_status``
+        is a string outside :data:`VALID_PIN_STATUSES`.
     """
     text = _attr(fact, "text")
     fact_type = normalize_to_v1_type(_attr(fact, "type", "claim"))
@@ -198,6 +216,12 @@ def build_canonical_claim_v1(
         )
     if source not in VALID_MEMORY_SOURCES:
         raise ValueError(f"build_canonical_claim_v1: invalid source {source!r}")
+
+    if pin_status is not None and pin_status not in VALID_PIN_STATUSES:
+        raise ValueError(
+            f"build_canonical_claim_v1: invalid pin_status {pin_status!r}; "
+            f"must be one of {VALID_PIN_STATUSES} or None"
+        )
 
     resolved_id = claim_id or str(uuid.uuid4())
     resolved_created_at = created_at or _now_iso()
@@ -238,6 +262,10 @@ def build_canonical_claim_v1(
         core_payload["expires_at"] = expires_at
     if superseded_by:
         core_payload["superseded_by"] = superseded_by
+    if pin_status is not None:
+        # Additive v1.1 field — absence == "unpinned" on the wire,
+        # so we only emit the field when the caller explicitly sets it.
+        core_payload["pin_status"] = pin_status
 
     # Attach schema_version BEFORE validation — core's v1 struct requires it.
     core_payload["schema_version"] = V1_SCHEMA_VERSION
@@ -248,6 +276,19 @@ def build_canonical_claim_v1(
     canonical = json.loads(validated)
     if not isinstance(canonical, dict):
         raise RuntimeError("validate_memory_claim_v1 did not return an object")
+
+    # Bug #8 (Wave 2a): the installed ``totalreclaw_core==2.1.0`` PyPI
+    # wheel doesn't round-trip the v1.1 ``pin_status`` field through
+    # ``validate_memory_claim_v1`` even though the Rust struct has it.
+    # Re-attach it IMMEDIATELY after validation (before schema_version +
+    # volatility). Order matters for byte-identical cross-impl parity
+    # with the plugin — core 2.1.1 on npm preserves the field in this
+    # position naturally, so inserting it here produces the same JSON
+    # key order as the plugin's output.
+    # Once core 2.1.1 (with the serde round-trip fix) lands on PyPI,
+    # this reattach becomes a no-op but remains safe.
+    if pin_status is not None and "pin_status" not in canonical:
+        canonical["pin_status"] = pin_status
 
     # Re-attach plugin-only extras not round-tripped by core's validator.
     canonical["schema_version"] = V1_SCHEMA_VERSION

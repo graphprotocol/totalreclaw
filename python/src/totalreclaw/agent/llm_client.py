@@ -1,9 +1,13 @@
 """
 LLM client for TotalReclaw fact extraction.
 
-Auto-detects the user's LLM provider from environment variables.
-Supports OpenAI-compatible APIs and Anthropic Messages API.
-Uses a cheap/fast model for extraction to minimize cost.
+Auto-detects the user's LLM provider from environment variables
+AND — since 2.2.2 — from ``~/.hermes/config.yaml`` + ``~/.hermes/.env``
+so Hermes plugin users don't have to duplicate their model choice as
+an ``OPENAI_MODEL`` env var (Bug #4, QA 2026-04-20).
+
+Supports OpenAI-compatible APIs and Anthropic Messages API. Uses a
+cheap/fast model for extraction to minimize cost.
 
 This module is framework-agnostic and can be used by any Python agent
 integration (Hermes, LangChain, CrewAI, or custom agents).
@@ -15,6 +19,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -49,15 +54,212 @@ PROVIDERS = [
 ]
 
 
+# Map Hermes provider names to (API key candidates, default base URL).
+# Kept aligned with ``PROVIDERS`` above — if you add a provider there,
+# add it here too.
+_HERMES_PROVIDER_KEY_MAP = {
+    "zai": (["ZAI_API_KEY", "GLM_API_KEY", "Z_AI_API_KEY"], "https://api.z.ai/api/coding/paas/v4"),
+    "openai": (["OPENAI_API_KEY"], "https://api.openai.com/v1"),
+    "anthropic": (["ANTHROPIC_API_KEY"], "https://api.anthropic.com/v1"),
+    "openrouter": (["OPENROUTER_API_KEY"], "https://openrouter.ai/api/v1"),
+    "groq": (["GROQ_API_KEY"], "https://api.groq.com/openai/v1"),
+    "deepseek": (["DEEPSEEK_API_KEY"], "https://api.deepseek.com/v1"),
+    "mistral": (["MISTRAL_API_KEY"], "https://api.mistral.ai/v1"),
+    "gemini": (["GEMINI_API_KEY", "GOOGLE_API_KEY"], "https://generativelanguage.googleapis.com/v1beta/openai"),
+    "xai": (["XAI_API_KEY"], "https://api.x.ai/v1"),
+    "together": (["TOGETHER_API_KEY"], "https://api.together.xyz/v1"),
+}
+
+
+def _candidate_hermes_config_paths() -> list[Path]:
+    """Return the ordered candidate paths for the Hermes config file.
+
+    ``$HERMES_CONFIG`` (full file path) wins, then the XDG location,
+    then the legacy ``~/.hermes/`` dir. We return all that exist and
+    let the caller try each in order — the first parseable one with a
+    model + provider wins.
+    """
+    paths: list[Path] = []
+    env_override = os.environ.get("HERMES_CONFIG")
+    if env_override:
+        paths.append(Path(env_override).expanduser())
+
+    xdg_home = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_home:
+        paths.append(Path(xdg_home).expanduser() / "hermes" / "config.yaml")
+    paths.append(Path.home() / ".config" / "hermes" / "config.yaml")
+    paths.append(Path.home() / ".hermes" / "config.yaml")
+    return paths
+
+
+def _read_hermes_env_file(env_path: Path) -> dict[str, str]:
+    """Parse a ``~/.hermes/.env`` style file into a dict.
+
+    Minimal KEY=VALUE parser — does not handle quoting or multi-line
+    values. Good enough for the Hermes-shaped ``.env`` file.
+    """
+    env_vars: dict[str, str] = {}
+    if not env_path.exists():
+        return env_vars
+    try:
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            # Strip surrounding quotes if present.
+            v = v.strip()
+            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                v = v[1:-1]
+            env_vars[k.strip()] = v
+    except OSError:
+        return {}
+    return env_vars
+
+
+def _extract_provider_and_model(cfg: dict) -> tuple[str, str]:
+    """Accept BOTH top-level and nested shapes.
+
+    Hermes writes ``provider: zai`` + ``model: glm-5-turbo`` as top-level
+    keys in ``~/.hermes/config.yaml``. Prior to 2.2.2 this helper only
+    read the nested ``model: { provider, model }`` shape, so every Hermes
+    user had to keep an ``OPENAI_MODEL`` env var around — see the QA
+    report at ``docs/notes/QA-hermes-RC-2.2.1-20260420.md`` Finding #4.
+    Accepting both shapes lets users configure it once in ``config.yaml``.
+    """
+    # Try top-level first (the actual Hermes shape).
+    provider = cfg.get("provider") if isinstance(cfg.get("provider"), str) else ""
+    model = cfg.get("model") if isinstance(cfg.get("model"), str) else ""
+    if provider and model:
+        return provider, model
+
+    # Fall back to nested ``model: { provider, model }`` (defensive —
+    # future-proofs against Hermes reorganizing its schema).
+    model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+    provider_nested = model_cfg.get("provider", "") if isinstance(model_cfg.get("provider"), str) else ""
+    model_nested = model_cfg.get("model", "") if isinstance(model_cfg.get("model"), str) else ""
+    if provider_nested and model_nested:
+        return provider_nested, model_nested
+
+    return "", ""
+
+
+def read_hermes_llm_config() -> Optional[LLMConfig]:
+    """Read the LLM provider config from Hermes's own config files.
+
+    Hermes stores its config in ``~/.hermes/config.yaml`` (provider +
+    model) and ``~/.hermes/.env`` (API keys). This reads both to build an
+    LLM config that matches what Hermes itself uses — no separate env
+    vars needed.
+
+    Resolution order:
+      1. ``$HERMES_CONFIG`` (full file path)
+      2. ``$XDG_CONFIG_HOME/hermes/config.yaml``
+      3. ``~/.config/hermes/config.yaml``
+      4. ``~/.hermes/config.yaml`` (legacy)
+
+    Accepts the YAML shape BOTH as top-level
+    ``{provider: zai, model: glm-5-turbo}`` AND nested
+    ``{model: {provider: zai, model: glm-5-turbo}}``.
+
+    Returns ``None`` if no config is found, if it can't be parsed, or
+    if the required provider/model fields are missing. Logs a WARNING
+    at the resolution point so operators can tell WHERE the model came
+    from (or why it failed).
+    """
+    try:
+        import yaml
+    except ImportError:
+        # PyYAML is a dep via setuptools; if it's not installed we simply
+        # cannot read YAML. Don't blow up — just skip Hermes detection.
+        logger.debug("read_hermes_llm_config: PyYAML not installed; skipping")
+        return None
+
+    for config_path in _candidate_hermes_config_paths():
+        if not config_path.exists():
+            continue
+
+        try:
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f) or {}
+        except (yaml.YAMLError, OSError) as e:
+            logger.debug(
+                "read_hermes_llm_config: %s unparseable (%s); trying next candidate",
+                config_path, e,
+            )
+            continue
+
+        if not isinstance(cfg, dict):
+            continue
+
+        provider, model = _extract_provider_and_model(cfg)
+        if not provider or not model:
+            logger.debug(
+                "read_hermes_llm_config: %s missing provider/model keys",
+                config_path,
+            )
+            continue
+
+        provider_lower = provider.lower()
+        key_names, default_base_url = _HERMES_PROVIDER_KEY_MAP.get(provider_lower, ([], ""))
+        if not key_names:
+            logger.debug(
+                "read_hermes_llm_config: unknown provider %r in %s",
+                provider, config_path,
+            )
+            continue
+
+        # Read adjacent .env for API keys. Candidate .env paths live in
+        # the same directory as the config (so ~/.hermes/.env pairs
+        # with ~/.hermes/config.yaml, etc.).
+        env_vars = _read_hermes_env_file(config_path.parent / ".env")
+
+        api_key: Optional[str] = None
+        for kn in key_names:
+            api_key = env_vars.get(kn) or os.environ.get(kn)
+            if api_key:
+                break
+
+        if not api_key:
+            logger.debug(
+                "read_hermes_llm_config: no API key found for provider %r "
+                "in %s or env (tried %s)",
+                provider, config_path.parent / ".env", ", ".join(key_names),
+            )
+            continue
+
+        base_url = (
+            env_vars.get("GLM_BASE_URL")
+            or env_vars.get("OPENAI_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
+            or default_base_url
+        )
+        api_format = "anthropic" if provider_lower == "anthropic" else "openai"
+
+        logger.info(
+            "TotalReclaw LLM config resolved from Hermes config: %s (provider=%s, model=%s)",
+            config_path, provider, model,
+        )
+        return LLMConfig(api_key=api_key, base_url=base_url, model=model, api_format=api_format)
+
+    return None
+
+
 def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMConfig]:
-    """Auto-detect LLM provider and model from environment variables.
+    """Auto-detect LLM provider and model from environment variables
+    and (for Hermes users) from ``~/.hermes/config.yaml`` + ``.env``.
 
     Uses the agent's configured model by default. No hardcoded model lists
     to maintain — just uses whatever the user set up.
 
-    Model priority:
-      1. configured_model (passed from agent framework)
-      2. OPENAI_MODEL / ANTHROPIC_MODEL / LLM_MODEL (generic env vars)
+    Resolution order (first hit wins):
+      1. ``configured_model`` + env-var API key (e.g. plugin-passed model).
+      2. ``OPENAI_MODEL`` / ``ANTHROPIC_MODEL`` / ``LLM_MODEL`` env vars
+         paired with any matching provider API key.
+      3. ``~/.hermes/config.yaml`` + ``~/.hermes/.env`` (Bug #4 fix —
+         Hermes users don't need to duplicate the model as an env var).
 
     The ``TOTALRECLAW_EXTRACTION_MODEL`` / ``TOTALRECLAW_LLM_MODEL`` overrides
     were removed in the v1 env cleanup — agent-framework config is now the
@@ -81,9 +283,14 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
             if api_key:
                 model = configured_model or env_model
                 if not model:
-                    logger.warning(
-                        "TotalReclaw: %s API key found but no model configured. "
-                        "Set OPENAI_MODEL or configure the model via your agent framework.",
+                    # No model configured via env — skip this provider so
+                    # we fall through to the Hermes-config fallback below.
+                    # Previously logged a WARNING per provider, which was
+                    # noisy when the user had keys for several providers
+                    # but hadn't set OPENAI_MODEL. Debug-log instead.
+                    logger.debug(
+                        "detect_llm_config: %s API key found but no model "
+                        "configured via env; continuing",
                         _provider,
                     )
                     continue
@@ -94,12 +301,27 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
                 else:
                     resolved_base_url = default_base_url
 
+                logger.info(
+                    "TotalReclaw LLM config resolved from env vars "
+                    "(provider=%s, model=%s)",
+                    _provider, model,
+                )
                 return LLMConfig(
                     api_key=api_key,
                     base_url=resolved_base_url,
                     model=model,
                     api_format=api_format,
                 )
+
+    # Last resort: try the Hermes config.yaml + .env pair. This is the
+    # path that was broken until 2.2.2 — Hermes users with a valid
+    # config.yaml but no OPENAI_MODEL env var ended up here with None
+    # and saw silent extraction failures (QA Finding #4, 2026-04-20).
+    hermes_config = read_hermes_llm_config()
+    if hermes_config is not None:
+        return hermes_config
+
+    logger.debug("detect_llm_config: no LLM config resolved from env or Hermes")
     return None
 
 

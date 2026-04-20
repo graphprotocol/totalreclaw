@@ -75,7 +75,46 @@ sequenceDiagram
 
 **What the relay actually stores.** After registration, the relay database has roughly: `{ auth_key_hash: hex, eoa_address: 0x..., smart_account_address: 0x..., tier: free, created_at: ... }`. It has no copy of the mnemonic, no encryption key, no dedup key, no LSH seed, and no plaintext. A full database dump gives an attacker nothing except the list of which users exist.
 
-**What the client stores locally.** `~/.totalreclaw/credentials.json` holds the auth-key hash (for bearer-token auth), the Smart Account address (cached so we do not re-resolve it), the chain ID, and the tier. The mnemonic itself is NOT persisted — it is only ever held in memory during key derivation. Re-deriving from the phrase on every startup would be slow (PBKDF2 is deliberately heavy), so the plugin caches the derived keys in memory for the session and stores only the hash on disk.
+**What the client stores locally.** `~/.totalreclaw/credentials.json` holds the auth-key hash (for bearer-token auth), the Smart Account address (cached so we do not re-resolve it), the chain ID, and the tier. The mnemonic itself IS persisted to the same file (mode `0600`) because re-requesting it from the user on every session would be poor UX; the containing directory's permissions are the only defense. Re-deriving from the phrase on every startup would be slow (PBKDF2 is deliberately heavy), so the plugin caches the derived keys in memory for the session and stores only the mnemonic + hash on disk.
+
+### `credentials.json` schema (v2026-04-20 — canonical)
+
+> Spec addendum shipped alongside `totalreclaw==2.2.2` + `@totalreclaw/totalreclaw@3.2.1` as part of Wave 2a of the Hermes QA fix-up. Prior to this addendum, Python and the OpenClaw plugin disagreed on the field name for the mnemonic — a ship-stopper for the "same recovery phrase works across all clients" portability story. See `docs/notes/QA-hermes-RC-2.2.1-20260420.md` Finding #7.
+
+**Path:** `~/.totalreclaw/credentials.json` (POSIX) — written with mode `0600`. Windows clients SHOULD emit to the equivalent user profile dir (`%USERPROFILE%\.totalreclaw\credentials.json`) at the same ACL tightness.
+
+**Canonical shape (write path):**
+
+```json
+{
+  "mnemonic": "letter sugar brave morning absurd pattern advice flight few pledge chef leisure"
+}
+```
+
+**Read path MUST accept BOTH:**
+
+- **`mnemonic`** — canonical key. Matches BIP-39 / industry convention. Emitted by plugin ≥ 3.2.0, MCP ≥ 3.2.0, Python ≥ 2.2.2 on fresh writes.
+- **`recovery_phrase`** — legacy alias. Written by Python 2.0.0–2.2.1. Accepted for back-compat so pre-2.2.2 vaults keep working without manual migration. Hand-edited files and older CLIs may also carry this key.
+
+**Priority when both keys are present:** `mnemonic` wins. Plugin-native files are authoritative because they reflect the canonical decision.
+
+**Migration policy:** implementations MUST NOT silently rewrite a legacy `recovery_phrase` file to the canonical `mnemonic` key on mere "touch" (e.g. re-opening an existing session). The file is 0600 and the user may have external tooling that reads a specific key name. Migration happens when the user explicitly re-onboards (e.g. imports a mnemonic via a fresh `totalreclaw_setup` call), at which point the write path emits canonical `mnemonic`.
+
+**Additional fields** (client-specific; both clients tolerate unknown keys):
+
+| Field | Written by | Purpose |
+|---|---|---|
+| `firstRunAnnouncementShown: bool` | Plugin 3.1.x (pre-3.2.0) | Flag for the one-time "phrase backup" banner. 3.2.0 moved phrase display to the CLI wizard, so this field is no longer set on fresh writes but preserved when reading legacy files. |
+| `userId: string` | Plugin | Server-side user id (uuid). Cached to avoid re-querying on every startup. |
+| `salt: string` | Plugin | Not used — vestige of an older derivation scheme. Tolerated on read. |
+
+**Reference implementations:**
+
+- Python: `python/src/totalreclaw/agent/state.py::_extract_mnemonic_from_creds` (2.2.2+)
+- OpenClaw plugin: `skill/plugin/fs-helpers.ts::extractBootstrapMnemonic` (3.2.0+)
+- MCP: `mcp/src/onboarding/cli.ts` (3.2.0+) — emits canonical `mnemonic` on write
+
+Cross-client parity test: writing via one implementation and reading via another MUST derive the same EOA + Smart Account address for the same mnemonic. See `python/tests/test_wave2a_hermes_fixes.py::TestBug7CrossClientParity` for the reference assertion.
 
 ---
 

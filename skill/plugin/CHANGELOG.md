@@ -4,6 +4,50 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.1] — 2026-04-20
+
+Cross-client parity patch: bumps the `@totalreclaw/core` peer from
+`^2.0.0` to `^2.1.1` so the plugin's pin/unpin write path produces
+byte-identical blobs to Python 2.2.2 and MCP 3.2.0. Ships alongside
+`totalreclaw==2.2.2` as Wave 2a of the Hermes 2.2.1 QA fix-up (see
+`docs/notes/QA-hermes-RC-2.2.1-20260420.md` in the internal repo).
+
+### Changed
+
+- `package.json`: bumped `@totalreclaw/core` dep from `^2.0.0` to
+  `^2.1.1`. Core 2.0.0 (the previous floor) dropped the v1.1 additive
+  `pin_status` field on the serde round-trip through
+  `validateMemoryClaimV1`, causing the plugin's pin/unpin blob to emit
+  with the field silently stripped. Core 2.1.1 (on npm since PR #51)
+  preserves `pin_status` as expected — 6 pin-unpin parity tests that
+  asserted `pin_status === 'pinned'` on the emitted blob failed on the
+  2.0.0 baseline and pass on 2.1.1. No plugin code changes required.
+
+### Fixed (via core bump + the symmetric Python 2.2.2 fix)
+
+- **Cross-client credentials.json parity** — declarative alignment
+  only; no plugin code change. Plugin 3.2.0 already accepts both
+  canonical `mnemonic` and legacy `recovery_phrase` keys on read and
+  emits canonical `mnemonic` on write (see
+  `skill/plugin/fs-helpers.ts::extractBootstrapMnemonic`). Python 2.2.2
+  gains symmetric behavior so a user who onboards via one client can
+  point the other at the same `~/.totalreclaw/credentials.json` and
+  derive the same Smart Account. Previously Hermes + OpenClaw wrote
+  incompatible key names on the same canonical path (QA Bug #7).
+
+### Spec
+
+- `docs/specs/totalreclaw/flows/01-identity-setup.md` gains a
+  "credentials.json schema" subsection documenting the canonical
+  `{"mnemonic": string}` shape + `recovery_phrase` legacy alias.
+
+### Tests
+
+- `skill/plugin/pin-unpin.test.ts`: 157/157 pass with `@totalreclaw/core@2.1.1`
+  (vs. 151/157 with 2.0.0 — 6 `pin_status` parity assertions flipped
+  from fail to pass).
+- `skill/plugin/credentials-bootstrap.test.ts`: 48/48 pass (unchanged from 3.2.0).
+
 ## [3.2.0] — 2026-04-19
 
 Secure leak-free onboarding for local users. **Breaking UX change:**

@@ -6,6 +6,83 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.2] - 2026-04-20
+
+Wave 2a Hermes fix-up. Three bugs from the 2.2.1 VPS QA
+([internal#14](https://github.com/p-diogo/totalreclaw-internal/pull/14),
+`docs/notes/QA-hermes-RC-2.2.1-20260420.md`) — each would have been a
+ship-stopper if left in a public release:
+
+### Fixed
+
+- **Bug #4 (HIGH) — `auto_extract` reads Hermes `config.yaml`.**
+  Pre-2.2.2's `auto_extract` + post-extraction pipeline required
+  `OPENAI_MODEL` to be set as an env var even when
+  `~/.hermes/config.yaml` already carried `provider: zai` +
+  `model: glm-5-turbo`. The 2.0.2 "fix" only wired the Hermes
+  reader into the hooks layer; the generic `detect_llm_config` still
+  read env vars exclusively, and the YAML reader expected a NESTED
+  `model: {provider, model}` shape while Hermes actually writes
+  top-level `provider:` + `model:` keys. 2.2.2:
+  - `agent/llm_client.py::read_hermes_llm_config` handles BOTH YAML
+    shapes and scans `$HERMES_CONFIG` → XDG → `~/.config/hermes/` →
+    legacy `~/.hermes/`. Emits a WARN-level log line identifying the
+    config path the model came from.
+  - `detect_llm_config()` falls through to the Hermes reader when no
+    env vars resolve. This is the path `extract_facts_llm` hits when
+    no explicit `llm_config` is passed.
+- **Bug #7 (SHIP-STOPPER) — `credentials.json` key parity with plugin 3.2.0.**
+  Python pre-2.2.2 wrote `{"recovery_phrase": ...}` at
+  `~/.totalreclaw/credentials.json`; plugin 3.2.0 writes
+  `{"mnemonic": ...}` on the same canonical path. Cross-agent
+  portability — a user switching from Hermes to OpenClaw without
+  re-onboarding — was silently broken. 2.2.2:
+  - `agent/state.py::_extract_mnemonic_from_creds` helper accepts
+    BOTH keys on read, prefers canonical `mnemonic` when both present.
+  - `configure()` write path now emits canonical `mnemonic` for
+    fresh writes. Preserves legacy `recovery_phrase` shape when an
+    existing file carries ONLY that key for the same mnemonic — no
+    silent migration on touch.
+  - Canonical decision documented in
+    `docs/specs/totalreclaw/flows/01-identity-setup.md`.
+- **Bug #8 (MEDIUM) — `pin_fact` emits v=4 `MemoryClaimV1` with `pin_status`.**
+  Pre-2.2.2's `pin_fact()` wrote a v=3 tombstone but no companion v=4
+  pinned claim — a pinned fact was invisible on the subgraph, so
+  cross-client pin awareness was broken (other clients couldn't see
+  the pin and the Tier-1 reranker's pin-aware ranking never fired).
+  2.2.2 ports `skill/plugin/pin.ts::executePinOperation`:
+  - `claims_helper.py::build_canonical_claim_v1` gains a
+    `pin_status` parameter (validated against
+    `VALID_PIN_STATUSES = ("pinned", "unpinned")`).
+  - `operations.py::_change_claim_status` now always emits a fresh
+    v1.1 blob (long-form `text`/`type`/`pin_status`/`superseded_by`)
+    regardless of whether the source fact was v0 short-key or v1.
+    New `FactPayload.version` is set to `PROTOBUF_VERSION_V4` so the
+    outer protobuf tags the write as v1 taxonomy. Tombstone stays at
+    v=3 (matches plugin behavior).
+  - New `_project_source_to_v1` helper mirrors the plugin's
+    `projectToV1` function-for-function — v0 sources upgrade on the
+    fly (short-key `c` → v1 `type`, `sa` heuristics → v1 `source`).
+
+### Tests
+
+- `tests/test_wave2a_hermes_fixes.py`: 19 new tests — 7 Bug #4, 7 Bug #7
+  (5 parity + 2 cross-client), 3 Bug #8, 2 cross-client portability.
+- `tests/test_pin_unpin.py`: 2 tests updated to assert on the new v1.1
+  long-form shape (prior assertions encoded the buggy pre-2.2.2
+  short-key contract).
+- Full Python suite: 678 passing, 10 skipped, 1 xfailed — no regressions.
+
+### Known limitations
+
+- The installed `totalreclaw-core==2.1.0` PyPI wheel doesn't round-trip
+  the v1.1 `pin_status` field through `validate_memory_claim_v1` (the
+  Rust struct has it; the serde emit drops it). 2.2.2 reattaches
+  `pin_status` after validation — same pattern as `schema_version` and
+  `volatility` — so the fix ships independently of core. A future
+  `totalreclaw-core` release (2.1.1 on npm already; PyPI pending) will
+  round-trip the field natively and the reattach becomes a no-op.
+
 ## [2.2.1] - 2026-04-19
 
 Wire `auto_extract` to `remember_batch`; realizes the ~8x extraction latency win

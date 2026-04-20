@@ -65,6 +65,40 @@ def _warn_removed_env_vars_once() -> None:
 _warn_removed_env_vars_once()
 
 
+# ---------------------------------------------------------------------------
+# Bug #7 (Wave 2a, 2026-04-20) — credentials.json key parity.
+#
+# Plugin 3.2.0 writes ``{"mnemonic": "..."}`` at
+# ``~/.totalreclaw/credentials.json``. Python pre-2.2.2 wrote
+# ``{"recovery_phrase": "..."}``. Both claim to use the same canonical
+# path — so a Hermes user couldn't open OpenClaw with the same vault,
+# and vice versa. We now accept BOTH keys on read and emit the canonical
+# ``mnemonic`` key on write (matching plugin + MCP). See
+# ``docs/specs/totalreclaw/flows/01-identity-setup.md`` for the schema
+# addendum.
+# ---------------------------------------------------------------------------
+
+
+def _extract_mnemonic_from_creds(creds: dict) -> str:
+    """Pull a plausible mnemonic out of a parsed credentials.json blob.
+
+    Accepts both ``mnemonic`` (canonical, plugin 3.2.0 + Python 2.2.2+)
+    and ``recovery_phrase`` (legacy Python) spellings. When both are
+    present, ``mnemonic`` wins — matches the plugin-side
+    ``extractBootstrapMnemonic`` in ``skill/plugin/fs-helpers.ts``.
+
+    Returns an empty string if neither key carries a non-empty string.
+    Never raises — defensive for partial file writes.
+    """
+    primary = creds.get("mnemonic") if isinstance(creds.get("mnemonic"), str) else ""
+    primary = primary.strip() if primary else ""
+    if primary:
+        return primary
+    alias = creds.get("recovery_phrase") if isinstance(creds.get("recovery_phrase"), str) else ""
+    alias = alias.strip() if alias else ""
+    return alias
+
+
 class AgentState:
     """Manages TotalReclaw client lifecycle, turn tracking, and message buffer.
 
@@ -126,26 +160,47 @@ class AgentState:
         self._env_importance_override = importance_env is not None
 
     def _try_auto_configure(self) -> None:
-        """Try to configure from env vars or config file."""
+        """Try to configure from env vars or config file.
+
+        Accepts the credentials.json blob keyed as EITHER ``mnemonic``
+        (canonical as of plugin 3.2.0 + Python 2.2.2) OR
+        ``recovery_phrase`` (legacy Python) — Bug #7, QA 2026-04-20.
+        Preference order on read: ``mnemonic`` wins when both are
+        present so plugin-native files are authoritative.
+        """
         # Check env var
         mnemonic = os.environ.get("TOTALRECLAW_RECOVERY_PHRASE", "")
         if mnemonic:
             self.configure(mnemonic)
             return
 
-        # Check credentials file
+        # Check credentials file — accept both canonical ``mnemonic`` and
+        # legacy ``recovery_phrase`` spellings.
         creds_path = Path.home() / ".totalreclaw" / "credentials.json"
         if creds_path.exists():
             try:
                 creds = json.loads(creds_path.read_text())
-                mnemonic = creds.get("recovery_phrase", "")
-                if mnemonic:
-                    self.configure(mnemonic)
             except Exception:
-                pass
+                return
+            if not isinstance(creds, dict):
+                return
+            mnemonic = _extract_mnemonic_from_creds(creds)
+            if mnemonic:
+                self.configure(mnemonic)
 
     def configure(self, mnemonic: str) -> None:
-        """Configure the TotalReclaw client with a mnemonic."""
+        """Configure the TotalReclaw client with a mnemonic.
+
+        Write policy (Bug #7 / Wave 2a):
+          * If the credentials file already exists with ONLY the legacy
+            ``recovery_phrase`` key, leave the legacy format in place —
+            don't silently migrate on touch. The user may have external
+            tooling reading that key. A full migration happens when the
+            user re-onboards (explicit ``totalreclaw_setup`` call).
+          * Otherwise (file missing, or already has ``mnemonic``), emit
+            the canonical ``{"mnemonic": ...}`` shape. Matches what
+            plugin 3.2.0 writes, giving cross-client portability.
+        """
         from totalreclaw.client import TotalReclaw
 
         relay_url = (
@@ -154,11 +209,32 @@ class AgentState:
         )
         self._client = TotalReclaw(mnemonic=mnemonic, relay_url=relay_url)
 
-        # Save credentials
+        # Save credentials — preserve legacy shape when present, write
+        # canonical shape otherwise.
         creds_path = Path.home() / ".totalreclaw" / "credentials.json"
         creds_path.parent.mkdir(parents=True, exist_ok=True)
-        creds_path.write_text(json.dumps({"recovery_phrase": mnemonic}))
-        creds_path.chmod(0o600)
+
+        should_preserve_legacy = False
+        if creds_path.exists():
+            try:
+                existing = json.loads(creds_path.read_text())
+                if (
+                    isinstance(existing, dict)
+                    and "mnemonic" not in existing
+                    and isinstance(existing.get("recovery_phrase"), str)
+                    and existing.get("recovery_phrase", "").strip() == mnemonic.strip()
+                ):
+                    should_preserve_legacy = True
+            except Exception:
+                pass
+
+        if should_preserve_legacy:
+            # Leave the file untouched. Same mnemonic, same content —
+            # no reason to rewrite and risk a partial update.
+            pass
+        else:
+            creds_path.write_text(json.dumps({"mnemonic": mnemonic}))
+            creds_path.chmod(0o600)
 
         # Do NOT read `self._client.wallet_address` here — it raises until
         # `resolve_address()` has run, and `configure()` is synchronous. The

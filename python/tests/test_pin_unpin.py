@@ -213,8 +213,15 @@ class TestPinFact:
     @pytest.mark.asyncio
     @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
     async def test_pin_new_blob_parses_back_as_pinned(self, mock_send, keys):
-        """Capture the ciphertext passed to the second UserOp call, decrypt, and
-        verify the canonical claim has st='p' and sup=<old_fact_id>."""
+        """Capture the ciphertext of the new fact (second UserOp), decrypt,
+        and verify the canonical claim is a v1.1 MemoryClaimV1 JSON with
+        ``pin_status: "pinned"`` and ``superseded_by: <old_fact_id>``.
+
+        Wave 2a (Bug #8, 2026-04-20) flipped the write path from v0
+        short-key blobs (``t``, ``c``, ``st``) to v1.1 long-form
+        (``text``, ``type``, ``pin_status``) so Python-pinned facts are
+        indistinguishable from plugin-pinned facts on the subgraph.
+        """
         mock_send.return_value = "0xabc"
         relay = _build_relay_mock(
             keys, fact_id="old-fact-id", text="Sarah loves Django", status=None
@@ -242,25 +249,23 @@ class TestPinFact:
         assert len(captured_payloads) == 2
         new_payload = captured_payloads[1]
 
-        # Pull out field 4 (encrypted_blob) by scanning for the tag (0x22 = field 4, wire 2).
-        # The simpler path: re-derive via operations.py isn't easy, so decode minimally.
-        # Tag 4<<3|2 = 0x22. Since field 1 is 'id' (variable length), we must parse step by step.
-        # Use a tiny helper: parse length-prefixed fields looking for field_number == 4.
         encrypted_blob_bytes = _extract_protobuf_bytes_field(new_payload, field_number=4)
         assert encrypted_blob_bytes is not None
         encrypted_b64 = base64.b64encode(encrypted_blob_bytes).decode("ascii")
         plaintext = decrypt(encrypted_b64, keys.encryption_key)
 
         parsed = json.loads(plaintext)
-        assert parsed["t"] == "Sarah loves Django"
-        assert parsed["c"] == "pref"
-        assert parsed["st"] == "p"
-        assert parsed["sup"] == "old-fact-id"
-
-        # Also round-trip through parse_claim_or_legacy to confirm it's still valid
-        reparsed_json = totalreclaw_core.parse_claim_or_legacy(plaintext)
-        reparsed = json.loads(reparsed_json)
-        assert reparsed["st"] == "p"
+        # v1.1 long-form shape — matches what plugin 3.2.0 emits.
+        assert parsed["text"] == "Sarah loves Django"
+        assert parsed["type"] == "preference"  # from v0 'pref' category upgrade
+        assert parsed["schema_version"].startswith("1.")
+        assert parsed["pin_status"] == "pinned"
+        assert parsed["superseded_by"] == "old-fact-id"
+        # v0 short keys must NOT appear in a v1 blob.
+        assert "t" not in parsed
+        assert "c" not in parsed
+        assert "st" not in parsed
+        assert "sup" not in parsed
 
 
 # ---------------------------------------------------------------------------
@@ -342,9 +347,14 @@ class TestUnpinFact:
 
     @pytest.mark.asyncio
     @patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock)
-    async def test_unpin_new_blob_has_no_status_field(self, mock_send, keys):
-        """When status returns to 'a' (Active), the canonical Claim omits the
-        default-value 'st' short key entirely."""
+    async def test_unpin_new_blob_has_explicit_unpinned_status(self, mock_send, keys):
+        """When unpin writes a new v1.1 blob, ``pin_status`` is set
+        explicitly to ``"unpinned"`` — matches ``skill/plugin/pin.ts``
+        line 550 (``pinStatus = targetStatus === 'pinned' ? 'pinned' : 'unpinned'``).
+
+        Prior to Wave 2a the path emitted a v0 short-key blob that
+        OMITTED ``st`` to mean "active" — that behavior is gone.
+        """
         mock_send.return_value = "0xabc"
         relay = _build_relay_mock(
             keys, fact_id="pinned-fact", text="Likes TDD", status="p"
@@ -373,10 +383,12 @@ class TestUnpinFact:
         encrypted_b64 = base64.b64encode(encrypted_blob_bytes).decode("ascii")
         plaintext = decrypt(encrypted_b64, keys.encryption_key)
         parsed = json.loads(plaintext)
-        # Active status is default — should be omitted per Rust canonicalization
-        assert "st" not in parsed
-        # But supersedes should still be set
-        assert parsed["sup"] == "pinned-fact"
+        # v1.1 shape: explicit unpinned status on the new blob, plus the
+        # superseded_by chain link back to the old pinned fact.
+        assert parsed["schema_version"].startswith("1.")
+        assert parsed["pin_status"] == "unpinned"
+        assert parsed["superseded_by"] == "pinned-fact"
+        assert parsed["text"] == "Likes TDD"
 
 
 # ---------------------------------------------------------------------------

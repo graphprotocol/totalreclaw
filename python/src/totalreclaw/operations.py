@@ -783,6 +783,171 @@ def _decrypt_and_parse_claim(
     return claim
 
 
+# v0 short-key category → v0 memory-type token. Inverse of
+# ``TYPE_TO_CATEGORY_V0`` in ``claims_helper.py``. Used by the pin/unpin
+# path to upgrade a legacy short-key source blob into a v1 ``type`` field
+# on the fly — mirrors ``skill/plugin/pin.ts::projectToV1``.
+_V0_CATEGORY_TO_V0_TYPE: dict[str, str] = {
+    "fact": "fact",
+    "pref": "preference",
+    "dec": "decision",
+    "epi": "episodic",
+    "goal": "goal",
+    "ctx": "context",
+    "sum": "summary",
+    "rule": "rule",
+    "ent": "fact",   # entity records fall back to "fact" on round-trip
+    "dig": "summary",
+    "claim": "claim",
+}
+
+
+def _project_source_to_v1(
+    source_claim: dict, default_source_agent: str,
+) -> dict:
+    """Project a decrypted claim (v0 short-key OR v1 long-form) into the
+    v1-shape dict needed to drive :func:`build_canonical_claim_v1`.
+
+    Mirrors ``skill/plugin/pin.ts::projectToV1`` function-for-function so
+    a Python-produced pinned blob is byte-equivalent to a plugin-produced
+    pinned blob for the same input fact. The pin path in 2.2.2 always
+    emits a v1.1 blob regardless of what the existing fact's blob shape
+    was; v0 sources are upgraded on the fly per the legacy-mapping table.
+
+    Unknown or missing fields fall back to defensible defaults:
+      * ``source`` → ``"user-inferred"`` (Tier 1 reranker doesn't grant
+        these the "user" trust boost; correct for legacy blobs with no
+        explicit provenance signal)
+      * ``type`` → ``"claim"``
+      * ``importance`` → 5
+      * ``confidence`` → 0.85
+
+    Returns a dict with keys matching the :func:`build_canonical_claim_v1`
+    attribute names.
+    """
+    from .agent.extraction import V0_TO_V1_TYPE, VALID_MEMORY_TYPES
+
+    # v1 source: schema_version "1.x" + long-form fields.
+    schema_version = source_claim.get("schema_version")
+    if (
+        isinstance(source_claim.get("text"), str)
+        and isinstance(source_claim.get("type"), str)
+        and isinstance(schema_version, str)
+        and schema_version.startswith("1.")
+    ):
+        v1_type = source_claim["type"]
+        if v1_type not in VALID_MEMORY_TYPES:
+            v1_type = "claim"
+        imp_raw = source_claim.get("importance")
+        try:
+            importance = int(imp_raw) if isinstance(imp_raw, (int, float)) else 5
+        except (ValueError, TypeError):
+            importance = 5
+        importance = max(1, min(10, importance))
+        conf_raw = source_claim.get("confidence")
+        try:
+            confidence = float(conf_raw) if isinstance(conf_raw, (int, float)) else 0.85
+        except (ValueError, TypeError):
+            confidence = 0.85
+        raw_source = source_claim.get("source")
+        v1_source = raw_source if isinstance(raw_source, str) and raw_source else "user-inferred"
+        raw_scope = source_claim.get("scope")
+        v1_scope = raw_scope if isinstance(raw_scope, str) and raw_scope else None
+        raw_volatility = source_claim.get("volatility")
+        v1_volatility = raw_volatility if isinstance(raw_volatility, str) and raw_volatility else None
+        raw_reasoning = source_claim.get("reasoning")
+        v1_reasoning = raw_reasoning if isinstance(raw_reasoning, str) and raw_reasoning else None
+        v1_entities = source_claim.get("entities") if isinstance(source_claim.get("entities"), list) else None
+        return {
+            "text": source_claim["text"],
+            "type": v1_type,
+            "source": v1_source,
+            "scope": v1_scope,
+            "volatility": v1_volatility,
+            "reasoning": v1_reasoning,
+            "entities": v1_entities,
+            "importance": importance,
+            "confidence": confidence,
+        }
+
+    # v0 short-key source: {t, c, cf, i, sa, ea, ...} → upgrade to v1.
+    text = source_claim.get("t") if isinstance(source_claim.get("t"), str) else ""
+    v0_category = source_claim.get("c") if isinstance(source_claim.get("c"), str) else "fact"
+    v0_type_token = _V0_CATEGORY_TO_V0_TYPE.get(v0_category, "fact")
+    v1_type = V0_TO_V1_TYPE.get(v0_type_token, "claim")
+    imp_raw = source_claim.get("i")
+    try:
+        importance = int(imp_raw) if isinstance(imp_raw, (int, float)) else 5
+    except (ValueError, TypeError):
+        importance = 5
+    importance = max(1, min(10, importance))
+    cf_raw = source_claim.get("cf")
+    try:
+        confidence = float(cf_raw) if isinstance(cf_raw, (int, float)) else 0.85
+    except (ValueError, TypeError):
+        confidence = 0.85
+
+    # v0 `sa` was "source agent" (e.g. "openclaw-plugin"), not v1 provenance.
+    # Heuristic upgrade — matches ``projectToV1`` in the TS plugin.
+    sa = source_claim.get("sa") if isinstance(source_claim.get("sa"), str) else default_source_agent
+    sa_lower = sa.lower() if isinstance(sa, str) else ""
+    if "derived" in sa_lower or "digest" in sa_lower or "consolidat" in sa_lower:
+        v1_source = "derived"
+    elif "assistant" in sa_lower:
+        v1_source = "assistant"
+    elif "extern" in sa_lower or "mem0" in sa_lower or "import" in sa_lower:
+        v1_source = "external"
+    else:
+        v1_source = "user-inferred"
+
+    # v0 entities → v1 entity shape (short keys n/tp/r → long name/type/role).
+    raw_entities = source_claim.get("e") if isinstance(source_claim.get("e"), list) else []
+    v1_entities: list[dict] = []
+    for e in raw_entities:
+        if not isinstance(e, dict):
+            continue
+        name = e.get("n") if isinstance(e.get("n"), str) else ""
+        ent_type = e.get("tp") if isinstance(e.get("tp"), str) else "concept"
+        if not name:
+            continue
+        entity: dict = {"name": name, "type": ent_type}
+        role = e.get("r") if isinstance(e.get("r"), str) else None
+        if role:
+            entity["role"] = role
+        v1_entities.append(entity)
+
+    return {
+        "text": text,
+        "type": v1_type,
+        "source": v1_source,
+        "scope": None,
+        "volatility": None,
+        "reasoning": None,
+        "entities": v1_entities or None,
+        "importance": importance,
+        "confidence": confidence,
+    }
+
+
+class _ProjectedFact:
+    """Lightweight attribute-carrier used to feed ``build_canonical_claim_v1``.
+
+    That builder accepts either dicts or attribute-based objects (see
+    ``claims_helper._attr``). Keeping this as a tiny local class avoids
+    having to hand-craft a dict with every taxonomy field the builder
+    reads — the builder silently falls back on missing attributes.
+    """
+
+    __slots__ = (
+        "text", "type", "importance", "confidence", "source",
+        "scope", "reasoning", "entities", "volatility",
+    )
+
+    def __init__(self, **kwargs):
+        for k in self.__slots__:
+            setattr(self, k, kwargs.get(k))
+
+
 async def _change_claim_status(
     fact_id: str,
     target_status: str,
@@ -797,24 +962,32 @@ async def _change_claim_status(
 ) -> dict:
     """Shared implementation for ``pin_fact`` / ``unpin_fact``.
 
-    Semantics (Phase 2 Slice 2e-python — mirrors the MCP slice-2e tool at
-    ``mcp/src/tools/pin.ts``):
+    Semantics (Wave 2a, 2026-04-20 — see also Bug #8 in
+    ``docs/notes/QA-hermes-RC-2.2.1-20260420.md``):
 
     1. Fetch the existing fact by id via the subgraph.
-    2. Decrypt + parse as a canonical Claim.
-    3. If ``claim["st"]`` already matches ``target_status`` — return a
-       ``{idempotent: True}`` result with no on-chain write.
-    4. Otherwise, clone the claim, mutate ``st`` (omitting it when the
-       target is the default ``"a"`` so the canonical serializer drops
-       it), set ``sup`` to the previous fact id, refresh ``ea``, and
-       re-canonicalize via ``totalreclaw_core.canonicalize_claim``.
-    5. Encrypt, build a new ``FactPayload`` with a fresh UUID. Blind
-       indices on the new fact are intentionally **empty** — retrieval
-       follows the supersession chain from the old fact's search hits.
-       Re-indexing is deferred to a later slice (matches MCP).
-    6. Tombstone the old fact and submit the new fact as two sequential
-       UserOps. (Matches MCP's batch, but Python's ``build_and_send_userop``
-       doesn't currently expose a multi-call shim, so we do two calls.)
+    2. Decrypt + parse. Detect whether the source blob is v1 (long-form
+       fields + ``schema_version``) or v0 (short-key).
+    3. Idempotency guard — if the parsed status already matches
+       ``target_status``, return a no-op result with no on-chain write.
+       For v1 sources the status comes from ``pin_status``; for v0
+       sources it comes from the short-key ``st`` sentinel.
+    4. **New in 2.2.2** — project the source blob into v1 shape via
+       :func:`_project_source_to_v1` (upgrading v0 → v1 on the fly when
+       necessary), then build a fresh v1.1 ``MemoryClaimV1`` JSON blob
+       with ``pin_status`` set ("pinned" for pin; "unpinned" for
+       explicit unpin), ``superseded_by`` pointing at the old fact id,
+       and a fresh claim id. Matches ``skill/plugin/pin.ts`` byte-for-byte.
+    5. Encrypt the new blob and build a ``FactPayload`` carrying it,
+       with ``version=PROTOBUF_VERSION_V4`` so the outer protobuf wrapper
+       tags the write as v1 taxonomy.
+    6. Submit tombstone (at default v=3; matches plugin behavior) + new
+       fact (at v=4) as two sequential UserOps.
+
+    Prior to 2.2.2 this helper emitted a short-key blob at the default
+    protobuf v=3 for the new fact, which violated the v1 on-chain
+    contract: the subgraph showed a v=3 tombstone with no companion v=4
+    pinned claim. That was the QA Finding #8 ship-stopper.
 
     Returns ``{success, fact_id, new_fact_id, previous_status, new_status}``
     plus ``idempotent: True`` on no-op.
@@ -822,7 +995,9 @@ async def _change_claim_status(
     Parameters
     ----------
     target_status : {"p", "a"}
-        Compact short-key for the target ``ClaimStatus``.
+        Compact short-key for the target ``ClaimStatus``. ``"p"`` means
+        pin (emit ``pin_status: "pinned"``); ``"a"`` means unpin (emit
+        ``pin_status: "unpinned"`` on the new v1 blob).
     """
     if not isinstance(fact_id, str) or not fact_id.strip():
         raise ValueError("fact_id must be a non-empty string")
@@ -842,10 +1017,54 @@ async def _change_claim_status(
     if not fact:
         raise ValueError(f"fact {fact_id} not found")
 
-    # 2. Decrypt + parse
-    claim = _decrypt_and_parse_claim(fact, keys)
-    current_short = claim.get("st")  # may be None for default Active
-    current_long = _status_long_name(current_short)
+    # 2. Decrypt + parse. We need the raw decrypted blob (not the
+    # normalized-to-short-key output of ``_decrypt_and_parse_claim``) so
+    # v1 sources can round-trip their long-form fields into the new v1
+    # blob. Parse twice on the v0 path: once to get the short-key dict
+    # for idempotency + projection, once through the raw plaintext so
+    # v1 blobs preserve their long-form metadata.
+    encrypted_hex_src = fact.get("encryptedBlob", "") or ""
+    if encrypted_hex_src.startswith("0x"):
+        encrypted_hex_src = encrypted_hex_src[2:]
+    if not encrypted_hex_src:
+        raise ValueError("fact has empty encryptedBlob")
+    encrypted_b64_src = base64.b64encode(bytes.fromhex(encrypted_hex_src)).decode("ascii")
+    try:
+        decrypted_plaintext = decrypt(encrypted_b64_src, keys.encryption_key)
+    except Exception as e:
+        raise ValueError(f"failed to decrypt fact blob: {e}") from e
+
+    # Try to parse the raw plaintext. v1 blobs come out as long-form
+    # dicts with schema_version; v0 blobs come out as short-key dicts.
+    try:
+        raw_claim_obj = _json.loads(decrypted_plaintext)
+    except (ValueError, TypeError):
+        raw_claim_obj = None
+
+    is_v1_source = (
+        isinstance(raw_claim_obj, dict)
+        and isinstance(raw_claim_obj.get("text"), str)
+        and isinstance(raw_claim_obj.get("type"), str)
+        and isinstance(raw_claim_obj.get("schema_version"), str)
+        and raw_claim_obj["schema_version"].startswith("1.")
+    )
+
+    # Derive ``current_status`` + short-key projection for idempotency.
+    if is_v1_source:
+        source_claim_for_projection = raw_claim_obj
+        current_pin_status = raw_claim_obj.get("pin_status")
+        if current_pin_status == "pinned":
+            current_short = "p"
+            current_long = "pinned"
+        else:
+            current_short = None
+            current_long = "active"
+    else:
+        # v0 short-key path — delegate to the existing normalizer so
+        # legacy {text, metadata} blobs coerce into {t, c, ...}.
+        source_claim_for_projection = _decrypt_and_parse_claim(fact, keys)
+        current_short = source_claim_for_projection.get("st")
+        current_long = _status_long_name(current_short)
 
     # 3. Idempotency guard
     current_is_target = (
@@ -861,41 +1080,48 @@ async def _change_claim_status(
             "idempotent": True,
         }
 
-    # 4. Build the new canonical claim
-    new_claim = dict(claim)  # shallow clone
-    if target_status == "a":
-        # Active is the canonical default — omit the short key so the
-        # serializer produces exactly the same bytes as an "untouched" claim.
-        new_claim.pop("st", None)
-    else:
-        new_claim["st"] = target_status
-    new_claim["sup"] = fact_id
-    # Refresh the extraction timestamp so downstream consumers can tell
-    # this is a new event (matches MCP pin.ts behavior).
-    new_claim["ea"] = datetime.now(timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%S.000Z"
+    # 4. Build the new v1.1 canonical claim. ALWAYS v1 on the pin path —
+    # matches ``skill/plugin/pin.ts::executePinOperation`` step 4.
+    v1_view = _project_source_to_v1(
+        source_claim_for_projection,
+        default_source_agent="python-client",
     )
-
-    new_blob_plaintext = _core.canonicalize_claim(
-        _json.dumps(new_claim, ensure_ascii=False, separators=(",", ":"))
-    )
-
-    # 5. Encrypt + build FactPayload
-    encrypted_blob = encrypt(new_blob_plaintext, keys.encryption_key)
-    encrypted_hex = base64.b64decode(encrypted_blob).hex()
 
     new_fact_id = str(uuid.uuid4())
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    pin_status_wire = "pinned" if target_status == "p" else "unpinned"
+
+    projected_fact = _ProjectedFact(
+        text=v1_view["text"],
+        type=v1_view["type"],
+        importance=v1_view["importance"],
+        confidence=v1_view["confidence"],
+        source=v1_view["source"],
+        scope=v1_view["scope"],
+        reasoning=v1_view["reasoning"],
+        entities=v1_view["entities"],
+        volatility=v1_view["volatility"],
+    )
+
+    new_blob_plaintext = build_canonical_claim_v1(
+        projected_fact,
+        importance=v1_view["importance"],
+        created_at=timestamp,
+        superseded_by=fact_id,
+        claim_id=new_fact_id,
+        pin_status=pin_status_wire,
+    )
+
+    # 5. Encrypt + build FactPayload at protobuf v=4.
+    encrypted_blob = encrypt(new_blob_plaintext, keys.encryption_key)
+    encrypted_hex = base64.b64decode(encrypted_blob).hex()
+
     source_tag = "python_pin" if target_status == "p" else "python_unpin"
 
-    # Regenerate trapdoors for the new pinned fact so trapdoor-based recall
-    # still surfaces it after the old fact is tombstoned.
-    new_claim_text = claim.get("t") if isinstance(claim.get("t"), str) else ""
-    new_entities_raw = claim.get("e") if isinstance(claim.get("e"), list) else []
-    new_entity_objs: list = []
-    for e in new_entities_raw:
-        if isinstance(e, dict) and isinstance(e.get("n"), str):
-            new_entity_objs.append({"name": e["n"], "type": e.get("tp", "concept")})
+    # Regenerate trapdoors for the new pinned fact so trapdoor-based
+    # recall still surfaces it after the old fact is tombstoned.
+    new_claim_text = v1_view["text"]
+    new_entity_objs = v1_view["entities"] or []
 
     new_word_indices: list[str] = generate_blind_indices(new_claim_text) if new_claim_text else []
     new_lsh_indices: list[str] = []
@@ -925,6 +1151,12 @@ async def _change_claim_status(
         content_fp="",
         agent_id="python-client",
         encrypted_embedding=new_encrypted_emb,
+        # Bug #8 (Wave 2a): the new v1.1 blob MUST ride a v=4 outer
+        # protobuf. Pre-2.2.2 this fell through to DEFAULT_PROTOBUF_VERSION
+        # (v=3), leaving the on-chain fact with an inner v0 short-key
+        # blob and a v=3 wrapper — unreadable by decoders that gate on
+        # the v=4 flag.
+        version=PROTOBUF_VERSION_V4,
     )
 
     # 5b. Slice 2f: if this pin/unpin overrides a prior auto-resolution,
@@ -941,8 +1173,9 @@ async def _change_claim_status(
         # Feedback wiring is best-effort — never block the pin operation.
         pass
 
-    # 6. Tombstone old, then write new. Order matters: if the new write
-    # fails after a successful tombstone, the caller will see the fact as
+    # 6. Tombstone old (at v=3, legacy; matches plugin ``pin.ts``), then
+    # write new fact (at v=4). Order matters: if the new write fails
+    # after a successful tombstone, the caller will see the fact as
     # deleted — acceptable trade-off vs. duplicating the fact live then
     # tombstoning (which would surface both in recall on failure).
     tombstone_bytes = encode_tombstone_protobuf(fact_id, owner)
