@@ -511,6 +511,73 @@ async function main(): Promise<void> {
   }
 
   // ---------------------------------------------------------------------
+  // 17. Fresh-install regression — parent dir does NOT exist
+  //
+  // Regression for rc.3 (totalreclaw-internal#21, QA strace evidence):
+  // acquireSessionsFileLock ran openSync(lockPath, 'wx') BEFORE ensuring
+  // the parent dir existed. On a fresh user account with no
+  // `~/.totalreclaw/`, every attempt returned ENOENT; the retry loop
+  // spun for LOCK_WAIT_MS (10s) and threw "could not acquire lock".
+  // The CLI surfaced that as a hung `openclaw totalreclaw pair generate`
+  // with no QR / URL / code ever rendered.
+  //
+  // Expectation: createPairSession against a deep missing path succeeds
+  // QUICKLY (well under the 10s deadline), creates all missing
+  // intermediates, persists the session, and leaves no lock file.
+  // ---------------------------------------------------------------------
+  {
+    const root = mkTmp();
+    // Three levels deep to prove `{ recursive: true }` is honored.
+    const missingDeep = path.join(root, 'a', 'b', 'c');
+    const p = path.join(missingDeep, 'pair-sessions.json');
+
+    assert(!fs.existsSync(missingDeep), 'fresh-install: parent dir absent pre-create');
+
+    const started = Date.now();
+    const s = await createPairSession(p, {
+      mode: 'generate',
+      operatorContext: { channel: 'cli' },
+    });
+    const elapsed = Date.now() - started;
+
+    assert(elapsed < 2_000, `fresh-install: create completes promptly (got ${elapsed}ms, bug was 10_000ms+)`);
+    assert(fs.existsSync(missingDeep), 'fresh-install: deep parent dir created');
+    assert(fs.existsSync(p), 'fresh-install: sessions file created');
+    assert(!fs.existsSync(`${p}.lock`), 'fresh-install: lock released');
+    assert(typeof s.sid === 'string' && s.sid.length === 32, 'fresh-install: session has valid sid');
+
+    // Bonus: the on-disk file has 0o600 even though we created a missing
+    // parent dir — the mkdir mode doesn't leak into the file mode.
+    const mode = fs.statSync(p).mode & 0o777;
+    assert(mode === 0o600, `fresh-install: file mode still 0o600 (got ${mode.toString(8)})`);
+
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // ---------------------------------------------------------------------
+  // 18. Fresh-install regression — read paths also tolerate missing dir
+  //
+  // Defensive: `getPairSession` is called by the HTTP handler before the
+  // CLI has had a chance to create anything. If the operator pokes the
+  // browser page before `pair start` writes any state, we should return
+  // null cleanly rather than throwing. `listActivePairSessions` is used
+  // by the CLI's "is a pairing already in flight?" guard on a fresh box.
+  // ---------------------------------------------------------------------
+  {
+    const root = mkTmp();
+    const missingDeep = path.join(root, 'never', 'made');
+    const p = path.join(missingDeep, 'pair-sessions.json');
+
+    const found = await getPairSession(p, 'deadbeef'.repeat(4));
+    assert(found === null, 'fresh-install: getPairSession returns null, no throw');
+
+    const active = await listActivePairSessions(p);
+    assert(Array.isArray(active) && active.length === 0, 'fresh-install: listActive returns [], no throw');
+
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // ---------------------------------------------------------------------
   // Summary
   // ---------------------------------------------------------------------
   console.log(`# ${passed} passed, ${failed} failed`);

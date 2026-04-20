@@ -2747,10 +2747,20 @@ const plugin = {
               return { state: 'active' };
             },
           });
-          api.registerHttpRoute!({ path: bundle.finishPath, handler: bundle.handlers.finish, auth: 'gateway' });
-          api.registerHttpRoute!({ path: bundle.startPath, handler: bundle.handlers.start, auth: 'gateway' });
-          api.registerHttpRoute!({ path: bundle.respondPath, handler: bundle.handlers.respond, auth: 'gateway' });
-          api.registerHttpRoute!({ path: bundle.statusPath, handler: bundle.handlers.status, auth: 'gateway' });
+          // auth: 'plugin' — the 4 pair routes are reached from the operator's
+          // phone/laptop browser, which has no gateway bearer token. The plugin
+          // authenticates each request itself via (a) the in-memory pair session
+          // (sid + secondaryCode + single-use consumption), (b) ECDH + AEAD for
+          // the encrypted mnemonic payload. See gateway-cli dist
+          // `matchedPluginRoutesRequireGatewayAuth` / `enforcePluginRouteGatewayAuth`
+          // — routes with `auth: 'gateway'` require a bearer token and 401 any
+          // browser caller, which is the wrong semantic for QR-pair. rc.3
+          // shipped `auth: 'gateway'` and the QA agent confirmed the routes
+          // were unreachable from a browser (QA-plugin-3.3.0-rc.3 report).
+          api.registerHttpRoute!({ path: bundle.finishPath, handler: bundle.handlers.finish, auth: 'plugin' });
+          api.registerHttpRoute!({ path: bundle.startPath, handler: bundle.handlers.start, auth: 'plugin' });
+          api.registerHttpRoute!({ path: bundle.respondPath, handler: bundle.handlers.respond, auth: 'plugin' });
+          api.registerHttpRoute!({ path: bundle.statusPath, handler: bundle.handlers.status, auth: 'plugin' });
           api.logger.info('TotalReclaw: registered 4 QR-pairing HTTP routes');
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

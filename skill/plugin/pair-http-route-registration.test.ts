@@ -1,26 +1,43 @@
 /**
- * Tests that the 4 QR-pairing HTTP routes are registered with the mandatory
- * `auth: 'gateway'` field required by OpenClaw 2026.4.2+.
+ * Tests that the 4 QR-pairing HTTP routes are registered with the correct
+ * `auth: 'plugin'` literal required by OpenClaw 2026.4.2+.
  *
- * Background: rc.2 shipped without the `auth` field — OpenClaw's loader
- * silently dropped all 4 registrations. The plugin's own
- * `logger.info('registered 4 QR-pairing HTTP routes')` still fired, making
- * the failure invisible. `GET /plugin/totalreclaw/pair/finish` fell through
- * to the SPA and `POST /pair/respond` returned 404. This test guards against
- * that class of regression.
+ * Background:
+ *   - rc.2 shipped without the `auth` field — OpenClaw's loader silently
+ *     dropped all 4 registrations (`httpRouteCount: 0`).
+ *   - rc.3 added `auth: 'gateway'`. The SDK accepted the literal but its
+ *     runtime semantics ("requires gateway bearer token") blocks every
+ *     browser caller (phones never have the token), so `/pair/*` was 401
+ *     at the plugin-auth stage before ever reaching the handler.
+ *   - rc.4 switches to `auth: 'plugin'`, the SDK's second valid literal.
+ *     Verified in the shipped gateway dist at
+ *     `loader-BkOjign1.js:662` (`if (params.auth !== "gateway" && params.auth !== "plugin")`)
+ *     and `gateway-cli-CWpalJNJ.js:23186`
+ *     (`matchedPluginRoutesRequireGatewayAuth` only trips on `=== "gateway"`).
+ *     Under `auth: 'plugin'`, the route handler runs without a prior bearer
+ *     check; our handlers authenticate via sid + 6-digit secondaryCode +
+ *     single-use session consumption + ECDH AEAD payload.
  *
- * References: totalreclaw-internal#21
+ * The plugin's own `logger.info('registered 4 QR-pairing HTTP routes')` still
+ * fires whether or not the routes actually land in the gateway's registry,
+ * so this unit test is NOT sufficient end-to-end proof — it's a guard that
+ * ensures the production call sites pass the exact literal the SDK accepts
+ * AND the literal whose runtime semantics match the browser-first flow.
+ *
+ * References: totalreclaw-internal#21,
+ * docs/notes/QA-plugin-3.3.0-rc.3-20260420-1440.md
  *
  * Run with: npx tsx pair-http-route-registration.test.ts
  *
  * Test matrix:
  *   1. registerHttpRoute is called exactly 4 times when api provides it.
  *   2. Each call receives an `auth` field.
- *   3. Each `auth` value equals `'gateway'`.
+ *   3. Each `auth` value equals `'plugin'` (NOT `'gateway'`).
  *   4. Each call includes a `path` containing the '/pair/' prefix.
  *   5. Each call includes a `handler` function.
  *   6. When api does NOT provide registerHttpRoute, no call is made + no throw.
  *   7. The 4 paths cover finish, start, respond, status (by substring).
+ *   8. `'gateway'` is NOT accidentally used (regression guard against rc.3).
  */
 
 import fs from 'node:fs';
@@ -93,10 +110,10 @@ function buildAndRegister(): { calls: RouteCall[] } {
     calls.push(params);
   };
 
-  registerHttpRoute({ path: bundle.finishPath, handler: bundle.handlers.finish, auth: 'gateway' });
-  registerHttpRoute({ path: bundle.startPath, handler: bundle.handlers.start, auth: 'gateway' });
-  registerHttpRoute({ path: bundle.respondPath, handler: bundle.handlers.respond, auth: 'gateway' });
-  registerHttpRoute({ path: bundle.statusPath, handler: bundle.handlers.status, auth: 'gateway' });
+  registerHttpRoute({ path: bundle.finishPath, handler: bundle.handlers.finish, auth: 'plugin' });
+  registerHttpRoute({ path: bundle.startPath, handler: bundle.handlers.start, auth: 'plugin' });
+  registerHttpRoute({ path: bundle.respondPath, handler: bundle.handlers.respond, auth: 'plugin' });
+  registerHttpRoute({ path: bundle.statusPath, handler: bundle.handlers.status, auth: 'plugin' });
 
   return { calls };
 }
@@ -111,10 +128,12 @@ function buildAndRegister(): { calls: RouteCall[] } {
   // 1. Exactly 4 calls
   assertEq(calls.length, 4, 'registerHttpRoute is called exactly 4 times');
 
-  // 2–3. auth field present and equals 'gateway' on every call
+  // 2–3. auth field present and equals 'plugin' on every call
   for (let i = 0; i < calls.length; i++) {
     assert('auth' in calls[i], `call[${i}] has auth field`);
-    assertEq(calls[i].auth, 'gateway', `call[${i}].auth === 'gateway'`);
+    assertEq(calls[i].auth, 'plugin', `call[${i}].auth === 'plugin'`);
+    // 8. Regression guard: ensure the rc.3 value is gone.
+    assert(calls[i].auth !== 'gateway', `call[${i}].auth is NOT 'gateway' (rc.3 regression guard)`);
   }
 
   // 4. Every path contains the '/pair/' segment

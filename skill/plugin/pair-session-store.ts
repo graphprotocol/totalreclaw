@@ -239,6 +239,25 @@ export const LOCK_WAIT_MS = 10_000;
 export const LOCK_RETRY_MS = 50;
 
 /**
+ * Ensure the parent directory of `sessionsPath` exists, creating it
+ * (and any missing intermediates) with 0700 mode. This is called from
+ * BOTH the lock-acquisition and the write paths — if we only create
+ * the dir on write, a fresh install hits ENOENT on the lock's
+ * `openSync(path, 'wx')` and spins the retry loop until deadline (rc.3
+ * regression: QA-plugin-3.3.0-rc.3 report).
+ *
+ * Best-effort: a mkdir failure is re-thrown to the caller, which will
+ * surface it via the lock-acquisition error path (for lock) or the
+ * try/catch in `writePairSessionsFileSync` (for write). 0700 mode
+ * matches the privacy posture of the sessions file (0600) — if the
+ * user can read the directory they can already read the file.
+ */
+function ensureSessionsFileDir(sessionsPath: string): void {
+  const dir = path.dirname(sessionsPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+}
+
+/**
  * Acquire an exclusive lock on the given sessions-file path by
  * atomically creating `<path>.lock` with `wx` mode. Retries up to
  * `LOCK_WAIT_MS`; breaks a lock older than `LOCK_STALE_MS`; returns
@@ -251,6 +270,16 @@ export const LOCK_RETRY_MS = 50;
  * and self-contained is safer than fighting the scanner.
  */
 async function acquireSessionsFileLock(sessionsPath: string): Promise<() => void> {
+  // Guarantee the parent directory exists BEFORE the first openSync(wx).
+  // Without this, a fresh install where `~/.totalreclaw/` doesn't yet
+  // exist gets ENOENT on every attempt, tight-loops until deadline, and
+  // throws "could not acquire lock" — which the CLI surfaces as a hung
+  // pair command with no QR / code / URL ever rendered (rc.3 blocker;
+  // QA-plugin-3.3.0-rc.3 strace evidence in totalreclaw-internal#21).
+  // `writePairSessionsFileSync` already creates the dir, but that path
+  // is never reached because the lock never acquires.
+  ensureSessionsFileDir(sessionsPath);
+
   const lockPath = `${sessionsPath}.lock`;
   const deadline = Date.now() + LOCK_WAIT_MS;
 
@@ -349,8 +378,9 @@ export function writePairSessionsFileSync(
   file: PairSessionFile,
 ): boolean {
   try {
-    const dir = path.dirname(sessionsPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    // Same ensureSessionsFileDir used by acquireSessionsFileLock so the
+    // two paths can't drift.
+    ensureSessionsFileDir(sessionsPath);
     const tmp = `${sessionsPath}.tmp-${process.pid}-${Date.now()}`;
     fs.writeFileSync(tmp, JSON.stringify(file), { mode: 0o600 });
     fs.renameSync(tmp, sessionsPath);

@@ -4,6 +4,115 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0-rc.4] — 2026-04-20
+
+Fourth release candidate for 3.3.0. Two independent ship-stopper fixes for
+rc.3's QR-pairing flow, both surfaced by the auto-QA run against rc.3
+artifacts (report: `docs/notes/QA-plugin-3.3.0-rc.3-20260420-1440.md` in
+`totalreclaw-internal`, thread at `totalreclaw-internal#21`). No protocol /
+on-chain changes vs 3.3.0. Bundled into a single RC because shipping them
+separately would require two more QA loops for what are, individually,
+one-line fixes.
+
+### Fixed
+
+- **`skill/plugin/index.ts` — pair HTTP routes must use `auth: 'plugin'`, not
+  `'gateway'`** (lines 2750–2753, now 2760–2763 after added comment). rc.3
+  added `auth: 'gateway'` to the 4 `api.registerHttpRoute` calls, which the
+  SDK loader accepted as a legal value but whose runtime semantics are
+  "requires gateway bearer token" (see
+  `matchedPluginRoutesRequireGatewayAuth` at
+  `gateway-cli-CWpalJNJ.js:23186`). For the 4 pair routes — reached from a
+  phone/laptop browser with no bearer token — that means `/pair/*` is 401'd
+  at the plugin-auth stage before the handler ever runs. The second valid
+  literal, `auth: 'plugin'` (verified as the only other accepted value at
+  `loader-BkOjign1.js:662`), lets the plugin's handler run directly and
+  authenticate itself via the in-session sid + 6-digit secondaryCode +
+  single-use consumption + ECDH AEAD payload, which is the correct model
+  for QR-pair. QA observed `httpRouteCount: 0` in rc.3 via `plugins inspect`
+  and confirmed all 4 `/plugin/totalreclaw/pair/*` paths returned 404 / SPA
+  fallthrough. rc.4 switches all 4 to `auth: 'plugin'`.
+
+  **Before (rc.3):**
+  ```ts
+  api.registerHttpRoute!({ path: bundle.finishPath,  handler: bundle.handlers.finish,  auth: 'gateway' });
+  api.registerHttpRoute!({ path: bundle.startPath,   handler: bundle.handlers.start,   auth: 'gateway' });
+  api.registerHttpRoute!({ path: bundle.respondPath, handler: bundle.handlers.respond, auth: 'gateway' });
+  api.registerHttpRoute!({ path: bundle.statusPath,  handler: bundle.handlers.status,  auth: 'gateway' });
+  ```
+
+  **After (rc.4):**
+  ```ts
+  api.registerHttpRoute!({ path: bundle.finishPath,  handler: bundle.handlers.finish,  auth: 'plugin' });
+  api.registerHttpRoute!({ path: bundle.startPath,   handler: bundle.handlers.start,   auth: 'plugin' });
+  api.registerHttpRoute!({ path: bundle.respondPath, handler: bundle.handlers.respond, auth: 'plugin' });
+  api.registerHttpRoute!({ path: bundle.statusPath,  handler: bundle.handlers.status,  auth: 'plugin' });
+  ```
+
+- **`skill/plugin/pair-session-store.ts::acquireSessionsFileLock` — mkdir
+  parent before `openSync(wx)`**. On a fresh install with no
+  `~/.totalreclaw/` directory, the lock's `openSync(path, 'wx')` returned
+  `ENOENT (No such file or directory)` and the retry loop misinterpreted
+  that as "lock already held", spinning at 50 ms intervals for the full
+  10 s `LOCK_WAIT_MS` before throwing `could not acquire lock`. The CLI
+  surfaced this as a hung `openclaw totalreclaw pair generate` with no QR,
+  URL, or secondary code ever rendered. `writePairSessionsFileSync`
+  already had a mkdir, but it was never reached because the lock never
+  acquired. rc.4 extracts a shared `ensureSessionsFileDir(sessionsPath)`
+  helper (mkdir `-p` with mode 0700) and calls it at the TOP of both
+  `acquireSessionsFileLock` AND `writePairSessionsFileSync` so the two
+  code paths can't drift. QA strace evidence in
+  `totalreclaw-internal#21`.
+
+  **Before (rc.3):**
+  ```ts
+  async function acquireSessionsFileLock(sessionsPath) {
+    const lockPath = `${sessionsPath}.lock`;
+    // ...
+    while (true) {
+      try {
+        const fd = fs.openSync(lockPath, 'wx');  // ENOENT here on fresh install
+        // ...
+  ```
+
+  **After (rc.4):**
+  ```ts
+  function ensureSessionsFileDir(sessionsPath) {
+    const dir = path.dirname(sessionsPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+
+  async function acquireSessionsFileLock(sessionsPath) {
+    ensureSessionsFileDir(sessionsPath);   // NEW — guarantees parent dir
+    const lockPath = `${sessionsPath}.lock`;
+    // ...
+  ```
+
+### Added
+
+- `skill/plugin/pair-session-store.test.ts` — two new blocks (§17, §18)
+  covering the fresh-install regression: `createPairSession` against a
+  path whose parent directory does NOT exist completes in < 2 s (was
+  10 s hang), materializes the missing dir with the correct mode, writes
+  the sessions file at 0600, and leaves no lock sentinel. Plus read-path
+  defensive tests: `getPairSession` / `listActivePairSessions` against
+  a missing dir return null / `[]` without throwing (previously would
+  have hit the same ENOENT hang).
+- `skill/plugin/pair-http-route-registration.test.ts` — assertions
+  updated from `'gateway'` to `'plugin'`, plus a per-call regression
+  guard asserting `auth !== 'gateway'` so rc.3's value cannot sneak back
+  in. Test count: 23 → 27 assertions.
+
+### Unchanged
+
+No changes to: scanner-sim rules (still 0 flags), tarball contents (same
+44 files; diff is content of 3 `.ts` files + `package.json` bump +
+`CHANGELOG.md`), UX copy, terminology (`recovery phrase` throughout),
+protobuf schema, Memory Taxonomy v1, on-chain contract surface, MCP
+wiring, client integration, Hermes / NanoClaw / core (plugin-only RC).
+
+---
+
 ## [3.3.0-rc.3] — 2026-04-20
 
 Third release candidate for 3.3.0. Sole change vs rc.2: adds the mandatory
