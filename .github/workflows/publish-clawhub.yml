@@ -47,6 +47,11 @@ on:
         required: false
         type: number
         default: 1
+      slug:
+        description: 'ClawHub slug (default: totalreclaw). Override for canary / preview / side-channel publishes.'
+        required: false
+        type: string
+        default: totalreclaw
 
 jobs:
   publish:
@@ -97,9 +102,13 @@ jobs:
 
           echo "Publishing to ClawHub: version=$VERSION tags=$TAGS"
 
+          SLUG="${{ github.event.inputs.slug }}"
+          SLUG="${SLUG:-totalreclaw}"
+          echo "Publishing to slug: $SLUG"
+
           clawhub login --token "$CLAWHUB_TOKEN" --no-browser
           clawhub publish ./skill/plugin \
-            --slug totalreclaw \
+            --slug "$SLUG" \
             --version "$VERSION" \
             --tags "$TAGS" \
             --changelog "$CHANGELOG"
