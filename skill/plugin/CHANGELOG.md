@@ -4,6 +4,173 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.1] — 2026-04-22
+
+First release candidate for 3.3.1. Comprehensive patch release addressing
+user-QA findings against 3.3.0-rc.6
+(`docs/notes/QA-user-findings-3.3.0-rc.6-20260421.md` in
+`totalreclaw-internal`). The 3.3.0 runtime works; what 3.3.1 fixes is the
+user experience around LLM auto-detection, config schema, non-interactive
+CLI, gateway-URL resolution, and SKILL.md. All rc.2–rc.6 fixes are
+preserved (scanner comment, auth: 'plugin' literal, ensureSessionsFileDir
+mkdir, sync HTTP-route registration, manifest kind drop).
+
+See: `plans/2026-04-22-plugin-3.3.1-provider-agnostic-llm.md` (internal).
+
+### Added
+
+- **`skill/plugin/llm-profile-reader.ts`** — new scanner-isolated module that
+  harvests provider API keys from
+  `~/.openclaw/agents/<agent>/agent/auth-profiles.json`. This is where real
+  OpenClaw installs store user API keys. rc.6 silently no-op'd auto-extraction
+  for nearly every real user because `initLLMClient` only looked at env vars
+  and the SDK-passed `api.config.providers` — neither of which reach
+  auth-profiles.json.
+
+- **`skill/plugin/gateway-url.ts`** — new scanner-isolated module that detects
+  the gateway's externally-reachable URL for QR pairing. Two autodetect tiers:
+    1. Tailscale MagicDNS via `tailscale status --json` (assumes `tailscale
+       serve` on 443).
+    2. First non-loopback, non-virtual IPv4 interface (LAN mode; emits a
+       "only works on the same network" warning).
+
+- **`initLLMClient` 4-tier resolution cascade** — plugin-config override
+  (highest) → SDK-passed openclawProviders → harvested auth-profiles.json
+  keys → env vars (lowest). Every tier logs ONCE at startup at INFO level;
+  per-turn noise from rc.6 is removed.
+
+- **`openclaw totalreclaw onboard` non-interactive modes**:
+    - `--non-interactive` — exits 1 if any input would be prompted.
+    - `--json` — emits a structured payload (requires `--non-interactive`).
+    - `--mode <generate|restore>` — skip the menu prompt.
+    - `--phrase <12-or-24>` — required for `--mode restore`; `-` reads stdin.
+    - `--emit-phrase` — opt-in path that includes the plaintext phrase in the
+      JSON payload. Default omits the phrase; the agent should direct the
+      user to read `~/.totalreclaw/credentials.json` in their terminal.
+
+- **`openclaw totalreclaw pair [mode]` non-interactive flags**:
+    - `--json` — emits `{v, sid, url, pin, mode, expires_at_ms, qr_ascii}` to
+      stdout before polling begins. Agents capture + present to the user.
+    - `--timeout <sec>` — override the 15-minute default session TTL.
+
+- **`extraction.llm` plugin-config override** — new optional block in the
+  plugin config schema. Explicit provider/model/apiKey/baseUrl wins over
+  every auto-detection tier:
+  ```yaml
+  plugins:
+    entries:
+      totalreclaw:
+        config:
+          extraction:
+            llm:
+              provider: zai
+              apiKey: <your-key>
+              model: glm-4.5-flash   # optional — derived from provider default otherwise
+  ```
+
+- **Config schema accepts `publicUrl` + `extraction.interval` +
+  `extraction.maxFactsPerExtraction`** — 3.3.0 rejected these keys with
+  `invalid config: must NOT have additional properties`. Both the manifest
+  (`openclaw.plugin.json`) and the JS plugin definition now accept them.
+  `extraction.additionalProperties` and `extraction.llm.additionalProperties`
+  remain `false` to keep the surface strictly typed.
+
+- **Three new test files**:
+    - `llm-profile-reader.test.ts` — 19 assertions covering the auth-profiles
+      harvester (provider mapping, malformed input, multi-agent aggregation).
+    - `llm-client.test.ts` — 28 assertions covering the 4-tier cascade,
+      plus the `deriveCheapModel` regex-boundary fix.
+    - `config-schema.test.ts` — 14 assertions (+ Ajv strict validation when
+      available) covering the 3.3.1 schema surface.
+    - `onboarding-noninteractive.test.ts` — 22 assertions covering
+      `runNonInteractiveOnboard` happy path, phrase-validation, mode 0600,
+      `already-active` short-circuit.
+    - `pair-cli-json.test.ts` — 17 assertions covering pair-cli JSON output,
+      `ttlSeconds` propagation, and human-mode regression.
+
+### Changed
+
+- **`pair-cli.ts` — no TTY requirement**. Prior rc versions imported
+  `readline` but never used it; the intro block also had no interactive
+  prompts. 3.3.1 removes any path that touches `setRawMode` in pair-cli and
+  adds a 10-second timeout on the QR renderer so a misbehaving qrcode-terminal
+  never hangs the pairing flow. Confirmed by
+  `pair-cli-json.test.ts` asserting JSON mode emits a single payload without
+  any TTY interaction.
+
+- **`deriveCheapModel` — fixes word-boundary regression**. rc.6 used
+  `primaryModel.toLowerCase().includes(cheapWord)` which matched the substring
+  `mini` inside `gemini`, so `gemini-2.5-pro` passed through unchanged and
+  the extractor called a model the user hadn't configured. 3.3.1 uses a
+  word-boundary regex (`/(?:^|[-_/.])(?:flash|mini|nano|haiku|small|lite|fast)(?:[-_/.]|$)/i`).
+
+- **Cheap-model table** — exported as `CHEAP_MODEL_BY_PROVIDER` for use by
+  paths that resolve a provider without knowing the user's primary model
+  (auth-profiles.json tier). Includes zai→glm-4.5-flash, openai→gpt-4.1-mini,
+  anthropic→claude-haiku-4-5-20251001, gemini/google→gemini-flash-lite,
+  groq→llama-3.3-70b-versatile, deepseek→deepseek-chat,
+  openrouter→anthropic/claude-haiku-4-5-20251001, xai→grok-2,
+  mistral→mistral-small-latest, together→meta-llama/Llama-3.3-70B-Instruct-Turbo,
+  cerebras→llama3.3-70b.
+
+- **Gateway pairing URL cascade** — `buildPairingUrl` now threads through the
+  six-layer cascade: `publicUrl` → `gateway.remote.url` → custom bind host →
+  Tailscale autodetect → LAN autodetect → localhost fallback. Each fallback
+  emits a warning with clear pointer to `publicUrl` for override.
+
+- **SKILL.md — full rewrite**. Explicit prohibition of generating phrases in
+  chat; canonical onboarding commands (`openclaw totalreclaw onboard` or
+  `onboard --non-interactive --json --mode generate`); two-step install flow
+  documented clearly; full 3.3.1 config schema documented; all tool surfaces
+  aligned with current taxonomy (`claim|preference|directive|commitment|
+  episode|summary`); references to `npx @totalreclaw/mcp-server setup`
+  removed.
+
+### Fixed
+
+- **LLM auto-resolve silent no-op** — the root user-facing bug from
+  `QA-user-findings-3.3.0-rc.6-20260421.md`. Users store their provider key
+  in `~/.openclaw/agents/<agent>/agent/auth-profiles.json`; rc.6 never looked
+  there, so every turn logged `No LLM available for auto-extraction` and
+  zero facts were extracted. 3.3.1 adds auth-profiles as tier 3 of the
+  cascade.
+
+- **`plugins.entries.totalreclaw.config.publicUrl` rejected** — user-documented
+  config key errored out with `invalid config: must NOT have additional
+  properties`. Schema was missing the property. Fixed in both `openclaw.plugin.json`
+  and the in-JS `configSchema`.
+
+- **`No LLM available` fires every turn** — downgraded to a single INFO log
+  at startup. Never per-turn unless the resolvable state changes. The
+  `extraction.enabled=false` path also moved from warn to info (it's a user
+  choice, not a diagnostic signal).
+
+- **Recovery-phrase-in-chat in SKILL.md** — the prior SKILL.md told the
+  agent to "run `npx @totalreclaw/mcp-server setup` to generate a
+  cryptographically valid recovery phrase… display it prominently". Any
+  compliant agent following this leaked the phrase to the LLM provider's
+  logging path. Removed entirely and replaced with an explicit prohibition
+  + pointer to CLI flows.
+
+### Preserved from rc.2–rc.6
+
+- rc.2 scanner-comment isolation (fetch-word in comments rewrapped)
+- rc.4 `auth: 'plugin'` literal on HTTP routes
+- rc.4 `ensureSessionsFileDir` mkdir before lock acquire
+- rc.5 synchronous `registerHttpRoute` calls (no async IIFE)
+- rc.6 `openclaw.plugin.json` drop of `"kind": "memory"` (startup registry
+  fix; JS plugin definition still returns `kind: 'memory' as const` for
+  memory-slot matching)
+
+### Unchanged
+
+No protocol / on-chain changes vs 3.3.0. Memory Taxonomy v1 unchanged.
+Protobuf v4 unchanged. Subgraph schema unchanged. Billing cache unchanged.
+Relay API surface unchanged. No breaking changes to any public tool
+contract.
+
+---
+
 ## [3.3.0-rc.6] — 2026-04-20
 
 Sixth release candidate for 3.3.0. Single manifest-only fix for the

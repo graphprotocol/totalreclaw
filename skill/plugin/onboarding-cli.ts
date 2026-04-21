@@ -497,6 +497,166 @@ export function printStatus(
   out.write(COPY.statusFresh);
 }
 
+// ---------------------------------------------------------------------------
+// 3.3.1 — non-interactive onboard
+// ---------------------------------------------------------------------------
+
+/**
+ * Inputs to runNonInteractiveOnboard. Validated before any work begins —
+ * fail fast with a clear error rather than half-writing credentials.
+ */
+export interface NonInteractiveOnboardInputs {
+  credentialsPath: string;
+  statePath: string;
+  mode: 'generate' | 'restore';
+  /** Required for mode=restore. 12 or 24 BIP-39 words. */
+  phrase?: string;
+  /**
+   * If true, the JSON payload includes the plaintext phrase. Default
+   * false — the agent-driven flow returns only the derived scope address
+   * and the user is directed to `~/.totalreclaw/credentials.json` for
+   * their phrase. Explicitly opt-in via `--emit-phrase` in the CLI.
+   */
+  emitPhrase?: boolean;
+  /**
+   * Function that derives the scope/Smart Account address from a
+   * mnemonic. Supplied by `index.ts` so this module doesn't pull the
+   * viem / onnxruntime stack into its import graph.
+   */
+  deriveScopeAddress?: (mnemonic: string) => Promise<string | undefined>;
+  /** Override for @scure/bip39 generateMnemonic (for tests). */
+  generateMnemonic?: () => string;
+  /** Override for @scure/bip39 validateMnemonic (for tests). */
+  validateMnemonic?: (phrase: string) => boolean;
+}
+
+/** Result shape returned by runNonInteractiveOnboard. Mirrors the
+ *  JSON body the CLI prints when `--non-interactive --json` is set. */
+export interface NonInteractiveOnboardResult {
+  ok: boolean;
+  action: 'generate' | 'restore';
+  /** Only present when ok=true and mode=generate and emitPhrase=true. */
+  mnemonic?: string;
+  /** Derived scope address, when deriveScopeAddress is provided. */
+  scope_address?: string;
+  /** Path where the credentials file was written. */
+  credentials_path?: string;
+  /** Error code when ok=false (one of: missing-phrase, invalid-phrase, already-active, write-failed). */
+  error?: string;
+  /** Human-readable error detail when ok=false. */
+  error_detail?: string;
+}
+
+/**
+ * Run the onboarding flow without any TTY prompts. Never throws on
+ * invalid input — always returns a NonInteractiveOnboardResult so the
+ * CLI can render a clear JSON error.
+ *
+ * Security:
+ *   - Never writes the phrase to stdout unless `emitPhrase === true`.
+ *   - Writes credentials.json with mode 0600 via `writeCredentialsJson`.
+ *   - Does NOT prompt the user. Does NOT call readline.
+ */
+export async function runNonInteractiveOnboard(
+  inputs: NonInteractiveOnboardInputs,
+): Promise<NonInteractiveOnboardResult> {
+  const action: 'generate' | 'restore' = inputs.mode;
+  const generateFn = inputs.generateMnemonic ?? (() => generateMnemonic(wordlist, 128));
+  const validateFn = inputs.validateMnemonic ?? ((p: string) => validateMnemonic(p, wordlist));
+
+  // Refuse to overwrite an existing active onboarding — matches the
+  // interactive wizard's shortcut. Agents can still delete the file
+  // themselves if they truly want to re-onboard.
+  const existing = loadCredentialsJson(inputs.credentialsPath);
+  if (
+    existing?.mnemonic &&
+    typeof existing.mnemonic === 'string' &&
+    existing.mnemonic.trim().length > 0
+  ) {
+    return {
+      ok: false,
+      action,
+      error: 'already-active',
+      error_detail: `A recovery phrase already exists at ${inputs.credentialsPath}. Delete it first to re-onboard.`,
+    };
+  }
+
+  let mnemonic: string;
+  if (action === 'generate') {
+    mnemonic = generateFn();
+    if (typeof mnemonic !== 'string' || mnemonic.trim().split(/\s+/).length !== 12) {
+      return {
+        ok: false,
+        action,
+        error: 'generator-invalid',
+        error_detail: 'generateMnemonic produced an invalid phrase',
+      };
+    }
+  } else {
+    const raw = inputs.phrase ?? '';
+    if (!raw.trim()) {
+      return {
+        ok: false,
+        action,
+        error: 'missing-phrase',
+        error_detail: 'mode=restore requires --phrase <12-or-24-words> or --phrase - (read from stdin).',
+      };
+    }
+    const normalised = normaliseMnemonic(raw);
+    const words = normalised.split(/\s+/).filter(Boolean);
+    if ((words.length !== 12 && words.length !== 24) || !validateFn(normalised)) {
+      return {
+        ok: false,
+        action,
+        error: 'invalid-phrase',
+        error_detail: 'phrase must be 12 or 24 BIP-39 words with a valid checksum.',
+      };
+    }
+    mnemonic = normalised;
+  }
+
+  let state: OnboardingState;
+  try {
+    state = writeCredsAndState(
+      inputs.credentialsPath,
+      inputs.statePath,
+      mnemonic,
+      action === 'generate' ? 'generate' : 'import',
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      action,
+      error: 'write-failed',
+      error_detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  // Derive scope address if possible — best-effort, never block success.
+  let scopeAddress: string | undefined;
+  if (inputs.deriveScopeAddress) {
+    try {
+      scopeAddress = await inputs.deriveScopeAddress(mnemonic);
+    } catch {
+      scopeAddress = undefined;
+    }
+  }
+
+  const result: NonInteractiveOnboardResult = {
+    ok: true,
+    action,
+    credentials_path: inputs.credentialsPath,
+  };
+  if (scopeAddress) result.scope_address = scopeAddress;
+  if (inputs.emitPhrase) result.mnemonic = mnemonic;
+  void state; // Touch for clarity — state is persisted via writeCredsAndState.
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// CLI registration
+// ---------------------------------------------------------------------------
+
 /**
  * Helper the `index.ts` registerCli hook calls to wire both subcommands
  * onto the OpenClaw program. Kept here so the wiring + the wizard live in
@@ -504,10 +664,26 @@ export function printStatus(
  *
  * `program` is the OpenClaw-provided commander Command. We attach a
  * top-level `totalreclaw` command with `onboard` + `status` subcommands.
+ *
+ * 3.3.1 — `onboard` now accepts:
+ *   --non-interactive      Fail fast if any input would be prompted for.
+ *   --json                 Emit the result as structured JSON.
+ *   --mode <generate|restore>
+ *                          Skip the menu prompt.
+ *   --phrase <12-or-24>    Required for --mode restore. `-` reads stdin.
+ *   --emit-phrase          Include the plaintext phrase in the JSON payload
+ *                          (NOT recommended — the phrase lives in
+ *                          credentials.json; prefer reading it there).
  */
 export function registerOnboardingCli(
   program: import('commander').Command,
-  opts: { credentialsPath: string; statePath: string; logger: { info(msg: string): void; warn(msg: string): void; error(msg: string): void } },
+  opts: {
+    credentialsPath: string;
+    statePath: string;
+    logger: { info(msg: string): void; warn(msg: string): void; error(msg: string): void };
+    /** Caller-supplied helper for scope-address derivation. Optional — when absent, JSON output omits `scope_address`. */
+    deriveScopeAddress?: (mnemonic: string) => Promise<string | undefined>;
+  },
 ): void {
   const tr = program
     .command('totalreclaw')
@@ -515,7 +691,89 @@ export function registerOnboardingCli(
 
   tr.command('onboard')
     .description('Interactive onboarding: generate or import a recovery phrase (runs locally, no LLM)')
-    .action(async () => {
+    .option('--non-interactive', 'Exit non-zero if any input would be prompted for (agent-driven use)')
+    .option('--json', 'Emit the result as a structured JSON payload. Only valid with --non-interactive.')
+    .option('--mode <mode>', 'generate | restore — skip the menu prompt')
+    .option('--phrase <phrase>', 'Recovery phrase for --mode restore. `-` reads from stdin.')
+    .option('--emit-phrase', 'Include the plaintext phrase in the JSON payload (not recommended). Default: false.')
+    .action(async (...actionArgs: unknown[]) => {
+      // commander: (options, cmd)
+      const cliOpts = (actionArgs[0] ?? {}) as {
+        nonInteractive?: boolean;
+        json?: boolean;
+        mode?: string;
+        phrase?: string;
+        emitPhrase?: boolean;
+      };
+
+      if (cliOpts.nonInteractive) {
+        // Non-interactive path — no readline, no prompts.
+        const mode: 'generate' | 'restore' | null =
+          cliOpts.mode === 'generate'
+            ? 'generate'
+            : cliOpts.mode === 'restore' || cliOpts.mode === 'import'
+              ? 'restore'
+              : null;
+        if (!mode) {
+          const msg =
+            '--non-interactive requires --mode <generate|restore>. ' +
+            'Example: openclaw totalreclaw onboard --non-interactive --json --mode generate';
+          if (cliOpts.json) {
+            process.stdout.write(
+              JSON.stringify({ ok: false, error: 'missing-mode', error_detail: msg }) + '\n',
+            );
+          } else {
+            process.stderr.write(msg + '\n');
+          }
+          process.exit(1);
+        }
+
+        // Resolve phrase input. `-` means read all of stdin.
+        let phrase = cliOpts.phrase;
+        if (phrase === '-') {
+          phrase = await readAllStdin();
+        }
+
+        const result = await runNonInteractiveOnboard({
+          credentialsPath: opts.credentialsPath,
+          statePath: opts.statePath,
+          mode,
+          phrase,
+          emitPhrase: cliOpts.emitPhrase === true,
+          deriveScopeAddress: opts.deriveScopeAddress,
+        });
+
+        if (cliOpts.json) {
+          process.stdout.write(JSON.stringify(result) + '\n');
+        } else {
+          if (result.ok) {
+            if (result.mnemonic) {
+              process.stderr.write(
+                'WARNING: --emit-phrase was set. The plaintext recovery phrase was returned.\n' +
+                  'For agent-driven flows, prefer reading ~/.totalreclaw/credentials.json directly ' +
+                  'in the user\'s terminal instead of echoing the phrase.\n',
+              );
+            }
+            process.stdout.write(
+              `onboarding: ok  action=${result.action}  ` +
+                (result.scope_address ? `scope_address=${result.scope_address}  ` : '') +
+                `credentials=${result.credentials_path}\n`,
+            );
+          } else {
+            process.stderr.write(`onboarding: ${result.error}: ${result.error_detail ?? ''}\n`);
+          }
+        }
+        process.exit(result.ok ? 0 : 1);
+      }
+
+      if (cliOpts.json) {
+        process.stderr.write(
+          '--json requires --non-interactive. Use: openclaw totalreclaw onboard --non-interactive --json --mode generate\n',
+        );
+        process.exit(1);
+      }
+
+      // Interactive path — original 3.2.0 behaviour preserved in full.
       const io = buildDefaultIo();
       try {
         const result = await runOnboardingWizard({
@@ -545,6 +803,35 @@ export function registerOnboardingCli(
     .action(() => {
       printStatus(opts.credentialsPath, opts.statePath, process.stdout);
     });
+}
+
+// ---------------------------------------------------------------------------
+// stdin helper — reads until EOF. Used when --phrase=- is given.
+// ---------------------------------------------------------------------------
+
+async function readAllStdin(): Promise<string> {
+  const chunks: string[] = [];
+  process.stdin.setEncoding('utf-8');
+  return new Promise<string>((resolve) => {
+    const onData = (chunk: string) => chunks.push(chunk);
+    const onEnd = () => {
+      process.stdin.off('data', onData);
+      process.stdin.off('end', onEnd);
+      resolve(chunks.join(''));
+    };
+    process.stdin.on('data', onData);
+    process.stdin.on('end', onEnd);
+    // If stdin is a TTY with no data (e.g. user forgot to pipe), resolve
+    // after a short grace so we don't hang forever. Tests override by
+    // piping a string.
+    if ((process.stdin as NodeJS.ReadStream & { isTTY?: boolean }).isTTY) {
+      setTimeout(() => {
+        process.stdin.off('data', onData);
+        process.stdin.off('end', onEnd);
+        resolve(chunks.join(''));
+      }, 50);
+    }
+  });
 }
 
 // Ensure this module is reachable for import resolution in ESM tests.

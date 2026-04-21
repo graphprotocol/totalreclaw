@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/totalreclaw",
-  "version": "3.3.0-rc.6",
+  "version": "3.3.1-rc.1",
   "description": "End-to-end encrypted, agent-portable memory for OpenClaw and any LLM-agent runtime. XChaCha20-Poly1305 with protobuf v4 + on-chain Memory Taxonomy v1 (claim / preference / directive / commitment / episode / summary).",
   "type": "module",
   "keywords": [
@@ -50,7 +50,7 @@
     "skill.json"
   ],
   "scripts": {
-    "test": "npx tsx manifest-shape.test.ts",
+    "test": "npx tsx manifest-shape.test.ts && npx tsx config-schema.test.ts && npx tsx llm-profile-reader.test.ts && npx tsx llm-client.test.ts && npx tsx onboarding-noninteractive.test.ts && npx tsx pair-cli-json.test.ts",
     "check-scanner": "node ../scripts/check-scanner.mjs",
     "prepublishOnly": "node ../scripts/check-scanner.mjs"
   },

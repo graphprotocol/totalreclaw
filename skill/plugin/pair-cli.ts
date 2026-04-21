@@ -61,6 +61,11 @@ export interface PairCliDeps {
   io: PairCliIo;
   /** Optional TTL override (sec → ms conversion happens here). */
   ttlSeconds?: number;
+  /**
+   * 3.3.1 — Output format. Defaults to 'human' for backwards-compat with
+   * the rc.6 flow. `--json` on the CLI wraps this to 'json'.
+   */
+  outputMode?: PairCliOutputMode;
 }
 
 export type PairCliMode = PairSessionMode;
@@ -69,6 +74,33 @@ export interface PairCliOutcome {
   status: 'completed' | 'canceled' | 'expired' | 'rejected' | 'error';
   sid?: string;
   error?: string;
+}
+
+/**
+ * Output mode for runPairCli.
+ *   - 'human' (default): prints the multi-line intro + security warning +
+ *     "Waiting..." spinner line and polls until terminal state.
+ *   - 'json': emits a single JSON object to stdout with the URL, PIN,
+ *     SID, expiration, and ASCII QR, then polls silently. Exits as soon
+ *     as the session reaches a terminal state — same status-code
+ *     semantics as 'human' (0 on completed, 1 on expired/rejected/error,
+ *     130 on canceled).
+ */
+export type PairCliOutputMode = 'human' | 'json';
+
+/**
+ * JSON payload emitted by runPairCli when outputMode === 'json'. Printed
+ * ONCE to stdout before polling begins — agents can capture it, release
+ * the child-process stdout, and display it themselves.
+ */
+export interface PairCliJsonPayload {
+  v: 1;
+  sid: string;
+  url: string;
+  pin: string;
+  mode: PairCliMode;
+  expires_at_ms: number;
+  qr_ascii: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +175,15 @@ function renderUnsafelyVisibleCode(code: string): string {
  *
  * Blocks until the session finishes, expires, or the operator hits
  * Ctrl+C.
+ *
+ * 3.3.1 — Non-TTY support:
+ *   - Does NOT call `readline` / `stdin.setRawMode` / any interactive
+ *     prompt. All output is unidirectional to stdout/stderr, so the
+ *     command works under `docker exec <container> ...` without `-t`.
+ *   - Adds an optional JSON mode (deps.outputMode === 'json') that emits
+ *     a single JSON object to stdout before polling begins. Agents
+ *     capture it, present the QR / URL / PIN to the user themselves,
+ *     and still get the terminal-state exit code.
  */
 export async function runPairCli(
   mode: PairCliMode,
@@ -152,6 +193,7 @@ export async function runPairCli(
   const pollInterval = Math.max(500, deps.pollIntervalMs ?? 1500);
   const io = deps.io;
   const stdout = io.stdout;
+  const outputMode: PairCliOutputMode = deps.outputMode ?? 'human';
 
   // 1. Generate keypair + create the session
   const kp = generateGatewayKeypair();
@@ -171,64 +213,106 @@ export async function runPairCli(
     return { status: 'error', error: msg };
   }
 
-  // 2. Render the QR + text
+  // 2. Render the QR — promise-based so both human + json modes share it.
   const url = deps.renderPairingUrl(session);
-  stdout.write(COPY.intro);
-  stdout.write(mode === 'generate' ? COPY.introGenerate : COPY.introImport);
-  await new Promise<void>((resolve) => {
-    deps.renderQr(url, (ascii) => {
-      stdout.write('\n' + ascii + '\n');
-      resolve();
-    });
+  const qrAscii = await new Promise<string>((resolve) => {
+    // Guard against QR renderers that never fire their callback (shouldn't
+    // happen with qrcode-terminal, but defensive): a 10-second timeout
+    // returns an empty string so we never hang the pairing flow.
+    let settled = false;
+    const t = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve('');
+      }
+    }, 10_000);
+    try {
+      deps.renderQr(url, (ascii) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(t);
+        resolve(ascii);
+      });
+    } catch (err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(t);
+      resolve(`(QR renderer crashed: ${err instanceof Error ? err.message : String(err)})`);
+    }
   });
-  stdout.write(COPY.codeLabel);
-  stdout.write(renderUnsafelyVisibleCode(session.secondaryCode));
-  stdout.write(COPY.urlLabel);
-  stdout.write(url);
-  stdout.write(COPY.securityWarning);
-  stdout.write(COPY.awaiting);
-  stdout.write('\n');
 
-  // 3. Set up Ctrl+C to cancel the session server-side
+  // 3. Emit the visible surface (JSON first — single line — or human copy).
+  if (outputMode === 'json') {
+    const payload: PairCliJsonPayload = {
+      v: 1,
+      sid: session.sid,
+      url,
+      pin: session.secondaryCode,
+      mode,
+      expires_at_ms: session.expiresAtMs,
+      qr_ascii: qrAscii,
+    };
+    stdout.write(JSON.stringify(payload) + '\n');
+  } else {
+    stdout.write(COPY.intro);
+    stdout.write(mode === 'generate' ? COPY.introGenerate : COPY.introImport);
+    if (qrAscii) {
+      stdout.write('\n' + qrAscii + '\n');
+    } else {
+      stdout.write('\n(QR not rendered — use the URL below)\n');
+    }
+    stdout.write(COPY.codeLabel);
+    stdout.write(renderUnsafelyVisibleCode(session.secondaryCode));
+    stdout.write(COPY.urlLabel);
+    stdout.write(url);
+    stdout.write(COPY.securityWarning);
+    stdout.write(COPY.awaiting);
+    stdout.write('\n');
+  }
+
+  // 4. Set up Ctrl+C to cancel the session server-side
   let canceled = false;
   const releaseInterrupt = io.onInterrupt(() => {
     canceled = true;
   });
 
-  // 4. Poll
+  // 5. Poll
+  const emitStatus = (text: string): void => {
+    if (outputMode === 'human') stdout.write(text);
+  };
   let lastStatus = session.status;
   let showedDeviceConnected = false;
   try {
     while (true) {
       if (canceled) {
         await rejectPairSession(deps.sessionsPath, session.sid, now);
-        stdout.write(COPY.canceled + '\n');
+        emitStatus(COPY.canceled + '\n');
         return { status: 'canceled', sid: session.sid };
       }
       await sleep(pollInterval);
       const fresh = await getPairSession(deps.sessionsPath, session.sid, now);
       if (!fresh) {
         // Pruned — session is gone entirely.
-        stdout.write(COPY.expired + '\n');
+        emitStatus(COPY.expired + '\n');
         return { status: 'expired', sid: session.sid };
       }
       if (fresh.status !== lastStatus) {
         lastStatus = fresh.status;
         if (fresh.status === 'device_connected' && !showedDeviceConnected) {
-          stdout.write(COPY.deviceConnected + '\n');
+          emitStatus(COPY.deviceConnected + '\n');
           showedDeviceConnected = true;
         }
       }
       if (fresh.status === 'completed') {
-        stdout.write(COPY.completed + '\n');
+        emitStatus(COPY.completed + '\n');
         return { status: 'completed', sid: session.sid };
       }
       if (fresh.status === 'expired') {
-        stdout.write(COPY.expired + '\n');
+        emitStatus(COPY.expired + '\n');
         return { status: 'expired', sid: session.sid };
       }
       if (fresh.status === 'rejected') {
-        stdout.write(COPY.rejected + '\n');
+        emitStatus(COPY.rejected + '\n');
         return { status: 'rejected', sid: session.sid };
       }
     }
@@ -286,6 +370,7 @@ type CommanderCommand = {
   name(): string;
   command(name: string): CommanderCommand;
   description(text: string): CommanderCommand;
+  option(flags: string, description: string, defaultValue?: unknown): CommanderCommand;
   action(fn: (...args: unknown[]) => Promise<void> | void): CommanderCommand;
   commands: CommanderCommand[];
 };
@@ -313,10 +398,22 @@ export function registerPairCli(
     .description(
       'Pair a remote browser device to this gateway (mode = generate | import; default generate)',
     )
+    .option('--json', 'Emit a single JSON payload (url/pin/sid/qr_ascii) instead of the human-readable banner. Enables agent-driven pairing.')
+    .option('--timeout <sec>', 'Session TTL in seconds (default: 900 = 15 min, matches pair-session-store default)')
     .action(async (...args: unknown[]) => {
+      // commander passes: [modeArg, options, cmd]
       const modeRaw = typeof args[0] === 'string' ? args[0] : undefined;
+      const opts = (args[1] ?? {}) as { json?: boolean; timeout?: string | number };
       const mode: PairCliMode =
         modeRaw === 'import' || modeRaw === 'imp' ? 'import' : 'generate';
+      const outputMode: PairCliOutputMode = opts.json ? 'json' : 'human';
+      let ttlSeconds: number | undefined;
+      if (typeof opts.timeout === 'number' && Number.isFinite(opts.timeout)) {
+        ttlSeconds = opts.timeout;
+      } else if (typeof opts.timeout === 'string' && opts.timeout.trim() !== '') {
+        const parsed = Number(opts.timeout);
+        if (Number.isFinite(parsed) && parsed > 0) ttlSeconds = parsed;
+      }
       const io = buildDefaultPairCliIo();
       try {
         const outcome = await runPairCli(mode, {
@@ -324,6 +421,8 @@ export function registerPairCli(
           renderPairingUrl: deps.renderPairingUrl,
           renderQr: defaultRenderQr,
           io,
+          outputMode,
+          ttlSeconds,
         });
         if (outcome.status !== 'completed') {
           process.exit(outcome.status === 'canceled' ? 130 : 1);

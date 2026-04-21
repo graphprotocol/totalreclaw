@@ -94,54 +94,59 @@ const PROVIDER_BASE_URLS: Record<string, string> = {
 const CHEAP_INDICATORS = ['flash', 'mini', 'nano', 'haiku', 'small', 'lite', 'fast'];
 
 /**
+ * Regex that tests whether a model id genuinely mentions a "cheap" tier.
+ * Uses word-boundary + `-` separators so we do NOT match substrings like
+ * "mini" inside "gemini" (real bug caught in 3.3.1 tests — deriveCheapModel
+ * was passing gemini-2.5-pro through unchanged because `.includes('mini')`
+ * matched the letters inside "gemini"). The canonical cheap-tier naming
+ * conventions put the indicator at a hyphen boundary or end of string:
+ *   gpt-4.1-mini, claude-haiku-4-5, gemini-flash-lite, glm-4.5-flash, o4-mini
+ */
+const CHEAP_INDICATOR_RE = new RegExp(
+  `(?:^|[-_/.])(?:${CHEAP_INDICATORS.join('|')})(?:[-_/.]|$)`,
+  'i',
+);
+
+/**
+ * Default cheap extraction model per provider. Exported so callers that
+ * resolve a provider WITHOUT knowing the user's primary model (e.g. the
+ * auth-profiles.json path) can still pick a sensible model.
+ *
+ * 3.3.1 update: haiku is now `claude-haiku-4-5-20251001` (latest cheap
+ * Claude as of 2026-04). glm-4.5-flash stays the zai extraction default.
+ */
+export const CHEAP_MODEL_BY_PROVIDER: Record<string, string> = {
+  zai: 'glm-4.5-flash',
+  anthropic: 'claude-haiku-4-5-20251001',
+  openai: 'gpt-4.1-mini',
+  gemini: 'gemini-flash-lite',
+  google: 'gemini-flash-lite',
+  mistral: 'mistral-small-latest',
+  groq: 'llama-3.3-70b-versatile',
+  deepseek: 'deepseek-chat',
+  openrouter: 'anthropic/claude-haiku-4-5-20251001',
+  xai: 'grok-2',
+  together: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+  cerebras: 'llama3.3-70b',
+};
+
+/**
  * Derive a cheap/fast model suitable for fact extraction, given the user's
  * provider and primary (potentially expensive) model.
  */
-function deriveCheapModel(provider: string, primaryModel: string): string {
-  // If already on a cheap model, use it as-is
-  if (CHEAP_INDICATORS.some((s) => primaryModel.toLowerCase().includes(s))) {
+export function deriveCheapModel(provider: string, primaryModel: string): string {
+  // If already on a cheap model, use it as-is.
+  // Word-boundary match to avoid false positives (see CHEAP_INDICATOR_RE).
+  if (CHEAP_INDICATOR_RE.test(primaryModel)) {
     return primaryModel;
   }
 
   // Derive based on provider naming conventions
-  switch (provider) {
-    case 'zai': {
-      // glm-5.1 -> glm-5-turbo (fast, available on coding endpoint)
-      return 'glm-5-turbo';
-    }
-    case 'anthropic': {
-      // claude-sonnet-4-5 -> claude-haiku-4-5-20251001
-      return 'claude-haiku-4-5-20251001';
-    }
-    case 'openai': {
-      // gpt-4.1 -> gpt-4.1-mini, gpt-4o -> gpt-4.1-mini
-      return 'gpt-4.1-mini';
-    }
-    case 'gemini':
-    case 'google': {
-      return 'gemini-2.0-flash';
-    }
-    case 'mistral': {
-      return 'mistral-small-latest';
-    }
-    case 'groq': {
-      return 'llama-3.3-70b-versatile';
-    }
-    case 'deepseek': {
-      return 'deepseek-chat';
-    }
-    case 'openrouter': {
-      // Use Anthropic Haiku via OpenRouter (cheap and good at JSON)
-      return 'anthropic/claude-haiku-4-5-20251001';
-    }
-    case 'xai': {
-      return 'grok-2';
-    }
-    default: {
-      // Fallback: try the primary model itself
-      return primaryModel;
-    }
-  }
+  const fromTable = CHEAP_MODEL_BY_PROVIDER[provider];
+  if (fromTable) return fromTable;
+
+  // Fallback: use the primary model (best-effort — caller may still work)
+  return primaryModel;
 }
 
 // ---------------------------------------------------------------------------
@@ -150,21 +155,70 @@ function deriveCheapModel(provider: string, primaryModel: string): string {
 
 let _cachedConfig: LLMClientConfig | null = null;
 let _initialized = false;
-let _logger: { warn: (msg: string) => void } | null = null;
+let _logger: { warn: (msg: string) => void; info?: (msg: string) => void } | null = null;
+
+/** Harvested auth-profile key entry — same shape as llm-profile-reader. */
+export interface AuthProfileKeyInput {
+  provider: string;
+  apiKey: string;
+  sourcePath?: string;
+  profileId?: string;
+}
+
+/**
+ * Plugin-level extraction override block. Read from
+ * `plugins.entries.totalreclaw.config.extraction.llm` via the plugin
+ * config surface.
+ */
+interface ExtractionLlmOverride {
+  provider?: string;
+  model?: string;
+  apiKey?: string;
+  baseUrl?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Initialization
 // ---------------------------------------------------------------------------
 
 /**
+ * Build an LLMClientConfig for a known provider + apiKey, picking a
+ * cheap default model if none is specified. Returns null if the
+ * provider is unknown and no baseUrl is available.
+ */
+function buildConfigForProvider(
+  provider: string,
+  apiKey: string,
+  opts: {
+    baseUrlOverride?: string;
+    modelOverride?: string;
+    primaryModelHint?: string;
+    apiFormatOverride?: 'openai' | 'anthropic';
+  } = {},
+): LLMClientConfig | null {
+  const baseUrl = (opts.baseUrlOverride ?? PROVIDER_BASE_URLS[provider] ?? '').replace(/\/+$/, '');
+  if (!baseUrl) return null;
+  const model =
+    opts.modelOverride ??
+    (opts.primaryModelHint ? deriveCheapModel(provider, opts.primaryModelHint) : null) ??
+    CHEAP_MODEL_BY_PROVIDER[provider];
+  if (!model) return null;
+  const apiFormat: 'openai' | 'anthropic' =
+    opts.apiFormatOverride ?? (provider === 'anthropic' ? 'anthropic' : 'openai');
+  return { apiKey, baseUrl, model, apiFormat };
+}
+
+/**
  * Initialize the LLM client by detecting the provider from OpenClaw's config.
  * Called once from the plugin's `register()` function.
  *
- * Resolution order (highest priority first):
- *   1. Plugin config `extraction.model` (if provided)
- *   2. Auto-derived from provider heuristic using env var API keys
- *   3. OpenClaw's model provider config (api.config.models.providers)
- *   4. Fallback: try common env vars (ZAI_API_KEY, OPENAI_API_KEY) for dev/test
+ * 3.3.1 resolution cascade (highest priority first):
+ *   1. Plugin config `extraction.llm` override block (provider/apiKey/baseUrl/model)
+ *   2. `api.config.providers` / `openclawProviders` — SDK-passed
+ *   3. `~/.openclaw/agents/*\/agent/auth-profiles.json` (harvested by caller)
+ *   4. Env var fallback (`ZAI_API_KEY`, `OPENAI_API_KEY`, ...)
+ *   5. No source → disable extraction cleanly (single log at startup, never
+ *      per-turn).
  *
  * The `TOTALRECLAW_LLM_MODEL` user-facing override was removed in v1 —
  * `deriveCheapModel(provider)` covers the 99% case and a model-level knob
@@ -174,122 +228,218 @@ export function initLLMClient(options: {
   primaryModel?: string;
   pluginConfig?: Record<string, unknown>;
   openclawProviders?: Record<string, OpenClawProviderConfig>;
-  logger?: { warn: (msg: string) => void };
+  /**
+   * Auth-profile entries harvested by llm-profile-reader. Caller supplies
+   * this list so llm-client.ts never touches disk (scanner isolation —
+   * this file has `fetch`/`POST` in it).
+   */
+  authProfileKeys?: AuthProfileKeyInput[];
+  logger?: { warn: (msg: string) => void; info?: (msg: string) => void };
 }): void {
   _logger = options.logger ?? null;
   _initialized = true;
   _cachedConfig = null;
 
-  const { primaryModel, pluginConfig, openclawProviders } = options;
+  const { primaryModel, pluginConfig, openclawProviders, authProfileKeys } = options;
 
   // Check if extraction is explicitly disabled
   const extraction = pluginConfig?.extraction as Record<string, unknown> | undefined;
   if (extraction?.enabled === false) {
-    _logger?.warn('TotalReclaw: LLM extraction explicitly disabled via plugin config.');
+    _logger?.info?.(
+      'TotalReclaw extraction LLM: disabled via plugin config (extraction.enabled=false).',
+    );
     return;
   }
 
-  // --- Try to resolve from primaryModel (auto-detect path) ---
+  const modelOverride =
+    typeof extraction?.model === 'string' ? (extraction.model as string) : undefined;
+  const llmOverrideRaw = extraction?.llm as ExtractionLlmOverride | undefined;
+  const llmOverride: ExtractionLlmOverride | undefined =
+    typeof llmOverrideRaw === 'object' && llmOverrideRaw !== null ? llmOverrideRaw : undefined;
+
+  // Derive provider name from primary-model ("anthropic/claude-sonnet-4-5" etc)
+  let providerFromPrimary = '';
+  let modelFromPrimary: string | undefined;
   if (primaryModel) {
     const parts = primaryModel.split('/');
-    const provider = parts.length >= 2 ? parts[0].toLowerCase() : '';
-    const modelName = parts.length >= 2 ? parts.slice(1).join('/') : primaryModel;
+    if (parts.length >= 2) {
+      providerFromPrimary = parts[0].toLowerCase();
+      modelFromPrimary = parts.slice(1).join('/');
+    } else {
+      modelFromPrimary = primaryModel;
+    }
+  }
 
-    if (provider) {
-      // Find the API key for this provider — first from env vars, then from
-      // OpenClaw's provider config (api.config.models.providers)
-      const keyNames = PROVIDER_KEY_NAMES[provider];
-      let apiKey = keyNames
-        ? keyNames.map((name) => CONFIG.llmApiKeys[name]).find(Boolean)
+  // ---------------------------------------------------------------------
+  // Tier 1 — explicit plugin-config override (highest priority)
+  // Accepts any subset of { provider, model, apiKey, baseUrl }. A bare
+  // `model` override without a provider+apiKey falls through to lower
+  // tiers — matches pre-3.3.1 behaviour.
+  // ---------------------------------------------------------------------
+  if (llmOverride && typeof llmOverride === 'object') {
+    const provider = (llmOverride.provider ?? providerFromPrimary).toLowerCase();
+    const apiKey =
+      typeof llmOverride.apiKey === 'string' && llmOverride.apiKey.trim()
+        ? llmOverride.apiKey.trim()
         : undefined;
-
-      let baseUrl = PROVIDER_BASE_URLS[provider];
-
-      // If no env var key found, check OpenClaw's provider config
-      if (!apiKey && openclawProviders) {
-        const ocProvider = openclawProviders[provider];
-        if (ocProvider?.apiKey) {
-          apiKey = ocProvider.apiKey;
-          if (ocProvider.baseUrl) {
-            baseUrl = ocProvider.baseUrl.replace(/\/+$/, '');
-          }
-        }
-      }
-
-      if (apiKey && baseUrl) {
-        // Determine model: plugin config > auto-derived
-        const model =
-          (typeof extraction?.model === 'string' ? extraction.model : null) ||
-          deriveCheapModel(provider, modelName);
-
-        const apiFormat: 'openai' | 'anthropic' =
-          provider === 'anthropic' ? 'anthropic' : 'openai';
-
-        _cachedConfig = { apiKey, baseUrl, model, apiFormat };
+    if (provider && apiKey) {
+      const cfg = buildConfigForProvider(provider, apiKey, {
+        baseUrlOverride: llmOverride.baseUrl,
+        modelOverride: llmOverride.model ?? modelOverride,
+        primaryModelHint: modelFromPrimary,
+      });
+      if (cfg) {
+        _cachedConfig = cfg;
+        _logger?.info?.(`TotalReclaw extraction LLM: resolved ${provider}/${cfg.model} (plugin config override)`);
         return;
       }
     }
   }
 
-  // --- Fallback: try OpenClaw provider configs (any provider with an apiKey) ---
+  // ---------------------------------------------------------------------
+  // Tier 2 — SDK-passed openclawProviders. Try the primary-model's provider
+  // first, then any other provider that has an apiKey.
+  // ---------------------------------------------------------------------
   if (openclawProviders) {
+    if (providerFromPrimary) {
+      const ocProvider = openclawProviders[providerFromPrimary];
+      if (ocProvider?.apiKey) {
+        const cfg = buildConfigForProvider(providerFromPrimary, ocProvider.apiKey, {
+          baseUrlOverride: ocProvider.baseUrl,
+          modelOverride,
+          primaryModelHint: modelFromPrimary,
+          apiFormatOverride:
+            ocProvider.api === 'anthropic-messages' || providerFromPrimary === 'anthropic'
+              ? 'anthropic'
+              : 'openai',
+        });
+        if (cfg) {
+          _cachedConfig = cfg;
+          _logger?.info?.(
+            `TotalReclaw extraction LLM: resolved ${providerFromPrimary}/${cfg.model} (OpenClaw provider config)`,
+          );
+          return;
+        }
+      }
+    }
     for (const [providerName, providerConfig] of Object.entries(openclawProviders)) {
       if (!providerConfig?.apiKey) continue;
-
       const provider = providerName.toLowerCase();
-      let baseUrl = providerConfig.baseUrl?.replace(/\/+$/, '') || PROVIDER_BASE_URLS[provider];
-      if (!baseUrl) continue;
-
-      // Pick a model from the provider's configured models, or use our default
       const firstModelId = providerConfig.models?.[0]?.id;
-      const model =
-        (typeof extraction?.model === 'string' ? extraction.model : null) ||
-        (firstModelId ? deriveCheapModel(provider, firstModelId) : null);
-
-      if (!model) continue;
-
-      const apiFormat: 'openai' | 'anthropic' =
-        providerConfig.api === 'anthropic-messages' || provider === 'anthropic'
-          ? 'anthropic'
-          : 'openai';
-
-      _cachedConfig = { apiKey: providerConfig.apiKey, baseUrl, model, apiFormat };
-      return;
+      const cfg = buildConfigForProvider(provider, providerConfig.apiKey, {
+        baseUrlOverride: providerConfig.baseUrl,
+        modelOverride,
+        primaryModelHint: firstModelId,
+        apiFormatOverride:
+          providerConfig.api === 'anthropic-messages' || provider === 'anthropic'
+            ? 'anthropic'
+            : 'openai',
+      });
+      if (cfg) {
+        _cachedConfig = cfg;
+        _logger?.info?.(
+          `TotalReclaw extraction LLM: resolved ${provider}/${cfg.model} (OpenClaw provider config)`,
+        );
+        return;
+      }
     }
   }
 
-  // --- Fallback: try common env var API keys (for dev/test without OpenClaw config) ---
-  const fallbackProviders: Array<[string, string, string]> = [
-    ['zai', 'zai', 'glm-4.5-flash'],
-    ['openai', 'openai', 'gpt-4.1-mini'],
-    ['anthropic', 'anthropic', 'claude-haiku-4-5-20251001'],
-    ['gemini', 'gemini', 'gemini-2.0-flash'],
+  // ---------------------------------------------------------------------
+  // Tier 3 — auth-profiles.json keys harvested by llm-profile-reader.
+  // 3.3.1: new tier. Prefer the primary-model's provider, then any other.
+  // ---------------------------------------------------------------------
+  if (authProfileKeys && authProfileKeys.length > 0) {
+    if (providerFromPrimary) {
+      const hit = authProfileKeys.find((k) => k.provider === providerFromPrimary);
+      if (hit) {
+        const cfg = buildConfigForProvider(providerFromPrimary, hit.apiKey, {
+          modelOverride,
+          primaryModelHint: modelFromPrimary,
+        });
+        if (cfg) {
+          _cachedConfig = cfg;
+          _logger?.info?.(
+            `TotalReclaw extraction LLM: resolved ${providerFromPrimary}/${cfg.model} (auth-profiles.json)`,
+          );
+          return;
+        }
+      }
+    }
+    // Try zai / openai / anthropic first (cheapest+most available), then anything else.
+    const priority = ['zai', 'openai', 'anthropic', 'gemini', 'groq', 'deepseek', 'mistral', 'openrouter', 'xai', 'together', 'cerebras'];
+    const ordered = [
+      ...priority.flatMap((p) => authProfileKeys.filter((k) => k.provider === p)),
+      ...authProfileKeys.filter((k) => !priority.includes(k.provider)),
+    ];
+    for (const entry of ordered) {
+      const cfg = buildConfigForProvider(entry.provider, entry.apiKey, {
+        modelOverride,
+      });
+      if (cfg) {
+        _cachedConfig = cfg;
+        _logger?.info?.(
+          `TotalReclaw extraction LLM: resolved ${entry.provider}/${cfg.model} (auth-profiles.json)`,
+        );
+        return;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Tier 4 — env var fallback (for dev/test without OpenClaw config)
+  // ---------------------------------------------------------------------
+  const envFallback: Array<[string, string]> = [
+    ['zai', 'zai'],
+    ['openai', 'openai'],
+    ['anthropic', 'anthropic'],
+    ['gemini', 'gemini'],
+    ['groq', 'groq'],
+    ['deepseek', 'deepseek'],
+    ['mistral', 'mistral'],
+    ['openrouter', 'openrouter'],
+    ['xai', 'xai'],
   ];
-
-  for (const [provider, keyName, defaultModel] of fallbackProviders) {
+  // If primary model hints a specific provider, try it first.
+  if (providerFromPrimary) {
+    const keyNames = PROVIDER_KEY_NAMES[providerFromPrimary];
+    if (keyNames) {
+      const apiKey = keyNames.map((n) => CONFIG.llmApiKeys[n]).find(Boolean);
+      if (apiKey) {
+        const cfg = buildConfigForProvider(providerFromPrimary, apiKey, {
+          modelOverride,
+          primaryModelHint: modelFromPrimary,
+        });
+        if (cfg) {
+          _cachedConfig = cfg;
+          _logger?.info?.(
+            `TotalReclaw extraction LLM: resolved ${providerFromPrimary}/${cfg.model} (env var)`,
+          );
+          return;
+        }
+      }
+    }
+  }
+  for (const [provider, keyName] of envFallback) {
     const apiKey = CONFIG.llmApiKeys[keyName];
-    if (apiKey) {
-      const model =
-        (typeof extraction?.model === 'string' ? extraction.model : null) ||
-        defaultModel;
-
-      const apiFormat: 'openai' | 'anthropic' =
-        provider === 'anthropic' ? 'anthropic' : 'openai';
-
-      _cachedConfig = {
-        apiKey,
-        baseUrl: PROVIDER_BASE_URLS[provider],
-        model,
-        apiFormat,
-      };
+    if (!apiKey) continue;
+    const cfg = buildConfigForProvider(provider, apiKey, { modelOverride });
+    if (cfg) {
+      _cachedConfig = cfg;
+      _logger?.info?.(`TotalReclaw extraction LLM: resolved ${provider}/${cfg.model} (env var)`);
       return;
     }
   }
 
-  // No LLM available
-  _logger?.warn(
-    'TotalReclaw: No LLM available for auto-extraction. ' +
-    'Set an API key for your provider or configure extraction in plugin settings.',
+  // ---------------------------------------------------------------------
+  // No source — extraction disabled. Single startup log, INFO-level.
+  // NOT a warn: this is the default state for users who have not set up a
+  // provider. Warning per turn is what 3.3.0 did and it was misleading.
+  // ---------------------------------------------------------------------
+  _logger?.info?.(
+    'TotalReclaw extraction LLM: not configured — auto-extraction disabled. ' +
+      'To enable, configure a provider in ~/.openclaw/agents/*\/agent/auth-profiles.json ' +
+      'or set an API key env var (ZAI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, ...).',
   );
 }
 

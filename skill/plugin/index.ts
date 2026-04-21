@@ -74,6 +74,11 @@ import {
   type MemoryScope,
 } from './extractor.js';
 import { initLLMClient, resolveLLMConfig, chatCompletion, generateEmbedding, getEmbeddingDims } from './llm-client.js';
+import {
+  defaultAuthProfilesRoot,
+  readAllAuthProfileKeys,
+  dedupeByProvider,
+} from './llm-profile-reader.js';
 import { LSHHasher } from './lsh.js';
 import { rerank, cosineSimilarity, detectQueryIntent, INTENT_WEIGHTS, type RerankerCandidate } from './reranker.js';
 import { deduplicateBatch } from './semantic-dedup.js';
@@ -139,6 +144,7 @@ import {
 import { decideToolGate, isGatedToolName } from './tool-gating.js';
 import { detectFirstRun, buildWelcomePrepend, type GatewayMode } from './first-run.js';
 import { buildPairRoutes } from './pair-http.js';
+import { detectGatewayHost } from './gateway-url.js';
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import crypto from 'node:crypto';
@@ -270,18 +276,19 @@ const CREDENTIALS_PATH = CONFIG.credentialsPath;
  * Build the full pairing URL (including `#pk=` fragment) for a fresh
  * pairing session. Pulls gateway config from `api.config.gateway`.
  *
- * Resolution order (mirrors the device-pair extension):
- *   1. pluginConfig.publicUrl (if the operator set it explicitly)
- *   2. gateway.remote.url (if the gateway is marked remote)
- *   3. gateway.bind=custom + customBindHost + port
- *   4. gateway.bind=tailnet/lan is acknowledged but we do NOT probe
- *      the host here (network calls); we fall back to localhost with
- *      a warning log.
- *   5. gateway.port default = 18789 + localhost.
+ * Resolution order (3.3.1 — six-layer cascade):
+ *   1. `plugins.entries.totalreclaw.config.publicUrl` — explicit override
+ *   2. `gateway.remote.url` — OpenClaw's own remote-gateway URL
+ *   3. `gateway.bind === 'custom'` + `gateway.customBindHost` + port
+ *   4. Tailscale auto-detect — `tailscale status --json` → `https://<MagicDNS>`
+ *      (assumes `tailscale serve` proxies to the gateway port on 443)
+ *   5. LAN auto-detect — first non-loopback, non-virtual IPv4 interface.
+ *      Emits a warning: "only works on the same network".
+ *   6. Fallback `http://localhost:<port>` — warns with a pointer to
+ *      configure `plugins.entries.totalreclaw.config.publicUrl`.
  *
- * Always returns a working URL string; never throws. The caller can
- * log a warning if the URL is localhost and the gateway is remote,
- * but the CLI always prints whatever we give it.
+ * Always returns a working URL string; never throws. The caller (CLI or
+ * JSON output) prints whatever we give it.
  */
 function buildPairingUrl(
   api: Pick<OpenClawPluginApi, 'config' | 'pluginConfig' | 'logger'>,
@@ -303,24 +310,62 @@ function buildPairingUrl(
   const port = cfg?.gateway?.port ?? 18789;
 
   let base: string;
+
+  // Layer 1 — explicit user override
   if (typeof pluginCfg.publicUrl === 'string' && pluginCfg.publicUrl.trim()) {
     base = pluginCfg.publicUrl.replace(/\/+$/, '');
-    // If the user gave us a ws:// URL, rewrite to http(s)://
     base = base.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
-  } else if (typeof cfg?.gateway?.remote?.url === 'string' && cfg.gateway.remote.url.trim()) {
+  }
+  // Layer 2 — OpenClaw gateway remote URL
+  else if (typeof cfg?.gateway?.remote?.url === 'string' && cfg.gateway.remote.url.trim()) {
     base = cfg.gateway.remote.url.trim().replace(/\/+$/, '');
     base = base.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
-  } else if (cfg?.gateway?.bind === 'custom' && cfg.gateway.customBindHost) {
+  }
+  // Layer 3 — gateway.bind = custom + explicit customBindHost
+  else if (cfg?.gateway?.bind === 'custom' && cfg.gateway.customBindHost) {
     base = `${scheme}://${cfg.gateway.customBindHost}:${port}`;
-  } else {
-    const bind = cfg?.gateway?.bind;
-    if (bind === 'lan' || bind === 'tailnet') {
+  }
+  // Layers 4 + 5 — auto-detect via gateway-url helper (Tailscale, then LAN)
+  else {
+    let detected: ReturnType<typeof detectGatewayHost> = null;
+    try {
+      detected = detectGatewayHost();
+    } catch (err) {
       api.logger.warn(
-        `TotalReclaw: pairing URL is falling back to localhost because gateway.bind=${bind} without explicit host probe. ` +
-          'Set plugins.entries.totalreclaw.config.publicUrl to override.',
+        `TotalReclaw: host autodetect crashed: ${err instanceof Error ? err.message : String(err)} — falling back to localhost`,
       );
     }
-    base = `${scheme}://localhost:${port}`;
+    if (detected?.kind === 'tailscale') {
+      // Tailscale Serve is conventionally on 443 — the MagicDNS name is
+      // TLS-terminated by Tailscale itself.
+      base = `https://${detected.host}`;
+      api.logger.info(
+        `TotalReclaw: pairing URL using Tailscale host ${detected.host} (MagicDNS). ` +
+          detected.note,
+      );
+    } else if (detected?.kind === 'lan') {
+      base = `${scheme}://${detected.host}:${port}`;
+      api.logger.warn(
+        `TotalReclaw: pairing URL using LAN host ${detected.host}:${port} — ` +
+          `this URL only works from the same network. ` +
+          `Set plugins.entries.totalreclaw.config.publicUrl for remote access.`,
+      );
+    } else {
+      // Layer 6 — localhost fallback
+      const bind = cfg?.gateway?.bind;
+      if (bind === 'lan' || bind === 'tailnet') {
+        api.logger.warn(
+          `TotalReclaw: pairing URL falling back to localhost because gateway.bind=${bind} could not be autodetected. ` +
+            'Set plugins.entries.totalreclaw.config.publicUrl to override.',
+        );
+      } else {
+        api.logger.warn(
+          `TotalReclaw: pairing URL fell back to http://localhost:${port} — this URL only works on this machine. ` +
+            `Configure plugins.entries.totalreclaw.config.publicUrl for remote access.`,
+        );
+      }
+      base = `${scheme}://localhost:${port}`;
+    }
   }
 
   return `${base}/plugin/totalreclaw/pair/finish?sid=${encodeURIComponent(session.sid)}#pk=${encodeURIComponent(session.pkGatewayB64)}`;
@@ -456,11 +501,51 @@ function isLlmDedupEnabled(): boolean {
 }
 
 /**
+ * Plugin-config override snapshot — set once at register() time so the
+ * getters below are cheap (no re-walking of api.pluginConfig per turn).
+ * Keyed entries are read from plugin-config
+ * `extraction.interval` and `extraction.maxFactsPerExtraction` (both
+ * optional in the 3.3.1 schema).
+ */
+let _pluginExtractionOverrides: {
+  interval?: number;
+  maxFactsPerExtraction?: number;
+} = {};
+
+/**
+ * Called from register() — reads the `extraction.*` plugin-config block
+ * and memoizes the tunable overrides.
+ */
+function snapshotExtractionOverrides(pluginConfig: Record<string, unknown> | undefined): void {
+  const extraction = pluginConfig?.extraction as Record<string, unknown> | undefined;
+  if (!extraction) {
+    _pluginExtractionOverrides = {};
+    return;
+  }
+  const out: typeof _pluginExtractionOverrides = {};
+  if (typeof extraction.interval === 'number' && Number.isFinite(extraction.interval) && extraction.interval > 0) {
+    out.interval = Math.floor(extraction.interval);
+  }
+  if (
+    typeof extraction.maxFactsPerExtraction === 'number' &&
+    Number.isFinite(extraction.maxFactsPerExtraction) &&
+    extraction.maxFactsPerExtraction > 0
+  ) {
+    out.maxFactsPerExtraction = Math.floor(extraction.maxFactsPerExtraction);
+  }
+  _pluginExtractionOverrides = out;
+}
+
+/**
  * Get the effective extraction interval.
- * Server-side config takes priority (from billing cache), then env var fallback.
- * This allows the relay admin to tune extraction without an npm publish.
+ * Priority: plugin-config `extraction.interval` > server-side billing cache > env var.
+ * The plugin-config override is highest because the user who set it in
+ * their own config file clearly wants it to take effect locally.
  */
 function getExtractInterval(): number {
+  if (_pluginExtractionOverrides.interval !== undefined) {
+    return _pluginExtractionOverrides.interval;
+  }
   const cache = readBillingCache();
   if (cache?.features?.extraction_interval != null) return cache.features.extraction_interval;
   return AUTO_EXTRACT_EVERY_TURNS_ENV;
@@ -468,9 +553,12 @@ function getExtractInterval(): number {
 
 /**
  * Get the max facts per extraction cycle.
- * Server-side config takes priority (from billing cache), then env var / constant fallback.
+ * Priority: plugin-config `extraction.maxFactsPerExtraction` > server-side billing cache > env var / constant fallback.
  */
 function getMaxFactsPerExtraction(): number {
+  if (_pluginExtractionOverrides.maxFactsPerExtraction !== undefined) {
+    return _pluginExtractionOverrides.maxFactsPerExtraction;
+  }
   const cache = readBillingCache();
   if (cache?.features?.max_facts_per_extraction != null) return cache.features.max_facts_per_extraction;
   return MAX_FACTS_PER_EXTRACTION;
@@ -2624,17 +2712,68 @@ const plugin = {
   name: 'TotalReclaw',
   description: 'End-to-end encrypted memory vault for AI agents',
   kind: 'memory' as const,
+  // 3.3.1 schema expansion — `publicUrl` and the full `extraction.*` surface
+  // (including the extraction.llm provider-override block) are now valid
+  // properties. The 3.3.0 schema rejected these keys with
+  // `invalid config: must NOT have additional properties`, which blocked
+  // the documented remote-pairing setup (publicUrl) and made it impossible
+  // for a user to hand-pick an extraction model (extraction.llm.*).
   configSchema: {
     type: 'object',
     additionalProperties: false,
     properties: {
+      publicUrl: {
+        type: 'string',
+        description:
+          "Public gateway URL for QR pairing (e.g. 'https://gateway.example.com:18789'). Overrides the auto-resolution cascade in buildPairingUrl.",
+      },
       extraction: {
         type: 'object',
-        properties: {
-          model: { type: 'string', description: "Override the extraction model (e.g., 'glm-4.5-flash', 'gpt-4.1-mini')" },
-          enabled: { type: 'boolean', description: 'Enable/disable auto-extraction (default: true)' },
-        },
         additionalProperties: false,
+        properties: {
+          enabled: {
+            type: 'boolean',
+            description: 'Enable/disable auto-extraction (default: true)',
+          },
+          model: {
+            type: 'string',
+            description:
+              "Shorthand: override just the extraction model (e.g., 'glm-4.5-flash', 'gpt-4.1-mini'). For a full provider override use extraction.llm.",
+          },
+          interval: {
+            type: 'number',
+            description: 'Number of turns between automatic extractions (default: 3)',
+          },
+          maxFactsPerExtraction: {
+            type: 'number',
+            description: 'Hard cap on facts extracted per turn (default: 15)',
+          },
+          llm: {
+            type: 'object',
+            additionalProperties: false,
+            description:
+              'Explicit LLM override block. Highest-priority tier in the extraction-provider cascade. Any subset of provider+apiKey is enough to pin a provider.',
+            properties: {
+              provider: {
+                type: 'string',
+                description:
+                  "Provider name: zai | openai | anthropic | gemini | google | mistral | groq | deepseek | openrouter | xai | together | cerebras.",
+              },
+              model: {
+                type: 'string',
+                description: 'Explicit model id. If omitted, deriveCheapModel(provider) picks a sensible default.',
+              },
+              apiKey: {
+                type: 'string',
+                description: 'API key for the selected provider. Required for the override to take effect.',
+              },
+              baseUrl: {
+                type: 'string',
+                description: 'Override the provider base URL (self-hosted / custom gateway setups).',
+              },
+            },
+          },
+        },
       },
     },
   },
@@ -2643,13 +2782,45 @@ const plugin = {
     // ---------------------------------------------------------------
     // LLM client initialization (auto-detect provider from OpenClaw config)
     // ---------------------------------------------------------------
+    //
+    // 3.3.1 — the resolver now reads provider keys from
+    // `~/.openclaw/agents/*\/agent/auth-profiles.json` as one of the
+    // resolution tiers. This is where real OpenClaw installs store user
+    // API keys; prior releases only checked env vars and the SDK-passed
+    // `api.config.providers`, so auto-extraction silently no-op'd for
+    // virtually every real user. The disk read lives in
+    // `./llm-profile-reader.js` (scanner-isolated — that file has no
+    // network triggers) and the aggregated entries are handed to
+    // initLLMClient as a plain array.
+
+    let harvestedKeys: Array<{ provider: string; apiKey: string; sourcePath?: string; profileId?: string }> = [];
+    try {
+      const root = defaultAuthProfilesRoot(CONFIG.home);
+      if (root) {
+        const all = readAllAuthProfileKeys({ root });
+        // Dedupe so each provider appears once (last-wins — later agent
+        // files shadow earlier ones).
+        const byProvider = dedupeByProvider(all);
+        harvestedKeys = Object.values(byProvider);
+      }
+    } catch (err) {
+      // Never crash plugin init on a bad auth-profiles.json.
+      const msg = err instanceof Error ? err.message : String(err);
+      api.logger.warn(`TotalReclaw: could not read OpenClaw auth-profiles.json (${msg}) — falling through to env vars`);
+    }
 
     initLLMClient({
       primaryModel: api.config?.agents?.defaults?.model?.primary as string | undefined,
       pluginConfig: api.pluginConfig,
       openclawProviders: api.config?.models?.providers,
+      authProfileKeys: harvestedKeys,
       logger: api.logger,
     });
+
+    // 3.3.1 — memoize plugin-config extraction.interval / extraction.maxFactsPerExtraction
+    // so getExtractInterval() and getMaxFactsPerExtraction() don't re-walk
+    // api.pluginConfig per turn.
+    snapshotExtractionOverrides(api.pluginConfig);
 
     // ---------------------------------------------------------------
     // Service registration (lifecycle logging)
@@ -2686,6 +2857,25 @@ const plugin = {
             credentialsPath: CREDENTIALS_PATH,
             statePath: CONFIG.onboardingStatePath,
             logger: api.logger,
+            // 3.3.1 — supplied to the non-interactive --json onboard path
+            // so the emitted payload includes the derived Smart Account
+            // (scope) address. Uses the chain-id default; Pro-tier
+            // chain-id override is applied later by billing autodetect,
+            // at which point the address remains the same (SA is
+            // chain-independent up to the EntryPoint address which is
+            // identical on Base Sepolia / Gnosis).
+            deriveScopeAddress: async (mnemonic: string) => {
+              try {
+                return await deriveSmartAccountAddress(mnemonic, CONFIG.chainId);
+              } catch (err) {
+                api.logger.warn(
+                  `onboarding --json: scope-address derivation failed: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                );
+                return undefined;
+              }
+            },
           });
           // 3.3.0 — `openclaw totalreclaw pair [generate|import]` attaches
           // alongside the existing `onboard` + `status` subcommands.
