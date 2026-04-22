@@ -6,7 +6,7 @@ TotalReclaw gives your Hermes agent encrypted, persistent memory. One copy-paste
 
 Open your chat with your Hermes agent. Paste this message:
 
-> **Install TotalReclaw latest RC and walk me through the recovery-phrase setup**
+> **Install TotalReclaw (`pip install --pre totalreclaw` from PyPI) and walk me through the recovery-phrase setup**
 
 The agent will install the package, restart its gateway, call the `totalreclaw_pair` tool, and give you a URL + PIN to enter your recovery phrase in the browser. Your phrase never touches the chat.
 

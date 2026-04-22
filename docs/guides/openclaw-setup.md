@@ -8,7 +8,7 @@ TotalReclaw gives your OpenClaw agent encrypted, persistent memory. One copy-pas
 
 Open your chat with your OpenClaw agent. Paste this message:
 
-> **Install TotalReclaw latest RC and walk me through the recovery-phrase setup**
+> **Install TotalReclaw (`openclaw skills install totalreclaw` from ClawHub) and walk me through the recovery-phrase setup**
 
 The agent will install the package, restart its gateway, call the `totalreclaw_pair` tool, and give you a URL + PIN to enter your recovery phrase in the browser. Your phrase never touches the chat.
 
