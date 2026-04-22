@@ -4,6 +4,125 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.2] — 2026-04-22
+
+Follow-up RC for the 3.3.1-rc.1 QA NO-GO
+(`docs/notes/QA-plugin-3.3.1-rc.1-20260422-0121.md` in
+`totalreclaw-internal`). Fixes 3 ship-stoppers + 1 serious non-blocker
+identified by the first real-user-flow QA under the 2026-04-22 chat-only
+discipline, plus several UX gaps flagged by Pedro's agent (Hermes) during
+parallel Telegram testing. All 3.3.1-rc.1 provider-agnostic LLM work is
+preserved.
+
+### Changed
+
+- **`gateway-url.ts` — drop `child_process` subprocess probe.** The rc.1
+  implementation shelled out to `tailscale status --json` via
+  `child_process.execFileSync` to discover the local MagicDNS hostname.
+  This tripped the OpenClaw dangerous-code scanner's shell-execution
+  rule and **blocked every `openclaw plugins install @totalreclaw/totalreclaw`**.
+  rc.2 swaps to a passive probe: `os.networkInterfaces()` detects a
+  `tailscale*` NIC carrying a CGNAT IPv4 (100.64/10), and we surface
+  the raw IP as the auto-detected host. Operators who want a proper
+  `https://<magicdns>.ts.net` URL now set
+  `plugins.entries.totalreclaw.config.publicUrl` explicitly (documented
+  in SKILL.md). The six-layer URL cascade is otherwise unchanged.
+
+- **`check-scanner.mjs` — add shell-execution rule (catches `child_process`).**
+  Scanner-sim now mirrors the real OpenClaw `shell-execution` rule that
+  trips on any `child_process` substring (no context gate). Prevents a
+  repeat of the rc.1 regression. See `skill/scripts/check-scanner.mjs`
+  SHELL_EXEC_PATTERN.
+
+- **`totalreclaw_forget` — route through `submitFactBatchOnChain` and write
+  tombstones at legacy v3.** The rc.1 implementation used the single-fact
+  `submitFactOnChain` path and wrote the tombstone at protobuf v4, which
+  the subgraph did NOT reflect as `isActive=false`. rc.2 mirrors the
+  pin/unpin tombstone shape exactly (legacy v3, `source="tombstone"`,
+  single-payload batch via `submitFactBatchOnChain`). Also adds
+  UUID-shape validation on `factId` to reject LLM hallucinations
+  ("forget that I live in Porto" passed as the factId) with a clear
+  message pointing the agent at `totalreclaw_recall` first.
+
+- **`totalreclaw_forget` tool description** — rewritten from terse
+  ("Delete a specific memory by its ID.") to agent-instructive with a
+  recall-first workflow hint. Fixes the rc.1 QA failure where the LLM
+  hallucinated "Done" without actually calling the tool.
+
+- **`chatCompletion` — exponential-backoff retry for 429 / timeouts.**
+  rc.1 QA: 5 of 6 extraction windows returned 0 raw facts because zai
+  429s and timeouts had no retry path. rc.2 adds a retry wrapper:
+  3 attempts with 1s → 2s → 4s backoff; 30s per-attempt timeout;
+  fail-fast on 4xx-other-than-429. Every extractor callsite
+  (`extractFacts`, `extractFactsForCompaction`, `comparativeRescoreV1`,
+  `extractDebriefFacts`) opts in to the retry + logger. See
+  `isRetryable()` for the classification list.
+
+- **`llm-profile-reader.ts` — fallback to legacy `models.json` format.**
+  rc.1 QA VPS had `~/.openclaw/agents/<agent>/agent/models.json` (the
+  pre-auth-profiles shape, `{ providers: { zai: { apiKey: "..." } } }`)
+  not `auth-profiles.json`. The auto-resolve silently no-op'd.
+  rc.2 adds a 5th cascade tier: `readAllProfileKeys` reads
+  auth-profiles.json FIRST (takes precedence on overlap), then merges
+  in models.json entries for any provider not already covered.
+
+### Added
+
+- **`totalreclaw_onboard`** (agent tool) — lets the agent drive the
+  non-interactive onboard flow from chat without shelling out. Generate
+  mode only (restore still requires `openclaw totalreclaw onboard --mode
+  restore` in the local terminal for security). Returns scope address +
+  credentials path; NEVER returns the mnemonic. Directly wraps
+  `runNonInteractiveOnboard` in-process.
+
+- **`totalreclaw_pair`** (agent tool) — lets the agent start a pairing
+  session from chat and relay the URL + PIN + QR ASCII to the user.
+  Built on the same `createPairSession` + `buildPairingUrl` surface the
+  CLI uses, no subprocess. The recovery phrase still never crosses the
+  LLM — it's generated/entered in the BROWSER and uploaded E2EE.
+
+- **`totalreclaw_retype`** (agent tool) — reclassify an existing memory
+  from one taxonomy type to another (claim/preference/directive/
+  commitment/episode/summary). Writes a new v1.1 claim with the updated
+  type, tombstones the old fact on-chain. rc.1 QA confirmed this tool
+  was documented in SKILL.md but NOT registered — agents couldn't call
+  it.
+
+- **`totalreclaw_set_scope`** (agent tool) — move an existing memory to
+  a different scope (work/personal/health/family/creative/finance/misc/
+  unspecified). Same write pattern as retype. Also previously
+  documented-not-registered; rc.1 QA showed agents falling back to a
+  hallucinated delete+re-store workaround.
+
+- **`skill/plugin/retype-setscope.ts`** — new pure-logic module
+  supporting the two agent tools above. Tightly mirrors pin.ts but
+  without the idempotent-status short-circuit (user may be confirming
+  a prior auto-extraction label) and without feedback wiring.
+
+- **`skill/plugin/gateway-url.test.ts`** — unit coverage for the new
+  passive Tailscale + LAN detection. 17 cases, all green.
+
+- **`skill/plugin/retype-setscope.test.ts`** — 31 cases covering arg
+  validation, successful rewrites, fact-not-found, submit failure,
+  malformed-blob, invalid-type/scope.
+
+- **`skill/plugin/llm-client-retry.test.ts`** — 29 cases for the retry
+  wrapper: isRetryable classification, backoff behaviour, fail-fast on
+  non-retryable errors, logger interaction.
+
+- **`skill/plugin/llm-profile-reader.test.ts`** — 13 additional cases
+  for models.json parsing + combined reader.
+
+### Preserved from rc.1
+
+All the rc.1 LLM-autoresolve work carries forward unchanged:
+- 4-tier cascade (plugin config → openclawProviders → auth-profiles →
+  env). With rc.2's `models.json` fallback it's effectively 5 tiers.
+- `openclaw totalreclaw onboard --non-interactive --json --mode` CLI.
+- `openclaw totalreclaw pair generate --json` CLI.
+- `extraction.llm` plugin-config override block.
+- Synchronous HTTP-route registration, manifest `kind` drop, etc.
+
 ## [3.3.1-rc.1] — 2026-04-22
 
 First release candidate for 3.3.1. Comprehensive patch release addressing

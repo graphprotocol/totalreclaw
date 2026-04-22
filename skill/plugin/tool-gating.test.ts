@@ -50,6 +50,9 @@ const EXPECTED_GATED = [
   'totalreclaw_consolidate',
   'totalreclaw_pin',
   'totalreclaw_unpin',
+  // 3.3.1-rc.2: retype + set_scope are gated (require onboarding state=active).
+  'totalreclaw_retype',
+  'totalreclaw_set_scope',
   'totalreclaw_import_from',
   'totalreclaw_import_batch',
 ];

@@ -6,6 +6,87 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1rc2] — 2026-04-22
+
+Follow-up RC for UX gaps flagged by Pedro's agent (Hermes) during
+parallel Telegram testing alongside the plugin 3.3.1-rc.1 QA. Ships as
+part of the unified rc.2 wave (plugin 3.3.1-rc.2 + Hermes 2.3.1rc2).
+All 2.3.1rc1 work is preserved.
+
+### Added
+
+- **`totalreclaw` standalone CLI** (new console script). Users who
+  install `pip install totalreclaw` outside of Hermes now have a
+  first-class entry point. Two subcommands:
+    - `totalreclaw setup` — delegates to the shared `hermes setup`
+      wizard so both binaries behave identically. Default silent-save
+      mode (see below) + optional `--emit-phrase` opt-in.
+    - `totalreclaw doctor` — health check across 7 dimensions
+      (credentials exist + parse, mnemonic valid, Smart Account
+      resolved/cached, embedding model cached, LLM provider keys
+      present, Hermes plugin registered, relay reachable). Coloured
+      output when stdout is a TTY; exit 0 = healthy, 1 = warnings,
+      2 = setup not started.
+
+- **Post-install onboarding pointer** — when users run `totalreclaw`
+  with no subcommand on a setup-less machine, they see a helpful
+  "run `totalreclaw setup`" message instead of a bare argparse help.
+
+- **Eager Smart Account resolution in `hermes setup` / `totalreclaw
+  setup`** — after writing credentials.json, the wizard derives the
+  CREATE2 Smart Account address via a one-shot RPC call and merges it
+  back into credentials.json as `scope_address`. Means subsequent
+  status / doctor / agent-tool calls see the real address instead of
+  "pending". Best-effort: a missing network is non-fatal and prints a
+  warning pointing at the "will be derived on first remember/recall"
+  fallback.
+
+- **Embedding-model download progress banner** (`embedding.py`) —
+  before the first call to Harrier, we print a single-line stderr
+  banner: `[TotalReclaw] Downloading embedding model from HuggingFace
+  (~216 MB, one-time)…`. We also enable huggingface_hub's built-in
+  progress bar so users see bytes moving. Suppressable via
+  `TOTALRECLAW_QUIET_EMBEDDING_BANNER=1` for CI.
+
+- **Hermes plugin SKILL.md** (`python/src/totalreclaw/hermes/SKILL.md`)
+  — agent-directive document shipped with the plugin. Tells the agent
+  exactly when to call each tool + enforces RULE 0 (recovery-phrase
+  handling). Replaces the ambiguity in rc.1 where the agent (a) didn't
+  know it had setup authority via `totalreclaw_onboarding_start`, and
+  (b) occasionally echoed phrases back despite the security rules.
+
+- **`totalreclaw_onboarding_start` entry in plugin.yaml** — was
+  implemented in `tools.py` for rc.1 but not listed in the plugin
+  manifest. Agents now discover it via the standard plugin surface.
+
+### Changed
+
+- **Silent-save by default in `setup` generate flow.** Pedro's agent
+  flagged in the Hermes Telegram QA that rc.1 printed the generated
+  BIP-39 phrase to stderr in a 4x3 grid — "for a secrets management
+  plugin, this feels ironic". Terminal recordings, screen-shares, and
+  shoulder-surfers defeat the E2EE promise. rc.2 default: the phrase
+  is written to credentials.json (mode 0600), NEVER displayed. The
+  post-setup banner points the user at
+  `cat ~/.totalreclaw/credentials.json | jq -r .mnemonic` for
+  retrieval when they need it. Behaviour change is gated by a new
+  `--emit-phrase` flag for power users who genuinely want the rc.1
+  4x3-grid + last-3-words-confirmation flow.
+
+- **`LOCAL_MODE_INSTRUCTIONS` / `REMOTE_MODE_INSTRUCTIONS`** now
+  mention both `totalreclaw setup` (standalone) and `hermes setup`
+  (Hermes-specific) so users know which binary to run based on how
+  they installed.
+
+### Preserved from rc.1
+
+All of the 2.3.1rc1 onboarding work carries forward:
+- `detect_first_run`, `maybe_emit_welcome`, canonical copy constants.
+- `hermes setup` wizard (restore + generate branches, non-TTY
+  tolerance, overwrite confirmation).
+- `totalreclaw.onboarding` first-run sentinel.
+- All existing tools, hooks, and the Retrieval v2 Tier 1 reranker.
+
 ## [2.3.1] - 2026-04-20
 
 First-run onboarding UX parity with plugin 3.3.0. Users switching between

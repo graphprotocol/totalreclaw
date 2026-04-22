@@ -76,7 +76,7 @@ import {
 import { initLLMClient, resolveLLMConfig, chatCompletion, generateEmbedding, getEmbeddingDims } from './llm-client.js';
 import {
   defaultAuthProfilesRoot,
-  readAllAuthProfileKeys,
+  readAllProfileKeys,
   dedupeByProvider,
 } from './llm-profile-reader.js';
 import { LSHHasher } from './lsh.js';
@@ -122,6 +122,17 @@ import {
   validatePinArgs,
   type PinOpDeps,
 } from './pin.js';
+import {
+  executeRetype,
+  executeSetScope,
+  validateRetypeArgs,
+  validateSetScopeArgs,
+  type RetypeSetScopeDeps,
+} from './retype-setscope.js';
+import {
+  runNonInteractiveOnboard,
+  type NonInteractiveOnboardResult,
+} from './onboarding-cli.js';
 import { PluginHotCache, type HotFact } from './hot-cache-wrapper.js';
 import { CONFIG, setRecoveryPhraseOverride } from './config.js';
 import {
@@ -325,7 +336,7 @@ function buildPairingUrl(
   else if (cfg?.gateway?.bind === 'custom' && cfg.gateway.customBindHost) {
     base = `${scheme}://${cfg.gateway.customBindHost}:${port}`;
   }
-  // Layers 4 + 5 — auto-detect via gateway-url helper (Tailscale, then LAN)
+  // Layers 4 + 5 — auto-detect via gateway-url helper (Tailscale CGNAT, then LAN)
   else {
     let detected: ReturnType<typeof detectGatewayHost> = null;
     try {
@@ -336,11 +347,15 @@ function buildPairingUrl(
       );
     }
     if (detected?.kind === 'tailscale') {
-      // Tailscale Serve is conventionally on 443 — the MagicDNS name is
-      // TLS-terminated by Tailscale itself.
-      base = `https://${detected.host}`;
-      api.logger.info(
-        `TotalReclaw: pairing URL using Tailscale host ${detected.host} (MagicDNS). ` +
+      // 3.3.1-rc.2: we surface the raw Tailscale CGNAT IP because passive
+      // NIC detection (no subprocess) cannot resolve the MagicDNS name.
+      // Caller can override via `publicUrl` for a proper https://<magicdns>.
+      // The IP + port URL still works inside the tailnet (peers can reach
+      // each other by CGNAT IP directly). TLS defaults to the gateway's
+      // own config because we no longer assume `tailscale serve`.
+      base = `${scheme}://${detected.host}:${port}`;
+      api.logger.warn(
+        `TotalReclaw: pairing URL using Tailscale CGNAT IP ${detected.host}:${port} — ` +
           detected.note,
       );
     } else if (detected?.kind === 'lan') {
@@ -2797,16 +2812,19 @@ const plugin = {
     try {
       const root = defaultAuthProfilesRoot(CONFIG.home);
       if (root) {
-        const all = readAllAuthProfileKeys({ root });
+        // 3.3.1-rc.2 — readAllProfileKeys merges auth-profiles.json AND
+        // the legacy models.json format (pre-auth-profiles OpenClaw
+        // installs). Auth-profiles wins when both have the same provider.
+        const all = readAllProfileKeys({ root });
         // Dedupe so each provider appears once (last-wins — later agent
         // files shadow earlier ones).
         const byProvider = dedupeByProvider(all);
         harvestedKeys = Object.values(byProvider);
       }
     } catch (err) {
-      // Never crash plugin init on a bad auth-profiles.json.
+      // Never crash plugin init on a bad auth-profiles.json / models.json.
       const msg = err instanceof Error ? err.message : String(err);
-      api.logger.warn(`TotalReclaw: could not read OpenClaw auth-profiles.json (${msg}) — falling through to env vars`);
+      api.logger.warn(`TotalReclaw: could not read OpenClaw profile JSONs (${msg}) — falling through to env vars`);
     }
 
     initLLMClient({
@@ -3536,13 +3554,21 @@ const plugin = {
       {
         name: 'totalreclaw_forget',
         label: 'Forget',
-        description: 'Delete a specific memory by its ID.',
+        description:
+          'Delete a specific memory. Use when the user asks to forget, delete, or remove ' +
+          'something specific (e.g. "forget that I live in Porto", "delete the memory about my old job"). ' +
+          'Writes an on-chain tombstone — the delete is permanent and propagates across all devices. ' +
+          'If the user names the memory in natural language instead of an ID, FIRST call ' +
+          '`totalreclaw_recall` with their phrase as the query, then pass the top result\'s `id` as ' +
+          '`factId`. Non-reversible.',
         parameters: {
           type: 'object',
           properties: {
             factId: {
               type: 'string',
-              description: 'The UUID of the memory to delete',
+              description:
+                'The UUID of the memory to delete. Get this from a prior `totalreclaw_recall` result — ' +
+                'the `memories[i].id` field. Never invent a factId; if you don\'t have one, call recall first.',
             },
           },
           required: ['factId'],
@@ -3552,12 +3578,58 @@ const plugin = {
           try {
             await requireFullSetup(api.logger);
 
+            // Validate factId shape BEFORE any on-chain work. Prevents
+            // silent no-op when the LLM fabricates a non-UUID factId —
+            // the classic failure mode from 3.3.1-rc.1 QA where the
+            // agent replied "Done" without calling the tool at all, OR
+            // called the tool with a plain natural-language string.
+            const factId = typeof params.factId === 'string' ? params.factId.trim() : '';
+            if (!factId) {
+              return {
+                content: [{
+                  type: 'text',
+                  text:
+                    'Cannot forget without a memory ID. Call `totalreclaw_recall` first with ' +
+                    'the user\'s phrasing as the query — the top result\'s `id` field is the ' +
+                    'factId to pass here.',
+                }],
+                details: { deleted: false, error: 'missing-fact-id' },
+              };
+            }
+            // UUID-v4-ish shape check (loose — accepts any hex-dashed id).
+            // Prevents cases like `factId: "that I live in Porto"` from
+            // reaching the UserOp path and silently failing on-chain.
+            const looksLikeFactId = /^[0-9a-f-]{8,}$/i.test(factId);
+            if (!looksLikeFactId) {
+              api.logger.warn(
+                `totalreclaw_forget: rejected likely-invalid factId "${factId.slice(0, 40)}" ` +
+                  `— expected a UUID from a prior recall result, not natural language.`,
+              );
+              return {
+                content: [{
+                  type: 'text',
+                  text:
+                    `"${factId.slice(0, 60)}" doesn\'t look like a memory ID. Call ` +
+                    '`totalreclaw_recall` first with the user\'s phrasing as the query, then ' +
+                    'pass the top result\'s `id` field (a hex UUID) as `factId`.',
+                }],
+                details: { deleted: false, error: 'invalid-fact-id' },
+              };
+            }
+
             if (isSubgraphMode()) {
               // On-chain tombstone: write a minimal protobuf with decayScore=0
-              // The subgraph will overwrite the fact and set isActive=false
+              // The subgraph picks this up and sets isActive=false.
+              //
+              // 3.3.1-rc.2 fix: route through submitFactBatchOnChain with a
+              // single-payload batch so we share the tombstone codepath the
+              // pin/unpin flow uses (that flow is known-good and the QA
+              // confirms pin works). Also write at legacy v3 (NOT v4) so the
+              // subgraph handler matches the source="tombstone" + version=3
+              // shape the contradiction/pin tombstones use.
               const config = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
               const tombstone: FactPayload = {
-                id: params.factId,
+                id: factId,
                 timestamp: new Date().toISOString(),
                 owner: subgraphOwner || userId!,
                 encryptedBlob: '00', // minimal 1-byte placeholder
@@ -3565,24 +3637,31 @@ const plugin = {
                 decayScore: 0,
                 source: 'tombstone',
                 contentFp: '',
-                agentId: 'openclaw-plugin',
-                version: PROTOBUF_VERSION_V4,
+                agentId: 'openclaw-plugin-forget',
+                // Deliberately NO version: field → uses the default (legacy v3).
+                // The pin/unpin tombstones use v3 (see pin.ts:611-621) — we
+                // MUST match that shape or the subgraph may not flip isActive.
               };
               const protobuf = encodeFactProtobuf(tombstone);
-              const result = await submitFactOnChain(protobuf, config);
+              const result = await submitFactBatchOnChain([protobuf], config);
               if (!result.success) {
                 throw new Error(`On-chain tombstone failed (tx=${result.txHash?.slice(0, 10) || 'none'}…)`);
               }
-              api.logger.info(`Tombstone written for ${params.factId}: tx=${result.txHash}`);
+              api.logger.info(`Tombstone written for ${factId}: tx=${result.txHash}`);
               return {
-                content: [{ type: 'text', text: `Memory ${params.factId} deleted (on-chain tombstone, tx: ${result.txHash})` }],
-                details: { deleted: true, txHash: result.txHash },
+                content: [{
+                  type: 'text',
+                  text:
+                    `Memory ${factId} deleted on-chain (tx: ${result.txHash}). ` +
+                    'The subgraph will reflect isActive=false within ~30 seconds.',
+                }],
+                details: { deleted: true, txHash: result.txHash, factId },
               };
             } else {
-              await apiClient!.deleteFact(params.factId, authKeyHex!);
+              await apiClient!.deleteFact(factId, authKeyHex!);
               return {
-                content: [{ type: 'text', text: `Memory ${params.factId} deleted` }],
-                details: { deleted: true },
+                content: [{ type: 'text', text: `Memory ${factId} deleted` }],
+                details: { deleted: true, factId },
               };
             }
           } catch (err: unknown) {
@@ -4203,6 +4282,215 @@ const plugin = {
     );
 
     // ---------------------------------------------------------------
+    // Shared deps for retype + set_scope (same shape as pin deps).
+    // Built lazily so the closure captures the current encryption key /
+    // subgraph owner at call time rather than at register() time.
+    // ---------------------------------------------------------------
+    const buildRetypeSetScopeDeps = (): RetypeSetScopeDeps => {
+      const owner = subgraphOwner || userId || '';
+      const config = {
+        ...getSubgraphConfig(),
+        authKeyHex: authKeyHex!,
+        walletAddress: subgraphOwner ?? undefined,
+      };
+      return {
+        owner,
+        sourceAgent: 'openclaw-plugin',
+        fetchFactById: (factId: string) => fetchFactById(owner, factId, authKeyHex!),
+        decryptBlob: (hex: string) => decryptFromHex(hex, encryptionKey!),
+        encryptBlob: (plaintext: string) => encryptToHex(plaintext, encryptionKey!),
+        submitBatch: async (payloads: Buffer[]) => {
+          const result = await submitFactBatchOnChain(payloads, config);
+          return { txHash: result.txHash, success: result.success };
+        },
+        generateIndices: async (text: string, entityNames: string[]) => {
+          if (!text) return { blindIndices: [] };
+          const wordIndices = generateBlindIndices(text);
+          let lshIndices: string[] = [];
+          let encryptedEmbedding: string | undefined;
+          try {
+            const embedding = await generateEmbedding(text);
+            const hasher = getLSHHasher(api.logger);
+            if (hasher) lshIndices = hasher.hash(embedding);
+            encryptedEmbedding = encryptToHex(JSON.stringify(embedding), encryptionKey!);
+          } catch {
+            // Best-effort: word + entity trapdoors alone still surface the claim.
+          }
+          const entityTrapdoors = entityNames.map((n) => computeEntityTrapdoor(n));
+          return {
+            blindIndices: [...wordIndices, ...lshIndices, ...entityTrapdoors],
+            encryptedEmbedding,
+          };
+        },
+      };
+    };
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_retype (3.3.1-rc.2 — agent-facing taxonomy edit)
+    // ---------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: 'totalreclaw_retype',
+        label: 'Retype',
+        description:
+          'Reclassify an existing memory from one taxonomy type to another (claim / preference / ' +
+          'directive / commitment / episode / summary). Use when the user corrects a memory\'s ' +
+          'category — e.g. "that\'s actually a preference, not a fact" or "file this as a ' +
+          'commitment, not a claim". Writes a new v1.1 blob with the updated type and tombstones ' +
+          'the old fact on-chain.\n\n' +
+          'If the user names the memory in natural language, FIRST call `totalreclaw_recall` to ' +
+          'find the fact_id, then pass it here with the new type.',
+        parameters: {
+          type: 'object',
+          properties: {
+            fact_id: {
+              type: 'string',
+              description:
+                'The UUID of the memory to reclassify. Get this from a prior ' +
+                '`totalreclaw_recall` result.',
+            },
+            new_type: {
+              type: 'string',
+              enum: ['claim', 'preference', 'directive', 'commitment', 'episode', 'summary'],
+              description:
+                'The new taxonomy type. claim=factual statement, preference=opinion/like/dislike, ' +
+                'directive=instruction, commitment=promise/plan, episode=event, summary=aggregate.',
+            },
+          },
+          required: ['fact_id', 'new_type'],
+          additionalProperties: false,
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            await requireFullSetup(api.logger);
+            if (!isSubgraphMode()) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: 'Retype is only supported with the managed service. Self-hosted mode does not yet implement the status-flip supersession flow.',
+                }],
+              };
+            }
+            const validation = validateRetypeArgs(params);
+            if (!validation.ok) {
+              return { content: [{ type: 'text', text: validation.error }] };
+            }
+            const deps = buildRetypeSetScopeDeps();
+            const result = await executeRetype(validation.factId, validation.newType, deps);
+            if (result.success) {
+              api.logger.info(
+                `totalreclaw_retype: ${result.fact_id} (${result.previous_type} → ${result.new_type}) → ${result.new_fact_id} (tx ${result.tx_hash?.slice(0, 10)})`,
+              );
+              return {
+                content: [{
+                  type: 'text',
+                  text:
+                    `Retyped memory ${result.fact_id} from ${result.previous_type} to ${result.new_type}. ` +
+                    `New fact id: ${result.new_fact_id} (tx: ${result.tx_hash}).`,
+                }],
+                details: result,
+              };
+            }
+            api.logger.error(`totalreclaw_retype failed: ${result.error}`);
+            return {
+              content: [{ type: 'text', text: `Failed to retype memory: ${humanizeError(result.error ?? 'unknown error')}` }],
+              details: result,
+            };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            api.logger.error(`totalreclaw_retype failed: ${message}`);
+            return {
+              content: [{ type: 'text', text: `Failed to retype memory: ${humanizeError(message)}` }],
+            };
+          }
+        },
+      },
+      { name: 'totalreclaw_retype' },
+    );
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_set_scope (3.3.1-rc.2 — agent-facing scope edit)
+    // ---------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: 'totalreclaw_set_scope',
+        label: 'Set Scope',
+        description:
+          'Move an existing memory to a different scope (work / personal / health / family / ' +
+          'creative / finance / misc / unspecified). Use when the user re-categorizes a memory\'s ' +
+          'domain — e.g. "put that under work", "this is a health thing", "move this to personal". ' +
+          'Writes a new v1.1 blob with the updated scope and tombstones the old fact on-chain.\n\n' +
+          'If the user names the memory in natural language, FIRST call `totalreclaw_recall` to ' +
+          'find the fact_id, then pass it here with the new scope.',
+        parameters: {
+          type: 'object',
+          properties: {
+            fact_id: {
+              type: 'string',
+              description:
+                'The UUID of the memory to rescope. Get this from a prior `totalreclaw_recall` result.',
+            },
+            new_scope: {
+              type: 'string',
+              enum: ['work', 'personal', 'health', 'family', 'creative', 'finance', 'misc', 'unspecified'],
+              description:
+                'The new scope. Used for filtered recall — e.g. "recall work-related memories only".',
+            },
+          },
+          required: ['fact_id', 'new_scope'],
+          additionalProperties: false,
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            await requireFullSetup(api.logger);
+            if (!isSubgraphMode()) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: 'Set-scope is only supported with the managed service. Self-hosted mode does not yet implement the status-flip supersession flow.',
+                }],
+              };
+            }
+            const validation = validateSetScopeArgs(params);
+            if (!validation.ok) {
+              return { content: [{ type: 'text', text: validation.error }] };
+            }
+            const deps = buildRetypeSetScopeDeps();
+            const result = await executeSetScope(validation.factId, validation.newScope, deps);
+            if (result.success) {
+              api.logger.info(
+                `totalreclaw_set_scope: ${result.fact_id} (${result.previous_scope ?? 'unspecified'} → ${result.new_scope}) → ${result.new_fact_id} (tx ${result.tx_hash?.slice(0, 10)})`,
+              );
+              return {
+                content: [{
+                  type: 'text',
+                  text:
+                    `Moved memory ${result.fact_id} from scope "${result.previous_scope ?? 'unspecified'}" to "${result.new_scope}". ` +
+                    `New fact id: ${result.new_fact_id} (tx: ${result.tx_hash}).`,
+                }],
+                details: result,
+              };
+            }
+            api.logger.error(`totalreclaw_set_scope failed: ${result.error}`);
+            return {
+              content: [{ type: 'text', text: `Failed to set scope: ${humanizeError(result.error ?? 'unknown error')}` }],
+              details: result,
+            };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            api.logger.error(`totalreclaw_set_scope failed: ${message}`);
+            return {
+              content: [{ type: 'text', text: `Failed to set scope: ${humanizeError(message)}` }],
+            };
+          }
+        },
+      },
+      { name: 'totalreclaw_set_scope' },
+    );
+
+    // ---------------------------------------------------------------
     // Tool: totalreclaw_import_from
     // ---------------------------------------------------------------
 
@@ -4731,6 +5019,265 @@ const plugin = {
         },
       },
       { name: 'totalreclaw_onboarding_start' },
+    );
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_onboard (3.3.1-rc.2 — agent-callable onboard)
+    //
+    // Lets the agent drive the non-interactive onboard flow without
+    // shelling out to `openclaw totalreclaw onboard` (subprocess work
+    // is not available inside the plugin runtime and the OpenClaw
+    // security scanner blocks the standard subprocess module).
+    //
+    // Security envelope (same as the CLI path):
+    //   - NEVER accepts a recovery phrase through chat (mode=restore
+    //     is rejected here — that still requires the local CLI wizard).
+    //   - The generated phrase is written to ~/.totalreclaw/credentials.json
+    //     (mode 0600) by `runNonInteractiveOnboard`. We explicitly pass
+    //     `emitPhrase: false` so the phrase NEVER appears in the tool
+    //     return value.
+    //   - Returns only: scope_address + credentials_path + ok/error.
+    // ---------------------------------------------------------------
+    api.registerTool(
+      {
+        name: 'totalreclaw_onboard',
+        label: 'Onboard (generate new recovery phrase)',
+        description:
+          'Generate a NEW TotalReclaw recovery phrase on this machine without the user ' +
+          'leaving chat. The phrase is written ONLY to ~/.totalreclaw/credentials.json (mode ' +
+          '0600) and NEVER returned through this tool — the response contains just the derived ' +
+          'Smart Account (scope) address and the credentials path so the user can retrieve ' +
+          'their phrase locally (e.g. `cat ~/.totalreclaw/credentials.json | jq -r .mnemonic`).\n\n' +
+          'Use when a fresh user asks you to set up TotalReclaw or enable memory. Refuses if ' +
+          'onboarding is already active (the user can delete the credentials file to re-onboard, ' +
+          'but we will NOT silently overwrite). For RESTORE (import an existing phrase), tell ' +
+          'the user to run `openclaw totalreclaw onboard --mode restore` in their local ' +
+          'terminal — this tool refuses to accept phrases through chat.',
+        parameters: {
+          type: 'object',
+          properties: {
+            mode: {
+              type: 'string',
+              enum: ['generate'],
+              description:
+                'Only "generate" is supported via this tool (creates a fresh 12-word BIP-39 ' +
+                'phrase). "restore" requires the local CLI wizard because pasting a phrase ' +
+                'through chat ships it to the LLM provider, defeating end-to-end encryption.',
+              default: 'generate',
+            },
+          },
+          additionalProperties: false,
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const mode = params?.mode;
+          if (mode !== undefined && mode !== 'generate') {
+            return {
+              content: [{
+                type: 'text',
+                text:
+                  'Only mode="generate" is supported through chat. For RESTORE (import an ' +
+                  'existing recovery phrase), ask the user to run `openclaw totalreclaw onboard ' +
+                  '--mode restore` in their local terminal — the phrase is read from stdin and ' +
+                  'never touches the LLM provider or the transcript.',
+              }],
+            };
+          }
+          try {
+            const result: NonInteractiveOnboardResult = await runNonInteractiveOnboard({
+              credentialsPath: CREDENTIALS_PATH,
+              statePath: CONFIG.onboardingStatePath,
+              mode: 'generate',
+              emitPhrase: false, // NEVER include the phrase in agent-visible output.
+              deriveScopeAddress: async (mnemonic: string) => {
+                try {
+                  return await deriveSmartAccountAddress(mnemonic, CONFIG.chainId);
+                } catch (err) {
+                  api.logger.warn(
+                    `totalreclaw_onboard: scope-address derivation failed: ${
+                      err instanceof Error ? err.message : String(err)
+                    }`,
+                  );
+                  return undefined;
+                }
+              },
+            });
+            if (!result.ok) {
+              // already-active, write-failed, etc. Never leaks the phrase.
+              api.logger.info(`totalreclaw_onboard: ok=false error=${result.error}`);
+              return {
+                content: [{
+                  type: 'text',
+                  text:
+                    result.error === 'already-active'
+                      ? 'TotalReclaw is already set up on this machine. Memory tools are unblocked. To re-onboard, delete ~/.totalreclaw/credentials.json first.'
+                      : `Onboard failed: ${result.error_detail ?? result.error}`,
+                }],
+                details: {
+                  ok: false,
+                  error: result.error,
+                  action: result.action,
+                },
+              };
+            }
+            api.logger.info(
+              `totalreclaw_onboard: generated phrase, scope=${result.scope_address?.slice(0, 10) ?? 'unknown'}…, credentials=${result.credentials_path}`,
+            );
+            // Crucially: the mnemonic field is NEVER emitted in details
+            // (emitPhrase=false enforces that on the result object).
+            return {
+              content: [{
+                type: 'text',
+                text:
+                  `TotalReclaw setup complete. A new 12-word recovery phrase was generated and ` +
+                  `saved to ${result.credentials_path} (mode 0600). ` +
+                  (result.scope_address
+                    ? `Your on-chain scope (Smart Account) address is ${result.scope_address}. `
+                    : '') +
+                  `To view your recovery phrase, run on the user's local terminal:\n\n` +
+                  `    cat ${result.credentials_path} | jq -r .mnemonic\n\n` +
+                  `IMPORTANT: the recovery phrase is the ONLY way to recover memories on another ` +
+                  `device. Tell the user to store it safely — a password manager or a paper backup. ` +
+                  `TotalReclaw cannot recover it if lost.`,
+              }],
+              details: {
+                ok: true,
+                action: 'generate',
+                scope_address: result.scope_address,
+                credentials_path: result.credentials_path,
+                // Deliberately NO mnemonic field.
+              },
+            };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            api.logger.error(`totalreclaw_onboard failed: ${message}`);
+            return {
+              content: [{ type: 'text', text: `Onboard failed: ${humanizeError(message)}` }],
+              details: { ok: false, error: 'unexpected', error_detail: message },
+            };
+          }
+        },
+      },
+      { name: 'totalreclaw_onboard' },
+    );
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_pair (3.3.1-rc.2 — agent-callable pair-generate)
+    //
+    // Creates a pairing session (browser-mediated recovery-phrase sync),
+    // returns the URL + PIN + QR ASCII to the agent. The agent relays
+    // these to the user (paste-URL or scan-QR flow). The phrase itself
+    // NEVER crosses the gateway — the pair-http endpoint does the E2EE
+    // handshake with the browser pair-page.
+    // ---------------------------------------------------------------
+    api.registerTool(
+      {
+        name: 'totalreclaw_pair',
+        label: 'QR pair — start remote pairing session',
+        description:
+          'Start a remote pairing session so the user can create or import a TotalReclaw ' +
+          'recovery phrase from their phone or another browser. Returns a pairing URL, a ' +
+          '6-digit PIN, and an ASCII QR code that the agent relays to the user. The recovery ' +
+          'phrase itself is generated/entered in the BROWSER and uploaded end-to-end encrypted ' +
+          'to this gateway — it NEVER touches the LLM provider or the chat transcript.\n\n' +
+          'Use when a user wants to set up TotalReclaw on a machine they don\'t have terminal ' +
+          'access to (a VPS, a friend\'s computer), or when they prefer a phone-mediated flow. ' +
+          'For local-machine setup with a terminal, prefer `totalreclaw_onboard` (generate) or ' +
+          '`totalreclaw_onboarding_start` (pointer to local CLI for restore).',
+        parameters: {
+          type: 'object',
+          properties: {
+            mode: {
+              type: 'string',
+              enum: ['generate', 'import'],
+              description:
+                '"generate" = the browser will create a NEW recovery phrase. "import" = the ' +
+                'browser will accept an EXISTING phrase that the user pastes in their browser ' +
+                '(never through chat).',
+              default: 'generate',
+            },
+          },
+          additionalProperties: false,
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const rawMode = params?.mode;
+          const mode: 'generate' | 'import' =
+            rawMode === 'import' ? 'import' : 'generate';
+          try {
+            const { createPairSession } = await import('./pair-session-store.js');
+            const { generateGatewayKeypair } = await import('./pair-crypto.js');
+            const { defaultRenderQr } = await import('./pair-cli.js');
+            const kp = generateGatewayKeypair();
+            const session = await createPairSession(CONFIG.pairSessionsPath, {
+              mode,
+              operatorContext: { channel: 'agent' },
+              rngPrivateKey: () => Buffer.from(kp.skB64, 'base64url'),
+              rngPublicKey: () => Buffer.from(kp.pkB64, 'base64url'),
+            });
+            const url = buildPairingUrl(api, session);
+            const qrAscii = await new Promise<string>((resolve) => {
+              let settled = false;
+              const t = setTimeout(() => {
+                if (!settled) {
+                  settled = true;
+                  resolve('');
+                }
+              }, 5_000);
+              try {
+                defaultRenderQr(url, (ascii: string) => {
+                  if (settled) return;
+                  settled = true;
+                  clearTimeout(t);
+                  resolve(ascii);
+                });
+              } catch {
+                if (settled) return;
+                settled = true;
+                clearTimeout(t);
+                resolve('');
+              }
+            });
+            api.logger.info(
+              `totalreclaw_pair: session ${session.sid.slice(0, 8)}… mode=${mode} url=${url}`,
+            );
+            return {
+              content: [{
+                type: 'text',
+                text:
+                  `Pairing session started.\n\n` +
+                  `URL: ${url}\n\n` +
+                  `PIN (type this into the browser): ${session.secondaryCode}\n\n` +
+                  (qrAscii ? `QR code:\n\n${qrAscii}\n\n` : '') +
+                  `Instructions for the user:\n` +
+                  `1. Open the URL above on their phone or another browser (scan the QR or copy-paste).\n` +
+                  `2. ` +
+                  (mode === 'generate'
+                    ? `The browser will generate a NEW 12-word recovery phrase and ask the user to write it down + retype 3 words before finalizing.`
+                    : `The browser will accept an EXISTING phrase that the user pastes in the browser (never through chat).`) +
+                  `\n3. Enter the 6-digit PIN shown above into the browser.\n` +
+                  `4. The encrypted phrase uploads to this gateway — it NEVER touches the LLM.\n` +
+                  `5. Come back to chat once the browser says "Pairing complete".\n\n` +
+                  `This session expires in ~5 minutes. Run this tool again if you need a fresh URL.`,
+              }],
+              details: {
+                sid: session.sid,
+                url,
+                pin: session.secondaryCode,
+                mode,
+                expires_at_ms: session.expiresAtMs,
+                qr_ascii: qrAscii,
+              },
+            };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            api.logger.error(`totalreclaw_pair failed: ${message}`);
+            return {
+              content: [{ type: 'text', text: `Failed to start pairing session: ${humanizeError(message)}` }],
+              details: { error: message },
+            };
+          }
+        },
+      },
+      { name: 'totalreclaw_pair' },
     );
 
     // ---------------------------------------------------------------

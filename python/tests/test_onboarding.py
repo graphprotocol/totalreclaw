@@ -222,12 +222,18 @@ class TestCopyConstants:
         assert "generate" in q.lower()
 
     def test_local_instructions(self) -> None:
-        assert onboarding.LOCAL_MODE_INSTRUCTIONS == "Run: hermes setup"
+        # 2.3.1rc2: LOCAL_MODE_INSTRUCTIONS now mentions both `totalreclaw setup`
+        # (standalone CLI added in rc.2) and `hermes setup` (Hermes-specific).
+        assert "totalreclaw setup" in onboarding.LOCAL_MODE_INSTRUCTIONS
+        assert "hermes setup" in onboarding.LOCAL_MODE_INSTRUCTIONS
+        assert onboarding.LOCAL_MODE_INSTRUCTIONS.startswith("Run: ")
 
     def test_remote_instructions_contents(self) -> None:
         r = onboarding.REMOTE_MODE_INSTRUCTIONS
         assert r == r.strip()
-        assert "Run: hermes setup" in r
+        # 2.3.1rc2: now mentions both totalreclaw setup and hermes setup.
+        assert "totalreclaw setup" in r
+        assert "hermes setup" in r
         # The load-bearing security claim.
         assert "never leaves this machine" in r
 

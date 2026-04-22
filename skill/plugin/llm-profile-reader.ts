@@ -41,6 +41,24 @@
  * Non-default profile ids are ignored — a deliberate choice so users who
  * have multiple profiles (`openai:work`, `openai:personal`) see the one
  * they've explicitly flagged as `default`.
+ *
+ * File format (models.json, legacy OpenClaw shape) — 3.3.1-rc.2
+ * ------------------------------------------------------------
+ *   {
+ *     "providers": {
+ *       "zai":        { "apiKey": "..." },
+ *       "openai":     { "apiKey": "sk-..." },
+ *       "anthropic":  { "apiKey": "sk-ant-..." },
+ *       ...
+ *     }
+ *   }
+ *
+ * 3.3.1-rc.1 QA found that some real OpenClaw installs (the VPS used for
+ * QA in particular) still have the pre-auth-profiles format — a single
+ * `models.json` at the same path with a `providers` map. Reading only
+ * auth-profiles.json silently no-op'd on those hosts. 3.3.1-rc.2 adds a
+ * 5th tier to the cascade: if auth-profiles.json is absent, fall back to
+ * the adjacent `models.json`.
  */
 
 import fs from 'node:fs';
@@ -215,6 +233,115 @@ export function dedupeByProvider(entries: AuthProfileKey[]): Record<string, Auth
     map[e.provider] = e;
   }
   return map;
+}
+
+// ---------------------------------------------------------------------------
+// 3.3.1-rc.2 — legacy models.json reader
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk `$HOME/.openclaw/agents/*` and return every
+ * `agent/models.json` path that exists on disk. Mirrors findAuthProfilesFiles
+ * but targets the pre-auth-profiles filename.
+ */
+export function findModelsJsonFiles(root: string): string[] {
+  if (!root) return [];
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    if (e.name.startsWith('.')) continue;
+    const candidate = path.join(root, e.name, 'agent', 'models.json');
+    try {
+      if (fs.statSync(candidate).isFile()) out.push(candidate);
+    } catch {
+      // missing — skip.
+    }
+  }
+  out.sort();
+  return out;
+}
+
+/**
+ * Parse a legacy `models.json` file into AuthProfileKey entries. Unknown
+ * provider namespaces (anything not in PROFILE_NS_TO_PROVIDER) are
+ * skipped silently. Accepts `apiKey`, `api_key`, or `key` as the key
+ * field — different OpenClaw versions used different names.
+ */
+export function parseModelsJsonFile(filePath: string): AuthProfileKey[] {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, 'utf-8');
+  } catch {
+    return [];
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(raw) as unknown;
+  } catch {
+    return [];
+  }
+  if (typeof json !== 'object' || json === null) return [];
+  const providersField = (json as { providers?: unknown }).providers;
+  if (typeof providersField !== 'object' || providersField === null) return [];
+  const providers = providersField as Record<string, unknown>;
+
+  const out: AuthProfileKey[] = [];
+  for (const [providerName, entryRaw] of Object.entries(providers)) {
+    const nsKey = providerName.toLowerCase();
+    const provider = PROFILE_NS_TO_PROVIDER[nsKey];
+    if (!provider) continue;
+    if (typeof entryRaw !== 'object' || entryRaw === null) continue;
+    const rec = entryRaw as Record<string, unknown>;
+    const rawKey = rec.apiKey ?? rec.api_key ?? rec.key;
+    if (typeof rawKey !== 'string') continue;
+    const trimmed = rawKey.trim();
+    if (!trimmed) continue;
+    out.push({
+      provider,
+      apiKey: trimmed,
+      sourcePath: filePath,
+      profileId: `${providerName}:models-json-legacy`,
+    });
+  }
+  return out;
+}
+
+/**
+ * Read every models.json file under the agents root. Counterpart to
+ * `readAllAuthProfileKeys`.
+ */
+export function readAllModelsJsonKeys(options: { root: string }): AuthProfileKey[] {
+  const files = findModelsJsonFiles(options.root);
+  const out: AuthProfileKey[] = [];
+  for (const file of files) {
+    const keys = parseModelsJsonFile(file);
+    out.push(...keys);
+  }
+  return out;
+}
+
+/**
+ * 3.3.1-rc.2 — combined reader. Reads auth-profiles.json first (if
+ * present), then merges in models.json entries for any provider NOT
+ * already covered by auth-profiles. The newer format wins on overlap.
+ */
+export function readAllProfileKeys(options: { root: string }): AuthProfileKey[] {
+  const primary = readAllAuthProfileKeys(options);
+  const primaryProviders = new Set(primary.map((e) => e.provider));
+  const legacy = readAllModelsJsonKeys(options);
+  const merged = [...primary];
+  for (const entry of legacy) {
+    if (!primaryProviders.has(entry.provider)) {
+      merged.push(entry);
+    }
+  }
+  return merged;
 }
 
 // ---------------------------------------------------------------------------

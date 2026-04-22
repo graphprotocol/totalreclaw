@@ -22,6 +22,10 @@ import {
   readAllAuthProfileKeys,
   dedupeByProvider,
   defaultAuthProfilesRoot,
+  parseModelsJsonFile,
+  findModelsJsonFiles,
+  readAllModelsJsonKeys,
+  readAllProfileKeys,
 } from './llm-profile-reader.js';
 
 let passed = 0;
@@ -187,6 +191,127 @@ function mkTmp(): string {
   const byProvider = dedupeByProvider(all);
   assert(byProvider['openai']?.apiKey === 'sk-beta', 'dedupeByProvider: later file wins for openai');
   assert(byProvider['anthropic']?.apiKey === 'sk-ant', 'dedupeByProvider: anthropic only in beta');
+}
+
+// ---------------------------------------------------------------------------
+// 3.3.1-rc.2 — legacy models.json reader
+// ---------------------------------------------------------------------------
+
+{
+  const tmp = mkTmp();
+  const file = path.join(tmp, 'models.json');
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      providers: {
+        zai: { apiKey: 'zai-legacy' },
+        openai: { apiKey: 'sk-legacy' },
+        anthropic: { apiKey: 'sk-ant-legacy' },
+      },
+    }),
+  );
+  const entries = parseModelsJsonFile(file);
+  const byProvider = dedupeByProvider(entries);
+  assert(byProvider['zai']?.apiKey === 'zai-legacy', 'models.json: zai captured');
+  assert(byProvider['openai']?.apiKey === 'sk-legacy', 'models.json: openai captured');
+  assert(byProvider['anthropic']?.apiKey === 'sk-ant-legacy', 'models.json: anthropic captured');
+  assert(byProvider['zai']?.profileId?.includes('models-json-legacy') ?? false, 'models.json: profileId marks legacy source');
+}
+
+{
+  // Accepts apiKey / api_key / key
+  const tmp = mkTmp();
+  const file = path.join(tmp, 'models.json');
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      providers: {
+        zai: { api_key: 'snake-case' },
+        openai: { key: 'plain-key' },
+      },
+    }),
+  );
+  const entries = parseModelsJsonFile(file);
+  const byProvider = dedupeByProvider(entries);
+  assert(byProvider['zai']?.apiKey === 'snake-case', 'models.json: api_key snake_case variant accepted');
+  assert(byProvider['openai']?.apiKey === 'plain-key', 'models.json: plain "key" variant accepted');
+}
+
+{
+  // Missing / malformed — graceful null
+  const tmp = mkTmp();
+  const file = path.join(tmp, 'models.json');
+  fs.writeFileSync(file, 'not json');
+  assert(parseModelsJsonFile(file).length === 0, 'models.json: invalid JSON → []');
+
+  fs.writeFileSync(file, JSON.stringify({ something_else: {} }));
+  assert(parseModelsJsonFile(file).length === 0, 'models.json: missing "providers" field → []');
+}
+
+{
+  // findModelsJsonFiles
+  const tmp = mkTmp();
+  const root = path.join(tmp, '.openclaw', 'agents');
+  fs.mkdirSync(path.join(root, 'agent-x', 'agent'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'agent-x', 'agent', 'models.json'), '{}');
+  const files = findModelsJsonFiles(root);
+  assert(files.length === 1, 'findModelsJsonFiles: finds agent-x/agent/models.json');
+}
+
+{
+  // Combined reader: auth-profiles wins over models.json on overlap
+  const tmp = mkTmp();
+  const root = path.join(tmp, '.openclaw', 'agents');
+  fs.mkdirSync(path.join(root, 'agent-a', 'agent'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'agent-a', 'agent', 'auth-profiles.json'),
+    JSON.stringify({
+      profiles: { 'openai:default': { key: 'sk-from-auth' } },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(root, 'agent-a', 'agent', 'models.json'),
+    JSON.stringify({
+      providers: {
+        openai: { apiKey: 'sk-from-models-legacy' },
+        anthropic: { apiKey: 'sk-ant-from-models' },
+      },
+    }),
+  );
+  const merged = readAllProfileKeys({ root });
+  const byProvider = dedupeByProvider(merged);
+  assert(
+    byProvider['openai']?.apiKey === 'sk-from-auth',
+    'readAllProfileKeys: auth-profiles wins over models.json on overlap',
+  );
+  assert(
+    byProvider['anthropic']?.apiKey === 'sk-ant-from-models',
+    'readAllProfileKeys: models.json-only provider is picked up',
+  );
+}
+
+{
+  // Combined reader: models.json alone works when auth-profiles absent
+  const tmp = mkTmp();
+  const root = path.join(tmp, '.openclaw', 'agents');
+  fs.mkdirSync(path.join(root, 'agent-b', 'agent'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'agent-b', 'agent', 'models.json'),
+    JSON.stringify({
+      providers: { zai: { apiKey: 'zai-only' } },
+    }),
+  );
+  const merged = readAllProfileKeys({ root });
+  const byProvider = dedupeByProvider(merged);
+  assert(
+    byProvider['zai']?.apiKey === 'zai-only',
+    'readAllProfileKeys: models.json-only root yields its keys',
+  );
+}
+
+{
+  const allKeys = readAllModelsJsonKeys({ root: '/path/that/does/not/exist' });
+  assert(allKeys.length === 0, 'readAllModelsJsonKeys: missing root → []');
 }
 
 // ---------------------------------------------------------------------------

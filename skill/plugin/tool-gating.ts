@@ -29,6 +29,8 @@ export const GATED_TOOL_NAMES: readonly string[] = Object.freeze([
   'totalreclaw_consolidate',
   'totalreclaw_pin',
   'totalreclaw_unpin',
+  'totalreclaw_retype',
+  'totalreclaw_set_scope',
   'totalreclaw_import_from',
   'totalreclaw_import_batch',
 ]);

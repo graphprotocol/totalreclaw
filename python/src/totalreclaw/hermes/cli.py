@@ -199,6 +199,51 @@ def _write_credentials(credentials_path: Path, mnemonic: str) -> None:
         logger.debug("Could not chmod 0600 on %s", credentials_path, exc_info=True)
 
 
+def _try_eager_resolve_scope_address(credentials_path: Path, mnemonic: str, io: _IO) -> None:
+    """2.3.1rc2 — resolve the Smart Account address immediately after setup
+    and persist it back to credentials.json so status / doctor see the
+    real address instead of ``pending``. Best-effort; a missing network
+    is non-fatal.
+    """
+    try:
+        import asyncio
+
+        from totalreclaw.client import _derive_smart_account_address
+
+        try:
+            sa = asyncio.run(_derive_smart_account_address(mnemonic))
+        except RuntimeError:
+            # Already inside an event loop (rare but possible if the wizard is
+            # driven programmatically). Fall back to loop.run_until_complete.
+            loop = asyncio.new_event_loop()
+            try:
+                sa = loop.run_until_complete(_derive_smart_account_address(mnemonic))
+            finally:
+                loop.close()
+        if not sa:
+            return
+        # Merge into existing JSON, preserving any other fields.
+        try:
+            raw = credentials_path.read_text(encoding="utf-8")
+            data = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            data = {"mnemonic": mnemonic}
+        if not isinstance(data, dict):
+            data = {"mnemonic": mnemonic}
+        data["scope_address"] = sa
+        credentials_path.write_text(json.dumps(data, indent=2))
+        try:
+            credentials_path.chmod(0o600)
+        except OSError:
+            pass
+        io.write(f"Smart Account address resolved: {sa}\n")
+    except Exception as err:
+        io.write_err(
+            f"Note: Smart Account address could not be resolved right now ({err}). "
+            "It will be derived on the first remember/recall call.\n"
+        )
+
+
 def _last_n_words(mnemonic: str, n: int = 3) -> list[str]:
     return mnemonic.split()[-n:]
 
@@ -286,11 +331,31 @@ def _run_restore(io: _IO, credentials_path: Path) -> int:
         f"\nAccount restored. Credentials saved to {credentials_path} "
         "(mode 0600).\nMemory tools are now active in Hermes.\n"
     )
+    # 2.3.1rc2: eager Smart Account resolution — caches the address so
+    # subsequent status/doctor calls show the real value, not ``pending``.
+    _try_eager_resolve_scope_address(credentials_path, phrase, io)
     return 0
 
 
-def _run_generate(io: _IO, credentials_path: Path) -> int:
-    """Interactive generate flow. Returns exit code."""
+def _run_generate(io: _IO, credentials_path: Path, emit_phrase: bool = False) -> int:
+    """Interactive generate flow. Returns exit code.
+
+    Parameters
+    ----------
+    emit_phrase : bool
+        When True (``--emit-phrase`` power-user flag), display the phrase
+        in a 4x3 grid on stderr before asking for confirmation. This
+        matches the rc.1 behaviour.
+
+        When False (default for 2.3.1rc2), do NOT display the phrase at
+        all. The user is instead pointed at the credentials.json file
+        and told how to retrieve it with ``cat ... | jq -r .mnemonic``.
+
+    2.3.1rc2 rationale: Pedro's agent flagged that printing the phrase
+    to stdout is ironic for a "secrets management" product — any
+    terminal-recording tool, screen-share, or shoulder-surfer defeats
+    the end-to-end encryption promise. Default is silent-save + pointer.
+    """
     try:
         mnemonic = _generate_mnemonic()
     except Exception as e:
@@ -303,41 +368,45 @@ def _run_generate(io: _IO, credentials_path: Path) -> int:
         )
         return 2
 
-    # STORAGE_GUIDANCE copy — print BEFORE showing the phrase so the
-    # user reads the handling rules before they're tempted to screenshot.
+    # STORAGE_GUIDANCE copy — print regardless of emit-phrase, so the
+    # user understands the handling rules.
     io.write("\n" + STORAGE_GUIDANCE + "\n")
 
-    # Phrase banner to stderr — keeps it out of `hermes setup > out.txt`.
-    io.write_err("\nYour recovery phrase (WRITE THIS DOWN):\n\n")
-    # Render as a 4x3 grid, numbered.
-    for row in range(3):
-        cells = []
-        for col in range(4):
-            idx = row * 4 + col
-            cells.append(f"{idx + 1:>2}. {words[idx]:<12}")
-        io.write_err("  " + "".join(cells) + "\n")
-    io.write_err("\n")
-
-    # Last-3-words confirmation challenge — matches the plugin's
-    # "retype probe words" pattern, simplified to the tail 3 since
-    # users typically write the phrase top-to-bottom.
-    io.write(
-        "Before we save, type the LAST 3 words of your phrase "
-        "(space-separated) to confirm you wrote it down:\n> "
-    )
-    try:
-        typed = io.stdin.readline().rstrip("\r\n").strip().lower()
-    except Exception:
-        typed = ""
-
-    expected = " ".join(_last_n_words(mnemonic, 3))
-    if typed != expected:
+    if emit_phrase:
+        # Power-user opt-in path. Display the phrase in a 4x3 grid on
+        # stderr + demand last-3-words confirmation (prevents accidental
+        # runs where the user didn't actually transcribe the phrase).
         io.write_err(
-            "\nWord mismatch. No credentials have been written. "
-            "Write the phrase down carefully and re-run `hermes setup`.\n"
+            "\n⚠ --emit-phrase enabled — the recovery phrase will be VISIBLE in this terminal.\n"
+            "   Ensure no one can see your screen and no recording software is active.\n"
         )
-        return 1
+        io.write_err("\nYour recovery phrase (WRITE THIS DOWN NOW):\n\n")
+        for row in range(3):
+            cells = []
+            for col in range(4):
+                idx = row * 4 + col
+                cells.append(f"{idx + 1:>2}. {words[idx]:<12}")
+            io.write_err("  " + "".join(cells) + "\n")
+        io.write_err("\n")
 
+        io.write(
+            "Before we save, type the LAST 3 words of your phrase "
+            "(space-separated) to confirm you wrote it down:\n> "
+        )
+        try:
+            typed = io.stdin.readline().rstrip("\r\n").strip().lower()
+        except Exception:
+            typed = ""
+
+        expected = " ".join(_last_n_words(mnemonic, 3))
+        if typed != expected:
+            io.write_err(
+                "\nWord mismatch. No credentials have been written. "
+                "Write the phrase down carefully and re-run `hermes setup --emit-phrase`.\n"
+            )
+            return 1
+
+    # Silent-save path (default): persist without ever showing the phrase.
     try:
         _write_credentials(credentials_path, mnemonic)
     except OSError as e:
@@ -346,9 +415,17 @@ def _run_generate(io: _IO, credentials_path: Path) -> int:
 
     io.write("\n" + GENERATED_CONFIRMATION + "\n")
     io.write(
-        f"\nCredentials saved to {credentials_path} (mode 0600). "
-        "Memory tools are now active in Hermes.\n"
+        f"\n✓ Recovery phrase generated. Saved to {credentials_path} (mode 0600).\n"
     )
+    if not emit_phrase:
+        io.write(
+            f"  Retrieve it with:\n"
+            f"      cat {credentials_path} | jq -r .mnemonic\n"
+            f"  ⚠ STORE IT SAFELY — it's the only way to recover your vault.\n"
+        )
+    io.write("  Memory tools are now active in Hermes.\n")
+    # 2.3.1rc2: eager Smart Account resolution — same rationale as _run_restore.
+    _try_eager_resolve_scope_address(credentials_path, mnemonic, io)
     return 0
 
 
@@ -360,6 +437,7 @@ def _run_generate(io: _IO, credentials_path: Path) -> int:
 def run_setup(
     credentials_path: Optional[Path] = None,
     io: Optional[_IO] = None,
+    emit_phrase: bool = False,
 ) -> int:
     """Run the interactive setup wizard. Returns exit code.
 
@@ -369,6 +447,11 @@ def run_setup(
         Override for tests. Defaults to ``CANONICAL_CREDENTIALS_PATH``.
     io : _IO, optional
         Pre-built IO adapter. Defaults to stdin/stdout/stderr.
+    emit_phrase : bool
+        When True, passes ``emit_phrase=True`` to ``_run_generate`` so
+        the phrase is displayed on stderr (rc.1 behaviour). Default
+        False in 2.3.1rc2 — the phrase is never shown and the user is
+        pointed at credentials.json instead.
     """
     path = credentials_path if credentials_path is not None else CANONICAL_CREDENTIALS_PATH
     wizard_io = io if io is not None else _IO()
@@ -389,7 +472,7 @@ def run_setup(
     if branch == "restore":
         return _run_restore(wizard_io, path)
     if branch == "generate":
-        return _run_generate(wizard_io, path)
+        return _run_generate(wizard_io, path, emit_phrase=emit_phrase)
 
     wizard_io.write_err(
         "\nUnrecognised choice. Expected 'restore' or 'generate'. Aborting.\n"
@@ -424,11 +507,26 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=None,
         help="Override the credentials file location (default: ~/.totalreclaw/credentials.json).",
     )
+    sp_setup.add_argument(
+        "--emit-phrase",
+        action="store_true",
+        default=False,
+        help=(
+            "POWER-USER OPT-IN. Display the generated recovery phrase in the terminal "
+            "on stderr (useful for automation / immediate-transcription workflows). "
+            "Default: silent-save — the phrase is written to credentials.json and "
+            "NOT shown to avoid accidental capture in terminal recordings, screenshots, "
+            "or shared screens."
+        ),
+    )
 
     args = parser.parse_args(argv)
 
     if args.command == "setup":
-        return run_setup(credentials_path=args.credentials_path)
+        return run_setup(
+            credentials_path=args.credentials_path,
+            emit_phrase=getattr(args, "emit_phrase", False),
+        )
 
     parser.print_help()
     return 0

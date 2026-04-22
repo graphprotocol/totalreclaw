@@ -92,6 +92,25 @@ const EXFIL_CONTEXT_PATTERN = /\bfetch\b|\bpost\b|http\.request/i;
 // though the file never actually CALLS eval, the regex fired.
 const DYNAMIC_CODE_PATTERN = /\beval\s*\(|new\s+Function\s*\(/;
 
+// Mirrors OpenClaw SOURCE_RULES[shell-execution]:
+//   pattern:         /child_process/
+//   requiresContext: <none> — the import alone trips the scanner.
+// Shipped 2026-04-22 after 3.3.1-rc.1 NO-GO: `gateway-url.ts` imported
+// `child_process.execFileSync` for Tailscale auto-detect, which the
+// OpenClaw scanner flagged as "Shell command execution detected" and
+// BLOCKED install with:
+//   WARNING: Plugin "totalreclaw" contains dangerous code patterns:
+//   Shell command execution detected (child_process)
+// Even the import line alone fires the rule — the scanner doesn't
+// require an actual `spawn`/`exec*` call site. Fix by either:
+//   1. Removing the child_process usage entirely (preferred — most
+//      subprocess needs have a pure-node alternative), OR
+//   2. Moving the subprocess call into a separate post-install helper
+//      that OpenClaw sandboxes (NOT covered by this scanner), OR
+//   3. Applying for a scanner exemption (see docs/notes/
+//      INVESTIGATION-OPENCLAW-SCANNER-EXEMPTION-*).
+const SHELL_EXEC_PATTERN = /child_process/;
+
 const ALLOW_COMMENT = /^\s*(?:\/\/|\*|\/\*).*scanner-sim:\s*allow/i;
 
 function isSuppressed(source) {
@@ -152,6 +171,7 @@ for (let i = 2; i < process.argv.length; i++) {
 const envFindings = [];
 const exfilFindings = [];
 const dynCodeFindings = [];
+const shellExecFindings = [];
 
 if (!fs.existsSync(ROOT)) {
   console.error(`scanner-sim: root directory not found at ${ROOT}`);
@@ -195,9 +215,19 @@ for (const absPath of files) {
       hits: hits.slice(0, 10),
     });
   }
+
+  // Rule 4 — shell-execution (no context-trigger gate)
+  if (SHELL_EXEC_PATTERN.test(src)) {
+    const hits = allLinesMatching(lines, SHELL_EXEC_PATTERN);
+    shellExecFindings.push({
+      file: relPath,
+      hits: hits.slice(0, 10),
+    });
+  }
 }
 
-const totalFindings = envFindings.length + exfilFindings.length + dynCodeFindings.length;
+const totalFindings =
+  envFindings.length + exfilFindings.length + dynCodeFindings.length + shellExecFindings.length;
 if (jsonMode) {
   process.stdout.write(
     JSON.stringify(
@@ -206,6 +236,7 @@ if (jsonMode) {
         envHarvesting: envFindings,
         potentialExfiltration: exfilFindings,
         dynamicCodeExecution: dynCodeFindings,
+        shellExecution: shellExecFindings,
       },
       null,
       2,
@@ -216,7 +247,7 @@ if (jsonMode) {
 
 if (totalFindings === 0) {
   console.log(
-    `scanner-sim: OK — ${files.length} files scanned, 0 flags (env-harvesting + potential-exfiltration + dynamic-code-execution) under ${
+    `scanner-sim: OK — ${files.length} files scanned, 0 flags (env-harvesting + potential-exfiltration + dynamic-code-execution + shell-execution) under ${
       path.relative(process.cwd(), ROOT) || ROOT
     }`,
   );
@@ -224,7 +255,7 @@ if (totalFindings === 0) {
 }
 
 console.error(
-  `scanner-sim: FAIL — ${envFindings.length} env-harvesting + ${exfilFindings.length} potential-exfiltration + ${dynCodeFindings.length} dynamic-code-execution flag(s)`,
+  `scanner-sim: FAIL — ${envFindings.length} env-harvesting + ${exfilFindings.length} potential-exfiltration + ${dynCodeFindings.length} dynamic-code-execution + ${shellExecFindings.length} shell-execution flag(s)`,
 );
 console.error('');
 
@@ -278,6 +309,30 @@ if (dynCodeFindings.length > 0) {
   console.error('  2. Removing the call entirely if it is actual runtime code.');
   console.error('');
   for (const f of dynCodeFindings) {
+    console.error(`  ${f.file}`);
+    for (const t of f.hits) {
+      console.error(`    :${t.line}  hit -> ${t.text.slice(0, 120)}`);
+    }
+  }
+  console.error('');
+}
+
+if (shellExecFindings.length > 0) {
+  console.error('[shell-execution]');
+  console.error('Each of these files contains at least one match for `child_process` —');
+  console.error('even importing the module (`import ... from "child_process"` or');
+  console.error('`require("child_process")`) is enough to trip the rule. OpenClaw refuses');
+  console.error('to install plugins that can execute shell commands.');
+  console.error('');
+  console.error('This rule shipped after 3.3.1-rc.1 NO-GO: `gateway-url.ts` used');
+  console.error('`child_process.execFileSync(\"tailscale\", ...)` for MagicDNS auto-detect');
+  console.error('and blocked every `openclaw plugins install`. Fix by either:');
+  console.error('  1. Removing the child_process usage entirely (prefer pure-node');
+  console.error('     alternatives — os.networkInterfaces(), node:dns, node:fs), OR');
+  console.error('  2. Moving subprocess logic into a separate post-install helper');
+  console.error('     script that OpenClaw sandboxes (NOT inside the main plugin tree).');
+  console.error('');
+  for (const f of shellExecFindings) {
     console.error(`  ${f.file}`);
     for (const t of f.hits) {
       console.error(`    :${t.line}  hit -> ${t.text.slice(0, 120)}`);

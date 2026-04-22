@@ -132,15 +132,13 @@ class TestRestoreFlow:
 
 
 class TestGenerateFlow:
-    def test_happy_path(self, tmp_path: Path) -> None:
-        """Generate + confirm last-3-words → file written + banners printed."""
+    def test_happy_path_silent(self, tmp_path: Path) -> None:
+        """2.3.1rc2 default: generate → file written, phrase NOT shown, no confirmation prompt."""
         creds = tmp_path / "credentials.json"
 
-        # Mock the mnemonic generator so the test is deterministic.
         fake_mnem = VALID_MNEMONIC
-        last3 = " ".join(fake_mnem.split()[-3:])
-
-        stdin_text = f"generate\n{last3}\n"
+        # No retype needed in silent mode — just pick the generate branch.
+        stdin_text = "generate\n"
         io, stdout, stderr = _make_io(stdin_text)
 
         with patch.object(hermes_cli, "_generate_mnemonic", return_value=fake_mnem):
@@ -154,21 +152,56 @@ class TestGenerateFlow:
         out = stdout.getvalue()
         err = stderr.getvalue()
 
-        # STORAGE_GUIDANCE must appear in stdout BEFORE the phrase is shown.
         from totalreclaw.onboarding import STORAGE_GUIDANCE, GENERATED_CONFIRMATION
 
         assert STORAGE_GUIDANCE in out
         assert GENERATED_CONFIRMATION in out
-        # Confirmation banner includes "write it down" copy.
-        assert "write it down" in out.lower()
 
-        # Phrase goes to STDERR not STDOUT — key security invariant.
-        assert fake_mnem.split()[0] in err  # first word printed to stderr
-        # Phrase is NOT in stdout.
+        # 2.3.1rc2: phrase is NOT echoed to stdout OR stderr in default mode.
         assert fake_mnem not in out
+        assert fake_mnem not in err
+        # Individual words also absent (defensive — catches partial prints).
+        assert fake_mnem.split()[0] not in err
+        # Pointer to credentials.json retrieval is present.
+        assert "cat" in out and "jq" in out and "mnemonic" in out
+        # Warning that the phrase must be stored safely.
+        assert "store" in out.lower() and "safely" in out.lower()
 
-    def test_wrong_confirmation_rejects(self, tmp_path: Path) -> None:
-        """Mistyped last-3-words → non-zero exit + no file written."""
+    def test_emit_phrase_opt_in(self, tmp_path: Path) -> None:
+        """`--emit-phrase` (2.3.1rc2 opt-in) → phrase shown on stderr + last-3-words confirmation."""
+        creds = tmp_path / "credentials.json"
+
+        fake_mnem = VALID_MNEMONIC
+        last3 = " ".join(fake_mnem.split()[-3:])
+
+        stdin_text = f"generate\n{last3}\n"
+        io, stdout, stderr = _make_io(stdin_text)
+
+        with patch.object(hermes_cli, "_generate_mnemonic", return_value=fake_mnem):
+            rc = hermes_cli.run_setup(credentials_path=creds, io=io, emit_phrase=True)
+
+        assert rc == 0, stderr.getvalue()
+        assert creds.exists()
+        saved = json.loads(creds.read_text())
+        assert saved["mnemonic"] == fake_mnem
+
+        out = stdout.getvalue()
+        err = stderr.getvalue()
+
+        from totalreclaw.onboarding import STORAGE_GUIDANCE, GENERATED_CONFIRMATION
+
+        assert STORAGE_GUIDANCE in out
+        assert GENERATED_CONFIRMATION in out
+
+        # Phrase words appear in STDERR (opt-in behaviour).
+        assert fake_mnem.split()[0] in err
+        # Phrase is NOT in stdout regardless of opt-in.
+        assert fake_mnem not in out
+        # Opt-in warning about terminal visibility is present.
+        assert "visible" in err.lower() or "visible" in out.lower()
+
+    def test_emit_phrase_wrong_confirmation_rejects(self, tmp_path: Path) -> None:
+        """With --emit-phrase, mistyped last-3-words → non-zero exit + no file written."""
         creds = tmp_path / "credentials.json"
         fake_mnem = VALID_MNEMONIC
 
@@ -176,23 +209,21 @@ class TestGenerateFlow:
         io, stdout, stderr = _make_io(stdin_text)
 
         with patch.object(hermes_cli, "_generate_mnemonic", return_value=fake_mnem):
-            rc = hermes_cli.run_setup(credentials_path=creds, io=io)
+            rc = hermes_cli.run_setup(credentials_path=creds, io=io, emit_phrase=True)
 
         assert rc != 0
         assert not creds.exists()
         assert "mismatch" in stderr.getvalue().lower()
-        # GENERATED_CONFIRMATION must NOT be printed on failure.
         from totalreclaw.onboarding import GENERATED_CONFIRMATION
 
         assert GENERATED_CONFIRMATION not in stdout.getvalue()
 
-    def test_non_tty_generate_still_works(self, tmp_path: Path) -> None:
-        """Generate flow tolerates non-TTY stdin (scripted installers)."""
+    def test_non_tty_generate_silent_still_works(self, tmp_path: Path) -> None:
+        """Generate flow (default silent mode) tolerates non-TTY stdin."""
         creds = tmp_path / "credentials.json"
         fake_mnem = VALID_MNEMONIC
-        last3 = " ".join(fake_mnem.split()[-3:])
 
-        stdin_text = f"generate\n{last3}\n"
+        stdin_text = "generate\n"
         io, _stdout, _stderr = _make_io(stdin_text, is_tty=False)
 
         with patch.object(hermes_cli, "_generate_mnemonic", return_value=fake_mnem):
@@ -263,4 +294,12 @@ class TestMainEntry:
         with patch.object(hermes_cli, "run_setup", return_value=0) as m:
             rc = hermes_cli.main(["setup", "--credentials-path", str(creds)])
         assert rc == 0
-        m.assert_called_once_with(credentials_path=creds)
+        m.assert_called_once_with(credentials_path=creds, emit_phrase=False)
+
+    def test_main_setup_emit_phrase_forwarded(self, tmp_path: Path) -> None:
+        """`hermes setup --emit-phrase` forwards the flag to run_setup."""
+        creds = tmp_path / "c.json"
+        with patch.object(hermes_cli, "run_setup", return_value=0) as m:
+            rc = hermes_cli.main(["setup", "--credentials-path", str(creds), "--emit-phrase"])
+        assert rc == 0
+        m.assert_called_once_with(credentials_path=creds, emit_phrase=True)

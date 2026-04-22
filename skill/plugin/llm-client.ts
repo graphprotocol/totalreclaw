@@ -485,26 +485,128 @@ export function resolveLLMConfig(): LLMClientConfig | null {
 }
 
 /**
+ * Options for chatCompletion. `retry` controls the 429 + timeout backoff
+ * loop added in 3.3.1-rc.2 — 5 of 6 extraction windows failed in the
+ * 3.3.1-rc.1 QA because zai 429s had no retry path.
+ */
+export interface ChatCompletionOptions {
+  maxTokens?: number;
+  temperature?: number;
+  /**
+   * Retry behaviour. Defaults to { attempts: 3, baseDelayMs: 1000 } —
+   * 1s → 2s → 4s exponential backoff on 429 or transient timeout. First
+   * failure logs at INFO (single-line, no stack), subsequent attempts at
+   * DEBUG. Set `attempts: 0` to disable retry entirely. Pass a `logger`
+   * for visibility; without one, retries are silent.
+   */
+  retry?: {
+    attempts?: number;
+    baseDelayMs?: number;
+  };
+  logger?: {
+    info?: (msg: string) => void;
+    warn?: (msg: string) => void;
+    debug?: (msg: string) => void;
+  };
+  /** Timeout per attempt in ms (default 30_000). */
+  timeoutMs?: number;
+}
+
+/**
  * Call the LLM chat completion endpoint.
  *
  * Supports both OpenAI-compatible format and Anthropic Messages API,
  * determined by `config.apiFormat`.
+ *
+ * 3.3.1-rc.2 — adds an exponential-backoff retry wrapper for HTTP 429 +
+ * timeout transients. Every retry attempt respects the per-attempt
+ * `timeoutMs` (default 30s). Max 3 total attempts by default (1s, 2s, 4s
+ * backoff). Non-retryable errors (4xx other than 429, network refused,
+ * JSON parse) fail fast on the first attempt.
  *
  * @returns The assistant's response content, or null on failure.
  */
 export async function chatCompletion(
   config: LLMClientConfig,
   messages: ChatMessage[],
-  options?: { maxTokens?: number; temperature?: number },
+  options?: ChatCompletionOptions,
 ): Promise<string | null> {
   const maxTokens = options?.maxTokens ?? 2048;
   const temperature = options?.temperature ?? 0; // Deterministic output for dedup (same input → same text → same content fingerprint)
+  const attempts = Math.max(1, options?.retry?.attempts ?? 3);
+  const baseDelayMs = Math.max(100, options?.retry?.baseDelayMs ?? 1000);
+  const timeoutMs = options?.timeoutMs ?? 30_000;
+  const logger = options?.logger;
 
-  if (config.apiFormat === 'anthropic') {
-    return chatCompletionAnthropic(config, messages, maxTokens, temperature);
+  const callOnce = (): Promise<string | null> =>
+    config.apiFormat === 'anthropic'
+      ? chatCompletionAnthropic(config, messages, maxTokens, temperature, timeoutMs)
+      : chatCompletionOpenAI(config, messages, maxTokens, temperature, timeoutMs);
+
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await callOnce();
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const retryable = isRetryable(msg);
+      const isFinalAttempt = attempt >= attempts;
+      if (!retryable || isFinalAttempt) {
+        // Fail-fast OR last attempt — rethrow.
+        if (attempt > 1) {
+          logger?.warn?.(`chatCompletion: giving up after ${attempt} attempts: ${msg.slice(0, 200)}`);
+        }
+        throw err;
+      }
+      // Retry. INFO on first failure (visible), DEBUG on subsequent.
+      const delayMs = baseDelayMs * Math.pow(2, attempt - 1);
+      if (attempt === 1) {
+        logger?.info?.(
+          `chatCompletion: retrying after transient failure (attempt ${attempt}/${attempts}, wait ${delayMs}ms): ${msg.slice(0, 160)}`,
+        );
+      } else {
+        logger?.debug?.(
+          `chatCompletion: retry attempt ${attempt}/${attempts} (wait ${delayMs}ms): ${msg.slice(0, 160)}`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
+  // Defensive — should never reach here since the loop always throws on the
+  // final attempt when it fails. Keeps TS happy.
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
 
-  return chatCompletionOpenAI(config, messages, maxTokens, temperature);
+/**
+ * Which LLM-call errors are worth retrying. Exported for testability.
+ *
+ * Retryable:
+ *   - HTTP 429 (rate limit)
+ *   - HTTP 503 / 502 / 504 (gateway transients)
+ *   - AbortError / "aborted due to timeout" / "TimeoutError"
+ *
+ * NOT retryable:
+ *   - HTTP 400 / 401 / 403 / 404 (auth / request errors — no point retrying)
+ *   - JSON parse errors
+ *   - DNS / connection refused (usually misconfig, not transient)
+ */
+export function isRetryable(errorMessage: string): boolean {
+  const m = errorMessage.toLowerCase();
+  // Rate limit
+  if (/\b429\b/.test(errorMessage) || m.includes('rate limit')) return true;
+  // Transient gateway errors
+  if (/\b50(2|3|4)\b/.test(errorMessage)) return true;
+  // Timeouts
+  if (
+    m.includes('timeout') ||
+    m.includes('aborterror') ||
+    m.includes('was aborted') ||
+    m.includes('operation was aborted')
+  ) {
+    return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +618,7 @@ async function chatCompletionOpenAI(
   messages: ChatMessage[],
   maxTokens: number,
   temperature: number,
+  timeoutMs: number,
 ): Promise<string | null> {
   const url = `${config.baseUrl}/chat/completions`;
 
@@ -534,7 +637,7 @@ async function chatCompletionOpenAI(
         Authorization: `Bearer ${config.apiKey}`,
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000), // 30 second timeout
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!res.ok) {
@@ -559,6 +662,7 @@ async function chatCompletionAnthropic(
   messages: ChatMessage[],
   maxTokens: number,
   temperature: number,
+  timeoutMs: number,
 ): Promise<string | null> {
   const url = `${config.baseUrl}/messages`;
 
@@ -594,7 +698,7 @@ async function chatCompletionAnthropic(
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!res.ok) {

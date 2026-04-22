@@ -1,33 +1,38 @@
 /**
  * gateway-url — autodetect the gateway's externally-reachable URL for QR
- * pairing. Three layers that we can detect locally (no outbound-request
- * triggers in this file):
+ * pairing. This module runs sync + network-I/O-free so the OpenClaw
+ * dangerous-code scanner never flags it (the 3.3.1-rc.1 implementation
+ * used `child-process.execFileSync('tailscale', ...)` which blocked every
+ * `openclaw plugins install` — see QA report
+ * `docs/notes/QA-plugin-3.3.1-rc.1-20260422-0121.md`).
  *
- *   1. Tailscale — `tailscale status --json` via `child_process.execFileSync`.
- *      If the local node has a MagicDNS name and Tailscale is up, return
- *      `https://<magicdns-name>` and assume `tailscale serve` proxies to
- *      the gateway port on 443. Caller gets an opinionated default; user
- *      can override via `publicUrl`.
+ * Two layers:
  *
- *   2. LAN — pick the first non-loopback IPv4 address on a physical
- *      interface (skipping `lo`, `tailscale0`, `docker*`, `utun*`,
- *      `bridge*`, `veth*`). Emit with a caveat that the URL only works
- *      on the same network.
+ *   1. Tailscale — PASSIVE detection via `os.networkInterfaces()`. If a
+ *      `tailscale*` NIC has a CGNAT IPv4 (100.64/10), we return that IP
+ *      as an auto-detected host — the operator can verify + override via
+ *      `plugins.entries.totalreclaw.config.publicUrl` when they want a
+ *      proper MagicDNS hostname. We DO NOT call `tailscale` the CLI —
+ *      that requires `child-process` which the scanner blocks.
  *
- *   3. Nothing — return null. Caller falls through to localhost with a
- *      warning.
+ *   2. LAN — first non-loopback, non-virtual IPv4 interface. Emit with a
+ *      caveat that the URL only works on the same network.
+ *
+ *   3. Null — no signal; caller falls through to localhost with a warning.
+ *
+ * The caller is expected to surface `detected.note` to the operator and
+ * tell them to set `publicUrl` when auto-detect isn't good enough
+ * (remote-accessible https, MagicDNS, etc.).
  *
  * Scope and scanner surface
  * -------------------------
- * - This file does NOT do network I/O. `tailscale status --json` runs as
- *   a subprocess (`execFileSync`) which is NOT a scanner trigger.
- * - This file does NOT contain the substrings that the scanner's
- *   outbound-request rule matches.
- * - Callers that need to compose a final URL pull in this module via a
- *   named import and receive a plain record back.
+ * - No `child-process` import — the original scanner-blocking flaw.
+ * - No `fetch` / `post` / `http.request` substrings — the potential-
+ *   exfiltration rule is also clear.
+ * - Only `node:os` (synchronous, local) is used; no disk reads, no
+ *   subprocess execution, no network calls.
  */
 
-import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 
 // ---------------------------------------------------------------------------
@@ -46,64 +51,53 @@ export interface DetectedGatewayHost {
 }
 
 // ---------------------------------------------------------------------------
-// Tailscale
+// Tailscale — passive detection (no subprocess, no network I/O)
 // ---------------------------------------------------------------------------
 
+/** CGNAT range 100.64.0.0/10 — Tailscale assigns IPs here by default. */
+function isTailscaleCGNAT(addr: string): boolean {
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(addr)) return false;
+  const parts = addr.split('.').map((p) => Number.parseInt(p, 10));
+  if (parts[0] !== 100) return false;
+  return parts[1] >= 64 && parts[1] <= 127;
+}
+
 /**
- * Attempt to discover a local Tailscale MagicDNS name. Returns null if
- * tailscale isn't installed, isn't running, or has no MagicDNS name.
+ * Passive Tailscale detection — checks `os.networkInterfaces()` for a
+ * `tailscale*` NIC carrying a CGNAT IPv4. Returns null if not found.
  *
- * Implementation:
- *   1. `tailscale status --json` — returns a JSON blob with `Self.DNSName`.
- *      DNSName is the fully-qualified MagicDNS (`myhost.tailxxx.ts.net.`).
- *   2. Strip the trailing dot.
- *   3. Assume Tailscale Serve is configured on 443. Callers that know
- *      better can override via pluginConfig.publicUrl.
+ * Unlike rc.1, this does NOT shell out to `tailscale status` — that
+ * tripped the OpenClaw scanner's dangerous-code detector and blocked
+ * install. The trade-off: we surface the raw CGNAT IP instead of the
+ * MagicDNS hostname. Operators who want a MagicDNS host must set
+ * `plugins.entries.totalreclaw.config.publicUrl` explicitly (documented
+ * in SKILL.md).
  */
 export function detectTailscaleHost(options?: {
-  /** Override the `tailscale` binary lookup (tests). */
-  execTailscale?: (args: string[]) => string;
+  /** Override os.networkInterfaces for tests. */
+  networkInterfaces?: () => NodeJS.Dict<os.NetworkInterfaceInfo[]>;
 }): DetectedGatewayHost | null {
-  const exec =
-    options?.execTailscale ??
-    ((args: string[]) => {
-      // 2s timeout is plenty — tailscale status is instantaneous when
-      // the daemon is up. `stdio: 'pipe'` suppresses tailscale's chatter.
-      return execFileSync('tailscale', args, {
-        timeout: 2000,
-        stdio: ['ignore', 'pipe', 'ignore'],
-        encoding: 'utf-8',
-      });
-    });
-
-  let raw: string;
-  try {
-    raw = exec(['status', '--json']);
-  } catch {
-    return null;
+  const nif = (options?.networkInterfaces ?? os.networkInterfaces)();
+  for (const [name, addrs] of Object.entries(nif)) {
+    if (!name.toLowerCase().startsWith('tailscale')) continue;
+    if (!addrs) continue;
+    for (const a of addrs) {
+      if (a.family !== 'IPv4' || a.internal) continue;
+      if (isTailscaleCGNAT(a.address)) {
+        return {
+          kind: 'tailscale',
+          host: a.address,
+          tls: false,
+          note:
+            `Tailscale CGNAT IP detected on interface ${name}. For a proper ` +
+            `https://<magicdns>.ts.net URL, set plugins.entries.totalreclaw.config.publicUrl ` +
+            `(Tailscale CLI auto-resolution was removed in 3.3.1-rc.2 to pass the ` +
+            `OpenClaw security scanner).`,
+        };
+      }
+    }
   }
-  if (!raw) return null;
-
-  let blob: unknown;
-  try {
-    blob = JSON.parse(raw) as unknown;
-  } catch {
-    return null;
-  }
-  if (typeof blob !== 'object' || blob === null) return null;
-  const self = (blob as { Self?: unknown }).Self;
-  if (typeof self !== 'object' || self === null) return null;
-  const dnsName = (self as { DNSName?: unknown }).DNSName;
-  if (typeof dnsName !== 'string') return null;
-  const trimmed = dnsName.replace(/\.$/, '').trim();
-  if (!trimmed) return null;
-
-  return {
-    kind: 'tailscale',
-    host: trimmed,
-    tls: true,
-    note: `Tailscale MagicDNS host detected — assumes \`tailscale serve\` is configured on port 443.`,
-  };
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,14 +157,16 @@ export function detectLanHost(options?: {
 // ---------------------------------------------------------------------------
 
 /**
- * Try Tailscale first, then LAN. Returns null when neither is available
- * (caller falls through to localhost).
+ * Try Tailscale first (passive NIC probe), then LAN. Returns null when
+ * neither is available (caller falls through to localhost).
+ *
+ * Sync: no I/O, no subprocess, no network. Safe in sync callers like
+ * `buildPairingUrl` in index.ts.
  */
 export function detectGatewayHost(options?: {
-  execTailscale?: (args: string[]) => string;
   networkInterfaces?: () => NodeJS.Dict<os.NetworkInterfaceInfo[]>;
 }): DetectedGatewayHost | null {
-  const ts = detectTailscaleHost({ execTailscale: options?.execTailscale });
+  const ts = detectTailscaleHost({ networkInterfaces: options?.networkInterfaces });
   if (ts) return ts;
   const lan = detectLanHost({ networkInterfaces: options?.networkInterfaces });
   if (lan) return lan;
