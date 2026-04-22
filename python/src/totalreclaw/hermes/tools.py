@@ -33,7 +33,7 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
 
     client = state.get_client()
     if not client:
-        return json.dumps({"error": "TotalReclaw not configured. Run totalreclaw_setup first."})
+        return json.dumps({"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."})
 
     text = args.get("text", "").strip()
     if not text:
@@ -92,7 +92,7 @@ async def recall(args: dict, state: "PluginState", **kwargs) -> str:
     """Search memories in TotalReclaw."""
     client = state.get_client()
     if not client:
-        return json.dumps({"error": "TotalReclaw not configured. Run totalreclaw_setup first."})
+        return json.dumps({"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."})
 
     query = args.get("query", "").strip()
     if not query:
@@ -125,7 +125,7 @@ async def forget(args: dict, state: "PluginState", **kwargs) -> str:
     """Delete a memory from TotalReclaw."""
     client = state.get_client()
     if not client:
-        return json.dumps({"error": "TotalReclaw not configured. Run totalreclaw_setup first."})
+        return json.dumps({"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."})
 
     fact_id = args.get("fact_id", "").strip()
     if not fact_id:
@@ -149,7 +149,7 @@ async def pin(args: dict, state: "PluginState", **kwargs) -> str:
     """
     client = state.get_client()
     if not client:
-        return json.dumps({"error": "TotalReclaw not configured. Run totalreclaw_setup first."})
+        return json.dumps({"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."})
 
     raw = args.get("fact_id")
     if not isinstance(raw, str):
@@ -187,7 +187,7 @@ async def unpin(args: dict, state: "PluginState", **kwargs) -> str:
     """
     client = state.get_client()
     if not client:
-        return json.dumps({"error": "TotalReclaw not configured. Run totalreclaw_setup first."})
+        return json.dumps({"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."})
 
     raw = args.get("fact_id")
     if not isinstance(raw, str):
@@ -220,7 +220,7 @@ async def export_all(args: dict, state: "PluginState", **kwargs) -> str:
     """Export all memories from TotalReclaw."""
     client = state.get_client()
     if not client:
-        return json.dumps({"error": "TotalReclaw not configured. Run totalreclaw_setup first."})
+        return json.dumps({"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."})
 
     try:
         facts = await client.export_all()
@@ -234,7 +234,7 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
     """Check TotalReclaw billing status."""
     client = state.get_client()
     if not client:
-        return json.dumps({"error": "TotalReclaw not configured. Run totalreclaw_setup first."})
+        return json.dumps({"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."})
 
     try:
         billing = await client.status()
@@ -250,7 +250,20 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
 
 
 def setup(args: dict, state: "PluginState", **kwargs) -> str:
-    """Configure TotalReclaw credentials. Generates a new recovery phrase if none provided."""
+    """Configure TotalReclaw credentials. Generates a new recovery phrase if none provided.
+
+    .. warning::
+
+       In 2.3.1rc4 this function is NO LONGER registered as an agent tool —
+       ``project_phrase_safety_rule.md`` requires that recovery phrases
+       never cross the LLM context, and both the ``recovery_phrase``
+       parameter path (phrase-in) AND the phrase-less generation path
+       (phrase-out in the return JSON) violated that rule. The function
+       stays in the module for test compatibility and for the CLI
+       delegation chain (``totalreclaw setup`` -> ``hermes.cli.run_setup``).
+       Calling it from an agent-tool handler is forbidden; route the agent
+       to ``totalreclaw_pair`` instead.
+    """
     recovery_phrase = args.get("recovery_phrase", "").strip()
     generated = False
 
@@ -305,7 +318,7 @@ async def upgrade(args: dict, state: "PluginState", **kwargs) -> str:
     client = state.get_client()
     if not client:
         return json.dumps(
-            {"error": "TotalReclaw not configured. Run totalreclaw_setup first."}
+            {"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."}
         )
 
     try:
@@ -356,7 +369,7 @@ async def debrief(args: dict, state: "PluginState", **kwargs) -> str:
     client = state.get_client()
     if not client:
         return json.dumps(
-            {"error": "TotalReclaw not configured. Run totalreclaw_setup first."}
+            {"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."}
         )
 
     # Short-circuit guard so the tool returns a clear explanation to the
@@ -478,7 +491,7 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
     """Import memories from other AI tools (Gemini, ChatGPT, Claude, Mem0, etc.)."""
     client = state.get_client()
     if not client:
-        return json.dumps({"error": "TotalReclaw not configured. Run totalreclaw_setup first."})
+        return json.dumps({"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."})
 
     source = args.get("source", "")
     file_path = args.get("file_path")
@@ -536,7 +549,7 @@ async def import_batch(args: dict, state: "PluginState", **kwargs) -> str:
     """Process one batch of a large import. Call repeatedly with increasing offset."""
     client = state.get_client()
     if not client:
-        return json.dumps({"error": "TotalReclaw not configured. Run totalreclaw_setup first."})
+        return json.dumps({"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."})
 
     source = args.get("source", "")
     file_path = args.get("file_path")

@@ -4,6 +4,24 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.4] — 2026-04-22
+
+Phrase-safety hardening: `totalreclaw_onboard` agent tool removed. Paired with Hermes Python `2.3.1rc4` (which ports the QR-pair flow to Python so Hermes users gain a phrase-safe agent setup path too).
+
+### Removed (phrase-safety enforcement — BREAKING for agent tool callers)
+
+- **`totalreclaw_onboard` agent tool — REMOVED.** rc.3 shipped a `totalreclaw_onboard` tool that generated a fresh BIP-39 mnemonic in-process, wrote it to `credentials.json`, and returned `{scope_address, credentials_path}`. `emitPhrase: false` kept the mnemonic out of the tool's return payload, but NOTHING ARCHITECTURALLY PREVENTED leakage — a future patch could regress the flag, a different code path could echo the mnemonic in a log/error, or the mere existence of the tool signalled to agents that phrase generation inside chat is fine (it isn't). Per `project_phrase_safety_rule.md`: "recovery phrase MUST NEVER cross the LLM context in ANY form." rc.4 removes the registration. The underlying `runNonInteractiveOnboard` code path stays reachable via the CLI `openclaw totalreclaw onboard` — that path runs in the user's own terminal, OUTSIDE any agent shell, so phrase stdout never feeds back into LLM context.
+
+### Changed
+
+- **`SKILL.md` — setup section rewritten.** `totalreclaw_pair` is now the canonical setup surface for all users (local or remote). The CLI wizard (`openclaw totalreclaw onboard`) is explicitly documented as user-terminal-only — agents MUST NOT invoke it via their shell tool. Tool surface table updated: `totalreclaw_onboard` removed, `totalreclaw_pair` promoted to canonical. `totalreclaw_onboarding_start` remains as a pointer-only tool for users who explicitly prefer local-terminal setup.
+- **`index.ts` — `totalreclaw_pair` tool description updated.** Removed backref to `totalreclaw_onboard`; now instructs agents to always prefer pair, with `totalreclaw_onboarding_start` as the fallback pointer for local-terminal-only users.
+- **`docs/guides/openclaw-setup.md` — QR pairing is now documented as the default setup flow.** CLI wizard moved to a user-terminal-only subsection with a prominent "do NOT run this through an agent shell" warning.
+
+### Tests
+
+- **`phrase-safety-registry.test.ts`** — new. Text-scans `index.ts` for `api.registerTool({ name: '...' })` literals and asserts: (a) `totalreclaw_onboard` is NOT in the list; (b) `totalreclaw_pair` IS in the list; (c) no name contains phrase-adjacent tokens (`onboard_generate`, `generate_phrase`, `generate_mnemonic`, `restore_phrase`, `restore_mnemonic`, `mnemonic`). Runs as part of `npm test`.
+
 ## [3.3.1-rc.3] — 2026-04-22
 
 Patch RC bundling two stability fixes, one new RC-gated tool, two SKILL.md addendums, and a configurable LLM retry budget. All prior rc.1 + rc.2 fixes are preserved.

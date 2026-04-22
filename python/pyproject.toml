@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "totalreclaw"
-version = "2.3.1rc3"
+version = "2.3.1rc4"
 description = "End-to-end encrypted memory for AI agents — Python client (Memory Taxonomy v1)"
 readme = "README.md"
 license = "MIT"
@@ -27,6 +27,15 @@ dependencies = [
     "transformers>=4.40",
     "huggingface-hub>=0.23",
     "eth-account>=0.13",
+    # 2.3.1rc4 — QR-pair flow ports the TS plugin's x25519 + ChaCha20-Poly1305
+    # AEAD handshake to Python so Hermes gains a phrase-safe setup path. The
+    # `cryptography` library provides both primitives via a single well-
+    # audited C backend (OpenSSL). Lower bound 42 matches the first release
+    # with the Python-wrapped `ChaCha20Poly1305` that we rely on; upper
+    # bound stays open — this is a security-critical dep that MUST track
+    # upstream patches. Hybrid ML-KEM is deferred to rc.5 per the phrase-
+    # safety rule's "document + ship pure x25519 for rc.4" carve-out.
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]
@@ -37,14 +46,13 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-xdist>=3.5", "mnemonic>=0.
 totalreclaw = "totalreclaw.hermes"
 
 [project.scripts]
-# Hermes CLI for first-run onboarding ("hermes setup"). Mirrors the
-# plugin 3.3.0 onboarding flow so users switching between OpenClaw and
-# Hermes see the same branch question + recovery-phrase terminology.
-hermes = "totalreclaw.hermes.cli:main"
-# 2.3.1rc2 — standalone `totalreclaw` CLI (setup + doctor). Users who
-# install `pip install totalreclaw` without Hermes get a first-class
-# entry point for initialising the vault and running health checks. The
-# `hermes` binary remains for Hermes-specific flows.
+# 2.3.1rc4 — canonical user-facing CLI. Only one console script is
+# declared by this package: the colliding `hermes` binary (that would
+# overwrite hermes-agent's own CLI on `pip install totalreclaw`) was
+# REMOVED in rc.4 after rc.3 QA surfaced the "hermes gateway →
+# invalid choice: 'gateway'" restart-loop bug. Users who want the
+# Hermes-specific first-run wizard run `totalreclaw hermes-setup`
+# (see `totalreclaw.cli:main` for the subcommand router).
 totalreclaw = "totalreclaw.cli:main"
 
 [tool.setuptools.package-data]

@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "End-to-end encrypted memory for AI agents — portable, yours forever. XChaCha20-Poly1305 E2EE: server never sees plaintext."
-version: 3.3.1-rc.3
+version: 3.3.1-rc.4
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -30,14 +30,26 @@ You are operating inside a host that has the TotalReclaw memory plugin loaded. T
 
 Before any memory tool, check `~/.totalreclaw/credentials.json`:
 
-- **Missing, empty, malformed, or no `mnemonic` key** -> NOT set up. You MUST NOT generate a phrase in chat, and you MUST NOT ask the user to paste one. Route:
-  - Local gateway: call `totalreclaw_onboarding_start` (or `totalreclaw_onboard` if available); both return a pointer to `openclaw totalreclaw onboard`.
-  - Remote gateway (VPS / Docker / no TTY): call `totalreclaw_pair` (v3.3.1+), OR instruct the user to run `openclaw totalreclaw pair generate --json`. Present the returned `{url, pin, qr_ascii}` to the user. The phrase is entered in their browser, never in this conversation.
+- **Missing, empty, malformed, or no `mnemonic` key** -> NOT set up. Follow the "Setting up a user's TotalReclaw recovery phrase" section below. You MUST NOT generate a phrase in chat, and you MUST NOT ask the user to paste one.
 - **Present with a valid `mnemonic`** -> active. Use the tools below.
+
+## Setting up a user's TotalReclaw recovery phrase
+
+**Agent path (default, only secure path): call the `totalreclaw_pair` tool.** It returns a URL + 6-digit PIN. Tell the user:
+
+> "Open <URL> in your browser, enter your phrase (or let the browser generate one), and confirm PIN <PIN>. Your phrase is encrypted in the browser and uploaded end-to-end-encrypted to this gateway — it never crosses this chat."
+
+Browser-side crypto handles the phrase; this chat never sees it. After the user confirms "pairing complete" in their browser, the credentials are already on disk — no gateway restart needed for OpenClaw because routes are registered on plugin install and the pair HTTP handler writes credentials in-process.
+
+**NEVER** invoke `openclaw totalreclaw onboard`, `totalreclaw setup`, or any phrase-generating CLI via your shell tool. Those commands are for users to run in their own terminal — not for you. Agent shell stdout is captured into LLM context; running them leaks the phrase.
+
+**NEVER** ask the user to paste their phrase into chat. If they do, immediately tell them to rotate by generating a new wallet via `totalreclaw_pair` with `mode=generate`; the pasted phrase is compromised.
+
+**If the user explicitly prefers local-terminal setup** (no browser, no QR URL to open), point them at `totalreclaw_onboarding_start` — which returns a pointer to the CLI wizard they run THEMSELVES. You do not run it.
 
 ## Core rules
 
-1. **Phrase safety (NON-NEGOTIABLE).** The recovery phrase is a secret. Never generate one in chat, never echo one back, never log one in reasoning / tool payloads, never pass one to another tool. Direct users to `cat ~/.totalreclaw/credentials.json | jq -r .mnemonic`.
+1. **Phrase safety (NON-NEGOTIABLE, ABSOLUTE).** The recovery phrase is a secret. Never generate one in chat, never echo one back, never log one in reasoning / tool payloads, never pass one to another tool, never invoke a phrase-generating CLI via your shell tool. A leaked phrase = compromised vault, no rotation possible. Governed by `project_phrase_safety_rule.md` (memory file in p-diogo/totalreclaw-internal).
 2. **Use the tools, not inline state.** `totalreclaw_remember` stores; `totalreclaw_recall` retrieves. Don't re-ask the user for past facts; don't paraphrase memories as your own recollection.
 3. **Gateway restart is required after install.** If tools fail right after `openclaw plugins install @totalreclaw/totalreclaw`, tell the user to run `openclaw restart` or `docker restart openclaw-qa`.
 
@@ -87,8 +99,8 @@ Tools work only when credentials are active AND the gateway has been restarted p
 | `totalreclaw_migrate` | optional `confirm` (dry-run by default) |
 | `totalreclaw_import_from` / `totalreclaw_import_batch` | `source`, `file_path` or `content`, `dry_run` |
 | `totalreclaw_consolidate` | optional `dry_run` |
-| `totalreclaw_onboarding_start` / `totalreclaw_onboard` | (none) — returns CLI pointer |
-| `totalreclaw_pair` | optional `mode` (`generate` / `import`) — returns `{url, pin, qr_ascii, expires_at_ms}` |
+| `totalreclaw_onboarding_start` | (none) — returns CLI pointer for users who prefer local-terminal setup |
+| `totalreclaw_pair` | optional `mode` (`generate` / `import`) — returns `{url, pin, qr_ascii, expires_at_ms}`. CANONICAL setup surface |
 
 ## Taxonomy
 

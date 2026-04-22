@@ -79,10 +79,10 @@ BRANCH_QUESTION = """
 Let's set up your account. Do you already have a recovery phrase, or should we generate a new one?
 """.strip()
 
-LOCAL_MODE_INSTRUCTIONS = "Run: totalreclaw setup  (or: hermes setup)"
+LOCAL_MODE_INSTRUCTIONS = "Run: totalreclaw setup"
 
 REMOTE_MODE_INSTRUCTIONS = """
-Run: totalreclaw setup  (or: hermes setup if you're on a Hermes-specific install)
+Run: totalreclaw setup
 
 You'll be prompted to either restore from an existing recovery phrase or generate a new one. Your phrase never leaves this machine.
 """.strip()

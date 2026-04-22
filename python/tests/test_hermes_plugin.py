@@ -169,10 +169,27 @@ class TestSchemas:
         assert schemas.STATUS["name"] == "totalreclaw_status"
 
     def test_setup_schema(self):
+        # 2.3.1rc4 — ``totalreclaw_setup`` schema is retained in schemas.py
+        # for backward-compat with older code, but is NO LONGER registered
+        # as an agent tool (see ``TestRegister.test_register`` below). The
+        # schema itself still validates because internal callers may
+        # reference the shape; the security invariant is enforced at
+        # registration time.
         assert schemas.SETUP["name"] == "totalreclaw_setup"
         assert "recovery_phrase" in schemas.SETUP["parameters"]["properties"]
-        # recovery_phrase is optional (generates one if omitted)
         assert "required" not in schemas.SETUP["parameters"]
+
+    def test_pair_schema(self):
+        """2.3.1rc4 — totalreclaw_pair is the canonical agent-tool surface
+        for setup. Returns {url, pin, expires_at} — no phrase material."""
+        from totalreclaw.hermes import pair_tool
+
+        assert pair_tool.PAIR_SCHEMA["name"] == "totalreclaw_pair"
+        props = pair_tool.PAIR_SCHEMA["parameters"]["properties"]
+        assert "mode" in props
+        # No phrase-shaped params — crucial for the phrase-safety contract.
+        for forbidden in ("recovery_phrase", "phrase", "mnemonic"):
+            assert forbidden not in props
 
 
 class TestTools:
@@ -494,8 +511,10 @@ class TestRegister:
                 register(ctx)
         # v2.1.0 — 10 base tools (+ upgrade + debrief).
         # 2.3.1rc3 — +1 RC-gated `totalreclaw_report_qa_bug` when the
-        # installed version is a pre-release. We infer RC-gating dynamically
-        # so the test stays honest across stable/RC publishes.
+        # installed version is a pre-release.
+        # 2.3.1rc4 — `totalreclaw_setup` REMOVED (phrase-safety), replaced
+        # by `totalreclaw_pair`. Count stays the same (10 stable, 11 RC)
+        # because it's a 1-for-1 swap.
         from totalreclaw import __version__
         from totalreclaw.hermes.qa_bug_report import is_rc_build
         expected_tools = 11 if is_rc_build(__version__) else 10
@@ -505,14 +524,15 @@ class TestRegister:
         )
         assert ctx.register_hook.call_count == 4
 
-        # Check tool names
+        # Check tool names — every memory tool plus the new pair tool.
         tool_names = [call.kwargs["name"] for call in ctx.register_tool.call_args_list]
         assert "totalreclaw_remember" in tool_names
         assert "totalreclaw_recall" in tool_names
         assert "totalreclaw_forget" in tool_names
         assert "totalreclaw_export" in tool_names
         assert "totalreclaw_status" in tool_names
-        assert "totalreclaw_setup" in tool_names
+        # 2.3.1rc4 — the canonical setup surface is now pair, not setup.
+        assert "totalreclaw_pair" in tool_names
         assert "totalreclaw_import_from" in tool_names
         assert "totalreclaw_import_batch" in tool_names
         assert "totalreclaw_upgrade" in tool_names
@@ -524,3 +544,36 @@ class TestRegister:
         assert "pre_llm_call" in hook_names
         assert "post_llm_call" in hook_names
         assert "on_session_end" in hook_names
+
+    def test_register_phrase_safety_no_onboard_or_setup_tool(self):
+        """2.3.1rc4 phrase-safety contract: NEITHER `totalreclaw_setup`
+        nor any `totalreclaw_onboard*` variant may be registered as an
+        agent tool. Governed by
+        ``~/.claude/projects/-Users-pdiogo-Documents-code-totalreclaw-
+        internal/memory/project_phrase_safety_rule.md`` — recovery phrases
+        MUST NEVER cross the LLM context in any form. `totalreclaw_pair`
+        is the single approved agent-facilitated setup path (browser-side
+        crypto keeps the phrase out of the LLM round-trip)."""
+        from totalreclaw.hermes import register
+        ctx = MagicMock()
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(Path, "exists", return_value=False):
+                register(ctx)
+        tool_names = [call.kwargs["name"] for call in ctx.register_tool.call_args_list]
+
+        forbidden = [
+            "totalreclaw_setup",
+            "totalreclaw_onboard",
+            "totalreclaw_onboarding_start",
+            "totalreclaw_onboard_generate",
+            "totalreclaw_restore",
+            "totalreclaw_restore_phrase",
+        ]
+        for f in forbidden:
+            assert f not in tool_names, (
+                f"Phrase-safety violation: agent tool {f!r} is registered. "
+                f"Recovery phrases MUST NEVER cross the LLM context. "
+                f"Use totalreclaw_pair instead."
+            )
+        # And the approved replacement MUST be present.
+        assert "totalreclaw_pair" in tool_names

@@ -39,13 +39,33 @@ openclaw plugins install ./totalreclaw/skill/plugin
 
 ## Your recovery phrase
 
-TotalReclaw is keyed by a 12-word BIP-39 recovery phrase. The CLI wizard generates or imports it on your terminal -- it never touches the LLM, the chat transcript, or the network.
+TotalReclaw is keyed by a 12-word BIP-39 recovery phrase. QR pairing generates or imports it in your **browser**, which then ships the phrase to the gateway end-to-end-encrypted. The phrase never touches the LLM, the chat transcript, or the agent's shell-tool stdout.
 
 **Stored at:** `~/.totalreclaw/credentials.json` (mode `0600`, owner-only). A separate `~/.totalreclaw/state.json` tracks onboarding state and never contains secrets.
 
 **Save the phrase somewhere safe.** It is the only key to your memories and the only way to use the same vault from another agent (Claude Desktop, Cursor, Hermes, etc.). No password reset, no recovery email, no support ticket that can recover lost memories.
 
-### First-time setup (local gateway)
+### Setup (default: QR pairing — agent-facilitated)
+
+Ask the OpenClaw agent in chat: "Set up TotalReclaw for me." The agent will call the `totalreclaw_pair` tool and relay a URL + 6-digit PIN:
+
+> "Open https://your-gateway/plugin/totalreclaw/pair/finish?sid=...#pk=... in your browser, enter your phrase (or let the browser generate one), and confirm PIN 492731."
+
+**What happens under the hood:**
+
+1. Your browser fetches the pair page.
+2. The browser performs x25519 ECDH against the gateway's ephemeral public key (passed in the URL `#fragment` — never hits server logs), derives a ChaCha20-Poly1305 key via HKDF-SHA256.
+3. You type (or let the browser generate) your recovery phrase.
+4. The browser encrypts locally and uploads ciphertext + nonce + its own pubkey + PIN.
+5. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode 0600).
+
+**The recovery phrase never enters the LLM context.** Not the chat, not the agent's reasoning, not the agent's shell stdout, not the tool-call payload. Browser-side crypto keeps it isolated by construction.
+
+Session TTL is 15 minutes by default (5-60 min configurable). The QR URL is single-use. Supported browsers: Safari 17.2+, Chromium 118+.
+
+### Setup (user-terminal ONLY — do NOT run this through an agent)
+
+If you prefer to set up entirely in your own terminal:
 
 ```bash
 openclaw totalreclaw onboard
@@ -54,45 +74,24 @@ openclaw totalreclaw onboard
 The wizard asks:
 
 1. **Generate** a new phrase. Printed as a 3x4 grid on your terminal with a "write it down" warning; you retype three specific words to prove you saved it. Persisted to `credentials.json` on success. Phrase never leaves the terminal.
-2. **Import** an existing phrase. Hidden stdin (masked with `*`), BIP-39 checksum validation. Existing memories become accessible immediately.
-3. **Skip** for now. Memory tools stay disabled until you re-run the wizard.
+2. **Import** an existing phrase. Hidden stdin (masked with `*`), BIP-39 checksum validation.
+3. **Skip** for now. Memory tools stay disabled until you re-run.
 
 Check state any time: `openclaw totalreclaw status`.
 
-### Agent-driven setup (non-interactive, v3.3.1+)
-
-For scripted or agent-led installs:
-
-```bash
-openclaw totalreclaw onboard --non-interactive --json --mode generate
-# => {"ok": true, "action": "generate", "scope_address": "0x...", "credentials_path": "..."}
-```
-
-The phrase is NOT in the JSON payload -- it was written to `credentials_path` at mode 0600. The agent should tell the user to open that file to read their phrase.
-
-For restore: `--mode restore --phrase "word1 word2 ..."`.
+> **Do NOT ask an agent to run `openclaw totalreclaw onboard` through its shell tool.** Agent shell stdout is captured into LLM context. Even though the wizard doesn't print the phrase by default, running phrase-related CLIs via an agent shell is a phrase-safety hazard — the agent MUST use `totalreclaw_pair` instead. The CLI is for you, not the agent.
 
 ### In-chat prompts
 
-Ask the agent "set up TotalReclaw for me" and it calls `totalreclaw_onboarding_start` (v3.2.0+) or the agent-invocable `totalreclaw_onboard` tool (v3.3.1+) -- both return a pointer back to the CLI wizard. Neither surface ever shows your recovery phrase in chat; that would leak it to the LLM provider's logs.
+Ask the agent "set up TotalReclaw for me" and it should call `totalreclaw_pair` directly. For users who explicitly prefer local-terminal setup, the agent falls back to `totalreclaw_onboarding_start` — a pointer-only tool that tells YOU to run the CLI wizard yourself. The agent never runs the wizard for you.
 
-### Remote-gateway setup (QR pairing, v3.3.0+)
+### rc.4 phrase-safety changes (3.3.1-rc.4+)
 
-If OpenClaw runs on a VPS or anywhere you don't have a local TTY:
+Per `project_phrase_safety_rule.md`:
 
-```bash
-openclaw totalreclaw pair generate         # new phrase
-openclaw totalreclaw pair import           # import existing
-openclaw totalreclaw pair generate --json  # v3.3.1 agent-driven
-```
-
-The CLI prints an ASCII QR, a 6-digit PIN, and a URL like `https://your-gateway/plugin/totalreclaw/pair/finish?sid=...#pk=...`. Scan/open on any phone or laptop; type the PIN; enter the phrase. The browser performs x25519 ECDH with the gateway's ephemeral public key (carried in the URL fragment -- invisible to servers on the path), encrypts the phrase with ChaCha20-Poly1305, uploads the ciphertext. The gateway decrypts, writes `credentials.json`, activates.
-
-The phrase never enters the LLM, the chat transcript, or the relay in plaintext. Session TTL 15 min default (5-60 configurable); QR is single-use.
-
-**Agent-driven pairing (v3.3.1):** `pair generate --json` emits structured `{url, pin, qr_ascii, expires_at_ms}` the agent presents to the user. The agent NEVER asks the user to paste the phrase in chat.
-
-**Gateway URL resolution:** `publicUrl` config -> `gateway.remote.url` -> custom bind host -> Tailscale MagicDNS -> LAN IPv4 -> localhost. Browsers: Safari 17+, Chrome 123+, Firefox 130+.
+- `totalreclaw_onboard` agent tool — **REMOVED**. Even with `emitPhrase: false`, nothing architecturally prevented leakage. Use `totalreclaw_pair`.
+- `totalreclaw setup` / `openclaw totalreclaw onboard` CLI commands — **KEPT but user-terminal only**. They MUST NOT be invoked via any agent shell tool.
+- `totalreclaw_pair` agent tool — **CANONICAL**. Browser-side x25519 + ChaCha20-Poly1305 + HKDF-SHA256 keeps the phrase out of the LLM round-trip by construction. Now ported to Hermes Python as well (v2.3.1rc4+).
 
 ### Retrieving your phrase later
 

@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "End-to-end encrypted memory for AI agents — portable, yours forever. XChaCha20-Poly1305 E2EE: server never sees plaintext. Python / Hermes edition."
-version: 2.3.1rc3
+version: 2.3.1rc4
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -11,14 +11,19 @@ homepage: https://totalreclaw.xyz
 
 **This document is directive for agents, not user-facing copy.** Follow the rules in order; every rule is a hard `MUST` unless stated otherwise.
 
-## RULE 0 — Recovery-phrase handling (security boundary)
+## RULE 0 — Recovery-phrase handling (security boundary, ABSOLUTE)
 
-The recovery phrase is the ONLY key to the user's encrypted memories. Every agent decision in this skill flows downstream from this rule.
+The recovery phrase is the ONLY key to the user's encrypted memories. A single leaked phrase equals a fully compromised vault: the LLM provider (and anyone with access to its logs) can decrypt every memory the user has ever stored. Phrases do NOT rotate — once leaked, always leaked.
 
-- **NEVER generate a 12-word phrase yourself.** You cannot produce a valid BIP-39 checksum; any phrase you invent is a garbage string that can't recover real memories. Call `totalreclaw_setup` (or the CLI wizard) — those paths use `eth_account.Account.create_with_mnemonic()` which produces real phrases.
+**Absolute rule:** the recovery phrase MUST NEVER cross the LLM context in ANY form — not in your replies, not in tool-call arguments, not in tool-call return values, not in your reasoning, not in shell-tool stdout.
+
+- **NEVER invoke `totalreclaw setup`, `hermes setup`, or any phrase-generating / phrase-restoring CLI via your shell tool.** Those commands print (or could print, with flags like `--emit-phrase`, or with a silent-save regression) the phrase. Your shell-tool stdout is captured into LLM context. Those CLIs exist for users to run in their OWN terminal, OUTSIDE any agent shell.
+- **NEVER pass a recovery phrase as a tool-call argument.** The entire tool-call payload is in LLM context. The `totalreclaw_setup` tool that accepted a `recovery_phrase` parameter in rc.3 has been REMOVED in rc.4 for this reason.
+- **NEVER generate a 12-word phrase yourself.** You cannot produce a valid BIP-39 checksum; any phrase you invent is garbage that can't recover real memories.
 - **NEVER display a phrase in chat.** LLM providers log transcripts; any phrase in a reply leaks to every hop.
-- **NEVER echo back a phrase the user pastes.** If the user pastes one anyway, tell them: "That was pasted into chat — please delete the message immediately and use `totalreclaw setup --mode restore` in your terminal so the phrase stays on your machine."
-- **NEVER ask the user to paste their phrase.** Instead, direct them to run the CLI wizard.
+- **NEVER ask the user to paste their phrase.** If they do anyway, tell them immediately: "That was pasted into chat — please delete the message and generate a new wallet via `totalreclaw_pair` with `mode=generate`. The phrase you pasted is now compromised and cannot be un-leaked."
+
+The ONLY agent-facilitated setup path is `totalreclaw_pair` (see RULE 1a). Browser-side crypto keeps the phrase out of the LLM round-trip by construction.
 
 ---
 
@@ -31,15 +36,19 @@ Exactly one of these is true when your session starts:
 | Setup complete | `totalreclaw.agent.state.is_configured() == True` | Do nothing; memory tools are live. |
 | Setup pending | `is_configured() == False` (credentials.json missing/empty) | Proceed to RULE 1a. |
 
-### RULE 1a — Guide onboarding without leaking the phrase
+### RULE 1a — Setting up a user's TotalReclaw recovery phrase
 
-Call `totalreclaw_onboarding_start` (a pointer-only tool — returns a message, no secrets). The tool's return text contains two paths; relay them verbatim:
+**Agent path (default, only secure path): call the `totalreclaw_pair` tool.** It returns a URL + 6-digit PIN + `expires_at`. Tell the user:
 
-1. **Terminal wizard (preferred when user has shell access):** `totalreclaw setup` — the wizard generates a phrase silently, saves it to `~/.totalreclaw/credentials.json` (mode 0600), and tells the user to retrieve it with `cat ~/.totalreclaw/credentials.json | jq -r .mnemonic`. The phrase never appears in your output or the user's chat.
+> "Open <URL> in your browser, enter your phrase (or let the browser generate a new one), and confirm PIN <PIN>. Your phrase is encrypted in the browser and uploaded end-to-end-encrypted to this gateway — it never crosses this chat."
 
-2. **Agent-driven tool (where available, e.g., OpenClaw):** call `totalreclaw_setup` — the tool does the same write + pointer, returns `scope_address` but never the phrase.
+The browser does x25519 + ChaCha20-Poly1305 encryption against the gateway's ephemeral key. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json`. The LLM never sees the phrase at any point in the flow.
 
-If the user is on a remote machine without terminal access, use the pair flow (see RULE 5).
+**After the user confirms "pairing complete" in their browser:** tell them to restart the Hermes gateway so the plugin picks up the new credentials. Plugin routes and hooks only bind on fresh gateway start.
+
+**NEVER** invoke `totalreclaw setup`, `hermes setup`, `openclaw totalreclaw onboard`, or any phrase-generating CLI via your shell tool. Those commands are for users running them in their own terminal — not for you. Agent shell stdout is captured into LLM context; running them leaks the phrase.
+
+**NEVER** ask the user to paste their phrase into chat. If they do, immediately tell them to rotate by generating a new wallet via `totalreclaw_pair` with `mode=generate`; the pasted phrase is compromised and there is no rotation after-the-fact.
 
 ---
 
@@ -123,19 +132,13 @@ When user re-categorizes a memory's domain: "put that under work", "this is a he
 
 ---
 
-## RULE 5 — Remote setup (QR pair flow)
+## RULE 5 — QR pair is the canonical setup flow (RULE 1a applies to ALL users)
 
-If the user says they don't have terminal access (running Hermes on a remote VPS, inside Docker without exec, etc.), call the plugin-level `totalreclaw_pair` tool. The tool returns a URL + 6-digit PIN + ASCII QR code.
+RULE 1a's `totalreclaw_pair` flow is canonical for EVERY user, regardless of whether they have terminal access. Local users, remote users, Docker users, VPS users — all go through `totalreclaw_pair`. The browser-side crypto is what keeps the phrase out of the LLM context, and that protection matters whether the user is on the same machine or on a phone halfway around the world.
 
-Relay ALL THREE to the user verbatim:
-- Paste the URL in their phone browser (or scan the QR).
-- Type the PIN into the browser page when prompted.
-- The browser generates / accepts the recovery phrase and uploads it end-to-end encrypted.
-- Tell the user: "come back to chat when the browser says 'Pairing complete'."
+If a user explicitly says they prefer to set up entirely in their own terminal (no browser, no URL to open), point them at the CLI `totalreclaw setup` — but tell them to run it IN THEIR OWN TERMINAL, not through you. Do NOT call that CLI via your shell tool. Your shell-tool stdout is captured into LLM context.
 
-The phrase NEVER crosses chat. Even if the user insists, refuse to accept a pasted phrase and remind them of RULE 0.
-
-Hermes Python 2.3.1rc2 does not ship its own pair implementation — use the OpenClaw plugin tool when available, or fall back to directing the user to set up locally on another machine and `totalreclaw export` → paste into Hermes's `totalreclaw_restore` flow.
+Hermes Python 2.3.1rc4 ships a native `totalreclaw_pair` implementation (x25519 + ChaCha20-Poly1305). Use it directly — no fallback to external tools needed.
 
 ---
 

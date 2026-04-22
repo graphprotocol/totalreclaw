@@ -5049,143 +5049,34 @@ const plugin = {
     );
 
     // ---------------------------------------------------------------
-    // Tool: totalreclaw_onboard (3.3.1-rc.2 — agent-callable onboard)
+    // Tool: totalreclaw_onboard — REMOVED in 3.3.1-rc.4 (phrase-safety).
     //
-    // Lets the agent drive the non-interactive onboard flow without
-    // shelling out to `openclaw totalreclaw onboard` (subprocess work
-    // is not available inside the plugin runtime and the OpenClaw
-    // security scanner blocks the standard subprocess module).
+    // rc.3 shipped a `totalreclaw_onboard` agent tool that generated a
+    // fresh BIP-39 mnemonic in-process, wrote it to credentials.json,
+    // and returned `{scope_address, credentials_path}` to the agent.
+    // `emitPhrase: false` kept the mnemonic OUT of the tool's return
+    // payload, but NOTHING ARCHITECTURALLY PREVENTED leakage — a future
+    // patch could regress the flag, a different code path could echo
+    // the mnemonic in a log/error message the agent captures, or the
+    // mere existence of the tool implied to agents that "generating a
+    // phrase here is fine" (it isn't).
     //
-    // Security envelope (same as the CLI path):
-    //   - NEVER accepts a recovery phrase through chat (mode=restore
-    //     is rejected here — that still requires the local CLI wizard).
-    //   - The generated phrase is written to ~/.totalreclaw/credentials.json
-    //     (mode 0600) by `runNonInteractiveOnboard`. We explicitly pass
-    //     `emitPhrase: false` so the phrase NEVER appears in the tool
-    //     return value.
-    //   - Returns only: scope_address + credentials_path + ok/error.
+    // Per ``project_phrase_safety_rule.md``
+    // (memory file in p-diogo/totalreclaw-internal — absolute rule:
+    // "recovery phrase MUST NEVER cross the LLM context in ANY form"),
+    // phrase-generating agent tools are forbidden. The ONLY approved
+    // agent-facilitated setup surface is ``totalreclaw_pair`` (browser-
+    // side crypto keeps the phrase out of the LLM round-trip by
+    // construction). The underlying ``runNonInteractiveOnboard`` code
+    // path is still reachable via the CLI ``openclaw totalreclaw onboard``
+    // — that path runs in the user's own terminal, OUTSIDE any agent
+    // shell, so phrase stdout never feeds back into LLM context.
+    //
+    // Audit assertion: ``tool-gating.test.ts`` enforces the removal —
+    // any future re-registration of ``totalreclaw_onboard`` (or any
+    // phrase-generating variant like ``totalreclaw_onboard_generate``,
+    // ``totalreclaw_restore_phrase``) fails CI.
     // ---------------------------------------------------------------
-    api.registerTool(
-      {
-        name: 'totalreclaw_onboard',
-        label: 'Onboard (generate new recovery phrase)',
-        description:
-          'Generate a NEW TotalReclaw recovery phrase on this machine without the user ' +
-          'leaving chat. The phrase is written ONLY to ~/.totalreclaw/credentials.json (mode ' +
-          '0600) and NEVER returned through this tool — the response contains just the derived ' +
-          'Smart Account (scope) address and the credentials path so the user can retrieve ' +
-          'their phrase locally (e.g. `cat ~/.totalreclaw/credentials.json | jq -r .mnemonic`).\n\n' +
-          'Use when a fresh user asks you to set up TotalReclaw or enable memory. Refuses if ' +
-          'onboarding is already active (the user can delete the credentials file to re-onboard, ' +
-          'but we will NOT silently overwrite). For RESTORE (import an existing phrase), tell ' +
-          'the user to run `openclaw totalreclaw onboard --mode restore` in their local ' +
-          'terminal — this tool refuses to accept phrases through chat.',
-        parameters: {
-          type: 'object',
-          properties: {
-            mode: {
-              type: 'string',
-              enum: ['generate'],
-              description:
-                'Only "generate" is supported via this tool (creates a fresh 12-word BIP-39 ' +
-                'phrase). "restore" requires the local CLI wizard because pasting a phrase ' +
-                'through chat ships it to the LLM provider, defeating end-to-end encryption.',
-              default: 'generate',
-            },
-          },
-          additionalProperties: false,
-        },
-        async execute(_toolCallId: string, params: Record<string, unknown>) {
-          const mode = params?.mode;
-          if (mode !== undefined && mode !== 'generate') {
-            return {
-              content: [{
-                type: 'text',
-                text:
-                  'Only mode="generate" is supported through chat. For RESTORE (import an ' +
-                  'existing recovery phrase), ask the user to run `openclaw totalreclaw onboard ' +
-                  '--mode restore` in their local terminal — the phrase is read from stdin and ' +
-                  'never touches the LLM provider or the transcript.',
-              }],
-            };
-          }
-          try {
-            const result: NonInteractiveOnboardResult = await runNonInteractiveOnboard({
-              credentialsPath: CREDENTIALS_PATH,
-              statePath: CONFIG.onboardingStatePath,
-              mode: 'generate',
-              emitPhrase: false, // NEVER include the phrase in agent-visible output.
-              deriveScopeAddress: async (mnemonic: string) => {
-                try {
-                  return await deriveSmartAccountAddress(mnemonic, CONFIG.chainId);
-                } catch (err) {
-                  api.logger.warn(
-                    `totalreclaw_onboard: scope-address derivation failed: ${
-                      err instanceof Error ? err.message : String(err)
-                    }`,
-                  );
-                  return undefined;
-                }
-              },
-            });
-            if (!result.ok) {
-              // already-active, write-failed, etc. Never leaks the phrase.
-              api.logger.info(`totalreclaw_onboard: ok=false error=${result.error}`);
-              return {
-                content: [{
-                  type: 'text',
-                  text:
-                    result.error === 'already-active'
-                      ? 'TotalReclaw is already set up on this machine. Memory tools are unblocked. To re-onboard, delete ~/.totalreclaw/credentials.json first.'
-                      : `Onboard failed: ${result.error_detail ?? result.error}`,
-                }],
-                details: {
-                  ok: false,
-                  error: result.error,
-                  action: result.action,
-                },
-              };
-            }
-            api.logger.info(
-              `totalreclaw_onboard: generated phrase, scope=${result.scope_address?.slice(0, 10) ?? 'unknown'}…, credentials=${result.credentials_path}`,
-            );
-            // Crucially: the mnemonic field is NEVER emitted in details
-            // (emitPhrase=false enforces that on the result object).
-            return {
-              content: [{
-                type: 'text',
-                text:
-                  `TotalReclaw setup complete. A new 12-word recovery phrase was generated and ` +
-                  `saved to ${result.credentials_path} (mode 0600). ` +
-                  (result.scope_address
-                    ? `Your on-chain scope (Smart Account) address is ${result.scope_address}. `
-                    : '') +
-                  `To view your recovery phrase, run on the user's local terminal:\n\n` +
-                  `    cat ${result.credentials_path} | jq -r .mnemonic\n\n` +
-                  `IMPORTANT: the recovery phrase is the ONLY way to recover memories on another ` +
-                  `device. Tell the user to store it safely — a password manager or a paper backup. ` +
-                  `TotalReclaw cannot recover it if lost.`,
-              }],
-              details: {
-                ok: true,
-                action: 'generate',
-                scope_address: result.scope_address,
-                credentials_path: result.credentials_path,
-                // Deliberately NO mnemonic field.
-              },
-            };
-          } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
-            api.logger.error(`totalreclaw_onboard failed: ${message}`);
-            return {
-              content: [{ type: 'text', text: `Onboard failed: ${humanizeError(message)}` }],
-              details: { ok: false, error: 'unexpected', error_detail: message },
-            };
-          }
-        },
-      },
-      { name: 'totalreclaw_onboard' },
-    );
 
     // ---------------------------------------------------------------
     // Tool: totalreclaw_pair (3.3.1-rc.2 — agent-callable pair-generate)
@@ -5206,10 +5097,12 @@ const plugin = {
           '6-digit PIN, and an ASCII QR code that the agent relays to the user. The recovery ' +
           'phrase itself is generated/entered in the BROWSER and uploaded end-to-end encrypted ' +
           'to this gateway — it NEVER touches the LLM provider or the chat transcript.\n\n' +
-          'Use when a user wants to set up TotalReclaw on a machine they don\'t have terminal ' +
-          'access to (a VPS, a friend\'s computer), or when they prefer a phone-mediated flow. ' +
-          'For local-machine setup with a terminal, prefer `totalreclaw_onboard` (generate) or ' +
-          '`totalreclaw_onboarding_start` (pointer to local CLI for restore).',
+          'This is the CANONICAL agent-facilitated setup surface — use it whenever the user ' +
+          'asks you to set up TotalReclaw, regardless of whether they have terminal access. ' +
+          'Browser-side crypto keeps the recovery phrase out of the LLM context entirely. ' +
+          'If a user explicitly prefers local-terminal setup with no browser, point them at ' +
+          '`totalreclaw_onboarding_start` (a pointer to the CLI wizard they run on their own ' +
+          'terminal, NOT through your shell tool).',
         parameters: {
           type: 'object',
           properties: {

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from . import schemas, tools, hooks
+from . import schemas, tools, hooks, pair_tool
 from .state import PluginState
 
 logger = logging.getLogger(__name__)
@@ -77,12 +77,30 @@ def register(ctx):
         is_async=True,
         description=schemas.STATUS["description"],
     )
+    # 2.3.1rc4 — `totalreclaw_setup` agent tool REMOVED for phrase-safety.
+    #
+    # rc.3 registered a `totalreclaw_setup` tool whose handler (a) accepted
+    # a `recovery_phrase` tool argument, piping the phrase directly through
+    # the LLM tool-call payload, and (b) on phrase-less invocations
+    # GENERATED a fresh BIP-39 mnemonic and RETURNED it in the tool's JSON
+    # response. Either path crosses the LLM context, which is a vault-
+    # compromise-class violation of
+    # `project_phrase_safety_rule.md` (memory file in the internal repo;
+    # the absolute rule: "recovery phrase MUST NEVER cross the LLM context
+    # in ANY form"). rc.4 drops the registration entirely. The underlying
+    # `state.configure(phrase)` code path is still used — by the pair-
+    # flow HTTP handler (browser-side crypto) and by the `totalreclaw
+    # setup` CLI (user's own terminal) — but the agent has no direct
+    # surface that could leak the phrase.
+    #
+    # Agents route to `totalreclaw_pair` instead; see registration below.
     ctx.register_tool(
-        name="totalreclaw_setup",
+        name="totalreclaw_pair",
         toolset="totalreclaw",
-        schema=schemas.SETUP,
-        handler=lambda args, **kw: tools.setup(args, state, **kw),
-        description=schemas.SETUP["description"],
+        schema=pair_tool.PAIR_SCHEMA,
+        handler=lambda args, **kw: pair_tool.pair(args, state, **kw),
+        is_async=True,
+        description=pair_tool.PAIR_SCHEMA["description"],
     )
     ctx.register_tool(
         name="totalreclaw_import_from",

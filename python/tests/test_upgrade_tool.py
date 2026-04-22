@@ -63,7 +63,9 @@ class TestUpgradeTool:
         state = _make_state()
         result = json.loads(await upgrade({}, state))
         assert "error" in result
-        assert "totalreclaw_setup" in result["error"]
+        # 2.3.1rc4 — error messages now point to totalreclaw_pair (the
+        # phrase-safe replacement), not totalreclaw_setup (removed).
+        assert "totalreclaw_pair" in result["error"]
 
     @pytest.mark.asyncio
     async def test_happy_path_returns_url_and_message(self) -> None:

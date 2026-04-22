@@ -6,6 +6,41 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1rc4] — 2026-04-22
+
+Phrase-safety hardening + console-script collision fix. Paired with plugin `3.3.1-rc.4`. This release introduces architectural enforcement of the "recovery phrase MUST NEVER cross the LLM context" rule by porting the OpenClaw plugin's QR-pair flow to Hermes Python and removing every phrase-generating agent tool.
+
+### Fixed (ship-stopper)
+
+- **`pyproject.toml` — removed the `hermes = "totalreclaw.hermes.cli:main"` console script.** rc.3 shipped with this entry, which OVERWROTE the upstream `hermes-agent` CLI on `pip install totalreclaw`. Users hit `hermes gateway → argument command: invalid choice: 'gateway' (choose from setup)`, the Docker container restart-looped, the TR plugin never loaded, and zero memories were extracted. rc.4 drops the colliding binary — only `totalreclaw = "totalreclaw.cli:main"` remains. Users on rc.3 whose `hermes` binary was overwritten can restore it via `pip install --force-reinstall hermes-agent`.
+
+### Added
+
+- **`totalreclaw.pair`** — new module. x25519 ECDH + HKDF-SHA256 + ChaCha20-Poly1305 AEAD. Ports `skill/plugin/pair-crypto.ts` to Python via the `cryptography` library. Includes:
+  - `totalreclaw/pair/crypto.py` — `generate_gateway_keypair`, `compute_shared_secret`, `derive_aead_key_from_ecdh`, `aead_decrypt`, `encrypt_pairing_payload`, `decrypt_pairing_payload`, `compare_secondary_codes_ct`. Constants (HKDF info, AEAD key/nonce/tag lengths) match the TS module so a ciphertext produced by either side decrypts on the other.
+  - `totalreclaw/pair/session_store.py` — atomic TTL-evicted session store at `~/.totalreclaw/pair-sessions.json` (mode 0600). `.lock` sentinel via `O_CREAT | O_EXCL`. Stale-lock break at 30 s. Schema parity with the TS store: same field names on-disk (camelCase), same status values (`awaiting_scan` / `device_connected` / `consumed` / `completed` / `expired` / `rejected`), same TTL bounds (5-60 min, default 15), same 5-strike secondary-code lockout.
+  - `totalreclaw/pair/http_server.py` — stdlib `http.server` pinned to `127.0.0.1`. `GET /pair/<token>` serves the self-contained pair page; `POST /pair/<token>` accepts `{v, sid, pk_d, nonce, ct, pin}`, verifies PIN constant-time, decrypts, calls the caller-supplied completion handler, returns 204. CSP locked down, no-store cache, no LAN exposure.
+  - `totalreclaw/pair/pair_page.py` — browser HTML with inline crypto (x25519 + ChaCha via WebCrypto). No CDN, no external scripts. Refuses to run on browsers that lack WebCrypto x25519 (Safari <17.2, Chromium <118).
+- **`totalreclaw.hermes.pair_tool`** — `totalreclaw_pair` agent-tool handler. Returns `{url, pin, expires_at, mode, instructions}`. No phrase-adjacent data in the payload. Spawns (or reuses) a module-singleton background HTTP server on the first call.
+- **`cryptography>=42.0`** runtime dep. OpenSSL-backed; provides `ChaCha20Poly1305` + `X25519PrivateKey`.
+
+### Removed (phrase-safety enforcement — BREAKING for agent tool callers)
+
+- **`totalreclaw_setup` agent tool — REMOVED.** rc.3 accepted a `recovery_phrase` tool argument (phrase-in via LLM tool-call payload) AND on phrase-less invocations GENERATED a fresh BIP-39 mnemonic and RETURNED it in the JSON response (phrase-out). Either path is a vault-compromise-class violation of `project_phrase_safety_rule.md`. The underlying `tools.setup` function stays in the module for CLI delegation (`totalreclaw setup` -> `hermes.cli.run_setup`) and test compat, but is NO LONGER registered as an agent tool. Agents route through `totalreclaw_pair` instead.
+- Error messages in `tools.py` that previously pointed agents at `totalreclaw_setup` now point at `totalreclaw_pair`.
+
+### Changed
+
+- **`hermes/SKILL.md` — RULE 0 rewritten.** Now states the absolute rule ("phrase MUST NEVER cross the LLM context") and enumerates forbidden patterns (running `totalreclaw setup` / `hermes setup` via shell tool, passing phrase as tool-call arg, generating phrase in-chat, echoing pasted phrase, asking user to paste). RULE 1a rewritten around `totalreclaw_pair` as the canonical agent setup surface. RULE 5 (remote setup) collapsed into RULE 1a — QR pair is now the default for ALL users, not just remote/headless.
+- **`hermes/plugin.yaml` — tool list updated.** `totalreclaw_setup` and `totalreclaw_onboarding_start` removed; `totalreclaw_pair` added.
+- **`docs/guides/hermes-setup.md` — QR pair flow is now the default.** CLI wizard (`totalreclaw setup`) relegated to an "if you prefer local-terminal setup" subsection with a prominent "do NOT run this through an agent shell" warning.
+
+### Tests
+
+- **`tests/test_pair_crypto.py`** — 22 tests. Round-trip encrypt/decrypt, tamper rejection, sid binding, wrong-key rejection, constant-time PIN compare, RFC 5869 HKDF vector parity.
+- **`tests/test_pair_http.py`** — 11 tests. Spins up the embedded server; asserts happy path (204 + completion), PIN mismatch (403), expired session (410), unknown token (404), tampered ciphertext (400). Also validates the `GET` pair page (CSP, cache-control, content).
+- **`tests/test_agent_tools_phrase_safety.py`** — 5 tests. Enforces the phrase-safety contract: forbidden tool names NEVER registered, `totalreclaw_pair` IS registered, pair schema has no phrase-adjacent params, pair tool return value contains no phrase-adjacent keys.
+
 ## [2.3.1rc3] — 2026-04-22
 
 Hermes-side companion to the plugin `3.3.1-rc.3` wave. Paired fixes for the two zai endpoint paths, a bigger retry budget, AA25 nonce serialisation, a new RC-gated bug-report tool, and two SKILL.md addendums. All prior rc.1 + rc.2 fixes preserved.
