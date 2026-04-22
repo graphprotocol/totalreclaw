@@ -2,6 +2,14 @@
 
 TotalReclaw gives your Hermes agent encrypted, persistent memory. Install the plugin, pair your vault from your browser, chat.
 
+## Installing via chat with your agent
+
+If Hermes is already running and you want the agent to walk you through the rest of this guide, paste:
+
+> "Install TotalReclaw by following the guide at https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md"
+
+Your agent will install the package, restart its gateway, then walk you through the QR pairing flow. Your recovery phrase never touches the chat — it's entered in your browser during pairing.
+
 ## Prerequisites
 
 - Hermes Agent v0.5.0+ (https://github.com/NousResearch/hermes-agent)
@@ -20,12 +28,14 @@ Hermes auto-discovers the plugin via entry-point registration at next start. No 
 **Installing a release candidate (RC / pre-release)?** Pre-releases on PyPI are hidden from `pip install` by default. Use `--pre` and pin the version explicitly:
 
 ```bash
-pip install --pre totalreclaw==2.3.1rc4        # replace with the RC version you want
+pip install --pre totalreclaw==2.3.1rc6        # replace with the RC version you want
 ```
 
 Find the latest RC via `pip index versions totalreclaw --pre` or on [PyPI](https://pypi.org/project/totalreclaw/#history). Never install an RC on production — only for QA against staging.
 
-> **2.3.1rc4 changed the console-script list.** rc.3 and earlier shipped a `hermes` entry point that collided with the upstream `hermes-agent` CLI. rc.4 removes it — now `pip install totalreclaw` only creates the `totalreclaw` binary. If you upgraded from rc.3 and your `hermes` binary was overwritten, reinstall hermes-agent to restore it (`pip install --force-reinstall hermes-agent`).
+### Upgrading
+
+If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after `pip install --pre totalreclaw==2.3.1rc6` also run `pip install --force-reinstall hermes-agent` to restore the `hermes` CLI entrypoint that rc.2's console-script collision left stale. Fresh installs are unaffected.
 
 ## 2. Set up your vault (default: QR pair flow)
 

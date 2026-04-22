@@ -4,6 +4,16 @@ TotalReclaw gives your OpenClaw agent encrypted, persistent memory. Facts, prefe
 
 ---
 
+## Installing via chat with your agent
+
+If OpenClaw is already running and you want the agent to walk you through the rest of this guide, paste:
+
+> "Install TotalReclaw by following the guide at https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md"
+
+Your agent will install the package, restart its gateway, then walk you through the QR pairing flow. Your recovery phrase never touches the chat — it's entered in your browser during pairing.
+
+---
+
 ## Install
 
 ```bash
@@ -20,10 +30,14 @@ First-run setup runs a secure CLI wizard (v3.2.0+); the plugin never auto-genera
 
 ```bash
 openclaw plugins install @totalreclaw/totalreclaw@rc               # always the latest RC
-openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.2       # pin exact version
+openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.6       # pin exact version
 ```
 
 Find the current RC via `npm view @totalreclaw/totalreclaw dist-tags` or the [npm page](https://www.npmjs.com/package/@totalreclaw/totalreclaw?activeTab=versions).
+
+### Upgrading
+
+If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after `pip install --pre totalreclaw==2.3.1rc6` also run `pip install --force-reinstall hermes-agent` to restore the `hermes` CLI entrypoint that rc.2's console-script collision left stale. Fresh installs are unaffected.
 
 <details>
 <summary>From-source install (for plugin development)</summary>
@@ -85,13 +99,13 @@ Check state any time: `openclaw totalreclaw status`.
 
 Ask the agent "set up TotalReclaw for me" and it should call `totalreclaw_pair` directly. For users who explicitly prefer local-terminal setup, the agent falls back to `totalreclaw_onboarding_start` — a pointer-only tool that tells YOU to run the CLI wizard yourself. The agent never runs the wizard for you.
 
-### rc.4 phrase-safety changes (3.3.1-rc.4+)
+### Phrase-safety model (3.3.1-rc.6+)
 
 Per `project_phrase_safety_rule.md`:
 
 - `totalreclaw_onboard` agent tool — **REMOVED**. Even with `emitPhrase: false`, nothing architecturally prevented leakage. Use `totalreclaw_pair`.
 - `totalreclaw setup` / `openclaw totalreclaw onboard` CLI commands — **KEPT but user-terminal only**. They MUST NOT be invoked via any agent shell tool.
-- `totalreclaw_pair` agent tool — **CANONICAL**. Browser-side x25519 + ChaCha20-Poly1305 + HKDF-SHA256 keeps the phrase out of the LLM round-trip by construction. Now ported to Hermes Python as well (v2.3.1rc4+).
+- `totalreclaw_pair` agent tool — **CANONICAL**. Browser-side x25519 + ChaCha20-Poly1305 + HKDF-SHA256 keeps the phrase out of the LLM round-trip by construction. Ported to Hermes Python as well (v2.3.1rc6+).
 
 ### Retrieving your phrase later
 
