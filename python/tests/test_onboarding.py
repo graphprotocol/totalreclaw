@@ -128,7 +128,7 @@ class TestDetectFirstRun:
 
 class TestBuildWelcomeMessage:
     def test_welcome_message_local_mode(self) -> None:
-        """Local mode must include the short 'Run: hermes setup' instruction."""
+        """Local mode must include the short pair-flow instruction."""
         msg = onboarding.build_welcome_message("local")
         assert onboarding.WELCOME_MESSAGE in msg
         assert onboarding.BRANCH_QUESTION in msg
@@ -222,21 +222,34 @@ class TestCopyConstants:
         assert "generate" in q.lower()
 
     def test_local_instructions(self) -> None:
-        # 2.3.1rc4: the colliding `hermes` console script was removed to
-        # stop overwriting the upstream hermes-agent CLI on
-        # `pip install totalreclaw`. Only the canonical `totalreclaw setup`
-        # remains in the hint.
-        assert "totalreclaw setup" in onboarding.LOCAL_MODE_INSTRUCTIONS
-        assert "hermes setup" not in onboarding.LOCAL_MODE_INSTRUCTIONS
-        assert onboarding.LOCAL_MODE_INSTRUCTIONS.startswith("Run: ")
+        # 2.3.1rc9: instructions must NOT tell the user (or agent) to run
+        # ``totalreclaw setup`` directly. That CLI emits the recovery
+        # phrase to stdout; in an agent-driven context, stdout is echoed
+        # back into the LLM. The canonical setup surface is the
+        # ``totalreclaw_pair`` agent tool — a browser-side crypto
+        # handshake that never puts the phrase on stdout.
+        li = onboarding.LOCAL_MODE_INSTRUCTIONS
+        assert li == li.strip()
+        assert "Set up TotalReclaw" in li
+        # Phrase-safety invariant: no `Run: totalreclaw setup` / similar
+        # CLI-invocation hint, and no `hermes setup` either.
+        assert "Run: totalreclaw setup" not in li
+        assert "Run: hermes setup" not in li
+        assert "hermes setup" not in li
+        assert "recovery phrase" in li.lower()
 
     def test_remote_instructions_contents(self) -> None:
         r = onboarding.REMOTE_MODE_INSTRUCTIONS
         assert r == r.strip()
-        # 2.3.1rc4: canonical `totalreclaw setup` only (see test_local_instructions).
-        assert "totalreclaw setup" in r
+        # 2.3.1rc9: same phrase-safety invariants as local mode. The
+        # remote note still carries the "phrase never leaves this
+        # machine" guarantee because that's the key property the QR
+        # pair flow preserves.
+        assert "Set up TotalReclaw" in r
+        assert "Run: totalreclaw setup" not in r
+        assert "Run: hermes setup" not in r
         assert "hermes setup" not in r
-        # The load-bearing security claim.
+        # The load-bearing security claim, still true under pair flow.
         assert "never leaves this machine" in r
 
     def test_storage_guidance(self) -> None:
@@ -264,15 +277,24 @@ class TestCopyConstants:
 
 
 class TestMaybeEmitWelcome:
+    """``maybe_emit_welcome`` is a no-op as of 2.3.1rc9.
+
+    See the module docstring "Banner suppression" section and
+    :file:`test_no_stdout_on_first_run_in_agent_context.py` for the
+    full phrase-safety + harness-compat rationale. These tests pin the
+    new invariant so a future regression (re-enabling the banner) is
+    caught here as well as in the agent-context test.
+    """
+
     def setup_method(self) -> None:
         onboarding._reset_for_tests()
 
-    def test_emits_on_first_run(self, tmp_path: Path) -> None:
+    def test_no_op_on_first_run(self, tmp_path: Path) -> None:
+        """First-run (no credentials) no longer emits anything."""
         creds = tmp_path / "creds.json"
         sentinel = tmp_path / ".welcome_shown"
         buf = StringIO()
 
-        # Ensure we don't leak to the actual user home.
         original_sentinel = onboarding._WELCOME_SENTINEL_PATH
         onboarding._WELCOME_SENTINEL_PATH = sentinel
         try:
@@ -284,13 +306,11 @@ class TestMaybeEmitWelcome:
         finally:
             onboarding._WELCOME_SENTINEL_PATH = original_sentinel
 
-        assert emitted is True
-        output = buf.getvalue()
-        assert onboarding.WELCOME_MESSAGE in output
-        assert onboarding.BRANCH_QUESTION in output
-        assert onboarding.LOCAL_MODE_INSTRUCTIONS in output
+        assert emitted is False
+        assert buf.getvalue() == ""
 
-    def test_does_not_emit_when_onboarded(self, tmp_path: Path) -> None:
+    def test_no_op_when_onboarded(self, tmp_path: Path) -> None:
+        """Onboarded user still sees nothing (unchanged from pre-rc.9)."""
         creds = tmp_path / "creds.json"
         creds.write_text(json.dumps({"mnemonic": "abandon " * 11 + "about"}))
         buf = StringIO()
@@ -301,7 +321,8 @@ class TestMaybeEmitWelcome:
         assert emitted is False
         assert buf.getvalue() == ""
 
-    def test_does_not_emit_twice_in_same_process(self, tmp_path: Path) -> None:
+    def test_no_op_on_repeat_calls(self, tmp_path: Path) -> None:
+        """Repeat invocations are all no-ops; no banner on either call."""
         creds = tmp_path / "creds.json"
         buf1 = StringIO()
         buf2 = StringIO()
@@ -312,9 +333,9 @@ class TestMaybeEmitWelcome:
         second = onboarding.maybe_emit_welcome(
             credentials_path=creds, stream=buf2, use_sentinel=False
         )
-        assert first is True
+        assert first is False
         assert second is False
-        assert buf1.getvalue() != ""
+        assert buf1.getvalue() == ""
         assert buf2.getvalue() == ""
 
 

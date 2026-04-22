@@ -19,20 +19,52 @@ What this module owns:
   strings.
 * :data:`CANONICAL_CREDENTIALS_PATH` — the ``~/.totalreclaw/credentials.json``
   path shared across Hermes, OpenClaw, and MCP.
-* :func:`maybe_emit_welcome` — emits the welcome once-per-process. Uses
-  a module-level flag (``_emitted_this_process``) plus a best-effort
-  sentinel file so repeat imports within the same session stay quiet.
+* :func:`maybe_emit_welcome` — historically emitted a first-run welcome
+  banner to stdout. **As of 2.3.1rc9 this is a no-op by default** (see
+  "Banner suppression" below). The signature is preserved for
+  backwards-compat with existing call sites.
 
 What this module deliberately does NOT do:
 
 * Never prints or logs the recovery phrase itself — welcome copy only.
 * No network calls. No env var reads beyond what's needed to classify
   local-vs-remote mode.
-* No blocking prompts. The wizard (``hermes setup``) lives in
-  :mod:`totalreclaw.hermes.cli`; this module only emits the welcome
-  surface + detection helper.
+* No blocking prompts. Agent-driven setup runs through
+  ``totalreclaw_pair`` (browser-side crypto, phrase-safe); user-in-
+  terminal setup runs through the ``totalreclaw setup`` CLI wizard
+  OUTSIDE any agent context.
 
-Added 2.3.1 (2026-04-20).
+Banner suppression (2.3.1rc9):
+    Earlier RCs wrote a multi-paragraph welcome banner to stdout on
+    every ``import totalreclaw.hermes`` / ``TotalReclaw(...)`` call
+    when ``~/.totalreclaw/credentials.json`` was absent. Two problems
+    surfaced during the rc.8 Hermes auto-QA run with the Git-plugin
+    install path:
+
+    1. Chat-breaker: banner dominated ``hermes chat -q`` stdout in
+       agent contexts, so the QA harness could not parse the
+       ``session_id`` from the response and the chat step failed.
+    2. Phrase-safety violation: the banner told the user to
+       ``Run: totalreclaw setup``. When an agent reads that hint and
+       invokes the CLI through its shell tool, the CLI's interactive
+       prompts echo the recovery phrase through the agent's stdout /
+       LLM context — which violates the absolute phrase-safety rule
+       (``recovery phrase MUST NEVER cross the LLM context``).
+
+    Fix: suppress the banner entirely. Agent-driven setup flows via
+    the ``totalreclaw_pair`` tool, which SKILL.md routes to on a
+    "Set up TotalReclaw" prompt. The pair flow runs entirely in a
+    browser-side crypto handshake — no phrase ever touches stdout
+    or the LLM context. The ``totalreclaw setup`` CLI wizard still
+    exists for user-in-terminal setup and emits its own prompts
+    directly; it is not supposed to be invoked from an agent shell.
+
+    Copy constants (``WELCOME_MESSAGE``, ``BRANCH_QUESTION``,
+    ``STORAGE_GUIDANCE``, etc.) remain exported — the CLI wizard and
+    cross-client parity tests still consume them — but
+    ``maybe_emit_welcome`` no longer renders them to any stream.
+
+Added 2.3.1 (2026-04-20); banner suppressed 2.3.1rc9 (2026-04-23).
 """
 from __future__ import annotations
 
@@ -79,12 +111,13 @@ BRANCH_QUESTION = """
 Let's set up your account. Do you already have a recovery phrase, or should we generate a new one?
 """.strip()
 
-LOCAL_MODE_INSTRUCTIONS = "Run: totalreclaw setup"
+LOCAL_MODE_INSTRUCTIONS = (
+    "Ask your agent to 'Set up TotalReclaw' — it will walk you through a QR "
+    "pairing flow. Your recovery phrase never crosses the chat."
+)
 
 REMOTE_MODE_INSTRUCTIONS = """
-Run: totalreclaw setup
-
-You'll be prompted to either restore from an existing recovery phrase or generate a new one. Your phrase never leaves this machine.
+Ask your agent to 'Set up TotalReclaw' — it will walk you through a QR pairing flow. Scan the QR on your phone, enter the 6-digit PIN the agent shows you, and pick "Generate new" or "Restore existing". Your recovery phrase never crosses the chat. Your recovery phrase never leaves this machine.
 """.strip()
 
 STORAGE_GUIDANCE = """
@@ -264,74 +297,40 @@ def maybe_emit_welcome(
     *,
     use_sentinel: bool = True,
 ) -> bool:
-    """Emit the welcome message to ``stream`` iff this is first-run + we
-    haven't emitted in this process yet.
+    """Historically emitted a first-run welcome banner to ``stream``.
 
-    Returns ``True`` if the welcome was emitted, ``False`` otherwise
-    (already onboarded, already emitted in this process, or
-    sentinel-suppressed).
+    **As of 2.3.1rc9 this is a no-op.** The function is preserved so
+    existing callers (``totalreclaw.client.TotalReclaw.__init__``,
+    ``totalreclaw.hermes.register``) don't break on upgrade, but it
+    never writes to ``stream`` and always returns ``False``. See the
+    module docstring "Banner suppression" section for rationale.
 
-    Suppression strategy:
+    Why a no-op instead of a removal:
 
-    * Per-process: a module-level flag. Prevents double-emission when
-      both the client and the Hermes plugin import the onboarding
-      module during the same session.
-    * Per-host (best-effort): a sentinel file at
-      ``~/.totalreclaw/.welcome_shown``. Prevents re-emission on every
-      command invocation for a first-run user who's chosen to defer
-      setup. Pass ``use_sentinel=False`` to disable (useful for tests).
+    * Two in-tree callers still invoke it. Removing the function would
+      force a coordinated plugin + client update. A no-op is strictly
+      safer.
+    * The banner text violated the absolute phrase-safety rule: it
+      suggested ``Run: totalreclaw setup``, a CLI that emits the
+      recovery phrase to stdout. In an agent-driven context
+      (``hermes chat -q``, ``openclaw chat``, etc.) the agent reads
+      stdout back into its own LLM context, so the phrase would cross
+      the LLM boundary. Suppressing the banner removes the hint.
+    * The banner ALSO broke the ``hermes chat -q`` stdout format in
+      agent harnesses: multi-paragraph output dominated the session-id
+      response, so QA harnesses could not parse it and the chat step
+      failed. Suppression unblocks the harness immediately.
 
-    Never emits the recovery phrase itself. Only ever writes the
-    welcome + branch-question copy + the instructions for the detected
-    mode.
+    Parameters are retained byte-for-byte so call sites don't have to
+    change. They are all ignored.
     """
+    # Mark as "emitted" so any subsequent caller that treats a prior
+    # emission as a signal (e.g. an integration smoke test) still sees
+    # the once-per-process semantics it expects. This is cheap and
+    # preserves the existing observable flag behaviour.
     global _emitted_this_process
-
-    if _emitted_this_process:
-        return False
-
-    if not detect_first_run(credentials_path):
-        return False
-
-    if use_sentinel:
-        try:
-            if _WELCOME_SENTINEL_PATH.exists():
-                _emitted_this_process = True  # still mark to avoid repeat probes
-                return False
-        except OSError:
-            pass
-
-    mode = detect_mode(relay_url)
-    message = build_welcome_message(mode)
-
-    out = stream if stream is not None else _default_stream()
-    try:
-        out.write(message + "\n")
-        try:
-            out.flush()
-        except Exception:
-            pass
-    except Exception:
-        # Never block the client on a broken stdout — just log and move on.
-        logger.debug("totalreclaw.onboarding: welcome write failed", exc_info=True)
-        return False
-
     _emitted_this_process = True
-
-    if use_sentinel:
-        try:
-            _WELCOME_SENTINEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _WELCOME_SENTINEL_PATH.write_text("")
-            try:
-                _WELCOME_SENTINEL_PATH.chmod(0o600)
-            except OSError:
-                pass
-        except OSError:
-            # Read-only home dir / perms — tolerate and rely on the
-            # per-process flag alone.
-            logger.debug("totalreclaw.onboarding: sentinel write failed", exc_info=True)
-
-    return True
+    return False
 
 
 def _default_stream() -> TextIO:

@@ -4,6 +4,25 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.9] — 2026-04-23
+
+Coordinated version bump with Hermes Python `2.3.1rc9`. Plugin code itself is unchanged from `3.3.1-rc.6` (the first-run banner fix lives entirely on the Python side — `totalreclaw.onboarding.maybe_emit_welcome`). The rc.9 bundle ships the Hermes-side banner suppression and keeps plugin + Python versions aligned so the release-pipeline tracker can carry them through QA as one artifact set.
+
+### Why a plugin bump when only Python changed
+
+Our RC cadence publishes both registries from the same bundle. Out-of-sync version tags cause downstream confusion (the `qa-totalreclaw` skill and the release-pipeline tracker both key on a single RC-number per wave). Skipping the plugin bump would leave rc.9 documented on the Python side only; a later plugin bug would then have to skip to rc.10 to catch up. Much simpler to bump both in lockstep.
+
+See `python/CHANGELOG.md` (the `2.3.1rc9` entry) for the underlying fix: suppress the first-run welcome banner emitted by `totalreclaw.onboarding.maybe_emit_welcome`. Two problems surfaced during the rc.8 Hermes auto-QA run:
+
+1. **Chat-breaker.** The banner dominated `hermes chat -q` stdout when credentials were absent, breaking the QA harness's `session_id` parsing on every fresh install.
+2. **Phrase-safety violation.** The banner told users to `Run: totalreclaw setup` — a CLI that emits the recovery phrase to stdout. In an agent-driven context, stdout is echoed back into LLM context, so the phrase would cross the LLM boundary in violation of `project_phrase_safety_rule.md`.
+
+Agent-driven setup now routes through the `totalreclaw_pair` tool (browser-side crypto, phrase-safe) per SKILL.md. User-in-terminal setup still runs through `totalreclaw setup` / `openclaw totalreclaw onboard` OUTSIDE any agent context.
+
+### Skipped
+
+- **`3.3.1-rc.7`** and **`3.3.1-rc.8`** — registry-only bumps from 2026-04-22 workflow dispatches; the git repo on `main` carried rc.6 code unchanged through both publishes.
+
 ## [3.3.1-rc.6] — 2026-04-22
 
 Coordinated version bump with Hermes Python `2.3.1rc6`. Plugin code itself is unchanged from `3.3.1-rc.4` (the OpenClaw plugin's `register()` path already wired every tool advertised in `skill.yaml`). The rc.6 bundle ships the Hermes-side tool-registration fix and keeps plugin + Python versions aligned so the release-pipeline tracker can carry them through QA as one artifact set.

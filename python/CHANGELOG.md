@@ -6,6 +6,40 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1rc9] — 2026-04-23
+
+Ship-stopper fix for two problems in the first-run welcome banner that surfaced during the rc.8 Hermes auto-QA run against the Git-plugin install path. Both rooted in `totalreclaw.onboarding.maybe_emit_welcome`:
+
+1. **Chat-breaker (harness regression).** When `~/.totalreclaw/credentials.json` was absent (the clean-machine case every fresh user hits), `import totalreclaw.hermes` wrote a multi-paragraph welcome banner to stdout. The QA harness invokes `hermes chat -q` and parses `session_id` from the response — the banner dominated stdout, the parser failed, every chat step in the scenario failed, the run returned NO-GO.
+2. **Phrase-safety violation.** The banner told the user to `Run: totalreclaw setup`. That CLI runs an interactive prompt that echoes the recovery phrase to stdout. In an agent-driven context (`hermes chat -q`, `openclaw chat`, etc.) the agent reads stdout back into its LLM context — so the phrase would cross the LLM boundary, a vault-compromise-class violation of `project_phrase_safety_rule.md` ("recovery phrase MUST NEVER cross the LLM context in ANY form").
+
+### Fixed (ship-stopper)
+
+- **`python/src/totalreclaw/onboarding.py::maybe_emit_welcome` — now a no-op by default.** Preserves the function signature so existing callers (`totalreclaw.client.TotalReclaw.__init__`, `totalreclaw.hermes.register`) don't break on upgrade, but it never writes to `stream` and always returns `False`. Agent-driven setup flows through `totalreclaw_pair` (browser-side crypto, phrase-safe); user-in-terminal setup still happens via the `totalreclaw setup` CLI wizard, which emits its own prompts directly OUTSIDE any agent context.
+- **`LOCAL_MODE_INSTRUCTIONS` / `REMOTE_MODE_INSTRUCTIONS` rewrite.** The constants are still exported (the CLI wizard consumes them, and cross-client parity tests lock their shape), but the `Run: totalreclaw setup` CLI hint is gone. New copy routes users to the pair flow via their agent: `"Ask your agent to 'Set up TotalReclaw' — it will walk you through a QR pairing flow. Your recovery phrase never crosses the chat."` The remote variant additionally retains the "never leaves this machine" guarantee.
+
+### Added
+
+- **`python/tests/test_no_stdout_on_first_run_in_agent_context.py`** — regression shield. Pins the post-fix invariants:
+  - `test_maybe_emit_welcome_writes_nothing_in_agent_context` — simulates `sys.stdout.isatty() is False` + missing credentials; asserts both the explicit stream and `sys.stdout` receive zero bytes and the function returns `False`.
+  - `test_maybe_emit_welcome_writes_nothing_when_explicit_stream_passed` — harness-compat scenario: an agent runtime passes its own buffer; the no-op must honour the contract regardless of stream target.
+  - `test_import_totalreclaw_does_not_write_to_stdout` — reloads `totalreclaw.onboarding` under a captured `sys.stdout` and asserts bare import writes nothing.
+  - `test_no_print_statement_at_module_init_time` — AST scan of `onboarding.py` body; fails on any `print(...)` / `sys.stdout.write(...)` at module scope (belt-and-suspenders against future regressions that sneak in a module-level emit).
+  - `TestBannerCopyIsPhraseSafe` (3 tests) — locks the copy constants against re-introducing `Run: totalreclaw setup` / `Run: hermes setup` and asserts both still reference the pair flow.
+
+### Changed
+
+- **`python/tests/test_onboarding.py::TestMaybeEmitWelcome`** — rewritten to assert the new no-op contract: `test_no_op_on_first_run`, `test_no_op_when_onboarded`, `test_no_op_on_repeat_calls`. Previously these asserted the banner DID emit (which is now the thing we want to prevent).
+- **`python/tests/test_onboarding.py::TestCopyConstants::test_local_instructions` / `::test_remote_instructions_contents`** — updated to assert the pair-flow copy + the `Run:` CLI hint is absent. The `recovery phrase` terminology and "never leaves this machine" security claim are preserved.
+
+### Why auto-QA missed this earlier
+
+rc.6 auto-QA ran against a staging relay that happened to have a populated `credentials.json` on the QA host (seeded from the rc.4 QA run), so `detect_first_run` returned `False` and the banner never emitted. rc.7 and rc.8 QA ran on a freshly re-imaged host, hit the first-run path for the first time since the welcome banner shipped in rc.1, and surfaced both problems. The new regression test exercises the first-run path directly regardless of host state.
+
+## [2.3.1rc7, 2.3.1rc8] — SKIPPED
+
+rc.7 and rc.8 were registry-only bumps from 2026-04-22 workflow dispatches; the git repo on `main` carried rc.6 code unchanged through both publishes. rc.9 is the first RC with a functional change after rc.6.
+
 ## [2.3.1rc6] — 2026-04-22
 
 Ship-stopper fix for the rc.4 regression that shipped to manual QA: Hermes chat agent could not see the `totalreclaw_*` tools in its toolset even though the plugin loaded cleanly (SKILL.md surfaced, module imported). Root cause was a long-latent drift between `plugin.yaml::provides_tools` and the `ctx.register_tool()` calls in `totalreclaw.hermes.register()` — the manifest advertised `totalreclaw_pin` / `totalreclaw_unpin` as agent-facing but `register()` never wired them. The drift had been in the codebase since pin/unpin landed in 2.2.2; rc.4's phrase-safety hardening surfaced it because the user's first contact with the plugin was a fresh install hunting for `totalreclaw_pair` (which IS wired), which made the narrower missing-pin/unpin symptom mis-attributable to pair.
