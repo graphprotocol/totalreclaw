@@ -9,7 +9,21 @@ homepage: https://totalreclaw.xyz
 
 # TotalReclaw — Hermes
 
-## Setup flow (run on "install / set up TotalReclaw" OR any tool returning `onboarding required`)
+## Fast path — "set up TotalReclaw" (Approach A, preferred)
+
+If the user says "set up TotalReclaw" (or any variant) AND this SKILL.md is loaded, assume `totalreclaw_*` tools are already available (pip install + gateway restart atomically bundles SKILL.md + plugin for the Hermes pip package — if you are reading this, the plugin is loaded too).
+
+1. Check `~/.totalreclaw/credentials.json` exists and is non-empty (via a read-only shell `test -s ~/.totalreclaw/credentials.json`). If it exists, confirm *"TotalReclaw is already set up."* and stop.
+2. If credentials missing: call `totalreclaw_pair` immediately. It returns `{url, pin, expires_at_ms}`.
+3. Relay verbatim: *"Open <url> in your browser. Enter your 12-word recovery phrase (or let the browser generate one). Confirm PIN <pin>. I'll wait for you to say done."*
+4. After user says done: verify `~/.totalreclaw/credentials.json`. If missing, call `totalreclaw_pair` again (PIN likely expired) and resend.
+5. Confirm: *"TotalReclaw set up ✓. Ask me to remember or recall anything — try `totalreclaw_remember` or ask me to remember something."*
+
+If `totalreclaw_*` tools are NOT in your toolset: the gateway needs a restart. Tell the user once: *"Run `hermes gateway restart` (native) or `docker restart tr-hermes` (Docker), then come back."* Do not try to invoke missing tools.
+
+## Explicit two-step setup flow (Approach B, fallback)
+
+Used when the user pastes a verbose prompt describing install + restart + pair (e.g. *"TotalReclaw is installed at 'totalreclaw' on PyPI. Install it, restart the gateway, and walk me through the QR pairing flow"*) OR when a tool returns `onboarding required`.
 
 1. `pip install --pre totalreclaw` (latest pre-release on PyPI; pin a specific `rcN` from https://pypi.org/project/totalreclaw/#history if asked).
 2. Restart gateway so plugin loads. Docker: `docker restart tr-hermes`. Native: `hermes gateway restart`. Wait ~5s; confirm the gateway is back up.
@@ -32,9 +46,9 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
 
 ## Diagnostics
 
-- `totalreclaw_*` tools not visible → gateway not restarted after install; redo step 2.
+- `totalreclaw_*` tools not visible → gateway not restarted after install; ask user once to run `hermes gateway restart` or `docker restart tr-hermes`.
 - User says done but `credentials.json` missing → PIN expired or entered wrong phrase; call `totalreclaw_pair` again.
-- `onboarding required` → credentials missing; redo from step 3.
+- `onboarding required` → credentials missing; redo from the pair step.
 - `quota exceeded` → `totalreclaw_status`, then offer `totalreclaw_upgrade`.
 
 ## Tool surface

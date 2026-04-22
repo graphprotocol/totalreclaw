@@ -1,26 +1,54 @@
 # Hermes Agent + TotalReclaw
 
-TotalReclaw gives your Hermes agent encrypted, persistent memory. One copy-paste prompt to the agent installs the plugin, restarts the gateway, and walks you through pairing in your browser.
+TotalReclaw gives your Hermes agent encrypted, persistent memory. Two install approaches — pick whichever fits your workflow.
 
-## Install via chat (default)
+## Fastest — shell + chat (Approach A, preferred)
 
-Open your chat with your Hermes agent. Paste this message:
+Terminal:
 
-> **Install TotalReclaw (`pip install --pre totalreclaw` from PyPI) and walk me through the recovery-phrase setup**
+```bash
+pip install --pre totalreclaw
+hermes gateway restart    # or `docker restart tr-hermes` for Docker Hermes
+```
 
-The agent will install the package, restart its gateway, call the `totalreclaw_pair` tool, and give you a URL + PIN to enter your recovery phrase in the browser. Your phrase never touches the chat.
+Then in your Hermes chat:
+
+> **Set up TotalReclaw**
+
+The agent will call the pairing tool and give you a URL + PIN. Open the URL, enter your recovery phrase, confirm PIN. Done.
+
+Why this works: the Hermes pip package bundles both `SKILL.md` (agent instructions) and the plugin into the same wheel, so once pip + restart complete, the agent has everything it needs. The chat prompt triggers the skill's fast path: check for existing credentials, call `totalreclaw_pair`, relay URL + PIN.
+
+<details>
+<summary><strong>Approach B — explicit two-step (fallback)</strong></summary>
+
+If you'd rather spell out every step explicitly (useful if the agent doesn't know about TotalReclaw yet), install the same way but use this verbose chat prompt:
+
+Terminal:
+
+```bash
+pip install --pre totalreclaw
+hermes gateway restart    # or `docker restart tr-hermes` for Docker Hermes
+```
+
+Then in your Hermes chat:
+
+> **TotalReclaw is installed at 'totalreclaw' on PyPI. Install it, restart the gateway, and walk me through the QR pairing flow**
+
+The agent reads the explicit directive, runs `pip install --pre totalreclaw` (no-op if already installed), asks you to restart the gateway if needed, calls `totalreclaw_pair`, and guides you through the QR flow.
+
+</details>
 
 <details>
 <summary>What happens behind the scenes</summary>
 
-1. Agent runs `pip install --pre totalreclaw` (pip resolves to the latest RC on PyPI).
-2. Agent runs `hermes gateway restart` so the newly installed plugin is picked up.
-3. Agent calls the `totalreclaw_pair` tool.
-4. A pair URL + 6-digit PIN is surfaced back to you in chat.
-5. You open the URL in your browser and enter (or let the browser generate) your recovery phrase, then confirm the PIN.
-6. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives a ChaCha20-Poly1305 key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey to the gateway.
-7. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
-8. The agent confirms setup and your memory tools are live.
+1. Agent reads its TotalReclaw skill, picks up that `totalreclaw_*` tools are (or should be) live.
+2. Agent checks `~/.totalreclaw/credentials.json`; if absent, calls the `totalreclaw_pair` tool.
+3. A pair URL + 6-digit PIN is surfaced back to you in chat.
+4. You open the URL in your browser and enter (or let the browser generate) your recovery phrase, then confirm the PIN.
+5. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives a ChaCha20-Poly1305 key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey to the gateway.
+6. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
+7. The agent confirms setup and your memory tools are live.
 
 The recovery phrase never crosses the LLM context — not the chat transcript, not the agent's shell stdout, not any tool-call payload. Browser-side crypto keeps it isolated by construction.
 
@@ -33,18 +61,9 @@ The recovery phrase never crosses the LLM context — not the chat transcript, n
 - Python 3.11+
 - An up-to-date browser with WebCrypto x25519 + ChaCha20-Poly1305 (Safari 17.2+ or Chromium 118+)
 
-## Manual install (CLI)
-
-If you'd rather run the commands yourself:
-
-```bash
-pip install --pre totalreclaw
-hermes gateway restart
-```
+## Notes on `--pre`
 
 `--pre` lets pip resolve to the latest release candidate without pinning a version. Drop `--pre` once a stable is promoted. Ubuntu/Debian/Docker: add `--break-system-packages` or use a venv if you hit `externally-managed-environment`.
-
-Then ask the agent "set up TotalReclaw for me" — it will call `totalreclaw_pair` and hand you the URL + PIN.
 
 ## Upgrading
 
@@ -60,7 +79,12 @@ If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after upgrading also run `p
 
 ## Returning user (new machine)
 
-Paste the same prompt. When the pair page loads, choose "import" and enter your existing 12/24-word phrase. The browser encrypts it against the gateway's ephemeral key before uploading.
+Paste the same canonical prompt. When the pair page loads, choose "import" and enter your existing 12/24-word phrase. The browser encrypts it against the gateway's ephemeral key before uploading.
+
+## Canonical prompts (these match the QA harness scenario contracts)
+
+- Approach A: `Set up TotalReclaw`
+- Approach B: `TotalReclaw is installed at 'totalreclaw' on PyPI. Install it, restart the gateway, and walk me through the QR pairing flow`
 
 ## See also
 

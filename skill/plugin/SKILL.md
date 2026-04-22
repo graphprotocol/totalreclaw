@@ -24,10 +24,29 @@ metadata:
 
 # TotalReclaw — OpenClaw
 
-## Setup flow (run on "install / set up TotalReclaw" OR any tool returning `onboarding required`)
+## Fast path — "install totalreclaw" (Approach A, preferred)
 
-1. `openclaw plugins install @totalreclaw/totalreclaw` (stable). For RC: install `@totalreclaw/totalreclaw@rc` — the `rc` dist-tag on npm is the latest candidate.
-2. Restart gateway so plugin routes + tools bind. Docker: `docker restart tr-openclaw`. Native: `openclaw gateway restart`. Wait ~5s; confirm the gateway is back up.
+ClawHub classifies TotalReclaw as a skill. `openclaw skills install totalreclaw` registers this SKILL.md into your agent context BEFORE the plugin is installed (so you may be reading this with no `totalreclaw_*` tools yet).
+
+If the user says "install totalreclaw" (or any variant) AND no `totalreclaw_*` tools are in your toolset:
+
+1. Run via your shell tool: `openclaw plugins install totalreclaw`. (For RC candidates: `openclaw plugins install @totalreclaw/totalreclaw@rc` — the `rc` dist-tag on npm is the latest candidate.)
+2. Tell the user: *"Plugin installed. Restarting the gateway so the tools bind."* Then ask the user to restart the gateway: `openclaw gateway restart` (native) or `docker restart tr-openclaw` (Docker). The agent-facing shell CANNOT self-restart the gateway it's running inside of — this step has to be a user action. Wait for the user to confirm the restart is done.
+3. After restart: verify `totalreclaw_pair` is now in your toolset. If not, tell the user the restart didn't take effect and to retry the restart command. Do not loop the install.
+4. Check `~/.totalreclaw/credentials.json` (via `test -s ~/.totalreclaw/credentials.json`). If it exists, confirm *"TotalReclaw is already set up."* and stop.
+5. Call `totalreclaw_pair`. Returns `{url, pin, qr_ascii, expires_at_ms}`.
+6. Relay verbatim: *"Open <url> in your browser. Enter your 12-word recovery phrase (or let the browser generate one). Confirm PIN <pin>. I'll wait for you to say done."*
+7. After user says done: verify `~/.totalreclaw/credentials.json`. If missing, call `totalreclaw_pair` again (PIN likely expired) and resend.
+8. Confirm: *"TotalReclaw set up ✓. Ask me to remember or recall anything — try `totalreclaw_remember` or ask me to remember something."*
+
+If `totalreclaw_*` tools ARE already in your toolset when the user asks, SKIP the install step and jump to step 4.
+
+## Explicit two-step setup flow (Approach B, fallback)
+
+Used when the user pastes a verbose prompt describing skill install + plugin install + restart + pair (e.g. *"TotalReclaw is a skill at 'totalreclaw' on ClawHub. Install it, then install the plugin, restart the gateway, and walk me through the QR pairing flow"*) OR when a tool returns `onboarding required`.
+
+1. `openclaw plugins install @totalreclaw/totalreclaw` (stable). For RC: `@totalreclaw/totalreclaw@rc`.
+2. Restart gateway so plugin routes + tools bind. Docker: `docker restart tr-openclaw`. Native: `openclaw gateway restart`. Wait ~5s; confirm the gateway is back up. (If you are running inside the gateway, ask the user to run the restart command and wait for confirmation.)
 3. Call `totalreclaw_pair`. Returns `{url, pin, qr_ascii, expires_at_ms}`.
 4. Relay to user verbatim: *"Open <url> in your browser. Enter your 12-word recovery phrase (or let the browser generate one). Confirm PIN <pin>. I'll wait for you to say done."*
 5. After user says done: verify `~/.totalreclaw/credentials.json` exists and is non-empty. If missing, call `totalreclaw_pair` again (PIN likely expired) and resend.
@@ -47,9 +66,9 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
 
 ## Diagnostics
 
-- `totalreclaw_*` tools not visible → gateway not restarted after install; redo step 2.
+- `totalreclaw_*` tools not visible → plugin not installed or gateway not restarted. Verify via `openclaw plugins list | grep totalreclaw`. If listed, ask the user to restart the gateway.
 - User says done but `credentials.json` missing → PIN expired or entered wrong phrase; call `totalreclaw_pair` again.
-- `onboarding required` → credentials missing; redo from step 3.
+- `onboarding required` → credentials missing; redo from the pair step.
 - `quota exceeded` → `totalreclaw_status`, then offer `totalreclaw_upgrade`.
 - `No LLM available for auto-extraction` at startup → provider key unreachable; check `~/.openclaw/agents/<agent>/agent/auth-profiles.json` or plugin config `extraction.llm`.
 
