@@ -11,7 +11,7 @@ homepage: https://totalreclaw.xyz
 
 ## Fast path — "set up TotalReclaw" (Approach A, preferred)
 
-If the user says "set up TotalReclaw" (or any variant) AND this SKILL.md is loaded, assume `totalreclaw_*` tools are already available (pip install + gateway restart atomically bundles SKILL.md + plugin for the Hermes pip package — if you are reading this, the plugin is loaded too).
+If the user says "set up TotalReclaw" (or any variant) AND this SKILL.md is loaded, assume `totalreclaw_*` tools are already available (`hermes plugins install p-diogo/totalreclaw-hermes --enable` registers the plugin manifest, `pip install --pre totalreclaw` supplies the Python tool implementations, and gateway restart loads both together — if you are reading this, the plugin is loaded too).
 
 1. Check `~/.totalreclaw/credentials.json` exists and is non-empty (via a read-only shell `test -s ~/.totalreclaw/credentials.json`). If it exists, confirm *"TotalReclaw is already set up."* and stop.
 2. If credentials missing: call `totalreclaw_pair` immediately. It returns `{url, pin, expires_at_ms}`.
@@ -23,9 +23,9 @@ If `totalreclaw_*` tools are NOT in your toolset: the gateway needs a restart. T
 
 ## Explicit two-step setup flow (Approach B, fallback)
 
-Used when the user pastes a verbose prompt describing install + restart + pair (e.g. *"TotalReclaw is installed at 'totalreclaw' on PyPI. Install it, restart the gateway, and walk me through the QR pairing flow"*) OR when a tool returns `onboarding required`.
+Used when the user pastes a verbose prompt describing install + restart + pair (e.g. *"TotalReclaw is already installed. Use the totalreclaw_pair tool to walk me through the QR recovery-phrase setup."*) OR when a tool returns `onboarding required`.
 
-1. `pip install --pre totalreclaw` (latest pre-release on PyPI; pin a specific `rcN` from https://pypi.org/project/totalreclaw/#history if asked).
+1. Install both halves of the Hermes 2026.4.16+ plugin surface: `hermes plugins install p-diogo/totalreclaw-hermes --enable` (Git-based plugin manifest) AND `pip install --pre totalreclaw` (Python tool implementations; latest pre-release on PyPI — pin a specific `rcN` from https://pypi.org/project/totalreclaw/#history if asked).
 2. Restart gateway so plugin loads. Docker: `docker restart tr-hermes`. Native: `hermes gateway restart`. Wait ~5s; confirm the gateway is back up.
 3. Call `totalreclaw_pair`. Returns `{url, pin, expires_at_ms}`.
 4. Relay to user verbatim: *"Open <url> in your browser. Enter your 12-word recovery phrase (or let the browser generate one). Confirm PIN <pin>. I'll wait for you to say done."*

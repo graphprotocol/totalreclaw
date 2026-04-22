@@ -7,7 +7,14 @@ TotalReclaw gives your Hermes agent encrypted, persistent memory. Two install ap
 Terminal:
 
 ```bash
-pip install --pre totalreclaw
+# Install the Hermes plugin (Git-based discovery in Hermes 2026.4.16+)
+hermes plugins install p-diogo/totalreclaw-hermes --enable
+
+# Ensure the backing Python package is in your Hermes venv
+/path/to/hermes/venv/bin/python3 -m pip install --pre totalreclaw
+# (or just `pip install --pre totalreclaw` if your pip resolves to hermes's venv)
+
+# Restart the gateway for the plugin to take effect
 hermes gateway restart    # or `docker restart tr-hermes` for Docker Hermes
 ```
 
@@ -17,7 +24,7 @@ Then in your Hermes chat:
 
 The agent will call the pairing tool and give you a URL + PIN. Open the URL, enter your recovery phrase, confirm PIN. Done.
 
-Why this works: the Hermes pip package bundles both `SKILL.md` (agent instructions) and the plugin into the same wheel, so once pip + restart complete, the agent has everything it needs. The chat prompt triggers the skill's fast path: check for existing credentials, call `totalreclaw_pair`, relay URL + PIN.
+Why two install commands? Hermes 2026.4.16+ uses Git-based plugin discovery. `hermes plugins install p-diogo/totalreclaw-hermes --enable` registers the plugin manifest from the Git repo; `pip install --pre totalreclaw` supplies the Python tool implementations in the Hermes venv. The chat prompt then triggers the skill's fast path: check for existing credentials, call `totalreclaw_pair`, relay URL + PIN.
 
 <details>
 <summary><strong>Approach B — explicit two-step (fallback)</strong></summary>
@@ -27,7 +34,14 @@ If you'd rather spell out every step explicitly (useful if the agent doesn't kno
 Terminal:
 
 ```bash
-pip install --pre totalreclaw
+# Install the Hermes plugin (Git-based discovery in Hermes 2026.4.16+)
+hermes plugins install p-diogo/totalreclaw-hermes --enable
+
+# Ensure the backing Python package is in your Hermes venv
+/path/to/hermes/venv/bin/python3 -m pip install --pre totalreclaw
+# (or just `pip install --pre totalreclaw` if your pip resolves to hermes's venv)
+
+# Restart the gateway for the plugin to take effect
 hermes gateway restart    # or `docker restart tr-hermes` for Docker Hermes
 ```
 
@@ -71,7 +85,7 @@ If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after upgrading also run `p
 
 ## Troubleshooting
 
-- **Agent can't see TotalReclaw tools**: `hermes gateway restart`.
+- **Agent can't see TotalReclaw tools**: confirm both install commands ran — `hermes plugins list` should show `p-diogo/totalreclaw-hermes` enabled, and `pip show totalreclaw` in the Hermes venv should resolve. Then `hermes gateway restart`.
 - **Pair URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running.
 - **Browser fails to POST the encrypted phrase**: check the pair page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
 - **"No LLM available for auto-extraction"**: configure a provider in Hermes (`hermes login` or set `ZAI_API_KEY` / `OPENAI_API_KEY` in `~/.hermes/.env`). TotalReclaw reuses it automatically.
