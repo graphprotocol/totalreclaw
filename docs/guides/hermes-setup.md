@@ -1,94 +1,69 @@
 # Hermes Agent + TotalReclaw
 
-TotalReclaw gives your Hermes agent encrypted, persistent memory. Install the plugin, pair your vault from your browser, chat.
+TotalReclaw gives your Hermes agent encrypted, persistent memory. One copy-paste prompt to the agent installs the plugin, restarts the gateway, and walks you through pairing in your browser.
 
-## Installing via chat with your agent
+## Install via chat (default)
 
-If Hermes is already running and you want the agent to walk you through the rest of this guide, paste:
+Open your chat with your Hermes agent. Paste this message:
 
-> "Install TotalReclaw by following the guide at https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md"
+> **Install TotalReclaw latest RC and walk me through the recovery-phrase setup**
 
-Your agent will install the package, restart its gateway, then walk you through the QR pairing flow. Your recovery phrase never touches the chat — it's entered in your browser during pairing.
+The agent will install the package, restart its gateway, call the `totalreclaw_pair` tool, and give you a URL + PIN to enter your recovery phrase in the browser. Your phrase never touches the chat.
+
+<details>
+<summary>What happens behind the scenes</summary>
+
+1. Agent runs `pip install --pre totalreclaw` (pip resolves to the latest RC on PyPI).
+2. Agent runs `hermes gateway restart` so the newly installed plugin is picked up.
+3. Agent calls the `totalreclaw_pair` tool.
+4. A pair URL + 6-digit PIN is surfaced back to you in chat.
+5. You open the URL in your browser and enter (or let the browser generate) your recovery phrase, then confirm the PIN.
+6. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives a ChaCha20-Poly1305 key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey to the gateway.
+7. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
+8. The agent confirms setup and your memory tools are live.
+
+The recovery phrase never crosses the LLM context — not the chat transcript, not the agent's shell stdout, not any tool-call payload. Browser-side crypto keeps it isolated by construction.
+
+</details>
 
 ## Prerequisites
 
 - Hermes Agent v0.5.0+ (https://github.com/NousResearch/hermes-agent)
 - An LLM provider configured in Hermes (zai / openai / anthropic / gemini)
 - Python 3.11+
-- An up-to-date browser with WebCrypto x25519 + ChaCha20-Poly1305 (Safari 17.2+ or Chromium 118+) for QR pairing
+- An up-to-date browser with WebCrypto x25519 + ChaCha20-Poly1305 (Safari 17.2+ or Chromium 118+)
 
-## 1. Install
+## Manual install (CLI)
 
-```bash
-pip install totalreclaw
-```
-
-Hermes auto-discovers the plugin via entry-point registration at next start. No manual copy, no config editing. Ubuntu/Debian/Docker: add `--break-system-packages` or use a venv if you hit `externally-managed-environment`.
-
-**Installing a release candidate (RC / pre-release)?** Pre-releases on PyPI are hidden from `pip install` by default. Use `--pre` and pin the version explicitly:
+If you'd rather run the commands yourself:
 
 ```bash
-pip install --pre totalreclaw==2.3.1rc6        # replace with the RC version you want
-```
-
-Find the latest RC via `pip index versions totalreclaw --pre` or on [PyPI](https://pypi.org/project/totalreclaw/#history). Never install an RC on production — only for QA against staging.
-
-### Upgrading
-
-If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after `pip install --pre totalreclaw==2.3.1rc6` also run `pip install --force-reinstall hermes-agent` to restore the `hermes` CLI entrypoint that rc.2's console-script collision left stale. Fresh installs are unaffected.
-
-## 2. Set up your vault (default: QR pair flow)
-
-In any Hermes chat session, ask the agent to set up TotalReclaw. The agent will call the `totalreclaw_pair` tool and relay a URL + 6-digit PIN:
-
-> "Open http://127.0.0.1:58391/pair/\<token\> in your browser, enter your phrase (or let the browser generate a new one), and confirm PIN 492731."
-
-**What happens under the hood:**
-
-1. Your browser fetches the pair page over loopback HTTP.
-2. The browser generates an ephemeral x25519 keypair, does ECDH against the gateway's ephemeral pubkey (passed in the URL `#fragment`, so it never hits server logs), derives a ChaCha20-Poly1305 key via HKDF-SHA256.
-3. You type (or let the browser generate) your recovery phrase.
-4. The browser encrypts the phrase locally and POSTs ciphertext + nonce + its pubkey to the gateway.
-5. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
-
-**The recovery phrase never crosses the LLM context.** Not the chat transcript, not the agent's shell stdout, not the tool-call payload. Browser-side crypto keeps it isolated from the LLM round-trip by construction.
-
-After the browser says "Pairing complete", restart Hermes so the plugin picks up the new credentials:
-
-```bash
+pip install --pre totalreclaw
 hermes gateway restart
 ```
 
-### If you prefer local-terminal setup (user-terminal ONLY — do NOT run this through an agent)
+`--pre` lets pip resolve to the latest release candidate without pinning a version. Drop `--pre` once a stable is promoted. Ubuntu/Debian/Docker: add `--break-system-packages` or use a venv if you hit `externally-managed-environment`.
 
-```bash
-totalreclaw setup
-```
+Then ask the agent "set up TotalReclaw for me" — it will call `totalreclaw_pair` and hand you the URL + PIN.
 
-This runs the phrase wizard entirely in **your** terminal. Pick "generate" or "import". The phrase is written to `~/.totalreclaw/credentials.json` (mode `0600`) silently. Retrieve it later with `cat ~/.totalreclaw/credentials.json | jq -r .mnemonic`. Save it somewhere safe — it is the ONLY way to recover your vault.
+## Upgrading
 
-> **Do NOT ask an agent to run `totalreclaw setup` for you.** The agent's shell-tool stdout is captured into LLM context. Even though `totalreclaw setup` never prints the phrase by default, running phrase-related CLIs through the agent's shell is a phrase-safety hazard: any future flag change or regression could leak. The agent should ONLY use `totalreclaw_pair`.
-
-## 3. Verify
-
-Ask "What's my TotalReclaw status?", or run `hermes` then `/plugins` -- `totalreclaw` should be listed.
+If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after upgrading also run `pip install --force-reinstall hermes-agent` to restore the `hermes` CLI entrypoint that rc.2's console-script collision left stale. Fresh installs are unaffected.
 
 ## Troubleshooting
 
-| Issue | Fix |
-|---|---|
-| "No LLM available for auto-extraction" | Configure a provider in Hermes (`hermes login` or set `ZAI_API_KEY` / `OPENAI_API_KEY` in `~/.hermes/.env`). TotalReclaw reuses it automatically. |
-| Plugin not in `/plugins` | `hermes gateway restart`. |
-| Pair page says "browser lacks x25519" | Upgrade to Safari 17.2+ or a recent Chromium. Older browsers can't run the AEAD crypto. |
-| Pair URL unreachable from phone | The pair HTTP server binds to `127.0.0.1` by default. For remote-phone setup, SSH-port-forward the port (`ssh -L 58391:127.0.0.1:58391 ...`) or run the browser on the gateway host directly. |
-| Recovery phrase appeared in chat | File a bug. Rotate: generate a new wallet via `totalreclaw_pair` with `mode=generate`. The leaked phrase is unrecoverable once shipped through LLM context. |
+- **Agent can't see TotalReclaw tools**: `hermes gateway restart`.
+- **Pair URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running.
+- **Browser fails to POST the encrypted phrase**: check the pair page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
+- **"No LLM available for auto-extraction"**: configure a provider in Hermes (`hermes login` or set `ZAI_API_KEY` / `OPENAI_API_KEY` in `~/.hermes/.env`). TotalReclaw reuses it automatically.
+- **Recovery phrase appeared in chat**: file a bug. Rotate by generating a new wallet via `totalreclaw_pair` with `mode=generate`. The leaked phrase is unrecoverable once shipped through LLM context.
 
 ## Returning user (new machine)
 
-Use `totalreclaw_pair` with `mode=import`: the browser page accepts your existing 12/24-word phrase and encrypts it against the gateway's ephemeral key before uploading.
+Paste the same prompt. When the pair page loads, choose "import" and enter your existing 12/24-word phrase. The browser encrypts it against the gateway's ephemeral key before uploading.
 
 ## See also
 
-- [Memory types guide](memory-types-guide.md) -- v1 taxonomy
+- [Memory types guide](memory-types-guide.md) — v1 taxonomy
 - [Importing memories](importing-memories.md)
-- [OpenClaw plugin setup](openclaw-setup.md) -- same vault, different runtime
+- [OpenClaw plugin setup](openclaw-setup.md) — same vault, different runtime

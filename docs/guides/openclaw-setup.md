@@ -1,43 +1,52 @@
 # TotalReclaw for OpenClaw
 
-TotalReclaw gives your OpenClaw agent encrypted, persistent memory. Facts, preferences, and decisions are extracted automatically and recalled in future sessions. All data is encrypted on your device -- the server never sees plaintext.
+TotalReclaw gives your OpenClaw agent encrypted, persistent memory. One copy-paste prompt to the agent installs the plugin, restarts the gateway, and walks you through pairing in your browser.
 
 ---
 
-## Installing via chat with your agent
+## Install via chat (default)
 
-If OpenClaw is already running and you want the agent to walk you through the rest of this guide, paste:
+Open your chat with your OpenClaw agent. Paste this message:
 
-> "Install TotalReclaw by following the guide at https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md"
+> **Install TotalReclaw latest RC and walk me through the recovery-phrase setup**
 
-Your agent will install the package, restart its gateway, then walk you through the QR pairing flow. Your recovery phrase never touches the chat — it's entered in your browser during pairing.
+The agent will install the package, restart its gateway, call the `totalreclaw_pair` tool, and give you a URL + PIN to enter your recovery phrase in the browser. Your phrase never touches the chat.
+
+<details>
+<summary>What happens behind the scenes</summary>
+
+1. Agent runs `openclaw skills install totalreclaw` (resolves to the latest RC on ClawHub).
+2. Agent restarts the gateway (`openclaw restart` native, or `docker restart tr-openclaw` in Docker) so HTTP routes and hooks bind.
+3. Agent calls the `totalreclaw_pair` tool.
+4. A pair URL + 6-digit PIN is surfaced back to you in chat.
+5. You open the URL in your browser and enter (or let the browser generate) your recovery phrase, then confirm the PIN.
+6. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives a ChaCha20-Poly1305 key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey to the gateway.
+7. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
+8. The agent confirms setup and your memory tools are live.
+
+The recovery phrase never crosses the LLM context — not the chat transcript, not the agent's shell stdout, not any tool-call payload. Browser-side crypto keeps it isolated by construction. Your first real interaction will download a ~216 MB embedding model (cached locally, one-time).
+
+</details>
 
 ---
 
-## Install
+## Prerequisites
+
+- OpenClaw v3.2.0+ with the gateway running
+- An up-to-date browser with WebCrypto x25519 + ChaCha20-Poly1305 (Safari 17.2+ or Chromium 118+)
+
+---
+
+## Manual install (CLI)
+
+If you'd rather run the commands yourself:
 
 ```bash
-openclaw plugins install @totalreclaw/totalreclaw
+openclaw skills install totalreclaw
+openclaw restart              # or: docker restart tr-openclaw
 ```
 
-First-run setup runs a secure CLI wizard (v3.2.0+); the plugin never auto-generates a recovery phrase silently and never asks the LLM to display one.
-
-> **Restart required:** after `plugins install`, restart the gateway so HTTP routes and hooks bind: `openclaw restart` (native) or `docker restart openclaw-qa` (Docker). If you skip this, tool calls return "onboarding required" or 404.
-
-> **First interaction downloads a ~216 MB embedding model.** Cached locally, one-time.
-
-**Installing a release candidate (RC / pre-release)?** npm pre-releases are published under the `rc` dist-tag (or you can pin by exact version). Never install an RC on production — only for QA against staging.
-
-```bash
-openclaw plugins install @totalreclaw/totalreclaw@rc               # always the latest RC
-openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.6       # pin exact version
-```
-
-Find the current RC via `npm view @totalreclaw/totalreclaw dist-tags` or the [npm page](https://www.npmjs.com/package/@totalreclaw/totalreclaw?activeTab=versions).
-
-### Upgrading
-
-If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after `pip install --pre totalreclaw==2.3.1rc6` also run `pip install --force-reinstall hermes-agent` to restore the `hermes` CLI entrypoint that rc.2's console-script collision left stale. Fresh installs are unaffected.
+`openclaw skills install totalreclaw` resolves to the latest RC on ClawHub. Then ask the agent "set up TotalReclaw for me" — it will call `totalreclaw_pair` and hand you the URL + PIN.
 
 <details>
 <summary>From-source install (for plugin development)</summary>
@@ -51,69 +60,9 @@ openclaw plugins install ./totalreclaw/skill/plugin
 
 ---
 
-## Your recovery phrase
+## Upgrading
 
-TotalReclaw is keyed by a 12-word BIP-39 recovery phrase. QR pairing generates or imports it in your **browser**, which then ships the phrase to the gateway end-to-end-encrypted. The phrase never touches the LLM, the chat transcript, or the agent's shell-tool stdout.
-
-**Stored at:** `~/.totalreclaw/credentials.json` (mode `0600`, owner-only). A separate `~/.totalreclaw/state.json` tracks onboarding state and never contains secrets.
-
-**Save the phrase somewhere safe.** It is the only key to your memories and the only way to use the same vault from another agent (Claude Desktop, Cursor, Hermes, etc.). No password reset, no recovery email, no support ticket that can recover lost memories.
-
-### Setup (default: QR pairing — agent-facilitated)
-
-Ask the OpenClaw agent in chat: "Set up TotalReclaw for me." The agent will call the `totalreclaw_pair` tool and relay a URL + 6-digit PIN:
-
-> "Open https://your-gateway/plugin/totalreclaw/pair/finish?sid=...#pk=... in your browser, enter your phrase (or let the browser generate one), and confirm PIN 492731."
-
-**What happens under the hood:**
-
-1. Your browser fetches the pair page.
-2. The browser performs x25519 ECDH against the gateway's ephemeral public key (passed in the URL `#fragment` — never hits server logs), derives a ChaCha20-Poly1305 key via HKDF-SHA256.
-3. You type (or let the browser generate) your recovery phrase.
-4. The browser encrypts locally and uploads ciphertext + nonce + its own pubkey + PIN.
-5. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode 0600).
-
-**The recovery phrase never enters the LLM context.** Not the chat, not the agent's reasoning, not the agent's shell stdout, not the tool-call payload. Browser-side crypto keeps it isolated by construction.
-
-Session TTL is 15 minutes by default (5-60 min configurable). The QR URL is single-use. Supported browsers: Safari 17.2+, Chromium 118+.
-
-### Setup (user-terminal ONLY — do NOT run this through an agent)
-
-If you prefer to set up entirely in your own terminal:
-
-```bash
-openclaw totalreclaw onboard
-```
-
-The wizard asks:
-
-1. **Generate** a new phrase. Printed as a 3x4 grid on your terminal with a "write it down" warning; you retype three specific words to prove you saved it. Persisted to `credentials.json` on success. Phrase never leaves the terminal.
-2. **Import** an existing phrase. Hidden stdin (masked with `*`), BIP-39 checksum validation.
-3. **Skip** for now. Memory tools stay disabled until you re-run.
-
-Check state any time: `openclaw totalreclaw status`.
-
-> **Do NOT ask an agent to run `openclaw totalreclaw onboard` through its shell tool.** Agent shell stdout is captured into LLM context. Even though the wizard doesn't print the phrase by default, running phrase-related CLIs via an agent shell is a phrase-safety hazard — the agent MUST use `totalreclaw_pair` instead. The CLI is for you, not the agent.
-
-### In-chat prompts
-
-Ask the agent "set up TotalReclaw for me" and it should call `totalreclaw_pair` directly. For users who explicitly prefer local-terminal setup, the agent falls back to `totalreclaw_onboarding_start` — a pointer-only tool that tells YOU to run the CLI wizard yourself. The agent never runs the wizard for you.
-
-### Phrase-safety model (3.3.1-rc.6+)
-
-Per `project_phrase_safety_rule.md`:
-
-- `totalreclaw_onboard` agent tool — **REMOVED**. Even with `emitPhrase: false`, nothing architecturally prevented leakage. Use `totalreclaw_pair`.
-- `totalreclaw setup` / `openclaw totalreclaw onboard` CLI commands — **KEPT but user-terminal only**. They MUST NOT be invoked via any agent shell tool.
-- `totalreclaw_pair` agent tool — **CANONICAL**. Browser-side x25519 + ChaCha20-Poly1305 + HKDF-SHA256 keeps the phrase out of the LLM round-trip by construction. Ported to Hermes Python as well (v2.3.1rc6+).
-
-### Retrieving your phrase later
-
-```bash
-cat ~/.totalreclaw/credentials.json | jq -r .mnemonic
-```
-
-On a new machine: run `openclaw totalreclaw onboard` and choose "import". Do NOT paste the phrase into chat.
+If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after upgrading also run `pip install --force-reinstall hermes-agent` to restore the `hermes` CLI entrypoint that rc.2's console-script collision left stale. Fresh installs are unaffected.
 
 ---
 
@@ -143,10 +92,9 @@ Ask the agent naturally; the plugin picks the right tool.
 | **Export** | "Export all my TotalReclaw memories as plain text" |
 | **Status** | "What's my TotalReclaw status?" |
 | **Import from** | "Import my Gemini history from ~/Downloads/..." |
-| **Onboard** | "Set up TotalReclaw for me" -- points you at the CLI wizard |
-| **Pair** (remote) | "Help me set up TotalReclaw on my VPS" -- returns QR + PIN + URL (v3.3.1+) |
+| **Pair** | "Set up TotalReclaw for me" — returns URL + PIN |
 
-> The legacy `totalreclaw_setup` tool is **deprecated** (v3.2.0+) -- it rejects phrase arguments and redirects to the CLI to prevent the phrase leaking to the LLM provider.
+Your recovery phrase is the only key to your memories. Store it safely. Retrieve later with `cat ~/.totalreclaw/credentials.json | jq -r .mnemonic`. On a new machine, paste the canonical prompt above and choose "import" in the browser.
 
 ---
 
@@ -175,18 +123,11 @@ Both tiers have unlimited memories and reads. Upgrade: *"Upgrade my TotalReclaw 
 
 ## Troubleshooting
 
-| Problem | Fix |
-|---------|-----|
-| Plugin not loading | Restart the gateway: `openclaw restart` or `docker restart openclaw-qa`. |
-| Tool calls return "onboarding required" | `openclaw totalreclaw onboard` (local) or `openclaw totalreclaw pair generate` (remote). |
-| Routes return 404 after `plugins install` | Gateway wasn't restarted. Restart it. |
-| Can't find my recovery phrase | `cat ~/.totalreclaw/credentials.json \| jq -r .mnemonic` |
-| Tools not appearing | Gateway config needs `"tools": { "allow": ["totalreclaw", "group:plugins"] }`. Rebuild Docker image if applicable. |
-| "Not authenticated" / 401 | Check your phrase -- exact words, exact order, lowercase, single spaces. |
-| Memories not appearing | Try explicit recall: *"What do you remember about X?"* |
-| `plugins.allow is empty` warning | OpenClaw-side, not a TotalReclaw bug. Add to allowlist or ignore. |
-| `No LLM available for auto-extraction` | Fixed in v3.3.1 (reads `~/.openclaw/agents/<agent>/agent/auth-profiles.json`). Upgrade, or set `plugins.entries.totalreclaw.config.extraction.llm.{provider,apiKey}` explicitly. |
-| Quota exceeded (403) | Upgrade to Pro. |
+- **Agent can't see TotalReclaw tools**: restart the gateway (`openclaw restart` or `docker restart tr-openclaw`).
+- **Pair URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running.
+- **Browser fails to POST the encrypted phrase**: check the pair page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
+- **Tool calls return "onboarding required"**: repeat the canonical prompt so the agent re-runs `totalreclaw_pair`.
+- **"Not authenticated" / 401**: check your phrase — exact words, exact order, lowercase, single spaces.
 
 ---
 
@@ -194,6 +135,6 @@ Both tiers have unlimited memories and reads. Upgrade: *"Upgrade my TotalReclaw 
 
 - [Feature Comparison](feature-comparison.md)
 - [Importing Memories](importing-memories.md)
-- [Memory types guide](memory-types-guide.md) -- v1 taxonomy
-- [Detailed reference](beta-tester-guide-detailed.md) -- env vars, extraction tuning, architecture
+- [Memory types guide](memory-types-guide.md) — v1 taxonomy
+- [Detailed reference](beta-tester-guide-detailed.md) — env vars, extraction tuning, architecture
 - [totalreclaw.xyz](https://totalreclaw.xyz)
