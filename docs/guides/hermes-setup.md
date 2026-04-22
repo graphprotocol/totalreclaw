@@ -33,9 +33,9 @@ hermes gateway restart    # or `docker restart tr-hermes` for Docker Hermes
 
 Then in your Hermes chat:
 
-> **TotalReclaw is installed at 'totalreclaw' on PyPI. Install it, restart the gateway, and walk me through the QR pairing flow**
+> **TotalReclaw is already installed. Use the totalreclaw_pair tool to walk me through the QR recovery-phrase setup.**
 
-The agent reads the explicit directive, runs `pip install --pre totalreclaw` (no-op if already installed), asks you to restart the gateway if needed, calls `totalreclaw_pair`, and guides you through the QR flow.
+The agent reads the explicit directive, calls `totalreclaw_pair`, and guides you through the QR flow.
 
 </details>
 
@@ -84,7 +84,7 @@ Paste the same canonical prompt. When the pair page loads, choose "import" and e
 ## Canonical prompts (these match the QA harness scenario contracts)
 
 - Approach A: `Set up TotalReclaw`
-- Approach B: `TotalReclaw is installed at 'totalreclaw' on PyPI. Install it, restart the gateway, and walk me through the QR pairing flow`
+- Approach B: `TotalReclaw is already installed. Use the totalreclaw_pair tool to walk me through the QR recovery-phrase setup.`
 
 ## See also
 

@@ -35,7 +35,7 @@ openclaw gateway restart  # or `docker restart tr-openclaw` for Docker
 
 Then in your OpenClaw chat:
 
-> **TotalReclaw is a skill at 'totalreclaw' on ClawHub. Install it, then install the plugin, restart the gateway, and walk me through the QR pairing flow**
+> **TotalReclaw is a skill at 'totalreclaw' on ClawHub. Please install the plugin (openclaw plugins install totalreclaw), then use the totalreclaw_pair tool to walk me through the QR recovery-phrase setup.**
 
 The agent reads the explicit directive, installs the plugin (`openclaw plugins install totalreclaw`), asks you to restart the gateway, calls `totalreclaw_pair`, and guides you through the QR flow.
 
@@ -165,7 +165,7 @@ Both tiers have unlimited memories and reads. Upgrade: *"Upgrade my TotalReclaw 
 ## Canonical prompts (these match the QA harness scenario contracts)
 
 - Approach A: `Install totalreclaw`
-- Approach B: `TotalReclaw is a skill at 'totalreclaw' on ClawHub. Install it, then install the plugin, restart the gateway, and walk me through the QR pairing flow`
+- Approach B: `TotalReclaw is a skill at 'totalreclaw' on ClawHub. Please install the plugin (openclaw plugins install totalreclaw), then use the totalreclaw_pair tool to walk me through the QR recovery-phrase setup.`
 
 ---
 
