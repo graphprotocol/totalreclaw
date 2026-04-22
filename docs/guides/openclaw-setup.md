@@ -16,6 +16,15 @@ First-run setup runs a secure CLI wizard (v3.2.0+); the plugin never auto-genera
 
 > **First interaction downloads a ~216 MB embedding model.** Cached locally, one-time.
 
+**Installing a release candidate (RC / pre-release)?** npm pre-releases are published under the `rc` dist-tag (or you can pin by exact version). Never install an RC on production — only for QA against staging.
+
+```bash
+openclaw plugins install @totalreclaw/totalreclaw@rc               # always the latest RC
+openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.2       # pin exact version
+```
+
+Find the current RC via `npm view @totalreclaw/totalreclaw dist-tags` or the [npm page](https://www.npmjs.com/package/@totalreclaw/totalreclaw?activeTab=versions).
+
 <details>
 <summary>From-source install (for plugin development)</summary>
 

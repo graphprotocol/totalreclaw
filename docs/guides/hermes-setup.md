@@ -16,6 +16,14 @@ pip install totalreclaw
 
 Hermes auto-discovers the plugin via entry-point registration at next start. No manual copy, no config editing. Ubuntu/Debian/Docker: add `--break-system-packages` or use a venv if you hit `externally-managed-environment`.
 
+**Installing a release candidate (RC / pre-release)?** Pre-releases on PyPI are hidden from `pip install` by default. Use `--pre` and pin the version explicitly:
+
+```bash
+pip install --pre totalreclaw==2.3.1rc2        # replace with the RC version you want
+```
+
+Find the latest RC via `pip index versions totalreclaw --pre` or on [PyPI](https://pypi.org/project/totalreclaw/#history). Never install an RC on production — only for QA against staging.
+
 ## 2. Set up your vault
 
 **Recommended -- CLI wizard (runs outside the LLM path):**
