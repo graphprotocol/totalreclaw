@@ -35,13 +35,48 @@ class LLMConfig:
     api_format: str  # "openai" or "anthropic"
 
 
+# zai exposes TWO public endpoints:
+#   - CODING: backs GLM Coding Plan subscriptions (default here).
+#   - STANDARD: backs PAYG balances.
+# A coding-plan key hitting STANDARD (or vice-versa) returns HTTP 429 with
+# body "Insufficient balance or no resource package. Please recharge." —
+# misleading because the subscription is in good standing. The rc.3
+# auto-fallback in :func:`chat_completion` flips between these two when it
+# detects that error signature.
+ZAI_CODING_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
+ZAI_STANDARD_BASE_URL = "https://api.z.ai/api/paas/v4"
+
+
+def get_zai_base_url() -> str:
+    """Resolve the zai base URL.
+
+    Precedence:
+      1. ``ZAI_BASE_URL`` env var (explicit operator override)
+      2. Default: coding endpoint (coding-plan-biased; the rc.3
+         auto-fallback hops to the standard endpoint on an
+         "Insufficient balance" 429).
+
+    Documented in Hermes SKILL.md — GLM Coding Plan users can leave
+    unset; PAYG users SHOULD set ``ZAI_BASE_URL=https://api.z.ai/api/paas/v4``
+    to avoid the fallback round-trip on every first call.
+    """
+    raw = os.environ.get("ZAI_BASE_URL", "").strip()
+    if raw:
+        return raw.rstrip("/")
+    return ZAI_CODING_BASE_URL
+
+
 # Provider detection: (provider, env_vars, default_base_url, api_format)
 # No hardcoded model names — uses whatever the user configured via their
 # agent framework. The TOTALRECLAW_EXTRACTION_MODEL / TOTALRECLAW_LLM_MODEL
 # user-facing override was removed in the v1 env cleanup. Model selection
 # goes through agent-framework config + `OPENAI_MODEL` / `ANTHROPIC_MODEL`.
+#
+# NOTE: zai's base URL is looked up lazily via :func:`get_zai_base_url` at
+# config-resolution time so ``ZAI_BASE_URL`` propagates without a module
+# re-import. This table is kept for the non-zai providers.
 PROVIDERS = [
-    ("zai", ["ZAI_API_KEY", "GLM_API_KEY", "Z_AI_API_KEY"], "https://api.z.ai/api/coding/paas/v4", "openai"),
+    ("zai", ["ZAI_API_KEY", "GLM_API_KEY", "Z_AI_API_KEY"], ZAI_CODING_BASE_URL, "openai"),
     ("anthropic", ["ANTHROPIC_API_KEY"], "https://api.anthropic.com/v1", "anthropic"),
     ("openai", ["OPENAI_API_KEY"], "https://api.openai.com/v1", "openai"),
     ("groq", ["GROQ_API_KEY"], "https://api.groq.com/openai/v1", "openai"),
@@ -58,7 +93,7 @@ PROVIDERS = [
 # Kept aligned with ``PROVIDERS`` above — if you add a provider there,
 # add it here too.
 _HERMES_PROVIDER_KEY_MAP = {
-    "zai": (["ZAI_API_KEY", "GLM_API_KEY", "Z_AI_API_KEY"], "https://api.z.ai/api/coding/paas/v4"),
+    "zai": (["ZAI_API_KEY", "GLM_API_KEY", "Z_AI_API_KEY"], ZAI_CODING_BASE_URL),
     "openai": (["OPENAI_API_KEY"], "https://api.openai.com/v1"),
     "anthropic": (["ANTHROPIC_API_KEY"], "https://api.anthropic.com/v1"),
     "openrouter": (["OPENROUTER_API_KEY"], "https://openrouter.ai/api/v1"),
@@ -69,6 +104,31 @@ _HERMES_PROVIDER_KEY_MAP = {
     "xai": (["XAI_API_KEY"], "https://api.x.ai/v1"),
     "together": (["TOGETHER_API_KEY"], "https://api.together.xyz/v1"),
 }
+
+
+def is_zai_balance_error(message: str) -> bool:
+    """Detect the zai "Insufficient balance" error signature (case-insensitive)."""
+    if not message:
+        return False
+    m = message.lower()
+    return "insufficient balance" in m or "no resource package" in m
+
+
+def zai_fallback_base_url(current_base_url: str) -> Optional[str]:
+    """Pick the OTHER zai endpoint when the current one returns a balance error.
+
+    Returns ``None`` when ``current_base_url`` is neither of the known zai
+    endpoints — the caller should then skip the fallback branch and fall
+    back on normal retries.
+    """
+    if not current_base_url:
+        return None
+    normalized = current_base_url.rstrip("/")
+    if normalized == ZAI_CODING_BASE_URL:
+        return ZAI_STANDARD_BASE_URL
+    if normalized == ZAI_STANDARD_BASE_URL:
+        return ZAI_CODING_BASE_URL
+    return None
 
 
 def _candidate_hermes_config_paths() -> list[Path]:
@@ -230,12 +290,22 @@ def read_hermes_llm_config() -> Optional[LLMConfig]:
             )
             continue
 
-        base_url = (
-            env_vars.get("GLM_BASE_URL")
-            or env_vars.get("OPENAI_BASE_URL")
-            or os.environ.get("OPENAI_BASE_URL")
-            or default_base_url
-        )
+        # For zai, ``ZAI_BASE_URL`` (env or Hermes .env) wins over the
+        # hardcoded coding-endpoint default so users on the PAYG tier can
+        # point at the STANDARD endpoint without the auto-fallback tax.
+        if provider_lower == "zai":
+            zai_override = env_vars.get("ZAI_BASE_URL") or os.environ.get("ZAI_BASE_URL")
+            if zai_override and zai_override.strip():
+                base_url = zai_override.strip().rstrip("/")
+            else:
+                base_url = get_zai_base_url()
+        else:
+            base_url = (
+                env_vars.get("GLM_BASE_URL")
+                or env_vars.get("OPENAI_BASE_URL")
+                or os.environ.get("OPENAI_BASE_URL")
+                or default_base_url
+            )
         api_format = "anthropic" if provider_lower == "anthropic" else "openai"
 
         logger.info(
@@ -298,6 +368,11 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
                 # For OpenAI provider, respect OPENAI_BASE_URL
                 if _provider == "openai" and openai_base_url:
                     resolved_base_url = openai_base_url.rstrip("/")
+                elif _provider == "zai":
+                    # Respect ZAI_BASE_URL env override (rc.3). Coding-plan
+                    # users can leave unset; PAYG users set it explicitly
+                    # to https://api.z.ai/api/paas/v4.
+                    resolved_base_url = get_zai_base_url()
                 else:
                     resolved_base_url = default_base_url
 
@@ -325,10 +400,56 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
     return None
 
 
-# Retry/backoff settings for LLM calls
-_MAX_RETRIES = 3
-_BACKOFF_DELAYS = [5.0, 10.0, 20.0]  # seconds between retries
+# Retry/backoff settings for LLM calls — rc.3 lifts budget to 5 attempts
+# with 2→4→8→16→32s backoff (total ~62s). Configurable via
+# ``TOTALRECLAW_LLM_RETRY_BUDGET_MS`` env var (accepts ms for parity with
+# the TypeScript plugin). 120s timeout per attempt stays.
+_MAX_RETRIES = 5
+_BACKOFF_DELAYS = [2.0, 4.0, 8.0, 16.0, 32.0]  # seconds between retries
 _LLM_TIMEOUT = 120.0  # seconds (extraction prompts with long conversation text need this)
+
+
+def _default_retry_budget_s() -> float:
+    """Budget in seconds. Read lazily so tests can monkey-patch env.
+
+    The lower bound is 1ms to allow tests to exercise the budget-short-circuit
+    path quickly; in production the caller picks something in the 10s+ range
+    via the env var (default 60s).
+    """
+    raw = os.environ.get("TOTALRECLAW_LLM_RETRY_BUDGET_MS", "").strip()
+    if raw:
+        try:
+            return max(0.001, int(raw) / 1000.0)
+        except ValueError:
+            pass
+    return 60.0
+
+
+class LLMUpstreamOutageError(RuntimeError):
+    """Raised by :func:`chat_completion` when the extraction LLM upstream is
+    unreachable after the full retry budget is exhausted.
+
+    The extraction pipeline recognises this via ``except
+    LLMUpstreamOutageError`` and can choose to queue the message batch for
+    retry next turn, surface a one-time notification, or skip silently.
+    Historically :func:`chat_completion` returned ``None`` on retry
+    exhaustion; that conflated "transient outage" with "parseable empty
+    response", so callers could not distinguish. The structured error
+    preserves that information.
+
+    Attributes
+    ----------
+    attempts : int
+        Number of attempts made before giving up (1-based).
+    last_status : Optional[int]
+        HTTP status code from the last attempt, if the last error was an
+        HTTP error. ``None`` for timeouts / connection failures.
+    """
+
+    def __init__(self, message: str, attempts: int, last_status: Optional[int] = None):
+        super().__init__(message)
+        self.attempts = attempts
+        self.last_status = last_status
 
 
 async def chat_completion(
@@ -338,35 +459,161 @@ async def chat_completion(
     max_tokens: int = 2048,
     temperature: float = 0.0,
 ) -> Optional[str]:
-    """Call LLM chat completion with retry/backoff. Returns assistant response text or None."""
+    """Call LLM chat completion with retry/backoff.
+
+    rc.3 — retry budget is 5 attempts with 2→4→8→16→32s backoff
+    (total ~62s). Configurable via ``TOTALRECLAW_LLM_RETRY_BUDGET_MS``.
+    On retry exhaustion raises :class:`LLMUpstreamOutageError` instead of
+    returning ``None`` so the extraction pipeline can differentiate from
+    a parseable-but-empty response.
+
+    zai-specific: when a 429 response carries the "Insufficient balance"
+    signature AND the current base URL is one of the two known zai
+    endpoints, flips to the other endpoint and retries ONCE (separate
+    from the normal retry budget). Logs the flip at INFO.
+
+    Returns ``None`` only when the underlying API response parsed
+    successfully but contained no text content (empty choice, etc.).
+
+    Raises
+    ------
+    LLMUpstreamOutageError
+        After all retries are exhausted on retryable errors (429 / timeout).
+    """
+    # Make a mutable copy so the zai fallback branch can swap base_url
+    # without mutating the caller's dataclass.
+    active = LLMConfig(
+        api_key=config.api_key,
+        base_url=config.base_url,
+        model=config.model,
+        api_format=config.api_format,
+    )
+    budget_s = _default_retry_budget_s()
+    cumulative_delay_s = 0.0
+    zai_fallback_attempted = False
     last_exc: Optional[Exception] = None
-    for attempt in range(_MAX_RETRIES):
+    last_status: Optional[int] = None
+
+    attempt = 0
+    while attempt < _MAX_RETRIES:
+        attempt += 1
         try:
-            if config.api_format == "anthropic":
-                return await _call_anthropic(config, system_prompt, user_prompt, max_tokens, temperature)
+            if active.api_format == "anthropic":
+                return await _call_anthropic(active, system_prompt, user_prompt, max_tokens, temperature)
             else:
-                return await _call_openai(config, system_prompt, user_prompt, max_tokens, temperature)
-        except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
+                return await _call_openai(active, system_prompt, user_prompt, max_tokens, temperature)
+        except httpx.HTTPStatusError as e:
             last_exc = e
-            # Retry on timeout or 429 rate limit
-            is_rate_limit = isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429
-            is_timeout = isinstance(e, httpx.TimeoutException)
-            if (is_rate_limit or is_timeout) and attempt < _MAX_RETRIES - 1:
-                delay = _BACKOFF_DELAYS[attempt] if attempt < len(_BACKOFF_DELAYS) else _BACKOFF_DELAYS[-1]
+            last_status = e.response.status_code
+            err_body = ""
+            try:
+                err_body = e.response.text or ""
+            except Exception:
+                err_body = ""
+            err_str = f"{e.response.status_code}: {err_body}"
+
+            # ── zai "Insufficient balance" auto-fallback ──
+            if (
+                not zai_fallback_attempted
+                and e.response.status_code == 429
+                and is_zai_balance_error(err_body)
+            ):
+                fallback = zai_fallback_base_url(active.base_url)
+                if fallback:
+                    zai_fallback_attempted = True
+                    old_url = active.base_url
+                    active.base_url = fallback
+                    logger.info(
+                        "zai endpoint auto-fallback: %s → %s due to "
+                        '"Insufficient balance" response',
+                        old_url, fallback,
+                    )
+                    # Retry immediately — this flip is "free" and does not
+                    # consume the normal retry budget.
+                    attempt -= 1
+                    continue
+
+            is_retryable = e.response.status_code in (429, 502, 503, 504)
+            if not is_retryable:
+                # Non-retryable HTTP error (400/401/403/404/etc.) — propagate
+                # as-is so callers can distinguish config errors from outages.
+                logger.warning(
+                    "LLM call failed (non-retryable HTTP %d): %s",
+                    e.response.status_code, repr(e),
+                )
+                raise
+
+            # Retryable. Either schedule a backoff or surface the outage if
+            # we've exhausted attempts / the retry budget.
+            if attempt >= _MAX_RETRIES:
+                raise LLMUpstreamOutageError(
+                    f"LLM upstream outage (exhausted {_MAX_RETRIES} attempts): {err_str[:200]}",
+                    attempts=attempt,
+                    last_status=last_status,
+                ) from e
+
+            delay = _BACKOFF_DELAYS[min(attempt - 1, len(_BACKOFF_DELAYS) - 1)]
+            if cumulative_delay_s + delay > budget_s:
+                raise LLMUpstreamOutageError(
+                    f"LLM upstream outage (budget {budget_s:.0f}s exhausted after {attempt} attempts): {err_str[:200]}",
+                    attempts=attempt,
+                    last_status=last_status,
+                ) from e
+            cumulative_delay_s += delay
+            # Only log the FIRST retry at WARNING; subsequent retries at
+            # DEBUG to avoid spamming long outages.
+            if attempt == 1:
                 logger.warning(
                     "LLM call failed (attempt %d/%d, retrying in %.0fs): %s",
-                    attempt + 1, _MAX_RETRIES, delay, repr(e),
+                    attempt, _MAX_RETRIES, delay, repr(e),
                 )
-                await _asyncio.sleep(delay)
-                continue
-            logger.warning("LLM call failed (attempt %d/%d, no more retries): %s", attempt + 1, _MAX_RETRIES, repr(e))
-            return None
+            else:
+                logger.debug(
+                    "LLM retry (attempt %d/%d, wait %.0fs): %s",
+                    attempt, _MAX_RETRIES, delay, repr(e),
+                )
+            await _asyncio.sleep(delay)
+            continue
+        except httpx.TimeoutException as e:
+            last_exc = e
+            if attempt >= _MAX_RETRIES:
+                raise LLMUpstreamOutageError(
+                    f"LLM upstream outage (timeouts on {_MAX_RETRIES} attempts)",
+                    attempts=attempt,
+                    last_status=None,
+                ) from e
+
+            delay = _BACKOFF_DELAYS[min(attempt - 1, len(_BACKOFF_DELAYS) - 1)]
+            if cumulative_delay_s + delay > budget_s:
+                raise LLMUpstreamOutageError(
+                    f"LLM upstream outage (budget {budget_s:.0f}s exhausted after {attempt} attempts): timeout",
+                    attempts=attempt,
+                    last_status=None,
+                ) from e
+            cumulative_delay_s += delay
+            if attempt == 1:
+                logger.warning(
+                    "LLM call timeout (attempt %d/%d, retrying in %.0fs)",
+                    attempt, _MAX_RETRIES, delay,
+                )
+            else:
+                logger.debug(
+                    "LLM retry after timeout (attempt %d/%d, wait %.0fs)",
+                    attempt, _MAX_RETRIES, delay,
+                )
+            await _asyncio.sleep(delay)
+            continue
         except Exception as e:
             logger.warning("LLM call failed: %s", repr(e))
             return None
 
-    logger.warning("LLM call exhausted all retries: %s", repr(last_exc))
-    return None
+    # Fell through the loop with a retryable error on the final attempt —
+    # surface structured outage.
+    raise LLMUpstreamOutageError(
+        f"LLM upstream outage (exhausted {_MAX_RETRIES} attempts): {repr(last_exc)}",
+        attempts=_MAX_RETRIES,
+        last_status=last_status,
+    )
 
 
 async def _call_openai(

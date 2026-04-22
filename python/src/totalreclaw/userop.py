@@ -42,6 +42,45 @@ logger = logging.getLogger(__name__)
 
 ENTRYPOINT_V07 = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 SIMPLE_ACCOUNT_FACTORY = "0x91E60e0613810449d098b0b5Ec8b51A0FE8c8985"
+
+# ---------------------------------------------------------------------------
+# Per-account submission mutex — 3.3.1-rc.3 AA25 serialization
+# ---------------------------------------------------------------------------
+#
+# Concurrent UserOp submissions for the SAME Smart Account used to race
+# at the nonce fetch:
+#   - Call A: get_nonce()=5, build UserOp, submit, await receipt.
+#   - Call B: get_nonce()=5 (A not mined yet), build UserOp, submit → AA25.
+#
+# The fix: serialize per-``sender`` with an ``asyncio.Lock`` so call B
+# does not even START its nonce fetch until call A has settled. Existing
+# AA25 retry with fresh nonce continues to catch relay-side zombie
+# UserOps. Per-sender dict lives in module scope; keys are lowercased
+# addresses. Entries are never removed (bounded by # unique accounts per
+# process, typically 1).
+_sender_submission_locks: dict[str, asyncio.Lock] = {}
+_sender_locks_map_lock = asyncio.Lock()
+
+
+async def _get_sender_lock(sender: str) -> asyncio.Lock:
+    """Return the asyncio.Lock for the given Smart Account address.
+
+    Lazily creates the lock on first use. Locking the creation step itself
+    prevents two coroutines from simultaneously allocating separate locks
+    for the same sender.
+    """
+    key = sender.lower()
+    async with _sender_locks_map_lock:
+        lock = _sender_submission_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _sender_submission_locks[key] = lock
+        return lock
+
+
+def _reset_sender_locks_for_tests() -> None:
+    """Clear the per-account lock map. Test-only helper."""
+    _sender_submission_locks.clear()
 DATA_EDGE_ADDRESS = "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca"
 
 # Chain-specific public RPCs
@@ -329,7 +368,10 @@ async def build_and_send_userop(
 
     _MAX_NONCE_RETRIES = 3
 
-    async with httpx.AsyncClient(timeout=30.0) as http:
+    # rc.3 — serialize concurrent submissions for the same Smart Account.
+    sender_lock = await _get_sender_lock(sender)
+
+    async with sender_lock, httpx.AsyncClient(timeout=30.0) as http:
         # 1. Encode the execute calldata (idempotent, does not depend on nonce)
         #    SmartAccount.execute(dataEdgeAddress, 0, protobufPayload)
         #    Delegates to Rust core which hardcodes DataEdge address + value=0
@@ -573,7 +615,12 @@ async def build_and_send_userop_batch(
 
     _MAX_NONCE_RETRIES = 3
 
-    async with httpx.AsyncClient(timeout=30.0) as http:
+    # rc.3 — serialize concurrent batch submissions for the same Smart
+    # Account. Same lock shared with ``build_and_send_userop`` so a
+    # single-fact + batch concurrent pair also serialize correctly.
+    sender_lock = await _get_sender_lock(sender)
+
+    async with sender_lock, httpx.AsyncClient(timeout=30.0) as http:
         # 1. Encode the executeBatch calldata once. Independent of nonce,
         #    so we compute it before the retry loop. Delegates to the
         #    Rust core for byte-parity with the TS plugin.

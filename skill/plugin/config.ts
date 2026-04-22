@@ -157,6 +157,37 @@ export const CONFIG = {
     cerebras: process.env.CEREBRAS_API_KEY || '',
   } as Record<string, string>,
 
+  // 3.3.1-rc.3: zai base-URL override. Read via a getter so tests can
+  // mutate `process.env.ZAI_BASE_URL` between calls — the value is NOT
+  // frozen at module load. Default is the coding endpoint; the rc.3
+  // auto-fallback flips to the standard endpoint on an "Insufficient
+  // balance" 429.
+  get zaiBaseUrl(): string {
+    const override = process.env.ZAI_BASE_URL;
+    if (override && override.trim()) return override.trim().replace(/\/+$/, '');
+    return 'https://api.z.ai/api/coding/paas/v4';
+  },
+
+  // 3.3.1-rc.3: retry budget for chatCompletion. Default 60s covers
+  // multi-minute upstream outages. Read as a plain value (not getter)
+  // so tests that patch env need to reload the module — but the default
+  // suffices for production.
+  llmRetryBudgetMs: (() => {
+    const raw = process.env.TOTALRECLAW_LLM_RETRY_BUDGET_MS;
+    const parsed = raw ? parseInt(raw, 10) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 60_000;
+  })(),
+
+  // 3.3.1-rc.3: GitHub personal-access token used by the RC-gated
+  // `totalreclaw_report_qa_bug` tool. `TOTALRECLAW_QA_GITHUB_TOKEN` is
+  // the dedicated variable; `GITHUB_TOKEN` is a fallback for CI-style
+  // setups where the same token is shared across tools. Read via getter
+  // so operators can set the var after the process starts (e.g. via a
+  // dotenv reload) and the next tool call picks it up.
+  get qaGithubToken(): string {
+    return process.env.TOTALRECLAW_QA_GITHUB_TOKEN || process.env.GITHUB_TOKEN || '';
+  },
+
   // Paths
   home,
   billingCachePath: path.join(home, '.totalreclaw', 'billing-cache.json'),

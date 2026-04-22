@@ -4,6 +4,40 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.3] — 2026-04-22
+
+Patch RC bundling two stability fixes, one new RC-gated tool, two SKILL.md addendums, and a configurable LLM retry budget. All prior rc.1 + rc.2 fixes are preserved.
+
+### Changed
+
+- **`llm-client.ts` — configurable `ZAI_BASE_URL` + auto-fallback on "Insufficient balance" 429.** rc.2 QA surfaced that GLM Coding Plan keys hitting the STANDARD zai endpoint (and PAYG keys hitting CODING) return HTTP 429 with body `"Insufficient balance or no resource package. Please recharge."` — misleading because the key itself is valid. rc.3: (a) accepts `ZAI_BASE_URL` env override via `config.ts` / `getZaiBaseUrl()`; (b) auto-detects the error signature and flips CODING ↔ STANDARD once per call (logged at INFO). SKILL.md now documents "GLM Coding Plan → leave unset; PAYG → set `ZAI_BASE_URL=https://api.z.ai/api/paas/v4`."
+- **`llm-client.ts` — retry budget 7s → ~62s (configurable).** rc.1/rc.2 QA: 5–9 of 10 extraction windows returned 0 facts against multi-minute upstream 429 storms. The 3-attempt 1s/2s/4s backoff couldn't outlast a 9-minute outage. rc.3: 5 attempts, 2s/4s/8s/16s/32s backoff, total ~62s. Configurable via `TOTALRECLAW_LLM_RETRY_BUDGET_MS` env (default 60_000). First retry logs at INFO, rest at DEBUG (debounced — no spam during long outages). On exhaustion throws `LLMUpstreamOutageError` (structured, `attempts` + `lastStatus`) so extraction callers can recognise vs bail silently. Non-retryable errors (401/403/404/parse) still propagate as plain `Error`.
+- **`subgraph-store.ts` — per-account submission mutex.** rc.2 logged 16 AA25 `invalid account nonce` events from concurrent `submitFactBatchOnChain` / `submitFactOnChain` calls racing at the `eth_call getNonce(sender, 0)` step. rc.3 wraps both submission entry points in a per-`sender` `Map<scopeAddress, Promise>` chain so only one UserOp is in flight per Smart Account at a time. The existing AA25-retry-with-fresh-nonce path is unchanged and still catches relay-side zombie UserOps.
+
+### Added
+
+- **`totalreclaw_report_qa_bug`** (RC-gated tool) — lets agents file structured QA-bug issues to `p-diogo/totalreclaw-internal` without the maintainer opening a fresh issue per RC finding. Only registered when the plugin version matches the `-rc.` token (via `readPluginVersion` in `fs-helpers.ts` + `isRcBuild` in the new `qa-bug-report.ts`). Handler POSTs to `https://api.github.com/repos/.../issues` with `Authorization: Bearer <token>` where `token = CONFIG.qaGithubToken` (reads `TOTALRECLAW_QA_GITHUB_TOKEN` or `GITHUB_TOKEN`). Secrets (BIP-39 phrases, `sk-*`, `AIzaSy*`, Telegram bot tokens, bearer tokens, 64+ char hex blobs, 0x-private-keys, `token=`/`secret=` qualifiers) are redacted fail-close in `redactSecrets()` before POST. Stable builds never expose this tool. See SKILL.md "Filing QA bugs (RC builds only)" for trigger rules — always ask user before filing, never the same bug twice.
+- **`skill/plugin/qa-bug-report.ts`** — new pure-logic + HTTP module. Exports `isRcBuild`, `redactSecrets`, `validateQaBugArgs`, `buildIssueBody`, `postQaBugIssue`. Unit-tested in `qa-bug-report.test.ts`.
+- **`skill/plugin/nonce-serialization.test.ts`** — exercises the per-`sender` mutex primitive: same-sender serializes, different-sender runs in parallel, case-insensitive keying, first-call failure releases the lock for the next.
+- **`fs-helpers.ts` — `readPluginVersion(packageJsonDir)`** — scanner-safe helper used by the RC gate. Resolves via `path.dirname(fileURLToPath(import.meta.url))` in `index.ts` and returns the `version` field from `package.json` next to the module.
+
+### SKILL.md
+
+- **First-person recall rule.** rc.2 debug found agents skipped `totalreclaw_recall` in 5/5 attempts on "Where do I live?". SKILL.md now hard-rules it: any first-person factual query ("where do I live/work", "what do I prefer", "my [noun]", etc.) MUST call recall first. If recall returns 0, say "I don't have anything about that yet" rather than invent.
+- **QA bug triggers.** New "Filing QA bugs (RC builds only)" section with the four triggers (repeated tool failure, user friction signals, setup errors, docs-vs-reality mismatch). Offer to file, never auto-file, never same bug twice.
+- **zai endpoint + retry budget** documented in a new "zai provider configuration" section.
+
+### Tests
+
+- `llm-client-retry.test.ts` extended from 29 → 59 assertions. Covers: balance-error detection, CODING↔STANDARD fallback URL helper, `ZAI_BASE_URL` env override, full fallback happy/sad paths, `LLMUpstreamOutageError` surfacing, budget short-circuit.
+- `qa-bug-report.test.ts` — 57 assertions covering isRcBuild, redactSecrets (BIP-39 / sk- / AIza / Telegram / Bearer / hex / private-key / preservation of UUIDs+SHAs+addresses), validateQaBugArgs, buildIssueBody, postQaBugIssue success + all failure paths.
+- `nonce-serialization.test.ts` — 9 assertions.
+- All existing tests (`llm-client.test.ts`, `manifest-shape.test.ts`, etc.) unchanged and green.
+
+### Scanner
+
+- `check-scanner.mjs` still passes (0 flags). The `TOTALRECLAW_QA_GITHUB_TOKEN` + `ZAI_BASE_URL` + `TOTALRECLAW_LLM_RETRY_BUDGET_MS` env reads live in `config.ts` (the env-harvesting-free house). `llm-client.ts`, `index.ts`, and `qa-bug-report.ts` all stay off `process.env`.
+
 ## [3.3.1-rc.2] — 2026-04-22
 
 Follow-up RC for the 3.3.1-rc.1 QA NO-GO

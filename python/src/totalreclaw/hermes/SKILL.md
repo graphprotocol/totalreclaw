@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "End-to-end encrypted memory for AI agents — portable, yours forever. XChaCha20-Poly1305 E2EE: server never sees plaintext. Python / Hermes edition."
-version: 2.3.1rc2
+version: 2.3.1rc3
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -82,6 +82,20 @@ Use the user's natural phrasing as the `query`. Default `k=8` works well; bump t
 
 **Start-of-session check (optional but recommended):** after RULE 1 passes, call `recall(query="")` with an empty-ish prompt or a broad term like `"user profile"` to surface the top memories before the user types their first real message. This lets you open with "hey Pedro, welcome back from Porto" rather than a cold hello.
 
+### RULE 3a — First-person queries ALWAYS trigger recall
+
+Any user message that references THEIR OWN facts triggers a recall call BEFORE you answer. Triggers (non-exhaustive — err on the side of calling recall):
+
+- "where do I live / work" / "what's my address / city"
+- "what do I prefer / like / hate / use"
+- "do I have / own / know"
+- "when did I / have I ever"
+- "who is my / my [relation/role]"
+- "what was my / my [object/preference]"
+- any question pattern containing "my / I / me" + a fact-shaped noun (address, job, favourite, project, partner, pet, etc.)
+
+Call `totalreclaw_recall(query=<semantic version of the question>)` FIRST, THEN answer based on returned facts. Do NOT answer from memory or invent. If recall returns 0 results, say "I don't have anything about that yet." rc.2 QA debug found 5/5 failures to call recall on "where do I live?" — the phrasing was enough to make agents skip the tool. This rule is hard: first-person factual queries are a recall trigger, full stop.
+
 ---
 
 ## RULE 4 — Mutation tools
@@ -153,6 +167,19 @@ When user notices duplicates or says "clean up my memory": call `totalreclaw_con
 - Tool returns `quota exceeded`: call `totalreclaw_status` to confirm, then offer `totalreclaw_upgrade`.
 - Tool returns a generic error: surface the message, don't retry blindly — the backoff is inside the tool, not you.
 
+### zai provider configuration (2.3.1rc3+)
+
+zai exposes two endpoints:
+- **Coding plan (subscription)**: `https://api.z.ai/api/coding/paas/v4` — default.
+- **PAYG**: `https://api.z.ai/api/paas/v4` — for pay-as-you-go balances.
+
+A coding-plan key hitting the PAYG endpoint (or vice-versa) returns `Insufficient balance or no resource package. Please recharge.` rc.3 auto-detects this and flips to the other endpoint on one retry per call, but users can avoid the first-call tax by setting `ZAI_BASE_URL` in their `~/.hermes/.env` or environment:
+
+- GLM Coding Plan users: leave `ZAI_BASE_URL` unset, or set to `https://api.z.ai/api/coding/paas/v4`.
+- PAYG users: set `ZAI_BASE_URL=https://api.z.ai/api/paas/v4`.
+
+Retry budget: the extraction LLM retries up to 5 attempts with 2s→4s→8s→16s→32s backoff (total ~62s). Configurable via `TOTALRECLAW_LLM_RETRY_BUDGET_MS` (default 60000ms).
+
 ---
 
 ## Memory Taxonomy v1 reference
@@ -169,3 +196,23 @@ The on-chain v1 contract (as of plugin 3.0.0 / Hermes 2.3.0 / core 2.2.0):
 | `importance` | no | 1-10 (int) or 0-1 (float) |
 
 Retrieval v2 Tier 1 ranks user-sourced facts above assistant-sourced facts on tied BM25 + cosine scores. Use `source="user"` for verbatim user statements and `source="user-inferred"` when you're stating something the user implied but didn't say outright.
+
+---
+
+## RULE 10 — Filing QA bugs (RC builds only)
+
+If the `totalreclaw_report_qa_bug` tool is registered (this means you're running an RC build — stable users never see the tool), OFFER to file a bug when ANY of these triggers fire. Never auto-file; always ask the user once per issue.
+
+Triggers:
+1. A tool call fails 2+ times in a row with the same error signature.
+2. User expresses friction: "this doesn't work" / "error" / "stuck" / "broken" / "not what I expected" / "wrong version" / explicit "file a bug".
+3. Setup flow hits an error that you can't resolve via the docs.
+4. Docs don't match reality (user guide says X; actual behavior is Y).
+
+Offer: "This looks worth reporting so the maintainer can fix it. Want me to file a QA bug? I'll capture the symptom + repro."
+
+On user yes → call `totalreclaw_report_qa_bug` with the redacted details. Required fields: `integration` (plugin/hermes/nanoclaw/mcp/relay/clawhub/docs/other), `rc_version` (exact version string, e.g. `2.3.1rc3`), `severity` (blocker/high/medium/low), `title` (<60 chars), `symptom`, `expected`, `repro`, `logs`, `environment`.
+
+On user no / ambiguous → proceed without filing.
+
+Do NOT offer the same bug twice in a session. Do NOT include secrets (recovery phrases, API keys, Telegram bot tokens, bearer tokens) in any field — the tool redacts automatically, but don't pass raw values anyway. The tool requires `TOTALRECLAW_QA_GITHUB_TOKEN` (or `GITHUB_TOKEN`) to be set on the host; if the tool returns a missing-token error, tell the user the operator needs to export one with `repo` scope.

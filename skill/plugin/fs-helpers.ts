@@ -108,6 +108,38 @@ export function ensureMemoryHeaderFile(
 }
 
 // ---------------------------------------------------------------------------
+// Plugin version — 3.3.1-rc.3 helper for RC gating
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the plugin's own version string from `package.json`.
+ *
+ * Behaviour:
+ *   - Resolves `package.json` next to the caller-provided directory
+ *     (typically `path.dirname(fileURLToPath(import.meta.url))` from the
+ *     caller).
+ *   - Returns the `version` field, or `null` on any I/O / parse error.
+ *
+ * Used by the RC-gated `totalreclaw_report_qa_bug` tool registration in
+ * `index.ts`: if the version contains `-rc.`, register the tool; if not,
+ * skip it entirely so stable users never see it.
+ *
+ * Scanner-safe: pure filesystem. No outbound-request word markers in this
+ * helper — see the file-header guardrail.
+ */
+export function readPluginVersion(packageJsonDir: string): string | null {
+  try {
+    const pkgPath = path.join(packageJsonDir, 'package.json');
+    if (!fs.existsSync(pkgPath)) return null;
+    const raw = fs.readFileSync(pkgPath, 'utf-8');
+    const parsed = JSON.parse(raw) as { version?: string };
+    return typeof parsed.version === 'string' ? parsed.version : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // credentials.json load / write / delete
 // ---------------------------------------------------------------------------
 

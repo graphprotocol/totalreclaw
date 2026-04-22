@@ -150,8 +150,10 @@ import {
   deleteFileIfExists,
   resolveOnboardingState,
   writeOnboardingState,
+  readPluginVersion,
   type OnboardingState,
 } from './fs-helpers.js';
+import { isRcBuild } from './qa-bug-report.js';
 import { decideToolGate, isGatedToolName } from './tool-gating.js';
 import { detectFirstRun, buildWelcomePrepend, type GatewayMode } from './first-run.js';
 import { buildPairRoutes } from './pair-http.js';
@@ -2795,6 +2797,31 @@ const plugin = {
 
   register(api: OpenClawPluginApi) {
     // ---------------------------------------------------------------
+    // RC-build detection (3.3.1-rc.3)
+    // ---------------------------------------------------------------
+    //
+    // `isRcBuild` reads the plugin's own version string. When true, the
+    // `totalreclaw_report_qa_bug` tool is registered at the end of this
+    // function — stable builds never see it. The version is resolved via
+    // `readPluginVersion` from fs-helpers.ts (scanner-safe, pure-fs).
+    let rcMode = false;
+    try {
+      // `import.meta.url` is ESM-only; fallback to `__dirname` for the CJS
+      // build path. `require` comes from Node core and is available in both
+      // module formats. `fileURLToPath` / `path.dirname` are pure-sync.
+      const url = require('node:url') as typeof import('node:url');
+      const nodePath = require('node:path') as typeof import('node:path');
+      const pluginDir = nodePath.dirname(url.fileURLToPath(import.meta.url));
+      const version = readPluginVersion(pluginDir);
+      rcMode = isRcBuild(version);
+      if (rcMode) {
+        api.logger.info(`TotalReclaw: RC build detected (version=${version}). RC-gated tools will be registered.`);
+      }
+    } catch {
+      rcMode = false;
+    }
+
+    // ---------------------------------------------------------------
     // LLM client initialization (auto-detect provider from OpenClaw config)
     // ---------------------------------------------------------------
     //
@@ -5279,6 +5306,135 @@ const plugin = {
       },
       { name: 'totalreclaw_pair' },
     );
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_report_qa_bug (3.3.1-rc.3 — RC-gated)
+    //
+    // Lets the agent file a structured QA-bug issue to
+    // `p-diogo/totalreclaw-internal` during RC testing. Only registered
+    // when the plugin version contains `-rc.` — stable users never see it.
+    //
+    // Secrets (recovery phrases, API keys, Telegram bot tokens) are
+    // redacted inside `postQaBugIssue` before the POST. The agent should
+    // still avoid passing raw secrets — see SKILL.md addendum.
+    // ---------------------------------------------------------------
+    if (rcMode) {
+      api.registerTool(
+        {
+          name: 'totalreclaw_report_qa_bug',
+          label: 'File a QA bug issue (RC builds only)',
+          description:
+            'File a structured QA bug report to the internal tracker. RC-only; never available in stable builds. ' +
+            'Do NOT call auto-file — ask the user first before invoking. The tool redacts recovery phrases, API keys, ' +
+            'and Telegram bot tokens from all free-text fields before posting, but the agent SHOULD still avoid ' +
+            'passing raw secrets.',
+          parameters: {
+            type: 'object',
+            properties: {
+              integration: {
+                type: 'string',
+                enum: ['plugin', 'hermes', 'nanoclaw', 'mcp', 'relay', 'clawhub', 'docs', 'other'],
+                description: 'Which TotalReclaw surface is affected.',
+              },
+              rc_version: {
+                type: 'string',
+                description: 'Exact RC version string (e.g. "3.3.1-rc.3" or "2.3.1rc3").',
+              },
+              severity: {
+                type: 'string',
+                enum: ['blocker', 'high', 'medium', 'low'],
+                description: 'blocker=release blocked, high=major UX failure, medium=annoying, low=polish.',
+              },
+              title: {
+                type: 'string',
+                description: 'Short summary, <60 chars. Prefix "[qa-bug]" is added automatically.',
+                maxLength: 60,
+              },
+              symptom: {
+                type: 'string',
+                description: 'What happened (redacted automatically).',
+              },
+              expected: {
+                type: 'string',
+                description: 'What should have happened.',
+              },
+              repro: {
+                type: 'string',
+                description: 'Reproduction steps (redacted automatically).',
+              },
+              logs: {
+                type: 'string',
+                description: 'Log excerpts / error messages (redacted automatically).',
+              },
+              environment: {
+                type: 'string',
+                description: 'Host, Docker/native, OpenClaw version, LLM provider, etc.',
+              },
+            },
+            required: [
+              'integration',
+              'rc_version',
+              'severity',
+              'title',
+              'symptom',
+              'expected',
+              'repro',
+              'logs',
+              'environment',
+            ],
+            additionalProperties: false,
+          },
+          async execute(_toolCallId: string, params: Record<string, unknown>) {
+            try {
+              const { postQaBugIssue } = await import('./qa-bug-report.js');
+              // The token is resolved via CONFIG (config.ts) so index.ts
+              // stays clean of env-harvesting triggers.
+              const token = CONFIG.qaGithubToken;
+              if (!token) {
+                return {
+                  content: [{
+                    type: 'text',
+                    text:
+                      'Cannot file QA bug: no GitHub token found. The operator must export ' +
+                      'TOTALRECLAW_QA_GITHUB_TOKEN (or GITHUB_TOKEN) with `repo` scope to enable ' +
+                      'agent-filed bug reports during RC testing.',
+                  }],
+                  details: { error: 'missing_github_token' },
+                };
+              }
+              const result = await postQaBugIssue(
+                params as unknown as import('./qa-bug-report.js').QaBugArgs,
+                {
+                  githubToken: token,
+                  logger: api.logger,
+                },
+              );
+              return {
+                content: [{
+                  type: 'text',
+                  text: `Filed QA bug #${result.issue_number}: ${result.issue_url}`,
+                }],
+                details: { issue_url: result.issue_url, issue_number: result.issue_number },
+              };
+            } catch (err: unknown) {
+              const message = err instanceof Error ? err.message : String(err);
+              api.logger.error(`totalreclaw_report_qa_bug failed: ${message}`);
+              return {
+                content: [{
+                  type: 'text',
+                  text: `Failed to file QA bug: ${message}`,
+                }],
+                details: { error: message },
+              };
+            }
+          },
+        },
+        { name: 'totalreclaw_report_qa_bug' },
+      );
+      api.logger.info(
+        'totalreclaw_report_qa_bug registered (RC build — this tool is hidden in stable releases).',
+      );
+    }
 
     // ---------------------------------------------------------------
     // Hook: before_tool_call (3.2.0 memory-tool gate)

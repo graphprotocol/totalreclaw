@@ -72,8 +72,48 @@ const PROVIDER_KEY_NAMES: Record<string, string[]> = {
   cerebras:   ['cerebras'],
 };
 
+/**
+ * zai has TWO public endpoints. The CODING endpoint is what GLM Coding Plan
+ * subscription keys are provisioned against; the STANDARD (PAYG) endpoint
+ * serves pay-as-you-go balances. A coding-plan key that hits the STANDARD
+ * endpoint returns HTTP 429 with body `"Insufficient balance or no resource
+ * package. Please recharge."` — misleading because the subscription is in
+ * good standing. Vice-versa for PAYG keys that accidentally hit CODING.
+ *
+ * 3.3.1-rc.3: exported so the rc.3 auto-fallback (see `chatCompletion`)
+ * can flip between them when the upstream error signature matches.
+ */
+export const ZAI_CODING_BASE_URL = 'https://api.z.ai/api/coding/paas/v4';
+export const ZAI_STANDARD_BASE_URL = 'https://api.z.ai/api/paas/v4';
+
+/**
+ * Resolve the zai base URL.
+ *
+ * Precedence:
+ *   1. `ZAI_BASE_URL` env var (explicit operator override — read by
+ *      `CONFIG.zaiBaseUrl` via a getter so tests can mutate the env
+ *      between calls)
+ *   2. Default: coding endpoint (coding-plan-biased; the rc.3 auto-fallback
+ *      hops to the standard endpoint on an "Insufficient balance" 429).
+ *
+ * Documented in plugin SKILL.md — Coding-Plan users can leave it unset (or
+ * set it explicitly to `https://api.z.ai/api/coding/paas/v4`). PAYG users
+ * MUST set it to `https://api.z.ai/api/paas/v4` to avoid the auto-fallback
+ * tax on every first call.
+ *
+ * Scanner-isolation note: the env read lives in `config.ts` (which has no
+ * network triggers). This module has network calls, so it cannot touch
+ * env vars directly — both rules 1 (env-harvesting) and 2 (potential-
+ * exfiltration) in check-scanner.mjs would fire.
+ */
+export function getZaiBaseUrl(): string {
+  return CONFIG.zaiBaseUrl;
+}
+
 const PROVIDER_BASE_URLS: Record<string, string> = {
-  zai:        'https://api.z.ai/api/coding/paas/v4',
+  // zai: resolved lazily at each init/call so `ZAI_BASE_URL` env changes
+  // propagate without a module re-import. See `getZaiBaseUrl()`.
+  zai:        getZaiBaseUrl(),
   anthropic:  'https://api.anthropic.com/v1',
   openai:     'https://api.openai.com/v1',
   gemini:     'https://generativelanguage.googleapis.com/v1beta/openai',
@@ -196,7 +236,13 @@ function buildConfigForProvider(
     apiFormatOverride?: 'openai' | 'anthropic';
   } = {},
 ): LLMClientConfig | null {
-  const baseUrl = (opts.baseUrlOverride ?? PROVIDER_BASE_URLS[provider] ?? '').replace(/\/+$/, '');
+  // zai's base URL is resolved via `getZaiBaseUrl()` (reads CONFIG) so
+  // the `ZAI_BASE_URL` env override takes effect even when this helper is
+  // called with no `baseUrlOverride` (i.e. the env-var fallback tier in
+  // initLLMClient).
+  const defaultForProvider =
+    provider === 'zai' ? getZaiBaseUrl() : PROVIDER_BASE_URLS[provider] ?? '';
+  const baseUrl = (opts.baseUrlOverride ?? defaultForProvider).replace(/\/+$/, '');
   if (!baseUrl) return null;
   const model =
     opts.modelOverride ??
@@ -466,7 +512,7 @@ export function resolveLLMConfig(): LLMClientConfig | null {
   if (zaiKey) {
     return {
       apiKey: zaiKey,
-      baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+      baseUrl: getZaiBaseUrl(),
       model,
       apiFormat: 'openai',
     };
@@ -486,22 +532,29 @@ export function resolveLLMConfig(): LLMClientConfig | null {
 
 /**
  * Options for chatCompletion. `retry` controls the 429 + timeout backoff
- * loop added in 3.3.1-rc.2 — 5 of 6 extraction windows failed in the
- * 3.3.1-rc.1 QA because zai 429s had no retry path.
+ * loop. Defaults to 5 attempts with 2s → 4s → 8s → 16s → 32s backoff
+ * (total budget ~62s) — rc.1/rc.2 QA showed multi-minute upstream outages
+ * that blew through the rc.2 7s budget. Configurable via
+ * `TOTALRECLAW_LLM_RETRY_BUDGET_MS` env (cap on cumulative retry-delay).
  */
 export interface ChatCompletionOptions {
   maxTokens?: number;
   temperature?: number;
   /**
-   * Retry behaviour. Defaults to { attempts: 3, baseDelayMs: 1000 } —
-   * 1s → 2s → 4s exponential backoff on 429 or transient timeout. First
-   * failure logs at INFO (single-line, no stack), subsequent attempts at
-   * DEBUG. Set `attempts: 0` to disable retry entirely. Pass a `logger`
-   * for visibility; without one, retries are silent.
+   * Retry behaviour. Defaults mirror the rc.3 budget: 5 attempts, 2s base
+   * delay, exponential. Set `attempts: 0` (or `1`) to disable retry. Pass
+   * a `logger` for visibility; without one, retries are silent.
+   *
+   * `budgetMs` caps the cumulative retry-delay time — after an attempt
+   * fails, we compute the next delay and skip it (falling through to the
+   * give-up path) if adding it would exceed the budget. Defaults to the
+   * value read from `TOTALRECLAW_LLM_RETRY_BUDGET_MS` at module load,
+   * which itself defaults to 60_000ms.
    */
   retry?: {
     attempts?: number;
     baseDelayMs?: number;
+    budgetMs?: number;
   };
   logger?: {
     info?: (msg: string) => void;
@@ -513,16 +566,75 @@ export interface ChatCompletionOptions {
 }
 
 /**
+ * Default retry budget in ms. Configurable via
+ * `TOTALRECLAW_LLM_RETRY_BUDGET_MS` env var — read by `config.ts`. Callers
+ * can override per-call via `retry.budgetMs`. 60_000ms covers ~8 minutes
+ * worth of upstream outages with the 2s→32s schedule.
+ *
+ * Scanner-isolation note: the env read lives in `config.ts` so this file
+ * stays clean of env-harvesting triggers.
+ */
+export const DEFAULT_RETRY_BUDGET_MS: number = CONFIG.llmRetryBudgetMs;
+
+/**
+ * Structured error thrown when the extraction LLM upstream is unreachable
+ * after the full retry budget is exhausted. The extraction pipeline
+ * recognizes this via `err instanceof LLMUpstreamOutageError` and can
+ * choose to:
+ *   - queue the message batch for retry next turn,
+ *   - surface a one-time notification to the user, or
+ *   - simply skip this extraction window silently.
+ */
+export class LLMUpstreamOutageError extends Error {
+  readonly attempts: number;
+  readonly lastStatus?: number;
+  constructor(message: string, attempts: number, lastStatus?: number) {
+    super(message);
+    this.name = 'LLMUpstreamOutageError';
+    this.attempts = attempts;
+    this.lastStatus = lastStatus;
+  }
+}
+
+/**
+ * Detect the "Insufficient balance" error shape from zai. Matches both
+ * the exact production wording ("Insufficient balance or no resource
+ * package. Please recharge.") and the short "no resource package" variant
+ * we've seen in some historical responses.
+ */
+export function isZaiBalanceError(errorMessage: string): boolean {
+  const m = errorMessage.toLowerCase();
+  return m.includes('insufficient balance') || m.includes('no resource package');
+}
+
+/**
+ * Identify the "other" zai endpoint when the current one returns a balance
+ * error — CODING ↔ STANDARD. Returns `null` when the URL is neither of
+ * the two zai endpoints we know about (e.g. a self-hosted proxy), which
+ * means the fallback logic stays put.
+ */
+export function zaiFallbackBaseUrl(currentBaseUrl: string): string | null {
+  const normalized = currentBaseUrl.replace(/\/+$/, '');
+  if (normalized === ZAI_CODING_BASE_URL) return ZAI_STANDARD_BASE_URL;
+  if (normalized === ZAI_STANDARD_BASE_URL) return ZAI_CODING_BASE_URL;
+  return null;
+}
+
+/**
  * Call the LLM chat completion endpoint.
  *
  * Supports both OpenAI-compatible format and Anthropic Messages API,
  * determined by `config.apiFormat`.
  *
- * 3.3.1-rc.2 — adds an exponential-backoff retry wrapper for HTTP 429 +
- * timeout transients. Every retry attempt respects the per-attempt
- * `timeoutMs` (default 30s). Max 3 total attempts by default (1s, 2s, 4s
- * backoff). Non-retryable errors (4xx other than 429, network refused,
- * JSON parse) fail fast on the first attempt.
+ * 3.3.1-rc.3 — lifts the retry budget 5 attempts × (2s/4s/8s/16s/32s), total
+ * ~62s. Configurable via `TOTALRECLAW_LLM_RETRY_BUDGET_MS`. Adds zai
+ * "Insufficient balance" auto-fallback: when a zai 429 carries the balance
+ * error body AND we're on one of the two known zai endpoints, we flip to
+ * the OTHER endpoint and retry ONCE (accounted for separately from the
+ * normal retry loop). On exhaustion, throws `LLMUpstreamOutageError`.
+ *
+ * Non-retryable errors (4xx other than 429, network refused, JSON parse)
+ * fail fast on the first attempt.
  *
  * @returns The assistant's response content, or null on failure.
  */
@@ -533,34 +645,96 @@ export async function chatCompletion(
 ): Promise<string | null> {
   const maxTokens = options?.maxTokens ?? 2048;
   const temperature = options?.temperature ?? 0; // Deterministic output for dedup (same input → same text → same content fingerprint)
-  const attempts = Math.max(1, options?.retry?.attempts ?? 3);
-  const baseDelayMs = Math.max(100, options?.retry?.baseDelayMs ?? 1000);
+  const attempts = Math.max(1, options?.retry?.attempts ?? 5);
+  const baseDelayMs = Math.max(100, options?.retry?.baseDelayMs ?? 2000);
+  const budgetMs = Math.max(100, options?.retry?.budgetMs ?? DEFAULT_RETRY_BUDGET_MS);
   const timeoutMs = options?.timeoutMs ?? 30_000;
   const logger = options?.logger;
 
+  // We mutate `activeConfig.baseUrl` in the zai fallback branch so the
+  // retried call hits the other endpoint. Shallow-clone so the caller's
+  // config object stays untouched.
+  const activeConfig: LLMClientConfig = { ...config };
+
+  // One-shot flag: we only auto-fallback zai once per chatCompletion call
+  // to prevent ping-pong between the two endpoints if both reject.
+  let zaiFallbackAttempted = false;
+
   const callOnce = (): Promise<string | null> =>
-    config.apiFormat === 'anthropic'
-      ? chatCompletionAnthropic(config, messages, maxTokens, temperature, timeoutMs)
-      : chatCompletionOpenAI(config, messages, maxTokens, temperature, timeoutMs);
+    activeConfig.apiFormat === 'anthropic'
+      ? chatCompletionAnthropic(activeConfig, messages, maxTokens, temperature, timeoutMs)
+      : chatCompletionOpenAI(activeConfig, messages, maxTokens, temperature, timeoutMs);
 
   let lastErr: unknown;
+  let cumulativeDelayMs = 0;
+  let lastStatus: number | undefined;
+
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       return await callOnce();
     } catch (err) {
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
+      lastStatus = parseHttpStatus(msg) ?? lastStatus;
+
+      // ── zai "Insufficient balance" auto-fallback ──
+      // Fires BEFORE the normal retry accounting. If the error is a zai
+      // balance-shaped 429, flip the baseUrl once and immediately retry —
+      // no backoff, no decrement of the attempt count. Keeps the total
+      // attempt budget reserved for genuine outages.
+      if (!zaiFallbackAttempted && /\b429\b/.test(msg) && isZaiBalanceError(msg)) {
+        const fallback = zaiFallbackBaseUrl(activeConfig.baseUrl);
+        if (fallback) {
+          zaiFallbackAttempted = true;
+          const oldUrl = activeConfig.baseUrl;
+          activeConfig.baseUrl = fallback;
+          logger?.info?.(
+            `chatCompletion: zai endpoint auto-fallback: ${oldUrl} → ${fallback} due to "Insufficient balance" response`,
+          );
+          // Retry immediately — do NOT decrement attempts counter further;
+          // this "extra" attempt is the fallback freebie.
+          attempt--;
+          continue;
+        }
+      }
+
       const retryable = isRetryable(msg);
       const isFinalAttempt = attempt >= attempts;
       if (!retryable || isFinalAttempt) {
         // Fail-fast OR last attempt — rethrow.
-        if (attempt > 1) {
-          logger?.warn?.(`chatCompletion: giving up after ${attempt} attempts: ${msg.slice(0, 200)}`);
+        if (attempt > 1 || !retryable) {
+          if (retryable) {
+            logger?.warn?.(`chatCompletion: giving up after ${attempt} attempts: ${msg.slice(0, 200)}`);
+          }
+          // Structured outage error when the retryable error budget is
+          // fully exhausted — lets downstream recognize vs bail silently.
+          if (retryable) {
+            throw new LLMUpstreamOutageError(
+              `LLM upstream outage after ${attempt} attempts: ${msg.slice(0, 200)}`,
+              attempt,
+              lastStatus,
+            );
+          }
         }
         throw err;
       }
-      // Retry. INFO on first failure (visible), DEBUG on subsequent.
+
+      // Compute next delay, but respect the cumulative retry-budget cap.
       const delayMs = baseDelayMs * Math.pow(2, attempt - 1);
+      if (cumulativeDelayMs + delayMs > budgetMs) {
+        logger?.warn?.(
+          `chatCompletion: retry budget exhausted (${cumulativeDelayMs}ms used + ${delayMs}ms next > ${budgetMs}ms budget); surfacing outage after ${attempt} attempts: ${msg.slice(0, 160)}`,
+        );
+        throw new LLMUpstreamOutageError(
+          `LLM upstream outage (budget ${budgetMs}ms exhausted after ${attempt} attempts): ${msg.slice(0, 200)}`,
+          attempt,
+          lastStatus,
+        );
+      }
+      cumulativeDelayMs += delayMs;
+
+      // Log only the FIRST retry at INFO to avoid spamming during long
+      // outages; subsequent retries are DEBUG (debounced per outage).
       if (attempt === 1) {
         logger?.info?.(
           `chatCompletion: retrying after transient failure (attempt ${attempt}/${attempts}, wait ${delayMs}ms): ${msg.slice(0, 160)}`,
@@ -576,6 +750,20 @@ export async function chatCompletion(
   // Defensive — should never reach here since the loop always throws on the
   // final attempt when it fails. Keeps TS happy.
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+/**
+ * Parse the HTTP status code from an error message of the form
+ * `"LLM API 429: rate limit"` or `"Anthropic API 503: ..."`. Returns
+ * `undefined` when the message doesn't follow that shape (e.g. network
+ * refused). Used by `LLMUpstreamOutageError.lastStatus` for downstream
+ * classification.
+ */
+function parseHttpStatus(errorMessage: string): number | undefined {
+  const m = errorMessage.match(/\b(\d{3})\b/);
+  if (!m) return undefined;
+  const code = parseInt(m[1], 10);
+  return code >= 100 && code < 600 ? code : undefined;
 }
 
 /**

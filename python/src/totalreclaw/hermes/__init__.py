@@ -118,10 +118,33 @@ def register(ctx):
         description=schemas.DEBRIEF["description"],
     )
 
+    # 3.3.1-rc.3 — RC-gated QA bug-report tool. Only registered when the
+    # installed package version is a pre-release RC (PEP-440 ``rcN`` or
+    # SemVer ``-rc.``). Stable builds never expose the tool to end users.
+    try:
+        from totalreclaw import __version__ as _pkg_version
+        from .qa_bug_report import is_rc_build, report_qa_bug, SCHEMA as QA_BUG_SCHEMA
+        if is_rc_build(_pkg_version):
+            ctx.register_tool(
+                name="totalreclaw_report_qa_bug",
+                toolset="totalreclaw",
+                schema=QA_BUG_SCHEMA,
+                handler=lambda args, **kw: report_qa_bug(args, state, **kw),
+                is_async=True,
+                description=QA_BUG_SCHEMA["description"],
+            )
+            logger.info(
+                "totalreclaw_report_qa_bug registered (RC build %s — "
+                "this tool is hidden in stable releases).",
+                _pkg_version,
+            )
+    except Exception:  # pragma: no cover — registration must not crash plugin load
+        logger.debug("QA bug-report tool registration skipped", exc_info=True)
+
     # Register hooks
     ctx.register_hook("on_session_start", lambda **kw: hooks.on_session_start(state, **kw))
     ctx.register_hook("pre_llm_call", lambda **kw: hooks.pre_llm_call(state, **kw))
     ctx.register_hook("post_llm_call", lambda **kw: hooks.post_llm_call(state, **kw))
     ctx.register_hook("on_session_end", lambda **kw: hooks.on_session_end(state, **kw))
 
-    logger.info("TotalReclaw plugin registered (10 tools, 4 hooks)")
+    logger.info("TotalReclaw plugin registered (10+ tools, 4 hooks)")

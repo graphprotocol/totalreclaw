@@ -299,6 +299,45 @@ def run_doctor(credentials_path: Optional[Path] = None, relay_url: Optional[str]
         print(_warn(f"Could not reach relay at {resolved_relay}: {err}"))
 
     # --------------------------------------------------------------------
+    # Check 8 — RC-gated QA bug-report tool (2.3.1rc3+)
+    # --------------------------------------------------------------------
+    #
+    # Reports whether the installed package version is a pre-release RC
+    # that exposes `totalreclaw_report_qa_bug`. Useful for anyone running
+    # QA scripts who wants to confirm the tool is / isn't available before
+    # asking the agent to file a bug.
+    try:
+        from totalreclaw import __version__ as _pkg_version
+        from totalreclaw.hermes.qa_bug_report import is_rc_build
+
+        if is_rc_build(_pkg_version):
+            token_set = bool(
+                os.environ.get("TOTALRECLAW_QA_GITHUB_TOKEN")
+                or os.environ.get("GITHUB_TOKEN")
+            )
+            if token_set:
+                print(_ok(
+                    f"RC build {_pkg_version} — `totalreclaw_report_qa_bug` "
+                    "tool is REGISTERED and GitHub token is set."
+                ))
+            else:
+                print(_warn(
+                    f"RC build {_pkg_version} — `totalreclaw_report_qa_bug` "
+                    "tool is registered but no GitHub token is set in env."
+                ))
+                print(
+                    "        Export TOTALRECLAW_QA_GITHUB_TOKEN (or GITHUB_TOKEN) "
+                    "with `repo` scope to enable agent-filed bug reports."
+                )
+        else:
+            print(_info(
+                f"Stable build {_pkg_version} — `totalreclaw_report_qa_bug` "
+                "tool is not registered (as expected)."
+            ))
+    except Exception as err:
+        print(_warn(f"Could not check RC bug-report tool status: {err}"))
+
+    # --------------------------------------------------------------------
     # Summary
     # --------------------------------------------------------------------
     print()

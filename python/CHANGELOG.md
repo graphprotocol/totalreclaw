@@ -6,6 +6,30 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1rc3] — 2026-04-22
+
+Hermes-side companion to the plugin `3.3.1-rc.3` wave. Paired fixes for the two zai endpoint paths, a bigger retry budget, AA25 nonce serialisation, a new RC-gated bug-report tool, and two SKILL.md addendums. All prior rc.1 + rc.2 fixes preserved.
+
+### Changed
+
+- **`agent/llm_client.py` — configurable `ZAI_BASE_URL` + auto-fallback on "Insufficient balance" 429.** GLM Coding Plan keys hitting STANDARD (and PAYG keys hitting CODING) return HTTP 429 with body `"Insufficient balance or no resource package. Please recharge."`. rc.3: (a) accepts `ZAI_BASE_URL` env override via `get_zai_base_url()`; (b) auto-detects the error body in `chat_completion` and flips CODING ↔ STANDARD once per call (logged at INFO). SKILL.md updated with setup guidance ("GLM Coding Plan → leave unset; PAYG → set `ZAI_BASE_URL=https://api.z.ai/api/paas/v4`").
+- **`agent/llm_client.py` — retry budget 3 attempts × 5/10/20s → 5 attempts × 2/4/8/16/32s.** rc.1/rc.2 QA: 5–9 of 10 extraction windows returned 0 facts against multi-minute upstream 429 storms. rc.3: total ~62s budget configurable via `TOTALRECLAW_LLM_RETRY_BUDGET_MS` env. On exhaustion raises new `LLMUpstreamOutageError` (with `attempts` + `last_status`) instead of returning `None` so callers can distinguish transient outages from parseable-empty responses. Non-retryable HTTP errors (401/403/404) re-raise as `httpx.HTTPStatusError` unchanged.
+- **`userop.py` — per-account `asyncio.Lock` on UserOp submission.** rc.2 logged 16 AA25 nonce-conflict events from concurrent `build_and_send_userop{,_batch}` calls racing at `get_nonce(sender, 0)`. rc.3 serialises per-`sender` with `_get_sender_lock(sender)` so only one UserOp submission is in flight per Smart Account at a time. Existing AA25 retry with fresh nonce remains unchanged. Symmetric to the plugin-side `withSenderLock`.
+
+### Added
+
+- **`totalreclaw_report_qa_bug`** (RC-gated tool) — lets the Hermes agent file structured QA-bug issues to `p-diogo/totalreclaw-internal` during RC testing. Registered only when `totalreclaw.__version__` is a pre-release RC (PEP-440 `rcN` or SemVer `-rc.`). Handler POSTs to GitHub REST API using `TOTALRECLAW_QA_GITHUB_TOKEN` (or `GITHUB_TOKEN`). All free-text fields run through `redact_secrets()` fail-close: BIP-39 phrases, `sk-*` / Anthropic keys, `AIzaSy*` Google keys, Telegram bot tokens, bearer-auth headers, 64+ char hex blobs, 0x-prefixed private keys, qualified `token=`/`secret=` values. Naked UUIDs (fact ids) and 40-char commit SHAs are preserved. Stable builds never expose the tool.
+- **`totalreclaw/hermes/qa_bug_report.py`** — pure-logic module. Exports `is_rc_build`, `redact_secrets`, `validate_args`, `build_issue_body`, `post_qa_bug_issue`, `report_qa_bug`, `SCHEMA`.
+- **`tests/test_llm_client_rc3.py`** — 23 tests for zai auto-fallback (CODING→STANDARD, STANDARD→CODING, both-fail surfaces outage, non-zai URLs skip fallback), `LLMUpstreamOutageError` surfacing on 503/timeout exhaustion, retry-budget short-circuit.
+- **`tests/test_qa_bug_report_rc3.py`** — 32 tests covering redaction corpus, validation, body builder, POST success + HTTP failure + invalid-args.
+- **`tests/test_nonce_serialization_rc3.py`** — 5 tests for per-sender `asyncio.Lock` behaviour.
+
+### SKILL.md
+
+- **RULE 3a — First-person queries ALWAYS trigger recall.** rc.2 debug found the agent skipped `totalreclaw_recall` in 5/5 attempts on "Where do I live?". New hard rule: any first-person factual query ("where do I…", "my [noun]", "do I…") calls recall first. If recall returns 0, say so — don't invent.
+- **RULE 10 — Filing QA bugs (RC builds only).** New section with the four triggers (repeated tool failure, user friction, setup errors, docs-vs-reality). Offer to file, never auto-file, never the same bug twice.
+- **zai provider configuration** — new section under RULE 9 documenting the two endpoints and when to set `ZAI_BASE_URL`.
+
 ## [2.3.1rc2] — 2026-04-22
 
 Follow-up RC for UX gaps flagged by Pedro's agent (Hermes) during

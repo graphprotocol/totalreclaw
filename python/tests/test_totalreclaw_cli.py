@@ -115,3 +115,16 @@ class TestDoctor:
         captured = capsys.readouterr()
         assert "0x1234567890abcdef1234567890abcdef12345678" in captured.out.lower() or \
                "0x1234567890abcdef1234567890abcdef12345678" in captured.out
+
+    def test_rc_bug_report_status_surfaced(self, tmp_path: Path, capsys) -> None:
+        """Doctor surfaces whether the RC bug-report tool is active."""
+        creds = tmp_path / "credentials.json"
+        creds.write_text(json.dumps({"mnemonic": VALID_MNEMONIC}))
+
+        rc = tr_cli.run_doctor(credentials_path=creds)
+        assert rc in (0, 1)
+        captured = capsys.readouterr()
+        # Output mentions "totalreclaw_report_qa_bug" regardless of RC vs
+        # stable — the message differentiates via the "REGISTERED" / "not
+        # registered" / "Stable build" wording.
+        assert "totalreclaw_report_qa_bug" in captured.out
