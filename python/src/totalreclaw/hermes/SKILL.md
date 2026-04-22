@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "End-to-end encrypted memory for AI agents — portable, yours forever. XChaCha20-Poly1305 E2EE: server never sees plaintext. Python / Hermes edition."
-version: 2.3.1rc4
+version: 2.3.1rc6
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz

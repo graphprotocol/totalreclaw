@@ -4,6 +4,18 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.6] — 2026-04-22
+
+Coordinated version bump with Hermes Python `2.3.1rc6`. Plugin code itself is unchanged from `3.3.1-rc.4` (the OpenClaw plugin's `register()` path already wired every tool advertised in `skill.yaml`). The rc.6 bundle ships the Hermes-side tool-registration fix and keeps plugin + Python versions aligned so the release-pipeline tracker can carry them through QA as one artifact set.
+
+### Why a plugin bump when only Python changed
+
+Our RC cadence publishes both registries from the same bundle. Out-of-sync version tags cause downstream confusion (the `qa-totalreclaw` skill and the release-pipeline tracker both key on a single RC-number per wave). Skipping the plugin bump would leave rc.6 documented on the Python side only; a later plugin bug would then have to skip to rc.7 to catch up. Much simpler to bump both in lockstep.
+
+### Skipped
+
+- **`3.3.1-rc.5`** — PR #76 (branch `fix/plugin-3.3.1-rc.5-qr-display`) remained unmerged when the rc.4 Hermes regression was escalated. rc.5's QR-display work rebases onto rc.6 as a follow-up.
+
 ## [3.3.1-rc.4] — 2026-04-22
 
 Phrase-safety hardening: `totalreclaw_onboard` agent tool removed. Paired with Hermes Python `2.3.1rc4` (which ports the QR-pair flow to Python so Hermes users gain a phrase-safe agent setup path too).

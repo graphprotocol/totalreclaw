@@ -515,9 +515,16 @@ class TestRegister:
         # 2.3.1rc4 — `totalreclaw_setup` REMOVED (phrase-safety), replaced
         # by `totalreclaw_pair`. Count stays the same (10 stable, 11 RC)
         # because it's a 1-for-1 swap.
+        # 2.3.1rc6 — `totalreclaw_pin` + `totalreclaw_unpin` wired into
+        # ``register()`` to match plugin.yaml. Count → 12 stable, 13 RC.
+        # Fix for the rc.4 user-reported regression: plugin.yaml advertised
+        # pin/unpin but register body never called register_tool() for
+        # them, so the agent's tool list was a strict subset of the
+        # manifest. See test_hermes_plugin_manifest_parity.py for the
+        # manifest↔register parity contract.
         from totalreclaw import __version__
         from totalreclaw.hermes.qa_bug_report import is_rc_build
-        expected_tools = 11 if is_rc_build(__version__) else 10
+        expected_tools = 13 if is_rc_build(__version__) else 12
         assert ctx.register_tool.call_count == expected_tools, (
             f"expected {expected_tools} tools for version {__version__!r}, "
             f"got {ctx.register_tool.call_count}"
@@ -533,6 +540,9 @@ class TestRegister:
         assert "totalreclaw_status" in tool_names
         # 2.3.1rc4 — the canonical setup surface is now pair, not setup.
         assert "totalreclaw_pair" in tool_names
+        # 2.3.1rc6 — pin/unpin now wired (closes manifest↔register drift).
+        assert "totalreclaw_pin" in tool_names
+        assert "totalreclaw_unpin" in tool_names
         assert "totalreclaw_import_from" in tool_names
         assert "totalreclaw_import_batch" in tool_names
         assert "totalreclaw_upgrade" in tool_names

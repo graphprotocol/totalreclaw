@@ -102,6 +102,38 @@ def register(ctx):
         is_async=True,
         description=pair_tool.PAIR_SCHEMA["description"],
     )
+    # 2.3.1rc6 — wire `totalreclaw_pin` + `totalreclaw_unpin` into the
+    # agent tool list. Both tools were shipped in Hermes 2.2.2 (tools.py
+    # handlers + schemas) and advertised in ``plugin.yaml::provides_tools``
+    # from that release onward, but the corresponding ``ctx.register_tool``
+    # calls were never added to this ``register()`` body. Downstream
+    # effect: the Hermes chat agent's toolset was a strict subset of the
+    # manifest, so the agent could not pin/unpin even when the user asked
+    # explicitly. Regression surfaced to a real user during rc.4 manual
+    # QA on 2026-04-22 (the user's agent couldn't see any TotalReclaw
+    # tools on a fresh ``pip install --pre totalreclaw==2.3.1rc4`` into a
+    # Docker-hosted Hermes gateway — root cause was this class of drift
+    # between the manifest and the register body). Auto-QA missed it
+    # because its rc.3/rc.4 enumerations compared ``register()`` output
+    # against itself, never against plugin.yaml.
+    # See ``python/tests/test_hermes_plugin_manifest_parity.py`` for the
+    # regression shield that pins the two lists to each other.
+    ctx.register_tool(
+        name="totalreclaw_pin",
+        toolset="totalreclaw",
+        schema=schemas.PIN,
+        handler=lambda args, **kw: tools.pin(args, state, **kw),
+        is_async=True,
+        description=schemas.PIN["description"],
+    )
+    ctx.register_tool(
+        name="totalreclaw_unpin",
+        toolset="totalreclaw",
+        schema=schemas.UNPIN,
+        handler=lambda args, **kw: tools.unpin(args, state, **kw),
+        is_async=True,
+        description=schemas.UNPIN["description"],
+    )
     ctx.register_tool(
         name="totalreclaw_import_from",
         toolset="totalreclaw",
@@ -165,4 +197,4 @@ def register(ctx):
     ctx.register_hook("post_llm_call", lambda **kw: hooks.post_llm_call(state, **kw))
     ctx.register_hook("on_session_end", lambda **kw: hooks.on_session_end(state, **kw))
 
-    logger.info("TotalReclaw plugin registered (10+ tools, 4 hooks)")
+    logger.info("TotalReclaw plugin registered (12+ tools, 4 hooks)")

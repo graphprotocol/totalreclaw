@@ -6,6 +6,30 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1rc6] — 2026-04-22
+
+Ship-stopper fix for the rc.4 regression that shipped to manual QA: Hermes chat agent could not see the `totalreclaw_*` tools in its toolset even though the plugin loaded cleanly (SKILL.md surfaced, module imported). Root cause was a long-latent drift between `plugin.yaml::provides_tools` and the `ctx.register_tool()` calls in `totalreclaw.hermes.register()` — the manifest advertised `totalreclaw_pin` / `totalreclaw_unpin` as agent-facing but `register()` never wired them. The drift had been in the codebase since pin/unpin landed in 2.2.2; rc.4's phrase-safety hardening surfaced it because the user's first contact with the plugin was a fresh install hunting for `totalreclaw_pair` (which IS wired), which made the narrower missing-pin/unpin symptom mis-attributable to pair.
+
+### Fixed (ship-stopper)
+
+- **`python/src/totalreclaw/hermes/__init__.py` — wire `totalreclaw_pin` and `totalreclaw_unpin` into the agent tool list.** Both tool handlers (`tools.pin`, `tools.unpin`) and schemas (`schemas.PIN`, `schemas.UNPIN`) have existed since 2.2.2, and `plugin.yaml` has advertised them since that release — but `register()` never called `ctx.register_tool()` for either. Downstream effect: Hermes chat agents could not pin or unpin memories (the manifest said the tools existed, the register body disagreed, the register body won). Fix is 2 new `register_tool` calls mirroring the existing pattern.
+
+### Added
+
+- **`python/tests/test_hermes_plugin_manifest_parity.py`** — regression shield. Parses `plugin.yaml::provides_tools` and asserts every advertised tool has a matching `ctx.register_tool(name=...)` call during `register()`. Fails on rc.4 / rc.5 (pin + unpin missing from register body); passes on rc.6. Three related assertions: manifest is parseable, pair tool is both advertised + registered, phrase-unsafe tool names are not registered.
+
+### Changed
+
+- **`python/tests/test_hermes_plugin.py`** — updated `TestRegister.test_register` expected tool count (10 stable / 11 RC → 12 stable / 13 RC) and added explicit `totalreclaw_pin` / `totalreclaw_unpin` name assertions.
+
+### Why auto-QA missed this
+
+The rc.4 auto-QA "assertion 5" claimed pin/unpin worked — but that verification happened via a natural-language chat request on the **OpenClaw** plugin (which shares the same `credentials.json` as Hermes, making on-chain writes indistinguishable between clients). Auto-QA never asked the Hermes chat agent to pin/unpin, and its Hermes tool enumeration compared `register()`'s output against a hard-coded list that also omitted pin/unpin — so both sides drifted together away from `plugin.yaml`. The new parity test closes the gap at the choke-point: the manifest is the single source of truth for what the plugin advertises; `register()` must match it.
+
+## [2.3.1rc5] — 2026-04-22 — SKIPPED
+
+rc.5's QR-display work (PR #76, branch `fix/plugin-3.3.1-rc.5-qr-display`) remained unmerged when the rc.4 regression was escalated. rc.6 lands on top of rc.4 main with the narrow tool-registration fix; rc.5's QR display rebases onto rc.6 as a follow-up (see PR #76 coordination comment).
+
 ## [2.3.1rc4] — 2026-04-22
 
 Phrase-safety hardening + console-script collision fix. Paired with plugin `3.3.1-rc.4`. This release introduces architectural enforcement of the "recovery phrase MUST NEVER cross the LLM context" rule by porting the OpenClaw plugin's QR-pair flow to Hermes Python and removing every phrase-generating agent tool.
