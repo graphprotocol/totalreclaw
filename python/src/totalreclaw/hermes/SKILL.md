@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "End-to-end encrypted memory for AI agents — portable, yours forever. XChaCha20-Poly1305 E2EE: server never sees plaintext. Python / Hermes edition."
-version: 2.3.1rc4
+version: 2.3.1rc5
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -38,13 +38,23 @@ Exactly one of these is true when your session starts:
 
 ### RULE 1a — Setting up a user's TotalReclaw recovery phrase
 
-**Agent path (default, only secure path): call the `totalreclaw_pair` tool.** It returns a URL + 6-digit PIN + `expires_at`. Tell the user:
+**Agent path (default, only secure path): call the `totalreclaw_pair` tool.** It returns `{url, pin, expires_at, qr_png_b64, qr_unicode, mode, instructions}` (the last two rc.5 fields are new — see the QR-rendering section below). Tell the user:
 
 > "Open <URL> in your browser, enter your phrase (or let the browser generate a new one), and confirm PIN <PIN>. Your phrase is encrypted in the browser and uploaded end-to-end-encrypted to this gateway — it never crosses this chat."
 
 The browser does x25519 + ChaCha20-Poly1305 encryption against the gateway's ephemeral key. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json`. The LLM never sees the phrase at any point in the flow.
 
 **After the user confirms "pairing complete" in their browser:** tell them to restart the Hermes gateway so the plugin picks up the new credentials. Plugin routes and hooks only bind on fresh gateway start.
+
+### Rendering the QR on your transport (rc.5+)
+
+When the `totalreclaw_pair` payload arrives, tell the user: "Open the URL below or scan this QR code from your phone. PIN: <pin>." Then render the QR based on your chat transport:
+
+- **Transport supports image attachments** (Telegram, Slack, web chat, any transport with file/image upload): decode `qr_png_b64` from base64 to bytes, save to a tempfile with a `.png` suffix, and attach the tempfile as an image in your reply. Also show the URL + PIN as text so users who prefer clicking can still do so. (Example for Telegram: the reply tool accepts `files=["<path>.png"]`.)
+- **Terminal-only transport** (bare SSH shell, non-graphical CLI): emit the `qr_unicode` string inline in your reply. It renders as half-block glyphs in most monospace terminal fonts; the user scans from their phone.
+- **Web chat with inline-image support**: embed as `<img src="data:image/png;base64,<qr_png_b64>" alt="Pair QR">` if the chat client renders HTML; otherwise fall back to attachment.
+
+The QR encodes ONLY the pair URL. The 6-digit PIN is a separate out-of-band confirmation — it is deliberately NOT baked into the QR (dual-channel design: scan + type). Never log, print, or re-emit the PIN outside of the user-facing reply. The PIN is a shared secret between you and the user; it must NOT end up in any other tool call, any log file, or any memory store.
 
 **NEVER** invoke `totalreclaw setup`, `hermes setup`, `openclaw totalreclaw onboard`, or any phrase-generating CLI via your shell tool. Those commands are for users running them in their own terminal — not for you. Agent shell stdout is captured into LLM context; running them leaks the phrase.
 

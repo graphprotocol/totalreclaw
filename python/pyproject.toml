@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "totalreclaw"
-version = "2.3.1rc4"
+version = "2.3.1rc5"
 description = "End-to-end encrypted memory for AI agents — Python client (Memory Taxonomy v1)"
 readme = "README.md"
 license = "MIT"
@@ -36,11 +36,26 @@ dependencies = [
     # upstream patches. Hybrid ML-KEM is deferred to rc.5 per the phrase-
     # safety rule's "document + ship pure x25519 for rc.4" carve-out.
     "cryptography>=42.0",
+    # 2.3.1rc5 — QR rendering for the pair tool. ``qrcode`` is tiny and
+    # pure-Python; the ``[pil]`` extra pulls in Pillow for PNG output.
+    # Both Telegram-image and terminal-Unicode rendering fall out of this
+    # one dep. See ``totalreclaw.pair.qr`` for the encoder wrappers.
+    "qrcode[pil]>=7.4,<9",
 ]
 
 [project.optional-dependencies]
 # hermes-agent is not on PyPI — install manually: pip install git+https://github.com/NousResearch/hermes-agent.git
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-xdist>=3.5", "mnemonic>=0.21"]
+# pyzbar is used in the QR round-trip unit test (decode the PNG we emit
+# and assert the decoded URL matches the input). System requires libzbar
+# at runtime; contributor docs in CHANGELOG.md explain the
+# `brew install zbar` / `apt install libzbar0` prerequisite.
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-xdist>=3.5",
+    "mnemonic>=0.21",
+    "pyzbar>=0.1.9",
+]
 
 [project.entry-points."hermes_agent.plugins"]
 totalreclaw = "totalreclaw.hermes"

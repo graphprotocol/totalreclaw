@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "End-to-end encrypted memory for AI agents — portable, yours forever. XChaCha20-Poly1305 E2EE: server never sees plaintext."
-version: 3.3.1-rc.4
+version: 3.3.1-rc.5
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -45,7 +45,7 @@ Browser-side crypto handles the phrase; this chat never sees it. After the user 
 
 **NEVER** ask the user to paste their phrase into chat. If they do, immediately tell them to rotate by generating a new wallet via `totalreclaw_pair` with `mode=generate`; the pasted phrase is compromised.
 
-**If the user explicitly prefers local-terminal setup** (no browser, no QR URL to open), point them at `totalreclaw_onboarding_start` — which returns a pointer to the CLI wizard they run THEMSELVES. You do not run it.
+**If the user explicitly prefers local-terminal setup** (no browser, no QR URL to open), tell them to run `openclaw totalreclaw onboard` in their own terminal. Do NOT run that CLI via your shell tool — the shell stdout is captured into LLM context and a phrase-printing CLI would leak it. The prior rc.4 pointer tool (`totalreclaw_onboarding_start`) was removed in rc.5; its only job was to repeat those instructions, and keeping a registered tool whose schema hinted at "phrase handling" was a future-regression hazard.
 
 ## Core rules
 
@@ -99,8 +99,19 @@ Tools work only when credentials are active AND the gateway has been restarted p
 | `totalreclaw_migrate` | optional `confirm` (dry-run by default) |
 | `totalreclaw_import_from` / `totalreclaw_import_batch` | `source`, `file_path` or `content`, `dry_run` |
 | `totalreclaw_consolidate` | optional `dry_run` |
-| `totalreclaw_onboarding_start` | (none) — returns CLI pointer for users who prefer local-terminal setup |
-| `totalreclaw_pair` | optional `mode` (`generate` / `import`) — returns `{url, pin, qr_ascii, expires_at_ms}`. CANONICAL setup surface |
+| `totalreclaw_pair` | optional `mode` (`generate` / `import`) — returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}`. CANONICAL setup surface |
+
+## Rendering the QR on your transport (rc.5+)
+
+When you call `totalreclaw_pair` and receive the payload, tell the user: "Open the URL below or scan this QR code from your phone. PIN: <pin>."
+
+Then render the QR based on your chat transport:
+
+- **Transport supports image attachments** (Telegram, Slack, web chat, any transport with file/image upload): decode `qr_png_b64` from base64 to bytes, save to a tempfile with a `.png` suffix, and attach the tempfile as an image in your reply. Also show the URL + PIN as text so users who prefer clicking can still do so.
+- **Terminal-only transport** (OpenClaw native CLI chat, bare SSH shell): emit the `qr_unicode` string inline in your reply. It renders as block characters that display correctly in most terminal fonts; the user scans from their phone.
+- **Web chat with inline-image support**: embed as `<img src="data:image/png;base64,<qr_png_b64>" alt="Pair QR">` if the chat client renders HTML; otherwise fall back to attachment.
+
+The QR encodes ONLY the pair URL. The 6-digit PIN is a separate out-of-band confirmation — it is deliberately NOT baked into the QR (dual-channel design: scan + type). Never log, print, or re-emit the PIN outside of the user-facing reply. The PIN is a shared secret between you and the user; it must NOT end up in any other tool call, any log file, or any memory store.
 
 ## Taxonomy
 
@@ -142,8 +153,8 @@ User: "What do you remember about me?"
 
 User: "Set me up for TotalReclaw."
 -> check ~/.totalreclaw/credentials.json. If missing:
-   local:  totalreclaw_onboarding_start (or totalreclaw_onboard)
-   remote: totalreclaw_pair -> present URL + PIN + QR
+   canonical: totalreclaw_pair -> present URL + PIN + QR (render per transport; see section below)
+   fallback (user explicitly wants terminal-only): tell them to run `openclaw totalreclaw onboard` in their OWN terminal.
 -> follow the tool's instructions. Never invent a phrase.
 ```
 

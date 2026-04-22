@@ -13,6 +13,7 @@ internal/memory/project_phrase_safety_rule.md`` for the governing rule.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -192,11 +193,31 @@ async def pair(args: dict, state: "PluginState", **kwargs) -> str:
             session.expires_at_ms / 1000.0, tz=timezone.utc
         ).isoformat()
 
+        # 2.3.1rc5 — render the URL as both a PNG (for image-capable
+        # transports like Telegram) and a Unicode block QR (for terminal
+        # transports). The PIN is NEVER encoded into the QR; it stays a
+        # separate out-of-band confirmation the agent prints as text.
+        # Phrase-safety rule: the QR carries the same pair URL the agent
+        # already prints; nothing new is exposed. Best-effort — if
+        # encoding fails (e.g. Pillow missing) the core payload still
+        # ships so the URL-copy flow keeps working.
+        qr_png_b64 = ""
+        qr_unicode = ""
+        try:
+            from ..pair import encode_png, encode_unicode
+
+            qr_png_b64 = base64.b64encode(encode_png(url)).decode("ascii")
+            qr_unicode = encode_unicode(url)
+        except Exception as qr_err:  # pragma: no cover — soft-fail
+            logger.warning("QR encode failed (non-fatal): %s", qr_err)
+
         logger.info(
-            "totalreclaw_pair: session %s… mode=%s port=%d",
+            "totalreclaw_pair: session %s… mode=%s port=%d qr_png=%d qr_unicode=%d",
             session.sid[:8],
             mode,
             singleton.server.port,
+            len(qr_png_b64),
+            len(qr_unicode),
         )
 
         return json.dumps(
@@ -205,6 +226,8 @@ async def pair(args: dict, state: "PluginState", **kwargs) -> str:
                 "pin": session.secondary_code,
                 "expires_at": expires_iso,
                 "mode": mode,
+                "qr_png_b64": qr_png_b64,
+                "qr_unicode": qr_unicode,
                 "instructions": (
                     f"Relay these to the user verbatim:\n"
                     f"1. Open {url} in your browser.\n"

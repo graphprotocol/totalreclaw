@@ -53,6 +53,7 @@ from .session_store import (
 )
 from .http_server import PairHttpServer, build_pair_http_server
 from .pair_page import render_pair_page
+from .qr import QREncodeError, encode_png, encode_unicode
 
 __all__ = [
     "AEAD_KEY_BYTES",
@@ -66,6 +67,7 @@ __all__ = [
     "PairSession",
     "PairSessionStatus",
     "PairHttpServer",
+    "QREncodeError",
     "build_pair_http_server",
     "compute_shared_secret",
     "consume_pair_session",
@@ -74,6 +76,8 @@ __all__ = [
     "default_pair_sessions_path",
     "derive_aead_key_from_ecdh",
     "derive_session_keys",
+    "encode_png",
+    "encode_unicode",
     "generate_gateway_keypair",
     "get_pair_session",
     "register_failed_secondary_code",

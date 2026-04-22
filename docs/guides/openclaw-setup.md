@@ -63,6 +63,27 @@ Ask the OpenClaw agent in chat: "Set up TotalReclaw for me." The agent will call
 
 Session TTL is 15 minutes by default (5-60 min configurable). The QR URL is single-use. Supported browsers: Safari 17.2+, Chromium 118+.
 
+#### Pair via terminal QR (rc.5+)
+
+In OpenClaw's native CLI chat (or any terminal-only transport), rc.5 renders the same pair URL as a Unicode block QR inline in the agent's reply — scan it from your phone's camera:
+
+```
+[openclaw agent]: I've started a TotalReclaw pairing session.
+
+  ███████  ██▄ █  ▀ ▀▀▄ ██ ███████
+  █ ▀▀▀ █  █▀█ ▄▀▀▄▄ ▄▀ █  █ ▀▀▀ █
+  █ ███ █    █▀▀▄ ▀▀▀▀█▄▄  █ ███ █
+  █▄▄▄▄▄█  █ ▀▄▀ ▀▄▀▄▀ ▀▄  █▄▄▄▄▄█
+  [...remainder of the QR block grid...]
+
+  Or open this URL on any browser:
+  https://your-gateway/plugin/totalreclaw/pair/finish?sid=...#pk=...
+
+  Enter PIN 492731 when prompted.
+```
+
+You can still copy the URL manually if you prefer (e.g. pairing from a different device than where your chat is open). The QR encodes only the URL; the PIN stays out-of-band.
+
 ### Setup (user-terminal ONLY — do NOT run this through an agent)
 
 If you prefer to set up entirely in your own terminal:
@@ -83,15 +104,16 @@ Check state any time: `openclaw totalreclaw status`.
 
 ### In-chat prompts
 
-Ask the agent "set up TotalReclaw for me" and it should call `totalreclaw_pair` directly. For users who explicitly prefer local-terminal setup, the agent falls back to `totalreclaw_onboarding_start` — a pointer-only tool that tells YOU to run the CLI wizard yourself. The agent never runs the wizard for you.
+Ask the agent "set up TotalReclaw for me" and it should call `totalreclaw_pair` directly. If you explicitly prefer local-terminal setup (no browser), the agent should tell you to open your OWN terminal and run `openclaw totalreclaw onboard` — it must NOT run that wizard via its shell tool.
 
-### rc.4 phrase-safety changes (3.3.1-rc.4+)
+### rc.4 + rc.5 phrase-safety changes
 
 Per `project_phrase_safety_rule.md`:
 
-- `totalreclaw_onboard` agent tool — **REMOVED**. Even with `emitPhrase: false`, nothing architecturally prevented leakage. Use `totalreclaw_pair`.
+- `totalreclaw_onboard` agent tool — **REMOVED** (rc.4). Even with `emitPhrase: false`, nothing architecturally prevented leakage. Use `totalreclaw_pair`.
+- `totalreclaw_setup` + `totalreclaw_onboarding_start` agent tools — **REMOVED** (rc.5). Both were neutered pointer stubs in rc.4; rc.5 auto-QA flagged them as future-regression surface and their mere presence signalled to agents that "phrase handling happens here". Deleted outright.
 - `totalreclaw setup` / `openclaw totalreclaw onboard` CLI commands — **KEPT but user-terminal only**. They MUST NOT be invoked via any agent shell tool.
-- `totalreclaw_pair` agent tool — **CANONICAL**. Browser-side x25519 + ChaCha20-Poly1305 + HKDF-SHA256 keeps the phrase out of the LLM round-trip by construction. Now ported to Hermes Python as well (v2.3.1rc4+).
+- `totalreclaw_pair` agent tool — **CANONICAL**. Browser-side x25519 + ChaCha20-Poly1305 + HKDF-SHA256 keeps the phrase out of the LLM round-trip by construction. Now ported to Hermes Python as well (v2.3.1rc4+). rc.5 adds a QR image (`qr_png_b64`) + terminal Unicode QR (`qr_unicode`) to the tool payload so the agent can render a scannable code inline in chat.
 
 ### Retrieving your phrase later
 
@@ -129,10 +151,9 @@ Ask the agent naturally; the plugin picks the right tool.
 | **Export** | "Export all my TotalReclaw memories as plain text" |
 | **Status** | "What's my TotalReclaw status?" |
 | **Import from** | "Import my Gemini history from ~/Downloads/..." |
-| **Onboard** | "Set up TotalReclaw for me" -- points you at the CLI wizard |
-| **Pair** (remote) | "Help me set up TotalReclaw on my VPS" -- returns QR + PIN + URL (v3.3.1+) |
+| **Pair** (canonical) | "Set up TotalReclaw for me" / "Help me set up TotalReclaw on my VPS" — returns URL + PIN + QR (PNG + Unicode); v3.3.1-rc.5+ |
 
-> The legacy `totalreclaw_setup` tool is **deprecated** (v3.2.0+) -- it rejects phrase arguments and redirects to the CLI to prevent the phrase leaking to the LLM provider.
+> The legacy `totalreclaw_setup` + `totalreclaw_onboarding_start` tools were **removed in v3.3.1-rc.5** (both were pointer-only stubs with no runtime effect). The only agent-facilitated setup surface is `totalreclaw_pair`.
 
 ---
 

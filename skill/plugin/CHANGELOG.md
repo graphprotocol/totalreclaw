@@ -4,6 +4,37 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.5] — 2026-04-22
+
+QR display layer added to the pair tool payload + rc.4 phrase-safety carve-out closed. Paired with Hermes Python `2.3.1rc5`. Pure additive display-layer change on top of rc.4; the pair crypto, HTTP server, and gateway-side phrase handling are untouched.
+
+### Added
+
+- **`skill/plugin/pair-qr.ts`** — new module. Two helpers wrapping the `qrcode` npm package:
+  - `encodePng(url, { ecc, boxSize, border }) -> Promise<Buffer>`: emits a PNG (~4 KiB buffer / ~5.5 KiB base64 for a typical ~110-char pair URL).
+  - `encodeUnicode(url, { ecc, border }) -> Promise<string>`: emits a terminal-ready half-block Unicode string (~1 KiB, ~23 lines).
+  - `QREncodeError` wraps all library errors + guards against oversized (>2 KiB) / empty / non-string payloads.
+- **`totalreclaw_pair` tool payload extended.** `details` now includes `qr_png_b64` (base64 PNG of the pair URL) + `qr_unicode` (terminal-ready block string) alongside the existing `url`, `pin`, `expires_at_ms`, and `qr_ascii`. The QR encodes ONLY the pair URL — the PIN stays a separate out-of-band confirmation (deliberate dual-channel design). Encoding is best-effort; on failure the tool still ships the core fields so the URL-copy flow keeps working.
+- **`qrcode` + `@types/qrcode` runtime deps.** Pure-TypeScript encoder, no native bindings. Lazy-imported so the plugin's hot `register()` path stays cheap.
+
+### Removed (phrase-safety enforcement — closes rc.4 auto-QA carve-out)
+
+- **`totalreclaw_setup` + `totalreclaw_onboarding_start` agent tools — REMOVED.** rc.4 left both as neutered pointer stubs (they rejected any phrase argument + returned a CLI-pointer text). The rc.4 auto-QA (2026-04-22) flagged them as future-regression surface: any future patch that re-enabled phrase acceptance would silently re-open the leak, and their mere presence kept signalling to agents that "phrase handling happens here". rc.5 deletes both outright. The underlying CLI wizard (`openclaw totalreclaw onboard`) is unchanged — users run it in their own terminal, outside any agent shell. Agents routed through either tool should use `totalreclaw_pair` instead.
+
+### Changed
+
+- **`SKILL.md` — added a "Rendering the QR on your transport" section.** Telemetry-transport-specific guidance: Telegram / Slack / image-capable transports get the PNG as an attachment; terminal / SSH transports get the Unicode block string inline; HTML transports can embed as `<img data:image/png;base64,...>`. Tool-surface table updated: `totalreclaw_onboarding_start` removed, `totalreclaw_pair` return-value fields extended.
+- **`docs/guides/openclaw-setup.md`** — added a "Pair via terminal QR" subsection with a Unicode block-QR mockup. `rc.4 + rc.5 phrase-safety changes` section updated to list the rc.5 tool removals.
+
+### Tests
+
+- **`pair-qr.test.ts`** — 14 tests. PNG magic-header validation, scale-parameter respect, Unicode block-glyph presence + line-count guard, oversized/empty/non-string guardrails, `QREncodeError` type check.
+- **`phrase-safety-registry.test.ts`** — extended. Now asserts neither `totalreclaw_setup` nor `totalreclaw_onboarding_start` appears in the `registerTool` call list, alongside the existing `totalreclaw_onboard` absence check.
+
+### Phrase-safety note
+
+The QR-image payload encodes ONLY the pair URL. The pair URL itself carries only the session token + gateway ephemeral pubkey (fragment-encoded, so it never hits server logs). No phrase material crosses the QR at any point. rc.5 is a pure additive display-layer change — the pair crypto, HTTP server, and gateway-side phrase handling are untouched from rc.4.
+
 ## [3.3.1-rc.4] — 2026-04-22
 
 Phrase-safety hardening: `totalreclaw_onboard` agent tool removed. Paired with Hermes Python `2.3.1rc4` (which ports the QR-pair flow to Python so Hermes users gain a phrase-safe agent setup path too).

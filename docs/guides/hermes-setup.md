@@ -27,11 +27,30 @@ Find the latest RC via `pip index versions totalreclaw --pre` or on [PyPI](https
 
 > **2.3.1rc4 changed the console-script list.** rc.3 and earlier shipped a `hermes` entry point that collided with the upstream `hermes-agent` CLI. rc.4 removes it — now `pip install totalreclaw` only creates the `totalreclaw` binary. If you upgraded from rc.3 and your `hermes` binary was overwritten, reinstall hermes-agent to restore it (`pip install --force-reinstall hermes-agent`).
 
+> **2.3.1rc5 upgrade note** (rc.2 → rc.5): after `pip install --pre totalreclaw==2.3.1rc5`, also run `pip install --force-reinstall hermes-agent` to restore the `hermes` binary entry point that rc.2's colliding console-script left stale. Fresh installs unaffected.
+
 ## 2. Set up your vault (default: QR pair flow)
 
 In any Hermes chat session, ask the agent to set up TotalReclaw. The agent will call the `totalreclaw_pair` tool and relay a URL + 6-digit PIN:
 
 > "Open http://127.0.0.1:58391/pair/\<token\> in your browser, enter your phrase (or let the browser generate a new one), and confirm PIN 492731."
+
+### Pair via QR code (rc.5+)
+
+If your Hermes agent runs on an image-capable transport (Telegram, Slack, any web-chat that accepts file uploads), rc.5 returns a QR image alongside the URL. The agent attaches it inline so you can scan from your phone's camera instead of copying a long URL:
+
+```
+[Hermes]: I've started a TotalReclaw pairing session for you.
+
+  [QR image, ~300x300 px]
+
+  Scan the QR from your phone, or open this URL on any browser:
+  http://127.0.0.1:58391/pair/<token>
+
+  Enter PIN 492731 in the browser when prompted.
+```
+
+You can still copy the URL manually if you prefer (e.g. pairing from a different device than where your chat is open — common when the Telegram client is on your phone and your browser is on your desktop).
 
 **What happens under the hood:**
 
@@ -41,7 +60,7 @@ In any Hermes chat session, ask the agent to set up TotalReclaw. The agent will 
 4. The browser encrypts the phrase locally and POSTs ciphertext + nonce + its pubkey to the gateway.
 5. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
 
-**The recovery phrase never crosses the LLM context.** Not the chat transcript, not the agent's shell stdout, not the tool-call payload. Browser-side crypto keeps it isolated from the LLM round-trip by construction.
+**The recovery phrase never crosses the LLM context.** Not the chat transcript, not the agent's shell stdout, not the tool-call payload. The QR image carries only the same URL the agent prints as text; the 6-digit PIN stays out-of-band (you type it into the browser yourself).
 
 After the browser says "Pairing complete", restart Hermes so the plugin picks up the new credentials:
 

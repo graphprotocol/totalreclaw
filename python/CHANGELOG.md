@@ -6,6 +6,34 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1rc5] — 2026-04-22
+
+QR display layer added to the existing phrase-safe pair flow. Paired with plugin `3.3.1-rc.5`. Pure additive display-layer change on top of rc.4's crypto — the pair HTTP server, the x25519 + ChaCha20-Poly1305 handshake, and the gateway-side credentials write are all untouched.
+
+### Added
+
+- **`totalreclaw.pair.qr`** — new module. Two helpers wrapping the `qrcode` library:
+  - `encode_png(url, *, ecc='M', box_size=10, border=4) -> bytes`: emits a PNG (~3-4 KiB for a ~110-char pair URL).
+  - `encode_unicode(url, *, ecc='M', border=2) -> str`: emits a terminal-ready half-block Unicode string (~1 KiB, ~23 lines).
+  - `QREncodeError` wraps all library errors + guards against oversized (>2 KiB) / empty / non-string payloads.
+- **`totalreclaw_pair` tool payload extended.** Now returns `{url, pin, expires_at, mode, instructions, qr_png_b64, qr_unicode}` — the last two are base64 PNG + UTF-8 block string rendering the pair URL. The QR encodes ONLY the pair URL (the PIN stays a separate out-of-band confirmation — deliberate dual-channel design). Encoding is best-effort; on failure the tool still ships the core fields so the URL-copy flow keeps working.
+- **`qrcode[pil]>=7.4,<9`** runtime dep. Pure-Python core + Pillow for PNG output. Pillow is only loaded when `encode_png` is actually called, keeping `totalreclaw.pair` module-load cheap.
+- **`pyzbar>=0.1.9`** dev dep for the round-trip test (encode URL → PNG → decode → assert equality). Skipped when `libzbar` isn't installed (portability on minimal CI hosts).
+
+### Changed
+
+- **`hermes/SKILL.md` — added a "Rendering the QR on your transport" section.** Telemetry-transport-specific guidance: Telegram / Slack / image-capable transports get the PNG as an attachment; terminal / SSH transports get the Unicode block string inline; HTML transports can embed as `<img data:image/png;base64,...>`.
+- **`docs/guides/hermes-setup.md`** — added a "Pair via QR code" subsection with an ASCII mockup of the Telegram chat flow.
+
+### Tests
+
+- **`tests/test_pair_qr.py`** — 11 tests. PNG magic-header validation, PIL-free error path, unicode block-char regression guard with stable golden snapshot, oversized/empty/non-string guardrails. pyzbar round-trip decode (soft-skipped on hosts without `libzbar`).
+- **`tests/test_pair_tool_payload.py`** — 2 tests. End-to-end `totalreclaw_pair` tool call + payload shape assertions (`qr_png_b64` decodes to valid PNG, `qr_unicode` contains block chars, PIN never encoded into the URL), plus a defence-in-depth check that the payload never contains a phrase-adjacent field name or a 12-word-shaped value.
+
+### Phrase-safety note
+
+The QR-image payload encodes ONLY the pair URL. The pair URL itself carries only the session token + gateway ephemeral pubkey (fragment-encoded, so it never hits server logs). No phrase material crosses the QR at any point. rc.5 is a pure additive display-layer change — the pair crypto, HTTP server, and gateway-side phrase handling are untouched from rc.4.
+
 ## [2.3.1rc4] — 2026-04-22
 
 Phrase-safety hardening + console-script collision fix. Paired with plugin `3.3.1-rc.4`. This release introduces architectural enforcement of the "recovery phrase MUST NEVER cross the LLM context" rule by porting the OpenClaw plugin's QR-pair flow to Hermes Python and removing every phrase-generating agent tool.
