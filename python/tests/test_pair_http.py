@@ -326,7 +326,8 @@ class TestGetPairPage:
         try:
             status, body, headers = _http_get(server, f"/pair/{session.sid}")
             assert status == 200
-            assert b"TotalReclaw pairing" in body
+            # rc.13 UX refresh: page title is "Set up TotalReclaw" now.
+            assert b"Set up TotalReclaw" in body
             assert "text/html" in headers.get("content-type", "")
             assert "no-store" in headers.get("cache-control", "")
             assert "default-src 'none'" in headers.get("content-security-policy", "")

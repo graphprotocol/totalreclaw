@@ -365,39 +365,37 @@ def test_pair_tool_schema_advertises_either():
 
 @pytest.mark.asyncio
 async def test_relay_mode_passes_ui_mode_to_open_session(tmp_path, monkeypatch):
-    """Verify relay path forwards UI mode to ``open_remote_pair_session``.
+    """Verify relay path forwards UI mode to the thread-based pair
+    supervisor.
 
-    This test uses a spy wrapper on ``open_remote_pair_session`` to make
-    sure the ``mode`` kwarg threads through ``pair_tool.pair`` -> ``_pair_relay``
-    -> ``open_remote_pair_session``. No live network.
+    rc.13 replaced the ``_spawn_relay_completion_task`` asyncio-task
+    helper with ``_run_relay_pair_on_thread``, which runs the entire
+    relay session on a dedicated worker thread (fixes the
+    tool-invocation loop-teardown bug where ack frames were never
+    sent). This test stubs out the thread-helper entirely and asserts
+    the ``mode`` kwarg threads through ``pair_tool.pair`` →
+    ``_pair_relay`` → ``_run_relay_pair_on_thread``. No network.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("TOTALRECLAW_PAIR_MODE", raising=False)  # default (relay)
 
     from totalreclaw.hermes import pair_tool as _pair_tool_mod
-    from totalreclaw.pair import remote_client as _rc
 
     captured: dict = {}
 
-    class _FakeSession:
-        url = "https://example.invalid/pair/p/x#pk=y"
-        pin = "123456"
-        expires_at = "2026-04-23T12:00:00Z"
-        token = "x"
-        keypair = MagicMock(pk_b64="y")
-        _ws = MagicMock()
-
-    async def _fake_open_remote_pair_session(**kwargs):
-        captured.update(kwargs)
-        return _FakeSession()
+    def _fake_run_relay_pair_on_thread(state, mode, **kwargs):
+        captured["mode"] = mode
+        captured["state"] = state
+        return _pair_tool_mod._OpenedSession(
+            url="https://example.invalid/pair/p/x#pk=y",
+            pin="123456",
+            expires_at="2026-04-23T12:00:00Z",
+        )
 
     monkeypatch.setattr(
-        _rc, "open_remote_pair_session", _fake_open_remote_pair_session
-    )
-
-    # Skip the background task — we're only testing pair_tool wiring.
-    monkeypatch.setattr(
-        _pair_tool_mod, "_spawn_relay_completion_task", lambda s, st: None
+        _pair_tool_mod,
+        "_run_relay_pair_on_thread",
+        _fake_run_relay_pair_on_thread,
     )
 
     state = MagicMock()

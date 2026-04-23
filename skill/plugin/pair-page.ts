@@ -5,6 +5,17 @@
  * the URL fragment (`#pk=...`), runs the client-side pairing flow
  * ENTIRELY in the browser, and POSTs the encrypted payload back.
  *
+ * rc.13 status: this OpenClaw-plugin local-mode page has NOT been
+ * ported to the wizard UX used by the relay (production) and the
+ * Python local-mode pages. Local-mode on the OpenClaw plugin is rarely
+ * exercised — the plugin defaults to a relay flow via the Hermes
+ * Python sidecar and only falls back here for air-gapped setups. The
+ * wizard UX port for this file is tracked for rc.14 alongside the
+ * design decision on whether to share a single CSS+JS asset across
+ * all three pair pages (relay / Python / plugin) or keep them
+ * independently inlined. For now, this file retains its rc.10–rc.12
+ * UX shape and the rc.12 AES-GCM cipher swap.
+ *
  * Brand tokens imported from the v5b.html public site (colors, font
  * stack). Typography falls back to system fonts for mobile parity —
  * we don't ship Euclid Circular A bytes over the pairing HTTP surface.

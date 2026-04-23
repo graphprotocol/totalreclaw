@@ -6,6 +6,107 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1rc13] — 2026-04-24
+
+**Ship-stopper fix for rc.12.** Calling `totalreclaw_pair` from the
+Hermes chat agent returned `{url, pin}` successfully, but the follow-up
+browser submit hit a 502 every time. Gateway container logs surfaced
+the root cause:
+
+```
+ERROR asyncio: Task was destroyed but it is pending!
+task: <Task pending name='Task-56' coro=<_spawn_relay_completion_task
+       .<locals>._runner() running at
+       totalreclaw/hermes/pair_tool.py:209>>
+Exception ignored in: <coroutine object
+       WebSocketCommonProtocol.close_connection>
+RuntimeError: no running event loop
+```
+
+The rc.10–rc.12 implementation opened the relay WebSocket on Hermes's
+tool-invocation event loop, then used `loop.create_task(...)` to keep
+awaiting on it after the tool returned. Hermes tears that loop down
+as soon as the tool returns, so the background task was destroyed
+mid-`ws.recv()`. The relay received no ack, timed out after 15s, and
+the browser got a 502.
+
+### Fix
+
+The full relay pair session (WebSocket open + opened + forward +
+decrypt + credentials write + ack + close) now runs on a dedicated OS
+thread that owns its own `asyncio.new_event_loop()`. The WebSocket is
+created **inside** the thread loop, so it is never bound to a loop
+that closes. The tool body blocks only on the fast
+`session/open` handshake — the browser-flow wait that follows (user
+types PIN + paste phrase, ~30s median) runs fully inside the worker
+thread with no dependency on the Hermes tool-call loop.
+
+Design note: threading was chosen over "block the tool for up to the
+5-minute TTL" (Option 1, unusable UX — user's chat would stall) and
+over "register a persistent-task hook on plugin startup" (Option 3,
+requires hermes-agent core changes, out of rc.13 scope).
+
+### Observability
+
+Four new structured log events trace the background thread's
+lifecycle for debuggability in `docker compose logs`:
+
+- `pair.relay_completion_started` — waiter thread spawned.
+- `pair.relay_opened` — relay answered `session/open`.
+- `pair.relay_decrypt_ok` / `pair.relay_decrypt_failed` — decrypt +
+  `state.configure(phrase)` outcome.
+- `pair.relay_ack_sent` / `pair.relay_ack_failed` — ack frame written
+  to the WS.
+- `pair.relay_completion_done` — thread exit, carries terminal outcome.
+
+### Pair page UX
+
+The pair HTML page served at `/pair/<token>` is replaced with the
+rc.13 wizard UX: a typeform-style 3-step flow (PIN → phrase → done)
+with 2/3/4-column responsive phrase grids, step dots, countdown, and
+the preview-mode split (`/pair-preview/` stays a mockup). Local-mode
+(`TOTALRECLAW_PAIR_MODE=local`) also adopts the wizard UX so a user
+who hops between relay and local sees identical UX.
+
+Four user-ratified design decisions baked in:
+
+1. 6-cell PIN input (not a single text field) — better affordance +
+   iOS `autocomplete="one-time-code"` on cell 1.
+2. Returning-user tab label is "Log in" (not "Import existing").
+3. Step-1 subheading is agent-generic: "Enter the 6-digit code from
+   your chat to continue." — no "your agent" / "Claude" reference.
+4. Paste into PIN auto-advances + auto-submits Continue when all 6
+   digits are present.
+
+Each is controlled by a single constant at the top of the wizard
+script so a later UX review can flip them without hunting.
+
+### Changed
+- `totalreclaw.hermes.pair_tool`: `_spawn_relay_completion_task`
+  (asyncio-task) replaced by `_run_relay_pair_on_thread`
+  (thread + dedicated event loop). Tool body now uses
+  `asyncio.to_thread(...)` to await the session-open handshake while
+  keeping the completion phase off the caller loop.
+- `totalreclaw.pair.remote_client`: ack emit logs structured
+  `pair.relay_ack_sent` / `_failed` events alongside the existing
+  session-completed log for grep-ability.
+- `totalreclaw.pair.pair_page`: full rewrite on the wizard UX with
+  parity to the relay-served page. Same crypto path (x25519 + HKDF
+  + AES-GCM + `HKDF_INFO = "totalreclaw-pair-v2"`).
+
+### Tests
+
+- New `tests/test_pair_tool_asyncio_lifecycle.py` — regression shield
+  for the rc.10–rc.12 lifecycle bug. Drives `_run_relay_pair_on_thread`
+  against a delayed relay stub + asserts the ack arrives even after
+  the caller-side handshake has returned. 3 test cases.
+- `tests/test_pair_generate_mode.py` — rewired to mock
+  `_run_relay_pair_on_thread` rather than the removed
+  `_spawn_relay_completion_task`.
+- `tests/test_pair_http.py` — page-title assertion updated to
+  match the wizard UX ("Set up TotalReclaw" vs. the rc.12
+  "TotalReclaw pairing").
+
 ## [2.3.1rc12] — 2026-04-23
 
 **Ship-stopper fix for rc.11.** The relay-served pair page's submit

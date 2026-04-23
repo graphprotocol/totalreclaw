@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "totalreclaw"
-version = "2.3.1rc12"
+version = "2.3.1rc13"
 description = "End-to-end encrypted memory for AI agents — Python client (Memory Taxonomy v1)"
 readme = "README.md"
 license = "MIT"

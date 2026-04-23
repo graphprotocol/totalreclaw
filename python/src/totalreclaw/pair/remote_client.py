@@ -330,11 +330,21 @@ async def await_phrase_upload(
         phrase = ""  # noqa: F841 — drop our reference
 
     # Ack the relay so the browser gets a 204.
+    ack_sent = False
     try:
         await ws.send(json.dumps({"type": "ack"}))
+        ack_sent = True
+        # Structured event — makes rc.13 gateway-side pair successes
+        # grep-able in ``docker compose logs`` alongside the relay's
+        # ``pair.respond_success`` event.
+        logger.info(
+            "pair.relay_ack_sent token=%s… mode=%s",
+            session.token[:8],
+            forward_mode or "unspecified",
+        )
     except Exception as err:
         logger.warning(
-            "pair.remote_client: ack send failed for token=%s…: %r",
+            "pair.relay_ack_failed token=%s… err=%r",
             session.token[:8],
             err,
         )
@@ -345,9 +355,10 @@ async def await_phrase_upload(
             pass
 
     logger.info(
-        "pair.remote_client: session completed token=%s… mode=%s",
+        "pair.remote_client: session completed token=%s… mode=%s ack=%s",
         session.token[:8],
         forward_mode or "unspecified",
+        "ok" if ack_sent else "failed",
     )
     return result
 

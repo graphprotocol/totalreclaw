@@ -20,7 +20,9 @@ import base64
 import json
 import logging
 import os
+import queue
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -29,6 +31,22 @@ if TYPE_CHECKING:
     from .state import PluginState
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Relay-session handshake result — returned from the worker thread to the
+# tool body once the relay has acknowledged ``session/open``. Kept tiny so
+# we can push it through a threading.Queue without risking phrase material.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _OpenedSession:
+    """Metadata the tool needs to return to the agent."""
+
+    url: str
+    pin: str
+    expires_at: str
 
 
 # ---------------------------------------------------------------------------
@@ -161,63 +179,227 @@ def _pair_mode() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Relay-mode: a background task completes the pairing after the tool returns.
+# Relay-mode: a background THREAD runs the entire pair session.
+#
+# rc.13 asyncio-lifecycle fix. Earlier RCs (rc.10–rc.12) opened the relay
+# WebSocket on the Hermes tool-invocation loop, then used
+# ``loop.create_task(...)`` to keep waiting on it after the tool
+# returned. Hermes tears that loop down as soon as the tool returns, so
+# the background task was destroyed mid-``ws.recv()`` — logged as::
+#
+#     Task was destroyed but it is pending!
+#     RuntimeError: no running event loop
+#
+# during ``WebSocketCommonProtocol.close_connection``. The relay saw no
+# ack, timed out at 15s, and returned 502 to the browser.
+#
+# Fix (Option 2 from the rc.13 design notes): run the ENTIRE pair
+# session — open + opened + forward + decrypt + configure + ack + close
+# — on a dedicated OS thread that owns its own ``asyncio`` event loop.
+# The WebSocket is created INSIDE the thread loop, not on the caller
+# loop, so it is never bound to a loop that closes.
+#
+# The tool body still needs ``{url, pin, expires_at}`` to return to the
+# agent synchronously. We use a small ``queue.Queue`` handshake: the
+# thread runs ``open_remote_pair_session`` to completion, pushes the
+# metadata, then proceeds to ``await_phrase_upload`` without the tool
+# body being involved. The tool blocks briefly (a few hundred ms — just
+# the TCP / TLS handshake + one WS round-trip) on the queue before
+# returning.
+#
+# Why NOT Option 1 (block synchronously up to the 5-minute TTL):
+#   Option 1 would pin the user's chat for up to 5 minutes while the
+#   browser flow runs. The whole point of the pair tool returning
+#   ``{url, pin}`` fast is so the agent can relay those to the user
+#   verbatim and the user can go open the URL without the chat
+#   stalling.
+#
+# Why NOT Option 3 (plugin lifecycle hook holding a long-lived task):
+#   Hermes's plugin runtime doesn't expose a persistent background-task
+#   hook. Option 3 would have required hermes-agent core changes,
+#   which is out of rc.13 scope (gateway-side hotfix).
+#
+# Observability: the worker thread emits structured lifecycle events so
+# the next layer of failure (decrypt error, credential-write error, ack
+# send error) is debuggable at a glance in ``docker compose logs``:
+#
+#   - pair.relay_completion_started  → waiter thread spawned
+#   - pair.relay_opened              → relay ACK'd session/open
+#   - pair.relay_decrypt_ok / _failed → decrypt + complete-pairing
+#   - pair.relay_ack_sent / _failed  → ack frame written to WS
+#   - pair.relay_completion_done     → thread exit (with outcome)
 # ---------------------------------------------------------------------------
 
 
-def _spawn_relay_completion_task(
-    session,
+# Queue sentinel — pushed by the worker thread if ``open_remote_pair_session``
+# raises before it can report a URL+PIN back. Carries the exception so
+# the tool body can re-raise it to the agent.
+@dataclass
+class _OpenFailed:
+    error: BaseException
+
+
+def _run_relay_pair_on_thread(
     state: "PluginState",
-) -> None:
-    """Schedule the phrase-upload-wait as a detached asyncio task.
+    mode: Optional[str],
+    handshake_timeout_s: float = 15.0,
+) -> _OpenedSession:
+    """Spawn a worker thread that runs the FULL relay pair session.
 
-    Called synchronously from the tool body. The tool returns the
-    {url, pin, ...} payload to the agent, then this task blocks on the
-    WebSocket until the user completes the browser flow (or the 5-minute
-    TTL lapses).
+    Blocks the caller only until the relay returns ``opened``. After
+    that, the thread runs ``await_phrase_upload`` independently and the
+    tool body is free to return to the agent.
+
+    Returns ``_OpenedSession(url, pin, expires_at)``. Raises on
+    relay open failure (rate-limit, bad gateway, etc).
     """
-    from ..pair.remote_client import await_phrase_upload
+    from ..pair.remote_client import await_phrase_upload, open_remote_pair_session
 
-    async def _complete_pairing(phrase: str) -> dict:
-        # Run the synchronous state.configure in a thread so we don't stall
-        # the asyncio loop while credentials.json + EOA derivation happens.
-        loop = asyncio.get_running_loop()
+    handshake_q: "queue.Queue[Any]" = queue.Queue(maxsize=1)
 
-        def _do() -> dict:
-            try:
-                state.configure(phrase)
-                client = state.get_client()
-                eoa = getattr(client, "_eoa_address", None)
-                logger.info(
-                    "pair-tool(relay): credentials configured for EOA %s (token %s…)",
-                    eoa or "unknown",
-                    session.token[:8],
-                )
-                return {"state": "active", "account_id": eoa}
-            except Exception as err:
-                logger.error(
-                    "pair-tool(relay): complete_pairing failed token=%s…: %r",
-                    session.token[:8],
-                    err,
-                )
-                return {"state": "error", "error": str(err)}
+    # Thread name uses the short relay host so the thread is identifiable
+    # in ``pstack`` / py-spy dumps. Will be appended with the token once
+    # the relay opens the session.
+    thread_name = "totalreclaw-pair-relay"
 
-        return await loop.run_in_executor(None, _do)
-
-    async def _runner() -> None:
+    def _configure_from_phrase(token_tag: str, phrase: str) -> dict:
+        """Synchronous credential write — runs on the thread's executor."""
         try:
-            await await_phrase_upload(session, complete_pairing=_complete_pairing)
+            state.configure(phrase)
+            client = state.get_client()
+            eoa = getattr(client, "_eoa_address", None)
+            logger.info(
+                "pair.relay_decrypt_ok token=%s… eoa=%s",
+                token_tag,
+                eoa or "unknown",
+            )
+            return {"state": "active", "account_id": eoa}
         except Exception as err:
-            logger.warning(
-                "pair-tool(relay): background task failed token=%s…: %r",
-                session.token[:8] if session.token else "?",
+            logger.error(
+                "pair.relay_decrypt_failed token=%s… stage=configure err=%r",
+                token_tag,
                 err,
             )
+            return {"state": "error", "error": str(err)}
 
-    # Fire-and-forget task on the current event loop. Hermes tool handlers
-    # run under asyncio so ``get_running_loop`` succeeds.
-    loop = asyncio.get_running_loop()
-    loop.create_task(_runner())
+    def _thread_main() -> None:
+        logger.info("pair.relay_completion_started")
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+
+            async def _drive_full_session() -> None:
+                """Open + opened + forward + decrypt + ack + close — all
+                under a SINGLE ``run_until_complete`` on the thread loop.
+
+                Splitting this across two ``run_until_complete`` calls
+                (open first, then await_phrase_upload) leaves the WS
+                protocol's keepalive tasks suspended between calls;
+                websockets then sends close 1001 (going away) when the
+                second run_until_complete starts, so ack fails. Keeping
+                it in one coroutine holds the loop in continuous drive.
+                """
+                token_tag_local = "?"
+                try:
+                    session = await open_remote_pair_session(mode=mode)
+                except BaseException as err:
+                    handshake_q.put(_OpenFailed(err))
+                    return
+
+                token_tag_local = session.token[:8] if session.token else "?"
+                logger.info(
+                    "pair.relay_opened token=%s… url_host=%s",
+                    token_tag_local,
+                    _safe_host(session.url),
+                )
+                handshake_q.put(
+                    _OpenedSession(
+                        url=session.url,
+                        pin=session.pin,
+                        expires_at=session.expires_at,
+                    )
+                )
+
+                async def _complete_pairing_async(phrase: str) -> dict:
+                    return await loop.run_in_executor(
+                        None, _configure_from_phrase, token_tag_local, phrase
+                    )
+
+                try:
+                    result = await await_phrase_upload(
+                        session,
+                        complete_pairing=_complete_pairing_async,
+                    )
+                    logger.info(
+                        "pair.relay_completion_done token=%s… outcome=ok state=%s",
+                        token_tag_local,
+                        result.get("state") if isinstance(result, dict) else "unknown",
+                    )
+                except Exception as err:
+                    logger.warning(
+                        "pair.relay_completion_done token=%s… outcome=error err=%r",
+                        token_tag_local,
+                        err,
+                    )
+
+            loop.run_until_complete(_drive_full_session())
+        finally:
+            # Drain stray tasks so websockets' close_connection coroutine
+            # doesn't emit a "task was destroyed but pending" warning on
+            # loop close — the same class of log line that gave rc.12
+            # away.
+            try:
+                pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+                for t in pending:
+                    t.cancel()
+                if pending:
+                    loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
+            except Exception:
+                pass
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    t = threading.Thread(
+        target=_thread_main,
+        name=thread_name,
+        daemon=True,
+    )
+    t.start()
+
+    # Block the tool body until the relay answers ``opened`` — or a
+    # 15-second ceiling elapses (same as the relay's own respond-side
+    # timeout, so we don't accidentally hold the tool open longer than
+    # the browser will).
+    try:
+        handshake = handshake_q.get(timeout=handshake_timeout_s)
+    except queue.Empty:
+        raise RuntimeError(
+            "pair.relay: handshake did not complete within "
+            f"{handshake_timeout_s:.0f}s — relay unreachable?"
+        ) from None
+
+    if isinstance(handshake, _OpenFailed):
+        raise handshake.error  # propagate the open-time error to the agent
+
+    return handshake
+
+
+def _safe_host(url: str) -> str:
+    """Extract the host portion of ``url`` for logging.
+
+    Strips scheme + path + fragment — the fragment carries the gateway
+    pubkey, which we never want in logs even though it's public.
+    """
+    try:
+        from urllib.parse import urlparse
+
+        return urlparse(url).netloc or "?"
+    except Exception:
+        return "?"
 
 
 # ---------------------------------------------------------------------------
@@ -363,10 +545,21 @@ async def _pair_relay(state: "PluginState", mode: str):
 
     The ``mode`` is passed to the relay via the ``open`` frame so the
     server-rendered HTML only shows the panel(s) the caller asked for.
+
+    rc.13 asyncio-lifecycle fix: the WebSocket + completion waiter both
+    run on a dedicated worker thread. The tool body blocks only on the
+    fast ``session/open`` handshake, then returns to the agent. The
+    browser-side flow that follows (user types PIN + paste phrase, ~30s
+    median) runs fully inside the worker thread — the Hermes tool-call
+    event loop can close immediately after this function returns.
     """
-    from ..pair.remote_client import open_remote_pair_session
-
-    session = await open_remote_pair_session(mode=mode)
-    _spawn_relay_completion_task(session, state)
-
-    return session.url, session.pin, session.expires_at
+    # Offload to a thread-owned event loop — the WS never gets tied to
+    # the Hermes tool-invocation loop. See ``_run_relay_pair_on_thread``
+    # for the full design rationale + observability contract.
+    #
+    # ``to_thread`` is a thin wrapper around the default executor; it
+    # keeps this coroutine awaitable while the heavy lifting is on a
+    # real OS thread. The callee itself is synchronous — it blocks
+    # internally on the worker thread's handshake queue.
+    opened = await asyncio.to_thread(_run_relay_pair_on_thread, state, mode)
+    return opened.url, opened.pin, opened.expires_at

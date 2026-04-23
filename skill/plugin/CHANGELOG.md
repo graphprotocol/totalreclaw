@@ -4,6 +4,39 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.13] — 2026-04-24
+
+Coordinated version bump with Python `2.3.1rc13`. No substantive
+changes to the plugin's own TypeScript — the rc.13 fix lands on the
+Hermes-side (`python/src/totalreclaw/hermes/pair_tool.py`) where the
+asyncio lifecycle regression lived. We keep plugin + Python RC
+numbers in lockstep so the release-pipeline tracker and
+`qa-totalreclaw` skill carry both artifacts through QA as one
+bundle.
+
+See the corresponding entry in `python/CHANGELOG.md` for the full
+design: the relay-pair WebSocket is now owned by a dedicated worker
+thread (with its own event loop) so it survives the Hermes
+tool-invocation loop teardown that destroyed the rc.10–rc.12 waiter
+mid-recv and caused every pair attempt to 502.
+
+The relay-served production pair page is also replaced with the
+rc.13 wizard UX — a typeform-style 3-step flow (PIN → phrase → done)
+mirroring the `docs/mockups/rc13-pair-wizard/` design. This lands in
+the `totalreclaw-relay` repo PR, not here, but surfaces to every
+OpenClaw user via the default relay pair flow.
+
+### Plugin local-mode pair page
+
+`skill/plugin/pair-page.ts` (the local-mode fallback served when a
+user sets `TOTALRECLAW_PAIR_MODE=local`) retains its rc.10–rc.12 UX
+shape. The wizard UX port for this file is deferred to rc.14 pending
+a design decision on whether to share a single CSS+JS asset across
+all three pair pages (relay / Python local / plugin local) or keep
+them independently inlined. Local-mode is rarely exercised — the
+plugin defaults to the relay flow via the Hermes Python sidecar and
+only falls back here for air-gapped setups.
+
 ## [3.3.1-rc.12] — 2026-04-23
 
 **Ship-stopper fix for rc.11.** The relay-served pair page's submit

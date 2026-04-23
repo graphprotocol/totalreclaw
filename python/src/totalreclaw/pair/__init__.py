@@ -1,4 +1,4 @@
-"""TotalReclaw Hermes QR-pair flow (2.3.1rc12+).
+"""TotalReclaw Hermes QR-pair flow (2.3.1rc13+).
 
 Browser-side crypto handoff that keeps the recovery phrase out of the
 LLM context. The gateway publishes an ephemeral x25519 public key via a
