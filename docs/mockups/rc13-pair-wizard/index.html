@@ -6,13 +6,21 @@
   <meta name="referrer" content="no-referrer" />
   <meta name="robots" content="noindex, nofollow" />
   <meta name="theme-color" content="#0B0B1A" />
-  <title>Pair your device — TotalReclaw (rc.13 mockup)</title>
+  <title>Set up TotalReclaw (rc.13 mockup)</title>
   <link rel="stylesheet" href="wizard.css" />
 </head>
 <body>
   <a href="#main" class="skip-link">Skip to content</a>
 
   <main id="main" class="wizard" aria-live="polite">
+    <!-- Preview-mode badge (shown only when served from /pair-preview/ or ?preview=1).
+         JS toggles the [hidden] attribute at boot; see wizard.js isPreviewMode(). -->
+    <div class="preview-badge" id="preview-badge" hidden>
+      <span class="preview-badge-dot" aria-hidden="true"></span>
+      <span class="preview-badge-label">PREVIEW</span>
+      <span class="preview-badge-help">mockup only — crypto mocked, validation relaxed</span>
+    </div>
+
     <!-- Top bar: logo + step meter + countdown -->
     <header class="topbar">
       <a class="brand" href="#" aria-label="TotalReclaw">
@@ -63,17 +71,25 @@
         <div class="screen-inner">
           <p class="eyebrow">Step 1 of 3</p>
           <h1 id="pin-heading" class="heading">Enter your PIN</h1>
-          <p class="subheading">Your agent showed you this PIN. It's there so only you can complete pairing.</p>
+          <p class="subheading">This sets up your TotalReclaw account. Your agent showed you a PIN — enter it here so only you can finish setup.</p>
 
           <div class="pin-wrap">
             <div class="pin-cells" role="group" aria-label="6-digit PIN">
-              <input class="pin-cell" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="off" aria-label="Digit 1" data-index="0" />
+              <!-- autocomplete="one-time-code" on cell 1 triggers iOS SMS-autofill and will
+                   distribute the 6 digits across cells via the paste handler. -->
+              <input class="pin-cell" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="one-time-code" aria-label="Digit 1" data-index="0" />
               <input class="pin-cell" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="off" aria-label="Digit 2" data-index="1" />
               <input class="pin-cell" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="off" aria-label="Digit 3" data-index="2" />
               <span class="pin-sep" aria-hidden="true"></span>
               <input class="pin-cell" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="off" aria-label="Digit 4" data-index="3" />
               <input class="pin-cell" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="off" aria-label="Digit 5" data-index="4" />
               <input class="pin-cell" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="off" aria-label="Digit 6" data-index="5" />
+            </div>
+            <div class="pin-actions">
+              <button type="button" class="btn-ghost btn-ghost-inline" id="pin-paste" aria-label="Paste 6-digit PIN from clipboard">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="5" y="6" width="14" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+                Paste
+              </button>
             </div>
             <p class="pin-error" id="pin-error" role="alert" aria-live="assertive"></p>
           </div>
@@ -88,37 +104,27 @@
         </footer>
       </article>
 
-      <!-- ============ STEP 2 — PHRASE ============ -->
+      <!-- ============ STEP 2 — PHRASE ============
+           Default tab = Generate ("Set up"). New-user flow: generate phrase → create account.
+           The "Log in" tab is the returning-user branch (paste existing recovery phrase). -->
       <article class="screen" id="screen-phrase" data-step="2" role="group" aria-labelledby="phrase-heading" hidden>
         <div class="screen-inner">
           <p class="eyebrow">Step 2 of 3</p>
           <h1 id="phrase-heading" class="heading">Your recovery phrase</h1>
 
-          <div class="tabs" role="tablist" aria-label="Phrase source">
-            <button type="button" class="tab active" role="tab" id="tab-import" aria-selected="true" aria-controls="panel-import" data-mode="import">
-              Import existing
+          <div class="tabs mode-generate" role="tablist" aria-label="Account action">
+            <button type="button" class="tab active" role="tab" id="tab-generate" aria-selected="true" aria-controls="panel-generate" data-mode="generate">
+              Set up
             </button>
-            <button type="button" class="tab" role="tab" id="tab-generate" aria-selected="false" aria-controls="panel-generate" data-mode="generate">
-              Generate new
+            <button type="button" class="tab" role="tab" id="tab-import" aria-selected="false" aria-controls="panel-import" data-mode="import">
+              Log in
             </button>
             <span class="tab-indicator" aria-hidden="true"></span>
           </div>
 
-          <!-- Import panel (default) -->
-          <div id="panel-import" class="tab-panel" role="tabpanel" aria-labelledby="tab-import">
-            <p class="helper">Enter the 12 words of your existing recovery phrase.</p>
-            <div class="phrase-grid" id="phrase-grid-import" role="group" aria-label="12-word recovery phrase input">
-              <!-- JS populates 12 slots -->
-            </div>
-            <button type="button" class="btn-ghost" id="paste-all">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="5" y="6" width="14" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
-              Paste all 12 words
-            </button>
-          </div>
-
-          <!-- Generate panel -->
-          <div id="panel-generate" class="tab-panel" role="tabpanel" aria-labelledby="tab-generate" hidden>
-            <p class="helper">We generated a fresh 12-word phrase for you. Write it down before continuing.</p>
+          <!-- Generate panel (default — new-user flow) -->
+          <div id="panel-generate" class="tab-panel" role="tabpanel" aria-labelledby="tab-generate">
+            <p class="helper">Generate your recovery phrase. This phrase IS your account — write it down. You can restore your memories on any agent with it.</p>
             <div class="phrase-grid readonly" id="phrase-grid-generate" role="group" aria-label="Generated 12-word recovery phrase">
               <!-- JS populates 12 slots (readonly) -->
             </div>
@@ -138,6 +144,18 @@
             </label>
           </div>
 
+          <!-- Import panel (returning-user flow) -->
+          <div id="panel-import" class="tab-panel" role="tabpanel" aria-labelledby="tab-import" hidden>
+            <p class="helper">Enter your recovery phrase to restore your memories on this device.</p>
+            <div class="phrase-grid" id="phrase-grid-import" role="group" aria-label="12-word recovery phrase input">
+              <!-- JS populates 12 slots -->
+            </div>
+            <button type="button" class="btn-ghost" id="paste-all">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="5" y="6" width="14" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+              Paste all 12 words
+            </button>
+          </div>
+
           <p class="security-note">
             <svg class="lock" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 1 1 10 0v3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
             Never share this phrase. TotalReclaw's relay never sees it &mdash; encrypted in your browser before transmission.
@@ -150,7 +168,7 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
             <button type="button" class="btn-primary" id="phrase-pair" disabled>
-              <span class="btn-label">Pair</span>
+              <span class="btn-label" id="phrase-pair-label">Set up TotalReclaw</span>
               <span class="btn-spinner" aria-hidden="true"></span>
             </button>
           </div>
@@ -167,7 +185,7 @@
             </svg>
           </div>
           <h1 id="done-heading" class="heading">You're all set</h1>
-          <p class="subheading">Go back to your chat and try: <em>"remember I prefer Python over Go"</em></p>
+          <p class="subheading" id="done-subheading">TotalReclaw account created. Your memories are encrypted to your recovery phrase. Go back to your chat and try: <em>"remember I prefer Python over Go"</em></p>
           <a href="#" class="close-link" id="close-link">Close this page</a>
         </div>
       </article>

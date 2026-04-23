@@ -16,13 +16,32 @@
   const STATE = {
     step: 1,
     pin: ['', '', '', '', '', ''],
-    mode: 'import', // 'import' | 'generate'
+    // Default 'generate' — new-user flow. 'import' is the "I have a phrase" branch.
+    mode: 'generate', // 'import' | 'generate'
     words: new Array(12).fill(''),
     generated: null,
     ackChecked: false,
     expiresAtMs: Date.now() + 10 * 60 * 1000, // 10 minutes
     timerId: null,
   };
+
+  // Preview mode = served from /pair-preview/ path or ?preview=1 query.
+  // In preview mode, validation is relaxed (Continue/Set up always clickable)
+  // so the user can click through the whole flow without filling fields.
+  // Production path remains strict.
+  function isPreviewMode() {
+    try {
+      const path = window.location.pathname || '';
+      const search = window.location.search || '';
+      if (path.indexOf('/pair-preview') === 0) return true;
+      if (path.indexOf('/pair-preview/') === 0) return true;
+      if (/(^|[?&])preview=1(&|$)/.test(search)) return true;
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+  const PREVIEW = isPreviewMode();
 
   // Deterministic demo phrase (NOT cryptographically generated — this is a
   // mockup). Real pair page uses WebCrypto entropy → BIP-39.
@@ -114,11 +133,45 @@
     STATE.timerId = setInterval(renderCountdown, 1000);
   }
 
+  // ---------- Toast (transient hint) ----------
+  // One toast element is reused. Primarily used when the clipboard API is
+  // blocked / denied so the user knows to type manually. Self-dismisses.
+  let toastEl = null;
+  let toastTimer = null;
+  function showToast(msg, ms) {
+    if (!toastEl) {
+      toastEl = document.createElement('div');
+      toastEl.className = 'toast';
+      toastEl.setAttribute('role', 'status');
+      toastEl.setAttribute('aria-live', 'polite');
+      document.body.appendChild(toastEl);
+    }
+    toastEl.textContent = msg;
+    // Force a reflow before toggling .show so the transition plays.
+    // eslint-disable-next-line no-unused-expressions
+    toastEl.offsetWidth;
+    toastEl.classList.add('show');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      if (toastEl) toastEl.classList.remove('show');
+    }, ms || 2400);
+  }
+
+  // ---------- Preview-mode badge ----------
+  function initPreviewBadge() {
+    const badge = $('preview-badge');
+    if (!badge) return;
+    if (PREVIEW) {
+      badge.hidden = false;
+    }
+  }
+
   // ---------- Step 1: PIN ----------
   function initPinStep() {
     const cells = $$('.pin-cell');
     const continueBtn = $('pin-continue');
     const errEl = $('pin-error');
+    const pasteBtn = $('pin-paste');
 
     function updateFilledClass() {
       cells.forEach((c, i) => {
@@ -128,7 +181,9 @@
 
     function updateContinueState() {
       const complete = STATE.pin.every((d) => /^\d$/.test(d));
-      continueBtn.disabled = !complete;
+      // Preview-mode relaxation: the mockup should be clickable with 0 digits.
+      // Production path stays strict — only enables when all 6 are entered.
+      continueBtn.disabled = PREVIEW ? false : !complete;
     }
 
     function clearError() {
@@ -141,6 +196,26 @@
       errEl.classList.add('show');
     }
 
+    // Shared distributor used by both the explicit Paste button and keyboard
+    // paste events. Takes up to 6 digits from anywhere in the string.
+    function distributeDigits(digits, startIdx) {
+      const start = Math.max(0, Math.min(startIdx || 0, cells.length - 1));
+      const toWrite = digits.slice(0, cells.length - start).split('');
+      toWrite.forEach((d, k) => {
+        const target = cells[start + k];
+        if (target) {
+          target.value = d;
+          STATE.pin[start + k] = d;
+        }
+      });
+      updateFilledClass();
+      updateContinueState();
+      const lastWritten = start + toWrite.length - 1;
+      const nextIdx = Math.min(lastWritten + 1, cells.length - 1);
+      if (cells[nextIdx]) cells[nextIdx].focus();
+      return toWrite.length;
+    }
+
     cells.forEach((cell, i) => {
       cell.addEventListener('input', (e) => {
         const raw = e.target.value.replace(/\D/g, '');
@@ -150,8 +225,16 @@
           updateContinueState();
           return;
         }
-        // Take only the first digit; handle paste of multi-char in keydown/paste instead
-        const digit = raw[raw.length - 1];
+        // iOS SMS-autofill (triggered by autocomplete="one-time-code") fires an
+        // `input` event with the full 6-char code on cell 1. Distribute across
+        // cells when we receive more than one digit at once.
+        if (raw.length > 1) {
+          e.target.value = '';
+          distributeDigits(raw, i);
+          clearError();
+          return;
+        }
+        const digit = raw;
         STATE.pin[i] = digit;
         e.target.value = digit;
         updateFilledClass();
@@ -189,24 +272,44 @@
       cell.addEventListener('paste', (e) => {
         e.preventDefault();
         const text = (e.clipboardData || window.clipboardData).getData('text') || '';
-        const digits = text.replace(/\D/g, '').slice(0, 6 - i).split('');
-        digits.forEach((d, k) => {
-          const target = cells[i + k];
-          if (target) {
-            target.value = d;
-            STATE.pin[i + k] = d;
-          }
-        });
-        updateFilledClass();
-        updateContinueState();
-        const next = Math.min(i + digits.length, cells.length - 1);
-        cells[next].focus();
+        const digits = text.replace(/\D/g, '');
+        if (!digits) return;
+        distributeDigits(digits, i);
+        clearError();
       });
     });
 
+    // Explicit "Paste" button — reads clipboard via async API.
+    // Extracts the first 6 digits found, ignoring non-digit characters.
+    // Graceful fallback if the API is blocked/denied: shows a toast.
+    if (pasteBtn) {
+      pasteBtn.addEventListener('click', async () => {
+        let text = '';
+        try {
+          if (navigator.clipboard && navigator.clipboard.readText) {
+            text = await navigator.clipboard.readText();
+          } else {
+            throw new Error('clipboard API unavailable');
+          }
+        } catch (_) {
+          showToast('Paste not allowed — type manually');
+          return;
+        }
+        const digits = (text || '').replace(/\D/g, '').slice(0, 6);
+        if (!digits) {
+          showToast('Clipboard has no digits');
+          return;
+        }
+        distributeDigits(digits, 0);
+        clearError();
+        // If we filled all 6, Continue auto-enables via updateContinueState.
+        // Don't auto-submit — let the user confirm by clicking Continue.
+      });
+    }
+
     continueBtn.addEventListener('click', () => {
       const complete = STATE.pin.every((d) => /^\d$/.test(d));
-      if (!complete) {
+      if (!complete && !PREVIEW) {
         // Subtle shake for the first empty cell
         const firstEmpty = cells.find((c, idx) => !STATE.pin[idx]);
         if (firstEmpty) {
@@ -222,8 +325,9 @@
       STATE.step = 2;
       setDots();
       transitionTo('screen-phrase', 'forward');
-      // Focus the first word input of the active panel
-      setTimeout(focusFirstWordOfActivePanel, 300);
+      // Focus the first word input of the active panel (import) or the ack
+      // checkbox (generate) — whichever is active.
+      setTimeout(focusFirstInteractiveOfActivePanel, 300);
     });
 
     // Autofocus first cell on load
@@ -267,13 +371,23 @@
     }
   }
 
+  // Swap the primary CTA label depending on the active tab:
+  //   'generate' → "Set up TotalReclaw"  (new user: create account)
+  //   'import'   → "Log in"              (returning user: restore from phrase)
+  function setPrimaryActionLabel(mode) {
+    const label = $('phrase-pair-label');
+    if (!label) return;
+    label.textContent = mode === 'import' ? 'Log in' : 'Set up TotalReclaw';
+  }
+
   function wireImportGrid() {
     const grid = $('phrase-grid-import');
     const inputs = $$('.word-input', grid);
 
     function updatePairState() {
+      if (STATE.mode !== 'import') return; // only care when import tab is active
       const complete = STATE.words.every((w) => w.trim().length > 0);
-      $('phrase-pair').disabled = !complete;
+      $('phrase-pair').disabled = PREVIEW ? false : !complete;
     }
 
     function setWord(i, val) {
@@ -351,8 +465,9 @@
     fill(DEMO_PHRASE);
 
     function updatePairState() {
+      if (STATE.mode !== 'generate') return; // only care when generate tab is active
       const ready = STATE.generated && STATE.generated.length === 12 && STATE.ackChecked;
-      $('phrase-pair').disabled = !ready;
+      $('phrase-pair').disabled = PREVIEW ? false : !ready;
     }
 
     $('gen-ack').addEventListener('change', (e) => {
@@ -386,10 +501,17 @@
     });
   }
 
-  function focusFirstWordOfActivePanel() {
-    const panelId = STATE.mode === 'import' ? 'panel-import' : 'panel-generate';
-    const input = $(panelId).querySelector('.word-input:not([readonly])');
-    if (input) input.focus();
+  // Focus the right element when the phrase screen opens:
+  //   generate tab → the ack checkbox (user's next action)
+  //   import tab   → the first word input
+  function focusFirstInteractiveOfActivePanel() {
+    if (STATE.mode === 'import') {
+      const input = $('panel-import').querySelector('.word-input:not([readonly])');
+      if (input) input.focus();
+    } else {
+      const ack = $('gen-ack');
+      if (ack) ack.focus();
+    }
   }
 
   function wireTabs() {
@@ -407,8 +529,13 @@
       $('panel-import').hidden = mode !== 'import';
       $('panel-generate').hidden = mode !== 'generate';
 
-      // Re-evaluate Pair button
-      if (mode === 'import') {
+      // Update the primary CTA label for the new tab
+      setPrimaryActionLabel(mode);
+
+      // Re-evaluate primary button state for the active tab (preview mode always clickable)
+      if (PREVIEW) {
+        $('phrase-pair').disabled = false;
+      } else if (mode === 'import') {
         $('phrase-pair').disabled = !STATE.words.every((w) => w.trim().length > 0);
       } else {
         $('phrase-pair').disabled = !(STATE.generated && STATE.ackChecked);
@@ -425,6 +552,9 @@
         }
       });
     });
+
+    // Apply initial mode so label + button state are in sync with the default tab.
+    setMode(STATE.mode);
   }
 
   function initPhraseStep() {
@@ -480,6 +610,7 @@
   function resetWizard() {
     STATE.step = 1;
     STATE.pin = ['', '', '', '', '', ''];
+    STATE.mode = 'generate';
     STATE.words = new Array(12).fill('');
     STATE.generated = null;
     STATE.ackChecked = false;
@@ -495,8 +626,11 @@
       el.parentElement.classList.remove('filled');
     });
     $('gen-ack').checked = false;
-    $('pin-continue').disabled = true;
-    $('phrase-pair').disabled = true;
+    // In preview mode both primary buttons stay clickable; in production they
+    // start disabled until their respective validation is satisfied.
+    $('pin-continue').disabled = !PREVIEW;
+    $('phrase-pair').disabled = !PREVIEW;
+    setPrimaryActionLabel(STATE.mode);
     const cd = $('countdown');
     if (cd) {
       cd.style.visibility = '';
@@ -506,6 +640,20 @@
     // Rebuild generated panel so it re-fills with demo phrase cleanly
     buildWordGrid($('phrase-grid-generate'), { prefix: 'g', readonly: true });
     wireGenerateGrid();
+
+    // Restore the default "Set up" tab (generate) so a fresh click-through
+    // starts on the new-user flow every time.
+    const tabsRow = document.querySelector('.tabs');
+    if (tabsRow) {
+      tabsRow.classList.add('mode-generate');
+      $$('.tab').forEach((t) => {
+        const isGenerate = t.dataset.mode === 'generate';
+        t.classList.toggle('active', isGenerate);
+        t.setAttribute('aria-selected', isGenerate ? 'true' : 'false');
+      });
+      $('panel-import').hidden = true;
+      $('panel-generate').hidden = false;
+    }
 
     // Back to step 1
     const currentActive = document.querySelector('.screen.active');
@@ -522,6 +670,7 @@
 
   // ---------- Boot ----------
   document.addEventListener('DOMContentLoaded', () => {
+    initPreviewBadge();
     setDots();
     startTimer();
     initPinStep();

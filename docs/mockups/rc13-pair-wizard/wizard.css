@@ -447,6 +447,98 @@ em { font-style: normal; color: var(--fg); font-weight: 500; background: var(--p
 }
 .pin-error.show { opacity: 1; }
 
+/* ---------- PIN "Paste" button ----------
+   Small inline action under the cells. Compact, secondary visual weight so it
+   doesn't compete with the primary Continue CTA. */
+.pin-actions {
+  display: flex;
+  justify-content: center;
+  margin: 6px 0 2px;
+}
+.btn-ghost-inline {
+  width: auto;
+  min-height: 36px;
+  padding: 7px 14px;
+  font-size: 0.86rem;
+  font-weight: 500;
+  border-radius: 999px;
+  gap: 6px;
+}
+.btn-ghost-inline svg { width: 15px; height: 15px; }
+
+/* ==========================================================================
+   Preview-mode badge + toast
+   ========================================================================== */
+.preview-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  margin: -4px 0 12px;
+  background: var(--orange-soft);
+  border: 1px solid var(--orange);
+  border-radius: 999px;
+  font-size: 0.76rem;
+  color: var(--orange);
+  letter-spacing: 0.02em;
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-badge[hidden] { display: none; }
+.preview-badge-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--orange);
+  flex-shrink: 0;
+  animation: preview-pulse 1.6s ease-in-out infinite;
+}
+.preview-badge-label {
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+.preview-badge-help {
+  color: var(--fg-dim);
+  font-weight: 400;
+  letter-spacing: 0.005em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@keyframes preview-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.8); }
+}
+
+/* Floating toast (e.g. clipboard-denied hint). Centred above footer CTA. */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(88px + env(safe-area-inset-bottom));
+  transform: translateX(-50%) translateY(20px);
+  padding: 10px 16px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--fg);
+  font-size: 0.86rem;
+  box-shadow: var(--shadow-soft);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 10;
+  transition: opacity var(--transition), transform var(--transition);
+  max-width: calc(100% - 32px);
+  text-align: center;
+}
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+@media (max-width: 420px) {
+  .preview-badge-help { display: none; }
+}
+
 /* ==========================================================================
    STEP 2 — tabs, phrase grid
    ========================================================================== */
