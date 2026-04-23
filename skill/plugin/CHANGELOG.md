@@ -4,6 +4,38 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.11] — 2026-04-23
+
+OpenClaw-side universal pair reachability — the plugin's `totalreclaw_pair` tool now routes through the relay WebSocket by default, mirroring the Python `2.3.1rc10` pivot on the Hermes side. The URL returned to the user is `https://api-staging.totalreclaw.xyz/pair/p/<token>#pk=<gateway_pubkey>` instead of the previous `http://<gateway-host>:<port>/plugin/totalreclaw/pair/finish?sid=<sid>#pk=…`. Managed hosts, Docker-in-cloud setups, phone-scan-QR flows, and split-network operators can now complete pairing without the browser needing loopback or LAN access to the gateway.
+
+Paired with Hermes Python `2.3.1rc11` — both clients now reach for the relay by default, and `TOTALRECLAW_PAIR_MODE=local` on either side restores the rc.4–rc.10 loopback flow for air-gapped / self-hosted deployments.
+
+### Added
+
+- **`skill/plugin/pair-remote-client.ts`** — new. TypeScript mirror of `python/src/totalreclaw/pair/remote_client.py` (rc.10 Hermes):
+  - `openRemotePairSession({ relayBaseUrl?, pin?, clientId?, mode? })` — generates an ephemeral x25519 keypair via the existing `pair-crypto.ts` module, opens a WebSocket to `/pair/session/open`, sends `{type:"open", gateway_pubkey, pin, client_id, mode}`, and returns a `RemotePairSession` handle containing the user-facing URL (with `#pk=` fragment), PIN, token, expiry, and the live WebSocket.
+  - `awaitPhraseUpload(session, { completePairing, phraseValidator?, timeoutMs? })` — blocks on the kept-open WebSocket until the relay pushes `{type:"forward", client_pubkey, nonce, ciphertext}`. Decrypts locally via `decryptPairingPayload` using the gateway's private key (same ECDH + HKDF + ChaCha20-Poly1305 primitives as rc.10's loopback flow — byte-compatible with Python's `pair.crypto`). Runs the caller-supplied `completePairing` handler and sends `{type:"ack"}` back on success or `{type:"nack", error}` on validator / decrypt / completion failure.
+  - `pairViaRelay(...)` — one-shot convenience wrapper for tests and simple callers.
+- **`ws` runtime dep** (`^8.18.3`) + **`@types/ws`** — pure-JS WebSocket client. Transitive already via `@totalreclaw/core`; rc.11 promotes it to a direct dep so the plugin's own import graph is explicit.
+- **`TOTALRECLAW_PAIR_MODE`** env (plugin side) — mirrors the Python env. Unset or any non-`local` value routes through the relay; `local` preserves the rc.4–rc.10 loopback HTTP server served by `pair-http.ts` (`/plugin/totalreclaw/pair/{finish,start,respond,status}`).
+- **`TOTALRECLAW_PAIR_RELAY_URL`** env (plugin side) — self-hosters can point at their own relay. Defaults to `wss://api-staging.totalreclaw.xyz`.
+- **`skill/plugin/pair-remote-client.test.ts`** — 20 assertions across 5 scenarios: happy-path round-trip, invalid-phrase nack, relay open error, decrypt failure, https-to-wss scheme conversion. Runs against a local `ws` server stub — no network dependency.
+
+### Changed
+
+- **`totalreclaw_pair` tool** now branches on `CONFIG.pairMode`. In relay mode it returns the URL + PIN immediately and schedules a background task that blocks on the WebSocket until the browser completes (or the TTL lapses). Credentials-write happens in that background task via the same `loadCredentialsJson` / `writeCredentialsJson` / `setRecoveryPhraseOverride` / `writeOnboardingState` side-effect chain that the loopback `pair-http.respond` handler uses — so the onboarding-state flip remains identical. Tool payload shape unchanged (`{url, pin, expires_at_ms, qr_ascii, qr_png_b64, qr_unicode, mode}`) except for a new `transport: 'relay' | 'local'` field that tooling (QA harness, telemetry) can use to confirm which path served a given URL.
+
+### Phrase-safety invariants (preserved)
+
+- Relay is blind: the gateway's ephemeral x25519 private key never leaves the plugin host. The relay forwards opaque ciphertext; it cannot derive the symmetric key.
+- PIN is out-of-band: the user reads the PIN from agent chat and types it into the browser. The relay stores the PIN in memory only; logs carry no PIN, no ciphertext, no pubkey, no phrase.
+- Session state is in-memory on the relay with a 5-minute TTL. Redis deferred to Phase 2 per the design blueprint.
+- Backwards-compat: `TOTALRECLAW_PAIR_MODE=local` preserves every bit of the rc.4–rc.10 flow — same loopback HTTP server, same session store, same browser page, same decrypt handler.
+
+### Mechanism / byte-compat
+
+The crypto is a literal TypeScript binding against the same `pair-crypto.ts` module `pair-http.ts` already imports. No new cipher suite, no new wire format — only the transport (WebSocket to relay + relay-served HTML page) differs from the loopback path. A ciphertext produced by the relay-served `pair-html.ts` page decrypts under the same gateway private key using the same `decryptPairingPayload(...)` call path. This is deliberate: `pair-crypto.ts` is the byte-compat anchor shared with Python's `pair.crypto`, and rc.11 extends that anchor to the relay wire.
+
 ## [3.3.1-rc.10] — 2026-04-23
 
 Coordinated version bump with Hermes Python `2.3.1rc10`. rc.10 ships the relay-brokered pair flow — see `python/CHANGELOG.md` (the `2.3.1rc10` entry) for the full design. The `totalreclaw_pair` pair URL on the OpenClaw plugin side still uses the gateway-loopback HTTP server (the OpenClaw plugin runs in-process alongside a browser on the same host for most deployments, so the loopback URL actually reaches the user). The relay-brokered path is currently Hermes-side only — the OpenClaw plugin can pick it up in a later RC if the same universal-reachability problem starts biting OpenClaw users.

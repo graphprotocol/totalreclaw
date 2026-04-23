@@ -6,6 +6,16 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1rc11] — 2026-04-23
+
+Version-bump-only on the Python side — the substantive rc.11 change is in the OpenClaw plugin, which ports the universal-reachability relay-brokered pair flow from Python rc.10 to TypeScript. See `skill/plugin/CHANGELOG.md` (the `3.3.1-rc.11` entry) for the full design. The Python client's own relay client (`totalreclaw.pair.remote_client`) is unchanged from rc.10 and continues to back the Hermes `totalreclaw_pair` tool.
+
+We coordinate the Python + plugin version bumps so the release-pipeline tracker carries both artifacts through QA as one RC bundle.
+
+### Why a Python bump when only plugin changed
+
+Our RC cadence publishes both registries from the same bundle. Out-of-sync version tags cause downstream confusion (the `qa-totalreclaw` skill and the release-pipeline tracker both key on a single RC-number per wave). Skipping the Python bump would leave rc.11 documented on the plugin side only; a later Hermes regression would then have to skip to rc.12 to catch up. Much simpler to bump both in lockstep.
+
 ## [2.3.1rc10] — 2026-04-23
 
 rc.10 relay-brokered pair flow — default `totalreclaw_pair` now routes through `wss://api-staging.totalreclaw.xyz/pair/*` instead of a gateway-loopback HTTP server. Universal pair reachability: users can complete the pair flow from any browser on any device (phone, laptop, split-network setups) — no more `127.0.0.1` URL that only works when the browser shares a loopback with the gateway.

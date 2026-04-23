@@ -4996,18 +4996,99 @@ const plugin = {
           const rawMode = params?.mode;
           const mode: 'generate' | 'import' =
             rawMode === 'import' ? 'import' : 'generate';
+          const pairMode = CONFIG.pairMode;
           try {
-            const { createPairSession } = await import('./pair-session-store.js');
-            const { generateGatewayKeypair } = await import('./pair-crypto.js');
+            // 3.3.1-rc.11 — relay-brokered pair by default (universal reachability).
+            // `TOTALRECLAW_PAIR_MODE=local` preserves the rc.4–rc.10 loopback flow
+            // for air-gapped / self-hosted setups. Both paths return the same
+            // tool payload (`{url, pin, expires_at_ms, qr_*, mode, instructions}`);
+            // only the URL origin differs.
+            let url: string;
+            let pin: string;
+            let sidOrToken: string;
+            let expiresAtMs: number;
+            let localSession: import('./pair-session-store.js').PairSession | undefined;
+
+            if (pairMode === 'relay') {
+              const { openRemotePairSession, awaitPhraseUpload } = await import(
+                './pair-remote-client.js'
+              );
+              const remoteSession = await openRemotePairSession({
+                relayBaseUrl: CONFIG.pairRelayUrl,
+                mode: mode === 'generate' ? 'generate' : 'import',
+              });
+              url = remoteSession.url;
+              pin = remoteSession.pin;
+              sidOrToken = remoteSession.token;
+              // Relay sends ISO-8601; convert to ms for tool payload parity.
+              const parsed = Date.parse(remoteSession.expiresAt);
+              expiresAtMs = Number.isFinite(parsed)
+                ? parsed
+                : Date.now() + 5 * 60_000;
+              // Background task — writes credentials.json + flips state when
+              // the browser completes the flow. Tool handler returns
+              // immediately so the agent can tell the user the URL + PIN.
+              void (async () => {
+                try {
+                  await awaitPhraseUpload(remoteSession, {
+                    phraseValidator: (p: string) =>
+                      validateMnemonic(p, wordlist),
+                    completePairing: async ({ mnemonic }) => {
+                      try {
+                        const creds =
+                          loadCredentialsJson(CREDENTIALS_PATH) ?? {};
+                        const next = { ...creds, mnemonic };
+                        if (!writeCredentialsJson(CREDENTIALS_PATH, next)) {
+                          return { state: 'error', error: 'credentials_write_failed' };
+                        }
+                        setRecoveryPhraseOverride(mnemonic);
+                        writeOnboardingState(CONFIG.onboardingStatePath, {
+                          onboardingState: 'active',
+                          createdBy: mode === 'generate' ? 'generate' : 'import',
+                          credentialsCreatedAt: new Date().toISOString(),
+                          version: '3.3.1-rc.11',
+                        });
+                        api.logger.info(
+                          `totalreclaw_pair(relay): session ${remoteSession.token.slice(0, 8)}… completed; credentials written`,
+                        );
+                        return { state: 'active' };
+                      } catch (err: unknown) {
+                        const msg = err instanceof Error ? err.message : String(err);
+                        api.logger.error(
+                          `totalreclaw_pair(relay): completePairing failed: ${msg}`,
+                        );
+                        return { state: 'error', error: msg };
+                      }
+                    },
+                  });
+                } catch (bgErr: unknown) {
+                  // Expected on TTL expiry / user-aborts — log at warn, not error.
+                  const bgMsg = bgErr instanceof Error ? bgErr.message : String(bgErr);
+                  api.logger.warn(
+                    `totalreclaw_pair(relay): background task ended for token=${remoteSession.token.slice(0, 8)}…: ${bgMsg}`,
+                  );
+                }
+              })();
+            } else {
+              // Local loopback path (rc.10 behaviour).
+              const { createPairSession } = await import('./pair-session-store.js');
+              const { generateGatewayKeypair } = await import('./pair-crypto.js');
+              const kp = generateGatewayKeypair();
+              const session = await createPairSession(CONFIG.pairSessionsPath, {
+                mode,
+                operatorContext: { channel: 'agent' },
+                rngPrivateKey: () => Buffer.from(kp.skB64, 'base64url'),
+                rngPublicKey: () => Buffer.from(kp.pkB64, 'base64url'),
+              });
+              url = buildPairingUrl(api, session);
+              pin = session.secondaryCode;
+              sidOrToken = session.sid;
+              expiresAtMs = session.expiresAtMs;
+              localSession = session;
+            }
+
+            // QR renderers — same for both modes; input is the URL string.
             const { defaultRenderQr } = await import('./pair-cli.js');
-            const kp = generateGatewayKeypair();
-            const session = await createPairSession(CONFIG.pairSessionsPath, {
-              mode,
-              operatorContext: { channel: 'agent' },
-              rngPrivateKey: () => Buffer.from(kp.skB64, 'base64url'),
-              rngPublicKey: () => Buffer.from(kp.pkB64, 'base64url'),
-            });
-            const url = buildPairingUrl(api, session);
             const qrAscii = await new Promise<string>((resolve) => {
               let settled = false;
               const t = setTimeout(() => {
@@ -5031,13 +5112,7 @@ const plugin = {
               }
             });
 
-            // 3.3.1-rc.5 — render the same pair URL as (a) a PNG for
-            // image-capable transports (Telegram / Slack / web chat)
-            // and (b) a Unicode block string for terminal transports.
-            // The PIN is NEVER encoded into the QR; the QR carries
-            // ONLY the URL. Best-effort — if encoding fails (unlikely
-            // with the pure-TS `qrcode` lib) we ship empty strings so
-            // the URL-copy flow keeps working.
+            // 3.3.1-rc.5 — PNG + Unicode QR for multi-transport rendering.
             let qrPngB64 = '';
             let qrUnicode = '';
             try {
@@ -5057,15 +5132,19 @@ const plugin = {
             }
 
             api.logger.info(
-              `totalreclaw_pair: session ${session.sid.slice(0, 8)}… mode=${mode} url=${url} qr_png=${qrPngB64.length} qr_unicode=${qrUnicode.length}`,
+              `totalreclaw_pair: session ${sidOrToken.slice(0, 8)}… mode=${mode} transport=${pairMode} url=${url} qr_png=${qrPngB64.length} qr_unicode=${qrUnicode.length}`,
             );
+            // Voidly reference localSession so TS does not flag the unused
+            // local-branch binding. Future rc.12 diagnostics can expose
+            // `session.mode` / `session.status` separately.
+            void localSession;
             return {
               content: [{
                 type: 'text',
                 text:
                   `Pairing session started.\n\n` +
                   `URL: ${url}\n\n` +
-                  `PIN (type this into the browser): ${session.secondaryCode}\n\n` +
+                  `PIN (type this into the browser): ${pin}\n\n` +
                   (qrAscii ? `QR code:\n\n${qrAscii}\n\n` : '') +
                   `Instructions for the user:\n` +
                   `1. Open the URL above on their phone or another browser (scan the QR or copy-paste).\n` +
@@ -5079,16 +5158,18 @@ const plugin = {
                   `This session expires in ~5 minutes. Run this tool again if you need a fresh URL.`,
               }],
               details: {
-                sid: session.sid,
+                sid: sidOrToken,
                 url,
-                pin: session.secondaryCode,
+                pin,
                 mode,
-                expires_at_ms: session.expiresAtMs,
+                expires_at_ms: expiresAtMs,
                 qr_ascii: qrAscii,
-                // rc.5 additions — see SKILL.md "Rendering the QR on
-                // your transport" section for the agent-side logic.
                 qr_png_b64: qrPngB64,
                 qr_unicode: qrUnicode,
+                // rc.11 — surface the transport so downstream tooling (QA
+                // harness asserters, telemetry) can confirm which path
+                // served the URL. Either 'relay' or 'local'.
+                transport: pairMode,
               },
             };
           } catch (err: unknown) {

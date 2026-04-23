@@ -105,6 +105,21 @@ export const CONFIG = {
   // for 15-min TTL windows; 0600 mode.
   pairSessionsPath: process.env.TOTALRECLAW_PAIR_SESSIONS_PATH || path.join(home, '.totalreclaw', 'pair-sessions.json'),
 
+  // 3.3.1-rc.11 — pair-flow transport selector. Mirrors the Python-side
+  // `TOTALRECLAW_PAIR_MODE` env (rc.10). `'relay'` (default) routes
+  // `totalreclaw_pair` through the universal-reachability WebSocket relay at
+  // `TOTALRECLAW_PAIR_RELAY_URL`. `'local'` preserves the rc.4–rc.10 loopback
+  // HTTP flow (the plugin serves `/plugin/totalreclaw/pair/*` via
+  // `pair-http.ts`). Air-gapped / self-hosted users can pin `'local'` here.
+  pairMode: (() => {
+    const v = (process.env.TOTALRECLAW_PAIR_MODE ?? '').trim().toLowerCase();
+    return v === 'local' ? 'local' : 'relay';
+  })() as 'relay' | 'local',
+  // 3.3.1-rc.11 — relay base URL for the WebSocket-brokered pair flow.
+  // `wss://` preferred; `https://` is rewritten in the remote-client.
+  pairRelayUrl: (process.env.TOTALRECLAW_PAIR_RELAY_URL
+    || 'wss://api-staging.totalreclaw.xyz').replace(/\/+$/, ''),
+
   // Chain — chainId is no longer user-configurable. It is auto-detected from
   // the relay billing response (free = Base Sepolia / 84532, Pro = Gnosis /
   // 100). The default here is used only before the first billing lookup
