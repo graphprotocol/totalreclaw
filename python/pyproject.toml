@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "totalreclaw"
-version = "2.3.1rc9"
+version = "2.3.1rc10"
 description = "End-to-end encrypted memory for AI agents — Python client (Memory Taxonomy v1)"
 readme = "README.md"
 license = "MIT"
@@ -36,6 +36,17 @@ dependencies = [
     # upstream patches. Hybrid ML-KEM is deferred to rc.5 per the phrase-
     # safety rule's "document + ship pure x25519 for rc.4" carve-out.
     "cryptography>=42.0",
+    # 2.3.1rc5 — QR rendering for the pair tool. ``qrcode`` is tiny and
+    # pure-Python; the ``[pil]`` extra pulls in Pillow for PNG output.
+    # Both Telegram-image and terminal-Unicode rendering fall out of this
+    # one dep. See ``totalreclaw.pair.qr`` for the encoder wrappers.
+    "qrcode[pil]>=7.4,<9",
+    # 2.3.1rc10 — relay-brokered pair flow. Uses the ``websockets`` async
+    # client to open a short-lived WS to ``wss://<relay>/pair/session/open``
+    # and await the encrypted phrase upload. See
+    # ``totalreclaw.pair.remote_client`` for the transport, and the
+    # rc.10 blueprint in the internal repo for the full design.
+    "websockets>=12.0,<14",
 ]
 
 [project.optional-dependencies]

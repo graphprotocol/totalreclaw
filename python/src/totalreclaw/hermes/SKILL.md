@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Install + set up TotalReclaw encrypted memory for Hermes, then use totalreclaw_remember / totalreclaw_recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 2.3.1rc6
+version: 2.3.1rc10
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz

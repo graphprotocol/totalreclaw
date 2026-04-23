@@ -4,6 +4,12 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.10] — 2026-04-23
+
+Coordinated version bump with Hermes Python `2.3.1rc10`. rc.10 ships the relay-brokered pair flow — see `python/CHANGELOG.md` (the `2.3.1rc10` entry) for the full design. Plugin code in this release is unchanged from rc.9; the `totalreclaw_pair` pair URL on the OpenClaw plugin side still uses the gateway-loopback HTTP server (the OpenClaw plugin runs in-process alongside a browser on the same host for most deployments, so the loopback URL actually reaches the user). The relay-brokered path is currently Hermes-side only — the OpenClaw plugin can pick it up in a later RC if the same universal-reachability problem starts biting OpenClaw users.
+
+Version bump reason: rc cadence keeps Python + plugin aligned so the release-pipeline tracker carries them through QA as one artifact set.
+
 ## [3.3.1-rc.9] — 2026-04-23
 
 Coordinated version bump with Hermes Python `2.3.1rc9`. Plugin code itself is unchanged from `3.3.1-rc.6` (the first-run banner fix lives entirely on the Python side — `totalreclaw.onboarding.maybe_emit_welcome`). The rc.9 bundle ships the Hermes-side banner suppression and keeps plugin + Python versions aligned so the release-pipeline tracker can carry them through QA as one artifact set.

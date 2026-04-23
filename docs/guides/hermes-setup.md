@@ -59,7 +59,7 @@ The agent reads the explicit directive, calls `totalreclaw_pair`, and guides you
 1. Agent reads its TotalReclaw skill, picks up that `totalreclaw_*` tools are (or should be) live.
 2. Agent checks `~/.totalreclaw/credentials.json`; if absent, calls the `totalreclaw_pair` tool.
 3. A pair URL + 6-digit PIN is surfaced back to you in chat.
-4. You open the URL in your browser and enter (or let the browser generate) your recovery phrase, then confirm the PIN.
+4. You open the URL in your browser. The pair page offers two tabs: **Generate new** (the browser creates a fresh 12-word recovery phrase using the canonical BIP-39 wordlist) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, and continue.
 5. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives a ChaCha20-Poly1305 key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey to the gateway.
 6. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
 7. The agent confirms setup and your memory tools are live.
@@ -93,7 +93,11 @@ If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after upgrading also run `p
 
 ## Returning user (new machine)
 
-Paste the same canonical prompt. When the pair page loads, choose "import" and enter your existing 12/24-word phrase. The browser encrypts it against the gateway's ephemeral key before uploading.
+Paste the same canonical prompt. When the pair page loads, switch to the **Import existing** tab and enter your existing 12/24-word phrase. The browser encrypts it against the gateway's ephemeral key before uploading — the relay never sees plaintext.
+
+## First-time user (no phrase yet)
+
+Paste the same canonical prompt. The **Generate new** tab is selected by default. Click **Generate new 12-word phrase** — the browser creates a BIP-39 phrase using its own `crypto.getRandomValues` against the inlined 2048-word wordlist. Write the 12 words down somewhere safe (a password manager is fine), tick the acknowledgment, and click **Seal key and finish**. That is your one and only recovery key — there is no reset.
 
 ## Canonical prompts (these match the QA harness scenario contracts)
 

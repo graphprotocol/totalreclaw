@@ -1,18 +1,22 @@
 """Hermes agent tool: ``totalreclaw_pair``.
 
-Shipped in 2.3.1rc4 as part of the phrase-safety hardening. Called by
-the Hermes agent when the user asks to set up TotalReclaw. Spins up (or
-reuses) a local-loopback HTTP pair server, creates a session, and
-returns ``{url, pin, expires_at}`` to the agent — no phrase-adjacent
-data. The agent relays the URL + PIN to the user, who completes the
-flow in their browser. The recovery phrase NEVER crosses the LLM
-context.
+2.3.1rc10: default flow now routes through the relay-brokered WebSocket
+(``api-staging.totalreclaw.xyz/pair/*``). The tool still returns
+``{url, pin, expires_at, qr_png_b64, qr_unicode}`` — the URL now points
+at the universally-reachable relay instead of a gateway-loopback port.
+
+Backwards-compat: ``TOTALRECLAW_PAIR_MODE=local`` preserves the rc.4–rc.9
+loopback HTTP flow for air-gapped / offline / self-hosted setups.
 
 See ``~/.claude/projects/-Users-pdiogo-Documents-code-totalreclaw-
 internal/memory/project_phrase_safety_rule.md`` for the governing rule.
+The phrase still NEVER crosses LLM context — only the crypto-safe URL +
+PIN round-trips through the agent.
 """
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import logging
 import os
@@ -28,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Schema
+# Schema (unchanged from rc.5 — tool contract stays stable across relay pivot)
 # ---------------------------------------------------------------------------
 
 PAIR_SCHEMA: Dict[str, Any] = {
@@ -50,11 +54,14 @@ PAIR_SCHEMA: Dict[str, Any] = {
         "properties": {
             "mode": {
                 "type": "string",
-                "enum": ["generate", "import"],
+                "enum": ["generate", "import", "either"],
                 "description": (
-                    '"generate" = the browser will create a NEW 12-word '
-                    'recovery phrase. "import" = the user pastes an '
-                    "EXISTING phrase in the browser (never in this chat)."
+                    '"generate" = browser creates a NEW 12-word recovery '
+                    'phrase (pair page hides the import option). "import" = '
+                    'user pastes an EXISTING phrase (pair page hides the '
+                    'generate option). "either" = pair page shows both with '
+                    'a tab switcher so the user picks (default — safest when '
+                    "you don't know whether the user is new or returning)."
                 ),
             },
         },
@@ -63,7 +70,9 @@ PAIR_SCHEMA: Dict[str, Any] = {
 
 
 # ---------------------------------------------------------------------------
-# Module-singleton pair-HTTP server (lazy)
+# Local-mode module-singleton pair-HTTP server (lazy).
+#
+# Kept intact for ``TOTALRECLAW_PAIR_MODE=local`` — rc.4–rc.9 behaviour.
 # ---------------------------------------------------------------------------
 
 _SERVER_LOCK = threading.Lock()
@@ -89,23 +98,12 @@ class PairServerSingleton:
 
 
 def _resolve_sessions_dir() -> Path:
-    """Default to ``~/.totalreclaw`` — the same dir credentials.json lives in.
-
-    Kept as a helper so tests can monkeypatch ``pathlib.Path.home``.
-    """
+    """Default to ``~/.totalreclaw`` — the same dir credentials.json lives in."""
     return Path.home() / ".totalreclaw"
 
 
 def _complete_pairing_handler(state: "PluginState"):
-    """Closure that writes credentials.json + configures state.
-
-    ``state.configure(phrase)`` is the same code path that
-    ``tools.setup`` used in rc.3. We reuse it because it handles the EOA
-    derivation + credentials write atomically. The critical difference:
-    this path runs INSIDE the HTTP handler after the browser has
-    end-to-end-encrypted the phrase. The agent never saw the phrase, and
-    this handler's return payload to the browser contains NO phrase data.
-    """
+    """Closure that writes credentials.json + configures state — LOCAL mode."""
     from .pair_tool_completion import complete_pairing
 
     def _handler(phrase: str, session) -> Any:
@@ -114,16 +112,13 @@ def _complete_pairing_handler(state: "PluginState"):
     return _handler
 
 
-def _get_or_build_server(state: "PluginState"):
-    """Return the module-singleton pair server; build on first call."""
+def _get_or_build_local_server(state: "PluginState"):
+    """Return the module-singleton local-mode pair server."""
     global _SERVER_INSTANCE
     with _SERVER_LOCK:
         if _SERVER_INSTANCE is not None:
             return _SERVER_INSTANCE
 
-        # Late import to avoid pulling cryptography into module load if
-        # the tool is never called (e.g. on a stable build that hasn't
-        # shipped this tool yet).
         from ..pair import build_pair_http_server, default_pair_sessions_path
         from ..pair.http_server import PairHttpConfig
 
@@ -131,9 +126,6 @@ def _get_or_build_server(state: "PluginState"):
         base_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         sessions_path = default_pair_sessions_path(base_dir)
 
-        # Bind host: 127.0.0.1 by default. Operators running Hermes in
-        # Docker need to publish the port OR SSH-tunnel; those paths are
-        # documented in the setup guides. No LAN bind.
         bind_host = os.environ.get("TOTALRECLAW_PAIR_BIND_HOST", "127.0.0.1")
         bind_port_raw = os.environ.get("TOTALRECLAW_PAIR_BIND_PORT", "0")
         try:
@@ -154,6 +146,81 @@ def _get_or_build_server(state: "PluginState"):
 
 
 # ---------------------------------------------------------------------------
+# Pair-mode selector
+# ---------------------------------------------------------------------------
+
+
+def _pair_mode() -> str:
+    """Return 'local' or 'relay' based on env.
+
+    rc.10 default: 'relay'. Users can opt back into the rc.4–rc.9 loopback
+    flow with ``TOTALRECLAW_PAIR_MODE=local``.
+    """
+    v = (os.environ.get("TOTALRECLAW_PAIR_MODE") or "relay").strip().lower()
+    return "local" if v == "local" else "relay"
+
+
+# ---------------------------------------------------------------------------
+# Relay-mode: a background task completes the pairing after the tool returns.
+# ---------------------------------------------------------------------------
+
+
+def _spawn_relay_completion_task(
+    session,
+    state: "PluginState",
+) -> None:
+    """Schedule the phrase-upload-wait as a detached asyncio task.
+
+    Called synchronously from the tool body. The tool returns the
+    {url, pin, ...} payload to the agent, then this task blocks on the
+    WebSocket until the user completes the browser flow (or the 5-minute
+    TTL lapses).
+    """
+    from ..pair.remote_client import await_phrase_upload
+
+    async def _complete_pairing(phrase: str) -> dict:
+        # Run the synchronous state.configure in a thread so we don't stall
+        # the asyncio loop while credentials.json + EOA derivation happens.
+        loop = asyncio.get_running_loop()
+
+        def _do() -> dict:
+            try:
+                state.configure(phrase)
+                client = state.get_client()
+                eoa = getattr(client, "_eoa_address", None)
+                logger.info(
+                    "pair-tool(relay): credentials configured for EOA %s (token %s…)",
+                    eoa or "unknown",
+                    session.token[:8],
+                )
+                return {"state": "active", "account_id": eoa}
+            except Exception as err:
+                logger.error(
+                    "pair-tool(relay): complete_pairing failed token=%s…: %r",
+                    session.token[:8],
+                    err,
+                )
+                return {"state": "error", "error": str(err)}
+
+        return await loop.run_in_executor(None, _do)
+
+    async def _runner() -> None:
+        try:
+            await await_phrase_upload(session, complete_pairing=_complete_pairing)
+        except Exception as err:
+            logger.warning(
+                "pair-tool(relay): background task failed token=%s…: %r",
+                session.token[:8] if session.token else "?",
+                err,
+            )
+
+    # Fire-and-forget task on the current event loop. Hermes tool handlers
+    # run under asyncio so ``get_running_loop`` succeeds.
+    loop = asyncio.get_running_loop()
+    loop.create_task(_runner())
+
+
+# ---------------------------------------------------------------------------
 # Tool handler
 # ---------------------------------------------------------------------------
 
@@ -161,66 +228,88 @@ def _get_or_build_server(state: "PluginState"):
 async def pair(args: dict, state: "PluginState", **kwargs) -> str:
     """Agent-callable handler for ``totalreclaw_pair``.
 
-    Returns a JSON-encoded ``{url, pin, expires_at}`` payload. NO phrase
-    data crosses this return value.
+    Returns a JSON-encoded ``{url, pin, expires_at, qr_png_b64, qr_unicode,
+    mode, instructions}`` payload. NO phrase data crosses this return value.
+
+    Mode selection:
+      - ``TOTALRECLAW_PAIR_MODE=local`` → rc.4–rc.9 loopback HTTP server.
+      - unset / any other value → rc.10 relay-brokered WebSocket flow.
+
+    UI-mode selection (passed to the pair page):
+      - ``"generate"`` / ``"import"`` — pin the pair page to one panel.
+      - ``"either"`` (default) — let the user pick on the page. This is
+        the safest default for agents that don't know whether the user
+        has an existing phrase or is creating one fresh.
     """
-    raw_mode = args.get("mode", "generate")
-    mode = "import" if raw_mode == "import" else "generate"
+    raw_mode = args.get("mode")
+    if raw_mode in ("generate", "import", "either"):
+        mode = raw_mode
+    else:
+        mode = "either"
+    pair_mode = _pair_mode()
 
     try:
-        from ..pair import (
-            create_pair_session,
-            generate_gateway_keypair,
-        )
+        if pair_mode == "local":
+            # Local mode's pair_page.py predates "either" — map it to
+            # the first-run default (generate) since that's what a new
+            # user on a fresh local install is most likely doing.
+            local_mode = mode if mode in ("generate", "import") else "generate"
+            url, pin, expires_iso, session = await _pair_local(state, local_mode)
+        else:
+            url, pin, expires_iso = await _pair_relay(state, mode)
 
-        singleton = _get_or_build_server(state)
-        singleton.ensure_started()
+        qr_png_b64 = ""
+        qr_unicode = ""
+        try:
+            from ..pair import encode_png, encode_unicode  # type: ignore
 
-        kp = generate_gateway_keypair()
-        session = create_pair_session(
-            singleton.sessions_path,
-            mode=mode,
-            sk_b64=kp.sk_b64,
-            pk_b64=kp.pk_b64,
-        )
-
-        base_url = singleton.server.url_for(session.sid)
-        # The pubkey goes in the fragment so it never hits server logs.
-        url = f"{base_url}#pk={kp.pk_b64}"
-
-        expires_iso = datetime.fromtimestamp(
-            session.expires_at_ms / 1000.0, tz=timezone.utc
-        ).isoformat()
+            qr_png_b64 = base64.b64encode(encode_png(url)).decode("ascii")
+            qr_unicode = encode_unicode(url)
+        except Exception as qr_err:  # pragma: no cover — soft-fail
+            logger.warning("QR encode failed (non-fatal): %s", qr_err)
 
         logger.info(
-            "totalreclaw_pair: session %s… mode=%s port=%d",
-            session.sid[:8],
+            "totalreclaw_pair: mode=%s transport=%s qr_png=%d qr_unicode=%d",
             mode,
-            singleton.server.port,
+            pair_mode,
+            len(qr_png_b64),
+            len(qr_unicode),
         )
+
+        if mode == "generate":
+            step3 = (
+                "The browser generates a new 12-word recovery phrase. "
+                "Write it down BEFORE confirming — the phrase is "
+                "unrecoverable if lost.\n"
+            )
+        elif mode == "import":
+            step3 = (
+                "Paste your existing 12 or 24-word recovery phrase in the "
+                "browser (never in this chat).\n"
+            )
+        else:
+            step3 = (
+                "On the pair page, pick 'Generate new' if you don't have a "
+                "TotalReclaw recovery phrase yet, or 'Import existing' if "
+                "you do. The phrase stays in the browser — never in chat.\n"
+            )
 
         return json.dumps(
             {
                 "url": url,
-                "pin": session.secondary_code,
+                "pin": pin,
                 "expires_at": expires_iso,
                 "mode": mode,
+                "qr_png_b64": qr_png_b64,
+                "qr_unicode": qr_unicode,
                 "instructions": (
                     f"Relay these to the user verbatim:\n"
                     f"1. Open {url} in your browser.\n"
-                    f"2. Enter PIN {session.secondary_code} when asked.\n"
-                    f"3. "
-                    + (
-                        "The browser generates a new 12-word recovery phrase. "
-                        "Write it down BEFORE confirming — the phrase is "
-                        "unrecoverable if lost.\n"
-                        if mode == "generate"
-                        else "Paste your existing 12 or 24-word recovery phrase "
-                        "in the browser (never in this chat).\n"
-                    )
+                    f"2. Enter PIN {pin} when asked.\n"
+                    f"3. " + step3
                     + f"4. The encrypted phrase uploads to this gateway; it never crosses "
                     f"this chat.\n"
-                    f"5. Come back to chat once the browser says 'Pairing complete'. "
+                    f"5. Come back to chat once the browser says 'Paired'. "
                     f"Restart the Hermes gateway so the plugin picks up the new "
                     f"credentials."
                 ),
@@ -229,3 +318,55 @@ async def pair(args: dict, state: "PluginState", **kwargs) -> str:
     except Exception as err:
         logger.error("totalreclaw_pair failed: %s", err)
         return json.dumps({"error": f"Failed to start pairing session: {err}"})
+
+
+async def _pair_local(state: "PluginState", mode: str):
+    """rc.4–rc.9 loopback HTTP-server path (preserved for backwards-compat)."""
+    from ..pair import create_pair_session, generate_gateway_keypair
+
+    singleton = _get_or_build_local_server(state)
+    singleton.ensure_started()
+
+    kp = generate_gateway_keypair()
+    session = create_pair_session(
+        singleton.sessions_path,
+        mode=mode,
+        sk_b64=kp.sk_b64,
+        pk_b64=kp.pk_b64,
+    )
+
+    base_url = singleton.server.url_for(session.sid)
+    url = f"{base_url}#pk={kp.pk_b64}"
+    expires_iso = datetime.fromtimestamp(
+        session.expires_at_ms / 1000.0, tz=timezone.utc
+    ).isoformat()
+
+    logger.info(
+        "totalreclaw_pair(local): session %s… mode=%s port=%d",
+        session.sid[:8],
+        mode,
+        singleton.server.port,
+    )
+    return url, session.secondary_code, expires_iso, session
+
+
+async def _pair_relay(state: "PluginState", mode: str):
+    """rc.10 relay-brokered WebSocket path.
+
+    The relay's pair HTML page bundles the full BIP-39 English wordlist
+    (2048 words) and supports all three modes natively via ``crypto.subtle``:
+
+      - ``"generate"`` — browser creates a fresh 12-word phrase. The
+        wordlist is inlined in the page; no external fetch.
+      - ``"import"``   — user pastes an existing phrase.
+      - ``"either"``   — pair page shows both with a tab switcher.
+
+    The ``mode`` is passed to the relay via the ``open`` frame so the
+    server-rendered HTML only shows the panel(s) the caller asked for.
+    """
+    from ..pair.remote_client import open_remote_pair_session
+
+    session = await open_remote_pair_session(mode=mode)
+    _spawn_relay_completion_task(session, state)
+
+    return session.url, session.pin, session.expires_at

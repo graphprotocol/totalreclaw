@@ -53,8 +53,24 @@ from .session_store import (
 )
 from .http_server import PairHttpServer, build_pair_http_server
 from .pair_page import render_pair_page
+from .qr import QREncodeError, encode_png, encode_unicode
+from .remote_client import (
+    DEFAULT_RELAY_URL,
+    RemotePairSession,
+    await_phrase_upload,
+    open_remote_pair_session,
+    pair_via_relay,
+)
 
 __all__ = [
+    "DEFAULT_RELAY_URL",
+    "QREncodeError",
+    "RemotePairSession",
+    "await_phrase_upload",
+    "encode_png",
+    "encode_unicode",
+    "open_remote_pair_session",
+    "pair_via_relay",
     "AEAD_KEY_BYTES",
     "AEAD_NONCE_BYTES",
     "AEAD_TAG_BYTES",

@@ -50,7 +50,7 @@ The agent reads the explicit directive, installs the plugin (`openclaw plugins i
 4. The agent asks you to restart the gateway (`openclaw gateway restart` or `docker restart tr-openclaw`) so HTTP routes + hooks bind. The agent cannot self-restart the process it is running in.
 5. Agent calls the `totalreclaw_pair` tool.
 6. A pair URL + 6-digit PIN is surfaced back to you in chat.
-7. You open the URL in your browser, enter (or let the browser generate) your recovery phrase, confirm the PIN.
+7. You open the URL in your browser. The pair page offers two tabs: **Generate new** (the browser creates a fresh 12-word recovery phrase using the canonical BIP-39 wordlist) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, and continue.
 8. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives a ChaCha20-Poly1305 key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey to the gateway.
 9. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
 10. The agent confirms setup and your memory tools are live. First real interaction downloads a ~216 MB embedding model (cached locally, one-time).
@@ -125,7 +125,7 @@ Ask the agent naturally; the plugin picks the right tool.
 | **Import from** | "Import my Gemini history from ~/Downloads/..." |
 | **Pair** | "Set up TotalReclaw for me" — returns URL + PIN |
 
-Your recovery phrase is the only key to your memories. Store it safely. Retrieve later with `cat ~/.totalreclaw/credentials.json | jq -r .mnemonic`. On a new machine, paste the canonical prompt above and choose "import" in the browser.
+Your recovery phrase is the only key to your memories. Store it safely. Retrieve later with `cat ~/.totalreclaw/credentials.json | jq -r .mnemonic`. On a new machine, paste the canonical prompt above and switch to the **Import existing** tab in the browser. First-time users can stay on the default **Generate new** tab to create a fresh BIP-39 phrase.
 
 ---
 

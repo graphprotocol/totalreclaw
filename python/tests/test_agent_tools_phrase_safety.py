@@ -105,11 +105,20 @@ class TestPairToolReturnsNoPhrase:
         from totalreclaw.hermes import pair_tool
         from totalreclaw.hermes.state import PluginState
 
-        # Force the pair-server bind to a hermetic tmp dir.
+        # Force the pair-server bind to a hermetic tmp dir. Pin to local
+        # mode — rc.10 default is relay but this test must not hit the
+        # network. The payload shape is identical across both modes.
         with patch.object(pair_tool, "_resolve_sessions_dir", return_value=tmp_path):
             # Fresh singleton per test.
             pair_tool._SERVER_INSTANCE = None  # type: ignore[attr-defined]
-            with patch.dict(os.environ, {"TOTALRECLAW_PAIR_BIND_PORT": "0"}, clear=True):
+            with patch.dict(
+                os.environ,
+                {
+                    "TOTALRECLAW_PAIR_BIND_PORT": "0",
+                    "TOTALRECLAW_PAIR_MODE": "local",
+                },
+                clear=True,
+            ):
                 with patch.object(Path, "exists", return_value=False):
                     state = PluginState()
                 try:
