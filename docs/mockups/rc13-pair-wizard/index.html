@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="theme-color" content="#0B0B1A" />
+  <title>Pair your device — TotalReclaw (rc.13 mockup)</title>
+  <link rel="stylesheet" href="wizard.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <main id="main" class="wizard" aria-live="polite">
+    <!-- Top bar: logo + step meter + countdown -->
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="TotalReclaw">
+        <svg class="brand-mark" viewBox="0 0 256 256" aria-hidden="true" focusable="false">
+          <defs>
+            <linearGradient id="shieldGrad" x1="30%" y1="0%" x2="70%" y2="100%">
+              <stop offset="0%" stop-color="#5040B0"/>
+              <stop offset="100%" stop-color="#7B5CFF"/>
+            </linearGradient>
+          </defs>
+          <path d="M128 18 L212 58 V162 C212 210 174 236 128 250 C82 236 44 210 44 162 V58 Z"
+                fill="rgba(75,55,170,0.05)" stroke="url(#shieldGrad)" stroke-width="5" stroke-linejoin="round"/>
+          <path d="M128 40 L196 74 V160 C196 200 164 222 128 234 C92 222 60 200 60 160 V74 Z"
+                fill="none" stroke="url(#shieldGrad)" stroke-width="2.5" stroke-linejoin="round" opacity="0.45"/>
+          <path d="M 116 186 C 96 162, 60 124, 72 92 C 76 78, 94 70, 108 82 C 118 90, 114 108, 100 116"
+                fill="none" stroke="url(#shieldGrad)" stroke-width="9" stroke-linecap="round"/>
+          <path d="M 140 186 C 160 162, 196 124, 184 92 C 180 78, 162 70, 148 82 C 138 90, 142 108, 156 116"
+                fill="none" stroke="url(#shieldGrad)" stroke-width="9" stroke-linecap="round"/>
+        </svg>
+        <span class="brand-text">TotalReclaw</span>
+      </a>
+
+      <div class="meta">
+        <div class="step-meter" aria-label="Progress">
+          <span class="step-label"><span id="step-current">1</span> / 3</span>
+          <div class="step-dots" role="presentation">
+            <span class="dot" data-step="1" aria-hidden="true"></span>
+            <span class="dot" data-step="2" aria-hidden="true"></span>
+            <span class="dot" data-step="3" aria-hidden="true"></span>
+          </div>
+        </div>
+        <div class="countdown" id="countdown" aria-live="polite">
+          <svg class="clock" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M12 9v4l2.5 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="M9 3h6M12 3v2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+          <span id="countdown-text">10:00</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Stage contains exactly one active screen at a time -->
+    <section class="stage" id="stage">
+
+      <!-- ============ STEP 1 — PIN ============ -->
+      <article class="screen active" id="screen-pin" data-step="1" role="group" aria-labelledby="pin-heading">
+        <div class="screen-inner">
+          <p class="eyebrow">Step 1 of 3</p>
+          <h1 id="pin-heading" class="heading">Enter your PIN</h1>
+          <p class="subheading">Your agent showed you this PIN. It's there so only you can complete pairing.</p>
+
+          <div class="pin-wrap">
+            <div class="pin-cells" role="group" aria-label="6-digit PIN">
+              <input class="pin-cell" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="off" aria-label="Digit 1" data-index="0" />
+              <input class="pin-cell" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="off" aria-label="Digit 2" data-index="1" />
+              <input class="pin-cell" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="off" aria-label="Digit 3" data-index="2" />
+              <span class="pin-sep" aria-hidden="true"></span>
+              <input class="pin-cell" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="off" aria-label="Digit 4" data-index="3" />
+              <input class="pin-cell" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="off" aria-label="Digit 5" data-index="4" />
+              <input class="pin-cell" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="off" aria-label="Digit 6" data-index="5" />
+            </div>
+            <p class="pin-error" id="pin-error" role="alert" aria-live="assertive"></p>
+          </div>
+        </div>
+
+        <footer class="screen-cta">
+          <button type="button" class="btn-primary" id="pin-continue" disabled>Continue</button>
+          <p class="security-note">
+            <svg class="lock" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 1 1 10 0v3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+            This flow is the only secure way to set up your recovery phrase without the LLM provider ever seeing it.
+          </p>
+        </footer>
+      </article>
+
+      <!-- ============ STEP 2 — PHRASE ============ -->
+      <article class="screen" id="screen-phrase" data-step="2" role="group" aria-labelledby="phrase-heading" hidden>
+        <div class="screen-inner">
+          <p class="eyebrow">Step 2 of 3</p>
+          <h1 id="phrase-heading" class="heading">Your recovery phrase</h1>
+
+          <div class="tabs" role="tablist" aria-label="Phrase source">
+            <button type="button" class="tab active" role="tab" id="tab-import" aria-selected="true" aria-controls="panel-import" data-mode="import">
+              Import existing
+            </button>
+            <button type="button" class="tab" role="tab" id="tab-generate" aria-selected="false" aria-controls="panel-generate" data-mode="generate">
+              Generate new
+            </button>
+            <span class="tab-indicator" aria-hidden="true"></span>
+          </div>
+
+          <!-- Import panel (default) -->
+          <div id="panel-import" class="tab-panel" role="tabpanel" aria-labelledby="tab-import">
+            <p class="helper">Enter the 12 words of your existing recovery phrase.</p>
+            <div class="phrase-grid" id="phrase-grid-import" role="group" aria-label="12-word recovery phrase input">
+              <!-- JS populates 12 slots -->
+            </div>
+            <button type="button" class="btn-ghost" id="paste-all">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="5" y="6" width="14" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+              Paste all 12 words
+            </button>
+          </div>
+
+          <!-- Generate panel -->
+          <div id="panel-generate" class="tab-panel" role="tabpanel" aria-labelledby="tab-generate" hidden>
+            <p class="helper">We generated a fresh 12-word phrase for you. Write it down before continuing.</p>
+            <div class="phrase-grid readonly" id="phrase-grid-generate" role="group" aria-label="Generated 12-word recovery phrase">
+              <!-- JS populates 12 slots (readonly) -->
+            </div>
+            <div class="gen-actions">
+              <button type="button" class="btn-ghost" id="gen-copy">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 15V5a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+                <span id="gen-copy-label">Copy</span>
+              </button>
+              <button type="button" class="btn-ghost" id="gen-regen">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3M18 3v4h-4M6 21v-4h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Regenerate
+              </button>
+            </div>
+            <label class="ack" for="gen-ack">
+              <input type="checkbox" id="gen-ack" />
+              <span>I've written this down and stored it somewhere safe.</span>
+            </label>
+          </div>
+
+          <p class="security-note">
+            <svg class="lock" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 1 1 10 0v3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+            Never share this phrase. TotalReclaw's relay never sees it &mdash; encrypted in your browser before transmission.
+          </p>
+        </div>
+
+        <footer class="screen-cta">
+          <div class="cta-row">
+            <button type="button" class="btn-secondary" id="back-to-pin" aria-label="Back to PIN">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button type="button" class="btn-primary" id="phrase-pair" disabled>
+              <span class="btn-label">Pair</span>
+              <span class="btn-spinner" aria-hidden="true"></span>
+            </button>
+          </div>
+        </footer>
+      </article>
+
+      <!-- ============ STEP 3 — DONE ============ -->
+      <article class="screen" id="screen-done" data-step="3" role="group" aria-labelledby="done-heading" hidden>
+        <div class="screen-inner center">
+          <div class="check-wrap" aria-hidden="true">
+            <svg class="check" viewBox="0 0 100 100">
+              <circle class="check-ring" cx="50" cy="50" r="44" fill="none" stroke-width="3"/>
+              <path class="check-tick" d="M30 52 L45 67 L72 36" fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <h1 id="done-heading" class="heading">You're all set</h1>
+          <p class="subheading">Go back to your chat and try: <em>"remember I prefer Python over Go"</em></p>
+          <a href="#" class="close-link" id="close-link">Close this page</a>
+        </div>
+      </article>
+
+    </section>
+
+    <p class="build-note" aria-hidden="true">rc.13 mockup &middot; clickable preview &middot; no backend</p>
+  </main>
+
+  <script src="wizard.js"></script>
+</body>
+</html>
