@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Install + set up TotalReclaw encrypted memory for OpenClaw, then use totalreclaw_remember / totalreclaw_recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 3.3.1-rc.6
+version: 3.3.1-rc.10
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -34,7 +34,7 @@ If the user says "install totalreclaw" (or any variant) AND no `totalreclaw_*` t
 2. Tell the user: *"Plugin installed. Restarting the gateway so the tools bind."* Then ask the user to restart the gateway: `openclaw gateway restart` (native) or `docker restart tr-openclaw` (Docker). The agent-facing shell CANNOT self-restart the gateway it's running inside of — this step has to be a user action. Wait for the user to confirm the restart is done.
 3. After restart: verify `totalreclaw_pair` is now in your toolset. If not, tell the user the restart didn't take effect and to retry the restart command. Do not loop the install.
 4. Check `~/.totalreclaw/credentials.json` (via `test -s ~/.totalreclaw/credentials.json`). If it exists, confirm *"TotalReclaw is already set up."* and stop.
-5. Call `totalreclaw_pair`. Returns `{url, pin, qr_ascii, expires_at_ms}`.
+5. Call `totalreclaw_pair`. Returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}` (see "Rendering the QR on your transport" below for the rc.5+ additions).
 6. Relay verbatim: *"Open <url> in your browser. Enter your 12-word recovery phrase (or let the browser generate one). Confirm PIN <pin>. I'll wait for you to say done."*
 7. After user says done: verify `~/.totalreclaw/credentials.json`. If missing, call `totalreclaw_pair` again (PIN likely expired) and resend.
 8. Confirm: *"TotalReclaw set up ✓. Ask me to remember or recall anything — try `totalreclaw_remember` or ask me to remember something."*
@@ -47,10 +47,22 @@ Used when the user pastes a verbose prompt describing skill install + plugin ins
 
 1. `openclaw plugins install @totalreclaw/totalreclaw` (stable). For RC: `@totalreclaw/totalreclaw@rc`.
 2. Restart gateway so plugin routes + tools bind. Docker: `docker restart tr-openclaw`. Native: `openclaw gateway restart`. Wait ~5s; confirm the gateway is back up. (If you are running inside the gateway, ask the user to run the restart command and wait for confirmation.)
-3. Call `totalreclaw_pair`. Returns `{url, pin, qr_ascii, expires_at_ms}`.
+3. Call `totalreclaw_pair`. Returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}` (see "Rendering the QR on your transport" below for the rc.5+ additions).
 4. Relay to user verbatim: *"Open <url> in your browser. Enter your 12-word recovery phrase (or let the browser generate one). Confirm PIN <pin>. I'll wait for you to say done."*
 5. After user says done: verify `~/.totalreclaw/credentials.json` exists and is non-empty. If missing, call `totalreclaw_pair` again (PIN likely expired) and resend.
 6. Confirm: *"TotalReclaw is set up. Ask me to remember or recall anything."*
+
+## Rendering the QR on your transport (rc.5+)
+
+When you call `totalreclaw_pair` and receive the payload, tell the user: *"Open the URL below or scan this QR code from your phone. PIN: <pin>."*
+
+Then render the QR based on your chat transport:
+
+- **Transport supports image attachments** (Telegram, Slack, web chat, any transport with file/image upload): decode `qr_png_b64` from base64 to bytes, save to a tempfile with a `.png` suffix, and attach the tempfile as an image in your reply. Also show the URL + PIN as text so users who prefer clicking can still do so.
+- **Terminal-only transport** (OpenClaw native CLI chat, bare SSH shell): emit the `qr_unicode` string inline in your reply. It renders as block characters that display correctly in most terminal fonts; the user scans from their phone.
+- **Web chat with inline-image support**: embed as `<img src="data:image/png;base64,<qr_png_b64>" alt="Pair QR">` if the chat client renders HTML; otherwise fall back to attachment.
+
+The QR encodes ONLY the pair URL. The 6-digit PIN is a separate out-of-band confirmation — it is deliberately NOT baked into the QR (dual-channel design: scan + type). Never log, print, or re-emit the PIN outside of the user-facing reply. The PIN is a shared secret between you and the user; it must NOT end up in any other tool call, any log file, or any memory store.
 
 ## Phrase safety (HARD — never break)
 

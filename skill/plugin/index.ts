@@ -4891,162 +4891,36 @@ const plugin = {
     );
 
     // ---------------------------------------------------------------
-    // Tool: totalreclaw_setup (DEPRECATED in 3.2.0)
+    // Tools: totalreclaw_setup + totalreclaw_onboarding_start —
+    //   REMOVED in 3.3.1-rc.5 (phrase-safety carve-out closure).
     // ---------------------------------------------------------------
     //
-    // Pre-3.2.0 behaviour: auto-generate a mnemonic + return it in the tool
-    // response body so the LLM surfaces it to the user. That path shipped
-    // the recovery phrase to the LLM provider's logs — incompatible with
-    // TotalReclaw's "server cannot read your memories" pitch. 3.2.0
-    // replaces it with a pointer-only stub.
+    // rc.4 left these two registrations in place as *neutered* stubs —
+    // ``totalreclaw_setup`` rejected any ``recovery_phrase`` argument
+    // and returned a CLI-pointer message; ``totalreclaw_onboarding_start``
+    // was already pointer-only. Neither path could leak a phrase in
+    // rc.4, but the rc.4 auto-QA (2026-04-22) flagged them as future-
+    // regression surface: any future patch that re-enables phrase
+    // acceptance (e.g. a flag-driven "power-user" path) would silently
+    // re-open the leak, and their mere presence in the tool registry
+    // keeps signalling to agents that "phrase handling happens here".
     //
-    // Kept registered (rather than deleted) for back-compat — LLMs that
-    // learned the old tool name from training data won't silently succeed
-    // if the user asks them to set up memory. They'll call this tool,
-    // receive a pointer to `openclaw totalreclaw onboard`, and the flow
-    // continues on the user's TTY.
+    // Per ``project_phrase_safety_rule.md`` the ONLY approved agent-
+    // facilitated setup surface is ``totalreclaw_pair`` (browser-side
+    // crypto keeps the phrase out of the LLM round-trip by construction).
+    // rc.5 deletes both registrations outright. The underlying CLI
+    // wizard (``openclaw totalreclaw onboard``) is unchanged — users
+    // run it in their own terminal, outside any agent shell.
     //
-    // The `recovery_phrase` param is kept in the schema so existing tool
-    // calls parse — but ANY phrase the caller passes is rejected, and the
-    // tool NEVER writes credentials.json. All real setup happens in the
-    // CLI wizard.
-    api.registerTool(
-      {
-        name: 'totalreclaw_setup',
-        label: 'TotalReclaw setup (deprecated — redirect to CLI)',
-        description:
-          'DEPRECATED in 3.2.0. This tool no longer accepts recovery phrases or performs ' +
-          'setup. It returns a pointer to `openclaw totalreclaw onboard` — the secure CLI ' +
-          'wizard that runs on the user\'s terminal so the phrase never touches the LLM ' +
-          'provider. Prefer calling `totalreclaw_onboarding_start` for the same pointer.',
-        parameters: {
-          type: 'object',
-          properties: {
-            recovery_phrase: {
-              type: 'string',
-              description:
-                'Legacy parameter — IGNORED in 3.2.0. If provided, the tool returns a ' +
-                'security warning explaining that phrases must never be pasted through ' +
-                'chat. Use the `openclaw totalreclaw onboard` CLI wizard to import an ' +
-                'existing phrase safely.',
-            },
-          },
-          additionalProperties: false,
-        },
-        async execute(_toolCallId: string, params: { recovery_phrase?: string }) {
-          // Phrase-passing is a security boundary violation in 3.2.0. Reject
-          // with a message that explains WHY — the LLM might try again with
-          // a different shape otherwise.
-          if (typeof params?.recovery_phrase === 'string' && params.recovery_phrase.trim().length > 0) {
-            api.logger.warn(
-              'totalreclaw_setup: rejected phrase-passing call (3.2.0 deprecation).',
-            );
-            return {
-              content: [{
-                type: 'text',
-                text:
-                  'For security, TotalReclaw no longer accepts a recovery phrase through ' +
-                  'chat. Pasting a phrase into this tool would ship it to the LLM provider, ' +
-                  'which defeats the whole point of end-to-end encryption.\n\n' +
-                  'Ask the user to open a terminal on their machine and run:\n\n' +
-                  '    openclaw totalreclaw onboard\n\n' +
-                  'The wizard imports an existing phrase via a hidden stdin prompt that ' +
-                  'never touches the LLM, the transcript, or the network.',
-              }],
-            };
-          }
-
-          // No-arg call against an already-active state: confirm + move on.
-          const state = resolveOnboardingState(CREDENTIALS_PATH, CONFIG.onboardingStatePath);
-          if (state.onboardingState === 'active') {
-            return {
-              content: [{
-                type: 'text',
-                text:
-                  'TotalReclaw is already set up and active on this machine. Memory tools ' +
-                  'are unblocked — you can call `totalreclaw_remember` and `totalreclaw_recall` ' +
-                  'directly. If the user wants to rotate phrases, have them delete ' +
-                  '`~/.totalreclaw/credentials.json` and run `openclaw totalreclaw onboard` again.',
-              }],
-            };
-          }
-
-          // Fresh state, no phrase: redirect to the CLI wizard.
-          return {
-            content: [{
-              type: 'text',
-              text:
-                'TotalReclaw setup must run on the user\'s local terminal so the recovery ' +
-                'phrase never touches the LLM. Ask the user to open a terminal and run:\n\n' +
-                '    openclaw totalreclaw onboard\n\n' +
-                'The wizard walks through generate-new-phrase or import-existing-phrase. ' +
-                'After it completes, memory tools become available automatically. See the ' +
-                '`totalreclaw_onboarding_start` tool for the same pointer in a more ' +
-                'discoverable shape.',
-            }],
-          };
-        },
-      },
-      { name: 'totalreclaw_setup' },
-    );
-
-    // ---------------------------------------------------------------
-    // Tool: totalreclaw_onboarding_start (3.2.0 pointer-only tool)
-    // ---------------------------------------------------------------
+    // Audit assertion: ``phrase-safety-registry.test.ts`` asserts
+    // neither name is present in the ``api.registerTool`` call list.
+    // Re-adding either fails CI.
     //
-    // When the user asks the LLM to set up TotalReclaw, this tool directs
-    // them to the CLI wizard. The response body is a non-secret pointer —
-    // it NEVER contains a recovery phrase — so it can safely flow through
-    // the LLM provider and the transcript.
-    api.registerTool(
-      {
-        name: 'totalreclaw_onboarding_start',
-        label: 'TotalReclaw — start onboarding',
-        description:
-          'Call this when the user wants to set up TotalReclaw memory or asks about ' +
-          'enabling memory features. This tool does NOT generate, display, or accept ' +
-          'a recovery phrase — it returns a short pointer that tells the user to run ' +
-          'the onboarding wizard in their local terminal. All phrase handling happens ' +
-          'outside the LLM. If TotalReclaw is already active, the tool returns a ' +
-          'confirmation.',
-        parameters: {
-          type: 'object',
-          properties: {},
-          additionalProperties: false,
-        },
-        async execute() {
-          const state = resolveOnboardingState(CREDENTIALS_PATH, CONFIG.onboardingStatePath);
-          if (state.onboardingState === 'active') {
-            return {
-              content: [{
-                type: 'text',
-                text:
-                  'TotalReclaw is already set up on this machine. Your encryption keys are ' +
-                  'ready — `totalreclaw_remember`, `totalreclaw_recall`, and the other memory ' +
-                  'tools are unblocked. Run `openclaw totalreclaw status` in a terminal for ' +
-                  'more detail.',
-              }],
-            };
-          }
-          return {
-            content: [{
-              type: 'text',
-              text:
-                'TotalReclaw onboarding requires a local terminal so your recovery phrase ' +
-                'never touches the LLM provider. On the same machine as your OpenClaw ' +
-                'gateway, open a terminal and run:\n\n' +
-                '    openclaw totalreclaw onboard\n\n' +
-                'The wizard will ask whether you want to generate a new phrase or import an ' +
-                'existing TotalReclaw phrase. Both paths display/accept the phrase only on ' +
-                'your terminal — nothing crosses the network. After the wizard completes, ' +
-                'come back here and I\'ll be able to use `totalreclaw_remember` and ' +
-                '`totalreclaw_recall`.',
-            }],
-          };
-        },
-      },
-      { name: 'totalreclaw_onboarding_start' },
-    );
+    // Historical tombstone (so LLM-assisted contributors don't re-add
+    // the former shape from training-data memory): rc.4 registered two
+    // tools by the names "totalreclaw_setup" and
+    // "totalreclaw_onboarding_start" as pointer-only stubs. Both were
+    // deleted in rc.5. Do not re-introduce.
 
     // ---------------------------------------------------------------
     // Tool: totalreclaw_onboard — REMOVED in 3.3.1-rc.4 (phrase-safety).
@@ -5156,8 +5030,34 @@ const plugin = {
                 resolve('');
               }
             });
+
+            // 3.3.1-rc.5 — render the same pair URL as (a) a PNG for
+            // image-capable transports (Telegram / Slack / web chat)
+            // and (b) a Unicode block string for terminal transports.
+            // The PIN is NEVER encoded into the QR; the QR carries
+            // ONLY the URL. Best-effort — if encoding fails (unlikely
+            // with the pure-TS `qrcode` lib) we ship empty strings so
+            // the URL-copy flow keeps working.
+            let qrPngB64 = '';
+            let qrUnicode = '';
+            try {
+              const { encodePng, encodeUnicode } = await import('./pair-qr.js');
+              const [pngBuf, uni] = await Promise.all([
+                encodePng(url),
+                encodeUnicode(url),
+              ]);
+              qrPngB64 = pngBuf.toString('base64');
+              qrUnicode = uni;
+            } catch (qrErr: unknown) {
+              api.logger.warn(
+                `totalreclaw_pair: QR encode failed (non-fatal): ${
+                  qrErr instanceof Error ? qrErr.message : String(qrErr)
+                }`,
+              );
+            }
+
             api.logger.info(
-              `totalreclaw_pair: session ${session.sid.slice(0, 8)}… mode=${mode} url=${url}`,
+              `totalreclaw_pair: session ${session.sid.slice(0, 8)}… mode=${mode} url=${url} qr_png=${qrPngB64.length} qr_unicode=${qrUnicode.length}`,
             );
             return {
               content: [{
@@ -5185,6 +5085,10 @@ const plugin = {
                 mode,
                 expires_at_ms: session.expiresAtMs,
                 qr_ascii: qrAscii,
+                // rc.5 additions — see SKILL.md "Rendering the QR on
+                // your transport" section for the agent-side logic.
+                qr_png_b64: qrPngB64,
+                qr_unicode: qrUnicode,
               },
             };
           } catch (err: unknown) {

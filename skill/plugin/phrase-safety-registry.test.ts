@@ -17,10 +17,13 @@
  * What this test asserts:
  *   1. `totalreclaw_onboard` is NOT present as a `registerTool` name
  *      anywhere in `index.ts`. (rc.3 registered it; rc.4 removed it.)
- *   2. `totalreclaw_pair` IS present (the approved replacement).
- *   3. No tool name containing a phrase-adjacent token (`onboard_generate`,
+ *   2. `totalreclaw_setup` and `totalreclaw_onboarding_start` are NOT
+ *      present either. (rc.4 kept them as neutered pointer stubs; rc.5
+ *      deletes both — see the rc.4 auto-QA carve-out in the PR body.)
+ *   3. `totalreclaw_pair` IS present (the approved replacement).
+ *   4. No tool name containing a phrase-adjacent token (`onboard_generate`,
  *      `restore_phrase`, `mnemonic`, `generate_phrase`) is registered.
- *   4. The scan is defense-in-depth — a text search, not an AST walk —
+ *   5. The scan is defense-in-depth — a text search, not an AST walk —
  *      because a new registration that accidentally ships a phrase
  *      surface would almost always include one of these tokens.
  *
@@ -87,6 +90,21 @@ const registered = extractRegisteredToolNames(src);
 assert(
   !registered.includes('totalreclaw_onboard'),
   'phrase-safety: totalreclaw_onboard is NOT registered (removed in rc.4)',
+);
+
+// ---------------------------------------------------------------------------
+// 1b. totalreclaw_setup and totalreclaw_onboarding_start are NOT
+//     registered (rc.5 removes the rc.4 neutered stubs — closes the
+//     auto-QA carve-out that flagged them as future-regression
+//     surface even though they couldn't leak a phrase today).
+// ---------------------------------------------------------------------------
+assert(
+  !registered.includes('totalreclaw_setup'),
+  'phrase-safety: totalreclaw_setup is NOT registered (removed in rc.5)',
+);
+assert(
+  !registered.includes('totalreclaw_onboarding_start'),
+  'phrase-safety: totalreclaw_onboarding_start is NOT registered (removed in rc.5)',
 );
 
 // ---------------------------------------------------------------------------

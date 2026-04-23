@@ -6,7 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [3.3.1-rc.10] — 2026-04-23
 
-Coordinated version bump with Hermes Python `2.3.1rc10`. rc.10 ships the relay-brokered pair flow — see `python/CHANGELOG.md` (the `2.3.1rc10` entry) for the full design. Plugin code in this release is unchanged from rc.9; the `totalreclaw_pair` pair URL on the OpenClaw plugin side still uses the gateway-loopback HTTP server (the OpenClaw plugin runs in-process alongside a browser on the same host for most deployments, so the loopback URL actually reaches the user). The relay-brokered path is currently Hermes-side only — the OpenClaw plugin can pick it up in a later RC if the same universal-reachability problem starts biting OpenClaw users.
+Coordinated version bump with Hermes Python `2.3.1rc10`. rc.10 ships the relay-brokered pair flow — see `python/CHANGELOG.md` (the `2.3.1rc10` entry) for the full design. The `totalreclaw_pair` pair URL on the OpenClaw plugin side still uses the gateway-loopback HTTP server (the OpenClaw plugin runs in-process alongside a browser on the same host for most deployments, so the loopback URL actually reaches the user). The relay-brokered path is currently Hermes-side only — the OpenClaw plugin can pick it up in a later RC if the same universal-reachability problem starts biting OpenClaw users.
+
+Bundled into rc.10: the previously-parked rc.5 QR display layer from PR #76 (`pair-qr.ts` + `pair-qr.test.ts`, tool-payload `qr_png_b64` + `qr_unicode` fields, `totalreclaw_setup` / `totalreclaw_onboarding_start` stub removal). All rebased onto main via the chore/rc.10-qr-rebase-pr76 branch.
+
+### Added (rebased from PR #76)
+
+- **`skill/plugin/pair-qr.ts`** — new. QR encoder module wrapping `qrcode` (PNG) + `qrcode-terminal` (Unicode block). Same contract as the Python side (`totalreclaw.pair.qr`).
+- **`totalreclaw_pair` tool payload** — the `details` block now carries `qr_png_b64` (base64 PNG for image transports) and `qr_unicode` (terminal block-char string) alongside the existing `qr_ascii`. URL + PIN unchanged.
+- **SKILL.md "Rendering the QR on your transport" section** — per-transport agent rendering guidance (Telegram attachment, terminal inline, web chat `<img>` embed).
+- **`qrcode` + `@types/qrcode`** runtime deps.
+
+### Removed (rc.5 phrase-safety carve-out closure, rebased)
+
+- **`totalreclaw_setup` + `totalreclaw_onboarding_start`** agent tools — both were neutered pointer stubs in rc.4; rc.5 auto-QA flagged them as future-regression surface and their mere presence signalled to agents that "phrase handling happens here". Deleted outright in rc.5, preserved through rc.10. `skill/plugin/phrase-safety-registry.test.ts` now asserts neither name is registered.
 
 Version bump reason: rc cadence keeps Python + plugin aligned so the release-pipeline tracker carries them through QA as one artifact set.
 
