@@ -38,7 +38,8 @@ class TestConstants:
     def test_parity_with_ts_module(self):
         """These values MUST equal the TS module's exports. Any drift
         breaks cross-stack ciphertext interop."""
-        assert HKDF_INFO == "totalreclaw-pair-v1"
+        # rc.12: bumped to v2 after cipher-suite swap to AES-256-GCM.
+        assert HKDF_INFO == "totalreclaw-pair-v2"
         assert AEAD_KEY_BYTES == 32
         assert AEAD_NONCE_BYTES == 12
         assert AEAD_TAG_BYTES == 16

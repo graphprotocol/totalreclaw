@@ -8,7 +8,7 @@
  *   4. Contains the required security copy blocks (design doc + user
  *      ratification 2026-04-20 phone-page wave).
  *   5. Uses the brand tokens from v5b.html (--purple, --bg, etc.).
- *   6. Uses WebCrypto X25519 + ChaCha20-Poly1305 + HKDF.
+ *   6. Uses WebCrypto X25519 + AES-GCM + HKDF (rc.12 cipher swap).
  *   7. Reads pk from `window.location.hash` (design doc section 5c).
  *   8. Does NOT reference any external CDN / host.
  *   9. Escapes potentially-dangerous sid/apiBase injections via
@@ -127,9 +127,12 @@ function assert(cond: boolean, name: string): void {
     sid: 's', mode: 'generate', expiresAtMs: 0, apiBase: '/', nowMs: 0,
   });
   assert(html.includes('X25519'), 'crypto: X25519 algorithm referenced');
-  assert(html.includes('ChaCha20-Poly1305'), 'crypto: ChaCha20-Poly1305 referenced');
+  // rc.12: AEAD is AES-GCM (WebCrypto-supported). ChaCha20-Poly1305 is NOT
+  // implemented in browser WebCrypto; see pair-crypto.ts header for context.
+  assert(html.includes('AES-GCM'), 'crypto: AES-GCM referenced');
+  assert(!html.includes('ChaCha20-Poly1305'), 'crypto: no stale ChaCha20-Poly1305 ref');
   assert(html.includes('HKDF'), 'crypto: HKDF referenced');
-  assert(html.includes('totalreclaw-pair-v1'), 'crypto: HKDF info matches server');
+  assert(html.includes('totalreclaw-pair-v2'), 'crypto: HKDF info matches server (v2)');
   assert(html.includes('deriveBits'), 'crypto: WebCrypto deriveBits API used');
 }
 

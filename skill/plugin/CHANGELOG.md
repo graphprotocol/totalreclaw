@@ -4,6 +4,37 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.12] — 2026-04-23
+
+**Ship-stopper fix for rc.11.** The relay-served pair page's submit
+button threw `NotSupportedError: Failed to execute 'importKey' on
+'SubtleCrypto': Algorithm: Unrecognized name` when the user clicked
+"Seal key and finish". Root cause: `ChaCha20-Poly1305` is NOT
+implemented in the Web Crypto API of Chrome / Safari / Edge — the
+spec exposes `AES-GCM` as the only AEAD. rc.10/rc.11 never worked
+end-to-end for any user; every pair attempt failed silently and the
+token expired without logging a failure — GH issue #79.
+
+rc.12 swaps the cipher suite from ChaCha20-Poly1305 to AES-256-GCM on
+both sides (browser + gateway). Wire shape unchanged — still 12-byte
+nonce, 16-byte tag, sid-bound AAD, base64url encoding. HKDF info bumped
+from `totalreclaw-pair-v1` to `totalreclaw-pair-v2` so rc.11 ciphertexts
+cannot collide with rc.12 keys (fail-closed on any version skew).
+
+### Changed
+- `skill/plugin/pair-crypto.ts`: `aeadDecrypt` / `aeadEncryptWithSessionKey`
+  switched from `chacha20-poly1305` to `aes-256-gcm`. `HKDF_INFO` bumped
+  to `totalreclaw-pair-v2`.
+- `skill/plugin/pair-page.ts` (local-mode pair page): WebCrypto
+  `ChaCha20-Poly1305` calls swapped to `AES-GCM`. Capability probe
+  function renamed `chaChaSupported` → `aesGcmSupported`.
+
+### Observability
+- The relay's `pair-html.ts` (user-facing page) now reports phase-labelled
+  error messages so a network / encrypt / submit failure no longer masks
+  as a silent "stuck on acknowledge screen". Relay PR (fix/pair-aes-gcm-rc12)
+  is the canonical fix for the issue reported in #79.
+
 ## [3.3.1-rc.11] — 2026-04-23
 
 OpenClaw-side universal pair reachability — the plugin's `totalreclaw_pair` tool now routes through the relay WebSocket by default, mirroring the Python `2.3.1rc10` pivot on the Hermes side. The URL returned to the user is `https://api-staging.totalreclaw.xyz/pair/p/<token>#pk=<gateway_pubkey>` instead of the previous `http://<gateway-host>:<port>/plugin/totalreclaw/pair/finish?sid=<sid>#pk=…`. Managed hosts, Docker-in-cloud setups, phone-scan-QR flows, and split-network operators can now complete pairing without the browser needing loopback or LAN access to the gateway.

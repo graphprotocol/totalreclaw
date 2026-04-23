@@ -369,7 +369,8 @@ function assert(condition: boolean, name: string): void {
 // 16. Constant sanity
 // ---------------------------------------------------------------------------
 {
-  assert(HKDF_INFO === 'totalreclaw-pair-v1', 'const: HKDF info tag matches spec');
+  // rc.12: bumped to v2 after cipher-suite swap to AES-256-GCM.
+  assert(HKDF_INFO === 'totalreclaw-pair-v2', 'const: HKDF info tag matches spec (v2)');
   assert(AEAD_KEY_BYTES === 32, 'const: AEAD key 32 bytes');
   assert(AEAD_NONCE_BYTES === 12, 'const: AEAD nonce 12 bytes');
   assert(AEAD_TAG_BYTES === 16, 'const: AEAD tag 16 bytes');

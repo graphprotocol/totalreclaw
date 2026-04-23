@@ -60,7 +60,7 @@ The agent reads the explicit directive, calls `totalreclaw_pair`, and guides you
 2. Agent checks `~/.totalreclaw/credentials.json`; if absent, calls the `totalreclaw_pair` tool.
 3. A pair URL + 6-digit PIN is surfaced back to you in chat.
 4. You open the URL in your browser. The pair page offers two tabs: **Generate new** (the browser creates a fresh 12-word recovery phrase using the canonical BIP-39 wordlist) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, and continue.
-5. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives a ChaCha20-Poly1305 key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey to the gateway.
+5. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives an AES-256-GCM key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey to the gateway.
 6. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
 7. The agent confirms setup and your memory tools are live.
 
@@ -73,7 +73,7 @@ The recovery phrase never crosses the LLM context — not the chat transcript, n
 - Hermes Agent v0.5.0+ (https://github.com/NousResearch/hermes-agent)
 - An LLM provider configured in Hermes (zai / openai / anthropic / gemini)
 - Python 3.11+
-- An up-to-date browser with WebCrypto x25519 + ChaCha20-Poly1305 (Safari 17.2+ or Chromium 118+)
+- An up-to-date browser with WebCrypto x25519 + AES-GCM (Safari 17.2+ or Chromium 133+)
 
 ## Notes on `--pre`
 

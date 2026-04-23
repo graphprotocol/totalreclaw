@@ -7,7 +7,7 @@
  * Python implementation byte-for-byte so either side can open a session that
  * the relay (`totalreclaw-relay`) + browser page (`pair-html.ts`) already
  * understand. Crypto primitives come from the shared ``pair-crypto.ts``
- * module — the same ECDH + HKDF + ChaCha20-Poly1305 stack the loopback HTTP
+ * module — the same ECDH + HKDF + AES-256-GCM stack the loopback HTTP
  * server uses.
  *
  * Flow (this file implements the gateway half):

@@ -1,21 +1,26 @@
-"""TotalReclaw Hermes QR-pair flow (2.3.1rc4).
+"""TotalReclaw Hermes QR-pair flow (2.3.1rc12+).
 
 Browser-side crypto handoff that keeps the recovery phrase out of the
 LLM context. The gateway publishes an ephemeral x25519 public key via a
 local-loopback HTTP endpoint; the user's browser does x25519 ECDH +
-ChaCha20-Poly1305 AEAD encryption of the phrase against that key and
-POSTs the ciphertext back. The gateway decrypts, writes
+AES-256-GCM AEAD encryption of the phrase against that key and POSTs
+the ciphertext back. The gateway decrypts, writes
 ``~/.totalreclaw/credentials.json`` (0600), and the agent never sees the
 plaintext at any point.
 
-Parity with the TypeScript plugin's ``skill/plugin/pair-*.ts`` modules
-(3.3.0). Cipher-suite wire format is identical:
+Parity with the TypeScript plugin's ``skill/plugin/pair-*.ts`` modules.
+Cipher-suite wire format is identical:
 
 - x25519 ECDH key agreement (32-byte raw keys).
 - HKDF-SHA256 with ``salt = sid`` (UTF-8 bytes) and
-  ``info = "totalreclaw-pair-v1"`` (UTF-8) -> 32-byte AEAD key.
-- ChaCha20-Poly1305 AEAD, 12-byte nonce, 16-byte tag, ``AD = sid`` bytes.
+  ``info = "totalreclaw-pair-v2"`` (UTF-8) -> 32-byte AEAD key.
+- AES-256-GCM AEAD, 12-byte nonce, 16-byte tag, ``AD = sid`` bytes.
 - Base64url encoding for every wire field.
+
+Cipher-suite history: rc.4..rc.11 used ChaCha20-Poly1305 but the Web
+Crypto API doesn't implement it in Chrome/Safari/Edge — rc.12 swapped
+to AES-GCM. HKDF info bumped v1 → v2 to fail closed on cross-version
+mixes.
 
 ML-KEM hybrid parity (per ``project_phrase_safety_rule.md``) is DEFERRED
 to rc.5 — pure x25519 ships in rc.4 so Hermes gains *some* phrase-safe

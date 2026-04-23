@@ -6,6 +6,38 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1rc12] — 2026-04-23
+
+**Ship-stopper fix for rc.11.** The relay-served pair page's submit
+button threw `NotSupportedError: Failed to execute 'importKey' on
+'SubtleCrypto': Algorithm: Unrecognized name` when the user clicked
+"Seal key and finish". Root cause: `ChaCha20-Poly1305` is NOT implemented
+in the Web Crypto API of Chrome / Safari / Edge (AES-GCM is the only
+AEAD the spec currently exposes). rc.10/rc.11 never worked end-to-end
+for any user; every pair attempt failed silently and the token expired
+without logging a failure — GH issue #79.
+
+rc.12 swaps the cipher suite from ChaCha20-Poly1305 to AES-256-GCM on
+both sides (browser + gateway). Wire shape unchanged — still 12-byte
+nonce, 16-byte tag, sid-bound AAD, base64url encoding. HKDF info bumped
+from `totalreclaw-pair-v1` to `totalreclaw-pair-v2` so rc.11 ciphertexts
+cannot collide with rc.12 keys.
+
+### Changed
+- `totalreclaw.pair.crypto`: AEAD cipher swapped from `ChaCha20Poly1305`
+  to `AESGCM` (same `cryptography` package). HKDF info constant bumped.
+- `totalreclaw.pair.pair_page`: browser-side AEAD call and capability
+  probe updated to AES-GCM; HKDF info bumped.
+
+### Observability
+- Pair page emits phase-labelled error messages ("Key derivation failed",
+  "Encryption failed", "Submit failed", "Network error", "Gateway could
+  not finish pairing") instead of a single generic "Encryption failed"
+  that masked the browser crypto unsupported error.
+- Capability gate on page load now probes X25519 + AES-GCM + HKDF
+  end-to-end (rc.10/rc.11 only probed X25519, which passed in browsers
+  that still couldn't do AEAD).
+
 ## [2.3.1rc11] — 2026-04-23
 
 Version-bump-only on the Python side — the substantive rc.11 change is in the OpenClaw plugin, which ports the universal-reachability relay-brokered pair flow from Python rc.10 to TypeScript. See `skill/plugin/CHANGELOG.md` (the `3.3.1-rc.11` entry) for the full design. The Python client's own relay client (`totalreclaw.pair.remote_client`) is unchanged from rc.10 and continues to back the Hermes `totalreclaw_pair` tool.

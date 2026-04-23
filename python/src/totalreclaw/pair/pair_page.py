@@ -4,8 +4,8 @@ side of the QR-pair handshake.
 Python parity of ``skill/plugin/pair-page.ts``. The browser loads this
 page at ``GET /pair/<token>``, reads the gateway's ephemeral pubkey from
 the URL fragment (``#pk=<b64url>``), does x25519 ECDH + HKDF +
-ChaCha20-Poly1305 encrypt against the user's typed / generated phrase,
-and POSTs the ciphertext to ``POST /pair/<token>``.
+AES-256-GCM encrypt against the user's typed / generated phrase, and
+POSTs the ciphertext to ``POST /pair/<token>``.
 
 UI mirrors the TS page's UX:
 
@@ -31,8 +31,9 @@ size; on ``generate`` mode the page uses the browser's ``crypto.getRandomValues`
 build time. See :func:`_bip39_words` for the lazy loader.
 
 ML-KEM hybrid port: NOT in rc.4. Both TS and Python pages use pure
-x25519 + ChaCha20-Poly1305. Hybrid KEM lands in rc.5 in lockstep across
-both stacks.
+x25519 + AES-256-GCM (rc.12; was ChaCha20-Poly1305 in rc.4..rc.11 but
+that cipher is not exposed by WebCrypto). Hybrid KEM lands later in
+lockstep across both stacks.
 """
 from __future__ import annotations
 
@@ -222,9 +223,11 @@ _PAIR_PAGE_SCRIPT = r"""
     const NOW_MS = {now_ms};
     const BIP39 = {bip39_js};
 
-    const HKDF_INFO = "totalreclaw-pair-v1";
+    // rc.12: v2 after cipher-suite swap (ChaCha20-Poly1305 -> AES-256-GCM).
+    const HKDF_INFO = "totalreclaw-pair-v2";
     const AEAD_KEY_BYTES = 32;
     const AEAD_NONCE_BYTES = 12;
+    const AEAD_TAG_BITS = 128;
 
     // ---- Base64url helpers (matching Node / Python side) ----
     function b64url(buf) {{
@@ -250,10 +253,10 @@ _PAIR_PAGE_SCRIPT = r"""
       try {{ return b64urlDecode(m[1]); }} catch (_e) {{ return null; }}
     }}
 
-    // ---- Web Crypto: x25519 ECDH + HKDF-SHA256 + ChaCha20-Poly1305 ----
-    // WebCrypto's x25519 + ChaCha20-Poly1305 support lands in Safari 17.2
-    // and Chromium 118. Older browsers fall back to a fail-closed error
-    // page ("update your browser to pair securely"). No polyfill ship.
+    // ---- Web Crypto: x25519 ECDH + HKDF-SHA256 + AES-256-GCM ----
+    // rc.12: cipher suite swapped from ChaCha20-Poly1305 (not supported
+    // in WebCrypto) to AES-256-GCM (universal). Older browsers lacking
+    // X25519 still fall back to a fail-closed error page.
     async function deriveKey(gatewayPub, sid) {{
       // Generate an ephemeral x25519 keypair for the device side.
       const kp = await crypto.subtle.generateKey({{ name: "X25519" }}, true, ["deriveBits"]);
@@ -267,7 +270,7 @@ _PAIR_PAGE_SCRIPT = r"""
       );
       const shared = new Uint8Array(sharedBits);
 
-      // HKDF: extract with salt=sid, expand with info="totalreclaw-pair-v1".
+      // HKDF: extract with salt=sid, expand with info="totalreclaw-pair-v2".
       const baseKey = await crypto.subtle.importKey(
         "raw", shared, "HKDF", false, ["deriveBits"]
       );
@@ -286,11 +289,11 @@ _PAIR_PAGE_SCRIPT = r"""
 
     async function aeadEncrypt(kEnc, sid, plaintext) {{
       const key = await crypto.subtle.importKey(
-        "raw", kEnc, {{ name: "ChaCha20-Poly1305" }}, false, ["encrypt"]
+        "raw", kEnc, {{ name: "AES-GCM" }}, false, ["encrypt"]
       );
       const nonce = crypto.getRandomValues(new Uint8Array(AEAD_NONCE_BYTES));
       const ct = await crypto.subtle.encrypt(
-        {{ name: "ChaCha20-Poly1305", iv: nonce, additionalData: new TextEncoder().encode(sid) }},
+        {{ name: "AES-GCM", iv: nonce, additionalData: new TextEncoder().encode(sid), tagLength: AEAD_TAG_BITS }},
         key,
         plaintext
       );
@@ -459,15 +462,31 @@ _PAIR_PAGE_SCRIPT = r"""
       }}
     }}
 
-    // Capability gate: refuse to run on browsers without x25519 + ChaCha.
+    // Capability gate: probe X25519 + AES-GCM + HKDF end-to-end. rc.10/rc.11
+    // only probed X25519, missed that the browser didn't implement
+    // ChaCha20-Poly1305 — submit failed silently with "Algorithm:
+    // Unrecognized name". rc.12 probes every call this page will make.
     (async () => {{
       try {{
         const ok = crypto && crypto.subtle && typeof crypto.subtle.generateKey === "function";
         if (!ok) throw new Error("no webcrypto");
-        // Probe X25519 support without actually using a key.
         await crypto.subtle.generateKey({{ name: "X25519" }}, true, ["deriveBits"]);
+        const rawKey = new Uint8Array(AEAD_KEY_BYTES);
+        const aesKey = await crypto.subtle.importKey("raw", rawKey, {{ name: "AES-GCM" }}, false, ["encrypt"]);
+        const probeNonce = new Uint8Array(AEAD_NONCE_BYTES);
+        await crypto.subtle.encrypt(
+          {{ name: "AES-GCM", iv: probeNonce, additionalData: new Uint8Array(0), tagLength: AEAD_TAG_BITS }},
+          aesKey,
+          new Uint8Array(0)
+        );
+        await crypto.subtle.importKey("raw", rawKey, "HKDF", false, ["deriveBits"]);
       }} catch (err) {{
-        setStatus("This browser lacks x25519 + ChaCha20-Poly1305 support. Please use an up-to-date Safari (17.2+) or Chromium (118+) browser to pair securely.", "err");
+        setStatus(
+          "This browser lacks x25519 + AES-GCM + HKDF support required to pair securely. " +
+            "Use an up-to-date Safari 17.2+ or Chromium 133+ browser. (" +
+            (err && err.message ? err.message : String(err)) + ")",
+          "err"
+        );
         document.querySelectorAll("button").forEach(b => b.disabled = true);
       }}
     }})();

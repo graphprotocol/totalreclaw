@@ -1,19 +1,24 @@
 /**
- * pair-crypto — gateway-side cryptographic primitives for the v3.3.0
- * QR-pairing flow.
+ * pair-crypto — gateway-side cryptographic primitives for the v3.3.x
+ * relay-brokered pair flow.
  *
- * Cipher suite (per design doc section 3a-3b, ratified 2026-04-20):
+ * Cipher suite (design doc 3a-3b, cipher swap ratified 2026-04-23 / rc.12):
  *   - ECDH on x25519 for key agreement.
  *   - HKDF-SHA256 for symmetric-key derivation from the shared secret.
- *   - ChaCha20-Poly1305 AEAD for the ciphertext payload, with the sid
- *     bound as associated data (AD = sid UTF-8 bytes).
+ *   - AES-256-GCM AEAD for the ciphertext payload, with the sid bound as
+ *     associated data (AD = sid UTF-8 bytes, 12-byte nonce, 16-byte tag).
+ *
+ * rc.4..rc.11 used ChaCha20-Poly1305, but the Web Crypto API does NOT
+ * implement ChaCha20-Poly1305 in Chrome / Safari / Edge. The pair-page
+ * submit path silently threw `Algorithm: Unrecognized name` before
+ * reaching the network. rc.12 swaps the cipher suite to AES-256-GCM
+ * (universally supported in WebCrypto) and bumps HKDF_INFO to v2 so
+ * cross-version mis-pairs fail closed rather than garble.
  *
  * Every primitive is provided by the Node built-in `node:crypto` module
  * on Node 18.19+ and above. NO third-party crypto dependency is added
- * to the plugin for the gateway side. (The BROWSER side of the flow in
- * P2 uses WebCrypto with a `@noble/curves` + `@noble/ciphers` fallback
- * for older Safari — those ship as part of the served pairing page and
- * do NOT affect the plugin's server-side dep tree.)
+ * to the plugin for the gateway side. (The BROWSER side of the flow uses
+ * WebCrypto's AES-GCM directly — no shim needed.)
  *
  * Scope and guarantees
  * --------------------
@@ -33,11 +38,11 @@
  *
  * Interoperability with browser WebCrypto
  * ---------------------------------------
- *   The WebCrypto x25519 + HKDF + ChaCha20-Poly1305 APIs are bit-for-bit
- *   compatible with Node's `crypto` as long as:
+ *   The WebCrypto x25519 + HKDF + AES-GCM APIs are bit-for-bit compatible
+ *   with Node's `crypto` as long as:
  *     - Raw 32-byte public/private keys are used (not DER/SPKI).
  *     - HKDF parameters are (hash=SHA-256, salt=sid bytes, info fixed
- *       ASCII string, length=32 bytes → 256-bit AEAD key).
+ *       ASCII string "totalreclaw-pair-v2", length=32 bytes).
  *     - AEAD uses a 12-byte random nonce + 16-byte tag, AD = sid bytes.
  *   See tests for fixed test vectors.
  */
@@ -60,18 +65,23 @@ import {
 
 /**
  * HKDF "info" parameter — fixes the domain separation for this protocol.
- * MUST match the browser-side constant in the pair-page bundle (P2).
- * Versioned so we can roll to a new KDF without breaking old ciphertexts.
+ * MUST match the browser-side constant in the pair-page bundle + the
+ * relay-served pair-html page.
+ *
+ * Versioned so we can roll to a new KDF or cipher suite without silently
+ * producing garbage with old ciphertexts. rc.12: bumped from v1 to v2
+ * after cipher-suite swap from ChaCha20-Poly1305 → AES-256-GCM (see
+ * module header comment for context).
  */
-export const HKDF_INFO = 'totalreclaw-pair-v1';
+export const HKDF_INFO = 'totalreclaw-pair-v2';
 
-/** HKDF output length — 32 bytes = 256-bit ChaCha20-Poly1305 key. */
+/** HKDF output length — 32 bytes = 256-bit AES-256-GCM key. */
 export const AEAD_KEY_BYTES = 32;
 
-/** ChaCha20-Poly1305 nonce length — 12 bytes per RFC 7539. */
+/** AES-GCM nonce length — 12 bytes (SP 800-38D recommendation). */
 export const AEAD_NONCE_BYTES = 12;
 
-/** ChaCha20-Poly1305 auth tag length — 16 bytes standard. */
+/** AES-GCM auth tag length — 16 bytes (128 bits, standard). */
 export const AEAD_TAG_BYTES = 16;
 
 /** Raw x25519 public/private key length — 32 bytes per RFC 7748. */
@@ -101,7 +111,7 @@ export interface GatewayKeypair {
 
 /** Fully-derived session keys — caller uses kEnc for AEAD ops. */
 export interface SessionKeys {
-  /** 32-byte ChaCha20-Poly1305 key. */
+  /** 32-byte AES-256-GCM key. */
   kEnc: Buffer;
 }
 
@@ -323,9 +333,9 @@ export function deriveAeadKeyFromEcdh(opts: {
 // ---------------------------------------------------------------------------
 
 /**
- * Decrypt a ChaCha20-Poly1305 AEAD ciphertext. Returns the plaintext
- * on success; throws if the tag is invalid (which includes both
- * tampering and wrong-key attempts).
+ * Decrypt an AES-256-GCM AEAD ciphertext. Returns the plaintext on
+ * success; throws if the tag is invalid (which includes both tampering
+ * and wrong-key attempts).
  *
  * Ciphertext is expected in the combined form `plaintext || tag`, where
  * tag is the trailing 16 bytes. The caller MUST supply the same
@@ -351,7 +361,7 @@ export function aeadDecrypt(opts: {
   const ct = combined.subarray(0, combined.length - AEAD_TAG_BYTES);
   const tag = combined.subarray(combined.length - AEAD_TAG_BYTES);
 
-  const decipher = createDecipheriv('chacha20-poly1305', opts.kEnc, nonce, {
+  const decipher = createDecipheriv('aes-256-gcm', opts.kEnc, nonce, {
     authTagLength: AEAD_TAG_BYTES,
   });
   decipher.setAAD(Buffer.from(opts.sid, 'utf-8'), { plaintextLength: ct.length });
@@ -409,7 +419,7 @@ export function aeadEncryptWithSessionKey(opts: {
   }
 
   const pt = Buffer.isBuffer(opts.plaintext) ? opts.plaintext : Buffer.from(opts.plaintext);
-  const cipher = createCipheriv('chacha20-poly1305', opts.kEnc, nonceBuf, {
+  const cipher = createCipheriv('aes-256-gcm', opts.kEnc, nonceBuf, {
     authTagLength: AEAD_TAG_BYTES,
   });
   cipher.setAAD(Buffer.from(opts.sid, 'utf-8'), { plaintextLength: pt.length });

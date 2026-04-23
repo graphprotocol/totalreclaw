@@ -51,7 +51,7 @@ The agent reads the explicit directive, installs the plugin (`openclaw plugins i
 5. Agent calls the `totalreclaw_pair` tool.
 6. A pair URL + 6-digit PIN is surfaced back to you in chat.
 7. You open the URL in your browser. The pair page offers two tabs: **Generate new** (the browser creates a fresh 12-word recovery phrase using the canonical BIP-39 wordlist) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, and continue.
-8. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives a ChaCha20-Poly1305 key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey to the gateway.
+8. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives an AES-256-GCM key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey to the gateway.
 9. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
 10. The agent confirms setup and your memory tools are live. First real interaction downloads a ~216 MB embedding model (cached locally, one-time).
 
@@ -64,7 +64,7 @@ The recovery phrase never crosses the LLM context — not the chat transcript, n
 ## Prerequisites
 
 - OpenClaw v3.2.0+ with the gateway running
-- An up-to-date browser with WebCrypto x25519 + ChaCha20-Poly1305 (Safari 17.2+ or Chromium 118+)
+- An up-to-date browser with WebCrypto x25519 + AES-GCM (Safari 17.2+ or Chromium 133+)
 
 ---
 

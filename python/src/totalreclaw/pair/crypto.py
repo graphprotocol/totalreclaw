@@ -1,20 +1,29 @@
-"""pair.crypto — gateway-side x25519 + ChaCha20-Poly1305 primitives.
+"""pair.crypto — gateway-side x25519 + AES-256-GCM primitives.
 
-Python parity of ``skill/plugin/pair-crypto.ts`` (v3.3.0). Every wire
+Python parity of ``skill/plugin/pair-crypto.ts`` (v3.3.1-rc.12). Every wire
 constant (HKDF info, salt binding, tag length, key length) matches the
 TS module so a ciphertext produced by one side decrypts on the other
 unchanged.
 
-Cipher suite (per design doc section 3a-3b, ratified 2026-04-20):
+Cipher suite (per design doc section 3a-3b; cipher swap ratified 2026-04-23):
 
 - ECDH on x25519 for key agreement.
 - HKDF-SHA256 for symmetric-key derivation from the shared secret.
-- ChaCha20-Poly1305 AEAD for the ciphertext payload, with the sid
-  bound as associated data (``AD = sid UTF-8 bytes``).
+- AES-256-GCM AEAD for the ciphertext payload, with the sid bound as
+  associated data (``AD = sid UTF-8 bytes``).
 
 Every primitive is provided by the ``cryptography`` package (OpenSSL-
 backed). No phrase material, private keys, or secondary codes EVER flow
 through logs or return values.
+
+RC.12 cipher-suite swap
+-----------------------
+rc.4..rc.11 specified ChaCha20-Poly1305, but WebCrypto (Chrome / Safari
+/ Edge) does NOT implement ChaCha20-Poly1305 as of 2026-04-23 — the spec
+exposes AES-GCM as the only AEAD. The pair-page submit silently failed
+on encrypt with "Algorithm: Unrecognized name". rc.12 swaps the browser
+side to AES-256-GCM and bumps ``HKDF_INFO`` to ``totalreclaw-pair-v2``
+so mixed-version ciphertexts fail closed rather than silently garble.
 
 Byte encoding: every wire field is base64url (``urlsafe_b64``) with
 ``"="`` padding stripped, matching Node's ``Buffer.toString('base64url')``
@@ -38,7 +47,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PrivateKey,
     X25519PublicKey,
 )
-from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
     PrivateFormat,
@@ -53,15 +62,17 @@ from cryptography.hazmat.primitives.serialization import (
 
 #: HKDF "info" parameter — fixes the domain separation for this protocol.
 #: MUST match the browser-side constant in the pair-page bundle.
-HKDF_INFO = "totalreclaw-pair-v1"
+#: rc.12: bumped to v2 after cipher-suite swap from ChaCha20-Poly1305 to
+#: AES-256-GCM. v1 ciphertexts will fail closed under v2 HKDF.
+HKDF_INFO = "totalreclaw-pair-v2"
 
-#: HKDF output length — 32 bytes = 256-bit ChaCha20-Poly1305 key.
+#: HKDF output length — 32 bytes = 256-bit AES-256-GCM key.
 AEAD_KEY_BYTES = 32
 
-#: ChaCha20-Poly1305 nonce length — 12 bytes per RFC 7539.
+#: AES-GCM nonce length — 12 bytes (recommended per SP 800-38D).
 AEAD_NONCE_BYTES = 12
 
-#: ChaCha20-Poly1305 auth-tag length — 16 bytes standard.
+#: AES-GCM auth-tag length — 16 bytes (128 bits, standard).
 AEAD_TAG_BYTES = 16
 
 #: Raw x25519 public/private key length — 32 bytes per RFC 7748.
@@ -242,15 +253,16 @@ def derive_aead_key_from_ecdh(sk_local_b64: str, pk_remote_b64: str, sid: str) -
 
 
 def aead_decrypt(k_enc: bytes, nonce_b64: str, sid: str, ciphertext_b64: str) -> bytes:
-    """Decrypt a ChaCha20-Poly1305 ciphertext.
+    """Decrypt an AES-256-GCM ciphertext.
 
-    The ``cryptography`` library's ``ChaCha20Poly1305.decrypt`` expects
-    the ciphertext in combined ``plaintext || tag`` form and takes the
-    AD bytes directly — matching the Node API's ``setAAD`` behaviour.
+    The ``cryptography`` library's ``AESGCM.decrypt`` expects the
+    ciphertext in combined ``plaintext || tag`` form and takes the AD
+    bytes directly — matching both the Node ``setAAD`` API and the
+    WebCrypto ``additionalData`` parameter.
 
     Raises ``cryptography.exceptions.InvalidTag`` on tag mismatch (either
-    tampering or wrong key), which the HTTP handler catches and maps to
-    a 400 response.
+    tampering or wrong key), which the relay respond handler catches and
+    maps to a gateway nack → 502 response.
     """
     nonce = _b64url_decode(nonce_b64)
     if len(nonce) != AEAD_NONCE_BYTES:
@@ -263,7 +275,7 @@ def aead_decrypt(k_enc: bytes, nonce_b64: str, sid: str, ciphertext_b64: str) ->
     if len(combined) < AEAD_TAG_BYTES:
         raise ValueError("pair.crypto: ciphertext too short to contain tag")
 
-    aead = ChaCha20Poly1305(k_enc)
+    aead = AESGCM(k_enc)
     return aead.decrypt(nonce, combined, sid.encode("utf-8"))
 
 
@@ -315,7 +327,7 @@ def aead_encrypt_with_session_key(
         raise ValueError(f"pair.crypto: nonce must be {AEAD_NONCE_BYTES} bytes")
 
     pt = bytes(plaintext)
-    aead = ChaCha20Poly1305(k_enc)
+    aead = AESGCM(k_enc)
     ct = aead.encrypt(nonce, pt, sid.encode("utf-8"))
     return (_b64url_encode(nonce), _b64url_encode(ct))
 

@@ -364,7 +364,9 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
   // Client-observed time at page load (used to adjust for clock skew).
   const CLIENT_EPOCH_AT_LOAD = Date.now();
 
-  const HKDF_INFO = "totalreclaw-pair-v1";
+  // v2: cipher-suite swap in rc.12 (see pair-crypto.ts header). Keep
+  // this constant in lockstep with the gateway-side pair-crypto.ts.
+  const HKDF_INFO = "totalreclaw-pair-v2";
 
   // ---------- Small utilities ----------
   function $(sel, root) { return (root || document).querySelector(sel); }
@@ -473,10 +475,9 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
   }
 
   // ---------- Crypto shims: prefer WebCrypto; fall back to JS path ----------
-  // WebCrypto's x25519 + HKDF + ChaCha20-Poly1305 availability is Safari 17+
-  // and modern Chromium / Firefox. If absent we render an error — the page
-  // is self-contained, and we elect not to bundle @noble/curves + ciphers
-  // for the MVP (tracked as Wave 3.1 polish follow-up).
+  // WebCrypto's x25519 + HKDF + AES-GCM availability is Safari 17+ and
+  // modern Chromium 133+ / Firefox 130+. If absent we render an error
+  // — the page is self-contained and we do not bundle any JS crypto shim.
   async function ensureWebCryptoSupport() {
     if (!window.crypto || !crypto.subtle) return false;
     try {
@@ -505,29 +506,28 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
     );
     return new Uint8Array(bits);
   }
-  // AEAD: WebCrypto offers AES-GCM universally; ChaCha20-Poly1305 support is
-  // newer. We attempt chacha first; if it throws, we abort (do NOT silently
-  // swap ciphers — that would mismatch the gateway).
-  async function aeadEncryptChaCha(keyBytes, nonce, sid, plaintext) {
+  // AEAD: AES-256-GCM (universal in WebCrypto). Cipher swap rationale
+  // lives in pair-crypto.ts header comment (rc.12 changelog entry).
+  async function aeadEncryptAesGcm(keyBytes, nonce, sid, plaintext) {
     const key = await crypto.subtle.importKey(
       "raw", keyBytes,
-      { name: "ChaCha20-Poly1305" },
+      { name: "AES-GCM" },
       false, ["encrypt"],
     );
     const adBytes = new TextEncoder().encode(sid);
     const ct = new Uint8Array(await crypto.subtle.encrypt(
-      { name: "ChaCha20-Poly1305", iv: nonce, additionalData: adBytes, tagLength: 128 },
+      { name: "AES-GCM", iv: nonce, additionalData: adBytes, tagLength: 128 },
       key, plaintext,
     ));
     return ct;
   }
 
-  async function chaChaSupported() {
+  async function aesGcmSupported() {
     try {
       const k = new Uint8Array(32);
       const n = new Uint8Array(12);
-      const key = await crypto.subtle.importKey("raw", k, { name: "ChaCha20-Poly1305" }, false, ["encrypt"]);
-      await crypto.subtle.encrypt({ name: "ChaCha20-Poly1305", iv: n, additionalData: new Uint8Array(0), tagLength: 128 }, key, new Uint8Array(0));
+      const key = await crypto.subtle.importKey("raw", k, { name: "AES-GCM" }, false, ["encrypt"]);
+      await crypto.subtle.encrypt({ name: "AES-GCM", iv: n, additionalData: new Uint8Array(0), tagLength: 128 }, key, new Uint8Array(0));
       return true;
     } catch (e) { return false; }
   }
@@ -742,8 +742,8 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
       render(renderError("Your browser does not support modern cryptographic APIs (X25519). Please update your browser and try again, or use a different device. Supported: Chrome 123+, Firefox 130+, Safari 17+."));
       return;
     }
-    if (!(await chaChaSupported())) {
-      render(renderError("Your browser does not support ChaCha20-Poly1305. Update your browser or use a different device."));
+    if (!(await aesGcmSupported())) {
+      render(renderError("Your browser does not support AES-GCM. Update your browser or use a different device."));
       return;
     }
 
@@ -762,7 +762,7 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
       const nonce = new Uint8Array(12);
       crypto.getRandomValues(nonce);
       const ptBytes = new TextEncoder().encode(mnemonic);
-      const ct = await aeadEncryptChaCha(kEnc, nonce, SID, ptBytes);
+      const ct = await aeadEncryptAesGcm(kEnc, nonce, SID, ptBytes);
 
       // 6. Zero sensitive buffers BEFORE sending. The JS GC will run
       //    whenever it runs; explicit zeroing is best-effort but honours
