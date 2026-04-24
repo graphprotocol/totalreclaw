@@ -5412,11 +5412,18 @@ const plugin = {
                 '## TotalReclaw setup pending\n\n' +
                 'TotalReclaw encrypted memory is installed but not yet set up on this machine. ' +
                 'If the user asks about memory features or wants to configure TotalReclaw, ' +
-                'call the `totalreclaw_onboarding_start` tool for instructions.\n\n' +
+                'call the `totalreclaw_pair` tool — it returns a pairing URL + 6-digit PIN ' +
+                'the user opens in a browser (phrase is generated and encrypted in-browser, ' +
+                'never leaves their device in plaintext). If `totalreclaw_pair` is not in ' +
+                'your tool list (container-based agents sometimes miss it), shell out to ' +
+                '`openclaw totalreclaw pair generate --url-pin-only` on the gateway host — ' +
+                'it emits a single JSON line `{v,url,pin,expires_at_ms}` with no phrase ' +
+                'material; hand the user the `url` and `pin`.\n\n' +
                 '**Do NOT** attempt to generate, display, or relay a recovery phrase in chat. ' +
-                'All phrase handling happens on the user\'s local terminal via ' +
-                '`openclaw totalreclaw onboard` — this keeps the phrase out of the LLM ' +
-                'provider\'s logs.',
+                '**Do NOT** run `openclaw totalreclaw onboard` — that CLI emits the recovery ' +
+                'phrase on stdout and would leak it into the LLM transcript. Use `pair` ' +
+                '(tool or `--url-pin-only` CLI) instead; `onboard` is reserved for users ' +
+                'running it directly in their own local terminal.',
             };
           }
 

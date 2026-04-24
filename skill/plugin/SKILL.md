@@ -66,7 +66,7 @@ The QR encodes ONLY the pair URL. The 6-digit PIN is a separate out-of-band conf
 
 ## Phrase safety (HARD — never break)
 
-NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER invoke `openclaw totalreclaw onboard`, `totalreclaw setup`, or any phrase-touching CLI via your shell tool (stdout enters LLM context). The ONLY agent-facilitated setup path is `totalreclaw_pair`. If the user pastes a phrase anyway: tell them it is compromised, call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
+NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER invoke `openclaw totalreclaw onboard`, `totalreclaw setup`, or any phrase-touching CLI via your shell tool (stdout enters LLM context). The ONLY agent-facilitated setup paths are (in order of preference): (1) `totalreclaw_pair` tool; (2) if the tool is missing from your tool list — a known gap for some container-based agents, issue #87 — shell out to `openclaw totalreclaw pair generate --url-pin-only`, which emits a single-line JSON `{v,url,pin,expires_at_ms}` with zero phrase material on stdout (pair-crypto is x25519-only, not BIP-39). If the user pastes a phrase anyway: tell them it is compromised, call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
 
 ## Usage (post-setup)
 
@@ -78,7 +78,7 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
 
 ## Diagnostics
 
-- `totalreclaw_*` tools not visible → plugin not installed or gateway not restarted. Verify via `openclaw plugins list | grep totalreclaw`. If listed, ask the user to restart the gateway.
+- `totalreclaw_*` tools not visible → plugin not installed or gateway not restarted. Verify via `openclaw plugins list | grep totalreclaw`. If listed but tools still absent (container-agent gap, issue #87), shell out to `openclaw totalreclaw pair generate --url-pin-only` on the gateway host and hand the user the `url` + `pin` from the JSON payload — do NOT suggest `openclaw totalreclaw onboard` (leaks phrase on stdout).
 - User says done but `credentials.json` missing → PIN expired or entered wrong phrase; call `totalreclaw_pair` again.
 - `onboarding required` → credentials missing; redo from the pair step.
 - `quota exceeded` → `totalreclaw_status`, then offer `totalreclaw_upgrade`.
