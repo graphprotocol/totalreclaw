@@ -4,6 +4,59 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.14] — 2026-04-24
+
+Coordinated version bump with Python `2.3.1rc14`. Two narrow bug fixes
+found during rc.13 user QA on 2026-04-24:
+
+### RC-gated QA bug tool — target-repo hardening
+
+`totalreclaw_report_qa_bug` now refuses to file to any repo that isn't
+internal. rc.13 user QA surfaced agent-filed bug reports leaking to the
+public `p-diogo/totalreclaw` tracker despite the tool's default target
+being `p-diogo/totalreclaw-internal`.
+
+- New env var: `TOTALRECLAW_QA_REPO` lets operators point the tool at a
+  private fork. The default stays `p-diogo/totalreclaw-internal`.
+- New `resolveQaRepo(...)` guard: rejects any slug that is on the
+  public-repo denylist (includes `p-diogo/totalreclaw`,
+  `...-website`, `...-relay`, `...-plugin`, `...-hermes`) OR does not
+  end in `-internal`. The check runs before the HTTP POST is
+  constructed, so rejection never leaves the client.
+- `CONFIG.qaRepoOverride` surfaces the env var through `config.ts`
+  (keeps scanner-sensitive `process.env` reads centralized).
+- Regression test in `qa-bug-report.test.ts` mocks the public slug
+  and asserts `fetch` is NEVER called.
+
+Labels on filing unchanged — still emits `qa-bug`, `pending-triage`,
+`severity:<...>`, `component:<...>`, `rc:<...>`.
+
+### Relay pair page — PIN paste button UX
+
+The paste button on the step-1 PIN screen was silently failing under
+certain browser states. rc.14 rewrites the handler with a proper
+error taxonomy:
+
+- Capability probe up front — `navigator.clipboard.readText` missing →
+  clear "Paste unavailable on this browser" toast.
+- `NotAllowedError` → "Clipboard access denied — type the 6 digits
+  manually" (covers iOS Safari permission denial).
+- Empty clipboard → "Clipboard is empty — copy the PIN from your chat
+  first".
+- Non-digit content → "Clipboard has no digits — copy the 6-digit PIN
+  first".
+- Every failure path focuses the first PIN cell so the user can fall
+  through to manual typing without another click.
+- Errors log to `console.warn` with name + message so future failures
+  are diagnosable from browser devtools.
+
+The mockup at `docs/mockups/rc13-pair-wizard/wizard.js` gets the same
+rewrite for parity — the relay's `scripts/sync-pair-preview.mjs`
+regenerates `/pair-preview/` from this source.
+
+Fix also applies to the "Paste all 12 words" import-grid button on the
+relay production page (same taxonomy, same focus-fallback).
+
 ## [3.3.1-rc.13] — 2026-04-24
 
 Coordinated version bump with Python `2.3.1rc13`. No substantive

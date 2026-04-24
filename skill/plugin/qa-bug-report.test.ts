@@ -14,8 +14,11 @@
  */
 
 import {
+  DEFAULT_QA_REPO,
+  PUBLIC_REPOS_DENYLIST,
   isRcBuild,
   redactSecrets,
+  resolveQaRepo,
   validateQaBugArgs,
   buildIssueBody,
   postQaBugIssue,
@@ -197,6 +200,98 @@ assert(validateQaBugArgs(validArgs).ok === true, 'validate: valid args → ok');
 }
 
 // ---------------------------------------------------------------------------
+// resolveQaRepo — rc.14 target-repo guard
+// ---------------------------------------------------------------------------
+
+{
+  // Default (no override, no env) → internal.
+  assert(resolveQaRepo(null, {}) === 'p-diogo/totalreclaw-internal', 'resolve: default → internal');
+  assert(resolveQaRepo(null, {}) === DEFAULT_QA_REPO, 'resolve: DEFAULT_QA_REPO exported constant');
+}
+
+{
+  // Env override accepted when slug ends in -internal.
+  const env = { TOTALRECLAW_QA_REPO: 'acme/totalreclaw-qa-internal' };
+  assert(
+    resolveQaRepo(null, env) === 'acme/totalreclaw-qa-internal',
+    'resolve: env override accepted for -internal fork',
+  );
+}
+
+{
+  // Explicit override beats env override.
+  const env = { TOTALRECLAW_QA_REPO: 'other/totalreclaw-internal' };
+  assert(
+    resolveQaRepo('acme/totalreclaw-internal', env) === 'acme/totalreclaw-internal',
+    'resolve: explicit override beats env',
+  );
+}
+
+{
+  // Public repo denylist hit — throws.
+  let threw = false;
+  try {
+    resolveQaRepo(null, { TOTALRECLAW_QA_REPO: 'p-diogo/totalreclaw' });
+  } catch (err) {
+    threw = true;
+    assert(
+      err instanceof Error && err.message.includes('PUBLIC'),
+      'resolve: public-repo error mentions "PUBLIC"',
+    );
+  }
+  assert(threw, 'resolve: env pointing at public repo throws');
+}
+
+{
+  // Public repo via explicit override — throws.
+  let threw = false;
+  try {
+    resolveQaRepo('p-diogo/totalreclaw', {});
+  } catch {
+    threw = true;
+  }
+  assert(threw, 'resolve: explicit public-repo override throws');
+}
+
+{
+  // Non -internal slug — throws.
+  let threw = false;
+  try {
+    resolveQaRepo('someone/random-repo', {});
+  } catch (err) {
+    threw = true;
+    assert(
+      err instanceof Error && err.message.includes('-internal'),
+      'resolve: structural-rule error mentions "-internal"',
+    );
+  }
+  assert(threw, 'resolve: non "-internal" slug throws');
+}
+
+{
+  // Malformed slug — throws.
+  let threw = false;
+  try {
+    resolveQaRepo('no-slash', {});
+  } catch (err) {
+    threw = true;
+    assert(
+      err instanceof Error && err.message.includes('owner/name'),
+      'resolve: malformed slug error mentions format hint',
+    );
+  }
+  assert(threw, 'resolve: malformed slug throws');
+}
+
+{
+  // Denylist sanity — historical leak target captured.
+  assert(
+    PUBLIC_REPOS_DENYLIST.has('p-diogo/totalreclaw'),
+    'resolve: denylist contains public repo',
+  );
+}
+
+// ---------------------------------------------------------------------------
 // postQaBugIssue — mocked fetch
 // ---------------------------------------------------------------------------
 
@@ -300,6 +395,52 @@ async function runPostTests(): Promise<void> {
       assert(err instanceof Error && err.message.includes('integration'), 'post: invalid integration error');
     }
     assert(threw, 'post: invalid args throws');
+  }
+
+  // rc.14 regression: post rejects explicit public-repo override, never calls fetch.
+  {
+    let fetchCalled = false;
+    const mockFetch = (async (): Promise<Response> => {
+      fetchCalled = true;
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch;
+    let threw = false;
+    try {
+      await postQaBugIssue(validArgs, {
+        githubToken: 'gh-token',
+        repo: 'p-diogo/totalreclaw',
+        fetchImpl: mockFetch,
+      });
+    } catch (err) {
+      threw = true;
+      assert(
+        err instanceof Error && err.message.includes('PUBLIC'),
+        'post: public-repo error mentions "PUBLIC"',
+      );
+    }
+    assert(threw, 'post: rejects public-repo override');
+    assert(!fetchCalled, 'post: fetch never called for public repo');
+  }
+
+  // rc.14 regression: post uses explicit internal override when provided.
+  {
+    let capturedUrl = '';
+    const mockFetch = (async (url: string | URL | Request): Promise<Response> => {
+      capturedUrl = String(url);
+      return new Response(
+        JSON.stringify({ number: 1, html_url: 'https://example/1' }),
+        { status: 201, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+    await postQaBugIssue(validArgs, {
+      githubToken: 'gh-token',
+      repo: 'acme/totalreclaw-internal',
+      fetchImpl: mockFetch,
+    });
+    assert(
+      capturedUrl.endsWith('/repos/acme/totalreclaw-internal/issues'),
+      'post: honors -internal override slug',
+    );
   }
 }
 

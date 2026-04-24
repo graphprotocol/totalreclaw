@@ -6,6 +6,42 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1rc14] — 2026-04-24
+
+Coordinated version bump with plugin `3.3.1-rc.14`. Two narrow bug
+fixes found during rc.13 user QA on 2026-04-24.
+
+### RC-gated QA bug tool — target-repo hardening
+
+`totalreclaw_report_qa_bug` now refuses to file to any repo that isn't
+an internal fork. rc.13 user QA surfaced agent-filed bug reports
+leaking to the public `p-diogo/totalreclaw` tracker despite the tool's
+default target being `p-diogo/totalreclaw-internal`. Private QA
+ship-stopper detail must not reach public.
+
+- New env var: `TOTALRECLAW_QA_REPO` lets operators point the tool at
+  a private fork. Default stays `p-diogo/totalreclaw-internal`.
+- New `resolve_qa_repo(...)` guard: rejects any slug that is on the
+  public-repo denylist (includes `p-diogo/totalreclaw`,
+  `...-website`, `...-relay`, `...-plugin`, `...-hermes`) OR does not
+  end in `-internal`. Rejection happens before the `httpx.post(...)`
+  call is constructed; the HTTPS POST never reaches the network.
+- Regression test in `test_qa_bug_report_rc3.py` mocks the public
+  slug and asserts `mock_client.post` is NEVER called.
+
+Labels on filing unchanged — still emits `qa-bug`, `pending-triage`,
+`severity:<...>`, `component:<...>`, `rc:<...>`.
+
+### Relay pair page — PIN paste button UX
+
+Lives in the `totalreclaw-relay` repo
+(`src/routes/pair-html.ts`), not in this package — documented here
+because the plugin + Python + relay all ship together as one RC
+bundle. See the relay repo PR for details. The mockup at
+`docs/mockups/rc13-pair-wizard/wizard.js` gets the same rewrite so the
+relay sync script regenerates `/pair-preview/` from a consistent
+source.
+
 ## [2.3.1rc13] — 2026-04-24
 
 **Ship-stopper fix for rc.12.** Calling `totalreclaw_pair` from the

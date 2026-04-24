@@ -5280,10 +5280,16 @@ const plugin = {
                   details: { error: 'missing_github_token' },
                 };
               }
+              // rc.14 — `repo` is resolved inside `postQaBugIssue` via
+              // `resolveQaRepo(...)`, which reads `TOTALRECLAW_QA_REPO` and
+              // refuses any slug that isn't a `-internal` fork. Pass the
+              // config-surfaced override so env reads stay in config.ts.
+              const repoOverride = CONFIG.qaRepoOverride || undefined;
               const result = await postQaBugIssue(
                 params as unknown as import('./qa-bug-report.js').QaBugArgs,
                 {
                   githubToken: token,
+                  repo: repoOverride,
                   logger: api.logger,
                 },
               );

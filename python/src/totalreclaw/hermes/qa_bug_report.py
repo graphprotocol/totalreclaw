@@ -10,6 +10,13 @@ fail-close before the HTTPS POST: BIP-39 phrases, API keys, Telegram
 bot tokens, and bearer-token auth headers are replaced with
 ``<REDACTED>``. The agent is also instructed (via SKILL.md addendum) to
 not pass raw secrets, but redaction is the last line of defence.
+
+The target repo defaults to ``p-diogo/totalreclaw-internal`` and can
+only be overridden via the ``TOTALRECLAW_QA_REPO`` environment variable
+to a repo slug ending in ``-internal``. Any other slug (including the
+public ``p-diogo/totalreclaw`` repo) is rejected with a loud error —
+QA bug reports frequently contain RC ship-stopper detail that must
+never reach the public tracker. See rc.13 → rc.14 for the fix rationale.
 """
 from __future__ import annotations
 
@@ -112,6 +119,64 @@ def redact_secrets(text: Optional[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Target repo guard — fail-loud on any repo that isn't the internal tracker.
+# ---------------------------------------------------------------------------
+
+DEFAULT_QA_REPO = "p-diogo/totalreclaw-internal"
+
+# Repo slugs we KNOW are public. The slug must also end in ``-internal``
+# (structural rule); this list is a belt-and-braces explicit denylist so
+# the rule catches the historical ``p-diogo/totalreclaw`` leak even if a
+# future repo rename skips the ``-internal`` suffix.
+PUBLIC_REPOS_DENYLIST = frozenset({
+    "p-diogo/totalreclaw",
+    "p-diogo/totalreclaw-website",
+    "p-diogo/totalreclaw-relay",
+    "p-diogo/totalreclaw-plugin",
+    "p-diogo/totalreclaw-hermes",
+})
+
+
+def resolve_qa_repo(
+    override: Optional[str] = None,
+    *,
+    env: Optional[dict] = None,
+) -> str:
+    """Resolve the target repo for QA bug filings.
+
+    Precedence (highest first):
+      1. ``override`` argument (used by tests).
+      2. ``TOTALRECLAW_QA_REPO`` environment variable.
+      3. Default: ``p-diogo/totalreclaw-internal``.
+
+    Raises ``RuntimeError`` if the resolved slug is on the public-repo
+    denylist or does not end in ``-internal``. rc.13 QA surfaced a bug
+    where agent-filed bug reports leaked to the public repo; this guard
+    is the last line of defence to prevent that recurring.
+    """
+    env = os.environ if env is None else env
+    candidate = (override or env.get("TOTALRECLAW_QA_REPO") or DEFAULT_QA_REPO).strip()
+    if not candidate or "/" not in candidate:
+        raise RuntimeError(
+            f"invalid QA repo slug {candidate!r}: expected 'owner/name' format"
+        )
+    if candidate in PUBLIC_REPOS_DENYLIST:
+        raise RuntimeError(
+            f"refusing to file QA bug to PUBLIC repo {candidate!r}. "
+            "QA bug reports contain RC ship-stopper detail that must not "
+            "leak to public. Set TOTALRECLAW_QA_REPO to a repo ending in "
+            "'-internal' (e.g. p-diogo/totalreclaw-internal)."
+        )
+    if not candidate.endswith("-internal"):
+        raise RuntimeError(
+            f"refusing to file QA bug to repo {candidate!r}: slug must end "
+            "in '-internal' (structural safety rule). Override via "
+            "TOTALRECLAW_QA_REPO only to another internal fork."
+        )
+    return candidate
+
+
+# ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 
@@ -209,12 +274,17 @@ async def post_qa_bug_issue(
     args: dict,
     *,
     github_token: str,
-    repo: str = "p-diogo/totalreclaw-internal",
+    repo: Optional[str] = None,
     http_client: Optional[httpx.AsyncClient] = None,
 ) -> dict:
     """POST the redacted issue to GitHub. Returns
     ``{"issue_url": ..., "issue_number": ...}`` on success; raises
     ``RuntimeError`` on validation or HTTP failure.
+
+    ``repo`` is resolved through :func:`resolve_qa_repo` which reads the
+    ``TOTALRECLAW_QA_REPO`` env var and refuses any slug that isn't a
+    repo ending in ``-internal``. Pass a slug explicitly (tests only) to
+    override env-var lookup.
     """
     err = validate_args(args)
     if err:
@@ -222,7 +292,8 @@ async def post_qa_bug_issue(
     if not github_token:
         raise RuntimeError("github_token is required")
 
-    url = f"https://api.github.com/repos/{repo}/issues"
+    target_repo = resolve_qa_repo(repo)
+    url = f"https://api.github.com/repos/{target_repo}/issues"
     title = "[qa-bug] " + redact_secrets(args["title"])
     body = build_issue_body(args)
     # Safe label value — strip chars that GH rejects in label names.

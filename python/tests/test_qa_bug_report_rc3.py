@@ -8,12 +8,15 @@ import httpx
 import pytest
 
 from totalreclaw.hermes.qa_bug_report import (
+    DEFAULT_QA_REPO,
+    PUBLIC_REPOS_DENYLIST,
     REDACTED,
     SCHEMA,
     build_issue_body,
     is_rc_build,
     post_qa_bug_issue,
     redact_secrets,
+    resolve_qa_repo,
     validate_args,
 )
 
@@ -272,6 +275,122 @@ class TestPostQaBugIssue:
         with pytest.raises(RuntimeError) as exc_info:
             await post_qa_bug_issue(bad, github_token="gh-token")
         assert "integration" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# resolve_qa_repo — rc.14 target-repo guard (rc.13 leak fix)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveQaRepo:
+    def test_default_is_internal(self):
+        assert resolve_qa_repo(env={}) == "p-diogo/totalreclaw-internal"
+        assert resolve_qa_repo(env={}) == DEFAULT_QA_REPO
+
+    def test_env_override_internal_fork(self):
+        env = {"TOTALRECLAW_QA_REPO": "acme/totalreclaw-qa-internal"}
+        assert resolve_qa_repo(env=env) == "acme/totalreclaw-qa-internal"
+
+    def test_override_arg_beats_env(self):
+        env = {"TOTALRECLAW_QA_REPO": "other/totalreclaw-internal"}
+        assert resolve_qa_repo("acme/totalreclaw-internal", env=env) == (
+            "acme/totalreclaw-internal"
+        )
+
+    def test_reject_public_repo_literal(self):
+        env = {"TOTALRECLAW_QA_REPO": "p-diogo/totalreclaw"}
+        with pytest.raises(RuntimeError) as exc:
+            resolve_qa_repo(env=env)
+        assert "PUBLIC" in str(exc.value)
+        assert "p-diogo/totalreclaw" in str(exc.value)
+
+    def test_reject_public_repo_via_override(self):
+        with pytest.raises(RuntimeError) as exc:
+            resolve_qa_repo("p-diogo/totalreclaw", env={})
+        assert "PUBLIC" in str(exc.value)
+
+    def test_reject_non_internal_suffix(self):
+        with pytest.raises(RuntimeError) as exc:
+            resolve_qa_repo("someone/random-repo", env={})
+        assert "-internal" in str(exc.value)
+
+    def test_reject_malformed_slug(self):
+        with pytest.raises(RuntimeError) as exc:
+            resolve_qa_repo("no-slash", env={})
+        assert "owner/name" in str(exc.value)
+
+    def test_denylist_contains_known_public_repos(self):
+        # Ensures we caught the historical leak target.
+        assert "p-diogo/totalreclaw" in PUBLIC_REPOS_DENYLIST
+
+
+# ---------------------------------------------------------------------------
+# post_qa_bug_issue — rc.14 target-repo wiring
+# ---------------------------------------------------------------------------
+
+
+class TestPostRespectsRepoGuard:
+    @pytest.mark.asyncio
+    async def test_post_rejects_public_override(self):
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock()
+        with pytest.raises(RuntimeError) as exc:
+            await post_qa_bug_issue(
+                VALID_ARGS,
+                github_token="gh-token",
+                repo="p-diogo/totalreclaw",
+                http_client=mock_client,
+            )
+        assert "PUBLIC" in str(exc.value)
+        # Ensure we never attempted the network call.
+        mock_client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_post_honors_env_override(self, monkeypatch):
+        monkeypatch.setenv("TOTALRECLAW_QA_REPO", "acme/totalreclaw-internal")
+        captured: dict = {}
+
+        async def fake_post(url, headers=None, json=None):
+            captured["url"] = url
+            return MagicMock(
+                status_code=201,
+                text="",
+                json=lambda: {"number": 7, "html_url": "https://example/7"},
+            )
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(side_effect=fake_post)
+        await post_qa_bug_issue(
+            VALID_ARGS,
+            github_token="gh-token",
+            http_client=mock_client,
+        )
+        assert captured["url"].endswith("/repos/acme/totalreclaw-internal/issues")
+
+    @pytest.mark.asyncio
+    async def test_post_default_is_internal(self, monkeypatch):
+        monkeypatch.delenv("TOTALRECLAW_QA_REPO", raising=False)
+        captured: dict = {}
+
+        async def fake_post(url, headers=None, json=None):
+            captured["url"] = url
+            captured["labels"] = json.get("labels", []) if isinstance(json, dict) else []
+            return MagicMock(
+                status_code=201,
+                text="",
+                json=lambda: {"number": 1, "html_url": "https://example/1"},
+            )
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(side_effect=fake_post)
+        await post_qa_bug_issue(
+            VALID_ARGS,
+            github_token="gh-token",
+            http_client=mock_client,
+        )
+        assert "totalreclaw-internal" in captured["url"]
+        # Regression per rc.14 spec: qa-bug label is always present.
+        assert "qa-bug" in captured["labels"]
 
 
 # ---------------------------------------------------------------------------

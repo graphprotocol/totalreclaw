@@ -280,24 +280,42 @@
     });
 
     // Explicit "Paste" button — reads clipboard via async API.
-    // Extracts the first 6 digits found, ignoring non-digit characters.
-    // Graceful fallback if the API is blocked/denied: shows a toast.
+    // rc.14 — distinguish 4 failure modes with distinct toasts so the
+    // user knows whether to grant permission / copy a fresh PIN / type
+    // manually. Keeps the relay production handler (pair-html.ts) and
+    // this mockup in lockstep; the sync script (scripts/sync-pair-
+    // preview.mjs in the relay repo) inlines this file.
     if (pasteBtn) {
       pasteBtn.addEventListener('click', async () => {
-        let text = '';
-        try {
-          if (navigator.clipboard && navigator.clipboard.readText) {
-            text = await navigator.clipboard.readText();
-          } else {
-            throw new Error('clipboard API unavailable');
-          }
-        } catch (_) {
-          showToast('Paste not allowed — type manually');
+        if (!navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
+          showToast('Paste unavailable on this browser — type the 6 digits manually');
+          if (cells[0]) cells[0].focus();
           return;
         }
-        const digits = (text || '').replace(/\D/g, '').slice(0, 6);
+        let text = '';
+        try {
+          text = await navigator.clipboard.readText();
+        } catch (err) {
+          const name = (err && err.name) || '';
+          const msg = (err && err.message) || '';
+          try { console.warn('[pair-paste] readText failed:', name, msg); } catch (_) { /* ignore */ }
+          if (name === 'NotAllowedError' || /not\s*allowed/i.test(msg)) {
+            showToast('Clipboard access denied — type the 6 digits manually');
+          } else {
+            showToast('Could not read clipboard — type the 6 digits manually');
+          }
+          if (cells[0]) cells[0].focus();
+          return;
+        }
+        if (!text) {
+          showToast('Clipboard is empty — copy the PIN from your chat first');
+          if (cells[0]) cells[0].focus();
+          return;
+        }
+        const digits = text.replace(/\D/g, '').slice(0, 6);
         if (!digits) {
-          showToast('Clipboard has no digits');
+          showToast('Clipboard has no digits — copy the 6-digit PIN first');
+          if (cells[0]) cells[0].focus();
           return;
         }
         distributeDigits(digits, 0);

@@ -203,6 +203,17 @@ export const CONFIG = {
     return process.env.TOTALRECLAW_QA_GITHUB_TOKEN || process.env.GITHUB_TOKEN || '';
   },
 
+  // 3.3.1-rc.14: optional target-repo override for the RC-gated QA
+  // bug-report tool. The `qa-bug-report` module enforces a
+  // "slug ends in `-internal`" rule on whatever is resolved here, so
+  // this override is only useful for forks / mirrors of the internal
+  // tracker. Leaving unset uses the production default
+  // (`p-diogo/totalreclaw-internal`). Read via getter so operators can
+  // flip the var at runtime.
+  get qaRepoOverride(): string {
+    return process.env.TOTALRECLAW_QA_REPO || '';
+  },
+
   // Paths
   home,
   billingCachePath: path.join(home, '.totalreclaw', 'billing-cache.json'),

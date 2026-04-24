@@ -18,6 +18,13 @@
  * POST. BIP-39 phrases, API keys, Telegram bot tokens, and bearer tokens
  * in headers all become `<REDACTED>` in the posted issue. Refer to
  * `redactSecrets()` for the exact rule set.
+ *
+ * Target repo safety: the default target is `p-diogo/totalreclaw-internal`.
+ * Operators can override via the `TOTALRECLAW_QA_REPO` env var, but only
+ * to another slug ending in `-internal`. Any other slug — including the
+ * public `p-diogo/totalreclaw` — is rejected with a loud error. rc.13 QA
+ * surfaced a repo-slug drift where QA findings leaked to the public
+ * tracker; rc.14 adds this fail-loud guard.
  */
 
 // ---------------------------------------------------------------------------
@@ -148,7 +155,12 @@ export interface QaBugArgs {
 export interface QaBugDeps {
   /** GitHub personal-access token with `repo` scope. */
   githubToken: string;
-  /** Repo to post to. Defaults to `p-diogo/totalreclaw-internal`. */
+  /**
+   * Repo to post to. Defaults to `resolveQaRepo(null)` → reads
+   * `TOTALRECLAW_QA_REPO` env var and falls back to
+   * `p-diogo/totalreclaw-internal`. Pass a slug (tests only) to
+   * bypass env-var lookup.
+   */
   repo?: string;
   /**
    * Abstract fetch for testing — defaults to global `fetch`. Intentionally
@@ -158,6 +170,76 @@ export interface QaBugDeps {
   fetchImpl?: typeof fetch;
   /** Logger for non-fatal diagnostic lines. */
   logger?: { info: (msg: string) => void; warn: (msg: string) => void };
+}
+
+// ---------------------------------------------------------------------------
+// Target repo guard — fail-loud on any repo that isn't the internal tracker.
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_QA_REPO = 'p-diogo/totalreclaw-internal';
+
+/**
+ * Known-public repo slugs that must never receive QA bug reports. The
+ * structural rule (`endsWith('-internal')`) below should already block
+ * these, but the explicit denylist is a belt-and-braces safety against
+ * a future rename that accidentally drops the `-internal` suffix.
+ */
+export const PUBLIC_REPOS_DENYLIST: ReadonlySet<string> = new Set([
+  'p-diogo/totalreclaw',
+  'p-diogo/totalreclaw-website',
+  'p-diogo/totalreclaw-relay',
+  'p-diogo/totalreclaw-plugin',
+  'p-diogo/totalreclaw-hermes',
+]);
+
+/**
+ * Resolve the target repo for a QA bug filing.
+ *
+ * Precedence: explicit override → `TOTALRECLAW_QA_REPO` env → default.
+ * Throws if the slug is on the public denylist or does not end in
+ * `-internal`. rc.13 QA found agent-filed bug reports leaking to the
+ * public repo; this guard makes any such drift fail loudly rather than
+ * silently leak RC ship-stopper detail.
+ *
+ * `TOTALRECLAW_QA_REPO` is the documented override var. The env-var
+ * read lives in `config.ts` (CONFIG.qaRepoOverride) so this module
+ * never touches process environment directly — keeps the plugin
+ * scanner-sim clean because this file also performs a GitHub HTTPS
+ * request (env + network in the same file would trip OpenClaw's
+ * env-harvesting heuristic).
+ *
+ * Pass the env-resolved slug (or `null`/empty for default) as
+ * `override`. Tests can inject via the second arg.
+ */
+export function resolveQaRepo(
+  override?: string | null,
+  env?: Record<string, string | undefined>,
+): string {
+  // `env` is only for test injection — production callers should
+  // pre-resolve the env value via CONFIG.qaRepoOverride and pass it as
+  // `override`. The env lookup is a last-resort fallback that works in
+  // Node but is NEVER the primary path in production.
+  const envOverride = env ? env.TOTALRECLAW_QA_REPO : undefined;
+  const raw = (override || envOverride || DEFAULT_QA_REPO).trim();
+  if (!raw || !raw.includes('/')) {
+    throw new Error(`invalid QA repo slug '${raw}': expected 'owner/name' format`);
+  }
+  if (PUBLIC_REPOS_DENYLIST.has(raw)) {
+    throw new Error(
+      `refusing to file QA bug to PUBLIC repo '${raw}'. ` +
+        'QA bug reports contain RC ship-stopper detail that must not ' +
+        "leak to public. Set TOTALRECLAW_QA_REPO to a repo ending in " +
+        "'-internal' (e.g. p-diogo/totalreclaw-internal).",
+    );
+  }
+  if (!raw.endsWith('-internal')) {
+    throw new Error(
+      `refusing to file QA bug to repo '${raw}': slug must end in ` +
+        "'-internal' (structural safety rule). Override via " +
+        'TOTALRECLAW_QA_REPO only to another internal fork.',
+    );
+  }
+  return raw;
 }
 
 const VALID_INTEGRATIONS = new Set([
@@ -260,7 +342,7 @@ export async function postQaBugIssue(
   if ('error' in validation) throw new Error(`invalid args: ${validation.error}`);
   if (!deps.githubToken) throw new Error('githubToken is required');
 
-  const repo = deps.repo ?? 'p-diogo/totalreclaw-internal';
+  const repo = resolveQaRepo(deps.repo ?? null);
   const url = `https://api.github.com/repos/${repo}/issues`;
 
   const title = `[qa-bug] ${redactSecrets(args.title)}`;
