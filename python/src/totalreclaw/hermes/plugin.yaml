@@ -1,5 +1,5 @@
 name: totalreclaw
-version: 2.3.1rc14
+version: 2.3.1rc15
 description: End-to-end encrypted memory vault for AI agents (Memory Taxonomy v1)
 author: TotalReclaw Team
 provides_tools:

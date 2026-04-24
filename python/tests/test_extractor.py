@@ -254,8 +254,13 @@ class TestTruncateMessages:
 # ---------------------------------------------------------------------------
 
 class TestDetectLLMConfig:
-    def test_no_api_keys(self):
-        with patch.dict(os.environ, {}, clear=True):
+    def test_no_api_keys(self, tmp_path, monkeypatch):
+        # Point HOME at an empty tmp dir so the Hermes auth.json
+        # fallback (added in rc.15 for Hermes 0.10.0) doesn't resolve
+        # against the developer's real ~/.hermes — the test's intent
+        # is "no env, no config", so filesystem state must be empty too.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        with patch.dict(os.environ, {"HOME": str(tmp_path)}, clear=True):
             config = detect_llm_config()
             assert config is None
 
@@ -286,9 +291,14 @@ class TestDetectLLMConfig:
             assert config.model == "test-model"
             assert "groq.com" in config.base_url
 
-    def test_no_model_returns_none(self):
+    def test_no_model_returns_none(self, tmp_path, monkeypatch):
         """API key present but no model configured anywhere -> None."""
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "sk-test", "HOME": str(tmp_path)},
+            clear=True,
+        ):
             config = detect_llm_config()
             assert config is None
 
@@ -492,8 +502,9 @@ class TestChatCompletion:
 
 class TestExtractFactsLLM:
     @pytest.mark.asyncio
-    async def test_no_llm_returns_empty(self):
-        with patch.dict(os.environ, {}, clear=True):
+    async def test_no_llm_returns_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        with patch.dict(os.environ, {"HOME": str(tmp_path)}, clear=True):
             messages = [{"role": "user", "content": "I live in Lisbon"}]
             facts = await extract_facts_llm(messages)
             assert facts == []

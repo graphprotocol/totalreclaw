@@ -197,4 +197,15 @@ def register(ctx):
     ctx.register_hook("post_llm_call", lambda **kw: hooks.post_llm_call(state, **kw))
     ctx.register_hook("on_session_end", lambda **kw: hooks.on_session_end(state, **kw))
 
+    # Fix for internal#97: validate LLM-config resolution once at plugin
+    # load and emit a single loud WARNING if it fails, so Hermes 0.10.0
+    # schema drift surfaces immediately instead of accumulating one
+    # silent DEBUG line per turn.
+    try:
+        from totalreclaw.agent.llm_client import validate_llm_config_at_load
+        _config, reason = validate_llm_config_at_load(context="hermes-plugin-load")
+        state._totalreclaw_llm_load_reason = reason
+    except Exception:  # pragma: no cover — validation must not crash plugin load
+        logger.debug("LLM-config load-time validation skipped", exc_info=True)
+
     logger.info("TotalReclaw plugin registered (12+ tools, 4 hooks)")

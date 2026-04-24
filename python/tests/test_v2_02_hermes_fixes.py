@@ -193,8 +193,9 @@ class TestBug5VisibleLLMError:
     """
 
     @pytest.mark.asyncio
-    async def test_extract_facts_llm_warns_when_no_config(self, caplog):
-        with patch.dict(os.environ, {}, clear=True):
+    async def test_extract_facts_llm_warns_when_no_config(self, caplog, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        with patch.dict(os.environ, {"HOME": str(tmp_path)}, clear=True):
             with caplog.at_level(logging.WARNING, logger="totalreclaw.agent.extraction"):
                 result = await extract_facts_llm(
                     [{"role": "user", "content": "I like coffee"}],

@@ -27,6 +27,25 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+#: Per-provider canonical model-name env var candidates. Checked in order;
+#: first hit wins. ``HERMES_MODEL`` is Hermes 0.10.0's session-level setting
+#: that always reflects the active model regardless of provider. Generic
+#: fallbacks (``OPENAI_MODEL`` / ``ANTHROPIC_MODEL`` / ``LLM_MODEL``) keep
+#: pre-0.10.0 installs working.
+_PROVIDER_MODEL_ENV_VARS = {
+    "zai": ["HERMES_MODEL", "ZAI_MODEL", "GLM_MODEL"],
+    "openai": ["HERMES_MODEL", "OPENAI_MODEL"],
+    "anthropic": ["HERMES_MODEL", "ANTHROPIC_MODEL"],
+    "openrouter": ["HERMES_MODEL", "OPENROUTER_MODEL"],
+    "groq": ["HERMES_MODEL", "GROQ_MODEL"],
+    "deepseek": ["HERMES_MODEL", "DEEPSEEK_MODEL"],
+    "mistral": ["HERMES_MODEL", "MISTRAL_MODEL"],
+    "gemini": ["HERMES_MODEL", "GEMINI_MODEL", "GOOGLE_MODEL"],
+    "xai": ["HERMES_MODEL", "XAI_MODEL"],
+    "together": ["HERMES_MODEL", "TOGETHER_MODEL"],
+}
+
+
 @dataclass
 class LLMConfig:
     api_key: str
@@ -179,6 +198,159 @@ def _read_hermes_env_file(env_path: Path) -> dict[str, str]:
     return env_vars
 
 
+def _read_hermes_auth_json(auth_path: Path) -> Optional[dict]:
+    """Parse ``~/.hermes/auth.json`` into a dict, or return ``None``.
+
+    Hermes 0.10.0 moved active-provider credentials out of ``config.yaml``
+    and into ``auth.json::credential_pool``. We read the whole JSON and
+    let the caller pick what it needs; on any parse / IO error we return
+    ``None`` and the caller falls through to the next resolution path.
+    """
+    if not auth_path.exists():
+        return None
+    try:
+        return json.loads(auth_path.read_text())
+    except (OSError, ValueError) as e:
+        logger.debug("_read_hermes_auth_json: %s unparseable (%s)", auth_path, e)
+        return None
+
+
+def _pick_credential_from_pool(
+    auth: dict,
+) -> tuple[str, str, str]:
+    """Pick the first usable (provider, api_key, base_url) triple from
+    ``auth.json::credential_pool``.
+
+    Hermes 0.10.0 shape::
+
+        {
+          "credential_pool": {
+            "zai": [{"access_token": "...", "base_url": "...", ...}, ...],
+            ...
+          }
+        }
+
+    We walk providers in the order they appear in the dict (Python 3.7+
+    preserves insertion order → matches the order Hermes registered them).
+    Within each provider, the first credential with an ``access_token``
+    wins. Returns ``("", "", "")`` when nothing usable is found.
+    """
+    pool = auth.get("credential_pool")
+    if not isinstance(pool, dict):
+        return "", "", ""
+    for provider, creds in pool.items():
+        if not isinstance(creds, list):
+            continue
+        for cred in creds:
+            if not isinstance(cred, dict):
+                continue
+            token = cred.get("access_token")
+            if not isinstance(token, str) or not token:
+                continue
+            base_url = cred.get("base_url") if isinstance(cred.get("base_url"), str) else ""
+            return str(provider), token, base_url
+    return "", "", ""
+
+
+def _resolve_hermes_model_from_runtime_env(
+    provider_lower: str, env_vars: dict[str, str]
+) -> str:
+    """Resolve the active model name from Hermes runtime env vars.
+
+    Checks the provider-specific candidates from
+    :data:`_PROVIDER_MODEL_ENV_VARS` (e.g. ``ZAI_MODEL`` for zai) plus the
+    generic ``HERMES_MODEL`` fallback. ``env_vars`` is the parsed
+    ``~/.hermes/.env`` dict; it wins over process env so a stale
+    ``OPENAI_MODEL`` export from an earlier shell can't shadow the
+    current Hermes session model.
+    """
+    candidates = _PROVIDER_MODEL_ENV_VARS.get(
+        provider_lower,
+        # Unknown provider — fall back to generic vars only.
+        ["HERMES_MODEL", "LLM_MODEL"],
+    )
+    for name in candidates:
+        val = env_vars.get(name) or os.environ.get(name)
+        if val and val.strip():
+            return val.strip()
+    # Final generic fallback in case the provider table is out of date.
+    for name in ("HERMES_MODEL", "LLM_MODEL"):
+        val = env_vars.get(name) or os.environ.get(name)
+        if val and val.strip():
+            return val.strip()
+    return ""
+
+
+def _read_hermes_llm_config_from_auth_json(
+    hermes_dir: Path,
+) -> Optional[LLMConfig]:
+    """Build an :class:`LLMConfig` from ``hermes_dir/auth.json`` + ``.env``.
+
+    This is the Hermes 0.10.0 resolution path. ``auth.json`` supplies
+    provider + API key + base_url via ``credential_pool``; the active
+    model is read from the runtime-env vars Hermes writes to ``.env``
+    (``HERMES_MODEL`` / ``{PROVIDER}_MODEL``). Returns ``None`` on any
+    missing piece — callers fall through to the next resolver.
+    """
+    auth = _read_hermes_auth_json(hermes_dir / "auth.json")
+    if auth is None:
+        return None
+    provider, api_key, auth_base_url = _pick_credential_from_pool(auth)
+    if not provider or not api_key:
+        logger.debug(
+            "_read_hermes_llm_config_from_auth_json: no usable credential in %s",
+            hermes_dir / "auth.json",
+        )
+        return None
+
+    provider_lower = provider.lower()
+    env_vars = _read_hermes_env_file(hermes_dir / ".env")
+    model = _resolve_hermes_model_from_runtime_env(provider_lower, env_vars)
+    if not model:
+        logger.debug(
+            "_read_hermes_llm_config_from_auth_json: no model env var set "
+            "for provider %r (tried %s)",
+            provider,
+            ", ".join(
+                _PROVIDER_MODEL_ENV_VARS.get(
+                    provider_lower, ["HERMES_MODEL", "LLM_MODEL"]
+                )
+            ),
+        )
+        return None
+
+    # base_url precedence:
+    #   1. Explicit ZAI_BASE_URL override (matches the legacy path).
+    #   2. auth.json credential base_url (Hermes's own chosen endpoint).
+    #   3. Default for this provider.
+    if provider_lower == "zai":
+        zai_override = env_vars.get("ZAI_BASE_URL") or os.environ.get("ZAI_BASE_URL")
+        if zai_override and zai_override.strip():
+            base_url = zai_override.strip().rstrip("/")
+        elif auth_base_url:
+            base_url = auth_base_url.rstrip("/")
+        else:
+            base_url = get_zai_base_url()
+    else:
+        _, default_base_url = _HERMES_PROVIDER_KEY_MAP.get(provider_lower, ([], ""))
+        base_url = (
+            (auth_base_url.rstrip("/") if auth_base_url else "")
+            or env_vars.get("OPENAI_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
+            or default_base_url
+        )
+
+    api_format = "anthropic" if provider_lower == "anthropic" else "openai"
+    logger.info(
+        "TotalReclaw LLM config resolved from Hermes auth.json + .env "
+        "(provider=%s, model=%s, base_url=%s)",
+        provider, model, base_url,
+    )
+    return LLMConfig(
+        api_key=api_key, base_url=base_url, model=model, api_format=api_format
+    )
+
+
 def _extract_provider_and_model(cfg: dict) -> tuple[str, str]:
     """Accept BOTH top-level and nested shapes.
 
@@ -224,6 +396,13 @@ def read_hermes_llm_config() -> Optional[LLMConfig]:
     ``{provider: zai, model: glm-5-turbo}`` AND nested
     ``{model: {provider: zai, model: glm-5-turbo}}``.
 
+    Hermes 0.10.0 (2026-04-16) moved the active provider + API key out
+    of ``config.yaml`` into ``~/.hermes/auth.json::credential_pool`` and
+    the active model into runtime-set env vars (``HERMES_MODEL`` plus
+    provider-specific ``{PROVIDER}_MODEL``). After the legacy YAML path
+    fails, we fall through to an ``auth.json``-based resolver so 0.10.0
+    installs work without a TR-side config change. Fix for internal#97.
+
     Returns ``None`` if no config is found, if it can't be parsed, or
     if the required provider/model fields are missing. Logs a WARNING
     at the resolution point so operators can tell WHERE the model came
@@ -256,8 +435,17 @@ def read_hermes_llm_config() -> Optional[LLMConfig]:
 
         provider, model = _extract_provider_and_model(cfg)
         if not provider or not model:
+            # Legacy YAML shape empty — try the Hermes 0.10.0 auth.json
+            # path in the same directory before moving to the next YAML
+            # candidate. The YAML file still serves as the "this is a
+            # Hermes install" marker so we don't read auth.json from an
+            # unrelated directory.
+            hermes_010 = _read_hermes_llm_config_from_auth_json(config_path.parent)
+            if hermes_010 is not None:
+                return hermes_010
             logger.debug(
-                "read_hermes_llm_config: %s missing provider/model keys",
+                "read_hermes_llm_config: %s missing provider/model keys "
+                "(and auth.json fallback unavailable)",
                 config_path,
             )
             continue
@@ -340,17 +528,25 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
       2. Provider default
     """
     openai_base_url = os.environ.get("OPENAI_BASE_URL")
-    # Common env vars for configured model name
-    env_model = (
+    # Generic model-env vars, used as the last-resort fallback below when
+    # no provider-specific ``{PROVIDER}_MODEL`` / ``HERMES_MODEL`` is set.
+    env_model_generic = (
         os.environ.get("OPENAI_MODEL")
         or os.environ.get("ANTHROPIC_MODEL")
         or os.environ.get("LLM_MODEL")
+        or os.environ.get("HERMES_MODEL")
     )
 
     for _provider, env_vars, default_base_url, api_format in PROVIDERS:
         for env_var in env_vars:
             api_key = os.environ.get(env_var)
             if api_key:
+                # Provider-specific model vars (e.g. ``ZAI_MODEL``,
+                # ``GROQ_MODEL``) take precedence over the generic ones so
+                # Hermes 0.10.0 users with a single ``ZAI_MODEL=...`` in
+                # ``.env`` resolve here without needing an extra
+                # ``OPENAI_MODEL`` export. Fix for internal#97.
+                env_model = _resolve_hermes_model_from_runtime_env(_provider, {}) or env_model_generic
                 model = configured_model or env_model
                 if not model:
                     # No model configured via env — skip this provider so
@@ -398,6 +594,88 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
 
     logger.debug("detect_llm_config: no LLM config resolved from env or Hermes")
     return None
+
+
+def validate_llm_config_at_load(
+    context: str = "plugin-load",
+) -> tuple[Optional[LLMConfig], Optional[str]]:
+    """Resolve LLM config once at plugin load and loudly WARN if missing.
+
+    Prior to internal#97 (rc.15), TR's auto-extraction silently logged
+    one DEBUG line per turn when :func:`detect_llm_config` returned
+    ``None`` — users saw 27+ identical log lines for a 27-turn session
+    with zero memories written, and no hint as to why. Per Pedro's
+    directive ("fail loud"), this validator runs once at plugin
+    registration so operators see a single, actionable WARNING at
+    startup instead of a per-turn stream.
+
+    Returns ``(config, None)`` on success, ``(None, reason)`` on
+    failure. The reason string is a short diagnostic intended for
+    inclusion in the WARNING body and for surfacing via the
+    quota-warning channel on first turn.
+    """
+    config = detect_llm_config()
+    if config is not None:
+        logger.info(
+            "TotalReclaw [%s]: LLM config OK (provider_base=%s, model=%s).",
+            context, config.base_url, config.model,
+        )
+        return config, None
+
+    # Build an actionable reason by re-probing the two resolution paths.
+    hermes_dir = Path.home() / ".hermes"
+    auth_exists = (hermes_dir / "auth.json").exists()
+    env_exists = (hermes_dir / ".env").exists()
+    yaml_exists = (hermes_dir / "config.yaml").exists()
+    has_any_api_key = any(
+        os.environ.get(v) for v in (
+            "ZAI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+            "GROQ_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY",
+            "MISTRAL_API_KEY", "XAI_API_KEY", "TOGETHER_API_KEY",
+            "GEMINI_API_KEY", "GOOGLE_API_KEY", "GLM_API_KEY", "Z_AI_API_KEY",
+        )
+    )
+    has_any_model = any(
+        os.environ.get(v) for v in (
+            "HERMES_MODEL", "OPENAI_MODEL", "ANTHROPIC_MODEL", "LLM_MODEL",
+            "ZAI_MODEL", "GLM_MODEL", "OPENROUTER_MODEL", "GROQ_MODEL",
+            "DEEPSEEK_MODEL", "MISTRAL_MODEL", "XAI_MODEL", "TOGETHER_MODEL",
+            "GEMINI_MODEL", "GOOGLE_MODEL",
+        )
+    )
+    if not (yaml_exists or auth_exists):
+        reason = (
+            "no Hermes install detected at ~/.hermes (and no "
+            "{PROVIDER}_API_KEY + {PROVIDER}_MODEL in env)"
+        )
+    elif auth_exists and not has_any_model:
+        reason = (
+            "Hermes auth.json found but no model env var set — Hermes "
+            "0.10.0 writes HERMES_MODEL / {PROVIDER}_MODEL to "
+            "~/.hermes/.env at session start. Is the session running?"
+        )
+    elif not has_any_api_key and not auth_exists:
+        reason = (
+            "no provider API key found — set {PROVIDER}_API_KEY in env "
+            "or ~/.hermes/.env (e.g. ZAI_API_KEY, OPENAI_API_KEY)"
+        )
+    else:
+        reason = (
+            "config files exist but resolution failed — enable DEBUG "
+            "logging on 'totalreclaw.agent.llm_client' for details"
+        )
+
+    logger.warning(
+        "TotalReclaw [%s]: automatic memory extraction is DISABLED — %s. "
+        "Extraction will be skipped until this is fixed; explicit "
+        "totalreclaw_remember / totalreclaw_recall still work. Files checked: "
+        "~/.hermes/config.yaml=%s, ~/.hermes/auth.json=%s, ~/.hermes/.env=%s.",
+        context, reason,
+        "present" if yaml_exists else "missing",
+        "present" if auth_exists else "missing",
+        "present" if env_exists else "missing",
+    )
+    return None, reason
 
 
 # Retry/backoff settings for LLM calls — rc.3 lifts budget to 5 attempts

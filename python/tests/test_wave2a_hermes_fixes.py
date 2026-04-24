@@ -102,7 +102,12 @@ class TestBug4HermesConfigYaml:
         # No .env file at all.
 
         monkeypatch.setenv("HERMES_CONFIG", str(hermes_dir / "config.yaml"))
-        for k in ("ZAI_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL", "GLM_API_KEY"):
+        # rc.15: point HOME at tmp_path so the 0.10.0 auth.json fallback
+        # doesn't accidentally resolve against the developer's real
+        # ~/.hermes dir.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        for k in ("ZAI_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL", "GLM_API_KEY",
+                  "HERMES_MODEL", "ZAI_MODEL"):
             monkeypatch.delenv(k, raising=False)
 
         assert read_hermes_llm_config() is None

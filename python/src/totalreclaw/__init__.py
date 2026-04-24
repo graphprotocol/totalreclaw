@@ -9,7 +9,7 @@ except Exception:
     # installed-package metadata is absent. Must match pyproject.toml —
     # test_version.py enforces a semver-shape string; the live value in
     # a pip-installed wheel comes from importlib.metadata above.
-    __version__ = "2.3.1rc14"
+    __version__ = "2.3.1rc15"
 
 from .client import TotalReclaw
 
