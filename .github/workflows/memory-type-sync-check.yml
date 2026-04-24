@@ -1,0 +1,97 @@
+name: Memory-Type Sync Check
+
+# Guards against per-file edits to the v1 memory-type taxonomy that forget
+# one of the 7 consumers. Rc.13 QA surfaced real drift symptoms from this.
+# Stopgap until the rc.16 unification epic lands a single-source spec.
+#
+# Trigger: any PR that touches one of the 7 canonical locations.
+# (A PR that touches none of them is skipped by the path filter — no
+# unnecessary CI minutes burned on unrelated changes.)
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/check-memory-type-sync.py'
+      - 'skill/plugin/extractor.ts'
+      - 'skill/plugin/claims-helper.ts'
+      - 'mcp/src/v1-types.ts'
+      - 'python/src/totalreclaw/agent/extraction.py'
+      - 'python/src/totalreclaw/claims_helper.py'
+      - 'rust/totalreclaw-core/src/claims.rs'
+      - 'rust/totalreclaw-core/src/prompts/extraction.md'
+      - '.github/workflows/memory-type-sync-check.yml'
+
+# Keep GITHUB_TOKEN minimal — we only need to read the repo + post a
+# review comment on failure. No write-to-code permissions.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  memory-type-sync-check:
+    name: memory-type-sync-check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Capture the script's stdout so we can echo the diff straight
+      # into a PR comment on failure. The script uses only stdlib, so
+      # no `pip install` step is needed.
+      - name: Run memory-type sync check
+        id: sync
+        run: |
+          set +e
+          output=$(python3 scripts/check-memory-type-sync.py 2>&1)
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          # Stash the full output for both the log and the PR comment.
+          {
+            echo 'report<<SYNC_REPORT_EOF'
+            echo "$output"
+            echo 'SYNC_REPORT_EOF'
+          } >> "$GITHUB_OUTPUT"
+          echo "$output"
+          exit $status
+
+      - name: Post PR comment on failure
+        if: failure() && steps.sync.outputs.exit_code != '0'
+        uses: actions/github-script@v7
+        env:
+          # Pass the diff report via env to sidestep template-literal
+          # escaping pitfalls (backticks, ${...}) if the script's output
+          # ever grows to include shell-meaningful characters.
+          SYNC_REPORT: ${{ steps.sync.outputs.report }}
+        with:
+          script: |
+            const report = process.env.SYNC_REPORT || '(no report captured — see job logs)';
+            const body = [
+              '### memory-type v1 sync check failed',
+              '',
+              'The v1 memory-type taxonomy must stay identical across all 7 canonical',
+              'locations (Rust enum, Python tuple + dict, TypeScript const + record,',
+              'and the extraction prompt). This PR edited one location without',
+              'updating the others.',
+              '',
+              'Fix: add/remove the type in every file the diff flags below, then',
+              'push. Canonical spec: `docs/specs/totalreclaw/memory-taxonomy-v1.md`.',
+              '',
+              '```text',
+              report,
+              '```',
+              '',
+              '_Stopgap check — tracked for retirement under the rc.16 unification',
+              'epic (single-source memory-type spec)._',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
