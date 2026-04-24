@@ -62,6 +62,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'v0.14.0'  # pinned to stop `latest`-tag flake; v0.9.1 lacks --features
 
       - name: Build WASM
         run: cd rust/totalreclaw-core && wasm-pack build --target nodejs --out-dir pkg --features wasm
@@ -197,6 +199,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'v0.14.0'  # pinned to stop `latest`-tag flake; v0.9.1 lacks --features
 
       # NOTE: `mcp/package.json` used to depend on `@totalreclaw/core` via a
       # `file:` dep, which required building the WASM pkg locally. It now
