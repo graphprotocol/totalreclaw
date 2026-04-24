@@ -4,6 +4,47 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.15] — 2026-04-24
+
+Install-time unblock for bandwidth-constrained hosts. Lazy-loads the ONNX
+runtime instead of forcing a ~216MB download during `openclaw plugins
+install`.
+
+### Lazy-loaded ONNX / `@huggingface/transformers`
+
+`openclaw plugins install @totalreclaw/totalreclaw` on slow hosts (VPNs,
+CI containers with limited bandwidth, metered connections) was exceeding
+the plugin-install timeout mid-download and getting SIGTERM'd, leaving
+the plugin partially installed. Root cause: `@huggingface/transformers`
+was a direct `dependency`, which transitively pulled
+`onnxruntime-node`'s postinstall binary fetch (~216MB from GitHub
+Releases).
+
+- `@huggingface/transformers` and `onnxruntime-node` moved from
+  `dependencies` to optional `peerDependencies`
+  (`peerDependenciesMeta.<name>.optional: true`). npm v7+ and the
+  OpenClaw install path (`--legacy-peer-deps`) both skip these by
+  default — plugin install is now lean.
+- `embedding.ts` converts the static
+  `import { AutoTokenizer, AutoModel, pipeline } from
+  '@huggingface/transformers'` into a dynamic `await import(...)` on
+  the first `generateEmbedding` call. If the optional peer is missing,
+  the error surfaces a clear install hint:
+  `npm install @huggingface/transformers`.
+- New regression test `lazy-load-embedding.test.ts` asserts the
+  invariants (no top-level static runtime import; heavy packages not in
+  `dependencies`; peer-dep `optional` flag set) so a future refactor
+  can't silently reintroduce the install-time block.
+
+**User impact:** users on constrained hosts can now install the plugin
+without the 216MB download. Users who want semantic memory (recall /
+search over encrypted facts) install `@huggingface/transformers`
+separately — one-time, resumable if it times out.
+
+Fixes [issue #92][i92] (QA bug 6 of 10, split from #84).
+
+[i92]: https://github.com/p-diogo/totalreclaw-internal/issues/92
+
 ## [3.3.1-rc.14] — 2026-04-24
 
 Coordinated version bump with Python `2.3.1rc14`. Two narrow bug fixes

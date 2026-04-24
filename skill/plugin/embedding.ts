@@ -8,11 +8,44 @@
  * embedding model breaks search across an existing vault, so the
  * `TOTALRECLAW_EMBEDDING_MODEL` user-facing env var was removed in v1.
  *
- * Dependencies: @huggingface/transformers
+ * Dependencies: @huggingface/transformers is declared as an optional peer
+ * dependency. It is lazy-loaded on the first `generateEmbedding` call so
+ * `openclaw plugins install @totalreclaw/totalreclaw` does not block on the
+ * ~216MB onnxruntime-node native-binary download. Install it separately to
+ * enable semantic search: `npm install @huggingface/transformers`.
  */
 
+// Type-only import — erased at compile time, no runtime dep on the package.
 // @ts-ignore - @huggingface/transformers types may not be perfect
-import { AutoTokenizer, AutoModel, pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
+import type { FeatureExtractionPipeline } from '@huggingface/transformers';
+
+type HFTransformers = typeof import('@huggingface/transformers');
+
+/** Cached module handle after first successful dynamic import. */
+let transformersModule: HFTransformers | null = null;
+
+/**
+ * Lazily import @huggingface/transformers. The package is declared as an
+ * optional peer dependency so the plugin installs on bandwidth-constrained
+ * hosts without pulling the onnxruntime-node native binary (~216MB). On first
+ * use, try to load it; if the user never installed it, surface a clear
+ * actionable error with the install command.
+ */
+async function loadTransformers(): Promise<HFTransformers> {
+  if (transformersModule) return transformersModule;
+  try {
+    // @ts-ignore - dynamic import target is the optional peer dep
+    transformersModule = (await import('@huggingface/transformers')) as HFTransformers;
+    return transformersModule;
+  } catch (err) {
+    const hint =
+      '[TotalReclaw] @huggingface/transformers is not installed. ' +
+      'Semantic memory requires it (one-time ~216MB download of ONNX runtime + model). ' +
+      'Install with: npm install @huggingface/transformers';
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`${hint}\nUnderlying load error: ${detail}`);
+  }
+}
 
 interface ModelConfig {
   id: string;
@@ -45,14 +78,17 @@ let activeModel: ModelConfig | null = null;
 /**
  * Generate an embedding vector for the given text.
  *
- * On first call, downloads and loads the ONNX model (cached after download).
- * Subsequent calls reuse the loaded model and run in ~100ms.
+ * On first call, dynamically imports @huggingface/transformers (requires it
+ * to be installed — see module docstring) and downloads the ONNX model
+ * (cached after download). Subsequent calls reuse the loaded module + model
+ * and run in ~100ms.
  */
 export async function generateEmbedding(
   text: string,
   options?: { isQuery?: boolean },
 ): Promise<number[]> {
   if (!activeModel) {
+    const { AutoTokenizer, AutoModel, pipeline } = await loadTransformers();
     activeModel = getModelConfig();
     console.error(`[TotalReclaw] Downloading embedding model (${activeModel.size}, one-time setup)...`);
     console.error('[TotalReclaw] This enables semantic search across your encrypted memories.');
