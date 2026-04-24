@@ -71,6 +71,15 @@ This registers the plugin with your gateway under the ID `totalreclaw` and sets 
 
 > **TotalReclaw is distributed via npm.** Future CLI resolvers may surface it via additional registries.
 
+> **Beta tester note — installing an RC.** The bare spec above resolves to npm's `latest` dist-tag, which is always the current **stable** build. If you installed the skill via `openclaw skills install totalreclaw`, ClawHub may have handed you a release-candidate skill — in that case install the matching RC plugin explicitly with the `@rc` tag (or pin a specific candidate):
+>
+> ```
+> openclaw plugins install @totalreclaw/totalreclaw@rc          # latest RC
+> openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.13 # pinned RC
+> ```
+>
+> Run `npm view @totalreclaw/totalreclaw dist-tags` to see what `latest` and `rc` currently resolve to. Keeping the skill and plugin on the same version family (both stable or both RC) avoids skill-instruction / plugin-behavior drift.
+
 <details>
 <summary>Developer / from-source install (plugin contributors only)</summary>
 

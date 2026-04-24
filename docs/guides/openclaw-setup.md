@@ -73,11 +73,21 @@ The recovery phrase never crosses the LLM context — not the chat transcript, n
 If you'd rather run every command yourself without any agent involvement:
 
 ```bash
-openclaw plugins install @totalreclaw/totalreclaw
+openclaw plugins install @totalreclaw/totalreclaw            # stable
 openclaw gateway restart              # or: docker restart tr-openclaw
 ```
 
 Then ask the agent "set up TotalReclaw for me" — it will call `totalreclaw_pair` and hand you the URL + PIN.
+
+> **Installing an RC build.** `openclaw skills install totalreclaw` pulls the latest release-candidate skill from ClawHub, but the bare npm spec `@totalreclaw/totalreclaw` resolves to the `latest` dist-tag, which is always the current **stable** build. To install the matching RC plugin, explicitly tag the npm spec:
+>
+> ```bash
+> openclaw plugins install @totalreclaw/totalreclaw@rc        # latest RC
+> # or pin a specific candidate:
+> openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.13
+> ```
+>
+> Check what each tag currently resolves to with `npm view @totalreclaw/totalreclaw dist-tags`. Keep the skill and plugin on the same version family (both stable or both RC) to avoid skill instructions and plugin behavior drifting apart.
 
 <details>
 <summary>From-source install (for plugin development)</summary>
