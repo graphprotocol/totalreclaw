@@ -84,7 +84,7 @@ Then ask the agent "set up TotalReclaw for me" — it will call `totalreclaw_pai
 > ```bash
 > openclaw plugins install @totalreclaw/totalreclaw@rc        # latest RC
 > # or pin a specific candidate:
-> openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.13
+> openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.18
 > ```
 >
 > Check what each tag currently resolves to with `npm view @totalreclaw/totalreclaw dist-tags`. Keep the skill and plugin on the same version family (both stable or both RC) to avoid skill instructions and plugin behavior drifting apart.
