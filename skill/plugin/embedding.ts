@@ -9,10 +9,17 @@
  * `TOTALRECLAW_EMBEDDING_MODEL` user-facing env var was removed in v1.
  *
  * Dependencies: @huggingface/transformers
+ *
+ * Download UX (rc.16, fixes #92):
+ *   First-call download is wrapped via `downloadWithUX` from `download-ux.ts`
+ *   — configurable timeout (`TOTALRECLAW_ONNX_INSTALL_TIMEOUT`, default 600s),
+ *   60s keep-alive, 3-attempt exponential-backoff retry, loud actionable
+ *   failure. Slow-bandwidth hosts no longer see a silent freeze.
  */
 
 // @ts-ignore - @huggingface/transformers types may not be perfect
 import { AutoTokenizer, AutoModel, pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
+import { downloadWithUX, getDownloadTimeoutMs } from './download-ux.js';
 
 interface ModelConfig {
   id: string;
@@ -54,20 +61,36 @@ export async function generateEmbedding(
 ): Promise<number[]> {
   if (!activeModel) {
     activeModel = getModelConfig();
-    console.error(`[TotalReclaw] Downloading embedding model (${activeModel.size}, one-time setup)...`);
-    console.error('[TotalReclaw] This enables semantic search across your encrypted memories.');
+    const timeoutSec = Math.floor(getDownloadTimeoutMs() / 1000);
+    console.error(
+      `[TotalReclaw] Downloading embedding model (${activeModel.size}) — this may take a few minutes on slower connections. Please wait.`,
+    );
+    console.error(
+      `[TotalReclaw] One-time setup. Per-attempt timeout: ${timeoutSec}s (configurable via TOTALRECLAW_ONNX_INSTALL_TIMEOUT). Cached after first download.`,
+    );
 
     if (activeModel.pooling === 'sentence_embedding') {
       // Harrier: use AutoModel (pipeline doesn't support sentence_embedding output)
-      autoTokenizer = await AutoTokenizer.from_pretrained(activeModel.id);
-      autoModel = await AutoModel.from_pretrained(activeModel.id, {
-        dtype: activeModel.dtype as any,
-      });
+      autoTokenizer = await downloadWithUX(
+        'tokenizer',
+        () => AutoTokenizer.from_pretrained(activeModel!.id),
+      );
+      autoModel = await downloadWithUX(
+        'embedding model',
+        () =>
+          AutoModel.from_pretrained(activeModel!.id, {
+            dtype: activeModel!.dtype as any,
+          }),
+      );
     } else {
       // e5-small / Qwen: use pipeline
-      pipelineExtractor = await pipeline('feature-extraction', activeModel.id, {
-        dtype: activeModel.dtype as any,
-      });
+      pipelineExtractor = await downloadWithUX(
+        'embedding pipeline',
+        () =>
+          pipeline('feature-extraction', activeModel!.id, {
+            dtype: activeModel!.dtype as any,
+          }),
+      );
     }
     console.error('[TotalReclaw] Embedding model ready. Future startups will be instant.');
   }

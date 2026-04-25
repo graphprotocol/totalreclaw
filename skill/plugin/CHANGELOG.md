@@ -4,6 +4,38 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1-rc.16] — 2026-04-24
+
+Fixes #92 — slow-host install times out during ONNX-runtime / embedding-model
+download. ONNX stays mandatory (no opt-in flag); first-call download is now
+wrapped with timeout, progress, and retry UX so slow connections succeed
+instead of silently hanging until OpenClaw SIGTERMs.
+
+### Embedding-model download UX
+
+- New `download-ux.ts` module — pure stdlib, no third-party imports — exposes
+  `downloadWithUX(label, fn, opts)`. Wraps a download promise with:
+  - **Per-attempt timeout**, default 600s (covers ~290 KB/s for the 344 MB
+    Harrier model). Configurable via env `TOTALRECLAW_ONNX_INSTALL_TIMEOUT`
+    (in seconds). Per-attempt timeout grows 1x/2x/4x across retries.
+  - **60s keep-alive log** during long downloads so users on slow networks
+    see "still downloading… (Ns elapsed)" rather than a frozen prompt.
+  - **3-attempt exponential-backoff retry** (5s/10s backoff between attempts)
+    to absorb transient network blips.
+  - **Loud actionable error** on exhaustion: names the env var to extend the
+    timeout and the exact `openclaw plugins install totalreclaw` command to
+    rerun.
+- `embedding.ts` now wraps `AutoTokenizer.from_pretrained`,
+  `AutoModel.from_pretrained`, and the `pipeline()` call with
+  `downloadWithUX`. Prints a user-visible "Downloading embedding model
+  (~344MB) — this may take a few minutes on slower connections. Please wait."
+  message before the first download starts.
+- ONNX remains a mandatory hard `dependency` (no `[embedding]`-style opt-in
+  extra). Recall accuracy is unchanged.
+- Regression: `test_issue_92_onnx_download_ux.test.ts` exercises happy path,
+  transient failure → retry, full exhaustion, per-attempt timeout, and
+  keep-alive cadence. Wired into the plugin `npm test` chain.
+
 ## [3.3.1-rc.14] — 2026-04-24
 
 Coordinated version bump with Python `2.3.1rc14`. Two narrow bug fixes
