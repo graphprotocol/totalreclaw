@@ -4,6 +4,53 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Install / runtime hygiene (issues #126, #128)
+
+Two narrow fixes from the rc.20 user-QA findings — both around install /
+boot-time output cleanliness, no behavior change to the steady-state plugin.
+
+- **#126 — clean up `.openclaw-install-stage-*` siblings.** When
+  `openclaw plugins install @totalreclaw/totalreclaw` is interrupted mid-
+  extract (e.g. by an auto-gateway-restart triggered by the same install),
+  the npm staging directory `<extensionsDir>/.openclaw-install-stage-XXXXXX/`
+  survives. On the next gateway start, OpenClaw's plugin loader auto-
+  discovers BOTH `.../totalreclaw/` AND the orphan staging dir, registers
+  duplicate plugins, fires hooks twice, and prints a "duplicate-plugin-id"
+  warning every cycle. A user running `openclaw plugins list` sees two
+  `totalreclaw` rows.
+
+  Fix: `cleanupInstallStagingDirs(pluginDir)` runs at plugin register time
+  (one tick after the loader resolves our entrypoint). It scans the
+  extensions directory for `.openclaw-install-stage-*` siblings and
+  recursively removes each one. Best-effort — never crashes plugin init
+  on permission / race failures.
+
+  Regression: `install-staging-cleanup.test.ts` (16 assertions) covers
+  fresh install, idempotent re-run, package-root vs `dist/` invocation,
+  unrelated-dotfile preservation (`.git`, `.openclaw-cache`), and stray-
+  file (non-directory) skipping.
+
+- **#128 — registerTool breadcrumbs no longer bleed into `--json` stdout.**
+  The rc.20 breadcrumb logs (`registerTool(totalreclaw_pair) returned. ...`
+  and the RC-only `totalreclaw_report_qa_bug registered ...`) were emitted
+  via `api.logger.info`, which OpenClaw routes to stdout decorated with
+  `[plugins] `. When a user invoked `openclaw agent --message "..." --json`
+  for programmatic parsing, the breadcrumb appeared on stdout alongside
+  the JSON-RPC body, breaking any naive `JSON.parse(stdout)`.
+
+  Fix: gate both breadcrumbs behind `CONFIG.verboseRegister`, OFF by
+  default. Ops can opt back in with `TOTALRECLAW_VERBOSE_REGISTER=1` (or
+  the general `TOTALRECLAW_DEBUG=1` toggle) when chasing a tool-injection
+  regression. Default-off keeps `openclaw agent --json` stdout clean.
+
+  Regression: `json-stdout-cleanliness.test.ts` (11 assertions) confirms
+  both breadcrumbs are wrapped in `if (CONFIG.verboseRegister)` blocks,
+  simulates the gated `--json` stdout path and `JSON.parse`s the result,
+  and exercises the env-var resolution (`TOTALRECLAW_VERBOSE_REGISTER`
+  -> `TOTALRECLAW_DEBUG` -> default false).
+
 ## [3.3.1-rc.16] — 2026-04-24
 
 Fixes #92 — slow-host install times out during ONNX-runtime / embedding-model

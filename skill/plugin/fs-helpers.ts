@@ -253,6 +253,89 @@ export function deleteFileIfExists(filePath: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Install-staging cleanup (issue #126 — rc.20 finding F3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Clean up `.openclaw-install-stage-*` sibling directories left behind by
+ * an interrupted `openclaw plugins install` run.
+ *
+ * Background
+ * ----------
+ * `openclaw plugins install @totalreclaw/totalreclaw` extracts the npm
+ * tarball into a staging directory named
+ * `<extensionsDir>/.openclaw-install-stage-XXXXXX/` and then renames it
+ * to `<extensionsDir>/totalreclaw/` on success. If the install is
+ * interrupted partway through (e.g. an auto-gateway-restart triggered by
+ * the same install kills the process — see rc.20 QA finding F3), the
+ * staging dir survives. On the next gateway start, OpenClaw's plugin
+ * loader auto-discovers BOTH directories — the real `totalreclaw/` and
+ * the orphaned `.openclaw-install-stage-XXXXXX/` — and registers two
+ * copies of the plugin. Hooks fire twice, the user sees a duplicate
+ * `totalreclaw` row in `openclaw plugins list`, and the gateway log
+ * spams a duplicate-plugin-id warning every cycle.
+ *
+ * Fix scope: best-effort cleanup driven by the plugin itself at register
+ * time. We resolve the extensions dir as the parent of the loaded
+ * plugin's own directory, scan for `.openclaw-install-stage-*` siblings,
+ * and recursively remove each one. If anything fails (permission,
+ * race with a concurrent install), we swallow the error — the existing
+ * loader-warning behavior is no worse than before.
+ *
+ * Returns the list of staging-dir paths that were successfully removed.
+ * Callers may log this for ops visibility. Empty list on a clean install.
+ *
+ * Parameters
+ * ----------
+ * @param pluginDir  Absolute path to the loaded plugin's directory
+ *                   (typically `<extensionsDir>/totalreclaw/dist`). The
+ *                   helper walks up to the parent that holds sibling
+ *                   plugin directories (the `extensions/` root).
+ * @param _now       Optional clock injector for testing — defaults to
+ *                   Date.now().
+ */
+export function cleanupInstallStagingDirs(
+  pluginDir: string,
+  _now: () => number = Date.now,
+): string[] {
+  const removed: string[] = [];
+  try {
+    // pluginDir is `<extensionsDir>/totalreclaw/dist` after build, so the
+    // siblings live two levels up. Resolve both candidates so the helper
+    // works regardless of whether the caller passes the package root or
+    // its `dist/` subdir.
+    const candidates = [
+      path.resolve(pluginDir, '..'),       // <extensionsDir>/totalreclaw → siblings dir if pluginDir is `dist`
+      path.resolve(pluginDir, '..', '..'), // <extensionsDir>/             → siblings dir if pluginDir is package root
+    ];
+
+    for (const extensionsDir of candidates) {
+      let entries: string[];
+      try {
+        entries = fs.readdirSync(extensionsDir);
+      } catch {
+        continue;
+      }
+      for (const name of entries) {
+        if (!name.startsWith('.openclaw-install-stage-')) continue;
+        const target = path.join(extensionsDir, name);
+        try {
+          const st = fs.lstatSync(target);
+          if (!st.isDirectory()) continue;
+          fs.rmSync(target, { recursive: true, force: true });
+          removed.push(target);
+        } catch {
+          // Best-effort — skip unreadable / racy entries.
+        }
+      }
+    }
+  } catch {
+    // Best-effort — never crash plugin init on cleanup failure.
+  }
+  return removed;
+}
+
+// ---------------------------------------------------------------------------
 // Auto-bootstrap of credentials.json (3.1.0 first-run UX)
 // ---------------------------------------------------------------------------
 

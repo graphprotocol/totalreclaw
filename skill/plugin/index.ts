@@ -151,6 +151,7 @@ import {
   resolveOnboardingState,
   writeOnboardingState,
   readPluginVersion,
+  cleanupInstallStagingDirs,
   type OnboardingState,
 } from './fs-helpers.js';
 import { isRcBuild } from './qa-bug-report.js';
@@ -2868,6 +2869,25 @@ const plugin = {
       if (rcMode) {
         api.logger.info(`TotalReclaw: RC build detected (version=${pluginVersion}). RC-gated tools will be registered.`);
       }
+
+      // 3.3.1-rc.21 (issue #126 — rc.20 finding F3): clean up
+      // `.openclaw-install-stage-*` siblings left behind by an interrupted
+      // `openclaw plugins install` run. Without cleanup, OpenClaw's plugin
+      // loader auto-discovers the orphan directory on the next gateway
+      // start and registers a duplicate `totalreclaw` plugin (duplicate
+      // hooks, duplicate tools, "duplicate-plugin-id" warning every cycle).
+      // Best-effort — never throws on permission / race failures.
+      try {
+        const removed = cleanupInstallStagingDirs(pluginDir);
+        if (removed.length > 0) {
+          api.logger.info(
+            `TotalReclaw: removed ${removed.length} stale install-staging dir(s) from prior interrupted install: ${removed.join(', ')}`,
+          );
+        }
+      } catch {
+        // Best-effort — already swallowed inside the helper, but keep this
+        // outer try as belt-and-braces against future helper changes.
+      }
     } catch {
       rcMode = false;
     }
@@ -5251,11 +5271,20 @@ const plugin = {
     // declared. If the agent then reports the tool is missing from its
     // tool list, the gap is upstream OpenClaw tool propagation, not our
     // plugin — see issue #110 fix 3 + PR #102 (CLI fallback).
-    api.logger.info(
-      'TotalReclaw: registerTool(totalreclaw_pair) returned. If the agent does not see it in its tool list ' +
-        'after gateway restart, the issue is upstream tool injection (containerized agents) — fall back to ' +
-        '`openclaw totalreclaw pair generate --url-pin-only` (PR #102) or `openclaw totalreclaw onboard --pair-only`.',
-    );
+    //
+    // 3.3.1-rc.21 (issue #128): the breadcrumb is debug-grade — it was
+    // bleeding into `openclaw agent --json` stdout, breaking programmatic
+    // parsers that expect the JSON-RPC body to be the only thing on the
+    // wire. Gated behind `TOTALRECLAW_VERBOSE_REGISTER` (or the general
+    // `TOTALRECLAW_DEBUG` toggle) so ops can opt back in when chasing
+    // a tool-injection regression. Default OFF — clean stdout for users.
+    if (CONFIG.verboseRegister) {
+      api.logger.info(
+        'TotalReclaw: registerTool(totalreclaw_pair) returned. If the agent does not see it in its tool list ' +
+          'after gateway restart, the issue is upstream tool injection (containerized agents) — fall back to ' +
+          '`openclaw totalreclaw pair generate --url-pin-only` (PR #102) or `openclaw totalreclaw onboard --pair-only`.',
+      );
+    }
 
     // ---------------------------------------------------------------
     // Tool: totalreclaw_report_qa_bug (3.3.1-rc.3 — RC-gated)
@@ -5387,9 +5416,15 @@ const plugin = {
         },
         { name: 'totalreclaw_report_qa_bug' },
       );
-      api.logger.info(
-        'totalreclaw_report_qa_bug registered (RC build — this tool is hidden in stable releases).',
-      );
+      // 3.3.1-rc.21 (issue #128): demote the registration-confirmation
+      // breadcrumb to verbose-only. Same `--json` stdout pollution risk
+      // as the totalreclaw_pair breadcrumb above; ops can opt back in
+      // via TOTALRECLAW_VERBOSE_REGISTER / TOTALRECLAW_DEBUG.
+      if (CONFIG.verboseRegister) {
+        api.logger.info(
+          'totalreclaw_report_qa_bug registered (RC build — this tool is hidden in stable releases).',
+        );
+      }
     }
 
     // ---------------------------------------------------------------

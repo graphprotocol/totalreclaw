@@ -214,6 +214,24 @@ export const CONFIG = {
     return process.env.TOTALRECLAW_QA_REPO || '';
   },
 
+  // 3.3.1-rc.21 (issue #128): verbose-register flag. When enabled, the
+  // plugin emits opt-in `info`-level breadcrumbs after sensitive
+  // registerTool calls (currently `totalreclaw_pair`) to help ops/QA
+  // grep gateway logs for definitive proof the tool was declared.
+  // Default OFF — the breadcrumb is debug-grade and was bleeding into
+  // `openclaw agent --json` stdout, breaking programmatic parsers.
+  // Enable with either:
+  //   TOTALRECLAW_VERBOSE_REGISTER=1   (specific opt-in)
+  //   TOTALRECLAW_DEBUG=1              (general debug toggle)
+  // Read via getter so flipping the env at runtime takes effect on the
+  // next gateway start without a rebuild.
+  get verboseRegister(): boolean {
+    const specific = (process.env.TOTALRECLAW_VERBOSE_REGISTER ?? '').trim().toLowerCase();
+    if (specific === '1' || specific === 'true' || specific === 'yes') return true;
+    const general = (process.env.TOTALRECLAW_DEBUG ?? '').trim().toLowerCase();
+    return general === '1' || general === 'true' || general === 'yes';
+  },
+
   // Paths
   home,
   billingCachePath: path.join(home, '.totalreclaw', 'billing-cache.json'),
