@@ -2902,6 +2902,12 @@ const plugin = {
             credentialsPath: CREDENTIALS_PATH,
             statePath: CONFIG.onboardingStatePath,
             logger: api.logger,
+            // 3.3.1-rc.18 — wire the pair flow into onboard so the
+            // `--pair-only` flag (issue #95) can delegate to it without
+            // duplicating session-store / URL-builder logic. Same deps
+            // as the standalone `pair` subcommand.
+            pairSessionsPath: CONFIG.pairSessionsPath,
+            renderPairingUrl: (session) => buildPairingUrl(api, session),
             // 3.3.1 — supplied to the non-interactive --json onboard path
             // so the emitted payload includes the derived Smart Account
             // (scope) address. Uses the chain-id default; Pro-tier

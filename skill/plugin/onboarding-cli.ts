@@ -59,6 +59,23 @@ import {
 // has one place to grow into later).
 // ---------------------------------------------------------------------------
 
+/**
+ * 3.3.1-rc.18 (issue #95) — deprecation warning for the interactive
+ * phrase-print branch. Emitted to STDERR (never stdout) so it is visible
+ * to humans but does not pollute any pipe consuming the wizard's output.
+ *
+ * The phrase-print branch will be REMOVED in the next RC after rc.18.
+ * Users running on a TTY can still complete the flow in rc.18; agents
+ * MUST use `--pair-only` or the `totalreclaw_pair` tool today.
+ */
+export const PHRASE_PRINT_DEPRECATION_WARNING =
+  '\nDEPRECATION (issue #95): the interactive `openclaw totalreclaw onboard` flow\n' +
+  '  prints your recovery phrase to this terminal. This is being removed in the\n' +
+  '  next release candidate. For agent / scripted invocation, use:\n' +
+  '    openclaw totalreclaw onboard --pair-only\n' +
+  '  which emits ONLY {pair_url, pin} JSON and routes the phrase through the\n' +
+  '  browser flow (never on stdout).\n\n';
+
 export const COPY = {
   welcome:
     '\nTotalReclaw — Secure onboarding\n\n' +
@@ -403,6 +420,11 @@ export async function runOnboardingWizard(deps: WizardDeps): Promise<WizardResul
   }
 
   if (choice === 'generate') {
+    // 3.3.1-rc.18 (issue #95) — deprecation banner on stderr ONLY.
+    // The phrase-print branch is scheduled for removal in the RC after
+    // rc.18; we keep it functional in rc.18 for back-compat with users
+    // running the wizard on a real TTY today.
+    io.stderr.write(PHRASE_PRINT_DEPRECATION_WARNING);
     io.stdout.write(COPY.generateWarning);
     io.stdout.write(COPY.importRemoteLimitation);
     const mnemonic = genMnemonic();
@@ -674,6 +696,22 @@ export async function runNonInteractiveOnboard(
  *   --emit-phrase          Include the plaintext phrase in the JSON payload
  *                          (NOT recommended — the phrase lives in
  *                          credentials.json; prefer reading it there).
+ *
+ * 3.3.1-rc.18 — `onboard` accepts:
+ *   --pair-only            Phrase-safe agent-shell flag (issue #95).
+ *                          Delegates to the pair flow and emits a single
+ *                          line of JSON `{v, pair_url, pin, expires_at_ms}`
+ *                          to stdout. Phrase NEVER touches stdout, stderr,
+ *                          or the logger in this mode. Use this for any
+ *                          agent-driven setup; it is the recommended path
+ *                          when a container-based agent does not have the
+ *                          `totalreclaw_pair` tool injected.
+ *
+ *                          Requires `pairSessionsPath` + `renderPairingUrl`
+ *                          to be supplied to `registerOnboardingCli`. If
+ *                          absent, `--pair-only` exits non-zero with a
+ *                          clear message instead of falling through to the
+ *                          phrase-print branch.
  */
 export function registerOnboardingCli(
   program: import('commander').Command,
@@ -683,6 +721,10 @@ export function registerOnboardingCli(
     logger: { info(msg: string): void; warn(msg: string): void; error(msg: string): void };
     /** Caller-supplied helper for scope-address derivation. Optional — when absent, JSON output omits `scope_address`. */
     deriveScopeAddress?: (mnemonic: string) => Promise<string | undefined>;
+    /** Caller-supplied path to the pair-session store. Required for `--pair-only`. */
+    pairSessionsPath?: string;
+    /** Caller-supplied URL renderer for the pair flow. Required for `--pair-only`. */
+    renderPairingUrl?: (session: import('./pair-session-store.js').PairSession) => string;
   },
 ): void {
   const tr = program
@@ -690,12 +732,13 @@ export function registerOnboardingCli(
     .description('TotalReclaw encrypted memory — secure onboarding + status');
 
   tr.command('onboard')
-    .description('Interactive onboarding: generate or import a recovery phrase (runs locally, no LLM)')
+    .description('Interactive onboarding: generate or import a recovery phrase (runs locally, no LLM). For agent-driven setup prefer --pair-only.')
     .option('--non-interactive', 'Exit non-zero if any input would be prompted for (agent-driven use)')
     .option('--json', 'Emit the result as a structured JSON payload. Only valid with --non-interactive.')
     .option('--mode <mode>', 'generate | restore — skip the menu prompt')
     .option('--phrase <phrase>', 'Recovery phrase for --mode restore. `-` reads from stdin.')
     .option('--emit-phrase', 'Include the plaintext phrase in the JSON payload (not recommended). Default: false.')
+    .option('--pair-only', 'Phrase-safe agent-invocation mode (issue #95). Emits ONLY {v,pair_url,pin,expires_at_ms} JSON to stdout via the pair flow. Phrase never touches stdout/stderr/logger. RECOMMENDED for any agent or scripted invocation.')
     .action(async (...actionArgs: unknown[]) => {
       // commander: (options, cmd)
       const cliOpts = (actionArgs[0] ?? {}) as {
@@ -704,7 +747,69 @@ export function registerOnboardingCli(
         mode?: string;
         phrase?: string;
         emitPhrase?: boolean;
+        pairOnly?: boolean;
       };
+
+      // ---------------------------------------------------------------
+      // 3.3.1-rc.18 — `--pair-only` (issue #95)
+      //
+      // Phrase-safe agent-shell flag. Delegates to the pair flow and
+      // emits a single line of JSON `{v, pair_url, pin, expires_at_ms}`
+      // to stdout. By construction:
+      //   - The pair flow is x25519-only — pair-crypto.ts does NOT
+      //     import @scure/bip39 and never touches a recovery phrase.
+      //   - No interactive prompts, no readline, no @scure/bip39 import
+      //     in this code path. Phrase never enters stdout/stderr/logger.
+      //   - Stays silent on status transitions (the runPairCli
+      //     `pair-only` output mode suppresses banners, spinners, and
+      //     all human-readable copy).
+      //
+      // This MUST be the path agents take when they need to set up
+      // TotalReclaw via a shell. The interactive phrase-print branch
+      // below is deprecated for that use case and emits a warning when
+      // the user falls through to it.
+      // ---------------------------------------------------------------
+      if (cliOpts.pairOnly) {
+        if (!opts.pairSessionsPath || !opts.renderPairingUrl) {
+          process.stderr.write(
+            '--pair-only is unavailable: this OpenClaw build did not wire the pair flow into the onboard CLI. ' +
+              'Use `openclaw totalreclaw pair generate --url-pin-only` instead.\n',
+          );
+          process.exit(1);
+        }
+        // Resolve mode. --mode restore is incompatible with --pair-only
+        // since pair flow's "import" mode runs in the browser, not in
+        // the CLI. Default to 'generate' silently.
+        const pairMode = cliOpts.mode === 'restore' || cliOpts.mode === 'import' ? 'import' : 'generate';
+
+        // Lazy import — keeps pair-cli + qrcode-terminal off the
+        // onboarding hot path when --pair-only is not used.
+        const { runPairCli, defaultRenderQr, buildDefaultPairCliIo } = await import('./pair-cli.js');
+        const io = buildDefaultPairCliIo();
+        try {
+          const outcome = await runPairCli(pairMode, {
+            sessionsPath: opts.pairSessionsPath,
+            renderPairingUrl: opts.renderPairingUrl,
+            renderQr: defaultRenderQr,
+            io,
+            outputMode: 'pair-only',
+          });
+          if (outcome.status !== 'completed') {
+            process.exit(outcome.status === 'canceled' ? 130 : 1);
+          }
+          process.exit(0);
+        } catch (err) {
+          // CRITICAL: this catch MUST NOT include the phrase, the
+          // mnemonic, or any user secret in the message. The pair flow
+          // does not produce phrase material, so this is structurally
+          // safe — but defense-in-depth: emit a fixed error string.
+          opts.logger.error(
+            `pair-only delegation crashed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          process.stderr.write('--pair-only failed (see logs).\n');
+          process.exit(2);
+        }
+      }
 
       if (cliOpts.nonInteractive) {
         // Non-interactive path — no readline, no prompts.
@@ -744,10 +849,18 @@ export function registerOnboardingCli(
         });
 
         if (cliOpts.json) {
+          // 3.3.1-rc.18 (issue #95) — emit deprecation on stderr when
+          // the JSON payload is about to include the plaintext phrase.
+          // stderr is intentional: stdout must remain a single
+          // machine-parseable JSON line.
+          if (cliOpts.emitPhrase && result.ok && result.mnemonic) {
+            process.stderr.write(PHRASE_PRINT_DEPRECATION_WARNING);
+          }
           process.stdout.write(JSON.stringify(result) + '\n');
         } else {
           if (result.ok) {
             if (result.mnemonic) {
+              process.stderr.write(PHRASE_PRINT_DEPRECATION_WARNING);
               process.stderr.write(
                 'WARNING: --emit-phrase was set. The plaintext recovery phrase was returned.\n' +
                   'For agent-driven flows, prefer reading ~/.totalreclaw/credentials.json directly ' +
