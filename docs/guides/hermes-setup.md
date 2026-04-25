@@ -14,8 +14,10 @@ hermes plugins install p-diogo/totalreclaw-hermes --enable
 /path/to/hermes/venv/bin/python3 -m pip install --pre totalreclaw
 # (or just `pip install --pre totalreclaw` if your pip resolves to hermes's venv)
 
-# Restart the gateway for the plugin to take effect
-hermes gateway restart    # or `docker restart tr-hermes` for Docker Hermes
+# Restart the gateway. Pick the line that matches your setup:
+hermes gateway restart                       # native install
+docker restart <your-hermes-container>       # Docker self-host (substitute your container name; `docker ps` shows it)
+# Managed Hermes service: use the service's restart control (web UI). See the "Managed Hermes service" section below.
 ```
 
 Then in your Hermes chat:
@@ -41,8 +43,10 @@ hermes plugins install p-diogo/totalreclaw-hermes --enable
 /path/to/hermes/venv/bin/python3 -m pip install --pre totalreclaw
 # (or just `pip install --pre totalreclaw` if your pip resolves to hermes's venv)
 
-# Restart the gateway for the plugin to take effect
-hermes gateway restart    # or `docker restart tr-hermes` for Docker Hermes
+# Restart the gateway. Pick the line that matches your setup:
+hermes gateway restart                       # native install
+docker restart <your-hermes-container>       # Docker self-host (substitute your container name)
+# Managed Hermes service: use the service's restart control (web UI).
 ```
 
 Then in your Hermes chat:
@@ -75,6 +79,20 @@ The recovery phrase never crosses the LLM context — not the chat transcript, n
 - Python 3.11+
 - An up-to-date browser with WebCrypto x25519 + AES-GCM (Safari 17.2+ or Chromium 133+)
 
+## Managed Hermes service (no terminal)
+
+If you're on a managed / hosted Hermes service and don't have shell access to the gateway host, plugin installation typically happens through your service's web UI rather than the `hermes` CLI + `pip`. The flow is:
+
+1. In your service's control panel, find the **Plugins** panel and search for `totalreclaw` (or `p-diogo/totalreclaw-hermes`). Install and enable it. Most managed Hermes deployments handle the underlying Python-package install transparently as part of plugin enable.
+2. If the service exposes a separate restart control, restart your agent through that. Many managed services apply plugin changes transparently and skip this step.
+3. Return to chat and say **`Set up TotalReclaw`**. Your agent will call `totalreclaw_pair` and walk you through the QR pairing flow — open the URL it returns, enter or generate your 12-word recovery phrase in the browser, and confirm the 6-digit PIN.
+
+The browser-side crypto and pairing flow are identical to self-hosted setups; only the install + restart step differs.
+
+> Managed-Hermes coverage is still emerging — if your service doesn't expose `totalreclaw` in its plugins UI yet, ask their support to surface the `p-diogo/totalreclaw-hermes` Hermes plugin + `totalreclaw` Python package, or run a self-hosted Hermes instance for now.
+
+> The CLI-driven install commands above (`hermes plugins install`, `pip install --pre totalreclaw`) assume you have terminal access on the gateway host and a writable Hermes Python venv. They will not work on a managed service that doesn't expose the host shell — use the steps above instead.
+
 ## Notes on `--pre`
 
 `--pre` lets pip resolve to the latest release candidate without pinning a version. Drop `--pre` once a stable is promoted. Ubuntu/Debian/Docker: add `--break-system-packages` or use a venv if you hit `externally-managed-environment`.
@@ -85,7 +103,7 @@ If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after upgrading also run `p
 
 ## Troubleshooting
 
-- **Agent can't see TotalReclaw tools**: confirm both install commands ran — `hermes plugins list` should show `p-diogo/totalreclaw-hermes` enabled, and `pip show totalreclaw` in the Hermes venv should resolve. Then `hermes gateway restart`.
+- **Agent can't see TotalReclaw tools**: confirm both install steps completed — on a self-host, `hermes plugins list` should show `p-diogo/totalreclaw-hermes` enabled and `pip show totalreclaw` in the Hermes venv should resolve; on a managed service, confirm `totalreclaw` is listed in your service's plugins UI. Then restart: `hermes gateway restart` (native), `docker restart <your-hermes-container>` (Docker self-host — substitute your actual container name), or your managed service's restart control.
 - **Pair URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running.
 - **Browser fails to POST the encrypted phrase**: check the pair page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
 - **"No LLM available for auto-extraction"**: configure a provider in Hermes (`hermes login` or set `ZAI_API_KEY` / `OPENAI_API_KEY` in `~/.hermes/.env`). TotalReclaw reuses it automatically.

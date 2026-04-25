@@ -10,7 +10,11 @@ Terminal:
 
 ```bash
 openclaw skills install totalreclaw
-openclaw gateway restart  # or `docker restart tr-openclaw` for Docker
+
+# Restart your gateway. Pick the line that matches your setup:
+openclaw gateway restart                       # native install
+docker restart <your-openclaw-container>       # Docker self-host (substitute your container name; `docker ps` shows it)
+# Managed OpenClaw service: use the service's restart control (web UI). See the "Managed OpenClaw service" section below.
 ```
 
 Then in your OpenClaw chat:
@@ -30,7 +34,11 @@ Terminal:
 
 ```bash
 openclaw skills install totalreclaw
-openclaw gateway restart  # or `docker restart tr-openclaw` for Docker
+
+# Restart your gateway. Pick the line that matches your setup:
+openclaw gateway restart                       # native install
+docker restart <your-openclaw-container>       # Docker self-host (substitute your container name)
+# Managed OpenClaw service: use the service's restart control (web UI).
 ```
 
 Then in your OpenClaw chat:
@@ -47,7 +55,7 @@ The agent reads the explicit directive, installs the plugin (`openclaw plugins i
 1. `openclaw skills install totalreclaw` places the skill metadata + SKILL.md under `~/.openclaw/workspace/skills/totalreclaw/`.
 2. The first gateway restart makes the skill visible to your agent's context.
 3. The chat prompt triggers the skill's fast path: the agent runs `openclaw plugins install totalreclaw` via its shell tool.
-4. The agent asks you to restart the gateway (`openclaw gateway restart` or `docker restart tr-openclaw`) so HTTP routes + hooks bind. The agent cannot self-restart the process it is running in.
+4. The agent asks you to restart the gateway so HTTP routes + hooks bind — `openclaw gateway restart` for native installs, `docker restart <your-openclaw-container>` for Docker self-host (substitute your actual container name), or your managed service's restart control. The agent cannot self-restart the process it is running in.
 5. Agent calls the `totalreclaw_pair` tool.
 6. A pair URL + 6-digit PIN is surfaced back to you in chat.
 7. You open the URL in your browser. The pair page offers two tabs: **Generate new** (the browser creates a fresh 12-word recovery phrase using the canonical BIP-39 wordlist) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, and continue.
@@ -68,13 +76,31 @@ The recovery phrase never crosses the LLM context — not the chat transcript, n
 
 ---
 
+## Managed OpenClaw service (no terminal)
+
+If you're on a managed / hosted OpenClaw service and don't have shell access to the gateway host, plugin installation typically happens through your service's web UI rather than the `openclaw` CLI. You can still use TotalReclaw — the flow is:
+
+1. In your service's control panel, find the **Plugins** (or **Skills**) panel and search for `totalreclaw`. Install and enable it.
+2. If the service exposes a separate restart control, restart your agent through that. Many managed services apply plugin changes transparently and skip this step.
+3. Return to chat and say **`Set up TotalReclaw`**. Your agent will pick up the skill and walk you through the QR pairing flow — open the URL it returns, enter or generate your 12-word recovery phrase in the browser, and confirm the 6-digit PIN.
+
+The browser-side crypto and pairing flow are identical to self-hosted setups; only the install + restart step differs.
+
+> The CLI-driven sections below (`openclaw skills install`, `openclaw plugins install`, `pip install`, `git clone`) assume you have terminal access on the gateway host. They will not work on a managed service that doesn't expose the host shell — use the steps above instead.
+
+---
+
 ## Fully manual (CLI only)
 
-If you'd rather run every command yourself without any agent involvement:
+If you'd rather run every command yourself without any agent involvement (self-hosted only — managed services don't expose the host shell):
 
 ```bash
 openclaw plugins install @totalreclaw/totalreclaw            # stable
-openclaw gateway restart              # or: docker restart tr-openclaw
+
+# Restart your gateway. Pick the line that matches your setup:
+openclaw gateway restart                                     # native install
+docker restart <your-openclaw-container>                     # Docker self-host (substitute your container name)
+# Managed OpenClaw service: use the service's restart control (web UI).
 ```
 
 Then ask the agent "set up TotalReclaw for me" — it will call `totalreclaw_pair` and hand you the URL + PIN.
@@ -90,12 +116,14 @@ Then ask the agent "set up TotalReclaw for me" — it will call `totalreclaw_pai
 > Check what each tag currently resolves to with `npm view @totalreclaw/totalreclaw dist-tags`. Keep the skill and plugin on the same version family (both stable or both RC) to avoid skill instructions and plugin behavior drifting apart.
 
 <details>
-<summary>From-source install (for plugin development)</summary>
+<summary>From-source install (for plugin development — self-host only)</summary>
 
 ```bash
 git clone https://github.com/p-diogo/totalreclaw.git
 openclaw plugins install ./totalreclaw/skill/plugin
 ```
+
+This path requires terminal access on the gateway host and is not available on managed services.
 
 </details>
 
@@ -164,7 +192,7 @@ Both tiers have unlimited memories and reads. Upgrade: *"Upgrade my TotalReclaw 
 
 ## Troubleshooting
 
-- **Agent can't see TotalReclaw tools**: restart the gateway (`openclaw gateway restart` or `docker restart tr-openclaw`).
+- **Agent can't see TotalReclaw tools**: restart the gateway. Native: `openclaw gateway restart`. Docker self-host: `docker restart <your-openclaw-container>` (substitute your actual container name; `docker ps` shows it). Managed service: use the service's restart control (web UI).
 - **Pair URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running.
 - **Browser fails to POST the encrypted phrase**: check the pair page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
 - **Tool calls return "onboarding required"**: repeat the canonical prompt so the agent re-runs `totalreclaw_pair`.

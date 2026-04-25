@@ -1,5 +1,11 @@
 # TotalReclaw Changelog
 
+## rc.19 — Setup-agnostic instructions (2026-04-25)
+
+- **Fix:** setup instructions agnostic to container names. Both shipped SKILL.md files (`skill/plugin/SKILL.md`, `python/src/totalreclaw/hermes/SKILL.md`) and both user-facing guides (`docs/guides/openclaw-setup.md`, `docs/guides/hermes-setup.md`) replaced 12 hardcoded `docker restart tr-openclaw` / `docker restart tr-hermes` literals with topology-agnostic `docker restart <your-container-name>` placeholders + a three-pattern fork (native / Docker self-host / managed service) so users whose container is not named `tr-*` get correct instructions.
+- **Add:** "Managed OpenClaw service" and "Managed Hermes service" subsections in both user guides documenting the no-terminal install path (web-UI plugin install + service-restart control). Both shipped SKILL.md files gained a managed-service fallback branch: if the agent's shell can't run `openclaw plugins install` / `hermes plugins install` / `pip install` (ENOENT, command not found, not authorized), it tells the user to install via the service's plugins UI and reply `done` instead of looping.
+- Bug-fix only — no API changes, no install-command changes, no version bumps. Resolves the rc.18 audit at `docs/notes/AUDIT-tr-setup-agnostic-2026-04-25.md` (commit `705ac21`, internal repo).
+
 ## Wave 1 -- v1 Stabilization (2026-04-19)
 
 Post-v1-launch stabilization wave. The v1 taxonomy (shipped 2026-04-18 in core 2.0.0 and the matching client set) revealed a cluster of UX and protocol gaps once real users started onboarding. Wave 1 closes that cluster across core, MCP, OpenClaw plugin, and the Python client.
