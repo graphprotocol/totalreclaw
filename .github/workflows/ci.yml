@@ -69,6 +69,17 @@ jobs:
       - name: Verify tarball ships built `.js` artifacts (issue #110)
         run: cd skill/plugin && npm run verify-tarball
 
+      # Issue #124 (rc.20 ship-stopper): the published `dist/index.js` is
+      # ESM-only (`"type":"module"`) but had three runtime `require()` calls
+      # left over from an unfinished migration — every plugin entry point
+      # died with `require is not defined`. The pre-publish gate above only
+      # runs `node --check` (syntax-only) and missed it. This step actually
+      # imports the built dist in a clean Node ESM process AND grep-guards
+      # the dist files for any bare `require(` outside comments. Catches
+      # the regression at PR time, never publish-time.
+      - name: ESM-shape smoke (issue #124 — bare require regression)
+        run: cd skill/plugin && npm run smoke:dist
+
   mcp-tests:
     name: MCP Server Tests
     runs-on: ubuntu-latest

@@ -161,6 +161,19 @@ import { detectGatewayHost } from './gateway-url.js';
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import * as nodePath from 'node:path';
+
+// CJS-style require for the @totalreclaw/core WASM module. We keep this
+// load path lazy (only inside getSmartImportWasm() below) so a partial
+// install of the dependency tree doesn't crash module init. Bare
+// `require()` is a CommonJS global and is undefined under bare Node ESM —
+// the shipped `dist/index.js` declares `"type":"module"`, so calling the
+// global directly emits "require is not defined" at runtime (issue #124).
+// createRequire bridges the gap. Same shape as crypto.ts / lsh.ts /
+// subgraph-store.ts / claims-helper.ts.
+const __cjsRequire = createRequire(import.meta.url);
 
 // ---------------------------------------------------------------------------
 // OpenClaw Plugin API type (defined locally to avoid SDK dependency)
@@ -2298,10 +2311,13 @@ async function handlePluginImportFrom(
 // Smart Import — Two-Pass Pipeline (Profile + Triage)
 // ---------------------------------------------------------------------------
 
-// Lazy-load WASM for smart import functions (same pattern as crypto.ts / subgraph-store.ts).
+// Lazy-load WASM for smart import functions (same pattern as crypto.ts /
+// subgraph-store.ts). Goes through __cjsRequire (createRequire(import.meta.url))
+// declared at the top of the file — bare `require()` is undefined under
+// pure-ESM Node, see issue #124.
 let _smartImportWasm: typeof import('@totalreclaw/core') | null = null;
 function getSmartImportWasm() {
-  if (!_smartImportWasm) _smartImportWasm = require('@totalreclaw/core');
+  if (!_smartImportWasm) _smartImportWasm = __cjsRequire('@totalreclaw/core');
   return _smartImportWasm;
 }
 
@@ -2840,12 +2856,13 @@ const plugin = {
     // the loopback callsite if package.json read fails.
     let pluginVersion: string | null = null;
     try {
-      // `import.meta.url` is ESM-only; fallback to `__dirname` for the CJS
-      // build path. `require` comes from Node core and is available in both
-      // module formats. `fileURLToPath` / `path.dirname` are pure-sync.
-      const url = require('node:url') as typeof import('node:url');
-      const nodePath = require('node:path') as typeof import('node:path');
-      const pluginDir = nodePath.dirname(url.fileURLToPath(import.meta.url));
+      // Resolve our own dist/ directory so `readPluginVersion` can locate
+      // package.json. We use `import.meta.url` + ESM-static stdlib imports
+      // (`fileURLToPath` from `node:url`, `nodePath.dirname` from `node:path`,
+      // both imported at the top of this file). Earlier shape used inline
+      // `require('node:url')` — undefined under bare-ESM Node, broke the
+      // before_agent_start hook in the published rc.20 bundle (issue #124).
+      const pluginDir = nodePath.dirname(fileURLToPath(import.meta.url));
       pluginVersion = readPluginVersion(pluginDir);
       rcMode = isRcBuild(pluginVersion);
       if (rcMode) {

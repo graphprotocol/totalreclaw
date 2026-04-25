@@ -10,10 +10,14 @@
  * and chain RPCs. No viem, no permissionless.
  */
 
-// Lazy-load WASM to avoid crash when npm install hasn't finished yet.
+// Lazy-load WASM via createRequire — the shipped bundle is ESM-only and
+// the bare `require` global is undefined there (issue #124). Same pattern
+// as crypto / lsh / claims-helper / consolidation / digest-sync.
+import { createRequire } from 'node:module';
+const requireWasm = createRequire(import.meta.url);
 let _wasm: typeof import('@totalreclaw/core') | null = null;
 function getWasm() {
-  if (!_wasm) _wasm = require('@totalreclaw/core');
+  if (!_wasm) _wasm = requireWasm('@totalreclaw/core');
   return _wasm;
 }
 import { CONFIG } from './config.js';

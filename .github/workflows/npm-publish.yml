@@ -372,6 +372,16 @@ jobs:
       - name: Verify tarball ships built `.js` artifacts (issue #110)
         run: cd skill/plugin && npm run verify-tarball
 
+      # Issue #124 (rc.20 ship-stopper): the published `dist/index.js` had
+      # three runtime `require()` calls under `"type":"module"`. The
+      # tarball-smoke step below imports the entry, but `require()`s on
+      # lazy paths (extractor, hot-cache, plugin-version reader) don't
+      # fire on import alone. This grep+exec gate scans every dist/*.js
+      # for bare `require(` outside comments AND executes the dist in a
+      # clean ESM process. Fail-fast at publish, never reach the registry.
+      - name: ESM-shape smoke (issue #124 — bare require regression)
+        run: cd skill/plugin && npm run smoke:dist
+
       - name: Smoke-import the plugin module from a clean Node env
         run: |
           cd skill/plugin
