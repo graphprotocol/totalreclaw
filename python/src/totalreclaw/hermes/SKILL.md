@@ -9,28 +9,29 @@ homepage: https://totalreclaw.xyz
 
 # TotalReclaw — Hermes
 
-## Fast path — "set up TotalReclaw" (Approach A, preferred)
+> The canonical install flow lives at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md>. If a user pastes that URL in chat, fetch it and follow its agent-instructions section. This SKILL.md mirrors the same steps so you can act even if the URL is unreachable.
 
-If the user says "set up TotalReclaw" (or any variant) AND this SKILL.md is loaded, assume `totalreclaw_*` tools are already available (`hermes plugins install p-diogo/totalreclaw-hermes --enable` registers the plugin manifest, `pip install --pre totalreclaw` supplies the Python tool implementations, and gateway restart loads both together — if you are reading this, the plugin is loaded too). On a managed Hermes service where your shell can't run `hermes plugins install` or `pip install`, expect that the user installed both via the service's plugins UI; this SKILL.md still applies.
+## Setup flow
 
-1. Check `~/.totalreclaw/credentials.json` exists and is non-empty (via a read-only shell `test -s ~/.totalreclaw/credentials.json`). If it exists, confirm *"TotalReclaw is already set up."* and stop.
-2. If credentials missing: call `totalreclaw_pair` immediately. It returns `{url, pin, expires_at_ms}`.
-3. Relay verbatim: *"Open <url> in your browser. Enter your 12-word recovery phrase (or let the browser generate one). Confirm PIN <pin>. I'll wait for you to say done."*
-4. After user says done: verify `~/.totalreclaw/credentials.json`. If missing, call `totalreclaw_pair` again (PIN likely expired) and resend.
-5. Confirm: *"TotalReclaw set up ✓. Ask me to remember or recall anything — try `totalreclaw_remember` or ask me to remember something."*
+If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jump to step 4. Otherwise run all steps in order.
 
-If `totalreclaw_*` tools are NOT in your toolset: the gateway needs a restart. Hermes does NOT auto-reload on plugin install — manual restart is required. Tell the user once: *"My memory tools didn't bind — the gateway needs a restart. Common patterns: `hermes gateway restart` (native install), `docker restart <your-container-name>` (Docker self-host — replace with your actual container name; `docker ps` shows it), or your managed Hermes service's restart control if you're on a hosted plan. If your Hermes is supervised by systemd / launchd, you can also send SIGUSR1 for a graceful-drain restart: `kill -USR1 $(cat ~/.hermes/gateway.pid)` — the supervisor will respawn cleanly. Reply `done` once it's back up."* Do not try to invoke missing tools yourself, and do NOT run the restart yourself — your shell is inside the gateway you're restarting.
+1. **Install plugin + Python package.** Hermes 2026.4.16+ uses Git-based plugin discovery and a separate Python tool implementation. Run via your shell tool:
+   ```
+   hermes plugins install p-diogo/totalreclaw-hermes --enable
+   pip install --pre totalreclaw
+   ```
+   (If Hermes runs in its own venv, use that venv's pip — e.g. `/path/to/hermes/venv/bin/python3 -m pip install --pre totalreclaw`.) If either shell call fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment): tell the user verbatim *"Your environment doesn't expose the Hermes CLI / pip to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`."* Wait for `done` and skip to step 3.
 
-## Explicit two-step setup flow (Approach B, fallback)
+2. **Restart the gateway — Hermes does NOT auto-reload on plugin install.** Tell the user verbatim: *"Please restart your Hermes gateway: `hermes gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. If supervised by systemd / launchd, `kill -USR1 $(cat ~/.hermes/gateway.pid)` triggers a graceful-drain restart. Reply `done` once it's back up."* Do NOT run the restart yourself — your shell is inside the gateway you'd be restarting. Wait for the user's `done`.
 
-Used when the user pastes a verbose prompt describing install + restart + pair (e.g. *"TotalReclaw is already installed. Use the totalreclaw_pair tool to walk me through the QR recovery-phrase setup."*) OR when a tool returns `onboarding required`.
+3. **Verify `totalreclaw_pair` is bound.** If still missing after restart, tell the user the plugin didn't load and to retry. Do not loop the install.
 
-1. Install both halves of the Hermes 2026.4.16+ plugin surface: `hermes plugins install p-diogo/totalreclaw-hermes --enable` (Git-based plugin manifest) AND `pip install --pre totalreclaw` (Python tool implementations; latest pre-release on PyPI — pin a specific `rcN` from https://pypi.org/project/totalreclaw/#history if asked). If either shell call fails with `command not found` / ENOENT / "not authorized" / similar (managed-service or shell-restricted environment): tell the user *"Your environment doesn't expose the Hermes CLI / pip to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`."* Wait for `done` and skip to step 3.
-2. Restart gateway so plugin loads. Tell the user verbatim: *"Please restart your Hermes gateway: `hermes gateway restart` (native install), `docker restart <your-container-name>` (Docker self-host — replace with your actual container name), or your managed service's restart control. Reply `done` once it's back up."* Do NOT run the restart yourself — your shell is inside the gateway. Wait for the user's `done`.
-3. Call `totalreclaw_pair`. Returns `{url, pin, expires_at_ms}`.
-4. Relay to user verbatim: *"Open <url> in your browser. Enter your 12-word recovery phrase (or let the browser generate one). Confirm PIN <pin>. I'll wait for you to say done."*
-5. After user says done: verify `~/.totalreclaw/credentials.json` exists and is non-empty. If missing, call `totalreclaw_pair` again (PIN likely expired) and resend.
-6. Confirm: *"TotalReclaw is set up. Ask me to remember or recall anything."*
+4. **Check for existing credentials.** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, confirm *"TotalReclaw is already set up."* and stop.
+
+5. **Pair.** Call `totalreclaw_pair`. Returns `{url, pin, expires_at_ms}`. Relay verbatim:
+   > *Open <url> in your browser. Generate a new 12-word recovery phrase there or paste an existing one — the phrase stays in your browser, the relay only sees ciphertext. Confirm PIN <pin>. Reply `done` once the page says it's sealed.*
+
+6. **Verify and confirm.** After user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again and resend. If present, confirm *"TotalReclaw is set up. Ask me to remember or recall anything."*
 
 ## Phrase safety (HARD — never break)
 

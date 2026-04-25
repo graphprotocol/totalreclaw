@@ -1,71 +1,73 @@
 # TotalReclaw for OpenClaw
 
-TotalReclaw gives your OpenClaw agent encrypted, persistent memory. Two install approaches — pick whichever fits your workflow.
+TotalReclaw gives your OpenClaw agent encrypted, persistent memory. The fastest setup is a single chat message — the agent fetches this guide, runs the install for you, and walks you through pairing. **You do nothing in the terminal.**
+
+If you already have OpenClaw running, paste this into your OpenClaw chat:
+
+> **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>**
+
+Your agent will fetch this page, run the two install commands, and hand you a pair URL + 6-digit PIN. You open the URL in your browser, generate or restore a 12-word recovery phrase there, confirm the PIN, and you're done.
 
 ---
 
-## Fastest — skill + chat (Approach A, preferred)
+## Agent instructions (read this if you are an OpenClaw agent that just fetched this URL)
 
-Terminal:
+You have been asked to install TotalReclaw. Run the steps below in order. Do not deviate, do not ask the user to run terminal commands, do not echo or generate a recovery phrase.
 
-```bash
-openclaw skills install totalreclaw
+### Step 1 — Install the skill + plugin
 
-# Restart your gateway so the new skill is discoverable. Pick the line that matches your setup:
-openclaw gateway restart                       # native install
-docker restart <your-openclaw-container>       # Docker self-host (substitute your container name; `docker ps` shows it)
-# Managed OpenClaw service: use the service's restart control (web UI). See the "Managed OpenClaw service" section below.
-```
-
-Then in your OpenClaw chat:
-
-> **Install totalreclaw**
-
-The agent reads the skill, installs the plugin, waits for OpenClaw's auto-reload to bind the new tools (default `gateway.reload.mode = "hybrid"` triggers a graceful restart within 1-3s of the install), calls the pairing tool, and guides you through the QR flow. No second manual restart required for the common case.
-
-Why this works: ClawHub classifies `totalreclaw` as a skill. `openclaw skills install totalreclaw` registers the SKILL.md into agent context **before** the plugin itself is installed — so the agent has the instructions to bootstrap the rest. The one `openclaw gateway restart` in the terminal makes the skill discoverable; the plugin install happens via shell from the agent, and OpenClaw's config-watcher then auto-restarts the gateway to bind the new tools (no second user-driven restart needed unless `gateway.reload.mode = off`).
-
-<details>
-<summary><strong>Approach B — explicit two-step (fallback)</strong></summary>
-
-If you'd rather spell out every step explicitly (useful if you prefer more control), install the skill the same way but use a verbose chat prompt:
-
-Terminal:
+Run via your shell tool, in this order:
 
 ```bash
 openclaw skills install totalreclaw
-
-# Restart your gateway so the new skill is discoverable. Pick the line that matches your setup:
-openclaw gateway restart                       # native install
-docker restart <your-openclaw-container>       # Docker self-host (substitute your container name)
-# Managed OpenClaw service: use the service's restart control (web UI).
+openclaw plugins install @totalreclaw/totalreclaw
 ```
 
-Then in your OpenClaw chat:
+Notes:
+- For an RC build, replace the second command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (or pin a version like `@totalreclaw/totalreclaw@3.3.1-rc.19`).
+- If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
-> **TotalReclaw is a skill at 'totalreclaw' on ClawHub. Please install the plugin (openclaw plugins install totalreclaw), then use the totalreclaw_pair tool to walk me through the QR recovery-phrase setup.**
+### Step 2 — Wait for auto-reload (do NOT restart the gateway yourself)
 
-The agent reads the explicit directive, installs the plugin (`openclaw plugins install totalreclaw`), waits for OpenClaw's config-watcher to auto-restart the gateway and bind the new tools (1-3s under default `gateway.reload.mode = "hybrid"`), calls `totalreclaw_pair`, and guides you through the QR flow.
+OpenClaw's default config (`gateway.reload.mode = "hybrid"`) auto-restarts the gateway via a file-watcher within 1-3 seconds of the plugin install. Wait ~5 seconds, then verify with `openclaw plugins list | grep totalreclaw` and confirm the `totalreclaw_pair` tool is in your toolset.
 
-</details>
+If `totalreclaw_pair` is not bound within 10 seconds, the user has `gateway.reload.mode = off`. Fall back: tell the user verbatim *"Auto-reload didn't fire. Please restart your OpenClaw gateway: `openclaw gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. Reply `done` once it's back up."* Do NOT invoke the restart yourself — your shell runs inside the gateway you'd be restarting.
 
-<details>
-<summary>What happens behind the scenes</summary>
+### Step 3 — Check for existing credentials
 
-1. `openclaw skills install totalreclaw` places the skill metadata + SKILL.md under `~/.openclaw/workspace/skills/totalreclaw/`.
-2. The first gateway restart makes the skill visible to your agent's context.
-3. The chat prompt triggers the skill's fast path: the agent runs `openclaw plugins install totalreclaw` via its shell tool.
-4. OpenClaw's config-watcher (chokidar) detects the `plugins.*` change in `~/.openclaw/config.yaml` and, under the default `gateway.reload.mode = "hybrid"`, schedules a SIGUSR1 graceful-drain restart of the gateway. The new process re-reads config, re-imports the plugin, and the new HTTP routes + hooks + tools bind — typically within 1-3s. No human action required. (Fallback: if the user has set `gateway.reload.mode = off` in their config, auto-reload is disabled and the agent will instruct a manual restart instead. The agent cannot self-restart the process it is running in.)
-5. Agent calls the `totalreclaw_pair` tool.
-6. A pair URL + 6-digit PIN is surfaced back to you in chat.
-7. You open the URL in your browser. The pair page offers two tabs: **Generate new** (the browser creates a fresh 12-word recovery phrase using the canonical BIP-39 wordlist) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, and continue.
-8. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives an AES-256-GCM key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey to the gateway.
-9. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
-10. The agent confirms setup and your memory tools are live. First real interaction downloads a ~216 MB embedding model (cached locally, one-time).
+Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, confirm *"TotalReclaw is already set up."* and stop. Otherwise continue.
 
-The recovery phrase never crosses the LLM context — not the chat transcript, not the agent's shell stdout, not any tool-call payload. Browser-side crypto keeps it isolated by construction.
+### Step 4 — Pair (browser flow, NEVER ask the user to type their phrase in chat)
 
-</details>
+Call the `totalreclaw_pair` tool. It returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}`.
+
+Relay to the user verbatim:
+
+> *Open <url> in your browser. Generate a new 12-word recovery phrase there or paste an existing one — the phrase stays in your browser, the relay only sees ciphertext. Confirm PIN <pin>. Reply `done` once the page says it's sealed.*
+
+Render the QR if your transport supports it: image-capable transports (Telegram, Slack, web chat) decode `qr_png_b64` to bytes and attach as an image; terminal-only transports (OpenClaw native CLI) emit `qr_unicode` inline. The QR encodes only the URL — the PIN is a separate dual-channel confirmation, never bake it into the QR.
+
+### Step 5 — Verify and confirm
+
+After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN likely expired — call `totalreclaw_pair` again and resend. If present, confirm *"TotalReclaw is set up. Ask me to remember or recall anything."*
+
+### Phrase safety (HARD — never break)
+
+NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `openclaw totalreclaw onboard` (bare interactive form), `totalreclaw setup`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The ONLY agent-facilitated setup path is the `totalreclaw_pair` tool. If the user pastes a phrase anyway: tell them it is compromised and call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
+
+---
+
+## What's happening (for the human reader)
+
+1. `openclaw skills install totalreclaw` — fetches TotalReclaw's SKILL.md from ClawHub and registers it under `~/.openclaw/workspace/skills/totalreclaw/`. The agent picks it up on next config reload.
+2. `openclaw plugins install @totalreclaw/totalreclaw` — installs the plugin from npm (the `latest` dist-tag is always current stable; use `@rc` for the latest release candidate).
+3. OpenClaw's config-watcher detects the `plugins.*` change in `~/.openclaw/config.yaml` and (under default `gateway.reload.mode = "hybrid"`) triggers a graceful SIGUSR1 restart within 1-3s. The new tools bind automatically.
+4. The agent calls `totalreclaw_pair`, which generates an ephemeral x25519 keypair on the gateway and a 6-digit PIN. You get a URL + PIN.
+5. You open the URL. The pair page has two tabs: **Generate new** (the browser creates a fresh BIP-39 12-word phrase locally using `crypto.getRandomValues`) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, click seal.
+6. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives an AES-256-GCM key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey back. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
+7. The recovery phrase never crosses the LLM context — not the chat transcript, not the agent's shell stdout, not any tool-call payload. Browser-side crypto keeps it isolated by construction.
+
+First real interaction downloads a ~216 MB embedding model (cached locally, one-time).
 
 ---
 
@@ -76,48 +78,41 @@ The recovery phrase never crosses the LLM context — not the chat transcript, n
 
 ---
 
-## Managed OpenClaw service (no terminal)
+## Managed OpenClaw service (no terminal, no agent shell)
 
-If you're on a managed / hosted OpenClaw service and don't have shell access to the gateway host, plugin installation typically happens through your service's web UI rather than the `openclaw` CLI. You can still use TotalReclaw — the flow is:
+If you're on a managed / hosted OpenClaw service that doesn't expose host shell to the agent, install via the service's web UI instead:
 
 1. In your service's control panel, find the **Plugins** (or **Skills**) panel and search for `totalreclaw`. Install and enable it.
-2. If the service exposes a separate restart control, restart your agent through that. Many managed services apply plugin changes transparently and skip this step.
-3. Return to chat and say **`Set up TotalReclaw`**. Your agent will pick up the skill and walk you through the QR pairing flow — open the URL it returns, enter or generate your 12-word recovery phrase in the browser, and confirm the 6-digit PIN.
+2. If the service exposes a separate restart control, use it. Many managed services apply plugin changes transparently.
+3. Return to chat and paste the same canonical message:
 
-The browser-side crypto and pairing flow are identical to self-hosted setups; only the install + restart step differs.
+   > **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>**
 
-> The CLI-driven sections below (`openclaw skills install`, `openclaw plugins install`, `pip install`, `git clone`) assume you have terminal access on the gateway host. They will not work on a managed service that doesn't expose the host shell — use the steps above instead.
+   The agent will detect that the plugin is already loaded, skip Steps 1-2, and jump straight to pairing.
+
+The browser-side crypto and pairing flow are identical to self-hosted setups; only the install step differs.
 
 ---
 
-## Fully manual (CLI only)
+## Fully manual (CLI only — last resort)
 
-If you'd rather run every command yourself without any agent involvement (self-hosted only — managed services don't expose the host shell):
+If you can't or won't use the chat flow (self-hosted only — managed services don't expose the host shell):
 
 ```bash
 openclaw plugins install @totalreclaw/totalreclaw            # stable
+# Or for an RC: @totalreclaw/totalreclaw@rc
 # Under the default config (`gateway.reload.mode = "hybrid"`), OpenClaw's file-watcher
 # auto-restarts the gateway within 1-3s of the install — no manual restart needed.
 # Verify with: `openclaw plugins list | grep totalreclaw`.
 
-# If you have `gateway.reload.mode = off` (or auto-reload is otherwise disabled),
-# fall back to a manual restart. Pick the line that matches your setup:
+# If you have `gateway.reload.mode = off`, restart manually:
 # openclaw gateway restart                                   # native install
-# docker restart <your-openclaw-container>                   # Docker self-host (substitute your container name)
-# Managed OpenClaw service: use the service's restart control (web UI).
+# docker restart <your-openclaw-container>                   # Docker self-host
 ```
 
-Then ask the agent "set up TotalReclaw for me" — it will call `totalreclaw_pair` and hand you the URL + PIN.
+Then in chat: *"Set up TotalReclaw"* — the agent will call `totalreclaw_pair` and hand you the URL + PIN. Open the URL in your browser to enter or generate your phrase.
 
-> **Installing an RC build.** `openclaw skills install totalreclaw` pulls the latest release-candidate skill from ClawHub, but the bare npm spec `@totalreclaw/totalreclaw` resolves to the `latest` dist-tag, which is always the current **stable** build. To install the matching RC plugin, explicitly tag the npm spec:
->
-> ```bash
-> openclaw plugins install @totalreclaw/totalreclaw@rc        # latest RC
-> # or pin a specific candidate:
-> openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.19
-> ```
->
-> Check what each tag currently resolves to with `npm view @totalreclaw/totalreclaw dist-tags`. Keep the skill and plugin on the same version family (both stable or both RC) to avoid skill instructions and plugin behavior drifting apart.
+> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.19`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
 
 <details>
 <summary>From-source install (for plugin development — self-host only)</summary>
@@ -127,7 +122,7 @@ git clone https://github.com/p-diogo/totalreclaw.git
 openclaw plugins install ./totalreclaw/skill/plugin
 ```
 
-This path requires terminal access on the gateway host and is not available on managed services.
+Requires terminal access on the gateway host. Not available on managed services.
 
 </details>
 
@@ -196,18 +191,18 @@ Both tiers have unlimited memories and reads. Upgrade: *"Upgrade my TotalReclaw 
 
 ## Troubleshooting
 
-- **Agent can't see TotalReclaw tools**: under the default config OpenClaw auto-restarts the gateway within 1-3s of `openclaw plugins install` — wait 5-10s and check `openclaw plugins list`. If the plugin is listed but the agent still can't see the tools, your config likely has `gateway.reload.mode = off` (auto-reload disabled) — fall back to a manual restart. Native: `openclaw gateway restart`. Docker self-host: `docker restart <your-openclaw-container>` (substitute your actual container name; `docker ps` shows it). Managed service: use the service's restart control (web UI).
+- **Agent says "I'm not familiar with TotalReclaw"**: paste the canonical message above with the URL — the agent fetches the guide and follows the install steps.
+- **Agent can't see TotalReclaw tools after install**: under the default config OpenClaw auto-restarts the gateway within 1-3s of `openclaw plugins install` — wait 5-10s and check `openclaw plugins list`. If the plugin is listed but the agent still can't see the tools, your config likely has `gateway.reload.mode = off` — fall back to a manual restart. Native: `openclaw gateway restart`. Docker self-host: `docker restart <your-openclaw-container>`. Managed service: use the service's restart control.
 - **Pair URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running.
 - **Browser fails to POST the encrypted phrase**: check the pair page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
-- **Tool calls return "onboarding required"**: repeat the canonical prompt so the agent re-runs `totalreclaw_pair`.
+- **Tool calls return "onboarding required"**: paste the canonical message again so the agent re-runs `totalreclaw_pair`.
 - **"Not authenticated" / 401**: check your phrase — exact words, exact order, lowercase, single spaces.
 
 ---
 
-## Canonical prompts (these match the QA harness scenario contracts)
+## Canonical prompt (matches the QA harness scenario contracts)
 
-- Approach A: `Install totalreclaw`
-- Approach B: `TotalReclaw is a skill at 'totalreclaw' on ClawHub. Please install the plugin (openclaw plugins install totalreclaw), then use the totalreclaw_pair tool to walk me through the QR recovery-phrase setup.`
+> **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>**
 
 ---
 
