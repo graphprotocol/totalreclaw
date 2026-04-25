@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Install hygiene — orphan staging-dir sweep at install time (issue #134)
+
+The rc.20 `cleanupInstallStagingDirs()` register-time cleanup (#126) is
+defeated when OpenClaw's plugin loader crashes on an orphan
+`.openclaw-install-stage-*` sibling BEFORE our register code runs. The
+orphan's incomplete `dist/index.js` throws `Cannot find module
+'@huggingface/transformers'`; `PluginLoadFailureError` propagates and the
+gateway / CLI exits non-zero. Self-defeating: cleanup needs the plugin to
+load; plugin can't load because cleanup hasn't run.
+
+Fix: add a tiny `postinstall.mjs` in the package root, wired via
+`scripts.postinstall`. npm runs it from inside the freshly-extracted
+staging dir BEFORE OpenClaw renames it into place AND BEFORE the next
+gateway start re-scans extensions. From there it sweeps OTHER
+`.openclaw-install-stage-*` siblings (excluding self), so the loader sees
+a clean tree on its next pass. Sits OUTSIDE the loader cycle, immune to
+the load-order trap that defeated the in-process helper.
+
+The register-time `cleanupInstallStagingDirs()` stays as defence-in-depth
+for cases where postinstall didn't run (e.g. install killed mid-extract
+before npm reached the postinstall hook).
+
+Regression: `test_issue_134_postinstall_cleanup.test.ts` (18 assertions)
+spawns the script in a child process from inside a synthesized staging /
+real-plugin dir and asserts: self preservation, sibling sweep, real
+`totalreclaw/` survival, unrelated dotfile preservation (`.openclaw-cache`,
+`.git`), stray-file skipping, and exit-0 on every path.
+
 ### Install / runtime hygiene (issues #126, #128)
 
 Two narrow fixes from the rc.20 user-QA findings — both around install /
