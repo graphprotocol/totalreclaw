@@ -529,7 +529,10 @@ class TestRegister:
             f"expected {expected_tools} tools for version {__version__!r}, "
             f"got {ctx.register_tool.call_count}"
         )
-        assert ctx.register_hook.call_count == 4
+        assert ctx.register_hook.call_count == 6
+        hook_names = [call.args[0] for call in ctx.register_hook.call_args_list]
+        assert "on_session_finalize" in hook_names  # issue #101
+        assert "on_session_reset" in hook_names  # issue #101
 
         # Check tool names — every memory tool plus the new pair tool.
         tool_names = [call.kwargs["name"] for call in ctx.register_tool.call_args_list]

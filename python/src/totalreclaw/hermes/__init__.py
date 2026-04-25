@@ -191,11 +191,19 @@ def register(ctx):
     except Exception:  # pragma: no cover — registration must not crash plugin load
         logger.debug("QA bug-report tool registration skipped", exc_info=True)
 
-    # Register hooks
+    # Register hooks.
+    #
+    # ``on_session_end`` is registered as a no-op handler: hermes_cli
+    # dispatches it at the end of every ``run_conversation()`` (per user
+    # turn), not at true session end, so anything heavy belongs in
+    # ``on_session_finalize``. See ``hooks.on_session_end`` docstring +
+    # issue #101 for the failure mode this avoids.
     ctx.register_hook("on_session_start", lambda **kw: hooks.on_session_start(state, **kw))
     ctx.register_hook("pre_llm_call", lambda **kw: hooks.pre_llm_call(state, **kw))
     ctx.register_hook("post_llm_call", lambda **kw: hooks.post_llm_call(state, **kw))
     ctx.register_hook("on_session_end", lambda **kw: hooks.on_session_end(state, **kw))
+    ctx.register_hook("on_session_finalize", lambda **kw: hooks.on_session_finalize(state, **kw))
+    ctx.register_hook("on_session_reset", lambda **kw: hooks.on_session_reset(state, **kw))
 
     # Fix for internal#97: validate LLM-config resolution once at plugin
     # load and emit a single loud WARNING if it fails, so Hermes 0.10.0
@@ -208,4 +216,4 @@ def register(ctx):
     except Exception:  # pragma: no cover — validation must not crash plugin load
         logger.debug("LLM-config load-time validation skipped", exc_info=True)
 
-    logger.info("TotalReclaw plugin registered (12+ tools, 4 hooks)")
+    logger.info("TotalReclaw plugin registered (12+ tools, 6 hooks)")

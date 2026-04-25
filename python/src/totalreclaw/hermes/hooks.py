@@ -212,27 +212,54 @@ def post_llm_call(state: "PluginState", **kwargs) -> None:
 
 
 def on_session_end(state: "PluginState", **kwargs) -> None:
-    """Comprehensive flush of unprocessed messages + session debrief."""
-    if not state.is_configured():
-        return
+    """No-op. ``on_session_end`` is dispatched by hermes_cli at the end of
+    every ``run_conversation()`` call — i.e. once per user turn, NOT at
+    true session end. Session-end flush + debrief + message-buffer clear
+    have moved to ``on_session_finalize``.
 
-    if not state.has_unprocessed_messages():
+    Before 2.3.1rc16 this handler ran the flush + debrief and wiped
+    ``state._messages`` in its ``finally`` block. Because the hook fires
+    per-turn, the clear ran after every turn and ``totalreclaw_debrief``
+    always saw <8 messages even in 10+ turn sessions (issue #101, parent
+    #85 bug 5).
+    """
+    return None
+
+
+def on_session_finalize(state: "PluginState", **kwargs) -> None:
+    """Comprehensive flush of unprocessed messages + session debrief.
+
+    Fires at true session boundaries (hermes_cli atexit, gateway session
+    finalize). Per-turn auto-extraction runs from ``post_llm_call``; this
+    handler catches residual unprocessed messages and runs the session
+    debrief while the full conversation buffer is still intact.
+    """
+    if not state.is_configured():
         return
 
     try:
         stored_fact_texts: list[str] = []
-        try:
-            stored_fact_texts = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config())
-        except Exception as e:
-            logger.warning("TotalReclaw on_session_end flush failed: %s", e)
+        if state.has_unprocessed_messages():
+            try:
+                stored_fact_texts = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config())
+            except Exception as e:
+                logger.warning("TotalReclaw on_session_finalize flush failed: %s", e)
 
-        # Session debrief (after regular extraction)
         try:
             _session_debrief(state, stored_fact_texts=stored_fact_texts)
         except Exception as e:
-            logger.warning("TotalReclaw on_session_end debrief failed: %s", e)
+            logger.warning("TotalReclaw on_session_finalize debrief failed: %s", e)
     finally:
         state.clear_messages()
+
+
+def on_session_reset(state: "PluginState", **kwargs) -> None:
+    """User-initiated reset (``/reset``). Clean slate without the expensive
+    debrief — a finalize would have fired first if the conversation was
+    meant to be persisted.
+    """
+    state.clear_messages()
+    state.reset_turn_counter()
 
 
 # Backward-compatible alias used by tests
