@@ -24,7 +24,11 @@ import {
   type RetypeSetScopeDeps,
 } from './retype-setscope.js';
 
-import { buildV1ClaimBlob } from './claims-helper.js';
+import {
+  buildV1ClaimBlob,
+  readClaimFromBlob,
+  readV1Blob,
+} from './claims-helper.js';
 
 let passed = 0;
 let failed = 0;
@@ -254,6 +258,188 @@ function buildMockDeps(opts: {
   const r = await executeRetype('abc-mal', 'preference', deps);
   assert(!r.success, 'executeRetype: malformed blob → success=false');
   assert(r.error?.toLowerCase().includes('blob') ?? false, 'executeRetype: error mentions blob');
+}
+
+// ---------------------------------------------------------------------------
+// Issue #117 regression — set_scope writer/reader round-trip
+//
+// The original tests above only check that 2 payloads were submitted; they
+// don't actually decode the *new* fact's blob and verify the export reader
+// (`readClaimFromBlob`) can extract the new scope. Without this assertion,
+// any future bug that drops the scope on the rewrite path or breaks the
+// reader's v1 detection would silently pass the existing tests.
+//
+// The QA report for issue #117 was:
+//   "agent reports set_scope success but export shows scope=unspecified"
+//
+// We lock down the contract: after set_scope, the export reader (which
+// powers totalreclaw_export) MUST surface the new scope, not 'unspecified'.
+// Covers v1-with-scope, v1-without-scope, v0-legacy, and pinned-fact paths.
+// ---------------------------------------------------------------------------
+
+function decodePayload(payload: Buffer): string {
+  // Mock encryptBlob produces utf-8 → hex via Buffer; the protobuf encoder
+  // wraps the bytes in field 4 (encrypted_blob, length-delimited). Recover
+  // the inner JSON by scanning for the leading `{` and reading until `}`.
+  // This avoids re-implementing the protobuf decoder here while still
+  // exercising the real production write path.
+  const bytes = payload.toString('binary');
+  const start = bytes.indexOf('{');
+  if (start === -1) return '';
+  const end = bytes.lastIndexOf('}');
+  if (end === -1 || end < start) return '';
+  return bytes.substring(start, end + 1);
+}
+
+// Issue #117 R1: v1 blob with no scope → set_scope('health') →
+// export reader sees scope='health'.
+{
+  const v1Blob = buildV1ClaimBlob({
+    id: 'rt-1',
+    text: 'I run every morning',
+    type: 'commitment',
+    source: 'user-inferred',
+    createdAt: new Date().toISOString(),
+    importance: 7,
+    confidence: 0.85,
+  });
+  const deps = buildMockDeps({ existingV1Blob: v1Blob });
+  const r = await executeSetScope('rt-1', 'health', deps);
+  assert(r.success, 'issue#117 R1: set_scope success');
+
+  // The new (second) payload contains the new blob. Decode and verify with
+  // the SAME reader the export tool uses (`readClaimFromBlob`).
+  const newPayload = deps._captured.payloads?.[1];
+  assert(newPayload !== undefined, 'issue#117 R1: new payload present');
+  const newBlob = decodePayload(newPayload!);
+  const exportView = readClaimFromBlob(newBlob);
+  assert(
+    exportView.metadata.scope === 'health',
+    `issue#117 R1: export reader sees scope=health (got: ${exportView.metadata.scope})`,
+  );
+  assert(
+    exportView.metadata.type === 'commitment',
+    'issue#117 R1: export reader preserves type',
+  );
+}
+
+// Issue #117 R2: v1 blob with scope='work' → set_scope('personal') →
+// export reader sees scope='personal' (not 'work', not 'unspecified').
+{
+  const v1Blob = buildV1ClaimBlob({
+    id: 'rt-2',
+    text: 'I report to Alice',
+    type: 'claim',
+    source: 'user',
+    scope: 'work',
+    createdAt: new Date().toISOString(),
+    importance: 8,
+    confidence: 0.9,
+  });
+  const deps = buildMockDeps({ existingV1Blob: v1Blob });
+  const r = await executeSetScope('rt-2', 'personal', deps);
+  assert(r.success, 'issue#117 R2: set_scope success');
+  assert(r.previous_scope === 'work', 'issue#117 R2: previous_scope=work surfaced');
+
+  const newPayload = deps._captured.payloads?.[1];
+  const newBlob = decodePayload(newPayload!);
+  const exportView = readClaimFromBlob(newBlob);
+  assert(
+    exportView.metadata.scope === 'personal',
+    `issue#117 R2: export reader sees scope=personal (got: ${exportView.metadata.scope})`,
+  );
+}
+
+// Issue #117 R3: v0 legacy blob (short-key) → set_scope('finance') →
+// the upgrade path produces a v1 blob with scope='finance' surfaced
+// by the export reader.
+{
+  const v0Blob = JSON.stringify({
+    t: 'My budget is $100/week',
+    c: 'fact',
+    cf: 0.85,
+    i: 6,
+    sa: 'openclaw-plugin',
+    ea: new Date().toISOString(),
+  });
+  const deps = buildMockDeps({ existingV1Blob: v0Blob });
+  const r = await executeSetScope('rt-3', 'finance', deps);
+  assert(r.success, 'issue#117 R3: set_scope on v0 blob succeeds');
+
+  const newPayload = deps._captured.payloads?.[1];
+  const newBlob = decodePayload(newPayload!);
+  const exportView = readClaimFromBlob(newBlob);
+  assert(
+    exportView.metadata.scope === 'finance',
+    `issue#117 R3: export reader sees scope=finance after v0→v1 upgrade (got: ${exportView.metadata.scope})`,
+  );
+  assert(
+    exportView.metadata.schema_version === '1.0',
+    'issue#117 R3: upgraded blob carries schema_version',
+  );
+}
+
+// Issue #117 R4: pin_status preservation — set_scope on a PINNED fact
+// MUST preserve pin_status='pinned'. Without this, a pinned fact silently
+// loses its immunity to auto-supersede after a metadata edit. Found while
+// investigating #117 in the same write path as the reported scope bug.
+{
+  const pinnedBlob = buildV1ClaimBlob({
+    id: 'rt-4',
+    text: 'I prefer PostgreSQL',
+    type: 'preference',
+    source: 'user',
+    scope: 'work',
+    createdAt: new Date().toISOString(),
+    importance: 9,
+    confidence: 0.95,
+    pinStatus: 'pinned',
+  });
+  const deps = buildMockDeps({ existingV1Blob: pinnedBlob });
+  const r = await executeSetScope('rt-4', 'health', deps);
+  assert(r.success, 'issue#117 R4: set_scope on pinned fact succeeds');
+
+  const newPayload = deps._captured.payloads?.[1];
+  const newBlob = decodePayload(newPayload!);
+  const v1View = readV1Blob(newBlob);
+  assert(v1View !== null, 'issue#117 R4: new blob is a valid v1 blob');
+  assert(
+    v1View!.scope === 'health',
+    `issue#117 R4: scope=health (got: ${v1View!.scope})`,
+  );
+  assert(
+    v1View!.pinStatus === 'pinned',
+    `issue#117 R4: pin_status='pinned' preserved across set_scope (got: ${v1View!.pinStatus})`,
+  );
+}
+
+// Issue #117 R5: same pin_status preservation contract for retype.
+{
+  const pinnedBlob = buildV1ClaimBlob({
+    id: 'rt-5',
+    text: 'Always run lint before commit',
+    type: 'directive',
+    source: 'user',
+    createdAt: new Date().toISOString(),
+    importance: 9,
+    pinStatus: 'pinned',
+  });
+  const deps = buildMockDeps({ existingV1Blob: pinnedBlob });
+  const r = await executeRetype('rt-5', 'commitment', deps);
+  assert(r.success, 'issue#117 R5: retype on pinned fact succeeds');
+
+  const newPayload = deps._captured.payloads?.[1];
+  const newBlob = decodePayload(newPayload!);
+  const v1View = readV1Blob(newBlob);
+  assert(v1View !== null, 'issue#117 R5: new blob is a valid v1 blob');
+  assert(
+    v1View!.type === 'commitment',
+    `issue#117 R5: type=commitment (got: ${v1View!.type})`,
+  );
+  assert(
+    v1View!.pinStatus === 'pinned',
+    `issue#117 R5: pin_status='pinned' preserved across retype (got: ${v1View!.pinStatus})`,
+  );
 }
 
 // ---------------------------------------------------------------------------

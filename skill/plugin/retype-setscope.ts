@@ -34,6 +34,7 @@ import {
   buildV1ClaimBlob,
   mapTypeToCategory,
   readV1Blob,
+  type PinStatus,
 } from './claims-helper.js';
 import {
   isValidMemoryType,
@@ -135,6 +136,12 @@ interface NormalizedFact {
   confidence: number;
   createdAt: string;
   expiresAt?: string;
+  /**
+   * v1.1 pin state. Preserved across retype / set_scope so that pinned facts
+   * remain pinned after a metadata edit. Issue #117 surfaced an adjacent gap
+   * where this field was silently dropped on the rewrite path.
+   */
+  pinStatus?: PinStatus;
 }
 
 function projectFromDecrypted(decrypted: string): NormalizedFact | null {
@@ -166,6 +173,7 @@ function projectFromDecrypted(decrypted: string): NormalizedFact | null {
         confidence: v1.confidence,
         createdAt: v1.createdAt,
         expiresAt: v1.expiresAt,
+        pinStatus: v1.pinStatus,
       };
     }
   }
@@ -267,6 +275,10 @@ async function rewriteWithMutation(
       confidence: next.confidence,
       createdAt: new Date().toISOString(),
       supersededBy: factId,
+      // Issue #117 follow-up: preserve pin_status so that retype / set_scope
+      // on a pinned fact does NOT silently un-pin it. Without this, a pinned
+      // fact loses its immunity to auto-supersede after any metadata edit.
+      pinStatus: next.pinStatus,
     });
   } catch (err) {
     return {
