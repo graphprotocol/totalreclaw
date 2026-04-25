@@ -407,6 +407,271 @@ async function testHttpsInputConvertedToWss(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Multi-session stub (issue #125 regression — pair-twice in same Node process)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-connection state for the multi-session stub. Each new WebSocket the
+ * gateway opens (one per pair invocation) gets its own slot — token,
+ * lastFrame, ack resolver — so we can assert each cycle independently.
+ */
+interface StubSlot {
+  index: number;
+  token: string;
+  lastFrame: Record<string, unknown> | null;
+  ack: Promise<'ack' | 'nack' | 'closed'>;
+  ackResolver: ((v: 'ack' | 'nack' | 'closed') => void) | null;
+}
+
+interface MultiSessionRelayStub {
+  wssUrl: string;
+  /** Slot for the Nth (0-indexed) connection. Resolves once that slot exists. */
+  awaitSlot(index: number): Promise<StubSlot>;
+  /** Connection count seen by the relay so far. */
+  connectionCount(): number;
+  close(): Promise<void>;
+}
+
+async function startMultiSessionRelayStub(
+  opts: { tokens: string[] } = { tokens: ['tok-aaaaa1', 'tok-bbbbb2'] },
+): Promise<MultiSessionRelayStub> {
+  const tokens = opts.tokens;
+  const http: HttpServer = createServer();
+  const wss = new WebSocketServer({ server: http });
+  const slots: StubSlot[] = [];
+  const slotResolvers: Array<(s: StubSlot) => void> = [];
+
+  function getOrCreateSlotPromise(idx: number): Promise<StubSlot> {
+    if (slots[idx]) return Promise.resolve(slots[idx]!);
+    return new Promise((resolve) => {
+      slotResolvers[idx] = resolve;
+    });
+  }
+
+  wss.on('connection', (ws) => {
+    const slotIdx = slots.length;
+    const token = tokens[slotIdx] ?? `tok-extra-${slotIdx}`;
+    let resolveAck: ((v: 'ack' | 'nack' | 'closed') => void) | null = null;
+    const ackPromise = new Promise<'ack' | 'nack' | 'closed'>((resolve) => {
+      resolveAck = resolve;
+    });
+    const slot: StubSlot = {
+      index: slotIdx,
+      token,
+      lastFrame: null,
+      ack: ackPromise,
+      ackResolver: resolveAck,
+    };
+    slots.push(slot);
+    if (slotResolvers[slotIdx]) {
+      slotResolvers[slotIdx]!(slot);
+    }
+
+    ws.on('message', (raw) => {
+      try {
+        const text =
+          typeof raw === 'string'
+            ? raw
+            : Buffer.from(raw as ArrayBuffer).toString('utf-8');
+        const msg = JSON.parse(text) as Record<string, unknown>;
+        slot.lastFrame = msg;
+
+        if (msg.type === 'open') {
+          ws.send(
+            JSON.stringify({
+              type: 'opened',
+              token: slot.token,
+              short_url: `/pair/p/${slot.token}`,
+              expires_at: new Date(Date.now() + 60_000).toISOString(),
+            }),
+          );
+
+          // Simulate the browser uploading the encrypted phrase.
+          setTimeout(() => {
+            const gatewayPubkey = String(msg.gateway_pubkey);
+            const deviceKp = generateGatewayKeypair();
+            const { nonceB64, ciphertextB64 } = encryptPairingPayload({
+              skLocalB64: deviceKp.skB64,
+              pkRemoteB64: gatewayPubkey,
+              sid: slot.token,
+              plaintext: Buffer.from(TEST_PHRASE, 'utf-8'),
+            });
+            ws.send(
+              JSON.stringify({
+                type: 'forward',
+                client_pubkey: deviceKp.pkB64,
+                nonce: nonceB64,
+                ciphertext: ciphertextB64,
+              }),
+            );
+          }, 10);
+          return;
+        }
+        if (msg.type === 'ack') {
+          slot.ackResolver?.('ack');
+          slot.ackResolver = null;
+          try { ws.close(); } catch { /* noop */ }
+          return;
+        }
+        if (msg.type === 'nack') {
+          slot.ackResolver?.('nack');
+          slot.ackResolver = null;
+          try { ws.close(); } catch { /* noop */ }
+          return;
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('multi-stub: message handler error', err);
+      }
+    });
+
+    ws.on('close', () => {
+      if (slot.ackResolver) {
+        slot.ackResolver('closed');
+        slot.ackResolver = null;
+      }
+    });
+  });
+
+  await new Promise<void>((resolve) => {
+    http.listen(0, '127.0.0.1', () => resolve());
+  });
+  const addr = http.address() as AddressInfo;
+
+  return {
+    wssUrl: `ws://127.0.0.1:${addr.port}`,
+    awaitSlot: getOrCreateSlotPromise,
+    connectionCount: () => slots.length,
+    close: () =>
+      new Promise<void>((resolve) => {
+        try {
+          wss.close(() => http.close(() => resolve()));
+        } catch {
+          resolve();
+        }
+      }),
+  };
+}
+
+/**
+ * Regression for issue #125 — pair flow is single-shot per gateway lifetime.
+ *
+ * Real-world bug: after a successful pair, a second `totalreclaw_pair` call
+ * returned a URL whose token was never registered with the relay (HTTP 404
+ * from the relay, 502 from the proxy). The QA bot's recommendation: ensure
+ * every invocation recreates session state — fresh keypair, fresh PIN,
+ * fresh client id, fresh WebSocket — and that the second cycle reaches the
+ * relay end-to-end.
+ *
+ * This test runs two sequential open + await + complete cycles in a single
+ * Node process against a multi-session stub. Both must succeed. Both must
+ * use distinct ephemeral material.
+ */
+async function testTwoSequentialPairsSucceed(): Promise<void> {
+  const tok1 = 'pair-once-1111';
+  const tok2 = 'pair-twice-2222';
+  const stub = await startMultiSessionRelayStub({ tokens: [tok1, tok2] });
+  try {
+    // ---- First pair ----
+    const session1 = await openRemotePairSession({
+      relayBaseUrl: stub.wssUrl,
+      pin: '111111',
+      clientId: 'gw-first',
+    });
+    ok(
+      'pair-twice: first session URL contains first token',
+      session1.url.includes(`/pair/p/${tok1}`),
+      session1.url,
+    );
+    ok(
+      'pair-twice: first session token echoes',
+      session1.token === tok1,
+      session1.token,
+    );
+
+    let firstCompletionRan = false;
+    const result1 = await awaitPhraseUpload(session1, {
+      completePairing: async () => {
+        firstCompletionRan = true;
+        return { state: 'active', accountId: '0xfirst' };
+      },
+    });
+    ok('pair-twice: first completion ran', firstCompletionRan);
+    ok('pair-twice: first result active', result1.state === 'active');
+    const ack1 = await (await stub.awaitSlot(0)).ack;
+    ok('pair-twice: first cycle ack received', ack1 === 'ack');
+
+    // ---- Second pair (the bug — this is where rc.20 returns a URL whose
+    //                  token never reaches the relay) ----
+    const session2 = await openRemotePairSession({
+      relayBaseUrl: stub.wssUrl,
+      pin: '222222',
+      clientId: 'gw-second',
+    });
+
+    ok(
+      'pair-twice: second relay open frame received',
+      stub.connectionCount() === 2,
+      `connections=${stub.connectionCount()}`,
+    );
+    ok(
+      'pair-twice: second session URL contains second token',
+      session2.url.includes(`/pair/p/${tok2}`),
+      session2.url,
+    );
+    ok(
+      'pair-twice: second session token echoes',
+      session2.token === tok2,
+      session2.token,
+    );
+    ok(
+      'pair-twice: second URL token differs from first',
+      !session2.url.includes(tok1),
+      session2.url,
+    );
+
+    // Fresh ephemeral material per call — keypair must NOT match between cycles.
+    ok(
+      'pair-twice: second keypair distinct from first',
+      session1.keypair.pkB64 !== session2.keypair.pkB64
+        && session1.keypair.skB64 !== session2.keypair.skB64,
+    );
+
+    // Inspect what the relay actually saw on the second connection. If the
+    // bug regresses (no second open frame ever reaches the relay), the slot
+    // never materialises and `awaitSlot(1)` hangs — which the outer promise
+    // race catches.
+    const slot2 = await Promise.race<StubSlot | 'timeout'>([
+      stub.awaitSlot(1),
+      new Promise<'timeout'>((resolve) =>
+        setTimeout(() => resolve('timeout'), 1500),
+      ),
+    ]);
+    ok(
+      'pair-twice: second open frame reached relay (no single-shot regression)',
+      slot2 !== 'timeout' && (slot2 as StubSlot).lastFrame?.type === 'open',
+      typeof slot2 === 'string'
+        ? slot2
+        : JSON.stringify((slot2 as StubSlot).lastFrame),
+    );
+
+    let secondCompletionRan = false;
+    const result2 = await awaitPhraseUpload(session2, {
+      completePairing: async () => {
+        secondCompletionRan = true;
+        return { state: 'active', accountId: '0xsecond' };
+      },
+    });
+    ok('pair-twice: second completion ran', secondCompletionRan);
+    ok('pair-twice: second result active', result2.state === 'active');
+    const ack2 = await (await stub.awaitSlot(1)).ack;
+    ok('pair-twice: second cycle ack received', ack2 === 'ack');
+  } finally {
+    await stub.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Run
 // ---------------------------------------------------------------------------
 
@@ -416,6 +681,7 @@ async function main(): Promise<void> {
   await testOpenErrorPropagates();
   await testDecryptFailureSendsNack();
   await testHttpsInputConvertedToWss();
+  await testTwoSequentialPairsSucceed();
 
   // eslint-disable-next-line no-console
   console.log(`# fail: ${_failed}`);
