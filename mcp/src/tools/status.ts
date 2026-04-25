@@ -7,6 +7,7 @@
 
 import { STATUS_TOOL_DESCRIPTION } from '../prompts.js';
 import { getClientId } from '../client-id.js';
+import { getSessionId } from '../session-id.js';
 
 export const statusToolDefinition = {
   name: 'totalreclaw_status',
@@ -80,13 +81,17 @@ export async function handleStatus(
   try {
     const url = `${serverUrl.replace(/\/+$/, '')}/v1/billing/status?wallet_address=${encodeURIComponent(walletAddress)}`;
 
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${authKey}`,
+      'Content-Type': 'application/json',
+      'X-TotalReclaw-Client': getClientId(),
+    };
+    // Forward QA / observability session tag when set — see internal#127.
+    const sid = getSessionId();
+    if (sid) headers['X-TotalReclaw-Session'] = sid;
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${authKey}`,
-        'Content-Type': 'application/json',
-        'X-TotalReclaw-Client': getClientId(),
-      },
+      headers,
     });
 
     if (!response.ok) {
@@ -115,8 +120,15 @@ export async function handleStatus(
       ? `Expires: ${new Date(data.expires_at).toLocaleDateString()}`
       : 'No expiry';
 
+    // 3.3.1 (internal#130) — echo the SA / scope address back to the
+    // agent so the user can see it pre-write. The MCP tool already takes
+    // wallet_address as a required input (the SA is derived deterministically
+    // from the mnemonic and passed in by the host); surfacing it here makes
+    // it visible in the tool response without the user needing to ask
+    // separately.
     const formatted = [
       `Tier: ${tierLabel}`,
+      `Smart Account: ${walletAddress}`,
       `Writes used: ${usage}`,
       `Remaining: ${remaining}`,
       expiresLabel,
@@ -131,6 +143,7 @@ export async function handleStatus(
           free_writes_limit: data.free_writes_limit,
           remaining_writes: remaining,
           expires_at: data.expires_at,
+          scope_address: walletAddress,
           formatted,
         }),
       }],

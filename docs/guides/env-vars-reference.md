@@ -76,6 +76,18 @@ export TOTALRECLAW_CACHE_PATH="$HOME/.config/totalreclaw/cache.enc"
 **Default:** `~/.totalreclaw/cache.enc`.
 **When to override:** same as `TOTALRECLAW_CREDENTIALS_PATH` — sandboxed environments, XDG layouts, multi-tenant deployments.
 
+### `TOTALRECLAW_SESSION_ID`
+
+**Optional.** QA / observability session tag. When set, every outbound relay call adds the `X-TotalReclaw-Session` header so Axiom log filters and the `qa-totalreclaw` skill can scope log searches per QA run.
+
+```bash
+export TOTALRECLAW_SESSION_ID="qa-rc.20-run-7"
+```
+
+**Default:** unset — header omitted, requests are untagged.
+**When to override:** set during QA runs so log queries can be filtered by session id. Production users do not need to set it.
+**Security:** non-secret. Shows up in relay logs by design. Pick a non-PII tag.
+
 ### LLM provider keys
 
 **Required if the client needs an LLM** (auto-extraction, LLM-guided dedup, import processing).
@@ -109,7 +121,6 @@ These env vars existed in earlier versions and are now silently ignored. Delete 
 | `TOTALRECLAW_EMBEDDING_MODEL` | Harrier-OSS-v1-270M (640d) is the only supported model in v1. |
 | `TOTALRECLAW_STORE_DEDUP` | Store-time near-duplicate detection is always on. |
 | `TOTALRECLAW_LLM_MODEL` / `TOTALRECLAW_EXTRACTION_MODEL` | LLM is picked automatically from the available provider. Model choice is not user-tunable. |
-| `TOTALRECLAW_SESSION_ID` | Sessions are computed internally. |
 | `TOTALRECLAW_TAXONOMY_VERSION` | v1 is the only format. No opt-in needed. |
 | `TOTALRECLAW_CLAIM_FORMAT` | Same reason — the v0 `{text, metadata}` shape is gone. |
 | `TOTALRECLAW_DIGEST_MODE` | Digest behaviour is no longer user-configurable. |

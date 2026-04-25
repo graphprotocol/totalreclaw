@@ -239,9 +239,14 @@ export async function beforeAgentStart(
     if (needsRefresh && options.authKeyHex) {
       // Make API call to refresh cache
       const serverUrl = options.config.serverUrl.replace(/\/+$/, '');
-      const response = await fetch(`${serverUrl}/v1/billing/status`, {
-        headers: { 'Authorization': `Bearer ${options.authKeyHex}`, 'X-TotalReclaw-Client': 'openclaw-plugin' }
-      });
+      const headers: Record<string, string> = {
+        'Authorization': `Bearer ${options.authKeyHex}`,
+        'X-TotalReclaw-Client': 'openclaw-plugin',
+      };
+      // QA / observability session tag — see internal#127.
+      const rawSid = process.env.TOTALRECLAW_SESSION_ID;
+      if (rawSid && rawSid.trim()) headers['X-TotalReclaw-Session'] = rawSid.trim();
+      const response = await fetch(`${serverUrl}/v1/billing/status`, { headers });
       if (response.ok) {
         const parsed: unknown = await response.json();
         if (isBillingCacheData(parsed)) {

@@ -36,6 +36,12 @@ export interface StatusToolResult {
   free_writes_reset_at?: string;
   /** Upgrade URL (if on free tier) */
   upgrade_url?: string;
+  /**
+   * Smart Account / scope address (echoed back from the wallet_address
+   * input). Surfaced so users + agents can see their on-chain identity
+   * before any chain write completes. Internal#130.
+   */
+  scope_address?: string;
   /** Human-readable formatted summary */
   formatted?: string;
   /** Error message (if failed) */
@@ -84,13 +90,18 @@ export async function statusTool(
     const baseUrl = `${serverUrl.replace(/\/+$/, '')}/v1/billing/status`;
     const url = walletAddress ? `${baseUrl}?wallet_address=${encodeURIComponent(walletAddress)}` : baseUrl;
 
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${authKeyHex}`,
+      'Accept': 'application/json',
+      'X-TotalReclaw-Client': 'openclaw-plugin',
+    };
+    // QA / observability session tag — see internal#127.
+    const rawSid = process.env.TOTALRECLAW_SESSION_ID;
+    if (rawSid && rawSid.trim()) headers['X-TotalReclaw-Session'] = rawSid.trim();
+
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${authKeyHex}`,
-        'Accept': 'application/json',
-        'X-TotalReclaw-Client': 'openclaw-plugin',
-      },
+      headers,
     });
 
     if (!response.ok) {
@@ -123,6 +134,11 @@ export async function statusTool(
       lines.push(`Resets: ${new Date(freeWritesResetAt).toLocaleDateString()}`);
     }
 
+    // 3.3.1 (internal#130) — surface the SA / scope address pre-write.
+    if (walletAddress) {
+      lines.push(`Smart Account: ${walletAddress}`);
+    }
+
     if (tier !== 'pro' && upgradeUrl) {
       lines.push(`Upgrade: ${upgradeUrl}`);
     }
@@ -136,6 +152,7 @@ export async function statusTool(
       free_reads_limit: freeReadsLimit,
       free_writes_reset_at: freeWritesResetAt,
       upgrade_url: upgradeUrl,
+      scope_address: walletAddress,
       formatted: lines.join('\n'),
     };
   } catch (error) {

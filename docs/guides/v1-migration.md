@@ -97,7 +97,6 @@ Six env vars that were internal/experimental knobs are gone. If you had them set
 - `TOTALRECLAW_EMBEDDING_MODEL` — Harrier 640d is the default, no alternatives shipped.
 - `TOTALRECLAW_STORE_DEDUP` — always on (best-match near-duplicate detection at core).
 - `TOTALRECLAW_LLM_MODEL` — LLM picked automatically from your provider's default.
-- `TOTALRECLAW_SESSION_ID` — computed internally.
 - `TOTALRECLAW_TAXONOMY_VERSION` — v1 is the only format.
 - `TOTALRECLAW_CLAIM_FORMAT` — same reason.
 - `TOTALRECLAW_DIGEST_MODE` / `TOTALRECLAW_AUTO_RESOLVE_MODE` — internal behaviour no longer user-configurable.

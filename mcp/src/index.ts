@@ -161,13 +161,17 @@ const MASTER_PASSWORD = process.env.TOTALRECLAW_RECOVERY_PHRASE;
 
 // v1 env var cleanup — warn once if any removed env var is still set.
 // See docs/guides/env-vars-reference.md for the canonical list.
+//
+// NOTE: TOTALRECLAW_SESSION_ID was previously in this list and silently
+// rejected with a warning, breaking Axiom traceability for QA runs that rely
+// on the X-TotalReclaw-Session header for log filtering. Restored as
+// SUPPORTED — see `./session-id.ts` + internal#127. Do NOT add it back.
 (() => {
   const removed = [
     'TOTALRECLAW_CHAIN_ID',
     'TOTALRECLAW_EMBEDDING_MODEL',
     'TOTALRECLAW_STORE_DEDUP',
     'TOTALRECLAW_LLM_MODEL',
-    'TOTALRECLAW_SESSION_ID',
     'TOTALRECLAW_TAXONOMY_VERSION',
     'TOTALRECLAW_CLAIM_FORMAT',
     'TOTALRECLAW_DIGEST_MODE',
@@ -180,9 +184,33 @@ const MASTER_PASSWORD = process.env.TOTALRECLAW_RECOVERY_PHRASE;
   }
 })();
 
+// QA / observability session-tag reader. See `./session-id.ts`.
+// Re-exported so the existing wide imports of `mcp/src/index.ts` keep working.
+import { getSessionId } from './session-id.js';
+export { getSessionId };
+
 // ── Client identification ──────────────────────────────────────────────────
 import { setClientId, getClientId } from './client-id.js';
 let clientIdentifierResolved = false;
+
+/**
+ * Build outbound relay headers including the optional session tag.
+ * Uses the late-resolved client identifier — falls back to the raw
+ * `getClientId()` value if `getClientIdentifier()` hasn't run yet (which
+ * can happen for fetches kicked off before the MCP `initialize` handshake
+ * completes, e.g. proactive billing fetch).
+ */
+function buildRelayHeaders(
+  overrides: Record<string, string> = {},
+): Record<string, string> {
+  const clientId = clientIdentifierResolved ? getClientIdentifier() : getClientId();
+  const headers: Record<string, string> = {
+    'X-TotalReclaw-Client': clientId,
+  };
+  const sid = getSessionId();
+  if (sid) headers['X-TotalReclaw-Session'] = sid;
+  return { ...headers, ...overrides };
+}
 
 function resolveMnemonic(): string | undefined {
   // Priority 1: env var
@@ -237,10 +265,9 @@ function proactiveBillingFetch(state: SubgraphState): void {
   const url = `${state.serverUrl.replace(/\/+$/, '')}/v1/billing/status?wallet_address=${encodeURIComponent(state.smartAccountAddress)}`;
   fetch(url, {
     method: 'GET',
-    headers: {
+    headers: buildRelayHeaders({
       'Authorization': `Bearer ${authKeyHex}`,
-      'X-TotalReclaw-Client': getClientIdentifier(),
-    },
+    }),
   })
     .then(async (resp) => {
       if (resp.ok) {
@@ -359,10 +386,9 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
       const billingUrl = `${SERVER_URL.replace(/\/+$/, '')}/v1/billing/status?wallet_address=${encodeURIComponent(smartAccountAddress)}`;
       const resp = await fetch(billingUrl, {
         method: 'GET',
-        headers: {
+        headers: buildRelayHeaders({
           'Authorization': `Bearer ${authKeyHex}`,
-          'X-TotalReclaw-Client': getClientIdentifier(),
-        },
+        }),
         signal: AbortSignal.timeout(5000),
       });
       if (resp.ok) {

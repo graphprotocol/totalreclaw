@@ -135,6 +135,7 @@ import {
 } from './onboarding-cli.js';
 import { PluginHotCache, type HotFact } from './hot-cache-wrapper.js';
 import { CONFIG, setRecoveryPhraseOverride } from './config.js';
+import { buildRelayHeaders } from './relay-headers.js';
 import {
   readBillingCache,
   writeBillingCache,
@@ -890,11 +891,10 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
         const billingUrl = CONFIG.serverUrl;
         const resp = await fetch(`${billingUrl}/v1/billing/status?wallet_address=${encodeURIComponent(walletAddr)}`, {
           method: 'GET',
-          headers: {
+          headers: buildRelayHeaders({
             'Authorization': `Bearer ${authKeyHex}`,
             'Accept': 'application/json',
-            'X-TotalReclaw-Client': 'openclaw-plugin',
-          },
+          }),
         });
         if (resp.ok) {
           const billingData = await resp.json() as Record<string, unknown>;
@@ -1467,11 +1467,11 @@ async function migrationGqlQuery<T>(
   authKey?: string,
 ): Promise<T | null> {
   try {
-    const headers: Record<string, string> = {
+    const overrides: Record<string, string> = {
       'Content-Type': 'application/json',
-      'X-TotalReclaw-Client': 'openclaw-plugin',
     };
-    if (authKey) headers['Authorization'] = `Bearer ${authKey}`;
+    if (authKey) overrides['Authorization'] = `Bearer ${authKey}`;
+    const headers = buildRelayHeaders(overrides);
     const response = await fetch(endpoint, {
       method: 'POST',
       headers,
@@ -3051,8 +3051,30 @@ const plugin = {
           // Write credentials.json + flip state to 'active' via
           // fs-helpers. This centralizes disk I/O off the
           // pair-http surface (scanner isolation).
+          //
+          // 3.3.1 (internal#130) — derive + persist the Smart Account
+          // address right here so the user can see their scope address
+          // immediately after pair, without waiting for a first chain
+          // write. SA derivation runs locally (WASM deriveEoa + factory
+          // getAddress eth_call); the mnemonic NEVER crosses any new
+          // boundary — it's already on disk in credentials.json and is
+          // consumed by the same `deriveSmartAccountAddress` call the
+          // store/search paths use. Only the derived public address is
+          // persisted to credentials.json (`scope_address`).
+          let scopeAddress: string | undefined;
+          try {
+            scopeAddress = await deriveSmartAccountAddress(mnemonic, CONFIG.chainId);
+          } catch (err) {
+            // Best-effort. If chain RPC is unreachable at pair time, the
+            // status tool re-tries derivation lazily on next call —
+            // fall through and write credentials.json without it.
+            api.logger.warn(
+              `pair: scope_address derivation failed (will retry lazily): ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
           const creds = loadCredentialsJson(CREDENTIALS_PATH) ?? {};
-          const next = { ...creds, mnemonic };
+          const next: typeof creds = { ...creds, mnemonic };
+          if (scopeAddress) next.scope_address = scopeAddress;
           if (!writeCredentialsJson(CREDENTIALS_PATH, next)) {
             return { state: 'error', error: 'credentials_write_failed' };
           }
@@ -3840,11 +3862,10 @@ const plugin = {
 
                 const res = await fetch(`${relayUrl}/v1/subgraph`, {
                   method: 'POST',
-                  headers: {
+                  headers: buildRelayHeaders({
                     'Content-Type': 'application/json',
-                    'X-TotalReclaw-Client': 'openclaw-plugin',
                     ...(authKeyHex ? { Authorization: `Bearer ${authKeyHex}` } : {}),
-                  },
+                  }),
                   body: JSON.stringify({ query, variables }),
                 });
 
@@ -3980,11 +4001,10 @@ const plugin = {
             const walletAddr = subgraphOwner || userId || '';
             const response = await fetch(`${serverUrl}/v1/billing/status?wallet_address=${encodeURIComponent(walletAddr)}`, {
               method: 'GET',
-              headers: {
+              headers: buildRelayHeaders({
                 'Authorization': `Bearer ${authKeyHex}`,
                 'Accept': 'application/json',
-                'X-TotalReclaw-Client': 'openclaw-plugin',
-              },
+              }),
             });
 
             if (!response.ok) {
@@ -4009,6 +4029,37 @@ const plugin = {
               checked_at: Date.now(),
             });
 
+            // 3.3.1 (internal#130) — surface the Smart Account / scope
+            // address so the user can do subgraph queries, BaseScan
+            // lookups, and cross-client portability checks BEFORE any
+            // chain write completes. Resolution priority:
+            //   1. In-memory `subgraphOwner` (already derived earlier).
+            //   2. credentials.json `scope_address` (persisted at pair).
+            //   3. Lazy derive now from the loaded mnemonic + cache it
+            //      back to credentials.json so the next call is free.
+            let scopeAddress: string | undefined =
+              subgraphOwner ?? undefined;
+            if (!scopeAddress) {
+              try {
+                const credsCache = loadCredentialsJson(CREDENTIALS_PATH);
+                if (credsCache?.scope_address && typeof credsCache.scope_address === 'string') {
+                  scopeAddress = credsCache.scope_address;
+                } else if (credsCache?.mnemonic && typeof credsCache.mnemonic === 'string') {
+                  scopeAddress = await deriveSmartAccountAddress(
+                    credsCache.mnemonic,
+                    CONFIG.chainId,
+                  );
+                  if (scopeAddress) {
+                    writeCredentialsJson(CREDENTIALS_PATH, { ...credsCache, scope_address: scopeAddress });
+                  }
+                }
+              } catch (deriveErr) {
+                api.logger.warn(
+                  `totalreclaw_status: scope_address lookup failed: ${deriveErr instanceof Error ? deriveErr.message : String(deriveErr)}`,
+                );
+              }
+            }
+
             const tierLabel = tier === 'pro' ? 'Pro' : 'Free';
             const lines: string[] = [
               `Tier: ${tierLabel}`,
@@ -4017,13 +4068,21 @@ const plugin = {
             if (freeWritesResetAt) {
               lines.push(`Resets: ${new Date(freeWritesResetAt).toLocaleDateString()}`);
             }
+            if (scopeAddress) {
+              lines.push(`Smart Account: ${scopeAddress}`);
+            }
             if (tier !== 'pro') {
               lines.push(`Pricing: https://totalreclaw.xyz/pricing`);
             }
 
             return {
               content: [{ type: 'text', text: lines.join('\n') }],
-              details: { tier, free_writes_used: freeWritesUsed, free_writes_limit: freeWritesLimit },
+              details: {
+                tier,
+                free_writes_used: freeWritesUsed,
+                free_writes_limit: freeWritesLimit,
+                scope_address: scopeAddress,
+              },
             };
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
@@ -4746,11 +4805,10 @@ const plugin = {
 
             const response = await fetch(`${serverUrl}/v1/billing/checkout`, {
               method: 'POST',
-              headers: {
+              headers: buildRelayHeaders({
                 'Authorization': `Bearer ${authKeyHex}`,
                 'Content-Type': 'application/json',
-                'X-TotalReclaw-Client': 'openclaw-plugin',
-              },
+              }),
               body: JSON.stringify({
                 wallet_address: walletAddr,
                 tier: 'pro',
@@ -4834,11 +4892,10 @@ const plugin = {
               `${serverUrl}/v1/billing/status?wallet_address=${encodeURIComponent(subgraphOwner)}`,
               {
                 method: 'GET',
-                headers: {
+                headers: buildRelayHeaders({
                   'Authorization': `Bearer ${authKeyHex}`,
                   'Content-Type': 'application/json',
-                  'X-TotalReclaw-Client': 'openclaw-plugin',
-                },
+                }),
               },
             );
             if (!billingResp.ok) {
@@ -5117,9 +5174,27 @@ const plugin = {
                       validateMnemonic(p, wordlist),
                     completePairing: async ({ mnemonic }) => {
                       try {
+                        // 3.3.1 (internal#130) — derive + persist the
+                        // Smart Account address now so the user can see
+                        // it immediately after pair, before any chain
+                        // write. Mnemonic stays in this scope (already
+                        // on disk in credentials.json); only the
+                        // derived public scope_address is added.
+                        let scopeAddress: string | undefined;
+                        try {
+                          scopeAddress = await deriveSmartAccountAddress(
+                            mnemonic,
+                            CONFIG.chainId,
+                          );
+                        } catch (deriveErr) {
+                          api.logger.warn(
+                            `totalreclaw_pair(relay): scope_address derivation failed (will retry lazily): ${deriveErr instanceof Error ? deriveErr.message : String(deriveErr)}`,
+                          );
+                        }
                         const creds =
                           loadCredentialsJson(CREDENTIALS_PATH) ?? {};
-                        const next = { ...creds, mnemonic };
+                        const next: typeof creds = { ...creds, mnemonic };
+                        if (scopeAddress) next.scope_address = scopeAddress;
                         if (!writeCredentialsJson(CREDENTIALS_PATH, next)) {
                           return { state: 'error', error: 'credentials_write_failed' };
                         }
@@ -5131,7 +5206,7 @@ const plugin = {
                           version: pluginVersion ?? '3.3.0',
                         });
                         api.logger.info(
-                          `totalreclaw_pair(relay): session ${remoteSession.token.slice(0, 8)}… completed; credentials written`,
+                          `totalreclaw_pair(relay): session ${remoteSession.token.slice(0, 8)}… completed; credentials written${scopeAddress ? ` (scope_address=${scopeAddress})` : ''}`,
                         );
                         return { state: 'active' };
                       } catch (err: unknown) {
@@ -5560,7 +5635,7 @@ const plugin = {
               const walletParam = encodeURIComponent(subgraphOwner || userId || '');
               const billingResp = await fetch(`${billingUrl}/v1/billing/status?wallet_address=${walletParam}`, {
                 method: 'GET',
-                headers: { 'Authorization': `Bearer ${authKeyHex}`, 'Accept': 'application/json', 'X-TotalReclaw-Client': 'openclaw-plugin' },
+                headers: buildRelayHeaders({ 'Authorization': `Bearer ${authKeyHex}`, 'Accept': 'application/json' }),
               });
               if (billingResp.ok) {
                 const billingData = await billingResp.json() as Record<string, unknown>;

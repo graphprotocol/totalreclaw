@@ -56,6 +56,15 @@ export interface CredentialsFile {
   mnemonic?: string;
   /** Alias for `mnemonic`, accepted on read only. */
   recovery_phrase?: string;
+  /**
+   * Smart Account (scope) address derived from the mnemonic. Persisted at
+   * pair-finish so users + tools (`totalreclaw_status`) can read it before
+   * any on-chain write. Internal#130 — lazy SA derivation previously left
+   * the user blind to their scope address until first-write.
+   *
+   * Format: lowercase 0x-prefixed 40-hex-char address. Public, non-secret.
+   */
+  scope_address?: string;
   firstRunAnnouncementShown?: boolean;
   [extra: string]: unknown;
 }

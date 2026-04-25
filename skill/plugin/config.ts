@@ -9,8 +9,15 @@
  *
  * v1 env var cleanup — see `docs/guides/env-vars-reference.md`.
  * Removed user-facing vars: TOTALRECLAW_CHAIN_ID, TOTALRECLAW_EMBEDDING_MODEL,
- * TOTALRECLAW_STORE_DEDUP, TOTALRECLAW_LLM_MODEL, TOTALRECLAW_SESSION_ID,
- * TOTALRECLAW_TAXONOMY_VERSION.
+ * TOTALRECLAW_STORE_DEDUP, TOTALRECLAW_LLM_MODEL, TOTALRECLAW_TAXONOMY_VERSION.
+ *
+ * NOTE: ``TOTALRECLAW_SESSION_ID`` was in the removed list during the v1
+ * cleanup and silently rejected with a warning. That broke Axiom log tracing
+ * for QA — the qa-totalreclaw skill prescribes setting the var so relay logs
+ * are searchable by ``X-TotalReclaw-Session``. Restored as a SUPPORTED
+ * variable: read here, forwarded as the ``X-TotalReclaw-Session`` header on
+ * every outbound relay call. Mirrors the Python-side fix
+ * (`python/src/totalreclaw/agent/state.py`, v2.0.2). See internal#127.
  * Removed legacy gates: TOTALRECLAW_CLAIM_FORMAT, TOTALRECLAW_DIGEST_MODE,
  * TOTALRECLAW_AUTO_RESOLVE_MODE (the last one moved to an internal debug
  * module; see `contradiction-sync.ts`).
@@ -33,7 +40,9 @@ const REMOVED_ENV_VARS = [
   'TOTALRECLAW_EMBEDDING_MODEL',
   'TOTALRECLAW_STORE_DEDUP',
   'TOTALRECLAW_LLM_MODEL',
-  'TOTALRECLAW_SESSION_ID',
+  // NOTE: TOTALRECLAW_SESSION_ID was here before; restored as SUPPORTED
+  // (forwarded as X-TotalReclaw-Session header). Do NOT add it back to this
+  // list — see file header + internal#127.
   'TOTALRECLAW_TAXONOMY_VERSION',
   'TOTALRECLAW_CLAIM_FORMAT',
   'TOTALRECLAW_DIGEST_MODE',
@@ -64,6 +73,27 @@ export function getRecoveryPhrase(): string {
 }
 
 /**
+ * Read the QA / observability session tag from the environment.
+ *
+ * When set, every outbound relay call adds the ``X-TotalReclaw-Session``
+ * header so relay logs (and Axiom queries) can be filtered by this tag —
+ * this is what the qa-totalreclaw skill relies on to scope log searches per
+ * QA run. When unset, returns ``null`` and the header is omitted.
+ *
+ * Read via getter (not snapshotted) so operators / test harnesses can flip
+ * the var between calls without reloading the module.
+ *
+ * Mirrors the Python-side ``RelayClient._session_id`` resolution priority.
+ * See internal#127 / `docs/guides/env-vars-reference.md`.
+ */
+export function getSessionId(): string | null {
+  const raw = process.env.TOTALRECLAW_SESSION_ID;
+  if (raw === undefined) return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
  * Runtime override for chain ID, set after the relay billing response is
  * read. Free tier stays on 84532 (Base Sepolia); Pro tier flips to 100
  * (Gnosis mainnet). The relay routes Pro writes to Gnosis, so Pro-tier
@@ -91,6 +121,15 @@ export const CONFIG = {
   // backward-compat with code that reads CONFIG.recoveryPhrase at init time.
   get recoveryPhrase(): string {
     return getRecoveryPhrase();
+  },
+  /**
+   * Optional QA / observability session tag forwarded to the relay as
+   * ``X-TotalReclaw-Session``. See `getSessionId()` above. Getter form so
+   * tests + harnesses can flip the env between calls. ``null`` when unset
+   * (header omitted).
+   */
+  get sessionId(): string | null {
+    return getSessionId();
   },
   serverUrl: (process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz').replace(/\/+$/, ''),
   selfHosted: process.env.TOTALRECLAW_SELF_HOSTED === 'true',

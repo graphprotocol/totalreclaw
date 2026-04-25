@@ -21,6 +21,7 @@ function getWasm() {
   return _wasm;
 }
 import { CONFIG } from './config.js';
+import { buildRelayHeaders } from './relay-headers.js';
 
 // ---------------------------------------------------------------------------
 // Pimlico 429 retry helper
@@ -387,12 +388,12 @@ async function submitFactOnChainLocked(
   sender: string,
 ): Promise<{ txHash: string; userOpHash: string; success: boolean }> {
   const bundlerUrl = `${config.relayUrl}/v1/bundler`;
-  const headers: Record<string, string> = {
+  const overrides: Record<string, string> = {
     'Content-Type': 'application/json',
-    'X-TotalReclaw-Client': 'openclaw-plugin',
   };
-  if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
-  if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
+  if (config.authKeyHex) overrides['Authorization'] = `Bearer ${config.authKeyHex}`;
+  if (config.walletAddress) overrides['X-Wallet-Address'] = config.walletAddress;
+  const headers = buildRelayHeaders(overrides);
 
   // Helper for JSON-RPC calls to relay bundler (with 429 retry)
   async function rpc(method: string, params: unknown[]): Promise<any> {
@@ -604,12 +605,12 @@ async function submitFactBatchOnChainLocked(
   sender: string,
 ): Promise<{ txHash: string; userOpHash: string; success: boolean; batchSize: number }> {
   const bundlerUrl = `${config.relayUrl}/v1/bundler`;
-  const headers: Record<string, string> = {
+  const overrides: Record<string, string> = {
     'Content-Type': 'application/json',
-    'X-TotalReclaw-Client': 'openclaw-plugin',
   };
-  if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
-  if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
+  if (config.authKeyHex) overrides['Authorization'] = `Bearer ${config.authKeyHex}`;
+  if (config.walletAddress) overrides['X-Wallet-Address'] = config.walletAddress;
+  const headers = buildRelayHeaders(overrides);
 
   // Helper for JSON-RPC calls to relay bundler (with 429 retry)
   async function rpc(method: string, params: unknown[]): Promise<any> {

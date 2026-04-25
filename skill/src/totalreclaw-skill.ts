@@ -405,9 +405,14 @@ export class TotalReclawSkill {
       if (needsRefresh && this.authKeyHex) {
         // Make API call to refresh cache
         const serverUrl = this.config.serverUrl.replace(/\/+$/, '');
-        const response = await fetch(`${serverUrl}/v1/billing/status`, {
-          headers: { 'Authorization': `Bearer ${this.authKeyHex}`, 'X-TotalReclaw-Client': 'openclaw-plugin' }
-        });
+        const headers: Record<string, string> = {
+          'Authorization': `Bearer ${this.authKeyHex}`,
+          'X-TotalReclaw-Client': 'openclaw-plugin',
+        };
+        // QA / observability session tag — see internal#127.
+        const rawSid = process.env.TOTALRECLAW_SESSION_ID;
+        if (rawSid && rawSid.trim()) headers['X-TotalReclaw-Session'] = rawSid.trim();
+        const response = await fetch(`${serverUrl}/v1/billing/status`, { headers });
         if (response.ok) {
           const parsed: unknown = await response.json();
           if (isBillingCacheData(parsed)) {
