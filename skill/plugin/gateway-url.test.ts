@@ -15,7 +15,7 @@
  */
 
 import type os from 'node:os';
-import { detectTailscaleHost, detectLanHost, detectGatewayHost } from './gateway-url.js';
+import { detectTailscaleHost, detectLanHost, detectGatewayHost, isDockerInternalIp } from './gateway-url.js';
 
 let passed = 0;
 let failed = 0;
@@ -207,6 +207,71 @@ function iface(addr: string, family: 'IPv4' | 'IPv6', internal = false): os.Netw
   assert(r === null, 'meta: detectGatewayHost returns sync null on empty NIC table');
   // If detectGatewayHost returned a Promise, the assertion above would be
   // `Promise<null>` which is truthy — so `r === null` catches it.
+}
+
+// ---------------------------------------------------------------------------
+// Issue #110 fix 4: Docker container internal IP detection
+// ---------------------------------------------------------------------------
+
+{
+  // isDockerInternalIp — 172.16/12 range
+  assert(isDockerInternalIp('172.17.0.1') === true, 'docker: 172.17.0.1 (default-bridge) recognized');
+  assert(isDockerInternalIp('172.18.0.2') === true, 'docker: 172.18.0.2 (issue #110 user IP) recognized');
+  assert(isDockerInternalIp('172.31.255.255') === true, 'docker: 172.31.255.255 (top of /12) recognized');
+  assert(isDockerInternalIp('172.16.0.1') === true, 'docker: 172.16.0.1 (bottom of /12) recognized');
+  assert(isDockerInternalIp('172.15.0.1') === false, 'docker: 172.15.x outside /12 not flagged');
+  assert(isDockerInternalIp('172.32.0.1') === false, 'docker: 172.32.x outside /12 not flagged');
+  assert(isDockerInternalIp('192.168.1.1') === false, 'docker: 192.168.x not flagged');
+  assert(isDockerInternalIp('10.0.0.1') === false, 'docker: 10.x not flagged (rare for Docker default)');
+  assert(isDockerInternalIp('not-an-ip') === false, 'docker: malformed input safe');
+}
+
+{
+  // detectLanHost with isDocker=true skips 172.18.x
+  const result = detectLanHost({
+    networkInterfaces: fakeNetifs({
+      lo0: [iface('127.0.0.1', 'IPv4', true)],
+      eth0: [iface('172.18.0.2', 'IPv4')], // Docker bridge IP — must be skipped
+    }),
+    isDocker: true,
+  });
+  assert(result === null, 'docker-aware LAN: 172.18.0.2 on eth0 skipped when isDocker=true (issue #110)');
+}
+
+{
+  // detectLanHost with isDocker=false KEEPS 172.18.x (could be a real LAN)
+  const result = detectLanHost({
+    networkInterfaces: fakeNetifs({
+      lo0: [iface('127.0.0.1', 'IPv4', true)],
+      eth0: [iface('172.18.0.2', 'IPv4')],
+    }),
+    isDocker: false,
+  });
+  assert(result !== null && result.host === '172.18.0.2', 'docker-aware LAN: 172.18.0.2 kept when isDocker=false (legitimate corporate LAN)');
+}
+
+{
+  // detectLanHost with isDocker=true skips Docker IP but picks up a non-Docker LAN
+  const result = detectLanHost({
+    networkInterfaces: fakeNetifs({
+      lo0: [iface('127.0.0.1', 'IPv4', true)],
+      eth0: [iface('172.18.0.2', 'IPv4')], // Docker bridge — skip
+      eth1: [iface('192.168.1.50', 'IPv4')], // real LAN — keep
+    }),
+    isDocker: true,
+  });
+  assert(result?.host === '192.168.1.50', 'docker-aware LAN: skips Docker IP, picks real LAN if present');
+}
+
+{
+  // detectGatewayHost forwards isDocker to detectLanHost
+  const result = detectGatewayHost({
+    networkInterfaces: fakeNetifs({
+      eth0: [iface('172.18.0.2', 'IPv4')],
+    }),
+    isDocker: true,
+  });
+  assert(result === null, 'composed: detectGatewayHost returns null in Docker when only Docker-internal IP found');
 }
 
 // ---------------------------------------------------------------------------

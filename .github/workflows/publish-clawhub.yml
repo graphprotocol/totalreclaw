@@ -71,6 +71,19 @@ jobs:
       - name: Scanner-sim (env-harvesting false-positive check)
         run: node skill/scripts/check-scanner.mjs
 
+      # Issue #110 fix 1: build the plugin's TS to dist/.js before publish.
+      # The plugin uses ` /* */ from './X.js'` Node-ESM-style imports; the
+      # tarball must ship matching dist/X.js files, otherwise CLI subcommand
+      # paths fail (gateway TS-loader was masking this on the runtime path).
+      - name: Install plugin dependencies (for tsc)
+        run: cd skill/plugin && rm -f package-lock.json && npm install --legacy-peer-deps
+
+      - name: Build plugin (.ts -> dist/.js)
+        run: cd skill/plugin && npm run build
+
+      - name: Verify tarball ships built `.js` artifacts (issue #110)
+        run: cd skill/plugin && npm run verify-tarball
+
       - name: Install ClawHub CLI
         run: npm install -g clawhub
 

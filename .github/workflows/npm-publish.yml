@@ -358,12 +358,44 @@ jobs:
       - name: Scanner-sim (env-harvesting false-positive check)
         run: cd skill/plugin && npm run check-scanner
 
-      # Tests intentionally skipped at this step: this plugin publishes
-      # `.ts` source (no build step), and `skill/plugin/package.json` has
-      # no `test` script defined. Per-file `*.test.ts` suites are run in
-      # other workflows; gating publish on them here would require wiring
-      # a runner that isn't currently present. Mirrors the nanoclaw
-      # rationale above.
+      # Issue #110 fix 1 (rc.18 manual QA): plugin used to ship raw `.ts`
+      # source — `index.ts` did `import './crypto.js'` but only `crypto.ts`
+      # existed. Gateway TS-loader masked this, but CLI subcommand paths
+      # that resolved literal `./crypto.js` failed. Build + verify gates
+      # below ensure every `.js` import target ships as a real file.
+      - name: Build plugin (.ts -> dist/.js)
+        run: cd skill/plugin && npm run build
+
+      - name: Run plugin tests (asserts manifest, phrase-safety registry, import-time budget)
+        run: cd skill/plugin && npm test
+
+      - name: Verify tarball ships built `.js` artifacts (issue #110)
+        run: cd skill/plugin && npm run verify-tarball
+
+      - name: Smoke-import the plugin module from a clean Node env
+        run: |
+          cd skill/plugin
+          # Pack and install to /tmp to verify the published shape works
+          # the way an end-user `openclaw plugins install` would see it.
+          TARBALL=$(npm pack 2>/dev/null | tail -1)
+          mkdir -p /tmp/plugin-smoke && cd /tmp/plugin-smoke
+          npm init -y >/dev/null
+          npm install "${GITHUB_WORKSPACE}/skill/plugin/${TARBALL}" --no-save --legacy-peer-deps
+          # Import the entry — must complete in <5s and not require network.
+          timeout 10 node --input-type=module -e "
+            const start = Date.now();
+            const mod = await import('@totalreclaw/totalreclaw');
+            const elapsed = Date.now() - start;
+            if (typeof mod.default !== 'object' || mod.default?.id !== 'totalreclaw') {
+              console.error('Expected default export with id=totalreclaw, got:', mod.default);
+              process.exit(1);
+            }
+            if (elapsed > 5000) {
+              console.error('Plugin import took', elapsed, 'ms (>5000ms budget) — possible eager ONNX regression (issue #110 fix 2)');
+              process.exit(1);
+            }
+            console.log('OK: plugin imports cleanly from clean Node env in', elapsed, 'ms');
+          " || { echo 'ERROR: plugin tarball failed clean-Node smoke import'; exit 1; }
 
       - name: Apply RC version suffix (rc mode only)
         if: inputs.release-type == 'rc'

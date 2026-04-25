@@ -341,8 +341,17 @@ function buildPairingUrl(
   // Layers 4 + 5 — auto-detect via gateway-url helper (Tailscale CGNAT, then LAN)
   else {
     let detected: ReturnType<typeof detectGatewayHost> = null;
+    // issue #110 fix 4 — pass `isDocker` so LAN detection skips
+    // 172.16/12 bridge IPs that no external browser can reach.
+    let isDocker = false;
     try {
-      detected = detectGatewayHost();
+      isDocker = isRunningInDocker();
+    } catch {
+      // Defensive: never block URL building on Docker sniff errors.
+      isDocker = false;
+    }
+    try {
+      detected = detectGatewayHost({ isDocker });
     } catch (err) {
       api.logger.warn(
         `TotalReclaw: host autodetect crashed: ${err instanceof Error ? err.message : String(err)} — falling back to localhost`,
@@ -368,9 +377,27 @@ function buildPairingUrl(
           `Set plugins.entries.totalreclaw.config.publicUrl for remote access.`,
       );
     } else {
-      // Layer 6 — localhost fallback
+      // Layer 6 — localhost fallback (or Docker-aware relay-pointer warning)
       const bind = cfg?.gateway?.bind;
-      if (bind === 'lan' || bind === 'tailnet') {
+      if (isDocker) {
+        // issue #110 fix 4: inside Docker the LAN IP is container-internal
+        // and useless. Loopback localhost only works for `docker exec`
+        // tests. The CORRECT pair URL for Docker is the relay-brokered
+        // path served by the `totalreclaw_pair` agent tool (CONFIG.pairMode
+        // === 'relay' since rc.11). The CLI-only path here cannot mint a
+        // relay session synchronously (the relay handshake needs a WS
+        // round-trip), so we emit the loopback URL with a LOUD warning
+        // pointing the operator at the agent tool / publicUrl override.
+        api.logger.warn(
+          `TotalReclaw: Docker container detected — pairing URL falling back to ` +
+            `http://localhost:${port}, which is unreachable from the host browser. ` +
+            `Use the totalreclaw_pair AGENT TOOL (relay-brokered, universally reachable) ` +
+            `instead of the CLI fallback, OR set plugins.entries.totalreclaw.config.publicUrl ` +
+            `to your gateway's host-reachable URL (e.g. http://<host-ip>:${port} when the ` +
+            `Docker port is published). Setting TOTALRECLAW_PAIR_MODE=relay is the default; ` +
+            `air-gapped operators on TOTALRECLAW_PAIR_MODE=local must publish a port + set publicUrl.`,
+        );
+      } else if (bind === 'lan' || bind === 'tailnet') {
         api.logger.warn(
           `TotalReclaw: pairing URL falling back to localhost because gateway.bind=${bind} could not be autodetected. ` +
             'Set plugins.entries.totalreclaw.config.publicUrl to override.',
@@ -5189,6 +5216,16 @@ const plugin = {
         },
       },
       { name: 'totalreclaw_pair' },
+    );
+    // 3.3.1-rc.20 (issue #110): explicit post-registration breadcrumb so
+    // ops/QA can grep gateway logs for definitive proof the tool was
+    // declared. If the agent then reports the tool is missing from its
+    // tool list, the gap is upstream OpenClaw tool propagation, not our
+    // plugin — see issue #110 fix 3 + PR #102 (CLI fallback).
+    api.logger.info(
+      'TotalReclaw: registerTool(totalreclaw_pair) returned. If the agent does not see it in its tool list ' +
+        'after gateway restart, the issue is upstream tool injection (containerized agents) — fall back to ' +
+        '`openclaw totalreclaw pair generate --url-pin-only` (PR #102) or `openclaw totalreclaw onboard --pair-only`.',
     );
 
     // ---------------------------------------------------------------

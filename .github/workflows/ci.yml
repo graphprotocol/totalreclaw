@@ -54,8 +54,20 @@ jobs:
       # openclaw.plugin.json does NOT have "kind":"memory" (startup registry fix)
       # AND that index.ts still declares kind:'memory' as const (memory-slot
       # matching preserved). Uses npx tsx — available without a devDependency.
-      - name: Plugin manifest shape tests
+      # Includes import-time-smoke.test.ts (issue #110 fix 2) which asserts
+      # plugin module load completes in <5s with no eager network I/O.
+      - name: Plugin manifest shape + smoke tests
         run: cd skill/plugin && npm test
+
+      # Issue #110 fix 1: build the plugin's TS to dist/.js, and verify the
+      # tarball would ship a complete set of `.js` artifacts. PR-time check
+      # so a broken build (e.g. missing import target, syntax error) doesn't
+      # reach the publish workflow.
+      - name: Build plugin (.ts -> dist/.js)
+        run: cd skill/plugin && npm run build
+
+      - name: Verify tarball ships built `.js` artifacts (issue #110)
+        run: cd skill/plugin && npm run verify-tarball
 
   mcp-tests:
     name: MCP Server Tests

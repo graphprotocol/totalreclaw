@@ -41,7 +41,13 @@
     "qrcode-terminal": "^0.12.0",
     "ws": "^8.18.3"
   },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "files": [
+    "dist/",
     "*.ts",
     "import-adapters/",
     "!**/*.test.ts",
@@ -54,13 +60,16 @@
     "skill.json"
   ],
   "scripts": {
-    "test": "npx tsx manifest-shape.test.ts && npx tsx config-schema.test.ts && npx tsx llm-profile-reader.test.ts && npx tsx llm-client.test.ts && npx tsx llm-client-retry.test.ts && npx tsx gateway-url.test.ts && npx tsx retype-setscope.test.ts && npx tsx tool-gating.test.ts && npx tsx onboarding-noninteractive.test.ts && npx tsx pair-cli-json.test.ts && npx tsx pair-qr.test.ts && npx tsx pair-remote-client.test.ts && npx tsx qa-bug-report.test.ts && npx tsx nonce-serialization.test.ts && npx tsx phrase-safety-registry.test.ts && npx tsx test_issue_92_onnx_download_ux.test.ts && npx tsx onboard-pair-only.test.ts",
+    "build": "rm -rf dist && tsc -p tsconfig.json --noCheck",
+    "verify-tarball": "node ../scripts/verify-tarball.mjs",
+    "test": "npx tsx manifest-shape.test.ts && npx tsx config-schema.test.ts && npx tsx llm-profile-reader.test.ts && npx tsx llm-client.test.ts && npx tsx llm-client-retry.test.ts && npx tsx gateway-url.test.ts && npx tsx retype-setscope.test.ts && npx tsx tool-gating.test.ts && npx tsx onboarding-noninteractive.test.ts && npx tsx pair-cli-json.test.ts && npx tsx pair-qr.test.ts && npx tsx pair-remote-client.test.ts && npx tsx qa-bug-report.test.ts && npx tsx nonce-serialization.test.ts && npx tsx phrase-safety-registry.test.ts && npx tsx test_issue_92_onnx_download_ux.test.ts && npx tsx onboard-pair-only.test.ts && npx tsx import-time-smoke.test.ts",
     "check-scanner": "node ../scripts/check-scanner.mjs",
+    "prepack": "npm run build",
     "prepublishOnly": "node ../scripts/check-scanner.mjs"
   },
   "openclaw": {
     "extensions": [
-      "./index.ts"
+      "./dist/index.js"
     ]
   }
 }
