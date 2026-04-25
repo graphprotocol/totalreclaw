@@ -11,7 +11,7 @@ Terminal:
 ```bash
 openclaw skills install totalreclaw
 
-# Restart your gateway. Pick the line that matches your setup:
+# Restart your gateway so the new skill is discoverable. Pick the line that matches your setup:
 openclaw gateway restart                       # native install
 docker restart <your-openclaw-container>       # Docker self-host (substitute your container name; `docker ps` shows it)
 # Managed OpenClaw service: use the service's restart control (web UI). See the "Managed OpenClaw service" section below.
@@ -21,9 +21,9 @@ Then in your OpenClaw chat:
 
 > **Install totalreclaw**
 
-The agent reads the skill, installs the plugin, asks you to restart the gateway once the plugin is in place, calls the pairing tool, and guides you through the QR flow.
+The agent reads the skill, installs the plugin, waits for OpenClaw's auto-reload to bind the new tools (default `gateway.reload.mode = "hybrid"` triggers a graceful restart within 1-3s of the install), calls the pairing tool, and guides you through the QR flow. No second manual restart required for the common case.
 
-Why this works: ClawHub classifies `totalreclaw` as a skill. `openclaw skills install totalreclaw` registers the SKILL.md into agent context **before** the plugin itself is installed — so the agent has the instructions to bootstrap the rest. The one `openclaw gateway restart` in the terminal makes the skill discoverable; the plugin install happens via shell from the agent, and a second user-driven restart binds the tools.
+Why this works: ClawHub classifies `totalreclaw` as a skill. `openclaw skills install totalreclaw` registers the SKILL.md into agent context **before** the plugin itself is installed — so the agent has the instructions to bootstrap the rest. The one `openclaw gateway restart` in the terminal makes the skill discoverable; the plugin install happens via shell from the agent, and OpenClaw's config-watcher then auto-restarts the gateway to bind the new tools (no second user-driven restart needed unless `gateway.reload.mode = off`).
 
 <details>
 <summary><strong>Approach B — explicit two-step (fallback)</strong></summary>
@@ -35,7 +35,7 @@ Terminal:
 ```bash
 openclaw skills install totalreclaw
 
-# Restart your gateway. Pick the line that matches your setup:
+# Restart your gateway so the new skill is discoverable. Pick the line that matches your setup:
 openclaw gateway restart                       # native install
 docker restart <your-openclaw-container>       # Docker self-host (substitute your container name)
 # Managed OpenClaw service: use the service's restart control (web UI).
@@ -45,7 +45,7 @@ Then in your OpenClaw chat:
 
 > **TotalReclaw is a skill at 'totalreclaw' on ClawHub. Please install the plugin (openclaw plugins install totalreclaw), then use the totalreclaw_pair tool to walk me through the QR recovery-phrase setup.**
 
-The agent reads the explicit directive, installs the plugin (`openclaw plugins install totalreclaw`), asks you to restart the gateway, calls `totalreclaw_pair`, and guides you through the QR flow.
+The agent reads the explicit directive, installs the plugin (`openclaw plugins install totalreclaw`), waits for OpenClaw's config-watcher to auto-restart the gateway and bind the new tools (1-3s under default `gateway.reload.mode = "hybrid"`), calls `totalreclaw_pair`, and guides you through the QR flow.
 
 </details>
 
@@ -55,7 +55,7 @@ The agent reads the explicit directive, installs the plugin (`openclaw plugins i
 1. `openclaw skills install totalreclaw` places the skill metadata + SKILL.md under `~/.openclaw/workspace/skills/totalreclaw/`.
 2. The first gateway restart makes the skill visible to your agent's context.
 3. The chat prompt triggers the skill's fast path: the agent runs `openclaw plugins install totalreclaw` via its shell tool.
-4. The agent asks you to restart the gateway so HTTP routes + hooks bind — `openclaw gateway restart` for native installs, `docker restart <your-openclaw-container>` for Docker self-host (substitute your actual container name), or your managed service's restart control. The agent cannot self-restart the process it is running in.
+4. OpenClaw's config-watcher (chokidar) detects the `plugins.*` change in `~/.openclaw/config.yaml` and, under the default `gateway.reload.mode = "hybrid"`, schedules a SIGUSR1 graceful-drain restart of the gateway. The new process re-reads config, re-imports the plugin, and the new HTTP routes + hooks + tools bind — typically within 1-3s. No human action required. (Fallback: if the user has set `gateway.reload.mode = off` in their config, auto-reload is disabled and the agent will instruct a manual restart instead. The agent cannot self-restart the process it is running in.)
 5. Agent calls the `totalreclaw_pair` tool.
 6. A pair URL + 6-digit PIN is surfaced back to you in chat.
 7. You open the URL in your browser. The pair page offers two tabs: **Generate new** (the browser creates a fresh 12-word recovery phrase using the canonical BIP-39 wordlist) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, and continue.
@@ -96,10 +96,14 @@ If you'd rather run every command yourself without any agent involvement (self-h
 
 ```bash
 openclaw plugins install @totalreclaw/totalreclaw            # stable
+# Under the default config (`gateway.reload.mode = "hybrid"`), OpenClaw's file-watcher
+# auto-restarts the gateway within 1-3s of the install — no manual restart needed.
+# Verify with: `openclaw plugins list | grep totalreclaw`.
 
-# Restart your gateway. Pick the line that matches your setup:
-openclaw gateway restart                                     # native install
-docker restart <your-openclaw-container>                     # Docker self-host (substitute your container name)
+# If you have `gateway.reload.mode = off` (or auto-reload is otherwise disabled),
+# fall back to a manual restart. Pick the line that matches your setup:
+# openclaw gateway restart                                   # native install
+# docker restart <your-openclaw-container>                   # Docker self-host (substitute your container name)
 # Managed OpenClaw service: use the service's restart control (web UI).
 ```
 
@@ -192,7 +196,7 @@ Both tiers have unlimited memories and reads. Upgrade: *"Upgrade my TotalReclaw 
 
 ## Troubleshooting
 
-- **Agent can't see TotalReclaw tools**: restart the gateway. Native: `openclaw gateway restart`. Docker self-host: `docker restart <your-openclaw-container>` (substitute your actual container name; `docker ps` shows it). Managed service: use the service's restart control (web UI).
+- **Agent can't see TotalReclaw tools**: under the default config OpenClaw auto-restarts the gateway within 1-3s of `openclaw plugins install` — wait 5-10s and check `openclaw plugins list`. If the plugin is listed but the agent still can't see the tools, your config likely has `gateway.reload.mode = off` (auto-reload disabled) — fall back to a manual restart. Native: `openclaw gateway restart`. Docker self-host: `docker restart <your-openclaw-container>` (substitute your actual container name; `docker ps` shows it). Managed service: use the service's restart control (web UI).
 - **Pair URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running.
 - **Browser fails to POST the encrypted phrase**: check the pair page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
 - **Tool calls return "onboarding required"**: repeat the canonical prompt so the agent re-runs `totalreclaw_pair`.
