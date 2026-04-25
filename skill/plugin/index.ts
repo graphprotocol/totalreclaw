@@ -80,7 +80,7 @@ import {
   dedupeByProvider,
 } from './llm-profile-reader.js';
 import { LSHHasher } from './lsh.js';
-import { rerank, cosineSimilarity, detectQueryIntent, INTENT_WEIGHTS, type RerankerCandidate } from './reranker.js';
+import { rerank, cosineSimilarity, detectQueryIntent, INTENT_WEIGHTS, passesRelevanceGate, type RerankerCandidate } from './reranker.js';
 import { deduplicateBatch } from './semantic-dedup.js';
 import {
   findNearDuplicate,
@@ -3563,14 +3563,19 @@ const plugin = {
               };
             }
 
-            // 6b. Cosine similarity threshold gate — skip results when the
-            //     best match is below the minimum relevance threshold.
-            const maxCosine = Math.max(
-              ...reranked.map((r) => r.cosineSimilarity ?? 0),
-            );
-            if (maxCosine < COSINE_THRESHOLD) {
+            // 6b. Relevance gate — surface results when EITHER the top match
+            //     clears the cosine threshold OR every meaningful query token
+            //     appears in the top result's text (lexical override).
+            //     Issue #116 (rc.18 finding F1): short queries like
+            //     "favorite color" produce embeddings with low cosine sim
+            //     against the local Harrier-OSS-270m model even when the
+            //     stored fact text contains every query token.
+            if (!passesRelevanceGate(params.query, reranked, COSINE_THRESHOLD)) {
+              const maxCosine = Math.max(
+                ...reranked.map((r) => r.cosineSimilarity ?? 0),
+              );
               api.logger.info(
-                `Recall: cosine threshold gate filtered results (max=${maxCosine.toFixed(3)}, threshold=${COSINE_THRESHOLD})`,
+                `Recall: relevance gate filtered results (max cosine=${maxCosine.toFixed(3)}, threshold=${COSINE_THRESHOLD}, no lexical override)`,
               );
               return {
                 content: [{ type: 'text', text: 'No relevant memories found for this query.' }],
@@ -5740,14 +5745,14 @@ const plugin = {
 
             if (reranked.length === 0) return undefined;
 
-            // 6b. Cosine similarity threshold gate — skip injection when the
-            //     best match is below the minimum relevance threshold.
-            const hookMaxCosine = Math.max(
-              ...reranked.map((r) => r.cosineSimilarity ?? 0),
-            );
-            if (hookMaxCosine < COSINE_THRESHOLD) {
+            // 6b. Relevance gate — see recall tool above for the cosine +
+            //     lexical-override rule (issue #116).
+            if (!passesRelevanceGate(evt.prompt, reranked, COSINE_THRESHOLD)) {
+              const hookMaxCosine = Math.max(
+                ...reranked.map((r) => r.cosineSimilarity ?? 0),
+              );
               api.logger.info(
-                `Hook: cosine threshold gate filtered results (max=${hookMaxCosine.toFixed(3)}, threshold=${COSINE_THRESHOLD})`,
+                `Hook: relevance gate filtered results (max cosine=${hookMaxCosine.toFixed(3)}, threshold=${COSINE_THRESHOLD}, no lexical override)`,
               );
               return undefined;
             }
@@ -5855,14 +5860,14 @@ const plugin = {
 
           if (reranked.length === 0) return undefined;
 
-          // Cosine similarity threshold gate — skip injection when the
-          // best match is below the minimum relevance threshold.
-          const srvMaxCosine = Math.max(
-            ...reranked.map((r) => r.cosineSimilarity ?? 0),
-          );
-          if (srvMaxCosine < COSINE_THRESHOLD) {
+          // Relevance gate — see recall tool for the cosine + lexical-override
+          // rule (issue #116).
+          if (!passesRelevanceGate(evt.prompt, reranked, COSINE_THRESHOLD)) {
+            const srvMaxCosine = Math.max(
+              ...reranked.map((r) => r.cosineSimilarity ?? 0),
+            );
             api.logger.info(
-              `Hook: cosine threshold gate filtered results (max=${srvMaxCosine.toFixed(3)}, threshold=${COSINE_THRESHOLD})`,
+              `Hook: relevance gate filtered results (max cosine=${srvMaxCosine.toFixed(3)}, threshold=${COSINE_THRESHOLD}, no lexical override)`,
             );
             return undefined;
           }

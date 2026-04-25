@@ -507,3 +507,76 @@ export function rerank(
   // Preserve rrfScore and cosineSimilarity through MMR
   return mmrResults as RerankerResult[];
 }
+
+// ---------------------------------------------------------------------------
+// Relevance gate (issue #116)
+// ---------------------------------------------------------------------------
+
+/**
+ * Decide whether reranked results clear the relevance gate for surfacing to
+ * the user (recall tool) or auto-injecting into agent context (hooks).
+ *
+ * Two-signal acceptance rule, addressing issue #116 (rc.18 finding F1):
+ *
+ *   1. **Cosine path** — at least one reranked result has cosine similarity
+ *      with the query embedding >= `cosineThreshold`. This is the existing
+ *      semantic-relevance gate and remains the primary signal.
+ *
+ *   2. **Lexical override** — when cosine is below threshold (e.g. short
+ *      queries against the local Harrier-OSS-270m model produce embeddings
+ *      with low cosine sim regardless of topical match), the gate ALSO
+ *      passes when every meaningful query token (post stop-word removal)
+ *      appears as a stem-prefix substring in the top reranked result's
+ *      text. This is strong lexical evidence that the user is asking
+ *      about a fact already stored, even when embedding sim is weak.
+ *
+ * Without (2), short queries like `"favorite color"` against the stored
+ * fact `"User's favorite color is cobalt blue"` were silently filtered
+ * even though every query token was present in the candidate. Hermes
+ * (Python client) does not apply any cosine gate, which is why it
+ * recalled the same fact for the same Smart Account in rc.18 QA.
+ *
+ * The lexical override is intentionally conservative:
+ *   - Requires ALL non-stop-word query tokens to be present (any-of would
+ *     over-trigger).
+ *   - Uses 4-char-prefix substring match to be stem-tolerant ("favorite"
+ *     stems to "favorit" in the stored fact's blind index, but the raw
+ *     fact text contains the unstemmed word; the prefix check absorbs
+ *     light morphology).
+ *   - Token count must be >= 1 — empty/all-stop-word queries fall back
+ *     to cosine path.
+ *
+ * @param query - the user's search query (raw string)
+ * @param reranked - reranked results (top first)
+ * @param cosineThreshold - the configured cosine cutoff (typically 0.15)
+ * @returns true if results should be surfaced; false to suppress
+ */
+export function passesRelevanceGate(
+  query: string,
+  reranked: RerankerResult[],
+  cosineThreshold: number,
+): boolean {
+  if (reranked.length === 0) return false;
+
+  // Path 1: cosine clears threshold.
+  const maxCosine = Math.max(...reranked.map((r) => r.cosineSimilarity ?? 0));
+  if (maxCosine >= cosineThreshold) return true;
+
+  // Path 2: lexical override — every meaningful query token appears in
+  // the top reranked result's text.
+  const queryTokens = tokenize(query, /* removeStopWords */ true);
+  if (queryTokens.length === 0) return false;
+
+  const topText = (reranked[0]?.text ?? '').toLowerCase();
+  if (topText.length === 0) return false;
+
+  // 4-char prefix substring match: tolerates light stemming ("favorite"
+  // matches a fact text containing "favorite", "favorites", "favoring",
+  // etc., without re-running the WASM Porter stemmer client-side).
+  const PREFIX_LEN = 4;
+  for (const token of queryTokens) {
+    const probe = token.length >= PREFIX_LEN ? token.slice(0, PREFIX_LEN) : token;
+    if (!topText.includes(probe)) return false;
+  }
+  return true;
+}
