@@ -323,7 +323,7 @@ This provides memory isolation between different contexts.
 
 The v1 env cleanup removed the following user-facing vars: `TOTALRECLAW_CHAIN_ID`
 (chain is auto-detected from billing tier), `TOTALRECLAW_EMBEDDING_MODEL`,
-`TOTALRECLAW_STORE_DEDUP`, `TOTALRECLAW_LLM_MODEL`, `TOTALRECLAW_SESSION_ID`,
+`TOTALRECLAW_STORE_DEDUP`, `TOTALRECLAW_LLM_MODEL`,
 `TOTALRECLAW_TAXONOMY_VERSION`, `TOTALRECLAW_CLAIM_FORMAT`,
 `TOTALRECLAW_DIGEST_MODE`. Tuning knobs like `TOTALRECLAW_EXTRACT_INTERVAL`
 and `TOTALRECLAW_MIN_IMPORTANCE` are now delivered via the relay billing

@@ -2832,6 +2832,13 @@ const plugin = {
     // function — stable builds never see it. The version is resolved via
     // `readPluginVersion` from fs-helpers.ts (scanner-safe, pure-fs).
     let rcMode = false;
+    // Plugin version resolved from package.json once at register time. Reused
+    // by writeOnboardingState callsites below so the `version` field in
+    // state.json tracks the actual shipped plugin version (avoids drift —
+    // e.g. rc.18 finding F4 where a hardcoded `'3.3.1-rc.11'` stayed put
+    // through 7 RC bumps). Fallback `'3.3.0'` matches the prior literal at
+    // the loopback callsite if package.json read fails.
+    let pluginVersion: string | null = null;
     try {
       // `import.meta.url` is ESM-only; fallback to `__dirname` for the CJS
       // build path. `require` comes from Node core and is available in both
@@ -2839,10 +2846,10 @@ const plugin = {
       const url = require('node:url') as typeof import('node:url');
       const nodePath = require('node:path') as typeof import('node:path');
       const pluginDir = nodePath.dirname(url.fileURLToPath(import.meta.url));
-      const version = readPluginVersion(pluginDir);
-      rcMode = isRcBuild(version);
+      pluginVersion = readPluginVersion(pluginDir);
+      rcMode = isRcBuild(pluginVersion);
       if (rcMode) {
-        api.logger.info(`TotalReclaw: RC build detected (version=${version}). RC-gated tools will be registered.`);
+        api.logger.info(`TotalReclaw: RC build detected (version=${pluginVersion}). RC-gated tools will be registered.`);
       }
     } catch {
       rcMode = false;
@@ -3021,7 +3028,7 @@ const plugin = {
             onboardingState: 'active',
             createdBy: 'generate',
             credentialsCreatedAt: new Date().toISOString(),
-            version: '3.3.0',
+            version: pluginVersion ?? '3.3.0',
           });
           return { state: 'active' };
         },
@@ -5079,7 +5086,7 @@ const plugin = {
                           onboardingState: 'active',
                           createdBy: mode === 'generate' ? 'generate' : 'import',
                           credentialsCreatedAt: new Date().toISOString(),
-                          version: '3.3.1-rc.11',
+                          version: pluginVersion ?? '3.3.0',
                         });
                         api.logger.info(
                           `totalreclaw_pair(relay): session ${remoteSession.token.slice(0, 8)}… completed; credentials written`,
