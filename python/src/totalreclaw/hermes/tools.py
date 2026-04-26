@@ -170,6 +170,16 @@ async def pin(args: dict, state: "PluginState", **kwargs) -> str:
         if result.get("idempotent"):
             response["idempotent"] = True
             response["message"] = "Claim was already pinned; no on-chain write."
+        # rc.23 graceful confirm-indexed: when the underlying
+        # ``totalreclaw-core`` wheel doesn't yet expose the PyO3
+        # ``confirm_indexed_*`` bindings (any wheel published pre-2.3.x),
+        # ``operations._change_claim_status`` returns ``partial=True`` on
+        # the result dict — the on-chain write succeeded but the
+        # observational read-after-write step couldn't run. Surface the
+        # flag so callers know follow-up reads may briefly show stale
+        # state.
+        if result.get("partial"):
+            response["partial"] = True
         return json.dumps(response)
     except ValueError as e:
         return json.dumps({"error": str(e)})
@@ -208,6 +218,12 @@ async def unpin(args: dict, state: "PluginState", **kwargs) -> str:
         if result.get("idempotent"):
             response["idempotent"] = True
             response["message"] = "Claim was already active; no on-chain write."
+        # rc.23 graceful confirm-indexed: see :func:`pin` — same partial
+        # propagation when the read-after-write helper short-circuits
+        # because the installed ``totalreclaw-core`` wheel lacks the
+        # ``confirm_indexed_*`` PyO3 bindings.
+        if result.get("partial"):
+            response["partial"] = True
         return json.dumps(response)
     except ValueError as e:
         return json.dumps({"error": str(e)})

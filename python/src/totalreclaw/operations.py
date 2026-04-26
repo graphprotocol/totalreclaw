@@ -1256,9 +1256,20 @@ async def _change_claim_status(
     # — the chain write IS acknowledged — but flag ``partial=True`` so a
     # follow-up ``client.export()`` / ``client.recall()`` doesn't surprise
     # the caller with stale state.
+    #
+    # rc.23 graceful-fallback: ``confirm_indexed`` itself returns ``False``
+    # if the PyO3 bindings aren't on the installed ``totalreclaw-core``
+    # wheel (any wheel published before 2.3.x). We additionally wrap the
+    # call here so any unexpected post-binding error path also surfaces
+    # as ``partial=True`` rather than torpedoing the on-chain write that
+    # already succeeded. Mirrors the TS retype-setscope.ts pattern (commit
+    # ``d9c5352``).
     from .confirm_indexed import confirm_indexed as _confirm_indexed
 
-    indexed = await _confirm_indexed(new_fact_id, relay, expect="active")
+    try:
+        indexed = await _confirm_indexed(new_fact_id, relay, expect="active")
+    except Exception:
+        indexed = False
 
     result = {
         "success": True,

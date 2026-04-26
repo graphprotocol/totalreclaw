@@ -15,12 +15,22 @@ homepage: https://totalreclaw.xyz
 
 If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jump to step 4. Otherwise run all steps in order.
 
-1. **Install plugin + Python package.** Hermes 2026.4.16+ uses Git-based plugin discovery and a separate Python tool implementation. Run via your shell tool:
+1. **Install plugin + Python package.** Hermes 2026.4.16+ uses Git-based plugin discovery and a separate Python tool implementation. The Python package MUST go into the SAME Python environment that Hermes runs from (containerized venv, native venv, or system Python — whichever your install uses). Bare `pip install` may target the wrong Python on containerized deploys. Step-by-step via your shell tool:
    ```
+   # 1a. Detect the Hermes Python (run inside the gateway's shell context — for
+   # Docker, that means `docker exec -it <container> bash` first).
+   HERMES_PYTHON="$(command -v python3)"
+   echo "Hermes Python: $HERMES_PYTHON"
+   "$HERMES_PYTHON" -c "import sys; print(sys.prefix)"
+
+   # 1b. Install both halves into the right env.
    hermes plugins install p-diogo/totalreclaw-hermes --enable
-   pip install --pre totalreclaw
+   "$HERMES_PYTHON" -m pip install --pre totalreclaw
+
+   # 1c. Verify the package resolved through Hermes' Python.
+   "$HERMES_PYTHON" -m pip show totalreclaw | head -2
    ```
-   (If Hermes runs in its own venv, use that venv's pip — e.g. `/path/to/hermes/venv/bin/python3 -m pip install --pre totalreclaw`.) If either shell call fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment): tell the user verbatim *"Your environment doesn't expose the Hermes CLI / pip to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`."* Wait for `done` and skip to step 3.
+   If `pip show` doesn't list the package, the install landed in a different Python — fix `$HERMES_PYTHON` and re-run 1b. On Debian/Ubuntu/Docker you may hit `externally-managed-environment` if Hermes runs against system Python — add `--break-system-packages` to the `pip install` line, or ask the user to recreate Hermes inside a venv. If either shell call fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment): tell the user verbatim *"Your environment doesn't expose the Hermes CLI / pip to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`."* Wait for `done` and skip to step 3.
 
 2. **Restart the gateway — Hermes does NOT auto-reload on plugin install.** Tell the user verbatim: *"Please restart your Hermes gateway: `hermes gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. If supervised by systemd / launchd, `kill -USR1 $(cat ~/.hermes/gateway.pid)` triggers a graceful-drain restart. Reply `done` once it's back up."* Do NOT run the restart yourself — your shell is inside the gateway you'd be restarting. Wait for the user's `done`.
 
