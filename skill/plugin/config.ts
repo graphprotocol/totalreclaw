@@ -48,12 +48,19 @@ const REMOVED_ENV_VARS = [
   'TOTALRECLAW_DIGEST_MODE',
 ] as const;
 
+// Migration guide URL — kept as a constant so the regression test can assert
+// the exact link text in the warning. Pointing at GitHub raw-blob is more
+// useful than the relative repo path: operators copying the warning out of
+// stderr usually do not have the repo cloned. rc.22 finding #4.
+export const ENV_VARS_REFERENCE_URL =
+  'https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/env-vars-reference.md';
+
 function warnRemovedEnvVars(warn: (msg: string) => void = console.warn): void {
   const set = REMOVED_ENV_VARS.filter((name) => process.env[name] !== undefined);
   if (set.length === 0) return;
   warn(
     `TotalReclaw: ignoring removed env var(s): ${set.join(', ')}. ` +
-      `See docs/guides/env-vars-reference.md for the v1 env var surface.`,
+      `Migration guide: ${ENV_VARS_REFERENCE_URL}`,
   );
 }
 

@@ -345,6 +345,191 @@ export function cleanupInstallStagingDirs(
 }
 
 // ---------------------------------------------------------------------------
+// Partial-install detection (rc.22 finding #5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Marker filename written into the plugin directory at register-time. Its
+ * presence means a prior install was interrupted before the plugin successfully
+ * loaded — a confirmed-broken half-state that the next `openclaw plugins
+ * install` retry can detect and clean.
+ *
+ * Conceptually the marker is dropped BEFORE npm install completes (the
+ * complementary npm script removes it on success) and additionally
+ * re-asserted at register-time as a second-line check. If you see this file
+ * in `<extensionsDir>/totalreclaw/`, the install never reached register()
+ * AND the marker drop wasn't undone.
+ *
+ * Constants are exported so the npm preinstall/cleanup scripts in
+ * `package.json` use the same name as the runtime detector.
+ */
+export const PARTIAL_INSTALL_MARKER = '.tr-partial-install';
+
+/** Package name we own — used to confirm a directory is OUR plugin, not a stray. */
+export const PLUGIN_PACKAGE_NAME = '@totalreclaw/totalreclaw';
+
+/**
+ * Outcome of `detectPartialInstall`.
+ *  - `'clean'`  — the dir is a fully-installed plugin (package.json claims our
+ *                 name AND `dist/index.js` exists AND no marker present).
+ *  - `'partial'` — the dir is OUR plugin but in a corrupt half-state. Caller
+ *                  should wipe + retry. Returned reasons include:
+ *                    * marker file present (preinstall fired, postinstall did not)
+ *                    * dist/index.js missing (build never finished)
+ *  - `'foreign'` — package.json missing or claims a different name. Helper
+ *                  refuses to act so we never delete an unrelated plugin.
+ *  - `'absent'`  — dir does not exist at all.
+ */
+export type PartialInstallStatus = 'clean' | 'partial' | 'foreign' | 'absent';
+
+export interface PartialInstallResult {
+  status: PartialInstallStatus;
+  /** Why the caller decided this is partial — surfaces in error messages. */
+  reasons: string[];
+}
+
+/**
+ * Inspect a plugin install directory to decide whether it is fully installed,
+ * a corrupted half-state from an interrupted install, or someone else's
+ * plugin. Pure filesystem inspection; never deletes anything.
+ *
+ * Background — rc.22 finding #5
+ * ------------------------------
+ * After a partial `openclaw plugins install @totalreclaw/totalreclaw` (e.g.
+ * the auto-gateway-restart kills npm mid-build), `extensions/totalreclaw/`
+ * survives with a populated package.json but a missing or empty `dist/`. The
+ * agent's recovery retry then fires another install; OpenClaw's plugin
+ * loader scans `extensions/` and tries to register the half-state as a "hook
+ * pack", failing with the cryptic "package.json missing openclaw.hooks". The
+ * fix: detect the partial state up-front so the retry can wipe + reinstall
+ * instead of cargo-culting a confused error.
+ *
+ * Decision rules
+ * --------------
+ *   1. `pluginRootDir` does not exist → `'absent'`.
+ *   2. package.json missing or unparsable → `'foreign'` (don't touch).
+ *   3. package.json `name !== '@totalreclaw/totalreclaw'` → `'foreign'`.
+ *   4. `<root>/.tr-partial-install` exists → `'partial'` (the canonical signal).
+ *   5. `<root>/dist/index.js` missing → `'partial'` (build never finished).
+ *   6. otherwise → `'clean'`.
+ *
+ * The function is intentionally conservative: it returns `'foreign'` on any
+ * ambiguous read. Callers should NEVER auto-wipe a `'foreign'` directory.
+ *
+ * @param pluginRootDir Absolute path to the suspect plugin dir, e.g.
+ *                      `~/.openclaw/extensions/totalreclaw`.
+ */
+export function detectPartialInstall(pluginRootDir: string): PartialInstallResult {
+  const reasons: string[] = [];
+
+  // Rule 1 — absent dir.
+  let rootStat: fs.Stats;
+  try {
+    rootStat = fs.statSync(pluginRootDir);
+  } catch {
+    return { status: 'absent', reasons: ['directory does not exist'] };
+  }
+  if (!rootStat.isDirectory()) {
+    return { status: 'foreign', reasons: ['path exists but is not a directory'] };
+  }
+
+  // Rules 2-3 — package.json must claim our name.
+  const pkgJsonPath = path.join(pluginRootDir, 'package.json');
+  let pkgRaw: string;
+  try {
+    pkgRaw = fs.readFileSync(pkgJsonPath, 'utf-8');
+  } catch {
+    return { status: 'foreign', reasons: ['package.json missing or unreadable'] };
+  }
+  let parsed: { name?: unknown };
+  try {
+    parsed = JSON.parse(pkgRaw) as { name?: unknown };
+  } catch {
+    return { status: 'foreign', reasons: ['package.json is not valid JSON'] };
+  }
+  if (parsed.name !== PLUGIN_PACKAGE_NAME) {
+    return {
+      status: 'foreign',
+      reasons: [`package.json declares "${String(parsed.name)}" not "${PLUGIN_PACKAGE_NAME}"`],
+    };
+  }
+
+  // Rule 4 — explicit partial marker wins.
+  const markerPath = path.join(pluginRootDir, PARTIAL_INSTALL_MARKER);
+  if (fs.existsSync(markerPath)) {
+    reasons.push(`${PARTIAL_INSTALL_MARKER} marker present (preinstall fired, postinstall did not)`);
+  }
+
+  // Rule 5 — dist/index.js must exist for the loader to register.
+  const distIndex = path.join(pluginRootDir, 'dist', 'index.js');
+  if (!fs.existsSync(distIndex)) {
+    reasons.push('dist/index.js missing (build artifact absent)');
+  }
+
+  if (reasons.length > 0) {
+    return { status: 'partial', reasons };
+  }
+  return { status: 'clean', reasons: [] };
+}
+
+/**
+ * Wipe a partial-install directory so the next `openclaw plugins install`
+ * starts from a blank slate. Only acts when `detectPartialInstall(...)`
+ * returns `'partial'` — `'foreign'` and `'clean'` are no-ops by design.
+ *
+ * Returns `true` if the directory was wiped, `false` otherwise.
+ *
+ * SAFETY: this helper is the only place that recursively deletes a plugin
+ * dir. It refuses to act on `'foreign'` and `'clean'` results so a
+ * misconfigured caller can never wipe a healthy install or someone else's
+ * plugin.
+ */
+export function wipePartialInstall(pluginRootDir: string): boolean {
+  const detection = detectPartialInstall(pluginRootDir);
+  if (detection.status !== 'partial') return false;
+  try {
+    fs.rmSync(pluginRootDir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Drop the `.tr-partial-install` marker into `pluginRootDir`. Idempotent
+ * (overwrites any existing marker) and best-effort — returns `true` on
+ * success, `false` if the dir doesn't exist or write fails. Used by the
+ * `preinstall` npm script and (defensively) by the runtime if the npm
+ * preinstall/cleanup script pair did not fire.
+ */
+export function writePartialInstallMarker(pluginRootDir: string): boolean {
+  try {
+    if (!fs.existsSync(pluginRootDir)) return false;
+    fs.writeFileSync(path.join(pluginRootDir, PARTIAL_INSTALL_MARKER), '');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Remove the partial-install marker. Called by the `postinstall` script and
+ * (defensively) at register-time once we've confirmed the load succeeded.
+ * Returns `true` if a marker was removed, `false` if there was nothing to
+ * remove.
+ */
+export function clearPartialInstallMarker(pluginRootDir: string): boolean {
+  try {
+    const markerPath = path.join(pluginRootDir, PARTIAL_INSTALL_MARKER);
+    if (!fs.existsSync(markerPath)) return false;
+    fs.unlinkSync(markerPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Auto-bootstrap of credentials.json (3.1.0 first-run UX)
 // ---------------------------------------------------------------------------
 

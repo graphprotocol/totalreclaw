@@ -162,6 +162,8 @@ import {
   writeOnboardingState,
   readPluginVersion,
   cleanupInstallStagingDirs,
+  detectPartialInstall,
+  clearPartialInstallMarker,
   type OnboardingState,
 } from './fs-helpers.js';
 import { isRcBuild } from './qa-bug-report.js';
@@ -2907,8 +2909,7 @@ const plugin = {
       // `generateEmbedding()` call knows where to cache the bundle and
       // which RC's GitHub Release to fetch from. `pluginVersion` may be
       // `null` if package.json is unreadable; the embedder defaults to
-      // a "0.0.0-dev" tag in that case (which will fail any real fetch
-      // but allows tests with mocked URLs to proceed).
+      // a "0.0.0-dev" tag in that case.
       try {
         configureEmbedder({
           cacheRoot: CONFIG.embedderCachePath,
@@ -2917,6 +2918,34 @@ const plugin = {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         api.logger.warn(`TotalReclaw: configureEmbedder failed (will use defaults): ${msg}`);
+      }
+
+      // 3.3.1-rc.22 (rc.21 finding #5): self-heal partial-install marker.
+      // The `preinstall` npm script writes `.tr-partial-install`; the
+      // `postinstall` script removes it on a successful install. If we
+      // have gotten this far the loader did register us — meaning the
+      // install succeeded enough to be useful — so any lingering marker
+      // (e.g. npm ran preinstall but postinstall misfired) is stale.
+      // Clear it so the next retry's detector does not see a false positive.
+      //
+      // 3.3.1-rc.22 (rc.21 finding #6) — gateway/reload upstream caveat:
+      // OpenClaw's config-watcher fires `gateway/reload` when
+      // `plugins.entries.totalreclaw` mutates (e.g. mid-install). In-flight
+      // CLI clients see `1006 abnormal closure` and start a 600-second wait.
+      // Proper fix is upstream OpenClaw FR. Plugin-side mitigation = these
+      // helper calls MUST be idempotent under repeated register() calls
+      // triggered by reload chatter. Asserted by
+      // `install-reload-idempotency.test.ts`.
+      try {
+        const pluginRoot = nodePath.resolve(pluginDir, '..');
+        const cleared = clearPartialInstallMarker(pluginRoot);
+        if (cleared) {
+          api.logger.info(
+            `TotalReclaw: cleared stale .tr-partial-install marker (rc.22 finding #5)`,
+          );
+        }
+      } catch {
+        // Best-effort. Helper logs internally and never throws.
       }
     } catch {
       rcMode = false;

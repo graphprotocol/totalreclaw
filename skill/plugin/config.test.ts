@@ -109,6 +109,33 @@ function assertEq<T>(actual: T, expected: T, name: string): void {
       (warned ?? '').includes('env-vars-reference'),
       'warnRemovedEnvVars: warning links to env vars reference',
     );
+    // rc.22 finding #4 — warning text MUST include a clickable migration URL,
+    // not just a relative repo path. Operators see this on stderr without the
+    // repo cloned; a relative path is useless to them.
+    assert(
+      (warned ?? '').includes('https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/env-vars-reference.md'),
+      'warnRemovedEnvVars: warning includes full GitHub URL (rc.22 finding #4)',
+    );
+    assert(
+      (warned ?? '').toLowerCase().includes('migration'),
+      'warnRemovedEnvVars: warning labels the link as a migration guide (rc.22 finding #4)',
+    );
+    // rc.22 finding #4 — TOTALRECLAW_SESSION_ID must NOT trigger this warning.
+    // Even though we already keep it OUT of REMOVED_ENV_VARS (internal#127),
+    // belt-and-braces: explicit assertion that setting SESSION_ID by itself
+    // produces no warning naming it.
+    process.env.TOTALRECLAW_SESSION_ID = 'qa-rc.22-test-1';
+    let sessionWarned: string | null = null;
+    __internal.warnRemovedEnvVars((msg) => {
+      sessionWarned = msg;
+    });
+    delete process.env.TOTALRECLAW_SESSION_ID;
+    // sessionWarned is non-null only because CHAIN_ID is still set above —
+    // the assertion is that the message does not name SESSION_ID.
+    assert(
+      !(sessionWarned ?? '').includes('TOTALRECLAW_SESSION_ID'),
+      'warnRemovedEnvVars: SESSION_ID never appears in warning (rc.22 finding #4 / internal#127)',
+    );
   } finally {
     for (const [name, val] of Object.entries(originals)) {
       if (val === undefined) delete process.env[name];

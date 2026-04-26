@@ -63,11 +63,13 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json --noCheck",
     "verify-tarball": "node ../scripts/verify-tarball.mjs",
-    "test": "npx tsx manifest-shape.test.ts && npx tsx config-schema.test.ts && npx tsx config.test.ts && npx tsx relay-headers.test.ts && npx tsx scope-address-visible.test.ts && npx tsx llm-profile-reader.test.ts && npx tsx llm-client.test.ts && npx tsx llm-client-retry.test.ts && npx tsx gateway-url.test.ts && npx tsx retype-setscope.test.ts && npx tsx tool-gating.test.ts && npx tsx onboarding-noninteractive.test.ts && npx tsx pair-cli-json.test.ts && npx tsx pair-qr.test.ts && npx tsx pair-remote-client.test.ts && npx tsx qa-bug-report.test.ts && npx tsx nonce-serialization.test.ts && npx tsx phrase-safety-registry.test.ts && npx tsx test_issue_92_onnx_download_ux.test.ts && npx tsx onboard-pair-only.test.ts && npx tsx import-time-smoke.test.ts && npx tsx install-staging-cleanup.test.ts && npx tsx json-stdout-cleanliness.test.ts && npx tsx embedder-cache.test.ts && npx tsx embedder-network.test.ts && npx tsx embedder-loader.test.ts && npx tsx embedding-model-id.test.ts",
+    "test": "npx tsx manifest-shape.test.ts && npx tsx config-schema.test.ts && npx tsx config.test.ts && npx tsx relay-headers.test.ts && npx tsx scope-address-visible.test.ts && npx tsx llm-profile-reader.test.ts && npx tsx llm-client.test.ts && npx tsx llm-client-retry.test.ts && npx tsx gateway-url.test.ts && npx tsx retype-setscope.test.ts && npx tsx tool-gating.test.ts && npx tsx onboarding-noninteractive.test.ts && npx tsx pair-cli-json.test.ts && npx tsx pair-qr.test.ts && npx tsx pair-remote-client.test.ts && npx tsx qa-bug-report.test.ts && npx tsx nonce-serialization.test.ts && npx tsx phrase-safety-registry.test.ts && npx tsx test_issue_92_onnx_download_ux.test.ts && npx tsx onboard-pair-only.test.ts && npx tsx import-time-smoke.test.ts && npx tsx install-staging-cleanup.test.ts && npx tsx partial-install-detection.test.ts && npx tsx install-reload-idempotency.test.ts && npx tsx json-stdout-cleanliness.test.ts",
     "smoke:dist": "npx tsx dist-esm-smoke.test.ts",
     "check-scanner": "node ../scripts/check-scanner.mjs",
     "check-version-drift": "node ../scripts/check-version-drift.mjs",
     "sync-version": "node ../scripts/sync-version.mjs",
+    "preinstall": "node -e \"try{require('fs').writeFileSync('.tr-partial-install','');}catch{}\"",
+    "postinstall": "node -e \"try{require('fs').unlinkSync('.tr-partial-install');}catch{}\"",
     "prepack": "npm run build",
     "prepublishOnly": "node ../scripts/check-scanner.mjs && node ../scripts/check-version-drift.mjs"
   },

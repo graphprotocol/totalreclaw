@@ -178,9 +178,10 @@ const MASTER_PASSWORD = process.env.TOTALRECLAW_RECOVERY_PHRASE;
     'TOTALRECLAW_DIGEST_MODE',
   ].filter((name) => process.env[name] !== undefined);
   if (removed.length > 0) {
+    // rc.22 finding #4 — full URL beats relative repo path on stderr.
     console.error(
       `TotalReclaw MCP: ignoring removed env var(s): ${removed.join(', ')}. ` +
-        `See docs/guides/env-vars-reference.md for the v1 env var surface.`,
+        `Migration guide: https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/env-vars-reference.md`,
     );
   }
 })();
