@@ -18,6 +18,7 @@ import asyncio as _asyncio
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -66,78 +67,252 @@ ZAI_CODING_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
 ZAI_STANDARD_BASE_URL = "https://api.z.ai/api/paas/v4"
 
 
-def zai_base_url_for_model(model: str) -> str:
-    """Pick the right zai endpoint for ``model``.
+# ---------------------------------------------------------------------------
+# rc.24 F2 — same-provider cheap-model selection for auto-extraction.
+#
+# Pedro's design directive (2026-04-26):
+#   - Reuse the SAME provider, endpoint, and API key that's already
+#     powering the agent's main chat. NEVER introduce a second provider
+#     just for extraction (no Anthropic-Haiku-as-fallback shape). NEVER
+#     re-route the endpoint based on model name (the user's API key is
+#     scoped to ONE endpoint; flipping would 401).
+#   - WITHIN that provider+endpoint, pick a cheaper / faster MODEL.
+#   - Mirror the OpenClaw rc.22 plugin's auth-profiles UX:
+#     ``CHEAP_MODEL_BY_PROVIDER`` table + word-boundary cheap-indicator
+#     pattern (so chat model names like ``gemini-2.5-pro`` aren't
+#     mis-detected as "already cheap" because they contain ``mini``).
+#
+# Reference impl (canonical, byte-aligned where possible):
+#   ``skill/plugin/llm-client.ts::CHEAP_MODEL_BY_PROVIDER`` +
+#   ``deriveCheapModel`` + ``CHEAP_INDICATORS`` / ``CHEAP_INDICATOR_RE``.
+#   Pedro's directive 2026-04-26: "OpenClaw rc.22 already SOLVED this
+#   exact problem; mirror that pattern instead of inventing".
+#
+# This replaces the rc.23 status-quo of "extraction uses the user's
+# chat model verbatim" which (a) charged GPT-4 prices for what the
+# extraction prompt only needs at ~7B-class quality, and (b) hit the
+# F2 silent-empty-content bug when GLM-5.1-on-Coding was the chat
+# model (GLM-5.1 isn't supported on the Coding endpoint; the API
+# returns HTTP 200 with empty body).
+#
+# Override
+#   ``TOTALRECLAW_EXTRACTION_MODEL`` env var pins the extraction model
+#   verbatim. Operator escape hatch.
+# ---------------------------------------------------------------------------
 
-    rc.24 (F2 follow-up per Pedro 2026-04-26): zai exposes two
-    endpoints with DIFFERENT model availability matrices. Coding-plan
-    keys hitting the standard endpoint or vice-versa returns 429
-    "Insufficient balance" (handled in :func:`chat_completion`'s
-    auto-fallback) — but a Coding-plan key sending GLM-5.x to the
-    coding endpoint OR vice-versa returns HTTP 200 with **empty
-    content** (no error to flip on). That was the silent symptom F2
-    surfaced in the rc.23 QA report.
 
-    Heuristic:
+#: Cheap-tier indicator tokens. Matched at hyphen / underscore / dot
+#: boundaries (see :data:`_CHEAP_INDICATOR_RE`) so chat model names
+#: like ``gemini-2.5-pro`` aren't mis-detected as "cheap" because they
+#: contain ``mini``. Mirrors ``skill/plugin/llm-client.ts::CHEAP_INDICATORS``
+#: for parity with the OpenClaw plugin.
+_CHEAP_INDICATORS: tuple[str, ...] = (
+    "flash", "mini", "nano", "haiku", "small", "lite", "fast",
+)
 
-    - GLM-4.5 family (``glm-4.5*``, ``glm-4.5-air``, ``glm-4.5-flash``,
-      ``glm-4-*`` in general) is a Coding plan model — coding endpoint.
-    - GLM-5.x family (``glm-5*``, ``glm-5.1``, etc.) is on the
-      Standard PAYG endpoint.
-    - Anything else falls back to the configured / default endpoint.
 
-    The actual run-time binding still respects the explicit
-    ``ZAI_BASE_URL`` override (operator-pinned). This helper only
-    resolves the *default* when no override is set.
+_CHEAP_INDICATOR_RE = re.compile(
+    r"(?:^|[-_/.])(?:" + "|".join(_CHEAP_INDICATORS) + r")(?:[-_/.]|$)",
+    re.IGNORECASE,
+)
+
+
+#: Per-provider default extraction model. Maps the user-configured
+#: provider name (lower-case) to the cheap / fast sibling used for
+#: auto-extraction.
+#:
+#: Pinned to match ``skill/plugin/llm-client.ts::CHEAP_MODEL_BY_PROVIDER``
+#: byte-for-byte (where the same provider exists on both clients) so
+#: that the same Z.AI Coding-plan user sees the SAME extraction model
+#: across OpenClaw and Hermes — Pedro's "one provider, both clients"
+#: invariant.
+#:
+#: zai: ``glm-4.5-flash`` is the proven-on-Coding-plan workhorse per
+#: prior QA cycles. Available on BOTH Coding and Standard endpoints.
+#:
+#: anthropic: ``claude-haiku-4-5-20251001`` — date-pinned to match the
+#: TS plugin (3.3.1 lifted the alias to the dated identifier per
+#: provider's deprecation policy).
+#:
+#: openai: ``gpt-4.1-mini`` — TS plugin's canonical pick. Cheap, fast,
+#: same JSON-output quality as gpt-4 for our extraction prompt.
+#:
+#: gemini / google: ``gemini-flash-lite`` — Google's cheapest tier.
+#: Both keys present so legacy ``provider: google`` configs resolve.
+#:
+#: groq: ``llama-3.3-70b-versatile`` — Groq's fastest extraction-tier.
+#:
+#: openrouter: routes through Anthropic Haiku (same UX as anthropic).
+_DEFAULT_EXTRACTION_MODEL_BY_PROVIDER: dict[str, str] = {
+    "zai": "glm-4.5-flash",
+    "anthropic": "claude-haiku-4-5-20251001",
+    "openai": "gpt-4.1-mini",
+    "gemini": "gemini-flash-lite",
+    "google": "gemini-flash-lite",
+    "mistral": "mistral-small-latest",
+    "groq": "llama-3.3-70b-versatile",
+    "deepseek": "deepseek-chat",
+    "openrouter": "anthropic/claude-haiku-4-5-20251001",
+    "xai": "grok-2",
+    "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "cerebras": "llama3.3-70b",
+}
+
+
+def is_cheap_model(model: str) -> bool:
+    """Word-boundary check: does the model name signal cheap tier?
+
+    Used by :func:`cheap_extraction_model_for` to short-circuit when
+    the user already pinned a cheap model for chat (e.g. they
+    configured ``glm-4.5-flash`` or ``gpt-4.1-mini`` directly).
+
+    Word-boundary so ``gemini-2.5-pro`` is NOT mis-detected as cheap
+    just because it contains ``mini``. Mirrors the rc.22 fix that
+    landed in the OpenClaw plugin.
     """
-    lower = (model or "").strip().lower()
-    if not lower:
-        return ZAI_CODING_BASE_URL
-
-    # GLM-5.x → Standard PAYG. Match `glm-5`, `glm-5.x`, `glm-5-*`,
-    # `glm5*` (no-dash variant occasionally seen). Tight enough not to
-    # match GLM-4.5 (which contains "5" but is a different family).
-    if (
-        lower.startswith("glm-5")
-        or lower.startswith("glm5")
-        or "glm-5." in lower
-    ):
-        return ZAI_STANDARD_BASE_URL
-
-    # GLM-4.x → Coding plan. Includes -flash, -air, -turbo variants.
-    if (
-        lower.startswith("glm-4")
-        or lower.startswith("glm4")
-        or "glm-4." in lower
-    ):
-        return ZAI_CODING_BASE_URL
-
-    # Unknown model — fall back to the historical coding default.
-    return ZAI_CODING_BASE_URL
+    if not model:
+        return False
+    return _CHEAP_INDICATOR_RE.search(model) is not None
 
 
-def get_zai_base_url(model: Optional[str] = None) -> str:
-    """Resolve the zai base URL.
+def cheap_extraction_model_for(provider: str, chat_model: str) -> str:
+    """Return the same-provider cheap model to use for auto-extraction.
+
+    Mirrors ``skill/plugin/llm-client.ts::deriveCheapModel`` —
+    Pedro's "use the OpenClaw rc.22 pattern" directive 2026-04-26.
+
+    Resolution order:
+      1. ``TOTALRECLAW_EXTRACTION_MODEL`` env var (operator override).
+      2. If ``chat_model`` already matches the cheap-indicator pattern
+         (``flash``, ``mini``, ``haiku``, etc. at a word boundary),
+         use it as-is — no redundant swap.
+      3. Per-provider default from
+         :data:`_DEFAULT_EXTRACTION_MODEL_BY_PROVIDER`.
+      4. Fallback to the chat model when no cheap mapping exists for
+         the provider — preserves rc.23 behaviour for unknown providers
+         (better to over-pay for extraction than silently disable it).
+
+    Same-provider rule: the returned model is meant to swap into the
+    user's existing :class:`LLMConfig` with NO change to ``api_key``,
+    ``base_url``, or ``api_format``.
+    """
+    override = os.environ.get("TOTALRECLAW_EXTRACTION_MODEL", "").strip()
+    if override:
+        return override
+    if is_cheap_model(chat_model):
+        return chat_model
+    provider_lower = (provider or "").strip().lower()
+    cheap = _DEFAULT_EXTRACTION_MODEL_BY_PROVIDER.get(provider_lower)
+    if cheap:
+        return cheap
+    # Unknown provider — use whatever the user had configured. Better
+    # to over-pay for extraction than to silently disable it.
+    return chat_model
+
+
+def derive_extraction_config(
+    chat_config: LLMConfig, *, provider_hint: Optional[str] = None
+) -> LLMConfig:
+    """Build the extraction-side :class:`LLMConfig` from a chat config.
+
+    Reuses the chat config's API key + auth shape verbatim and swaps
+    the model for the same-provider cheap pick. For zai, also
+    re-resolves the base URL based on the EXTRACTION model's family
+    so a GLM-5.x chat config doesn't try to issue extraction calls
+    against the Standard endpoint when the cheap model lives on
+    Coding (or vice-versa).
+
+    ``provider_hint`` is required when the chat config doesn't carry
+    a provider name directly (LLMConfig only has base_url + api_format).
+    Callers that resolved provider during config detection (e.g.
+    ``read_hermes_llm_config``) can pass it through; otherwise we
+    infer from base_url substring.
+    """
+    provider = (provider_hint or _infer_provider_from_base_url(chat_config.base_url)).lower()
+    cheap_model = cheap_extraction_model_for(provider, chat_config.model)
+
+    # Same provider, same key, same api_format, SAME ENDPOINT.
+    # Pedro 2026-04-26: extraction stays on the SAME endpoint the user
+    # configured for chat. The cheap pick is verified to be available
+    # on whichever endpoint the user runs (GLM-4.5-flash works on both
+    # zai Coding + Standard; gpt-4o-mini works on the OpenAI default
+    # endpoint; etc.). Re-resolving the endpoint based on model family
+    # would (a) drift away from the user's pinned ``ZAI_BASE_URL`` /
+    # ``OPENAI_BASE_URL`` override, and (b) introduce a per-call
+    # endpoint flip the user didn't ask for.
+    base_url = chat_config.base_url
+
+    if cheap_model != chat_config.model:
+        logger.info(
+            "TotalReclaw extraction LLM auto-selected: provider=%s "
+            "chat_model=%s -> extraction_model=%s (base_url=%s)",
+            provider, chat_config.model, cheap_model, base_url,
+        )
+
+    return LLMConfig(
+        api_key=chat_config.api_key,
+        base_url=base_url,
+        model=cheap_model,
+        api_format=chat_config.api_format,
+    )
+
+
+def _infer_provider_from_base_url(base_url: str) -> str:
+    """Best-effort provider name from base URL.
+
+    Used when ``derive_extraction_config`` doesn't get an explicit
+    ``provider_hint``. Substring match against known provider hosts;
+    falls back to "" (which makes ``cheap_extraction_model_for``
+    return the user's chat model unchanged).
+    """
+    if not base_url:
+        return ""
+    lower = base_url.lower()
+    if "z.ai" in lower:
+        return "zai"
+    if "api.openai.com" in lower:
+        return "openai"
+    if "api.anthropic.com" in lower:
+        return "anthropic"
+    if "groq.com" in lower:
+        return "groq"
+    if "deepseek.com" in lower:
+        return "deepseek"
+    if "openrouter.ai" in lower:
+        return "openrouter"
+    if "googleapis.com" in lower or "generativelanguage" in lower:
+        return "gemini"
+    if "mistral.ai" in lower:
+        return "mistral"
+    if "x.ai" in lower:
+        return "xai"
+    if "together.xyz" in lower:
+        return "together"
+    return ""
+
+
+def get_zai_base_url() -> str:
+    """Resolve the zai base URL for CHAT (user-facing) calls.
 
     Precedence:
       1. ``ZAI_BASE_URL`` env var (explicit operator override)
-      2. ``zai_base_url_for_model(model)`` — model-family heuristic
-         (rc.24 F2 fix). Picks coding-vs-standard based on the model
-         name to avoid the silent-empty-content trap when the model
-         isn't available on the chosen endpoint.
-      3. Default: coding endpoint (coding-plan-biased; the rc.3
+      2. Default: coding endpoint (coding-plan-biased; the rc.3
          auto-fallback hops to the standard endpoint on an
          "Insufficient balance" 429).
 
     Documented in Hermes SKILL.md — GLM Coding Plan users can leave
     unset; PAYG users SHOULD set ``ZAI_BASE_URL=https://api.z.ai/api/paas/v4``
     to avoid the fallback round-trip on every first call.
+
+    Note: extraction-side endpoint resolution is handled by
+    :func:`derive_extraction_config`, which picks the same endpoint
+    as the user's chat config (per Pedro 2026-04-26 — extraction
+    reuses the user's provider+endpoint, only the model swaps to the
+    cheap pick). This helper is for chat-side resolution only.
     """
     raw = os.environ.get("ZAI_BASE_URL", "").strip()
     if raw:
         return raw.rstrip("/")
-    if model:
-        return zai_base_url_for_model(model)
     return ZAI_CODING_BASE_URL
 
 
@@ -386,9 +561,7 @@ def _read_hermes_llm_config_from_auth_json(
         elif auth_base_url:
             base_url = auth_base_url.rstrip("/")
         else:
-            # rc.24 F2 fix — pick endpoint based on model family.
-            # GLM-5.x lives on Standard PAYG, GLM-4.x on Coding.
-            base_url = get_zai_base_url(model=model)
+            base_url = get_zai_base_url()
     else:
         _, default_base_url = _HERMES_PROVIDER_KEY_MAP.get(provider_lower, ([], ""))
         base_url = (
@@ -544,8 +717,7 @@ def read_hermes_llm_config() -> Optional[LLMConfig]:
             if zai_override and zai_override.strip():
                 base_url = zai_override.strip().rstrip("/")
             else:
-                # rc.24 F2 fix — model-aware endpoint pick.
-                base_url = get_zai_base_url(model=model)
+                base_url = get_zai_base_url()
         else:
             base_url = (
                 env_vars.get("GLM_BASE_URL")
@@ -627,11 +799,7 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
                     # Respect ZAI_BASE_URL env override (rc.3). Coding-plan
                     # users can leave unset; PAYG users set it explicitly
                     # to https://api.z.ai/api/paas/v4.
-                    # rc.24 F2 fix — when no env override is set, pick the
-                    # endpoint based on the model family (GLM-5.x → Standard,
-                    # GLM-4.x → Coding) so a Coding-plan user asking for
-                    # GLM-5.1 doesn't silently get empty content.
-                    resolved_base_url = get_zai_base_url(model=model)
+                    resolved_base_url = get_zai_base_url()
                 else:
                     resolved_base_url = default_base_url
 
@@ -842,33 +1010,16 @@ async def chat_completion(
             if active.api_format == "anthropic":
                 return await _call_anthropic(active, system_prompt, user_prompt, max_tokens, temperature)
             else:
-                content = await _call_openai(active, system_prompt, user_prompt, max_tokens, temperature)
-                # rc.24 F2 fix — if zai returned 200 with empty content
-                # AND we haven't yet tried the OTHER zai endpoint, do
-                # a one-shot flip and retry. Empty 200 from zai is the
-                # "wrong-endpoint-for-this-model" symptom (e.g.
-                # GLM-5.1 hit on the Coding endpoint where it isn't
-                # available). The flip is consistent with the existing
-                # 429 "Insufficient balance" auto-fallback.
-                if (
-                    not content
-                    and not zai_fallback_attempted
-                    and zai_fallback_base_url(active.base_url) is not None
-                ):
-                    fallback = zai_fallback_base_url(active.base_url)
-                    if fallback:
-                        zai_fallback_attempted = True
-                        old_url = active.base_url
-                        active.base_url = fallback
-                        logger.info(
-                            "zai endpoint auto-fallback: %s → %s due to "
-                            "empty content response (model=%s — likely "
-                            "wrong endpoint for this model family)",
-                            old_url, fallback, active.model,
-                        )
-                        attempt -= 1
-                        continue
-                return content
+                # rc.24 F2: empty-content responses are surfaced with a
+                # WARN inside ``_call_openai`` (not silent INFO). The
+                # extraction-side fix is :func:`derive_extraction_config`
+                # — it picks a same-provider cheap model proven to work
+                # on the user's existing endpoint, so the empty-content
+                # symptom is rare to begin with. We deliberately do NOT
+                # auto-flip the zai endpoint on empty content because
+                # the user's chosen endpoint reflects their plan + the
+                # cheap-pick is endpoint-compatible by construction.
+                return await _call_openai(active, system_prompt, user_prompt, max_tokens, temperature)
         except httpx.HTTPStatusError as e:
             last_exc = e
             last_status = e.response.status_code

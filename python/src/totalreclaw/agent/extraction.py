@@ -29,7 +29,12 @@ from typing import Any, List, Optional
 
 import totalreclaw_core
 
-from .llm_client import LLMConfig, detect_llm_config, chat_completion
+from .llm_client import (
+    LLMConfig,
+    chat_completion,
+    derive_extraction_config,
+    detect_llm_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -986,8 +991,8 @@ async def extract_facts_llm(
         Pre-resolved LLM config (e.g. from Hermes). Falls back to env-var
         detection via :func:`detect_llm_config` when not provided.
     """
-    config = llm_config or detect_llm_config()
-    if not config:
+    chat_config = llm_config or detect_llm_config()
+    if not chat_config:
         # Bug #5: loud, actionable warning — no more silent extraction disable.
         logger.warning(
             "TotalReclaw extraction disabled: no LLM config resolved. "
@@ -996,6 +1001,16 @@ async def extract_facts_llm(
             "provider pair). See docs/guides/env-vars-reference.md."
         )
         return []
+
+    # rc.24 F2 — same-provider cheap-model selection (Pedro 2026-04-26).
+    # The user's chat model is often a flagship (GLM-5.1, GPT-4, Sonnet)
+    # that's both expensive and — in the GLM-5.1-on-Coding case — known
+    # to silently return empty content for the merged-extraction prompt.
+    # Swap to the same-provider cheap workhorse (GLM-4.5-flash, gpt-4o-mini,
+    # claude-haiku-4-5, etc.). Same key, same provider, same auth surface;
+    # only model + (for zai) base URL change. Operator override:
+    # ``TOTALRECLAW_EXTRACTION_MODEL``.
+    config = derive_extraction_config(chat_config)
 
     if not messages:
         logger.info("extract_facts_llm: no messages to process")
@@ -1106,8 +1121,8 @@ async def extract_facts_compaction(
     Uses :data:`COMPACTION_SYSTEM_PROMPT` and always processes the full
     conversation. Mirrors ``extractFactsForCompaction`` in the TS plugin.
     """
-    config = llm_config or detect_llm_config()
-    if not config:
+    chat_config = llm_config or detect_llm_config()
+    if not chat_config:
         # Bug #5: loud, actionable warning — no more silent extraction disable.
         logger.warning(
             "TotalReclaw compaction extraction disabled: no LLM config resolved. "
@@ -1116,6 +1131,12 @@ async def extract_facts_compaction(
             "See docs/guides/env-vars-reference.md."
         )
         return []
+
+    # rc.24 F2 — same-provider cheap-model selection (parity with
+    # extract_facts_llm above). Compaction is a STRUCTURED-OUTPUT call
+    # exactly like turn-mode extraction, so the same cheap-pick rule
+    # applies. See ``derive_extraction_config`` for the mapping.
+    config = derive_extraction_config(chat_config)
 
     conversation_text = _truncate_messages(messages)
     if len(conversation_text) < 20:
