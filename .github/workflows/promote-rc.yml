@@ -251,7 +251,7 @@ jobs:
               fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
               console.log('Repackaging', pkg.name, 'as', pkg.version);
             "
-            npm publish --access public --tag latest
+            npm publish --access public --tag latest --ignore-scripts
             cd /tmp/promote
             rm -rf unpacked "$TARBALL"
           done
