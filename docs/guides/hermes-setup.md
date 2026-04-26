@@ -20,14 +20,31 @@ Run via your shell tool, in this order:
 
 ```bash
 hermes plugins install p-diogo/totalreclaw-hermes --enable
-pip install --pre totalreclaw
+
+# Find Hermes's own Python interpreter — the one whose site-packages the
+# gateway actually loads from. The hermes binary's shebang points at it.
+HERMES_PY="$(head -1 "$(command -v hermes)" 2>/dev/null | sed -E 's|^#!\s*||' | awk '{print $1}')"
+[ -x "$HERMES_PY" ] || HERMES_PY="$(command -v python3)"
+
+# Install totalreclaw INTO that interpreter. Prefer pip-as-module when the
+# venv has pip; fall back to the host pip with an explicit --target into the
+# venv's site-packages when it doesn't (uv-built venvs lack pip by default).
+if "$HERMES_PY" -m pip --version >/dev/null 2>&1; then
+  "$HERMES_PY" -m pip install --pre totalreclaw
+else
+  HERMES_SP="$("$HERMES_PY" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+  pip install --pre --target "$HERMES_SP" totalreclaw
+fi
+
+# Verify Hermes's Python can actually import it.
+"$HERMES_PY" -c 'import totalreclaw' || { echo "totalreclaw did not land in Hermes's site-packages — STOP and report"; exit 1; }
 ```
 
 Notes:
-- Hermes 2026.4.16+ uses Git-based plugin discovery: the first command registers the plugin manifest, the second installs the Python tool implementations into the Hermes venv.
-- If Hermes runs in its own venv that your default `pip` doesn't resolve to, use the venv's pip directly: `/path/to/hermes/venv/bin/python3 -m pip install --pre totalreclaw`.
-- On Ubuntu / Debian / Docker you may hit `externally-managed-environment` — add `--break-system-packages` or use a venv.
-- If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the Hermes CLI / pip to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`."* Wait for `done` before continuing to Step 2.
+- Hermes 2026.4.16+ uses Git-based plugin discovery: the first command registers the plugin manifest, the install block then drops the Python tool implementations into Hermes's venv.
+- The probe-and-decide block is the canonical install path because shipping `pip install --pre totalreclaw` blindly silently misses on containerized Hermes deploys: `pip` on PATH often resolves to a system / user-site interpreter, while Hermes runs from a venv that the install never reaches. The verify-import line catches that case explicitly.
+- On Ubuntu / Debian / Docker you may hit `externally-managed-environment` — add `--break-system-packages` to the fallback `pip install --pre --target …` line, or run inside a venv.
+- If `hermes plugins install …` or the install block fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the Hermes CLI / pip to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
 ### Step 2 — Ask the user to restart the gateway
 
@@ -62,7 +79,7 @@ NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER 
 ## What's happening (for the human reader)
 
 1. `hermes plugins install p-diogo/totalreclaw-hermes --enable` — registers TotalReclaw's plugin manifest from its Git repo.
-2. `pip install --pre totalreclaw` — installs the Python tool implementations into the Hermes venv. `--pre` resolves to the latest release candidate; drop it once a stable is promoted.
+2. The probe-and-decide install block — drops the Python tool implementations into the Hermes venv. It first locates Hermes's own Python interpreter from the `hermes` binary's shebang, then either runs `<hermes-py> -m pip install --pre totalreclaw` (when the venv has pip) or falls back to a host pip with explicit `--target <hermes-site-packages>`. `--pre` resolves to the latest release candidate; drop it once a stable is promoted. The trailing `import totalreclaw` line is the verification that the install actually landed where Hermes can load it.
 3. The agent asks you to restart the Hermes gateway. (Hermes does not yet auto-reload on plugin install — tracked upstream.) After restart, the new tools bind.
 4. The agent calls `totalreclaw_pair`, which generates an ephemeral x25519 keypair on the gateway and a 6-digit PIN. You get a URL + PIN.
 5. You open the URL. The pair page has two tabs: **Generate new** (the browser creates a fresh BIP-39 12-word phrase locally using `crypto.getRandomValues`) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, click seal.
