@@ -73,7 +73,15 @@ import {
   type MemorySource,
   type MemoryScope,
 } from './extractor.js';
-import { initLLMClient, resolveLLMConfig, chatCompletion, generateEmbedding, getEmbeddingDims } from './llm-client.js';
+import {
+  initLLMClient,
+  resolveLLMConfig,
+  chatCompletion,
+  generateEmbedding,
+  getEmbeddingDims,
+  getEmbeddingModelId,
+  configureEmbedder,
+} from './llm-client.js';
 import {
   defaultAuthProfilesRoot,
   readAllProfileKeys,
@@ -1947,6 +1955,11 @@ async function storeExtractedFacts(
         fact: factForBlob,
         importance: effectiveImportance,
         sourceAgent: factSource,
+        // 3.3.1-rc.22 — tag every new claim with the active embedder id
+        // so future distillation can rescore selectively. Plugin-only
+        // field; survives the core validator strip via re-attach in
+        // `buildCanonicalClaimV1`.
+        embeddingModelId: getEmbeddingModelId(),
       });
 
       const factId = crypto.randomUUID();
@@ -2888,6 +2901,22 @@ const plugin = {
       } catch {
         // Best-effort — already swallowed inside the helper, but keep this
         // outer try as belt-and-braces against future helper changes.
+      }
+
+      // 3.3.1-rc.22 — wire the lazy-embedder runtime config so the first
+      // `generateEmbedding()` call knows where to cache the bundle and
+      // which RC's GitHub Release to fetch from. `pluginVersion` may be
+      // `null` if package.json is unreadable; the embedder defaults to
+      // a "0.0.0-dev" tag in that case (which will fail any real fetch
+      // but allows tests with mocked URLs to proceed).
+      try {
+        configureEmbedder({
+          cacheRoot: CONFIG.embedderCachePath,
+          rcTag: pluginVersion ?? '0.0.0-dev',
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        api.logger.warn(`TotalReclaw: configureEmbedder failed (will use defaults): ${msg}`);
       }
     } catch {
       rcMode = false;

@@ -96,6 +96,14 @@ export interface BuildClaimInput {
   sourceAgent: string;
   /** Creation timestamp. Defaults to now. */
   extractedAt?: string;
+  /**
+   * 3.3.1-rc.22 — optional embedding-model id stamped on the claim for
+   * forward-compat. Defaults to omitted (callers that already know the
+   * active embedder pass it in; legacy paths leave it unset). The field
+   * is plugin-scoped — it survives the core validator's strip pass via
+   * the same re-attach path used for `schema_version` / `volatility`.
+   */
+  embeddingModelId?: string;
 }
 
 /**
@@ -112,7 +120,7 @@ export interface BuildClaimInput {
  * payload (see `subgraph-store.ts::encodeFactProtobuf`).
  */
 export function buildCanonicalClaim(input: BuildClaimInput): string {
-  const { fact, importance, extractedAt } = input;
+  const { fact, importance, extractedAt, embeddingModelId } = input;
 
   // Defensive: ensure fact.source is always populated before v1 validation.
   // `applyProvenanceFilterLax` should have set this upstream; this is the
@@ -125,6 +133,7 @@ export function buildCanonicalClaim(input: BuildClaimInput): string {
     fact: factWithSource,
     importance,
     createdAt: extractedAt,
+    embeddingModelId,
   });
 }
 
@@ -173,6 +182,14 @@ export interface BuildClaimV1Input {
    * when provided.
    */
   pinStatus?: PinStatus;
+  /**
+   * 3.3.1-rc.22 — optional embedding-model id stamped on the claim for
+   * distillation forward-compat. Survives the core validator strip pass
+   * via the same re-attach path used for `schema_version` / `volatility`.
+   * When omitted the field is not emitted (legacy claims remain untagged
+   * and are read back as "unspecified").
+   */
+  embeddingModelId?: string;
 }
 
 /**
@@ -257,6 +274,13 @@ export function buildCanonicalClaimV1(input: BuildClaimV1Input): string {
   if (fact.volatility && (VALID_MEMORY_VOLATILITIES as readonly string[]).includes(fact.volatility)) {
     canonical.volatility = fact.volatility;
   }
+  // 3.3.1-rc.22 — forward-compat embedder marker. Plugin-only field;
+  // survives the core validator via re-attach. Future distillation
+  // detects this on read to re-embed selectively without forcing a
+  // vault-wide rebuild.
+  if (typeof input.embeddingModelId === 'string' && input.embeddingModelId.length > 0) {
+    canonical.embedding_model_id = input.embeddingModelId;
+  }
 
   return JSON.stringify(canonical);
 }
@@ -313,6 +337,11 @@ export interface BuildV1ClaimBlobInput {
    * non-pin write.
    */
   pinStatus?: PinStatus;
+  /**
+   * 3.3.1-rc.22 — optional embedding-model id stamped on the claim for
+   * distillation forward-compat. See `BuildClaimV1Input.embeddingModelId`.
+   */
+  embeddingModelId?: string;
 }
 
 /**
@@ -374,6 +403,10 @@ export function buildV1ClaimBlob(input: BuildV1ClaimBlobInput): string {
   if (input.volatility && (VALID_MEMORY_VOLATILITIES as readonly string[]).includes(input.volatility)) {
     canonical.volatility = input.volatility;
   }
+  // 3.3.1-rc.22 — see `buildCanonicalClaimV1` comment.
+  if (typeof input.embeddingModelId === 'string' && input.embeddingModelId.length > 0) {
+    canonical.embedding_model_id = input.embeddingModelId;
+  }
   return JSON.stringify(canonical);
 }
 
@@ -431,6 +464,13 @@ export interface V1BlobReadResult {
    * when the writer explicitly omitted the field (treated as `"unpinned"`).
    */
   pinStatus?: PinStatus;
+  /**
+   * 3.3.1-rc.22 — embedder identity tag. Absent on claims written by
+   * older plugin versions. Forward-compat marker; consumers MAY use it
+   * to decide whether a claim's stored embedding matches the active
+   * embedder before letting cosine similarity make a relevance call.
+   */
+  embeddingModelId?: string;
 }
 
 export function readV1Blob(decrypted: string): V1BlobReadResult | null {
@@ -496,6 +536,12 @@ export function readV1Blob(decrypted: string): V1BlobReadResult | null {
       if (ps === 'pinned' || ps === 'unpinned') {
         result.pinStatus = ps;
       }
+    }
+    // 3.3.1-rc.22 — pull the embedder identity tag through. Plugin-only
+    // field added by `buildCanonicalClaimV1` / `buildV1ClaimBlob` after
+    // core validation.
+    if (typeof obj.embedding_model_id === 'string' && obj.embedding_model_id.length > 0) {
+      result.embeddingModelId = obj.embedding_model_id;
     }
 
     return result;

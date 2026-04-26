@@ -480,3 +480,102 @@ jobs:
           git tag "${TAG}"
           git push origin "${TAG}"
           echo "Tagged: ${TAG}"
+          node -e "const p = require('./skill/plugin/package.json'); console.log('Published:', p.name + '@' + p.version)"
+
+  # ---------------------------------------------------------------------------
+  # Lazy-embedder bundle (3.3.1-rc.22+)
+  # ---------------------------------------------------------------------------
+  #
+  # rc.21 NO-GO: `openclaw plugins install @totalreclaw/totalreclaw` OOM-killed
+  # the OpenClaw gateway on a 3.7 GB Hetzner VPS — the plugin's runtime
+  # dependencies (`@huggingface/transformers` + `onnxruntime-node`) required
+  # ~700 MB peak install RAM and tipped the host over.
+  #
+  # rc.22 fix: those heavy deps are no longer in the plugin's `dependencies`.
+  # On first call to `embed()` the plugin downloads `embedder-v1.tar.gz`
+  # from this GitHub Release, verifies the SHA-256 against the manifest, and
+  # extracts to `~/.totalreclaw/embedder/v1/`. This job builds the bundle and
+  # uploads it to the release tagged `v<plugin-version>` so the plugin's
+  # static URL template resolves it correctly.
+  #
+  # The bundle is identical for stable + RC publishes — same code, same model,
+  # same vector space. The release tag is what differs (`v3.3.1-rc.22` vs
+  # `v3.3.2`).
+  publish-embedder-bundle:
+    needs: [publish-plugin]
+    if: |
+      always() &&
+      (inputs.package == 'plugin' || inputs.package == 'all') &&
+      (needs.publish-plugin.result == 'success') &&
+      (inputs.dry-run == false)
+    name: Build + upload embedder-v1 bundle to GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required by gh release upload
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compute release tag
+        id: tag
+        run: |
+          PLUGIN_VERSION=$(node -e "console.log(require('./skill/plugin/package.json').version)")
+          if [ "${{ inputs.release-type }}" = "rc" ]; then
+            BASE=${PLUGIN_VERSION%-*}
+            TAG="v${BASE}-rc.${{ inputs.rc-number }}"
+          else
+            TAG="v${PLUGIN_VERSION}"
+          fi
+          echo "Release tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build embedder bundle
+        run: |
+          mkdir -p dist/embedder
+          node scripts/build-embedder-bundle.mjs --out-dir dist/embedder
+          ls -la dist/embedder/
+
+      - name: Ensure GitHub Release exists for the tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          # `gh release view` exits non-zero if the release doesn't exist.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Creating GitHub Release for tag $TAG"
+            FLAGS=""
+            if [ "${{ inputs.release-type }}" = "rc" ]; then
+              FLAGS="--prerelease"
+            fi
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "Auto-generated release for embedder bundle attachment. See CHANGELOG-public.md for details." \
+              $FLAGS \
+              --target "${GITHUB_SHA}"
+          else
+            echo "Release $TAG already exists; will upload bundle assets to it."
+          fi
+
+      - name: Upload embedder bundle + manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          # `gh release upload --clobber` replaces existing assets with the
+          # same name so re-runs of this job do not error out. The bundle is
+          # deterministic for a given commit; clobbering is safe.
+          gh release upload "$TAG" \
+            dist/embedder/embedder-v1.tar.gz \
+            dist/embedder/embedder-v1.manifest.json \
+            --clobber
+
+      - name: Report bundle URLs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          echo "Embedder bundle: https://github.com/${{ github.repository }}/releases/download/${TAG}/embedder-v1.tar.gz"
+          echo "Manifest:       https://github.com/${{ github.repository }}/releases/download/${TAG}/embedder-v1.manifest.json"

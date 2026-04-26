@@ -276,6 +276,20 @@ export const CONFIG = {
   billingCachePath: path.join(home, '.totalreclaw', 'billing-cache.json'),
   cachePath: process.env.TOTALRECLAW_CACHE_PATH || path.join(home, '.totalreclaw', 'cache.enc'),
   openclawWorkspace: path.join(home, '.openclaw', 'workspace'),
+
+  // 3.3.1-rc.22 — lazy embedder bundle cache. The embedder
+  // (`@huggingface/transformers` + `onnxruntime-node` + the q4 ONNX
+  // model) is no longer shipped inside the plugin tarball; it is fetched
+  // on first `embed()` call from a versioned GitHub Release and cached
+  // here. Separate path from `cachePath` (encrypted vault cache) so the
+  // two never collide. See `embedder-loader.ts`.
+  embedderCachePath: process.env.TOTALRECLAW_EMBEDDER_CACHE_PATH || path.join(home, '.totalreclaw', 'embedder'),
+
+  // 3.3.1-rc.22 — override the GitHub-Releases URL templates. Only useful
+  // for air-gapped / mirror deployments and self-hosted CI. Empty string
+  // falls back to the static defaults baked into the embedder code path.
+  embedderBundleUrlTemplate: process.env.TOTALRECLAW_EMBEDDER_BUNDLE_URL || '',
+  embedderManifestUrlTemplate: process.env.TOTALRECLAW_EMBEDDER_MANIFEST_URL || '',
 } as const;
 
 // ---------------------------------------------------------------------------

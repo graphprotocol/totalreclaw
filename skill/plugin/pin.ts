@@ -115,6 +115,12 @@ export interface V1PinBlob {
   id?: string;
   /** Previously-stored pin_status on the blob (v1.1). */
   pinStatus?: PinStatus;
+  /**
+   * 3.3.1-rc.22 — preserved when round-tripping a v1 blob through pin
+   * mutation. We keep the SOURCE blob's tag so distillation backfill
+   * never loses track of which embedder produced the original vector.
+   */
+  embeddingModelId?: string;
 }
 
 /** Shape of a v0 (short-key) blob or a legacy {text, metadata} blob. */
@@ -187,6 +193,7 @@ export function parseBlobForPin(decrypted: string): ParsedBlob {
           expiresAt: v1.expiresAt,
           id: v1.id,
           pinStatus: v1.pinStatus,
+          embeddingModelId: v1.embeddingModelId,
         },
         claim: shortProjection,
         currentStatus: human,
@@ -315,6 +322,8 @@ interface V1Projection {
   entities?: Array<{ name: string; type: string; role?: string }>;
   importance: number;
   confidence: number;
+  /** 3.3.1-rc.22 — carried through pin/retype rewrites for forward-compat. */
+  embeddingModelId?: string;
 }
 
 /**
@@ -337,6 +346,7 @@ function projectToV1(src: V1PinBlob | V0PinBlob, defaultSourceAgent: string): V1
       entities: src.entities,
       importance: src.importance,
       confidence: src.confidence,
+      embeddingModelId: src.embeddingModelId,
     };
   }
 
@@ -580,6 +590,11 @@ export async function executePinOperation(
       createdAt: new Date().toISOString(),
       supersededBy: factId,
       pinStatus,
+      // 3.3.1-rc.22 — preserve the source claim's embedder tag through
+      // pin mutation. The new fact reuses the same encrypted embedding
+      // as the original (re-indexed via deps.regenerateBlindIndices),
+      // so the embedder identity must round-trip too.
+      embeddingModelId: v1View.embeddingModelId,
     });
   } catch (err) {
     return {
