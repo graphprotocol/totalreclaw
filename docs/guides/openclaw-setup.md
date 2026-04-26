@@ -24,8 +24,8 @@ openclaw plugins install @totalreclaw/totalreclaw
 ```
 
 Notes:
-- For an RC build, replace the second command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (or pin a version like `@totalreclaw/totalreclaw@3.3.1-rc.22`).
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
+- Testing a release candidate? See [Installing release candidates (advanced)](#installing-release-candidates-advanced) at the bottom of this guide.
 
 ### Step 2 — Wait for auto-reload (do NOT restart the gateway yourself)
 
@@ -60,7 +60,7 @@ NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER 
 ## What's happening (for the human reader)
 
 1. `openclaw skills install totalreclaw` — fetches TotalReclaw's SKILL.md from ClawHub and registers it under `~/.openclaw/workspace/skills/totalreclaw/`. The agent picks it up on next config reload.
-2. `openclaw plugins install @totalreclaw/totalreclaw` — installs the plugin from npm (the `latest` dist-tag is always current stable; use `@rc` for the latest release candidate).
+2. `openclaw plugins install @totalreclaw/totalreclaw` — installs the plugin from npm (the `latest` dist-tag is always current stable).
 3. OpenClaw's config-watcher detects the `plugins.*` change in `~/.openclaw/config.yaml` and (under default `gateway.reload.mode = "hybrid"`) triggers a graceful SIGUSR1 restart within 1-3s. The new tools bind automatically.
 4. The agent calls `totalreclaw_pair`, which generates an ephemeral x25519 keypair on the gateway and a 6-digit PIN. You get a URL + PIN.
 5. You open the URL. The account-setup page has two tabs: **Generate new** (the browser creates a fresh BIP-39 12-word phrase locally using `crypto.getRandomValues`) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, click seal.
@@ -99,8 +99,7 @@ The browser-side crypto and account-setup flow are identical to self-hosted setu
 If you can't or won't use the chat flow (self-hosted only — managed services don't expose the host shell):
 
 ```bash
-openclaw plugins install @totalreclaw/totalreclaw            # stable
-# Or for an RC: @totalreclaw/totalreclaw@rc
+openclaw plugins install @totalreclaw/totalreclaw
 # Under the default config (`gateway.reload.mode = "hybrid"`), OpenClaw's file-watcher
 # auto-restarts the gateway within 1-3s of the install — no manual restart needed.
 # Verify with: `openclaw plugins list | grep totalreclaw`.
@@ -111,8 +110,6 @@ openclaw plugins install @totalreclaw/totalreclaw            # stable
 ```
 
 Then in chat: *"Set up TotalReclaw"* — the agent will call `totalreclaw_pair` and hand you the URL + PIN. Open the URL in your browser to enter or generate your phrase.
-
-> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.22`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
 
 <details>
 <summary>From-source install (for plugin development — self-host only)</summary>
@@ -203,6 +200,24 @@ Both tiers have unlimited memories and reads. Upgrade: *"Upgrade my TotalReclaw 
 ## Canonical prompt (matches the QA harness scenario contracts)
 
 > **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>**
+
+---
+
+## Installing release candidates (advanced)
+
+Most users should install stable (the default — `openclaw plugins install @totalreclaw/totalreclaw` resolves to the current stable on the `latest` dist-tag). Skip this section unless you are testing a pre-release build.
+
+For pre-release builds:
+
+```bash
+# Latest release candidate (whatever's currently on the @rc dist-tag):
+openclaw plugins install @totalreclaw/totalreclaw@rc
+
+# Pin a specific RC (e.g. for QA harnesses or restoring a known-good build after a regression):
+openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.22
+```
+
+Check what each tag resolves to with `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
 
 ---
 

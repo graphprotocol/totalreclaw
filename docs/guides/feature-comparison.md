@@ -2,7 +2,7 @@
 
 TotalReclaw works across multiple AI agent platforms. The core encryption, storage, search pipeline, and v1 taxonomy are identical everywhere -- the differences are in automation (lifecycle hooks) and available tools. This table shows what each platform supports.
 
-All clients ship v1 by default. Stable production versions: core 2.2.0, plugin 3.2.3, mcp-server 3.2.0, nanoclaw 3.0.0, python 2.3.0.
+All clients ship v1 by default. Stable production versions: core 2.2.0, plugin 3.3.1, mcp-server 3.2.1, nanoclaw 3.0.0, python 2.3.1.
 
 ---
 

@@ -382,4 +382,4 @@ For implementation depth:
 
 ---
 
-*This guide tracks plugin 3.3.1 / Hermes 2.3.1 / mcp-server 3.2.x / nanoclaw 3.1.x. Stable line: plugin 3.2.3, mcp-server 3.2.0, nanoclaw 3.0.0, Hermes 2.3.0.*
+*This guide tracks plugin 3.3.1 / Hermes 2.3.1 / mcp-server 3.2.1 / nanoclaw 3.0.0. Stable line: plugin 3.3.1, mcp-server 3.2.1, nanoclaw 3.0.0, Hermes 2.3.1.*

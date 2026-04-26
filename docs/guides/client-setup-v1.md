@@ -1,6 +1,6 @@
 # Client Setup — v1
 
-**Applies to:** TotalReclaw v1, all clients. Current stable versions: core 2.2.0, plugin 3.2.3, mcp-server 3.2.0, nanoclaw 3.0.0, python 2.3.0.
+**Applies to:** TotalReclaw v1, all clients. Current stable versions: core 2.2.0, plugin 3.3.1, mcp-server 3.2.1, nanoclaw 3.0.0, python 2.3.1.
 
 One setup page per client. v1 is the default on every client — no env toggles, no feature flags to flip. Pick your platform.
 

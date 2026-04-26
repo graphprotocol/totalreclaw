@@ -35,8 +35,6 @@ claude mcp add -s user totalreclaw -- npx -y @totalreclaw/mcp-server
 
 This registers `totalreclaw` at user scope (available across all Claude Code sessions). Do NOT pass `-e TOTALRECLAW_RECOVERY_PHRASE=...` here — the user will add the phrase themselves in Step 3 so it never enters your context.
 
-To pin a release candidate: `claude mcp add -s user totalreclaw -- npx -y @totalreclaw/mcp-server@rc` (latest RC) or `@totalreclaw/mcp-server@3.2.3` (pin specific stable / RC version).
-
 If the CLI exits cleanly, continue to Step 3. If it fails with `command not found` / ENOENT, fall back to Step 2B.
 
 ### Step 2B — Register the MCP server via JSON config (fallback)
@@ -147,7 +145,7 @@ claude mcp add -s user totalreclaw -- npx -y @totalreclaw/mcp-server
 
 Restart the host. Verify by asking *"Do you have access to TotalReclaw memory tools?"*.
 
-> **Pin a specific RC** with `args: ["-y", "@totalreclaw/mcp-server@rc"]` (latest RC) or `@totalreclaw/mcp-server@3.3.1-rc.22` (pinned). Stable is `3.2.3` on the `latest` dist-tag. Check what each tag resolves to: `npm view @totalreclaw/mcp-server dist-tags`.
+> **Testing a release candidate?** Pin via `args: ["-y", "@totalreclaw/mcp-server@rc"]` (latest RC on the `@rc` dist-tag) or `@totalreclaw/mcp-server@3.2.1` (pin a specific version). Check what each tag resolves to: `npm view @totalreclaw/mcp-server dist-tags`. Most users should leave the args at `["-y", "@totalreclaw/mcp-server"]`, which resolves to the current stable.
 
 ---
 
