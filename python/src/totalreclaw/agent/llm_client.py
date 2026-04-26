@@ -920,7 +920,22 @@ async def _call_openai(
         )
         resp.raise_for_status()
         data = resp.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content")
+        choice = (data.get("choices") or [{}])[0]
+        content = (choice.get("message") or {}).get("content")
+        if not content:
+            # Issue #158: 200-with-empty-content used to be silent. Surface
+            # finish_reason + payload sizes so triage doesn't have to guess
+            # whether it was content_filter / length / refusal-empty / hiccup.
+            logger.warning(
+                "LLM returned empty content (provider=openai, base=%s, model=%s, "
+                "finish_reason=%s, system_chars=%d, user_chars=%d)",
+                config.base_url,
+                config.model,
+                choice.get("finish_reason"),
+                len(system_prompt),
+                len(user_prompt),
+            )
+        return content
 
 
 async def _call_anthropic(
@@ -950,5 +965,25 @@ async def _call_anthropic(
         data = resp.json()
         for block in data.get("content", []):
             if block.get("type") == "text":
-                return block.get("text")
+                text = block.get("text")
+                if not text:
+                    logger.warning(
+                        "LLM returned empty content (provider=anthropic, base=%s, "
+                        "model=%s, stop_reason=%s, system_chars=%d, user_chars=%d)",
+                        config.base_url,
+                        config.model,
+                        data.get("stop_reason"),
+                        len(system_prompt),
+                        len(user_prompt),
+                    )
+                return text
+        logger.warning(
+            "LLM returned no text blocks (provider=anthropic, base=%s, model=%s, "
+            "stop_reason=%s, system_chars=%d, user_chars=%d)",
+            config.base_url,
+            config.model,
+            data.get("stop_reason"),
+            len(system_prompt),
+            len(user_prompt),
+        )
         return None

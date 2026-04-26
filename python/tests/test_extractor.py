@@ -557,12 +557,49 @@ class TestExtractFactsLLM:
 
     @pytest.mark.asyncio
     async def test_llm_returns_none(self):
+        # Issue #158: empty 200-response triggers a reduced-prompt retry. If
+        # BOTH the first call and the retry are empty, extraction yields [].
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
             with patch("totalreclaw.agent.extraction.chat_completion", new_callable=AsyncMock) as mock_chat:
                 mock_chat.return_value = None
                 messages = [{"role": "user", "content": "Some conversation content here"}]
                 facts = await extract_facts_llm(messages)
                 assert facts == []
+                assert mock_chat.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_issue_158_empty_response_retries_with_reduced_prompt(self):
+        """Issue #158: when chat_completion returns empty 200 on the first call,
+        extract_facts_llm retries once with a smaller prompt (no existing-memories
+        block, last 3 messages only) before giving up."""
+        recovery_payload = json.dumps([
+            {"text": "User lives in Lisbon", "type": "fact", "importance": 8, "action": "ADD"},
+        ])
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-4.1-mini"}, clear=True):
+            with patch("totalreclaw.agent.extraction.chat_completion", new_callable=AsyncMock) as mock_chat:
+                # First call: empty (mimics the rc.23 silent-fail symptom).
+                # Second call (reduced-prompt retry): valid extraction.
+                mock_chat.side_effect = ["", recovery_payload]
+                messages = [
+                    {"role": "user", "content": "I want to talk about my home setup"},
+                    {"role": "assistant", "content": "Sure, tell me more."},
+                    {"role": "user", "content": "I live in Lisbon and work on TotalReclaw"},
+                    {"role": "assistant", "content": "Got it."},
+                ]
+                existing = [{"id": f"mem_{i}", "text": f"old memory {i}"} for i in range(20)]
+                facts = await extract_facts_llm(messages, existing_memories=existing)
+
+                assert mock_chat.call_count == 2, "should retry exactly once on empty response"
+                # First call carries existing-memories context; retry strips it.
+                first_user_prompt = mock_chat.call_args_list[0][0][2]
+                retry_user_prompt = mock_chat.call_args_list[1][0][2]
+                assert "Existing memories" in first_user_prompt
+                assert "Existing memories" not in retry_user_prompt
+                assert len(retry_user_prompt) < len(first_user_prompt)
+                # Recovery payload survives the rest of the pipeline.
+                assert len(facts) == 1
+                assert facts[0].text == "User lives in Lisbon"
 
     @pytest.mark.asyncio
     async def test_short_conversation_skipped(self):

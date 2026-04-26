@@ -1021,11 +1021,12 @@ async def extract_facts_llm(
             + "\n".join(mem_lines)
         )
 
-    user_prompt = (
-        f"Extract important facts from these recent conversation turns:\n\n{conversation_text}{memories_ctx}"
+    framing = (
+        "Extract important facts from these recent conversation turns:"
         if mode == "turn"
-        else f"Extract ALL valuable long-term memories from this conversation before it is lost:\n\n{conversation_text}{memories_ctx}"
+        else "Extract ALL valuable long-term memories from this conversation before it is lost:"
     )
+    user_prompt = f"{framing}\n\n{conversation_text}{memories_ctx}"
 
     try:
         response = await chat_completion(config, EXTRACTION_SYSTEM_PROMPT, user_prompt)
@@ -1033,9 +1034,35 @@ async def extract_facts_llm(
         logger.warning("extract_facts_llm: chat_completion threw: %s", e)
         return []
 
+    # Issue #158: empty 200-response on the aux LLM path used to silently
+    # zero out auto-extraction. Retry once with a reduced prompt (drop
+    # existing-memories context, trim conversation to the last 3 messages)
+    # before giving up — covers length / context-shape sensitivities.
     if not response:
-        logger.info("extract_facts_llm: chat_completion returned None/empty")
-        return []
+        retry_text = _truncate_messages(relevant[-3:]) if relevant else conversation_text
+        retry_prompt = f"{framing}\n\n{retry_text}"
+        logger.warning(
+            "extract_facts_llm: chat_completion returned None/empty on first call "
+            "(user_chars=%d, memories_ctx_chars=%d); retrying with reduced prompt "
+            "(user_chars=%d, no memories_ctx)",
+            len(user_prompt),
+            len(memories_ctx),
+            len(retry_prompt),
+        )
+        try:
+            response = await chat_completion(config, EXTRACTION_SYSTEM_PROMPT, retry_prompt)
+        except Exception as e:
+            logger.warning("extract_facts_llm: reduced-prompt retry threw: %s", e)
+            return []
+        if not response:
+            logger.warning(
+                "extract_facts_llm: chat_completion returned None/empty on reduced-"
+                "prompt retry too — no facts extracted from this turn"
+            )
+            return []
+        logger.info(
+            "extract_facts_llm: reduced-prompt retry recovered %d chars", len(response),
+        )
 
     logger.info(
         "extract_facts_llm: LLM returned %d chars; parsing merged response",
