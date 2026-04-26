@@ -52,13 +52,29 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Union
 
 logger = logging.getLogger(__name__)
+
+OwnerSpec = Union[str, Iterable[str]]
 
 
 def _pending_path() -> Path:
     return Path.home() / ".totalreclaw" / ".pending_extract.jsonl"
+
+
+def _normalize_owners(owner: OwnerSpec) -> frozenset[str]:
+    """Normalize an owner spec to a frozenset of lower-cased non-empty strings.
+
+    Read-side helpers (``has_pending`` / ``drain_pending``) accept either a
+    single owner string (legacy single-account API) or any iterable of
+    owner strings (e.g. both EOA and SA for a single configured user — see
+    issue #169). Empty / falsy entries are dropped, matching the legacy
+    behavior of treating ``""`` as "no owner".
+    """
+    if isinstance(owner, str):
+        return frozenset({owner.lower()}) if owner else frozenset()
+    return frozenset(o.lower() for o in owner if o)
 
 
 def enqueue_messages(
@@ -101,10 +117,15 @@ def enqueue_messages(
 
 
 def drain_pending(
-    owner: str,
+    owner: OwnerSpec,
     path: Optional[Path] = None,
 ) -> list[list[dict]]:
     """Atomically read + remove all batches matching ``owner``.
+
+    ``owner`` is either a single address string or any iterable of address
+    strings — matching across the set lets a single user with both an EOA
+    and a Smart Account drain entries written under either key. See issue
+    #169 for the SA-vs-EOA queue-keying race this guards against.
 
     Returns a list of message-lists (one per enqueued batch, in arrival
     order). Non-matching batches stay in the file. The file is removed
@@ -117,6 +138,8 @@ def drain_pending(
     pending = path or _pending_path()
     if not pending.exists():
         return []
+
+    accept = _normalize_owners(owner)
 
     keep_lines: list[str] = []
     drained: list[list[dict]] = []
@@ -138,12 +161,12 @@ def drain_pending(
         if not isinstance(record, dict):
             continue
 
-        rec_owner = record.get("owner", "") or ""
+        rec_owner = (record.get("owner", "") or "").lower()
         rec_msgs = record.get("messages") or []
         if not isinstance(rec_msgs, list):
             continue
 
-        if rec_owner == (owner or ""):
+        if rec_owner in accept:
             drained.append(rec_msgs)
         else:
             keep_lines.append(line)
@@ -180,8 +203,11 @@ def drain_pending(
     return drained
 
 
-def has_pending(owner: str, path: Optional[Path] = None) -> bool:
+def has_pending(owner: OwnerSpec, path: Optional[Path] = None) -> bool:
     """Cheap predicate: is there at least one queued batch for ``owner``?
+
+    ``owner`` accepts a single string or any iterable (see ``drain_pending``
+    for the EOA/SA-spread rationale).
 
     Used by ``on_session_start`` to skip the (slightly costly) drain path
     when the file is missing. Treats read errors as "no pending" rather
@@ -194,5 +220,12 @@ def has_pending(owner: str, path: Optional[Path] = None) -> bool:
         raw = pending.read_text(encoding="utf-8")
     except Exception:
         return False
-    needle = f'"owner": "{owner or ""}"'
-    return needle in raw
+
+    accept = _normalize_owners(owner)
+    if not accept:
+        return False
+    # Case-insensitive substring scan — queue records are written
+    # JSON-canonically with `"owner": "0x..."` (lower-case). Matching
+    # against the lowered raw text avoids parsing every line.
+    raw_lc = raw.lower()
+    return any(f'"owner": "{addr}"' in raw_lc for addr in accept)

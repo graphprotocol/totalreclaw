@@ -58,6 +58,38 @@ def _owner_address(state: "AgentState") -> str:
     eoa = getattr(client, "_eoa_address", None) or getattr(client, "wallet_address", None)
     return str(eoa).lower() if eoa else ""
 
+
+def _owner_addresses(state: "AgentState") -> list[str]:
+    """All known owner addresses for the configured client (EOA + SA).
+
+    Returned as lower-cased, deduped, in stable order (EOA first when
+    present). Empty list if the state is not configured. Used by drain
+    callers (``has_pending`` / ``drain_pending``) to accept queue entries
+    written under EITHER address — avoids the SA-vs-EOA timing race
+    described in issue #169 (queue write picks whichever side
+    ``_owner_address`` returned at shutdown; the next session's drain
+    would silently miss if SA-resolution timing differs).
+    """
+    client = state.get_client()
+    if not client:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    eoa = getattr(client, "_eoa_address", None) or getattr(client, "wallet_address", None)
+    if eoa:
+        addr = str(eoa).lower()
+        if addr not in seen:
+            seen.add(addr)
+            out.append(addr)
+    sa = getattr(client, "_sa_address", None) or getattr(client, "smart_account_address", None)
+    if sa:
+        addr = str(sa).lower()
+        if addr not in seen:
+            seen.add(addr)
+            out.append(addr)
+    return out
+
+
 STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity for near-duplicate detection
 
 # Maximum facts per batched UserOperation — mirrors userop.MAX_BATCH_SIZE so

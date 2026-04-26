@@ -17,6 +17,7 @@ from totalreclaw.agent.lifecycle import (
     _is_near_duplicate,
     _fetch_recent_memories,
     _owner_address,
+    _owner_addresses,
     STORE_DEDUP_THRESHOLD,
 )
 from totalreclaw.agent.pending_drain import drain_pending, has_pending
@@ -111,10 +112,16 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
     # Drain any messages that a prior interpreter-shutdown race deferred.
     # This must run before billing-cache logic so a drain-induced
     # quota_warning isn't overwritten.
+    #
+    # We pass ALL known owner addresses (EOA + SA) so the drain matches
+    # entries written under either side. Issue #169: ``_owner_address``
+    # at write time picks SA when set / EOA otherwise; lifecycle ordering
+    # in ``hermes chat -q`` can put the next-session ``on_session_start``
+    # on the OTHER side of that split, silently missing queued batches.
     try:
-        owner = _owner_address(state)
-        if owner and has_pending(owner):
-            batches = drain_pending(owner)
+        owners = _owner_addresses(state)
+        if owners and has_pending(owners):
+            batches = drain_pending(owners)
             recovered_count = _drain_into_state(state, batches)
             if recovered_count > 0:
                 logger.info(
