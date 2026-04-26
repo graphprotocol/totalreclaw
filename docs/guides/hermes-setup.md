@@ -16,18 +16,59 @@ You have been asked to install TotalReclaw. Run the steps below in order. Do not
 
 ### Step 1 — Install the plugin + Python package
 
+The Hermes Python tool implementations MUST be installed into the SAME Python environment that Hermes itself runs from. Otherwise the gateway will reload, find no `totalreclaw_*` tools, and the agent will loop on Step 2.
+
+#### Step 1a — Find the Hermes Python (run this first)
+
+Detect Hermes' Python interpreter and stash it in `$HERMES_PYTHON` for the rest of Step 1.
+
+```bash
+# Containerized Hermes (Docker / docker-compose / supervised container).
+# The container's PATH already points at the venv — `which python3`
+# resolves to the venv's interpreter, not the host's. Run this INSIDE
+# the same shell context the gateway runs in (e.g. `docker exec -it
+# <container> bash`, then this loop). Example output:
+#   /opt/hermes/venv/bin/python3
+HERMES_PYTHON="$(command -v python3)"
+
+# Native install with a known venv (Hermes was set up with `python3 -m
+# venv ~/.hermes/venv` or similar). Override the autodetect:
+# HERMES_PYTHON=~/.hermes/venv/bin/python3
+
+# Bare-metal install with a system Python (no venv). The default
+# `python3`/`pip` should resolve fine; the autodetect above still works.
+
+# Sanity check — if this prints nothing, set HERMES_PYTHON manually:
+echo "Hermes Python: $HERMES_PYTHON"
+"$HERMES_PYTHON" -c "import sys; print(sys.prefix)"
+```
+
+If you can't determine the Hermes Python interpreter from the shell context (managed service, restricted shell), skip to the managed-service fallback below — do NOT guess and install into a random Python.
+
+#### Step 1b — Install the plugin + the Python package together
+
 Run via your shell tool, in this order:
 
 ```bash
 hermes plugins install p-diogo/totalreclaw-hermes --enable
-pip install --pre totalreclaw
+"$HERMES_PYTHON" -m pip install --pre totalreclaw
 ```
 
 Notes:
-- Hermes 2026.4.16+ uses Git-based plugin discovery: the first command registers the plugin manifest, the second installs the Python tool implementations into the Hermes venv.
-- If Hermes runs in its own venv that your default `pip` doesn't resolve to, use the venv's pip directly: `/path/to/hermes/venv/bin/python3 -m pip install --pre totalreclaw`.
-- On Ubuntu / Debian / Docker you may hit `externally-managed-environment` — add `--break-system-packages` or use a venv.
+- Hermes 2026.4.16+ uses Git-based plugin discovery: the first command registers the plugin manifest, the second installs the Python tool implementations into Hermes' venv. Using `"$HERMES_PYTHON" -m pip ...` (instead of bare `pip install`) guarantees the package lands in the SAME environment Hermes will load tools from after restart — this is the rc.23 fix for the F5 "outside-venv install" bug.
+- DO NOT use bare `pip install --pre totalreclaw` unless you have already verified that `which pip` resolves to the same venv as `$HERMES_PYTHON`. On containerized Hermes the system `pip` may not even exist (`pip: command not found`) and the bare command would target the host's Python anyway, leaving Hermes' venv empty.
+- On Ubuntu / Debian / Docker you may hit `externally-managed-environment` if `$HERMES_PYTHON` points at a system Python (no venv). Add `--break-system-packages` to the `pip install` line, OR ask the user to recreate Hermes inside a venv.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the Hermes CLI / pip to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`."* Wait for `done` before continuing to Step 2.
+
+#### Step 1c — Verify the package is installed in the right Python
+
+Before moving to Step 2, confirm the package resolves through `$HERMES_PYTHON`:
+
+```bash
+"$HERMES_PYTHON" -m pip show totalreclaw | head -2
+```
+
+If `pip show` reports the package and the version matches what you just installed, proceed. If it errors with `Package(s) not found`, the install landed in a different Python — fix `$HERMES_PYTHON` and re-run Step 1b.
 
 ### Step 2 — Ask the user to restart the gateway
 
@@ -104,7 +145,15 @@ If you can't or won't use the chat flow (self-hosted only — managed services d
 
 ```bash
 hermes plugins install p-diogo/totalreclaw-hermes --enable
-pip install --pre totalreclaw       # or your hermes venv's pip
+
+# Use the SAME Python that Hermes runs from — never bare `pip install` unless
+# you already know `which pip` and Hermes' interpreter agree.
+#   Native venv install:
+~/.hermes/venv/bin/python3 -m pip install --pre totalreclaw
+#   Containerized Hermes (run from inside the container shell):
+python3 -m pip install --pre totalreclaw
+#   System-Python install (no venv, may need --break-system-packages):
+python3 -m pip install --pre totalreclaw
 
 # Restart the gateway. Pick the line that matches your setup:
 hermes gateway restart                       # native install
