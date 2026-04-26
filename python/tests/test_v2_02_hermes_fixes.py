@@ -417,3 +417,108 @@ class TestBug6FirstRunNudge:
         if result is not None:
             ctx = result.get("context", "").lower()
             assert "totalreclaw_setup" not in ctx
+
+
+class TestIssue167ToolPriorityNudge:
+    """F4 / issue #167 — configured users must receive a tool-priority
+    nudge so the LLM picks ``totalreclaw_remember`` over Hermes's built-in
+    ``memory`` for memory-intent turns. The rc.24 chat-flow QA proved that
+    schema-level "prefer this tool" descriptions are not strong enough on
+    their own; the hook needs to inject a system-context nudge.
+    """
+
+    def _make_configured_state(self):
+        from totalreclaw.hermes.state import PluginState
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(Path, "exists", return_value=False):
+                state = PluginState()
+        state._client = MagicMock()  # forge configured
+        return state
+
+    def test_issue_167_priority_nudge_fires_on_memory_intent(self):
+        """Configured user + 'remember X' message → priority nudge injected."""
+        from totalreclaw.hermes.hooks import pre_llm_call
+
+        state = self._make_configured_state()
+        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+            result = pre_llm_call(
+                state,
+                is_first_turn=True,
+                user_message="Please remember that I prefer dark mode.",
+            )
+        assert result is not None, "expected priority nudge"
+        ctx = result.get("context", "").lower()
+        assert "totalreclaw_remember" in ctx
+        assert "built-in" in ctx
+        # Setup nudge must NOT fire for configured users.
+        assert "totalreclaw_setup" not in ctx
+
+    def test_issue_167_priority_nudge_no_op_on_non_memory_message(self):
+        """Configured user + non-memory message → no priority nudge."""
+        from totalreclaw.hermes.hooks import pre_llm_call
+
+        state = self._make_configured_state()
+        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+            result = pre_llm_call(
+                state,
+                is_first_turn=True,
+                user_message="What's the weather like today?",
+            )
+        if result is not None:
+            ctx = result.get("context", "").lower()
+            assert "totalreclaw tool priority" not in ctx
+
+    def test_issue_167_priority_nudge_fires_on_later_turns(self):
+        """Nudge isn't gated to first turn — sliding-window context could
+        drop a once-only injection on the turn the user actually expresses
+        memory intent. Must fire on every memory-intent turn.
+        """
+        from totalreclaw.hermes.hooks import pre_llm_call
+
+        state = self._make_configured_state()
+        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+            # Simulate a non-first turn (is_first_turn=False) that still
+            # has clear memory intent.
+            result = pre_llm_call(
+                state,
+                is_first_turn=False,
+                user_message="Save this preference: I like Postgres over MySQL.",
+            )
+        assert result is not None
+        ctx = result.get("context", "").lower()
+        assert "totalreclaw_remember" in ctx
+
+    def test_issue_167_priority_nudge_repeats_across_turns(self):
+        """Each memory-intent turn re-injects the nudge (not gated to once-per-session)."""
+        from totalreclaw.hermes.hooks import pre_llm_call
+
+        state = self._make_configured_state()
+        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+            r1 = pre_llm_call(state, is_first_turn=True,
+                              user_message="Remember I like Python.")
+            r2 = pre_llm_call(state, is_first_turn=False,
+                              user_message="Note that I prefer Postgres.")
+        assert r1 is not None and "totalreclaw_remember" in r1["context"].lower()
+        assert r2 is not None and "totalreclaw_remember" in r2["context"].lower()
+
+    def test_issue_167_priority_nudge_combines_with_recall_context(self):
+        """Priority nudge + auto-recalled memories should both appear in the
+        combined context (priority nudge is additive, not replacement).
+        """
+        from totalreclaw.hermes.hooks import pre_llm_call
+
+        state = self._make_configured_state()
+
+        def fake_auto_recall(msg, st, top_k=8):
+            return "## Memories\n- User prefers dark mode."
+
+        with patch("totalreclaw.hermes.hooks.auto_recall", side_effect=fake_auto_recall):
+            result = pre_llm_call(
+                state,
+                is_first_turn=True,
+                user_message="Recall what you know about my editor preferences.",
+            )
+        assert result is not None
+        ctx = result["context"]
+        assert "totalreclaw_remember" in ctx.lower()
+        assert "dark mode" in ctx.lower()

@@ -40,6 +40,25 @@ _SETUP_NUDGE = (
     "built-in 'memory' tool for durability + encryption."
 )
 
+#: F4 (issue #167): for configured users, schema-level "prefer this tool"
+#: language in the REMEMBER/RECALL descriptions is not strong enough — the
+#: rc.24 chat-flow QA showed every memory-intent turn routing to Hermes's
+#: built-in ``memory`` tool. We inject this nudge on every memory-intent
+#: turn (not just first) so context-window summarization can't drop it on
+#: the turn it matters. Cost is small (~80 tokens) and only paid when
+#: ``_looks_like_memory_intent`` matches.
+_TOOL_PRIORITY_NUDGE = (
+    "## TotalReclaw tool priority\n"
+    "For any user fact, preference, decision-with-reasoning, directive "
+    "('always X' / 'never Y'), commitment, or notable episode the user "
+    "shares — ALWAYS call `totalreclaw_remember` instead of any built-in "
+    "`memory` tool. TotalReclaw stores memories end-to-end encrypted, "
+    "on-chain (Base/Gnosis), and portable across every AI tool the user "
+    "runs; the built-in `memory` tool is plain-text, session-scoped, and "
+    "not cross-agent. For lookups, prefer `totalreclaw_recall` over any "
+    "built-in equivalent for the same reason."
+)
+
 #: Keywords that trigger the setup nudge when the user isn't configured.
 #: Kept intentionally broad — a missed nudge on an unrelated question is
 #: a no-op, but a missed nudge on a memory-relevant question means the
@@ -168,14 +187,21 @@ def _drain_into_state(state: "PluginState", batches: list[list[dict]]) -> int:
 
 
 def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
-    """Auto-recall on first turn, inject memories, quota warnings, and the
-    unconfigured-user setup nudge (Bug #6) into context.
+    """Auto-recall on first turn, inject memories, quota warnings, the
+    unconfigured-user setup nudge (Bug #6), and the configured-user
+    tool-priority nudge (F4 / issue #167) into context.
 
     When the plugin is installed but the user hasn't run
     ``totalreclaw_setup`` yet, a one-time nudge is injected on the first
     turn that references any memory intent. The nudge tells the Hermes
     agent to offer setup — preventing silent routing to Hermes's
     built-in ``memory`` tool.
+
+    For configured users, a parallel tool-priority nudge fires on every
+    memory-intent turn (cheap and reliably present in active LLM context)
+    so the LLM picks ``totalreclaw_remember`` instead of Hermes's
+    built-in ``memory`` for fact/preference/directive/commitment/episode
+    intents.
     """
     user_message = kwargs.get("user_message", "")
     is_first_turn = kwargs.get("is_first_turn", False)
@@ -194,6 +220,13 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
         return None
 
     context_parts: list[str] = []
+
+    # F4 (issue #167) — configured: bias LLM toward totalreclaw_remember
+    # over Hermes's built-in ``memory`` for memory-intent turns. Fires
+    # every matching turn (not gated to first) so sliding context windows
+    # can't drop it on the turn the user actually expresses an intent.
+    if user_message and _looks_like_memory_intent(user_message):
+        context_parts.append(_TOOL_PRIORITY_NUDGE)
 
     # Inject quota warning (once per session)
     quota_warning = state.get_quota_warning()
