@@ -58,6 +58,7 @@ Notes:
 - Hermes 2026.4.16+ uses Git-based plugin discovery: the first command registers the plugin manifest, the second installs the Python tool implementations into Hermes' venv. Using `"$HERMES_PYTHON" -m pip ...` (instead of bare `pip install`) guarantees the package lands in the SAME environment Hermes will load tools from after restart — this is the rc.23 fix for the F5 "outside-venv install" bug.
 - DO NOT use bare `pip install --pre totalreclaw` unless you have already verified that `which pip` resolves to the same venv as `$HERMES_PYTHON`. On containerized Hermes the system `pip` may not even exist (`pip: command not found`) and the bare command would target the host's Python anyway, leaving Hermes' venv empty.
 - On Ubuntu / Debian / Docker you may hit `externally-managed-environment` if `$HERMES_PYTHON` points at a system Python (no venv). Add `--break-system-packages` to the `pip install` line, OR ask the user to recreate Hermes inside a venv.
+- For an RC build, `--pre` resolves to whatever release candidate is latest on PyPI right now. To pin a specific RC (QA against a known-good build, restoring a specific version after a regression in a newer RC), drop `--pre` and use an explicit version specifier — see [Targeting a specific RC](#targeting-a-specific-rc).
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the Hermes CLI / pip to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
 #### Step 1c — Verify the package is installed in the right Python
@@ -186,6 +187,22 @@ Then in chat: *"Set up TotalReclaw"* — the agent will call `totalreclaw_pair` 
 ## Upgrading
 
 If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after upgrading also run `pip install --force-reinstall hermes-agent` to restore the `hermes` CLI entrypoint that rc.2's console-script collision left stale. Fresh installs are unaffected.
+
+---
+
+## Targeting a specific RC
+
+`pip install --pre totalreclaw` always resolves to the latest published release candidate on PyPI. For QA harnesses pinned to a known build, or for re-installing a specific RC after a regression in a newer one, pin the version explicitly:
+
+```bash
+# Fresh install of a specific RC (no --pre needed when the version is explicit):
+"$HERMES_PYTHON" -m pip install 'totalreclaw==2.3.1rc24'
+
+# Re-pin (downgrade) over a newer RC that's already installed:
+"$HERMES_PYTHON" -m pip install --force-reinstall 'totalreclaw==2.3.1rc24'
+```
+
+`uv pip install 'totalreclaw==2.3.1rc24' --reinstall` is the equivalent under `uv`. Stick with the same version family across plugin and Python package — mismatched versions can leave the gateway loading old tool signatures.
 
 ---
 
