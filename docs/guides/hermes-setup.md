@@ -1,12 +1,14 @@
 # TotalReclaw for Hermes
 
-TotalReclaw gives your Hermes agent encrypted, persistent memory. The fastest setup is a single chat message — the agent fetches this guide, runs the install for you, and walks you through pairing. **You do nothing in the terminal.**
+TotalReclaw gives your Hermes agent encrypted, persistent memory. The fastest path is a single chat message — the agent fetches this guide, installs the package for you, and walks you through setting up your TotalReclaw account. **You do nothing in the terminal.**
 
 If you already have Hermes running, paste this into your Hermes chat:
 
 > **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md>**
 
-Your agent will fetch this page, run the install commands, ask you to restart the gateway once (Hermes doesn't auto-reload), and then hand you a pair URL + 6-digit PIN. You open the URL in your browser, generate or restore a 12-word recovery phrase there, confirm the PIN, and you're done.
+Your agent will fetch this page, run the install commands, ask you to restart the gateway once (Hermes doesn't auto-reload), and then hand you an account-setup URL + 6-digit PIN. You open the URL in your browser, generate or restore a 12-word recovery phrase there, confirm the PIN, and your account is ready.
+
+> **Important — Hermes account setup needs daemon mode.** See [Account setup requires daemon mode](#account-setup-requires-daemon-mode) below before invoking the account-setup flow if you are using `hermes chat -q "..."` one-shot CLI invocations.
 
 ---
 
@@ -103,7 +105,11 @@ Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, co
 
 ### Step 5 — Pair (browser flow, NEVER ask the user to type their phrase in chat)
 
-Call the `totalreclaw_pair` tool. It returns `{url, pin, expires_at_ms}`.
+> *(Heading retains "Pair" for backward compatibility with the QA harness; the user-facing terminology is "set up your TotalReclaw account". The tool registered as `totalreclaw_pair` is the account-setup tool.)*
+
+Before calling the tool, check whether you are running inside a one-shot agent process (e.g. `hermes chat -q "..."`, single-prompt CLI). If so, surface the [account-setup-requires-daemon-mode caveat](#account-setup-requires-daemon-mode) to the user verbatim and ask them to switch to daemon / interactive mode before continuing — the WebSocket session this step opens will die before the user can finish entering their phrase otherwise.
+
+Tell the user: *"I'll walk you through setting up your TotalReclaw account."* Then call the `totalreclaw_pair` tool (the account-setup tool — name kept for backward compatibility). It returns `{url, pin, expires_at_ms}`.
 
 Relay to the user verbatim:
 
@@ -111,11 +117,11 @@ Relay to the user verbatim:
 
 ### Step 6 — Verify and confirm
 
-After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN likely expired — call `totalreclaw_pair` again and resend. If present, confirm *"TotalReclaw is set up. Ask me to remember or recall anything."*
+After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN likely expired — call `totalreclaw_pair` again and resend. If present, confirm *"Your TotalReclaw account is set up. Ask me to remember or recall anything."*
 
 ### Phrase safety (HARD — never break)
 
-NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `totalreclaw setup`, `hermes setup`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The ONLY agent-facilitated setup path is the `totalreclaw_pair` tool. If the user pastes a phrase anyway: tell them it is compromised and call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
+NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `totalreclaw setup`, `hermes setup`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The ONLY agent-facilitated account-setup path is the `totalreclaw_pair` tool (the account-setup tool — name kept for backward compatibility). If the user pastes a phrase anyway: tell them it is compromised and call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
 
 ---
 
@@ -125,7 +131,7 @@ NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER 
 2. `pip install --pre totalreclaw` — installs the Python tool implementations into the Hermes venv. `--pre` resolves to the latest release candidate; drop it once a stable is promoted.
 3. The agent asks you to restart the Hermes gateway. (Hermes does not yet auto-reload on plugin install — tracked upstream.) After restart, the new tools bind.
 4. The agent calls `totalreclaw_pair`, which generates an ephemeral x25519 keypair on the gateway and a 6-digit PIN. You get a URL + PIN.
-5. You open the URL. The pair page has two tabs: **Generate new** (the browser creates a fresh BIP-39 12-word phrase locally using `crypto.getRandomValues`) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, click seal.
+5. You open the URL. The account-setup page has two tabs: **Generate new** (the browser creates a fresh BIP-39 12-word phrase locally using `crypto.getRandomValues`) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, click seal.
 6. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives an AES-256-GCM key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey back. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
 7. The recovery phrase never crosses the LLM context — not the chat transcript, not the agent's shell stdout, not any tool-call payload. Browser-side crypto keeps it isolated by construction.
 
@@ -140,6 +146,23 @@ NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER 
 
 ---
 
+## Account setup requires daemon mode
+
+Setting up your TotalReclaw account uses a brief WebSocket session that needs to stay alive while you complete the browser-side phrase generation / import. This requires Hermes running in a long-lived process — typically `hermes gateway run` (daemon mode, recommended for any production memory use) OR a fully interactive `hermes chat` session that stays open while you finish the browser flow.
+
+**Not supported** (for account setup specifically): `hermes chat -q "..."` one-shot CLI invocations. The Hermes process exits as soon as the LLM responds; the WebSocket dies with it; the browser POST that delivers your encrypted recovery phrase to the gateway then sees a closed session and returns 404.
+
+Workarounds for one-shot CLI users:
+
+1. **Use daemon mode**: `hermes gateway run &` then `hermes chat -q "Set up TotalReclaw for me, see <URL>"` — the daemon owns the WS-keepalive while chat-q exits.
+2. **Use the standalone setup CLI**: `totalreclaw setup` (interactive, blocks until your account is set up — recovery phrase entered locally, never crosses LLM context).
+
+Once your account is set up, all daily operations (`hermes chat -q`, `--resume`, etc.) work fine — the lifecycle constraint is account-setup-flow-specific.
+
+This is tracked in [#170 — sidecar / IPC handoff to long-lived daemon for account setup](https://github.com/p-diogo/totalreclaw/issues/170) for a future improvement.
+
+---
+
 ## Managed Hermes service (no terminal, no agent shell)
 
 If you're on a managed / hosted Hermes service that doesn't expose host shell to the agent, install via the service's web UI instead:
@@ -150,9 +173,9 @@ If you're on a managed / hosted Hermes service that doesn't expose host shell to
 
    > **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md>**
 
-   The agent will detect the plugin is already loaded, skip Steps 1-2, and jump straight to pairing.
+   The agent will detect the plugin is already loaded, skip Steps 1-2, and jump straight to account setup.
 
-The browser-side crypto and pairing flow are identical to self-hosted setups.
+The browser-side crypto and account-setup flow are identical to self-hosted setups.
 
 > Managed-Hermes coverage is still emerging — if your service doesn't expose `totalreclaw` in its plugins UI yet, ask their support to surface the `p-diogo/totalreclaw-hermes` Hermes plugin + `totalreclaw` Python package, or run a self-hosted Hermes instance for now.
 
@@ -210,8 +233,8 @@ If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after upgrading also run `p
 
 - **Agent says "I'm not familiar with TotalReclaw"**: paste the canonical message above with the URL — the agent fetches the guide and follows the install steps.
 - **Agent can't see TotalReclaw tools after install**: confirm both install steps completed — on a self-host, `hermes plugins list` should show `p-diogo/totalreclaw-hermes` enabled and `pip show totalreclaw` in the Hermes venv should resolve; on a managed service, confirm `totalreclaw` is listed in your service's plugins UI. Then restart: `hermes gateway restart` (native), `docker restart <your-hermes-container>` (Docker self-host), or your managed service's restart control. If supervised by systemd / launchd, `kill -USR1 $(cat ~/.hermes/gateway.pid)` is faster than `systemctl restart`. (Hermes does not yet auto-reload on plugin install — tracked upstream.)
-- **Pair URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running.
-- **Browser fails to POST the encrypted phrase**: check the pair page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
+- **Account-setup URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running. If you invoked `hermes chat -q "..."` (one-shot) for account setup, the WebSocket the relay needs may have died before the browser POST landed — see [Account setup requires daemon mode](#account-setup-requires-daemon-mode).
+- **Browser fails to POST the encrypted phrase**: check the account-setup page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
 - **"No LLM available for auto-extraction"**: configure a provider in Hermes (`hermes login` or set `ZAI_API_KEY` / `OPENAI_API_KEY` in `~/.hermes/.env`). TotalReclaw reuses it automatically.
 - **Recovery phrase appeared in chat**: file a bug. Rotate by generating a new wallet via `totalreclaw_pair` with `mode=generate`. The leaked phrase is unrecoverable once shipped through LLM context.
 
@@ -219,7 +242,7 @@ If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after upgrading also run `p
 
 ## Returning user (new machine)
 
-Paste the same canonical message. When the pair page loads, switch to the **Import existing** tab and enter your existing 12/24-word phrase. The browser encrypts it against the gateway's ephemeral key before uploading — the relay never sees plaintext.
+Paste the same canonical message. When the account-setup page loads, switch to the **Import existing** tab and enter your existing 12/24-word phrase. The browser encrypts it against the gateway's ephemeral key before uploading — the relay never sees plaintext.
 
 ## First-time user (no phrase yet)
 
@@ -237,7 +260,7 @@ Paste the same canonical message. The **Generate new** tab is selected by defaul
 
 TotalReclaw and Hermes' built-in `memory` tool BOTH respond to "remember X" / "recall X" intents. Running both simultaneously creates a silent bug: depending on the LLM's tool-selection, your conversation context may be split between Hermes' MEMORY.md and TotalReclaw's encrypted vault — neither sees the full picture.
 
-The TotalReclaw setup flow auto-disables Hermes built-in memory on install. We DO NOT recommend re-enabling it while TotalReclaw is installed.
+The TotalReclaw account-setup flow auto-disables Hermes built-in memory on install. We DO NOT recommend re-enabling it while TotalReclaw is installed.
 
 If you want to use Hermes built-in memory instead of TotalReclaw:
 

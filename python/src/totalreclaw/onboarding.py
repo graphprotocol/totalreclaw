@@ -112,12 +112,12 @@ Let's set up your account. Do you already have a recovery phrase, or should we g
 """.strip()
 
 LOCAL_MODE_INSTRUCTIONS = (
-    "Ask your agent to 'Set up TotalReclaw' — it will walk you through a QR "
-    "pairing flow. Your recovery phrase never crosses the chat."
+    "Ask your agent to 'Set up TotalReclaw' — it will walk you through a "
+    "browser-based account setup. Your recovery phrase never crosses the chat."
 )
 
 REMOTE_MODE_INSTRUCTIONS = """
-Ask your agent to 'Set up TotalReclaw' — it will walk you through a QR pairing flow. Scan the QR on your phone, enter the 6-digit PIN the agent shows you, and pick "Generate new" or "Restore existing". Your recovery phrase never crosses the chat. Your recovery phrase never leaves this machine.
+Ask your agent to 'Set up TotalReclaw' — it will walk you through a browser-based account setup. Scan the QR on your phone (or open the URL the agent shows you), enter the 6-digit PIN, and pick "Generate new" or "Restore existing". Your recovery phrase never crosses the chat. Your recovery phrase never leaves this machine.
 """.strip()
 
 STORAGE_GUIDANCE = """

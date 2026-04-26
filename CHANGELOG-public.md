@@ -1,6 +1,50 @@
 # TotalReclaw Changelog
 
-> **Note:** This file lists releases promoted to the public registries' stable tags. Active release-candidate work (`@rc` dist-tag on npm, `rcN` on PyPI, etc.) is tracked in the internal release-pipeline tracker, not here. The "rc.19 — Setup-agnostic instructions" entry below describes a fix list that shipped in the rc.19→rc.22 RC line; once that line promotes to stable as `3.3.1`, expect a consolidated stable entry covering 3.2.0 → 3.3.1.
+> **Note:** This file lists releases promoted to the public registries' stable tags. Active release-candidate work (`@rc` dist-tag on npm, `rcN` on PyPI, etc.) is tracked in the internal release-pipeline tracker, not here.
+
+## 3.3.1 / 2.3.1 / mcp-server 3.2.1 — Stable promote (2026-04-27)
+
+Consolidated stable line covering plugin 3.2.0 → 3.3.1, Python client 2.2.1 → 2.3.1, MCP server 3.2.0 → 3.2.1. Highlights from the rc.1 → rc.27 line:
+
+### `@totalreclaw/totalreclaw` (OpenClaw plugin) → 3.3.1
+
+- **URL-driven install flow.** The canonical install path is now a single chat message with the setup-guide URL — the agent fetches it, runs the install commands, and walks the user through browser-based account setup. No terminal commands required for the user. (rc.1, rc.18)
+- **Lazy CDN embedder.** The MiniLM ONNX model now loads from CDN on first use rather than being bundled in the plugin tarball — install footprint shrinks from ~210 MB to under 5 MB, and the model is fetched + cached locally on the first real conversation. Closes the rc.21 OOM ship-stoppers. (rc.22)
+- **Reranker hoist to `@totalreclaw/core::reranker`.** Tier 1 source-weighted reranker logic moved out of the plugin and into the Rust core (with WASM bindings). All clients now share a single byte-identical implementation. (rc.22)
+- **`confirm_indexed` read-after-write primitive.** New core primitive lets clients confirm an on-chain write is indexed by the subgraph before continuing. Closes a class of race conditions where recall ran before the write was visible. (rc.22)
+- **Phrase-safety CI guard.** New CI check forbids any code path that emits recovery-phrase material on stdout/stderr from agent-callable contexts. (rc.22)
+- **rc.18 dist-tag promote bug fix.** Earlier RCs published under wrong dist-tags; rc.18 + rc.19 fixes ensure stable promote actually moves the `latest` pointer. (rc.18, rc.19)
+- **Topology-agnostic restart instructions.** Setup guides now use `<your-container-name>` placeholders instead of hardcoded `tr-openclaw` references; works for any Docker / managed-service topology. (rc.19)
+- **Recall miss fix for short queries.** Short queries (1-2 tokens) were under-recalling due to over-aggressive cosine threshold. Threshold now adapts to query length. (rc.18 follow-up)
+- **`pin_status` preservation across retype / set_scope.** Pin state now correctly survives type or scope changes. (rc.18 follow-up)
+
+### `totalreclaw` (Python client + Hermes plugin) → 2.3.1
+
+- **`hermes plugins install p-diogo/totalreclaw-hermes`** is now the canonical Hermes plugin install path, alongside `pip install totalreclaw` for the Python tool implementations into Hermes' venv. (rc.16+)
+- **Auto-disable Hermes built-in memory.** The TotalReclaw setup flow now calls `hermes tools disable memory` on install — running both Hermes' built-in `memory` tool AND TotalReclaw simultaneously creates a silent intent-stealing bug where memories land in `MEMORY.md` instead of TotalReclaw's encrypted vault. Documented as unsupported. Companion path B: tool-description bias steers the LLM toward `totalreclaw_remember` even when the built-in tool can't be disabled. (rc.25, rc.26)
+- **Retype + set_scope on-chain operations.** Hermes now supports natural-language retype ("that's actually a directive, not a preference") and set_scope ("file that under work") via on-chain UserOps. Tool parity with the OpenClaw plugin. (rc.23)
+- **F2 same-provider cheap-model selection.** Auto-extraction now resolves a cheap model from the SAME provider as the user's main agent (previously could spin up an unrelated provider's model and fail on missing key). (rc.24)
+- **Pair AttributeError + venv install path fixes.** Closes #151 + #152 — the install/setup path now resolves correctly under Hermes-supervised venvs. (rc.10)
+- **Pending-queue drain accepts EOA OR SA owner-key.** Auto-extract drains correctly across mixed key states. (rc.26)
+- **Persist + drain auto-extract on interpreter-shutdown race.** Pending facts now survive a shutdown mid-extract. (rc.20)
+- **Graceful fallback when core wheel lacks `confirm_indexed` bindings.** Hermes degrades to write-and-hope rather than crashing on older wheels. (rc.20)
+
+### `@totalreclaw/mcp-server` (Claude Desktop / Cursor / Windsurf / IronClaw) → 3.2.1
+
+- **[SECURITY] Removed `totalreclaw_setup` tool.** This tool generated a recovery phrase and returned it via MCP tool-output JSON, which crossed the LLM context. Phrase-safety violation. The MCP server now has no phrase-touching tool surface; users source phrases from another client's `~/.totalreclaw/credentials.json`, the OpenClaw / Hermes browser account-setup flow, or an offline BIP-39 generator. (3.2.1)
+
+### Cross-cutting
+
+- **Terminology normalization.** User-facing prose, agent-verbatim messages, and tool descriptions now consistently say "set up your TotalReclaw account" / "account setup" instead of mixing "pair", "pairing", "QR-pair", and "setup". The technical tool name `totalreclaw_pair` is unchanged for backward compatibility — it remains the canonical agent-facilitated account-setup tool. API endpoints (`/pair/p/...`, `/pair/session/open`) and code identifiers are unchanged.
+- **Hermes `hermes chat -q` setup caveat documented.** One-shot `hermes chat -q "..."` invocations cannot complete account setup because the process exits before the browser handshake — the WebSocket dies and the browser POST returns 404. The Hermes setup guide now documents this explicitly with daemon-mode + standalone-CLI workarounds. Daily operations (chat-q, --resume) work normally once the account is set up. Tracked at #170.
+
+### Known carry-overs
+
+- The `~/.totalreclaw/credentials.json` schema is unchanged across this stable line. Existing vaults decrypt transparently.
+- Plugin 3.3.1 + Hermes 2.3.1 require core 2.1.1+ (bundled as a dependency).
+- ZeroClaw (Rust crate) is unchanged at 2.0.0; v2.1+ retry is on the roadmap once `confirm_indexed` bindings stabilize.
+
+---
 
 ## rc.19 — Setup-agnostic instructions (2026-04-25)
 

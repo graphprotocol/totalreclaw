@@ -56,16 +56,26 @@ class _OpenedSession:
 PAIR_SCHEMA: Dict[str, Any] = {
     "name": "totalreclaw_pair",
     "description": (
-        "Start a remote pairing session so the user can create or import "
-        "a TotalReclaw recovery phrase from their browser. Returns a "
-        "pairing URL and a 6-digit PIN. Relay both to the user verbatim — "
-        "the user opens the URL in their browser and types the PIN. The "
-        "phrase is entered and encrypted IN THE BROWSER and uploaded "
-        "end-to-end-encrypted to this Hermes gateway; it NEVER touches "
-        "the LLM provider or this chat transcript. Use this tool whenever "
-        "the user wants to set up TotalReclaw. NEVER shell out to "
-        "`totalreclaw setup` or `hermes setup` — those commands are for "
-        "users running them in their own terminal OUTSIDE an agent shell."
+        "Set up the user's TotalReclaw account (encrypted, browser-side "
+        "phrase generation or import). Starts a brief remote session so "
+        "the user can create or import a TotalReclaw recovery phrase from "
+        "their browser. Returns an account-setup URL and a 6-digit PIN. "
+        "Relay both to the user verbatim — the user opens the URL in "
+        "their browser and types the PIN. The phrase is entered and "
+        "encrypted IN THE BROWSER and uploaded end-to-end-encrypted to "
+        "this Hermes gateway; it NEVER touches the LLM provider or this "
+        "chat transcript. Use this tool whenever the user wants to set "
+        "up TotalReclaw — narrate it as 'setting up your TotalReclaw "
+        "account'. (Tool name `totalreclaw_pair` is kept for backward "
+        "compatibility — function-wise this is the account-setup tool.) "
+        "NEVER shell out to `totalreclaw setup` or `hermes setup` — those "
+        "commands are for users running them in their own terminal "
+        "OUTSIDE an agent shell. NOTE: this account-setup step needs a "
+        "long-lived Hermes process — a one-shot `hermes chat -q \"...\"` "
+        "invocation will exit before the user finishes the browser "
+        "handshake. If you detect short-lived process invocation, "
+        "surface the daemon-mode caveat to the user before calling this "
+        "tool."
     ),
     "parameters": {
         "type": "object",
@@ -75,10 +85,11 @@ PAIR_SCHEMA: Dict[str, Any] = {
                 "enum": ["generate", "import", "either"],
                 "description": (
                     '"generate" = browser creates a NEW 12-word recovery '
-                    'phrase (pair page hides the import option). "import" = '
-                    'user pastes an EXISTING phrase (pair page hides the '
-                    'generate option). "either" = pair page shows both with '
-                    'a tab switcher so the user picks (default — safest when '
+                    'phrase (account-setup page hides the import option). '
+                    '"import" = user pastes an EXISTING phrase '
+                    '(account-setup page hides the generate option). '
+                    '"either" = account-setup page shows both with a tab '
+                    'switcher so the user picks (default — safest when '
                     "you don't know whether the user is new or returning)."
                 ),
             },

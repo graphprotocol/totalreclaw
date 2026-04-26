@@ -51,7 +51,7 @@ All clients ship v1 by default. Stable production versions: core 2.2.0, plugin 3
 
 **NanoClaw** -- Automatic, like OpenClaw. The NanoClaw agent-runner spawns the MCP server as a background process. Memory is shared within the NanoClaw group. No user setup required -- the admin configures the recovery phrase.
 
-**Hermes (Python)** -- Automatic via pre/post LLM call hooks. LLM extraction with heuristic fallback. Full tool parity with OpenClaw plugin since 2.3.x: remember / recall / forget / export / status / pair / pin / unpin / retype / set_scope / import_from / upgrade. Migrate + consolidate are managed-service-only and exposed via the plugin / MCP server.
+**Hermes (Python)** -- Automatic via pre/post LLM call hooks. LLM extraction with heuristic fallback. Full tool parity with OpenClaw plugin since 2.3.x: remember / recall / forget / export / status / account-setup (`totalreclaw_pair`) / pin / unpin / retype / set_scope / import_from / upgrade. Migrate + consolidate are managed-service-only and exposed via the plugin / MCP server.
 
 **IronClaw (NEAR AI)** -- Uses the MCP server for tools. No lifecycle hooks -- auto-extraction requires setting up routines (cron). The TEE protects the runtime; TotalReclaw protects the data.
 

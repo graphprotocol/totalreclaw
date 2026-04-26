@@ -1,12 +1,12 @@
 # TotalReclaw for OpenClaw
 
-TotalReclaw gives your OpenClaw agent encrypted, persistent memory. The fastest setup is a single chat message — the agent fetches this guide, runs the install for you, and walks you through pairing. **You do nothing in the terminal.**
+TotalReclaw gives your OpenClaw agent encrypted, persistent memory. The fastest path is a single chat message — the agent fetches this guide, installs the plugin for you, and walks you through setting up your TotalReclaw account. **You do nothing in the terminal.**
 
 If you already have OpenClaw running, paste this into your OpenClaw chat:
 
 > **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>**
 
-Your agent will fetch this page, run the two install commands, and hand you a pair URL + 6-digit PIN. You open the URL in your browser, generate or restore a 12-word recovery phrase there, confirm the PIN, and you're done.
+Your agent will fetch this page, run the two install commands, and hand you an account-setup URL + 6-digit PIN. You open the URL in your browser, generate or restore a 12-word recovery phrase there, confirm the PIN, and your account is ready.
 
 ---
 
@@ -37,9 +37,9 @@ If `totalreclaw_pair` is not bound within 10 seconds, the user has `gateway.relo
 
 Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, confirm *"TotalReclaw is already set up."* and stop. Otherwise continue.
 
-### Step 4 — Pair (browser flow, NEVER ask the user to type their phrase in chat)
+### Step 4 — Set up the user's TotalReclaw account (browser flow, NEVER ask the user to type their phrase in chat)
 
-Call the `totalreclaw_pair` tool. It returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}`.
+Tell the user: *"I'll walk you through setting up your TotalReclaw account."* Then call the `totalreclaw_pair` tool (the account-setup tool — name kept for backward compatibility). It returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}`.
 
 Relay to the user verbatim:
 
@@ -49,11 +49,11 @@ Render the QR if your transport supports it: image-capable transports (Telegram,
 
 ### Step 5 — Verify and confirm
 
-After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN likely expired — call `totalreclaw_pair` again and resend. If present, confirm *"TotalReclaw is set up. Ask me to remember or recall anything."*
+After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN likely expired — call `totalreclaw_pair` again and resend. If present, confirm *"Your TotalReclaw account is set up. Ask me to remember or recall anything."*
 
 ### Phrase safety (HARD — never break)
 
-NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `openclaw totalreclaw onboard` (bare interactive form), `totalreclaw setup`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The ONLY agent-facilitated setup path is the `totalreclaw_pair` tool. If the user pastes a phrase anyway: tell them it is compromised and call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
+NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `openclaw totalreclaw onboard` (bare interactive form), `totalreclaw setup`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The ONLY agent-facilitated account-setup path is the `totalreclaw_pair` tool (the account-setup tool — name kept for backward compatibility). If the user pastes a phrase anyway: tell them it is compromised and call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
 
 ---
 
@@ -63,7 +63,7 @@ NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER 
 2. `openclaw plugins install @totalreclaw/totalreclaw` — installs the plugin from npm (the `latest` dist-tag is always current stable; use `@rc` for the latest release candidate).
 3. OpenClaw's config-watcher detects the `plugins.*` change in `~/.openclaw/config.yaml` and (under default `gateway.reload.mode = "hybrid"`) triggers a graceful SIGUSR1 restart within 1-3s. The new tools bind automatically.
 4. The agent calls `totalreclaw_pair`, which generates an ephemeral x25519 keypair on the gateway and a 6-digit PIN. You get a URL + PIN.
-5. You open the URL. The pair page has two tabs: **Generate new** (the browser creates a fresh BIP-39 12-word phrase locally using `crypto.getRandomValues`) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, click seal.
+5. You open the URL. The account-setup page has two tabs: **Generate new** (the browser creates a fresh BIP-39 12-word phrase locally using `crypto.getRandomValues`) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, click seal.
 6. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives an AES-256-GCM key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey back. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
 7. The recovery phrase never crosses the LLM context — not the chat transcript, not the agent's shell stdout, not any tool-call payload. Browser-side crypto keeps it isolated by construction.
 
@@ -88,9 +88,9 @@ If you're on a managed / hosted OpenClaw service that doesn't expose host shell 
 
    > **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>**
 
-   The agent will detect that the plugin is already loaded, skip Steps 1-2, and jump straight to pairing.
+   The agent will detect that the plugin is already loaded, skip Steps 1-2, and jump straight to account setup.
 
-The browser-side crypto and pairing flow are identical to self-hosted setups; only the install step differs.
+The browser-side crypto and account-setup flow are identical to self-hosted setups; only the install step differs.
 
 ---
 
@@ -160,7 +160,7 @@ Ask the agent naturally; the plugin picks the right tool.
 | **Export** | "Export all my TotalReclaw memories as plain text" |
 | **Status** | "What's my TotalReclaw status?" |
 | **Import from** | "Import my Gemini history from ~/Downloads/..." |
-| **Pair** | "Set up TotalReclaw for me" — returns URL + PIN |
+| **Account setup** | "Set up TotalReclaw for me" — returns URL + PIN |
 
 Your recovery phrase is the only key to your memories. Store it safely. Retrieve later with `cat ~/.totalreclaw/credentials.json | jq -r .mnemonic`. On a new machine, paste the canonical prompt above and switch to the **Import existing** tab in the browser. First-time users can stay on the default **Generate new** tab to create a fresh BIP-39 phrase.
 
@@ -193,8 +193,8 @@ Both tiers have unlimited memories and reads. Upgrade: *"Upgrade my TotalReclaw 
 
 - **Agent says "I'm not familiar with TotalReclaw"**: paste the canonical message above with the URL — the agent fetches the guide and follows the install steps.
 - **Agent can't see TotalReclaw tools after install**: under the default config OpenClaw auto-restarts the gateway within 1-3s of `openclaw plugins install` — wait 5-10s and check `openclaw plugins list`. If the plugin is listed but the agent still can't see the tools, your config likely has `gateway.reload.mode = off` — fall back to a manual restart. Native: `openclaw gateway restart`. Docker self-host: `docker restart <your-openclaw-container>`. Managed service: use the service's restart control.
-- **Pair URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running.
-- **Browser fails to POST the encrypted phrase**: check the pair page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
+- **Account-setup URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running.
+- **Browser fails to POST the encrypted phrase**: check the account-setup page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
 - **Tool calls return "onboarding required"**: paste the canonical message again so the agent re-runs `totalreclaw_pair`.
 - **"Not authenticated" / 401**: check your phrase — exact words, exact order, lowercase, single spaces.
 

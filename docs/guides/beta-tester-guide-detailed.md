@@ -7,9 +7,9 @@
 
 This guide is a companion to the 95-percent-of-users setup guides. **For installation, follow your runtime's setup guide first** — every flow is URL-driven and takes a single chat message:
 
-- **OpenClaw** → [openclaw-setup.md](./openclaw-setup.md) (browser pair flow, auto-reload)
-- **Hermes (Python)** → [hermes-setup.md](./hermes-setup.md) (browser pair flow, manual restart)
-- **Claude Code / Claude Desktop / Cursor / Windsurf / IronClaw (MCP)** → [claude-code-setup.md](./claude-code-setup.md) (no pair flow — phrase from another client's credentials or offline)
+- **OpenClaw** → [openclaw-setup.md](./openclaw-setup.md) (browser account-setup flow, auto-reload)
+- **Hermes (Python)** → [hermes-setup.md](./hermes-setup.md) (browser account-setup flow, manual restart)
+- **Claude Code / Claude Desktop / Cursor / Windsurf / IronClaw (MCP)** → [claude-code-setup.md](./claude-code-setup.md) (no account-setup flow — phrase from another client's credentials or offline)
 
 Once setup is done and tools are bound, come back here for the knobs.
 
@@ -39,7 +39,7 @@ Once setup is done and tools are bound, come back here for the knobs.
 | Pre-compaction flush | yes | yes | yes | no |
 | Session debrief | yes | yes | yes | no (use `totalreclaw_debrief` tool) |
 | First-run welcome | yes | yes | yes | no (MCP is stateless JSON-RPC) |
-| Browser pair flow | yes | yes | reuse OpenClaw / Hermes phrase | no — phrase from another client |
+| Browser account-setup flow | yes | yes | reuse OpenClaw / Hermes phrase | no — phrase from another client |
 | Auto-reload on plugin install | yes (`gateway.reload.mode = hybrid`) | no — manual restart | container respawn | host-restart only |
 
 If you're on MCP, all the auto behavior is replaced by tool calls the host LLM makes from context. The same memories land in the same vault.
@@ -92,7 +92,7 @@ The relay never sees plaintext, never sees query terms, and never holds an encry
 
 - **Server-blind search.** The relay sees blind index tokens (HMAC outputs) and never the plaintext keywords. Even with a full database compromise, an attacker can't reverse a query without the per-user secret.
 - **End-to-end encryption.** All fact bytes are XChaCha20-Poly1305 ciphertext when they leave your device.
-- **No phrase ever leaves your device** as long as you follow the canonical setup. Browser pair flow encrypts the phrase locally with a fresh x25519/AES-GCM key derived against the gateway's ephemeral pubkey before posting; the relay only ever sees ciphertext.
+- **No phrase ever leaves your device** as long as you follow the canonical setup. Browser setup flow encrypts the phrase locally with a fresh x25519/AES-GCM key derived against the gateway's ephemeral pubkey before posting; the relay only ever sees ciphertext.
 - **Decay is local.** Importance decay and eviction run client-side from the decrypted set. The relay can't infer which memories matter to you.
 
 ---
@@ -181,7 +181,7 @@ Canonical reference: [`docs/guides/env-vars-reference.md`](./env-vars-reference.
 
 | Variable | Description | Default |
 |---|---|---|
-| `TOTALRECLAW_RECOVERY_PHRASE` | 12-word BIP-39 phrase. Required for MCP / NanoClaw. OpenClaw + Hermes prefer the browser pair flow (writes `~/.totalreclaw/credentials.json`). | — |
+| `TOTALRECLAW_RECOVERY_PHRASE` | 12-word BIP-39 phrase. Required for MCP / NanoClaw. OpenClaw + Hermes prefer the browser account-setup flow (writes `~/.totalreclaw/credentials.json`). | — |
 | `TOTALRECLAW_SERVER_URL` | Relay URL. Only set for self-hosted. | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_SELF_HOSTED` | `true` to disable on-chain pipeline (PostgreSQL self-host). | `false` |
 | `TOTALRECLAW_CREDENTIALS_PATH` | Override credentials file location. | `~/.totalreclaw/credentials.json` |
@@ -228,9 +228,9 @@ To migrate from one client to another:
 cat ~/.totalreclaw/credentials.json
 ```
 
-On the target machine, the agent's URL-driven setup will detect an existing credentials file and skip phrase entry. If you can't move files (e.g., switching to a phone), use the **Import existing** tab in OpenClaw / Hermes browser pair flow on the target — same phrase, same vault.
+On the target machine, the agent's URL-driven setup will detect an existing credentials file and skip phrase entry. If you can't move files (e.g., switching to a phone), use the **Import existing** tab in OpenClaw / Hermes browser account-setup flow on the target — same phrase, same vault.
 
-If you're moving from MCP (which doesn't have a pair flow) to OpenClaw / Hermes, just install the new client and reuse `~/.totalreclaw/credentials.json` — both runtimes read it on startup before falling back to the env-var path.
+If you're moving from MCP (which doesn't have an account-setup flow) to OpenClaw / Hermes, just install the new client and reuse `~/.totalreclaw/credentials.json` — both runtimes read it on startup before falling back to the env-var path.
 
 ---
 
@@ -315,7 +315,7 @@ Internal: see `~/.claude/skills/qa-totalreclaw.md` (TotalReclaw team only). Runs
 
 **Cause:** the env var is missing or empty in the runtime that needs it (typically MCP / NanoClaw).
 
-**Fix:** OpenClaw + Hermes prefer credentials at `~/.totalreclaw/credentials.json` from the browser pair flow — re-run setup. MCP / NanoClaw need the env var in your host config.
+**Fix:** OpenClaw + Hermes prefer credentials at `~/.totalreclaw/credentials.json` from the browser account-setup flow — re-run setup. MCP / NanoClaw need the env var in your host config.
 
 ### Memories aren't appearing in new conversations
 

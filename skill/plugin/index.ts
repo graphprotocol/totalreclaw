@@ -5162,19 +5162,24 @@ const plugin = {
     api.registerTool(
       {
         name: 'totalreclaw_pair',
-        label: 'QR pair — start remote pairing session',
+        label: 'Set up the user\'s TotalReclaw account (encrypted, browser-side)',
         description:
-          'Start a remote pairing session so the user can create or import a TotalReclaw ' +
-          'recovery phrase from their phone or another browser. Returns a pairing URL, a ' +
-          '6-digit PIN, and an ASCII QR code that the agent relays to the user. The recovery ' +
-          'phrase itself is generated/entered in the BROWSER and uploaded end-to-end encrypted ' +
-          'to this gateway — it NEVER touches the LLM provider or the chat transcript.\n\n' +
-          'This is the CANONICAL agent-facilitated setup surface — use it whenever the user ' +
-          'asks you to set up TotalReclaw, regardless of whether they have terminal access. ' +
-          'Browser-side crypto keeps the recovery phrase out of the LLM context entirely. ' +
-          'If a user explicitly prefers local-terminal setup with no browser, point them at ' +
-          '`totalreclaw_onboarding_start` (a pointer to the CLI wizard they run on their own ' +
-          'terminal, NOT through your shell tool).',
+          'Set up the user\'s TotalReclaw account (encrypted, browser-side recovery-phrase ' +
+          'generation or import). Starts a brief remote session so the user can create or ' +
+          'import a TotalReclaw recovery phrase from their phone or another browser. ' +
+          'Returns an account-setup URL, a 6-digit PIN, and an ASCII QR code that the agent ' +
+          'relays to the user. The recovery phrase itself is generated/entered in the ' +
+          'BROWSER and uploaded end-to-end encrypted to this gateway — it NEVER touches ' +
+          'the LLM provider or the chat transcript.\n\n' +
+          'This is the CANONICAL agent-facilitated account-setup surface — use it whenever ' +
+          'the user asks you to set up TotalReclaw, regardless of whether they have ' +
+          'terminal access. Narrate it to the user as "setting up your TotalReclaw ' +
+          'account". Browser-side crypto keeps the recovery phrase out of the LLM context ' +
+          'entirely. If a user explicitly prefers local-terminal account setup with no ' +
+          'browser, point them at `totalreclaw_onboarding_start` (a pointer to the CLI ' +
+          'wizard they run on their own terminal, NOT through your shell tool).\n\n' +
+          'Tool name `totalreclaw_pair` is kept for backward compatibility — function-wise ' +
+          'this is the account-setup tool.',
         parameters: {
           type: 'object',
           properties: {

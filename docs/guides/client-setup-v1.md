@@ -123,7 +123,7 @@ If you need to generate a recovery phrase first, run `npx @totalreclaw/mcp-serve
 ## Python client
 
 **Package:** `totalreclaw>=2.3.0` (PyPI).
-**Features:** Hermes Agent plugin with pre_llm_call auto-recall + post_llm_call auto-extract + on_session_finalize debrief. Full tool parity with the OpenClaw plugin: remember / recall / forget / export / status / pair / pin / unpin / retype / set_scope / import_from / upgrade.
+**Features:** Hermes Agent plugin with pre_llm_call auto-recall + post_llm_call auto-extract + on_session_finalize debrief. Full tool parity with the OpenClaw plugin: remember / recall / forget / export / status / account-setup (`totalreclaw_pair`) / pin / unpin / retype / set_scope / import_from / upgrade.
 
 ### Install
 

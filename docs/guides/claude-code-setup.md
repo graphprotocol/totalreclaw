@@ -6,7 +6,7 @@ If you already have Claude Code (or Claude Desktop / Cursor / Windsurf) running,
 
 > **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/claude-code-setup.md>**
 
-Your agent will fetch this page, run the MCP install command, and walk you through getting a recovery phrase into the config without ever printing it in chat. The phrase comes from your browser (via the OpenClaw or Hermes pair flow) or from a phrase you already have on file.
+Your agent will fetch this page, run the MCP install command, and walk you through getting a recovery phrase into the config without ever printing it in chat. The phrase comes from your browser (via the OpenClaw or Hermes account-setup flow) or from a phrase you already have on file.
 
 ---
 
@@ -69,7 +69,7 @@ Check `test -s ~/.totalreclaw/credentials.json`. If it exists, the user already 
 
 If `~/.totalreclaw/credentials.json` does NOT exist, tell them verbatim:
 
-> *To generate or import a recovery phrase, the safest path is the browser-side pair flow that OpenClaw or Hermes uses (the relay only ever sees ciphertext). If you have OpenClaw or Hermes available, run their setup once (see [openclaw-setup.md](./openclaw-setup.md) or [hermes-setup.md](./hermes-setup.md)) — it writes `~/.totalreclaw/credentials.json`, and we'll reuse it here. If you don't, generate a 12-word BIP-39 phrase using a trusted offline tool (a hardware wallet, an air-gapped BIP-39 generator, or a password manager's seed-phrase generator), paste the 12 words into `TOTALRECLAW_RECOVERY_PHRASE` in your config (NOT into this chat), and reply `done`.*
+> *To generate or import a recovery phrase, the safest path is the browser-side account-setup flow that OpenClaw or Hermes uses (the relay only ever sees ciphertext). If you have OpenClaw or Hermes available, run their account setup once (see [openclaw-setup.md](./openclaw-setup.md) or [hermes-setup.md](./hermes-setup.md)) — it writes `~/.totalreclaw/credentials.json`, and we'll reuse it here. If you don't, generate a 12-word BIP-39 phrase using a trusted offline tool (a hardware wallet, an air-gapped BIP-39 generator, or a password manager's seed-phrase generator), paste the 12 words into `TOTALRECLAW_RECOVERY_PHRASE` in your config (NOT into this chat), and reply `done`.*
 
 Wait for `done`. Do not at any point ask the user to type the phrase into chat. Do not run `npx @totalreclaw/mcp-server setup` via your shell tool — its stdout contains the phrase.
 
@@ -87,7 +87,7 @@ Once the user replies `done`, ask the agent's own internal toolset (yourself): *
 
 ### Phrase safety (HARD — never break)
 
-NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `npx @totalreclaw/mcp-server setup`, `totalreclaw_setup`, `npx @totalreclaw/totalreclaw generate-mnemonic`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The MCP server has NO browser pair flow (it's stateless JSON-RPC); the user MUST source their phrase from another TotalReclaw client's pair flow (OpenClaw / Hermes browser flow), reuse `~/.totalreclaw/credentials.json` from a prior install, or paste a phrase they generated offline directly into the config file. If the user pastes a phrase in chat anyway: tell them it is compromised and they need to generate a fresh wallet via the OpenClaw or Hermes browser pair flow.
+NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `npx @totalreclaw/mcp-server setup`, `totalreclaw_setup`, `npx @totalreclaw/totalreclaw generate-mnemonic`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The MCP server has NO browser account-setup flow (it's stateless JSON-RPC); the user MUST source their phrase from another TotalReclaw client's account-setup flow (OpenClaw / Hermes browser flow), reuse `~/.totalreclaw/credentials.json` from a prior install, or paste a phrase they generated offline directly into the config file. If the user pastes a phrase in chat anyway: tell them it is compromised and they need to generate a fresh wallet via the OpenClaw or Hermes browser account-setup flow.
 
 ---
 
@@ -107,7 +107,7 @@ First real interaction downloads a ~600 MB embedding model (cached locally, one-
 
 - **Node.js 18+** (22 recommended)
 - **An MCP-compatible host:** Claude Code, Claude Desktop, Cursor, Windsurf, IronClaw, or similar
-- **A recovery phrase** — generated via OpenClaw / Hermes browser pair flow, an offline BIP-39 generator, or already on file at `~/.totalreclaw/credentials.json`
+- **A recovery phrase** — generated via OpenClaw / Hermes browser account-setup flow, an offline BIP-39 generator, or already on file at `~/.totalreclaw/credentials.json`
 
 ---
 
@@ -159,7 +159,7 @@ Restart the host. Verify by asking *"Do you have access to TotalReclaw memory to
 | Auto-extract every N turns | yes (lifecycle hook) | no — host invokes `totalreclaw_remember` when its prompt tells it to |
 | Pre-compaction flush | yes | no |
 | Session debrief | yes | no (use `totalreclaw_debrief` explicitly) |
-| Browser pair flow | yes (`totalreclaw_pair` tool) | **no** — MCP is stateless JSON-RPC; phrase must come from another client or offline tool |
+| Browser account-setup flow | yes (`totalreclaw_pair` account-setup tool) | **no** — MCP is stateless JSON-RPC; phrase must come from another client or offline tool |
 | First-run welcome | yes (host prepends context on session start) | no — MCP doesn't expose session lifecycle to the server |
 
 MCP is the lowest-overhead integration but the most explicit. You'll talk naturally and the host will still recall / store via tool calls when its context gates fire — you just won't get the every-turn automatic behavior that OpenClaw and Hermes provide.
@@ -230,14 +230,14 @@ Both tiers have unlimited reads. Upgrade: *"Upgrade my TotalReclaw subscription.
 - **"Not authenticated" / 401**: check your phrase — exact words, exact order, lowercase, single spaces.
 - **First-run is slow / model download**: the embedding model is ~600 MB, downloaded once and cached. Be patient on first call.
 - **Quota exceeded (403)**: free tier has a monthly write cap. Upgrade with *"Upgrade my TotalReclaw subscription"*.
-- **Recovery phrase appeared in chat**: file a bug. Rotate by generating a new wallet via the OpenClaw or Hermes browser pair flow. The leaked phrase is unrecoverable once shipped through LLM context.
+- **Recovery phrase appeared in chat**: file a bug. Rotate by generating a new wallet via the OpenClaw or Hermes browser account-setup flow. The leaked phrase is unrecoverable once shipped through LLM context.
 
 ---
 
 ## MCP-specific notes
 
 - **MCP is stateless.** There's no first-run welcome, no lifecycle hooks, and no auto-restart on config change. You restart the host explicitly to pick up new config.
-- **No browser pair flow.** The MCP server has no HTTP routes — phrase entry is the user's responsibility (config file, env var, or copying from another client's `credentials.json`). This is by design: keeping crypto secrets out of LLM context is more important than convenience parity with OpenClaw / Hermes.
+- **No browser account-setup flow.** The MCP server has no HTTP routes — phrase entry is the user's responsibility (config file, env var, or copying from another client's `credentials.json`). This is by design: keeping crypto secrets out of LLM context is more important than convenience parity with OpenClaw / Hermes.
 - **`totalreclaw_setup` exists but should not be used.** The tool exists for legacy compatibility. It generates a phrase and returns it through MCP tool-output JSON, which means the phrase enters the host LLM's context. The phrase-safety rule forbids this. New installs should always use the workflow in this guide.
 
 ---
@@ -250,8 +250,8 @@ Both tiers have unlimited reads. Upgrade: *"Upgrade my TotalReclaw subscription.
 
 ## Further reading
 
-- [OpenClaw setup guide](./openclaw-setup.md) — same vault, different runtime, with browser pair flow
-- [Hermes setup guide](./hermes-setup.md) — Python client with browser pair flow
+- [OpenClaw setup guide](./openclaw-setup.md) — same vault, different runtime, with browser account-setup flow
+- [Hermes setup guide](./hermes-setup.md) — Python client with browser account-setup flow
 - [Beta tester deep-dive](./beta-tester-guide-detailed.md) — env vars, extraction tuning, architecture
 - [Memory types guide](./memory-types-guide.md) — v1 taxonomy
 - [Importing memories](./importing-memories.md)

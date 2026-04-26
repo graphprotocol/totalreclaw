@@ -30,7 +30,7 @@ If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jum
    # 1c. Verify the package resolved through Hermes' Python.
    "$HERMES_PYTHON" -m pip show totalreclaw | head -2
    ```
-   If `pip show` doesn't list the package, the install landed in a different Python — fix `$HERMES_PYTHON` and re-run 1b. On Debian/Ubuntu/Docker you may hit `externally-managed-environment` if Hermes runs against system Python — add `--break-system-packages` to the `pip install` line, or ask the user to recreate Hermes inside a venv. If either shell call fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment): tell the user verbatim *"Your environment doesn't expose the Hermes CLI / pip to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`. Also disable Hermes' built-in `memory` tool in the same UI if available — running both creates a silent intent-stealing bug."* Wait for `done` and skip to step 4 (verify pair tool bound).
+   If `pip show` doesn't list the package, the install landed in a different Python — fix `$HERMES_PYTHON` and re-run 1b. On Debian/Ubuntu/Docker you may hit `externally-managed-environment` if Hermes runs against system Python — add `--break-system-packages` to the `pip install` line, or ask the user to recreate Hermes inside a venv. If either shell call fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment): tell the user verbatim *"Your environment doesn't expose the Hermes CLI / pip to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`. Also disable Hermes' built-in `memory` tool in the same UI if available — running both creates a silent intent-stealing bug."* Wait for `done` and skip to step 4 (verify account-setup tool bound).
 
 2. **Restart the gateway — Hermes does NOT auto-reload on plugin install.** Tell the user verbatim: *"Please restart your Hermes gateway: `hermes gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. If supervised by systemd / launchd, `kill -USR1 $(cat ~/.hermes/gateway.pid)` triggers a graceful-drain restart. Reply `done` once it's back up."* Do NOT run the restart yourself — your shell is inside the gateway you'd be restarting. Wait for the user's `done`.
 
@@ -53,14 +53,18 @@ If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jum
 
 5. **Check for existing credentials.** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, confirm *"TotalReclaw is already set up."* and stop.
 
-6. **Pair.** Call `totalreclaw_pair`. Returns `{url, pin, expires_at_ms}`. Relay verbatim:
+6. **Set up the user's TotalReclaw account.** Tell the user: *"I'll walk you through setting up your TotalReclaw account."* Then call `totalreclaw_pair` (the account-setup tool — name kept for backward compatibility). Returns `{url, pin, expires_at_ms}`. Relay verbatim:
    > *Open <url> in your browser. Generate a new 12-word recovery phrase there or paste an existing one — the phrase stays in your browser, the relay only sees ciphertext. Confirm PIN <pin>. Reply `done` once the page says it's sealed.*
 
-7. **Verify and confirm.** After user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again and resend. If present, confirm *"TotalReclaw is set up. Ask me to remember or recall anything."*
+   **Lifecycle caveat for one-shot CLI invocations.** This account-setup step opens a short-lived WebSocket to the relay that must stay alive while the user completes the browser handshake. If you are running inside a one-shot agent process (`hermes chat -q "..."`, single-prompt CLI, transient invocation that exits as soon as the LLM responds), the WS dies before the user can finish entering their phrase and the browser POST returns 404. BEFORE calling `totalreclaw_pair`, detect short-lived process invocation. If detected, surface this caveat to the user verbatim:
+   > *Setting up your TotalReclaw account needs a long-lived Hermes process to keep the session alive while you finish the browser flow. One-shot `hermes chat -q "..."` invocations exit too quickly. Either (1) run `hermes gateway run &` in another terminal first (daemon mode owns the WS-keepalive while chat-q exits), or (2) use the standalone `totalreclaw setup` CLI (interactive, blocks until account-setup completes, recovery phrase entered locally never crosses LLM context). Once your account is set up, daily operations (`hermes chat -q`, `--resume`, etc.) work normally.*
+   Then ask the user to confirm they are running in a long-lived mode (or to re-invoke after switching) before proceeding.
+
+7. **Verify and confirm.** After user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again and resend. If present, confirm *"Your TotalReclaw account is set up. Ask me to remember or recall anything."*
 
 ## Phrase safety (HARD — never break)
 
-NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER invoke `totalreclaw setup`, `hermes setup`, or any phrase-touching CLI via your shell tool (stdout enters LLM context). The ONLY agent-facilitated setup path is `totalreclaw_pair`. If the user pastes a phrase anyway: tell them it is compromised, call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
+NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER invoke `totalreclaw setup`, `hermes setup`, or any phrase-touching CLI via your shell tool (stdout enters LLM context). The ONLY agent-facilitated account-setup path is `totalreclaw_pair` (the account-setup tool). If the user pastes a phrase anyway: tell them it is compromised, call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
 
 ## Usage (post-setup)
 
@@ -74,9 +78,9 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
 
 - `totalreclaw_*` tools not visible → gateway not restarted after install; ask the user once to restart their gateway. Common patterns: `hermes gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — replace with the user's actual container name), or the managed service's restart control. Wait for `done`.
 - User says done but `credentials.json` missing → PIN expired or entered wrong phrase; call `totalreclaw_pair` again.
-- `onboarding required` → credentials missing; redo from the pair step.
+- `onboarding required` → credentials missing; redo from the account-setup step.
 - `quota exceeded` → `totalreclaw_status`, then offer `totalreclaw_upgrade`.
 
 ## Tool surface
 
-`totalreclaw_pair` (ONLY setup path) · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_export` · `_status` · `_upgrade` · `_import_from` · `_import_batch` · `_debrief` · `_report_qa_bug` (RC only).
+`totalreclaw_pair` (ONLY account-setup path) · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_export` · `_status` · `_upgrade` · `_import_from` · `_import_batch` · `_debrief` · `_report_qa_bug` (RC only).
