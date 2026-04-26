@@ -28,6 +28,20 @@ logger = logging.getLogger(__name__)
 ExpectDirection = Literal["active", "inactive"]
 
 
+# Inline mirror of rust/totalreclaw-core/src/confirm.rs::FACT_BY_ID_INDEXED_QUERY.
+# Used when the installed core wheel pre-dates the confirm_indexed PyO3 binding
+# (totalreclaw-core <= 2.2.0). Keep this string in sync with the Rust constant.
+_FALLBACK_QUERY = """
+  query ConfirmIndexed($id: ID!) {
+    fact(id: $id) {
+      id
+      isActive
+      blockNumber
+    }
+  }
+"""
+
+
 def _default_poll_ms() -> int:
     fn = getattr(_core, "confirm_indexed_default_poll_ms", None)
     return int(fn()) if callable(fn) else 1_000
@@ -36,6 +50,21 @@ def _default_poll_ms() -> int:
 def _default_timeout_ms() -> int:
     fn = getattr(_core, "confirm_indexed_default_timeout_ms", None)
     return int(fn()) if callable(fn) else 30_000
+
+
+def _query_string() -> str:
+    fn = getattr(_core, "confirm_indexed_query", None)
+    return fn() if callable(fn) else _FALLBACK_QUERY
+
+
+def _parse_response(payload_json: str) -> bool:
+    fn = getattr(_core, "confirm_indexed_parse", None)
+    if callable(fn):
+        return bool(fn(payload_json))
+    import json as _json
+    value = _json.loads(payload_json)
+    fact = value.get("data", {}).get("fact") if isinstance(value.get("data"), dict) else value.get("fact")
+    return bool(fact and fact.get("isActive"))
 
 
 async def confirm_indexed(
@@ -77,7 +106,7 @@ async def confirm_indexed(
     """
     poll_ms = poll_interval_ms if poll_interval_ms is not None else _default_poll_ms()
     total_ms = timeout_ms if timeout_ms is not None else _default_timeout_ms()
-    query = _core.confirm_indexed_query()
+    query = _query_string()
 
     start = asyncio.get_event_loop().time()
     deadline = start + (total_ms / 1000.0)
@@ -92,7 +121,7 @@ async def confirm_indexed(
             import json as _json
 
             payload = _json.dumps(data)
-            is_active = _core.confirm_indexed_parse(payload)
+            is_active = _parse_response(payload)
             resolved = is_active if expect == "active" else not is_active
             if resolved:
                 logger.debug(
