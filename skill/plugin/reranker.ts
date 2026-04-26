@@ -1,213 +1,64 @@
 /**
- * TotalReclaw Plugin - Client-Side Re-Ranker
+ * TotalReclaw Plugin -- Reranker (thin wrapper around `@totalreclaw/core`).
  *
- * Replaces the naive `textScore` word-overlap scorer with a proper ranking
- * pipeline:
- *   1. Okapi BM25 — term frequency / inverse document frequency
- *   2. Cosine similarity — between query and fact embeddings (WASM-backed)
- *   3. Importance — normalized importance score (0-1)
- *   4. Recency — time-decay with 1-week half-life
- *   5. Weighted RRF (Reciprocal Rank Fusion) — combines all ranking lists
- *   6. MMR (Maximal Marginal Relevance) — promotes diversity in results
+ * As of rc.22 the plugin no longer ships its own BM25 / RRF / source-weight
+ * implementation. All ranking decisions are delegated to the canonical Rust
+ * core (`rerankWithConfig`, `cosineSimilarity`, `sourceWeight`,
+ * `legacyClaimFallbackWeight`) so plugin / Hermes / MCP runtimes share one
+ * source of truth and cannot drift again (rc.18 cosine-gate divergence).
  *
- * Cosine similarity delegates to the Rust WASM core for performance.
- * All other functions are pure TypeScript. This module runs CLIENT-SIDE
- * after decrypting candidates from the server.
+ * The previous client-side pipeline added importance, recency, and MMR
+ * signals on top of BM25 + cosine. Those signals are dropped here:
+ * core's intent-weighted RRF + source-weighted final score is the
+ * canonical Pipeline G + Tier 1 mix that benchmark E13 calibrated. The
+ * extra TS-side passes were not part of the validated baseline and were a
+ * source of cross-client divergence.
+ *
+ * Public surface kept for callers (index.ts, semantic-dedup.ts,
+ * consolidation.ts, pocv2-e2e-test.ts, v1-taxonomy.test.ts):
+ *   - `rerank(query, queryEmbedding, candidates, topK, _legacyWeights, applySourceWeights)`
+ *   - `cosineSimilarity(a, b)`
+ *   - `getSourceWeight(source)`
+ *   - `detectQueryIntent(query)` and `INTENT_WEIGHTS`
+ *     (kept as no-ops for callers that pass them in -- core handles
+ *      intent-weighting internally now, so the legacy weights argument is
+ *      ignored.)
+ *   - Types: `RerankerCandidate`, `RerankerResult`, `RankingWeights`,
+ *     `QueryIntent`.
  */
 
+import * as core from '@totalreclaw/core';
+
 // ---------------------------------------------------------------------------
-// Cosine Similarity
+// Cosine Similarity (delegated to core WASM)
 // ---------------------------------------------------------------------------
 
-/**
- * Compute cosine similarity between two vectors.
- *
- * Returns dot(a, b) / (||a|| * ||b||).
- * Returns 0 if either vector has zero magnitude (avoids division by zero).
- */
 export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length === 0 || b.length === 0) return 0;
-
-  const len = Math.min(a.length, b.length);
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-
-  for (let i = 0; i < len; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  if (denom === 0) return 0;
-
-  return dot / denom;
+  if (a.length !== b.length) return 0;
+  return core.cosineSimilarity(new Float32Array(a), new Float32Array(b));
 }
 
 // ---------------------------------------------------------------------------
-// Tokenization
+// Source-weight lookup (delegated to core)
 // ---------------------------------------------------------------------------
 
-/**
- * Tokenize a text string for BM25 scoring.
- *
- * Matches the tokenization rules used for blind indices in crypto.ts:
- *   1. Lowercase
- *   2. Remove punctuation (keep Unicode letters, numbers, whitespace)
- *   3. Split on whitespace
- *   4. Filter tokens shorter than 2 characters
- *
- * Removes common English stop words to improve BM25 signal — stop words
- * have low IDF and add noise.
- */
-const STOP_WORDS = new Set([
-  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'do', 'for',
-  'from', 'had', 'has', 'have', 'he', 'her', 'him', 'his', 'how', 'if',
-  'in', 'into', 'is', 'it', 'its', 'me', 'my', 'no', 'not', 'of', 'on',
-  'or', 'our', 'out', 'she', 'so', 'than', 'that', 'the', 'their', 'them',
-  'then', 'there', 'these', 'they', 'this', 'to', 'up', 'us', 'was', 'we',
-  'were', 'what', 'when', 'where', 'which', 'who', 'whom', 'why', 'will',
-  'with', 'you', 'your',
-]);
-
-export function tokenize(text: string, removeStopWords: boolean = true): string[] {
-  let tokens = text
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .split(/\s+/)
-    .filter((t) => t.length >= 2);
-
-  if (removeStopWords) {
-    tokens = tokens.filter((t) => !STOP_WORDS.has(t));
-  }
-
-  return tokens;
+export function getSourceWeight(source: string | undefined): number {
+  if (!source) return core.legacyClaimFallbackWeight();
+  return core.sourceWeight(source);
 }
 
 // ---------------------------------------------------------------------------
-// BM25 Scoring (Okapi BM25)
+// Query Intent Detection
+//
+// Kept as a no-op compat layer so existing call sites that still pass
+// INTENT_WEIGHTS[intent] into `rerank()` continue to compile. Core does its
+// own intent-weighting internally based on the per-candidate cosine score
+// (see `rust/totalreclaw-core/src/reranker.rs` -- `bm25_weight = 0.3 + 0.3 *
+// (1 - intent_score)`) so the TS-side weight argument is ignored.
 // ---------------------------------------------------------------------------
 
-/**
- * Compute the Okapi BM25 score for a single document against a query.
- *
- * @param queryTerms  - Tokenized query terms
- * @param docTerms    - Tokenized document terms
- * @param avgDocLen   - Average document length (in tokens) across the candidate corpus
- * @param docCount    - Total number of documents in the candidate corpus
- * @param termDocFreqs - Map from term to number of documents containing that term
- * @param k1          - BM25 k1 parameter (default 1.2)
- * @param b           - BM25 b parameter (default 0.75)
- */
-export function bm25Score(
-  queryTerms: string[],
-  docTerms: string[],
-  avgDocLen: number,
-  docCount: number,
-  termDocFreqs: Map<string, number>,
-  k1: number = 1.2,
-  b: number = 0.75,
-): number {
-  if (docTerms.length === 0 || avgDocLen === 0 || docCount === 0) return 0;
-
-  // Count term frequencies in this document.
-  const docTf = new Map<string, number>();
-  for (const term of docTerms) {
-    docTf.set(term, (docTf.get(term) ?? 0) + 1);
-  }
-
-  const docLen = docTerms.length;
-  let score = 0;
-
-  for (const qi of queryTerms) {
-    const freq = docTf.get(qi) ?? 0;
-    if (freq === 0) continue;
-
-    const nqi = termDocFreqs.get(qi) ?? 0;
-
-    // IDF with Robertson-Walker floor: ln((N - n + 0.5) / (n + 0.5) + 1)
-    const idf = Math.log((docCount - nqi + 0.5) / (nqi + 0.5) + 1);
-
-    // TF saturation with length normalization.
-    const tfNorm = (freq * (k1 + 1)) / (freq + k1 * (1 - b + b * docLen / avgDocLen));
-
-    score += idf * tfNorm;
-  }
-
-  return score;
-}
-
-// ---------------------------------------------------------------------------
-// Reciprocal Rank Fusion (RRF)
-// ---------------------------------------------------------------------------
-
-export interface RankedItem {
-  id: string;
-  score: number;
-}
-
-/**
- * Fuse multiple ranking lists using Reciprocal Rank Fusion.
- */
-export function rrfFuse(
-  rankings: RankedItem[][],
-  k: number = 60,
-): RankedItem[] {
-  const fusedScores = new Map<string, number>();
-
-  for (const ranking of rankings) {
-    for (let rank = 0; rank < ranking.length; rank++) {
-      const item = ranking[rank];
-      const contribution = 1 / (k + rank + 1);
-      fusedScores.set(item.id, (fusedScores.get(item.id) ?? 0) + contribution);
-    }
-  }
-
-  const fused: RankedItem[] = [];
-  for (const [id, score] of fusedScores) {
-    fused.push({ id, score });
-  }
-
-  fused.sort((a, b) => b.score - a.score);
-  return fused;
-}
-
-// ---------------------------------------------------------------------------
-// Weighted Reciprocal Rank Fusion
-// ---------------------------------------------------------------------------
-
-/**
- * Fuse multiple ranking lists using Weighted Reciprocal Rank Fusion.
- */
-export function weightedRrfFuse(
-  rankings: RankedItem[][],
-  weights: number[],
-  k: number = 60,
-): RankedItem[] {
-  const fusedScores = new Map<string, number>();
-
-  for (let r = 0; r < rankings.length; r++) {
-    const w = weights[r] ?? 1;
-    for (let rank = 0; rank < rankings[r].length; rank++) {
-      const item = rankings[r][rank];
-      const contribution = w * (1 / (k + rank + 1));
-      fusedScores.set(item.id, (fusedScores.get(item.id) ?? 0) + contribution);
-    }
-  }
-
-  const fused: RankedItem[] = [];
-  for (const [id, score] of fusedScores) {
-    fused.push({ id, score });
-  }
-
-  fused.sort((a, b) => b.score - a.score);
-  return fused;
-}
-
-// ---------------------------------------------------------------------------
-// Ranking Weights & Interfaces
-// ---------------------------------------------------------------------------
+export type QueryIntent = 'factual' | 'temporal' | 'semantic';
 
 export interface RankingWeights {
   bm25: number;
@@ -216,367 +67,130 @@ export interface RankingWeights {
   recency: number;
 }
 
-export const DEFAULT_WEIGHTS: RankingWeights = {
-  bm25: 0.25,
-  cosine: 0.25,
-  importance: 0.25,
-  recency: 0.25,
-};
-
-// ---------------------------------------------------------------------------
-// Query Intent Detection (T326)
-// ---------------------------------------------------------------------------
-
-/** The detected intent of a user query. */
-export type QueryIntent = 'factual' | 'temporal' | 'semantic';
-
 const TEMPORAL_KEYWORDS = /\b(yesterday|today|last\s+week|last\s+month|recently|recent|latest|ago|when|this\s+week|this\s+month|earlier|before|after|since|during|tonight|morning|afternoon)\b/i;
-
 const FACTUAL_PATTERNS = /^(what|who|where|which|how\s+many|how\s+much|is\s+|are\s+|does\s+|do\s+|did\s+|was\s+|were\s+)\b/i;
 
-/** Ranking weights tuned for each query intent. */
 export const INTENT_WEIGHTS: Record<QueryIntent, RankingWeights> = {
   factual:  { bm25: 0.40, cosine: 0.20, importance: 0.25, recency: 0.15 },
   temporal: { bm25: 0.15, cosine: 0.20, importance: 0.20, recency: 0.45 },
   semantic: { bm25: 0.20, cosine: 0.35, importance: 0.25, recency: 0.20 },
 };
 
-/**
- * Classify a query into one of three intent types using lightweight heuristics.
- * Temporal is checked first so "What did we discuss yesterday?" -> temporal.
- */
 export function detectQueryIntent(query: string): QueryIntent {
   if (TEMPORAL_KEYWORDS.test(query)) return 'temporal';
   if (FACTUAL_PATTERNS.test(query) && query.length < 80) return 'factual';
   return 'semantic';
 }
 
+// ---------------------------------------------------------------------------
+// Candidate / Result types (cross-runtime stable)
+// ---------------------------------------------------------------------------
+
 export interface RerankerCandidate {
   id: string;
   text: string;
   embedding?: number[];
-  importance?: number;   // 0-1 normalized importance score
-  createdAt?: number;    // Unix timestamp (seconds) when fact was created
-  /**
-   * Memory Taxonomy v1 provenance tag. Plugin v3.0.0+ surfaces this when a
-   * candidate was decrypted from a v1 blob. When present and
-   * `applySourceWeights: true` is passed to rerank(), the final RRF score
-   * is multiplied by the Retrieval v2 Tier 1 source weight from core.
-   */
+  /** Unused now -- core ignores importance. Kept for API stability. */
+  importance?: number;
+  /** Unused now -- core ignores recency. Kept for API stability. */
+  createdAt?: number;
+  /** Memory Taxonomy v1 source ("user" | "user-inferred" | ... ). */
   source?: string;
 }
 
 export interface RerankerResult extends RerankerCandidate {
+  /** Final fused score from core (post source-weight multiplication). */
   rrfScore: number;
   cosineSimilarity?: number;
-  /** Source weight multiplier applied (1.0 = no weighting). */
+  /** Source weight multiplier applied (1.0 if no weighting). */
   sourceWeight?: number;
 }
 
-// ---------------------------------------------------------------------------
-// Source-weight lookup (Retrieval v2 Tier 1)
-//
-// Mirrors the table in `rust/totalreclaw-core/src/reranker.rs` exactly so
-// the TypeScript reranker produces the same ordering as core rerankWithConfig
-// when `applySourceWeights: true` is passed.
-//
-// NOTE: this is duplicated here (vs calling core via WASM) because the
-// plugin's local reranker handles RRF + MMR on the client side with rich
-// candidate metadata. The core `rerankWithConfig` is the canonical source
-// of truth and will be used directly by MCP/Python adapters.
-// ---------------------------------------------------------------------------
-
-const SOURCE_WEIGHTS: Record<string, number> = {
-  'user': 1.0,
-  'user-inferred': 0.9,
-  'derived': 0.7,
-  'external': 0.7,
-  'assistant': 0.55,
-};
-
-const LEGACY_FALLBACK_WEIGHT = 0.85;
-
-export function getSourceWeight(source: string | undefined): number {
-  if (!source) return LEGACY_FALLBACK_WEIGHT;
-  const w = SOURCE_WEIGHTS[source.toLowerCase()];
-  return w ?? 0.85; // unknown source → moderate penalty
+// Core's RankedResult JSON shape (returned by rerankWithConfig).
+interface CoreRankedResult {
+  id: string;
+  text: string;
+  score: number;
+  bm25_score: number;
+  cosine_score: number;
+  timestamp: string;
+  source_weight?: number;
 }
 
 // ---------------------------------------------------------------------------
-// Recency Scoring
+// Re-ranker (delegates to core::reranker)
 // ---------------------------------------------------------------------------
 
 /**
- * Compute a recency score with a 1-week half-life.
- */
-function recencyScore(createdAt: number): number {
-  const nowSeconds = Date.now() / 1000;
-  const hoursSince = (nowSeconds - createdAt) / 3600;
-  return 1 / (1 + hoursSince / 168);
-}
-
-// ---------------------------------------------------------------------------
-// MMR (Maximal Marginal Relevance)
-// ---------------------------------------------------------------------------
-
-/**
- * Apply Maximal Marginal Relevance to promote diversity in results.
- */
-export function applyMMR(
-  candidates: RerankerCandidate[],
-  lambda: number = 0.7,
-  topK: number = 8,
-): RerankerCandidate[] {
-  if (candidates.length === 0) return [];
-  if (candidates.length <= 1) return candidates.slice(0, topK);
-
-  const remaining = candidates.map((c, i) => ({ candidate: c, index: i }));
-  const selected: RerankerCandidate[] = [];
-  const n = candidates.length;
-
-  while (selected.length < topK && remaining.length > 0) {
-    let bestIdx = -1;
-    let bestMMR = -Infinity;
-
-    for (let i = 0; i < remaining.length; i++) {
-      const { candidate, index } = remaining[i];
-
-      // Relevance: linear decay from 1.0 (first) to near 0 (last)
-      const relevance = 1.0 - index / n;
-
-      // Max similarity to any already-selected candidate
-      let maxSim = 0;
-      if (candidate.embedding && candidate.embedding.length > 0) {
-        for (const sel of selected) {
-          if (sel.embedding && sel.embedding.length > 0) {
-            const sim = cosineSimilarity(candidate.embedding, sel.embedding);
-            if (sim > maxSim) maxSim = sim;
-          }
-        }
-      }
-
-      const mmr = lambda * relevance - (1 - lambda) * maxSim;
-      if (mmr > bestMMR) {
-        bestMMR = mmr;
-        bestIdx = i;
-      }
-    }
-
-    if (bestIdx >= 0) {
-      selected.push(remaining[bestIdx].candidate);
-      remaining.splice(bestIdx, 1);
-    } else {
-      break;
-    }
-  }
-
-  return selected;
-}
-
-// ---------------------------------------------------------------------------
-// Combined Re-Ranker
-// ---------------------------------------------------------------------------
-
-/**
- * Re-rank decrypted candidates using BM25 + Cosine + Importance + Recency
- * with Weighted RRF fusion and MMR diversity.
+ * Re-rank decrypted candidates by delegating to core's `rerankWithConfig`.
  *
- * When `applySourceWeights` is true, the final RRF score for each candidate
- * is multiplied by a Retrieval v2 Tier 1 source weight based on the
- * candidate's `source` field (user=1.0, user-inferred=0.9, derived/external=0.7,
- * assistant=0.55). Candidates without a `source` field use the legacy
- * fallback weight (0.85). This is the flag equivalent of core
- * `rerankWithConfig(.., apply_source_weights=true)`.
+ * @param query              The user's plaintext search query.
+ * @param queryEmbedding     Embedding vector for the query.
+ * @param candidates         Decrypted candidates with text and optional
+ *                           embeddings + v1 source.
+ * @param topK               Top-K to return (default 8).
+ * @param _legacyWeights     IGNORED -- kept for API stability so existing
+ *                           callers still compile. Core handles
+ *                           intent-weighting internally based on per-candidate
+ *                           cosine scores.
+ * @param applySourceWeights When true, multiply the final fused score by
+ *                           the v1 source-weight (Retrieval v2 Tier 1).
+ *                           Default true at all production call sites.
  */
 export function rerank(
   query: string,
   queryEmbedding: number[],
   candidates: RerankerCandidate[],
   topK: number = 8,
-  weights?: Partial<RankingWeights>,
+  _legacyWeights?: Partial<RankingWeights>,
   applySourceWeights: boolean = false,
 ): RerankerResult[] {
   if (candidates.length === 0) return [];
 
-  // Merge caller weights with defaults
-  const w: RankingWeights = { ...DEFAULT_WEIGHTS, ...weights };
-
-  // --- Step 1: Tokenize ---
-  const queryTerms = tokenize(query);
-  const candidateTerms = candidates.map((c) => tokenize(c.text));
-
-  // --- Step 2: Corpus statistics ---
-  const docCount = candidates.length;
-  let totalDocLen = 0;
-
-  const termDocFreqs = new Map<string, number>();
-  for (const terms of candidateTerms) {
-    totalDocLen += terms.length;
-    const uniqueTerms = new Set(terms);
-    for (const term of uniqueTerms) {
-      termDocFreqs.set(term, (termDocFreqs.get(term) ?? 0) + 1);
-    }
-  }
-
-  const avgDocLen = docCount > 0 ? totalDocLen / docCount : 0;
-
-  // --- Step 3: BM25 scores ---
-  const bm25Ranking: RankedItem[] = [];
-  for (let i = 0; i < candidates.length; i++) {
-    const score = bm25Score(queryTerms, candidateTerms[i], avgDocLen, docCount, termDocFreqs);
-    bm25Ranking.push({ id: candidates[i].id, score });
-  }
-  bm25Ranking.sort((a, b) => b.score - a.score);
-
-  // --- Step 4: Cosine similarity scores ---
-  const cosineScores = new Map<string, number>();
-  const cosineRanking: RankedItem[] = [];
-  for (const candidate of candidates) {
-    if (candidate.embedding && candidate.embedding.length > 0) {
-      const score = cosineSimilarity(queryEmbedding, candidate.embedding);
-      cosineScores.set(candidate.id, score);
-      cosineRanking.push({ id: candidate.id, score });
-    }
-  }
-  cosineRanking.sort((a, b) => b.score - a.score);
-
-  // --- Step 5: Importance ranking ---
-  const importanceRanking: RankedItem[] = candidates.map((c) => ({
+  // Build the core::Candidate JSON shape. Core requires:
+  //   { id, text, embedding: number[], timestamp: string, source? }
+  // Candidates without an embedding pass an empty array; core's cosine
+  // similarity returns 0 for that case (see cosine_similarity_f32).
+  const coreCandidates = candidates.map((c) => ({
     id: c.id,
-    score: c.importance ?? 0.5,
+    text: c.text,
+    embedding: c.embedding ?? [],
+    timestamp: c.createdAt != null ? String(c.createdAt) : '',
+    ...(c.source ? { source: c.source } : {}),
   }));
-  importanceRanking.sort((a, b) => b.score - a.score);
 
-  // --- Step 6: Recency ranking ---
-  const recencyRanking: RankedItem[] = candidates.map((c) => ({
-    id: c.id,
-    score: c.createdAt != null ? recencyScore(c.createdAt) : 0.5,
-  }));
-  recencyRanking.sort((a, b) => b.score - a.score);
+  // Empty queryEmbedding is allowed: core will compute cosine = 0 across
+  // all candidates and rely entirely on BM25 (intent_score clamps to 0
+  // -> bm25_weight = 0.6, cosine_weight = 0.3).
+  const queryVec = new Float32Array(queryEmbedding ?? []);
+  const candidatesJson = JSON.stringify(coreCandidates);
 
-  // --- Step 7: Weighted RRF fusion ---
-  const rankings: RankedItem[][] = [bm25Ranking];
-  const rankWeights: number[] = [w.bm25];
+  const ranked = core.rerankWithConfig(
+    query,
+    queryVec,
+    candidatesJson,
+    topK,
+    applySourceWeights,
+  ) as CoreRankedResult[];
 
-  if (cosineRanking.length > 0) {
-    rankings.push(cosineRanking);
-    rankWeights.push(w.cosine);
-  }
-
-  rankings.push(importanceRanking);
-  rankWeights.push(w.importance);
-
-  rankings.push(recencyRanking);
-  rankWeights.push(w.recency);
-
-  const fused = weightedRrfFuse(rankings, rankWeights);
-
-  // --- Step 8: Build result objects with scores ---
+  // Map core results back to RerankerResult, restoring the optional
+  // metadata (importance/createdAt/source) so callers that still read those
+  // fields keep working.
   const candidateMap = new Map<string, RerankerCandidate>();
-  for (const c of candidates) {
-    candidateMap.set(c.id, c);
-  }
+  for (const c of candidates) candidateMap.set(c.id, c);
 
-  const rrfResults: RerankerResult[] = [];
-  for (const item of fused) {
-    const candidate = candidateMap.get(item.id);
-    if (candidate) {
-      const sourceWeight = applySourceWeights
-        ? getSourceWeight(candidate.source)
-        : 1.0;
-      rrfResults.push({
-        ...candidate,
-        rrfScore: item.score * sourceWeight,
-        cosineSimilarity: cosineScores.get(item.id),
-        sourceWeight: applySourceWeights ? sourceWeight : undefined,
-      });
-    }
-  }
-
-  // When source weights are applied the RRF-scaled scores may no longer be in
-  // descending order (weighted=0.55 assistant could slip below a weighted=1.0
-  // user fact that was originally ranked lower). Re-sort so the top-K picked
-  // by MMR is meaningful.
-  if (applySourceWeights) {
-    rrfResults.sort((a, b) => b.rrfScore - a.rrfScore);
-  }
-
-  // --- Step 9: Apply MMR for diversity, then return top-k ---
-  const mmrResults = applyMMR(rrfResults, 0.7, topK);
-
-  // Preserve rrfScore and cosineSimilarity through MMR
-  return mmrResults as RerankerResult[];
-}
-
-// ---------------------------------------------------------------------------
-// Relevance gate (issue #116)
-// ---------------------------------------------------------------------------
-
-/**
- * Decide whether reranked results clear the relevance gate for surfacing to
- * the user (recall tool) or auto-injecting into agent context (hooks).
- *
- * Two-signal acceptance rule, addressing issue #116 (rc.18 finding F1):
- *
- *   1. **Cosine path** — at least one reranked result has cosine similarity
- *      with the query embedding >= `cosineThreshold`. This is the existing
- *      semantic-relevance gate and remains the primary signal.
- *
- *   2. **Lexical override** — when cosine is below threshold (e.g. short
- *      queries against the local Harrier-OSS-270m model produce embeddings
- *      with low cosine sim regardless of topical match), the gate ALSO
- *      passes when every meaningful query token (post stop-word removal)
- *      appears as a stem-prefix substring in the top reranked result's
- *      text. This is strong lexical evidence that the user is asking
- *      about a fact already stored, even when embedding sim is weak.
- *
- * Without (2), short queries like `"favorite color"` against the stored
- * fact `"User's favorite color is cobalt blue"` were silently filtered
- * even though every query token was present in the candidate. Hermes
- * (Python client) does not apply any cosine gate, which is why it
- * recalled the same fact for the same Smart Account in rc.18 QA.
- *
- * The lexical override is intentionally conservative:
- *   - Requires ALL non-stop-word query tokens to be present (any-of would
- *     over-trigger).
- *   - Uses 4-char-prefix substring match to be stem-tolerant ("favorite"
- *     stems to "favorit" in the stored fact's blind index, but the raw
- *     fact text contains the unstemmed word; the prefix check absorbs
- *     light morphology).
- *   - Token count must be >= 1 — empty/all-stop-word queries fall back
- *     to cosine path.
- *
- * @param query - the user's search query (raw string)
- * @param reranked - reranked results (top first)
- * @param cosineThreshold - the configured cosine cutoff (typically 0.15)
- * @returns true if results should be surfaced; false to suppress
- */
-export function passesRelevanceGate(
-  query: string,
-  reranked: RerankerResult[],
-  cosineThreshold: number,
-): boolean {
-  if (reranked.length === 0) return false;
-
-  // Path 1: cosine clears threshold.
-  const maxCosine = Math.max(...reranked.map((r) => r.cosineSimilarity ?? 0));
-  if (maxCosine >= cosineThreshold) return true;
-
-  // Path 2: lexical override — every meaningful query token appears in
-  // the top reranked result's text.
-  const queryTokens = tokenize(query, /* removeStopWords */ true);
-  if (queryTokens.length === 0) return false;
-
-  const topText = (reranked[0]?.text ?? '').toLowerCase();
-  if (topText.length === 0) return false;
-
-  // 4-char prefix substring match: tolerates light stemming ("favorite"
-  // matches a fact text containing "favorite", "favorites", "favoring",
-  // etc., without re-running the WASM Porter stemmer client-side).
-  const PREFIX_LEN = 4;
-  for (const token of queryTokens) {
-    const probe = token.length >= PREFIX_LEN ? token.slice(0, PREFIX_LEN) : token;
-    if (!topText.includes(probe)) return false;
-  }
-  return true;
+  return ranked.map((r) => {
+    const orig = candidateMap.get(r.id);
+    return {
+      id: r.id,
+      text: r.text,
+      embedding: orig?.embedding,
+      importance: orig?.importance,
+      createdAt: orig?.createdAt,
+      source: orig?.source,
+      rrfScore: r.score,
+      cosineSimilarity: r.cosine_score,
+      sourceWeight: applySourceWeights ? (r.source_weight ?? 1.0) : undefined,
+    };
+  });
 }

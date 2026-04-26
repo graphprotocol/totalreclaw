@@ -1240,36 +1240,29 @@ async function handleRecallSubgraph(
     const intent = detectQueryIntent(query.trim());
     const weights = INTENT_WEIGHTS[intent];
 
-    // 7. Rerank with BM25 + cosine + importance + recency via weighted RRF
-    //    (+ MMR diversity). Then apply Retrieval v2 Tier 1 source weights via
-    //    core's `rerankWithConfig` using only the bm25/cosine components (the
-    //    MCP-side recency + MMR + intent weighting remain in TS for now).
-    //    Strategy: run the TS reranker to produce the top-K ordering; use
-    //    core's source-weight helper to nudge the final score so assistant-
-    //    authored claims drop behind user-authored ones with comparable text.
-    const reranked = rerank(query.trim(), queryEmbedding, decryptedCandidates, k, weights);
-    const core = require('@totalreclaw/core') as typeof import('@totalreclaw/core');
-    const weighted = reranked
-      .map((r) => {
-        const s = sourceMap.get(r.id);
-        const w = s
-          ? core.sourceWeight(s)
-          : core.legacyClaimFallbackWeight();
-        return { r, weightedScore: r.rrfScore * w, sourceWeight: w };
-      })
-      .sort((a, b) => b.weightedScore - a.weightedScore)
-      .slice(0, k);
+    // 7. Rerank via core's `rerankWithConfig` (BM25 + cosine + intent-weighted
+    //    RRF + Tier 1 source weighting in one shot). The legacy `weights`
+    //    argument is accepted for API stability but ignored -- core handles
+    //    intent-weighting internally based on per-candidate cosine scores.
+    const reranked = rerank(
+      query.trim(),
+      queryEmbedding,
+      decryptedCandidates,
+      k,
+      weights,
+      /* applySourceWeights (Retrieval v2 Tier 1) */ true,
+    );
 
     // 8. Format results
-    const memories = weighted.map(({ r, weightedScore, sourceWeight }) => ({
+    const memories = reranked.map((r) => ({
       fact_id: r.id,
       fact_text: r.text,
       type: categoryMap.get(r.id) ?? 'fact',
       source: sourceMap.get(r.id),
       scope: scopeMap.get(r.id),
-      score: weightedScore,
+      score: r.rrfScore,
       rrf_score: r.rrfScore,
-      source_weight: sourceWeight,
+      source_weight: r.sourceWeight ?? 1.0,
       cosine_similarity: r.cosineSimilarity ?? 0,
       importance: Math.round((r.importance ?? 0.5) * 10),
       age_days: r.createdAt
