@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.2.1] - 2026-04-26
+
+### Security
+- **[SECURITY] Removed `totalreclaw_setup` tool**; users should follow the URL-driven install flow per [`docs/guides/claude-code-setup.md`](../docs/guides/claude-code-setup.md). Onboarding now sources the recovery phrase out-of-band (OpenClaw / Hermes browser pair flow, an offline BIP-39 generator, or a prior `~/.totalreclaw/credentials.json` cache) and the user pastes it directly into `TOTALRECLAW_RECOVERY_PHRASE` in the MCP host config. The agent never sees the phrase.
+- Stale tool catalogs that still call the old name receive a structured `tool_removed` error pointing at the canonical install guide.
+- Server `SERVER_INSTRUCTIONS` rewritten to the new phrase-safety stance (no in-chat setup, never echo / print / summarize the phrase, never invoke phrase-touching CLIs via a shell tool).
+- Added `tests/phrase-safety-dist.test.ts` — a regression scan over compiled `dist/` JS that fails if any source code emits a phrase string in a response-payload-shaped JSON object.
+- Added repo-level companion to the existing markdown-only phrase-safety guard at `scripts/check-phrase-safety.sh`: new `scripts/check-phrase-safety-dist.sh` scans compiled MCP `dist/` JS for source-emitted phrase keys in tool responses.
+
+### Notes / Compatibility
+- Patch-version bump (3.2.0 -> 3.2.1). No breaking change for end-users — the MCP onboarding path was already documented as URL-driven in `docs/guides/claude-code-setup.md` (which explicitly forbids the deleted tool). Hosts that retained a stale `totalreclaw_setup` reference get a structured error with a link to the install guide.
+
 ## [3.2.0] - 2026-04-19
 
 ### Added

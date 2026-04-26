@@ -1814,147 +1814,16 @@ function quotaExceededResponse(): { content: Array<{ type: string; text: string 
   };
 }
 
-// ── Setup tool (unconfigured mode) ──────────────────────────────────────────
-
-const setupToolDefinition = {
-  name: 'totalreclaw_setup',
-  description: 'Set up TotalReclaw for first-time use. Generate a new recovery phrase or import an existing one.',
-  inputSchema: {
-    type: 'object' as const,
-    properties: {
-      action: {
-        type: 'string',
-        enum: ['generate', 'import'],
-        description: 'Whether to generate a new recovery phrase or import an existing one',
-      },
-      recovery_phrase: {
-        type: 'string',
-        description: 'Your existing 12-word BIP-39 recovery phrase (only for action="import")',
-      },
-    },
-    required: ['action'],
-  },
-};
-
-async function handleSetup(
-  args: unknown,
-): Promise<{ content: Array<{ type: string; text: string }> }> {
-  const input = args as Record<string, unknown>;
-  const action = input?.action as string;
-
-  if (action !== 'generate' && action !== 'import') {
-    return {
-      content: [{ type: 'text', text: JSON.stringify({
-        success: false,
-        error: 'Invalid action. Use "generate" for a new identity or "import" to restore an existing one.',
-      })}],
-    };
-  }
-
-  let mnemonic: string;
-
-  if (action === 'import') {
-    const phrase = (input?.recovery_phrase as string || '').trim();
-    const words = phrase.split(/\s+/);
-    const allWordsValid = words.length === 12 && words.every(w => wordlist.includes(w));
-    if (!phrase || (!validateMnemonic(phrase, wordlist) && !allWordsValid)) {
-      return {
-        content: [{ type: 'text', text: JSON.stringify({
-          success: false,
-          error: 'Invalid recovery phrase. Must be 12 words from the BIP-39 English wordlist.',
-        })}],
-      };
-    }
-    if (!validateMnemonic(phrase, wordlist)) {
-      console.error('Warning: recovery phrase has valid words but invalid BIP-39 checksum. Accepting anyway.');
-    }
-    mnemonic = phrase;
-  } else {
-    mnemonic = generateMnemonic(wordlist, 128);
-  }
-
-  // Derive keys
-  const { authKeyHex, saltHex } = deriveAuthKey(mnemonic);
-  const authKeyHash = computeSetupAuthKeyHash(authKeyHex);
-
-  // Register with relay
-  const serverUrl = SERVER_URL;
-  let userId: string;
-  try {
-    userId = await registerWithServer(serverUrl, authKeyHash, saltHex);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      content: [{ type: 'text', text: JSON.stringify({
-        success: false,
-        error: `Registration failed: ${message}. Check your internet connection.`,
-      })}],
-    };
-  }
-
-  // Save credentials (including mnemonic)
-  const credDir = path.dirname(CREDENTIALS_PATH);
-  fs.mkdirSync(credDir, { recursive: true });
-  const credentials: SavedCredentials = {
-    userId,
-    salt: saltHex,
-    serverUrl,
-    mnemonic,
-  };
-  fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(credentials, null, 2), {
-    encoding: 'utf-8',
-    mode: 0o600,
-  });
-
-  // Pre-download embedding model
-  console.error('Downloading embedding model (one-time, ~600MB)...');
-  try {
-    await generateEmbedding('warmup');
-    console.error('Embedding model ready.');
-  } catch (err) {
-    console.error(`Warning: Could not pre-download embedding model: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  // Hot-reload server state
-  try {
-    subgraphState = await initSubgraphState(mnemonic);
-    currentMode = 'subgraph';
-    console.error(`TotalReclaw configured (managed service, owner: ${subgraphState.smartAccountAddress})`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      content: [{ type: 'text', text: JSON.stringify({
-        success: true,
-        warning: `Setup saved but initialization failed: ${message}. Restart the MCP server.`,
-        recovery_phrase: action === 'generate' ? mnemonic : undefined,
-        user_id: userId,
-      })}],
-    };
-  }
-
-  const result: Record<string, unknown> = {
-    success: true,
-    user_id: userId,
-    mode: 'managed_service',
-    smart_account: subgraphState.smartAccountAddress,
-    tier: 'free',
-    tier_info: 'Free tier: unlimited memories and reads (test network — memories may be reset). Upgrade to Pro for permanent on-chain storage. Pricing: https://totalreclaw.xyz/pricing — upgrade anytime via totalreclaw_upgrade.',
-  };
-
-  if (action === 'generate') {
-    result.recovery_phrase = mnemonic;
-    result.recovery_phrase_warning =
-      'CRITICAL: Write down this recovery phrase and store it securely. ' +
-      'It is your ONLY identity in TotalReclaw. If you lose it, ALL your memories are lost forever. ' +
-      'There is NO password reset, NO recovery, NO support that can help.';
-  } else {
-    result.message = 'Identity restored. Your existing memories are now accessible.';
-  }
-
-  return {
-    content: [{ type: 'text', text: JSON.stringify(result) }],
-  };
-}
+// ── Setup tool — REMOVED in 3.2.1 (security: phrase-safety) ─────────────────
+// The `totalreclaw_setup` MCP tool was removed because its response payload
+// returned the BIP-39 mnemonic via the `recovery_phrase` field, which crossed
+// the LLM's context window every time an agent invoked the tool. That violated
+// the phrase-safety invariant ("the recovery phrase MUST NEVER cross the LLM
+// context"). MCP onboarding now follows the URL-driven flow documented at
+// `docs/guides/claude-code-setup.md` — agents direct users to source their
+// phrase from the OpenClaw / Hermes browser pair flow (or an offline BIP-39
+// generator) and paste it into the MCP host config themselves. No tool path
+// exists for the agent to ever see the phrase.
 
 // ── Layer 1: Server with instructions ────────────────────────────────────────
 
@@ -1998,7 +1867,6 @@ function getClientIdentifier(): string {
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
-    setupToolDefinition,
     rememberToolDefinition,
     recallToolDefinition,
     forgetToolDefinition,
@@ -2023,9 +1891,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
-  // Handle setup tool (available in all modes)
+  // `totalreclaw_setup` was removed in 3.2.1 (security: phrase-safety).
+  // Onboarding now follows the URL-driven flow at
+  // `docs/guides/claude-code-setup.md`. If a stale agent / host catalog
+  // still calls the old tool name, return a structured error pointing at
+  // the canonical install guide — without surfacing any phrase in payload.
   if (name === 'totalreclaw_setup') {
-    return await handleSetup(args);
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          error: 'tool_removed',
+          message:
+            'The totalreclaw_setup tool was removed in @totalreclaw/mcp-server@3.2.1 ' +
+            'for phrase-safety. Follow the URL-driven install flow at ' +
+            'https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/claude-code-setup.md. ' +
+            'The user sources their recovery phrase out-of-band (OpenClaw or Hermes ' +
+            'browser pair flow, or an offline BIP-39 generator) and pastes it directly ' +
+            'into TOTALRECLAW_RECOVERY_PHRASE in the MCP host config — never into chat.',
+        }),
+      }],
+      isError: true,
+    };
   }
 
   // Handle support tool (available in all modes, including unconfigured)
@@ -2034,14 +1921,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return handleSupport(walletAddress);
   }
 
-  // In unconfigured mode, all other tools return setup guidance
+  // In unconfigured mode, all other tools return setup guidance pointing at
+  // the URL-driven install flow (NOT the deleted totalreclaw_setup tool).
   if (currentMode === 'unconfigured') {
     return {
       content: [{
         type: 'text',
         text: JSON.stringify({
           error: 'not_configured',
-          message: 'TotalReclaw is not configured yet. Ask the user if they have an existing recovery phrase or want to generate a new one, then use the totalreclaw_setup tool.',
+          message:
+            'TotalReclaw is not configured yet. Follow the URL-driven install flow ' +
+            'at https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/claude-code-setup.md — ' +
+            'the user pastes their recovery phrase directly into the MCP host config (TOTALRECLAW_RECOVERY_PHRASE), ' +
+            'never into chat.',
         }),
       }],
       isError: true,
@@ -2490,7 +2382,7 @@ async function main(): Promise<void> {
   } else if (currentMode === 'http') {
     console.error('TotalReclaw MCP server started (self-hosted mode)');
   } else {
-    console.error('TotalReclaw MCP server started (unconfigured — use totalreclaw_setup tool)');
+    console.error('TotalReclaw MCP server started (unconfigured — set TOTALRECLAW_RECOVERY_PHRASE in the MCP host config; see docs/guides/claude-code-setup.md)');
   }
 
   const transport = new StdioServerTransport();

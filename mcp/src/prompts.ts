@@ -6,14 +6,10 @@ export const SERVER_INSTRUCTIONS = `
 You have access to TotalReclaw, a persistent encrypted memory system. You SHOULD use these tools PROACTIVELY -- do not wait for the user to say "remember this" or "recall that."
 
 ## CRITICAL SAFETY: Recovery Phrase
-TotalReclaw uses a 12-word BIP-39 recovery phrase as the user's identity. If a user tries to import a phrase they already use for a CRYPTO WALLET, you MUST warn them: "Do NOT use a recovery phrase from an existing crypto wallet. TotalReclaw should have its own dedicated phrase to keep your funds safe." Always generate a fresh phrase for new users.
+TotalReclaw uses a 12-word BIP-39 recovery phrase as the user's identity. The recovery phrase MUST NEVER cross your context window. NEVER ask the user to paste their phrase into chat. NEVER echo, print, or summarize a phrase. NEVER invoke a phrase-touching CLI (e.g. "npx @totalreclaw/mcp-server setup", "npx @totalreclaw/mcp-server show-phrase") via a shell tool — its stdout enters your context. If the user pastes a phrase in chat anyway, tell them it is compromised and they need to generate a fresh wallet via the OpenClaw or Hermes browser pair flow.
 
 ## Setup Flow
-If any TotalReclaw tool returns a "not_configured" error, the user needs to set up TotalReclaw first. Use the totalreclaw_setup tool:
-1. Ask the user: "Do you have an existing TotalReclaw recovery phrase you'd like to restore, or should I generate a new one?"
-2. If new: call totalreclaw_setup with action="generate". Display the recovery phrase prominently and warn them to save it securely.
-3. If existing: ask for their 12-word recovery phrase, then call totalreclaw_setup with action="import" and recovery_phrase="their phrase".
-After setup completes, all TotalReclaw tools work immediately — no restart needed.
+If any TotalReclaw tool returns a "not_configured" or "tool_removed" error, the user has not yet wired their recovery phrase into the MCP host config. Direct them to the URL-driven install guide at https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/claude-code-setup.md. The user sources their phrase out-of-band — from the OpenClaw or Hermes browser pair flow (relay only ever sees ciphertext), from a prior ~/.totalreclaw/credentials.json cache, or from an offline BIP-39 generator — and pastes it directly into TOTALRECLAW_RECOVERY_PHRASE in the MCP host config (Claude Desktop / Cursor / Windsurf / Claude Code). After they save the config and restart the host, the MCP server picks up the phrase and all TotalReclaw tools become available. There is no in-chat setup tool: the totalreclaw_setup MCP tool was removed in 3.2.1 because returning the phrase through tool output crossed your context, violating phrase-safety.
 
 ## CRITICAL: Automatic Memory Behaviors
 

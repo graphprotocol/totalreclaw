@@ -141,7 +141,8 @@ All 19 tools are invoked by the host agent from natural language context. Tool s
 | `totalreclaw_migrate` | Migrate testnet memories to mainnet after Pro upgrade |
 | `totalreclaw_account` | View account details (wallet, tier, quota, phrase hint) |
 | `totalreclaw_support` | Troubleshooting help + contact links |
-| `totalreclaw_setup` | Generate or import a recovery phrase (first-run flow) |
+
+> **Onboarding (recovery phrase):** the `totalreclaw_setup` tool was removed in 3.2.1 for phrase-safety. Onboarding follows the URL-driven flow at [`docs/guides/claude-code-setup.md`](../docs/guides/claude-code-setup.md): the user sources their phrase out-of-band (OpenClaw / Hermes browser pair flow, offline BIP-39 generator, or a prior `~/.totalreclaw/credentials.json` cache) and pastes it into `TOTALRECLAW_RECOVERY_PHRASE` in the MCP host config. The agent never sees the phrase.
 
 Users invoke the new v1 tools naturally: *"pin that"*, *"that was actually a rule, not a preference"*, *"file that under work"*. Tool descriptions teach the host LLM to match utterances to tools.
 

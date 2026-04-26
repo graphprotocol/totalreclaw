@@ -17,15 +17,38 @@ jobs:
     # isn't paired with a safety qualifier ("NEVER display", "do not
     # show", etc) on the same line.
     #
-    # See: scripts/check-phrase-safety.sh + tests/phrase-safety/.
+    # The dist scan (added 2026-04-26 with the @totalreclaw/mcp-server@3.2.1
+    # SECURITY hotfix) is the source-code companion: it scans the COMPILED
+    # JavaScript shipped to npm for any tool-response payload that emits
+    # `recovery_phrase` or `mnemonic` as an object key. The deleted
+    # `totalreclaw_setup` MCP tool used to do exactly that.
+    #
+    # See: scripts/check-phrase-safety.sh + scripts/check-phrase-safety-dist.sh
+    # + tests/phrase-safety/.
     name: Phrase Safety
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run phrase-safety guard
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'v0.14.0'
+      - name: Build @totalreclaw/core (WASM) [transitional]
+        run: |
+          cd rust/totalreclaw-core
+          wasm-pack build --target nodejs --out-dir pkg --features wasm
+          node -e "const p=require('./pkg/package.json'); p.name='@totalreclaw/core'; require('fs').writeFileSync('./pkg/package.json', JSON.stringify(p,null,2)+'\n')"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run phrase-safety guard (markdown / SKILL.md)
         run: bash scripts/check-phrase-safety.sh
       - name: Run phrase-safety regression suite
         run: bash tests/phrase-safety/run-regression.sh
+      - name: Build mcp/dist (required for dist scan)
+        run: cd mcp && rm -f package-lock.json && npm install --legacy-peer-deps && npm run build
+      - name: Run phrase-safety dist scan (compiled JS payloads)
+        run: bash scripts/check-phrase-safety-dist.sh
 
   client-tests:
     name: Client Tests (TypeScript)
