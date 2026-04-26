@@ -73,6 +73,35 @@ def _get_hermes_llm_config():
         return None
 
 
+def _maybe_drain_pending(state: "PluginState") -> None:
+    """Drain any deferred-extraction queue for the configured owner.
+
+    Issue #165 (umbrella #163, F2): Hermes does not fire ``on_session_start``
+    for ``hermes chat -q --resume <sid>`` turns, so a drain wired only to
+    that hook never recovers queue entries when users continue a
+    conversation. Calling this from both ``on_session_start`` AND the head
+    of ``pre_llm_call`` makes drain fire on every turn including resumes.
+    The path is idempotent — ``has_pending`` is a cheap read, so the
+    no-op cost on quiet turns is one filesystem stat.
+    """
+    try:
+        owner = _owner_address(state)
+        if owner and has_pending(owner):
+            batches = drain_pending(owner)
+            recovered_count = _drain_into_state(state, batches)
+            if recovered_count > 0:
+                logger.info(
+                    "TotalReclaw: drained %d message(s) from prior interpreter-shutdown race.",
+                    recovered_count,
+                )
+                state.set_quota_warning(
+                    f"TotalReclaw: caught up on auto-extraction for {recovered_count} "
+                    f"message(s) deferred from a prior CLI session."
+                )
+    except Exception as exc:
+        logger.warning("TotalReclaw: pending-drain failed: %s", exc)
+
+
 def on_session_start(state: "PluginState", **kwargs) -> None:
     """Initialize client, drain any pending extraction queue, and check billing.
 
@@ -90,24 +119,9 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
         return
 
     # Drain any messages that a prior interpreter-shutdown race deferred.
-    # This must run before billing-cache logic so a drain-induced
-    # quota_warning isn't overwritten.
-    try:
-        owner = _owner_address(state)
-        if owner and has_pending(owner):
-            batches = drain_pending(owner)
-            recovered_count = _drain_into_state(state, batches)
-            if recovered_count > 0:
-                logger.info(
-                    "TotalReclaw: drained %d message(s) from prior interpreter-shutdown race.",
-                    recovered_count,
-                )
-                state.set_quota_warning(
-                    f"TotalReclaw: caught up on auto-extraction for {recovered_count} "
-                    f"message(s) deferred from a prior CLI session."
-                )
-    except Exception as exc:
-        logger.warning("TotalReclaw: pending-drain failed at session start: %s", exc)
+    # Must run before billing-cache logic so a drain-induced quota_warning
+    # isn't overwritten.
+    _maybe_drain_pending(state)
 
     # Check billing cache and update server-driven config
     try:
@@ -192,6 +206,12 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
             state._totalreclaw_setup_nudge_shown = True
             return {"context": _SETUP_NUDGE}
         return None
+
+    # Issue #165: Hermes doesn't fire on_session_start for ``--resume`` turns,
+    # so the drain-on-session-start path (issue #148) never recovers the queue
+    # for users running multi-turn ``hermes chat -q --resume <sid>``. Drain
+    # here too — idempotent and cheap when the queue is empty.
+    _maybe_drain_pending(state)
 
     context_parts: list[str] = []
 

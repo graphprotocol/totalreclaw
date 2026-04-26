@@ -294,3 +294,97 @@ def test_on_session_start_drains_pending_into_state(pending_path, monkeypatch):
     assert not pending_path.exists()
     # Quota warning announces the catch-up.
     assert state.quota_warning and "caught up" in state.quota_warning
+
+
+# ---------------------------------------------------------------------------
+# 5. Issue #165 (umbrella #163, F2): pre_llm_call must also drain so the
+#    --resume case (where Hermes does NOT fire on_session_start) recovers
+#    the queue. Without this, drain is gated to fresh-session boundaries
+#    only and ``hermes chat -q --resume <sid>`` users accumulate pending
+#    entries forever.
+# ---------------------------------------------------------------------------
+
+
+def test_issue_165_pre_llm_call_drains_pending_for_resume_case(
+    pending_path, monkeypatch
+):
+    from totalreclaw.hermes import hooks
+
+    drained_calls: list = []
+
+    def fake_auto_extract(state, mode="turn", llm_config=None):
+        drained_calls.append({"mode": mode, "msg_count": len(state._messages)})
+        return []
+
+    def fake_auto_recall(*_a, **_kw):
+        return ""
+
+    monkeypatch.setattr(hooks, "_auto_extract", fake_auto_extract)
+    monkeypatch.setattr(hooks, "_get_hermes_llm_config", lambda: None)
+    monkeypatch.setattr(hooks, "auto_recall", fake_auto_recall)
+
+    owner = "0xdeadbeef00000000000000000000000000000001"
+    enqueue_messages(
+        owner,
+        [
+            {"role": "user", "content": "queued during --resume turn N-1"},
+            {"role": "assistant", "content": "queued reply"},
+        ],
+    )
+
+    state = _FakeState(_FakeClient(raise_on="never"), [])
+    state.add_message = lambda role, content: state._messages.append(
+        {"role": role, "content": content}
+    )
+    # PluginState surface used by pre_llm_call.
+    state.get_quota_warning = lambda: None
+    state.clear_quota_warning = lambda: None
+
+    # Simulate ``hermes chat -q --resume <sid> --query "..."`` — Hermes
+    # treats this as a continuing session and skips on_session_start, but
+    # pre_llm_call still fires.
+    hooks.pre_llm_call(state, user_message="continue", is_first_turn=False)
+
+    assert len(drained_calls) == 1, (
+        "drain should have run from pre_llm_call even though "
+        "on_session_start was never called for the --resume turn"
+    )
+    assert drained_calls[0]["mode"] == "full"
+    assert drained_calls[0]["msg_count"] == 2
+    assert not pending_path.exists(), "queue should be consumed after drain"
+    assert state.quota_warning and "caught up" in state.quota_warning
+
+
+def test_issue_165_pre_llm_call_drain_is_noop_when_queue_empty(
+    pending_path, monkeypatch
+):
+    """The drain hook must be cheap on the hot path. With no queue entry,
+    no extraction should fire and no quota warning should be set."""
+    from totalreclaw.hermes import hooks
+
+    drained_calls: list = []
+
+    def fake_auto_extract(state, mode="turn", llm_config=None):
+        drained_calls.append({"mode": mode})
+        return []
+
+    def fake_auto_recall(*_a, **_kw):
+        return ""
+
+    monkeypatch.setattr(hooks, "_auto_extract", fake_auto_extract)
+    monkeypatch.setattr(hooks, "_get_hermes_llm_config", lambda: None)
+    monkeypatch.setattr(hooks, "auto_recall", fake_auto_recall)
+
+    state = _FakeState(_FakeClient(raise_on="never"), [])
+    state.add_message = lambda role, content: state._messages.append(
+        {"role": role, "content": content}
+    )
+    state.get_quota_warning = lambda: None
+    state.clear_quota_warning = lambda: None
+
+    hooks.pre_llm_call(state, user_message="hi", is_first_turn=False)
+
+    # Queue empty → no auto_extract, no quota warning, no on-disk file.
+    assert drained_calls == []
+    assert not pending_path.exists()
+    assert state.quota_warning is None
