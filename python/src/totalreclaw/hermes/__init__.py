@@ -238,4 +238,76 @@ def register(ctx):
     except Exception:  # pragma: no cover — validation must not crash plugin load
         logger.debug("LLM-config load-time validation skipped", exc_info=True)
 
+    # rc.26 (issue #167 path A): defensive WARN if the user re-enabled
+    # Hermes' built-in `memory` tool after install. The SKILL.md install
+    # flow auto-disables it (`hermes tools disable memory`), but this
+    # belt-and-suspenders check runs on every plugin load to surface the
+    # anti-pattern in logs if someone manually re-enabled the built-in.
+    # Best-effort — never crashes plugin load. Shells out to the `hermes`
+    # CLI; absence of the CLI is silently tolerated.
+    try:
+        _warn_if_built_in_memory_enabled()
+    except Exception:  # pragma: no cover — defensive check must not crash
+        logger.debug("built-in memory enablement check skipped", exc_info=True)
+
     logger.info("TotalReclaw plugin registered (14+ tools, 6 hooks)")
+
+
+def _warn_if_built_in_memory_enabled() -> None:
+    """Check whether Hermes' built-in `memory` tool is currently enabled.
+
+    Emits a single WARN line if it is. No-op (DEBUG only) if the
+    `hermes` CLI is not on PATH or if `hermes tools list` doesn't
+    expose a parseable enabled-set — we don't want this defensive
+    check to spam logs in environments where it can't be answered
+    cleanly.
+
+    rc.26 fix for the rc.24 NO-GO finding (issue #167): TotalReclaw
+    and Hermes built-in `memory` solve the same problem and compete
+    for "remember X" / "recall X" intents during natural conversation.
+    The install flow disables the built-in via SKILL.md step 3, but
+    this WARN catches users who re-enabled it manually.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("hermes") is None:
+        logger.debug("hermes CLI not found on PATH; skipping built-in memory check")
+        return
+
+    try:
+        proc = subprocess.run(
+            ["hermes", "tools", "list"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError):
+        logger.debug("hermes tools list failed; skipping built-in memory check", exc_info=True)
+        return
+
+    if proc.returncode != 0:
+        logger.debug(
+            "hermes tools list exited with code %d; skipping built-in memory check",
+            proc.returncode,
+        )
+        return
+
+    output = proc.stdout or ""
+    # Parse heuristically — match `memory` token followed by an
+    # enabled marker. Tolerant of whitespace + alternative formats
+    # (`memory: enabled`, `memory  enabled`, table-style, JSON-style).
+    lower = output.lower()
+    if "memory" in lower and "enabled" in lower:
+        # Tighten the match: only WARN if `memory` and `enabled` co-occur
+        # on the same line.
+        for line in output.splitlines():
+            ll = line.lower()
+            if "memory" in ll and "enabled" in ll and "disabled" not in ll:
+                logger.warning(
+                    "Hermes built-in 'memory' tool is enabled. TotalReclaw "
+                    "recommends disabling it to avoid intent-stealing. "
+                    "Run: hermes tools disable memory"
+                )
+                return

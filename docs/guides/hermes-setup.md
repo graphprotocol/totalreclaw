@@ -78,11 +78,29 @@ Hermes does NOT auto-reload on plugin install. Tell the user verbatim:
 
 Do NOT invoke the restart yourself — your shell runs inside the gateway you'd be restarting. Wait for the user's `done`.
 
-### Step 3 — Check for existing credentials
+### Step 3 — Disable Hermes built-in memory tool (CRITICAL)
+
+Hermes ships with its own built-in `memory` tool that competes with TotalReclaw for "remember X" / "recall X" intents. Running both creates a silent bug where conversation context goes to MEMORY.md instead of TotalReclaw's encrypted vault. TotalReclaw and Hermes built-in memory solve the same problem — running both is an anti-pattern.
+
+Run via your shell tool:
+
+```bash
+hermes tools disable memory
+```
+
+Then tell the user verbatim:
+
+> *I've disabled Hermes' built-in `memory` tool so TotalReclaw can be your primary, encrypted, on-chain memory. Your old `MEMORY.md` / `USER.md` files are still on disk but no longer used by the agent.*
+> *- To re-enable Hermes built-in memory: `hermes tools enable memory` (NOT recommended while TotalReclaw is installed — they will steal intents from each other).*
+> *- To wipe the orphaned files: `hermes memory reset`.*
+
+If `hermes tools disable memory` errors with `command not found` or "tool not found" (older Hermes versions, managed services that don't expose the CLI, or the built-in `memory` tool was already removed), log the failure and continue — the rc.25 tool-description bias still steers the LLM toward `totalreclaw_remember` as a fallback.
+
+### Step 4 — Check for existing credentials
 
 Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, confirm *"TotalReclaw is already set up."* and stop. Otherwise continue.
 
-### Step 4 — Pair (browser flow, NEVER ask the user to type their phrase in chat)
+### Step 5 — Pair (browser flow, NEVER ask the user to type their phrase in chat)
 
 Call the `totalreclaw_pair` tool. It returns `{url, pin, expires_at_ms}`.
 
@@ -90,7 +108,7 @@ Relay to the user verbatim:
 
 > *Open <url> in your browser. Generate a new 12-word recovery phrase there or paste an existing one — the phrase stays in your browser, the relay only sees ciphertext. Confirm PIN <pin>. Reply `done` once the page says it's sealed.*
 
-### Step 5 — Verify and confirm
+### Step 6 — Verify and confirm
 
 After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN likely expired — call `totalreclaw_pair` again and resend. If present, confirm *"TotalReclaw is set up. Ask me to remember or recall anything."*
 
@@ -195,6 +213,24 @@ Paste the same canonical message. The **Generate new** tab is selected by defaul
 ## Canonical prompt (matches the QA harness scenario contracts)
 
 > **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md>**
+
+---
+
+## Compatibility with Hermes built-in memory
+
+TotalReclaw and Hermes' built-in `memory` tool BOTH respond to "remember X" / "recall X" intents. Running both simultaneously creates a silent bug: depending on the LLM's tool-selection, your conversation context may be split between Hermes' MEMORY.md and TotalReclaw's encrypted vault — neither sees the full picture.
+
+The TotalReclaw setup flow auto-disables Hermes built-in memory on install. We DO NOT recommend re-enabling it while TotalReclaw is installed.
+
+If you want to use Hermes built-in memory instead of TotalReclaw:
+
+```bash
+hermes tools enable memory
+totalreclaw forget --all     # optional: clear TotalReclaw's vault
+pip uninstall totalreclaw    # optional: remove the package
+```
+
+If you want to use both (NOT supported, results may be unreliable): file an issue at <https://github.com/p-diogo/totalreclaw/issues> describing your use case so we can scope dual-mode support.
 
 ---
 

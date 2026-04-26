@@ -13,7 +13,7 @@ homepage: https://totalreclaw.xyz
 
 ## Setup flow
 
-If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jump to step 4. Otherwise run all steps in order.
+If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jump to step 5. Otherwise run all steps in order.
 
 1. **Install plugin + Python package.** Hermes 2026.4.16+ uses Git-based plugin discovery and a separate Python tool implementation. The Python package MUST go into the SAME Python environment that Hermes runs from (containerized venv, native venv, or system Python — whichever your install uses). Bare `pip install` may target the wrong Python on containerized deploys. Step-by-step via your shell tool:
    ```
@@ -30,18 +30,33 @@ If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jum
    # 1c. Verify the package resolved through Hermes' Python.
    "$HERMES_PYTHON" -m pip show totalreclaw | head -2
    ```
-   If `pip show` doesn't list the package, the install landed in a different Python — fix `$HERMES_PYTHON` and re-run 1b. On Debian/Ubuntu/Docker you may hit `externally-managed-environment` if Hermes runs against system Python — add `--break-system-packages` to the `pip install` line, or ask the user to recreate Hermes inside a venv. If either shell call fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment): tell the user verbatim *"Your environment doesn't expose the Hermes CLI / pip to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`."* Wait for `done` and skip to step 3.
+   If `pip show` doesn't list the package, the install landed in a different Python — fix `$HERMES_PYTHON` and re-run 1b. On Debian/Ubuntu/Docker you may hit `externally-managed-environment` if Hermes runs against system Python — add `--break-system-packages` to the `pip install` line, or ask the user to recreate Hermes inside a venv. If either shell call fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment): tell the user verbatim *"Your environment doesn't expose the Hermes CLI / pip to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`. Also disable Hermes' built-in `memory` tool in the same UI if available — running both creates a silent intent-stealing bug."* Wait for `done` and skip to step 4 (verify pair tool bound).
 
 2. **Restart the gateway — Hermes does NOT auto-reload on plugin install.** Tell the user verbatim: *"Please restart your Hermes gateway: `hermes gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. If supervised by systemd / launchd, `kill -USR1 $(cat ~/.hermes/gateway.pid)` triggers a graceful-drain restart. Reply `done` once it's back up."* Do NOT run the restart yourself — your shell is inside the gateway you'd be restarting. Wait for the user's `done`.
 
-3. **Verify `totalreclaw_pair` is bound.** If still missing after restart, tell the user the plugin didn't load and to retry. Do not loop the install.
+3. **Disable Hermes built-in memory tool (CRITICAL).** Hermes ships with its own built-in `memory` tool that competes with TotalReclaw for "remember X" / "recall X" intents. Running both creates a silent bug where conversation context goes to MEMORY.md instead of TotalReclaw's encrypted vault. TotalReclaw and Hermes built-in memory solve the same problem — running both is an anti-pattern.
 
-4. **Check for existing credentials.** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, confirm *"TotalReclaw is already set up."* and stop.
+   Run via your shell tool:
+   ```bash
+   hermes tools disable memory
+   ```
 
-5. **Pair.** Call `totalreclaw_pair`. Returns `{url, pin, expires_at_ms}`. Relay verbatim:
+   Then tell the user verbatim:
+
+   > *I've disabled Hermes' built-in `memory` tool so TotalReclaw can be your primary, encrypted, on-chain memory. Your old `MEMORY.md` / `USER.md` files are still on disk but no longer used by the agent.*
+   > *- To re-enable Hermes built-in memory: `hermes tools enable memory` (NOT recommended while TotalReclaw is installed — they will steal intents from each other).*
+   > *- To wipe the orphaned files: `hermes memory reset`.*
+
+   If `hermes tools disable memory` errors with `command not found` or "tool not found" (older Hermes versions, managed services that don't expose the CLI, or the built-in `memory` tool was already removed), log the failure and continue — the rc.25 tool-description bias still steers the LLM toward `totalreclaw_remember` as a fallback.
+
+4. **Verify `totalreclaw_pair` is bound.** If still missing after restart, tell the user the plugin didn't load and to retry. Do not loop the install.
+
+5. **Check for existing credentials.** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, confirm *"TotalReclaw is already set up."* and stop.
+
+6. **Pair.** Call `totalreclaw_pair`. Returns `{url, pin, expires_at_ms}`. Relay verbatim:
    > *Open <url> in your browser. Generate a new 12-word recovery phrase there or paste an existing one — the phrase stays in your browser, the relay only sees ciphertext. Confirm PIN <pin>. Reply `done` once the page says it's sealed.*
 
-6. **Verify and confirm.** After user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again and resend. If present, confirm *"TotalReclaw is set up. Ask me to remember or recall anything."*
+7. **Verify and confirm.** After user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again and resend. If present, confirm *"TotalReclaw is set up. Ask me to remember or recall anything."*
 
 ## Phrase safety (HARD — never break)
 
