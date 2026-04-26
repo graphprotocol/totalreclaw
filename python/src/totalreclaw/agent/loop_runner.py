@@ -58,6 +58,40 @@ logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
 
+class InterpreterShutdownError(RuntimeError):
+    """Raised when a sync-loop call cannot run because the host interpreter
+    is shutting down.
+
+    The Python ``concurrent.futures.thread`` module sets a process-global
+    ``_shutdown`` flag from a ``threading._register_atexit`` callback that
+    fires before atexit-module callbacks, and after that point any
+    ``ThreadPoolExecutor.submit`` raises ``RuntimeError("cannot schedule
+    new futures after interpreter shutdown")``. ``httpx``'s anyio backend
+    relies on ``loop.run_in_executor(None, ...)`` for DNS / SSL, so any
+    HTTP work queued during atexit fails with that exact message.
+
+    The Hermes ``on_session_finalize`` hook fires from ``hermes_cli``'s
+    atexit chain in ``hermes chat -q`` one-shot mode, so issue #148 hits
+    this every CLI turn. Callers (lifecycle hooks) catch this specific
+    subclass and persist unprocessed messages to disk for next-run drain
+    instead of silently swallowing the failure.
+    """
+
+
+def is_interpreter_shutdown_error(exc: BaseException) -> bool:
+    """Return True if ``exc`` is the interpreter-shutdown RuntimeError.
+
+    Matches both the ``cpython`` ThreadPoolExecutor message at
+    ``concurrent/futures/thread.py:172`` and our own
+    ``InterpreterShutdownError`` subclass.
+    """
+    if isinstance(exc, InterpreterShutdownError):
+        return True
+    if isinstance(exc, RuntimeError) and "cannot schedule new futures after interpreter shutdown" in str(exc):
+        return True
+    return False
+
+
 class _SyncLoopRunner:
     """One-loop, one-thread runner for sync-calls-async bridging.
 
@@ -127,7 +161,12 @@ class _SyncLoopRunner:
             )
 
         fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return fut.result()
+        try:
+            return fut.result()
+        except RuntimeError as exc:
+            if is_interpreter_shutdown_error(exc):
+                raise InterpreterShutdownError(str(exc)) from exc
+            raise
 
     def shutdown(self, timeout: float = 5.0) -> None:
         """Stop the loop and join the thread.

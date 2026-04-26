@@ -23,9 +23,40 @@ if TYPE_CHECKING:
 from .extraction import ExtractedFact, extract_facts_llm, extract_facts_heuristic
 from .contradiction import detect_and_resolve_contradictions
 from .debrief import generate_debrief
-from .loop_runner import run_sync
+from .loop_runner import (
+    run_sync,
+    InterpreterShutdownError,
+    is_interpreter_shutdown_error,
+)
+from .pending_drain import enqueue_messages
 
 logger = logging.getLogger(__name__)
+
+
+_INTERPRETER_SHUTDOWN_QUOTA_NOTE = (
+    "TotalReclaw: auto-extraction was deferred because the chat process "
+    "was already shutting down (CLI one-shot race). {n} message(s) were "
+    "queued to ~/.totalreclaw/.pending_extract.jsonl and will be processed "
+    "on your next session. No data was lost."
+)
+
+
+def _owner_address(state: "AgentState") -> str:
+    """Best-effort lookup of the configured owner address for queue keying.
+
+    Falls back to the EOA address when the smart-account address hasn't
+    been resolved yet (which is the case during early CLI -q invocations
+    before any remember/recall call has run). Returns ``""`` when the
+    state isn't configured — callers treat that as "skip queueing".
+    """
+    client = state.get_client()
+    if not client:
+        return ""
+    sa = getattr(client, "_sa_address", None) or getattr(client, "smart_account_address", None)
+    if sa:
+        return str(sa).lower()
+    eoa = getattr(client, "_eoa_address", None) or getattr(client, "wallet_address", None)
+    return str(eoa).lower() if eoa else ""
 
 STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity for near-duplicate detection
 
@@ -40,6 +71,11 @@ def _fetch_recent_memories(state: "AgentState") -> list[dict]:
 
     Returns dicts with id, text, and embedding for both LLM dedup context and
     cosine-based near-duplicate detection.
+
+    Re-raises ``InterpreterShutdownError`` so the outer ``auto_extract``
+    handler can persist unprocessed messages to the drain queue (issue
+    #148). Other failures are swallowed and surface as an empty list —
+    dedup is best-effort.
     """
     client = state.get_client()
     if not client:
@@ -48,7 +84,11 @@ def _fetch_recent_memories(state: "AgentState") -> list[dict]:
         # Use a generic query to get recent memories for dedup
         results = run_sync(client.recall("recent context", top_k=50))
         return [{"id": r.id, "text": r.text, "embedding": r.embedding} for r in results]
+    except InterpreterShutdownError:
+        raise
     except Exception as e:
+        if is_interpreter_shutdown_error(e):
+            raise InterpreterShutdownError(str(e)) from e
         logger.debug("Failed to fetch recent memories for dedup: %s", e)
         return []
 
@@ -150,6 +190,57 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
 
     stored_texts: list[str] = []
 
+    try:
+        return _auto_extract_inner(
+            state, mode, llm_config, messages, max_facts, client, stored_texts,
+        )
+    except InterpreterShutdownError:
+        # The host interpreter is shutting down (atexit chain in
+        # ``hermes chat -q`` one-shot mode). The persistent sync-loop runner
+        # can't drive any more httpx work, so persist the unprocessed
+        # buffer to disk and let the next session drain it. See
+        # ``totalreclaw.agent.pending_drain`` and issue #148.
+        owner = _owner_address(state)
+        if owner:
+            persisted = enqueue_messages(owner, list(messages))
+        else:
+            persisted = False
+        if persisted:
+            logger.warning(
+                "TotalReclaw: auto-extract deferred — interpreter shutdown "
+                "race; %d msg(s) queued for next-session drain.",
+                len(messages),
+            )
+            try:
+                state.set_quota_warning(
+                    _INTERPRETER_SHUTDOWN_QUOTA_NOTE.format(n=len(messages))
+                )
+            except Exception:
+                pass
+        else:
+            logger.warning(
+                "TotalReclaw: auto-extract deferred — interpreter shutdown "
+                "race; persistence FAILED, %d msg(s) lost.",
+                len(messages),
+            )
+        # Do NOT call ``state.mark_messages_processed()`` — leaving them
+        # unprocessed is harmless (state dies with the process anyway) and
+        # makes the failure visible to any in-process retry path.
+        return []
+
+
+def _auto_extract_inner(
+    state: "AgentState",
+    mode: str,
+    llm_config,
+    messages: list[dict],
+    max_facts: int,
+    client,
+    stored_texts: list[str],
+) -> list[str]:
+    """Inner auto_extract body — kept separate so the outer wrapper can
+    catch ``InterpreterShutdownError`` from any nested ``run_sync``."""
+
     # Fetch existing memories for both LLM dedup context and cosine dedup
     existing_memories = _fetch_recent_memories(state)
 
@@ -159,7 +250,11 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
         facts = run_sync(
             extract_facts_llm(messages, mode=mode, existing_memories=existing_memories, llm_config=llm_config)
         )
+    except InterpreterShutdownError:
+        raise
     except Exception as e:
+        if is_interpreter_shutdown_error(e):
+            raise InterpreterShutdownError(str(e)) from e
         logger.debug("LLM extraction failed, falling back to heuristic: %s", e)
 
     # Fall back to heuristic if LLM returned nothing
@@ -176,7 +271,11 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
     # Contradiction detection: filter out facts that lose to existing vault claims
     try:
         facts = run_sync(detect_and_resolve_contradictions(facts, client, logger))
+    except InterpreterShutdownError:
+        raise
     except Exception as exc:
+        if is_interpreter_shutdown_error(exc):
+            raise InterpreterShutdownError(str(exc)) from exc
         logger.debug("Contradiction detection failed (proceeding with all facts): %s", exc)
 
     # -----------------------------------------------------------------------
@@ -199,7 +298,12 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
             if fact.action == "DELETE":
                 # Tombstone the old fact — one-at-a-time, no batch needed.
                 if fact.existing_fact_id:
-                    run_sync(client.forget(fact.existing_fact_id))
+                    try:
+                        run_sync(client.forget(fact.existing_fact_id))
+                    except Exception as fe:
+                        if is_interpreter_shutdown_error(fe):
+                            raise InterpreterShutdownError(str(fe)) from fe
+                        raise
                 continue
 
             # For ADD and UPDATE: resolve embedding + run dedup, then enqueue.
@@ -233,7 +337,11 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
             }
             pending_store.append((fact, embedding, fact_dict))
 
+        except InterpreterShutdownError:
+            raise
         except Exception as e:
+            if is_interpreter_shutdown_error(e):
+                raise InterpreterShutdownError(str(e)) from e
             logger.warning("Failed to prepare extracted fact for batch: %s", e)
 
     # Submit pending ADD/UPDATE facts in chunks of _LIFECYCLE_MAX_BATCH.
@@ -249,7 +357,11 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
             fact_ids = run_sync(
                 client.remember_batch(chunk_dicts, source="hermes-auto")
             )
+        except InterpreterShutdownError:
+            raise
         except Exception as e:
+            if is_interpreter_shutdown_error(e):
+                raise InterpreterShutdownError(str(e)) from e
             logger.warning(
                 "remember_batch failed for chunk of %d facts: %s", len(chunk), e
             )
@@ -273,7 +385,11 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
                     if fact.action == "UPDATE" and fact.existing_fact_id:
                         try:
                             run_sync(client.forget(fact.existing_fact_id))
+                        except InterpreterShutdownError:
+                            raise
                         except Exception as fe:
+                            if is_interpreter_shutdown_error(fe):
+                                raise InterpreterShutdownError(str(fe)) from fe
                             logger.warning(
                                 "Failed to tombstone old fact %s after UPDATE: %s",
                                 fact.existing_fact_id, fe,
@@ -284,7 +400,11 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
                         "Fact not stored (no id returned by batch): %s",
                         fact.text[:80],
                     )
+            except InterpreterShutdownError:
+                raise
             except Exception as e:
+                if is_interpreter_shutdown_error(e):
+                    raise InterpreterShutdownError(str(e)) from e
                 logger.warning("Failed to process batch result for fact: %s", e)
 
     state.mark_messages_processed()
@@ -346,8 +466,28 @@ def session_debrief(
                     )
                     if fact_id:
                         stored_fact_ids.append(fact_id)
+                except InterpreterShutdownError:
+                    raise
                 except Exception as e:
+                    if is_interpreter_shutdown_error(e):
+                        raise InterpreterShutdownError(str(e)) from e
                     logger.warning("Failed to store debrief item: %s", e)
+    except InterpreterShutdownError:
+        # Debrief lost to interpreter shutdown. The auto-extract path
+        # already enqueued unprocessed messages for next-session drain
+        # (see issue #148 + ``pending_drain``). Debrief is a derived
+        # session summary — re-running on the drained messages would be
+        # pointless without the full session context, so we just log
+        # and return the partial list of debrief facts (if any).
+        logger.warning(
+            "TotalReclaw: session debrief deferred — interpreter shutdown race; "
+            "next session will re-run extract on the drained messages."
+        )
     except Exception as e:
-        logger.warning("Session debrief failed: %s", e)
+        if is_interpreter_shutdown_error(e):
+            logger.warning(
+                "TotalReclaw: session debrief deferred — interpreter shutdown race."
+            )
+        else:
+            logger.warning("Session debrief failed: %s", e)
     return stored_fact_ids

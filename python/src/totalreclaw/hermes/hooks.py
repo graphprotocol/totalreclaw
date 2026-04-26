@@ -16,8 +16,10 @@ from totalreclaw.agent.lifecycle import (
     session_debrief as _session_debrief,
     _is_near_duplicate,
     _fetch_recent_memories,
+    _owner_address,
     STORE_DEDUP_THRESHOLD,
 )
+from totalreclaw.agent.pending_drain import drain_pending, has_pending
 from totalreclaw.agent.recall import auto_recall
 from totalreclaw.agent.extraction import extract_facts_llm, extract_facts_heuristic
 
@@ -72,7 +74,13 @@ def _get_hermes_llm_config():
 
 
 def on_session_start(state: "PluginState", **kwargs) -> None:
-    """Initialize client and check billing on session start."""
+    """Initialize client, drain any pending extraction queue, and check billing.
+
+    The drain step recovers messages whose extraction was lost in a
+    previous CLI one-shot turn — see issue #148 + ``pending_drain``. The
+    interpreter is healthy at session start, so the persistent sync-loop
+    runner can drive httpx normally.
+    """
     session_id = kwargs.get("session_id", "")
     logger.debug("TotalReclaw on_session_start: %s", session_id)
 
@@ -80,6 +88,26 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
 
     if not state.is_configured():
         return
+
+    # Drain any messages that a prior interpreter-shutdown race deferred.
+    # This must run before billing-cache logic so a drain-induced
+    # quota_warning isn't overwritten.
+    try:
+        owner = _owner_address(state)
+        if owner and has_pending(owner):
+            batches = drain_pending(owner)
+            recovered_count = _drain_into_state(state, batches)
+            if recovered_count > 0:
+                logger.info(
+                    "TotalReclaw: drained %d message(s) from prior interpreter-shutdown race.",
+                    recovered_count,
+                )
+                state.set_quota_warning(
+                    f"TotalReclaw: caught up on auto-extraction for {recovered_count} "
+                    f"message(s) deferred from a prior CLI session."
+                )
+    except Exception as exc:
+        logger.warning("TotalReclaw: pending-drain failed at session start: %s", exc)
 
     # Check billing cache and update server-driven config
     try:
@@ -99,6 +127,44 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
                 logger.info("TotalReclaw: Memory usage >80%% — quota warning set")
     except Exception:
         pass
+
+
+def _drain_into_state(state: "PluginState", batches: list[list[dict]]) -> int:
+    """Replay drained message batches into the agent state and run a
+    full-mode auto-extract to land the facts.
+
+    Returns the total number of messages recovered. Errors during the
+    extraction call are logged and swallowed — drain is best-effort.
+    Whether the drain landed facts or not, the messages are consumed
+    from the queue (already done by ``drain_pending``) so we don't
+    re-attempt indefinitely on a persistent failure.
+    """
+    if not batches:
+        return 0
+
+    total = 0
+    # Snapshot the original buffer so the active session's own messages
+    # stay intact after the drain. We process drained batches in a
+    # separate state-buffer slice via ``add_message`` + final
+    # ``mark_messages_processed`` so the user-visible session message
+    # buffer keeps the drained content for context.
+    for batch in batches:
+        for msg in batch:
+            role = msg.get("role") if isinstance(msg, dict) else None
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if role and content:
+                state.add_message(role, content)
+                total += 1
+
+    if total == 0:
+        return 0
+
+    try:
+        _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config())
+    except Exception as exc:
+        logger.warning("TotalReclaw: drain-side auto_extract failed: %s", exc)
+
+    return total
 
 
 def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
