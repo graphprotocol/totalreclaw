@@ -24,7 +24,7 @@ openclaw plugins install @totalreclaw/totalreclaw
 ```
 
 Notes:
-- For an RC build, replace the second command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (or pin a version like `@totalreclaw/totalreclaw@3.3.1-rc.19`).
+- For an RC build, replace the second command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (or pin a version like `@totalreclaw/totalreclaw@3.3.1-rc.22`).
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
 ### Step 2 — Wait for auto-reload (do NOT restart the gateway yourself)
@@ -112,7 +112,7 @@ openclaw plugins install @totalreclaw/totalreclaw            # stable
 
 Then in chat: *"Set up TotalReclaw"* — the agent will call `totalreclaw_pair` and hand you the URL + PIN. Open the URL in your browser to enter or generate your phrase.
 
-> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.19`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
+> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.22`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
 
 <details>
 <summary>From-source install (for plugin development — self-host only)</summary>

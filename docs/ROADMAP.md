@@ -13,28 +13,29 @@ TotalReclaw is an end-to-end encrypted memory vault for AI agents. The project p
 
 ---
 
-## Now / Next (Wave status, 2026-04-19)
+## Now / Next (Wave status, 2026-04-25)
 
 The phase breakdown below is the canonical long-term plan. This section surfaces what's live right now and what the next publish wave looks like, for users tracking against the CHANGELOG.
 
-### Shipped in Wave 1 -- v1 Stabilization (2026-04-19) — COMPLETE
+### Shipped — current stable (2026-04-25)
 
-- `@totalreclaw/core@2.1.0` + `2.1.1` (npm + PyPI + crates.io) -- Tier 2 hoist of `VALID_MEMORY_TYPES` / `TYPE_TO_CATEGORY` + additive `pin_status` field on `MemoryClaimV1`. Spec v1.1 addendum.
-- `@totalreclaw/mcp-server@3.1.0` + `3.2.0` (npm) -- Phase 2 contradiction detection wired via core WASM; pin-on-tombstone recovery; `pin` / `unpin` emit v1 blobs with `pin_status`.
-- `@totalreclaw/totalreclaw@3.0.5` through `3.1.0` (ClawHub + npm) -- scanner false-positive fixes, consolidation delegated to Rust core, 4-bug stabilization wave in 3.1.0 (schema dedup, digest stub filter, auto-bootstrap credentials).
-- `totalreclaw@2.0.2` / `2.1.0` / `2.2.0` / `2.2.1` (PyPI) -- Python client + Hermes stabilization, Phase A parity (upgrade + debrief + Mem0 import), Gap 3 UserOp batching (`remember_batch`), lifecycle `auto_extract` wired through batching.
-- Infra: `publish-*.yml` workflows gained `release-type: stable | rc` + `rc-number`; new `promote-rc.yml`; public [`docs/guides/release-process.md`](guides/release-process.md).
+- `@totalreclaw/totalreclaw@3.2.3` (npm `latest`) — OpenClaw plugin. Auto-recall, auto-extract every 3 turns, pre-compaction flush, session debrief, full v1 tool surface (remember / recall / forget / export / status / pair / pin / unpin / retype / set_scope / import_from / migrate / consolidate / upgrade).
+- `@totalreclaw/mcp-server@3.2.0` (npm) — MCP server for Claude Desktop / Cursor / Windsurf. Pin/unpin/retype/set_scope wired; v1 contradiction detection via core WASM.
+- `@totalreclaw/core@2.2.0` (npm WASM) + `totalreclaw-core@2.2.0` (PyPI PyO3) + `totalreclaw-core@2.2.0` (crates.io) — shared Rust core: claim proto, crypto, pin state machine, source-weighted reranker.
+- `totalreclaw@2.3.0` (PyPI) — Python client + Hermes Agent plugin. Full Hermes parity with the plugin tool surface.
+- `@totalreclaw/skill-nanoclaw@3.0.0` (npm) — NanoClaw skill (auto-recall + auto-extract via `additionalContext`).
+- Wave 1 (2026-04-19) shipped post-v1 stabilization (core 2.1.x, mcp 3.1/3.2, plugin 3.0.x, python 2.0.2-2.2.1). Subsequent waves landed: 3.2.x (plugin secure onboarding CLI wizard), 3.3.x RC line (QR-pairing + relay-brokered pair flow + URL-driven install via canonical chat prompt + ESM/createRequire fix). Public `docs/guides/release-process.md` documents the RC-then-promote flow.
 
-Known issues carried over: plugin 3.1.0 auto-bootstrap recovery-phrase LLM-leak risk (fix in 3.2.0), bundled-core version mismatch on older plugin tarballs (mitigation: 3.1.1 patch if needed), `totalreclaw-memory@2.0.1` crates.io publish blocked at dry-run (deferred).
+### In flight — RC wave (2026-04-25)
 
-### Next
+- `@totalreclaw/totalreclaw@3.3.1-rc.22` (npm `rc` dist-tag) + `totalreclaw==2.3.1rc22` (PyPI) — under QA. Bundle adds: install scanner robustness, ESM `createRequire` / await-import fix, pair simulator v2 cipher alignment, post-install sweeper for orphan staging dirs, plus prior rc.20 work (URL-driven install via canonical chat prompt + relay-brokered pair flow). Promote target is `3.3.1` once full chat-flow QA returns GO.
+- See [`totalreclaw-internal/docs/release-pipeline.md`](https://github.com/p-diogo/totalreclaw-internal) for live RC + QA state.
 
-- **Plugin 3.2.0 (secure onboarding CLI wizard)** -- replaces the 3.1.0 `prependContext` recovery-phrase banner with a CLI wizard. Design-in-progress. Closes the LLM-leak UX gap.
-- **Plugin 3.3.0 (QR-pairing for remote-gateway users)** -- QR-based handoff for users running the OpenClaw gateway remotely. Follow-on to the 3.2.0 wizard.
-- **`totalreclaw-memory@2.0.1` (crates.io) publish retry** -- deferred from Wave 1 after the cargo dry-run sanity check flagged a metadata mismatch. ZeroClaw continues on 2.0.0 until the retry lands.
-- **Python client Hermes parity Phase B/C** -- remaining tools (`retype`, `set_scope`, MCP adapter, `migrate`, `consolidate`, JSON re-import) to reach full Hermes feature parity with OpenClaw.
-- **PR #45 (prompt hoist + NanoClaw align)** -- rebase, merge, and publish the hoisted extraction prompt + NanoClaw alignment work.
-- **ClawHub reclassification path** -- either via a reclassification request to ClawHub, or by validating the `totalreclaw-canary@3.1.0-canary.0` slug against the scanner and then re-registering under a clean classification.
+### Next (post-rc.22 promote)
+
+- **`totalreclaw-memory@2.0.1` (crates.io) publish retry** — deferred from Wave 1 after the cargo dry-run sanity check flagged a metadata mismatch. ZeroClaw continues on 2.0.0 until the retry lands.
+- **ClawHub reclassification path** — via a reclassification request to ClawHub, or by validating a clean canary slug against the scanner and re-registering.
+- **Phase 3 autonomous QA / triage pipeline (in production)** — see `docs/operations/autonomous-qa-pipeline.md` in the internal repo. Phase 1 manual dispatch and Phase 2 webhook-triggered ephemeral QA are live; Phase 3 auto-triage of QA findings into umbrella issues + scoped fix branches is shipping incrementally.
 
 ---
 

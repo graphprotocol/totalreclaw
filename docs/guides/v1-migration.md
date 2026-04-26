@@ -87,7 +87,7 @@ Full detail in [`docs/specs/totalreclaw/tiered-retrieval.md`](../specs/totalrecl
 
 The on-chain wire format bumps from v3 to v4 to signal that the encrypted blob now contains v1 JSON (not v0 binary). Subgraph schema is unchanged — no re-indexing required.
 
-Details: [`totalreclaw-internal/docs/plans/2026-04-18-protobuf-v4-design.md`](https://github.com/p-diogo/totalreclaw-internal/) (internal).
+Details: see the protobuf claim definitions in `python/src/totalreclaw/proto/` (Python) and `rust/totalreclaw-core/src/proto/` (Rust) for the canonical wire schema.
 
 ### 6. Environment variables removed
 

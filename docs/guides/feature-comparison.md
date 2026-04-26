@@ -2,7 +2,7 @@
 
 TotalReclaw works across multiple AI agent platforms. The core encryption, storage, search pipeline, and v1 taxonomy are identical everywhere -- the differences are in automation (lifecycle hooks) and available tools. This table shows what each platform supports.
 
-All clients below ship v1 (core 2.0.0, plugin 3.0.0, mcp-server 3.0.0, nanoclaw 3.0.0, python 2.0.0, ZeroClaw 2.0.0).
+All clients ship v1 by default. Stable production versions: core 2.2.0, plugin 3.2.3, mcp-server 3.2.0, nanoclaw 3.0.0, python 2.3.0.
 
 ---
 
@@ -24,10 +24,10 @@ All clients below ship v1 (core 2.0.0, plugin 3.0.0, mcp-server 3.0.0, nanoclaw 
 | **Explicit Tools** | | | | | | |
 | Remember / Recall / Forget / Export | Yes | Yes | Yes | Yes | Yes | Yes |
 | Status (billing & usage) | Yes | Yes | Yes | Yes | Yes | Yes |
-| Pin / Unpin (v1) | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- |
-| Retype (v1) | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- |
-| Set scope (v1) | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- |
-| Import from Mem0 / ChatGPT / Claude | Yes | Yes | Yes | -- | Yes | -- |
+| Pin / Unpin (v1) | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | -- |
+| Retype (v1) | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | -- |
+| Set scope (v1) | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | -- |
+| Import from Mem0 / ChatGPT / Claude / Gemini | Yes | Yes | Yes | Yes | Yes | -- |
 | Upgrade to Pro | Yes | Yes | Yes | -- | Yes | -- |
 | Migrate (testnet to mainnet) | Yes | Yes | Yes | -- | Yes | -- |
 | Consolidate (bulk dedup) | Yes | Yes | Yes | -- | Yes | -- |
@@ -51,7 +51,7 @@ All clients below ship v1 (core 2.0.0, plugin 3.0.0, mcp-server 3.0.0, nanoclaw 
 
 **NanoClaw** -- Automatic, like OpenClaw. The NanoClaw agent-runner spawns the MCP server as a background process. Memory is shared within the NanoClaw group. No user setup required -- the admin configures the recovery phrase.
 
-**Hermes (Python)** -- Automatic via pre/post LLM call hooks. LLM extraction with heuristic fallback. Core tools work; import/migrate/consolidate not yet implemented.
+**Hermes (Python)** -- Automatic via pre/post LLM call hooks. LLM extraction with heuristic fallback. Full tool parity with OpenClaw plugin since 2.3.x: remember / recall / forget / export / status / pair / pin / unpin / retype / set_scope / import_from / upgrade. Migrate + consolidate are managed-service-only and exposed via the plugin / MCP server.
 
 **IronClaw (NEAR AI)** -- Uses the MCP server for tools. No lifecycle hooks -- auto-extraction requires setting up routines (cron). The TEE protects the runtime; TotalReclaw protects the data.
 

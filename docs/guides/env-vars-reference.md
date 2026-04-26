@@ -1,7 +1,7 @@
 # Environment Variables Reference
 
 **Applies to:** TotalReclaw v1 (all clients).
-**Last updated:** 2026-04-18.
+**Last updated:** 2026-04-25.
 
 v1 deliberately removes every env var that was an internal knob pretending to be user configuration. The list below is the **complete** set of env vars that end users or deployment operators should ever need to set.
 
@@ -81,7 +81,7 @@ export TOTALRECLAW_CACHE_PATH="$HOME/.config/totalreclaw/cache.enc"
 **Optional.** QA / observability session tag. When set, every outbound relay call adds the `X-TotalReclaw-Session` header so Axiom log filters and the `qa-totalreclaw` skill can scope log searches per QA run.
 
 ```bash
-export TOTALRECLAW_SESSION_ID="qa-rc.20-run-7"
+export TOTALRECLAW_SESSION_ID="qa-rc.22-run-7"
 ```
 
 **Default:** unset — header omitted, requests are untagged.

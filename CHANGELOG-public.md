@@ -1,5 +1,7 @@
 # TotalReclaw Changelog
 
+> **Note:** This file lists releases promoted to the public registries' stable tags. Active release-candidate work (`@rc` dist-tag on npm, `rcN` on PyPI, etc.) is tracked in the internal release-pipeline tracker, not here. The "rc.19 — Setup-agnostic instructions" entry below describes a fix list that shipped in the rc.19→rc.22 RC line; once that line promotes to stable as `3.3.1`, expect a consolidated stable entry covering 3.2.0 → 3.3.1.
+
 ## rc.19 — Setup-agnostic instructions (2026-04-25)
 
 - **Fix:** setup instructions agnostic to container names. Both shipped SKILL.md files (`skill/plugin/SKILL.md`, `python/src/totalreclaw/hermes/SKILL.md`) and both user-facing guides (`docs/guides/openclaw-setup.md`, `docs/guides/hermes-setup.md`) replaced 12 hardcoded `docker restart tr-openclaw` / `docker restart tr-hermes` literals with topology-agnostic `docker restart <your-container-name>` placeholders + a three-pattern fork (native / Docker self-host / managed service) so users whose container is not named `tr-*` get correct instructions.
