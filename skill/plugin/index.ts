@@ -92,6 +92,7 @@ import {
   type DecryptedCandidate,
 } from './consolidation.js';
 import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, submitFactBatchOnChain, deriveSmartAccountAddress, PROTOBUF_VERSION_V4, type FactPayload } from './subgraph-store.js';
+import { confirmIndexed } from './confirm-indexed.js';
 import {
   DIGEST_TRAPDOOR,
   buildCanonicalClaim,
@@ -3779,14 +3780,29 @@ const plugin = {
                 throw new Error(`On-chain tombstone failed (tx=${result.txHash?.slice(0, 10) || 'none'}…)`);
               }
               api.logger.info(`Tombstone written for ${factId}: tx=${result.txHash}`);
+              // Read-after-write: poll the subgraph until the original fact id
+              // is no longer active (forget flips isActive=false). On timeout
+              // surface `partial: true` so the agent can explain the chain
+              // write succeeded but the subgraph is still propagating.
+              const confirm = await confirmIndexed(factId, {
+                expect: 'inactive',
+                authKeyHex: authKeyHex!,
+              });
               return {
                 content: [{
                   type: 'text',
-                  text:
-                    `Memory ${factId} deleted on-chain (tx: ${result.txHash}). ` +
-                    'The subgraph will reflect isActive=false within ~30 seconds.',
+                  text: confirm.indexed
+                    ? `Memory ${factId} deleted on-chain and confirmed by the subgraph (tx: ${result.txHash}).`
+                    : `Memory ${factId} deleted on-chain (tx: ${result.txHash}). ` +
+                      'The subgraph indexer is still propagating the change — ' +
+                      'recall/export may briefly show the memory as still active.',
                 }],
-                details: { deleted: true, txHash: result.txHash, factId },
+                details: {
+                  deleted: true,
+                  txHash: result.txHash,
+                  factId,
+                  ...(confirm.indexed ? {} : { partial: true }),
+                },
               };
             } else {
               await apiClient!.deleteFact(factId, authKeyHex!);

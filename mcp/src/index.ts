@@ -96,6 +96,7 @@ import {
   type SubgraphStoreConfig,
 } from './subgraph/store.js';
 import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, fetchFactById } from './subgraph/search.js';
+import { confirmIndexed } from './subgraph/confirm-indexed.js';
 import {
   detectAndResolveContradictions,
   type ResolutionDecision,
@@ -1358,6 +1359,25 @@ async function handleForgetSubgraph(
 
     const { txHash, success } = await submitFactOnChain(protobuf, config);
 
+    // Read-after-write: poll the subgraph until the fact is no longer
+    // active (forget flips isActive=false). On timeout we still report
+    // deleted_count: 1 — the chain write IS acknowledged — but flag
+    // `partial: true` so callers know the indexer is still propagating.
+    let indexed = true;
+    if (success) {
+      const subgraphUrl = process.env.TOTALRECLAW_SUBGRAPH_URL || `${state.serverUrl}/v1/subgraph`;
+      try {
+        const r = await confirmIndexed(factId, {
+          subgraphUrl,
+          authKeyHex: Buffer.from(state.authKey).toString('hex'),
+          expect: 'inactive',
+        });
+        indexed = r.indexed;
+      } catch {
+        indexed = false;
+      }
+    }
+
     return {
       content: [{
         type: 'text',
@@ -1366,6 +1386,7 @@ async function handleForgetSubgraph(
           fact_ids: success ? [factId] : [],
           tx_hash: txHash,
           mode: 'subgraph',
+          ...(success && !indexed ? { partial: true } : {}),
         }),
       }],
     };
@@ -1432,6 +1453,15 @@ function buildPinDepsFromState(state: SubgraphState): PinOpDeps {
         encryptedEmbedding,
       };
     },
+    confirmIndexed: async (factId: string, expect?: 'active' | 'inactive') => {
+      const subgraphUrl = process.env.TOTALRECLAW_SUBGRAPH_URL || `${state.serverUrl}/v1/subgraph`;
+      const result = await confirmIndexed(factId, {
+        subgraphUrl,
+        authKeyHex: Buffer.from(state.authKey).toString('hex'),
+        expect,
+      });
+      return result.indexed;
+    },
   };
 }
 
@@ -1449,6 +1479,7 @@ function buildMetadataOpDepsFromState(state: SubgraphState): MetadataOpDeps {
     encryptBlob: pinDeps.encryptBlob,
     submitBatch: pinDeps.submitBatch,
     generateIndices: pinDeps.generateIndices,
+    confirmIndexed: pinDeps.confirmIndexed,
   };
 }
 

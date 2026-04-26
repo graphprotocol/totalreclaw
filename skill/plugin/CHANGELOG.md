@@ -493,7 +493,8 @@ See: `plans/2026-04-22-plugin-3.3.1-provider-agnostic-llm.md` (internal).
     - `--json` — emits a structured payload (requires `--non-interactive`).
     - `--mode <generate|restore>` — skip the menu prompt.
     - `--phrase <12-or-24>` — required for `--mode restore`; `-` reads stdin.
-    - `--emit-phrase` — opt-in path that includes the plaintext phrase in the
+    - `--emit-phrase` — historic opt-in flag (do not invoke via agent shell:
+      forbidden by the phrase-safety rule); included plaintext phrase in the
       JSON payload. Default omits the phrase; the agent should direct the
       user to read `~/.totalreclaw/credentials.json` in their terminal.
 

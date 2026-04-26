@@ -548,6 +548,15 @@ export interface PinOpDeps {
     blindIndices: string[];
     encryptedEmbedding?: string;
   }>;
+  /**
+   * Optional read-after-write hook. Called after submitBatch returns success;
+   * polls the subgraph for the new fact id. Returning `false` causes the
+   * result to surface `partial: true`. When undefined, the op skips the wait.
+   */
+  confirmIndexed?: (
+    factId: string,
+    expect?: 'active' | 'inactive',
+  ) => Promise<boolean>;
 }
 
 export interface PinOpResult {
@@ -560,6 +569,12 @@ export interface PinOpResult {
   tx_hash?: string;
   reason?: string;
   error?: string;
+  /**
+   * On-chain pin/unpin succeeded but the subgraph indexer hasn't confirmed
+   * the new fact id within the timeout window. `tx_hash` is observable on
+   * the explorer; a follow-up recall/export may briefly show stale state.
+   */
+  partial?: boolean;
 }
 
 /**
@@ -777,6 +792,18 @@ export async function executePinOperation(
         tx_hash: txHash,
       };
     }
+    // 8. Read-after-write — wait for the subgraph to index the new fact id
+    //    before returning success. On timeout we still claim success (chain
+    //    write IS acknowledged) but flag `partial: true` so callers can
+    //    explain that recall/export may briefly surface stale state.
+    let indexed = true;
+    if (deps.confirmIndexed) {
+      try {
+        indexed = await deps.confirmIndexed(newFactId, 'active');
+      } catch {
+        indexed = false;
+      }
+    }
     return {
       success: true,
       fact_id: factId,
@@ -785,6 +812,7 @@ export async function executePinOperation(
       new_status: targetStatus,
       tx_hash: txHash,
       reason,
+      ...(indexed ? {} : { partial: true }),
     };
   } catch (err) {
     return {

@@ -42,7 +42,7 @@ npx @totalreclaw/mcp-server setup
 The wizard will:
 1. Generate a 12-word recovery phrase
 2. Register the phrase with the managed service
-3. Print the phrase for you to save
+3. Output the phrase to YOUR terminal only — never to the agent transcript (do not paste it into chat)
 
 > **Save your recovery phrase somewhere safe.** It is the only way to recover your encrypted memories. If you lose it, your memories are gone permanently.
 

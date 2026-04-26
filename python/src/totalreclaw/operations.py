@@ -706,6 +706,25 @@ async def forget_fact(
             client_id=relay._client_id,
             session_id=getattr(relay, "_session_id", None),
         )
+        # Read-after-write: wait until the subgraph has flipped the fact's
+        # isActive bit. Forget keeps its bool return contract — a False here
+        # would mean the chain write itself failed, which is NOT what a
+        # confirm-indexed timeout signals. We log the timeout for
+        # observability but still return True (chain write succeeded).
+        from .confirm_indexed import confirm_indexed as _confirm_indexed
+        try:
+            indexed = await _confirm_indexed(fact_id, relay, expect="inactive")
+            if not indexed:
+                import logging as _logging
+                _logging.getLogger(__name__).info(
+                    "forget_fact: chain write succeeded for %s but subgraph "
+                    "indexer did not confirm tombstone within timeout; "
+                    "follow-up recall/export may briefly show stale state",
+                    fact_id,
+                )
+        except Exception:
+            # Confirm helper failures must NEVER mask a successful chain write.
+            pass
         return True
     except Exception:
         return False
@@ -1232,13 +1251,25 @@ async def _change_claim_status(
         session_id=getattr(relay, "_session_id", None),
     )
 
-    return {
+    # Read-after-write: poll the subgraph until the new (pinned/unpinned)
+    # fact id is indexed and active. On timeout we still report success
+    # — the chain write IS acknowledged — but flag ``partial=True`` so a
+    # follow-up ``client.export()`` / ``client.recall()`` doesn't surprise
+    # the caller with stale state.
+    from .confirm_indexed import confirm_indexed as _confirm_indexed
+
+    indexed = await _confirm_indexed(new_fact_id, relay, expect="active")
+
+    result = {
         "success": True,
         "fact_id": fact_id,
         "new_fact_id": new_fact_id,
         "previous_status": current_long,
         "new_status": target_long,
     }
+    if not indexed:
+        result["partial"] = True
+    return result
 
 
 async def pin_fact(

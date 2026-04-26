@@ -47,7 +47,7 @@ sequenceDiagram
     Agent->>Client: totalreclaw_setup (no phrase)
     Client->>Client: run generator CLI<br/>(scure/bip39)
     Client-->>Agent: 12-word phrase
-    Agent-->>User: display phrase +<br/>"write this down!"
+    Note over Agent,User: SUPERSEDED in rc.20 — agent must NEVER display phrase<br/>(see phrase-safety rule); use QR-pair flow instead.
     User->>Agent: "ok, proceed"
     Agent->>Client: totalreclaw_setup(phrase)
 

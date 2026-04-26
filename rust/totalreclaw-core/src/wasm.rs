@@ -9,6 +9,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::blind;
 use crate::claims;
+use crate::confirm;
 use crate::contradiction;
 use crate::crypto;
 use crate::debrief;
@@ -1538,6 +1539,37 @@ pub fn wasm_filter_shadow_mode(actions_json: &str, mode: &str) -> Result<String,
         .map_err(|e| JsError::new(&format!("invalid actions JSON: {}", e)))?;
     let filtered = contradiction::filter_shadow_mode(actions, mode);
     serde_json::to_string(&filtered).map_err(|e| JsError::new(&e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Read-after-write (confirm_indexed)
+// ---------------------------------------------------------------------------
+
+/// GraphQL query string used to confirm a fact id has been indexed.
+/// Pair with `wasmConfirmIndexedParse` in a host-side polling loop.
+#[wasm_bindgen(js_name = wasmConfirmIndexedQuery)]
+pub fn wasm_confirm_indexed_query() -> String {
+    confirm::confirm_indexed_query().to_string()
+}
+
+/// Parse a subgraph response JSON and return whether the fact is indexed +
+/// active. Returns `true` when the read-after-write loop can stop.
+#[wasm_bindgen(js_name = wasmConfirmIndexedParse)]
+pub fn wasm_confirm_indexed_parse(response_json: &str) -> Result<bool, JsError> {
+    confirm::parse_indexed_response(response_json).map_err(|e| JsError::new(&e))
+}
+
+/// Default polling interval (ms) — exposed so host adapters share the same
+/// default without re-declaring the constant.
+#[wasm_bindgen(js_name = wasmConfirmIndexedDefaultPollMs)]
+pub fn wasm_confirm_indexed_default_poll_ms() -> u32 {
+    confirm::DEFAULT_POLL_INTERVAL_MS as u32
+}
+
+/// Default total timeout (ms) — exposed so host adapters share the same default.
+#[wasm_bindgen(js_name = wasmConfirmIndexedDefaultTimeoutMs)]
+pub fn wasm_confirm_indexed_default_timeout_ms() -> u32 {
+    confirm::DEFAULT_TIMEOUT_MS as u32
 }
 
 // ---------------------------------------------------------------------------

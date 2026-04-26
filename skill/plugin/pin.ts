@@ -26,6 +26,7 @@ import { isValidMemoryType, V0_TO_V1_TYPE } from './extractor.js';
 import type { MemoryType, MemorySource, MemoryScope, MemoryVolatility } from './extractor.js';
 import { PROTOBUF_VERSION_V4 } from './subgraph-store.js';
 import type { SubgraphSearchFact } from './subgraph-search.js';
+import { confirmIndexed, type ConfirmIndexedOptions } from './confirm-indexed.js';
 
 // Lazy-load WASM core (mirrors claims-helper.ts pattern — plays nicely under
 // both the OpenClaw runtime (CJS-ish tsx) and bare Node ESM used by tests).
@@ -445,6 +446,14 @@ export interface PinOpResult {
   tx_hash?: string;
   reason?: string;
   error?: string;
+  /**
+   * On-chain batch submitted but subgraph indexer did not confirm the new
+   * fact id within the timeout window (default 30s). The pin/unpin IS
+   * on-chain — `tx_hash` is observable on the explorer — but a follow-up
+   * `recall`/`export` may briefly surface stale state. Resolves once the
+   * indexer catches up. See `confirm-indexed.ts`.
+   */
+  partial?: boolean;
 }
 
 /**
@@ -461,6 +470,7 @@ export async function executePinOperation(
   targetStatus: 'pinned' | 'active',
   deps: PinOpDeps,
   reason?: string,
+  confirmOpts?: ConfirmIndexedOptions,
 ): Promise<PinOpResult> {
   // 1. Fetch the existing fact
   const existing = await deps.fetchFactById(factId);
@@ -672,6 +682,11 @@ export async function executePinOperation(
         tx_hash: txHash,
       };
     }
+    // Read-after-write: poll the subgraph until the new (pinned/unpinned)
+    // fact id is indexed and active. On timeout, surface `partial: true`
+    // so a follow-up recall/export that races against indexer lag can
+    // surface a clear "still propagating" hint rather than apparent staleness.
+    const confirm = await confirmIndexed(newFactId, confirmOpts);
     return {
       success: true,
       fact_id: factId,
@@ -680,6 +695,7 @@ export async function executePinOperation(
       new_status: targetStatus,
       tx_hash: txHash,
       reason,
+      ...(confirm.indexed ? {} : { partial: true }),
     };
   } catch (err) {
     return {

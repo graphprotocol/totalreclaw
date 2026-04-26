@@ -15,7 +15,7 @@ use crate::search;
 #[cfg(feature = "managed")]
 use crate::userop;
 use crate::{
-    blind, claims, contradiction, crypto, debrief, digest, feedback_log, fingerprint, lsh,
+    blind, claims, confirm, contradiction, crypto, debrief, digest, feedback_log, fingerprint, lsh,
     protobuf, reranker, store,
 };
 
@@ -1503,6 +1503,38 @@ fn py_filter_shadow_mode(actions_json: &str, mode: &str) -> PyResult<String> {
 // Module registration
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Read-after-write (confirm_indexed)
+// ---------------------------------------------------------------------------
+
+/// GraphQL query string for confirm_indexed (`fact(id: $id) { id, isActive,
+/// blockNumber }`). Pair with `confirm_indexed_parse` in a host-side polling
+/// loop.
+#[pyfunction]
+fn confirm_indexed_query() -> &'static str {
+    confirm::confirm_indexed_query()
+}
+
+/// Parse a subgraph response JSON for confirm_indexed and return whether the
+/// fact is indexed AND active.
+#[pyfunction]
+fn confirm_indexed_parse(response_json: &str) -> PyResult<bool> {
+    confirm::parse_indexed_response(response_json).map_err(PyValueError::new_err)
+}
+
+/// Default polling interval (ms) — exposed so Python adapters share the
+/// same default without re-declaring the constant.
+#[pyfunction]
+fn confirm_indexed_default_poll_ms() -> u64 {
+    confirm::DEFAULT_POLL_INTERVAL_MS
+}
+
+/// Default total timeout (ms) — exposed so Python adapters share the same default.
+#[pyfunction]
+fn confirm_indexed_default_timeout_ms() -> u64 {
+    confirm::DEFAULT_TIMEOUT_MS
+}
+
 /// TotalReclaw core crypto primitives (Rust implementation).
 ///
 /// This module provides byte-for-byte compatible implementations of all
@@ -1634,6 +1666,12 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Memory Taxonomy v1 constants + guard
     crate::memory_types::register_python_functions(m)?;
+
+    // Read-after-write (confirm_indexed)
+    m.add_function(wrap_pyfunction!(confirm_indexed_query, m)?)?;
+    m.add_function(wrap_pyfunction!(confirm_indexed_parse, m)?)?;
+    m.add_function(wrap_pyfunction!(confirm_indexed_default_poll_ms, m)?)?;
+    m.add_function(wrap_pyfunction!(confirm_indexed_default_timeout_ms, m)?)?;
 
     Ok(())
 }

@@ -124,6 +124,16 @@ export interface MetadataOpDeps {
     blindIndices: string[];
     encryptedEmbedding?: string;
   }>;
+  /**
+   * Optional read-after-write hook. Called after submitBatch returns success;
+   * polls the subgraph for the new fact id. Returning `false` causes the op
+   * result to surface `partial: true`. When this dep is undefined the op
+   * skips the wait entirely.
+   */
+  confirmIndexed?: (
+    factId: string,
+    expect?: 'active' | 'inactive',
+  ) => Promise<boolean>;
 }
 
 export interface MetadataOpResult {
@@ -135,6 +145,14 @@ export interface MetadataOpResult {
   idempotent?: boolean;
   tx_hash?: string;
   error?: string;
+  /**
+   * Set when the chain write succeeded but the subgraph indexer didn't
+   * confirm the new fact id within the timeout window. The mutation IS
+   * on-chain — `tx_hash` is observable on the explorer — but a follow-up
+   * recall/export may briefly surface stale state until the indexer catches
+   * up. See `subgraph/confirm-indexed.ts`.
+   */
+  partial?: boolean;
 }
 
 /**
@@ -379,6 +397,21 @@ export async function executeMetadataOp<T>(
         tx_hash: txHash,
       };
     }
+    // 9. Read-after-write — wait until the new fact id is indexed and
+    //    active, OR the host's timeout elapses. On timeout, return success
+    //    with `partial: true` so the agent surfaces "chain write submitted,
+    //    indexer still propagating" instead of claiming the operation is
+    //    fully visible.
+    let indexed = true;
+    if (deps.confirmIndexed) {
+      try {
+        indexed = await deps.confirmIndexed(newFactId, 'active');
+      } catch {
+        // Defensive: a confirm helper that throws does not invalidate the
+        // chain write — fall through with `partial: true`.
+        indexed = false;
+      }
+    }
     return {
       success: true,
       memory_id: memoryId,
@@ -386,6 +419,7 @@ export async function executeMetadataOp<T>(
       previous_value: String(current),
       new_value: String(nextValue),
       tx_hash: txHash,
+      ...(indexed ? {} : { partial: true }),
     };
   } catch (err) {
     return {

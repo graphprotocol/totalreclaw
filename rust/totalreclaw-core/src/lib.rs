@@ -23,9 +23,11 @@
 //! - [`smart_import`] — Smart import profiling (prompt construction + response parsing)
 //! - [`memory_types`] — Memory Taxonomy v1 string-level constants + runtime guard
 //! - [`prompts`] — Canonical extraction + compaction system prompts (2.2.0)
+//! - [`confirm`] — Read-after-write primitive for on-chain mutation tools (2.2.x)
 
 pub mod blind;
 pub mod claims;
+pub mod confirm;
 pub mod consolidation;
 pub mod contradiction;
 pub mod decision_log;

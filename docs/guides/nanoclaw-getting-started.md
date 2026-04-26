@@ -40,7 +40,7 @@ The wizard will:
 1. Ask if you have an existing recovery phrase (say **no** if this is your first time)
 2. Generate a cryptographically secure 12-word recovery phrase
 3. Register the phrase with the TotalReclaw managed service
-4. Display the recovery phrase for you to save
+4. Write the phrase to YOUR terminal so you can save it — never to the agent transcript (do not paste the phrase into chat: it would compromise the wallet)
 
 **Write down the 12 words in exact order and store them securely.** Treat this like a password -- anyone with the phrase can decrypt your memories.
 
