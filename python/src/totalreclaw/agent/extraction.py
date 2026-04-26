@@ -1034,7 +1034,20 @@ async def extract_facts_llm(
         return []
 
     if not response:
-        logger.info("extract_facts_llm: chat_completion returned None/empty")
+        # F2 (rc.24) — bumped from INFO to WARNING. An empty extraction
+        # response is a CORRECTNESS bug, not a routine event: the LLM
+        # accepted the call without raising, but content was empty —
+        # this is what surfaced in the rc.23 QA report as 100% silent
+        # auto-extraction failure on Z.AI/GLM-5.1. ``chat_completion``
+        # already logs the underlying request shape (finish_reason,
+        # usage, response_format) at WARN; this line tells the operator
+        # WHERE the empty bubbled up so they can correlate the two.
+        logger.warning(
+            "extract_facts_llm: chat_completion returned None/empty — "
+            "auto-extraction will be a no-op for this turn. "
+            "See preceding 'LLM returned empty content' log for the "
+            "underlying response shape (finish_reason / usage)."
+        )
         return []
 
     logger.info(
@@ -1133,7 +1146,16 @@ async def extract_facts_compaction(
         return []
 
     if not response:
-        logger.info("extract_facts_compaction: chat_completion returned None/empty")
+        # F2 (rc.24) — bumped from INFO to WARNING for the same reason
+        # as ``extract_facts_llm`` above. Compaction is the LAST chance
+        # to capture facts before the conversation is collapsed; a
+        # silent empty-response here is a hard data-loss event.
+        logger.warning(
+            "extract_facts_compaction: chat_completion returned None/empty — "
+            "compaction extraction will be a no-op for this conversation. "
+            "See preceding 'LLM returned empty content' log for the "
+            "underlying response shape."
+        )
         return []
 
     logger.info(

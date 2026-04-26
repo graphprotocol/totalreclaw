@@ -4,7 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "totalreclaw"
-version = "2.3.1rc24"
+# Stable base version. The publish-python-client.yml workflow appends
+# `rc<N>` (PEP 440) to this string when `release-type=rc` is dispatched;
+# the mutation is ephemeral and does NOT round-trip back to main. Prior
+# to rc.24 a stale `2.3.1rc24` literal had leaked into this file (the
+# publish workflow's per-RC mutation had been committed back manually),
+# which would have caused stable builds to mis-publish AND broke the
+# regex-based mutation logic on subsequent RCs. Keep this at the next
+# stable target with NO rc suffix. F3 fix in rc.24.
+version = "2.3.1"
 description = "End-to-end encrypted memory for AI agents — Python client (Memory Taxonomy v1)"
 readme = "README.md"
 license = "MIT"
@@ -65,6 +73,21 @@ totalreclaw = "totalreclaw.hermes"
 # Hermes-specific first-run wizard run `totalreclaw hermes-setup`
 # (see `totalreclaw.cli:main` for the subcommand router).
 totalreclaw = "totalreclaw.cli:main"
+
+# 2.3.1rc24 (F3) — explicit setuptools find config. Without this
+# stanza, ``setuptools.build_meta`` runs auto-discovery; with our
+# src-layout (``python/src/totalreclaw/``) and the multiple top-level
+# directories that auto-discovery scans (``tests/``, ``.venv/``, etc.)
+# it can silently miss newly-added top-level modules under
+# ``totalreclaw/``. The rc.23 wheel published to PyPI did NOT contain
+# ``retype_setscope.py`` even though the file was on main, exactly
+# because of this auto-discovery quirk. Pin the discovery root + glob
+# explicitly so every ``totalreclaw*`` package + subpackage that lives
+# under ``src/`` lands in the wheel. Validated by the regression test at
+# ``python/tests/test_packaging_integrity.py``.
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["totalreclaw*"]
 
 [tool.setuptools.package-data]
 "totalreclaw.hermes" = ["plugin.yaml", "SKILL.md"]

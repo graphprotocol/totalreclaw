@@ -546,20 +546,79 @@ async def _pair_relay(state: "PluginState", mode: str):
     The ``mode`` is passed to the relay via the ``open`` frame so the
     server-rendered HTML only shows the panel(s) the caller asked for.
 
-    rc.13 asyncio-lifecycle fix: the WebSocket + completion waiter both
-    run on a dedicated worker thread. The tool body blocks only on the
-    fast ``session/open`` handshake, then returns to the agent. The
-    browser-side flow that follows (user types PIN + paste phrase, ~30s
-    median) runs fully inside the worker thread — the Hermes tool-call
-    event loop can close immediately after this function returns.
+    rc.13 asyncio-lifecycle fix: the WebSocket + completion waiter ran
+    on a dedicated worker thread inside the Hermes process. That fix
+    held for long-lived ``hermes gateway run`` daemons but DID NOT
+    survive ``hermes chat -q`` / ACP single-call / MCP single-call /
+    Python harness — those all exit the Python process the moment the
+    agent reply lands, killing the daemon thread (and its WebSocket)
+    before the user can finish the browser flow. The relay then saw
+    the WS close, tore the session down, and returned 404/502 for the
+    eventual phrase POST.
+
+    rc.24 (F1, ref ``QA-hermes-RC-2.3.1-rc.23-20260426.md`` Finding
+    #157): always hand the WebSocket lifecycle off to a fully-detached
+    sidecar SUBPROCESS (POSIX ``setsid``) before returning. The
+    sidecar lives past the parent's exit because it's been reparented
+    to ``init`` / ``launchd``, so a one-shot agent process can finish
+    its turn while the sidecar holds the relay session open through
+    the user's browser-completion latency. See
+    :mod:`totalreclaw.pair.completion_sidecar` for the full rationale.
+
+    The ``TOTALRECLAW_PAIR_SIDECAR=0`` env var falls back to the rc.13
+    daemon-thread path. This is intentionally undocumented — it's an
+    operator escape hatch for environments that block subprocess spawn
+    (some sandboxes), not a user-facing knob. Setting it on a one-shot
+    process re-introduces the rc.23 NO-GO bug; do not use casually.
     """
-    # Offload to a thread-owned event loop — the WS never gets tied to
-    # the Hermes tool-invocation loop. See ``_run_relay_pair_on_thread``
-    # for the full design rationale + observability contract.
-    #
-    # ``to_thread`` is a thin wrapper around the default executor; it
-    # keeps this coroutine awaitable while the heavy lifting is on a
-    # real OS thread. The callee itself is synchronous — it blocks
-    # internally on the worker thread's handshake queue.
+    if _sidecar_enabled():
+        # Run the spawn in a worker thread so the (synchronous) Popen
+        # + handshake-poll doesn't block the asyncio loop. The whole
+        # call is fast (<1s typical) since the sidecar reports back as
+        # soon as the relay returns ``opened``.
+        record = await asyncio.to_thread(_run_relay_pair_via_sidecar, mode)
+        return record.url, record.pin, record.expires_at
+
+    # rc.13 fallback path — daemon-thread inside the parent process.
     opened = await asyncio.to_thread(_run_relay_pair_on_thread, state, mode)
     return opened.url, opened.pin, opened.expires_at
+
+
+def _sidecar_enabled() -> bool:
+    """rc.24 default ON. Set ``TOTALRECLAW_PAIR_SIDECAR=0`` to disable.
+
+    Disabling re-exposes the rc.23 lifecycle bug for short-lived
+    process invocations. Only sensible for long-lived daemon hosts
+    that explicitly want the daemon-thread path back (e.g. environments
+    where subprocess spawn is blocked by a sandbox).
+    """
+    raw = (os.environ.get("TOTALRECLAW_PAIR_SIDECAR") or "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _run_relay_pair_via_sidecar(mode: Optional[str]):
+    """Sync helper — spawns the sidecar and waits for its handshake.
+
+    Returns the
+    :class:`totalreclaw.pair.completion_sidecar._HandshakeRecord` so
+    the caller can pull ``url`` / ``pin`` / ``expires_at`` off it.
+
+    rc.24 (F1) — see module docstring for design rationale.
+    """
+    # Local import: keeps cold-start path light; sidecar module pulls
+    # in subprocess + asyncio + uuid which the regular tool body
+    # doesn't need.
+    from ..pair.completion_sidecar import spawn_completion_sidecar
+
+    # Forward operator overrides the user might have set in env so the
+    # sidecar talks to the same relay + relay endpoint the parent would
+    # have used. ``subprocess.Popen(env=...)`` already inherits these
+    # by default; passing them through ``spawn_completion_sidecar``
+    # keeps the contract explicit and lets tests monkeypatch the env.
+    relay_url = os.environ.get("TOTALRECLAW_PAIR_RELAY_URL")
+    server_url = os.environ.get("TOTALRECLAW_SERVER_URL")
+    return spawn_completion_sidecar(
+        mode=mode,
+        relay_url=relay_url,
+        server_url=server_url,
+    )

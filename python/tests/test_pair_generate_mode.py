@@ -364,20 +364,25 @@ def test_pair_tool_schema_advertises_either():
 
 
 @pytest.mark.asyncio
-async def test_relay_mode_passes_ui_mode_to_open_session(tmp_path, monkeypatch):
-    """Verify relay path forwards UI mode to the thread-based pair
-    supervisor.
+async def test_relay_mode_passes_ui_mode_to_thread_supervisor_when_sidecar_disabled(
+    tmp_path, monkeypatch
+):
+    """rc.13 fallback path — when ``TOTALRECLAW_PAIR_SIDECAR=0`` is set
+    we route to the daemon-thread helper. Verify the UI mode threads
+    through to ``_run_relay_pair_on_thread`` exactly as it did pre-rc.24.
 
-    rc.13 replaced the ``_spawn_relay_completion_task`` asyncio-task
-    helper with ``_run_relay_pair_on_thread``, which runs the entire
-    relay session on a dedicated worker thread (fixes the
-    tool-invocation loop-teardown bug where ack frames were never
-    sent). This test stubs out the thread-helper entirely and asserts
-    the ``mode`` kwarg threads through ``pair_tool.pair`` →
-    ``_pair_relay`` → ``_run_relay_pair_on_thread``. No network.
+    rc.24 (F1) replaced the daemon-thread default with a fully detached
+    sidecar subprocess so ``hermes chat -q`` one-shot processes don't
+    kill the WebSocket. The thread path is still reachable via the
+    operator escape hatch and must keep working for long-lived daemon
+    hosts. See ``test_pair_sidecar_lifecycle.py`` for the sidecar-path
+    coverage.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("TOTALRECLAW_PAIR_MODE", raising=False)  # default (relay)
+    # Force the rc.13 daemon-thread fallback so this test exercises
+    # ``_run_relay_pair_on_thread`` (the function it stubs out).
+    monkeypatch.setenv("TOTALRECLAW_PAIR_SIDECAR", "0")
 
     from totalreclaw.hermes import pair_tool as _pair_tool_mod
 
@@ -406,3 +411,53 @@ async def test_relay_mode_passes_ui_mode_to_open_session(tmp_path, monkeypatch):
         assert "error" not in payload, payload
         assert payload["mode"] == mode
         assert captured.get("mode") == mode
+
+
+@pytest.mark.asyncio
+async def test_relay_mode_passes_ui_mode_via_sidecar_default_path(
+    tmp_path, monkeypatch
+):
+    """rc.24 default path — sidecar subprocess. The UI mode must thread
+    through ``pair_tool.pair`` → ``_pair_relay`` →
+    ``_run_relay_pair_via_sidecar`` → ``spawn_completion_sidecar``.
+
+    Companion to the rc.13 fallback test above; together they pin the
+    mode-forwarding contract on both code paths.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("TOTALRECLAW_PAIR_MODE", raising=False)
+    monkeypatch.delenv("TOTALRECLAW_PAIR_SIDECAR", raising=False)  # default ON
+
+    from totalreclaw.hermes import pair_tool as _pair_tool_mod
+    from totalreclaw.pair.completion_sidecar import _HandshakeRecord
+
+    captured: dict = {}
+
+    def _fake_spawn(*, mode, relay_url=None, server_url=None, **kwargs):
+        captured["mode"] = mode
+        return _HandshakeRecord(
+            url="https://example.invalid/pair/p/x#pk=y",
+            pin="654321",
+            expires_at="2026-04-30T12:00:00Z",
+            token="rc24-test-token",
+            status="opened",
+        )
+
+    # Patch the import inside _run_relay_pair_via_sidecar.
+    monkeypatch.setattr(
+        "totalreclaw.pair.completion_sidecar.spawn_completion_sidecar",
+        _fake_spawn,
+    )
+
+    state = MagicMock()
+
+    for mode in ("generate", "import", "either"):
+        captured.clear()
+        result_json = await _pair_tool_mod.pair({"mode": mode}, state)
+        payload = json.loads(result_json)
+        assert "error" not in payload, payload
+        assert payload["mode"] == mode
+        assert payload["pin"] == "654321"
+        assert captured.get("mode") == mode, (
+            f"sidecar must receive mode={mode!r}; got {captured!r}"
+        )

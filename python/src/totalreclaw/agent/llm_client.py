@@ -20,7 +20,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -66,12 +66,66 @@ ZAI_CODING_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
 ZAI_STANDARD_BASE_URL = "https://api.z.ai/api/paas/v4"
 
 
-def get_zai_base_url() -> str:
+def zai_base_url_for_model(model: str) -> str:
+    """Pick the right zai endpoint for ``model``.
+
+    rc.24 (F2 follow-up per Pedro 2026-04-26): zai exposes two
+    endpoints with DIFFERENT model availability matrices. Coding-plan
+    keys hitting the standard endpoint or vice-versa returns 429
+    "Insufficient balance" (handled in :func:`chat_completion`'s
+    auto-fallback) — but a Coding-plan key sending GLM-5.x to the
+    coding endpoint OR vice-versa returns HTTP 200 with **empty
+    content** (no error to flip on). That was the silent symptom F2
+    surfaced in the rc.23 QA report.
+
+    Heuristic:
+
+    - GLM-4.5 family (``glm-4.5*``, ``glm-4.5-air``, ``glm-4.5-flash``,
+      ``glm-4-*`` in general) is a Coding plan model — coding endpoint.
+    - GLM-5.x family (``glm-5*``, ``glm-5.1``, etc.) is on the
+      Standard PAYG endpoint.
+    - Anything else falls back to the configured / default endpoint.
+
+    The actual run-time binding still respects the explicit
+    ``ZAI_BASE_URL`` override (operator-pinned). This helper only
+    resolves the *default* when no override is set.
+    """
+    lower = (model or "").strip().lower()
+    if not lower:
+        return ZAI_CODING_BASE_URL
+
+    # GLM-5.x → Standard PAYG. Match `glm-5`, `glm-5.x`, `glm-5-*`,
+    # `glm5*` (no-dash variant occasionally seen). Tight enough not to
+    # match GLM-4.5 (which contains "5" but is a different family).
+    if (
+        lower.startswith("glm-5")
+        or lower.startswith("glm5")
+        or "glm-5." in lower
+    ):
+        return ZAI_STANDARD_BASE_URL
+
+    # GLM-4.x → Coding plan. Includes -flash, -air, -turbo variants.
+    if (
+        lower.startswith("glm-4")
+        or lower.startswith("glm4")
+        or "glm-4." in lower
+    ):
+        return ZAI_CODING_BASE_URL
+
+    # Unknown model — fall back to the historical coding default.
+    return ZAI_CODING_BASE_URL
+
+
+def get_zai_base_url(model: Optional[str] = None) -> str:
     """Resolve the zai base URL.
 
     Precedence:
       1. ``ZAI_BASE_URL`` env var (explicit operator override)
-      2. Default: coding endpoint (coding-plan-biased; the rc.3
+      2. ``zai_base_url_for_model(model)`` — model-family heuristic
+         (rc.24 F2 fix). Picks coding-vs-standard based on the model
+         name to avoid the silent-empty-content trap when the model
+         isn't available on the chosen endpoint.
+      3. Default: coding endpoint (coding-plan-biased; the rc.3
          auto-fallback hops to the standard endpoint on an
          "Insufficient balance" 429).
 
@@ -82,6 +136,8 @@ def get_zai_base_url() -> str:
     raw = os.environ.get("ZAI_BASE_URL", "").strip()
     if raw:
         return raw.rstrip("/")
+    if model:
+        return zai_base_url_for_model(model)
     return ZAI_CODING_BASE_URL
 
 
@@ -330,7 +386,9 @@ def _read_hermes_llm_config_from_auth_json(
         elif auth_base_url:
             base_url = auth_base_url.rstrip("/")
         else:
-            base_url = get_zai_base_url()
+            # rc.24 F2 fix — pick endpoint based on model family.
+            # GLM-5.x lives on Standard PAYG, GLM-4.x on Coding.
+            base_url = get_zai_base_url(model=model)
     else:
         _, default_base_url = _HERMES_PROVIDER_KEY_MAP.get(provider_lower, ([], ""))
         base_url = (
@@ -486,7 +544,8 @@ def read_hermes_llm_config() -> Optional[LLMConfig]:
             if zai_override and zai_override.strip():
                 base_url = zai_override.strip().rstrip("/")
             else:
-                base_url = get_zai_base_url()
+                # rc.24 F2 fix — model-aware endpoint pick.
+                base_url = get_zai_base_url(model=model)
         else:
             base_url = (
                 env_vars.get("GLM_BASE_URL")
@@ -568,7 +627,11 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
                     # Respect ZAI_BASE_URL env override (rc.3). Coding-plan
                     # users can leave unset; PAYG users set it explicitly
                     # to https://api.z.ai/api/paas/v4.
-                    resolved_base_url = get_zai_base_url()
+                    # rc.24 F2 fix — when no env override is set, pick the
+                    # endpoint based on the model family (GLM-5.x → Standard,
+                    # GLM-4.x → Coding) so a Coding-plan user asking for
+                    # GLM-5.1 doesn't silently get empty content.
+                    resolved_base_url = get_zai_base_url(model=model)
                 else:
                     resolved_base_url = default_base_url
 
@@ -779,7 +842,33 @@ async def chat_completion(
             if active.api_format == "anthropic":
                 return await _call_anthropic(active, system_prompt, user_prompt, max_tokens, temperature)
             else:
-                return await _call_openai(active, system_prompt, user_prompt, max_tokens, temperature)
+                content = await _call_openai(active, system_prompt, user_prompt, max_tokens, temperature)
+                # rc.24 F2 fix — if zai returned 200 with empty content
+                # AND we haven't yet tried the OTHER zai endpoint, do
+                # a one-shot flip and retry. Empty 200 from zai is the
+                # "wrong-endpoint-for-this-model" symptom (e.g.
+                # GLM-5.1 hit on the Coding endpoint where it isn't
+                # available). The flip is consistent with the existing
+                # 429 "Insufficient balance" auto-fallback.
+                if (
+                    not content
+                    and not zai_fallback_attempted
+                    and zai_fallback_base_url(active.base_url) is not None
+                ):
+                    fallback = zai_fallback_base_url(active.base_url)
+                    if fallback:
+                        zai_fallback_attempted = True
+                        old_url = active.base_url
+                        active.base_url = fallback
+                        logger.info(
+                            "zai endpoint auto-fallback: %s → %s due to "
+                            "empty content response (model=%s — likely "
+                            "wrong endpoint for this model family)",
+                            old_url, fallback, active.model,
+                        )
+                        attempt -= 1
+                        continue
+                return content
         except httpx.HTTPStatusError as e:
             last_exc = e
             last_status = e.response.status_code
@@ -894,6 +983,45 @@ async def chat_completion(
     )
 
 
+#: Providers that return a base_url containing one of these substrings
+#: are known to honour ``response_format: {"type": "json_object"}`` and
+#: BENEFIT from it for structured-output prompts (extraction, compaction,
+#: comparative re-rank). Z.AI / GLM in particular is observed to return
+#: empty content on the merged-extraction prompt without it (F2 in QA
+#: report ``QA-hermes-RC-2.3.1-rc.23-20260426.md``). OpenAI also supports
+#: it but the prompt already guides JSON output reliably; sending the hint
+#: doesn't hurt.
+#:
+#: Match logic is a substring check on ``LLMConfig.base_url`` rather than
+#: a provider-name table because ``base_url`` is the only field we have
+#: at call time once the config is built.
+_JSON_OBJECT_PROVIDER_HINTS: tuple[str, ...] = (
+    "z.ai",                  # both /coding/paas/v4 and /paas/v4 endpoints
+    "api.openai.com",
+    "groq.com",
+    "openrouter.ai",
+    "deepseek.com",
+    "mistral.ai",
+    "x.ai",
+    "together.xyz",
+)
+
+
+def _supports_json_object_response_format(base_url: str) -> bool:
+    """Return True if this provider should be sent
+    ``response_format: {"type": "json_object"}`` on extraction calls.
+
+    Conservative match: substring match on the base URL. Adding new
+    providers is safe — incorrect inclusion only makes the API ignore
+    the field on providers that don't support it (OpenAI-spec-compatible
+    providers either honour the field or drop it silently).
+    """
+    if not base_url:
+        return False
+    lower = base_url.lower()
+    return any(hint in lower for hint in _JSON_OBJECT_PROVIDER_HINTS)
+
+
 async def _call_openai(
     config: LLMConfig,
     system_prompt: str,
@@ -901,6 +1029,44 @@ async def _call_openai(
     max_tokens: int,
     temperature: float,
 ) -> Optional[str]:
+    """OpenAI-spec chat-completions call.
+
+    F2 fix (rc.24, ref ``QA-hermes-RC-2.3.1-rc.23-20260426.md``):
+
+    1. For known structured-output-aware providers (zai/GLM, OpenAI,
+       Groq, DeepSeek, OpenRouter, Mistral, x.ai, Together) we now send
+       ``response_format: {"type": "json_object"}``. GLM-5.1 in
+       particular returned EMPTY content for the merged-extraction
+       prompt without this hint — no error, just an empty
+       ``message.content`` — which broke auto-extraction silently in
+       rc.23 QA. Sending the hint flips it to deterministic JSON
+       output. Providers that ignore the field are unaffected.
+
+    2. When the response parses successfully but ``message.content`` is
+       empty / missing, we now WARN with the request payload size,
+       model, and the OpenAI ``finish_reason`` so an empty extraction
+       call is loud at the source. Previously this surfaced as the
+       single line ``extract_facts_llm: chat_completion returned
+       None/empty`` at INFO level, which gave operators no way to
+       tell whether the model returned junk, hit a content filter, or
+       OOM'd a context window.
+    """
+    body: dict[str, Any] = {
+        "model": config.model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": temperature,
+        "max_completion_tokens": max_tokens,
+    }
+    if _supports_json_object_response_format(config.base_url):
+        # Hint to the provider that we want valid JSON. Combined with
+        # the system prompt's "Return JSON ..." instruction, this is
+        # what flips zai/GLM from empty-content responses to structured
+        # output. See F2 in the rc.23 QA report.
+        body["response_format"] = {"type": "json_object"}
+
     async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
         resp = await client.post(
             f"{config.base_url}/chat/completions",
@@ -908,19 +1074,32 @@ async def _call_openai(
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {config.api_key}",
             },
-            json={
-                "model": config.model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": temperature,
-                "max_completion_tokens": max_tokens,
-            },
+            json=body,
         )
         resp.raise_for_status()
         data = resp.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content")
+        choice = (data.get("choices") or [{}])[0]
+        content = choice.get("message", {}).get("content")
+        if not content:
+            # F2 — empty responses must be loud, not silent. Prior to
+            # rc.24 this was logged as a generic "returned None/empty"
+            # downstream in extraction.py at INFO. Surface the actual
+            # response shape (finish_reason, usage) at WARN here so the
+            # operator can correlate empty extraction batches with the
+            # provider response without enabling DEBUG.
+            logger.warning(
+                "LLM returned empty content (provider=%s, model=%s, "
+                "system_chars=%d, user_chars=%d, finish_reason=%s, usage=%s, "
+                "json_response_format=%s)",
+                config.base_url,
+                config.model,
+                len(system_prompt or ""),
+                len(user_prompt or ""),
+                choice.get("finish_reason"),
+                data.get("usage"),
+                "response_format" in body,
+            )
+        return content
 
 
 async def _call_anthropic(
