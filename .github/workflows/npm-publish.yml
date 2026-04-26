@@ -336,7 +336,7 @@ jobs:
     name: Publish @totalreclaw/totalreclaw (OpenClaw plugin)
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write  # `write` so the post-publish step can `git push origin v<VERSION>` (rc.21 finding #8)
       id-token: write  # OIDC trusted publishing
     steps:
       - uses: actions/checkout@v4
@@ -420,6 +420,18 @@ jobs:
           console.log('RC version:', p.version);
           "
 
+      # Propagate the (possibly RC-mutated) package.json::version into
+      # SKILL.md frontmatter and skill.json, then GATE the publish on
+      # those three sites being aligned. Catches the rc.21 drift class
+      # (package.json says rc.21, SKILL.md says rc.11, skill.json says
+      # 1.6.2) BEFORE we publish a confused tarball. See
+      # skill/scripts/sync-version.mjs + check-version-drift.mjs.
+      - name: Sync bundled-tarball version sites + drift gate
+        run: |
+          cd skill/plugin
+          node ../scripts/sync-version.mjs
+          node ../scripts/check-version-drift.mjs
+
       - name: Publish
         if: inputs.dry-run == false
         run: |
@@ -441,5 +453,30 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Report version
+        id: report
         run: |
-          node -e "const p = require('./skill/plugin/package.json'); console.log('Published:', p.name + '@' + p.version)"
+          VERSION=$(node -e "console.log(require('./skill/plugin/package.json').version)")
+          echo "Published: @totalreclaw/totalreclaw@${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # Tag the source SHA the workflow published from. Idempotent: if the
+      # tag already exists on the remote (re-run, manual backfill), skip.
+      # Uses the RESOLVED version (e.g. 3.3.1-rc.22), so RCs and stables
+      # both get a tag. Closes the rc.21 finding #8 gap (no `v3.3.1-rc.*`
+      # tags in the public repo, only stables up to v3.0.4).
+      - name: Tag git commit with published version
+        if: inputs.dry-run == false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.report.outputs.version }}"
+          TAG="v${VERSION}"
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "${TAG}$"; then
+            echo "Tag ${TAG} already exists on origin, skipping"
+            exit 0
+          fi
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name  "github-actions[bot]"
+          git tag "${TAG}"
+          git push origin "${TAG}"
+          echo "Tagged: ${TAG}"

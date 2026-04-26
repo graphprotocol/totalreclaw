@@ -56,6 +56,8 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # `write` so the post-publish step can `git push origin v<VERSION>` (rc.21 finding #8)
     steps:
       - uses: actions/checkout@v4
 
@@ -87,9 +89,21 @@ jobs:
       - name: Install ClawHub CLI
         run: npm install -g clawhub
 
-      - name: Publish to ClawHub
-        env:
-          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+      # ROOT CAUSE of rc.21 finding #3 (on-disk version drift): this
+      # workflow used to call `clawhub publish ./skill/plugin` WITHOUT
+      # ever mutating package.json / SKILL.md / skill.json in the
+      # working tree. So even when `--version` was set to the right RC
+      # string in the catalog, the tarball ClawHub built from
+      # `./skill/plugin/` shipped whatever was checked into main —
+      # which was a stale 3.3.1-rc.15 in package.json + 3.3.1-rc.11 in
+      # SKILL.md + 1.6.2 in skill.json. New users installing rc.21 got
+      # rc.15-on-disk, no matter what the catalog said.
+      #
+      # Fix: resolve the publish version, write it into all three
+      # bundled files BEFORE `clawhub publish`, then run the drift
+      # gate so a sync regression is impossible.
+      - name: Resolve version + propagate to bundled tarball files
+        id: resolve
         run: |
           set -e
           BASE_VERSION="${{ github.event.inputs.version || github.ref_name }}"
@@ -102,13 +116,43 @@ jobs:
 
           if [ "$RELEASE_TYPE" = "rc" ]; then
             VERSION="${BASE_VERSION}-rc.${RC_NUMBER}"
+          else
+            VERSION="$BASE_VERSION"
+          fi
+
+          # Mutate skill/plugin/package.json::version in-place. Same shape
+          # as the npm-publish.yml RC suffix step — keeps the canonical
+          # source of truth in one place.
+          node -e "
+          const fs = require('fs');
+          const p = require('./skill/plugin/package.json');
+          p.version = '${VERSION}';
+          fs.writeFileSync('./skill/plugin/package.json', JSON.stringify(p, null, 2) + '\n');
+          console.log('package.json::version =', p.version);
+          "
+
+          # Propagate into SKILL.md frontmatter + skill.json, then GATE.
+          node skill/scripts/sync-version.mjs
+          node skill/scripts/check-version-drift.mjs
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "release_type=${RELEASE_TYPE}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to ClawHub
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          set -e
+          VERSION="${{ steps.resolve.outputs.version }}"
+          RELEASE_TYPE="${{ steps.resolve.outputs.release_type }}"
+
+          if [ "$RELEASE_TYPE" = "rc" ]; then
             # `rc`-only tags; do NOT set `latest` so the ClawHub front page
             # keeps pointing at the last stable version until promote-rc
             # republishes the same content as `latest`.
             TAGS="rc"
             CHANGELOG="Release candidate $VERSION -- testing build, not recommended for production. See https://github.com/p-diogo/totalreclaw/releases"
           else
-            VERSION="$BASE_VERSION"
             TAGS="latest,memory,encryption,e2ee,privacy,agent-memory,e2e-encryption,persistent-context"
             CHANGELOG="Release $VERSION -- see https://github.com/p-diogo/totalreclaw/releases/tag/v$VERSION"
           fi
@@ -129,6 +173,26 @@ jobs:
           # Surface the published version for downstream jobs / notifications.
           echo "published_version=$VERSION" >> "$GITHUB_OUTPUT"
         id: publish
+
+      # Idempotent git-tag of the source SHA the ClawHub publish came
+      # from. Same logic as npm-publish.yml so manual dispatches that
+      # only hit ClawHub still tag history. Closes rc.21 finding #8
+      # (no v3.3.1-rc.* tags in public repo).
+      - name: Tag git commit with published version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.publish.outputs.published_version }}"
+          TAG="v${VERSION}"
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "${TAG}$"; then
+            echo "Tag ${TAG} already exists on origin, skipping"
+            exit 0
+          fi
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name  "github-actions[bot]"
+          git tag "${TAG}"
+          git push origin "${TAG}"
+          echo "Tagged: ${TAG}"
 
       - name: Notify on Telegram
         if: success()
