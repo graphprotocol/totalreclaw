@@ -23,11 +23,29 @@ if TYPE_CHECKING:
 from .extraction import ExtractedFact, extract_facts_llm, extract_facts_heuristic
 from .contradiction import detect_and_resolve_contradictions
 from .debrief import generate_debrief
-from .loop_runner import run_sync
+from .loop_runner import (
+    is_interpreter_shutdown_error,
+    run_sync,
+    run_sync_resilient,
+)
 
 logger = logging.getLogger(__name__)
 
 STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity for near-duplicate detection
+
+
+def _resilient_run(coro_factory):
+    """Run an async work unit with shutdown-resilience.
+
+    rc.23 finding #1 (umbrella #147 / sub #148): under ``hermes chat -q``
+    the auto-extract / auto-recall / debrief work fires during process
+    teardown and used to silently fail with ``cannot schedule new
+    futures after interpreter shutdown``. Routing every per-fact /
+    per-batch async call through ``run_sync_resilient`` gives the
+    persistent loop runner a chance to rebuild its private executor and
+    retry the awaitable on a fresh slate.
+    """
+    return run_sync_resilient(coro_factory)
 
 # Maximum facts per batched UserOperation — mirrors userop.MAX_BATCH_SIZE so
 # we don't need to import from userop here (avoids a circular-import risk).
@@ -45,9 +63,20 @@ def _fetch_recent_memories(state: "AgentState") -> list[dict]:
     if not client:
         return []
     try:
-        # Use a generic query to get recent memories for dedup
-        results = run_sync(client.recall("recent context", top_k=50))
+        # Use a generic query to get recent memories for dedup. Wrapped
+        # in a coroutine factory so the loop runner can retry on the
+        # post-shutdown ``cannot schedule new futures`` RuntimeError.
+        results = _resilient_run(lambda: client.recall("recent context", top_k=50))
         return [{"id": r.id, "text": r.text, "embedding": r.embedding} for r in results]
+    except RuntimeError as exc:
+        if is_interpreter_shutdown_error(exc):
+            logger.warning(
+                "TotalReclaw lifecycle: dedup-context fetch dropped due to "
+                "interpreter-shutdown race (recall could not land). Auto-extraction "
+                "will skip dedup for this batch."
+            )
+            return []
+        raise
     except Exception as e:
         logger.debug("Failed to fetch recent memories for dedup: %s", e)
         return []
@@ -153,12 +182,30 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
     # Fetch existing memories for both LLM dedup context and cosine dedup
     existing_memories = _fetch_recent_memories(state)
 
-    # Try LLM extraction first
+    # Try LLM extraction first. Resilient invocation so the auto-extract
+    # call survives the rc.23 finding #1 shutdown race — without this,
+    # CLI ``hermes chat -q`` users got ZERO durable memories per turn.
     facts: list[ExtractedFact] = []
     try:
-        facts = run_sync(
-            extract_facts_llm(messages, mode=mode, existing_memories=existing_memories, llm_config=llm_config)
+        facts = _resilient_run(
+            lambda: extract_facts_llm(
+                messages,
+                mode=mode,
+                existing_memories=existing_memories,
+                llm_config=llm_config,
+            )
         )
+    except RuntimeError as exc:
+        if is_interpreter_shutdown_error(exc):
+            logger.warning(
+                "TotalReclaw lifecycle: LLM extraction dropped due to "
+                "interpreter-shutdown race (mode=%s, %d unprocessed messages). "
+                "Falling back to heuristic so at least the buffer is drained.",
+                mode, len(messages),
+            )
+            facts = []
+        else:
+            logger.debug("LLM extraction failed, falling back to heuristic: %s", exc)
     except Exception as e:
         logger.debug("LLM extraction failed, falling back to heuristic: %s", e)
 
@@ -175,7 +222,20 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
 
     # Contradiction detection: filter out facts that lose to existing vault claims
     try:
-        facts = run_sync(detect_and_resolve_contradictions(facts, client, logger))
+        facts = _resilient_run(
+            lambda: detect_and_resolve_contradictions(facts, client, logger)
+        )
+    except RuntimeError as exc:
+        if is_interpreter_shutdown_error(exc):
+            logger.warning(
+                "TotalReclaw lifecycle: contradiction detection dropped due to "
+                "interpreter-shutdown race; proceeding with all %d facts unchanged.",
+                len(facts),
+            )
+        else:
+            logger.debug(
+                "Contradiction detection failed (proceeding with all facts): %s", exc,
+            )
     except Exception as exc:
         logger.debug("Contradiction detection failed (proceeding with all facts): %s", exc)
 
@@ -199,7 +259,8 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
             if fact.action == "DELETE":
                 # Tombstone the old fact — one-at-a-time, no batch needed.
                 if fact.existing_fact_id:
-                    run_sync(client.forget(fact.existing_fact_id))
+                    _delete_id = fact.existing_fact_id
+                    _resilient_run(lambda fid=_delete_id: client.forget(fid))
                 continue
 
             # For ADD and UPDATE: resolve embedding + run dedup, then enqueue.
@@ -245,14 +306,25 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
             # v1 write path — forward the taxonomy fields the extractor
             # populated (source/scope/reasoning/volatility). Defensive
             # fallback for source matches the plugin's
-            # ``storeExtractedFacts`` handling.
-            fact_ids = run_sync(
-                client.remember_batch(chunk_dicts, source="hermes-auto")
+            # ``storeExtractedFacts`` handling. Resilient call so a
+            # batch fired during process exit survives the post-shutdown
+            # executor race (rc.23 finding #1).
+            _chunk_dicts = chunk_dicts
+            fact_ids = _resilient_run(
+                lambda d=_chunk_dicts: client.remember_batch(d, source="hermes-auto")
             )
         except Exception as e:
-            logger.warning(
-                "remember_batch failed for chunk of %d facts: %s", len(chunk), e
-            )
+            if is_interpreter_shutdown_error(e):
+                logger.warning(
+                    "TotalReclaw lifecycle: remember_batch dropped %d facts due to "
+                    "interpreter-shutdown race (CLI auto-extract during process "
+                    "exit). Memories not persisted.",
+                    len(chunk),
+                )
+            else:
+                logger.warning(
+                    "remember_batch failed for chunk of %d facts: %s", len(chunk), e
+                )
             # On a total batch failure, none of the facts in this chunk landed.
             # Log each one individually so the caller can diagnose.
             for fact, _, _ in chunk:
@@ -272,7 +344,8 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
                     # has been successfully stored.
                     if fact.action == "UPDATE" and fact.existing_fact_id:
                         try:
-                            run_sync(client.forget(fact.existing_fact_id))
+                            _old_id = fact.existing_fact_id
+                            _resilient_run(lambda fid=_old_id: client.forget(fid))
                         except Exception as fe:
                             logger.warning(
                                 "Failed to tombstone old fact %s after UPDATE: %s",
@@ -326,7 +399,9 @@ def session_debrief(
 
     stored_fact_ids: list[str] = []
     try:
-        debrief_items = run_sync(generate_debrief(all_messages, stored_fact_texts))
+        debrief_items = _resilient_run(
+            lambda: generate_debrief(all_messages, stored_fact_texts)
+        )
         if debrief_items:
             for item in debrief_items:
                 try:
@@ -334,10 +409,13 @@ def session_debrief(
                     # provenance — the assistant-side debrief pipeline
                     # synthesized them from the conversation, so the
                     # v1 source is always "derived" (plugin parity).
-                    fact_id = run_sync(
-                        client.remember(
-                            item.text,
-                            importance=item.importance / 10.0,
+                    # Capture loop variables explicitly so the
+                    # coroutine factory closure binds the right values.
+                    _item = item
+                    fact_id = _resilient_run(
+                        lambda it=_item: client.remember(
+                            it.text,
+                            importance=it.importance / 10.0,
                             source="hermes_debrief",
                             fact_type="summary",
                             provenance="derived",
@@ -347,7 +425,21 @@ def session_debrief(
                     if fact_id:
                         stored_fact_ids.append(fact_id)
                 except Exception as e:
-                    logger.warning("Failed to store debrief item: %s", e)
+                    if is_interpreter_shutdown_error(e):
+                        logger.warning(
+                            "TotalReclaw debrief: dropped a summary item due to "
+                            "interpreter-shutdown race; remaining items will still "
+                            "attempt to store.",
+                        )
+                    else:
+                        logger.warning("Failed to store debrief item: %s", e)
     except Exception as e:
-        logger.warning("Session debrief failed: %s", e)
+        if is_interpreter_shutdown_error(e):
+            logger.warning(
+                "TotalReclaw debrief: generate_debrief dropped due to "
+                "interpreter-shutdown race (CLI session-end during process exit). "
+                "Conversation summary not persisted.",
+            )
+        else:
+            logger.warning("Session debrief failed: %s", e)
     return stored_fact_ids

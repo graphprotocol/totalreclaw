@@ -12,7 +12,11 @@ from __future__ import annotations
 import logging
 from typing import Optional, TYPE_CHECKING
 
-from .loop_runner import run_sync
+from .loop_runner import (
+    is_interpreter_shutdown_error,
+    run_sync,
+    run_sync_resilient,
+)
 
 if TYPE_CHECKING:
     from .state import AgentState
@@ -49,13 +53,24 @@ def auto_recall(
         return None
 
     try:
-        results = run_sync(client.recall(query, top_k=top_k))
+        # rc.23 finding #1: pre_llm_call auto-recall fires DURING process
+        # teardown for ``hermes chat -q`` one-shot mode. Wrap in a coroutine
+        # factory so the loop runner can rebuild its private executor and
+        # retry on the post-shutdown ``cannot schedule new futures`` race.
+        results = run_sync_resilient(lambda: client.recall(query, top_k=top_k))
 
         if results:
             memories = "\n".join(f"- [{r.category}] {r.text}" for r in results)
             return f"## Relevant memories from TotalReclaw\n{memories}"
     except Exception as e:
-        logger.warning("TotalReclaw auto-recall failed: %s", e)
+        if is_interpreter_shutdown_error(e):
+            logger.warning(
+                "TotalReclaw auto-recall: dropped due to interpreter-shutdown "
+                "race (CLI pre_llm_call during process exit). No memories "
+                "injected for this turn.",
+            )
+        else:
+            logger.warning("TotalReclaw auto-recall failed: %s", e)
 
     return None
 
