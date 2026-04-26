@@ -216,6 +216,87 @@ async def unpin(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": str(e)})
 
 
+async def retype(args: dict, state: "PluginState", **kwargs) -> str:
+    """Re-type an existing memory (e.g. claim → preference).
+
+    Mirrors ``skill/plugin/index.ts::handleRetype``. The claim is rewritten
+    with the new ``type`` and tombstoned; a new fact carrying
+    ``superseded_by`` and the inherited ``pin_status`` is written in the
+    same atomic batch. Surfaces ``partial: True`` when the on-chain write
+    succeeded but the subgraph indexer hasn't caught up within the timeout.
+    """
+    from totalreclaw.retype_setscope import validate_retype_args
+
+    client = state.get_client()
+    if not client:
+        return json.dumps({"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."})
+
+    parsed = validate_retype_args(args)
+    if not parsed.get("ok"):
+        return json.dumps({"error": parsed.get("error")})
+
+    try:
+        result = await client.retype(parsed["fact_id"], parsed["new_type"])
+        if not result.get("success"):
+            return json.dumps({"error": result.get("error", "retype failed")})
+        response = {
+            "retyped": True,
+            "fact_id": result.get("fact_id"),
+            "new_fact_id": result.get("new_fact_id"),
+            "previous_type": result.get("previous_type"),
+            "new_type": result.get("new_type"),
+        }
+        if result.get("tx_hash"):
+            response["tx_hash"] = result["tx_hash"]
+        if result.get("partial"):
+            response["partial"] = True
+        return json.dumps(response)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        logger.error("totalreclaw_retype failed: %s", e)
+        return json.dumps({"error": str(e)})
+
+
+async def set_scope(args: dict, state: "PluginState", **kwargs) -> str:
+    """Re-scope an existing memory (e.g. unspecified → health).
+
+    Mirrors ``skill/plugin/index.ts::handleSetScope``. Same on-chain shape
+    as :func:`retype` — tombstone + new fact in one ``executeBatch`` UserOp.
+    """
+    from totalreclaw.retype_setscope import validate_set_scope_args
+
+    client = state.get_client()
+    if not client:
+        return json.dumps({"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."})
+
+    parsed = validate_set_scope_args(args)
+    if not parsed.get("ok"):
+        return json.dumps({"error": parsed.get("error")})
+
+    try:
+        result = await client.set_scope(parsed["fact_id"], parsed["new_scope"])
+        if not result.get("success"):
+            return json.dumps({"error": result.get("error", "set_scope failed")})
+        response = {
+            "scope_set": True,
+            "fact_id": result.get("fact_id"),
+            "new_fact_id": result.get("new_fact_id"),
+            "previous_scope": result.get("previous_scope"),
+            "new_scope": result.get("new_scope"),
+        }
+        if result.get("tx_hash"):
+            response["tx_hash"] = result["tx_hash"]
+        if result.get("partial"):
+            response["partial"] = True
+        return json.dumps(response)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        logger.error("totalreclaw_set_scope failed: %s", e)
+        return json.dumps({"error": str(e)})
+
+
 async def export_all(args: dict, state: "PluginState", **kwargs) -> str:
     """Export all memories from TotalReclaw."""
     client = state.get_client()

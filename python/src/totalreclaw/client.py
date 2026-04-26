@@ -38,6 +38,7 @@ from .operations import (
     pin_fact,
     unpin_fact,
 )
+from .retype_setscope import execute_retype, execute_set_scope
 from .userop import MAX_BATCH_SIZE as _USEROP_MAX_BATCH_SIZE
 
 # Smart Account address derivation constants
@@ -661,6 +662,57 @@ class TotalReclaw:
         chain_id = await self._ensure_chain_id()
         return await unpin_fact(
             fact_id=fact_id,
+            keys=self._keys,
+            owner=self._wallet_address,
+            relay=self._relay,
+            eoa_private_key=self._eoa_private_key,
+            eoa_address=self._eoa_address,
+            sender=self._wallet_address,
+            chain_id=chain_id,
+        )
+
+    async def retype(self, fact_id: str, new_type: str) -> dict:
+        """Re-type an existing memory (claim → preference, etc.).
+
+        Delegates to :func:`totalreclaw.retype_setscope.execute_retype`.
+        Tombstones the old fact and writes a fresh v1.1 claim with the new
+        ``type`` and ``superseded_by`` pointing to the old id. Preserves
+        ``pin_status`` across the rewrite (issue #117 / TS PR #114).
+
+        Returns
+        -------
+        dict
+            ``{success, fact_id, new_fact_id, previous_type, new_type,
+            previous_scope, new_scope, tx_hash, partial?}``.
+        """
+        await self._ensure_address()
+        await self._ensure_registered()
+        chain_id = await self._ensure_chain_id()
+        return await execute_retype(
+            fact_id=fact_id,
+            new_type=new_type,
+            keys=self._keys,
+            owner=self._wallet_address,
+            relay=self._relay,
+            eoa_private_key=self._eoa_private_key,
+            eoa_address=self._eoa_address,
+            sender=self._wallet_address,
+            chain_id=chain_id,
+        )
+
+    async def set_scope(self, fact_id: str, new_scope: str) -> dict:
+        """Re-scope an existing memory (work → health, etc.).
+
+        Delegates to :func:`totalreclaw.retype_setscope.execute_set_scope`.
+        Same on-chain shape as :meth:`retype` — tombstone + new fact in
+        a single atomic ``executeBatch`` UserOp.
+        """
+        await self._ensure_address()
+        await self._ensure_registered()
+        chain_id = await self._ensure_chain_id()
+        return await execute_set_scope(
+            fact_id=fact_id,
+            new_scope=new_scope,
             keys=self._keys,
             owner=self._wallet_address,
             relay=self._relay,

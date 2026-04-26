@@ -134,6 +134,28 @@ def register(ctx):
         is_async=True,
         description=schemas.UNPIN["description"],
     )
+    # 2.3.1rc23 — Hermes Python parity for retype + set_scope (issue #150).
+    # Mirrors ``skill/plugin/retype-setscope.ts`` (TS plugin 3.3.1-rc.2+).
+    # Cross-client KG parity: a plugin write + Hermes retype on the same
+    # fact id surface the new type/scope to either side after subgraph
+    # confirmation. ``pin_status`` is preserved across the rewrite (issue
+    # #117 / TS PR #114).
+    ctx.register_tool(
+        name="totalreclaw_retype",
+        toolset="totalreclaw",
+        schema=schemas.RETYPE,
+        handler=lambda args, **kw: tools.retype(args, state, **kw),
+        is_async=True,
+        description=schemas.RETYPE["description"],
+    )
+    ctx.register_tool(
+        name="totalreclaw_set_scope",
+        toolset="totalreclaw",
+        schema=schemas.SET_SCOPE,
+        handler=lambda args, **kw: tools.set_scope(args, state, **kw),
+        is_async=True,
+        description=schemas.SET_SCOPE["description"],
+    )
     ctx.register_tool(
         name="totalreclaw_import_from",
         toolset="totalreclaw",
@@ -216,4 +238,4 @@ def register(ctx):
     except Exception:  # pragma: no cover — validation must not crash plugin load
         logger.debug("LLM-config load-time validation skipped", exc_info=True)
 
-    logger.info("TotalReclaw plugin registered (12+ tools, 6 hooks)")
+    logger.info("TotalReclaw plugin registered (14+ tools, 6 hooks)")

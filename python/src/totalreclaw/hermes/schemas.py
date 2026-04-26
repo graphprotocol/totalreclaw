@@ -199,6 +199,73 @@ UNPIN = {
     },
 }
 
+RETYPE = {
+    "name": "totalreclaw_retype",
+    "description": (
+        "Re-type an existing memory — change its v1 ``type`` (claim, "
+        "preference, directive, commitment, episode, summary). "
+        "\n\nINVOKE WHEN USER SAYS:\n"
+        "- 'that's a preference, not a claim'\n"
+        "- 'mark that as a directive' / 'that's actually a commitment'\n"
+        "- 'file that under preferences' (when they mean the v1 type)\n"
+        "\nThe original fact is tombstoned and a new fact is written with "
+        "the corrected type and ``superseded_by`` pointing to the old id. "
+        "``pin_status`` is preserved so a previously-pinned fact stays "
+        "pinned across the rewrite."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "fact_id": {
+                "type": "string",
+                "description": "The UUID of the memory to retype.",
+            },
+            "new_type": {
+                "type": "string",
+                "enum": list(VALID_MEMORY_TYPES),
+                "description": (
+                    "Target v1 memory type. One of: claim, preference, "
+                    "directive, commitment, episode, summary."
+                ),
+            },
+        },
+        "required": ["fact_id", "new_type"],
+    },
+}
+
+SET_SCOPE = {
+    "name": "totalreclaw_set_scope",
+    "description": (
+        "Re-scope an existing memory — change its v1 life-domain ``scope`` "
+        "(work, personal, health, family, creative, finance, misc, "
+        "unspecified). "
+        "\n\nINVOKE WHEN USER SAYS:\n"
+        "- 'put that under health' / 'file this under work'\n"
+        "- 'that's personal, not work'\n"
+        "- 'this belongs in finance / family / creative ...'\n"
+        "\nThe original fact is tombstoned and a new fact is written with "
+        "the corrected scope; ``pin_status`` is preserved across the rewrite."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "fact_id": {
+                "type": "string",
+                "description": "The UUID of the memory to rescope.",
+            },
+            "new_scope": {
+                "type": "string",
+                "enum": list(VALID_MEMORY_SCOPES),
+                "description": (
+                    "Target v1 life-domain scope. One of: work, personal, "
+                    "health, family, creative, finance, misc, unspecified."
+                ),
+            },
+        },
+        "required": ["fact_id", "new_scope"],
+    },
+}
+
 IMPORT_FROM = {
     "name": "totalreclaw_import_from",
     "description": (

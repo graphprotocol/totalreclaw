@@ -517,14 +517,13 @@ class TestRegister:
         # because it's a 1-for-1 swap.
         # 2.3.1rc6 — `totalreclaw_pin` + `totalreclaw_unpin` wired into
         # ``register()`` to match plugin.yaml. Count → 12 stable, 13 RC.
-        # Fix for the rc.4 user-reported regression: plugin.yaml advertised
-        # pin/unpin but register body never called register_tool() for
-        # them, so the agent's tool list was a strict subset of the
-        # manifest. See test_hermes_plugin_manifest_parity.py for the
-        # manifest↔register parity contract.
+        # 2.3.1rc23 — `totalreclaw_retype` + `totalreclaw_set_scope` added
+        # for Hermes Python parity with plugin retype-setscope.ts (issue
+        # #150). Count → 14 stable, 15 RC. Cross-link: plugin.yaml +
+        # test_hermes_plugin_manifest_parity.py + this test must agree.
         from totalreclaw import __version__
         from totalreclaw.hermes.qa_bug_report import is_rc_build
-        expected_tools = 13 if is_rc_build(__version__) else 12
+        expected_tools = 15 if is_rc_build(__version__) else 14
         assert ctx.register_tool.call_count == expected_tools, (
             f"expected {expected_tools} tools for version {__version__!r}, "
             f"got {ctx.register_tool.call_count}"
