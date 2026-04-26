@@ -1,595 +1,306 @@
 <!--
 Product: TotalReclaw
-Formerly: tech specs/v0.3 (grok)/TS v0.3: E2EE with LSH + Blind Buckets.md
-Version: 0.3 (1.0)
-Last updated: 2026-02-24
+Version: v1.0 — 2026-04-26
+Last updated: 2026-04-26
 -->
 
-# Technical Specification — Crypto-Only (LSH + Blind Buckets)
+# TotalReclaw — System Architecture (v1)
 
-**Title:** TotalReclaw v0.3 — Server-Blind Vector Search via LSH + Encrypted Embeddings
-**Version:** 1.0 (complete, copy-paste for any coding agent with zero prior context)
-**Target stack:** Python 3.12+ (server + client lib) + TypeScript client for OpenClaw
-**Assumed PRD (lousy version):** "Make TotalReclaw truly server-blind for both documents and embeddings while keeping accuracy within 3% of plaintext and latency <150ms at 1M memories."
+**Title:** TotalReclaw v1.0 — End-to-end-encrypted memory across AI clients, with permanent on-chain anchoring
+**Audience:** anyone integrating, auditing, or extending TotalReclaw (engineers, security reviewers, downstream client authors)
+**Scope:** the architectural picture — identity, crypto, storage, retrieval, multi-client model, on-chain layer, install model. Implementation-level schemas live in their own specs (linked).
 
----
+This document is intentionally architectural. Concrete schemas, retrieval pipeline weights, and individual flow diagrams live in:
 
-## 1.1 Problem Statement (recap for new developer)
+- [`memory-taxonomy-v1.md`](./memory-taxonomy-v1.md) — canonical claim schema (6 types + source / scope / volatility axes)
+- [`retrieval-v2.md`](./retrieval-v2.md) — Tier 1 source-weighted reranker + tiers
+- [`server.md`](./server.md) — relay surface (sibling spec)
+- [`flows/`](./flows/README.md) — write/read/recovery flow walkthroughs
 
-Current code stores embeddings as raw `np.ndarray` → server sees plaintext vectors.
-Query embeddings are sent in plaintext → server learns semantic content.
-
-**Goal:** Server must never see plaintext embeddings or query vectors at any time.
-
-**Constraint:** Keep exact same two-pass flow and RRF fusion; no TEEs, no homomorphic crypto.
+Update this guide when **architectural** invariants change (trust split, key model, on-chain primitives, install model). Schema-level evolution belongs in the linked specs, not here.
 
 ---
 
-## 1.2 Chosen Solution: Locality-Sensitive Hashing + Blind Bucket Indexing
+## 1. Trust split — what runs where, and what each layer can see
 
-We extend the existing blind-index system (SHA-256 token hashes) to also index LSH buckets.
-This gives ~92–96% recall@500 with 400–1,200 candidates → client reranks exactly as today.
+TotalReclaw is split across three trust layers. This split is the single load-bearing claim of the architecture; everything else is in service of preserving it.
+
+```
+   Client (device)               Relay Service                     Open Network
+ ┌──────────────────┐         ┌──────────────────┐             ┌──────────────────┐
+ │ Mnemonic-rooted   │         │ Encrypted blobs   │             │ Gnosis (Pro)     │
+ │ key derivation    │ cipher  │ + LSH trapdoors   │   anchor    │ Base Sepolia     │
+ │ Embedding model   │ + LSH   │ GIN-indexed       │  (sponsored │ (Free testnet)   │
+ │ Extraction LLM    │ ─────▸  │ candidate retrieval│ ERC-4337) ▸ │ EventfulDataEdge │
+ │ Reranker (core)   │ ◂─────  │ AA bundler shim   │  ◂────────  │ Subgraph indexer │
+ │ Smart Account sig │ results │ Pair-flow relay   │   indexed   └──────────────────┘
+ └──────────────────┘         └──────────────────┘    events
+```
+
+| Layer | Sees plaintext? | Sees embeddings? | Holds keys? | Notes |
+|---|---|---|---|---|
+| Client | yes | yes (locally) | yes (mnemonic + derived) | All extraction, embedding, encryption, reranking |
+| Relay | **no** | **no** | **no** (only `SHA256(authKey)`) | Stores ciphertext, returns candidates by trapdoor match, brokers ephemeral pair-flow handshakes, shims AA bundler calls |
+| Open network | **no** | **no** | **no** | Anchors ciphertext as event logs; permanent, permissionless |
+
+**Critical invariant:** the embedding model stays client-side. Putting it on the relay would break the trust split — the server would learn semantic content from queries, even if storage stayed encrypted. This is why the lazy-CDN embedder (§7) downloads the model to the device, not to the relay.
 
 ---
 
-## 1.3 Data Models (updated)
+## 2. Identity — one mnemonic, deterministic everything
 
-```python
-# In EncryptedMemoryStore (Python)
-@dataclass
-class MemoryItem:
-    id: str                          # UUIDv7
-    encrypted_doc: bytes             # XChaCha20-Poly1305
-    encrypted_embedding: bytes       # XChaCha20-Poly1305
-    blind_indices: list[str]         # SHA-256(token) + SHA-256(LSH_bucket)
-    metadata: dict                   # source, timestamp, importance, etc.
+A 12-word BIP-39 mnemonic is the **only** secret the user holds. Every other key, address, and stable identifier is derived from it.
+
 ```
+BIP-39 mnemonic
+   │
+   ├─► PBKDF2 (BIP-39 standard, 2048 rounds) → 512-bit seed
+   │
+   ├─► HKDF-SHA256(seed, "totalreclaw-auth-v1")        → authKey         (relay auth)
+   ├─► HKDF-SHA256(seed, "totalreclaw-enc-v1")         → encryptionKey   (XChaCha20)
+   ├─► HKDF-SHA256(seed, "totalreclaw-dedup-v1")       → dedupKey        (HMAC fingerprints)
+   ├─► HKDF-SHA256(seed, "totalreclaw-lsh-v1")         → lshSeed         (deterministic hyperplanes)
+   │
+   └─► BIP-44 derivation m/44'/60'/0'/0/0
+         → secp256k1 keypair → ERC-4337 Smart Account address (counterfactual, deterministic)
+```
+
+**Properties this gives us:**
+
+- **Cross-client portability.** Same mnemonic on OpenClaw, Hermes, NanoClaw, MCP server → identical Smart Account address, same encryption key, same LSH hyperplanes → all clients see the same memories. No server-side coordination required.
+- **Server blindness.** The relay only ever stores `SHA256(authKey)`. It cannot derive `encryptionKey`, `dedupKey`, or `lshSeed` from this.
+- **Recovery.** Lose the device, keep the mnemonic → re-derive everything, query the subgraph for the smart-account's event history, decrypt locally. Relay outage / acquisition / shutdown does not lose data.
+
+### Phrase-safety rule
+
+The recovery phrase MUST NEVER cross an LLM context. Concretely:
+
+- Agents do **not** display, store, log, or transmit the phrase.
+- Setup happens via a browser-side QR-pair flow (§6) — the phrase never leaves the user's browser tab.
+- No CLI tool exposed to an agent emits or accepts the phrase as text.
+
+This rule is structural, not advisory. All client implementations are audited against it.
 
 ---
 
-## Re-ranking Architecture (Research-Backed)
+## 3. Crypto choices — which primitive, where, why
 
-### Do NOT Use Main LLM for Re-ranking
+Two separate authenticated symmetric ciphers are used, deliberately, because the threat model differs.
 
-Based on research of Mem0, Zep, Letta:
-- **Re-ranking latency budget**: <100ms
-- **Main LLM latency**: 500-2000ms (too slow!)
-- **Zep's approach**: Hybrid scoring without LLM (fastest)
+| Use site | Primitive | Rationale |
+|---|---|---|
+| **Long-term storage** of memory ciphertext (relay + on-chain) | **XChaCha20-Poly1305** | 192-bit nonce → safe to pick at random without a counter; constant-time ChaCha is faster than AES-GCM on TotalReclaw's targets (browsers, Node, PyO3, embedded Rust); long-term storage means many writes, large nonce space matters |
+| **Pair-flow ECDH session** (browser ↔ client during onboarding, rc.12+) | **AES-256-GCM** | Short-lived session payload (the paired phrase, encrypted to the client's ephemeral pubkey); native WebCrypto support across browsers; nonce reuse risk is trivial because each pair session uses a fresh ECDH session key |
+| Authentication | HKDF-SHA256-derived `authKey`, sent as bearer token; relay stores only `SHA256(authKey)` | Stateless; no separate password; same mnemonic re-derives auth on any device |
+| Dedup | `HMAC-SHA256(dedupKey, normalize(plaintext))` → content fingerprint | Server can de-duplicate without learning plaintext; one bit of leakage per pair (same/not-same) |
+| Blind search | `SHA-256` of word tokens + LSH bucket IDs (trapdoors) | Server matches trapdoors via GIN index; cannot invert |
 
-### Recommended: Dedicated Cross-Encoder
-
-| Model | Size | Latency (10 docs) | Accuracy |
-|-------|------|-------------------|----------|
-| BGE-Reranker-base (ONNX) | 400MB | 30-50ms | High |
-| BGE-Reranker-large | 1GB | 50-100ms | Very High |
-| ms-marco-MiniLM-L-6-v2 | 100MB | 10-30ms | Good |
-
-### Recommended: Use Main LLM for Extraction
-
-| Model | Size | Latency | When to Use |
-|-------|------|---------|-------------|
-| **Main agent LLM** | - | 500ms+ | **Preferred** - already available, no extra RAM |
-| Qwen3-0.6B (local) | 400MB | 100-300ms | Only if main LLM unavailable (extraction LLM, not embedding) |
-| Phi-3-mini (local) | 2GB | 200-500ms | Higher accuracy (not recommended) |
-
-**Extraction is async** - doesn't block user queries, so latency is acceptable.
-
-**IMPORTANT**: Prefer using the main LLM for extraction to minimize RAM footprint. This enables deployment on low-resource devices (e.g., Raspberry Pi). A separate extraction model adds 400MB-2GB RAM overhead. Only consider a dedicated small LLM if:
-- Main LLM doesn't support async calls
-- Privacy requires fully local processing
-- Main LLM is cloud-based and user wants offline capability
-
-### Implementation Architecture
-
-```
-SYNCHRONOUS PATH (<100ms total):
-  Query → Embedding (5-10ms) → Server Search (10-20ms) → Cross-Encoder Rerank (30-50ms)
-
-ASYNC PATH (non-blocking):
-  New memories → Small LLM Extraction (100-300ms) → Encrypt → Upload
-```
+**One-line summary:** XChaCha20-Poly1305 for things that live a long time, AES-GCM for the brief ECDH onboarding payload, SHA-256/HMAC for everything the server needs to *match without decrypting*.
 
 ---
 
-## 1.4 LSH Configuration (VALIDATED 2026-02-22)
+## 4. Memory model — the v1 taxonomy
 
-**Library:** Custom Random Hyperplane LSH (or Faiss IndexLSH)
+The plaintext inside each ciphertext is a **v1 Memory Claim** — a structured object, not a free-text blob. Six closed types, three orthogonal axes, provenance as a first-class field.
 
-**Parameters** (validated on combined WhatsApp + Slack data, 8,727 embeddings):
+The architectural points:
 
-```python
-n_bits_per_table = 64   # 64-bit hash per table (NOT 512 as originally proposed)
-n_tables = 16           # 16 independent hash tables (increased from 12 for scale)
-candidate_pool = 3000   # number of candidates to retrieve for re-ranking
-```
+- **Six types, closed enum:** `claim`, `preference`, `directive`, `commitment`, `episode`, `summary`. Cross-client agreement requires a small, fixed vocabulary.
+- **Three orthogonal axes:** `source` (who authored — user / user-inferred / derived / external / agent), `scope` (life domain), `volatility` (how stable over time).
+- **Provenance is structural, not metadata.** The reranker reads `source` and weights it (Tier 1, §5). This is what defends against the Mem0 97.8%-junk failure mode: assistant-tagged content cannot score equal to user-authored claims.
+- **Importance is advisory.** Receivers may recompute it.
+- **Pin status is additive (v1.1).** Pinned claims are immune to auto-supersede; the field is optional and ignorable by older readers.
 
-**Validation Results (Combined WhatsApp + Slack data, 8,727 embeddings):**
-| Metric | Target | Achieved |
-|--------|--------|----------|
-| Mean Recall@3000 | ≥93% | **93.6%** |
-| P5 Recall | - | 84.4% |
-| Query Latency | <50ms | **9.71ms** |
-| Storage Overhead | ≤2.2x | **0.06x** |
-| Candidates Returned | - | ~1,848 |
-
-**Alternative Configurations:**
-| Config | n_bits | n_tables | candidate_pool | Mean Recall | P5 Recall | Latency |
-|--------|--------|----------|----------------|-------------|-----------|---------|
-| Efficient | 64 | 16 | 2800 | 93.3% | 84.0% | 13.73ms |
-| **Balanced** | 64 | 12 | 3000 | 93.6% | 84.4% | 9.71ms |
-| Higher Recall | 64 | 12 | 4000 | 96.6% | 90.8% | 10.04ms |
-
-**Scaling Note:** Parameters were adjusted from WhatsApp-only validation (99% recall with 2,000 candidates) to account for the larger, more diverse Slack dataset. The candidate pool scales roughly with dataset size.
-
-**Key Finding:** The `candidate_pool` size is the critical lever for recall:
-- 500 candidates → ~75% recall
-- 1000 candidates → ~91% recall
-- 1500 candidates → ~97% recall (small dataset)
-- **3000 candidates → ~93.6% recall (large, diverse dataset)** ✅
+Full schema, axis enums, validation rules, version-history details — see **[`memory-taxonomy-v1.md`](./memory-taxonomy-v1.md)**. Do not duplicate them here; this section is the architectural framing only.
 
 ---
 
-### Scaling Formula for Production
+## 5. Storage and retrieval
 
-**`candidate_pool` is FULLY DYNAMIC** - no index rebuild needed!
+### Write path (architectural)
 
-For production deployments with large corpora, the server auto-adjusts `candidate_pool` based on corpus size:
-
-```python
-def calculate_candidate_pool(corpus_size: int) -> int:
-    """
-    Calculate optimal candidate pool size based on corpus size.
-
-    VALIDATED DATA POINTS:
-    - 1,162 memories → 2,000 candidates = 99.0% recall (34% of corpus)
-    - 8,727 memories → 3,000 candidates = 93.6% recall (34% of corpus)
-
-    Key insight: candidate_pool scales roughly logarithmically, not linearly.
-    """
-    import math
-
-    MIN_POOL = 2000
-    MAX_POOL = 10000
-
-    if corpus_size < 2000:
-        return MIN_POOL
-    elif corpus_size < 10000:
-        # Validated: 8,727 → 3,000 (34% ratio)
-        return max(MIN_POOL, min(4000, int(corpus_size * 0.35)))
-    elif corpus_size < 100000:
-        # Estimate: logarithmic scaling for medium corpora
-        return min(MAX_POOL, 3000 + int(math.log10(corpus_size) * 500))
-    else:
-        # Large corpora: cap at 10,000 but consider hierarchical LSH
-        return MAX_POOL
+```
+plaintext claim (v1 taxonomy)
+   │
+   ├─► extract → embed → compute LSH buckets → hash buckets to trapdoors
+   ├─► compute content fingerprint = HMAC-SHA256(dedupKey, normalize(text))
+   ├─► XChaCha20-Poly1305 encrypt {claim, embedding, metadata}
+   │
+   ▼
+protobuf v=4 envelope { ciphertext, blind_indices[], content_fp, ... }
+   │
+   ├─► POST to relay (fast path) — stored under user's authKeyHash
+   └─► ERC-4337 UserOp via relay's bundler shim → on-chain log → indexed by subgraph
 ```
 
-**Validated Scaling Table:**
+### Read path (architectural)
 
-| Corpus Size | Candidate Pool | Ratio | Expected Recall | Validated? |
-|-------------|----------------|-------|-----------------|------------|
-| 1,162 | 2,000 | 172% | 99.0% | ✅ WhatsApp |
-| 8,727 | 3,000 | 34% | 93.6% | ✅ Combined |
-| 10,000 | 3,500 | 35% | ~93% | 🟡 Extrapolated |
-| 50,000 | 5,000 | 10% | ~90% | 🟡 Extrapolated |
-| 100,000 | 6,500 | 6.5% | ~88% | 🟡 Extrapolated |
-| 1,000,000 | 10,000 | 1% | ~85%* | 🟡 Extrapolated |
+```
+query text
+   │
+   ├─► embed query (client-side; instruction-prefixed)
+   ├─► generate trapdoors (token hashes + LSH bucket hashes)
+   │
+   ▼
+relay GIN index returns N encrypted candidates (auto-tuned by corpus size)
+   │
+   ▼
+client decrypts, runs core::reranker:
+   ├─► BM25 + cosine + decay + importance
+   ├─► RRF fusion
+   ├─► Tier 1 source-weighted multiplier (v1)
+   │
+   ▼
+top K (default 8)
+```
 
-*At 1M+ scale, consider increasing `n_tables` to 24 or using **hierarchical LSH** (cluster → LSH per cluster).
+### Source-weighted reranker (Tier 1)
+
+Lives in `rust/totalreclaw-core/src/reranker.rs` and is consumed by every client (WASM for JS/TS, PyO3 for Python). After RRF fusion, the final score is multiplied by a `source` weight (user > user-inferred > derived ≈ external > agent). This is the minimum retrieval change that lets v1 taxonomy actually do work — without it, provenance tagging is observability, not behavior.
+
+Full reranker spec including tiers 2–4 and validation results: **[`retrieval-v2.md`](./retrieval-v2.md)**.
+
+### Read-after-write consistency
+
+On-chain writes are visible only after the subgraph indexes them. Empirically: **~5–30s lag** in steady state. As of `totalreclaw-core` rc.22+, reads opt into a primitive that polls the subgraph until the just-written sequence is visible, so callers don't see "I just stored that — why isn't it there?" races. The primitive is in `core`, so all clients inherit it.
+
+### Storage tiers
+
+| Tier | Anchor | Cost | Persistence |
+|---|---|---|---|
+| **Free** | Base Sepolia testnet | $0 | May reset (testnet) — fine for evaluation, not for irreplaceable data |
+| **Pro** | Gnosis mainnet | $3.99 / mo | Permanent, permissionless |
+
+Both tiers use the same `EventfulDataEdge` contract pattern (single `fallback()` emitting `Log(msg.data)`), the same ERC-4337 Smart Account derivation, and the same paymaster-sponsored UserOps. Tier choice is at write time and recorded per claim.
 
 ---
 
-### Production Monitoring for LSH Scaling
+## 6. Onboarding — the QR-pair flow
 
-Track these metrics in production to know when to adjust parameters:
+The mnemonic must reach the client without ever crossing an LLM context. The flow:
 
-```python
-# Add to your /health or /metrics endpoint
-{
-    "lsh_metrics": {
-        "total_embeddings": 8727,           # Track corpus size
-        "candidate_pool_configured": 3000,  # Current setting
-        "avg_candidates_returned": 1848,    # From search responses
-        "avg_recall_estimate": 0.936,       # Based on validation curves
-        "p95_query_latency_ms": 15.2,       # Monitor latency
-        "last_param_update": "2026-02-22"   # When params were last changed
-    }
-}
+```
+┌─────────────────┐                                 ┌─────────────────┐
+│ Browser tab     │   1. Show pair QR + nonce       │ Client (e.g.    │
+│ (totalreclaw.xyz)│ ◀──────────────────────────────│  OpenClaw,      │
+│                 │                                 │  Hermes, MCP)   │
+│ User enters or  │   2. Scan QR → ECDH pubkey      │                 │
+│ generates       │      exchange via relay         │ Generates       │
+│ phrase locally  │      (ephemeral WebSocket)      │ ephemeral       │
+│                 │                                 │ ECDH keypair    │
+│ AES-GCM encrypt │   3. Encrypted paired_phrase    │                 │
+│ phrase to       │ ──────────────────────────────▶ │ Decrypts with   │
+│ client's pubkey │      via relay (transient)      │ session key,    │
+│                 │                                 │ derives all keys│
+└─────────────────┘                                 └─────────────────┘
 ```
 
-**Alert Thresholds:**
+Properties:
 
-| Metric | Warning | Critical | Action |
-|--------|---------|----------|--------|
-| `total_embeddings` > 50K | - | ⚠️ | Re-validate LSH params |
-| `avg_candidates_returned` < 500 | ⚠️ | - | Increase candidate_pool |
-| `p95_query_latency_ms` > 100ms | ⚠️ | ⚠️⚠️ | Check database indexes |
-| Estimated recall < 90% | ⚠️ | ⚠️⚠️ | Increase candidate_pool or n_tables |
+- **Phrase never enters an agent context.** The browser holds it; the client receives only the AES-GCM ciphertext.
+- **Relay is a dumb transport.** It brokers the WebSocket pubkey exchange and forwards the encrypted blob. It cannot decrypt — it doesn't have the ECDH session key.
+- **Same mnemonic, any client.** Pair OpenClaw today, pair Hermes tomorrow with the same phrase → same Smart Account, same memories.
 
-**Scaling Triggers:**
-1. **Every 10x growth** (10K → 100K → 1M): Re-run LSH validation on sample
-2. **Recall drops below 90%**: Increase `candidate_pool` by 1,000
-3. **Latency exceeds 100ms**: Consider read replicas or caching
+The pair handshake mechanism shipped in relay rc.10+; AES-GCM payload encryption shipped client-side in rc.12+.
 
 ---
 
-### Server-Side Auto-Adjustment (IMPLEMENT THIS)
+## 7. Install model — URL-driven setup, lazy-CDN embedder
 
-```python
-# In server search handler
-async def search(request: SearchRequest) -> SearchResponse:
-    # Get current corpus size for user
-    corpus_size = await db.get_active_memory_count(request.user_id)
+### URL-driven install (rc.20+)
 
-    # Auto-calculate candidate_pool using validated formula
-    candidate_pool = calculate_candidate_pool(corpus_size)
+The user does not install via copy-pasted shell commands. The flow:
 
-    # Use whichever is larger: auto-calculated or client-requested
-    max_candidates = max(candidate_pool, request.max_candidates or 3000)
+1. User pastes a setup URL (e.g. `https://totalreclaw.xyz/setup/openclaw`) into their agent.
+2. Agent fetches the markdown at that URL.
+3. The markdown contains the install commands; the agent runs them.
 
-    # Execute search with dynamic pool
-    results = await db.search_with_blind_indices(
-        user_id=request.user_id,
-        trapdoors=request.trapdoors,
-        limit=max_candidates
-    )
+This decouples install instructions from agent prompt-engineering and gives the project a single place to update setup steps without re-publishing every client.
 
-    return SearchResponse(results=results, total_candidates=len(results))
-```
+### Lazy-CDN embedder (rc.22+)
 
-**Benefits:**
-- No admin intervention needed
-- Scales automatically with corpus growth
-- Per-user optimization (user with 100 memories uses smaller pool than user with 10K)
+The plugin tarball is small (~5–10 MB) — small enough to install fast even on slow connections. The embedding model (~325 MB) is **not** in the tarball. On the first auto-extraction turn, the client downloads the embedder from GitHub Releases, caches it locally, and uses it from then on.
+
+**E2EE invariant preserved:** the embedder runs on the device. The relay never sees it, never proxies it, and could not host it without breaking the trust split.
 
 ---
 
-### Manual Scaling Workflow (Admin Guide)
+## 8. Clients — one core, many surfaces
 
-**`candidate_pool` is AUTOMATIC** - server auto-adjusts based on corpus size.
+Every client speaks to the relay and the chain through the same Rust core (`totalreclaw-core`), exposed via WASM (browsers / Node / Deno) or PyO3 (Python). This means crypto, retrieval, dedup, and protobuf framing have **one** implementation — clients are thin agent-integration shells around it.
 
-**Only `n_bits` and `n_tables` require manual intervention** (rarely needed, only at 500K+ scale).
+| Client | Package | Role |
+|---|---|---|
+| OpenClaw plugin | `@totalreclaw/totalreclaw` | Plugin for the OpenClaw agent runtime |
+| Hermes | `totalreclaw` (PyPI) | Python client for Claude Agent SDK / direct API users |
+| NanoClaw skill | bundled | Lightweight overlay skill |
+| MCP server | `@totalreclaw/mcp-server` | Model Context Protocol server — any MCP host (Claude Desktop, Cursor, etc.) |
 
-#### Step 1: Check Current Metrics
-```bash
-# Check corpus size and performance
-curl http://localhost:8080/metrics
+Stable versions are tracked in [`docs/release-pipeline.md`](../../release-pipeline.md) (in the internal repo) and in the public-facing release pages. Don't pin them in this doc — they drift.
 
-# Response:
-{
-  "total_embeddings": 52000,
-  "candidate_pool_configured": 3000,
-  "avg_candidates_returned": 1450,
-  "p95_query_latency_ms": 22
-}
-```
-
-#### Step 2: Decide If Adjustment Needed
-```python
-# Use the formula or table above
-current_corpus = 52000
-recommended_pool = 3000 + int(log10(52000) * 500)  # = ~4600
-
-# Current is 3000, should be ~4600 → NEEDS ADJUSTMENT
-```
-
-#### Step 3: Update Configuration
-```bash
-# Option A: Update server config file
-# Edit /server/config.yaml:
-lsh:
-  candidate_pool: 4600
-
-# Option B: Update via environment variable
-export LSH_CANDIDATE_POOL=4600
-
-# Option C: Update database (persistent)
-psql -c "UPDATE config SET value='4600' WHERE key='lsh_candidate_pool'"
-```
-
-#### Step 4: Restart Server (if needed)
-```bash
-# For config file changes
-docker-compose restart totalreclaw-server
-
-# For env vars (requires restart)
-docker-compose up -d --force-recreate totalreclaw-server
-```
-
-#### Step 5: Verify
-```bash
-curl http://localhost:8080/metrics
-# Confirm candidate_pool_configured = 4600
-```
+**Architectural consequence:** to add a new client (e.g. a new IDE), you bind to `totalreclaw-core` and implement the agent-glue. You don't reimplement crypto, retrieval, or dedup. This is what keeps cross-client behavior consistent as the surface area grows.
 
 ---
 
-### User Impact Analysis
+## 9. Relay — a blind intermediary
 
-**When you change `candidate_pool`, users ARE affected:**
+The relay (separate `totalreclaw-relay` repo) is **not** a memory backend in the traditional sense. It does four things:
 
-| Change | User Impact | Severity |
-|--------|-------------|----------|
-| **Increase pool** | Higher recall (better results) | ✅ Positive |
-| **Increase pool** | Slightly slower search (more candidates to decrypt) | ⚠️ Minor negative |
-| **Increase pool** | More bandwidth usage | ⚠️ Minor negative |
-| **Decrease pool** | Lower recall (might miss relevant memories) | ❌ Negative |
-| **Decrease pool** | Faster search | ✅ Positive |
+1. **Stores opaque ciphertext + trapdoors** under `SHA256(authKey)` namespaces.
+2. **Returns candidates by trapdoor match** (PostgreSQL GIN index over the blind-index array).
+3. **Brokers pair-flow handshakes** via ephemeral WebSocket sessions.
+4. **Shims ERC-4337 bundler calls** so clients can send UserOps without running their own bundler.
 
-**Recommendation: Only INCREASE, never DECREASE in production.**
+Health endpoints:
 
-#### Before/After Comparison
+- Staging: `https://api-staging.totalreclaw.xyz`
+- Production: `https://api.totalreclaw.xyz`
 
-| Metric | Before (3000) | After (4600) | Impact |
-|--------|---------------|--------------|--------|
-| Recall | ~90% | ~93% | Better results ✅ |
-| Latency | 22ms | 28ms | +6ms (negligible) |
-| Bandwidth | ~500KB/query | ~750KB/query | +250KB |
-| Client CPU | Low | Medium | More decryption |
-
-#### No User Action Required
-- **Clients auto-adapt**: The `max_candidates` is a server-side limit
-- **No client updates needed**: Client just receives more candidates to re-rank
-- **Seamless transition**: Users won't notice except better recall
-
-#### Communication (Optional)
-If you want to notify users:
-```
-System Notice: Memory search improved!
-We've increased search depth to find more relevant memories.
-You may notice slightly more comprehensive results.
-```
+Full surface (protobuf wire format, endpoints, dedup behavior, sync semantics, schema, deployment) lives in the sibling spec: **[`server.md`](./server.md)**.
 
 ---
 
-### Scaling Decision Tree
+## 10. Performance envelope (architectural targets)
 
-```
-Is total_embeddings > 50K?
-├── YES → Check avg_recall_estimate
-│   ├── < 90% → URGENT: Increase candidate_pool
-│   └── ≥ 90% → OK, but plan for 100K milestone
-│
-└── NO → Check growth rate
-    ├── Growing fast (>10K/month) → Pre-emptively increase
-    └── Growing slow → Monitor monthly
-```
+The following are the architectural targets the system is designed around. Implementation-specific measured numbers live next to each implementation in code or in the relevant spec.
 
----
+| Concern | Target |
+|---|---|
+| End-to-end search latency (client + relay roundtrip) | < 150 ms p95 |
+| Trapdoor generation + GIN lookup | < 15 ms |
+| Recall@8 on real-user corpora | ≥ 95% (validated 98.1% on benchmark) |
+| Plugin tarball size | ~5–10 MB |
+| Embedder download (first-turn lazy fetch) | ~325 MB |
+| On-chain write visibility (subgraph lag) | 5–30 s typical |
+| Smart-account derivation determinism | 100% — same mnemonic → same address, every client |
 
-### At 500K+ Scale: Hierarchical LSH (Future)
-
-When corpus exceeds 500K, single LSH becomes inefficient. Switch to:
-
-```
-Hierarchical LSH:
-1. Cluster memories into groups (~10K each)
-2. LSH index per cluster
-3. Query: Find top 3 relevant clusters → search within each
-4. Total candidates: 3 × 3000 = 9000 (same as before, better recall)
-
-Implementation: Post-PoC, requires additional development.
-```
+When these targets slip, the architecture is wrong, not the implementation. (LSH parameters, reranker tiers, embedder choice — all live in linked specs and can be tuned without touching this doc.)
 
 ---
 
-## Latency Optimizations (Future Improvements)
+## 11. What this doc does NOT cover
 
-If latency becomes an issue, implement these optimizations in order of impact:
+By design. Each topic below has a canonical home:
 
-### 1. Client-Side Caching (60%+ Hit Rate)
-```typescript
-// Cache recent searches by query hash
-const searchCache = new LRUCache<string, SearchResult[]>({ max: 100 });
+- **Claim schema, axis enums, version history** → [`memory-taxonomy-v1.md`](./memory-taxonomy-v1.md)
+- **Reranker weights, tier definitions, validation** → [`retrieval-v2.md`](./retrieval-v2.md)
+- **Relay protobuf wire format, endpoints, DB schema, dedup behavior** → [`server.md`](./server.md)
+- **Step-by-step user flows** (identity setup, write, read, recovery, storage modes) → [`flows/README.md`](./flows/README.md)
+- **Conflict resolution beyond exact-fingerprint dedup** → conflict-resolution spec (see `conflict-resolution.md`)
+- **LSH parameter tuning + scaling formula** → [`lsh-tuning.md`](./lsh-tuning.md)
+- **MCP server specifics** → [`mcp-server.md`](./mcp-server.md)
+- **Skills (OpenClaw / NanoClaw)** → [`skill-openclaw.md`](./skill-openclaw.md), [`skill-nanoclaw.md`](./skill-nanoclaw.md)
 
-async function cachedSearch(query: string): Promise<SearchResult[]> {
-  const hash = sha256(query);
-  const cached = searchCache.get(hash);
-  if (cached) return cached;  // Cache hit - instant return
-
-  const results = await server.search(query);
-  searchCache.set(hash, results);
-  return results;
-}
-```
-
-**Impact**: 60%+ of queries hit cache → 0ms latency for those queries
-
-### 2. Debounce Rapid Messages
-```typescript
-// Don't search on every keystroke - wait for user to pause
-const debouncedSearch = debounce(search, 300);  // 300ms delay
-
-onMessageReceived((msg) => {
-  if (msg.length < 10) return;  // Skip short messages
-  debouncedSearch(msg);
-});
-```
-
-**Impact**: Reduces unnecessary searches by 40%
-
-### 3. Async Pre-Fetching
-```typescript
-// Predict and pre-fetch likely queries in background
-onMessageReceived((msg) => {
-  const likelyQueries = predictQueries(msg);  // Simple keyword extraction
-  likelyQueries.forEach(q => backgroundSearch(q));
-});
-```
-
-**Impact**: 200-300ms head-start on likely queries
-
-### 4. Edge Deployment
-- Deploy TotalReclaw server to multiple regions
-- Use CDN-like routing to nearest server
-- Target: <20ms network RTT
-
-**Impact**: Reduces network latency by 50-70%
-
-### 5. Local LSH Index Cache
-```typescript
-// Cache LSH hyperplanes and blind indices locally
-// Avoids re-computing on every query
-const lshCache = await loadLSHFromDisk();
-```
-
-**Impact**: Saves 10-20ms per query
-
-### Optimization Priority
-
-| Optimization | Effort | Impact | Priority |
-|--------------|--------|--------|----------|
-| Client caching | Low | High | P1 |
-| Debounce | Low | Medium | P1 |
-| Skip short messages | Low | Medium | P1 |
-| Async pre-fetch | Medium | Medium | P2 |
-| Local LSH cache | Medium | Low | P2 |
-| Edge deployment | High | High | P3 |
+If you find yourself wanting to extend this doc with a schema field, a tuning constant, or a sequence diagram for a specific flow, you're probably in the wrong file.
 
 ---
 
-## 1.5 Ingestion Pipeline (client-side only)
+## See also
 
-```python
-# pseudocode — full implementation provided in repo skeleton
-def ingest(memory_item: dict, master_password: str):
-    # 1. Compute embedding (same as today)
-    emb = embedder.encode(memory_item["text"])
-
-    # 2. Generate LSH buckets
-    lsh_hashes = lsh_index.hash_vector(emb)          # returns list of 12 strings
-
-    # 3. Generate blind indices
-    blind = [sha256(token) for token in tokenize(text)]
-    blind += [sha256(h) for h in lsh_hashes]
-
-    # 4. Encrypt BOTH doc and embedding
-    key = derive_key(master_password)
-    enc_doc = xchacha20_encrypt(memory_item["text"], key)
-    enc_emb = xchacha20_encrypt(emb.tobytes(), key)
-
-    # 5. Upload
-    server.upload({
-        "id": uuid7(),
-        "encrypted_doc": enc_doc,
-        "encrypted_embedding": enc_emb,
-        "blind_indices": blind,
-        "metadata": {...}
-    })
-```
-
----
-
-## 1.6 Search Pipeline (unchanged outer flow)
-
-1. **Client:** embed query → compute LSH hashes → generate trapdoors (SHA-256 of each bucket).
-2. **Client:** send ONLY trapdoors + optional keyword blind indices.
-3. **Server:** inverted-index lookup → union of all matching memories (400–1,200 candidates).
-4. **Server:** return encrypted docs + encrypted embeddings for those IDs.
-5. **Client:** decrypt 400–1,200 items → exact cosine on decrypted embeddings + BM25 + RRF → top 8.
-
-**(Optional)** client caches LSH index locally for 24h to reduce server load on repeat queries.
-
----
-
-## 1.7 Migration from current plaintext-embeddings
-
-- **One-time script:** download all items (they are still decryptable by user), re-ingest with LSH + encryption.
-- **Backward compatible:** old items without LSH buckets fall back to keyword-only pre-filter (still works, just lower recall).
-
----
-
-## 1.8 Full File Structure & Deliverables Expected from Coding Agent
-
-```
-totalreclaw/core/lsh.py          — Faiss wrapper + hash generation
-totalreclaw/client.py            — updated store() and search() with LSH
-totalreclaw/server/blind_index.py — extended inverted index (already exists, just add LSH bucket column)
-tests/benchmarks/               — 10k, 100k, 1M synthetic + real WhatsApp datasets
-docs/migration.md
-```
-
-**Config file:** `totalreclaw/config.yaml` with all LSH tunables
-
----
-
-## Performance Targets (must hit)
-
-| Metric | Target |
-|--------|--------|
-| 1M memories search p95 | <140ms |
-| Download size | <2MB |
-| Recall@500 of true top-250 | ≥93% |
-| Storage overhead vs v0.2 | ≤2.2× |
-
----
-
-## LSH Parameter Immutability & Re-indexing (MVP Requirement)
-
-### Problem
-
-LSH parameters `n_bits` and `n_tables` are **index-time parameters**:
-- Old memory indexed with `n_tables=12`
-- Server scales to `n_tables=16` (at 500K+ scale)
-- New queries use 16 tables, old memory only has 12 buckets
-- **Search breaks for old memories**
-
-### Solution: Full Re-index on Param Change
-
-When LSH params must change (rare, only at 500K+ scale):
-
-```
-RE-INDEX WORKFLOW:
-
-1. ADMIN TRIGGERS: PUT /admin/lsh-reindex
-   - New params: { n_bits: 64, n_tables: 16 }
-   - System enters MAINTENANCE mode
-
-2. PAUSE OPERATIONS:
-   - Block all exports (prevent partial data)
-   - Block new memory storage
-   - Allow read-only search (with old params)
-
-3. FOR EACH USER:
-   a. Fetch all encrypted memories
-   b. Client-side: decrypt with recovery phrase
-   c. Client-side: re-compute LSH buckets with NEW params
-   d. Client-side: re-encrypt, re-upload
-   e. Server: update blind_indices atomically
-
-4. RESUME OPERATIONS:
-   - System exits MAINTENANCE mode
-   - All queries use new params
-```
-
-### Implementation Notes
-
-| Aspect | Detail |
-|--------|--------|
-| **Frequency** | Rare - only at 500K+ corpus size |
-| **Downtime** | Per-user, not global (each user re-indexes independently) |
-| **Client requirement** | Must have recovery phrase (cannot re-index server-side) |
-| **Rollback** | Keep old blind_indices until re-index complete |
-| **Export blocking** | Prevent export during re-index to avoid inconsistent data |
-
-### Config Storage
-
-```python
-# Per-user LSH config (immutable until re-index)
-class UserLSHConfig:
-    user_id: str
-    n_bits: int = 64
-    n_tables: int = 12
-    created_at: datetime
-    reindex_in_progress: bool = False
-```
-
-### API Endpoints (MVP)
-
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /lsh-config` | Get current user's LSH params |
-| `POST /admin/lsh-reindex` | Trigger re-index (admin only) |
-| `GET /lsh-reindex/status` | Check re-index progress |
-
-**Note: This is OUT OF SCOPE for PoC, required for MVP launch.**
+- [`memory-taxonomy-v1.md`](./memory-taxonomy-v1.md) — claim schema (canonical)
+- [`retrieval-v2.md`](./retrieval-v2.md) — reranker (canonical)
+- [`server.md`](./server.md) — relay surface (sibling)
+- [`flows/README.md`](./flows/README.md) — flow walkthroughs
+- [`mcp-server.md`](./mcp-server.md) — MCP client specifics
+- [`tiered-retrieval.md`](./tiered-retrieval.md) — tier rationale + validation
+- [`benchmark.md`](./benchmark.md) — retrieval benchmark methodology

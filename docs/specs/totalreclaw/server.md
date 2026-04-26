@@ -1,700 +1,335 @@
 <!--
 Product: TotalReclaw
-Formerly: tech specs/v0.3 (grok)/TS v0.3.1: Server-side PoC (with Auth).md
-Version: 0.3.1b
-Last updated: 2026-02-24
+Version: v1.0 — 2026-04-26
+Last updated: 2026-04-26
 -->
 
-# Technical Specification: TotalReclaw Server PoC v0.3.1
+# TotalReclaw Relay — Architecture (v1)
 
-**Version:** 0.3.1b (Auth + Content Fingerprint Dedup)
-**Date:** February 24, 2026 (updated from February 21, 2026)
-**Supersedes:** TS v0.3 Server-side PoC (no Subgraph).md
-**Status:** Ready for Implementation
-**See also:** TS v0.3.2 (Multi-Agent Conflict Resolution) for advanced conflict resolution layers beyond what this spec covers.
+**Title:** TotalReclaw v1.0 — Relay (server-blind intermediary, AA bundler shim, pair-flow broker)
+**Audience:** anyone reading, auditing, or operating the relay; integrators who need to understand what the relay can and cannot do for them.
+**Scope:** the relay's architectural responsibilities, surface, and invariants. Concrete schemas (memory claim, reranker, retrieval) live in sibling specs. The relay codebase lives in a separate repo (`totalreclaw-relay`); details specific to deployment, ops runbooks, and CI live there.
 
----
-
-## Changelog from v0.3
-
-| Change | Section |
-|--------|---------|
-| Added authentication system using recovery phrase derivation | §5 |
-| Added rate limiting design (deferred to post-PoC) | §6 |
-| Clarified API error codes | §4 |
-| Added conflict resolution strategy | §8 |
-| Added security considerations | §10 |
-| Added deferred MVP items (LSH re-index, conflict enhancement) | §14 |
-| **Added content fingerprint dedup (v0.3.1b)** | **§3, §7, §8** |
-| **Added DUPLICATE_CONTENT error code (v0.3.1b)** | **§3** |
-| **Added sync endpoint for delta reconciliation (v0.3.1b)** | **§4, §7** |
-| **Referenced v0.3.2 for advanced conflict resolution (v0.3.1b)** | **§14** |
+This document is the **architectural** spec for the relay. Update it when the relay's role, surface boundaries, or invariants change. Do not duplicate claim-schema or reranker details here.
 
 ---
 
-## 1. Goals & Non-Goals
+## 1. Role of the relay
 
-### Goals
-- Simple, single-binary server for PoC testing
-- Server-blind: server never sees plaintext or recovery phrase
-- Authentication derived from user's recovery phrase (no separate API keys)
-- Protobuf API (future-proof for decentralized migration)
-- PostgreSQL backend with event-sourced storage
+The relay is **not** a memory backend in the traditional sense. It is a server-blind intermediary that makes day-to-day reads and writes fast — without ever decrypting anything, ever holding a key, or ever seeing a recovery phrase.
 
-### Non-Goals (for PoC)
-- No subgraphs, no ERC-4337, no paymaster
-- No production-scale deployment (single Postgres)
-- Rate limiting (deferred)
-- Multi-tenant isolation (single user per instance for PoC)
+It has exactly four jobs:
+
+1. **Store opaque ciphertext + trapdoors** under per-user `SHA256(authKey)` namespaces.
+2. **Return candidates by trapdoor match** for blind retrieval (PostgreSQL GIN index over the blind-index array).
+3. **Broker the pair-flow handshake** via ephemeral WebSocket sessions during onboarding.
+4. **Shim ERC-4337 bundler calls** so clients can submit UserOps without running their own bundler.
+
+Everything plaintext — extraction, embedding, dedup decisions, reranking, claim schema validation — happens on the client. The relay can be fully compromised without exposing user memories.
+
+For the trust split that justifies this design, see [`architecture.md`](./architecture.md) §1.
 
 ---
 
-## 2. Architecture Overview
+## 2. Architectural diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    CLIENT (OpenClaw Skill)                       │
+│                    CLIENT (any of: OpenClaw, Hermes,             │
+│                    MCP server, NanoClaw, browser pair tab)      │
 ├─────────────────────────────────────────────────────────────────┤
-│  master_password                                                 │
-│       │                                                          │
-│       ├──► HKDF(pw, salt, "auth") ──► auth_key ──► Auth Header  │
-│       │                                                          │
-│       └──► HKDF(pw, salt, "enc") ──► encryption_key             │
-│                   │                                              │
-│                   ▼                                              │
-│            XChaCha20-Poly1305 Encrypt                             │
-│                   │                                              │
-│                   ▼                                              │
-│            Protobuf Request                                      │
+│  mnemonic                                                       │
+│       │                                                         │
+│       ├─► HKDF(seed, "totalreclaw-auth-v1")  ─► authKey         │
+│       ├─► HKDF(seed, "totalreclaw-enc-v1")   ─► encryptionKey   │
+│       ├─► HKDF(seed, "totalreclaw-dedup-v1") ─► dedupKey        │
+│       ├─► HKDF(seed, "totalreclaw-lsh-v1")   ─► lshSeed         │
+│       └─► BIP-44 m/44'/60'/0'/0/0  ─► secp256k1 → AA address    │
+│                                                                 │
+│  XChaCha20-Poly1305 encrypt {claim, embedding, metadata}        │
+│  Compute trapdoors (token hashes + LSH bucket hashes)           │
+│  Compute content_fp = HMAC-SHA256(dedupKey, normalize(text))    │
+│  Sign UserOp (ERC-4337)                                         │
 └─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼ HTTP/Protobuf
+          │                              │
+          │ HTTPS / Protobuf v=4         │ WebSocket
+          ▼                              ▼ (pair handshake only)
 ┌─────────────────────────────────────────────────────────────────┐
-│                      SERVER (PoC)                                │
+│                          RELAY                                   │
 ├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐  │
-│  │ Auth Check  │───►│ Rate Limit  │───►│ Request Handler     │  │
-│  │ (SHA256)    │    │ (deferred)  │    │                     │  │
-│  └─────────────┘    └─────────────┘    └─────────────────────┘  │
-│                                                  │               │
-│                                                  ▼               │
-│                                          ┌─────────────┐         │
-│                                          │ PostgreSQL  │         │
-│                                          │ • raw_events│         │
-│                                          │ • facts     │         │
-│                                          │ • users     │         │
-│                                          └─────────────┘         │
+│  Auth      Rate    Request Handlers                             │
+│  ┌──────┐ ┌─────┐ ┌────────────────────────────────────────┐    │
+│  │SHA256│►│limit│►│ /store /search /update /sync /export   │    │
+│  │  fp  │ └─────┘ │ /pair-init /pair-claim (WS)            │    │
+│  └──────┘         │ /aa-bundler-shim                        │    │
+│                   └────────────────────────────────────────┘    │
+│                                       │                          │
+│                                       ▼                          │
+│                              ┌──────────────────┐                │
+│                              │   PostgreSQL     │                │
+│                              │ • users           │                │
+│                              │ • facts (GIN)    │                │
+│                              │ • raw_events     │                │
+│                              │ • tombstones     │                │
+│                              └──────────────────┘                │
 └─────────────────────────────────────────────────────────────────┘
+          │                              │
+          ▼                              ▼
+   Subgraph indexer                ERC-4337 bundler
+   (The Graph)                     (sponsored by paymaster)
+          │                              │
+          ▼                              ▼
+   Gnosis (Pro)                    Gnosis / Base Sepolia chain
+   Base Sepolia (Free)             (EventfulDataEdge contract)
 ```
 
 ---
 
-## 3. Protobuf Schema
+## 3. What the relay sees, and what it doesn't
 
-```proto
-syntax = "proto3";
-package totalreclaw;
+The architectural invariant. Everything else in this doc serves it.
 
-message TotalReclawFact {
-  string id = 1;                    // UUIDv7 (time-sortable)
-  string timestamp = 2;             // ISO 8601
-  string owner = 3;                 // user_id from auth
-  string encrypted_blob = 4;        // Base64 of XChaCha20-Poly1305 (doc + embedding + metadata)
-  repeated string blind_indices = 5; // SHA-256(token) + SHA-256(LSH bucket)
-  float decay_score = 6;
-  bool is_active = 7;
-  int32 version = 8;
-  string source = 9;                // conversation | pre_compaction | explicit | etc.
-  // --- Added in v0.3.1b ---
-  string content_fp = 10;           // HMAC-SHA256 content fingerprint (for dedup, see §8.2)
-  string agent_id = 11;             // identifier of the agent that created this fact
-}
+| The relay stores or sees | The relay never sees |
+|---|---|
+| `SHA256(authKey)` per user | the mnemonic |
+| `encryptionKey`-encrypted ciphertext blobs | `encryptionKey` |
+| `dedupKey`-derived `content_fp` | `dedupKey` |
+| `lshSeed`-derived bucket trapdoors | `lshSeed` (and therefore the LSH hyperplanes) |
+| Trapdoor sets at query time | the query text or query embedding |
+| ERC-4337 UserOp bytes (signed) | the secp256k1 private key that signed them |
+| Pair-flow ECDH pubkeys + ciphertext | the ECDH session key or paired-phrase plaintext |
 
-message StoreRequest {
-  repeated TotalReclawFact facts = 1;
-}
-
-message StoreResponse {
-  bool success = 1;
-  repeated string ids = 2;
-  ErrorCode error_code = 3;
-  string error_message = 4;
-  // --- Added in v0.3.1b ---
-  repeated string duplicate_ids = 5;  // fact IDs that were rejected as duplicates
-}
-
-message SearchRequest {
-  repeated string blind_trapdoors = 1;   // LSH + keyword trapdoors from client
-  int32 limit = 2;                       // default 500
-  float min_decay_score = 3;             // default 0.3
-}
-
-message SearchResponse {
-  repeated TotalReclawFact facts = 1;     // encrypted, client decrypts & reranks
-  int32 total_available = 2;
-  ErrorCode error_code = 3;
-  string error_message = 4;
-}
-
-// --- Added in v0.3.1b: Delta sync for agent reconnection ---
-message SyncRequest {
-  int64 since_sequence = 1;              // agent's last known sequence_id
-  int32 limit = 2;                       // max facts to return (default 1000)
-}
-
-message SyncResponse {
-  repeated TotalReclawFact facts = 1;
-  int64 latest_sequence = 2;             // current highest sequence_id for this user
-  bool has_more = 3;                     // true if more facts beyond limit
-}
-
-enum ErrorCode {
-  OK = 0;
-  INVALID_REQUEST = 1;
-  UNAUTHORIZED = 2;
-  RATE_LIMITED = 3;
-  NOT_FOUND = 4;
-  INTERNAL_ERROR = 5;
-  VERSION_CONFLICT = 6;
-  DUPLICATE_CONTENT = 7;                 // Added in v0.3.1b: content fingerprint match
-}
-```
+If the relay's database leaks in full, an attacker recovers ciphertext + trapdoors + signed-UserOp history. They do not recover any plaintext, any embedding, any key, or any recovery phrase. This is by construction.
 
 ---
 
-## 4. API Endpoints
+## 4. Wire format — protobuf v=4
 
-### Base URL
-```
-http://localhost:8080  (PoC only, never expose to internet)
-```
+The on-the-wire envelope between client and relay is protobuf, schema version 4 (locked rc.20+ as part of the v1 cutover). Architecturally, the envelope carries:
 
-### Endpoints
+- **Encrypted blob.** `XChaCha20-Poly1305(encryptionKey, plaintext)` where the plaintext is a v1 Memory Claim (see [`memory-taxonomy-v1.md`](./memory-taxonomy-v1.md)) plus its embedding and metadata. The relay never parses inside the blob.
+- **Blind indices.** SHA-256 of word tokens + SHA-256 of LSH bucket IDs.
+- **Content fingerprint.** `HMAC-SHA256(dedupKey, normalize(text))`. Server uses this for exact-duplicate dedup.
+- **Decay score, version, source channel, sequence id.** Server-readable scalars for indexing, ordering, and conflict checks. None of these reveal claim content.
 
-| Method | Path | Request | Response | Description |
-|--------|------|---------|----------|-------------|
-| POST | /register | RegisterRequest | RegisterResponse | One-time user registration |
-| POST | /store | StoreRequest | StoreResponse | Store new facts (with dedup) |
-| POST | /search | SearchRequest | SearchResponse | Blind-index search |
-| POST | /update | StoreRequest | StoreResponse | Update/decay facts |
-| DELETE | /facts/{id} | - | { success: bool } | Soft delete (tombstone) |
-| GET | /health | - | { status: "ok" } | Health check |
-| GET | /export | - | ExportResponse | Export all user data |
-| GET | /sync | SyncRequest | SyncResponse | Delta sync since sequence (v0.3.1b) |
+**Schema version semantics:** the protobuf envelope version (`v=4`) gates the wire layout. The taxonomy `schema_version` (`"1.0"`, `"1.1"`, etc.) is *inside* the encrypted blob — invisible to the relay, evolved independently, additive on read.
 
-### New: Registration
-
-```proto
-message RegisterRequest {
-  string auth_key_hash = 1;    // SHA256(HKDF(master_password, salt, "auth"))
-  bytes salt = 2;              // 32 random bytes
-}
-
-message RegisterResponse {
-  bool success = 1;
-  string user_id = 2;          // Server-generated UUID
-  ErrorCode error_code = 3;
-  string error_message = 4;
-}
-```
-
-### Authentication Header
-
-All requests except `/register` and `/health` require:
-```
-Authorization: Bearer <auth_key>
-```
-
-Where `auth_key = HKDF(master_password, salt, "auth")` (derived client-side).
-
-Server validates: `SHA256(auth_key) == stored_auth_key_hash`
+The exhaustive `.proto` field list, RPC method signatures, and codegen targets live in `totalreclaw-relay/proto/` (canonical source). Don't duplicate them in this doc — they drift.
 
 ---
 
-## 5. Authentication System
+## 5. Surface — what endpoints exist and why
 
-### Design Principles
-1. **No separate API key** - recovery phrase IS the auth credential
-2. **Server-blind** - server never sees recovery phrase
-3. **Cryptographic separation** - auth key ≠ encryption key
-4. **Stateless requests** - no sessions, no tokens to refresh
-5. **Portable** - same recovery phrase works on any device
+| Endpoint | Method | Purpose | Auth |
+|---|---|---|---|
+| `/health` | GET | Liveness probe | none |
+| `/register` | POST | One-time user registration; stores `SHA256(authKey)` + salt | derives auth |
+| `/store` | POST | Append encrypted facts; idempotent via `content_fp` | bearer `authKey` |
+| `/search` | POST | Trapdoor-matched candidate retrieval | bearer `authKey` |
+| `/update` | POST | Version-checked edits to existing facts | bearer `authKey` |
+| `/facts/{id}` | DELETE | Soft-delete (tombstone) | bearer `authKey` |
+| `/sync` | GET | Delta reconciliation since last `sequence_id` (multi-agent crash recovery) | bearer `authKey` |
+| `/export` | GET | Full encrypted dump for offline backup / migration | bearer `authKey` |
+| `/pair-init`, `/pair-claim` | WS | Pair-flow ECDH pubkey exchange + transient ciphertext relay | nonce-scoped |
+| `/aa-bundler-shim` | POST | Forward signed UserOps to an ERC-4337 bundler; return tx hash | bearer `authKey` |
 
-### Registration Flow
+Health URLs:
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│ CLIENT                                                        │
-├──────────────────────────────────────────────────────────────┤
-│ 1. User enters master_password                               │
-│ 2. Generate: salt = random(32 bytes)                         │
-│ 3. Derive: auth_key = HKDF-SHA256(                           │
-│                master_password,                              │
-│                salt,                                         │
-│                "totalreclaw-auth-v1",                         │
-│                length=32                                     │
-│            )                                                 │
-│ 4. Compute: auth_key_hash = SHA256(auth_key)                 │
-│ 5. Send: POST /register { auth_key_hash, salt }              │
-└──────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────┐
-│ SERVER                                                        │
-├──────────────────────────────────────────────────────────────┤
-│ 1. Generate: user_id = UUIDv7()                              │
-│ 2. Store: INSERT INTO users (user_id, auth_key_hash, salt)   │
-│ 3. Return: { success: true, user_id }                        │
-└──────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────┐
-│ CLIENT (Post-Registration)                                    │
-├──────────────────────────────────────────────────────────────┤
-│ Store locally in OS keychain:                                 │
-│   • user_id                                                   │
-│   • salt (for future auth_key derivation)                     │
-│                                                               │
-│ User remembers: master_password                               │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### Request Authentication
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│ CLIENT (Every Request)                                        │
-├──────────────────────────────────────────────────────────────┤
-│ 1. User enters master_password (or from OS keychain)         │
-│ 2. Retrieve: salt from local storage                         │
-│ 3. Derive: auth_key = HKDF-SHA256(master_password, salt, ...)│
-│ 4. Send request with header:                                 │
-│      Authorization: Bearer <auth_key>                        │
-└──────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────┐
-│ SERVER                                                        │
-├──────────────────────────────────────────────────────────────┤
-│ 1. Extract: auth_key from Authorization header               │
-│ 2. Compute: auth_key_hash = SHA256(auth_key)                 │
-│ 3. Lookup: SELECT * FROM users WHERE auth_key_hash = ?       │
-│ 4. If found: use user_id for all operations                  │
-│ 5. If not found: return 401 Unauthorized                     │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### Key Separation
-
-```
-master_password
-       │
-       ├──► HKDF(pw, salt, "totalreclaw-auth-v1")  ──► auth_key (for server auth)
-       │
-       └──► HKDF(pw, salt, "totalreclaw-enc-v1")   ──► encryption_key (for AES-GCM)
-```
-
-**Critical**: Server only ever sees `auth_key` (and stores `SHA256(auth_key)`). Server never has enough information to derive `encryption_key`.
+- **Staging:** `https://api-staging.totalreclaw.xyz` — auto-QA always targets this
+- **Production:** `https://api.totalreclaw.xyz`
 
 ---
 
-## 6. Rate Limiting (Deferred)
+## 6. Authentication — derived, not configured
 
-Design for future implementation:
+Architecturally, there is **no** separate API key, no password reset, no session token. The mnemonic is the credential.
 
-| Endpoint | Limit | Window |
-|----------|-------|--------|
-| /register | 5 | per hour per IP |
-| /store | 100 | per minute per user |
-| /search | 200 | per minute per user |
-| /export | 5 | per hour per user |
+```
+client:  authKey       = HKDF-SHA256(seed, "totalreclaw-auth-v1")
+client:  Authorization = Bearer <authKey>
+server:  if SHA256(authKey) == stored_auth_key_hash → ok
+```
 
-Implementation: Use Redis with sliding window or Postgres-based rate limiter.
+Cryptographic separation is structural:
+
+```
+mnemonic
+   ├─► HKDF(..., "totalreclaw-auth-v1")  ─► authKey         (server sees SHA-256 only)
+   ├─► HKDF(..., "totalreclaw-enc-v1")   ─► encryptionKey   (server NEVER derivable)
+   └─► HKDF(..., "totalreclaw-dedup-v1") ─► dedupKey        (server NEVER derivable)
+```
+
+The relay can verify the user is authentic without learning anything that lets it decrypt their data. There is no "give me my data back" recovery path through the relay; the only recovery path is the mnemonic + the subgraph (see [`architecture.md`](./architecture.md) §2 + §5).
 
 ---
 
-## 7. Database Schema
+## 7. Dedup — content fingerprint at write, sync at reconnect
 
-```sql
--- Users table (authentication)
-CREATE TABLE users (
-  user_id TEXT PRIMARY KEY,           -- UUIDv7
-  auth_key_hash BYTEA NOT NULL,       -- SHA256(auth_key)
-  salt BYTEA NOT NULL,                -- 32 bytes
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  last_seen_at TIMESTAMPTZ
-);
-
-CREATE INDEX idx_users_auth_hash ON users(auth_key_hash);
-
--- Raw events (immutable log)
-CREATE TABLE raw_events (
-  id BIGSERIAL PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(user_id),
-  event_bytes BYTEA NOT NULL,         -- raw Protobuf of StoreRequest
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_events_user ON raw_events(user_id, created_at DESC);
-
--- Facts (mutable view)
-CREATE TABLE facts (
-  id TEXT PRIMARY KEY,                -- fact UUIDv7
-  user_id TEXT NOT NULL REFERENCES users(user_id),
-  encrypted_blob BYTEA NOT NULL,
-  blind_indices TEXT[] NOT NULL,
-  decay_score FLOAT NOT NULL,
-  is_active BOOLEAN NOT NULL DEFAULT true,
-  version INT NOT NULL DEFAULT 1,
-  source TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  -- Added in v0.3.1b: content fingerprint dedup + sync
-  sequence_id BIGSERIAL,              -- monotonic per-user, for delta sync
-  content_fp TEXT,                    -- HMAC-SHA256 fingerprint for exact dedup
-  agent_id TEXT                       -- which agent created this fact
-);
-
-CREATE INDEX idx_facts_user ON facts(user_id);
-CREATE INDEX idx_facts_blind_gin ON facts USING GIN(blind_indices);
-CREATE INDEX idx_facts_active_decay ON facts(user_id, is_active, decay_score DESC);
--- Added in v0.3.1b:
-CREATE UNIQUE INDEX idx_facts_user_fp ON facts(user_id, content_fp) WHERE is_active = true;
-CREATE INDEX idx_facts_user_seq ON facts(user_id, sequence_id);
-
--- Tombstones (for soft delete, 30-day retention)
-CREATE TABLE tombstones (
-  fact_id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  deleted_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_tombstones_expiry ON tombstones(deleted_at);
-```
-
----
-
-## 8. Conflict Resolution
-
-### 8.1 Version-Based Optimistic Locking (Unchanged)
-
-For updates to **existing facts** (same fact ID):
-
-```sql
--- On update, include version check
-UPDATE facts
-SET encrypted_blob = ?, version = version + 1, updated_at = NOW()
-WHERE id = ? AND user_id = ? AND version = ?;
-
--- If affected_rows == 0, return VERSION_CONFLICT error
-```
-
-**Client strategy on VERSION_CONFLICT:**
-1. Re-retrieve latest version
-2. Merge changes (LLM-assisted merge for text)
-3. Retry update with new version
-
-### 8.2 Content Fingerprint Dedup (Added v0.3.1b)
-
-For **new facts** that may duplicate existing content (e.g., after agent restart, or when
-multiple agents extract from the same source material):
-
-#### Content Fingerprint Computation (Client-Side)
+### Exact-content dedup (HMAC-SHA256)
 
 ```
-dedup_key   = HKDF-SHA256(master_password, salt, "totalreclaw-dedup-v1")
-content_fp  = HMAC-SHA256(dedup_key, normalize(plaintext))
+content_fp = HMAC-SHA256(dedupKey, normalize(text))
+
+normalize(text):
+  Unicode NFC → lowercase → collapse whitespace → trim → UTF-8 encode
 ```
 
-**`normalize(text)` function:**
-1. Unicode NFC normalization
-2. Lowercase
-3. Collapse whitespace (multiple spaces/tabs/newlines to single space)
-4. Trim leading/trailing whitespace
-5. UTF-8 encode
-
-**Key derivation note:** The dedup key is derived via a separate HKDF context string
-(`"totalreclaw-dedup-v1"`) so that it survives encryption key rotation independently.
-It follows the same pattern as auth/encryption key separation (§5).
+Server-side `/store` handler:
 
 ```
-master_password
-       │
-       ├──► HKDF(pw, salt, "totalreclaw-auth-v1")   ──► auth_key
-       ├──► HKDF(pw, salt, "totalreclaw-enc-v1")    ──► encryption_key
-       └──► HKDF(pw, salt, "totalreclaw-dedup-v1")  ──► dedup_key  (NEW)
+for each fact in request:
+  if exists where (user_id = ?, content_fp = ?, is_active = true):
+    skip → add existing id to response.duplicate_ids[]
+  else:
+    insert → add new id to response.ids[]
+return success (partial = full)
 ```
 
-**Extraction temperature requirement:** For content fingerprint dedup to be effective, the
-LLM fact extraction call MUST use `temperature=0` (or the lowest available setting). This
-maximizes output determinism: the same input text produces the same extracted fact text
-across agents and sessions. Without this, minor wording variations in extraction output
-defeat the fingerprint. Note that `temperature=0` is not guaranteed to be fully deterministic
-by all providers, but achieves >95% consistency on short structured extractions — sufficient
-for dedup where occasional misses are a minor storage cost, not a correctness failure.
+**Why HMAC, not plain hash:** plain SHA-256 of plaintext would let the relay confirm or deny known content (build a rainbow table of common facts and probe). Keying with `dedupKey` (derived from the mnemonic) means the relay cannot probe — it can only match fingerprints from the same user.
 
-**Platform-specific implementation:**
+**Why it's idempotent:** same fact pushed twice from a recovered agent or two parallel clients → second push is a no-op, returned via `duplicate_ids`. The store operation is safe to retry without coordination.
 
-- **OpenClaw:** Use the built-in `llm-task` plugin tool. The skill instructs the agent to
-  invoke `llm-task` with `temperature: 0`, the fact extraction prompt, and a JSON schema
-  for structured output. This runs a separate LLM call that does NOT affect the main
-  conversation's temperature. The `llm-task` tool is JSON-only, no tools exposed — ideal
-  for structured extraction. Must be enabled in OpenClaw config:
-  ```json
-  { "plugins": { "entries": { "llm-task": { "enabled": true } } } }
-  ```
+**Extraction determinism note:** for fingerprint dedup to be effective, the extraction LLM should run with `temperature=0` so the same input produces the same extracted text. In OpenClaw this is enforced via the `llm-task` plugin tool. NanoClaw inherits Agent SDK defaults until the SDK exposes temperature (open issue: anthropics/claude-agent-sdk-python#273); duplicates that slip through are a storage cost, not a correctness issue.
 
-- **NanoClaw:** The Claude Agent SDK does not currently expose `temperature` as a parameter
-  (open issue: anthropics/claude-agent-sdk-python#273, 20+ upvotes). Do NOT implement a
-  workaround that bypasses the Agent SDK. Revisit when the Agent SDK adds native temperature
-  support — expected to land given community demand. Until then, NanoClaw extraction uses
-  the SDK default temperature, which reduces fingerprint dedup effectiveness but does not
-  break it (duplicates that slip through are a storage cost, not a correctness issue).
+### Multi-agent sync (sequence_id watermark)
 
-**Privacy:** The server sees the fingerprint but cannot reverse it without the dedup key.
-The fingerprint reveals only one bit per fact pair: "same content or not." This is strictly
-less information than blind indices already reveal (approximate similarity). See TS v0.3.2
-§9 for full privacy analysis.
-
-#### Server-Side Dedup Check (in `/store` handler)
-
-```
-POST /store receives StoreRequest with facts[]:
-
-FOR EACH fact in request:
-  1. Check: SELECT id FROM facts
-            WHERE user_id = $uid AND content_fp = $fp AND is_active = true;
-
-  2. IF found:
-       Skip this fact. Add existing fact ID to response.duplicate_ids[].
-       Do NOT return an error — continue processing remaining facts.
-
-  3. IF not found:
-       Insert fact normally. Assign sequence_id. Add to response.ids[].
-
-Return StoreResponse with:
-  success = true (partial success is still success)
-  ids = [newly stored fact IDs]
-  duplicate_ids = [skipped fact IDs that already existed]
-```
-
-**Behavior:** Duplicates are silently skipped, not hard-rejected. The client knows which
-facts were skipped via `duplicate_ids` and can proceed without retry logic. This makes the
-store operation **idempotent** — pushing the same facts twice is safe.
-
-#### Sync Endpoint (for Agent Reconnection)
-
-```
-GET /sync?since_sequence={seq}&limit=1000
-
-Returns all facts for the authenticated user with sequence_id > since_sequence.
-Used by agents after coming online to pull changes made by other agents.
-
-Response: SyncResponse {
-  facts: [...],           // facts since the given sequence
-  latest_sequence: 4721,  // current highest sequence_id
-  has_more: false         // true if more facts beyond limit (paginate)
-}
-```
-
-The agent stores `latest_sequence` locally and uses it on the next reconnection.
-
-#### Client Reconnection Protocol
+`/sync?since_sequence={seq}` returns facts with `sequence_id > seq`. Architecturally this lets multiple agents (e.g. OpenClaw on desktop + Hermes on a VPS, both paired with the same mnemonic) reconcile after one of them was offline:
 
 ```
 1. Agent comes online.
-2. GET /sync?since_sequence={last_known_sequence}
-3. Build set of server fingerprints: { content_fp → fact_id }
-4. For each local pending fact:
-   a. IF content_fp already in server set → skip (already stored)
-   b. ELSE → POST /store (server will also check, but pre-filtering avoids round trips)
+2. GET /sync?since_sequence={last_known}.
+3. Build server fingerprint set: { content_fp → fact_id }.
+4. For each pending local fact:
+     if content_fp in server set → skip.
+     else → POST /store.
 5. Update local last_known_sequence.
 ```
 
-> **For advanced conflict resolution** (semantic near-duplicates, contradictions, LLM-assisted
-> merge), see TS v0.3.2: Multi-Agent Conflict Resolution.
+The store operation is also idempotent server-side (§7 above), so step 4's pre-filter is an optimization, not a correctness requirement.
+
+### Beyond exact dedup
+
+Semantic near-duplicates ("prefers Python" vs "likes Python over JS"), stale contradictions ("lives in Lisbon" vs "moved to Berlin"), and LLM-assisted merging are **client-side** concerns by design — the relay can't see plaintext, so it can't do semantic comparison. See `conflict-resolution.md` for the multi-layer client pipeline.
 
 ---
 
-## 9. Search Implementation
+## 8. Database schema (architectural)
 
-### Query Flow
+The relay uses PostgreSQL. Architecturally, there are four tables; their existence is part of the spec, their column-by-column shapes evolve in the codebase.
+
+| Table | Purpose | Key invariants |
+|---|---|---|
+| `users` | One row per registered identity | Stores `SHA256(authKey)` + salt only. No phrase, no encryption material. Never deleted (would break recovery). |
+| `facts` | Mutable view of active claims | GIN index on `blind_indices` powers retrieval. Unique `(user_id, content_fp) WHERE is_active` enforces exact dedup at the DB level. Monotonic `sequence_id` per user powers `/sync`. |
+| `raw_events` | Immutable append-only log of `StoreRequest` payloads | Audit + debugging. Re-derivable view if `facts` corrupts. |
+| `tombstones` | Soft-delete records | 30-day retention; lets sync resolve "this was deleted, don't re-add" across agents. |
+
+The canonical DDL (column types, indices, migrations) lives in `totalreclaw-relay/db/`. This doc only fixes the architectural shape.
+
+---
+
+## 9. Search semantics
+
 ```sql
--- Blind index lookup using GIN array contains operator
 SELECT id, encrypted_blob, decay_score
 FROM facts
 WHERE user_id = ?
   AND is_active = true
   AND decay_score >= ?
-  AND blind_indices && ARRAY[?]::text[]  -- GIN index
+  AND blind_indices && ARRAY[?]::text[]   -- GIN index
 ORDER BY decay_score DESC
 LIMIT ?;
 ```
 
-### Performance Target
-- <50ms for 100K facts with GIN index
-- Client-side reranking handles the rest
+The relay's job ends at "return matching ciphertext." Reranking — BM25, cosine, decay, importance, RRF, source-weighting (Tier 1) — is **client-side**, in `totalreclaw-core::reranker`. See [`retrieval-v2.md`](./retrieval-v2.md).
+
+**Performance envelope:** GIN-indexed lookup over 100K facts target < 50 ms. End-to-end search latency target < 150 ms p95 (client + relay + reranking). LSH parameters and candidate-pool sizing live in [`lsh-tuning.md`](./lsh-tuning.md) — they're tunable knobs, not architectural commitments.
 
 ---
 
-## 10. Security Considerations
+## 10. Pair-flow brokering
 
-### Server-Side Protections
-
-| Threat | Mitigation |
-|--------|------------|
-| Brute force auth | Rate limiting (post-PoC) |
-| DB leak | auth_key_hash + salt only, no passwords |
-| Replay attacks | Include timestamp in future versions |
-| MITM | HTTPS in production (localhost for PoC) |
-
-### Client Responsibilities
-
-| Threat | Mitigation |
-|--------|------------|
-| Weak password | Enforce minimum entropy check |
-| Password reuse | Warn user (can't detect server-side) |
-| Key exfiltration | OS keychain storage |
-
-### E2EE Guarantee
-- Server stores: `auth_key_hash`, `salt`, `encrypted_blob`, `blind_indices`
-- Server NEVER sees: `master_password`, `encryption_key`, `plaintext`
-
----
-
-## 11. Implementation Order
-
-| Day | Tasks |
-|-----|-------|
-| 1 | Protobuf schema + codegen, DB schema + migrations |
-| 2 | /register, /health endpoints, auth middleware |
-| 3 | /store, /search endpoints with GIN queries |
-| 4 | /update, /delete, version conflict handling |
-| 5 | Integration tests, Docker Compose |
-
----
-
-## 12. Deliverables
+The relay is a transport, not a participant, in the onboarding handshake.
 
 ```
-server/
-├── proto/
-│   └── totalreclaw.proto
-├── src/
-│   ├── main.py (or index.ts)
-│   ├── auth.py
-│   ├── handlers/
-│   │   ├── register.py
-│   │   ├── store.py
-│   │   └── search.py
-│   └── db/
-│       ├── schema.sql
-│       └── queries.py
-├── tests/
-│   ├── test_auth.py
-│   ├── test_store.py
-│   └── test_search.py
-├── Dockerfile
-├── docker-compose.yml
-└── README.md
+1. Browser tab opens pair-init WebSocket → relay assigns ephemeral nonce.
+2. Client (OpenClaw / Hermes / MCP) opens pair-claim WebSocket with the same nonce
+   and sends its ephemeral ECDH pubkey.
+3. Relay forwards client's pubkey to browser tab.
+4. Browser AES-256-GCM-encrypts the paired_phrase to client's pubkey,
+   sends ciphertext through relay.
+5. Relay forwards ciphertext to client.
+6. Client decrypts with its ECDH session key, derives all keys from the mnemonic,
+   never echoes the phrase back.
+7. Pair session closes; relay drops all session state.
 ```
+
+**Architectural invariants:**
+
+- The relay holds no key. The ECDH session key exists only in the two endpoints.
+- AES-GCM is the right primitive here (short-lived session, native WebCrypto, fresh key per session) — distinct from XChaCha20-Poly1305 used for long-term storage. See [`architecture.md`](./architecture.md) §3.
+- The phrase never crosses an LLM context. The browser is the only place it lives in plaintext.
+
+The pair handshake landed in relay rc.10+; AES-GCM payload encryption shipped client-side in rc.12+.
 
 ---
 
-## 13. Docker Compose (PoC)
+## 11. ERC-4337 bundler shim
 
-```yaml
-version: '3.9'
-services:
-  totalreclaw-server:
-    build: .
-    container_name: totalreclaw-poc
-    environment:
-      DATABASE_URL: postgresql://totalreclaw:dev@postgres:5432/totalreclaw
-    ports:
-      - "127.0.0.1:8080:8080"  # localhost ONLY
-    depends_on:
-      - postgres
-    restart: unless-stopped
+The relay forwards signed UserOps to an ERC-4337 bundler so clients don't have to run one. Architecturally this is a transport convenience — the signature is generated client-side from the secp256k1 key derived from the mnemonic; the relay cannot forge it.
 
-  postgres:
-    image: postgres:16
-    container_name: totalreclaw-db
-    environment:
-      POSTGRES_USER: totalreclaw
-      POSTGRES_PASSWORD: dev  # Change in production
-      POSTGRES_DB: totalreclaw
-    volumes:
-      - totalreclaw-data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5432:5432"  # localhost ONLY
-    restart: unless-stopped
+The paymaster sponsors gas (free for users on both Free and Pro tiers). The chain selection — Base Sepolia for Free, Gnosis mainnet for Pro — is part of the UserOp; the relay does not choose it.
 
-volumes:
-  totalreclaw-data:
-```
-
-**Security Notes:**
-- All ports bound to 127.0.0.1 (localhost only)
-- Default password MUST be changed for any non-PoC use
-- No external network access required
+For chain choice rationale, paymaster topology, and the contract surface (`EventfulDataEdge`), see [`architecture.md`](./architecture.md) §5 ("Storage tiers") and the on-chain repo.
 
 ---
 
-## 14. Deferred to MVP Phase
+## 12. Subgraph integration
 
-These items are **out of scope for PoC** but **required before MVP launch**.
+The subgraph (The Graph, AssemblyScript indexer) sits **off** the relay's critical path. Writes go: client → relay → bundler → chain → subgraph indexer (5–30 s lag).
 
-### 14.1 LSH Runtime Re-indexing
+The relay does not query the subgraph. Clients do. As of `totalreclaw-core` rc.22+, a read-after-write primitive in `core` polls the subgraph until the just-written sequence is visible — this absorbs the indexer lag for callers without involving the relay.
 
-**Reference:** `TS v0.3: E2EE with LSH + Blind Buckets.md` §530-587
+Recovery from device loss does not touch the relay at all: mnemonic → subgraph → ciphertext → decrypt locally. This is the failure mode the architecture is designed for.
 
-When LSH parameters (`n_bits`, `n_tables`) need to change (rare, only at 500K+ corpus size):
+---
 
-| Aspect | Detail |
-|--------|--------|
-| **Trigger** | Admin `POST /admin/lsh-reindex` with new params |
-| **Downtime** | Per-user, not global |
-| **Client requirement** | Must have recovery phrase (cannot re-index server-side) |
-| **Process** | Client-side: decrypt → recompute LSH → re-encrypt → re-upload |
-| **APIs needed** | `GET /lsh-config`, `POST /admin/lsh-reindex`, `GET /lsh-reindex/status` |
+## 13. Operational expectations
 
-**Note:** `candidate_pool` is dynamic and auto-adjusts based on corpus size (no re-index needed).
+The relay is single-tenant per deployment in PoC and small-scale, multi-tenant per `user_id` in staging/production. It is **stateless** in the sense that all durable state is in PostgreSQL — restarts are safe, horizontal scaling is bounded by DB writes.
 
-### 14.2 Conflict Resolution Enhancement
+| Concern | Approach |
+|---|---|
+| Rate limiting | Per-endpoint per-user (auth-keyed) sliding windows; protects against scraping but cannot prevent legitimate-looking traffic from a stolen `authKey` |
+| Replay protection | Timestamp + sequence-id checks on signed payloads; bearer auth alone is not a replay defense |
+| MITM | HTTPS everywhere; auth happens over TLS, never plain HTTP |
+| DB leak | Recovers ciphertext + trapdoors + sequenced fingerprints; no plaintext, no keys |
+| Relay compromise | Same blast radius as DB leak — the relay does not hold keys, so compromise yields ciphertext only |
 
-**Current state (§8):** Optimistic locking + content fingerprint dedup (v0.3.1b)
+Concrete thresholds, deploy topology, monitoring dashboards, and runbooks live in the relay repo. They evolve faster than this spec.
 
-**What v0.3.1b covers:**
-- Exact duplicate prevention via content fingerprint (HMAC-SHA256)
-- Delta sync via sequence_id watermark
-- Idempotent store operations (safe to retry)
-- Agent crash recovery (re-push is safe)
+---
 
-**What remains for post-MVP (see TS v0.3.2 for full specification):**
+## 14. Out of scope for this doc
 
-| Gap | Description | Priority | TS v0.3.2 Layer |
-|-----|-------------|----------|-----------------|
-| Semantic near-duplicate detection | "prefers Python" vs "likes Python over JS" | MEDIUM | Layer 3 (blind index overlap) |
-| Stale contradiction resolution | "lives in Lisbon" vs "moved to Berlin" | MEDIUM | Layer 4 (client reconciliation) |
-| LLM-assisted merge | Prompt, model, fallback for merging conflicting facts | MEDIUM | Layer 4 |
-| Import conflicts | How to handle duplicates during bulk import | LOW | Layer 1 (fingerprint covers exact) |
-| Namespace collisions | Same namespace on different servers | LOW | Out of scope |
+- Memory claim schema → [`memory-taxonomy-v1.md`](./memory-taxonomy-v1.md)
+- Reranker behavior → [`retrieval-v2.md`](./retrieval-v2.md)
+- Trust split, key model, install model, on-chain layer → [`architecture.md`](./architecture.md)
+- Step-by-step user flows → [`flows/README.md`](./flows/README.md)
+- Conflict resolution beyond `content_fp` dedup → `conflict-resolution.md`
+- LSH parameter tuning → [`lsh-tuning.md`](./lsh-tuning.md)
+- MCP-specific client surface → [`mcp-server.md`](./mcp-server.md)
 
-**Recommended phasing:**
-1. **MVP (this spec):** Content fingerprint dedup + sync endpoint — catches ~70% of duplicates
-2. **Post-MVP:** Blind index overlap detection (TS v0.3.2 Layer 3) — catches semantic near-dupes
-3. **Post-MVP:** Client-side LLM merge (TS v0.3.2 Layer 4) — handles contradictions
+If a change to the relay would alter what the relay can see, what it stores, or how it interacts with the chain or the pair flow — update this doc. If it just adjusts a constant, an index, or a column type — update the codebase or the tunable spec.
 
-### 14.3 MVP Checklist
+---
 
-Before launching MVP:
+## See also
 
-- [ ] Implement `POST /admin/lsh-reindex` endpoint
-- [ ] Implement `GET /lsh-reindex/status` endpoint
-- [ ] Add per-user `lsh_config` table
-- [x] Content fingerprint dedup in `/store` handler (v0.3.1b §8.2)
-- [x] `GET /sync` endpoint for delta reconciliation (v0.3.1b §8.2)
-- [x] `DUPLICATE_CONTENT` error code (v0.3.1b §3)
-- [ ] Client-side sync protocol implementation
-- [ ] Test multi-agent dedup scenarios (crash recovery, shared context)
+- [`architecture.md`](./architecture.md) — system architecture (sibling)
+- [`memory-taxonomy-v1.md`](./memory-taxonomy-v1.md) — claim schema (canonical)
+- [`retrieval-v2.md`](./retrieval-v2.md) — reranker (canonical)
+- [`flows/README.md`](./flows/README.md) — flow walkthroughs
+- [`conflict-resolution.md`](./conflict-resolution.md) — semantic conflict handling
+- [`lsh-tuning.md`](./lsh-tuning.md) — LSH parameter tuning
+- [`mcp-server.md`](./mcp-server.md) — MCP-specific surface
