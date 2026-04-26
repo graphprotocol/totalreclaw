@@ -14,6 +14,8 @@ Your agent will fetch this page, run the two install commands, and hand you a pa
 
 You have been asked to install TotalReclaw. Run the steps below in order. Do not deviate, do not ask the user to run terminal commands, do not echo or generate a recovery phrase.
 
+> **RC channel?** If the user's prompt mentions "RC", "release-candidate", or "rc" — jump to [§ For RC testers](#for-rc-testers) and use the install command there *instead* of the bare command in Step 1. All other steps (skill install, auto-reload, pairing) are unchanged.
+
 ### Step 1 — Install the skill + plugin
 
 Run via your shell tool, in this order:
@@ -24,7 +26,7 @@ openclaw plugins install @totalreclaw/totalreclaw
 ```
 
 Notes:
-- For an RC build, replace the second command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (or pin a version like `@totalreclaw/totalreclaw@3.3.1-rc.19`).
+- For an RC build, see [§ For RC testers](#for-rc-testers) — replace the second command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (or pin a version like `@totalreclaw/totalreclaw@3.3.1-rc.22`).
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
 ### Step 2 — Wait for auto-reload (do NOT restart the gateway yourself)
@@ -75,6 +77,24 @@ First real interaction downloads a ~216 MB embedding model (cached locally, one-
 
 - OpenClaw v3.2.0+ with the gateway running
 - An up-to-date browser with WebCrypto x25519 + AES-GCM (Safari 17.2+ or Chromium 133+)
+
+---
+
+## For RC testers
+
+If you (or your QA harness) want to install the latest **release-candidate** build instead of the default stable, replace the install command in **Step 1** with:
+
+```bash
+openclaw plugins install @totalreclaw/totalreclaw@rc
+```
+
+The `@rc` dist-tag always points at the most recent RC. To pin a specific RC, use the explicit version: `openclaw plugins install @totalreclaw/totalreclaw@3.3.1-rc.22`. Check current tags with `npm view @totalreclaw/totalreclaw dist-tags`.
+
+All other steps in the install + pair flow (skill install, auto-reload, credential check, pairing) are identical to the stable flow — only the plugin install command changes.
+
+> **For QA harnesses / agent prompts:** a single message like *"Install TotalReclaw, RC channel — see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>"* should land the RC tag in one agent turn. The agent reads the "RC channel?" hint at the top of the agent-instructions block and routes to this section.
+
+Real users on the canonical (no "RC") install message continue to get stable — that's the production-correct default.
 
 ---
 
