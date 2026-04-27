@@ -122,6 +122,64 @@ differ. Ship with the table below in front of you.
 
 6. **Announce.** GitHub release, Telegram notification, website update.
 
+7. **Run the post-stable doc-cleanup checklist below.** Mandatory ceremony — same session as the promote, not deferred.
+
+## After stable promote (MANDATORY post-publish checklist)
+
+Run this immediately after every stable promote completes (npm + PyPI +
+ClawHub all live on the `latest` channel). Same session as the promote, not
+deferred to a follow-up task. The release ceremony isn't done until this
+checklist clears.
+
+1. **Bump `release-pipeline.md`.** Set Production version + status to
+   `promoted` for each surface that just shipped, clear the Latest RC
+   cell, append a Recent-history row dated today. Internal repo
+   `docs/release-pipeline.md`.
+
+2. **Drop `@rc` / `--pre` from default install paths in user-facing
+   guides.** Stable is the new canonical install. Audit
+   `docs/guides/openclaw-setup.md`, `docs/guides/hermes-setup.md`,
+   `docs/guides/claude-code-setup.md`, `docs/guides/feature-comparison.md`,
+   `docs/guides/client-setup-v1.md`, `docs/guides/beta-tester-guide-detailed.md`,
+   and any guide referencing the just-shipped surfaces. `@rc` /
+   `==<version>rc<N>` examples move to a clearly-labeled "Installing
+   release candidates (advanced)" subsection at the bottom of each guide
+   for power users. The default paste-this prompt and the canonical install
+   commands MUST default to stable, NOT `@rc`.
+
+3. **Audit + archive stale plans / specs.** Anything from the just-shipped
+   RC cycle that is now SHIPPED should be marked SHIPPED inline or moved
+   to `archive/plans/`. Anything redundant with a shipped spec can be
+   deleted. When in doubt, leave + flag — don't delete ambiguous items.
+   This sweep covers BOTH repos: public (`docs/plans/`, `docs/specs/`) and
+   internal (`docs/plans/`, `docs/notes/`, `research/`).
+
+4. **CHANGELOG dated entry.** Add a `## [X.Y.Z] - YYYY-MM-DD` block to
+   `CHANGELOG-public.md` summarizing what shipped. Group by surface
+   (plugin / python / mcp / core / nanoclaw). Cross-link to PR numbers
+   where useful.
+
+5. **`ROADMAP.md` update.** Move the just-shipped track from "In flight"
+   to "Shipped — current stable" with the new version pins, surface
+   what's next in the "Next" section, and bump the wave-status date at
+   the top of the "Now / Next" block.
+
+6. **Cross-repo verification.** Skim both repos one more time for stale
+   `@rc` references, outdated version pins, or broken cross-links between
+   the public guides and internal trackers. A rough `grep -rn @rc
+   docs/guides/` in the public repo is a useful sanity check; `grep -rn
+   "Latest RC" docs/release-pipeline.md` confirms cleared cells in the
+   internal tracker.
+
+These steps were done manually for the 3.3.1 + 2.3.1 + 3.2.1 stable
+promote on 2026-04-27. From that promote forward, this checklist is
+mandatory ceremony — skipping any step (especially #2 and #3) leaves the
+docs misaligned with the published artifacts and forces a follow-up
+cleanup PR. Future improvement: a post-stable workflow trigger that runs
+the audit + opens the cleanup PR automatically (tracked as a Phase 3+
+extension to the autonomous QA pipeline at
+`totalreclaw-internal/docs/operations/autonomous-qa-pipeline.md`).
+
 ## Troubleshooting
 
 ### RC publish fails mid-matrix

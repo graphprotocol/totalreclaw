@@ -13,28 +13,46 @@ TotalReclaw is an end-to-end encrypted memory vault for AI agents. The project p
 
 ---
 
-## Now / Next (Wave status, 2026-04-25)
+## Now / Next (Wave status, 2026-04-27)
 
 The phase breakdown below is the canonical long-term plan. This section surfaces what's live right now and what the next publish wave looks like, for users tracking against the CHANGELOG.
 
-### Shipped — current stable (2026-04-25)
+### Shipped — current stable (2026-04-27)
 
-- `@totalreclaw/totalreclaw@3.2.3` (npm `latest`) — OpenClaw plugin. Auto-recall, auto-extract every 3 turns, pre-compaction flush, session debrief, full v1 tool surface (remember / recall / forget / export / status / pair / pin / unpin / retype / set_scope / import_from / migrate / consolidate / upgrade).
-- `@totalreclaw/mcp-server@3.2.0` (npm) — MCP server for Claude Desktop / Cursor / Windsurf. Pin/unpin/retype/set_scope wired; v1 contradiction detection via core WASM.
-- `@totalreclaw/core@2.2.0` (npm WASM) + `totalreclaw-core@2.2.0` (PyPI PyO3) + `totalreclaw-core@2.2.0` (crates.io) — shared Rust core: claim proto, crypto, pin state machine, source-weighted reranker.
-- `totalreclaw@2.3.0` (PyPI) — Python client + Hermes Agent plugin. Full Hermes parity with the plugin tool surface.
-- `@totalreclaw/skill-nanoclaw@3.0.0` (npm) — NanoClaw skill (auto-recall + auto-extract via `additionalContext`).
-- Wave 1 (2026-04-19) shipped post-v1 stabilization (core 2.1.x, mcp 3.1/3.2, plugin 3.0.x, python 2.0.2-2.2.1). Subsequent waves landed: 3.2.x (plugin secure onboarding CLI wizard), 3.3.x RC line (QR-pairing + relay-brokered pair flow + URL-driven install via canonical chat prompt + ESM/createRequire fix). Public `docs/guides/release-process.md` documents the RC-then-promote flow.
+- `@totalreclaw/totalreclaw@3.3.1` (npm `latest`) — OpenClaw plugin. URL-driven install flow, lazy CDN embedder (5MB tarball vs 210MB), reranker hoist to `@totalreclaw/core`, `confirm_indexed` read-after-write primitive, phrase-safety CI guard, topology-agnostic restart instructions, `pin_status` preservation across retype/set_scope. Auto-recall + auto-extract + full v1 tool surface (remember / recall / forget / export / status / pair / pin / unpin / retype / set_scope / import_from / migrate / consolidate / upgrade).
+- `@totalreclaw/mcp-server@3.2.1` (npm `latest`) — security patch. Removes `totalreclaw_setup` tool (it generated a recovery phrase and returned it via MCP tool-output JSON, crossing the LLM context — phrase-safety violation). MCP server now has no phrase-touching tool surface.
+- `@totalreclaw/core@2.2.0` (npm WASM) + `totalreclaw-core@2.2.0` (PyPI PyO3) + `totalreclaw-core@2.2.0` (crates.io) — shared Rust core: claim proto, crypto, pin state machine, source-weighted reranker, `confirm_indexed` read-after-write.
+- `totalreclaw@2.3.1` (PyPI `latest`) — Python client + Hermes Agent plugin. `hermes plugins install p-diogo/totalreclaw-hermes` discovery path, auto-disable of Hermes built-in `memory` tool with companion tool-priority nudge, retype/set_scope on-chain UserOps, F2 same-provider cheap-model selection, pair AttributeError + venv install path fixes.
+- `@totalreclaw/skill-nanoclaw@3.0.0` (npm `latest`) — NanoClaw skill (auto-recall + auto-extract via `additionalContext`). Unchanged from prior stable; not in this lockstep wave.
+- Wave history: 3.2.3 (2026-04-25 prior stable) → 3.3.1 stable promote (2026-04-27, from rc.1 → rc.27 RC line). Public `docs/guides/release-process.md` documents the RC-then-promote flow plus the post-stable doc-cleanup checklist (mandatory ceremony as of 2026-04-27).
 
-### In flight — RC wave (2026-04-25)
+### In flight — none
 
-- `@totalreclaw/totalreclaw@3.3.1-rc.22` (npm `rc` dist-tag) + `totalreclaw==2.3.1rc22` (PyPI) — under QA. Bundle adds: install scanner robustness, ESM `createRequire` / await-import fix, pair simulator v2 cipher alignment, post-install sweeper for orphan staging dirs, plus prior rc.20 work (URL-driven install via canonical chat prompt + relay-brokered pair flow). Promote target is `3.3.1` once full chat-flow QA returns GO.
-- See [`totalreclaw-internal/docs/release-pipeline.md`](https://github.com/p-diogo/totalreclaw-internal) for live RC + QA state.
+No RC currently in flight. The 3.3.1 / 2.3.1 / 3.2.1 stable line is the canonical install target. Next major wave is **TotalReclaw 4.0 — version unification + post-v1 architectural wave** (see below).
 
-### Next (post-rc.22 promote)
+### Next — TotalReclaw 4.0 (version unification + post-v1 architectural wave)
+
+**Goal:** lockstep semver across all packages. Plugin **4.0.0** + Python **4.0.0** + MCP **4.0.0** + NanoClaw **4.0.0** + core **4.0.0** (Rust crates + PyPI + npm WASM).
+
+After 3.3.1, version drift across surfaces (plugin 3.3.x, python 2.3.x, mcp 3.2.x, nanoclaw 3.0.x, core 2.2.x) became a real maintenance + comms cost — RC numbering ran independently per-surface, every cross-surface bug investigation started with a "which versions are paired?" lookup, and users tracking the project couldn't tell at a glance whether their installed surfaces were a coherent set. The 4.0 wave consolidates: every shipped package moves lockstep to 4.0.0, every subsequent stable release shares the same `MAJOR.MINOR.PATCH`. Drift becomes a CI failure, not a manual reconciliation.
+
+**Drivers (the BREAKING wave content):**
+
+- **Entity-graph edges** (post-v1, +5–10pp on multi-session per honest gap analysis). Adds an entity-edge index alongside the existing fact index so cross-session questions ("did the GPS issue happen before or after the workshop?") can navigate relationships, not just text similarity. Design at `totalreclaw-internal/docs/plans/2026-04-26-entity-graph-edges-design.md`.
+- **Observation log** (Mastra-style architectural upgrade). Per-turn append-only log alongside the fact index — provides cross-conversation continuity primitive that flat fact storage cannot. Design at `totalreclaw-internal/docs/plans/2026-04-26-observation-log-design.md`.
+- **Embedder distillation.** Smaller embedder model alongside Harrier-OSS-270m for RAM-constrained envs (3.7GB Hetzner-class VPS, mobile / ZeroClaw). Same 640d output space; forward-compat tagging via `embedding_model_id` (already shipped rc.22) lets clients route to the right model. Scoping at `totalreclaw-internal/docs/plans/2026-04-26-embedder-distillation-research.md`.
+- **Cross-client KG parity port.** Hermes Python client today ships only the basic contradiction-detection path; the OpenClaw plugin (TS) ships the full 1389-LOC orchestration. Port the Python orchestration to core (PyO3) so a plugin-pinned fact can no longer be silently superseded by a Hermes write. Audit at `totalreclaw-internal/docs/plans/2026-04-26-python-kg-parity-audit.md`.
+- **Pin UX 2.2.8** (3 design questions still pending — time-decay curve, retroactive-override path, soft-pin tier). Recommendations at `totalreclaw-internal/docs/plans/2026-04-26-pin-ux-2.2.8-design-questions.md`. User sign-off pending before implementation.
+- **F1 chat-q lifecycle proper fix.** Hermes one-shot `hermes chat -q "..."` invocations cannot complete account setup because the process exits before the browser handshake (WebSocket dies, browser POST returns 404). Currently documented as a limitation in the setup guide with daemon-mode + standalone-CLI workarounds. The 4.0 fix is a proper lifecycle hook on the Hermes side (or accept it as a hard documented limitation if the upstream Hermes lifecycle doesn't support a fix that doesn't break daemon-mode invariants).
+
+**Package-side enforcement:** extend `skill/scripts/sync-version.mjs` (or add a sibling `sync-cross-package-version.mjs`) to assert that all 6 lockstep packages share the same `MAJOR.MINOR.PATCH` on stable releases. The pre-publish CI gate fails if drift is detected. RCs may diverge intra-wave (e.g. plugin rc.4 + python rc.6) but the stable promote workflow will refuse to mint a stable artifact unless the canonical version is identical across surfaces. NanoClaw has been on `3.0.0` since 2026-04-19 with no planned changes; it is included in the lockstep wave only via a no-op version bump to 4.0.0 to keep the cross-surface invariant clean.
+
+**Not in scope for 4.0:** ClawHub publishing reclassification (separate from semver), the relay (versioned independently as a private service), and the totalreclaw-memory crate (versioned independently as the ZeroClaw on-chain backend).
+
+### Carryovers (independent of the 4.0 wave)
 
 - **`totalreclaw-memory@2.0.1` (crates.io) publish retry** — deferred from Wave 1 after the cargo dry-run sanity check flagged a metadata mismatch. ZeroClaw continues on 2.0.0 until the retry lands.
-- **ClawHub reclassification path** — via a reclassification request to ClawHub, or by validating a clean canary slug against the scanner and re-registering.
+- **ClawHub reclassification path** — via a reclassification request to ClawHub, or by validating a clean canary slug against the scanner and re-registering. Independent of npm + PyPI; users install via npm / PyPI today.
 - **Phase 3 autonomous QA / triage pipeline (in production)** — see `docs/operations/autonomous-qa-pipeline.md` in the internal repo. Phase 1 manual dispatch and Phase 2 webhook-triggered ephemeral QA are live; Phase 3 auto-triage of QA findings into umbrella issues + scoped fix branches is shipping incrementally.
 
 ---
