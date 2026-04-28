@@ -164,6 +164,8 @@ import {
   cleanupInstallStagingDirs,
   detectPartialInstall,
   clearPartialInstallMarker,
+  writePluginManifest,
+  writePluginError,
   type OnboardingState,
 } from './fs-helpers.js';
 import { isRcBuild } from './qa-bug-report.js';
@@ -2857,6 +2859,50 @@ const plugin = {
 
   register(api: OpenClawPluginApi) {
     // ---------------------------------------------------------------
+    // 3.3.2-rc.1 (issue #186) — load manifest instrumentation
+    // ---------------------------------------------------------------
+    //
+    // Capture every `api.registerTool({name, ...})` call so we can write
+    // a `.loaded.json` manifest at the end of register(). Wrap the body
+    // in try/catch so a register-time throw produces `.error.json` for
+    // agent-side filesystem verification (the CLI hangs in some Docker
+    // setups — issue #182 — so the manifest is the canonical "did the
+    // plugin load?" probe).
+    //
+    // Implementation: we intercept the api.registerTool method by
+    // wrapping it on the api object passed in. The wrapper inspects the
+    // `name` field (every TR registerTool call sets it) and forwards
+    // verbatim. NO behavior change to the SDK call — the original method
+    // is invoked with original args and `this` binding.
+    //
+    // Synchronous writes ONLY (see writePluginManifest doc): the SDK
+    // freezes plugin registries the moment register() returns; an async
+    // write would race that freeze.
+    const _registeredToolNames: string[] = [];
+    const _originalRegisterTool = api.registerTool.bind(api);
+    api.registerTool = (tool: unknown, opts?: { name?: string; names?: string[] }) => {
+      try {
+        const t = tool as { name?: unknown } | null | undefined;
+        if (t && typeof t === 'object' && typeof t.name === 'string' && t.name.length > 0) {
+          _registeredToolNames.push(t.name);
+        }
+      } catch {
+        // Manifest is diagnostic; never let bookkeeping break tool registration.
+      }
+      _originalRegisterTool(tool, opts);
+    };
+
+    // Lazily resolved inside the try below — needed by both the manifest
+    // write and the error path. `dist/` after build, package root in tests.
+    let _pluginDirForManifest: string | null = null;
+
+    // NOTE: the body of register() below is intentionally NOT re-indented
+    // under this `try` block — re-indenting would touch every line in a
+    // 3,500-line function and obscure the actual hotfix diff. The closing
+    // `} catch (registerErr: unknown) { ... }` is at the very end of
+    // register() (search for "register() threw").
+    try {
+    // ---------------------------------------------------------------
     // RC-build detection (3.3.1-rc.3)
     // ---------------------------------------------------------------
     //
@@ -2880,6 +2926,7 @@ const plugin = {
       // `require('node:url')` — undefined under bare-ESM Node, broke the
       // before_agent_start hook in the published rc.20 bundle (issue #124).
       const pluginDir = nodePath.dirname(fileURLToPath(import.meta.url));
+      _pluginDirForManifest = pluginDir; // captured for #186 .loaded.json/.error.json
       pluginVersion = readPluginVersion(pluginDir);
       rcMode = isRcBuild(pluginVersion);
       if (rcMode) {
@@ -6296,6 +6343,60 @@ const plugin = {
       },
       { priority: 5 },
     );
+
+    // ---------------------------------------------------------------
+    // 3.3.2-rc.1 (issue #186) — write `.loaded.json` manifest
+    // ---------------------------------------------------------------
+    //
+    // Final step of register(): drop the success manifest so the agent
+    // can `cat ~/.openclaw/extensions/totalreclaw/.loaded.json` to
+    // verify which tools bound. Synchronous (see writePluginManifest doc).
+    // Never throws — diagnostic loss only on I/O failure.
+    if (_pluginDirForManifest) {
+      try {
+        const ok = writePluginManifest(_pluginDirForManifest, {
+          loadedAt: Date.now(),
+          tools: _registeredToolNames.slice(),
+          version: pluginVersion ?? 'unknown',
+        });
+        if (ok) {
+          api.logger.info(
+            `TotalReclaw: wrote .loaded.json manifest (${_registeredToolNames.length} tools, version=${pluginVersion ?? 'unknown'})`,
+          );
+        }
+      } catch {
+        // Best-effort; helper swallows internally too.
+      }
+    }
+    } catch (registerErr: unknown) {
+      // ---------------------------------------------------------------
+      // 3.3.2-rc.1 (issue #186) — write `.error.json` on register() throw
+      // ---------------------------------------------------------------
+      //
+      // Some surface threw out of register(). Drop a structured error
+      // marker the agent can grep. Best-effort logging then re-throw so
+      // the SDK sees the original failure.
+      const errMsg = registerErr instanceof Error ? registerErr.message : String(registerErr);
+      const errStack = registerErr instanceof Error ? registerErr.stack : undefined;
+      try {
+        api.logger.error(`TotalReclaw: register() threw: ${errMsg}`);
+      } catch {
+        // Logger may be unavailable (very early failure path).
+      }
+      if (_pluginDirForManifest) {
+        try {
+          writePluginError(_pluginDirForManifest, {
+            loadedAt: Date.now(),
+            error: errMsg,
+            stack: errStack,
+            version: 'unknown',
+          });
+        } catch {
+          // Best-effort.
+        }
+      }
+      throw registerErr;
+    }
   },
 };
 

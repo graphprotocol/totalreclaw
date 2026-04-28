@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/totalreclaw",
-  "version": "3.3.1",
+  "version": "3.3.2-rc.1",
   "description": "End-to-end encrypted, agent-portable memory for OpenClaw and any LLM-agent runtime. XChaCha20-Poly1305 with protobuf v4 + on-chain Memory Taxonomy v1 (claim / preference / directive / commitment / episode / summary).",
   "type": "module",
   "keywords": [
@@ -58,18 +58,19 @@
     "README.md",
     "CHANGELOG.md",
     "CLAWHUB.md",
-    "skill.json"
+    "skill.json",
+    "postinstall.mjs"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json --noCheck",
     "verify-tarball": "node ../scripts/verify-tarball.mjs",
-    "test": "npx tsx manifest-shape.test.ts && npx tsx config-schema.test.ts && npx tsx config.test.ts && npx tsx relay-headers.test.ts && npx tsx scope-address-visible.test.ts && npx tsx llm-profile-reader.test.ts && npx tsx llm-client.test.ts && npx tsx llm-client-retry.test.ts && npx tsx gateway-url.test.ts && npx tsx retype-setscope.test.ts && npx tsx tool-gating.test.ts && npx tsx onboarding-noninteractive.test.ts && npx tsx pair-cli-json.test.ts && npx tsx pair-qr.test.ts && npx tsx pair-remote-client.test.ts && npx tsx qa-bug-report.test.ts && npx tsx nonce-serialization.test.ts && npx tsx phrase-safety-registry.test.ts && npx tsx test_issue_92_onnx_download_ux.test.ts && npx tsx onboard-pair-only.test.ts && npx tsx import-time-smoke.test.ts && npx tsx install-staging-cleanup.test.ts && npx tsx partial-install-detection.test.ts && npx tsx install-reload-idempotency.test.ts && npx tsx json-stdout-cleanliness.test.ts",
+    "test": "npx tsx manifest-shape.test.ts && npx tsx config-schema.test.ts && npx tsx config.test.ts && npx tsx relay-headers.test.ts && npx tsx scope-address-visible.test.ts && npx tsx llm-profile-reader.test.ts && npx tsx llm-client.test.ts && npx tsx llm-client-retry.test.ts && npx tsx gateway-url.test.ts && npx tsx retype-setscope.test.ts && npx tsx tool-gating.test.ts && npx tsx onboarding-noninteractive.test.ts && npx tsx pair-cli-json.test.ts && npx tsx pair-qr.test.ts && npx tsx pair-remote-client.test.ts && npx tsx qa-bug-report.test.ts && npx tsx nonce-serialization.test.ts && npx tsx phrase-safety-registry.test.ts && npx tsx test_issue_92_onnx_download_ux.test.ts && npx tsx onboard-pair-only.test.ts && npx tsx import-time-smoke.test.ts && npx tsx install-staging-cleanup.test.ts && npx tsx partial-install-detection.test.ts && npx tsx install-reload-idempotency.test.ts && npx tsx json-stdout-cleanliness.test.ts && npx tsx load-manifest.test.ts && npx tsx postinstall-validation.test.ts",
     "smoke:dist": "npx tsx dist-esm-smoke.test.ts",
     "check-scanner": "node ../scripts/check-scanner.mjs",
     "check-version-drift": "node ../scripts/check-version-drift.mjs",
     "sync-version": "node ../scripts/sync-version.mjs",
     "preinstall": "node -e \"try{require('fs').writeFileSync('.tr-partial-install','');}catch{}\"",
-    "postinstall": "node -e \"try{require('fs').unlinkSync('.tr-partial-install');}catch{}\"",
+    "postinstall": "node ./postinstall.mjs",
     "prepack": "npm run build",
     "prepublishOnly": "node ../scripts/check-scanner.mjs && node ../scripts/check-version-drift.mjs"
   },

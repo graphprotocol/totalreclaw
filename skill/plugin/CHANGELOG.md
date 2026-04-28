@@ -4,7 +4,83 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.3.2-rc.1] — 2026-04-27
+
+Hotfix bundle for the inside-gateway agent-flow ship-stoppers caught by the
+2026-04-27 user QA against stable 3.3.1 (umbrella issue #182). The four fixes
+combined unblock the agent-driven canonical install path.
+
+### Added — filesystem load manifest (issue #186)
+
+The plugin now writes `.loaded.json` and `.error.json` into its own
+extension directory at register-time. The agent has no working CLI inside
+the gateway (issue #182 finding F1 — `openclaw plugins list` hangs in
+some Docker setups), so the manifests are the canonical filesystem signal
+that register() ran to completion AND which tools the SDK saw.
+
+- `~/.openclaw/extensions/totalreclaw/.loaded.json` —
+  `{loadedAt: <ms>, tools: [<name>...], version: <semver>}`. Written
+  synchronously at the end of `register(api)`. Captures every tool name
+  passed to `api.registerTool` during the call.
+- `~/.openclaw/extensions/totalreclaw/.error.json` —
+  `{loadedAt, error, stack?, version?}`. Written from the try/catch
+  surrounding the register() body when register() throws. Successful
+  boots clear any stale `.error.json`; failed boots preserve any prior
+  `.loaded.json` so the agent can compare timestamps.
+
+Synchronous writes only (same constraint as `registerHttpRoute` — the SDK
+freezes plugin registries the moment register() returns; an async write
+would race that freeze and the manifest could miss late tool
+registrations).
+
+Regression: `load-manifest.test.ts` (22 assertions).
+
+### Added — `totalreclaw_pair` declared in skill manifest (issue #185)
+
+The `totalreclaw_pair` tool is now advertised in `skill.json` alongside
+`totalreclaw_remember`/`recall`/`forget`/`export`/`status`/`consolidate`/
+`upgrade`/`import_from`. Previously plugin-only — if the plugin runtime
+load failed silently (e.g. dep race in #188), the tool never appeared
+in the agent's toolset and the canonical setup flow was unreachable.
+
+The skill-side declaration ensures the tool name is visible in the
+skill registry advertisement even when plugin runtime issues prevent
+binding. The implementation remains in the plugin (browser-side
+e2e-encrypted recovery-phrase flow); only the declaration moves up.
+
+### Added — atomic dependency validation in postinstall (issue #188)
+
+`postinstall.mjs` is now a real lifecycle script (replacing the inline
+`node -e` shim). After `npm install`, it require()s every critical dep
+(`@scure/bip39`, `@scure/bip39/wordlists/english.js`, `@totalreclaw/core`,
+`@totalreclaw/client`, `qrcode`, `ws`). On first-attempt failure: clears
+`node_modules`, re-runs `npm install --ignore-scripts` once, re-validates.
+If retry also fails, exits non-zero so the install surfaces the failure
+instead of writing `enabled: true` over a broken half-state.
+
+The retry loop can be skipped with `TOTALRECLAW_SKIP_POSTINSTALL_RETRY=1`
+for sandboxed CI / restricted-network environments.
+
+Phrase-safety: the script does NOT touch credentials.json, mnemonics,
+or any phrase code path. Only validates module loading and cleans
+staging directories.
+
+### Added — install-stage cleanup at install-time (issue #190)
+
+`postinstall.mjs` extends the rc.21 staging-cleanup behavior (which ran
+at register-time) to ALSO sweep `<extensions>/.openclaw-install-stage-*`
+siblings during the post-install step itself. Goal: a re-install starts
+from a clean parent dir, eliminating the
+"duplicate plugin id detected; global plugin will be overridden by global
+plugin" warning during the install. Safety: skipped when the plugin's
+parent dir is not an `extensions/` directory (dev checkouts) so no random
+siblings are deleted.
+
+Regression: `postinstall-validation.test.ts` (17 assertions) covers
+happy path, marker clearing, staging sweep, idempotent re-runs,
+unrelated-dotfile preservation, and dev-checkout safety.
+
+
 
 ### Install / runtime hygiene (issues #126, #128)
 

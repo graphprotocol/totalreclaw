@@ -1,6 +1,6 @@
 {
   "name": "totalreclaw",
-  "version": "3.3.1",
+  "version": "3.3.2-rc.1",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. XChaCha20-Poly1305 E2EE: server never sees plaintext.",
   "author": "TotalReclaw Team",
   "license": "MIT",
@@ -173,6 +173,19 @@
             "required": false,
             "default": false,
             "description": "Preview consolidation without deleting"
+          }
+        }
+      },
+      {
+        "name": "totalreclaw_pair",
+        "description": "Set up the user's TotalReclaw account (encrypted, browser-side recovery-phrase generation or import). Returns an account-setup URL, a 6-digit PIN, and an ASCII QR code that the agent relays to the user. The recovery phrase is generated/entered in the BROWSER and uploaded end-to-end encrypted to this gateway — it NEVER touches the LLM provider or the chat transcript. This is the canonical agent-facilitated account-setup surface. Tool name kept for backward compatibility — function-wise this is the account-setup tool.",
+        "parameters": {
+          "mode": {
+            "type": "string",
+            "required": false,
+            "enum": ["generate", "import"],
+            "default": "generate",
+            "description": "\"generate\" = browser will create a NEW recovery phrase. \"import\" = browser will accept an EXISTING phrase pasted by the user in their browser (never through chat)."
           }
         }
       }

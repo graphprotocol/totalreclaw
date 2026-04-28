@@ -495,6 +495,130 @@ export function wipePartialInstall(pluginRootDir: string): boolean {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Plugin load manifest (.loaded.json / .error.json) — 3.3.2-rc.1 #186
+// ---------------------------------------------------------------------------
+
+/**
+ * Filenames written into the plugin root dir at the end of register() and
+ * (on failure) from the surrounding try/catch. The presence of `.loaded.json`
+ * is the canonical filesystem signal that the plugin's register() body ran
+ * to completion AND the SDK tool/route/hook registries received calls.
+ *
+ * Acceptance criteria (issue #186):
+ *   - `cat ~/.openclaw/extensions/totalreclaw/.loaded.json` shows
+ *     `{loadedAt, tools, version}` after every successful gateway start.
+ *   - `cat ~/.openclaw/extensions/totalreclaw/.error.json` shows
+ *     `{loadedAt, error, stack}` if register() threw.
+ *   - Both are overwritten on each register() call so the agent can rely
+ *     on the timestamp matching the most recent gateway start.
+ *
+ * Why these MUST be synchronous writes (same constraint as
+ * `registerHttpRoute` per the comment in index.ts around the route
+ * registration site): the SDK loader treats register() returning as the
+ * signal to freeze the registries. An async `fs.promises.writeFile` would
+ * settle one microtask AFTER the loader has moved on, so the manifest
+ * could miss tools that registered late OR drop entirely if the gateway
+ * exits before the microtask runs. `writeFileSync` is the only safe choice.
+ */
+export const PLUGIN_LOADED_MANIFEST = '.loaded.json';
+export const PLUGIN_ERROR_MANIFEST = '.error.json';
+
+/** Schema written to `.loaded.json` — see PLUGIN_LOADED_MANIFEST. */
+export interface PluginLoadManifest {
+  /** Unix epoch milliseconds when register() finished. */
+  loadedAt: number;
+  /** Tool names passed to api.registerTool() during register(). */
+  tools: string[];
+  /** Plugin version string from package.json (or "unknown"). */
+  version: string;
+}
+
+/** Schema written to `.error.json` when register() throws. */
+export interface PluginLoadError {
+  loadedAt: number;
+  error: string;
+  stack?: string;
+  version?: string;
+}
+
+/**
+ * Resolve the plugin root dir from the loaded module's directory. The plugin
+ * is shipped with `dist/index.js` as the entry, so `import.meta.url` resolves
+ * to `<root>/dist/`. We walk up one level to put the manifests next to
+ * `package.json`. Defensive: if the caller already passed the root (no
+ * trailing `dist`), we still return a sensible path.
+ */
+function resolvePluginRootForManifest(pluginDir: string): string {
+  const base = path.basename(pluginDir);
+  return base === 'dist' ? path.resolve(pluginDir, '..') : pluginDir;
+}
+
+/**
+ * Write the success manifest. SYNCHRONOUS — the SDK freezes the plugin
+ * registries the moment register() returns; `fs.promises.writeFile` would
+ * race that freeze and the manifest could miss late tool registrations or
+ * never land at all if the process exits before the microtask runs.
+ *
+ * Best-effort: returns `true` on success, `false` on any I/O error. Never
+ * throws — failing to write the manifest is a diagnostic loss, not a
+ * correctness loss, so we don't propagate.
+ *
+ * The manifest is written at mode 0644 (world-readable). It contains no
+ * secrets — only a timestamp, the (publicly known) tool names, and the
+ * plugin version. Cleared first so a stale `.error.json` from a previous
+ * failed boot doesn't survive a successful boot.
+ */
+export function writePluginManifest(
+  pluginDir: string,
+  manifest: PluginLoadManifest,
+): boolean {
+  try {
+    const root = resolvePluginRootForManifest(pluginDir);
+    if (!fs.existsSync(root)) return false;
+    const loadedPath = path.join(root, PLUGIN_LOADED_MANIFEST);
+    const errorPath = path.join(root, PLUGIN_ERROR_MANIFEST);
+    // Best-effort error-file cleanup — a successful boot supersedes any
+    // prior failure marker. If the unlink fails (e.g. permission), the
+    // .loaded.json timestamp still tells the agent which is current.
+    try {
+      if (fs.existsSync(errorPath)) fs.unlinkSync(errorPath);
+    } catch {
+      // Swallow — best-effort.
+    }
+    fs.writeFileSync(loadedPath, JSON.stringify(manifest, null, 2));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Write the error manifest. SYNCHRONOUS for the same reason as
+ * `writePluginManifest`. Called from the try/catch surrounding the
+ * register() body so the agent has a filesystem signal that the plugin
+ * registered AT LEAST attempted to load and failed in a specific way.
+ *
+ * Does NOT clear `.loaded.json` from a prior successful boot — keeping
+ * the older success marker around lets the agent see "last good boot was
+ * X, current boot failed at Y" without spelunking logs. The newer
+ * `.error.json` timestamp wins as "current state".
+ */
+export function writePluginError(
+  pluginDir: string,
+  error: PluginLoadError,
+): boolean {
+  try {
+    const root = resolvePluginRootForManifest(pluginDir);
+    if (!fs.existsSync(root)) return false;
+    const errorPath = path.join(root, PLUGIN_ERROR_MANIFEST);
+    fs.writeFileSync(errorPath, JSON.stringify(error, null, 2));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Drop the `.tr-partial-install` marker into `pluginRootDir`. Idempotent
  * (overwrites any existing marker) and best-effort — returns `true` on
