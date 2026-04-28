@@ -870,3 +870,109 @@ export function resolveOnboardingState(
   writeOnboardingState(statePath, next);
   return next;
 }
+
+// ---------------------------------------------------------------------------
+// Plugin-load manifests (umbrella #182 finding F3 — issue #186)
+// ---------------------------------------------------------------------------
+
+/**
+ * Filename written into `<pluginRootDir>` when `register()` completes
+ * successfully. Agents running inside the gateway use this as a filesystem
+ * verification path when `openclaw plugins list` is unavailable (e.g. the
+ * `openclaw` CLI hangs inside the gateway — umbrella #182 finding F1).
+ */
+export const PLUGIN_LOADED_MANIFEST = '.loaded.json';
+
+/**
+ * Filename written into `<pluginRootDir>` when `register()` throws. Captures
+ * the error message + stack so an agent can diagnose load failures without
+ * shell access to the gateway logs.
+ */
+export const PLUGIN_ERROR_MANIFEST = '.error.json';
+
+/**
+ * Payload of `<pluginRootDir>/.loaded.json`. Schema is intentionally minimal
+ * so it's stable across RC bumps and easy to grep / `cat | jq` from an agent.
+ */
+export interface PluginLoadedManifest {
+  /** UNIX milliseconds when register() started. */
+  loadedAt: number;
+  /** Plugin version from package.json (`null` if unreadable). */
+  version: string | null;
+  /** Names of every tool registered via `api.registerTool` during this load. */
+  tools: string[];
+}
+
+/**
+ * Payload of `<pluginRootDir>/.error.json`. Written when register() throws.
+ */
+export interface PluginErrorManifest {
+  /** UNIX milliseconds when register() started. */
+  loadedAt: number;
+  /** Captured `err.message`, or `String(err)` for non-Error throws. */
+  error: string;
+  /** Captured `err.stack`, or empty string when unavailable. */
+  stack: string;
+}
+
+/**
+ * Write the success manifest at `<pluginRootDir>/.loaded.json`. Best-effort:
+ * returns `true` on success, `false` on any I/O / serialization failure.
+ * Caller treats `false` as "agent will lose the verification artifact this
+ * load cycle" — never block plugin init on this.
+ */
+export function writePluginLoadedManifest(
+  pluginRootDir: string,
+  payload: PluginLoadedManifest,
+): boolean {
+  try {
+    if (!fs.existsSync(pluginRootDir)) return false;
+    const target = path.join(pluginRootDir, PLUGIN_LOADED_MANIFEST);
+    fs.writeFileSync(target, JSON.stringify(payload, null, 2));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Write the failure manifest at `<pluginRootDir>/.error.json`. Best-effort.
+ */
+export function writePluginErrorManifest(
+  pluginRootDir: string,
+  payload: PluginErrorManifest,
+): boolean {
+  try {
+    if (!fs.existsSync(pluginRootDir)) return false;
+    const target = path.join(pluginRootDir, PLUGIN_ERROR_MANIFEST);
+    fs.writeFileSync(target, JSON.stringify(payload, null, 2));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Delete both manifest files at the start of `register()`. Stale state from
+ * a prior load cycle would otherwise mask a current load failure (a fresh
+ * `.error.json` with the new failure is the signal — but only if no stale
+ * `.loaded.json` from yesterday is also sitting next to it).
+ *
+ * Best-effort: missing files are not errors. Returns the count of files
+ * actually removed (useful for diagnostics, but most callers ignore it).
+ */
+export function clearPluginManifests(pluginRootDir: string): number {
+  let removed = 0;
+  for (const name of [PLUGIN_LOADED_MANIFEST, PLUGIN_ERROR_MANIFEST]) {
+    try {
+      const target = path.join(pluginRootDir, name);
+      if (fs.existsSync(target)) {
+        fs.unlinkSync(target);
+        removed++;
+      }
+    } catch {
+      // Best-effort.
+    }
+  }
+  return removed;
+}

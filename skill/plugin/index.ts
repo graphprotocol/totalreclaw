@@ -164,6 +164,9 @@ import {
   cleanupInstallStagingDirs,
   detectPartialInstall,
   clearPartialInstallMarker,
+  writePluginLoadedManifest,
+  writePluginErrorManifest,
+  clearPluginManifests,
   type OnboardingState,
 } from './fs-helpers.js';
 import { isRcBuild } from './qa-bug-report.js';
@@ -2856,6 +2859,53 @@ const plugin = {
   },
 
   register(api: OpenClawPluginApi) {
+    // ---------------------------------------------------------------
+    // Load manifests (umbrella #182 finding F3 — issue #186)
+    // ---------------------------------------------------------------
+    //
+    // Two filesystem artifacts an agent can `cat` to verify load state when
+    // the `openclaw plugins list` CLI is unavailable (umbrella #182 F1 —
+    // CLI hangs inside the gateway):
+    //
+    //   <pluginRoot>/.loaded.json — written on successful register()
+    //   <pluginRoot>/.error.json  — written when register() throws
+    //
+    // Resolve plugin root from `import.meta.url` (the dist/ dir → one up to
+    // package root). Stale manifests are cleared on entry so a current load
+    // failure isn't masked by yesterday's success file.
+    const __manifestStartedAt = Date.now();
+    let __manifestPluginRoot: string | null = null;
+    try {
+      const __pluginDistDir = nodePath.dirname(fileURLToPath(import.meta.url));
+      __manifestPluginRoot = nodePath.resolve(__pluginDistDir, '..');
+      clearPluginManifests(__manifestPluginRoot);
+    } catch {
+      // import.meta.url unresolvable — manifests will silently no-op.
+      __manifestPluginRoot = null;
+    }
+    // Capture every name passed to api.registerTool by shadowing the method
+    // for the lifetime of register(). Names are read from opts.name /
+    // opts.names if present, else from the tool object's own `name` field
+    // (the shape used by every existing api.registerTool callsite below).
+    const __registeredToolNames: string[] = [];
+    const __originalRegisterTool = api.registerTool.bind(api);
+    api.registerTool = ((tool: unknown, opts?: { name?: string; names?: string[] }) => {
+      try {
+        if (opts?.name) {
+          __registeredToolNames.push(opts.name);
+        } else if (opts?.names) {
+          for (const n of opts.names) __registeredToolNames.push(n);
+        } else if (tool && typeof tool === 'object') {
+          const t = tool as Record<string, unknown>;
+          if (typeof t.name === 'string') __registeredToolNames.push(t.name);
+        }
+      } catch {
+        // Capture is best-effort; never block tool registration.
+      }
+      return __originalRegisterTool(tool, opts);
+    }) as typeof api.registerTool;
+
+    try {
     // ---------------------------------------------------------------
     // RC-build detection (3.3.1-rc.3)
     // ---------------------------------------------------------------
@@ -6296,6 +6346,53 @@ const plugin = {
       },
       { priority: 5 },
     );
+
+    // ---------------------------------------------------------------
+    // Load manifest write — success path (umbrella #182 finding F3 / #186)
+    // ---------------------------------------------------------------
+    //
+    // Reached only if every preceding registration step completed without
+    // throwing. The manifest captures the version + the tool list so an
+    // agent inside the gateway can verify both that we loaded AND that
+    // every expected tool is bound (covers umbrella #182 F2 verification —
+    // sibling issue #185).
+    if (__manifestPluginRoot) {
+      const __manifestVersion = (() => {
+        try {
+          const __pluginDistDir = nodePath.dirname(fileURLToPath(import.meta.url));
+          return readPluginVersion(__pluginDistDir);
+        } catch {
+          return null;
+        }
+      })();
+      writePluginLoadedManifest(__manifestPluginRoot, {
+        loadedAt: __manifestStartedAt,
+        version: __manifestVersion,
+        tools: [...__registeredToolNames],
+      });
+    }
+    } catch (__registerErr: unknown) {
+      // ---------------------------------------------------------------
+      // Load manifest write — failure path (umbrella #182 F3 / #186)
+      // ---------------------------------------------------------------
+      //
+      // Capture diagnostics for the agent before re-throwing. Re-throw is
+      // mandatory: the SDK's plugin loader must still see the failure so
+      // it can flag this plugin as unloaded — silent swallow would mask
+      // the symptom.
+      if (__manifestPluginRoot) {
+        const __errMessage =
+          __registerErr instanceof Error ? __registerErr.message : String(__registerErr);
+        const __errStack =
+          __registerErr instanceof Error ? __registerErr.stack ?? '' : '';
+        writePluginErrorManifest(__manifestPluginRoot, {
+          loadedAt: __manifestStartedAt,
+          error: __errMessage,
+          stack: __errStack,
+        });
+      }
+      throw __registerErr;
+    }
   },
 };
 
