@@ -340,8 +340,12 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install ClawHub CLI
-        run: npm install -g clawhub
+      - name: Install ClawHub CLI (pinned to 0.8.0)
+        # Pinned because 0.9.x's `clawhub package publish --family code-plugin`
+        # collides with the existing `totalreclaw` slug already registered
+        # Family=Skill (rc.22 era). Until upstream slug migration lands.
+        # See publish-clawhub.yml comment for full context.
+        run: npm install -g clawhub@0.8.0
 
       - name: Publish stable tags over the promoted version
         env:
@@ -351,12 +355,9 @@ jobs:
           STABLE="${{ needs.derive-versions.outputs.stable-version }}"
           echo "Publishing stable $STABLE to ClawHub with full tag set."
           clawhub login --token "$CLAWHUB_TOKEN" --no-browser
-          # ClawHub CLI 0.9.x: plugin publish moved to `clawhub package publish`
-          # with --name (not --slug) + --family code-plugin. Surfaced 2026-04-28
-          # on 3.3.2-rc.1 publish — see publish-clawhub.yml comment for context.
-          clawhub package publish ./skill/plugin \
-            --name totalreclaw \
-            --family code-plugin \
+          # Using legacy `clawhub publish --slug` (CLI 0.8.0). See install step.
+          clawhub publish ./skill/plugin \
+            --slug totalreclaw \
             --version "$STABLE" \
             --tags "latest,memory,encryption,e2ee,privacy,agent-memory,e2e-encryption,persistent-context" \
             --changelog "Release $STABLE (promoted from RC) -- see https://github.com/p-diogo/totalreclaw/releases/tag/v$STABLE"
