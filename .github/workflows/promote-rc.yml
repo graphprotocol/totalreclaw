@@ -351,8 +351,12 @@ jobs:
           STABLE="${{ needs.derive-versions.outputs.stable-version }}"
           echo "Publishing stable $STABLE to ClawHub with full tag set."
           clawhub login --token "$CLAWHUB_TOKEN" --no-browser
-          clawhub publish ./skill/plugin \
-            --slug totalreclaw \
+          # ClawHub CLI 0.9.x: plugin publish moved to `clawhub package publish`
+          # with --name (not --slug) + --family code-plugin. Surfaced 2026-04-28
+          # on 3.3.2-rc.1 publish — see publish-clawhub.yml comment for context.
+          clawhub package publish ./skill/plugin \
+            --name totalreclaw \
+            --family code-plugin \
             --version "$STABLE" \
             --tags "latest,memory,encryption,e2ee,privacy,agent-memory,e2e-encryption,persistent-context" \
             --changelog "Release $STABLE (promoted from RC) -- see https://github.com/p-diogo/totalreclaw/releases/tag/v$STABLE"

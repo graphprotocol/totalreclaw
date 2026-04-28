@@ -164,8 +164,14 @@ jobs:
           echo "Publishing to slug: $SLUG"
 
           clawhub login --token "$CLAWHUB_TOKEN" --no-browser
-          clawhub publish ./skill/plugin \
-            --slug "$SLUG" \
+          # ClawHub CLI 0.9.x renamed plugin publish: `clawhub publish` rejects
+          # plugin-shaped sources with "Use clawhub package publish instead".
+          # Plugin-publish is now `clawhub package publish` with --name (not --slug)
+          # + --family code-plugin. See https://github.com/p-diogo/totalreclaw-internal/issues/189
+          # context — this surfaced 2026-04-28 during 3.3.2-rc.1 publish.
+          clawhub package publish ./skill/plugin \
+            --name "$SLUG" \
+            --family code-plugin \
             --version "$VERSION" \
             --tags "$TAGS" \
             --changelog "$CHANGELOG"
