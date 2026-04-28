@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### 3.3.2-rc.1 — preinstall orphan-stage cleanup (umbrella #182 F6 / issue #190)
+
+The rc.21 fix (#126) added `cleanupInstallStagingDirs` called at plugin
+register time. That helper is too late for the re-install scenario: with
+an orphan `.openclaw-install-stage-*` sibling already present in
+`~/.openclaw/extensions/`, OpenClaw's config validator fires
+`duplicate plugin id detected; global plugin will be overridden by global
+plugin` BEFORE plugin register runs, so registration is blocked entirely
+and the helper never gets a chance to clean up. The user observes the
+warning and a plugin that silently fails to load.
+
+Fix: a new `preinstall.mjs` script runs at npm preinstall time (before
+the new install is renamed into place). It removes orphan
+`.openclaw-install-stage-*` siblings from `~/.openclaw/extensions/`
+(and `$OPENCLAW_STATE_DIR/extensions/` when set), skipping the script's
+own cwd basename so older OpenClaw versions that stage inside extensions/
+don't delete their own in-flight install. Also keeps the existing
+`.tr-partial-install` marker drop. Best-effort throughout — never throws
+or exits non-zero.
+
+Regression: `test_issue_190_preinstall_orphan_cleanup.test.ts`
+(19 assertions) covers newer-OpenClaw flow (cwd in /tmp), older-OpenClaw
+flow (cwd inside extensions/), `OPENCLAW_STATE_DIR` env override,
+no-extensions-dir fallback, and unrelated-sibling preservation.
+
 ### Install / runtime hygiene (issues #126, #128)
 
 Two narrow fixes from the rc.20 user-QA findings — both around install /
