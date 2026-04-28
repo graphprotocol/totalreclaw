@@ -236,6 +236,18 @@ class AgentState:
             creds_path.write_text(json.dumps({"mnemonic": mnemonic}))
             creds_path.chmod(0o600)
 
+        # 2.3.2-rc.1 (#192): clear any stale eager-account-register
+        # latch attached by ``totalreclaw.hermes.hooks._eager_account_
+        # register``. If the user re-pairs (different mnemonic) mid-
+        # session, the new SA needs its own first-contact request to
+        # the relay; without resetting the latch we'd silently skip
+        # account creation for the new SA.
+        if hasattr(self, "_eager_account_registered"):
+            try:
+                delattr(self, "_eager_account_registered")
+            except AttributeError:
+                pass
+
         # Do NOT read `self._client.wallet_address` here — it raises until
         # `resolve_address()` has run, and `configure()` is synchronous. The
         # EOA is what we have at this point; the Smart Account address is

@@ -356,18 +356,23 @@ class TestBug6FirstRunNudge:
         from totalreclaw.hermes.hooks import pre_llm_call
         from totalreclaw.hermes.state import PluginState
 
+        # 2.3.2-rc.1 (#191): the lazy-reconfigure safety net in
+        # ``pre_llm_call`` re-reads creds.json on every entry. To keep
+        # this nudge test deterministic on hosts that DO have a real
+        # ~/.totalreclaw/credentials.json (e.g. dev machines), mock
+        # the file lookup across both ctor and the pre_llm_call body.
         with patch.dict(os.environ, {}, clear=True):
             with patch.object(Path, "exists", return_value=False):
                 state = PluginState()
 
-        assert not state.is_configured()
+                assert not state.is_configured()
 
-        # First turn — user asks a natural memory-related question.
-        result = pre_llm_call(
-            state,
-            is_first_turn=True,
-            user_message="Can you remember that I prefer dark mode?",
-        )
+                # First turn — user asks a natural memory-related question.
+                result = pre_llm_call(
+                    state,
+                    is_first_turn=True,
+                    user_message="Can you remember that I prefer dark mode?",
+                )
 
         # Should return a context nudge mentioning setup.
         assert result is not None, "expected setup nudge on first turn"
@@ -379,18 +384,20 @@ class TestBug6FirstRunNudge:
         from totalreclaw.hermes.hooks import pre_llm_call
         from totalreclaw.hermes.state import PluginState
 
+        # See test above for why ``Path.exists`` is mocked through the
+        # full pre_llm_call invocation rather than just the ctor.
         with patch.dict(os.environ, {}, clear=True):
             with patch.object(Path, "exists", return_value=False):
                 state = PluginState()
 
-        first = pre_llm_call(
-            state, is_first_turn=True,
-            user_message="Remember I like dark mode",
-        )
-        second = pre_llm_call(
-            state, is_first_turn=True,
-            user_message="Can you remember another thing for me?",
-        )
+                first = pre_llm_call(
+                    state, is_first_turn=True,
+                    user_message="Remember I like dark mode",
+                )
+                second = pre_llm_call(
+                    state, is_first_turn=True,
+                    user_message="Can you remember another thing for me?",
+                )
         assert first is not None
         # Second call: nudge should not re-fire (no "totalreclaw_setup" in ctx).
         if second is not None:

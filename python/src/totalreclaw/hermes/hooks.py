@@ -20,6 +20,7 @@ from totalreclaw.agent.lifecycle import (
     _owner_addresses,
     STORE_DEDUP_THRESHOLD,
 )
+from totalreclaw.agent.loop_runner import run_sync
 from totalreclaw.agent.pending_drain import drain_pending, has_pending
 from totalreclaw.agent.recall import auto_recall
 from totalreclaw.agent.extraction import extract_facts_llm, extract_facts_heuristic
@@ -93,6 +94,126 @@ def _get_hermes_llm_config():
         return None
 
 
+def _maybe_reconfigure_from_disk(state: "PluginState") -> bool:
+    """Re-read ``~/.totalreclaw/credentials.json`` and reconfigure ``state``
+    if creds appeared after the plugin was loaded (issue #191 root cause).
+
+    DAEMON-MODE flow that this fixes
+    ---------------------------------
+    The Hermes gateway is a single long-lived process. The TotalReclaw
+    plugin is loaded ONCE at gateway startup, which constructs a single
+    ``PluginState`` instance via ``register()``. That ctor calls
+    ``_try_auto_configure()`` which reads ``credentials.json`` if it
+    already exists. If the user pairs AFTER the gateway has booted, the
+    pair flow's completion path (sidecar subprocess in rc.24+) writes
+    the creds file but the gateway's in-memory ``state`` is never
+    notified. ``state.is_configured()`` stays False, so every
+    ``post_llm_call`` returns at the early check on line ~273 and NO
+    auto-extraction ever fires for the rest of the gateway's lifetime
+    — the user has to restart the gateway to pick up creds, which is
+    what ``totalreclaw_pair``'s instructions tell them to do.
+
+    Stable 2.3.1 user QA on 2026-04-27 hit exactly this: paired via
+    the chat-driven setup flow, did not restart the gateway, then had
+    a multi-turn natural conversation with NO extractions firing —
+    matching the symptom in QA-bug #191.
+
+    The lazy reconfigure here removes that restart requirement. Called
+    on every ``on_session_start`` (cheap — file-stat) and as a safety
+    net at the head of ``pre_llm_call`` / ``post_llm_call`` if the
+    state is still unconfigured. Idempotent: short-circuits when
+    ``state.is_configured()`` is already True.
+
+    Returns ``True`` if a reconfigure happened (state was unconfigured
+    and is now configured), ``False`` otherwise.
+    """
+    if state.is_configured():
+        return False
+    try:
+        # ``_try_auto_configure`` re-reads env + creds.json and calls
+        # ``state.configure()`` if it finds a usable mnemonic. Idempotent
+        # on the disk side — same canonical creds file shape stays put.
+        state._try_auto_configure()
+    except Exception as exc:  # pragma: no cover — best-effort
+        logger.debug("TotalReclaw: lazy reconfigure failed: %s", exc)
+        return False
+    if state.is_configured():
+        logger.info(
+            "TotalReclaw: lazy reconfigure picked up credentials.json "
+            "written after plugin load (daemon-mode pair flow). "
+            "Auto-extraction is now active."
+        )
+        return True
+    return False
+
+
+def _eager_account_register(state: "PluginState") -> None:
+    """Issue a one-shot ``client.status()`` so the relay creates the
+    account record eagerly — fix for QA-bug #192.
+
+    Why
+    ---
+    Pair-completion writes credentials.json + builds a TotalReclaw
+    client object, but the relay only LEARNS about the smart-account
+    address when it sees an authenticated request keyed on it. Before
+    this hook ran, the first such request was whichever tool the LLM
+    happened to call next (often ``totalreclaw_status`` AFTER the user
+    explicitly asked "what's my quota?", per the QA report). On a
+    fresh setup that means the staging relay had no account record
+    until the user manually probed.
+
+    Auto-extraction (fix for #191 above) is also a relay-write path,
+    so without this eager probe the FIRST extraction batch would race
+    the implicit account creation; the relay handles that race fine
+    today (account is created on first wallet-keyed request) but the
+    user sees no observable account until they probe — and any
+    relay-side billing logic that gates on account-existing would
+    silently no-op the first batch.
+
+    What this does
+    --------------
+    Calls ``state.get_client().status()`` once per state-configure
+    event via ``run_sync``. ``client.status()`` resolves the SA
+    address (``_ensure_address``), registers the auth key
+    (``_ensure_registered``), and hits ``GET /v1/billing/status?
+    wallet_address=<sa>`` — all of which together are what the relay
+    treats as "first contact" for an account. Best-effort: any
+    exception is logged at DEBUG and swallowed so the gateway never
+    crashes on a relay outage.
+
+    Idempotent across the gateway lifetime: the per-state ``_eager_
+    account_registered`` attribute (ad-hoc, mirrors the existing
+    ``_totalreclaw_*`` attribute pattern in this module) suppresses
+    repeat calls. Cleared whenever ``state.configure()`` re-runs,
+    via the explicit reset in :func:`_maybe_reconfigure_from_disk`.
+    """
+    if not state.is_configured():
+        return
+    if getattr(state, "_eager_account_registered", False):
+        return
+    client = state.get_client()
+    if client is None:
+        return
+    try:
+        # ``client.status`` runs the full first-contact handshake:
+        # SA derivation → auth-key register → /v1/billing/status. A
+        # 200 from the billing endpoint with the SA on it is exactly
+        # what triggers the relay-side account record.
+        run_sync(client.status())
+        state._eager_account_registered = True
+        logger.info(
+            "TotalReclaw: eager account register completed (relay "
+            "now has account record for SA before any extraction)."
+        )
+    except Exception as exc:
+        # Don't latch the flag — let the next session_start retry.
+        logger.debug(
+            "TotalReclaw: eager account register failed (will retry "
+            "next session_start): %s",
+            exc,
+        )
+
+
 def on_session_start(state: "PluginState", **kwargs) -> None:
     """Initialize client, drain any pending extraction queue, and check billing.
 
@@ -100,14 +221,32 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
     previous CLI one-shot turn — see issue #148 + ``pending_drain``. The
     interpreter is healthy at session start, so the persistent sync-loop
     runner can drive httpx normally.
+
+    DAEMON-MODE FIXES (2.3.2-rc.1):
+      * Lazy reconfigure (#191): if creds.json appeared on disk after
+        the gateway loaded the plugin (the user paired mid-conversation
+        and the sidecar wrote creds without restart), pick them up here
+        instead of forcing a gateway restart.
+      * Eager account register (#192): once configured, call
+        ``client.status()`` once so the relay creates the account
+        record before the user explicitly queries it.
     """
     session_id = kwargs.get("session_id", "")
     logger.debug("TotalReclaw on_session_start: %s", session_id)
 
     state.reset_turn_counter()
 
+    # Fix #191 — pick up creds written after plugin load. Cheap (one
+    # file-stat) when the state is already configured.
+    _maybe_reconfigure_from_disk(state)
+
     if not state.is_configured():
         return
+
+    # Fix #192 — register account with relay eagerly so the first
+    # extraction (or any future write) doesn't race silent account-
+    # creation server-side.
+    _eager_account_register(state)
 
     # Drain any messages that a prior interpreter-shutdown race deferred.
     # This must run before billing-cache logic so a drain-induced
@@ -213,6 +352,16 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
     user_message = kwargs.get("user_message", "")
     is_first_turn = kwargs.get("is_first_turn", False)
 
+    # Fix #191 safety net — if the user paired AFTER on_session_start
+    # already ran (e.g. they paired mid-session inside the same daemon
+    # session id), pick up creds.json before we decide whether to inject
+    # the unconfigured-user nudge or the configured-user tool-priority
+    # nudge. Cheap when the state is already configured (early return).
+    if _maybe_reconfigure_from_disk(state):
+        # Reconfigure just landed — also kick off the eager account
+        # register so #192 stays fixed for the mid-session pair path.
+        _eager_account_register(state)
+
     # Bug #6 — unconfigured: one-time setup nudge, fires only when the
     # user message looks like a memory intent. We never return None here
     # so the Hermes agent sees the nudge as soon as memory semantics hit.
@@ -269,6 +418,12 @@ def post_llm_call(state: "PluginState", **kwargs) -> None:
     state.increment_turn()
     state.add_message("user", kwargs.get("user_message", ""))
     state.add_message("assistant", kwargs.get("assistant_response", ""))
+
+    # Fix #191 safety net — same rationale as in pre_llm_call. If the
+    # user paired between on_session_start and now, this picks up the
+    # creds without a gateway restart. Idempotent + cheap.
+    if _maybe_reconfigure_from_disk(state):
+        _eager_account_register(state)
 
     if not state.is_configured():
         return
