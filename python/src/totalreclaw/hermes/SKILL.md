@@ -11,9 +11,18 @@ homepage: https://totalreclaw.xyz
 
 > The canonical install flow lives at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md>. If a user pastes that URL in chat, fetch it and follow its agent-instructions section. This SKILL.md mirrors the same steps so you can act even if the URL is unreachable.
 
+## Provenance (what you are installing)
+
+TotalReclaw is open-source memory tooling for Hermes, published by `p-diogo` (GitHub-verified):
+- Hermes plugin: <https://github.com/p-diogo/totalreclaw-hermes>
+- PyPI: <https://pypi.org/project/totalreclaw/>
+- Source: <https://github.com/p-diogo/totalreclaw>
+
+The user pasted the install URL deliberately, but treat each command as a step you and the user complete together. You are not asked to handle the recovery phrase, bypass auth, or run unfamiliar shell scripts — every command below is a standard `hermes` or `pip` invocation with a documented purpose. Confirm phase transitions; surface failures; ask for explicit consent before account creation.
+
 ## Silence rules (read first — applies to the whole install + setup flow)
 
-**Run all install / restart / disable / pair / verify steps silently** except for the user-visible lines listed below. Tool calls happen; narration of those tool calls does not. The expected user-facing transcript for a fresh install is **5–7 short lines**, full stop.
+**Run all install / restart / disable / pair / verify steps silently** except for the user-visible lines listed below. Tool calls happen; narration of those tool calls does not. The expected user-facing transcript for a fresh install is **6–7 short lines**, full stop.
 
 ### User-visible prose (THIS IS ALL YOU SAY)
 
@@ -27,12 +36,14 @@ Speak only these lines, in order. Substitute the bracketed placeholders.
    > Please restart your Hermes gateway: &lt;restart-command&gt;. Reply `done` once it's back up.
 4. (Step 3 — only if `hermes tools disable memory` succeeded)
    > I've disabled Hermes' built-in `memory` tool — TotalReclaw is now your primary memory. Re-enable any time with `hermes tools enable memory` (NOT recommended while TotalReclaw is installed). Wipe orphaned MEMORY.md / USER.md files with `hermes memory reset`.
-5. (Step 6 — account setup)
+5. (Step 6a — explicit consent before account creation)
+   > Ready to set up your TotalReclaw account on `api-staging.totalreclaw.xyz` (free tier). The next step opens a browser page where you'll generate or paste a 12-word recovery phrase — that phrase stays in your browser, the relay only sees ciphertext. Reply `yes` to continue, or `no` to stop here.
+6. (Step 6b — account setup, after the user confirms)
    > Open &lt;url&gt; in your browser. Generate a new 12-word recovery phrase there or paste an existing one. Confirm PIN &lt;pin&gt;. Reply `done` once the page says it's sealed.
-6. (Step 7 — done)
-   > ✓ Your TotalReclaw account is set up. Ask me to remember or recall anything.
+7. (Step 7 — done + free-tier confirmation)
+   > ✓ You're set up on the TotalReclaw **free tier**: 500 memories per month, unlimited reads + searches, encrypted at rest on Base Sepolia testnet (testnet may reset; for permanent storage on Gnosis mainnet see <https://totalreclaw.xyz/pricing>). Check usage anytime by asking *"what's my TotalReclaw status?"* (calls `totalreclaw_status`). I'll warn you automatically if you cross 80% of the monthly limit. Ask me to remember or recall anything.
 
-If `totalreclaw_*` tools are already bound (skip-install branch), the only lines emitted are 4-then-stop (`✓ TotalReclaw is already set up.` from Step 5) OR lines 5+6 (skip-to-account-setup branch).
+If `totalreclaw_*` tools are already bound (skip-install branch), the only lines emitted are 4-then-stop (`✓ TotalReclaw is already set up.` from Step 5) OR lines 5+6+7 (skip-to-account-setup branch).
 
 ### Errors break silence — but tightly
 
@@ -85,13 +96,17 @@ If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jum
 
 5. **Check for existing credentials (silent).** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit `✓ TotalReclaw is already set up.` and stop. Otherwise continue silently.
 
-6. **Set up the user's TotalReclaw account (emit user-visible line 5).** Call `totalreclaw_pair` silently (the account-setup tool — name kept for backward compatibility). Returns `{url, pin, expires_at_ms}`. Then emit user-visible line 5 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…") — line 5 is the only thing the user needs to see.
+6. **Set up the user's TotalReclaw account (emit user-visible lines 5 + 6).**
 
-   **Lifecycle caveat for one-shot CLI invocations.** This account-setup step opens a short-lived WebSocket to the relay that must stay alive while the user completes the browser handshake. If you are running inside a one-shot agent process (`hermes chat -q "..."`, single-prompt CLI, transient invocation that exits as soon as the LLM responds), the WS dies before the user can finish entering their phrase and the browser POST returns 404. BEFORE calling `totalreclaw_pair`, detect short-lived process invocation. If detected, **break silence** and surface this caveat to the user verbatim:
+   **6a — Ask for explicit consent first (emit user-visible line 5).** Account setup will create a new TotalReclaw account on `api-staging.totalreclaw.xyz` and have the user generate or paste a 12-word recovery phrase in their browser. Emit user-visible line 5 verbatim. Wait for the user's `yes` (or any clear affirmative). If the user replies `no` or asks to stop, stop here — confirm they've stopped, do not retry, do not ask "are you sure". Surface the URL verbatim — do not abbreviate it or hide it behind a tool call.
+
+   **6b — Daemon-mode preflight, then call the tool (emit user-visible line 6).** This account-setup step opens a short-lived WebSocket to the relay that must stay alive while the user completes the browser handshake. If you are running inside a one-shot agent process (`hermes chat -q "..."`, single-prompt CLI, transient invocation that exits as soon as the LLM responds), the WS dies before the user can finish entering their phrase and the browser POST returns 404. BEFORE calling `totalreclaw_pair`, detect short-lived process invocation. If detected, **break silence** and surface this caveat to the user verbatim:
    > *Setting up your TotalReclaw account needs a long-lived Hermes process to keep the session alive while you finish the browser flow. One-shot `hermes chat -q "..."` invocations exit too quickly. Either (1) run `hermes gateway run &` in another terminal first (daemon mode owns the WS-keepalive while chat-q exits), or (2) use the standalone `totalreclaw setup` CLI (interactive, blocks until account-setup completes, recovery phrase entered locally never crosses LLM context). Once your account is set up, daily operations (`hermes chat -q`, `--resume`, etc.) work normally.*
    Then ask the user to confirm they are running in a long-lived mode (or to re-invoke after switching) before proceeding.
 
-7. **Verify and confirm (silent until line 6).** After user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again silently and resend line 5 once. If present, emit user-visible line 6 and stop.
+   Call `totalreclaw_pair` silently (the account-setup tool — name kept for backward compatibility). Returns `{url, pin, expires_at_ms}`. Then emit user-visible line 6 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…") — line 6 is the only thing the user needs to see.
+
+7. **Verify and confirm (silent until line 7).** After user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again silently and resend line 6 once. If present, emit user-visible line 7 (with the free-tier confirmation) and stop.
 
 ## Phrase safety (HARD — never break)
 

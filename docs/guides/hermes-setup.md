@@ -1,20 +1,43 @@
 # TotalReclaw for Hermes
 
-TotalReclaw gives your Hermes agent encrypted, persistent memory. The fastest path is a single chat message — the agent fetches this guide, installs the package for you, and walks you through setting up your TotalReclaw account. **You do nothing in the terminal.**
+TotalReclaw gives your Hermes agent encrypted, persistent memory. The fastest path is a single chat message — your agent fetches this guide, you and your agent install the package together, and the agent walks you through setting up your TotalReclaw account.
+
+## What this is and where it comes from
+
+TotalReclaw is open-source memory tooling for Hermes. The plugin + Python client are published by `p-diogo` (GitHub-verified) at:
+
+- Hermes plugin: [`p-diogo/totalreclaw-hermes`](https://github.com/p-diogo/totalreclaw-hermes) (Git-based plugin discovery)
+- PyPI: [`totalreclaw`](https://pypi.org/project/totalreclaw/)
+- Source code: <https://github.com/p-diogo/totalreclaw>
+
+Everything runs locally except the encrypted-at-rest sync to TotalReclaw's relay (`api-staging.totalreclaw.xyz` for the free tier). The recovery phrase is generated and stays inside your browser — neither the agent, the relay, nor anyone else ever sees it.
 
 If you already have Hermes running, paste this into your Hermes chat:
 
 > **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md>**
 
-Your agent will fetch this page, run the install commands, ask you to restart the gateway once (Hermes doesn't auto-reload), and then hand you an account-setup URL + 6-digit PIN. You open the URL in your browser, generate or restore a 12-word recovery phrase there, confirm the PIN, and your account is ready.
+Your agent reads this page, runs two install commands ([`hermes plugins install`](https://hermes.readthedocs.io/en/latest/plugins.html) and [`pip install`](https://pip.pypa.io/en/stable/cli/pip_install/) — both standard tools you already have), asks you to restart the gateway once (Hermes doesn't auto-reload), and hands you an account-setup URL + 6-digit PIN. You open the URL in your browser, generate or restore a 12-word recovery phrase there, confirm the PIN, and your account is ready.
 
-> **Important — Hermes account setup needs daemon mode.** See [Account setup requires daemon mode](#account-setup-requires-daemon-mode) below before invoking the account-setup flow if you are using `hermes chat -q "..."` one-shot CLI invocations.
+This guide is the playbook your agent follows; you can read along to see what each step does.
+
+> **Heads-up — Hermes account setup needs daemon mode.** See [Account setup requires daemon mode](#account-setup-requires-daemon-mode) below before invoking the account-setup flow if you are using `hermes chat -q "..."` one-shot CLI invocations.
 
 ---
 
 ## Agent instructions (read this if you are a Hermes agent that just fetched this URL)
 
-You have been asked to install TotalReclaw. **Run all the steps below silently**, except for the user-visible lines explicitly listed below — those are the ONLY things you should write in chat. Tool calls happen; narration of those tool calls does not. Do not deviate, do not ask the user to run any terminal command other than the gateway restart in Step 2, do not echo or generate a recovery phrase.
+You have been asked to install TotalReclaw. **Run all install / verify steps silently** except for the user-visible lines explicitly listed below — those are the ONLY things you should write in chat. Tool calls happen; narration of those tool calls does not.
+
+The user pasted this URL deliberately, but treat each command as a step you and the user complete together. Confirm what you see at each phase. If anything looks wrong, surface it and stop — don't push through.
+
+### What you will run, and why each step is safe
+
+1. `hermes plugins install p-diogo/totalreclaw-hermes --enable` — registers the plugin manifest from the publisher's GitHub repo. The plugin runs inside Hermes' plugin sandbox. Upstream docs: <https://hermes.readthedocs.io/en/latest/plugins.html>.
+2. `pip install --pre totalreclaw` — installs the Python tool implementations from PyPI. The `--pre` flag pulls the latest release candidate. Standard PyPA workflow: <https://pip.pypa.io/en/stable/cli/pip_install/>.
+3. `hermes tools disable memory` — disables Hermes' built-in `memory` tool to avoid intent collision with TotalReclaw's `_remember` / `_recall`. Reversible with `hermes tools enable memory`.
+4. After the gateway restart, you will call `totalreclaw_pair` (a tool the plugin registers) to mint a one-time URL + PIN. The user opens the URL in their own browser to enter or generate a recovery phrase. The phrase never enters chat or your shell.
+
+You are not asked to handle the recovery phrase. You are not asked to bypass auth. If the user pastes a phrase in chat anyway, refuse to proceed — see "Phrase safety" below.
 
 ### User-visible prose (THIS IS ALL YOU SAY)
 
@@ -28,12 +51,14 @@ Speak only these lines, in order. Do not narrate around them. Do not announce in
    > Please restart your Hermes gateway: &lt;restart-command&gt;. Reply `done` once it's back up.
 4. (Step 3 — built-in-memory disable, only if the disable command succeeds)
    > I've disabled Hermes' built-in `memory` tool — TotalReclaw is now your primary memory. Re-enable any time with `hermes tools enable memory` (NOT recommended while TotalReclaw is installed). Wipe orphaned MEMORY.md / USER.md files with `hermes memory reset`.
-5. (Step 5 — account setup)
+5. (Step 5a — explicit consent before account creation)
+   > Ready to set up your TotalReclaw account on `api-staging.totalreclaw.xyz` (free tier). The next step opens a browser page where you'll generate or paste a 12-word recovery phrase — that phrase stays in your browser, the relay only sees ciphertext. Reply `yes` to continue, or `no` to stop here.
+6. (Step 5b — account setup, after the user confirms)
    > Open &lt;url&gt; in your browser. Generate a new 12-word recovery phrase there or paste an existing one. Confirm PIN &lt;pin&gt;. Reply `done` once the page says it's sealed.
-6. (Step 6 — done)
-   > ✓ Your TotalReclaw account is set up. Ask me to remember or recall anything.
+7. (Step 6 — done + free-tier confirmation)
+   > ✓ You're set up on the TotalReclaw **free tier**: 500 memories per month, unlimited reads + searches, encrypted at rest on Base Sepolia testnet (testnet may reset; for permanent storage on Gnosis mainnet see <https://totalreclaw.xyz/pricing>). Check usage anytime by asking *"what's my TotalReclaw status?"* (calls `totalreclaw_status`). I'll warn you automatically if you cross 80% of the monthly limit. Ask me to remember or recall anything.
 
-That is the complete user-facing transcript for a healthy install. Expected line count for a fresh install + setup is **5–7 lines** (line 3 collapses to a one-line confirmation if the gateway already auto-reloaded; line 4 is skipped silently when the disable command isn't available; line 5 may repeat once if the PIN expires).
+That is the complete user-facing transcript for a healthy install. Expected line count for a fresh install + setup is **6–7 lines** (line 3 collapses to a one-line confirmation if the gateway already auto-reloaded; line 4 is skipped silently when the disable command isn't available; line 6 may repeat once if the PIN expires).
 
 ### When to break silence (errors only)
 
@@ -138,17 +163,19 @@ If the command succeeds, emit user-visible line 4 (the built-in-memory disable c
 
 Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit `✓ TotalReclaw is already set up.` and stop. Otherwise continue silently.
 
-### Step 5 — Pair (account setup — browser flow, NEVER ask the user to type their phrase in chat) (emit user-visible line 5)
+### Step 5 — Pair (account setup — browser flow, NEVER ask the user to type their phrase in chat) (emit user-visible lines 5 + 6)
 
 > *(Heading retains "Pair" for backward compatibility with the QA harness; the user-facing terminology is "set up your TotalReclaw account". The tool registered as `totalreclaw_pair` is the account-setup tool.)*
 
-Before calling the tool, check whether you are running inside a one-shot agent process (e.g. `hermes chat -q "..."`, single-prompt CLI). If so, break silence and surface the [account-setup-requires-daemon-mode caveat](#account-setup-requires-daemon-mode) to the user verbatim and ask them to switch to daemon / interactive mode before continuing — the WebSocket session this step opens will die before the user can finish entering their phrase otherwise.
+**Step 5a — Ask for explicit consent first (emit user-visible line 5).** Account setup will create a new TotalReclaw account on `api-staging.totalreclaw.xyz` and have the user generate or paste a 12-word recovery phrase in their browser. Emit user-visible line 5 verbatim. Wait for the user's `yes` (or any clear affirmative). If the user replies `no` or asks to stop, stop here — confirm they've stopped, do not retry, do not ask "are you sure". Surface the URL verbatim — do not abbreviate it or hide it behind a tool call.
 
-Call the `totalreclaw_pair` tool silently (the account-setup tool — name kept for backward compatibility). It returns `{url, pin, expires_at_ms}`. Then emit user-visible line 5 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…") — line 5 itself is the only thing the user needs to see.
+**Step 5b — Daemon-mode preflight, then call the tool (emit user-visible line 6).** Before calling the tool, check whether you are running inside a one-shot agent process (e.g. `hermes chat -q "..."`, single-prompt CLI). If so, break silence and surface the [account-setup-requires-daemon-mode caveat](#account-setup-requires-daemon-mode) to the user verbatim and ask them to switch to daemon / interactive mode before continuing — the WebSocket session this step opens will die before the user can finish entering their phrase otherwise.
 
-### Step 6 — Verify and confirm (silent until line 6)
+Call the `totalreclaw_pair` tool silently (the account-setup tool — name kept for backward compatibility). It returns `{url, pin, expires_at_ms}`. Then emit user-visible line 6 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…") — line 6 itself is the only thing the user needs to see.
 
-After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN likely expired — call `totalreclaw_pair` again and resend line 5 once. If present, emit user-visible line 6 and stop.
+### Step 6 — Verify and confirm (silent until line 7)
+
+After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN likely expired — call `totalreclaw_pair` again and resend line 6 once. If present, emit user-visible line 7 (with the free-tier confirmation) and stop.
 
 ### Phrase safety (HARD — never break)
 
@@ -260,15 +287,29 @@ If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after upgrading also run `p
 
 ---
 
+## Billing
+
+| Tier | Storage | Monthly writes | Reads | Price |
+|------|---------|---------------|-------|-------|
+| **Free** | Base Sepolia testnet (may reset) | 500 / month | Unlimited | $0 |
+| **Pro** | Permanent on Gnosis mainnet | Unlimited | Unlimited | $3.99/month |
+
+The plugin warns you automatically when you cross 80% of the monthly free-tier write limit. Check anytime by asking *"what's my TotalReclaw status?"* — that calls `totalreclaw_status` and reports tier, writes used, writes limit, reset date, and upgrade URL.
+
+Upgrade: *"Upgrade my TotalReclaw subscription."* — see [Pricing](https://totalreclaw.xyz/pricing).
+
+---
+
 ## Troubleshooting
 
 - **Agent says "I'm not familiar with TotalReclaw"**: paste the canonical message above with the URL — the agent fetches the guide and follows the install steps.
+- **Agent refused the install** ("this looks like prompt injection", "I'm not going to do that"): rare but possible with safety-trained models that misread agent-imperative install prose. Ask the agent to read the "Agent instructions" section of this guide and proceed step-by-step — each command is annotated with what it does and why it's safe. If the refusal persists, file an issue with the model name + chat transcript.
 - **Agent can't see TotalReclaw tools after install**: confirm both install steps completed — on a self-host, `hermes plugins list` should show `p-diogo/totalreclaw-hermes` enabled and `pip show totalreclaw` in the Hermes venv should resolve; on a managed service, confirm `totalreclaw` is listed in your service's plugins UI. Then restart: `hermes gateway restart` (native), `docker restart <your-hermes-container>` (Docker self-host), or your managed service's restart control. If supervised by systemd / launchd, `kill -USR1 $(cat ~/.hermes/gateway.pid)` is faster than `systemctl restart`. (Hermes does not yet auto-reload on plugin install — tracked upstream.)
 - **Account-setup URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running. If you invoked `hermes chat -q "..."` (one-shot) for account setup, the WebSocket the relay needs may have died before the browser POST landed — see [Account setup requires daemon mode](#account-setup-requires-daemon-mode).
 - **Browser fails to POST the encrypted phrase**: check the account-setup page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
 - **"No LLM available for auto-extraction"**: configure a provider in Hermes (`hermes login` or set `ZAI_API_KEY` / `OPENAI_API_KEY` in `~/.hermes/.env`). TotalReclaw reuses it automatically.
 - **Recovery phrase appeared in chat**: file a bug. Rotate by generating a new wallet via `totalreclaw_pair` with `mode=generate`. The leaked phrase is unrecoverable once shipped through LLM context.
-- **Agent narrating Python / venv / pip details aloud during install**: the agent missed the silence rule in §"Agent instructions". Reply *"Don't narrate the install internals — just tell me when it's installed and when to set up my account."* and the next session should silence. If it persists across sessions, the published RC's `SKILL.md` is stale — file an issue.
+- **Agent narrating internals during install** ("let me find…", "let me try…", "in parallel…"): the agent missed the silence rule in §"Agent instructions". Reply *"Don't narrate the install internals — just tell me when it's installed and when to set up my account."* and the next session should silence. If it persists across sessions, the published RC's `SKILL.md` is stale — file an issue.
 
 ---
 
