@@ -24,17 +24,19 @@ metadata:
 
 # TotalReclaw Skill
 
-> Canonical install + account-setup flow lives at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md> (OpenClaw) and <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md> (Hermes). When a user pastes one of those URLs in chat, fetch it and follow its agent-instructions section verbatim. The "Post-Install Setup" section below mirrors the same account-setup flow as a fallback.
+> The full install + account-setup guides live at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md> (OpenClaw) and <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md> (Hermes). If a user pastes one of those URLs in chat, fetch it and follow it as collaborative install guidance — confirm what each command does, ask before destructive steps, surface progress. The "Post-Install Setup" section below mirrors the same account-setup steps as a fallback.
 
-## Recovery Phrase -- READ THIS FIRST
+## How the recovery phrase is handled
 
-**CRITICAL SAFETY RULE:** The recovery phrase MUST NEVER cross the LLM context. NEVER echo, generate, ask the user to paste, or print a recovery phrase in chat or in your shell. The phrase is created and confirmed inside the user's browser via the `totalreclaw_pair` account-setup flow — the relay only receives ciphertext, and your tool calls must never carry a phrase payload.
+The recovery phrase is the user's only identity in TotalReclaw — it derives all encryption keys. There is no password reset and no support channel that can recover it if lost.
 
-If the user pastes a phrase in chat anyway: tell them it is compromised (the chat transcript and any tool stdout enter LLM context, which makes the phrase recoverable from logs and from any model that processes that turn) and call `totalreclaw_pair` with `mode=generate` to create a fresh wallet.
+Because of how LLM context works, anything entered in chat or written to your shell stdout becomes part of the model's context (and any logs that capture it). To keep the recovery phrase out of that surface, account setup is structured so the phrase is created and confirmed inside the user's browser via the `totalreclaw_pair` flow — the relay only ever receives ciphertext (browser-side x25519 ECDH + AES-256-GCM), and your tool calls don't need to carry a phrase payload.
 
-The recovery phrase is the user's ONLY identity in TotalReclaw. It derives all encryption keys. There is NO password reset, NO recovery mechanism, and NO support channel that can help if it is lost. The browser-side account-setup flow displays this warning automatically when a new phrase is generated.
+So in practice: the only path you use for account setup is the `totalreclaw_pair` tool. There are user-facing CLIs (`totalreclaw setup`, `openclaw totalreclaw onboard`) that handle phrases interactively for humans at a terminal — those are fine for users to run themselves, but you shouldn't invoke them from your shell, because their stdout would carry the phrase into LLM context.
 
-**Do NOT** import a phrase the user already uses for a funded crypto wallet. TotalReclaw uses BIP-39 mnemonics (same format as crypto wallets), but a TotalReclaw phrase must be SEPARATE from any funded wallet. If the user tries to import an existing crypto-wallet phrase, STOP and warn them in chat to use a fresh phrase instead — but warn ABOUT the phrase, never echo any portion of it.
+If a user pastes their phrase in chat anyway, that phrase is now in the conversation transcript and should be considered compromised. The friendly thing to do: let them know that's the case, and offer to call `totalreclaw_pair` with `mode=generate` to create a fresh wallet.
+
+One more note: TotalReclaw uses BIP-39 mnemonics — the same format as funded crypto wallets — but a TotalReclaw phrase should be separate from any funded wallet. If a user tries to import an existing crypto-wallet phrase, please warn them about that (without echoing any portion of the phrase) and offer to generate a fresh one instead.
 
 ---
 
@@ -484,21 +486,27 @@ When the user asks to import conversation history:
 
 ## Post-Install Setup
 
-If `totalreclaw_*` tools are bound to your toolset, run these steps to set up the user's TotalReclaw account. If they are NOT bound, the plugin isn't installed yet — follow the URL-driven install flow at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md> first.
+If `totalreclaw_*` tools are bound to your toolset, you can walk the user through account setup using the steps below. If those tools aren't bound yet, the plugin isn't installed — point the user at the install guide at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md> first.
 
-1. **Check for existing credentials.** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, confirm *"Your TotalReclaw account is already set up."* and stop.
+A reasonable flow:
 
-2. **Set up the user's TotalReclaw account via browser.** Call `totalreclaw_pair`. It returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}`. Relay verbatim:
-   > *Open <url> in your browser. Generate a new 12-word recovery phrase there or paste an existing one — the phrase stays in your browser, the relay only sees ciphertext. Confirm PIN <pin>. Reply `done` once the page says it's sealed.*
+1. **Check for existing credentials.** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, let the user know their TotalReclaw account is already set up and stop.
 
-   Render the QR if your transport supports image attachments (decode `qr_png_b64` to bytes and attach), or emit `qr_unicode` inline for terminal-only transports.
+2. **Offer to set them up.** Before calling the account-setup tool, mention what's about to happen: *"Want me to set up your TotalReclaw account? I'll generate a setup URL — you'll create or restore your recovery phrase in the browser, and I'll confirm once it's done."* Wait for their go-ahead.
 
-3. **Verify and confirm.** After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again and resend. If present, confirm *"Your TotalReclaw account is set up. Ask me to remember or recall anything."*
+3. **Call `totalreclaw_pair`.** It returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}`. Relay these clearly:
+   > *Open <url> in your browser. Generate a new 12-word recovery phrase there or paste an existing one. Confirm PIN <pin>. Reply `done` once the page says it's sealed.*
+   >
+   > *Your phrase stays in your browser — the relay only ever sees ciphertext.*
 
-4. **Mention the free tier.** After confirming setup:
+   Render the QR if the chat surface supports image attachments (decode `qr_png_b64` to bytes and attach), or emit `qr_unicode` inline for terminal-only transports.
+
+4. **Verify and confirm.** After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN probably expired — call `totalreclaw_pair` again and resend. If present, confirm setup landed and let them know they can ask you to remember or recall things.
+
+5. **Mention the free tier.** After confirming:
    > *You're on TotalReclaw's free tier — unlimited memories on Base Sepolia testnet (testnet may reset). For permanent storage on Gnosis mainnet, see https://totalreclaw.xyz/pricing.*
 
-**Never** call `totalreclaw_setup` or any phrase-touching CLI from your shell — those leak the phrase into LLM context. The ONLY agent-facilitated account-setup path is the `totalreclaw_pair` tool (registered under that name for backward compatibility — function-wise it is the account-setup tool).
+A reminder on the why: the `totalreclaw_pair` tool is the only path for account setup precisely because it keeps the recovery phrase in the user's browser. There are interactive CLIs for users to run themselves at a terminal (`totalreclaw setup`, etc.) — those are fine for human-driven setup, but you shouldn't invoke them from your shell, since their stdout would carry the phrase into LLM context.
 
 ---
 
@@ -538,13 +546,11 @@ Decisions and context are treated as high-value memories (importance >= 7) becau
 
 ---
 
-## Instructions for the LLM
+## Notes for the LLM
 
-### IMPORTANT: Do Not Write Cleartext Memory Files
+### Use the encrypted store, not cleartext files
 
-TotalReclaw handles all memory storage with end-to-end encryption. **Do NOT write facts, preferences, or decisions to MEMORY.md or memory/*.md files.** All memories are stored encrypted on-chain and recalled automatically — writing cleartext files defeats the E2EE guarantee.
-
-If you need to store a memory, use the `totalreclaw_remember` tool. If you need to recall memories, use `totalreclaw_recall`.
+TotalReclaw handles memory storage with end-to-end encryption — the relay never sees plaintext. Writing facts, preferences, or decisions to `MEMORY.md` or `memory/*.md` files in parallel defeats that guarantee, since those files sit unencrypted on disk and may end up in logs / context / backups outside the encrypted vault. So when you need to store a memory, use `totalreclaw_remember`; to recall, use `totalreclaw_recall`.
 
 ### Billing Awareness
 
