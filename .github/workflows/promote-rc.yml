@@ -356,3 +356,64 @@ jobs:
             --version "$STABLE" \
             --tags "latest,memory,encryption,e2ee,privacy,agent-memory,e2e-encryption,persistent-context" \
             --changelog "Release $STABLE (promoted from RC) -- see https://github.com/p-diogo/totalreclaw/releases/tag/v$STABLE"
+
+  tag-stable-release:
+    name: Backfill v${{ needs.derive-versions.outputs.stable-version }} git tag
+    runs-on: ubuntu-latest
+    needs: [derive-versions, validate-rc-exists]
+    if: inputs.dry-run == false
+    permissions:
+      contents: write
+    # Why: ClawHub default-tag resolution depends on git tags in the public
+    # repo. Stable promotes prior to 2026-04-28 (v3.3.1) didn't auto-tag,
+    # leaving ClawHub serving the latest *RC* git tag (v3.3.1-rc.22) as the
+    # default `clawhub install totalreclaw` answer. See finding #189.
+    # The auto-tag-on-RC-publish fix already shipped in publish-*.yml workflows
+    # (see #139 / rc.21 backfill); this mirrors it for stable promote.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve source SHA from RC artifact
+        id: rc_sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          RC_TAG="v${{ needs.derive-versions.outputs.rc-version }}"
+          # Stable promote re-publishes the same content as the RC. Use the
+          # RC's git tag (which IS auto-created on every RC publish) as the
+          # canonical source SHA for the stable tag.
+          if ! SHA=$(git rev-list -n 1 "$RC_TAG" 2>/dev/null); then
+            echo "ERROR: RC tag $RC_TAG not found locally. Cannot backfill stable tag."
+            echo "       The RC publish workflow must auto-tag (see #139)."
+            exit 1
+          fi
+          echo "RC tag $RC_TAG points at $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Create + push v${{ needs.derive-versions.outputs.stable-version }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          STABLE="${{ needs.derive-versions.outputs.stable-version }}"
+          STABLE_TAG="v${STABLE}"
+          SRC_SHA="${{ steps.rc_sha.outputs.sha }}"
+
+          # Idempotent: if tag already exists at the right SHA, no-op.
+          if git rev-parse "$STABLE_TAG" >/dev/null 2>&1; then
+            EXISTING_SHA=$(git rev-list -n 1 "$STABLE_TAG")
+            if [ "$EXISTING_SHA" = "$SRC_SHA" ]; then
+              echo "$STABLE_TAG already at $SRC_SHA — no-op."
+              exit 0
+            else
+              echo "ERROR: $STABLE_TAG exists but points at $EXISTING_SHA, not $SRC_SHA. Refusing to move."
+              exit 1
+            fi
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$STABLE_TAG" "$SRC_SHA" -m "Stable $STABLE — promoted from RC (${{ needs.derive-versions.outputs.rc-version }}) via promote-rc.yml. Source SHA matches the RC tag. Auto-created on stable promote."
+          git push origin "$STABLE_TAG"
+          echo "Pushed $STABLE_TAG -> $SRC_SHA"
