@@ -377,6 +377,16 @@ jobs:
     # (see #139 / rc.21 backfill); this mirrors it for stable promote.
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Required so `git rev-list -n 1 "v$RC"` can resolve the RC tag.
+          # Default checkout sets up a shallow clone of the requested ref only;
+          # the RC tag (e.g. v3.3.2-rc.4) was pushed by an earlier `publish-*.yml`
+          # auto-tag step but isn't pulled here without this. Tracker #189
+          # surfaced this 2026-04-29 — first stable promote of v3.3.2 failed
+          # at "Backfill v3.3.2 git tag" because the runner couldn't see the
+          # rc tag.
+          fetch-tags: true
+          fetch-depth: 0
 
       - name: Resolve source SHA from RC artifact
         id: rc_sha
