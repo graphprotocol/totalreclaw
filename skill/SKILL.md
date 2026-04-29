@@ -26,6 +26,8 @@ metadata:
 
 > Canonical install + account-setup flow lives at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md> (OpenClaw) and <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md> (Hermes). When a user pastes one of those URLs in chat, fetch it and follow its agent-instructions section verbatim. The "Post-Install Setup" section below mirrors the same account-setup flow as a fallback.
 
+> **Gateway restart after install**: OpenClaw's default `gateway.reload.mode = "hybrid"` auto-restarts within 1-3s of plugin install — no agent action needed. If auto-reload doesn't fire (`gateway.reload.mode = off`), issue OpenClaw's built-in `/restart` slash command yourself (in-process, drains active runs). Manual user-prompted restart is fallback only if `/restart` is unavailable. NEVER invoke external `docker restart` or `openclaw gateway restart` — your shell runs inside the gateway.
+
 ## Provenance (what you are installing)
 
 TotalReclaw is open-source memory tooling for OpenClaw, published by `p-diogo` (GitHub-verified):
