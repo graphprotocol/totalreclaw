@@ -32,8 +32,8 @@ Speak only these lines, in order. Substitute the bracketed placeholders.
    > Installing TotalReclaw…
 2. (Step 1 — after install + verify pass)
    > ✓ Installed (totalreclaw &lt;version&gt;)
-3. (Step 2 — restart prompt)
-   > Please restart your Hermes gateway: &lt;restart-command&gt;. Reply `done` once it's back up.
+3. (Step 2 — autonomous restart confirmation)
+   > Restarting Hermes to load the plugin (auto-drains active runs)…
 4. (Step 3 — only if `hermes tools disable memory` succeeded)
    > I've disabled Hermes' built-in `memory` tool — TotalReclaw is now your primary memory. Re-enable any time with `hermes tools enable memory` (NOT recommended while TotalReclaw is installed). Wipe orphaned MEMORY.md / USER.md files with `hermes memory reset`.
 5. (Step 6a — explicit consent before account creation)
@@ -75,13 +75,15 @@ If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jum
    - `pip: command not found` / `No module named pip` (Hermes container shipped without pip): bootstrap silently with `"$HERMES_PYTHON" -m ensurepip --upgrade`, then retry 1b.
    - `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment): break silence and tell the user verbatim *"Your environment doesn't expose the Hermes CLI to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`. Also disable Hermes' built-in `memory` tool in the same UI if available — running both creates a silent intent-stealing bug."* Wait for `done` and skip to step 4 (verify account-setup tool bound).
 
-2. **Restart the gateway — Hermes does NOT auto-reload on plugin install (emit user-visible line 3).** Pick the right restart command for the user's deploy and emit it as user-visible line 3 (`Please restart your Hermes gateway: <restart-command>. Reply \`done\` once it's back up.`):
+2. **Restart the gateway autonomously via Hermes' built-in `/restart` slash command.** Hermes registers `/restart` as a session-scope slash command (see `hermes_cli/commands.py`: `CommandDef("restart", "Gracefully restart the gateway after draining active runs", "Session", ...)`). It drains active runs first, then reloads — safer than `kill -USR1` and works from inside the gateway because it's an in-process command, not an external CLI. Emit the slash command yourself; do NOT ask the user to run a shell command. Surface a single user-visible line confirming the action: `Restarting Hermes to load the plugin (auto-drains active runs)…`. Hermes will return after the restart finishes; resume at step 3.
+
+   **Fallback only if `/restart` is unavailable** (very old Hermes pre-2026.4, managed services that strip slash commands, or the user has explicitly requested manual control): pick the right restart command for the user's deploy and emit it as a single user-visible line (`Please restart your Hermes gateway: <restart-command>. Reply \`done\` once it's back up.`):
    - Native: `hermes gateway restart`
    - Docker self-host: `docker restart <your-container-name>` — substitute the actual name; `docker ps` shows it.
    - Managed service: their restart control.
    - systemd / launchd supervised: `kill -USR1 $(cat ~/.hermes/gateway.pid)` triggers a graceful-drain restart.
 
-   Do NOT run the restart yourself — your shell is inside the gateway you'd be restarting. Wait for the user's `done`.
+   Do NOT run any external `docker restart` / `kill` yourself — your shell is inside the gateway you'd be restarting. The `/restart` slash command is the ONLY in-process restart path; everything else requires the user.
 
 3. **Disable Hermes built-in memory tool (CRITICAL).** (Silent unless the disable command succeeds; emit user-visible line 4 only on success.) Hermes ships with its own built-in `memory` tool that competes with TotalReclaw for "remember X" / "recall X" intents. Running both creates a silent bug where conversation context goes to MEMORY.md instead of TotalReclaw's encrypted vault. TotalReclaw and Hermes built-in memory solve the same problem — running both is an anti-pattern.
 
@@ -92,7 +94,7 @@ If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jum
 
    If the command succeeds, emit user-visible line 4 (the disable confirmation). If it errors with `command not found` or "tool not found" (older Hermes versions, managed services that don't expose the CLI, or the built-in `memory` tool was already removed), skip line 4 silently and continue — the rc.25 tool-description bias still steers the LLM toward `totalreclaw_remember` as a fallback. Do not surface the disable failure.
 
-4. **Verify `totalreclaw_pair` is bound (silent).** If still missing after restart, surface a one-line error: `Plugin installed but tools didn't bind after restart. Asking for a second restart.` and resend line 3. Do not loop the install.
+4. **Verify `totalreclaw_pair` is bound (silent).** If still missing after restart, surface a one-line error: `Plugin installed but tools didn't bind after restart. Issuing /restart again.` and re-issue `/restart` once. Do not loop the install. If the second `/restart` still doesn't bind tools, fall back to the manual user-prompted restart path (see step 2 fallback) once.
 
 5. **Check for existing credentials (silent).** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit `✓ TotalReclaw is already set up.` and stop. Otherwise continue silently.
 
@@ -122,7 +124,7 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
 
 ## Diagnostics
 
-- `totalreclaw_*` tools not visible → gateway not restarted after install; ask the user once to restart their gateway. Common patterns: `hermes gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — replace with the user's actual container name), or the managed service's restart control. Wait for `done`.
+- `totalreclaw_*` tools not visible → gateway not restarted after install; issue Hermes' `/restart` slash command (in-process, drains active runs). If `/restart` is unavailable (very old Hermes, restricted managed service), fall back to asking the user once: `hermes gateway restart` (native), `docker restart <your-container-name>` (Docker self-host), or the managed service's restart control. Wait for `done`.
 - User says done but `credentials.json` missing → PIN expired or entered wrong phrase; call `totalreclaw_pair` again.
 - `onboarding required` → credentials missing; redo from the account-setup step.
 - `quota exceeded` → `totalreclaw_status`, then offer `totalreclaw_upgrade`.

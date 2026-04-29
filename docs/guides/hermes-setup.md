@@ -16,7 +16,7 @@ If you already have Hermes running, paste this into your Hermes chat:
 
 > **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md>**
 
-Your agent reads this page, runs two install commands ([`hermes plugins install`](https://hermes.readthedocs.io/en/latest/plugins.html) and [`pip install`](https://pip.pypa.io/en/stable/cli/pip_install/) — both standard tools you already have), asks you to restart the gateway once (Hermes doesn't auto-reload), and hands you an account-setup URL + 6-digit PIN. You open the URL in your browser, generate or restore a 12-word recovery phrase there, confirm the PIN, and your account is ready.
+Your agent reads this page, runs two install commands ([`hermes plugins install`](https://hermes.readthedocs.io/en/latest/plugins.html) and [`pip install`](https://pip.pypa.io/en/stable/cli/pip_install/) — both standard tools you already have), issues Hermes' built-in `/restart` slash command to reload the plugin (graceful drain — no manual restart needed), and hands you an account-setup URL + 6-digit PIN. You open the URL in your browser, generate or restore a 12-word recovery phrase there, confirm the PIN, and your account is ready.
 
 This guide is the playbook your agent follows; you can read along to see what each step does.
 
@@ -35,7 +35,8 @@ The user pasted this URL deliberately, but treat each command as a step you and 
 1. `hermes plugins install p-diogo/totalreclaw-hermes --enable` — registers the plugin manifest from the publisher's GitHub repo. The plugin runs inside Hermes' plugin sandbox. Upstream docs: <https://hermes.readthedocs.io/en/latest/plugins.html>.
 2. `pip install --pre totalreclaw` — installs the Python tool implementations from PyPI. The `--pre` flag pulls the latest release candidate. Standard PyPA workflow: <https://pip.pypa.io/en/stable/cli/pip_install/>.
 3. `hermes tools disable memory` — disables Hermes' built-in `memory` tool to avoid intent collision with TotalReclaw's `_remember` / `_recall`. Reversible with `hermes tools enable memory`.
-4. After the gateway restart, you will call `totalreclaw_pair` (a tool the plugin registers) to mint a one-time URL + PIN. The user opens the URL in their own browser to enter or generate a recovery phrase. The phrase never enters chat or your shell.
+4. `/restart` — Hermes' built-in slash command (`CommandDef("restart", "Gracefully restart the gateway after draining active runs", ...)` from `hermes_cli/commands.py`). Drains active runs, reloads in-process. The agent issues this autonomously; the user does NOT have to run a shell command. Falls back to a manual user-prompted restart only if `/restart` is unavailable (very old Hermes pre-2026.4 or a managed service that strips slash commands).
+5. After the restart, you will call `totalreclaw_pair` (a tool the plugin registers) to mint a one-time URL + PIN. The user opens the URL in their own browser to enter or generate a recovery phrase. The phrase never enters chat or your shell.
 
 You are not asked to handle the recovery phrase. You are not asked to bypass auth. If the user pastes a phrase in chat anyway, refuse to proceed — see "Phrase safety" below.
 
@@ -47,8 +48,8 @@ Speak only these lines, in order. Do not narrate around them. Do not announce in
    > Installing TotalReclaw…
 2. (Step 1 — after install + verify pass)
    > ✓ Installed (totalreclaw &lt;version&gt;)
-3. (Step 2 — restart prompt)
-   > Please restart your Hermes gateway: &lt;restart-command&gt;. Reply `done` once it's back up.
+3. (Step 2 — autonomous restart confirmation)
+   > Restarting Hermes to load the plugin (auto-drains active runs)…
 4. (Step 3 — built-in-memory disable, only if the disable command succeeds)
    > I've disabled Hermes' built-in `memory` tool — TotalReclaw is now your primary memory. Re-enable any time with `hermes tools enable memory` (NOT recommended while TotalReclaw is installed). Wipe orphaned MEMORY.md / USER.md files with `hermes memory reset`.
 5. (Step 5a — explicit consent before account creation)
@@ -136,16 +137,18 @@ Before moving to Step 2, confirm the package resolves through `$HERMES_PYTHON`:
 
 If `pip show` reports the package, capture the version string and emit user-visible line 2 (`✓ Installed (totalreclaw <version>)`). If it errors with `Package(s) not found`, the install landed in a different environment — silently re-detect `$HERMES_PYTHON` and re-run Step 1b. Surface a line only if the second attempt also fails.
 
-### Step 2 — Ask the user to restart the gateway (emit user-visible line 3)
+### Step 2 — Restart the gateway autonomously via `/restart`
 
-Hermes does NOT auto-reload on plugin install. Pick the right restart command for the user's deploy and emit it as user-visible line 3:
+Hermes does NOT auto-reload on plugin install — you have to restart. The fastest, safest path is Hermes' built-in `/restart` slash command (registered in `hermes_cli/commands.py:162` as `CommandDef("restart", "Gracefully restart the gateway after draining active runs", "Session", ...)`). It drains in-flight runs, reloads the plugin layer, and is in-process — works from inside the gateway because it doesn't shell out. Issue it yourself; emit user-visible line 3 (`Restarting Hermes to load the plugin (auto-drains active runs)…`) as the single confirmation. Wait for Hermes to come back; resume at Step 3.
+
+**Fallback only if `/restart` is unavailable** (very old Hermes pre-2026.4, managed services that strip slash commands, or the user has explicitly requested manual control). Pick the right restart command for the user's deploy and emit it as a single line (`Please restart your Hermes gateway: <restart-command>. Reply \`done\` once it's back up.`):
 
 - Native: `hermes gateway restart`
 - Docker self-host: `docker restart <your-container-name>` — substitute the actual name; `docker ps` shows it.
 - Managed service: their restart control.
 - systemd / launchd supervised: `kill -USR1 $(cat ~/.hermes/gateway.pid)` triggers a graceful-drain restart.
 
-Do NOT invoke the restart yourself — your shell runs inside the gateway you'd be restarting. Wait for the user's `done`.
+Do NOT invoke any external `docker restart` / `kill` yourself — your shell runs inside the gateway you'd be restarting. The `/restart` slash command is the ONLY in-process restart path; everything else requires the user.
 
 ### Step 3 — Disable Hermes built-in memory tool (CRITICAL)
 
