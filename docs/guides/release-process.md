@@ -8,6 +8,41 @@ This guide is for maintainers. Users install stable artifacts via the
 integration-specific setup guides (`openclaw-setup.md`, `hermes-setup.md`,
 etc.) and don't need to know about RCs.
 
+## Environment binding rule (HARD INVARIANT)
+
+**RC artifacts default to STAGING. Stable artifacts default to PRODUCTION.**
+
+| `release-type` | Default `TOTALRECLAW_SERVER_URL` | Audience |
+|---|---|---|
+| `rc` | `https://api-staging.totalreclaw.xyz` | QA + maintainers preparing a stable rollout. **NEVER point real users here.** |
+| `stable` | `https://api.totalreclaw.xyz` | Real users. Production data, durable, real SLA. |
+
+Why this matters:
+- Staging has **no SLA**, may be wiped or reset between RC cycles, and cannot
+  serve real-user vaults reliably. Pointing a real user at staging means they
+  can lose their account between QA runs.
+- Production has **billed Stripe tiers, real chain anchoring, real backups**.
+  Pointing a QA run at it generates noise, costs money, and pollutes
+  production analytics with throwaway test accounts.
+
+**Build-time binding** (shipped in plugin 3.3.3+ / hermes 2.3.3+):
+- Publish workflows bake `defaultServerUrl` into the artifact based on
+  `release-type`. RC artifacts contain the staging URL literal; stable
+  artifacts contain the production URL literal. Pre-publish CI guard fails
+  if a stable artifact contains `api-staging` or an RC artifact contains
+  `api.totalreclaw.xyz`.
+- Runtime sanity check warns loudly if an RC build is somehow pointed at
+  production OR a stable build at staging.
+- `RC mode` agents emit a prominent banner at install confirming the user
+  is on staging-only and should NOT use the install for production data.
+- User env (`TOTALRECLAW_SERVER_URL=...`) overrides always win — only the
+  default changes between RC and stable.
+
+**Pre-3.3.3 caveat:** every artifact had `api-staging.totalreclaw.xyz` baked
+in regardless of `release-type`. Stable users had to set
+`TOTALRECLAW_SERVER_URL` manually to hit production. From 3.3.3 forward the
+default is correct out-of-the-box.
+
 ## Flow
 
 ```
