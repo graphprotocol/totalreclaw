@@ -88,8 +88,7 @@ Managed Service uses a **dual-chain model**: Free tier stores on **Base Sepolia*
     │   ├── totalreclaw/   # Core product specs (architecture, server, skills, MCP)
     │   ├── subgraph/      # Subgraph specs (seed-to-subgraph, billing)
     │   └── tee/           # TEE specs (architecture, TDX SaaS)
-    ├── guides/            # User-facing guides (beta, import/migration, memory dedup)
-    └── ROADMAP.md         # Phased roadmap
+    └── guides/            # User-facing guides (beta, import/migration, memory dedup)
 ```
 
 ---

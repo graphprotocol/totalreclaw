@@ -13,7 +13,6 @@ TotalReclaw can import memories from external AI memory systems, so you can cons
 | **ChatGPT** | Conversations.json or memory text | Supported (unit tested) |
 | **Claude** | Memory text | Supported (unit tested) |
 | **Gemini** (Google) | Google Takeout HTML (conversation history) | Supported |
-| More sources planned | See [Roadmap](../ROADMAP.md#phase-5-import--migration-future) | -- |
 
 ---
 
@@ -238,4 +237,4 @@ The following sources are planned but not yet implemented:
 - **QMD** — OpenClaw's native memory system
 - **Generic JSON/CSV** -- catch-all for other tools
 
-See the [full roadmap](../ROADMAP.md#phase-5-import--migration-future) for details.
+Track progress and request additional sources via [GitHub Issues](https://github.com/p-diogo/totalreclaw/issues).
