@@ -39,6 +39,7 @@ from totalreclaw.claims_helper import (
     hours_since,
     is_digest_blob,
     is_digest_stale,
+    is_stub_blob_hex,
     is_v1_blob,
     map_type_to_category,
     read_blob_unified,
@@ -644,6 +645,51 @@ def test_is_digest_blob_legacy_doc_returns_false() -> None:
 def test_is_digest_blob_garbage_returns_false() -> None:
     assert is_digest_blob("not json at all") is False
     assert is_digest_blob("") is False
+
+
+# ---------------------------------------------------------------------------
+# is_stub_blob_hex — supersede tombstone detection (mirror of TS isStubBlob)
+# ---------------------------------------------------------------------------
+
+
+def test_is_stub_blob_hex_empty() -> None:
+    assert is_stub_blob_hex("") is True
+
+
+def test_is_stub_blob_hex_bare_prefix() -> None:
+    assert is_stub_blob_hex("0x") is True
+    assert is_stub_blob_hex("0X") is True
+
+
+def test_is_stub_blob_hex_single_zero_byte() -> None:
+    # Exact shape observed on the QA wallet — supersede stub == "0x00".
+    assert is_stub_blob_hex("0x00") is True
+    assert is_stub_blob_hex("00") is True
+
+
+def test_is_stub_blob_hex_all_zero_run() -> None:
+    assert is_stub_blob_hex("0x0000") is True
+    assert is_stub_blob_hex("000000000000000000000000") is True
+
+
+def test_is_stub_blob_hex_real_ciphertext_returns_false() -> None:
+    # Synthetic 40-byte (= NONCE 24 + TAG 16) all-ones blob — minimum
+    # plausible XChaCha20-Poly1305 ciphertext envelope.
+    real_blob = "0x" + "ff" * 40
+    assert is_stub_blob_hex(real_blob) is False
+
+
+def test_is_stub_blob_hex_short_nonzero_returns_false() -> None:
+    # Conservative: a 30-byte non-zero blob is suspicious but NOT a stub —
+    # let the decrypt path log it as a real WARN so wire-format breaks
+    # surface instead of being silently swallowed.
+    assert is_stub_blob_hex("0x" + "ab" * 30) is False
+
+
+def test_is_stub_blob_hex_non_string_returns_true() -> None:
+    # Defensive: any non-string input is treated as a stub.
+    assert is_stub_blob_hex(None) is True  # type: ignore[arg-type]
+    assert is_stub_blob_hex(42) is True  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

@@ -139,6 +139,98 @@ class TestSearchFacts:
         assert len(results) >= 1
         assert "Pedro prefers dark mode" in results[0].text
 
+    @pytest.mark.asyncio
+    async def test_search_skips_stub_blob_silently(self, keys, caplog):
+        """Recall MUST silently skip 0x00 supersede tombstones, not WARN per ID.
+
+        Regression test for the legacy QA-vault recall noise where ~9 facts
+        with ``encryptedBlob == "0x00"`` produced one
+        ``Failed to decrypt candidate <id>: ... Encrypted data too short``
+        WARN per recall per stale ID. The fix filters stub blobs
+        pre-decrypt and emits a single aggregate INFO instead.
+        """
+        import logging
+
+        # One real fact + one tombstone stub. The stub MUST be filtered
+        # out before any decrypt attempt (no WARN), and the real fact
+        # MUST still be returned.
+        encrypted_b64 = encrypt("Pedro prefers dark mode", keys.encryption_key)
+        encrypted_hex = "0x" + base64.b64decode(encrypted_b64).hex()
+
+        relay = AsyncMock(spec=RelayClient)
+        relay.query_subgraph = AsyncMock(
+            return_value={
+                "data": {
+                    "blindIndexes": [
+                        {
+                            "id": "idx-real",
+                            "fact": {
+                                "id": "fact-real",
+                                "encryptedBlob": encrypted_hex,
+                                "encryptedEmbedding": None,
+                                "decayScore": "0.5",
+                                "timestamp": "2026-03-29T10:00:00.000Z",
+                                "isActive": True,
+                                "contentFp": "abc",
+                            },
+                        },
+                        {
+                            "id": "idx-stub",
+                            "fact": {
+                                "id": "fact-stub-tombstone",
+                                # Exact shape observed on the QA wallet —
+                                # supersede stub written by the relay.
+                                "encryptedBlob": "0x00",
+                                "encryptedEmbedding": None,
+                                "decayScore": "0.5",
+                                "timestamp": "2026-03-29T10:00:00.000Z",
+                                "isActive": True,
+                                "contentFp": "def",
+                            },
+                        },
+                    ]
+                }
+            }
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="totalreclaw.operations"):
+            results = await search_facts(
+                query="Pedro dark mode preferences",
+                keys=keys,
+                owner="0x1234",
+                relay=relay,
+            )
+
+        # The real fact still comes back.
+        assert len(results) >= 1
+        assert any("Pedro prefers dark mode" in r.text for r in results)
+
+        # No per-stub WARN spam.  Specifically: the legacy
+        # "Failed to decrypt candidate <stub-id>" WARN must NOT appear —
+        # the pre-decrypt filter caught it.  The aggregate INFO (checked
+        # below) is allowed to mention the ID.
+        warn_msgs = [
+            r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING
+        ]
+        for msg in warn_msgs:
+            assert "fact-stub-tombstone" not in msg, (
+                f"Stub fact triggered a >=WARN log: {msg}"
+            )
+            assert "Encrypted data too short" not in msg, (
+                f"Pre-filter missed a stub: WARN-level decrypt failure leaked through: {msg}"
+            )
+
+        # And there's exactly one aggregate INFO summarising the skip.
+        info_msgs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.INFO and "stub/tombstone" in r.getMessage()
+        ]
+        assert len(info_msgs) == 1, (
+            f"Expected exactly one aggregate stub-skip INFO, got {len(info_msgs)}: {info_msgs}"
+        )
+        assert "fact-stub-tombstone" in info_msgs[0]
+
 
 class TestForgetFact:
     @pytest.mark.asyncio

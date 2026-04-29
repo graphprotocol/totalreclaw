@@ -543,6 +543,35 @@ def is_digest_blob(decrypted: str) -> bool:
     return isinstance(obj, dict) and obj.get("c") == DIGEST_CATEGORY
 
 
+def is_stub_blob_hex(blob_hex: str) -> bool:
+    """Is this subgraph-stored ``encryptedBlob`` hex a supersede tombstone?
+
+    Mirror of ``isStubBlob`` in ``skill/plugin/digest-sync.ts``. A real
+    XChaCha20-Poly1305 ciphertext requires at least 40 bytes (24 nonce +
+    16 tag), so any hex that decodes to a tombstone-shaped payload — empty,
+    or a run of all-zero bytes — cannot plausibly be a real claim and
+    SHOULD be filtered pre-decrypt to avoid noisy "Encrypted data too
+    short" warnings on every recall.
+
+    Conservative on purpose: short-but-non-stub blobs (e.g. a stray 30-byte
+    payload) still fall through to decrypt so a genuine wire-format break
+    still surfaces as a WARN rather than being silently swallowed.
+
+    Stubs detected:
+
+    * Empty string
+    * Bare ``0x`` / ``0X`` prefix
+    * All-zero hex of any length (e.g. ``0x00``, ``0000``) — explicit
+      tombstone shape the relay emits when superseding a fact.
+    """
+    if not isinstance(blob_hex, str):
+        return True
+    stripped = blob_hex[2:] if blob_hex.startswith(("0x", "0X")) else blob_hex
+    if not stripped:
+        return True
+    return all(c == "0" for c in stripped)
+
+
 def build_digest_claim(
     digest_json: str,
     compiled_at: str,

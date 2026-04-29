@@ -38,6 +38,7 @@ from .claims_helper import (
     build_canonical_claim_v1,
     compute_entity_trapdoors,
     is_digest_blob,
+    is_stub_blob_hex,
     read_blob_unified,
     read_claim_from_blob,
 )
@@ -591,9 +592,22 @@ async def search_facts(
 
     # Decrypt candidates and build reranker input
     candidates: list[RerankerCandidate] = []
+    skipped_stub_ids: list[str] = []
     for fact_id, fact in all_facts.items():
         try:
             encrypted_blob_hex = fact.get("encryptedBlob", "")
+            # Stub / tombstone blobs (encryptedBlob == "0x00" or all-zero
+            # hex) are supersede markers the relay writes when a fact is
+            # auto-resolved.  Decrypting them always fails with
+            # "Encrypted data too short" and pollutes recall logs with a
+            # WARN per stale ID per recall — observed on legacy QA vault
+            # with ~9 stubs from rc-era pin/supersede flows.  Filter
+            # pre-decrypt; emit a single aggregate INFO at the end.
+            #
+            # Mirrors ``isStubBlob`` in ``skill/plugin/digest-sync.ts``.
+            if is_stub_blob_hex(encrypted_blob_hex):
+                skipped_stub_ids.append(fact_id)
+                continue
             # Subgraph returns 0x-prefixed hex
             if encrypted_blob_hex.startswith("0x"):
                 encrypted_blob_hex = encrypted_blob_hex[2:]
@@ -654,6 +668,18 @@ async def search_facts(
         except Exception as e:
             logger.warning("Failed to decrypt candidate %s: %s", fact_id, e)
             continue
+
+    if skipped_stub_ids:
+        # Aggregate INFO instead of per-fact WARN spam.  Truncate to keep
+        # log lines reasonable when a vault has many tombstones.
+        sample = ", ".join(skipped_stub_ids[:5])
+        suffix = f" (+{len(skipped_stub_ids) - 5} more)" if len(skipped_stub_ids) > 5 else ""
+        logger.info(
+            "Skipped %d stub/tombstone blob(s) during recall: %s%s",
+            len(skipped_stub_ids),
+            sample,
+            suffix,
+        )
 
     if not candidates:
         return []
