@@ -4,6 +4,155 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.3-rc.1] — 2026-04-30
+
+Combined RC bundle:
+
+- Fix the OpenClaw runtime-scanner regression that blocked `openclaw plugins
+  install @totalreclaw/totalreclaw` on stable 3.3.2 (Telegram QA, OpenClaw
+  2026.4.22).
+- Implement the codified RC=staging / stable=production environment-binding
+  rule from PR #165.
+- Add a one-shot RC/staging banner so QA testers can't accidentally use an
+  RC build for real data.
+- Decouple the ~700 MB embedder bundle download from the pair-completion
+  gate (issue [#187](https://github.com/p-diogo/totalreclaw-internal/issues/187)).
+- Document the direct-node fallback for inside-gateway agents that hit
+  CLI deadlock (issue [#184](https://github.com/p-diogo/totalreclaw-internal/issues/184)).
+
+### Fixed — OpenClaw scanner blocking install on `child_process` import
+
+User chat QA on stable 3.3.2 hit:
+
+> The plugin install was blocked — OpenClaw flagged it because the plugin's
+> `postinstall.mjs` uses `child_process` (shell execution), which triggers
+> the dangerous-code-pattern safety gate.
+
+Workaround was `--allow-dangerous`. Real fix (this RC): drop `postinstall.mjs`
+entirely. The runtime `register(api)` path already (since 3.3.1-rc.21 / 22)
+sweeps `.openclaw-install-stage-*` siblings AND clears the
+`.tr-partial-install` marker, so the postinstall script was redundant.
+
+- `skill/plugin/postinstall.mjs` deleted.
+- `skill/plugin/postinstall-validation.test.ts` deleted (the script it
+  exercised no longer exists; the runtime equivalents are still covered by
+  `install-staging-cleanup.test.ts` + `partial-install-detection.test.ts` +
+  `install-reload-idempotency.test.ts`).
+- `package.json` no longer declares `scripts.postinstall` and no longer
+  ships `postinstall.mjs` in the `files` array.
+
+Behavior preserved:
+- `preinstall` still writes `.tr-partial-install` (uses `node -e` only — no
+  `child_process` import).
+- The `.tr-partial-install` marker is now cleared exclusively at plugin
+  load time by `register(api)`.
+- `.openclaw-install-stage-*` orphan sweep happens at register() time via
+  `cleanupInstallStagingDirs(pluginDir)`.
+- Critical deps (`@scure/bip39`, `@scure/bip39/wordlists/english.js`,
+  `@totalreclaw/core`, `@totalreclaw/client`, etc.) are imported at module
+  top of `index.ts` — if any is missing, the SDK loader surfaces the
+  import error directly AND the existing `.error.json` write path drops a
+  structured marker (issue #186 in 3.3.2-rc.1). The retry-by-respawn was
+  nice-to-have, not load-bearing.
+
+OpenClaw's runtime scanner (different code path from the plugin's local
+`check-scanner.mjs`) does NOT honor the `// scanner-sim: allow` comment.
+The local scanner's previous guidance ("Moving the subprocess call into a
+separate post-install helper that OpenClaw sandboxes") turned out to be
+incorrect — the runtime scanner inspects the full tarball and flags any
+`child_process` import regardless of file role. The local scanner now has
+nothing to flag because `child_process` no longer appears anywhere in the
+shipped tarball.
+
+### Added — ENV binding implementation (PR #165 codified rule)
+
+| `release-type` | Default `TOTALRECLAW_SERVER_URL` | Audience |
+|---|---|---|
+| `rc` | `https://api-staging.totalreclaw.xyz` | QA only — never point real users here |
+| `stable` | `https://api.totalreclaw.xyz` | Production users |
+
+User env override (`TOTALRECLAW_SERVER_URL=...`) always wins.
+
+Implementation:
+
+- Source-of-truth in `config.ts` / `index.ts` / `subgraph-store.ts` /
+  `skill.json` now references `api-staging.totalreclaw.xyz` everywhere.
+  RC tarballs ship the staging URL by design.
+- Stable publish workflows (`npm-publish.yml` + `publish-clawhub.yml`)
+  add a "Bind stable artifacts to production URLs" step that
+  sed-replaces `api-staging.totalreclaw.xyz` → `api.totalreclaw.xyz`
+  across `dist/**.js`, `skill.json`, and the SKILL.md / CLAWHUB.md /
+  CHANGELOG.md / README.md prose, before pack/publish.
+- New `skill/scripts/check-url-binding.mjs` guard runs at
+  `prepublishOnly` time + as a workflow step. It asserts the right
+  invariant for the resolved release type (RC artifact MUST contain
+  `api-staging.totalreclaw.xyz`; stable artifact MUST contain
+  `api.totalreclaw.xyz` AND ZERO staging references). Misconfigured
+  artifacts fail the publish before reaching the registry.
+- `prepublishOnly` reads `TOTALRECLAW_RELEASE_TYPE=stable|rc` (default
+  `rc` for safety) so local `npm publish` invocations also assert the
+  invariant.
+- New `url-binding.test.ts` regression covers both modes against a
+  synthetic artifact tree.
+
+### Added — RC/staging banner (one-shot per gateway process)
+
+When the bundled `serverUrl` resolves to `api-staging.totalreclaw.xyz`
+AND the user has not overridden via env, the plugin emits a prominent
+prependContext banner on the first non-trivial `before_agent_start`:
+
+> ⚠️ TotalReclaw is running in RC / staging mode
+>
+> This build is bound to `api-staging.totalreclaw.xyz`. Staging has **no
+> SLA** and may be wiped between QA cycles. Do **NOT** use this build for
+> real data.
+>
+> For production, install the stable release: `openclaw plugins install
+> @totalreclaw/totalreclaw` (no `@rc` suffix). To pin a custom server,
+> set `TOTALRECLAW_SERVER_URL=https://api.totalreclaw.xyz` in your env.
+
+Stable artifacts (where the workflow seded the URL to production) never
+fire the banner. Per-process one-shot semantics — restart re-fires once.
+
+### Added — `totalreclaw_preload_embedder` tool + non-blocking prefetch (issue #187)
+
+- New tool: `totalreclaw_preload_embedder` lets the agent download the
+  embedder bundle ahead of `totalreclaw_pair`. Includes a 500 MB
+  disk-space pre-flight (refuses if the cache mount is below threshold)
+  and surfaces a structured `{ status: cache_hit | fetched | failed }`
+  response.
+- Register-time non-blocking prefetch: `register(api)` now fires
+  `prefetchEmbedderBundle()` as a fire-and-forget Promise immediately
+  after `configureEmbedder()`. The bundle download starts on gateway
+  boot, BEFORE the user completes pair — closing the catch-22 where the
+  bundle was only fetched on the first `generateEmbedding()` call (which
+  is gated behind `requireFullSetup()`).
+- Toggle: `TOTALRECLAW_DISABLE_EMBEDDER_PREFETCH=1` skips the auto-prefetch
+  (CI / sandboxed-network environments). The next `generateEmbedding()`
+  call still triggers the download via the same idempotent path.
+
+### Documentation — direct-node fallback for CLI deadlock (issue #184)
+
+- `docs/guides/openclaw-setup.md` Troubleshooting now documents the
+  filesystem-manifest probe (`.loaded.json` / `.error.json`) and the
+  `node ~/.openclaw/extensions/totalreclaw/dist/pair-cli.js
+  --url-pin-only` direct-node fallback for when the `openclaw` CLI
+  deadlocks (exit 124) inside gateway-internal agent shells.
+- `skill/SKILL.md` mirrors the same fallbacks for the agent's own
+  instructions: prefer reading the `.loaded.json` manifest over
+  re-running `openclaw plugins list`; switch to direct-node `pair-cli.js`
+  when `totalreclaw_pair` itself hangs.
+
+### Known issues filed during this RC
+
+Five new observation issues filed via the QA pipeline (severity:minor,
+not blockers for 3.3.3-rc.1 promote):
+- [#208](https://github.com/p-diogo/totalreclaw-internal/issues/208) — Hermes auto-extraction burst pattern can trip per-model rate limits
+- [#209](https://github.com/p-diogo/totalreclaw-internal/issues/209) — `HERMES_MODEL` env swap doesn't propagate to running daemon
+- [#210](https://github.com/p-diogo/totalreclaw-internal/issues/210) — Hermes Docker venv ships without pip
+- [#211](https://github.com/p-diogo/totalreclaw-internal/issues/211) — ClawHub artifact's `package.json` retains rc-version label after stable promote
+- [#212](https://github.com/p-diogo/totalreclaw-internal/issues/212) — `wipe-qa.sh` model-pin step appends duplicate `HERMES_MODEL` lines
+
 ## [3.3.2-rc.1] — 2026-04-27
 
 Hotfix bundle for the inside-gateway agent-flow ship-stoppers caught by the

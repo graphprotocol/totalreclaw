@@ -91,6 +91,31 @@ function activeRuntimeConfig(): EmbedderRuntimeConfig {
   return { cacheRoot: defaultCacheRoot(), rcTag: '0.0.0-dev' };
 }
 
+/**
+ * 3.3.3-rc.1 (issue #187 — ONNX decouple): prefetch the embedder bundle
+ * WITHOUT loading the model into memory. Used to download the
+ * ~700 MB tarball pre-pair so the user does not hit the network round-trip
+ * mid-conversation. Idempotent — subsequent calls are cache-hit no-ops.
+ *
+ * Returns:
+ *   - `'cache_hit'` if the bundle was already extracted + verified.
+ *   - `'fetched'` if the bundle was downloaded this call.
+ *   - throws on transport / extraction failure.
+ *
+ * Pre-flight is the caller's job (disk-space, network reachability) — this
+ * function focuses on the cache-resolve + fetch-on-miss path so it can also
+ * be reused as a fast cache-validation probe.
+ */
+export async function prefetchEmbedderBundle(opts?: { log?: (msg: string) => void }): Promise<'cache_hit' | 'fetched'> {
+  const cfg = activeRuntimeConfig();
+  const loaded = await loadEmbedder({
+    cacheRoot: cfg.cacheRoot,
+    rcTag: cfg.rcTag,
+    log: opts?.log,
+  });
+  return loaded.wasFetched ? 'fetched' : 'cache_hit';
+}
+
 /** Lazily initialized state. */
 let pipelineExtractor: any = null;
 let autoTokenizer: any = null;

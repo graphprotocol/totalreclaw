@@ -138,7 +138,15 @@ export const CONFIG = {
   get sessionId(): string | null {
     return getSessionId();
   },
-  serverUrl: (process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz').replace(/\/+$/, ''),
+  // 3.3.3-rc.1: source default is `api-staging.totalreclaw.xyz` per the
+  // codified RC=staging / stable=production rule (PR #165). The workflow
+  // step "Bind stable to production URLs" in `npm-publish.yml` /
+  // `publish-clawhub.yml` sed-replaces `api-staging.totalreclaw.xyz` ->
+  // `api.totalreclaw.xyz` across the built `dist/` tree (and skill.json /
+  // SKILL.md / CHANGELOG / CLAWHUB.md / package.json) when
+  // `release-type=stable`. RC publishes leave the staging URL untouched.
+  // User overrides via `TOTALRECLAW_SERVER_URL=...` always win.
+  serverUrl: (process.env.TOTALRECLAW_SERVER_URL || 'https://api-staging.totalreclaw.xyz').replace(/\/+$/, ''),
   selfHosted: process.env.TOTALRECLAW_SELF_HOSTED === 'true',
   credentialsPath: process.env.TOTALRECLAW_CREDENTIALS_PATH || path.join(home, '.totalreclaw', 'credentials.json'),
   // 3.2.0 onboarding state file — separate from credentials.json so it
@@ -183,6 +191,21 @@ export const CONFIG = {
   dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || '',
   entryPointAddress: process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || '',
   rpcUrl: process.env.TOTALRECLAW_RPC_URL || '',
+
+  // 3.3.3-rc.1 (issue #187 — ONNX decouple): kill switch for the
+  // non-blocking embedder bundle prefetch fired from register(). Set to
+  // `1` in CI / sandboxed environments where the GitHub-Releases CDN is
+  // unreachable. The next call to generateEmbedding() still triggers the
+  // download via the same idempotent path.
+  embedderPrefetchDisabled: process.env.TOTALRECLAW_DISABLE_EMBEDDER_PREFETCH === '1',
+
+  // 3.3.3-rc.1 (PR #165 implementation): observable form of "did the user
+  // explicitly override the bundled-default server URL via env?". Used
+  // by the RC-staging banner check in index.ts so the banner suppresses
+  // when the user has pinned a custom URL (production or self-hosted).
+  // Lives here so index.ts stays free of process.env reads (scanner
+  // env-harvesting rule).
+  serverUrlEnvOverridden: !!process.env.TOTALRECLAW_SERVER_URL,
 
   // Tuning knobs — default values used only as local fallback for
   // self-hosted mode. Managed-service clients override these from the relay

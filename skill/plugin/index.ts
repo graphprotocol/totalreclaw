@@ -81,6 +81,7 @@ import {
   getEmbeddingDims,
   getEmbeddingModelId,
   configureEmbedder,
+  prefetchEmbedderBundle,
 } from './llm-client.js';
 import {
   defaultAuthProfilesRoot,
@@ -749,6 +750,21 @@ let firstRunAfterInit = true;
 let firstRunWelcomeShown = false;
 
 /**
+ * 3.3.3-rc.1 — RC-mode staging-only banner (PR #165 implementation).
+ *
+ * Fires ONCE per gateway process when:
+ *   - the bundled-default `serverUrl` resolves to `api-staging.totalreclaw.xyz`
+ *     (RC artifact, not stable), AND
+ *   - the user has NOT overridden via `TOTALRECLAW_SERVER_URL=...` env.
+ *
+ * Goal: a fresh QA tester can't accidentally use an RC build for real data
+ * without seeing a clear "RC = staging, no SLA, may be wiped" warning.
+ * One-shot at the first `before_agent_start` after register(); never spams
+ * per-turn. A fresh gateway restart re-fires it once.
+ */
+let stagingBannerShown = false;
+
+/**
  * Derive keys from the recovery phrase, load credentials, and register with
  * the server if this is the first run.
  *
@@ -761,7 +777,9 @@ let firstRunWelcomeShown = false;
  * directs the caller to `openclaw totalreclaw onboard`.
  */
 async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
-  const serverUrl = CONFIG.serverUrl || 'https://api.totalreclaw.xyz';
+  // 3.3.3-rc.1: staging is the source default per #165. Stable build-time
+  // sed-replace flips `api-staging` -> `api` in dist/.
+  const serverUrl = CONFIG.serverUrl || 'https://api-staging.totalreclaw.xyz';
   let masterPassword = CONFIG.recoveryPhrase;
 
   // 3.2.0: if the env var is unset, probe credentials.json for a
@@ -2967,13 +2985,39 @@ const plugin = {
         api.logger.warn(`TotalReclaw: configureEmbedder failed (will use defaults): ${msg}`);
       }
 
+      // 3.3.3-rc.1 (issue #187 — ONNX decouple): kick off a non-blocking
+      // bundle prefetch so the ~700 MB embedder tarball starts streaming
+      // as soon as the gateway boots, BEFORE the user completes
+      // `totalreclaw_pair`. Decouples the model download from the
+      // pair-completion gate the previous flow imposed via
+      // `requireFullSetup()` -> first `generateEmbedding()` call.
+      // Fire-and-forget — never awaits, never throws on failure (the next
+      // `generateEmbedding()` call retries via the same idempotent path).
+      // Disabled when `TOTALRECLAW_DISABLE_EMBEDDER_PREFETCH=1` (CI / tests
+      // where the network is sandboxed away). The env read lives in
+      // config.ts; we read the resolved CONFIG flag here so this file
+      // stays scanner-clean (no env lookups in index.ts).
+      if (!CONFIG.embedderPrefetchDisabled) {
+        prefetchEmbedderBundle({ log: (msg) => api.logger.info(msg) })
+          .then((result) => {
+            api.logger.info(`TotalReclaw: embedder prefetch ${result === 'fetched' ? 'completed (downloaded bundle)' : 'cache hit'}`);
+          })
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            api.logger.warn(
+              `TotalReclaw: embedder prefetch failed (non-fatal — will retry on first generateEmbedding): ${msg}`,
+            );
+          });
+      }
+
       // 3.3.1-rc.22 (rc.21 finding #5): self-heal partial-install marker.
-      // The `preinstall` npm script writes `.tr-partial-install`; the
-      // `postinstall` script removes it on a successful install. If we
-      // have gotten this far the loader did register us — meaning the
-      // install succeeded enough to be useful — so any lingering marker
-      // (e.g. npm ran preinstall but postinstall misfired) is stale.
-      // Clear it so the next retry's detector does not see a false positive.
+      // The `preinstall` npm script writes `.tr-partial-install`; clearing
+      // it has been the runtime's job since 3.3.3-rc.1 dropped postinstall.mjs
+      // (OpenClaw scanner blocked the install on the subprocess-spawn import
+      // — see 3.3.3-rc.1 PR). If we have gotten this far the loader did
+      // register us — meaning the install succeeded enough to be useful —
+      // so any lingering marker is stale. Clear it so the next retry's
+      // detector does not see a false positive.
       //
       // 3.3.1-rc.22 (rc.21 finding #6) — gateway/reload upstream caveat:
       // OpenClaw's config-watcher fires `gateway/reload` when
@@ -4200,6 +4244,120 @@ const plugin = {
         },
       },
       { name: 'totalreclaw_status' },
+    );
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_preload_embedder (3.3.3-rc.1 — issue #187)
+    // ---------------------------------------------------------------
+    //
+    // Decouples the ~700 MB embedder bundle download from the pair-
+    // completion gate. The agent can call this BEFORE
+    // `totalreclaw_pair` to pre-flight disk space, kick off the
+    // download, and surface the completion state. The non-blocking
+    // prefetch in `register()` already starts the download
+    // unconditionally; this tool is an explicit on-demand hook for
+    // agents that want to confirm completion (or trigger a retry on
+    // network failure) without first completing pair.
+    //
+    // Behavior:
+    //   - Disk-space pre-flight: refuses if free disk < 500 MB on the
+    //     embedder cache mount. Surfaces the path + free bytes so the
+    //     user can clear space.
+    //   - Triggers `prefetchEmbedderBundle()` (idempotent — cache hit
+    //     returns immediately).
+    //   - Returns a structured success message with status:
+    //     `cache_hit | fetched | failed`.
+    //
+    // Phrase-safety: this tool does NOT touch credentials.json,
+    // mnemonics, or keys. It only touches `~/.totalreclaw/embedder/`
+    // and the GitHub Releases CDN.
+
+    api.registerTool(
+      {
+        name: 'totalreclaw_preload_embedder',
+        label: 'Preload Embedder',
+        description:
+          'Download the local-embedding model bundle ahead of pair completion. Use this when the user wants to set up TotalReclaw on a slow connection or run an offline-after-setup workflow. Returns success once the ~700 MB bundle is cached at ~/.totalreclaw/embedder/.',
+        parameters: {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        },
+        async execute() {
+          try {
+            // Disk-space pre-flight: refuse if < 500 MB free on the
+            // embedder cache mount. Best-effort — if statfs fails, we
+            // proceed without the pre-flight rather than blocking.
+            const fsModule = await import('node:fs');
+            const cacheRoot = CONFIG.embedderCachePath;
+            const REQUIRED_BYTES = 500 * 1024 * 1024;
+            try {
+              // Find the deepest existing parent so statfs has a real
+              // mount to measure (loadEmbedder will mkdir under it
+              // anyway).
+              let probeDir = cacheRoot;
+              while (true) {
+                try {
+                  fsModule.statSync(probeDir);
+                  break;
+                } catch {
+                  const parent = nodePath.dirname(probeDir);
+                  if (parent === probeDir) break;
+                  probeDir = parent;
+                }
+              }
+              const stats = (fsModule as unknown as {
+                statfsSync?: (p: string) => { bavail: bigint | number; bsize: bigint | number };
+              }).statfsSync?.(probeDir);
+              if (stats) {
+                const bavail = typeof stats.bavail === 'bigint' ? Number(stats.bavail) : stats.bavail;
+                const bsize = typeof stats.bsize === 'bigint' ? Number(stats.bsize) : stats.bsize;
+                const freeBytes = bavail * bsize;
+                if (freeBytes > 0 && freeBytes < REQUIRED_BYTES) {
+                  const freeMb = Math.round(freeBytes / (1024 * 1024));
+                  return {
+                    content: [{
+                      type: 'text',
+                      text: `Insufficient free disk space for embedder bundle. Required: 500 MB. Available at ${probeDir}: ${freeMb} MB. Free up space and retry.`,
+                    }],
+                    details: { status: 'failed', reason: 'disk_space', free_mb: freeMb, required_mb: 500, cache_root: cacheRoot },
+                  };
+                }
+              }
+            } catch {
+              // statfs probe failed — surface a soft warning in logs
+              // but proceed with the download anyway.
+              api.logger.info('totalreclaw_preload_embedder: disk-space probe unavailable, proceeding without pre-flight');
+            }
+
+            // Trigger the prefetch. This is idempotent (cache hit returns
+            // immediately) so it's safe to invoke even when the
+            // background prefetch from register() already completed.
+            const result = await prefetchEmbedderBundle({
+              log: (msg) => api.logger.info(msg),
+            });
+            const human =
+              result === 'fetched'
+                ? `Embedder bundle downloaded and cached at ${cacheRoot}. Subsequent embedding calls run in-memory.`
+                : `Embedder bundle already cached at ${cacheRoot} — no download needed.`;
+            return {
+              content: [{ type: 'text', text: human }],
+              details: { status: result, cache_root: cacheRoot },
+            };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            api.logger.error(`totalreclaw_preload_embedder failed: ${message}`);
+            return {
+              content: [{
+                type: 'text',
+                text: `Embedder bundle preload failed: ${humanizeError(message)}. The plugin will retry on first embedding call.`,
+              }],
+              details: { status: 'failed', reason: 'fetch_error', message },
+            };
+          }
+        },
+      },
+      { name: 'totalreclaw_preload_embedder' },
     );
 
     // ---------------------------------------------------------------
@@ -5672,6 +5830,39 @@ const plugin = {
             return undefined;
           }
 
+          // 3.3.3-rc.1 — RC-staging banner (PR #165 implementation).
+          // Build a one-shot prefix when the bundled default points at staging
+          // AND the user hasn't overridden via env. This prefix is prepended
+          // to whichever context block the rest of the hook produces.
+          let stagingBannerBlock = '';
+          if (!stagingBannerShown) {
+            try {
+              const usingStagingDefault = CONFIG.serverUrl.includes('api-staging.totalreclaw.xyz');
+              const userOverrode = CONFIG.serverUrlEnvOverridden;
+              if (usingStagingDefault && !userOverrode) {
+                stagingBannerBlock =
+                  '## ⚠️ TotalReclaw is running in RC / staging mode\n\n' +
+                  'This build is bound to `api-staging.totalreclaw.xyz`. Staging has **no SLA** ' +
+                  'and may be wiped between QA cycles. Do **NOT** use this build for real data.\n\n' +
+                  'For production, install the stable release: `openclaw plugins install ' +
+                  '@totalreclaw/totalreclaw` (no `@rc` suffix). To pin a custom server, set ' +
+                  '`TOTALRECLAW_SERVER_URL=https://api.totalreclaw.xyz` in your env.\n\n';
+                stagingBannerShown = true;
+                api.logger.warn(
+                  'TotalReclaw: RC/staging build active (api-staging.totalreclaw.xyz). ' +
+                  'See docs/guides/release-process.md for the RC=staging / stable=production rule.',
+                );
+              } else {
+                // Non-RC artifact OR user override — never fire the banner this
+                // gateway-process lifetime.
+                stagingBannerShown = true;
+              }
+            } catch {
+              // Best-effort; never block session start on banner derivation.
+              stagingBannerShown = true;
+            }
+          }
+
           await ensureInitialized(api.logger);
 
           // 3.2.0 onboarding pending: emit a non-secret guidance banner so
@@ -5701,6 +5892,7 @@ const plugin = {
             }
             return {
               prependContext:
+                stagingBannerBlock +
                 welcomeBlock +
                 '## TotalReclaw setup pending\n\n' +
                 'TotalReclaw encrypted memory is installed but not yet set up on this machine. ' +
@@ -5802,6 +5994,7 @@ const plugin = {
                   api.logger.info(`Digest injection: state=${injectResult.state}`);
                   return {
                     prependContext:
+                      stagingBannerBlock +
                       `## Your Memory\n\n${injectResult.promptText}` + welcomeBack + billingWarning,
                   };
                 }
@@ -5848,7 +6041,7 @@ const plugin = {
                 const lines = cachedFacts.slice(0, 8).map((f, i) =>
                   `${i + 1}. ${f.text} (importance: ${f.importance}/10, cached)`,
                 );
-                return { prependContext: `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
+                return { prependContext: stagingBannerBlock + `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
               }
             }
 
@@ -5861,7 +6054,7 @@ const plugin = {
               const lines = cachedFacts.slice(0, 8).map((f, i) =>
                 `${i + 1}. ${f.text} (importance: ${f.importance}/10, cached)`,
               );
-              return { prependContext: `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
+              return { prependContext: stagingBannerBlock + `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
             }
 
             if (allTrapdoors.length === 0) return undefined;
@@ -5878,7 +6071,7 @@ const plugin = {
                 const lines = cachedFacts.slice(0, 8).map((f, i) =>
                   `${i + 1}. ${f.text} (importance: ${f.importance}/10, cached)`,
                 );
-                return { prependContext: `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
+                return { prependContext: stagingBannerBlock + `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
               }
               return undefined;
             }
@@ -5905,7 +6098,7 @@ const plugin = {
               const lines = cachedFacts.slice(0, 8).map((f, i) =>
                 `${i + 1}. ${f.text} (importance: ${f.importance}/10, cached)`,
               );
-              return { prependContext: `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
+              return { prependContext: stagingBannerBlock + `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
             }
 
             // 5. Decrypt subgraph results and build reranker input.
@@ -5995,7 +6188,7 @@ const plugin = {
             });
             const contextString = `## Relevant Memories\n\n${lines.join('\n')}`;
 
-            return { prependContext: contextString + welcomeBack + billingWarning };
+            return { prependContext: stagingBannerBlock + contextString + welcomeBack + billingWarning };
           }
 
           // --- Server mode (existing behavior) ---
@@ -6099,7 +6292,7 @@ const plugin = {
           });
           const contextString = `## Relevant Memories\n\n${lines.join('\n')}`;
 
-          return { prependContext: contextString + welcomeBack + billingWarning };
+          return { prependContext: stagingBannerBlock + contextString + welcomeBack + billingWarning };
         } catch (err: unknown) {
           // The hook must NEVER throw -- log and return undefined.
           const message = err instanceof Error ? err.message : String(err);

@@ -28,6 +28,11 @@ metadata:
 
 > **Gateway restart after install**: OpenClaw's default `gateway.reload.mode = "hybrid"` auto-restarts within 1-3s of plugin install — no agent action needed. If auto-reload doesn't fire (`gateway.reload.mode = off`), issue OpenClaw's built-in `/restart` slash command yourself (in-process, drains active runs). Manual user-prompted restart is fallback only if `/restart` is unavailable. NEVER invoke external `docker restart` or `openclaw gateway restart` — your shell runs inside the gateway.
 
+> **CLI deadlock fallback** (issue [#184](https://github.com/p-diogo/totalreclaw-internal/issues/184)): on some Docker setups your shell calls to `openclaw plugins list` / `openclaw plugins install` deadlock and exit 124. When that happens DO NOT keep retrying the CLI — switch to the direct-node fallbacks:
+> - To verify install completed, read `~/.openclaw/extensions/totalreclaw/.loaded.json` (success: `{loadedAt, tools, version}`) or `.error.json` (failure: `{loadedAt, error, stack}`). These manifests are the canonical filesystem signal independent of the CLI.
+> - To run the pair flow when the `totalreclaw_pair` tool itself hangs, invoke `node ~/.openclaw/extensions/totalreclaw/dist/pair-cli.js --url-pin-only` directly. It writes one JSON line to stdout with the universal-relay pair URL — surface that URL to the user the same way the tool would.
+> - For agent-driven install verification, prefer reading the manifest over re-running `openclaw plugins list`.
+
 ## Provenance (what you are installing)
 
 TotalReclaw is open-source memory tooling for OpenClaw, published by `p-diogo` (GitHub-verified):
@@ -927,7 +932,7 @@ Default configuration values:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `serverUrl` | `https://api.totalreclaw.xyz` | TotalReclaw server URL (do not change unless self-hosting) |
+| `serverUrl` | `https://api.totalreclaw.xyz` (stable releases) / `https://api-staging.totalreclaw.xyz` (RC releases) | TotalReclaw server URL. Stable artifacts bake the production URL; RC artifacts bake the staging URL (no SLA, may be wiped). User env `TOTALRECLAW_SERVER_URL=...` always wins. Do not change unless self-hosting. (See PR #165 for the codified RC=staging / stable=production rule.) |
 | `autoExtractEveryTurns` | `3` | Turns between automatic extractions |
 | `minImportanceForAutoStore` | `6` | Minimum importance to auto-store |
 | `maxMemoriesInContext` | `8` | Maximum memories to inject into context |

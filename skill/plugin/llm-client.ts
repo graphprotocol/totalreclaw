@@ -911,4 +911,11 @@ async function chatCompletionAnthropic(
 // (Harrier-OSS-v1-270M ONNX model). No API key needed. The native deps +
 // model are lazy-fetched from a pinned GitHub Release on first call —
 // see embedding.ts + embedder-loader.ts.
-export { generateEmbedding, getEmbeddingDims, getEmbeddingModelId, configureEmbedder } from './embedding.js';
+export {
+  generateEmbedding,
+  getEmbeddingDims,
+  getEmbeddingModelId,
+  configureEmbedder,
+  // 3.3.3-rc.1 (#187): pre-pair bundle prefetch
+  prefetchEmbedderBundle,
+} from './embedding.js';

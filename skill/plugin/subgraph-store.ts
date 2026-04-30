@@ -805,7 +805,7 @@ export function isSubgraphMode(): boolean {
  *
  * After the v1 env var cleanup, clients only need:
  *   - TOTALRECLAW_RECOVERY_PHRASE -- BIP-39 mnemonic
- *   - TOTALRECLAW_SERVER_URL -- relay server URL (default: https://api.totalreclaw.xyz)
+ *   - TOTALRECLAW_SERVER_URL -- relay server URL (source default: https://api-staging.totalreclaw.xyz; stable build: https://api.totalreclaw.xyz — swapped in at publish time per PR #165)
  *   - TOTALRECLAW_SELF_HOSTED -- set "true" to use self-hosted server (default: managed service)
  *
  * Chain ID is no longer configurable via env — it is auto-detected from the
@@ -813,7 +813,8 @@ export function isSubgraphMode(): boolean {
  */
 export function getSubgraphConfig(): SubgraphStoreConfig {
   return {
-    relayUrl: CONFIG.serverUrl || 'https://api.totalreclaw.xyz',
+    // 3.3.3-rc.1: staging by default in source; stable workflow seds.
+    relayUrl: CONFIG.serverUrl || 'https://api-staging.totalreclaw.xyz',
     mnemonic: CONFIG.recoveryPhrase,
     cachePath: CONFIG.cachePath,
     chainId: CONFIG.chainId,

@@ -144,6 +144,51 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "release_type=${RELEASE_TYPE}" >> "$GITHUB_OUTPUT"
 
+      # 3.3.3-rc.1 (PR #165 implementation): bind stable artifacts to
+      # production, leave RC artifacts on staging. Mirrors the npm-publish.yml
+      # "Bind stable artifacts to production URLs" + "Stable / RC URL guard"
+      # steps. ClawHub publishes the source tree (with built dist/) opaquely,
+      # so the same sed needs to run before `clawhub publish`.
+      - name: Bind stable artifacts to production URLs (release-type=stable)
+        if: steps.resolve.outputs.release_type == 'stable'
+        run: |
+          cd skill/plugin
+          FILES=$(find dist -type f \( -name '*.js' -o -name '*.d.ts' -o -name '*.cjs' -o -name '*.mjs' \) 2>/dev/null)
+          FILES="${FILES} skill.json SKILL.md CHANGELOG.md CLAWHUB.md README.md"
+          for f in $FILES; do
+            [ -f "$f" ] || continue
+            sed -i.bak 's|api-staging\.totalreclaw\.xyz|api.totalreclaw.xyz|g' "$f"
+            rm -f "$f.bak"
+          done
+          if grep -rqF 'api-staging.totalreclaw.xyz' dist/ skill.json 2>/dev/null; then
+            echo "ERROR: api-staging.totalreclaw.xyz still present in stable artifact"
+            grep -rnF 'api-staging.totalreclaw.xyz' dist/ skill.json
+            exit 1
+          fi
+          echo "Stable URL bind complete."
+
+      - name: Stable / RC URL guard (env-binding rule per PR #165)
+        run: |
+          cd skill/plugin
+          MODE="${{ steps.resolve.outputs.release_type }}"
+          if [ "$MODE" = "stable" ]; then
+            if grep -rqF 'api-staging.totalreclaw.xyz' dist/ skill.json 2>/dev/null; then
+              echo "GUARD FAIL: stable artifact contains api-staging.totalreclaw.xyz"
+              exit 1
+            fi
+            if ! grep -rqF 'api.totalreclaw.xyz' dist/ skill.json 2>/dev/null; then
+              echo "GUARD FAIL: stable artifact missing api.totalreclaw.xyz reference"
+              exit 1
+            fi
+            echo "GUARD OK: stable artifact bound to api.totalreclaw.xyz"
+          else
+            if ! grep -rqF 'api-staging.totalreclaw.xyz' dist/ skill.json 2>/dev/null; then
+              echo "GUARD FAIL: RC artifact missing api-staging.totalreclaw.xyz default"
+              exit 1
+            fi
+            echo "GUARD OK: RC artifact retains api-staging.totalreclaw.xyz default"
+          fi
+
       - name: Publish to ClawHub
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}

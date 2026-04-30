@@ -1,6 +1,6 @@
 {
   "name": "totalreclaw",
-  "version": "3.3.2-rc.4",
+  "version": "3.3.3-rc.1",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. XChaCha20-Poly1305 E2EE: server never sees plaintext.",
   "author": "TotalReclaw Team",
   "license": "MIT",
@@ -193,8 +193,8 @@
     "config": {
       "serverUrl": {
         "type": "string",
-        "default": "https://api.totalreclaw.xyz",
-        "description": "TotalReclaw server URL (only change for self-hosted mode)"
+        "default": "https://api-staging.totalreclaw.xyz",
+        "description": "TotalReclaw server URL (only change for self-hosted mode). Source default points at staging; stable releases swap to https://api.totalreclaw.xyz at publish time per PR #165."
       },
       "autoExtractEveryTurns": {
         "type": "number",

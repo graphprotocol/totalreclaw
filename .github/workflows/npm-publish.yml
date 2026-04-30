@@ -420,6 +420,76 @@ jobs:
           console.log('RC version:', p.version);
           "
 
+      # 3.3.3-rc.1 (PR #165 implementation): bind stable artifacts to
+      # production, leave RC artifacts on staging. Source-of-truth in
+      # `dist/` after `npm run build` references `api-staging.totalreclaw.xyz`
+      # everywhere (per the staging-default flip in
+      # config.ts/index.ts/subgraph-store.ts/skill.json). For
+      # `release-type=stable`, sed-replace `api-staging.totalreclaw.xyz`
+      # -> `api.totalreclaw.xyz` across `dist/`, `skill.json`, and the
+      # SKILL.md / CLAWHUB.md / CHANGELOG.md / README.md prose. RC builds
+      # leave the staging URL intact. Subsequent `Stable URL guard` step
+      # asserts the artifact's invariants.
+      - name: Bind stable artifacts to production URLs (release-type=stable)
+        if: inputs.release-type == 'stable'
+        run: |
+          cd skill/plugin
+          # Files in scope: built JS (dist/), shipped manifests (skill.json,
+          # SKILL.md, CHANGELOG.md, CLAWHUB.md, README.md), and the
+          # checked-in package.json — anything that ships in the npm tarball
+          # via the `files` array.
+          FILES=$(find dist -type f \( -name '*.js' -o -name '*.d.ts' -o -name '*.cjs' -o -name '*.mjs' \) 2>/dev/null)
+          FILES="${FILES} skill.json SKILL.md CHANGELOG.md CLAWHUB.md README.md"
+          MISSING_FILES=""
+          for f in $FILES; do
+            if [ ! -f "$f" ]; then
+              MISSING_FILES="${MISSING_FILES} $f"
+              continue
+            fi
+            # Substring sed: matches both `https://api-staging` and `wss://api-staging`.
+            sed -i.bak 's|api-staging\.totalreclaw\.xyz|api.totalreclaw.xyz|g' "$f"
+            rm -f "$f.bak"
+          done
+          if [ -n "$MISSING_FILES" ]; then
+            echo "WARN: missing files (not bound):${MISSING_FILES}"
+          fi
+          echo "Stable URL bind complete. Verifying no api-staging remains in shipped artifacts:"
+          # Whitelist: the env-binding block in config.ts is allowed to MENTION
+          # api-staging in comments; built dist/config.js gets the comment
+          # stripped by tsc --noCheck so dist/config.js cannot mention it.
+          if grep -rn 'api-staging\.totalreclaw\.xyz' dist/ skill.json 2>/dev/null; then
+            echo "ERROR: api-staging.totalreclaw.xyz still present in stable artifacts after bind"
+            exit 1
+          fi
+
+      # Stable URL guard — fail-fast at publish time if the artifact is
+      # mode-incorrect. Stable: dist/ + skill.json must contain
+      # `api.totalreclaw.xyz` and ZERO `api-staging.totalreclaw.xyz`.
+      # RC: dist/ + skill.json must contain `api-staging.totalreclaw.xyz`.
+      - name: Stable / RC URL guard (env-binding rule per PR #165)
+        run: |
+          cd skill/plugin
+          MODE="${{ inputs.release-type }}"
+          if [ "$MODE" = "stable" ]; then
+            if grep -rqF 'api-staging.totalreclaw.xyz' dist/ skill.json 2>/dev/null; then
+              echo "GUARD FAIL: stable artifact contains api-staging.totalreclaw.xyz"
+              grep -rnF 'api-staging.totalreclaw.xyz' dist/ skill.json
+              exit 1
+            fi
+            if ! grep -rqF 'api.totalreclaw.xyz' dist/ skill.json 2>/dev/null; then
+              echo "GUARD FAIL: stable artifact missing api.totalreclaw.xyz reference"
+              exit 1
+            fi
+            echo "GUARD OK: stable artifact bound to api.totalreclaw.xyz"
+          else
+            # RC mode
+            if ! grep -rqF 'api-staging.totalreclaw.xyz' dist/ skill.json 2>/dev/null; then
+              echo "GUARD FAIL: RC artifact missing api-staging.totalreclaw.xyz default"
+              exit 1
+            fi
+            echo "GUARD OK: RC artifact retains api-staging.totalreclaw.xyz default"
+          fi
+
       # Propagate the (possibly RC-mutated) package.json::version into
       # SKILL.md frontmatter and skill.json, then GATE the publish on
       # those three sites being aligned. Catches the rc.21 drift class
@@ -451,6 +521,10 @@ jobs:
           }
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Forwarded to `prepublishOnly` -> check-url-binding.mjs so it
+          # asserts the right invariant for the release type. Defaults to
+          # `rc` (safe — local invocations always assert RC source default).
+          TOTALRECLAW_RELEASE_TYPE: ${{ inputs.release-type }}
 
       - name: Report version
         id: report
