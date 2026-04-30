@@ -934,6 +934,53 @@ def _default_retry_budget_s() -> float:
     return 60.0
 
 
+# Hard ceiling on a server-suggested Retry-After delay. zai / OpenAI / etc.
+# occasionally return Retry-After values in the minutes (e.g. 300s for a
+# daily-quota wall) — we don't want a single 429 to block a session for
+# 5 minutes. If the suggested delay exceeds this, surface an outage so the
+# caller can fall back to the heuristic extraction path immediately.
+_RETRY_AFTER_CEILING_S = 60.0
+
+
+def _parse_retry_after(response: "httpx.Response") -> Optional[float]:
+    """Parse RFC 7231 ``Retry-After`` from an httpx response.
+
+    Accepts the two standard formats: delta-seconds (e.g. ``"5"``) and an
+    HTTP-date (e.g. ``"Fri, 30 Apr 2026 18:30:00 GMT"``). Returns the
+    delay in seconds (always non-negative), or ``None`` when the header
+    is missing, malformed, or specifies a past timestamp.
+
+    Headers come from the upstream verbatim, so a buggy provider could
+    send anything; the parser swallows ValueError and returns ``None``
+    rather than raising — the caller falls back to the static backoff.
+    """
+    if response is None:
+        return None
+    raw = response.headers.get("retry-after") or response.headers.get("Retry-After")
+    if not raw:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+
+    try:
+        secs = float(raw)
+        return max(0.0, secs)
+    except ValueError:
+        pass
+
+    try:
+        from email.utils import parsedate_to_datetime
+        import datetime as _dt
+        target = parsedate_to_datetime(raw)
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=_dt.timezone.utc)
+        delta = (target - _dt.datetime.now(tz=_dt.timezone.utc)).total_seconds()
+        return max(0.0, delta)
+    except (TypeError, ValueError):
+        return None
+
+
 class LLMUpstreamOutageError(RuntimeError):
     """Raised by :func:`chat_completion` when the extraction LLM upstream is
     unreachable after the full retry budget is exhausted.
@@ -976,6 +1023,13 @@ async def chat_completion(
     returning ``None`` so the extraction pipeline can differentiate from
     a parseable-but-empty response.
 
+    On a 429, the response's ``Retry-After`` header (delta-seconds OR
+    HTTP-date) is honored when it exceeds the static backoff for the
+    current attempt — capped at ``_RETRY_AFTER_CEILING_S``. A suggested
+    delay above the ceiling is treated as an outage and surfaces
+    ``LLMUpstreamOutageError`` immediately so the caller can fall back
+    to the heuristic extraction path instead of pinning the session.
+
     zai-specific: when a 429 response carries the "Insufficient balance"
     signature AND the current base URL is one of the two known zai
     endpoints, flips to the other endpoint and retries ONCE (separate
@@ -987,7 +1041,8 @@ async def chat_completion(
     Raises
     ------
     LLMUpstreamOutageError
-        After all retries are exhausted on retryable errors (429 / timeout).
+        After all retries are exhausted on retryable errors (429 / timeout),
+        or when a 429 ``Retry-After`` exceeds ``_RETRY_AFTER_CEILING_S``.
     """
     # Make a mutable copy so the zai fallback branch can swap base_url
     # without mutating the caller's dataclass.
@@ -1071,6 +1126,22 @@ async def chat_completion(
                 ) from e
 
             delay = _BACKOFF_DELAYS[min(attempt - 1, len(_BACKOFF_DELAYS) - 1)]
+            # Honor server-suggested Retry-After on 429s when it's longer
+            # than our static backoff. Most providers (zai, OpenAI, Anthropic,
+            # OpenRouter) return Retry-After on rate-limit responses; ignoring
+            # it means we hammer the wall and burn the retry budget on
+            # guaranteed-to-fail attempts. Capped at _RETRY_AFTER_CEILING_S
+            # so a daily-quota response (300s+) doesn't pin the session.
+            if e.response.status_code == 429:
+                retry_after = _parse_retry_after(e.response)
+                if retry_after is not None and retry_after > delay:
+                    if retry_after > _RETRY_AFTER_CEILING_S:
+                        raise LLMUpstreamOutageError(
+                            f"LLM upstream outage (Retry-After={retry_after:.0f}s exceeds ceiling {_RETRY_AFTER_CEILING_S:.0f}s): {err_str[:200]}",
+                            attempts=attempt,
+                            last_status=last_status,
+                        ) from e
+                    delay = retry_after
             if cumulative_delay_s + delay > budget_s:
                 raise LLMUpstreamOutageError(
                     f"LLM upstream outage (budget {budget_s:.0f}s exhausted after {attempt} attempts): {err_str[:200]}",
