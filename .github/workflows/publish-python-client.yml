@@ -27,6 +27,22 @@ on:
 #   - `pip install totalreclaw` ignores the RC by default. Users opt in with
 #     `pip install totalreclaw==2.1.0rc1`.
 #   - Mutation is ephemeral; not committed back to main.
+#
+# Environment-binding rule (codified in PR #165, enforced from 2.3.3-rc.1
+# onward — see docs/guides/release-process.md):
+#   - The canonical default-URL site lives at ``_HARDCODED_DEFAULT_URL`` in
+#     ``python/src/totalreclaw/relay.py``. Source-of-truth on ``main`` holds
+#     the STAGING URL so dev / test / RC builds default to staging without
+#     extra build steps.
+#   - When ``release-type=stable`` we sed-replace
+#     ``api-staging.totalreclaw.xyz`` -> ``api.totalreclaw.xyz`` in
+#     ``relay.py`` BEFORE ``python -m build`` so the published wheel binds
+#     real users to production by default.
+#   - When ``release-type=rc`` we leave the staging literal in place.
+#   - A pre-publish CI guard fails the build if a stable wheel still
+#     contains ``api-staging`` OR an RC wheel contains ``api.totalreclaw``
+#     (production). User env (``TOTALRECLAW_SERVER_URL=...``) always wins
+#     at runtime — the rule only changes the default.
 
 jobs:
   build:
@@ -66,8 +82,87 @@ jobs:
           print('\n'.join(new_text.splitlines()[:10]))
           PY
 
+      # 2.3.3-rc.1 (PR #165) — bind the wheel's default relay URL to the
+      # right environment for the release type. Source on ``main`` holds
+      # staging; rewrite to production for stable. RC builds skip this
+      # step entirely so staging stays baked in.
+      - name: Inject production URL (stable only)
+        if: inputs.release-type == 'stable'
+        run: |
+          cd python
+          set -euo pipefail
+          target="src/totalreclaw/relay.py"
+          if ! grep -q '_HARDCODED_DEFAULT_URL = "https://api-staging.totalreclaw.xyz"' "$target"; then
+            echo "::error::Expected staging literal in $target but did not find it. Source layout drift?"
+            grep -n '_HARDCODED_DEFAULT_URL' "$target" || true
+            exit 1
+          fi
+          sed -i 's|_HARDCODED_DEFAULT_URL = "https://api-staging.totalreclaw.xyz"|_HARDCODED_DEFAULT_URL = "https://api.totalreclaw.xyz"|' "$target"
+          echo "Post-rewrite literal:"
+          grep -n '_HARDCODED_DEFAULT_URL' "$target"
+
       - name: Build sdist and wheel
         run: cd python && python -m build
+
+      # 2.3.3-rc.1 (PR #165) — pre-publish CI guard. A stable wheel that
+      # still contains ``api-staging`` would point real users at staging;
+      # an RC wheel that contains the production URL (sans staging) would
+      # point QA at production. Either case is a release-blocker — fail
+      # the workflow before the publish job runs.
+      - name: Verify wheel default-URL binding matches release-type
+        run: |
+          cd python
+          set -euo pipefail
+          rm -rf /tmp/wheel-check
+          mkdir -p /tmp/wheel-check
+          for whl in dist/*.whl; do
+            python -m zipfile -e "$whl" /tmp/wheel-check/
+          done
+          echo "Scanning extracted wheel for URL literals..."
+          # Match any totalreclaw.xyz occurrence then partition by host.
+          staging_hits=$(grep -RIn "api-staging\.totalreclaw\.xyz" /tmp/wheel-check/ \
+            --include='*.py' || true)
+          # Production = api.totalreclaw.xyz NOT preceded by ``-staging``.
+          # The negative lookbehind keeps the ``api-staging`` URL from also
+          # being reported as production.
+          prod_hits=$(grep -RIn -P "(?<!-staging\.)(?<!-staging)api\.totalreclaw\.xyz" /tmp/wheel-check/ \
+            --include='*.py' || true)
+          echo "Staging literal hits:"
+          echo "${staging_hits:-<none>}"
+          echo "Production literal hits:"
+          echo "${prod_hits:-<none>}"
+          # Pull the canonical default-URL line specifically — we only enforce
+          # binding on the ``_HARDCODED_DEFAULT_URL`` site. Other strings
+          # (docstrings, comments) may still mention either URL legitimately.
+          default_url_line=$(grep -RIn '^_HARDCODED_DEFAULT_URL\s*=' /tmp/wheel-check/ --include='*.py' || true)
+          echo "Canonical default-URL line: ${default_url_line:-<not-found>}"
+          if [ -z "$default_url_line" ]; then
+            echo "::error::Canonical _HARDCODED_DEFAULT_URL line not found in wheel."
+            exit 1
+          fi
+          case "${{ inputs.release-type }}" in
+            stable)
+              if echo "$default_url_line" | grep -q "api-staging\.totalreclaw\.xyz"; then
+                echo "::error::Stable wheel still defaults to staging. Build-time injection did not run or failed."
+                exit 1
+              fi
+              if ! echo "$default_url_line" | grep -q "https://api\.totalreclaw\.xyz"; then
+                echo "::error::Stable wheel default-URL is neither staging nor production. Inspect the line above."
+                exit 1
+              fi
+              echo "OK: stable wheel binds to production by default."
+              ;;
+            rc)
+              if ! echo "$default_url_line" | grep -q "api-staging\.totalreclaw\.xyz"; then
+                echo "::error::RC wheel does not default to staging. Source-of-truth in relay.py changed?"
+                exit 1
+              fi
+              echo "OK: RC wheel binds to staging by default."
+              ;;
+            *)
+              echo "::warning::Unknown release-type '${{ inputs.release-type }}' — skipping URL-binding guard."
+              ;;
+          esac
 
       - uses: actions/upload-artifact@v4
         with:

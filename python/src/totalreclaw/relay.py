@@ -38,24 +38,42 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_HARDCODED_PRODUCTION_URL = "https://api.totalreclaw.xyz"
+# 2.3.3-rc.1 — environment-binding rule (PR #165): RC artifacts default to
+# STAGING, stable artifacts default to PRODUCTION. The checked-in literal is
+# STAGING; the publish-python-client.yml workflow rewrites this single line
+# to the production URL when ``release-type=stable`` before
+# ``python -m build``. A pre-publish CI guard fails the build if a stable
+# wheel still contains ``api-staging`` or an RC wheel contains
+# ``api.totalreclaw.xyz`` (sans staging) — see the workflow for the regex.
+#
+# This is THE canonical default-URL site for the Python package. Every
+# other module that resolves a default URL imports
+# ``_HARDCODED_DEFAULT_URL`` (or calls ``_default_relay_url()``) from here.
+# Adding a second hardcoded URL elsewhere will silently desync the wheel
+# from the build-time injection rule. Don't.
+_HARDCODED_DEFAULT_URL = "https://api-staging.totalreclaw.xyz"
 
 
 def _default_relay_url() -> str:
     """Resolve the default relay URL at call time.
 
     Respects ``TOTALRECLAW_SERVER_URL`` so tests and dev sessions can pin to
-    staging without editing code. Evaluated at every call (not at import) so
-    env changes after import take effect.
+    a non-default URL without editing code. Evaluated at every call (not at
+    import) so env changes after import take effect.
+
+    The fallback returned when the env var is unset is the value baked into
+    ``_HARDCODED_DEFAULT_URL`` at build time — staging for RC artifacts,
+    production for stable artifacts. See the module docstring for the
+    workflow that performs the substitution.
     """
-    return os.environ.get("TOTALRECLAW_SERVER_URL") or _HARDCODED_PRODUCTION_URL
+    return os.environ.get("TOTALRECLAW_SERVER_URL") or _HARDCODED_DEFAULT_URL
 
 
 # Backward-compat: preserve the old module attribute as a property-like
 # access via __getattr__ at import would complicate consumers, so we keep
 # it as a constant for direct reads but the client should prefer
-# _default_relay_url(). The constant itself is production to keep existing
-# behavior when no env var is set.
+# _default_relay_url(). The constant resolves to whichever default the
+# build-time rewrite landed on.
 DEFAULT_RELAY_URL = _default_relay_url()
 
 

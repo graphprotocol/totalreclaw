@@ -6,6 +6,7 @@ functions into Hermes's hook registration system.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -24,8 +25,43 @@ from totalreclaw.agent.loop_runner import run_sync
 from totalreclaw.agent.pending_drain import drain_pending, has_pending
 from totalreclaw.agent.recall import auto_recall
 from totalreclaw.agent.extraction import extract_facts_llm, extract_facts_heuristic
+from totalreclaw.relay import _HARDCODED_DEFAULT_URL
 
 logger = logging.getLogger(__name__)
+
+
+# 2.3.3-rc.1 (PR #165) — RC builds bake the staging URL as default. When
+# a real user installs a stable wheel they should never see this banner;
+# when a QA / maintainer installs an RC wheel they MUST see it so they
+# don't mistake the staging environment for production. Fires exactly
+# once per session via the ``_totalreclaw_rc_banner_shown`` latch.
+_RC_STAGING_BANNER = (
+    "## TotalReclaw — RC / staging build\n"
+    "WARNING: TotalReclaw is running in RC/staging mode against "
+    "api-staging.totalreclaw.xyz.\n"
+    "Staging has no SLA + may be wiped between QA cycles. Do NOT use "
+    "this build for real data.\n"
+    "Install the stable release for production: "
+    "`pip install totalreclaw` (no --pre)."
+)
+
+
+def _rc_staging_banner_active() -> bool:
+    """Return True iff the bundled default URL points at staging AND the
+    user hasn't overridden via ``TOTALRECLAW_SERVER_URL``.
+
+    Reads ``_HARDCODED_DEFAULT_URL`` directly (not ``_default_relay_url``)
+    so the env-override check is explicit + isolated from the default
+    resolution path. The build-time injection in
+    ``.github/workflows/publish-python-client.yml`` rewrites the
+    constant to the production URL for stable wheels, so this returns
+    False on stable installs even with no env var set.
+    """
+    if "api-staging.totalreclaw.xyz" not in _HARDCODED_DEFAULT_URL:
+        return False
+    if os.environ.get("TOTALRECLAW_SERVER_URL"):
+        return False
+    return True
 
 #: Bug #6: when the user hasn't run ``totalreclaw_setup`` yet but is
 #: asking a natural memory-related question, inject a one-time context
@@ -235,6 +271,24 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
     logger.debug("TotalReclaw on_session_start: %s", session_id)
 
     state.reset_turn_counter()
+
+    # 2.3.3-rc.1 (PR #165) — emit the RC/staging banner exactly once per
+    # session when the wheel is RC AND the user hasn't overridden the
+    # server URL. Surfaced via the existing ``quota_warning`` channel so
+    # the next ``pre_llm_call`` injects it as ``context``. Latch lives
+    # on the state instance so the banner is one-shot per process. Runs
+    # BEFORE the configured-only return below so unconfigured RC users
+    # see the banner on their first turn.
+    if _rc_staging_banner_active():
+        already_shown = getattr(state, "_totalreclaw_rc_banner_shown", False)
+        if not already_shown:
+            state._totalreclaw_rc_banner_shown = True
+            state.set_quota_warning(_RC_STAGING_BANNER)
+            logger.info(
+                "TotalReclaw: RC/staging banner queued for first turn "
+                "(default URL = %s).",
+                _HARDCODED_DEFAULT_URL,
+            )
 
     # Fix #191 — pick up creds written after plugin load. Cheap (one
     # file-stat) when the state is already configured.

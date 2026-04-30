@@ -280,11 +280,14 @@ def run_doctor(credentials_path: Optional[Path] = None, relay_url: Optional[str]
     # --------------------------------------------------------------------
     # Check 7 — Relay reachable
     # --------------------------------------------------------------------
-    resolved_relay = (
-        relay_url
-        or os.environ.get("TOTALRECLAW_SERVER_URL")
-        or "https://api.totalreclaw.xyz"
-    )
+    # 2.3.3-rc.1 — single-source-of-truth default URL resolution.
+    # ``_default_relay_url`` already consults ``TOTALRECLAW_SERVER_URL``
+    # and falls back to the build-time-injected default in ``relay.py``,
+    # so this stays correct whether the wheel is RC (staging) or stable
+    # (production) without duplicating the literal here.
+    from totalreclaw.relay import _default_relay_url
+
+    resolved_relay = relay_url or _default_relay_url()
     try:
         import httpx
 

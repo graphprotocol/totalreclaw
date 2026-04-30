@@ -6,6 +6,50 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.3rc1] — 2026-04-30
+
+Coordinated bundle with plugin `3.3.3-rc.1`. Implements the build-time
+half of PR #165's environment-binding rule (RC=staging, stable=production).
+
+### Build-time env binding (PR #165)
+
+The Python wheel now ships with a single canonical default-URL site at
+`totalreclaw.relay._HARDCODED_DEFAULT_URL`. Source-of-truth on `main`
+holds the staging URL; the publish workflow sed-rewrites this single
+line to production when `release-type=stable` before `python -m build`.
+A pre-publish CI guard fails the workflow if the built wheel still
+contains the wrong literal for the requested release type.
+
+- Consolidated three previously-independent default-URL fallbacks
+  (`relay.py`, `agent/state.py`, `cli.py`) so all of them now resolve
+  through `relay._default_relay_url()`. Drift across the three sites
+  was the root cause that PR #165 codified — a stable wheel could
+  rewrite one site and silently skip the others.
+- Workflow: new `Inject production URL (stable only)` step + new
+  `Verify wheel default-URL binding matches release-type` guard step.
+- User env (`TOTALRECLAW_SERVER_URL=...`) overrides always win — only
+  the default changes between RC and stable.
+
+### RC/staging session-start banner
+
+When a user installs an RC wheel (default URL = staging) AND has not
+overridden `TOTALRECLAW_SERVER_URL`, the Hermes plugin now emits a
+one-shot warning banner on first `on_session_start`. Surfaced via the
+existing `quota_warning` channel so the next `pre_llm_call` injects it
+as `context`. Stable wheels (production default) and any explicit env
+override silence the banner.
+
+### Hermes container venv pip — upstream
+
+User QA on Pop_OS this week observed `tr-hermes` container's
+`/home/pdiogo/venv/bin/pip` missing across container wipes; every
+install bootstraps via `python3 -m ensurepip --upgrade`. The
+`tr-hermes` Dockerfile lives in the internal `totalreclaw-internal`
+repo (`tools/qa-stack/hermes/`), not in this public repo, so the fix
+is filed as a follow-up there. Workaround for users hitting it on
+fresh containers: `python3 -m ensurepip --upgrade` once, then
+`pip install totalreclaw` as normal.
+
 ## [2.3.1rc14] — 2026-04-24
 
 Coordinated version bump with plugin `3.3.1-rc.14`. Two narrow bug

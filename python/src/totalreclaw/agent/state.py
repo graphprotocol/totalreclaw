@@ -202,11 +202,12 @@ class AgentState:
             plugin 3.2.0 writes, giving cross-client portability.
         """
         from totalreclaw.client import TotalReclaw
+        # 2.3.3-rc.1 — single-source-of-truth default URL resolution.
+        # Pull from totalreclaw.relay so the build-time staging/production
+        # rewrite at ``_HARDCODED_DEFAULT_URL`` is the only knob.
+        from totalreclaw.relay import _default_relay_url
 
-        relay_url = (
-            self._server_url
-            or os.environ.get("TOTALRECLAW_SERVER_URL", "https://api.totalreclaw.xyz")
-        )
+        relay_url = self._server_url or _default_relay_url()
         self._client = TotalReclaw(mnemonic=mnemonic, relay_url=relay_url)
 
         # Save credentials — preserve legacy shape when present, write
