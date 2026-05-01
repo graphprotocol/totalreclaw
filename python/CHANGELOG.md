@@ -6,6 +6,98 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.4rc1] — 2026-04-30
+
+Coordinated bundle with plugin `3.3.4-rc.1`. SKILL.md hardening pass —
+no Python runtime / API changes. The 2.3.3-rc.1 build-time env binding
+(PR #165) and the `Retry-After` honoring fix (PR #170) carry over
+unchanged.
+
+Pedro had not yet QA'd 2.3.3-rc.1 when plugin-side QA against
+3.3.3-rc.1 surfaced three skill-instruction gaps. Bumping Hermes to
+2.3.4-rc.1 alongside plugin 3.3.4-rc.1 lets both halves get QA'd
+together. The Hermes-side gaps mirror the plugin-side findings.
+
+### `/restart` autonomy + deny-list (Fix 1)
+
+Plugin-side QA on 2026-04-30 (zai/glm-5-turbo against plugin
+3.3.3-rc.1) showed the agent asking the user *"Should I /restart?"*
+instead of issuing the slash command itself, then stalling when
+`/restart` returned `"You are not authorized to use this command"`
+on a Telegram-channel deployment. PR #162 (rc.4) had hardened the
+restart step to "issue autonomously, never ask" but the language was
+soft enough for a less-capable model to backslide.
+
+`SKILL.md` and `docs/guides/hermes-setup.md` Step 2 now spell out:
+
+- A **forbidden-vocabulary deny-list** for the restart step:
+  *"Should I /restart?"*, *"Want me to restart?"*, *"Do you have a
+  public URL?"*, *"Let me check if the tool is bound."* — these phrases
+  must never appear in chat at restart-time. The agent must act, then
+  announce.
+- An **unauthorized fallback** when `/restart` returns *"not
+  authorized"* / *"command not found"* (managed Hermes deployments
+  that gate session-scope slash commands behind RBAC, or strip them
+  altogether): try `/new` once (fresh session in the same gateway,
+  may pick up freshly-bound tools), then escalate to a single-line
+  user-prompted restart message. Do NOT loop on `/restart` after an
+  unauthorized response — the gate isn't going to flip mid-session.
+  This mirrors the plugin-side fix for the OpenClaw `tier: power`
+  Telegram `allowFrom` auth gate (Hermes itself does not have an
+  equivalent power-tier gate today, but managed-service deployments
+  may impose one externally — research/hot-reload-hermes-openclaw
+  notes confirm Hermes' own `/restart` is unrestricted on stock
+  installs).
+- The Step 4 verify-bound retry path now matches: re-issue `/restart`
+  autonomously (no "should I?"), try `/new` once, then user-prompted
+  restart — never loop on `/restart` after an unauthorized response.
+
+### Install ordering — Python package first, plugin manifest second (Fix 2)
+
+Plugin-side QA on 2026-04-30 also surfaced an install race: a
+gateway-config-driven SIGUSR1 reload can fire as soon as
+`hermes plugins install ... --enable` registers the manifest. If the
+Python package isn't on disk by the time the reload fires, the gateway
+binds the manifest with no implementations and the agent loops on the
+restart step.
+
+The new canonical order in `SKILL.md` Step 1b and
+`docs/guides/hermes-setup.md` Step 1b is:
+
+1. `"$HERMES_PYTHON" -m pip install --pre totalreclaw` — implementations land first.
+2. `hermes plugins install p-diogo/totalreclaw-hermes --enable` — manifest registers second.
+
+The `Fully manual (CLI only)` section is updated to match. Inverted-
+order installs that already shipped continue to work — they just race
+the reload-trigger and may need a second restart to bind cleanly.
+
+### Test coverage
+
+- Re-ran `python/tests/test_env_binding_and_rc_banner.py` (PR #169) —
+  all 7 assertions still green; no behavior change to the
+  `_HARDCODED_DEFAULT_URL` site or the RC/staging banner path.
+- New `python/tests/test_skill_md_restart_hardening_2_3_4.py` pins the
+  forbidden-vocabulary deny-list, the `/restart` unauthorized fallback
+  prose, the `/new` retry hop, and the install-ordering note in
+  SKILL.md so a future refactor can't silently regress 2.3.4-rc.1's
+  hardening.
+- Existing `test_skill_md_includes_disable_memory_step.py` and
+  `test_hermes_plugin*.py` continue to pass — the rc.26 disable-memory
+  step is preserved verbatim.
+
+### Out of scope
+
+- No PyPI publish here — this PR opens for review only. Pedro QAs
+  2.3.4-rc.1 alongside plugin 3.3.4-rc.1 tomorrow; PyPI publish goes
+  through `publish-python-client.yml` once the bundle is GO.
+- TS plugin (`skill/`), `npm-publish.yml`, `publish-clawhub.yml`,
+  Hermes Dockerfile (`tools/qa-stack/hermes/` in the internal repo)
+  are owned by the parallel plugin agent / cross-repo follow-ups
+  — untouched here.
+- Phrase-safety invariant: untouched. The recovery-phrase isolation
+  contract from rc.4 (no `totalreclaw setup` / `hermes setup` shell
+  invocations from the agent) carries through unchanged.
+
 ## [2.3.3rc1] — 2026-04-30
 
 Coordinated bundle with plugin `3.3.3-rc.1`. Implements the build-time

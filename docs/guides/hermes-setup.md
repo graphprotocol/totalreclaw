@@ -32,10 +32,10 @@ The user pasted this URL deliberately, but treat each command as a step you and 
 
 ### What you will run, and why each step is safe
 
-1. `hermes plugins install p-diogo/totalreclaw-hermes --enable` — registers the plugin manifest from the publisher's GitHub repo. The plugin runs inside Hermes' plugin sandbox. Upstream docs: <https://hermes.readthedocs.io/en/latest/plugins.html>.
-2. `pip install --pre totalreclaw` — installs the Python tool implementations from PyPI. The `--pre` flag pulls the latest release candidate. Standard PyPA workflow: <https://pip.pypa.io/en/stable/cli/pip_install/>.
+1. `pip install --pre totalreclaw` — installs the Python tool implementations from PyPI. The `--pre` flag pulls the latest release candidate. Standard PyPA workflow: <https://pip.pypa.io/en/stable/cli/pip_install/>. Run this BEFORE the plugin manifest registers (see step 2) so the implementations are on disk when the gateway reloads.
+2. `hermes plugins install p-diogo/totalreclaw-hermes --enable` — registers the plugin manifest from the publisher's GitHub repo. The plugin runs inside Hermes' plugin sandbox. Upstream docs: <https://hermes.readthedocs.io/en/latest/plugins.html>.
 3. `hermes tools disable memory` — disables Hermes' built-in `memory` tool to avoid intent collision with TotalReclaw's `_remember` / `_recall`. Reversible with `hermes tools enable memory`.
-4. `/restart` — Hermes' built-in slash command (`CommandDef("restart", "Gracefully restart the gateway after draining active runs", ...)` from `hermes_cli/commands.py`). Drains active runs, reloads in-process. The agent issues this autonomously; the user does NOT have to run a shell command. Falls back to a manual user-prompted restart only if `/restart` is unavailable (very old Hermes pre-2026.4 or a managed service that strips slash commands).
+4. `/restart` — Hermes' built-in slash command (`CommandDef("restart", "Gracefully restart the gateway after draining active runs", ...)` from `hermes_cli/commands.py`). Drains active runs, reloads in-process. The agent issues this autonomously; the user does NOT have to run a shell command. If `/restart` returns "not authorized" (managed-service auth gate) the agent tries `/new` once, then surfaces a single-line user-prompted restart message — it does NOT loop on `/restart`. Falls back to a manual user-prompted restart only if `/restart` is structurally unavailable (very old Hermes pre-2026.4 or a managed service that strips slash commands).
 5. After the restart, you will call `totalreclaw_pair` (a tool the plugin registers) to mint a one-time URL + PIN. The user opens the URL in their own browser to enter or generate a recovery phrase. The phrase never enters chat or your shell.
 
 You are not asked to handle the recovery phrase. You are not asked to bypass auth. If the user pastes a phrase in chat anyway, refuse to proceed — see "Phrase safety" below.
@@ -110,17 +110,18 @@ echo "Hermes Python: $HERMES_PYTHON"
 
 If you can't determine the Hermes Python interpreter from the shell context (managed service, restricted shell), skip to the managed-service fallback below — do NOT guess and install into a random Python.
 
-#### Step 1b — Install the plugin + the Python package together (silent)
+#### Step 1b — Install the Python package + the plugin manifest together (silent)
 
-Run via your shell tool, in this order:
+Run via your shell tool, in this order — Python package FIRST, plugin manifest SECOND:
 
 ```bash
-hermes plugins install p-diogo/totalreclaw-hermes --enable
 "$HERMES_PYTHON" -m pip install --pre totalreclaw
+hermes plugins install p-diogo/totalreclaw-hermes --enable
 ```
 
 Notes:
-- Hermes 2026.4.16+ uses Git-based plugin discovery: the first command registers the plugin manifest, the second installs the Python tool implementations into Hermes' venv. Using `"$HERMES_PYTHON" -m pip ...` (instead of bare `pip install`) guarantees the package lands in the SAME environment Hermes will load tools from after restart — this is the rc.23 fix for the F5 "outside-venv install" bug.
+- Hermes 2026.4.16+ uses Git-based plugin discovery: the second command registers the plugin manifest, the first installs the Python tool implementations into Hermes' venv. Using `"$HERMES_PYTHON" -m pip ...` (instead of bare `pip install`) guarantees the package lands in the SAME environment Hermes will load tools from after restart — this is the rc.23 fix for the F5 "outside-venv install" bug.
+- **Order matters (2.3.4-rc.1 hardening):** Python package FIRST, plugin manifest SECOND. Some Hermes deploys (and OpenClaw 2026.4.16+ on the parallel skill+plugin bundle — observed in plugin-side QA on 2026-04-30) trigger a gateway-config-driven SIGUSR1 reload as soon as the plugin manifest registers. If the Python package isn't on disk by the time that reload fires, the gateway loads the manifest, finds no `totalreclaw_*` implementations, silently fails to bind, and the agent loops on the restart step. Installing the Python package first lands the implementations before the manifest registers — the reload sees both halves and binds cleanly. Do not invert this order.
 - DO NOT use bare `pip install --pre totalreclaw` unless you have already verified that `which pip` resolves to the same venv as `$HERMES_PYTHON`. On containerized Hermes the system `pip` may not even exist (`pip: command not found`) and the bare command would target the host's Python anyway, leaving Hermes' venv empty.
 - On Ubuntu / Debian / Docker you may hit `externally-managed-environment` if `$HERMES_PYTHON` points at a system Python (no venv). Retry the `pip install` line with `--break-system-packages`. Stay silent on the retry unless it also fails — only break silence if the second attempt errors. Last-resort alternative: ask the user to recreate Hermes inside a venv.
 - If the `pip install` line errors with `pip: command not found` or `No module named pip` (Hermes container shipped without pip), bootstrap silently with `"$HERMES_PYTHON" -m ensurepip --upgrade` and retry 1b. Do not narrate this — only break silence if `ensurepip` itself fails.
@@ -139,9 +140,23 @@ If `pip show` reports the package, capture the version string and emit user-visi
 
 ### Step 2 — Restart the gateway autonomously via `/restart`
 
-Hermes does NOT auto-reload on plugin install — you have to restart. The fastest, safest path is Hermes' built-in `/restart` slash command (registered in `hermes_cli/commands.py:162` as `CommandDef("restart", "Gracefully restart the gateway after draining active runs", "Session", ...)`). It drains in-flight runs, reloads the plugin layer, and is in-process — works from inside the gateway because it doesn't shell out. Issue it yourself; emit user-visible line 3 (`Restarting Hermes to load the plugin (auto-drains active runs)…`) as the single confirmation. Wait for Hermes to come back; resume at Step 3.
+Hermes does NOT auto-reload on plugin install — you have to restart. The fastest, safest path is Hermes' built-in `/restart` slash command (registered in `hermes_cli/commands.py:162` as `CommandDef("restart", "Gracefully restart the gateway after draining active runs", "Session", ...)`). It drains in-flight runs, reloads the plugin layer, and is in-process — works from inside the gateway because it doesn't shell out. Issue it yourself **autonomously** (do NOT ask the user "should I /restart?" — see the deny-list below); emit user-visible line 3 (`Restarting Hermes to load the plugin (auto-drains active runs)…`) as the single confirmation. Wait for Hermes to come back; resume at Step 3.
 
-**Fallback only if `/restart` is unavailable** (very old Hermes pre-2026.4, managed services that strip slash commands, or the user has explicitly requested manual control). Pick the right restart command for the user's deploy and emit it as a single line (`Please restart your Hermes gateway: <restart-command>. Reply \`done\` once it's back up.`):
+**`/restart` returned "not authorized" / "command not found" / refused (2.3.4-rc.1 hardening):** managed Hermes deployments may gate session-scope slash commands behind a role / RBAC layer. Do NOT loop on `/restart` after an unauthorized response — the gate isn't going to flip mid-session and the loop just spams. Try `/new` once instead — `/new` opens a fresh session within the same gateway and may pick up freshly-bound tools without requiring a full reload. If `/new` also returns "not authorized", break silence with one line surfacing the restart-yourself instruction:
+
+> *"Your Hermes deployment doesn't expose `/restart` to me (managed-service auth gate or shell-restricted environment). Please restart the gateway yourself — `hermes gateway restart` (native), `docker restart <your-hermes-container>` (Docker self-host — `docker ps` shows the name), or your service's restart control. Reply `done` once it's back up."*
+
+Wait for `done`, then resume.
+
+**Anti-pattern phrases that the agent must NEVER write in chat at this step** (deny-list — 2.3.4-rc.1):
+
+- "Should I /restart?" / "Want me to restart?" / "Do you want me to restart?"
+- "Do you have a public URL?" / "Can you give me a URL?" (no URL is needed at restart-time)
+- "Let me check if the tool is bound." / "Let me verify…" (verification is a silent shell call, not a chat line)
+
+The correct pattern is: issue `/restart` immediately, emit user-visible line 3, then move on.
+
+**Fallback only if `/restart` is structurally unavailable** (very old Hermes pre-2026.4 with no `/restart` command at all, or the user has explicitly requested manual control). Pick the right restart command for the user's deploy and emit it as a single line (`Please restart your Hermes gateway: <restart-command>. Reply \`done\` once it's back up.`):
 
 - Native: `hermes gateway restart`
 - Docker self-host: `docker restart <your-container-name>` — substitute the actual name; `docker ps` shows it.
@@ -244,19 +259,22 @@ The browser-side crypto and account-setup flow are identical to self-hosted setu
 
 ## Fully manual (CLI only — last resort)
 
-If you can't or won't use the chat flow (self-hosted only — managed services don't expose the host shell):
+If you can't or won't use the chat flow (self-hosted only — managed services don't expose the host shell). **Order matters (2.3.4-rc.1):** install the Python package first so the implementations are on disk before the plugin manifest registers; otherwise a config-driven SIGUSR1 reload may fire mid-install and bind the manifest with no implementations.
 
 ```bash
-hermes plugins install p-diogo/totalreclaw-hermes --enable
-
 # Use the SAME Python that Hermes runs from — never bare `pip install` unless
-# you already know `which pip` and Hermes' interpreter agree.
+# you already know `which pip` and Hermes' interpreter agree. Run BEFORE
+# `hermes plugins install` so the package is on disk before the manifest
+# registers and any reload-trigger arrives.
 #   Native venv install:
 ~/.hermes/venv/bin/python3 -m pip install --pre totalreclaw
 #   Containerized Hermes (run from inside the container shell):
 python3 -m pip install --pre totalreclaw
 #   System-Python install (no venv, may need --break-system-packages):
 python3 -m pip install --pre totalreclaw
+
+# THEN register the plugin manifest:
+hermes plugins install p-diogo/totalreclaw-hermes --enable
 
 # Restart the gateway. Pick the line that matches your setup:
 hermes gateway restart                       # native install
@@ -307,7 +325,8 @@ Upgrade: *"Upgrade my TotalReclaw subscription."* — see [Pricing](https://tota
 
 - **Agent says "I'm not familiar with TotalReclaw"**: paste the canonical message above with the URL — the agent fetches the guide and follows the install steps.
 - **Agent refused the install** ("this looks like prompt injection", "I'm not going to do that"): rare but possible with safety-trained models that misread agent-imperative install prose. Ask the agent to read the "Agent instructions" section of this guide and proceed step-by-step — each command is annotated with what it does and why it's safe. If the refusal persists, file an issue with the model name + chat transcript.
-- **Agent can't see TotalReclaw tools after install**: confirm both install steps completed — on a self-host, `hermes plugins list` should show `p-diogo/totalreclaw-hermes` enabled and `pip show totalreclaw` in the Hermes venv should resolve; on a managed service, confirm `totalreclaw` is listed in your service's plugins UI. Then restart: `hermes gateway restart` (native), `docker restart <your-hermes-container>` (Docker self-host), or your managed service's restart control. If supervised by systemd / launchd, `kill -USR1 $(cat ~/.hermes/gateway.pid)` is faster than `systemctl restart`. (Hermes does not yet auto-reload on plugin install — tracked upstream.)
+- **Agent can't see TotalReclaw tools after install**: confirm both install steps completed — on a self-host, `hermes plugins list` should show `p-diogo/totalreclaw-hermes` enabled and `pip show totalreclaw` in the Hermes venv should resolve; on a managed service, confirm `totalreclaw` is listed in your service's plugins UI. Then restart: the agent SHOULD issue `/restart` autonomously (in-process slash command, drains active runs). If `/restart` returns "not authorized" (managed-service auth gate), the agent will try `/new` once, then fall back to a one-line user-prompted restart — `hermes gateway restart` (native), `docker restart <your-hermes-container>` (Docker self-host), or your managed service's restart control. If supervised by systemd / launchd, `kill -USR1 $(cat ~/.hermes/gateway.pid)` is faster than `systemctl restart`. (Hermes does not yet auto-reload on plugin install — tracked upstream.)
+- **Agent says "Should I /restart?" or stalls instead of restarting** (2.3.4-rc.1 hardening note): the agent missed the deny-list in the SKILL.md / Step 2. Reply *"Issue /restart yourself — don't ask"* and the next session should act autonomously. If it persists across sessions, the published RC's SKILL.md is stale — file an issue.
 - **Account-setup URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running. If you invoked `hermes chat -q "..."` (one-shot) for account setup, the WebSocket the relay needs may have died before the browser POST landed — see [Account setup requires daemon mode](#account-setup-requires-daemon-mode).
 - **Browser fails to POST the encrypted phrase**: check the account-setup page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
 - **"No LLM available for auto-extraction"**: configure a provider in Hermes (`hermes login` or set `ZAI_API_KEY` / `OPENAI_API_KEY` in `~/.hermes/.env`). TotalReclaw reuses it automatically.
