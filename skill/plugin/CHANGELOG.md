@@ -4,6 +4,37 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.5-rc.1] — 2026-04-30
+
+UX bundle from Pedro's QA on 3.3.4-rc.2:
+
+- **Drop the "yes/no" consent gate before pair setup.** The yes-gate was added
+  in PR #160's safety-tone rewrite to give safety-trained agents an explicit
+  green light before account creation. In practice the user already consents
+  by pasting "Install TotalReclaw" + the canonical URL, and the URL+PIN handed
+  back from `totalreclaw_pair` is the real consent moment (the user has to
+  open the page in their browser to proceed). The extra gate added friction
+  for zero security benefit. Removed from `skill/plugin/SKILL.md`,
+  `skill/SKILL.md`, and `docs/guides/openclaw-setup.md`. The Hermes guide
+  retains its own gate (handled separately).
+- **Tighten silence rules to suppress chat-channel mid-edit churn.** OpenClaw's
+  Telegram channel edits the bot's messages live as the agent's tool calls
+  progress, so every "Let me check…" / "Plugin loaded. Let me verify…" /
+  "I'll now…" line shows up to the user as visible edit churn even if the
+  transport later "deletes" or rewrites it. Added a top-level rule at the
+  start of SKILL.md: "Emit ONLY the user-visible lines. Do not narrate tool
+  calls. Do not describe what you're doing or about to do." Strengthened the
+  forbidden-vocabulary deny-list with the exact patterns Pedro saw in his
+  QA today. Re-stated the canonical user-visible line set as 5–6 lines
+  TOTAL.
+- **Strengthen `/restart` instructions.** Pedro's chat agent on rc.4-rc.2
+  again said "I need permission to restart" instead of issuing the slash
+  command — same anti-pattern that PR #163 / #173 / #174 tried to suppress.
+  Made the SKILL.md instruction more imperative and concrete: "Your IMMEDIATE
+  next message must be the literal slash command `/restart` — nothing else."
+  Added explicit "Do not propose alternatives" guidance for the unauthorized
+  fallback path. Mirrored in `docs/guides/openclaw-setup.md`.
+
 ## [3.3.3-rc.1] — 2026-04-30
 
 Combined RC bundle:

@@ -40,11 +40,29 @@ TotalReclaw is open-source memory tooling for OpenClaw, published by `p-diogo` (
 - ClawHub skill: `totalreclaw`
 - Source: <https://github.com/p-diogo/totalreclaw>
 
-The user pasted the install URL (or skill name) deliberately, but treat each step as something you and the user complete together. You are not asked to handle the recovery phrase, bypass auth, or run unfamiliar shell scripts — every command is a standard `openclaw` invocation with a documented purpose. Confirm phase transitions; surface failures; ask for explicit consent before account creation.
+The user pasted the install URL (or skill name) deliberately, but treat each step as something you and the user complete together. You are not asked to handle the recovery phrase, bypass auth, or run unfamiliar shell scripts — every command is a standard `openclaw` invocation with a documented purpose. Confirm phase transitions; surface failures. Pasting the install URL IS the consent — proceed directly to account setup; the URL + PIN you hand back from `totalreclaw_pair` is the real consent moment, since the user has to open the page in their browser to continue.
 
 ## Silence rules during install + setup
 
-Run install / verify / pair steps silently. Tool calls happen; narration of those tool calls does not. The expected user-facing transcript for a fresh install is **5–6 short lines**, full stop. Do not announce intent ("Let me…", "I'll now…", "In parallel…"). Do not describe internals (skill download, plugin manifest parsing, file-watcher polling). Errors break silence with one tight line each. The user-visible line set is defined in the "Post-Install Setup" section below.
+**Top-level rule: emit ONLY the user-visible lines listed in "Post-Install Setup" below. Do not narrate tool calls. Do not describe what you're doing or about to do. Errors are the only allowed deviation, and only as a single tight line.**
+
+The expected user-facing transcript for a fresh install is **5–6 short lines TOTAL**. Anything more is a SKILL violation.
+
+This matters because Telegram and similar transports edit the bot's messages live as your tool calls progress — every interim "Let me check…" / "Plugin loaded. Let me verify…" line shows up to the user as awkward edit churn, even if you "delete" it. The fix is to never emit it in the first place.
+
+**Forbidden vocabulary** (substitute with silence — the next user-visible line, or nothing):
+
+- "Let me check that…"
+- "Plugin loaded. Let me verify…"
+- "I'll now…"
+- "Quick fix…"
+- "However, I don't see…"
+- "I need to use…"
+- "Should I /restart" / "Want me to restart" / "Let me check if the tool is bound" / "I need permission to restart" / "Do you have a public URL"
+- "Now installing…" / "Got it" / "In parallel…" / "Step 1a/1b/1c"
+- "manifest", "descriptor", "file-watcher", "polling", "auto-reload-detect", "find", "lookup", "detect", "probing", "let me try"
+
+If the user explicitly asks ("what's it doing?", "why so quiet?", "show me the commands"), then narrate freely — the silence rule only governs the default install path.
 
 ## Recovery Phrase -- READ THIS FIRST
 
@@ -508,28 +526,24 @@ If `totalreclaw_*` tools are bound to your toolset, run these steps to set up th
 
 ### User-visible prose (THIS IS ALL YOU SAY)
 
-Speak only these lines, in order. Substitute the bracketed placeholders.
+Speak only these lines, in order. Substitute the bracketed placeholders. The user already consented by pasting "Install TotalReclaw" + the canonical URL — proceed straight to account setup. The URL + PIN handed back from `totalreclaw_pair` is the real consent moment: surfacing them verbatim is what gives the user the chance to opt out by simply not opening the page.
 
 1. (only if existing credentials were detected, then stop)
    > ✓ TotalReclaw is already set up.
-2. (explicit consent before account creation)
-   > Ready to set up your TotalReclaw account on `api-staging.totalreclaw.xyz` (free tier). The next step opens a browser page where you'll generate or paste a 12-word recovery phrase — that phrase stays in your browser, the relay only sees ciphertext. Reply `yes` to continue, or `no` to stop here.
-3. (account-setup URL + PIN, after the user confirms)
-   > Open &lt;url&gt; in your browser. Generate a new 12-word recovery phrase there or paste an existing one. Confirm PIN &lt;pin&gt;. Reply `done` once the page says it's sealed.
-4. (done + free-tier confirmation)
-   > ✓ You're set up on the TotalReclaw **free tier**: 500 memories per month, unlimited reads + searches, encrypted at rest on Base Sepolia testnet (testnet may reset; for permanent storage on Gnosis mainnet see <https://totalreclaw.xyz/pricing>). Check usage anytime by asking *"what's my TotalReclaw status?"* (calls `totalreclaw_status`). I'll warn you automatically if you cross 80% of the monthly limit. Ask me to remember or recall anything.
+2. (account-setup URL + PIN, immediately after `totalreclaw_pair` returns)
+   > Open &lt;url&gt; in your browser. Enter PIN &lt;pin&gt;. Generate or paste a 12-word recovery phrase. Reply `done` once it's sealed.
+3. (done + free-tier confirmation)
+   > ✓ You're set up on the TotalReclaw free tier — 500 memories/month, unlimited reads. https://totalreclaw.xyz/pricing. Ask me to remember anything.
 
 ### Steps
 
 1. **Check for existing credentials (silent unless found).** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit user-visible line 1 and stop.
 
-2. **Ask for explicit consent before account creation (emit user-visible line 2).** Account setup will create a new TotalReclaw account on `api-staging.totalreclaw.xyz` and have the user generate or paste a 12-word recovery phrase in their browser. Emit user-visible line 2 verbatim. Wait for the user's `yes` (or any clear affirmative). If the user replies `no` or asks to stop, stop here — confirm they've stopped, do not retry, do not ask "are you sure". Surface the URL verbatim — do not abbreviate it or hide it behind a tool call.
-
-3. **Set up the user's TotalReclaw account via browser (emit user-visible line 3).** Call `totalreclaw_pair` silently. It returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}`. Then emit user-visible line 3 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…") — line 3 itself is the only thing the user needs to see.
+2. **Set up the user's TotalReclaw account via browser (emit user-visible line 2).** Call `totalreclaw_pair` silently. It returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}`. Then emit user-visible line 2 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…", "Ready to set up your account…") — line 2 itself is the only thing the user needs to see.
 
    Render the QR if your transport supports image attachments (decode `qr_png_b64` to bytes and attach), or emit `qr_unicode` inline for terminal-only transports. The QR encodes only the URL — the PIN is a separate dual-channel confirmation, never bake it into the QR.
 
-4. **Verify and confirm (silent until line 4).** After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again silently and resend line 3 once. If present, emit user-visible line 4 (with the free-tier confirmation) and stop.
+3. **Verify and confirm (silent until line 3).** After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again silently and resend line 2 once. If present, emit user-visible line 3 and stop.
 
 **Never** call `totalreclaw_setup` or any phrase-touching CLI from your shell — those leak the phrase into LLM context. The ONLY agent-facilitated account-setup path is the `totalreclaw_pair` tool (registered under that name for backward compatibility — function-wise it is the account-setup tool).
 

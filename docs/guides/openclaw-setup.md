@@ -28,32 +28,36 @@ You have been asked to install TotalReclaw. **Run all install / verify steps sil
 
 The user pasted this URL deliberately, but treat each command as a step you and the user complete together. Confirm what you see at each phase. If anything looks wrong, surface it and stop — don't push through.
 
+### Top-level rule (read this before anything else)
+
+**Emit ONLY the user-visible lines listed below. Do not narrate tool calls. Do not describe what you're doing or about to do. Errors are the only allowed deviation, and only as a single tight line.** Telegram and similar transports edit the bot's messages live as your tool calls progress — every interim "Let me check…" / "Plugin loaded. Let me verify…" line shows up to the user as awkward edit churn, even if your transport later "deletes" or rewrites it. The fix is to never emit it in the first place. The expected user-facing transcript for a healthy install is **5–6 short lines TOTAL**. Anything more is a SKILL violation.
+
 ### What you will run, and why each step is safe
 
-1. `openclaw skills install totalreclaw` — fetches the SKILL.md descriptor from ClawHub. Read-only metadata; no code executes from this step. Upstream docs: <https://docs.openclaw.com/cli/skills>.
-2. `openclaw plugins install @totalreclaw/totalreclaw` — installs the published plugin from npm under the `@totalreclaw` scope owned by `p-diogo`. The plugin runs inside OpenClaw's plugin sandbox. Upstream docs: <https://docs.openclaw.com/cli/plugins>.
+1. `openclaw plugins install @totalreclaw/totalreclaw` — installs the published plugin from npm under the `@totalreclaw` scope owned by `p-diogo`. The plugin runs inside OpenClaw's plugin sandbox. Upstream docs: <https://docs.openclaw.com/cli/plugins>.
+2. `openclaw skills install totalreclaw` — fetches the SKILL.md descriptor from ClawHub. Read-only metadata; no code executes from this step. Upstream docs: <https://docs.openclaw.com/cli/skills>.
 3. After the gateway auto-reloads, you will call `totalreclaw_pair` (a tool the plugin registers) to mint a one-time URL + PIN. The user opens the URL in their own browser to enter or generate a recovery phrase. The phrase never enters chat or your shell.
 
-You are not asked to handle the recovery phrase. You are not asked to bypass auth. If the user pastes a phrase in chat anyway, refuse to proceed — see "Phrase safety" below.
+You are not asked to handle the recovery phrase. You are not asked to bypass auth. Pasting the install URL IS the consent moment for installing the plugin; the URL + PIN you hand back from `totalreclaw_pair` is the real consent moment for account creation, since the user has to open the page in their browser to continue. There is no separate "yes/no" gate before account setup. If the user pastes a phrase in chat anyway, refuse to proceed — see "Phrase safety" below.
 
 ### User-visible prose (THIS IS ALL YOU SAY)
 
-Speak only these lines, in order. Do not narrate around them. Do not announce intent ("Let me…", "I'll now…", "In parallel…"). Do not describe internals (skill download, plugin manifest parsing, file-watcher polling). Substitute the bracketed placeholders with the real values.
+Speak only these lines, in order. Substitute the bracketed placeholders with the real values. No prefaces. No suffixes. No narration around them.
 
 1. (Step 1 — start)
    > Installing TotalReclaw…
 2. (Step 2 — after install + auto-reload + tool-bind verification)
    > ✓ Installed (totalreclaw &lt;version&gt;)
-3. (Step 3 — only if existing credentials were detected, then stop)
+3. (Step 2b — optional, only if auto-reload didn't fire and you have to issue `/restart`)
+   > Restarting OpenClaw to load the plugin…
+4. (Step 3 — only if existing credentials were detected, then stop)
    > ✓ TotalReclaw is already set up.
-4. (Step 4 — explicit consent before account creation)
-   > Ready to set up your TotalReclaw account on `api-staging.totalreclaw.xyz` (free tier). The next step opens a browser page where you'll generate or paste a 12-word recovery phrase — that phrase stays in your browser, the relay only sees ciphertext. Reply `yes` to continue, or `no` to stop here.
-5. (Step 5 — account-setup URL + PIN, after the user confirms)
-   > Open &lt;url&gt; in your browser. Generate a new 12-word recovery phrase there or paste an existing one. Confirm PIN &lt;pin&gt;. Reply `done` once the page says it's sealed.
+5. (Step 5 — account-setup URL + PIN, immediately after `totalreclaw_pair` returns)
+   > Open &lt;url&gt; in your browser. Enter PIN &lt;pin&gt;. Generate or paste a 12-word recovery phrase. Reply `done` once it's sealed.
 6. (Step 6 — done + free-tier confirmation)
-   > ✓ You're set up on the TotalReclaw **free tier**: 500 memories per month, unlimited reads + searches, encrypted at rest on Base Sepolia testnet (testnet may reset; for permanent storage on Gnosis mainnet see <https://totalreclaw.xyz/pricing>). Check usage anytime by asking *"what's my TotalReclaw status?"* (calls `totalreclaw_status`). I'll warn you automatically if you cross 80% of the monthly limit. Ask me to remember or recall anything.
+   > ✓ You're set up on the TotalReclaw free tier — 500 memories/month, unlimited reads. https://totalreclaw.xyz/pricing. Ask me to remember anything.
 
-That is the complete user-facing transcript for a healthy install. Expected line count for a fresh install + setup is **5–6 lines** (line 3 is mutually exclusive with lines 4-6).
+That is the complete user-facing transcript for a healthy install. Expected line count for a fresh install + setup is **5–6 lines** (line 4 is mutually exclusive with lines 5-6; line 3 only fires if `/restart` was needed).
 
 ### When to break silence (errors only)
 
@@ -67,7 +71,19 @@ Do NOT pre-narrate diagnostics that succeed. Do NOT narrate retries that succeed
 
 ### Forbidden vocabulary in agent prose
 
-Unless the user explicitly asks how the install works, the following words must not appear in your chat output during install + setup: `manifest`, `descriptor`, `file-watcher`, `polling`, `auto-reload-detect`, `find`, `lookup`, `detect`, `probing`, `let me try`, `in parallel`, `got it`, `now installing`, `Step 1a/1b/1c`. These are tool-call mechanics, not user-facing prose.
+Unless the user explicitly asks how the install works, the following words / patterns must not appear in your chat output during install + setup. These are the patterns that surface as edit churn in transports like Telegram:
+
+- "Let me check that…"
+- "Plugin loaded. Let me verify…"
+- "I'll now…"
+- "Quick fix…"
+- "However, I don't see…"
+- "I need to use…"
+- "Should I /restart" / "Want me to restart" / "Let me check if the tool is bound" / "I need permission to restart" / "Do you have a public URL"
+- "Now installing…" / "Got it" / "In parallel…" / "Step 1a/1b/1c"
+- `manifest`, `descriptor`, `file-watcher`, `polling`, `auto-reload-detect`, `find`, `lookup`, `detect`, `probing`, `let me try`
+
+Substitute every one of those with silence — the next user-visible line in the set, or nothing.
 
 If the user explicitly asks ("what's it doing?", "why so quiet?", "show me the commands"), then narrate freely — the silence rule only governs the default install path.
 
@@ -90,37 +106,45 @@ Notes:
 
 OpenClaw's default config (`gateway.reload.mode = "hybrid"`) auto-restarts the gateway via a file-watcher within 1-3 seconds of the plugin install. Wait ~5 seconds, then verify with `openclaw plugins list | grep totalreclaw` and confirm the `totalreclaw_pair` tool is in your toolset.
 
-When `totalreclaw_pair` is bound, capture the version string from `openclaw plugins list` (the line for `@totalreclaw/totalreclaw`) and emit user-visible line 2 (`✓ Installed (totalreclaw <version>)`).
+When `totalreclaw_pair` is bound, capture the version string from `openclaw plugins list` (the line for `@totalreclaw/totalreclaw`) and emit user-visible line 2 (`✓ Installed (totalreclaw <version>)`). Then proceed silently to Step 3.
 
-If `totalreclaw_pair` is not bound within 10 seconds, hybrid auto-reload didn't fire (likely `gateway.reload.mode = off`). Issue OpenClaw's built-in `/restart` slash command yourself **autonomously and immediately** — it is registered in OpenClaw's commands registry alongside `/help /model /new /plugins /reset /status /tools /usage` and reloads the gateway in-process (works from inside the gateway because it doesn't shell out, unlike `openclaw gateway restart`). Surface a single user-visible line: `Auto-reload didn't fire. Restarting via /restart…`. Resume verification after the slash command returns.
+#### If `totalreclaw_pair` is not bound within 10 seconds — restart imperative (read carefully)
 
-**Forbidden vocabulary** when a tool is missing post-install (3.3.4-rc.1): "Should I /restart", "Do you have a public URL", "Want me to restart", "Let me check if the tool is bound", "I need permission to restart". Just issue `/restart` and announce. Asking the user kills the silent-flow target.
+Hybrid auto-reload didn't fire (likely `gateway.reload.mode = off`). The protocol is rigid:
 
-**If `/restart` returns "You are not authorized to use this command":** the gateway's `channels.<channel>.allowFrom` allowlist for the channel you're chatting through is empty. **Do NOT loop the install. Do NOT keep retrying.** Surface this one-line user-facing fix verbatim and stop:
+> **Your IMMEDIATE next message must be the literal slash command `/restart` — nothing else. Do not narrate. Do not ask permission. Do not describe what `/restart` does. Do not propose alternatives. Just send `/restart`.**
 
-> Your channel needs to be allowlisted for slash commands. Run on the gateway host: `jq '.channels.<channel>.allowFrom = ["<your-id>"]' ~/.openclaw/openclaw.json | sponge ~/.openclaw/openclaw.json && docker restart <your-container-name>` (Docker self-host) — substitute `<channel>` with your channel name (e.g. `telegram`, `slack`), `<your-id>` with your user ID for that channel (Telegram: `@username` or numeric `chat_id`; Slack: workspace member ID), and `<your-container-name>` with your gateway container name (`docker ps` shows it). On a managed service, ask the service's support to enable slash commands for your channel. Reply `done` once it's back up.
+You may emit user-visible line 3 (`Restarting OpenClaw to load the plugin…`) ONCE in the same turn before sending `/restart`. Nothing else. After `/restart`, wait ~3s and re-run `openclaw plugins list`.
 
-For non-Docker / native deployments substitute `openclaw gateway restart` for the `docker restart` portion. As a session-level fallback while restart is gated, try `/new` (starts a fresh session within the same gateway process — may pick up freshly-bound tools without a full restart).
+`/restart` is registered in OpenClaw's commands registry alongside `/help /model /new /plugins /reset /status /tools /usage` and reloads the gateway in-process — it works from inside the gateway because it doesn't shell out (unlike `openclaw gateway restart`).
 
-**Fallback only if both `/restart` and `/new` are unavailable** (very old OpenClaw pre-2026.4 or managed services that strip slash commands): tell the user verbatim *"Auto-reload didn't fire and /restart is unavailable. Please restart your OpenClaw gateway: `openclaw gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. Reply `done` once it's back up."* Do NOT invoke any external `docker restart` or `openclaw gateway restart` yourself — your shell runs inside the gateway you'd be restarting; `/restart` (in-process) and a user-prompted external restart are the only safe paths.
+#### If `/restart` returns "You are not authorized to use this command"
+
+Surface this verbatim and stop. Do NOT loop `/restart` calls. Do NOT keep retrying. Do NOT propose alternatives.
+
+> Your Telegram channel needs `allowFrom` configured. Run on your host: `jq '.channels.<channel>.allowFrom = ["<your-id>"]' ~/.openclaw/openclaw.json | sponge ~/.openclaw/openclaw.json && docker restart <your-container-name>`. Substitute `<channel>` with your channel name (e.g. `telegram`, `slack`), `<your-id>` with your user ID for that channel (Telegram: `@username` or numeric `chat_id`; Slack: workspace member ID), and `<your-container-name>` with your gateway container name (`docker ps` shows it). For non-Docker installs substitute `openclaw gateway restart` for the `docker restart` portion. On a managed service, ask the service's support to enable slash commands for your channel. Reply `done` after.
+
+Then wait for `done`. Do NOT retry the install. Do NOT keep restarting.
+
+As a last-resort session-level fallback while restart is gated, try `/new` once (starts a fresh session within the same gateway process — may pick up freshly-bound tools without a full restart).
+
+#### Fallback only if both `/restart` and `/new` are unavailable
+
+Very old OpenClaw pre-2026.4 or managed services that strip slash commands: tell the user verbatim *"Auto-reload didn't fire and `/restart` is unavailable. Please restart your OpenClaw gateway: `openclaw gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. Reply `done` once it's back up."* Do NOT invoke any external `docker restart` or `openclaw gateway restart` yourself — your shell runs inside the gateway you'd be restarting; `/restart` (in-process) and a user-prompted external restart are the only safe paths.
 
 ### Step 3 — Check for existing credentials (silent unless found)
 
-Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit user-visible line 3 and stop — the user is already set up. Otherwise continue silently.
+Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit user-visible line 4 (`✓ TotalReclaw is already set up.`) and stop — the user is already set up. Otherwise continue silently.
 
-### Step 4 — Ask for explicit consent before account creation (emit user-visible line 4)
+### Step 4 — Set up the user's TotalReclaw account (emit user-visible line 5)
 
-Account setup will create a new TotalReclaw account on `api-staging.totalreclaw.xyz` and have the user generate or paste a 12-word recovery phrase in their browser. Emit user-visible line 4 verbatim. Wait for the user's `yes` (or any clear affirmative). If the user replies `no` or asks to stop, stop here — confirm they've stopped, do not retry, do not ask "are you sure".
+Pasting the install URL was the consent moment for installing the plugin. The URL + PIN you're about to hand the user is the real consent moment for account creation — they have to open the page in their browser to proceed. There is no separate yes/no gate.
 
-This consent step exists so the user knows the destination URL before any account is created. Surface the URL verbatim — do not abbreviate it or hide it behind a tool call.
-
-### Step 5 — Set up the user's TotalReclaw account (emit user-visible line 5)
-
-Call the `totalreclaw_pair` tool silently (the account-setup tool — name kept for backward compatibility). It returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}`. Then emit user-visible line 5 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…") — line 5 itself is the only thing the user needs to see.
+Call the `totalreclaw_pair` tool silently (the account-setup tool — name kept for backward compatibility). It returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}`. Then emit user-visible line 5 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…", "Ready to set up your account…") — line 5 itself is the only thing the user needs to see.
 
 Render the QR if your transport supports it: image-capable transports (Telegram, Slack, web chat) decode `qr_png_b64` to bytes and attach as an image; terminal-only transports (OpenClaw native CLI) emit `qr_unicode` inline. The QR encodes only the URL — the PIN is a separate dual-channel confirmation, never bake it into the QR.
 
-### Step 6 — Verify and confirm (silent until line 6)
+### Step 5 — Verify and confirm (silent until line 6)
 
 After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN likely expired — call `totalreclaw_pair` again silently and resend line 5 once. If present, emit user-visible line 6 (with the free-tier confirmation) and stop.
 
@@ -274,7 +298,8 @@ Upgrade: *"Upgrade my TotalReclaw subscription."*
 - **Browser fails to POST the encrypted phrase**: check the account-setup page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
 - **Tool calls return "onboarding required"**: paste the canonical message again so the agent re-runs `totalreclaw_pair`.
 - **"Not authenticated" / 401**: check your phrase — exact words, exact order, lowercase, single spaces.
-- **Agent narrating internals during install** ("let me find…", "in parallel…", "manifest detected…"): the agent missed the silence rule in §"Agent instructions". Reply *"Don't narrate the install internals — just tell me when it's installed and when to set up my account."* and the next session should silence.
+- **Agent narrating internals during install** ("Let me check that…", "Plugin loaded. Let me verify…", "I'll now…", "Quick fix…", "However, I don't see…", "I need to use…", "let me find…", "in parallel…", "manifest detected…"): the agent missed the silence rule in §"Agent instructions". Reply *"Don't narrate the install internals — just tell me when it's installed and when to set up my account."* and the next session should silence. On transports like Telegram, these intermediate lines visibly edit the bot's message live as tool calls progress, which is what makes them disruptive.
+- **Agent says "Should I /restart?" or stalls instead of restarting** (3.3.5-rc.1 hardening note): the agent missed the restart-imperative deny-list in the SKILL.md / Step 2. Reply *"Issue /restart yourself — don't ask"* and the next session should act autonomously. If it persists across sessions, the published RC's SKILL.md is stale — file an issue.
 - **`openclaw` CLI hangs / exits 124 inside the gateway agent shell** (issue [#184](https://github.com/p-diogo/totalreclaw-internal/issues/184)): on some Docker setups the agent's shell-execution of `openclaw plugins list` / `openclaw plugins install` etc. deadlocks (every subcommand exits 124). When this happens the agent can bypass the CLI wrapper by invoking the plugin's own JS entries directly via `node`. The plugin ships pair-flow + version-probe entries that work without any CLI:
   - **Plugin install probe** — read the plugin's filesystem manifests to confirm the install completed: `cat ~/.openclaw/extensions/totalreclaw/.loaded.json` (issue [#186](https://github.com/p-diogo/totalreclaw-internal/issues/186)) reports `{ loadedAt, tools, version }` if `register()` ran cleanly. `.error.json` reports a structured failure if it didn't. These files are the canonical filesystem signal — they don't depend on the deadlocking CLI.
   - **Pair-flow direct-node fallback** — when `openclaw` CLI hangs during `totalreclaw_pair`, the agent (or a shell helper) can run `node ~/.openclaw/extensions/totalreclaw/dist/pair-cli.js --url-pin-only` directly to obtain the universal-relay pair URL. This bypasses the gateway tool-router entirely and writes the resulting URL to stdout (one JSON line, no prompts). Surface that URL to the user the same way `totalreclaw_pair` would.
