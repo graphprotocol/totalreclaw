@@ -86,9 +86,26 @@ function defaultCacheRoot(): string {
   return path.join(os.homedir(), '.totalreclaw', 'embedder');
 }
 
+/**
+ * Last-known-good embedder bundle tag. Used ONLY as a hard-fallback when
+ * `configureEmbedder()` is never called by the orchestrator (defensive
+ * path — production code always wires it via index.ts register()).
+ *
+ * 3.3.4-rc.1 — pinned to v3.3.3-rc.1 because that is the most recent
+ * release at fix-time with a published `embedder-v1.tar.gz` asset. Earlier
+ * fallback `'0.0.0-dev'` (rc.22 → 3.3.3-rc.1) hard-coded a placeholder
+ * that resolved to a 404 GitHub Release URL; QA on 3.3.3-rc.1 (Pedro
+ * 2026-04-30) caught it because the cascade-cause (broken
+ * `readPluginVersion()` resolution) made the fallback fire on every cold
+ * start. Bumping this constant per RC is fine — the publish workflow auto-
+ * publishes the bundle for every RC tag (see scripts/build-embedder-
+ * bundle.mjs in the public repo).
+ */
+const LAST_KNOWN_GOOD_RC_TAG = '3.3.3-rc.1';
+
 function activeRuntimeConfig(): EmbedderRuntimeConfig {
   if (runtimeConfig) return runtimeConfig;
-  return { cacheRoot: defaultCacheRoot(), rcTag: '0.0.0-dev' };
+  return { cacheRoot: defaultCacheRoot(), rcTag: LAST_KNOWN_GOOD_RC_TAG };
 }
 
 /**

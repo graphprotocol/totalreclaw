@@ -124,9 +124,17 @@ export function ensureMemoryHeaderFile(
  * Read the plugin's own version string from `package.json`.
  *
  * Behaviour:
- *   - Resolves `package.json` next to the caller-provided directory
+ *   - Tries `package.json` next to the caller-provided directory first
  *     (typically `path.dirname(fileURLToPath(import.meta.url))` from the
- *     caller).
+ *     caller — i.e., the directory of the running ESM module).
+ *   - If that misses, walks up to 5 parent directories looking for a
+ *     `package.json` whose `name` is `@totalreclaw/totalreclaw`. This
+ *     covers the OpenClaw plugin sandbox case where the loaded module
+ *     lives at `<pluginRoot>/dist/index.js` while `package.json` lives
+ *     at `<pluginRoot>/package.json` (3.3.4-rc.1 fix — without this
+ *     walk-up, the `.loaded.json` manifest gets `version=unknown` and
+ *     all RC-gated logic that depends on the version string fails
+ *     silently in production OpenClaw deployments).
  *   - Returns the `version` field, or `null` on any I/O / parse error.
  *
  * Used by the RC-gated `totalreclaw_report_qa_bug` tool registration in
@@ -137,12 +145,48 @@ export function ensureMemoryHeaderFile(
  * helper — see the file-header guardrail.
  */
 export function readPluginVersion(packageJsonDir: string): string | null {
+  // Direct hit (source-tree dev path; tests).
+  const direct = tryReadPluginPackageJson(path.join(packageJsonDir, 'package.json'));
+  if (direct) return direct;
+
+  // Walk up — the running ESM module typically lives at
+  // `<pluginRoot>/dist/index.js`, so `packageJsonDir` is `<pluginRoot>/dist`
+  // and `package.json` is one level up. Bound the walk so a misconfigured
+  // path doesn't traverse the entire filesystem; 5 levels is more than
+  // enough for any realistic plugin layout (dist/, dist/cjs/, build/lib/).
+  let current = packageJsonDir;
+  for (let depth = 0; depth < 5; depth++) {
+    const parent = path.dirname(current);
+    if (parent === current) break; // root reached
+    const candidate = path.join(parent, 'package.json');
+    const version = tryReadPluginPackageJson(candidate);
+    if (version) return version;
+    current = parent;
+  }
+  return null;
+}
+
+/**
+ * Try to read `package.json` at `pkgPath`. Returns the `version` only if
+ * the file's `name` field matches `@totalreclaw/totalreclaw` — guards
+ * against accidentally returning the version of an outer host-package
+ * (e.g. when the plugin is bundled inside a parent app's tree).
+ *
+ * If `name` is absent (legacy / minimal package.json), accept the version
+ * anyway as a fallback — this is the existing behaviour preserved for
+ * anyone who manually trimmed their package.json.
+ */
+function tryReadPluginPackageJson(pkgPath: string): string | null {
   try {
-    const pkgPath = path.join(packageJsonDir, 'package.json');
     if (!fs.existsSync(pkgPath)) return null;
     const raw = fs.readFileSync(pkgPath, 'utf-8');
-    const parsed = JSON.parse(raw) as { version?: string };
-    return typeof parsed.version === 'string' ? parsed.version : null;
+    const parsed = JSON.parse(raw) as { version?: string; name?: string };
+    if (typeof parsed.version !== 'string') return null;
+    if (typeof parsed.name === 'string' && parsed.name !== '@totalreclaw/totalreclaw') {
+      // Wrong package — keep walking.
+      return null;
+    }
+    return parsed.version;
   } catch {
     return null;
   }

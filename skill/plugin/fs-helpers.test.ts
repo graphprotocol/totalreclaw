@@ -21,6 +21,7 @@ import {
   deleteCredentialsFile,
   isRunningInDocker,
   deleteFileIfExists,
+  readPluginVersion,
   type CredentialsFile,
 } from './fs-helpers.js';
 
@@ -285,6 +286,105 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
   // Directory may still exist — deleteFileIfExists makes no guarantee for dirs.
   // The contract is only "no throw + best-effort on files".
   fs.rmSync(dirPath, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// readPluginVersion — direct hit, walk-up from dist/, mismatched name guard
+// ---------------------------------------------------------------------------
+
+{
+  // Direct hit: package.json sits next to the caller-provided dir.
+  const root = fs.mkdtempSync(path.join(TMP, 'rpv-direct-'));
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({ name: '@totalreclaw/totalreclaw', version: '3.3.4-rc.1' }),
+  );
+  assertEq(
+    readPluginVersion(root),
+    '3.3.4-rc.1',
+    'readPluginVersion: direct hit returns version',
+  );
+}
+
+{
+  // Walk-up: caller passes the dist/ dir, package.json one level up.
+  // 3.3.4-rc.1 fix — without the walk-up, this scenario returned null
+  // and the .loaded.json manifest read `version=unknown`.
+  const root = fs.mkdtempSync(path.join(TMP, 'rpv-walkup-'));
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({ name: '@totalreclaw/totalreclaw', version: '3.3.4-rc.1' }),
+  );
+  const distDir = path.join(root, 'dist');
+  fs.mkdirSync(distDir);
+  assertEq(
+    readPluginVersion(distDir),
+    '3.3.4-rc.1',
+    'readPluginVersion: walks up from dist/ to find plugin package.json',
+  );
+}
+
+{
+  // Walk-up bound: 5 levels deep, package.json at the 4th level — found.
+  const root = fs.mkdtempSync(path.join(TMP, 'rpv-deep-'));
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({ name: '@totalreclaw/totalreclaw', version: '3.3.4-rc.1' }),
+  );
+  const deep = path.join(root, 'a', 'b', 'c', 'd');
+  fs.mkdirSync(deep, { recursive: true });
+  assertEq(
+    readPluginVersion(deep),
+    '3.3.4-rc.1',
+    'readPluginVersion: walks up to 5 levels (4-level descent works)',
+  );
+}
+
+{
+  // Wrong package.json (name mismatch) at first hit -> keeps walking.
+  // Without the name-guard, this would return the wrong version.
+  const root = fs.mkdtempSync(path.join(TMP, 'rpv-wrong-name-'));
+  // Outer = the right plugin
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({ name: '@totalreclaw/totalreclaw', version: '3.3.4-rc.1' }),
+  );
+  const distDir = path.join(root, 'dist');
+  fs.mkdirSync(distDir);
+  // Inner = a foreign package.json that should be skipped
+  fs.writeFileSync(
+    path.join(distDir, 'package.json'),
+    JSON.stringify({ name: '@some-other/lib', version: '99.0.0' }),
+  );
+  assertEq(
+    readPluginVersion(distDir),
+    '3.3.4-rc.1',
+    'readPluginVersion: skips wrong-name package.json and walks up to plugin',
+  );
+}
+
+{
+  // No package.json anywhere on the walk path -> null.
+  const root = fs.mkdtempSync(path.join(TMP, 'rpv-missing-'));
+  assertEq(
+    readPluginVersion(root),
+    null,
+    'readPluginVersion: returns null when no package.json found',
+  );
+}
+
+{
+  // Legacy / minimal package.json without `name` field — fallback accepts it.
+  const root = fs.mkdtempSync(path.join(TMP, 'rpv-no-name-'));
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({ version: '1.0.0' }),
+  );
+  assertEq(
+    readPluginVersion(root),
+    '1.0.0',
+    'readPluginVersion: accepts package.json without name (legacy fallback)',
+  );
 }
 
 // ---------------------------------------------------------------------------

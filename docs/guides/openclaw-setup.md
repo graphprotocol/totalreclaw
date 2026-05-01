@@ -73,15 +73,17 @@ If the user explicitly asks ("what's it doing?", "why so quiet?", "show me the c
 
 ### Step 1 — Install the skill + plugin (silent — emit user-visible line 1, then no prose until line 2)
 
-Run via your shell tool, in this order, **without writing prose about them**. Emit user-visible line 1 (`Installing TotalReclaw…`) once at the start, then stay silent until both commands succeed.
+Run via your shell tool, in this exact order, **without writing prose about them**. Emit user-visible line 1 (`Installing TotalReclaw…`) once at the start, then stay silent until both commands succeed.
 
 ```bash
-openclaw skills install totalreclaw
 openclaw plugins install @totalreclaw/totalreclaw
+openclaw skills install totalreclaw
 ```
 
+**Plugin BEFORE skill is deliberate** (3.3.4-rc.1, post-Pedro QA): the skill install triggers a config-driven SIGUSR1 gateway reload that can race a concurrent plugin install. Plugin-first lets the plugin land cleanly, then the skill's reload picks it up on the next gateway loop. If you accidentally do skill-first and the plugin install dies mid-flight, just retry `openclaw plugins install @totalreclaw/totalreclaw` once — it's idempotent.
+
 Notes:
-- For an RC build, replace the second command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.2-rc.2`.
+- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.4-rc.1`.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
 ### Step 2 — Wait for auto-reload + verify tool bind (silent — emit user-visible line 2 on success)
@@ -90,9 +92,17 @@ OpenClaw's default config (`gateway.reload.mode = "hybrid"`) auto-restarts the g
 
 When `totalreclaw_pair` is bound, capture the version string from `openclaw plugins list` (the line for `@totalreclaw/totalreclaw`) and emit user-visible line 2 (`✓ Installed (totalreclaw <version>)`).
 
-If `totalreclaw_pair` is not bound within 10 seconds, hybrid auto-reload didn't fire (likely `gateway.reload.mode = off`). Issue OpenClaw's built-in `/restart` slash command yourself — it is registered in OpenClaw's commands registry alongside `/help /model /new /plugins /reset /status /tools /usage` and reloads the gateway in-process (works from inside the gateway because it doesn't shell out, unlike `openclaw gateway restart`). Surface a single user-visible line: `Auto-reload didn't fire. Restarting via /restart…`. Resume verification after the slash command returns.
+If `totalreclaw_pair` is not bound within 10 seconds, hybrid auto-reload didn't fire (likely `gateway.reload.mode = off`). Issue OpenClaw's built-in `/restart` slash command yourself **autonomously and immediately** — it is registered in OpenClaw's commands registry alongside `/help /model /new /plugins /reset /status /tools /usage` and reloads the gateway in-process (works from inside the gateway because it doesn't shell out, unlike `openclaw gateway restart`). Surface a single user-visible line: `Auto-reload didn't fire. Restarting via /restart…`. Resume verification after the slash command returns.
 
-**Fallback only if `/restart` is unavailable** (very old OpenClaw pre-2026.4 or managed services that strip slash commands): tell the user verbatim *"Auto-reload didn't fire and /restart is unavailable. Please restart your OpenClaw gateway: `openclaw gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. Reply `done` once it's back up."* Do NOT invoke any external `docker restart` or `openclaw gateway restart` yourself — your shell runs inside the gateway you'd be restarting; both `/restart` (in-process) and a user-prompted external restart are the only safe paths.
+**Forbidden vocabulary** when a tool is missing post-install (3.3.4-rc.1): "Should I /restart", "Do you have a public URL", "Want me to restart", "Let me check if the tool is bound", "I need permission to restart". Just issue `/restart` and announce. Asking the user kills the silent-flow target.
+
+**If `/restart` returns "You are not authorized to use this command":** the gateway's `channels.<channel>.allowFrom` allowlist for the channel you're chatting through is empty. **Do NOT loop the install. Do NOT keep retrying.** Surface this one-line user-facing fix verbatim and stop:
+
+> Your channel needs to be allowlisted for slash commands. Run on the gateway host: `jq '.channels.<channel>.allowFrom = ["<your-id>"]' ~/.openclaw/openclaw.json | sponge ~/.openclaw/openclaw.json && docker restart <your-container-name>` (Docker self-host) — substitute `<channel>` with your channel name (e.g. `telegram`, `slack`), `<your-id>` with your user ID for that channel (Telegram: `@username` or numeric `chat_id`; Slack: workspace member ID), and `<your-container-name>` with your gateway container name (`docker ps` shows it). On a managed service, ask the service's support to enable slash commands for your channel. Reply `done` once it's back up.
+
+For non-Docker / native deployments substitute `openclaw gateway restart` for the `docker restart` portion. As a session-level fallback while restart is gated, try `/new` (starts a fresh session within the same gateway process — may pick up freshly-bound tools without a full restart).
+
+**Fallback only if both `/restart` and `/new` are unavailable** (very old OpenClaw pre-2026.4 or managed services that strip slash commands): tell the user verbatim *"Auto-reload didn't fire and /restart is unavailable. Please restart your OpenClaw gateway: `openclaw gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. Reply `done` once it's back up."* Do NOT invoke any external `docker restart` or `openclaw gateway restart` yourself — your shell runs inside the gateway you'd be restarting; `/restart` (in-process) and a user-prompted external restart are the only safe paths.
 
 ### Step 3 — Check for existing credentials (silent unless found)
 

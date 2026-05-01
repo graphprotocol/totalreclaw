@@ -759,10 +759,27 @@ let firstRunWelcomeShown = false;
  *
  * Goal: a fresh QA tester can't accidentally use an RC build for real data
  * without seeing a clear "RC = staging, no SLA, may be wiped" warning.
- * One-shot at the first `before_agent_start` after register(); never spams
- * per-turn. A fresh gateway restart re-fires it once.
+ * One-shot at the first `before_agent_start` whose `prependContext` actually
+ * lands on the LLM (3.3.4-rc.1 — see fix below). A fresh gateway restart
+ * re-fires it once.
+ *
+ * 3.3.4-rc.1 fix: through 3.3.3-rc.1 this flag was set to true as soon as
+ * the banner BLOCK was built — but multiple hook return paths returned
+ * `undefined` (zero-match cases), so the banner block was silently dropped
+ * AND the flag was flipped, suppressing all subsequent attempts. Now the
+ * flag flips ONLY when a return path actually includes the block in its
+ * `prependContext`, via the `markBannerDelivered()` closure.
  */
 let stagingBannerShown = false;
+
+/**
+ * 3.3.4-rc.1 — operator-facing "this is an RC build" log fires once per
+ * gateway process, independent of whether the user-facing banner has
+ * been delivered yet. Without this split, the warn-log was tied to the
+ * same flag as the user-facing banner and got dropped together when
+ * the hook returned `undefined`.
+ */
+let stagingBannerLogged = false;
 
 /**
  * Derive keys from the recovery phrase, load credentials, and register with
@@ -2972,17 +2989,32 @@ const plugin = {
 
       // 3.3.1-rc.22 — wire the lazy-embedder runtime config so the first
       // `generateEmbedding()` call knows where to cache the bundle and
-      // which RC's GitHub Release to fetch from. `pluginVersion` may be
-      // `null` if package.json is unreadable; the embedder defaults to
-      // a "0.0.0-dev" tag in that case.
-      try {
-        configureEmbedder({
-          cacheRoot: CONFIG.embedderCachePath,
-          rcTag: pluginVersion ?? '0.0.0-dev',
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        api.logger.warn(`TotalReclaw: configureEmbedder failed (will use defaults): ${msg}`);
+      // which RC's GitHub Release to fetch from.
+      //
+      // 3.3.4-rc.1 — when readPluginVersion() returns null (rare, but
+      // possible if package.json is unreadable inside the OpenClaw
+      // sandbox), we previously passed the literal `'0.0.0-dev'` which
+      // resolves to a 404 GitHub Release URL. Now we let `embedding.ts`
+      // fall back to its `LAST_KNOWN_GOOD_RC_TAG` constant by SKIPPING
+      // the configure call entirely in the null case — the
+      // `activeRuntimeConfig()` helper picks the constant up. This way
+      // the constant lives in one place (embedding.ts) and the orch-
+      // estrator just doesn't fight it.
+      if (pluginVersion) {
+        try {
+          configureEmbedder({
+            cacheRoot: CONFIG.embedderCachePath,
+            rcTag: pluginVersion,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          api.logger.warn(`TotalReclaw: configureEmbedder failed (will use defaults): ${msg}`);
+        }
+      } else {
+        api.logger.warn(
+          'TotalReclaw: pluginVersion unresolved — embedder will fall back to LAST_KNOWN_GOOD_RC_TAG. ' +
+            'Investigate package.json resolution; see fs-helpers.readPluginVersion docs.',
+        );
       }
 
       // 3.3.3-rc.1 (issue #187 — ONNX decouple): kick off a non-blocking
@@ -3151,11 +3183,39 @@ const plugin = {
           });
           // 3.3.0 — `openclaw totalreclaw pair [generate|import]` attaches
           // alongside the existing `onboard` + `status` subcommands.
+          //
+          // 3.3.4-rc.1 — wire `runRelayPairCli` so the CLI defaults to the
+          // same relay-brokered URL surface the agent tool uses. The local
+          // (gateway-loopback) flow is still available via `--local`. See
+          // pair-cli.ts header for the rationale.
           const { registerPairCli } = await import('./pair-cli.js');
           registerPairCli(program as import('commander').Command, {
             sessionsPath: CONFIG.pairSessionsPath,
             renderPairingUrl: (session) => buildPairingUrl(api, session),
             logger: api.logger,
+            runRelayPairCli: async (cliMode, runOpts) => {
+              const { runRelayPairCli } = await import('./pair-cli-relay.js');
+              return runRelayPairCli(cliMode, {
+                relayBaseUrl: CONFIG.pairRelayUrl,
+                credentialsPath: CREDENTIALS_PATH,
+                onboardingStatePath: CONFIG.onboardingStatePath,
+                logger: api.logger,
+                pluginVersion: pluginVersion ?? '3.3.4-rc.1',
+                deriveScopeAddress: async (mnemonic: string) => {
+                  try {
+                    return await deriveSmartAccountAddress(mnemonic, CONFIG.chainId);
+                  } catch (err) {
+                    api.logger.warn(
+                      `relay pair-cli: scope-address derivation failed (will retry lazily): ${
+                        err instanceof Error ? err.message : String(err)
+                      }`,
+                    );
+                    return undefined;
+                  }
+                },
+                ...runOpts,
+              });
+            },
           });
         },
         { commands: ['totalreclaw'] },
@@ -5834,7 +5894,24 @@ const plugin = {
           // Build a one-shot prefix when the bundled default points at staging
           // AND the user hasn't overridden via env. This prefix is prepended
           // to whichever context block the rest of the hook produces.
+          //
+          // 3.3.4-rc.1 — fix: previously `stagingBannerShown` was set to
+          // `true` AS SOON AS the block was built. If the rest of the hook
+          // then returned `undefined` (e.g. zero memory matches on the first
+          // turn — multiple paths around lines 6103-6325 do this), the
+          // banner block was silently discarded AND the flag was already
+          // flipped, so subsequent before_agent_start invocations never
+          // reconstructed it. Net effect: QA on 3.3.3-rc.1 (Pedro
+          // 2026-04-30) saw NO banner emitted across an entire conversation
+          // even though the build was bound to staging.
+          //
+          // Fix: build the block on every call until it is actually
+          // delivered (i.e., until at least one return path included it
+          // in `prependContext`). The flag flips at the bottom of this
+          // hook in `markBannerDelivered()` once we know the prependContext
+          // path was taken.
           let stagingBannerBlock = '';
+          let stagingBannerSuppressed = false;
           if (!stagingBannerShown) {
             try {
               const usingStagingDefault = CONFIG.serverUrl.includes('api-staging.totalreclaw.xyz');
@@ -5847,11 +5924,11 @@ const plugin = {
                   'For production, install the stable release: `openclaw plugins install ' +
                   '@totalreclaw/totalreclaw` (no `@rc` suffix). To pin a custom server, set ' +
                   '`TOTALRECLAW_SERVER_URL=https://api.totalreclaw.xyz` in your env.\n\n';
-                stagingBannerShown = true;
-                api.logger.warn(
-                  'TotalReclaw: RC/staging build active (api-staging.totalreclaw.xyz). ' +
-                  'See docs/guides/release-process.md for the RC=staging / stable=production rule.',
-                );
+                // Do NOT set stagingBannerShown=true here — see comment above.
+                // Logger emits once per gateway process; this is fine to
+                // gate on the same flag because the logger is operator-
+                // facing, not user-facing.
+                stagingBannerSuppressed = true;
               } else {
                 // Non-RC artifact OR user override — never fire the banner this
                 // gateway-process lifetime.
@@ -5862,6 +5939,34 @@ const plugin = {
               stagingBannerShown = true;
             }
           }
+          // Operator-facing log: once per process, when we DETECT the
+          // staging build (banner-shown semantics are about user
+          // delivery; this log is independent).
+          if (stagingBannerSuppressed && !stagingBannerLogged) {
+            stagingBannerLogged = true;
+            api.logger.warn(
+              'TotalReclaw: RC/staging build active (api-staging.totalreclaw.xyz). ' +
+              'See docs/guides/release-process.md for the RC=staging / stable=production rule.',
+            );
+          }
+          /**
+           * Helper — invoked inline at any `prependContext` site that
+           * wants to lead with the staging banner. Returns the banner
+           * string AND atomically marks the banner as delivered, so
+           * subsequent hook calls in the same gateway-process lifetime
+           * skip re-emission. Returns '' (empty) when no banner is due
+           * (stable build, user override, or already delivered).
+           *
+           * Use this at every prependContext callsite that takes the
+           * banner; do NOT inline `stagingBannerBlock` on its own — the
+           * 3.3.4-rc.1 bug fix requires the marker flip to be coupled
+           * to the actual delivery.
+           */
+          const consumeBannerForPrepend = (): string => {
+            if (stagingBannerBlock === '') return '';
+            stagingBannerShown = true;
+            return stagingBannerBlock;
+          };
 
           await ensureInitialized(api.logger);
 
@@ -5892,7 +5997,7 @@ const plugin = {
             }
             return {
               prependContext:
-                stagingBannerBlock +
+                consumeBannerForPrepend() +
                 welcomeBlock +
                 '## TotalReclaw setup pending\n\n' +
                 'TotalReclaw encrypted memory is installed but not yet set up on this machine. ' +
@@ -5994,7 +6099,7 @@ const plugin = {
                   api.logger.info(`Digest injection: state=${injectResult.state}`);
                   return {
                     prependContext:
-                      stagingBannerBlock +
+                      consumeBannerForPrepend() +
                       `## Your Memory\n\n${injectResult.promptText}` + welcomeBack + billingWarning,
                   };
                 }
@@ -6041,7 +6146,7 @@ const plugin = {
                 const lines = cachedFacts.slice(0, 8).map((f, i) =>
                   `${i + 1}. ${f.text} (importance: ${f.importance}/10, cached)`,
                 );
-                return { prependContext: stagingBannerBlock + `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
+                return { prependContext: consumeBannerForPrepend() + `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
               }
             }
 
@@ -6054,7 +6159,7 @@ const plugin = {
               const lines = cachedFacts.slice(0, 8).map((f, i) =>
                 `${i + 1}. ${f.text} (importance: ${f.importance}/10, cached)`,
               );
-              return { prependContext: stagingBannerBlock + `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
+              return { prependContext: consumeBannerForPrepend() + `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
             }
 
             if (allTrapdoors.length === 0) return undefined;
@@ -6071,7 +6176,7 @@ const plugin = {
                 const lines = cachedFacts.slice(0, 8).map((f, i) =>
                   `${i + 1}. ${f.text} (importance: ${f.importance}/10, cached)`,
                 );
-                return { prependContext: stagingBannerBlock + `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
+                return { prependContext: consumeBannerForPrepend() + `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
               }
               return undefined;
             }
@@ -6098,7 +6203,7 @@ const plugin = {
               const lines = cachedFacts.slice(0, 8).map((f, i) =>
                 `${i + 1}. ${f.text} (importance: ${f.importance}/10, cached)`,
               );
-              return { prependContext: stagingBannerBlock + `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
+              return { prependContext: consumeBannerForPrepend() + `## Relevant Memories\n\n${lines.join('\n')}` + welcomeBack + billingWarning };
             }
 
             // 5. Decrypt subgraph results and build reranker input.
@@ -6188,7 +6293,7 @@ const plugin = {
             });
             const contextString = `## Relevant Memories\n\n${lines.join('\n')}`;
 
-            return { prependContext: stagingBannerBlock + contextString + welcomeBack + billingWarning };
+            return { prependContext: consumeBannerForPrepend() + contextString + welcomeBack + billingWarning };
           }
 
           // --- Server mode (existing behavior) ---
@@ -6292,7 +6397,7 @@ const plugin = {
           });
           const contextString = `## Relevant Memories\n\n${lines.join('\n')}`;
 
-          return { prependContext: stagingBannerBlock + contextString + welcomeBack + billingWarning };
+          return { prependContext: consumeBannerForPrepend() + contextString + welcomeBack + billingWarning };
         } catch (err: unknown) {
           // The hook must NEVER throw -- log and return undefined.
           const message = err instanceof Error ? err.message : String(err);

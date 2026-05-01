@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Install + set up TotalReclaw encrypted memory for OpenClaw, then use totalreclaw_remember / totalreclaw_recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 3.3.3-rc.1
+version: 3.3.4-rc.1
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -30,16 +30,28 @@ metadata:
 
 If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jump to step 4. Otherwise run all steps in order.
 
-1. **Install skill + plugin.** Run via your shell tool, in this order:
+1. **Install plugin first, skill second.** Run via your shell tool, in this exact order:
    ```
-   openclaw skills install totalreclaw
    openclaw plugins install @totalreclaw/totalreclaw
+   openclaw skills install totalreclaw
    ```
-   For RC: replace the second command with `openclaw plugins install @totalreclaw/totalreclaw@rc`. If either shell call fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), tell the user verbatim *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` and skip to step 3.
+   For RC: replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc`. **Plugin BEFORE skill is deliberate** (3.3.4-rc.1 — issue from Pedro's QA on rc.3): the skill install triggers a config-driven SIGUSR1 gateway reload that can race a concurrent plugin install. Plugin-first lets the plugin land cleanly, then the skill's reload picks it up on the next gateway loop. If you accidentally do skill-first and the plugin install dies mid-flight, just retry `openclaw plugins install @totalreclaw/totalreclaw` once — it's idempotent.
 
-2. **Wait for auto-reload — do NOT restart the gateway yourself.** OpenClaw's default config (`gateway.reload.mode = "hybrid"`) auto-restarts the gateway via a file-watcher within 1-3 seconds. Wait ~5s, then run `openclaw plugins list | grep totalreclaw` and confirm `totalreclaw_pair` is in your toolset. If it does NOT appear within 10s, the user has `gateway.reload.mode = off` — fall back: tell the user verbatim *"Auto-reload didn't fire. Please restart your OpenClaw gateway: `openclaw gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. Reply `done` once it's back up."* Do NOT invoke the restart yourself — your shell is running inside the gateway you'd be restarting (catch-22). Wait for the user's `done`.
+   If either shell call fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), tell the user verbatim *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` and skip to step 3.
 
-3. **Verify `totalreclaw_pair` is bound.** If still missing after the user said `done`, tell them the restart didn't take effect and to retry. Do not loop the install.
+2. **Wait for auto-reload — then issue `/restart` autonomously if needed.** OpenClaw's default config (`gateway.reload.mode = "hybrid"`) auto-restarts the gateway via a file-watcher within 1-3 seconds. Wait ~5s, then run `openclaw plugins list | grep totalreclaw` and confirm `totalreclaw_pair` is in your toolset.
+
+   **If `totalreclaw_pair` is NOT visible after 10s:** issue OpenClaw's built-in `/restart` slash-command immediately and silently. **DO NOT ask the user "should I restart" / "do you want me to restart" / "let me check if the tool is bound" — just issue `/restart` and announce "Reloading gateway..." once.** This is in-process and drains active runs cleanly; your shell is NOT shelling out to `docker restart` or `openclaw gateway restart` (which would suicide the host). After `/restart`, wait ~3s and re-run `openclaw plugins list`.
+
+   **If `/restart` returns "You are not authorized to use this command":** the gateway's `channels.<your-channel>.allowFrom` allowlist is empty. **Do NOT keep retrying.** Surface this one-line user-facing fix and stop:
+
+   > Your channel needs to be allowlisted for slash commands. Run on the gateway host: `jq '.channels.<channel>.allowFrom = ["<your-id>"]' ~/.openclaw/openclaw.json | sponge ~/.openclaw/openclaw.json && docker restart <your-container-name>` (Docker self-host) — substitute `<channel>` with your channel name (e.g. `telegram`, `slack`), `<your-id>` with your user ID for that channel (Telegram: `@username` or numeric `chat_id`; Slack: workspace member ID), and `<your-container-name>` with your gateway container name (`docker ps` shows it). On a managed service, ask the service's support to enable slash commands for your channel. Reply `done` once it's back up.
+
+   For non-Docker / native deployments substitute `openclaw gateway restart` for the `docker restart` portion. As a session-level fallback while restart is gated, try `/new` (starts a fresh session within the same gateway process, may pick up freshly-bound tools without a full restart).
+
+   **Forbidden vocabulary** (these are anti-patterns when a tool is missing post-install): "Should I /restart", "Do you have a public URL", "Want me to restart", "Let me check if the tool is bound", "I need permission to restart". Just issue `/restart` immediately and announce.
+
+3. **Verify `totalreclaw_pair` is bound.** If still missing after `/restart` (or after the user fixed allowFrom and said `done`), tell them the restart didn't take effect and ask them to retry. Do not loop the install.
 
 4. **Check for existing credentials.** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, confirm *"TotalReclaw is already set up."* and stop.
 

@@ -3,20 +3,34 @@
  *
  * Purpose
  * -------
- * Starts a remote-onboarding session FROM the gateway host's terminal.
- * Creates a pair-session, renders the QR + URL + 6-digit secondary code
- * to stdout, then polls /status until the browser completes the flow.
+ * Starts a pairing session from the gateway host's terminal and renders
+ * the URL + 6-digit PIN + ASCII QR. The user opens the URL in a browser
+ * (on phone or laptop), confirms the PIN, and uploads their recovery
+ * phrase end-to-end-encrypted.
  *
- * This is the gateway-operator's surface. The operator reads the QR
- * with their phone (or opens the URL on their laptop browser); the
- * browser takes over from there.
+ * Two URL flavours
+ * ----------------
+ * * **Relay mode (3.3.4-rc.1 default).** The CLI opens a WebSocket against
+ *   the relay (`api-staging.totalreclaw.xyz` for RC, `api.totalreclaw.xyz`
+ *   for stable) and gets back a `https://<relay>/pair/p/<token>#pk=…` URL
+ *   the user can reach from any device on any network. This is the same
+ *   surface the agent-tool `totalreclaw_pair` uses. It works behind NAT,
+ *   in Docker, on managed services — anywhere outbound HTTPS works.
+ *
+ * * **Local mode (`--local`).** The legacy loopback flow: a session lands
+ *   in `pair-session-store` and the URL points at the gateway's own
+ *   bound interface (`http://localhost:18789/...`, or LAN/Tailscale IP
+ *   if autodetected). Required for fully-air-gapped operators who want
+ *   the relay out of the loop. Browser must be on a network that can
+ *   reach the gateway.
  *
  * Scope and scanner surface
  * -------------------------
  * Has `fetch` (for status polling) AND `POST` (never actually POSTs,
  * but the word lives in comments describing the paired browser POST).
  * MUST NOT also read disk or env vars. All state operations delegate
- * to pair-session-store; the CLI itself is a thin coordinator.
+ * to pair-session-store / pair-remote-client; the CLI itself is a thin
+ * coordinator.
  *
  * Zero logging of secret material. The secondary code IS printed to
  * stdout (required for the user to type), but never logged to file
@@ -444,6 +458,15 @@ export function registerPairCli(
     sessionsPath: string;
     renderPairingUrl(session: PairSession): string;
     logger: { info(msg: string): void; warn(msg: string): void; error(msg: string): void };
+    /**
+     * 3.3.4-rc.1 — relay-mode runner. When supplied, the CLI defaults to
+     * relay-mode (relay-brokered URL via `api-staging.totalreclaw.xyz` /
+     * `api.totalreclaw.xyz`). The runner is responsible for opening the
+     * WS session and polling the relay, mirroring `runPairCli`'s exit
+     * codes. If absent (very old plugin loader), the CLI silently falls
+     * back to local-mode and warns.
+     */
+    runRelayPairCli?: (mode: PairCliMode, opts: RelayPairCliOpts) => Promise<PairCliOutcome>;
   },
 ): void {
   // If the onboarding-cli already attached `totalreclaw`, reuse it.
@@ -459,15 +482,23 @@ export function registerPairCli(
 
   tr.command('pair [mode]')
     .description(
-      'Pair a remote browser device to this gateway (mode = generate | import; default generate)',
+      'Pair a remote browser device to this gateway via the relay (default; ' +
+      'works through NAT and inside Docker). Use --local to fall back to ' +
+      'gateway-loopback URLs for air-gapped setups.',
     )
-    .option('--json', 'Emit a single JSON payload (url/pin/sid/qr_ascii) instead of the human-readable banner. Enables agent-driven pairing.')
+    .option('--json', 'Emit a single JSON payload (url/pin/qr_ascii) instead of the human-readable banner. Enables agent-driven pairing.')
     .option('--url-pin-only', 'Emit ONLY {v,url,pin,expires_at_ms} — no QR ASCII, no SID, no mode echo. Headless fallback for container-based agents where the totalreclaw_pair tool is not injected (issue #87). Zero phrase exposure on stdout.')
+    .option('--local', '(3.3.4-rc.1) Use the loopback / LAN URL flow instead of the relay. URLs point at this gateway\'s bound interface (e.g. http://localhost:18789/…) and require the user\'s browser to be on a reachable network. Default since rc.6 was relay; this flag preserves the air-gapped path.')
     .option('--timeout <sec>', 'Session TTL in seconds (default: 900 = 15 min, matches pair-session-store default)')
     .action(async (...args: unknown[]) => {
       // commander passes: [modeArg, options, cmd]
       const modeRaw = typeof args[0] === 'string' ? args[0] : undefined;
-      const opts = (args[1] ?? {}) as { json?: boolean; urlPinOnly?: boolean; timeout?: string | number };
+      const opts = (args[1] ?? {}) as {
+        json?: boolean;
+        urlPinOnly?: boolean;
+        local?: boolean;
+        timeout?: string | number;
+      };
       const mode: PairCliMode =
         modeRaw === 'import' || modeRaw === 'imp' ? 'import' : 'generate';
       // --url-pin-only wins over --json when both are passed, since it is
@@ -483,15 +514,57 @@ export function registerPairCli(
         if (Number.isFinite(parsed) && parsed > 0) ttlSeconds = parsed;
       }
       const io = buildDefaultPairCliIo();
+      // 3.3.4-rc.1 — flip the default to relay-mode. The agent tool
+      // `totalreclaw_pair` has used the relay since rc.11; the CLI was
+      // the last surface still defaulting to gateway-loopback URLs,
+      // which are unreachable from a remote browser when the gateway
+      // runs in Docker (the rc.6+ default deployment). `--local`
+      // restores the legacy flow for air-gapped operators.
+      const useRelay = shouldUseRelayMode({
+        local: opts.local,
+        hasRelayRunner: typeof deps.runRelayPairCli === 'function',
+      });
       try {
-        const outcome = await runPairCli(mode, {
-          sessionsPath: deps.sessionsPath,
-          renderPairingUrl: deps.renderPairingUrl,
-          renderQr: defaultRenderQr,
-          io,
-          outputMode,
-          ttlSeconds,
-        });
+        let outcome: PairCliOutcome;
+        if (useRelay) {
+          outcome = await deps.runRelayPairCli!(mode, {
+            renderQr: defaultRenderQr,
+            io,
+            outputMode,
+            ttlSeconds,
+          });
+        } else {
+          if (opts.local) {
+            // Tell the operator they explicitly opted in. Suppress in
+            // JSON modes — the JSON contract must stay stdout-clean.
+            if (outputMode === 'human') {
+              io.stderr.write(
+                '\n[--local] Using gateway-loopback URL flow. The user\'s browser ' +
+                  'must be reachable from this gateway\'s bound interface (LAN, Tailscale, ' +
+                  'or localhost on the same machine).\n',
+              );
+            }
+          } else if (!deps.runRelayPairCli) {
+            // No relay runner wired — older composition. Warn once on
+            // stderr in human mode so the operator knows why URLs may
+            // be unreachable from a remote browser.
+            if (outputMode === 'human') {
+              io.stderr.write(
+                '\n[pair-cli] relay-mode runner not available — falling back to local-mode. ' +
+                  'Pair URLs will use this gateway\'s bound interface. Upgrade the plugin ' +
+                  'or pass --local to silence this warning.\n',
+              );
+            }
+          }
+          outcome = await runPairCli(mode, {
+            sessionsPath: deps.sessionsPath,
+            renderPairingUrl: deps.renderPairingUrl,
+            renderQr: defaultRenderQr,
+            io,
+            outputMode,
+            ttlSeconds,
+          });
+        }
         if (outcome.status !== 'completed') {
           process.exit(outcome.status === 'canceled' ? 130 : 1);
         }
@@ -501,6 +574,33 @@ export function registerPairCli(
         process.exit(2);
       }
     });
+}
+
+/**
+ * 3.3.4-rc.1 — options for the relay-mode CLI runner. Mirrors the human
+ * surface of `runPairCli` (output mode, QR renderer, IO, TTL) but does
+ * NOT take `sessionsPath` / `renderPairingUrl` because the relay flow
+ * mints its own URL via the relay's `opened` frame.
+ */
+export interface RelayPairCliOpts {
+  renderQr: (payload: string, cb: (ascii: string) => void) => void;
+  io: PairCliIo;
+  outputMode?: PairCliOutputMode;
+  ttlSeconds?: number;
+}
+
+/**
+ * 3.3.4-rc.1 — pure decision function: given the parsed action flags
+ * and whether a relay runner is wired, return whether the relay path
+ * should be taken. Exported for unit-testing the default-mode flip
+ * without invoking either runner.
+ */
+export function shouldUseRelayMode(opts: {
+  local?: boolean;
+  hasRelayRunner: boolean;
+}): boolean {
+  if (opts.local) return false;
+  return opts.hasRelayRunner;
 }
 
 // ---------------------------------------------------------------------------
