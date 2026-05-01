@@ -393,19 +393,23 @@ export function cleanupInstallStagingDirs(
 // ---------------------------------------------------------------------------
 
 /**
- * Marker filename written into the plugin directory at register-time. Its
- * presence means a prior install was interrupted before the plugin successfully
- * loaded — a confirmed-broken half-state that the next `openclaw plugins
- * install` retry can detect and clean.
+ * Marker filename indicating a prior install was interrupted before the
+ * plugin successfully loaded — a confirmed-broken half-state that the next
+ * `openclaw plugins install` retry can detect and clean.
  *
- * Conceptually the marker is dropped BEFORE npm install completes (the
- * complementary npm script removes it on success) and additionally
- * re-asserted at register-time as a second-line check. If you see this file
- * in `<extensionsDir>/totalreclaw/`, the install never reached register()
- * AND the marker drop wasn't undone.
+ * 3.3.6-rc.1 (2026-05-01): the `preinstall` npm script that wrote this
+ * marker was removed. OpenClaw's `openclaw plugins install` invokes
+ * `npm install --ignore-scripts`, so the script never fired in the
+ * canonical install path anyway, and `node -e` shell-exec patterns are a
+ * latent scanner-spec risk. The runtime canonical signal for partial
+ * detection is now `dist/index.js` missing (Rule 5 in `detectPartialInstall`)
+ * — the marker (Rule 4) is a redundant second-line check that still works
+ * for legacy installs that may have a stale marker on disk.
  *
- * Constants are exported so the npm preinstall/cleanup scripts in
- * `package.json` use the same name as the runtime detector.
+ * Helpers (`writePartialInstallMarker` / `clearPartialInstallMarker`) and
+ * the constant remain exported for backward compat and for any future
+ * mechanism that wants to reinstate marker writes (e.g. a runtime
+ * register-time write that is `--ignore-scripts`-safe).
  */
 export const PARTIAL_INSTALL_MARKER = '.tr-partial-install';
 
@@ -666,9 +670,12 @@ export function writePluginError(
 /**
  * Drop the `.tr-partial-install` marker into `pluginRootDir`. Idempotent
  * (overwrites any existing marker) and best-effort — returns `true` on
- * success, `false` if the dir doesn't exist or write fails. Used by the
- * `preinstall` npm script and (defensively) by the runtime if the npm
- * preinstall/cleanup script pair did not fire.
+ * success, `false` if the dir doesn't exist or write fails.
+ *
+ * 3.3.6-rc.1 (2026-05-01): the `preinstall` npm script that previously
+ * called this (via `node -e`) was removed (see `PARTIAL_INSTALL_MARKER`
+ * doc-comment). The helper remains exported for backward compat and for
+ * any future runtime register-time marker mechanism.
  */
 export function writePartialInstallMarker(pluginRootDir: string): boolean {
   try {
@@ -681,10 +688,11 @@ export function writePartialInstallMarker(pluginRootDir: string): boolean {
 }
 
 /**
- * Remove the partial-install marker. Called by the `postinstall` script and
- * (defensively) at register-time once we've confirmed the load succeeded.
- * Returns `true` if a marker was removed, `false` if there was nothing to
- * remove.
+ * Remove the partial-install marker. Called at register-time once we've
+ * confirmed the load succeeded — clears any stale marker left by a legacy
+ * install, since 3.3.6-rc.1 removed the `preinstall` script that used to
+ * write fresh markers. Returns `true` if a marker was removed, `false` if
+ * there was nothing to remove.
  */
 export function clearPartialInstallMarker(pluginRootDir: string): boolean {
   try {

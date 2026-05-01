@@ -1,6 +1,6 @@
 {
   "name": "totalreclaw",
-  "version": "3.3.5-rc.1",
+  "version": "3.3.6-rc.1",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. XChaCha20-Poly1305 E2EE: server never sees plaintext.",
   "author": "TotalReclaw Team",
   "license": "MIT",
@@ -14,6 +14,131 @@
     "privacy",
     "agent-memory",
     "persistent-context"
+  ],
+  "tools": [
+    {
+      "name": "totalreclaw_pair",
+      "description": "Set up the user's TotalReclaw account (encrypted, browser-side recovery-phrase generation or import). Returns an account-setup URL, a 6-digit PIN, and an ASCII QR code that the agent relays to the user. The recovery phrase is generated/entered in the BROWSER and uploaded end-to-end encrypted to this gateway — it NEVER touches the LLM provider or the chat transcript. This is the canonical agent-facilitated account-setup surface. Tool name kept for backward compatibility — function-wise this is the account-setup tool.",
+      "handler": "./dist/index.js",
+      "parameters": {
+        "mode": {
+          "type": "string",
+          "required": false,
+          "enum": ["generate", "import"],
+          "default": "generate",
+          "description": "\"generate\" = browser will create a NEW recovery phrase. \"import\" = browser will accept an EXISTING phrase pasted by the user in their browser (never through chat)."
+        }
+      }
+    },
+    {
+      "name": "totalreclaw_remember",
+      "description": "Store a new fact or preference in long-term memory",
+      "handler": "./dist/index.js",
+      "parameters": {
+        "text": {
+          "type": "string",
+          "required": true,
+          "description": "The fact or information to remember"
+        },
+        "type": {
+          "type": "string",
+          "required": false,
+          "enum": ["fact", "preference", "decision", "episodic", "goal"],
+          "default": "fact",
+          "description": "Type of memory"
+        },
+        "importance": {
+          "type": "integer",
+          "required": false,
+          "min": 1,
+          "max": 10,
+          "description": "Importance score 1-10. Default: auto-detected by LLM"
+        }
+      }
+    },
+    {
+      "name": "totalreclaw_recall",
+      "description": "Search and retrieve relevant memories from long-term storage",
+      "handler": "./dist/index.js",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "required": true,
+          "description": "Natural language query to search memories"
+        },
+        "k": {
+          "type": "integer",
+          "required": false,
+          "default": 8,
+          "max": 20,
+          "description": "Number of results to return"
+        }
+      }
+    },
+    {
+      "name": "totalreclaw_forget",
+      "description": "Delete a specific fact from memory",
+      "handler": "./dist/index.js",
+      "parameters": {
+        "factId": {
+          "type": "string",
+          "required": true,
+          "description": "UUID of the fact to delete"
+        }
+      }
+    },
+    {
+      "name": "totalreclaw_export",
+      "description": "Export all stored memories in plaintext format",
+      "handler": "./dist/index.js",
+      "parameters": {
+        "format": {
+          "type": "string",
+          "required": false,
+          "enum": ["json", "markdown"],
+          "default": "json",
+          "description": "Export format"
+        }
+      }
+    },
+    {
+      "name": "totalreclaw_status",
+      "description": "Check billing and subscription status, including quota usage and upgrade options",
+      "handler": "./dist/index.js",
+      "parameters": {}
+    },
+    {
+      "name": "totalreclaw_upgrade",
+      "description": "Get a checkout URL to upgrade to TotalReclaw Pro (unlimited memories on Gnosis mainnet)",
+      "handler": "./dist/index.js",
+      "parameters": {}
+    },
+    {
+      "name": "totalreclaw_import_from",
+      "description": "Import memories from other AI memory tools (Mem0, MCP Memory Server) into TotalReclaw",
+      "handler": "./dist/index.js",
+      "parameters": {
+        "source": {
+          "type": "string",
+          "required": true,
+          "enum": ["mem0", "mcp-memory"],
+          "description": "Source system to import from"
+        }
+      }
+    },
+    {
+      "name": "totalreclaw_consolidate",
+      "description": "Scan all stored memories and merge near-duplicates, keeping the most important/recent version",
+      "handler": "./dist/index.js",
+      "parameters": {
+        "dry_run": {
+          "type": "boolean",
+          "required": false,
+          "default": false,
+          "description": "Preview consolidation without deleting"
+        }
+      }
+    }
   ],
   "openclaw": {
     "minVersion": "0.1.0",

@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Install + set up TotalReclaw encrypted memory for OpenClaw, then use totalreclaw_remember / totalreclaw_recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 3.3.5-rc.1
+version: 3.3.6-rc.1
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -75,7 +75,7 @@ If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jum
 
    > Your Telegram channel needs `allowFrom` configured. Run on your host: `jq '.channels.<channel>.allowFrom = ["<your-id>"]' ~/.openclaw/openclaw.json | sponge ~/.openclaw/openclaw.json && docker restart <your-container-name>`. Substitute `<channel>` (e.g. `telegram`, `slack`), `<your-id>` (Telegram: `@username` or numeric `chat_id`; Slack: workspace member ID), and `<your-container-name>` (`docker ps` shows it). For non-Docker installs substitute `openclaw gateway restart` for the `docker restart` portion. On a managed service, ask the service's support to enable slash commands. Reply `done` after.
 
-   Then wait for `done`. Do NOT retry the install. Do NOT keep restarting. As a last-resort session-level fallback while restart is gated, try `/new` once (fresh session within the same gateway process, may pick up freshly-bound tools without a full restart).
+   Then wait for `done`. Do NOT retry the install. Do NOT keep restarting. Do NOT issue `/new` — it wipes the chat context, the agent forgets it was mid-install, and the user's next message is treated as a fresh install request which retries from scratch and re-trips the scanner block (Pedro QA, 3.3.5-rc.1).
 
    **Forbidden vocabulary** (these are anti-patterns — they show up to the user even if your transport edits them later, and they violate the silence rule):
    - "Let me check that…"

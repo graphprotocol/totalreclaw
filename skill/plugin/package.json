@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/totalreclaw",
-  "version": "3.3.5-rc.1",
+  "version": "3.3.6-rc.1",
   "description": "End-to-end encrypted, agent-portable memory for OpenClaw and any LLM-agent runtime. XChaCha20-Poly1305 with protobuf v4 + on-chain Memory Taxonomy v1 (claim / preference / directive / commitment / episode / summary).",
   "type": "module",
   "keywords": [
@@ -70,7 +70,6 @@
     "check-version-drift": "node ../scripts/check-version-drift.mjs",
     "check-url-binding": "node ../scripts/check-url-binding.mjs",
     "sync-version": "node ../scripts/sync-version.mjs",
-    "preinstall": "node -e \"try{require('fs').writeFileSync('.tr-partial-install','');}catch{}\"",
     "prepack": "npm run build",
     "prepublishOnly": "node ../scripts/check-scanner.mjs && node ../scripts/check-version-drift.mjs && node ../scripts/check-url-binding.mjs --release-type=${TOTALRECLAW_RELEASE_TYPE:-rc}"
   },

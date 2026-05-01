@@ -124,11 +124,9 @@ Surface this verbatim and stop. Do NOT loop `/restart` calls. Do NOT keep retryi
 
 > Your Telegram channel needs `allowFrom` configured. Run on your host: `jq '.channels.<channel>.allowFrom = ["<your-id>"]' ~/.openclaw/openclaw.json | sponge ~/.openclaw/openclaw.json && docker restart <your-container-name>`. Substitute `<channel>` with your channel name (e.g. `telegram`, `slack`), `<your-id>` with your user ID for that channel (Telegram: `@username` or numeric `chat_id`; Slack: workspace member ID), and `<your-container-name>` with your gateway container name (`docker ps` shows it). For non-Docker installs substitute `openclaw gateway restart` for the `docker restart` portion. On a managed service, ask the service's support to enable slash commands for your channel. Reply `done` after.
 
-Then wait for `done`. Do NOT retry the install. Do NOT keep restarting.
+Then wait for `done`. Do NOT retry the install. Do NOT keep restarting. Do NOT issue `/new` — it wipes the chat context, the agent forgets it was mid-install, and the user's next message is treated as a fresh install request which retries from scratch and re-trips the scanner block (Pedro QA, 3.3.5-rc.1).
 
-As a last-resort session-level fallback while restart is gated, try `/new` once (starts a fresh session within the same gateway process — may pick up freshly-bound tools without a full restart).
-
-#### Fallback only if both `/restart` and `/new` are unavailable
+#### Fallback only if `/restart` is unavailable
 
 Very old OpenClaw pre-2026.4 or managed services that strip slash commands: tell the user verbatim *"Auto-reload didn't fire and `/restart` is unavailable. Please restart your OpenClaw gateway: `openclaw gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. Reply `done` once it's back up."* Do NOT invoke any external `docker restart` or `openclaw gateway restart` yourself — your shell runs inside the gateway you'd be restarting; `/restart` (in-process) and a user-prompted external restart are the only safe paths.
 

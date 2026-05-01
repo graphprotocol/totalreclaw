@@ -4,6 +4,35 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.6-rc.1] — 2026-05-01
+
+Patch wave from Pedro's second QA cycle on 3.3.5-rc.1.
+
+### Fixed — `/new` fallback regression from PR #175
+
+PR #175 told the agent to suggest `/new` when `/restart` returned "not authorized". Pedro QA observed that this backfires: `/new` wipes the chat context, the agent forgets it was mid-install, treats the user's next message as a fresh install request, retries from scratch, and re-trips the scanner block on the partial-install dir.
+
+Removed `/new` as a fallback for `/restart` failures from `skill/plugin/SKILL.md` and `docs/guides/openclaw-setup.md`. The only correct response when `/restart` is unauthorized is to surface the verbatim user-facing fix (`jq` + `docker restart`) and wait for `done`.
+
+### Removed — `preinstall` script (`.tr-partial-install` marker write)
+
+`skill/plugin/package.json::scripts.preinstall` was a `node -e` shell-exec that wrote a `.tr-partial-install` marker file at npm-install time. Removed entirely.
+
+Why this is safe:
+- OpenClaw's `openclaw plugins install` invokes `npm install --ignore-scripts`, so the `preinstall` script literally never fired in the canonical install path. The marker write was already dead code in the OpenClaw flow.
+- `preinstall` ran via `node -e "require('fs').writeFileSync(...)"` — a node-eval shell-exec pattern that, while not flagged by the OpenClaw scanner today (the scanner does not inspect `package.json`), was a latent risk if the scanner spec ever extends to lifecycle scripts.
+- The runtime canonical signal for partial-install detection is `dist/index.js` missing (Rule 5 in `fs-helpers.ts::detectPartialInstall`). The marker file (Rule 4) was a redundant second-line check; its absence does not weaken detection.
+- `clearPartialInstallMarker()` in `index.ts::register()` is idempotent and returns `false` when the marker is absent — no behavioral change for clean installs.
+- Helpers `writePartialInstallMarker()` / `clearPartialInstallMarker()` remain exported for backward compat and for legacy installs that may have a stale marker on disk.
+
+Tests preserved unchanged: `partial-install-detection.test.ts`, `install-reload-idempotency.test.ts`, `install-staging-cleanup.test.ts`, and `fs-helpers.test.ts` all still exercise the helper round-trip without depending on the npm script.
+
+### Added — top-level `tools` array in `skill/plugin/skill.json`
+
+Per PR #154 / #185, `totalreclaw_pair` is declared at the skill layer in `openclaw.tools` so it appears in the registry catalog independent of plugin runtime register(). Added a top-level `tools` array as a defensive companion (mirrors the `openclaw.tools` entries with a `handler: "./dist/index.js"` pointer to the runtime impl) for any tool resolver that reads top-level `tools` rather than `openclaw.tools`.
+
+Caveat: based on inspection of OpenClaw 2026.3.x reference plugins (`extensions/llm-task`, `extensions/memory-core`), OpenClaw itself does not currently parse `skill.json` at install time — tool binding happens via runtime `api.registerTool()`. The skill-layer declaration mechanism may not solve the post-install tool-binding race on its own; upstream OpenClaw work is required for an auto-refresh of the agent toolset on plugin load. Tracked separately by Pedro's research agent.
+
 ## [3.3.5-rc.1] — 2026-04-30
 
 UX bundle from Pedro's QA on 3.3.4-rc.2:

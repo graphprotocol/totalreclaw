@@ -3043,13 +3043,17 @@ const plugin = {
       }
 
       // 3.3.1-rc.22 (rc.21 finding #5): self-heal partial-install marker.
-      // The `preinstall` npm script writes `.tr-partial-install`; clearing
-      // it has been the runtime's job since 3.3.3-rc.1 dropped postinstall.mjs
-      // (OpenClaw scanner blocked the install on the subprocess-spawn import
-      // — see 3.3.3-rc.1 PR). If we have gotten this far the loader did
-      // register us — meaning the install succeeded enough to be useful —
-      // so any lingering marker is stale. Clear it so the next retry's
-      // detector does not see a false positive.
+      // Clearing the marker has been the runtime's job since 3.3.3-rc.1
+      // dropped postinstall.mjs (OpenClaw scanner blocked the install on
+      // the subprocess-spawn import — see 3.3.3-rc.1 PR). 3.3.6-rc.1
+      // additionally dropped the `preinstall` npm script that wrote the
+      // marker (npm install --ignore-scripts meant it never fired in the
+      // canonical install path anyway, and `node -e` shell-exec is a
+      // latent scanner-spec risk). The clear call here remains valid for
+      // legacy installs that may have a stale marker on disk. If we have
+      // gotten this far the loader did register us — meaning the install
+      // succeeded enough to be useful — so any lingering marker is stale.
+      // Clear it so the next retry's detector does not see a false positive.
       //
       // 3.3.1-rc.22 (rc.21 finding #6) — gateway/reload upstream caveat:
       // OpenClaw's config-watcher fires `gateway/reload` when
