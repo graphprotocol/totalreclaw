@@ -5496,9 +5496,23 @@ const plugin = {
               // Background task — writes credentials.json + flips state when
               // the browser completes the flow. Tool handler returns
               // immediately so the agent can tell the user the URL + PIN.
+              //
+              // 3.3.4-rc.2 (Pedro QA — pair flow stuck-session) — wrap the
+              // WS-await in a 60s hard timeout. The relay drops sessions on
+              // `ws_close` (separately patched relay-side); without this
+              // bound the background task hangs in `waitNextMessage` for the
+              // full 5-minute session TTL before resolving, and downstream
+              // tooling that polls the gateway for completion sees stale
+              // `processing` state at 129s/159s/189s. 60s is the user-side
+              // deadline we surface in chat: long enough for a slow scan-
+              // and-paste, short enough that a fresh URL request is the
+              // obvious next step. Structured `timed_out` error in the log
+              // lets ops grep for the failure mode independently of generic
+              // ws-close errors.
+              const PAIR_TOOL_HARD_TIMEOUT_MS = 60_000;
               void (async () => {
                 try {
-                  await awaitPhraseUpload(remoteSession, {
+                  const phraseUploadPromise = awaitPhraseUpload(remoteSession, {
                     phraseValidator: (p: string) =>
                       validateMnemonic(p, wordlist),
                     completePairing: async ({ mnemonic }) => {
@@ -5546,7 +5560,48 @@ const plugin = {
                         return { state: 'error', error: msg };
                       }
                     },
+                    // 3.3.4-rc.2 — also pass through to awaitPhraseUpload so its
+                    // internal `waitNextMessage` timer matches the outer race.
+                    timeoutMs: PAIR_TOOL_HARD_TIMEOUT_MS,
                   });
+                  // 3.3.4-rc.2 — outer Promise.race guard. Resolves to a
+                  // sentinel ({ status: 'timed_out', ... }) so the catch
+                  // handler can distinguish a hard-timeout from a generic
+                  // ws-close error and surface it explicitly.
+                  const TIMEOUT_SENTINEL: {
+                    status: 'timed_out';
+                    message: string;
+                  } = {
+                    status: 'timed_out',
+                    message:
+                      `Pair flow timed out (${PAIR_TOOL_HARD_TIMEOUT_MS / 1000}s) — generate a new URL with totalreclaw_pair.`,
+                  };
+                  let hardTimer: ReturnType<typeof setTimeout> | undefined;
+                  const hardTimeoutPromise = new Promise<typeof TIMEOUT_SENTINEL>(
+                    (resolve) => {
+                      hardTimer = setTimeout(
+                        () => resolve(TIMEOUT_SENTINEL),
+                        PAIR_TOOL_HARD_TIMEOUT_MS,
+                      );
+                    },
+                  );
+                  try {
+                    const raced = await Promise.race([
+                      phraseUploadPromise,
+                      hardTimeoutPromise,
+                    ]);
+                    if (
+                      raced &&
+                      typeof raced === 'object' &&
+                      (raced as { status?: unknown }).status === 'timed_out'
+                    ) {
+                      api.logger.warn(
+                        `totalreclaw_pair(relay): hard timeout — ${(raced as typeof TIMEOUT_SENTINEL).message} (token=${remoteSession.token.slice(0, 8)}…)`,
+                      );
+                    }
+                  } finally {
+                    if (hardTimer) clearTimeout(hardTimer);
+                  }
                 } catch (bgErr: unknown) {
                   // Expected on TTL expiry / user-aborts — log at warn, not error.
                   const bgMsg = bgErr instanceof Error ? bgErr.message : String(bgErr);

@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/totalreclaw",
-  "version": "3.3.4-rc.1",
+  "version": "3.3.4-rc.2",
   "description": "End-to-end encrypted, agent-portable memory for OpenClaw and any LLM-agent runtime. XChaCha20-Poly1305 with protobuf v4 + on-chain Memory Taxonomy v1 (claim / preference / directive / commitment / episode / summary).",
   "type": "module",
   "keywords": [
@@ -31,6 +31,7 @@
   "author": "TotalReclaw Team",
   "license": "MIT",
   "dependencies": {
+    "@scure/bip39": "^2.2.0",
     "@totalreclaw/client": "^1.2.0",
     "@totalreclaw/core": "^2.1.1",
     "@types/qrcode": "^1.5.6",

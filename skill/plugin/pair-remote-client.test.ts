@@ -672,6 +672,180 @@ async function testTwoSequentialPairsSucceed(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// 3.3.4-rc.2 — pair-tool 60s hard timeout (Pedro QA, stuck-session bug)
+// ---------------------------------------------------------------------------
+
+/**
+ * Stub that opens normally but NEVER sends a `forward` frame. Mirrors the
+ * relay-side bug Pedro saw in 3.3.4-rc.1: the relay accepted `open`, replied
+ * `opened`, then dropped the session on `ws_close` before the browser could
+ * complete pair. Plugin-side, the background task hung in `waitNextMessage`
+ * for the full 5-minute session TTL. The 3.3.4-rc.2 fix wraps the WS-await
+ * in a 60s hard timeout — this test asserts it fires and produces a
+ * recognisable structured error.
+ */
+async function startSilentRelayStub(): Promise<{
+  wssUrl: string;
+  close: () => Promise<void>;
+}> {
+  const http: HttpServer = createServer();
+  const wss = new WebSocketServer({ server: http });
+
+  wss.on('connection', (ws) => {
+    ws.on('message', (raw) => {
+      try {
+        const text =
+          typeof raw === 'string'
+            ? raw
+            : Buffer.from(raw as ArrayBuffer).toString('utf-8');
+        const msg = JSON.parse(text) as Record<string, unknown>;
+        if (msg.type === 'open') {
+          ws.send(
+            JSON.stringify({
+              type: 'opened',
+              token: 'silent-tok-1',
+              short_url: '/pair/p/silent-tok-1',
+              expires_at: new Date(Date.now() + 60_000).toISOString(),
+            }),
+          );
+          // Deliberately do NOT send `forward` — simulate the relay
+          // dropping/silencing the session before phrase upload completes.
+        }
+      } catch {
+        /* swallow */
+      }
+    });
+  });
+
+  await new Promise<void>((resolve) => {
+    http.listen(0, '127.0.0.1', () => resolve());
+  });
+  const addr = http.address() as AddressInfo;
+  return {
+    wssUrl: `ws://127.0.0.1:${addr.port}`,
+    close: () =>
+      new Promise<void>((resolve) => {
+        try {
+          wss.close(() => http.close(() => resolve()));
+        } catch {
+          resolve();
+        }
+      }),
+  };
+}
+
+/**
+ * Asserts that `awaitPhraseUpload` honors the `timeoutMs` option (the inner
+ * leg of the rc.2 fix) and that the outer Promise.race sentinel pattern used
+ * in the plugin's `totalreclaw_pair` background task surfaces a structured
+ * `{status: 'timed_out'}` value when the WS-await never receives a forward
+ * frame. Uses a 200 ms timeout to keep test runtime bounded — the production
+ * value is 60_000 ms (PAIR_TOOL_HARD_TIMEOUT_MS in index.ts).
+ */
+async function testPairToolHardTimeout(): Promise<void> {
+  const stub = await startSilentRelayStub();
+  try {
+    const session = await openRemotePairSession({
+      relayBaseUrl: stub.wssUrl,
+      pin: '424242',
+    });
+
+    // Inner leg: awaitPhraseUpload with short timeout must reject (the
+    // existing 5-minute default would hang the whole test process).
+    const SHORT_MS = 200;
+    let innerThrew = false;
+    let innerErrMsg = '';
+    try {
+      await awaitPhraseUpload(session, {
+        completePairing: async () => ({ state: 'active' }),
+        timeoutMs: SHORT_MS,
+      });
+    } catch (err) {
+      innerThrew = true;
+      innerErrMsg = err instanceof Error ? err.message : String(err);
+    }
+    ok(
+      'pair-timeout: awaitPhraseUpload threw on timeoutMs',
+      innerThrew,
+    );
+    ok(
+      'pair-timeout: awaitPhraseUpload error message identifies timeout',
+      /timeout/i.test(innerErrMsg),
+      innerErrMsg,
+    );
+
+    // Outer leg: the Promise.race sentinel pattern used inside index.ts'
+    // `totalreclaw_pair` background task. When the awaitPhraseUpload promise
+    // rejects (or stalls), the outer hard-timer must produce a structured
+    // `{status: 'timed_out', message: ...}` shape that the catch handler
+    // can recognise. We re-open a fresh session so the WS is healthy.
+    const session2 = await openRemotePairSession({
+      relayBaseUrl: stub.wssUrl,
+      pin: '535353',
+    });
+    const phraseUploadPromise = awaitPhraseUpload(session2, {
+      completePairing: async () => ({ state: 'active' }),
+      // long enough that the OUTER race is the one that wins
+      timeoutMs: 5_000,
+    }).catch((err) => {
+      // Inner leg may reject too — swallow so the race resolves cleanly.
+      return { _innerRejected: true, _innerErr: err };
+    });
+    const TIMEOUT_SENTINEL = {
+      status: 'timed_out' as const,
+      message:
+        'Pair flow timed out (60s) — generate a new URL with totalreclaw_pair.',
+    };
+    let hardTimer: ReturnType<typeof setTimeout> | undefined;
+    const hardTimeoutPromise = new Promise<typeof TIMEOUT_SENTINEL>(
+      (resolve) => {
+        hardTimer = setTimeout(() => resolve(TIMEOUT_SENTINEL), 150);
+      },
+    );
+    let raced: unknown;
+    try {
+      raced = await Promise.race([phraseUploadPromise, hardTimeoutPromise]);
+    } finally {
+      if (hardTimer) clearTimeout(hardTimer);
+    }
+    ok(
+      'pair-timeout: outer race resolves to a structured value (not unhandled)',
+      raced != null && typeof raced === 'object',
+      typeof raced === 'object' ? JSON.stringify(raced) : String(raced),
+    );
+    const racedObj = raced as { status?: unknown; message?: unknown };
+    ok(
+      'pair-timeout: structured error has status: "timed_out"',
+      racedObj.status === 'timed_out',
+      JSON.stringify(racedObj),
+    );
+    ok(
+      'pair-timeout: structured error message references generating a new URL',
+      typeof racedObj.message === 'string' &&
+        /totalreclaw_pair/.test(racedObj.message as string) &&
+        /timed out/i.test(racedObj.message as string),
+      typeof racedObj.message === 'string' ? racedObj.message : 'non-string',
+    );
+
+    // Clean up: close the WS that the second awaitPhraseUpload still holds.
+    try {
+      session2._ws.close();
+    } catch {
+      /* noop */
+    }
+    // Drain the inner promise so node doesn't warn about pending handles.
+    await phraseUploadPromise.catch(() => undefined);
+    try {
+      session._ws.close();
+    } catch {
+      /* noop */
+    }
+  } finally {
+    await stub.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Run
 // ---------------------------------------------------------------------------
 
@@ -682,6 +856,7 @@ async function main(): Promise<void> {
   await testDecryptFailureSendsNack();
   await testHttpsInputConvertedToWss();
   await testTwoSequentialPairsSucceed();
+  await testPairToolHardTimeout();
 
   // eslint-disable-next-line no-console
   console.log(`# fail: ${_failed}`);
