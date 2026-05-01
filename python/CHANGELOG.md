@@ -6,6 +6,117 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.5rc1] — 2026-05-01
+
+Coordinated bundle with plugin `3.3.5-rc.1`. SKILL.md UX hardening pass —
+no Python runtime / API changes. The 2.3.4-rc.1 `/restart` autonomy +
+unauthorized fallback (PR #172) and the install-ordering fix carry over
+unchanged.
+
+Pedro QA on 2026-05-01 (Telegram-channel Hermes deployment) surfaced
+three UX issues with the install + setup transcript that mirror the
+plugin-side findings.
+
+### Drop the explicit-consent gate before account setup (Fix 1)
+
+User feedback verbatim: *"do I really need to say 'yes' to continue
+to the pairing/setup phase?"* The `yes/no` consent prompt was added
+in PR #160 / inherited via PR #172 hardening for safety-trained-LLM
+compliance. It is now redundant: the user has already consented by
+pasting *"Install TotalReclaw, see <URL>"* — that IS the consent.
+Adding a second gate adds friction without security value.
+
+`SKILL.md` and `docs/guides/hermes-setup.md` Step 5 / Step 6:
+
+- Removed the consent prompt + verbatim *"Reply `yes` to continue,
+  or `no` to stop here"* line.
+- Removed Step 5a / Step 6a / Step 5b / Step 6b sub-steps; Step 5
+  is now a single step that hands the user the URL + PIN
+  immediately after disable-memory.
+- Updated the agent-instructions overview to call out *"Proceed
+  directly from disable-memory to handing the user the URL + PIN
+  — do NOT add a second consent gate."*
+- Updated provenance preamble: *"The user already consented by
+  pasting the install message; do NOT add a second consent gate
+  before account setup."*
+
+### Tighten silence rules with new forbidden phrases (Fix 2)
+
+User feedback: *"I see a bunch of temporary commands on my Telegram
+conversation which then seem to be deleted/edited by the bot as it
+progresses, but it looks awful and confusing"*. Telegram bots edit
+or delete interim messages mid-tool-call — *"Now installing…"*,
+*"Plugin loaded. Let me verify…"*, *"I'll try…"* — and the
+edit/delete dance looks broken even when the final state is correct.
+
+`SKILL.md` and `docs/guides/hermes-setup.md`:
+
+- New top-level rule in the silence-rules preamble: *"Emit ONLY the
+  user-visible lines listed below. Do not narrate tool calls. Do
+  not describe what you're doing or about to do. Errors are the
+  only allowed deviation, and only as a single tight line."*
+- Forbidden-vocabulary deny-list extended with the exact phrases
+  Pedro saw in his 2026-05-01 Telegram transcripts: *"Let me check
+  that…"*, *"Now installing…"*, *"Plugin loaded. Let me verify…"*,
+  *"I'll try…"*, *"Quick fix…"*, *"One sec…"*, *"Got it, doing X…"*,
+  any *"I'm going to do X"* / *"About to do X"* pre-narration.
+- Expected line count for a healthy install + setup explicitly
+  reduced from **6–7 lines** (rc.4) to **5–6 lines TOTAL** —
+  anything more is now framed as a SKILL violation.
+
+### Strengthen `/restart` imperative (Fix 3)
+
+User feedback: even with rc.4's `/restart` autonomy hardening, the
+agent in Pedro's QA still asked *"should I /restart"* / *"I need
+permission"* before issuing the slash command. The 2.3.4-rc.1
+deny-list was good but the positive rule was soft.
+
+`SKILL.md` and `docs/guides/hermes-setup.md` Step 2:
+
+- Restated as an explicit imperative: *"When tools are missing
+  post-install, your IMMEDIATE next message must be the literal
+  slash command `/restart` — nothing else. Do not narrate. Do
+  not ask permission. Do not describe what /restart does. Just
+  send `/restart`."*
+- Deny-list extended with: *"I need permission to /restart"*,
+  *"Do you authorize /restart?"*, *"Confirming before I /restart…"*,
+  *"Is it OK if I restart?"*, *"I'll /restart now if that's OK"*,
+  and any prose describing what `/restart` does ("This will drain
+  runs and reload…") — just send the slash command.
+- Unauthorized-response handling restated as a single tight line
+  surfacing the underlying gate verbatim, then *"Do NOT loop
+  /restart calls."* The `/new` retry is now framed as an optional
+  preceding hop, not a mandatory one — some managed deployments
+  strip both.
+
+### Test coverage
+
+- `python/tests/test_skill_md_includes_disable_memory_step.py`
+  continues to pass — the rc.26 disable-memory step is preserved.
+- `python/tests/test_skill_md_restart_hardening_2_3_4.py` continues
+  to pass — the deny-list section heading, *"Should I /restart"*
+  literal, *"Do you have a public URL"* literal, *"Let me check if
+  the tool is bound"* literal, install-ordering Python-first
+  contract, and user-guide mirror are all preserved (this PR adds
+  to the deny-list, doesn't remove from it).
+- No test pinned the *"Reply `yes` to continue"* substring or the
+  Step 5a / 5b / 6a / 6b sub-step labels, so removing them does
+  not break any existing pin.
+
+### Out of scope
+
+- No PyPI publish here — this PR opens for review only. Pedro QAs
+  2.3.5-rc.1 alongside plugin 3.3.5-rc.1; PyPI publish goes through
+  `publish-python-client.yml` once the bundle is GO.
+- TS plugin (`skill/`), `npm-publish.yml`, `publish-clawhub.yml`,
+  Hermes Dockerfile (`tools/qa-stack/hermes/` in the internal repo)
+  are owned by the parallel plugin agent / cross-repo follow-ups
+  — untouched here.
+- Phrase-safety invariant: untouched. Dropping the `yes/no` consent
+  gate does NOT relax the recovery-phrase isolation contract — the
+  phrase still never crosses LLM context. Browser-side crypto and
+  the `totalreclaw_pair` account-setup tool are unchanged.
+
 ## [2.3.4rc1] — 2026-04-30
 
 Coordinated bundle with plugin `3.3.4-rc.1`. SKILL.md hardening pass —
