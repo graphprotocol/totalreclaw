@@ -4,6 +4,54 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.7-rc.1] — 2026-05-03
+
+Patch wave from Pedro's QA on 3.3.6-rc.1 (real-user Telegram → Pop OS Docker container → OpenClaw 2026.4.22 + plugin 3.3.6-rc.1). Two ship-stoppers, both architectural rather than config-drift:
+
+### Fixed — `/restart` rejects channel-paired owner when `allowFrom` config is unset (issue #215)
+
+**Root cause:** OpenClaw's built-in `/restart` checks `commands.ownerAllowFrom` + `channels.<provider>.allowFrom`. Managed-service users (and most users on a fresh install) never set those keys — they may not even be allowed to. So a default-config user typing `/restart` to recover from the plugin tool-binding race (the dominant first-run install path) hit `"You are not authorized to use this command."` and was stuck.
+
+**Fix:** plugin now registers its own `/restart` slash command with `requireAuth: false`. Plugin commands match BEFORE built-ins (see upstream `auto-reply/reply/commands-plugin.ts`), so this takes precedence whenever the plugin is loaded. The handler runs a 5-tier auth fallback (priority order):
+
+1. `commands.ownerAllowFrom` explicitly lists invoker → allow
+2. `channels.<provider>.allowFrom` explicitly lists invoker → allow
+3. Invoker is the same identity this channel session is bound to (paired channel + lone inbound user) → allow
+4. `credentials.json` exists AND was paired via this same channel → allow
+5. BOTH allow-from configs unset (default) AND only one user has ever messaged this gateway → allow (lone-user heuristic for first-run installs)
+
+Rejection ONLY when explicit config exists and excludes the invoker. Allow → fire `process.kill(process.pid, 'SIGUSR1')` (gateway accepts iff `commands.restart=true`, the default).
+
+Implementation:
+- `restart-auth.ts` — pure resolver (no fs / process side effects so the matrix is exhaustively unit-testable). Tests in `restart-auth.test.ts` (29 assertions).
+- `inbound-user-tracker.ts` — disk-backed counter persisted to `<credentialsDir>/.inbound-users.json` (mode 0o600). `message_received` hook records every inbound (channel, senderId) so tier 3 / tier 5 verdicts survive container restart. Tests in `inbound-user-tracker.test.ts` (14 assertions).
+- `index.ts` — wires `api.registerCommand({ name: 'restart', requireAuth: false, ... })` immediately after the existing `/totalreclaw` registration; reuses `loadCredentialsJson` for tier 4.
+
+### Investigated / partially mitigated — Container restart doesn't bind plugin tools to active session (issue #216)
+
+**Symptom:** after `openclaw plugins install @totalreclaw/totalreclaw@3.3.6-rc.1`, the bot still doesn't see `totalreclaw_pair`. User does `docker restart tr-openclaw` from host shell, bot reattaches, **STILL no tool**.
+
+**Investigation from code reading** (no reproducer access — Pedro's pop-os stack is the only known trip):
+- Plugin loader at `subagent-registry-DV5OCO20.js::loadOpenClawPlugins` calls `register(api)` synchronously on every gateway boot (line 60062). The plugin's `register()` would normally run.
+- Async `register()` returns a promise; OpenClaw discards it with a warning ("plugin register returned a promise; async registration is ignored", line 60067). Our register IS sync — confirmed by inspection. Not the root cause.
+- Plugin install dir: `~/.openclaw/extensions/<plugin>/`. In Docker, that path needs to be host-mounted OR populated inside the container. If host-mounted but install ran on host vs container with different uid/gid, register() can silently no-op on the mismatched ownership.
+
+**Most-likely hypothesis** (cannot confirm without reproducer): hypothesis (b) — plugin IS registered but the session's tool-registry was cached pre-restart and not refreshed. Telegram session-state persists in `~/.openclaw/sessions/`; the cached toolset survives the gateway process restart. OpenClaw upstream issue.
+
+**What we shipped:**
+1. **Boot-counter heartbeat in `.loaded.json`** — `writePluginManifest` reads the prior manifest and increments `bootCount` on every successful register(). Adds `bootAt` (ISO timestamp) + `pid`. User can `cat ~/.openclaw/extensions/totalreclaw/.loaded.json` after a container restart to verify register() ran in this process. Tests in `load-manifest.test.ts` (12 new assertions, 34 total).
+2. **`/totalreclaw diag` slash command** — exposes the same data inside the agent's view. Compares `manifest.pid` to `process.pid` and warns "STALE — file from prior boot, register() did NOT run in this process" when they differ. Lets Pedro / future QA agents prove (a) vs (b) without a docker exec.
+3. **Upstream issue path** — if Pedro's next QA confirms `bootCount` increments on container restart (i.e. register() DID run) but tools still don't bind, the root cause is upstream OpenClaw session-cache invalidation and we'll file the issue with the diagnostic data attached.
+
+### Doc updates
+
+- `docs/guides/openclaw-setup.md` — drop the "configure `commands.ownerAllowFrom` before testing /restart" prerequisite. `/restart` now works in default-config installs; the user no longer has to learn allow-from semantics before they can recover from a tool-binding race.
+
+### Tests
+
+- Plugin: 2 new test files (`restart-auth.test.ts`, `inbound-user-tracker.test.ts`) — 43 new assertions. `load-manifest.test.ts` extended by 12 assertions (boot-count regression + idempotency). All pre-existing tests remain green.
+- Hermes parity: `python/src/totalreclaw/hermes/restart_auth.py` ships the same matrix as a reusable utility. `python/tests/test_restart_auth_5_tier_2_3_6.py` — 21 assertions covering all 5 tiers. NOTE on Hermes wiring: as of `hermes-agent` 2026.4.x the plugin context API does NOT expose `register_command()` (Hermes roadmap). Until that lands, the Hermes module is an exported util; when Hermes adds the API, the plugin's `register()` can wire `/restart` in two lines.
+
 ## [3.3.6-rc.1] — 2026-05-01
 
 Patch wave from Pedro's second QA cycle on 3.3.5-rc.1.

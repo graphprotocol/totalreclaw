@@ -149,7 +149,7 @@ Hermes does NOT auto-reload on plugin install — you have to restart. The faste
 
 **When tools are missing post-install, your IMMEDIATE next message must be the literal slash command `/restart` — nothing else. Do not narrate. Do not ask permission. Do not describe what /restart does. Just send `/restart`.** After Hermes returns, emit user-visible line 3 (`Restarting Hermes to load the plugin…`) as the single confirmation. Resume at Step 3.
 
-**If `/restart` returns "You are not authorized to use this command" / "command not found" / refused (2.3.4-rc.1 hardening, strengthened in 2.3.5-rc.1):** managed Hermes deployments may gate session-scope slash commands behind a role / RBAC layer. Surface this verbatim as a single tight user-visible line:
+**If `/restart` returns "You are not authorized to use this command" / "command not found" / refused (2.3.4-rc.1 hardening, strengthened in 2.3.5-rc.1):** managed Hermes deployments may gate session-scope slash commands behind a role / RBAC layer. (Hermes does NOT yet expose `register_command()` to plugins — see `website/docs/guides/build-a-hermes-plugin.md` line 240; the 5-tier auth fallback that ships in TotalReclaw plugin 3.3.7-rc.1 for OpenClaw cannot be wired on the Hermes side until that lands. The 2.3.6rc1 client ships the 5-tier matrix as an exported util ready for the wiring.) Surface this verbatim as a single tight user-visible line:
 
 > *"Your Hermes deployment doesn't expose `/restart` to me. Run on your host: `hermes gateway restart` (native) OR `docker restart <your-hermes-container>` (Docker self-host — `docker ps` shows the name). Reply `done` after."*
 

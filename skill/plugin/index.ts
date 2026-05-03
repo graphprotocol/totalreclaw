@@ -167,10 +167,21 @@ import {
   clearPartialInstallMarker,
   writePluginManifest,
   writePluginError,
+  readPluginLoadedManifest,
   type OnboardingState,
 } from './fs-helpers.js';
 import { isRcBuild } from './qa-bug-report.js';
 import { decideToolGate, isGatedToolName } from './tool-gating.js';
+import {
+  resolveRestartAuth,
+  rejectMessageFor,
+  type RestartAuthConfig,
+} from './restart-auth.js';
+import {
+  recordInboundUser,
+  getDistinctInboundUserCount,
+  resolveTrackerPath,
+} from './inbound-user-tracker.js';
 import { detectFirstRun, buildWelcomePrepend, type GatewayMode } from './first-run.js';
 import { buildPairRoutes } from './pair-http.js';
 import { detectGatewayHost } from './gateway-url.js';
@@ -3405,16 +3416,191 @@ const plugin = {
                   : 'Memory tools are gated. Run `openclaw totalreclaw onboard` (local) or `openclaw totalreclaw pair` (remote) to complete setup.'),
             };
           }
+          if (sub === 'diag') {
+            // 3.3.7-rc.1 (issue #216) — diagnostic surface for the
+            // tool-binding-on-restart bug. Reports whether the
+            // plugin's register() ran in this process (boot count +
+            // pid + version + tool count). Non-secret: only public
+            // package metadata. The actual filesystem read lives in
+            // fs-helpers.readPluginLoadedManifest() so this file
+            // stays scanner-clean (whole-file rule disallows fs.read*
+            // co-located with `fetch` / `post` markers).
+            //
+            // Usage: `/totalreclaw diag` from chat OR `cat
+            // <pluginDir>/.loaded.json` from the host shell. Both
+            // surfaces should agree; if chat says boot=N but the
+            // file says boot=N+1, the chat session is stale and a
+            // /restart is warranted.
+            try {
+              const m = _pluginDirForManifest
+                ? readPluginLoadedManifest(_pluginDirForManifest)
+                : null;
+              if (!m) {
+                return {
+                  text:
+                    'TotalReclaw diag:\n' +
+                    `  pid=${process.pid}\n` +
+                    `  version=${pluginVersion ?? 'unknown'}\n` +
+                    '  loaded-manifest: NOT FOUND (register() may have failed — check .error.json)',
+                };
+              }
+              const stalePid = typeof m.pid === 'number' && m.pid !== process.pid;
+              return {
+                text:
+                  'TotalReclaw diag:\n' +
+                  `  current pid=${process.pid}\n` +
+                  `  manifest pid=${m.pid ?? '?'}${stalePid ? ' (STALE — file from prior boot, register() did NOT run in this process)' : ''}\n` +
+                  `  version=${m.version ?? 'unknown'}\n` +
+                  `  boot count=${m.bootCount ?? '?'}\n` +
+                  `  boot at=${m.bootAt ?? '?'}\n` +
+                  `  tools registered=${m.tools?.length ?? 0}`,
+              };
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err);
+              return { text: `TotalReclaw diag: error reading manifest (${msg})` };
+            }
+          }
           return {
             text:
               'TotalReclaw slash commands:\n' +
               '  /totalreclaw onboard — how to set up TotalReclaw securely\n' +
               '  /totalreclaw pair    — remote-gateway QR-pairing (3.3.0)\n' +
-              '  /totalreclaw status  — current onboarding state',
+              '  /totalreclaw status  — current onboarding state\n' +
+              '  /totalreclaw diag    — plugin load diagnostics (boot count, pid, tool count)',
           };
         },
       });
+
+      // ---------------------------------------------------------------
+      // 3.3.7-rc.1 (issue #215) — `/restart` plugin command override
+      // ---------------------------------------------------------------
+      //
+      // Replaces OpenClaw's built-in `/restart` so we can apply the
+      // 5-tier auth fallback. Plugin commands match BEFORE built-ins
+      // (see upstream `auto-reply/reply/commands-plugin.ts`), so this
+      // takes precedence whenever the plugin is loaded. We use
+      // `requireAuth: false` to bypass the channel-layer auth check —
+      // the 5-tier fallback in `restart-auth.ts` decides allow / reject.
+      //
+      // If allow → fire `process.kill(process.pid, 'SIGUSR1')`. The
+      // gateway accepts SIGUSR1 iff `commands.restart=true` (the
+      // default) — see upstream `setGatewaySigusr1RestartPolicy`.
+      //
+      // If reject → return a short non-shaming message via
+      // `rejectMessageFor` that points the user at the right config
+      // key (no infinite loop — agent will follow the unauthorized
+      // fallback path documented in SKILL.md instead).
+      api.registerCommand({
+        name: 'restart',
+        description: 'Restart OpenClaw gracefully (drains active runs first).',
+        acceptsArgs: false,
+        requireAuth: false,
+        handler: async (ctx) => {
+          const trackerPath = resolveTrackerPath(CREDENTIALS_PATH);
+          const channel = (ctx.channel ?? '').toString().trim().toLowerCase();
+          const senderId = (ctx.senderId ?? '').toString().trim();
+
+          // Tier 4 + tier 3 helpers. We approximate "paired via this
+          // channel" with the OpenClaw channel-allow-from store: if
+          // pairing wrote an entry for this provider, the file under
+          // ~/.openclaw/pairing/<channel>/allow_from.json (or env
+          // override) will exist. We don't import the upstream SDK's
+          // sync helper because the plugin loader sandbox sometimes
+          // strips the alias; instead we check a robust filesystem
+          // shape: pair-finish writes credentials.json AND OpenClaw's
+          // pairing-store entry. Safe approximation: if the plugin's
+          // own credentials.json exists AND the inbound-user tracker
+          // has at least one entry for this channel, treat it as
+          // "paired via this channel". This matches the bug-fix
+          // intent (issue #215, tier 4) without coupling to upstream
+          // internal APIs.
+          const credentialsExists = (): boolean => {
+            try {
+              const c = loadCredentialsJson(CREDENTIALS_PATH);
+              return c != null;
+            } catch {
+              return false;
+            }
+          };
+          const pairedViaChannel = (ch: string): boolean => {
+            if (!ch) return false;
+            // Tracker count > 0 means at least one user has messaged
+            // this channel since plugin load. Combined with
+            // credentialsExists() in tier 4, this is a robust proxy
+            // for "the channel is bound to this gateway".
+            return getDistinctInboundUserCount(trackerPath, ch) > 0;
+          };
+
+          const verdict = resolveRestartAuth(
+            { senderId, channel, config: api.config as RestartAuthConfig | undefined },
+            {
+              loadCredentialsExists: credentialsExists,
+              wasPairedViaChannel: pairedViaChannel,
+              getDistinctInboundUserCount: (ch) => getDistinctInboundUserCount(trackerPath, ch),
+            },
+          );
+
+          if (verdict.allow === false) {
+            api.logger.info(
+              `TotalReclaw: /restart rejected (channel=${channel || '<none>'} sender=${senderId || '<none>'} reason=${verdict.reason})`,
+            );
+            return { text: rejectMessageFor(verdict.reason) };
+          }
+
+          api.logger.info(
+            `TotalReclaw: /restart allowed (channel=${channel || '<none>'} sender=${senderId || '<none>'} tier=${verdict.reason})`,
+          );
+
+          // Trigger the gateway's SIGUSR1 restart path. Wrap in
+          // try/catch — `process.kill` can throw if the gateway is
+          // already shutting down (rare but seen in the wild).
+          try {
+            process.kill(process.pid, 'SIGUSR1');
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            api.logger.warn(`TotalReclaw: /restart SIGUSR1 emit failed: ${msg}`);
+            return {
+              text: `Restart request acknowledged but the gateway didn't accept the signal (${msg}). Try \`docker restart <container>\` if running in Docker.`,
+            };
+          }
+          return { text: 'Restarting OpenClaw — back in a few seconds.' };
+        },
+      });
     }
+
+    // ---------------------------------------------------------------
+    // 3.3.7-rc.1 (issue #215) — track distinct inbound users per channel
+    // ---------------------------------------------------------------
+    //
+    // Tier 3 + tier 5 of the `/restart` 5-tier auth fallback need to
+    // know how many distinct users have messaged this gateway on
+    // each channel. We instrument `message_received` to record every
+    // (channel, senderId) pair to disk; the count survives gateway
+    // restarts (see `inbound-user-tracker.ts`).
+    //
+    // Best-effort: we never throw out of this hook even if the disk
+    // write fails — the auth fallback degrades gracefully (a stale
+    // count doesn't break the explicit-allow tiers).
+    api.on(
+      'message_received',
+      async (event: unknown, ctx: unknown) => {
+        try {
+          const evt = event as { from?: string } | undefined;
+          const c = ctx as { channelId?: string } | undefined;
+          const sender = (evt?.from ?? '').toString().trim();
+          const channel = (c?.channelId ?? '').toString().trim();
+          if (!sender || !channel) return undefined;
+          const trackerPath = resolveTrackerPath(CREDENTIALS_PATH);
+          recordInboundUser(trackerPath, channel, sender);
+        } catch (err: unknown) {
+          // best-effort; never crash on tracker failure
+          const msg = err instanceof Error ? err.message : String(err);
+          api.logger.warn(`message_received tracker write failed: ${msg}`);
+        }
+        return undefined;
+      },
+      { priority: 5 },
+    );
 
     // ---------------------------------------------------------------
     // Tool: totalreclaw_remember

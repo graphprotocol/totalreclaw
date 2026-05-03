@@ -182,6 +182,69 @@ function rmrf(p: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Test 7 — 3.3.7-rc.1 (issue #216): bootCount increments on every register()
+// + bootAt + pid are populated. Lets the user diagnose whether register()
+// actually ran on container restart.
+// ---------------------------------------------------------------------------
+{
+  const { pluginRoot, pluginDist } = mkPluginTree();
+  // First boot
+  writePluginManifest(pluginDist, { loadedAt: 1000, tools: ['a'], version: '3.3.7-rc.1' });
+  const m1Path = path.join(pluginRoot, PLUGIN_LOADED_MANIFEST);
+  const m1 = JSON.parse(fs.readFileSync(m1Path, 'utf-8'));
+  assert(m1.bootCount === 1, 'first boot: bootCount = 1');
+  assert(typeof m1.bootAt === 'string' && m1.bootAt.includes('T'), 'first boot: bootAt is ISO timestamp');
+  assert(typeof m1.pid === 'number' && m1.pid > 0, 'first boot: pid populated');
+
+  // Second boot (simulated)
+  writePluginManifest(pluginDist, { loadedAt: 2000, tools: ['a', 'b'], version: '3.3.7-rc.1' });
+  const m2 = JSON.parse(fs.readFileSync(m1Path, 'utf-8'));
+  assert(m2.bootCount === 2, 'second boot: bootCount = 2 (preserved + incremented)');
+  assert(m2.tools.length === 2, 'second boot: new tools captured');
+  assert(m2.pid === m1.pid, 'second boot: pid stable in same process');
+
+  // Third boot
+  writePluginManifest(pluginDist, { loadedAt: 3000, tools: ['a'], version: '3.3.7-rc.1' });
+  const m3 = JSON.parse(fs.readFileSync(m1Path, 'utf-8'));
+  assert(m3.bootCount === 3, 'third boot: bootCount = 3');
+
+  rmrf(path.dirname(pluginRoot));
+}
+
+// ---------------------------------------------------------------------------
+// Test 8 — register() runs idempotently — repeated writes don't corrupt the
+// manifest schema (regression: shape stays identical over many boots).
+// ---------------------------------------------------------------------------
+{
+  const { pluginRoot, pluginDist } = mkPluginTree();
+  for (let i = 0; i < 10; i++) {
+    writePluginManifest(pluginDist, {
+      loadedAt: 1000 + i,
+      tools: ['totalreclaw_remember', 'totalreclaw_recall'],
+      version: '3.3.7-rc.1',
+    });
+  }
+  const m = JSON.parse(fs.readFileSync(path.join(pluginRoot, PLUGIN_LOADED_MANIFEST), 'utf-8'));
+  assert(m.bootCount === 10, 'idempotent: 10 boots → bootCount = 10');
+  assert(Array.isArray(m.tools) && m.tools.length === 2, 'idempotent: tools shape preserved');
+  assert(m.version === '3.3.7-rc.1', 'idempotent: version preserved');
+  rmrf(path.dirname(pluginRoot));
+}
+
+// ---------------------------------------------------------------------------
+// Test 9 — corrupt prior manifest does NOT crash; bootCount restarts from 1.
+// ---------------------------------------------------------------------------
+{
+  const { pluginRoot, pluginDist } = mkPluginTree();
+  fs.writeFileSync(path.join(pluginRoot, PLUGIN_LOADED_MANIFEST), '{ corrupt json');
+  const ok = writePluginManifest(pluginDist, { loadedAt: 1, tools: [], version: 'v' });
+  assert(ok === true, 'corrupt prior manifest: write still succeeds');
+  const m = JSON.parse(fs.readFileSync(path.join(pluginRoot, PLUGIN_LOADED_MANIFEST), 'utf-8'));
+  assert(m.bootCount === 1, 'corrupt prior manifest: bootCount restarts at 1');
+  rmrf(path.dirname(pluginRoot));
+}
+
+// ---------------------------------------------------------------------------
 console.log(`\n${passed}/${passed + failed} passed`);
 if (failed > 0) {
   process.exit(1);

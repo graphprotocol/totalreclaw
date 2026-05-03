@@ -6,6 +6,38 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.6rc1] — 2026-05-03
+
+Coordinated bundle with plugin `3.3.7-rc.1`. Hermes side of the `/restart` 5-tier auth fallback (issue #215).
+
+### Added — `totalreclaw.hermes.restart_auth` 5-tier auth utility
+
+New module ships the same allow/reject matrix as the OpenClaw plugin's `skill/plugin/restart-auth.ts`. Tier order (priority high → low):
+
+1. `commands.ownerAllowFrom` explicitly lists invoker → allow
+2. `channels.<provider>.allow_from` explicitly lists invoker → allow
+3. Invoker is the same identity the channel session is bound to → allow
+4. `credentials.json` exists AND was paired via this same channel → allow
+5. BOTH allow-from configs unset (default) AND only one user has ever messaged this gateway → allow (lone-user heuristic)
+
+Rejection ONLY when explicit config exists and excludes the invoker.
+
+Accepts BOTH Hermes snake_case (`commands.owner_allow_from`, `channels.<p>.allow_from`) AND OpenClaw camelCase (`commands.ownerAllowFrom`, `channels.<p>.allowFrom`) so the resolver works against either gateway's config shape.
+
+**Wiring status:** as of `hermes-agent` 2026.4.x the plugin context API does NOT expose `register_command()` (the Hermes team has it on the roadmap — see `website/docs/guides/build-a-hermes-plugin.md` line 240). Until that lands, this module is shipped as an exported util:
+
+- The matrix is unit-testable + version-pinned.
+- When Hermes adds `register_command`, the plugin's `register()` can wire `/restart` in two lines.
+- Documentation surfaces (SKILL.md, hermes-setup.md) can link the user to per-tier reasoning.
+
+### Tests
+
+`python/tests/test_restart_auth_5_tier_2_3_6.py` — 21 assertions covering all 5 tiers + both rejection reasons + reject-message format + camelCase/snake_case parity. All pre-existing Hermes tests remain green.
+
+### Doc updates
+
+- `docs/guides/hermes-setup.md` — drop the "configure `commands.ownerAllowFrom` before testing /restart" prerequisite (mirrors the plugin-side guide change). The `/restart` unauthorized fallback chain (try `/new` once, then escalate to user-prompted manual restart) remains in SKILL.md as the canonical recovery path until upstream Hermes ships `register_command`.
+
 ## [2.3.5rc1] — 2026-05-01
 
 Coordinated bundle with plugin `3.3.5-rc.1`. SKILL.md UX hardening pass —
