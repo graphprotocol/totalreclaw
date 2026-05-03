@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Install + set up TotalReclaw encrypted memory for OpenClaw, then use totalreclaw_remember / totalreclaw_recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 3.3.7-rc.1
+version: 3.3.7-rc.2
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -38,7 +38,7 @@ Speak only these lines, in order. Substitute the bracketed placeholders with the
    > Installing TotalReclaw…
 2. (after install + auto-reload + `totalreclaw_pair` is bound)
    > ✓ Installed (totalreclaw &lt;version&gt;)
-3. (optional — only if auto-reload didn't fire and you need to issue `/restart`)
+3. (optional — only if auto-reload didn't fire and you need to issue `/totalreclaw-restart`)
    > Restarting OpenClaw to load the plugin…
 4. (optional — only if you successfully disabled the built-in memory tool to prevent dual-write)
    > Disabled built-in memory tool.
@@ -63,15 +63,15 @@ If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jum
 
    If either shell call fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), tell the user verbatim *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` and skip to step 3.
 
-2. **Wait for auto-reload — then issue `/restart` autonomously if needed (silent — emit user-visible line 2 on success, line 3 only if you had to restart).** OpenClaw's default config (`gateway.reload.mode = "hybrid"`) auto-restarts the gateway via a file-watcher within 1-3 seconds. Wait ~5s, then run `openclaw plugins list | grep totalreclaw` and confirm `totalreclaw_pair` is in your toolset. When bound, emit user-visible line 2 and proceed.
+2. **Wait for auto-reload — then issue `/totalreclaw-restart` autonomously if needed (silent — emit user-visible line 2 on success, line 3 only if you had to restart).** OpenClaw's default config (`gateway.reload.mode = "hybrid"`) auto-restarts the gateway via a file-watcher within 1-3 seconds. Wait ~5s, then run `openclaw plugins list | grep totalreclaw` and confirm `totalreclaw_pair` is in your toolset. When bound, emit user-visible line 2 and proceed.
 
    **If `totalreclaw_pair` is NOT visible after 10s — restart imperative (read carefully):**
 
-   > Your IMMEDIATE next message must be the literal slash command `/restart` — nothing else. Do not narrate. Do not ask permission. Do not describe what `/restart` does. Do not propose alternatives. Just send `/restart`. You may emit user-visible line 3 (`Restarting OpenClaw to load the plugin…`) ONCE in the same turn, then issue `/restart`. Nothing else.
+   > Your IMMEDIATE next message must be the literal slash command `/totalreclaw-restart` — nothing else. Do not narrate. Do not ask permission. Do not describe what `/totalreclaw-restart` does. Do not propose alternatives. Just send `/totalreclaw-restart`. You may emit user-visible line 3 (`Restarting OpenClaw to load the plugin…`) ONCE in the same turn, then issue `/totalreclaw-restart`. Nothing else.
 
-   `/restart` is in-process — it drains active runs cleanly; your shell is NOT shelling out to `docker restart` or `openclaw gateway restart` (those would suicide the host). After `/restart`, wait ~3s and re-run `openclaw plugins list`.
+   `/totalreclaw-restart` is in-process — it drains active runs cleanly; your shell is NOT shelling out to `docker restart` or `openclaw gateway restart` (those would suicide the host). After `/totalreclaw-restart`, wait ~3s and re-run `openclaw plugins list`. (3.3.7-rc.2 renamed this from `/restart` because OpenClaw reserves `/restart` for its built-in — the plugin-side fallback can only attach to a unique name. The 5-tier auth resolver is unchanged; only the command name moved.)
 
-   **If `/restart` returns "You are not authorized to use this command":** surface this verbatim and stop. Do NOT loop `/restart` calls. Do NOT propose alternatives.
+   **If `/totalreclaw-restart` returns "You are not authorized to use this command":** surface this verbatim and stop. Do NOT loop `/totalreclaw-restart` calls. Do NOT propose alternatives.
 
    > Your Telegram channel needs `allowFrom` configured. Run on your host: `jq '.channels.<channel>.allowFrom = ["<your-id>"]' ~/.openclaw/openclaw.json | sponge ~/.openclaw/openclaw.json && docker restart <your-container-name>`. Substitute `<channel>` (e.g. `telegram`, `slack`), `<your-id>` (Telegram: `@username` or numeric `chat_id`; Slack: workspace member ID), and `<your-container-name>` (`docker ps` shows it). For non-Docker installs substitute `openclaw gateway restart` for the `docker restart` portion. On a managed service, ask the service's support to enable slash commands. Reply `done` after.
 
@@ -84,12 +84,12 @@ If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jum
    - "Quick fix…"
    - "However, I don't see…"
    - "I need to use…"
-   - "Should I /restart" / "Do you have a public URL" / "Want me to restart" / "Let me check if the tool is bound" / "I need permission to restart"
+   - "Should I /totalreclaw-restart" / "Do you have a public URL" / "Want me to restart" / "Let me check if the tool is bound" / "I need permission to restart"
    - "Now installing…" / "Got it" / "In parallel…" / "Step 1a/1b/1c"
 
    Substitute all of these with silence — the next user-visible line in the set, or nothing.
 
-3. **Verify `totalreclaw_pair` is bound.** If still missing after `/restart` (or after the user fixed allowFrom and said `done`), tell them the restart didn't take effect and ask them to retry. Do not loop the install.
+3. **Verify `totalreclaw_pair` is bound.** If still missing after `/totalreclaw-restart` (or after the user fixed allowFrom and said `done`), tell them the restart didn't take effect and ask them to retry. Do not loop the install.
 
 4. **Check for existing credentials (silent unless found).** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit *"✓ TotalReclaw is already set up."* and stop.
 

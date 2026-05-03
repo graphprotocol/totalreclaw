@@ -3430,7 +3430,7 @@ const plugin = {
             // <pluginDir>/.loaded.json` from the host shell. Both
             // surfaces should agree; if chat says boot=N but the
             // file says boot=N+1, the chat session is stale and a
-            // /restart is warranted.
+            // /totalreclaw-restart is warranted.
             try {
               const m = _pluginDirForManifest
                 ? readPluginLoadedManifest(_pluginDirForManifest)
@@ -3472,26 +3472,42 @@ const plugin = {
       });
 
       // ---------------------------------------------------------------
-      // 3.3.7-rc.1 (issue #215) — `/restart` plugin command override
+      // 3.3.7-rc.2 (issue #215, follow-up) — `/totalreclaw-restart`
       // ---------------------------------------------------------------
       //
-      // Replaces OpenClaw's built-in `/restart` so we can apply the
-      // 5-tier auth fallback. Plugin commands match BEFORE built-ins
-      // (see upstream `auto-reply/reply/commands-plugin.ts`), so this
-      // takes precedence whenever the plugin is loaded. We use
-      // `requireAuth: false` to bypass the channel-layer auth check —
-      // the 5-tier fallback in `restart-auth.ts` decides allow / reject.
+      // Originally rc.1 registered this as `/restart` to override the
+      // OpenClaw built-in. That was wrong: OpenClaw's plugin registry
+      // hard-rejects the name on the reserved list (see upstream
+      // `RESERVED_COMMANDS` in `dist/registry-*.js`) — registration
+      // fails with `Command name "restart" is reserved by a built-in
+      // command` and the 5-tier fallback never runs. Pedro caught this
+      // in 3.3.7-rc.1 manual integration testing 2026-05-03; gateway
+      // logs surfaced the rejection, so the rc.1 fix shipped DEAD-CODE.
+      //
+      // Workaround until upstream lands a plugin-override-precedence
+      // flag (FR filed alongside this PR): use a unique, namespaced
+      // command name. Plugin handles `/totalreclaw-restart`; the
+      // built-in `/restart` keeps its allow-from-only semantics
+      // unchanged. SKILL.md tells the agent to issue the namespaced
+      // form, so end-users never type `restart` directly.
+      //
+      // We still use `requireAuth: false` to bypass the channel-layer
+      // auth check — the 5-tier fallback in `restart-auth.ts` decides
+      // allow / reject per the same matrix as rc.1.
       //
       // If allow → fire `process.kill(process.pid, 'SIGUSR1')`. The
       // gateway accepts SIGUSR1 iff `commands.restart=true` (the
       // default) — see upstream `setGatewaySigusr1RestartPolicy`.
+      // (The SIGUSR1 policy still keys on `commands.restart`, NOT on
+      // the plugin command name — gateways only honour one restart
+      // signal.)
       //
       // If reject → return a short non-shaming message via
       // `rejectMessageFor` that points the user at the right config
       // key (no infinite loop — agent will follow the unauthorized
       // fallback path documented in SKILL.md instead).
       api.registerCommand({
-        name: 'restart',
+        name: 'totalreclaw-restart',
         description: 'Restart OpenClaw gracefully (drains active runs first).',
         acceptsArgs: false,
         requireAuth: false,
@@ -3542,13 +3558,13 @@ const plugin = {
 
           if (verdict.allow === false) {
             api.logger.info(
-              `TotalReclaw: /restart rejected (channel=${channel || '<none>'} sender=${senderId || '<none>'} reason=${verdict.reason})`,
+              `TotalReclaw: /totalreclaw-restart rejected (channel=${channel || '<none>'} sender=${senderId || '<none>'} reason=${verdict.reason})`,
             );
             return { text: rejectMessageFor(verdict.reason) };
           }
 
           api.logger.info(
-            `TotalReclaw: /restart allowed (channel=${channel || '<none>'} sender=${senderId || '<none>'} tier=${verdict.reason})`,
+            `TotalReclaw: /totalreclaw-restart allowed (channel=${channel || '<none>'} sender=${senderId || '<none>'} tier=${verdict.reason})`,
           );
 
           // Trigger the gateway's SIGUSR1 restart path. Wrap in
@@ -3558,7 +3574,7 @@ const plugin = {
             process.kill(process.pid, 'SIGUSR1');
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            api.logger.warn(`TotalReclaw: /restart SIGUSR1 emit failed: ${msg}`);
+            api.logger.warn(`TotalReclaw: /totalreclaw-restart SIGUSR1 emit failed: ${msg}`);
             return {
               text: `Restart request acknowledged but the gateway didn't accept the signal (${msg}). Try \`docker restart <container>\` if running in Docker.`,
             };
@@ -3572,11 +3588,11 @@ const plugin = {
     // 3.3.7-rc.1 (issue #215) — track distinct inbound users per channel
     // ---------------------------------------------------------------
     //
-    // Tier 3 + tier 5 of the `/restart` 5-tier auth fallback need to
-    // know how many distinct users have messaged this gateway on
-    // each channel. We instrument `message_received` to record every
-    // (channel, senderId) pair to disk; the count survives gateway
-    // restarts (see `inbound-user-tracker.ts`).
+    // Tier 3 + tier 5 of the `/totalreclaw-restart` 5-tier auth
+    // fallback need to know how many distinct users have messaged this
+    // gateway on each channel. We instrument `message_received` to
+    // record every (channel, senderId) pair to disk; the count
+    // survives gateway restarts (see `inbound-user-tracker.ts`).
     //
     // Best-effort: we never throw out of this hook even if the disk
     // write fails — the auth fallback degrades gracefully (a stale

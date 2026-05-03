@@ -26,7 +26,7 @@ metadata:
 
 > Canonical install + account-setup flow lives at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md> (OpenClaw) and <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md> (Hermes). When a user pastes one of those URLs in chat, fetch it and follow its agent-instructions section verbatim. The "Post-Install Setup" section below mirrors the same account-setup flow as a fallback.
 
-> **Gateway restart after install**: OpenClaw's default `gateway.reload.mode = "hybrid"` auto-restarts within 1-3s of plugin install — no agent action needed. If auto-reload doesn't fire (`gateway.reload.mode = off`), issue OpenClaw's built-in `/restart` slash command yourself (in-process, drains active runs). Manual user-prompted restart is fallback only if `/restart` is unavailable. NEVER invoke external `docker restart` or `openclaw gateway restart` — your shell runs inside the gateway.
+> **Gateway restart after install**: OpenClaw's default `gateway.reload.mode = "hybrid"` auto-restarts within 1-3s of plugin install — no agent action needed. If auto-reload doesn't fire (`gateway.reload.mode = off`), issue the plugin's `/totalreclaw-restart` slash command yourself (in-process, drains active runs; 5-tier auth fallback in 3.3.7-rc.2+ so default-config installs work without `allowFrom`). Manual user-prompted restart is fallback only if `/totalreclaw-restart` is unavailable. NEVER invoke external `docker restart` or `openclaw gateway restart` — your shell runs inside the gateway.
 
 > **CLI deadlock fallback** (issue [#184](https://github.com/p-diogo/totalreclaw-internal/issues/184)): on some Docker setups your shell calls to `openclaw plugins list` / `openclaw plugins install` deadlock and exit 124. When that happens DO NOT keep retrying the CLI — switch to the direct-node fallbacks:
 > - To verify install completed, read `~/.openclaw/extensions/totalreclaw/.loaded.json` (success: `{loadedAt, tools, version}`) or `.error.json` (failure: `{loadedAt, error, stack}`). These manifests are the canonical filesystem signal independent of the CLI.
@@ -58,7 +58,7 @@ This matters because Telegram and similar transports edit the bot's messages liv
 - "Quick fix…"
 - "However, I don't see…"
 - "I need to use…"
-- "Should I /restart" / "Want me to restart" / "Let me check if the tool is bound" / "I need permission to restart" / "Do you have a public URL"
+- "Should I /totalreclaw-restart" / "Want me to restart" / "Let me check if the tool is bound" / "I need permission to restart" / "Do you have a public URL"
 - "Now installing…" / "Got it" / "In parallel…" / "Step 1a/1b/1c"
 - "manifest", "descriptor", "file-watcher", "polling", "auto-reload-detect", "find", "lookup", "detect", "probing", "let me try"
 

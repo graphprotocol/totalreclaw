@@ -1,8 +1,18 @@
-"""5-tier auth fallback for /restart (issue #215, 2.3.6rc1).
+"""5-tier auth fallback for /totalreclaw-restart (issue #215, 2.3.6rc2).
 
 Hermes plugin parity with the OpenClaw plugin's
 ``skill/plugin/restart-auth.ts``. The matrix is identical so a future
 Hermes upstream change can plug this in directly.
+
+2.3.6rc2 (2026-05-04) renamed the target command from ``restart`` to
+``totalreclaw-restart`` matching the OpenClaw plugin rename in
+3.3.7-rc.2. Pedro caught the original problem in rc.1 manual integration
+testing on the OpenClaw side: registry hard-rejects the bare name
+``restart`` as reserved (see upstream ``RESERVED_COMMANDS``), so the
+fallback never ran. Hermes' command registry is independent of
+OpenClaw's, but we use the same namespaced name preemptively so a
+future Hermes wiring lands without re-rolling the docs / SKILL.md
+contract on both sides.
 
 NOTE on Hermes-side wiring: as of Hermes ``hermes-agent`` 2026.4.x the
 plugin context API does NOT expose ``register_command()`` (the Hermes
@@ -12,7 +22,7 @@ an exported util** so:
 
   * The matrix is unit-testable + version-pinned.
   * When Hermes adds ``register_command``, the plugin's
-    ``register()`` can wire ``/restart`` in two lines.
+    ``register()`` can wire ``/totalreclaw-restart`` in two lines.
   * Documentation surfaces (SKILL.md, hermes-setup.md) can link the
     user to the per-tier reasoning if their config rejects them.
 

@@ -4,6 +4,31 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.7-rc.2] — 2026-05-04
+
+Follow-up to 3.3.7-rc.1, caught in Pedro's manual integration testing on the OpenClaw side 2026-05-03. The 5-tier auth fix shipped DEAD-CODE in rc.1: gateway logs surfaced `[gateway] [plugins] command registration failed: Command name "restart" is reserved by a built-in command (plugin=totalreclaw, source=/home/pdiogo/.openclaw/extensions/totalreclaw/dist/index.js)`. The plugin's `/restart` registration was rejected because OpenClaw's plugin registry hard-rejects `restart` (and the rest of `RESERVED_COMMANDS` — see `node_modules/openclaw/dist/registry-*.js` — `help`, `commands`, `status`, `whoami`, `context`, `stop`, `restart`, `reset`, `new`, `compact`, `config`, `debug`, `allowlist`, `activation`, `skill`, `subagents`, `kill`, `steer`, `tell`, `model`, `models`, `queue`, `send`, `bash`, `exec`, `think`, `verbose`, `reasoning`, `elevated`, `usage`). Built-in `/restart` retains its allow-from-only semantics, which is what gave Pedro the original "You are not authorized" — and our 5-tier fallback never ran because plugin registration never succeeded.
+
+### Fixed — rename plugin slash command to `/totalreclaw-restart` (issue #215, follow-up)
+
+**Fix:** plugin command name renamed from `restart` to `totalreclaw-restart`. The 5-tier auth resolver from rc.1 (`restart-auth.ts`, `inbound-user-tracker.ts`) is unchanged — it's the correct logic, just needed to attach to a non-reserved name. SKILL.md / setup-guide both tell the agent to issue `/totalreclaw-restart` so end-users never type `/restart` directly. The OpenClaw built-in `/restart` keeps its allow-from-only semantics — both commands coexist; the plugin's namespaced form is the recommended path for default-config users.
+
+The SIGUSR1 emit path (`process.kill(process.pid, 'SIGUSR1')`) is unchanged — gateway accepts iff `commands.restart=true` (default), and the policy keys on the gateway-level config flag, NOT on the plugin command name. So `/totalreclaw-restart` triggers a real gateway restart end-to-end.
+
+**Upstream FR (filed alongside this PR):** OpenClaw should allow plugins to override built-in command names with an explicit precedence flag (e.g. `registerCommand({ name: 'restart', overrideBuiltIn: true, ... })`). Until that lands, the namespaced workaround is canonical. Reference back to issue #215 architectural concerns.
+
+Implementation:
+- `skill/plugin/index.ts` — `api.registerCommand({ name: 'totalreclaw-restart', ... })` (was `'restart'`). Log lines updated to `/totalreclaw-restart` for cross-grep with the new SKILL.md instructions.
+- `skill/plugin/restart-auth.ts` — docstring header reflects the rename + the rc.1 → rc.2 trail. The resolver matrix is byte-identical to rc.1.
+- `skill/plugin/inbound-user-tracker.ts` — comment refers to the new command name.
+- `skill/plugin/SKILL.md` — every user-facing instance of `/restart` (in agent-instructions: "issue `/restart` autonomously…") replaced with `/totalreclaw-restart`. Added a one-line note explaining why we renamed.
+- `skill/SKILL.md` — same.
+- `docs/guides/openclaw-setup.md` — same. The "If `/restart` returns unauthorized" section is now keyed on `/totalreclaw-restart`. The rare-but-real built-in `/restart` referenced as the OpenClaw-shipped command (which the user does NOT type for our path).
+
+### Tests
+
+- Plugin: existing `restart-auth.test.ts` (29 assertions) + `inbound-user-tracker.test.ts` (14 assertions) all pass against the new command name (the resolver doesn't know its caller's name — it's pure). New regression test `register-command-name.test.ts` asserts the registered name is `totalreclaw-restart` (NOT `restart`) and asserts the plugin would not trip OpenClaw's `RESERVED_COMMANDS` check (parses the upstream `validateCommandName` rule directly from `node_modules/openclaw/dist/registry-*.js`). All pre-existing tests remain green.
+- Hermes: `python/tests/test_restart_auth_5_tier_2_3_6.py` (21 assertions) all pass — the resolver is name-agnostic. CHANGELOG entry on the Hermes side notes the matching rename for the future Hermes `register_command` wiring.
+
 ## [3.3.7-rc.1] — 2026-05-03
 
 Patch wave from Pedro's QA on 3.3.6-rc.1 (real-user Telegram → Pop OS Docker container → OpenClaw 2026.4.22 + plugin 3.3.6-rc.1). Two ship-stoppers, both architectural rather than config-drift:

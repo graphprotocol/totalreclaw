@@ -1,7 +1,7 @@
 /**
  * Per-channel inbound-user tracker (issue #215, 3.3.7-rc.1).
  *
- * Tier 3 + Tier 5 of the `/restart` 5-tier auth fallback need to know
+ * Tier 3 + Tier 5 of the `/totalreclaw-restart` 5-tier auth fallback need to know
  * "how many distinct users have ever messaged this gateway on channel X".
  *
  * This module implements a simple disk-backed counter. Persistence

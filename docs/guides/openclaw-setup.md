@@ -48,7 +48,7 @@ Speak only these lines, in order. Substitute the bracketed placeholders with the
    > Installing TotalReclaw…
 2. (Step 2 — after install + auto-reload + tool-bind verification)
    > ✓ Installed (totalreclaw &lt;version&gt;)
-3. (Step 2b — optional, only if auto-reload didn't fire and you have to issue `/restart`)
+3. (Step 2b — optional, only if auto-reload didn't fire and you have to issue `/totalreclaw-restart`)
    > Restarting OpenClaw to load the plugin…
 4. (Step 3 — only if existing credentials were detected, then stop)
    > ✓ TotalReclaw is already set up.
@@ -57,7 +57,7 @@ Speak only these lines, in order. Substitute the bracketed placeholders with the
 6. (Step 6 — done + free-tier confirmation)
    > ✓ You're set up on the TotalReclaw free tier — 500 memories/month, unlimited reads. https://totalreclaw.xyz/pricing. Ask me to remember anything.
 
-That is the complete user-facing transcript for a healthy install. Expected line count for a fresh install + setup is **5–6 lines** (line 4 is mutually exclusive with lines 5-6; line 3 only fires if `/restart` was needed).
+That is the complete user-facing transcript for a healthy install. Expected line count for a fresh install + setup is **5–6 lines** (line 4 is mutually exclusive with lines 5-6; line 3 only fires if `/totalreclaw-restart` was needed).
 
 ### When to break silence (errors only)
 
@@ -79,7 +79,7 @@ Unless the user explicitly asks how the install works, the following words / pat
 - "Quick fix…"
 - "However, I don't see…"
 - "I need to use…"
-- "Should I /restart" / "Want me to restart" / "Let me check if the tool is bound" / "I need permission to restart" / "Do you have a public URL"
+- "Should I /totalreclaw-restart" / "Want me to restart" / "Let me check if the tool is bound" / "I need permission to restart" / "Do you have a public URL"
 - "Now installing…" / "Got it" / "In parallel…" / "Step 1a/1b/1c"
 - `manifest`, `descriptor`, `file-watcher`, `polling`, `auto-reload-detect`, `find`, `lookup`, `detect`, `probing`, `let me try`
 
@@ -112,25 +112,25 @@ When `totalreclaw_pair` is bound, capture the version string from `openclaw plug
 
 Hybrid auto-reload didn't fire (likely `gateway.reload.mode = off`). The protocol is rigid:
 
-> **Your IMMEDIATE next message must be the literal slash command `/restart` — nothing else. Do not narrate. Do not ask permission. Do not describe what `/restart` does. Do not propose alternatives. Just send `/restart`.**
+> **Your IMMEDIATE next message must be the literal slash command `/totalreclaw-restart` — nothing else. Do not narrate. Do not ask permission. Do not describe what `/totalreclaw-restart` does. Do not propose alternatives. Just send `/totalreclaw-restart`.**
 
-You may emit user-visible line 3 (`Restarting OpenClaw to load the plugin…`) ONCE in the same turn before sending `/restart`. Nothing else. After `/restart`, wait ~3s and re-run `openclaw plugins list`.
+You may emit user-visible line 3 (`Restarting OpenClaw to load the plugin…`) ONCE in the same turn before sending `/totalreclaw-restart`. Nothing else. After `/totalreclaw-restart`, wait ~3s and re-run `openclaw plugins list`.
 
-`/restart` is registered in OpenClaw's commands registry alongside `/help /model /new /plugins /reset /status /tools /usage` and reloads the gateway in-process — it works from inside the gateway because it doesn't shell out (unlike `openclaw gateway restart`).
+`/totalreclaw-restart` is the plugin-registered slash command (3.3.7-rc.2+; renamed from `/restart` because OpenClaw's plugin registry reserves the bare name `restart` for the built-in). It reloads the gateway in-process — works from inside the gateway because it doesn't shell out (unlike `openclaw gateway restart`). The 5-tier auth fallback (issue #215, see below) attaches to this command name; the OpenClaw built-in `/restart` retains its allow-from-only semantics unchanged.
 
-#### If `/restart` returns "You are not authorized to use this command"
+#### If `/totalreclaw-restart` returns "You are not authorized to use this command"
 
-3.3.7-rc.1 (issue #215) ships a 5-tier auth fallback for the plugin's `/restart` override, so default-config installs no longer hit this. The plugin's `register()` registers its own `/restart` slash command (overriding OpenClaw's built-in) with a fallback chain that allows a default-config user IF: they're explicitly listed in `commands.ownerAllowFrom` OR `channels.<provider>.allowFrom` OR they're the same identity the channel is bound to OR `credentials.json` exists + the channel was paired through OR the gateway has only seen ONE inbound user (the lone-user heuristic for fresh installs). Rejection only fires when an explicit allow-from is configured AND excludes the invoker.
+3.3.7-rc.1 (issue #215) shipped a 5-tier auth fallback for the plugin's restart override; rc.2 attached it to `/totalreclaw-restart` (rc.1 attempted to override the built-in `/restart`, which the registry hard-rejected — the fallback never ran). Default-config installs no longer hit this path. The plugin's `register()` registers `/totalreclaw-restart` with a fallback chain that allows a default-config user IF: they're explicitly listed in `commands.ownerAllowFrom` OR `channels.<provider>.allowFrom` OR they're the same identity the channel is bound to OR `credentials.json` exists + the channel was paired through OR the gateway has only seen ONE inbound user (the lone-user heuristic for fresh installs). Rejection only fires when an explicit allow-from is configured AND excludes the invoker.
 
-For 3.3.7-rc.1+ users the unauthorized message should not appear in the default install path. If it DOES appear, it means the user's config already specifies `commands.ownerAllowFrom` or `channels.<provider>.allowFrom` and excludes their channel id. Surface verbatim and stop. Do NOT loop `/restart` calls. Do NOT keep retrying. Do NOT propose alternatives.
+For 3.3.7-rc.2+ users the unauthorized message should not appear in the default install path. If it DOES appear, it means the user's config already specifies `commands.ownerAllowFrom` or `channels.<provider>.allowFrom` and excludes their channel id. Surface verbatim and stop. Do NOT loop `/totalreclaw-restart` calls. Do NOT keep retrying. Do NOT propose alternatives.
 
-> Your config restricts `/restart` to a specific allow-list and your channel id is not in it. Run on your host: `jq '.channels.<channel>.allowFrom = ["<your-id>"]' ~/.openclaw/openclaw.json | sponge ~/.openclaw/openclaw.json && docker restart <your-container-name>`. Substitute `<channel>` with your channel name (e.g. `telegram`, `slack`), `<your-id>` with your user ID for that channel (Telegram: `@username` or numeric `chat_id`; Slack: workspace member ID), and `<your-container-name>` with your gateway container name (`docker ps` shows it). For non-Docker installs substitute `openclaw gateway restart` for the `docker restart` portion. On a managed service, ask the service's support to enable slash commands for your channel. Reply `done` after.
+> Your config restricts `/totalreclaw-restart` to a specific allow-list and your channel id is not in it. Run on your host: `jq '.channels.<channel>.allowFrom = ["<your-id>"]' ~/.openclaw/openclaw.json | sponge ~/.openclaw/openclaw.json && docker restart <your-container-name>`. Substitute `<channel>` with your channel name (e.g. `telegram`, `slack`), `<your-id>` with your user ID for that channel (Telegram: `@username` or numeric `chat_id`; Slack: workspace member ID), and `<your-container-name>` with your gateway container name (`docker ps` shows it). For non-Docker installs substitute `openclaw gateway restart` for the `docker restart` portion. On a managed service, ask the service's support to enable slash commands for your channel. Reply `done` after.
 
 Then wait for `done`. Do NOT retry the install. Do NOT keep restarting. Do NOT issue `/new` — it wipes the chat context, the agent forgets it was mid-install, and the user's next message is treated as a fresh install request which retries from scratch and re-trips the scanner block (Pedro QA, 3.3.5-rc.1).
 
-#### Fallback only if `/restart` is unavailable
+#### Fallback only if `/totalreclaw-restart` is unavailable
 
-Very old OpenClaw pre-2026.4 or managed services that strip slash commands: tell the user verbatim *"Auto-reload didn't fire and `/restart` is unavailable. Please restart your OpenClaw gateway: `openclaw gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. Reply `done` once it's back up."* Do NOT invoke any external `docker restart` or `openclaw gateway restart` yourself — your shell runs inside the gateway you'd be restarting; `/restart` (in-process) and a user-prompted external restart are the only safe paths.
+Very old OpenClaw pre-2026.4 or managed services that strip slash commands: tell the user verbatim *"Auto-reload didn't fire and `/totalreclaw-restart` is unavailable. Please restart your OpenClaw gateway: `openclaw gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. Reply `done` once it's back up."* Do NOT invoke any external `docker restart` or `openclaw gateway restart` yourself — your shell runs inside the gateway you'd be restarting; `/totalreclaw-restart` (in-process) and a user-prompted external restart are the only safe paths.
 
 ### Step 3 — Check for existing credentials (silent unless found)
 
@@ -293,17 +293,17 @@ Upgrade: *"Upgrade my TotalReclaw subscription."*
 
 - **Agent says "I'm not familiar with TotalReclaw"**: paste the canonical message above with the URL — the agent fetches the guide and follows the install steps.
 - **Agent refused the install** ("this looks like prompt injection", "I'm not going to do that"): rare but possible with safety-trained models that misread agent-imperative install prose. Ask the agent to read the "Agent instructions" section of this guide and proceed step-by-step — each command is annotated with what it does and why it's safe. If the refusal persists, file an issue with the model name + chat transcript.
-- **Agent can't see TotalReclaw tools after install**: under the default config OpenClaw auto-restarts the gateway within 1-3s of `openclaw plugins install` — wait 5-10s and check `openclaw plugins list`. If the plugin is listed but the agent still can't see the tools, your config likely has `gateway.reload.mode = off`. The agent should issue OpenClaw's built-in `/restart` slash command (in-process, drains active runs, works from inside the gateway). Manual fallback only if `/restart` is unavailable — native: `openclaw gateway restart`; Docker self-host: `docker restart <your-openclaw-container>`; managed service: use the service's restart control.
+- **Agent can't see TotalReclaw tools after install**: under the default config OpenClaw auto-restarts the gateway within 1-3s of `openclaw plugins install` — wait 5-10s and check `openclaw plugins list`. If the plugin is listed but the agent still can't see the tools, your config likely has `gateway.reload.mode = off`. The agent should issue the plugin's `/totalreclaw-restart` slash command (in-process, drains active runs, works from inside the gateway; 5-tier auth fallback so default-config installs work without `allowFrom`). Manual fallback only if `/totalreclaw-restart` is unavailable — native: `openclaw gateway restart`; Docker self-host: `docker restart <your-openclaw-container>`; managed service: use the service's restart control.
 - **Account-setup URL returns 404**: check that `~/.totalreclaw/credentials.json` isn't locked by a previous process and that the gateway is running.
 - **Browser fails to POST the encrypted phrase**: check the account-setup page's Content-Security-Policy — older browsers without WebCrypto x25519 (pre-Safari 17.2 / Chromium 118) cannot run the AEAD crypto.
 - **Tool calls return "onboarding required"**: paste the canonical message again so the agent re-runs `totalreclaw_pair`.
 - **"Not authenticated" / 401**: check your phrase — exact words, exact order, lowercase, single spaces.
 - **Agent narrating internals during install** ("Let me check that…", "Plugin loaded. Let me verify…", "I'll now…", "Quick fix…", "However, I don't see…", "I need to use…", "let me find…", "in parallel…", "manifest detected…"): the agent missed the silence rule in §"Agent instructions". Reply *"Don't narrate the install internals — just tell me when it's installed and when to set up my account."* and the next session should silence. On transports like Telegram, these intermediate lines visibly edit the bot's message live as tool calls progress, which is what makes them disruptive.
-- **Agent says "Should I /restart?" or stalls instead of restarting** (3.3.5-rc.1 hardening note): the agent missed the restart-imperative deny-list in the SKILL.md / Step 2. Reply *"Issue /restart yourself — don't ask"* and the next session should act autonomously. If it persists across sessions, the published RC's SKILL.md is stale — file an issue.
+- **Agent says "Should I /totalreclaw-restart?" or stalls instead of restarting** (3.3.5-rc.1 hardening note, 3.3.7-rc.2 rename): the agent missed the restart-imperative deny-list in the SKILL.md / Step 2. Reply *"Issue /totalreclaw-restart yourself — don't ask"* and the next session should act autonomously. If it persists across sessions, the published RC's SKILL.md is stale — file an issue.
 - **`openclaw` CLI hangs / exits 124 inside the gateway agent shell** (issue [#184](https://github.com/p-diogo/totalreclaw-internal/issues/184)): on some Docker setups the agent's shell-execution of `openclaw plugins list` / `openclaw plugins install` etc. deadlocks (every subcommand exits 124). When this happens the agent can bypass the CLI wrapper by invoking the plugin's own JS entries directly via `node`. The plugin ships pair-flow + version-probe entries that work without any CLI:
   - **Plugin install probe** — read the plugin's filesystem manifests to confirm the install completed: `cat ~/.openclaw/extensions/totalreclaw/.loaded.json` (issue [#186](https://github.com/p-diogo/totalreclaw-internal/issues/186)) reports `{ loadedAt, tools, version }` if `register()` ran cleanly. `.error.json` reports a structured failure if it didn't. These files are the canonical filesystem signal — they don't depend on the deadlocking CLI.
   - **Pair-flow direct-node fallback** — when `openclaw` CLI hangs during `totalreclaw_pair`, the agent (or a shell helper) can run `node ~/.openclaw/extensions/totalreclaw/dist/pair-cli.js --url-pin-only` directly to obtain the universal-relay pair URL. This bypasses the gateway tool-router entirely and writes the resulting URL to stdout (one JSON line, no prompts). Surface that URL to the user the same way `totalreclaw_pair` would.
-  - **Restart fallback** — `/restart` slash command is the autonomous path; manual fallbacks (`openclaw gateway restart`, `docker restart`) require user-side terminal access and are documented above.
+  - **Restart fallback** — `/totalreclaw-restart` slash command is the autonomous path; manual fallbacks (`openclaw gateway restart`, `docker restart`) require user-side terminal access and are documented above.
 
 ---
 

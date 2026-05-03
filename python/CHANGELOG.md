@@ -6,6 +6,24 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.6rc2] — 2026-05-04
+
+Coordinated bundle with plugin `3.3.7-rc.2`. Hermes side of the `/totalreclaw-restart` rename (issue #215, follow-up).
+
+### Changed — rename future-wired plugin command from `restart` to `totalreclaw-restart`
+
+The OpenClaw plugin renamed `/restart` → `/totalreclaw-restart` in 3.3.7-rc.2 because OpenClaw's plugin registry hard-rejected the bare name (`RESERVED_COMMANDS`). Hermes' command registry is independent of OpenClaw's, but we use the same namespaced name preemptively so a future Hermes wiring lands without re-rolling the docs / SKILL.md contract on both sides.
+
+The 5-tier resolver in `totalreclaw.hermes.restart_auth` is byte-identical to 2.3.6rc1 — the matrix is name-agnostic; only the docstring + CHANGELOG mention the new target command name. When Hermes adds `register_command`, the plugin's `register()` will wire `/totalreclaw-restart` (NOT `/restart`).
+
+### Tests
+
+`python/tests/test_restart_auth_5_tier_2_3_6.py` (21 assertions) all pass — resolver is name-agnostic. All pre-existing Hermes tests remain green.
+
+### Doc updates
+
+No Hermes setup-guide / SKILL.md changes — Hermes' own built-in `/restart` is still upstream and unrelated to the plugin's rename. The setup-guide references to `/restart` continue to point at Hermes' built-in slash command (`hermes_cli/commands.py::CommandDef("restart", ...)`) since the plugin does not yet override it (no `register_command` API). When upstream Hermes ships the API and we wire `/totalreclaw-restart`, the SKILL.md contract will fork and we'll document the migration in a subsequent RC.
+
 ## [2.3.6rc1] — 2026-05-03
 
 Coordinated bundle with plugin `3.3.7-rc.1`. Hermes side of the `/restart` 5-tier auth fallback (issue #215).

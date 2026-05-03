@@ -1,5 +1,5 @@
 /**
- * /restart slash command — 5-tier auth fallback (issue #215)
+ * /totalreclaw-restart slash command — 5-tier auth fallback (issue #215)
  *
  * Architectural fix shipped 3.3.7-rc.1 after 3.3.6-rc.1 QA found that
  * default-config users (no `commands.ownerAllowFrom`, no
@@ -7,14 +7,24 @@
  * this command." when they typed `/restart` to recover from the plugin
  * tool-binding race (the dominant first-run install path).
  *
- * The plugin's `/restart` registration overrides OpenClaw's built-in
- * `/restart` (plugin commands are matched BEFORE built-ins; see
- * upstream `auto-reply/reply/commands-plugin.ts`). With
- * `requireAuth: false` the channel-layer auth check is skipped, and
- * this module's `resolveRestartAuth` decides allow-vs-reject using a
- * five-tier fallback. If the result is `allow`, the caller fires
+ * 3.3.7-rc.2 (2026-05-04) renamed the plugin command from `restart` to
+ * `totalreclaw-restart` after Pedro caught — in rc.1 manual integration
+ * testing — that OpenClaw's plugin registry hard-rejects names on
+ * `RESERVED_COMMANDS` (gateway log: `Command name "restart" is reserved
+ * by a built-in command`). The 5-tier matrix below is unchanged from
+ * rc.1; only the command name attached to it changed. SKILL.md /
+ * setup-guide both tell the agent to issue the namespaced form, so
+ * end-users never type `restart` directly. An upstream FR is open
+ * asking for a plugin-override-precedence flag.
+ *
+ * Plugin handles `/totalreclaw-restart` (validation passes — hyphenated
+ * names are allowed and the name is unique). With `requireAuth: false`
+ * the channel-layer auth check is skipped, and this module's
+ * `resolveRestartAuth` decides allow-vs-reject using a five-tier
+ * fallback. If the result is `allow`, the caller fires
  * `process.kill(process.pid, 'SIGUSR1')` — which the gateway accepts
- * iff `commands.restart=true` (the default).
+ * iff `commands.restart=true` (the default; the SIGUSR1 policy keys on
+ * the gateway-level config flag, NOT on the plugin command name).
  *
  * Tier order (highest priority first):
  *   1. `commands.ownerAllowFrom` explicitly lists invoker → allow
@@ -120,7 +130,7 @@ export interface RestartAuthInput {
 }
 
 /**
- * Resolve whether the given invoker may run `/restart`.
+ * Resolve whether the given invoker may run `/totalreclaw-restart`.
  *
  * Tier order: see file header.
  *
