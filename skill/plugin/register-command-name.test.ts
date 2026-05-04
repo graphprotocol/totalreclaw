@@ -229,7 +229,7 @@ assert(
 );
 
 // ---------------------------------------------------------------------------
-// 5. CHANGELOG entry exists for [3.3.7-rc.2]
+// 5. CHANGELOG entries exist for [3.3.7-rc.2] and [3.3.7-rc.3]
 // ---------------------------------------------------------------------------
 
 const changelogPath = path.join(__dirname, 'CHANGELOG.md');
@@ -245,21 +245,34 @@ assert(
   'CHANGELOG: rc.2 entry references the upstream "reserved by a built-in command" rejection',
 );
 
+assert(
+  /\[3\.3\.7-rc\.3\]/.test(changelogSrc),
+  'CHANGELOG: [3.3.7-rc.3] entry present',
+);
+
+assert(
+  /contracts\.tools/.test(changelogSrc),
+  'CHANGELOG: rc.3 entry references the contracts.tools fix',
+);
+
 // ---------------------------------------------------------------------------
-// 6. package.json + skill.json version bumps
+// 6. package.json + skill.json version bumps (must be >= rc.3)
 // ---------------------------------------------------------------------------
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
 const skillJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'skill.json'), 'utf8'));
 
+// Accept rc.3 or any later RC (the version bumps with each patch wave).
+const validVersionPattern = /^3\.3\.7-rc\.[3-9]\d*$/;
+
 assert(
-  packageJson.version === '3.3.7-rc.2',
-  `package.json: version === 3.3.7-rc.2 (got ${packageJson.version})`,
+  validVersionPattern.test(packageJson.version),
+  `package.json: version is 3.3.7-rc.3+ (got ${packageJson.version})`,
 );
 
 assert(
-  skillJson.version === '3.3.7-rc.2',
-  `skill.json: version === 3.3.7-rc.2 (got ${skillJson.version})`,
+  validVersionPattern.test(skillJson.version),
+  `skill.json: version is 3.3.7-rc.3+ (got ${skillJson.version})`,
 );
 
 // ---------------------------------------------------------------------------
