@@ -2,6 +2,27 @@
   "id": "totalreclaw",
   "name": "TotalReclaw",
   "description": "End-to-end encrypted memory vault for AI agents",
+  "contracts": {
+    "tools": [
+      "totalreclaw_remember",
+      "totalreclaw_recall",
+      "totalreclaw_forget",
+      "totalreclaw_export",
+      "totalreclaw_status",
+      "totalreclaw_preload_embedder",
+      "totalreclaw_consolidate",
+      "totalreclaw_pin",
+      "totalreclaw_unpin",
+      "totalreclaw_retype",
+      "totalreclaw_set_scope",
+      "totalreclaw_import_from",
+      "totalreclaw_import_batch",
+      "totalreclaw_upgrade",
+      "totalreclaw_migrate",
+      "totalreclaw_pair",
+      "totalreclaw_report_qa_bug"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -98,8 +98,16 @@ openclaw skills install totalreclaw
 
 **Plugin BEFORE skill is deliberate** (3.3.4-rc.1, post-Pedro QA): the skill install triggers a config-driven SIGUSR1 gateway reload that can race a concurrent plugin install. Plugin-first lets the plugin land cleanly, then the skill's reload picks it up on the next gateway loop. If you accidentally do skill-first and the plugin install dies mid-flight, just retry `openclaw plugins install @totalreclaw/totalreclaw` once — it's idempotent.
 
+**OpenClaw 2026.5.2+: one extra step after install** (3.3.7-rc.3): run this after `openclaw plugins install` to suppress the `plugins.allow is empty` log warning and ensure the discoveryLoader treats totalreclaw as explicitly trusted:
+
+```bash
+openclaw config set plugins.allow '["totalreclaw"]' --strict-json
+```
+
+This is a one-time per-gateway-config step. If `plugins.allow` is already set (e.g. you have other plugins listed), append rather than overwrite: `openclaw config get plugins.allow` to check, then `openclaw config set plugins.allow '["totalreclaw","other-plugin"]' --strict-json`. The gateway applies this via hot-reload (no restart needed for the allow-list change).
+
 Notes:
-- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.4-rc.1`.
+- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.7-rc.3`.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
 ### Step 2 — Wait for auto-reload + verify tool bind (silent — emit user-visible line 2 on success)
