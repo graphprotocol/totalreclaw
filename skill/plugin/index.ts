@@ -2926,6 +2926,29 @@ const plugin = {
     // write would race that freeze.
     const _registeredToolNames: string[] = [];
     const _originalRegisterTool = api.registerTool.bind(api);
+    // 3.3.8-rc.1 HYBRID MODE (OpenClaw 2026.5.2 issue #223 workaround):
+    // The tool-policy-pipeline in OC 2026.5.2 strips non-bundled plugin tools
+    // before they reach the agent's session toolset. registerTool() calls
+    // succeed and tools are declared in contracts.tools, so the PLUGIN LOADS.
+    // But tool calls never reach execute() — the pipeline discards them before
+    // the agent's toolset is built.
+    //
+    // Strategy: keep all registerTool() calls intact so the plugin loader can
+    // verify the contracts.tools declaration and load the plugin (hooks fire).
+    // The `tr` CLI binary (dist/tr-cli.js) provides the alternative execution
+    // path. Agent runs `tr remember|recall|status|pair` from shell; tool calls
+    // are dead-letter but hooks (before_agent_start, agent_end, message_received,
+    // before_reset) still fire via the unbroken hook code path.
+    //
+    // NOTE: do NOT no-op registerTool here — OC 2026.5.2 validates the
+    // contracts.tools declaration against registered tools at load time and
+    // drops the plugin (unloads it) if no tools match. Confirmed empirically:
+    // no-op'ing registerTool causes the gateway to log "4 plugins" instead of
+    // "5 plugins" after restart (plugin excluded from active set).
+    //
+    // TODO: when OC ships a fix for issue #223, restore tool-call routing
+    // and remove the tr-cli.ts CLI layer. The bin/tr field in package.json
+    // can stay as a convenience CLI regardless.
     api.registerTool = (tool: unknown, opts?: { name?: string; names?: string[] }) => {
       try {
         const t = tool as { name?: unknown } | null | undefined;
@@ -6917,10 +6940,15 @@ const plugin = {
           loadedAt: Date.now(),
           tools: _registeredToolNames.slice(),
           version: pluginVersion ?? 'unknown',
+          // 3.3.8-rc.1 hybrid mode annotation: tools ARE registered with the
+          // SDK (required for plugin loader validation), but tool calls are
+          // dead-letter on OC 2026.5.2 due to issue #223. Use `tr <cmd>` CLI.
+          hybridMode: true,
+          hybridCliTools: ['tr status', 'tr pair', 'tr remember', 'tr recall'],
         });
         if (ok) {
           api.logger.info(
-            `TotalReclaw: wrote .loaded.json manifest (${_registeredToolNames.length} tools, version=${pluginVersion ?? 'unknown'})`,
+            `TotalReclaw: wrote .loaded.json manifest (${_registeredToolNames.length} tools + hybridCli=tr, version=${pluginVersion ?? 'unknown'})`,
           );
         }
       } catch {

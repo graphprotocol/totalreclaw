@@ -1,23 +1,26 @@
 /**
- * manifest-shape.test.ts — Regression guard for the intentional manifest/JS
- * asymmetry introduced in 3.3.0-rc.6.
+ * manifest-shape.test.ts — Regression guard for the manifest/JS symmetry
+ * required on OpenClaw 2026.5.2+ (re-added in 3.3.8-rc.1).
  *
- * Background (OpenClaw startup registry bug):
- *   `resolveGatewayStartupPluginIds` excludes plugins with `kind: "memory"`
- *   from the gateway's startup set unless they also declare a configured
- *   channel. TotalReclaw has no channel, so the gateway startup path took an
- *   empty-list early return in `loadGatewayPlugins`, pinned an empty HTTP
- *   route registry, and never exposed the 4 pair routes — even though the
- *   plugin loaded later and registered them.
+ * Background — 2026.5.2 cold-start gate REVERSED the 3.3.0-rc.6 rule:
+ *   OpenClaw 2026.5.2's `resolveGatewayStartupPluginPlanFromRegistry` calls
+ *   `shouldConsiderForGatewayStartup()` which checks `plugin.startup.memory`,
+ *   derived from `hasKind(record.kind, "memory")`. Without `"kind": "memory"`
+ *   in the manifest, the plugin gets `startup.memory = false` and is
+ *   EXCLUDED from the cold-start loading plan. It only loaded via SIGTERM
+ *   hot-reload (different code path that bypasses the startup planner).
  *
- *   Fix: drop `"kind": "memory"` from `openclaw.plugin.json` (manifest) only.
- *   The JS plugin definition in `index.ts` still returns `kind: 'memory' as const`
- *   because the OpenClaw loader re-merges the JS definition into `record.kind`
- *   at line 2090, preserving memory-slot matching via
- *   `config.slots.memory === "totalreclaw"`.
+ *   Fix (3.3.8-rc.1): re-add `"kind": "memory"` to `openclaw.plugin.json`.
+ *   The JS plugin definition in `index.ts` already declares
+ *   `kind: 'memory' as const`. Manifest now matches — gateway includes the
+ *   plugin in its cold-start plan and loads it on every boot.
  *
- * This test asserts BOTH sides of the asymmetry:
- *   1. The manifest does NOT declare `kind: "memory"` (startup registry fix).
+ *   This reverses the 3.3.0-rc.6 removal. The upstream OpenClaw condition
+ *   flipped between 2026.4.x (excluded memory plugins from startup unless
+ *   they had a channel) and 2026.5.2 (REQUIRES kind=memory for cold-start).
+ *
+ * This test asserts BOTH sides of the new symmetry:
+ *   1. The manifest DOES declare `kind: "memory"` (cold-start gate on 2026.5.2).
  *   2. The JS plugin source DOES declare `kind: 'memory' as const` (memory-slot
  *      behaviour preserved).
  *
@@ -91,33 +94,40 @@ let manifest: Record<string, unknown>;
 }
 
 {
-  // 1a. The manifest must NOT have "kind": "memory".
-  // Presence of this field causes resolveGatewayStartupPluginIds to exclude
-  // the plugin from the startup set, pinning an empty HTTP route registry.
+  // 1a. (3.3.8-rc.1 reversal) OpenClaw 2026.5.2's
+  // `resolveGatewayStartupPluginPlanFromRegistry` calls
+  // `shouldConsiderForGatewayStartup()` which checks `plugin.startup.memory`,
+  // derived from `hasKind(record.kind, "memory")`. Without `"kind": "memory"`,
+  // the plugin gets `startup.memory = false` and is EXCLUDED from cold-start.
+  // Plugin only loaded via SIGTERM hot-reload (which bypasses startup planner).
+  // Re-adding `"kind": "memory"` to the manifest restores cold-start loading
+  // on every gateway boot. This reverses the 3.3.0-rc.6 removal — the
+  // upstream condition flipped between 2026.4.x and 2026.5.2.
   assert(
-    !('kind' in manifest),
-    'openclaw.plugin.json does NOT contain "kind" field (startup registry fix)',
+    'kind' in manifest,
+    'openclaw.plugin.json contains "kind" field (cold-start loading on 2026.5.2)',
   );
 }
 
 {
-  // 1b. Absence of "kind" in manifest is intentional — document the expected
-  // shape to catch accidental re-addition.
+  // 1b. Manifest "kind" === "memory" so the gateway treats this as a memory
+  // plugin and includes it in the cold-start plan.
   const kindValue = manifest['kind'];
-  assert(
-    kindValue === undefined,
-    'openclaw.plugin.json "kind" is undefined (not "memory" or any other value)',
+  assertEq(
+    kindValue,
+    'memory',
+    'openclaw.plugin.json "kind" === "memory"',
   );
 }
 
 {
-  // 1c. The string "memory" must not appear as a JSON value for any field
-  // named "kind" — raw-string check as an extra guard.
+  // 1c. Raw-string guard: regex must MATCH `"kind": "memory"` in the source
+  // to catch silent removals via merge or accidental edits.
   const raw = fs.readFileSync(manifestPath, 'utf8');
   const hasKindMemory = /"kind"\s*:\s*"memory"/.test(raw);
   assert(
-    !hasKindMemory,
-    'openclaw.plugin.json source does NOT match /"kind"\\s*:\\s*"memory"/ (raw regex guard)',
+    hasKindMemory,
+    'openclaw.plugin.json source matches /"kind"\\s*:\\s*"memory"/ (raw regex guard)',
   );
 }
 

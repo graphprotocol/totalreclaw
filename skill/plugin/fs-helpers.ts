@@ -594,6 +594,18 @@ export interface PluginLoadManifest {
    * verify the manifest is from the currently-running container vs a
    * stale-mounted copy. */
   pid?: number;
+  /**
+   * 3.3.8-rc.1 — true when registerTool() calls are no-op'd due to the
+   * OC 2026.5.2 issue #223 hybrid workaround. Tools in `tools[]` are
+   * exposed via the `tr` CLI binary instead of via the plugin API.
+   */
+  hybridMode?: boolean;
+  /**
+   * 3.3.8-rc.1 — CLI commands that replace the tool registrations
+   * when hybridMode=true. Agent runs these from shell instead of using
+   * tool calls.
+   */
+  hybridCliTools?: string[];
 }
 
 /** Schema written to `.error.json` when register() throws. */

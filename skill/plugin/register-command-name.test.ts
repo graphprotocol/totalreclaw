@@ -262,17 +262,18 @@ assert(
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
 const skillJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'skill.json'), 'utf8'));
 
-// Accept rc.3 or any later RC (the version bumps with each patch wave).
-const validVersionPattern = /^3\.3\.7-rc\.[3-9]\d*$/;
+// Accept 3.3.7-rc.3+ OR 3.3.8-rc.N+ (versions bump with each patch wave;
+// 3.3.8 series ships the kind:memory cold-start fix + hybrid CLI).
+const validVersionPattern = /^3\.3\.(7-rc\.[3-9]\d*|8-rc\.\d+|[89]\d*\.\d+|[1-9]\d{2,}.*)$/;
 
 assert(
   validVersionPattern.test(packageJson.version),
-  `package.json: version is 3.3.7-rc.3+ (got ${packageJson.version})`,
+  `package.json: version is 3.3.7-rc.3+ or 3.3.8-rc.1+ (got ${packageJson.version})`,
 );
 
 assert(
   validVersionPattern.test(skillJson.version),
-  `skill.json: version is 3.3.7-rc.3+ (got ${skillJson.version})`,
+  `skill.json: version is 3.3.7-rc.3+ or 3.3.8-rc.1+ (got ${skillJson.version})`,
 );
 
 // ---------------------------------------------------------------------------

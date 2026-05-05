@@ -2,6 +2,7 @@
   "id": "totalreclaw",
   "name": "TotalReclaw",
   "description": "End-to-end encrypted memory vault for AI agents",
+  "kind": "memory",
   "contracts": {
     "tools": [
       "totalreclaw_remember",

@@ -119,9 +119,48 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
 - "status" → `totalreclaw_status`. "upgrade" → `totalreclaw_upgrade` (paste Stripe URL verbatim). Post-upgrade testnet → mainnet: `totalreclaw_migrate` with `dry_run` first.
 - "import / export / consolidate" → `totalreclaw_import_from` (`dry_run=true` first; `_import_batch` for >50 chunks) · `totalreclaw_export` · `totalreclaw_consolidate` (`dry_run` first).
 
+## OpenClaw 2026.5.2 hybrid mode (issue #223 workaround — plugin 3.3.8-rc.1+)
+
+OpenClaw 2026.5.2 has a tool-policy-pipeline bug (issue #223) that strips non-bundled plugin tools before they reach the agent toolset. Plugin 3.3.8-rc.1 ships a hybrid workaround:
+
+- **Hooks still fire**: `before_agent_start`, `agent_end`, `message_received`, `before_reset` use a separate code path not affected by issue #223. Auto-extraction, digest injection, preloading, and billing checks all work normally.
+- **Tools replaced by `tr` CLI**: instead of `totalreclaw_remember`, `totalreclaw_recall`, etc., use the `tr` binary installed with the plugin. The agent runs it via shell tool.
+
+**Agent usage under hybrid mode** (check `tr status` output for `hybrid-mode: yes`):
+
+```
+# remember a fact
+node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js remember "I work at Graph Foundation"
+# → outputs {"ok":true,"id":"...","text":"..."}
+
+# recall facts
+node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js recall "where does the user work"
+# → outputs {"ok":true,"count":1,"query":"...","memories":[...]}
+
+# status check
+node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js status
+```
+
+Note: the `tr` bin name conflicts with the system `tr` utility; always invoke via full path `node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js <cmd>` or the gateway host's equivalent path.
+
+**Required post-install config** (add to `~/.openclaw/openclaw.json`):
+```json
+{
+  "plugins": {
+    "entries": {
+      "totalreclaw": {
+        "hooks": { "allowConversationAccess": true }
+      }
+    }
+  }
+}
+```
+
+This unlocks typed hooks (`agent_end`, etc.) for non-bundled plugins. Without it, auto-extraction still works (extraction runs in `message_received`) but the `agent_end` hook that writes the digest is silently blocked.
+
 ## Diagnostics
 
-- `totalreclaw_*` tools not visible → plugin not installed or auto-reload didn't fire. Verify via `openclaw plugins list | grep totalreclaw` (or, on a managed service that doesn't expose the CLI, ask the user to confirm via their service's plugins UI). If `totalreclaw` is listed but tools are still absent, the gateway probably hasn't completed its auto-restart yet (give it 5-10s) OR `gateway.reload.mode = off` is set — instruct manual restart as fallback: `openclaw gateway restart` (native), `docker restart <your-container-name>` (Docker self-host), or the managed service's restart control. If the plugin is listed and the gateway has been restarted but tools are still missing (container-agent gap, issue #87), shell out to `openclaw totalreclaw pair generate --url-pin-only` on the gateway host and hand the user the `url` + `pin` from the JSON payload — OR `openclaw totalreclaw onboard --pair-only` (same flow, returns `pair_url` instead of `url`, issue #95). If your shell doesn't reach the gateway host (managed service), tell the user to install/enable the plugin via their service's plugins UI and restart the gateway via the service's restart control. Do NOT suggest the bare `openclaw totalreclaw onboard` (leaks phrase on stdout — deprecated in rc.18, removed next RC).
+- `totalreclaw_*` tools not visible → plugin not installed or auto-reload didn't fire. Verify via `openclaw plugins list | grep totalreclaw` (or, on a managed service that doesn't expose the CLI, ask the user to confirm via their service's plugins UI). If `totalreclaw` is listed but tools are still absent, the gateway probably hasn't completed its auto-restart yet (give it 5-10s) OR `gateway.reload.mode = off` is set — instruct manual restart as fallback: `openclaw gateway restart` (native), `docker restart <your-container-name>` (Docker self-host), or the managed service's restart control. If the plugin is listed and the gateway has been restarted but tools are still missing (container-agent gap, issue #87 / OC 2026.5.2 issue #223), switch to hybrid mode: use `node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js <cmd>` for remember/recall/pair/status. If your shell doesn't reach the gateway host (managed service), tell the user to install/enable the plugin via their service's plugins UI and restart the gateway via the service's restart control. Do NOT suggest the bare `openclaw totalreclaw onboard` (leaks phrase on stdout — deprecated in rc.18, removed next RC).
 - User says done but `credentials.json` missing → PIN expired or entered wrong phrase; call `totalreclaw_pair` again.
 - `onboarding required` → credentials missing; redo from the account-setup step.
 - `quota exceeded` → `totalreclaw_status`, then offer `totalreclaw_upgrade`.
