@@ -26,7 +26,10 @@
  */
 
 import path from 'node:path';
+import fs from 'node:fs';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 import { CONFIG } from './config.js';
@@ -49,7 +52,16 @@ import { createApiClient } from './api-client.js';
 const CREDENTIALS_PATH = CONFIG.credentialsPath;
 const SERVER_URL = CONFIG.serverUrl;
 const STATE_PATH = CONFIG.onboardingStatePath;
-const PLUGIN_VERSION = '3.3.9-rc.1';
+const PLUGIN_VERSION = '3.3.10-rc.1';
+
+// Sentinel for the detached-child re-spawn used by `cmdPair`. The parent
+// invocation forks a child with this flag, the child holds the WS until
+// the browser uploads the encrypted phrase. Survives the parent
+// (agent shell tool) exit AND any subsequent gateway SIGUSR1 restart
+// — the child runs in its own process group via `detached: true` and
+// is `unref()`ed so the parent's event loop does not wait on it.
+const PAIR_DETACH_FLAG = '--detached-child';
+const PAIR_HANDOFF_ENV = 'TR_PAIR_HANDOFF';
 
 function die(msg: string, code = 1): never {
   process.stderr.write(`tr: ${msg}\n`);
@@ -222,15 +234,121 @@ async function cmdStatus(jsonMode: boolean): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function cmdPair(args: string[]): Promise<void> {
-  // Delegate to the existing pair-cli-relay.ts via a thin wrapper.
-  // The pair flow is relay-brokered (works through Docker NAT).
-  // Phrase-safety: pair-cli-relay.ts is x25519-only; mnemonic never appears.
+  // Outcome flags. `--detached-child` is a sentinel set by the
+  // parent re-spawn — the child runs the actual pair flow and holds
+  // the WS until the browser uploads the encrypted phrase. The parent
+  // (which the agent shell-tool waits on) prints URL+PIN and exits 0
+  // immediately so the agent can respond to the user without holding
+  // a 5-minute open shell-tool.
+  const isDetachedChild = args.includes(PAIR_DETACH_FLAG);
   const outputMode = args.includes('--json') ? 'json' : args.includes('--url-pin') ? 'url-pin' : 'human';
+
+  if (!isDetachedChild) {
+    // PARENT MODE: fork self detached, wait for handoff line on a
+    // tmp file, print it to stdout, exit. This shape — agent-facing
+    // tool returns immediately with URL+PIN — was forced by Pedro's
+    // 2026-05-05 502 QA: each `openclaw plugins install` writes a
+    // config-change that the gateway eventually applies via SIGUSR1
+    // restart, killing any in-flight subprocess. With the WS in a
+    // detached child (own process group), it survives the gateway
+    // restart that kills the agent's shell-tool subprocess.
+    await runPairParent(outputMode);
+    return;
+  }
+
+  // CHILD MODE: hold the WS until the browser uploads the encrypted
+  // phrase, write credentials.json, exit. Output goes to a handoff
+  // file the parent reads, then to /dev/null.
+  await runPairDetachedChild(outputMode, args);
+}
+
+async function runPairParent(outputMode: string): Promise<void> {
+  // Disk-handoff path — child writes URL+PIN here, parent polls.
+  // Crypto-random suffix keeps concurrent invocations non-colliding.
+  const handoffPath = path.join(os.tmpdir(), `tr-pair-handoff-${randomUUID()}.json`);
+  // Pre-touch the file so the child can `appendFile`/`writeFile`
+  // without a race against a non-existent parent dir.
+  fs.writeFileSync(handoffPath, '');
+
+  const selfPath = fileURLToPath(import.meta.url);
+  const childArgs = ['pair'];
+  if (outputMode === 'json') childArgs.push('--json');
+  else if (outputMode === 'url-pin') childArgs.push('--url-pin');
+  childArgs.push(PAIR_DETACH_FLAG);
+
+  const child = spawn(process.execPath, [selfPath, ...childArgs], {
+    detached: true,
+    stdio: ['ignore', 'ignore', 'ignore'],
+    env: { ...process.env, [PAIR_HANDOFF_ENV]: handoffPath },
+  });
+  child.unref();
+
+  // Poll the handoff file. `tr pair` typical wall-clock to URL+PIN
+  // is 100-500ms (one WS open + one frame round-trip). Cap the wait
+  // at 15s — beyond that the child has either failed (relay down,
+  // network issue) or gateway killed it before it could write.
+  const start = Date.now();
+  const POLL_INTERVAL_MS = 100;
+  const MAX_WAIT_MS = 15_000;
+  while (Date.now() - start < MAX_WAIT_MS) {
+    let payload: string;
+    try {
+      payload = fs.readFileSync(handoffPath, 'utf-8');
+    } catch {
+      payload = '';
+    }
+    if (payload.trim().length > 0) {
+      process.stdout.write(payload);
+      // Best-effort cleanup — if the child is still active, it'll
+      // re-write or it doesn't matter (we're about to exit).
+      try { fs.unlinkSync(handoffPath); } catch { /* ignore */ }
+      // Parent exits 0 — agent's tool call returns. Detached child
+      // continues holding WS until phrase upload or relay TTL.
+      process.exit(0);
+    }
+    await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS));
+  }
+
+  // Timed out — child never wrote URL+PIN. Surface the failure.
+  try { fs.unlinkSync(handoffPath); } catch { /* ignore */ }
+  die('pair handoff timed out — child failed to open relay session within 15s', 1);
+}
+
+async function runPairDetachedChild(outputMode: string, _args: string[]): Promise<void> {
+  // We're the detached child. Open WS, write URL+PIN to the handoff
+  // file (parent polls + prints), then block on phrase upload.
+  const handoffPath = process.env[PAIR_HANDOFF_ENV];
+  if (!handoffPath) {
+    process.stderr.write(`tr-pair-child: missing ${PAIR_HANDOFF_ENV}\n`);
+    process.exit(1);
+  }
 
   const { runRelayPairCli } = await import('./pair-cli-relay.js');
   const { defaultRenderQr, buildDefaultPairCliIo } = await import('./pair-cli.js');
 
+  // Capture stdout writes so we can route the URL+PIN line to the
+  // handoff file before passing through to the (ignored) child stdout.
   const io = buildDefaultPairCliIo();
+  const realStdout = process.stdout.write.bind(process.stdout);
+  let handoffWritten = false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (process.stdout as any).write = (chunk: any, ...rest: any[]): boolean => {
+    if (!handoffWritten) {
+      const text = typeof chunk === 'string' ? chunk : (chunk?.toString?.('utf-8') ?? String(chunk));
+      // The pair-cli-relay's first stdout write in --json/--url-pin
+      // mode is the URL+PIN payload as a single line.
+      if (text.trim().length > 0 && (text.includes('"url"') || text.includes('"pair_url"'))) {
+        try {
+          fs.writeFileSync(handoffPath, text);
+          handoffWritten = true;
+        } catch (err) {
+          process.stderr.write(`tr-pair-child: handoff write failed: ${String(err)}\n`);
+        }
+      }
+    }
+    return realStdout(chunk, ...rest);
+  };
+
   const outcome = await runRelayPairCli('generate', {
     relayBaseUrl: CONFIG.pairRelayUrl,
     credentialsPath: CREDENTIALS_PATH,
@@ -247,12 +365,22 @@ async function cmdPair(args: string[]): Promise<void> {
     outputMode: outputMode as import('./pair-cli.js').PairCliOutputMode,
   });
 
+  // If the child exits before parent has read the handoff file
+  // (the WS open frame failed before any URL+PIN to write), make sure
+  // the parent doesn't hang on its 15s poll — write an error payload.
+  if (!handoffWritten) {
+    try {
+      fs.writeFileSync(handoffPath, JSON.stringify({ error: `pair_failed:${outcome.status}` }) + '\n');
+    } catch { /* ignore */ }
+  }
+
   if (outcome.status !== 'completed' && outcome.status !== 'canceled') {
-    die(`Pairing ${outcome.status}`, 1);
+    process.exit(1);
   }
   if (outcome.status === 'canceled') {
     process.exit(130);
   }
+  process.exit(0);
 }
 
 // ---------------------------------------------------------------------------

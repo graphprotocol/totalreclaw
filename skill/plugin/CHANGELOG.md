@@ -4,6 +4,25 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.10-rc.1] — 2026-05-05
+
+Critical fix for the persistent 502 `gateway_disconnected` Pedro hit on the pair `/respond` endpoint after rc.4 published. Relay PR #14 (5s + immediate WS keepalive ping) was already deployed but did not fix the issue — root cause was different.
+
+### Fixed
+
+- **`tr pair` now detaches into a child process group; WS survives gateway restarts.** OpenClaw's `openclaw plugins install <pkg>` writes `plugins.installs.totalreclaw.*` into `~/.openclaw/openclaw.json`. The gateway's reload pipeline classifies that as `requires gateway restart` and defers a SIGUSR1 self-restart until active operations complete. When the agent immediately runs `tr pair --json` after install, the pair subprocess is part of the active operation set — restart is deferred until tr pair returns, but the gateway's reload heuristic sometimes fires the SIGUSR1 anyway (when other operations finish first), killing the pair subprocess and dropping its WS to the relay. Pedro's browser then POSTs `/respond` with the encrypted phrase, the relay finds the gateway WS gone, and returns 502.
+
+  **Fix:** `cmdPair` in `tr-cli.ts` now runs in two modes. The PARENT mode (default) forks itself with `detached: true`, `stdio: 'ignore'`, and `unref()` — placing the child in its own process group, untethered from the agent shell-tool's process. The CHILD mode (sentinel `--detached-child`) opens the relay WS, writes the URL+PIN payload to a tmp file, then blocks on `awaitPhraseUpload`. The parent polls the handoff file (100 ms cadence, 15 s cap) and prints URL+PIN to stdout the moment the child writes it. Parent exits 0 in <500 ms typical — agent's tool call returns immediately. Child holds the WS independently of any subsequent gateway restart, agent restart, or shell-tool kill.
+
+  Verified locally: parent exits in 100-300 ms with URL+PIN; killing the parent process leaves the child running and the WS open; `kill -9 <child-pid>` is required to drop it. Handoff file is auto-cleaned by the parent after read; child writes an error payload on early failure so the parent doesn't hang.
+
+### Implementation notes
+
+- Sentinel arg `--detached-child` + env var `TR_PAIR_HANDOFF=<tmpfile>` carry the handoff path from parent to child.
+- Child intercepts the first `process.stdout.write` whose chunk contains `"url"` / `"pair_url"` and writes that line to the handoff file before letting the rest pass through (which goes to /dev/null since stdio is ignored).
+- 15 s parent timeout: a slow relay handshake / network blip surfaces as `pair handoff timed out — child failed to open relay session within 15s` instead of an indefinite hang.
+- Phrase-safety unchanged: the mnemonic still flows browser → relay → child via the existing x25519 envelope; the parent never sees ciphertext, plaintext, or any phrase-derived material. The handoff file carries only the URL+PIN payload (the same data the agent used to receive synchronously).
+
 ## [3.3.9-rc.4] — 2026-05-05
 
 Defensive patch hardening `patchOpenClawConfig()` Fix #1 against a startup crash loop observed on Pedro's pop-os QA host on 2026-05-05.
