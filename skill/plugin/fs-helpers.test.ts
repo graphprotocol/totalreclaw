@@ -406,22 +406,43 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
 }
 
 {
-  // 'patched' on empty config — both keys written
+  // 'patched' on empty config — hooks written, but slot NOT touched
+  // (no `plugins.installs.totalreclaw` → slot patch is gated off, see
+  // 3.3.9-rc.4 defensive gate).
   const cfgPath = path.join(TMP, 'openclaw-empty.json');
   fs.writeFileSync(cfgPath, JSON.stringify({}));
-  assertEq(patchOpenClawConfig(cfgPath), 'patched', 'patchOpenClawConfig: patches empty config');
+  assertEq(patchOpenClawConfig(cfgPath), 'patched', 'patchOpenClawConfig: patches empty config (hooks only)');
   const written = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
   const plugins = written.plugins as Record<string, unknown>;
-  assertEq((plugins.slots as Record<string, unknown>)?.memory, 'totalreclaw', 'patchOpenClawConfig: slots.memory set to totalreclaw');
+  assertEq((plugins.slots as Record<string, unknown>)?.memory, undefined, 'patchOpenClawConfig: slot NOT written without installs.totalreclaw (rc.4 gate)');
   const tr = (plugins.entries as Record<string, Record<string, unknown>>)?.totalreclaw;
-  assertEq((tr?.hooks as Record<string, unknown>)?.allowConversationAccess, true, 'patchOpenClawConfig: allowConversationAccess set to true');
+  assertEq((tr?.hooks as Record<string, unknown>)?.allowConversationAccess, true, 'patchOpenClawConfig: allowConversationAccess set to true (no install gate)');
 }
 
 {
-  // 'unchanged' when both keys already correct
+  // 'patched' on empty config WITH installs.totalreclaw present —
+  // slot AND hooks both written.
+  const cfgPath = path.join(TMP, 'openclaw-empty-with-installs.json');
+  const initial = {
+    plugins: {
+      installs: { totalreclaw: { version: '3.3.9-rc.4' } },
+    },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(patchOpenClawConfig(cfgPath), 'patched', 'patchOpenClawConfig: patches when installs.totalreclaw present');
+  const written = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const plugins = written.plugins as Record<string, unknown>;
+  assertEq((plugins.slots as Record<string, unknown>)?.memory, 'totalreclaw', 'patchOpenClawConfig: slot WRITTEN with installs.totalreclaw');
+  const tr = (plugins.entries as Record<string, Record<string, unknown>>)?.totalreclaw;
+  assertEq((tr?.hooks as Record<string, unknown>)?.allowConversationAccess, true, 'patchOpenClawConfig: hooks written with installs');
+}
+
+{
+  // 'unchanged' when both keys already correct AND installs present
   const cfgPath = path.join(TMP, 'openclaw-complete.json');
   const initial = {
     plugins: {
+      installs: { totalreclaw: { version: '3.3.9-rc.4' } },
       slots: { memory: 'totalreclaw' },
       entries: { totalreclaw: { hooks: { allowConversationAccess: true } } },
     },
@@ -435,10 +456,11 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
 }
 
 {
-  // 'patched' when only slot is missing (allowConversationAccess already set)
+  // 'patched' when only slot is missing (allowConversationAccess + installs present)
   const cfgPath = path.join(TMP, 'openclaw-missing-slot.json');
   const initial = {
     plugins: {
+      installs: { totalreclaw: { version: '3.3.9-rc.4' } },
       entries: { totalreclaw: { hooks: { allowConversationAccess: true } } },
     },
   };
@@ -446,7 +468,7 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
   assertEq(patchOpenClawConfig(cfgPath), 'patched', 'patchOpenClawConfig: patches when only slot missing');
   const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
   const afterPlugins = after.plugins as Record<string, unknown>;
-  assertEq((afterPlugins.slots as Record<string, unknown>)?.memory, 'totalreclaw', 'patchOpenClawConfig: slot written when only slot missing');
+  assertEq((afterPlugins.slots as Record<string, unknown>)?.memory, 'totalreclaw', 'patchOpenClawConfig: slot written when installs + entries present');
 }
 
 {
@@ -463,6 +485,90 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
   const afterPlugins = after.plugins as Record<string, unknown>;
   const tr = (afterPlugins.entries as Record<string, Record<string, unknown>>)?.totalreclaw;
   assertEq((tr?.hooks as Record<string, unknown>)?.allowConversationAccess, true, 'patchOpenClawConfig: hooks written when only hooks missing');
+}
+
+// --- Fix #1 install-gate regression tests (3.3.9-rc.4) ---
+
+{
+  // REGRESSION: empty config WITHOUT installs.totalreclaw must NOT
+  // write `plugins.slots.memory = "totalreclaw"`. This is the
+  // 2026-05-05 pop-os crash-loop scenario — writing the slot without
+  // an install record produces "plugin not found: totalreclaw" at
+  // gateway startup and the container restart-loops indefinitely
+  // until `openclaw plugins install` repopulates installs.totalreclaw.
+  const cfgPath = path.join(TMP, 'openclaw-no-installs.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({ plugins: {} }));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'patched',
+    'patchOpenClawConfig: no-installs config returns patched (hooks written)',
+  );
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const plugins = after.plugins as Record<string, unknown>;
+  // The crash-loop test: slot must NOT be set when installs missing
+  assertEq(
+    (plugins.slots as Record<string, unknown> | undefined)?.memory,
+    undefined,
+    'patchOpenClawConfig: slot NOT set when installs.totalreclaw missing (crash-loop guard)',
+  );
+  // But hooks ARE set — they're inert without an install record so safe
+  const tr = (plugins.entries as Record<string, Record<string, unknown>>)?.totalreclaw;
+  assertEq(
+    (tr?.hooks as Record<string, unknown>)?.allowConversationAccess,
+    true,
+    'patchOpenClawConfig: hooks still written without installs (no validator gate)',
+  );
+}
+
+{
+  // REGRESSION: installs.totalreclaw with empty/non-string version → slot still gated.
+  // The version field is what the install pipeline writes; an empty
+  // installs.totalreclaw object is not authoritative enough to gate on.
+  const cfgPath = path.join(TMP, 'openclaw-installs-no-version.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({
+    plugins: { installs: { totalreclaw: {} } },
+  }));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'patched',
+    'patchOpenClawConfig: installs without version returns patched (hooks)',
+  );
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const plugins = after.plugins as Record<string, unknown>;
+  assertEq(
+    (plugins.slots as Record<string, unknown> | undefined)?.memory,
+    undefined,
+    'patchOpenClawConfig: slot still gated when installs.totalreclaw lacks version',
+  );
+}
+
+{
+  // REGRESSION: stale slot=totalreclaw + NO installs (the actual
+  // 2026-05-05 crash-loop disk state). Patch must NOT add to the
+  // problem — it already exists; we're not the cleaner. Slot stays
+  // (whoever wrote it earlier owns the cleanup), but we write hooks.
+  const cfgPath = path.join(TMP, 'openclaw-stale-slot-no-install.json');
+  const initial = {
+    plugins: {
+      slots: { memory: 'totalreclaw' },
+      // no installs.totalreclaw — the crash state on pop-os 12:10-12:23
+    },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'patched',
+    'patchOpenClawConfig: stale-slot + no-install returns patched (hooks only)',
+  );
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const plugins = after.plugins as Record<string, unknown>;
+  // Slot is still there but we did not re-write it — and we did not
+  // create a new mutation for it either (mutated only via hooks).
+  assertEq(
+    (plugins.slots as Record<string, unknown>)?.memory,
+    'totalreclaw',
+    'patchOpenClawConfig: pre-existing stale slot preserved (we do not auto-clean)',
+  );
 }
 
 {

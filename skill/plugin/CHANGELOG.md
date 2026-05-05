@@ -4,6 +4,22 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.9-rc.4] — 2026-05-05
+
+Defensive patch hardening `patchOpenClawConfig()` Fix #1 against a startup crash loop observed on Pedro's pop-os QA host on 2026-05-05.
+
+### Fixed
+
+- **Slot patch crash-loop guard:** `patchOpenClawConfig()` previously wrote `plugins.slots.memory = "totalreclaw"` whenever the slot was unset. On 2026-05-05 pop-os crashed in a restart loop (~13 attempts, 12:10–12:23 UTC) with `Gateway failed to start: Error: Invalid config at openclaw.json. plugins.slots.memory: plugin not found: totalreclaw. Run "openclaw doctor --fix" to repair, then retry.` Root cause: a previous register() invocation had written the slot, but a later config reset / migration wiped `plugins.installs.totalreclaw` while leaving `plugins.slots.memory` behind. OpenClaw's startup validator hard-fails when `slots.memory` points to a name with no install record. The crash self-resolved at 12:24 once the user re-ran `openclaw plugins install`.
+
+  **Fix:** Slot patch is now gated on `cfg.plugins.installs?.totalreclaw?.version` being a non-empty string. Without an install record we leave `slots.memory` alone — neither writing it (preventing future crash loops) nor cleaning it up (not our responsibility). The hooks (Fix #2) and Telegram streaming (Fix #3) patches are unchanged — they write under `plugins.entries` and `channels` which are inert without an install record and cannot trip the validator.
+
+### Implementation notes
+
+- `cfg.plugins.installs.totalreclaw.version` is the install pipeline's authoritative signal that the plugin is on disk and registered with the gateway. It's populated by `openclaw plugins install` and survives gateway restarts; a config reset that drops it indicates the plugin install record is no longer valid and slot should not point to it.
+- 7 new tests in `fs-helpers.test.ts`: empty-config-no-installs (slot NOT written), empty-config-with-installs (slot WRITTEN), installs-without-version (slot still gated), stale-slot-no-install (we don't auto-clean), plus updated fixtures across the existing 4 cases. 81/81 green.
+- Pre-existing tests for the hooks and Telegram streaming patches continue to pass unchanged — those code paths are not gated.
+
 ## [3.3.9-rc.3] — 2026-05-05
 
 Patch release silencing the verbose Telegram streaming output Pedro reported during 3.3.9-rc.2 manual QA ("Krilling… 🔧 Exec: run openclaw skills" repeated 3-4× per shell command in the same chat bubble).
