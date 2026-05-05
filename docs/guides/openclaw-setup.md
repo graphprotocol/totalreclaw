@@ -110,7 +110,7 @@ Step 2 (`hooks.allowConversationAccess`) unblocks the plugin's `agent_end` hook 
 Both apply via hot-reload (no `/totalreclaw-restart` needed for either).
 
 Notes:
-- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.9-rc.4`.
+- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.10-rc.1`.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
 ### Step 2 — Verify CLI works (hybrid-primary, 3.3.9-rc.1+) — emit user-visible line 2 on success
