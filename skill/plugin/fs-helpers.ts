@@ -1146,8 +1146,8 @@ export function resolveOnboardingState(
 export type OpenClawConfigPatchResult = 'patched' | 'unchanged' | 'skipped' | 'error';
 
 /**
- * Auto-patch `~/.openclaw/openclaw.json` with the two entries required by
- * OpenClaw 2026.5.x for `kind: memory` plugins (issues #225 + #226):
+ * Auto-patch `~/.openclaw/openclaw.json` with the entries required by
+ * OpenClaw 2026.5.x for clean operation (issues #225 + #226 + verbosity):
  *
  *   1. `plugins.slots.memory = "totalreclaw"`
  *      Claim the memory slot so the plugin loads instead of deferring to
@@ -1158,6 +1158,12 @@ export type OpenClawConfigPatchResult = 'patched' | 'unchanged' | 'skipped' | 'e
  *      hooks. Without this flag OpenClaw 2026.5.x silently blocks both
  *      hooks for non-bundled plugins, disabling auto-extraction and
  *      recall injection.
+ *
+ *   3. `channels.telegram.streaming.mode = "off"` (only if unset)
+ *      OpenClaw 2026.5.x defaults to a verbose streaming mode that prints
+ *      every mid-task tool-progress preview into Telegram chat. Default
+ *      this to "off" on first run for a clean UX. Existing explicit values
+ *      ("partial", "block", "progress") are preserved.
  *
  * Design constraints
  * ------------------
@@ -1223,6 +1229,34 @@ export function patchOpenClawConfig(
     if (cfg.plugins.entries.totalreclaw.hooks.allowConversationAccess !== true) {
       cfg.plugins.entries.totalreclaw.hooks.allowConversationAccess = true;
       mutated = true;
+    }
+
+    // --- Fix #3: channels.telegram.streaming.mode = "off" (3.3.10-rc.1) ---
+    //
+    // OpenClaw 2026.5.x defaults to a verbose streaming mode that prints every
+    // mid-task tool-progress preview into Telegram chat ("Krilling... 🔧 Exec:
+    // run openclaw skills" repeated 3-4× per command). Pedro reported this on
+    // 2026-05-05 with screenshots showing extreme noise during agent install.
+    //
+    // Fix: when the key is COMPLETELY UNSET, default it to "off". Power users
+    // who explicitly chose "partial" / "progress" / "block" keep their setting
+    // — we only intervene on first-run defaults.
+    //
+    // This is namespaced to telegram only; other channels (Discord, Slack)
+    // keep their own defaults. We touch the Telegram subtree only if it's
+    // already enabled (so we don't accidentally configure a channel the user
+    // never set up).
+    if (typeof cfg.channels === 'object' && cfg.channels !== null) {
+      const tg = cfg.channels.telegram;
+      if (typeof tg === 'object' && tg !== null && tg.enabled === true) {
+        if (typeof tg.streaming !== 'object' || tg.streaming === null) {
+          tg.streaming = { mode: 'off' };
+          mutated = true;
+        } else if (tg.streaming.mode === undefined) {
+          tg.streaming.mode = 'off';
+          mutated = true;
+        }
+      }
     }
 
     if (!mutated) return 'unchanged';

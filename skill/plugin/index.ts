@@ -3125,7 +3125,13 @@ const plugin = {
       //      agent_end and before_agent_start hooks. Without it, auto-
       //      extraction and recall injection are silently disabled. #226.
       //
-      // The patch is idempotent — if both keys are already correct the
+      //   3. channels.telegram.streaming.mode = "off" (only if unset)
+      //      OpenClaw 2026.5.x defaults Telegram to a verbose streaming
+      //      mode that prints every mid-task tool-progress preview into
+      //      chat. Default this to "off" on first run for a clean UX.
+      //      Existing explicit values are preserved (3.3.10-rc.1).
+      //
+      // The patch is idempotent — if all keys are already correct the
       // file is not touched. When the file IS mutated a restart is
       // required for the new keys to take effect (OpenClaw reads
       // openclaw.json at startup, not dynamically). We emit a warn so
@@ -3135,7 +3141,8 @@ const plugin = {
         if (patchResult === 'patched') {
           api.logger.warn(
             'TotalReclaw: updated openclaw.json with required 2026.5.x keys ' +
-              '(plugins.slots.memory + hooks.allowConversationAccess). ' +
+              '(plugins.slots.memory + hooks.allowConversationAccess + ' +
+              'channels.telegram.streaming.mode). ' +
               'Gateway restart required for the changes to take effect. ' +
               'Run `/totalreclaw-restart` or restart the gateway manually.',
           );

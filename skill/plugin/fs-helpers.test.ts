@@ -488,6 +488,106 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
   assertEq((entries['memory-core'] as Record<string, unknown>)?.enabled, false, 'patchOpenClawConfig: preserves memory-core entry');
 }
 
+// --- Fix #3: channels.telegram.streaming.mode = "off" (3.3.10-rc.1) ---
+
+{
+  // patches telegram streaming.mode when telegram is enabled and streaming is unset
+  const cfgPath = path.join(TMP, 'openclaw-telegram-no-streaming.json');
+  const initial = {
+    channels: { telegram: { enabled: true, botToken: 'BOT' } },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'patched',
+    'patchOpenClawConfig: patches when telegram enabled + streaming unset',
+  );
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const tg = (after.channels as Record<string, unknown>).telegram as Record<string, unknown>;
+  const streaming = tg.streaming as Record<string, unknown>;
+  assertEq(streaming?.mode, 'off', 'patchOpenClawConfig: telegram streaming.mode set to "off"');
+  assertEq(tg.botToken, 'BOT', 'patchOpenClawConfig: preserves telegram.botToken');
+}
+
+{
+  // patches when streaming exists as object but mode is missing
+  const cfgPath = path.join(TMP, 'openclaw-telegram-streaming-no-mode.json');
+  const initial = {
+    channels: { telegram: { enabled: true, streaming: { chunkMode: 'newline' } } },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'patched',
+    'patchOpenClawConfig: patches when streaming exists but mode missing',
+  );
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const tg = (after.channels as Record<string, unknown>).telegram as Record<string, unknown>;
+  const streaming = tg.streaming as Record<string, unknown>;
+  assertEq(streaming.mode, 'off', 'patchOpenClawConfig: streaming.mode added');
+  assertEq(streaming.chunkMode, 'newline', 'patchOpenClawConfig: preserves existing streaming.chunkMode');
+}
+
+{
+  // does NOT overwrite an explicit streaming.mode (power-user choice preserved)
+  const cfgPath = path.join(TMP, 'openclaw-telegram-explicit-mode.json');
+  const initial = {
+    plugins: {
+      slots: { memory: 'totalreclaw' },
+      entries: { totalreclaw: { hooks: { allowConversationAccess: true } } },
+    },
+    channels: { telegram: { enabled: true, streaming: { mode: 'partial' } } },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'unchanged',
+    'patchOpenClawConfig: does not overwrite explicit streaming.mode',
+  );
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const tg = (after.channels as Record<string, unknown>).telegram as Record<string, unknown>;
+  const streaming = tg.streaming as Record<string, unknown>;
+  assertEq(streaming.mode, 'partial', 'patchOpenClawConfig: explicit "partial" preserved');
+}
+
+{
+  // does NOT add streaming when telegram is not enabled
+  const cfgPath = path.join(TMP, 'openclaw-telegram-disabled.json');
+  const initial = {
+    plugins: {
+      slots: { memory: 'totalreclaw' },
+      entries: { totalreclaw: { hooks: { allowConversationAccess: true } } },
+    },
+    channels: { telegram: { enabled: false, botToken: 'BOT' } },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'unchanged',
+    'patchOpenClawConfig: skips telegram patch when channel disabled',
+  );
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const tg = (after.channels as Record<string, unknown>).telegram as Record<string, unknown>;
+  assertEq(tg.streaming, undefined, 'patchOpenClawConfig: streaming not added for disabled channel');
+}
+
+{
+  // does NOT add streaming when channels.telegram is absent entirely
+  const cfgPath = path.join(TMP, 'openclaw-no-telegram.json');
+  const initial = {
+    plugins: {
+      slots: { memory: 'totalreclaw' },
+      entries: { totalreclaw: { hooks: { allowConversationAccess: true } } },
+    },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'unchanged',
+    'patchOpenClawConfig: skips telegram patch when channel absent',
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Integration: round-trip write → load → delete → reload
 // ---------------------------------------------------------------------------

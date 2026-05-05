@@ -4,6 +4,20 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.9-rc.3] — 2026-05-05
+
+Patch release silencing the verbose Telegram streaming output Pedro reported during 3.3.9-rc.2 manual QA ("Krilling… 🔧 Exec: run openclaw skills" repeated 3-4× per shell command in the same chat bubble).
+
+### Fixed
+
+- **Telegram chat noise during agent runs:** OpenClaw 2026.5.x defaults `channels.telegram.streaming.mode` to a verbose preview mode that prints every mid-task tool-progress chunk into chat. The plugin's `patchOpenClawConfig()` now adds a third idempotent fix: when `channels.telegram.enabled === true` and `streaming.mode` is unset, default it to `"off"`. Existing explicit values (`"partial"`, `"block"`, `"progress"`) are preserved — only first-run defaults are touched. Restart required for the new key to take effect (logged via `api.logger.warn`).
+
+### Implementation notes
+
+- `patchOpenClawConfig()` extended in `fs-helpers.ts` with Fix #3. Fully namespaced to Telegram — does not touch Discord, Slack, or other channels' streaming defaults.
+- New tests in `fs-helpers.test.ts` cover: telegram enabled+streaming-unset (patched), streaming-exists-but-mode-missing (patched), explicit mode preserved (unchanged), telegram disabled (unchanged), telegram absent entirely (unchanged). 71/71 green.
+- The same warn message that fired for slot/hooks now also covers streaming.mode in the `'patched'` path, so users see one restart prompt per first install.
+
 ## [3.3.9-rc.2] — 2026-05-02
 
 Patch release fixing the two OpenClaw 2026.5.x compatibility blockers discovered during 3.3.9-rc.1 auto-QA ([umbrella #224](https://github.com/p-diogo/totalreclaw-internal/issues/224)).
