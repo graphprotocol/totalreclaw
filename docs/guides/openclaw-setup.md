@@ -98,13 +98,18 @@ openclaw skills install totalreclaw
 
 **Plugin BEFORE skill is deliberate** (3.3.4-rc.1, post-Pedro QA): the skill install triggers a config-driven SIGUSR1 gateway reload that can race a concurrent plugin install. Plugin-first lets the plugin land cleanly, then the skill's reload picks it up on the next gateway loop. If you accidentally do skill-first and the plugin install dies mid-flight, just retry `openclaw plugins install @totalreclaw/totalreclaw` once — it's idempotent.
 
-**OpenClaw 2026.5.2+: one extra step after install** (3.3.7-rc.3): run this after `openclaw plugins install` to suppress the `plugins.allow is empty` log warning and ensure the discoveryLoader treats totalreclaw as explicitly trusted:
+**OpenClaw 2026.5.2+: TWO extra config steps after install** (3.3.7-rc.3 + 3.3.8-rc.1). Run these in order, silent — no prose between commands:
 
 ```bash
 openclaw config set plugins.allow '["totalreclaw"]' --strict-json
+openclaw config set plugins.entries.totalreclaw.hooks.allowConversationAccess true --strict-json
 ```
 
-This is a one-time per-gateway-config step. If `plugins.allow` is already set (e.g. you have other plugins listed), append rather than overwrite: `openclaw config get plugins.allow` to check, then `openclaw config set plugins.allow '["totalreclaw","other-plugin"]' --strict-json`. The gateway applies this via hot-reload (no restart needed for the allow-list change).
+Step 1 (`plugins.allow`) suppresses the `plugins.allow is empty` log warning and ensures the discoveryLoader treats totalreclaw as explicitly trusted (one-time per gateway config). If `plugins.allow` is already set, append: `openclaw config get plugins.allow` first, then merge.
+
+Step 2 (`hooks.allowConversationAccess`) unblocks the plugin's `agent_end` hook on OpenClaw 2026.5.2+. Without it, the gateway logs `typed hook "agent_end" blocked because non-bundled plugins must set plugins.entries.totalreclaw.hooks.allowConversationAccess=true` and **auto-extraction silently fails** — every-N-turn fact extraction never fires, the user thinks the agent is remembering but nothing persists. Setting this opts the totalreclaw plugin into reading the agent's prompt+response stream for fact extraction (the only thing that requires conversation access — `before_agent_start`, `before_compaction`, `before_reset`, `message_received` work without it). Future OpenClaw releases may default this on for explicitly-trusted plugins (`plugins.allow` listed); until then it's required.
+
+Both apply via hot-reload (no `/totalreclaw-restart` needed for either).
 
 Notes:
 - For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.7-rc.3`.
