@@ -50,8 +50,16 @@ If you find yourself about to say any of these, STOP. The correct statement is: 
 
 OpenClaw 2026.5.2 has a tool-policy-pipeline bug (issue #223) that strips non-bundled plugin tools before they reach the agent toolset. **3.3.9-rc.1 makes the `tr` CLI the PRIMARY path for all memory operations.** Native tools (`totalreclaw_*`) are kept for back-compat with older OpenClaw versions where they work, but the agent MUST NOT depend on them. Use `tr` from your shell tool for everything.
 
-**The `tr` binary is installed at:** `~/.openclaw/extensions/totalreclaw/dist/tr-cli.js`
-**Always invoke via:** `node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js <cmd> [--json]`
+**The `tr` binary is installed at one of two paths depending on OpenClaw version:**
+- Modern (2026.5.x npm-managed): `~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cli.js`
+- Legacy (extensions tree): `~/.openclaw/extensions/totalreclaw/dist/tr-cli.js`
+
+**Resolve the path once at the top of your shell session and reuse:**
+```bash
+TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js 2>/dev/null | head -1)"
+```
+Then invoke as `node "$TR_CLI" <cmd> [--json]`.
+
 **Never rely on `totalreclaw_*` tool binding** — it may not be available due to issue #223.
 
 ## User-visible line set (THIS IS ALL YOU SAY)
@@ -81,41 +89,49 @@ If existing credentials are detected (step "Check for existing credentials" belo
 
    If either shell call fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), tell the user verbatim *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` and skip to step 3.
 
-2. **Verify CLI works — emit user-visible line 2 when successful.** Run:
-   ```
-   node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js status --json
+2. **Verify CLI works — emit user-visible line 2 when successful.** Resolve `TR_CLI` and run:
+   ```bash
+   TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js 2>/dev/null | head -1)"
+   node "$TR_CLI" status --json
    ```
    Parse the JSON. When you get `{"version": "...", "hybrid_mode": true, ...}`, emit user-visible line 2 with the version substituted. **Do NOT wait for tool binding. Do NOT issue `/totalreclaw-restart`. Do NOT check whether `totalreclaw_pair` is in your toolset.** The CLI works independently of tool binding. If `tr status` exits non-zero or the file doesn't exist, wait 5s and retry once — it may still be installing.
 
 3. **Check for existing credentials (silent unless found).** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit *"✓ TotalReclaw is already set up."* and stop.
 
-4. **Set up the user's TotalReclaw account IMMEDIATELY — no consent gate.** As soon as `tr status --json` returns and credentials are not present, run:
+4. **Set up the user's TotalReclaw account IMMEDIATELY — no consent gate.** As soon as `tr status --json` returns and credentials are not present, run pair in DETACHED mode. CRITICAL: a foreground `node tr-cli pair` is killed when the gateway fires its post-install SIGUSR1 reload (3.3.10 finding from Pedro's 2026-05-05 QA — relay logs `gateway_disconnected` 502 on `/respond`). Use `setsid -f` so the pair process is in its own session and survives any subsequent gateway SIGUSR1 reload. The handshake URL+PIN is written to a tmp file the moment the WS opens (~100-500ms typical):
+   ```bash
+   PAIR_OUT="/tmp/tr-pair-out-$(date +%s).json"
+   setsid -f node "$TR_CLI" pair --json > "$PAIR_OUT" 2>&1 < /dev/null
+   sleep 2
+   cat "$PAIR_OUT"
    ```
-   node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js pair --json
-   ```
-   This is UNCONDITIONAL. Do NOT ask "Would you like to set up an account?" or "Want me to pair now?". The user installed TotalReclaw — setup is the expected next step. The URL + PIN itself is the consent moment (the user can simply not open the page to opt out). Parse the JSON response `{"url": "...", "pin": "...", "expires_at": "..."}` and emit user-visible line 3. If `tr pair --json` is not available (old install), fall back to `totalreclaw_pair` tool or `openclaw totalreclaw pair generate --url-pin-only`.
+   This is UNCONDITIONAL. Do NOT ask "Would you like to set up an account?" or "Want me to pair now?". The user installed TotalReclaw — setup is the expected next step. The URL + PIN itself is the consent moment (the user can simply not open the page to opt out). Parse the JSON response `{"url": "...", "pin": "...", "expires_at_ms": ...}` and emit user-visible line 3. If the cat output is empty after 2s, sleep 2 more seconds and try again (relay handshake can take up to 4s on a cold network). If `tr pair --json` is not available (old install), fall back to `totalreclaw_pair` tool or `openclaw totalreclaw pair generate --url-pin-only`.
 
-5. **Verify and confirm (silent until line 4).** After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — run `tr pair --json` again and resend line 3 once. If present, emit user-visible line 4 and stop.
+5. **Verify and confirm (silent until line 4).** After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — repeat the `setsid -f node "$TR_CLI" pair --json` block and resend line 3 once. If present, emit user-visible line 4 and stop.
 
 ## `tr` CLI reference (hybrid-primary commands)
 
 Always use `--json` flag when running from shell for machine-parseable output. Plain text mode is for direct user invocation only.
 
 ```bash
+# (Resolve TR_CLI once at the top of your session)
+TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js 2>/dev/null | head -1)"
+
 # Status check (parse JSON to confirm install + onboarding state)
-node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js status --json
-# Returns: {"version":"3.3.9-rc.1","onboarded":false,"next_step":"pair","tool_count":17,"hybrid_mode":true}
+node "$TR_CLI" status --json
+# Returns: {"version":"3.3.10-rc.2","onboarded":false,"next_step":"pair","tool_count":17,"hybrid_mode":true}
 
-# Pair / account setup
-node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js pair --json
-# Returns: {"url":"https://...","pin":"123456","expires_at":"2026-05-05T..."}
+# Pair / account setup — ALWAYS run via setsid -f to survive gateway restarts
+PAIR_OUT="/tmp/tr-pair-out-$(date +%s).json"
+setsid -f node "$TR_CLI" pair --json > "$PAIR_OUT" 2>&1 < /dev/null && sleep 2 && cat "$PAIR_OUT"
+# Returns: {"v":1,"sid":"...","url":"https://...","pin":"123456","mode":"generate","expires_at_ms":...,"qr_ascii":"..."}
 
-# Remember a fact
-node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js remember --json "I work at Graph Foundation"
+# Remember a fact (foreground OK — non-blocking single-shot HTTP call)
+node "$TR_CLI" remember --json "I work at Graph Foundation"
 # Returns: {"ok":true,"id":"...","claim_count":N}
 
 # Recall memories
-node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js recall --json "where does the user work" --limit 5
+node "$TR_CLI" recall --json "where does the user work" --limit 5
 # Returns: {"results":[{"text":"...","score":0.8},...]}
 ```
 
@@ -138,12 +154,12 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
 ## Usage (post-setup)
 
 - Stable user facts / preferences / identity / "remember X":
-  ```
-  node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js remember --json "<fact>"
+  ```bash
+  node "$TR_CLI" remember --json "<fact>"
   ```
 - First-person factual query ("do I / what's my / where do I…"):
-  ```
-  node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js recall --json "<query>" --limit 5
+  ```bash
+  node "$TR_CLI" recall --json "<query>" --limit 5
   ```
   Recall FIRST, then answer from returned facts. If 0 results, say so.
 - For forget / pin / unpin / retype / set_scope — use native tools if available, or ask user to run `openclaw totalreclaw` subcommand.

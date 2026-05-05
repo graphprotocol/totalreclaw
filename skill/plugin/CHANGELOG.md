@@ -4,6 +4,26 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.10-rc.2] — 2026-05-05
+
+Critical 502 fix via shell-side detach (rc.10-rc.1's plugin-side `child_process` approach was reverted — scanner blocks `child_process` imports anywhere in the plugin tree). Pedro's manual QA on rc.4 confirmed the persistent 502 `gateway_disconnected` was NOT caused by relay idle close (PR #14's 5s+immediate WS keepalive was deployed and verified at sha `0ff812a`). Real cause: each `openclaw plugins install` writes `plugins.installs.totalreclaw.*` to the gateway config, triggering a deferred SIGUSR1 reload that eventually fires and kills any in-flight foreground subprocess — including the agent shell-tool's `node tr-cli pair --json` which holds the relay WS until the browser uploads the encrypted phrase.
+
+### Fixed
+
+- **`tr pair` invocation now uses shell-side `setsid -f` for session detachment.** SKILL.md and the public OpenClaw setup guide instruct the agent to spawn `tr pair --json` via `setsid -f` so the WS-holding subprocess is in its own POSIX session, untethered from the agent shell-tool's process group. The pair process survives any subsequent gateway SIGUSR1 reload, and the URL+PIN payload is captured to a tmp file the moment the WS handshake completes (~100-500ms typical). Verified live on pop-os 2026-05-05: `setsid -f node tr-cli.js pair --json > /tmp/...` returned exit 0 immediately, the detached `node tr-cli pair --json` process kept running across a `kill -USR1 1` to PID 1 in the container, and the URL+PIN was readable from the tmp file at +2s.
+
+  This needs no plugin-code change — it's a shell-side mechanism the agent uses when invoking the existing CLI. The plugin tree stays free of `child_process` imports (which would trip OpenClaw's runtime scanner same as the 3.3.2-era `postinstall.mjs` block).
+
+- **CLI install path corrected for OpenClaw 2026.5.x.** SKILL.md and `docs/guides/openclaw-setup.md` previously referenced `~/.openclaw/extensions/totalreclaw/dist/tr-cli.js` exclusively. Modern OpenClaw 2026.5.x npm-managed plugins install under `~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/...` (verified via `openclaw plugins inspect totalreclaw` → "Install path: ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw"). Both paths now appear in the recommended `TR_CLI` resolver:
+  ```bash
+  TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js 2>/dev/null | head -1)"
+  ```
+  Resolver picks the first existing path, so the agent works on both modern and legacy installs without per-version branching.
+
+### Reverted
+
+- **3.3.10-rc.1 plugin-side `child_process` detach** — scanner-sim blocked the publish on `import { spawn } from 'node:child_process'` in `tr-cli.ts`. OpenClaw's runtime scanner (which inspects the full tarball regardless of file role — same rule that killed `postinstall.mjs` in 3.3.2) would have blocked install at the user's gateway even if the publish had been bypassed. rc.10-rc.2 takes the equivalent detach via shell-side `setsid -f`, which OpenClaw's exec subsystem treats as a normal shell command.
+
 ## [3.3.9-rc.4] — 2026-05-05
 
 Defensive patch hardening `patchOpenClawConfig()` Fix #1 against a startup crash loop observed on Pedro's pop-os QA host on 2026-05-05.

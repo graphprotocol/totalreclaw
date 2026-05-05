@@ -110,21 +110,22 @@ Step 2 (`hooks.allowConversationAccess`) unblocks the plugin's `agent_end` hook 
 Both apply via hot-reload (no `/totalreclaw-restart` needed for either).
 
 Notes:
-- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.10-rc.1`.
+- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.10-rc.2`.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
 ### Step 2 — Verify CLI works (hybrid-primary, 3.3.9-rc.1+) — emit user-visible line 2 on success
 
 **Do NOT wait for tool binding. Do NOT check whether `totalreclaw_pair` is in your toolset.** Under OpenClaw 2026.5.2+, non-bundled plugin tools may be stripped (issue #223). The `tr` CLI is the primary path and works independently.
 
-Run:
+Resolve the CLI path once and reuse (3.3.10-rc.2 — modern OpenClaw 2026.5.x installs npm-managed plugins under `~/.openclaw/npm/...`, not `~/.openclaw/extensions/...`):
 ```bash
-node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js status --json
+TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js 2>/dev/null | head -1)"
+node "$TR_CLI" status --json
 ```
 
 Parse the JSON. When you receive `{"version": "...", "hybrid_mode": true, ...}`, emit user-visible line 2 (`✓ Installed (totalreclaw <version>, hybrid mode)`) with the version substituted. Then proceed silently to Step 3.
 
-If `tr status` exits non-zero or the file is not found, wait 5s and retry once (the install may still be completing). If it still fails, tell the user the install didn't land and retry `openclaw plugins install @totalreclaw/totalreclaw@rc`.
+If `tr status` exits non-zero or `$TR_CLI` is empty, wait 5s and retry once (the install may still be completing). If it still fails, tell the user the install didn't land and retry `openclaw plugins install @totalreclaw/totalreclaw@rc`.
 
 **Note on `/totalreclaw-restart`**: this slash command is still registered for environments where users need a manual reload (managed services, special configs). If you need to issue it for some reason, issue the literal slash command `/totalreclaw-restart` — nothing else. But under hybrid-primary, restarting to restore tool binding is no longer needed — `tr` CLI works regardless.
 
@@ -134,15 +135,20 @@ Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, em
 
 ### Step 4 — Set up the user's TotalReclaw account IMMEDIATELY — no consent gate (emit user-visible line 5)
 
-Pasting the install URL was the consent moment for installing the plugin. The URL + PIN you're about to hand the user is the real consent moment for account creation — they have to open the page in their browser to proceed. There is NO separate yes/no gate. Do NOT ask "Would you like to set up an account?" — run `tr pair --json` immediately.
+Pasting the install URL was the consent moment for installing the plugin. The URL + PIN you're about to hand the user is the real consent moment for account creation — they have to open the page in their browser to proceed. There is NO separate yes/no gate. Do NOT ask "Would you like to set up an account?" — run pair immediately.
+
+CRITICAL (3.3.10-rc.2): always invoke `tr pair --json` via `setsid -f` so the WS-holding subprocess is in its own session and survives any post-install gateway SIGUSR1 reload. A foreground `node tr-cli pair` is killed mid-flight when the gateway fires its deferred restart, surfacing as `Gateway could not finish pairing (502). The agent timed out or the ciphertext failed to decrypt — ask the agent to retry pairing.` on the user's browser.
 
 ```bash
-node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js pair --json
+PAIR_OUT="/tmp/tr-pair-out-$(date +%s).json"
+setsid -f node "$TR_CLI" pair --json > "$PAIR_OUT" 2>&1 < /dev/null
+sleep 2
+cat "$PAIR_OUT"
 ```
 
-Parse the JSON `{"url": "...", "pin": "...", "expires_at": "..."}`. Emit user-visible line 5 (`Open <url> in your browser. Enter PIN <pin>. Generate or paste a 12-word recovery phrase. Reply done once it's sealed.`) with `<url>` and `<pin>` substituted. Do not pre-narrate — line 5 itself is the only thing the user needs to see.
+Parse the JSON `{"v":1,"sid":"...","url":"...","pin":"...","mode":"...","expires_at_ms":...,"qr_ascii":"..."}`. Emit user-visible line 5 (`Open <url> in your browser. Enter PIN <pin>. Generate or paste a 12-word recovery phrase. Reply done once it's sealed.`) with `<url>` and `<pin>` substituted. Do not pre-narrate — line 5 itself is the only thing the user needs to see.
 
-If `tr pair --json` is unavailable (old install path), fall back to the `totalreclaw_pair` native tool or `openclaw totalreclaw pair generate --url-pin-only`.
+If the cat output is empty after 2s, sleep 2 more seconds and try again (relay handshake can take up to 4s on a cold network). If `tr pair --json` is unavailable (old install path), fall back to the `totalreclaw_pair` native tool or `openclaw totalreclaw pair generate --url-pin-only`.
 
 Render the QR if the pair payload includes `qr_png_b64`: image-capable transports (Telegram, Slack, web chat) decode to bytes and attach as an image; terminal-only transports (OpenClaw native CLI) emit `qr_unicode` inline. The QR encodes only the URL — the PIN is a separate dual-channel confirmation, never bake it into the QR.
 
