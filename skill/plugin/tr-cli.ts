@@ -306,7 +306,7 @@ async function cmdRemember(rawArgs: string[]): Promise<void> {
     await ctx.apiClient.store(ctx.userId, [payload], ctx.authKeyHex);
     if (jsonMode) {
       // JSON-first output for agent parsing
-      // claim_count is not easily available here without a fetch; omit or set 0
+      // claim_count requires an extra relay call to tally stored claims; not worth the latency — use 0
       log(JSON.stringify({ ok: true, id: factId, claim_count: 0 }));
     } else {
       log(`ok — stored memory (id=${factId})`);
