@@ -1126,3 +1126,111 @@ export function resolveOnboardingState(
   writeOnboardingState(statePath, next);
   return next;
 }
+
+// ---------------------------------------------------------------------------
+// OpenClaw 2026.5.x config auto-patch (3.3.9-rc.2 — issues #225 + #226)
+// ---------------------------------------------------------------------------
+
+/**
+ * Outcome of `patchOpenClawConfig`.
+ *  - `'patched'`   — one or more required keys were missing; file was updated.
+ *                    Caller must log a message telling the user to restart.
+ *  - `'unchanged'` — all required keys already present; no write.
+ *  - `'skipped'`   — config file not found (not an OpenClaw host, or pre-2026
+ *                    version that uses a different config path). Caller is safe
+ *                    to ignore.
+ *  - `'error'`     — file exists but read/parse/write failed. Caller logs
+ *                    warn and continues — the plugin still loads, the user
+ *                    must apply the keys manually.
+ */
+export type OpenClawConfigPatchResult = 'patched' | 'unchanged' | 'skipped' | 'error';
+
+/**
+ * Auto-patch `~/.openclaw/openclaw.json` with the two entries required by
+ * OpenClaw 2026.5.x for `kind: memory` plugins (issues #225 + #226):
+ *
+ *   1. `plugins.slots.memory = "totalreclaw"`
+ *      Claim the memory slot so the plugin loads instead of deferring to
+ *      the built-in `memory-core` tenant.
+ *
+ *   2. `plugins.entries.totalreclaw.hooks.allowConversationAccess = true`
+ *      Grant the plugin access to `agent_end` and `before_agent_start`
+ *      hooks. Without this flag OpenClaw 2026.5.x silently blocks both
+ *      hooks for non-bundled plugins, disabling auto-extraction and
+ *      recall injection.
+ *
+ * Design constraints
+ * ------------------
+ * - SYNCHRONOUS — called during register() which must be sync.
+ * - IDEMPOTENT — reads existing values before deciding to write; no-ops
+ *   when both keys are already correct.
+ * - BEST-EFFORT — all errors are swallowed; the plugin keeps loading even
+ *   if the patch fails. The caller logs an actionable warning.
+ * - SCANNER-SAFE — pure `node:fs` / `node:path`; no outbound markers.
+ *
+ * Restart semantics
+ * -----------------
+ * OpenClaw reads `openclaw.json` at gateway startup, not dynamically.
+ * When `patchOpenClawConfig` writes new keys during the CURRENT gateway
+ * boot, the keys take effect ONLY after the gateway is restarted. The
+ * plugin must tell the user via `api.logger.warn` so they know to run
+ * `/totalreclaw-restart` or restart the gateway manually.
+ *
+ * @param configPath  Absolute path to `openclaw.json`.
+ *                    Defaults to `<home>/.openclaw/openclaw.json`.
+ */
+export function patchOpenClawConfig(
+  configPath?: string,
+): OpenClawConfigPatchResult {
+  const home = process.env.HOME ?? '/home/node';
+  const target = configPath ?? path.join(home, '.openclaw', 'openclaw.json');
+
+  // `'skipped'` when the config file is absent — this host may not be
+  // running OpenClaw, or may use a non-standard config location.
+  if (!fs.existsSync(target)) return 'skipped';
+
+  try {
+    const raw = fs.readFileSync(target, 'utf-8');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cfg = JSON.parse(raw) as Record<string, any>;
+
+    // Ensure the `plugins` key exists.
+    if (typeof cfg.plugins !== 'object' || cfg.plugins === null) {
+      cfg.plugins = {};
+    }
+
+    let mutated = false;
+
+    // --- Fix #1: plugins.slots.memory = "totalreclaw" ---
+    if (typeof cfg.plugins.slots !== 'object' || cfg.plugins.slots === null) {
+      cfg.plugins.slots = {};
+    }
+    if (cfg.plugins.slots.memory !== 'totalreclaw') {
+      cfg.plugins.slots.memory = 'totalreclaw';
+      mutated = true;
+    }
+
+    // --- Fix #2: plugins.entries.totalreclaw.hooks.allowConversationAccess = true ---
+    if (typeof cfg.plugins.entries !== 'object' || cfg.plugins.entries === null) {
+      cfg.plugins.entries = {};
+    }
+    if (typeof cfg.plugins.entries.totalreclaw !== 'object' || cfg.plugins.entries.totalreclaw === null) {
+      cfg.plugins.entries.totalreclaw = {};
+    }
+    if (typeof cfg.plugins.entries.totalreclaw.hooks !== 'object' || cfg.plugins.entries.totalreclaw.hooks === null) {
+      cfg.plugins.entries.totalreclaw.hooks = {};
+    }
+    if (cfg.plugins.entries.totalreclaw.hooks.allowConversationAccess !== true) {
+      cfg.plugins.entries.totalreclaw.hooks.allowConversationAccess = true;
+      mutated = true;
+    }
+
+    if (!mutated) return 'unchanged';
+
+    // Write back with 2-space indent to match OpenClaw's own write style.
+    fs.writeFileSync(target, JSON.stringify(cfg, null, 2) + '\n');
+    return 'patched';
+  } catch {
+    return 'error';
+  }
+}

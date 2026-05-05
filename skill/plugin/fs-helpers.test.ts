@@ -22,6 +22,7 @@ import {
   isRunningInDocker,
   deleteFileIfExists,
   readPluginVersion,
+  patchOpenClawConfig,
   type CredentialsFile,
 } from './fs-helpers.js';
 
@@ -385,6 +386,106 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
     '1.0.0',
     'readPluginVersion: accepts package.json without name (legacy fallback)',
   );
+}
+
+// ---------------------------------------------------------------------------
+// patchOpenClawConfig — 3.3.9-rc.2 (issues #225 + #226)
+// ---------------------------------------------------------------------------
+
+{
+  // 'skipped' when config file does not exist
+  const missingPath = path.join(TMP, 'nonexistent', 'openclaw.json');
+  assertEq(patchOpenClawConfig(missingPath), 'skipped', 'patchOpenClawConfig: returns skipped when file absent');
+}
+
+{
+  // 'error' when file is not valid JSON
+  const badPath = path.join(TMP, 'bad-openclaw.json');
+  fs.writeFileSync(badPath, 'not json at all');
+  assertEq(patchOpenClawConfig(badPath), 'error', 'patchOpenClawConfig: returns error for invalid JSON');
+}
+
+{
+  // 'patched' on empty config — both keys written
+  const cfgPath = path.join(TMP, 'openclaw-empty.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({}));
+  assertEq(patchOpenClawConfig(cfgPath), 'patched', 'patchOpenClawConfig: patches empty config');
+  const written = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const plugins = written.plugins as Record<string, unknown>;
+  assertEq((plugins.slots as Record<string, unknown>)?.memory, 'totalreclaw', 'patchOpenClawConfig: slots.memory set to totalreclaw');
+  const tr = (plugins.entries as Record<string, Record<string, unknown>>)?.totalreclaw;
+  assertEq((tr?.hooks as Record<string, unknown>)?.allowConversationAccess, true, 'patchOpenClawConfig: allowConversationAccess set to true');
+}
+
+{
+  // 'unchanged' when both keys already correct
+  const cfgPath = path.join(TMP, 'openclaw-complete.json');
+  const initial = {
+    plugins: {
+      slots: { memory: 'totalreclaw' },
+      entries: { totalreclaw: { hooks: { allowConversationAccess: true } } },
+    },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(patchOpenClawConfig(cfgPath), 'unchanged', 'patchOpenClawConfig: returns unchanged when both keys already correct');
+  // File must not have been rewritten (same content)
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as typeof initial;
+  assertEq(after.plugins.slots.memory, 'totalreclaw', 'patchOpenClawConfig: unchanged preserves slots.memory');
+  assertEq(after.plugins.entries.totalreclaw.hooks.allowConversationAccess, true, 'patchOpenClawConfig: unchanged preserves allowConversationAccess');
+}
+
+{
+  // 'patched' when only slot is missing (allowConversationAccess already set)
+  const cfgPath = path.join(TMP, 'openclaw-missing-slot.json');
+  const initial = {
+    plugins: {
+      entries: { totalreclaw: { hooks: { allowConversationAccess: true } } },
+    },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(patchOpenClawConfig(cfgPath), 'patched', 'patchOpenClawConfig: patches when only slot missing');
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const afterPlugins = after.plugins as Record<string, unknown>;
+  assertEq((afterPlugins.slots as Record<string, unknown>)?.memory, 'totalreclaw', 'patchOpenClawConfig: slot written when only slot missing');
+}
+
+{
+  // 'patched' when only allowConversationAccess is missing (slot already set)
+  const cfgPath = path.join(TMP, 'openclaw-missing-hooks.json');
+  const initial = {
+    plugins: {
+      slots: { memory: 'totalreclaw' },
+    },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(patchOpenClawConfig(cfgPath), 'patched', 'patchOpenClawConfig: patches when only allowConversationAccess missing');
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const afterPlugins = after.plugins as Record<string, unknown>;
+  const tr = (afterPlugins.entries as Record<string, Record<string, unknown>>)?.totalreclaw;
+  assertEq((tr?.hooks as Record<string, unknown>)?.allowConversationAccess, true, 'patchOpenClawConfig: hooks written when only hooks missing');
+}
+
+{
+  // preserves existing config keys when patching
+  const cfgPath = path.join(TMP, 'openclaw-with-other-keys.json');
+  const initial = {
+    models: { providers: { zai: { apiKey: 'secret' } } },
+    gateway: { mode: 'local' },
+    plugins: {
+      entries: {
+        'memory-core': { enabled: false },
+      },
+    },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(patchOpenClawConfig(cfgPath), 'patched', 'patchOpenClawConfig: patches config with existing keys');
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as typeof initial & Record<string, unknown>;
+  // Other keys must be preserved
+  const models = after.models as Record<string, unknown>;
+  assertEq((models?.providers as Record<string, unknown>)?.zai !== undefined, true, 'patchOpenClawConfig: preserves models.providers.zai');
+  assertEq((after.gateway as Record<string, unknown>)?.mode, 'local', 'patchOpenClawConfig: preserves gateway.mode');
+  const entries = (after.plugins as Record<string, unknown>).entries as Record<string, unknown>;
+  assertEq((entries['memory-core'] as Record<string, unknown>)?.enabled, false, 'patchOpenClawConfig: preserves memory-core entry');
 }
 
 // ---------------------------------------------------------------------------

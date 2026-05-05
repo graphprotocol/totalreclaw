@@ -165,6 +165,7 @@ import {
   cleanupInstallStagingDirs,
   detectPartialInstall,
   clearPartialInstallMarker,
+  patchOpenClawConfig,
   writePluginManifest,
   writePluginError,
   readPluginLoadedManifest,
@@ -3107,6 +3108,48 @@ const plugin = {
         }
       } catch {
         // Best-effort. Helper logs internally and never throws.
+      }
+
+      // 3.3.9-rc.2 (issues #225 + #226): auto-patch openclaw.json for
+      // OpenClaw 2026.5.x. Two required config keys were not auto-applied
+      // by `openclaw plugins install` in 2026.5.x:
+      //
+      //   1. plugins.slots.memory = "totalreclaw"
+      //      OpenClaw 2026.5.x introduced memory-slot exclusivity — a
+      //      memory-kind plugin MUST explicitly claim the slot or it is
+      //      silently disabled (no error shown; `openclaw plugins inspect`
+      //      shows "memory slot set to memory-core"). #225.
+      //
+      //   2. plugins.entries.totalreclaw.hooks.allowConversationAccess = true
+      //      Non-bundled plugins in 2026.5.x require this flag to receive
+      //      agent_end and before_agent_start hooks. Without it, auto-
+      //      extraction and recall injection are silently disabled. #226.
+      //
+      // The patch is idempotent — if both keys are already correct the
+      // file is not touched. When the file IS mutated a restart is
+      // required for the new keys to take effect (OpenClaw reads
+      // openclaw.json at startup, not dynamically). We emit a warn so
+      // the user and ops scripts know to trigger a restart.
+      try {
+        const patchResult = patchOpenClawConfig();
+        if (patchResult === 'patched') {
+          api.logger.warn(
+            'TotalReclaw: updated openclaw.json with required 2026.5.x keys ' +
+              '(plugins.slots.memory + hooks.allowConversationAccess). ' +
+              'Gateway restart required for the changes to take effect. ' +
+              'Run `/totalreclaw-restart` or restart the gateway manually.',
+          );
+        } else if (patchResult === 'error') {
+          api.logger.warn(
+            'TotalReclaw: failed to auto-patch openclaw.json for OpenClaw 2026.5.x ' +
+              'compatibility. If memory hooks are silently disabled, add these keys ' +
+              'manually: plugins.slots.memory="totalreclaw" and ' +
+              'plugins.entries.totalreclaw.hooks.allowConversationAccess=true.',
+          );
+        }
+        // 'unchanged' and 'skipped' are silent — no log needed.
+      } catch {
+        // Best-effort — never let config-patch failure block plugin load.
       }
     } catch {
       rcMode = false;

@@ -4,6 +4,23 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.9-rc.2] — 2026-05-02
+
+Patch release fixing the two OpenClaw 2026.5.x compatibility blockers discovered during 3.3.9-rc.1 auto-QA ([umbrella #224](https://github.com/p-diogo/totalreclaw-internal/issues/224)).
+
+### Fixed
+
+- **Finding #1 — memory slot not auto-assigned on install ([#225](https://github.com/p-diogo/totalreclaw-internal/issues/225)):** OpenClaw 2026.5.x introduced memory-slot exclusivity — a `kind: memory` plugin must explicitly claim `plugins.slots.memory` in `openclaw.json` or it is silently disabled ("memory slot set to memory-core"). Previously required manual config edit with no user-visible error. The plugin's `register()` now calls `patchOpenClawConfig()` at startup, which idempotently writes `plugins.slots.memory = "totalreclaw"` if absent. If the file was patched, a warn is emitted asking for a gateway restart.
+
+- **Finding #2 — conversation hooks blocked by missing `allowConversationAccess` ([#226](https://github.com/p-diogo/totalreclaw-internal/issues/226)):** OpenClaw 2026.5.x requires `plugins.entries.totalreclaw.hooks.allowConversationAccess = true` for non-bundled plugins to receive `agent_end` and `before_agent_start` hooks. Without it, auto-extraction and recall injection are silently disabled — the hooks simply never fire. The same `patchOpenClawConfig()` call now idempotently writes this key alongside the slot claim.
+
+### Implementation notes
+
+- `patchOpenClawConfig()` added to `fs-helpers.ts` — synchronous, best-effort, scanner-safe (pure `node:fs` / `node:path`, no network markers).
+- Called early in `register()` (after install-staging cleanup, before LLM init). Idempotent — if both keys are already correct the file is not touched.
+- Results: `'patched'` (file mutated — warn + restart instruction), `'unchanged'` (no-op), `'skipped'` (no `openclaw.json` found — non-OpenClaw host), `'error'` (parse/write failure — warn with manual instructions).
+- **Restart required when patched:** OpenClaw reads `openclaw.json` at startup. When this runs on the FIRST boot after install, it patches the file and emits the restart warning. After the user restarts, the second boot picks up the keys and all hooks fire normally.
+
 ## [3.3.9-rc.1] — 2026-05-02
 
 Pedro's QA on 3.3.8-rc.1 (Telegram → canonical OpenClaw 2026.5.2) revealed five issues that all stem from the same architectural problem — TotalReclaw's tools registered via `api.registerTool()` are blocked by OpenClaw 2026.5.2's tool-policy strip race (issue #223, filed upstream). Each release we ship adds a fix for one gate, hits another. 3.3.9-rc.1 pivots to hybrid-primary: the `tr` CLI is now the PRIMARY path. Native tools are kept for back-compat only.
