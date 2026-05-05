@@ -229,7 +229,7 @@ assert(
 );
 
 // ---------------------------------------------------------------------------
-// 5. CHANGELOG entries exist for [3.3.7-rc.2] and [3.3.7-rc.3]
+// 5. CHANGELOG entries exist for [3.3.7-rc.2], [3.3.7-rc.3], and [3.3.9-rc.1]
 // ---------------------------------------------------------------------------
 
 const changelogPath = path.join(__dirname, 'CHANGELOG.md');
@@ -255,6 +255,16 @@ assert(
   'CHANGELOG: rc.3 entry references the contracts.tools fix',
 );
 
+assert(
+  /\[3\.3\.9-rc\.1\]/.test(changelogSrc),
+  'CHANGELOG: [3.3.9-rc.1] entry present',
+);
+
+assert(
+  /hybrid-primary/.test(changelogSrc),
+  'CHANGELOG: 3.3.9-rc.1 entry references hybrid-primary pivot',
+);
+
 // ---------------------------------------------------------------------------
 // 6. package.json + skill.json version bumps (must be >= rc.3)
 // ---------------------------------------------------------------------------
@@ -262,18 +272,18 @@ assert(
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
 const skillJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'skill.json'), 'utf8'));
 
-// Accept 3.3.7-rc.3+ OR 3.3.8-rc.N+ (versions bump with each patch wave;
-// 3.3.8 series ships the kind:memory cold-start fix + hybrid CLI).
-const validVersionPattern = /^3\.3\.(7-rc\.[3-9]\d*|8-rc\.\d+|[89]\d*\.\d+|[1-9]\d{2,}.*)$/;
+// Accept 3.3.7-rc.3+ OR 3.3.8-rc.N+ OR 3.3.9-rc.N+ (versions bump with each patch wave;
+// 3.3.9 series ships the hybrid-primary pivot + hallucination guards + CLI JSON-first output).
+const validVersionPattern = /^3\.3\.(7-rc\.[3-9]\d*|8-rc\.\d+|9-rc\.\d+|[89]\d*\.\d+|[1-9]\d{2,}.*)$/;
 
 assert(
   validVersionPattern.test(packageJson.version),
-  `package.json: version is 3.3.7-rc.3+ or 3.3.8-rc.1+ (got ${packageJson.version})`,
+  `package.json: version is 3.3.7-rc.3+ or 3.3.8-rc.1+ or 3.3.9-rc.1+ (got ${packageJson.version})`,
 );
 
 assert(
   validVersionPattern.test(skillJson.version),
-  `skill.json: version is 3.3.7-rc.3+ or 3.3.8-rc.1+ (got ${skillJson.version})`,
+  `skill.json: version is 3.3.7-rc.3+ or 3.3.8-rc.1+ or 3.3.9-rc.1+ (got ${skillJson.version})`,
 );
 
 // ---------------------------------------------------------------------------

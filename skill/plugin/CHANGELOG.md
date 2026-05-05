@@ -4,6 +4,54 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.9-rc.1] — 2026-05-02
+
+Pedro's QA on 3.3.8-rc.1 (Telegram → canonical OpenClaw 2026.5.2) revealed five issues that all stem from the same architectural problem — TotalReclaw's tools registered via `api.registerTool()` are blocked by OpenClaw 2026.5.2's tool-policy strip race (issue #223, filed upstream). Each release we ship adds a fix for one gate, hits another. 3.3.9-rc.1 pivots to hybrid-primary: the `tr` CLI is now the PRIMARY path. Native tools are kept for back-compat only.
+
+### Five issues from Pedro's 3.3.8-rc.1 QA — root causes and fixes:
+
+1. **Agent hallucinated "without an account, memories are local only"** — FALSE. TR is relay-based, no local storage. Fix: SKILL.md now has a "CRITICAL: Relay-based architecture" section at the top with an explicit forbidden-vocabulary denylist (`local`, `local-only`, `stored locally`, `on disk`, `without an account`, `local memory`, `local storage`). Both `skill/plugin/SKILL.md` and `skill/SKILL.md` updated.
+
+2. **Agent did not autonomously emit account-setup URL+PIN after install** — asked user instead. Fix: SKILL.md now makes step 4 (running `tr pair --json`) UNCONDITIONAL — no "Want me to set up an account?" gate. The URL+PIN is the consent moment.
+
+3. **Pair tool reply did NOT include the URL** ("open in your browser, enter PIN" with no link). Fix: `tr pair --json` output documented in SKILL.md with explicit JSON shape `{"url":"...","pin":"...","expires_at":"..."}`. Agent is instructed to parse and emit URL verbatim.
+
+4. **`totalreclaw_pair` not bound after install, `/totalreclaw-restart` did not restore binding** — root cause is issue #223 (tool-policy strip race). Fix: SKILL.md drops the "wait for tool-bind / /totalreclaw-restart / /new" cycle from the user-facing path. `tr status --json` replaces the tool-binding check. Agent no longer depends on `totalreclaw_*` binding.
+
+5. **Pair-page POST `/respond` returned 502 then 400** — separate relay bug, out of scope for this RC.
+
+### Changed — SKILL.md (both `skill/plugin/SKILL.md` and `skill/SKILL.md`):
+
+- Added "CRITICAL: Relay-based architecture" section at top with positive assertion and forbidden-vocabulary denylist.
+- Rewritten setup flow: Step 1 install → Step 2 verify CLI (`tr status --json`) → Step 3 credentials check → Step 4 emit URL+PIN via `tr pair --json` (unconditional) → Step 5 confirm.
+- Dropped the entire "wait for tool-bind, restart with /totalreclaw-restart, fall back to /new" cycle.
+- Added "tr CLI reference" section documenting `--json` flag shapes for all commands.
+- Autonomous account setup: removed consent gate, agent runs `tr pair --json` immediately.
+- User-visible line set updated: line 2 now confirms "hybrid mode"; line 3 emitted immediately from `tr pair --json` output.
+
+### Changed — `tr-cli.ts` → CLI JSON-first output:
+
+- `tr status --json` → `{"version":"3.3.9-rc.1","onboarded":bool,"next_step":"pair|none","tool_count":N,"hybrid_mode":bool}`
+- `tr pair --json` → `{"url":"...","pin":"...","expires_at":"..."}` (delegated to pair-cli-relay.ts, already JSON-capable)
+- `tr remember --json '<fact>'` → `{"ok":true,"id":"...","claim_count":0}`
+- `tr recall --json '<query>' --limit 5` → `{"results":[{"text":"...","score":0.8}]}`
+- Plain text mode kept for direct user CLI use; `--json` flag required for agent shell calls.
+- Updated plugin version reference to `3.3.9-rc.1` in pair delegation.
+
+### New tests:
+
+- `skill-md-hybrid-primary.test.ts` — asserts SKILL.md contains hybrid-primary instructions, forbidden-vocabulary denylist, relay-based architecture assertion, and autonomous pair call.
+- `tr-cli-json-output.test.ts` — asserts each `tr <cmd> --json` code path returns parseable JSON with expected keys (via static source analysis).
+
+### Not changed:
+
+- Hooks (`before_agent_start`, `agent_end`, `message_received`, `before_reset`) — not affected by issue #223, unchanged.
+- HTTP routes (4 QR-pairing routes) — unchanged.
+- `/totalreclaw-restart` slash command — kept for environments where users want a manual reload.
+- `api.registerTool()` calls — kept for back-compat (older OpenClaw versions where tools work).
+- Relay code — 502/400 pair page bugs are out of scope.
+- Hermes Python code — separate runtime.
+
 ## [3.3.7-rc.3] — 2026-05-04
 
 Root cause of tool-binding gap on OpenClaw 2026.5.2: the plugin manifest (`openclaw.plugin.json`) was missing the `contracts.tools` declaration that OpenClaw 2026.5.2 now requires before any non-bundled plugin may register agent tools. Without it, every `api.registerTool()` call is silently rejected — `openclaw plugins doctor` shows 17× "plugin must declare contracts.tools before registering agent tools". The gateway loads the plugin module (ESM import succeeds, `plugins.allow` check passes) but no tools bind to any session, so `totalreclaw_pair` / `totalreclaw_remember` / etc. are invisible to the agent and auto-QA step 1 fails.

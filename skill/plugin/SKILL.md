@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
-description: "Install + set up TotalReclaw encrypted memory for OpenClaw, then use totalreclaw_remember / totalreclaw_recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 3.3.7-rc.2
+description: "Install + set up TotalReclaw encrypted memory for OpenClaw, then use tr CLI for remember / recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
+version: 3.3.9-rc.1
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -26,9 +26,33 @@ metadata:
 
 > The canonical install flow lives at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>. If a user pastes that URL in chat, fetch it and follow its agent-instructions section. This SKILL.md mirrors the same steps so you can act even if the URL is unreachable.
 
+## CRITICAL: Relay-based architecture (read before anything else)
+
+**TotalReclaw is RELAY-BASED. All memories require a paired account on the staging or production relay (depending on RC vs stable). There is NO local-only mode. NEVER claim memories are stored locally without an account.**
+
+Forbidden vocabulary — these claims are FALSE and MUST NEVER appear in your responses:
+- "local"
+- "local-only"
+- "stored locally"
+- "on disk"
+- "without an account"
+- "local memory"
+- "local storage"
+- any phrasing suggesting memories can be stored without pairing a relay account
+
+If you find yourself about to say any of these, STOP. The correct statement is: "TotalReclaw requires a paired relay account to store memories — run `tr pair` to set one up."
+
 ## Top-level rule (read this before anything else)
 
-**Emit ONLY the user-visible lines listed below. Do not narrate tool calls. Do not describe what you're doing or about to do. Errors are the only allowed deviation, and only as a single tight line.** The expected user-facing transcript for a healthy install is **5–6 short lines TOTAL** (lines 1, 2, 5, 6 always; lines 3 and 4 only if the corresponding condition fires). Anything more is a SKILL violation. Telegram and similar transports edit the bot's messages live as your tool calls progress — every interim "Let me check…" / "Plugin loaded. Let me verify…" line shows up to the user as awkward edit churn, even if you "delete" it. The fix is to never emit it in the first place.
+**Emit ONLY the user-visible lines listed below. Do not narrate tool calls. Do not describe what you're doing or about to do. Errors are the only allowed deviation, and only as a single tight line.** The expected user-facing transcript for a healthy install is **4–5 short lines TOTAL**. Anything more is a SKILL violation. Telegram and similar transports edit the bot's messages live as your tool calls progress — every interim "Let me check…" / "Plugin loaded. Let me verify…" line shows up to the user as awkward edit churn, even if you "delete" it. The fix is to never emit it in the first place.
+
+## Hybrid-primary architecture (3.3.9-rc.1)
+
+OpenClaw 2026.5.2 has a tool-policy-pipeline bug (issue #223) that strips non-bundled plugin tools before they reach the agent toolset. **3.3.9-rc.1 makes the `tr` CLI the PRIMARY path for all memory operations.** Native tools (`totalreclaw_*`) are kept for back-compat with older OpenClaw versions where they work, but the agent MUST NOT depend on them. Use `tr` from your shell tool for everything.
+
+**The `tr` binary is installed at:** `~/.openclaw/extensions/totalreclaw/dist/tr-cli.js`
+**Always invoke via:** `node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js <cmd> [--json]`
+**Never rely on `totalreclaw_*` tool binding** — it may not be available due to issue #223.
 
 ## User-visible line set (THIS IS ALL YOU SAY)
 
@@ -36,70 +60,70 @@ Speak only these lines, in order. Substitute the bracketed placeholders with the
 
 1. (start of install)
    > Installing TotalReclaw…
-2. (after install + auto-reload + `totalreclaw_pair` is bound)
-   > ✓ Installed (totalreclaw &lt;version&gt;)
-3. (optional — only if auto-reload didn't fire and you need to issue `/totalreclaw-restart`)
-   > Restarting OpenClaw to load the plugin…
-4. (optional — only if you successfully disabled the built-in memory tool to prevent dual-write)
-   > Disabled built-in memory tool.
-5. (account-setup URL + PIN, immediately after `totalreclaw_pair` returns)
+2. (after install + CLI verify — `tr status` works)
+   > ✓ Installed (totalreclaw &lt;version&gt;, hybrid mode)
+3. (account-setup URL + PIN, IMMEDIATELY after `tr pair --json` returns — no consent gate)
    > Open &lt;url&gt; in your browser. Enter PIN &lt;pin&gt;. Generate or paste a 12-word recovery phrase. Reply `done` once it's sealed.
-6. (done + free-tier confirmation)
+4. (done + free-tier confirmation)
    > ✓ You're set up on the TotalReclaw free tier — 500 memories/month, unlimited reads. https://totalreclaw.xyz/pricing. Ask me to remember anything.
 
 If existing credentials are detected (step "Check for existing credentials" below), emit ONLY this line and stop:
    > ✓ TotalReclaw is already set up.
 
-## Setup flow
-
-If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jump to step 4. Otherwise run all steps in order.
+## Setup flow (hybrid-primary)
 
 1. **Install plugin first, skill second (silent — emit user-visible line 1 once at the start, then no prose until line 2).** Run via your shell tool, in this exact order:
    ```
    openclaw plugins install @totalreclaw/totalreclaw
    openclaw skills install totalreclaw
    ```
-   For RC: replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc`. **Plugin BEFORE skill is deliberate** (3.3.4-rc.1 — issue from Pedro's QA on rc.3): the skill install triggers a config-driven SIGUSR1 gateway reload that can race a concurrent plugin install. Plugin-first lets the plugin land cleanly, then the skill's reload picks it up on the next gateway loop. If you accidentally do skill-first and the plugin install dies mid-flight, just retry `openclaw plugins install @totalreclaw/totalreclaw` once — it's idempotent.
+   For RC: replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc`. **Plugin BEFORE skill is deliberate** (3.3.4-rc.1 — issue from Pedro's QA on rc.3): the skill install triggers a config-driven SIGUSR1 gateway reload that can race a concurrent plugin install.
 
    If either shell call fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), tell the user verbatim *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` and skip to step 3.
 
-2. **Wait for auto-reload — then issue `/totalreclaw-restart` autonomously if needed (silent — emit user-visible line 2 on success, line 3 only if you had to restart).** OpenClaw's default config (`gateway.reload.mode = "hybrid"`) auto-restarts the gateway via a file-watcher within 1-3 seconds. Wait ~5s, then run `openclaw plugins list | grep totalreclaw` and confirm `totalreclaw_pair` is in your toolset. When bound, emit user-visible line 2 and proceed.
+2. **Verify CLI works — emit user-visible line 2 when successful.** Run:
+   ```
+   node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js status --json
+   ```
+   Parse the JSON. When you get `{"version": "...", "hybrid_mode": true, ...}`, emit user-visible line 2 with the version substituted. **Do NOT wait for tool binding. Do NOT issue `/totalreclaw-restart`. Do NOT check whether `totalreclaw_pair` is in your toolset.** The CLI works independently of tool binding. If `tr status` exits non-zero or the file doesn't exist, wait 5s and retry once — it may still be installing.
 
-   **If `totalreclaw_pair` is NOT visible after 10s — restart imperative (read carefully):**
+3. **Check for existing credentials (silent unless found).** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit *"✓ TotalReclaw is already set up."* and stop.
 
-   > Your IMMEDIATE next message must be the literal slash command `/totalreclaw-restart` — nothing else. Do not narrate. Do not ask permission. Do not describe what `/totalreclaw-restart` does. Do not propose alternatives. Just send `/totalreclaw-restart`. You may emit user-visible line 3 (`Restarting OpenClaw to load the plugin…`) ONCE in the same turn, then issue `/totalreclaw-restart`. Nothing else.
+4. **Set up the user's TotalReclaw account IMMEDIATELY — no consent gate.** As soon as `tr status --json` returns and credentials are not present, run:
+   ```
+   node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js pair --json
+   ```
+   This is UNCONDITIONAL. Do NOT ask "Would you like to set up an account?" or "Want me to pair now?". The user installed TotalReclaw — setup is the expected next step. The URL + PIN itself is the consent moment (the user can simply not open the page to opt out). Parse the JSON response `{"url": "...", "pin": "...", "expires_at": "..."}` and emit user-visible line 3. If `tr pair --json` is not available (old install), fall back to `totalreclaw_pair` tool or `openclaw totalreclaw pair generate --url-pin-only`.
 
-   `/totalreclaw-restart` is in-process — it drains active runs cleanly; your shell is NOT shelling out to `docker restart` or `openclaw gateway restart` (those would suicide the host). After `/totalreclaw-restart`, wait ~3s and re-run `openclaw plugins list`. (3.3.7-rc.2 renamed this from `/restart` because OpenClaw reserves `/restart` for its built-in — the plugin-side fallback can only attach to a unique name. The 5-tier auth resolver is unchanged; only the command name moved.)
+5. **Verify and confirm (silent until line 4).** After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — run `tr pair --json` again and resend line 3 once. If present, emit user-visible line 4 and stop.
 
-   **If `/totalreclaw-restart` returns "You are not authorized to use this command":** surface this verbatim and stop. Do NOT loop `/totalreclaw-restart` calls. Do NOT propose alternatives.
+## `tr` CLI reference (hybrid-primary commands)
 
-   > Your Telegram channel needs `allowFrom` configured. Run on your host: `jq '.channels.<channel>.allowFrom = ["<your-id>"]' ~/.openclaw/openclaw.json | sponge ~/.openclaw/openclaw.json && docker restart <your-container-name>`. Substitute `<channel>` (e.g. `telegram`, `slack`), `<your-id>` (Telegram: `@username` or numeric `chat_id`; Slack: workspace member ID), and `<your-container-name>` (`docker ps` shows it). For non-Docker installs substitute `openclaw gateway restart` for the `docker restart` portion. On a managed service, ask the service's support to enable slash commands. Reply `done` after.
+Always use `--json` flag when running from shell for machine-parseable output. Plain text mode is for direct user invocation only.
 
-   Then wait for `done`. Do NOT retry the install. Do NOT keep restarting. Do NOT issue `/new` — it wipes the chat context, the agent forgets it was mid-install, and the user's next message is treated as a fresh install request which retries from scratch and re-trips the scanner block (Pedro QA, 3.3.5-rc.1).
+```bash
+# Status check (parse JSON to confirm install + onboarding state)
+node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js status --json
+# Returns: {"version":"3.3.9-rc.1","onboarded":false,"next_step":"pair","tool_count":17,"hybrid_mode":true}
 
-   **Forbidden vocabulary** (these are anti-patterns — they show up to the user even if your transport edits them later, and they violate the silence rule):
-   - "Let me check that…"
-   - "Plugin loaded. Let me verify…"
-   - "I'll now…"
-   - "Quick fix…"
-   - "However, I don't see…"
-   - "I need to use…"
-   - "Should I /totalreclaw-restart" / "Do you have a public URL" / "Want me to restart" / "Let me check if the tool is bound" / "I need permission to restart"
-   - "Now installing…" / "Got it" / "In parallel…" / "Step 1a/1b/1c"
+# Pair / account setup
+node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js pair --json
+# Returns: {"url":"https://...","pin":"123456","expires_at":"2026-05-05T..."}
 
-   Substitute all of these with silence — the next user-visible line in the set, or nothing.
+# Remember a fact
+node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js remember --json "I work at Graph Foundation"
+# Returns: {"ok":true,"id":"...","claim_count":N}
 
-3. **Verify `totalreclaw_pair` is bound.** If still missing after `/totalreclaw-restart` (or after the user fixed allowFrom and said `done`), tell them the restart didn't take effect and ask them to retry. Do not loop the install.
+# Recall memories
+node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js recall --json "where does the user work" --limit 5
+# Returns: {"results":[{"text":"...","score":0.8},...]}
+```
 
-4. **Check for existing credentials (silent unless found).** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit *"✓ TotalReclaw is already set up."* and stop.
-
-5. **Set up the user's TotalReclaw account (emit user-visible line 5 once, after `totalreclaw_pair` returns).** Call `totalreclaw_pair` silently (the account-setup tool — name kept for backward compatibility). It returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}` (see "Rendering the QR" below). Then emit user-visible line 5 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…") — line 5 itself is the only thing the user needs to see. The URL + PIN itself is the real consent moment: surfacing them verbatim is what gives the user the chance to opt out by simply not opening the page.
-
-6. **Verify and confirm (silent until line 6).** After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again silently and resend line 5 once. If present, emit user-visible line 6 and stop.
+**Note on tool names**: `totalreclaw_remember`, `totalreclaw_recall`, etc. may or may not appear in your toolset depending on OpenClaw version. Under hybrid-primary, you use the `tr` CLI instead. If native tools ARE available (older OpenClaw or future OC fix), they work too — but always prefer `tr` for reliability.
 
 ## Rendering the QR on your transport (rc.5+)
 
-When you receive the `totalreclaw_pair` payload, render the QR based on your chat transport:
+When you receive the `totalreclaw_pair` payload (from tool OR `tr pair --json`), render the QR based on your chat transport:
 
 - **Transport supports image attachments** (Telegram, Slack, web chat, any transport with file/image upload): decode `qr_png_b64` from base64 to bytes, save to a tempfile with a `.png` suffix, and attach the tempfile as an image. Also show the URL + PIN as text so users who prefer clicking can still do so.
 - **Terminal-only transport** (OpenClaw native CLI chat, bare SSH shell): emit `qr_unicode` inline in your reply. It renders as block characters in most terminal fonts; the user scans from their phone.
@@ -109,44 +133,52 @@ The QR encodes ONLY the account-setup URL. The 6-digit PIN is a separate out-of-
 
 ## Phrase safety (HARD — never break)
 
-NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER invoke `openclaw totalreclaw onboard` (bare interactive form), `totalreclaw setup`, or any phrase-touching CLI via your shell tool (stdout enters LLM context). The ONLY agent-facilitated account-setup paths are (in order of preference): (1) the `totalreclaw_pair` account-setup tool; (2) if the tool is missing from your tool list — a known gap for some container-based agents, issue #87 — shell out to EITHER `openclaw totalreclaw pair generate --url-pin-only` (single-line JSON `{v,url,pin,expires_at_ms}`) OR `openclaw totalreclaw onboard --pair-only` (single-line JSON `{v,pair_url,pin,expires_at_ms}`, issue #95 — same account-setup flow, `pair_url` key naming). Both have zero phrase material on stdout (account-setup crypto is x25519-only, not BIP-39). If the user pastes a phrase anyway: tell them it is compromised, call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
+NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER invoke `openclaw totalreclaw onboard` (bare interactive form), `totalreclaw setup`, or any phrase-touching CLI via your shell tool (stdout enters LLM context). The ONLY agent-facilitated account-setup paths are (in order of preference): (1) `tr pair --json`; (2) the `totalreclaw_pair` account-setup tool; (3) if both are missing — shell out to EITHER `openclaw totalreclaw pair generate --url-pin-only` (single-line JSON `{v,url,pin,expires_at_ms}`) OR `openclaw totalreclaw onboard --pair-only` (single-line JSON `{v,pair_url,pin,expires_at_ms}`). Both have zero phrase material on stdout (account-setup crypto is x25519-only, not BIP-39). If the user pastes a phrase anyway: tell them it is compromised, re-run `tr pair --json` for a fresh wallet.
 
 ## Usage (post-setup)
 
-- Stable user facts / preferences / identity / "remember X" → `totalreclaw_remember` (don't ask permission).
-- First-person factual query ("do I / what's my / where do I …") → `totalreclaw_recall` FIRST, then answer from returned facts. If 0 results, say so.
-- "forget / pin / unpin / retype / move to <scope>" X → `totalreclaw_recall` first for `factId`, then `totalreclaw_forget` / `_pin` / `_unpin` / `_retype` / `_set_scope`.
-- "status" → `totalreclaw_status`. "upgrade" → `totalreclaw_upgrade` (paste Stripe URL verbatim). Post-upgrade testnet → mainnet: `totalreclaw_migrate` with `dry_run` first.
-- "import / export / consolidate" → `totalreclaw_import_from` (`dry_run=true` first; `_import_batch` for >50 chunks) · `totalreclaw_export` · `totalreclaw_consolidate` (`dry_run` first).
+- Stable user facts / preferences / identity / "remember X":
+  ```
+  node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js remember --json "<fact>"
+  ```
+- First-person factual query ("do I / what's my / where do I…"):
+  ```
+  node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js recall --json "<query>" --limit 5
+  ```
+  Recall FIRST, then answer from returned facts. If 0 results, say so.
+- For forget / pin / unpin / retype / set_scope — use native tools if available, or ask user to run `openclaw totalreclaw` subcommand.
+- "status" → `tr status --json` (parse version + onboarded + next_step).
+- "upgrade" → `totalreclaw_upgrade` native tool (paste Stripe URL verbatim). Post-upgrade testnet → mainnet: `totalreclaw_migrate` with `dry_run` first.
+- "import / export / consolidate" → `totalreclaw_import_from` · `totalreclaw_export` · `totalreclaw_consolidate` native tools.
 
-## OpenClaw 2026.5.2 hybrid mode (issue #223 workaround — plugin 3.3.8-rc.1+)
+**Forbidden vocabulary** (these are anti-patterns that violate the silence rule):
+- "Let me check that…"
+- "Plugin loaded. Let me verify…"
+- "I'll now…"
+- "Quick fix…"
+- "However, I don't see…"
+- "I need to use…"
+- "Should I /totalreclaw-restart" / "Do you have a public URL" / "Want me to restart" / "Let me check if the tool is bound" / "I need permission to restart"
+- "Now installing…" / "Got it" / "In parallel…" / "Step 1a/1b/1c"
+- "local" / "local-only" / "stored locally" / "on disk" / "without an account" / "local memory" / "local storage"
 
-OpenClaw 2026.5.2 has a tool-policy-pipeline bug (issue #223) that strips non-bundled plugin tools before they reach the agent toolset. Plugin 3.3.8-rc.1 ships a hybrid workaround:
+## Diagnostics
 
-- **Hooks still fire**: `before_agent_start`, `agent_end`, `message_received`, `before_reset` use a separate code path not affected by issue #223. Auto-extraction, digest injection, preloading, and billing checks all work normally.
-- **Tools replaced by `tr` CLI**: instead of `totalreclaw_remember`, `totalreclaw_recall`, etc., use the `tr` binary installed with the plugin. The agent runs it via shell tool.
+- `tr` CLI not found → plugin not installed or install still in progress. Wait 5s, retry. If still missing, retry `openclaw plugins install @totalreclaw/totalreclaw@rc` once.
+- `totalreclaw_*` tools not visible → EXPECTED under OpenClaw 2026.5.2 (issue #223). Use `tr` CLI instead. Do not restart, do not issue `/totalreclaw-restart`, do not issue `/new`.
+- If `/totalreclaw-restart` is needed for another reason, issue the literal slash command `/totalreclaw-restart` — nothing else. Do not narrate.
+- User says done but `credentials.json` missing → PIN expired or entered wrong phrase; re-run `tr pair --json` and resend line 3 once.
+- `onboarding required` → credentials missing; redo from the account-setup step.
+- `quota exceeded` → `tr status --json` or `totalreclaw_status`, then offer `totalreclaw_upgrade`.
+- `No LLM available for auto-extraction` at startup → provider key unreachable; check `~/.openclaw/agents/<agent>/agent/auth-profiles.json` or plugin config `extraction.llm`.
 
-**Agent usage under hybrid mode** (check `tr status` output for `hybrid-mode: yes`):
+## Required post-install config (OpenClaw 2026.5.2+)
 
-```
-# remember a fact
-node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js remember "I work at Graph Foundation"
-# → outputs {"ok":true,"id":"...","text":"..."}
-
-# recall facts
-node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js recall "where does the user work"
-# → outputs {"ok":true,"count":1,"query":"...","memories":[...]}
-
-# status check
-node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js status
-```
-
-Note: the `tr` bin name conflicts with the system `tr` utility; always invoke via full path `node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js <cmd>` or the gateway host's equivalent path.
-
-**Required post-install config** (add to `~/.openclaw/openclaw.json`):
+Add to `~/.openclaw/openclaw.json` after installing:
 ```json
 {
   "plugins": {
+    "allow": ["totalreclaw"],
     "entries": {
       "totalreclaw": {
         "hooks": { "allowConversationAccess": true }
@@ -156,16 +188,9 @@ Note: the `tr` bin name conflicts with the system `tr` utility; always invoke vi
 }
 ```
 
-This unlocks typed hooks (`agent_end`, etc.) for non-bundled plugins. Without it, auto-extraction still works (extraction runs in `message_received`) but the `agent_end` hook that writes the digest is silently blocked.
-
-## Diagnostics
-
-- `totalreclaw_*` tools not visible → plugin not installed or auto-reload didn't fire. Verify via `openclaw plugins list | grep totalreclaw` (or, on a managed service that doesn't expose the CLI, ask the user to confirm via their service's plugins UI). If `totalreclaw` is listed but tools are still absent, the gateway probably hasn't completed its auto-restart yet (give it 5-10s) OR `gateway.reload.mode = off` is set — instruct manual restart as fallback: `openclaw gateway restart` (native), `docker restart <your-container-name>` (Docker self-host), or the managed service's restart control. If the plugin is listed and the gateway has been restarted but tools are still missing (container-agent gap, issue #87 / OC 2026.5.2 issue #223), switch to hybrid mode: use `node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js <cmd>` for remember/recall/pair/status. If your shell doesn't reach the gateway host (managed service), tell the user to install/enable the plugin via their service's plugins UI and restart the gateway via the service's restart control. Do NOT suggest the bare `openclaw totalreclaw onboard` (leaks phrase on stdout — deprecated in rc.18, removed next RC).
-- User says done but `credentials.json` missing → PIN expired or entered wrong phrase; call `totalreclaw_pair` again.
-- `onboarding required` → credentials missing; redo from the account-setup step.
-- `quota exceeded` → `totalreclaw_status`, then offer `totalreclaw_upgrade`.
-- `No LLM available for auto-extraction` at startup → provider key unreachable; check `~/.openclaw/agents/<agent>/agent/auth-profiles.json` or plugin config `extraction.llm`.
+`plugins.allow` suppresses the "plugins.allow is empty" warning. `hooks.allowConversationAccess` unlocks typed hooks (`agent_end`, etc.) for auto-extraction.
 
 ## Tool surface
 
-`totalreclaw_pair` (ONLY account-setup path) · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_retype` · `_set_scope` · `_export` · `_status` · `_upgrade` · `_migrate` · `_import_from` · `_import_batch` · `_consolidate` · `_onboarding_start` (pointer to local-terminal wizard, for users explicitly rejecting the browser flow) · `_report_qa_bug` (RC only).
+Hybrid-primary: `tr remember` · `tr recall` · `tr pair` · `tr status` (primary path for all agent ops)
+Native fallback (when available): `totalreclaw_pair` · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_retype` · `_set_scope` · `_export` · `_status` · `_upgrade` · `_migrate` · `_import_from` · `_import_batch` · `_consolidate` · `_onboarding_start` · `_report_qa_bug` (RC only)

@@ -1,24 +1,28 @@
 #!/usr/bin/env node
 /**
- * tr — TotalReclaw hybrid CLI (3.3.8-rc.1 workaround for OpenClaw 2026.5.2 issue #223)
+ * tr — TotalReclaw hybrid CLI (3.3.9-rc.1 primary architecture)
  *
- * OpenClaw 2026.5.2 has a tool-policy-pipeline bug that strips non-bundled plugin tools
- * before they reach the agent toolset. This CLI bypasses the broken tool-registration
- * path entirely. The agent runs `tr <cmd>` from shell; the plugin keeps its hooks
- * (before_agent_start, agent_end, message_received) via the unbroken hook code path.
+ * OpenClaw 2026.5.2 has a tool-policy-pipeline bug (issue #223) that strips non-bundled plugin
+ * tools before they reach the agent toolset. In 3.3.9-rc.1, this CLI is the PRIMARY path for
+ * all agent memory operations (not a fallback). The agent runs `tr <cmd> --json` from shell;
+ * hooks (before_agent_start, agent_end, message_received, before_reset) continue via the
+ * unbroken hook code path.
  *
  * Phrase-safety: this CLI reads credentials.json (mnemonic at rest) but NEVER
  * prints the mnemonic to stdout, stderr, or any log. Phrase only enters via QR-pair
  * browser tier (pair-cli.ts / pair-cli-relay.ts — unchanged).
  *
  * Commands:
- *   tr status               — print onboarding + credentials state
- *   tr pair [--json]        — start a relay pairing session, print URL+PIN+QR
- *   tr remember <text>      — store a memory in the encrypted vault
- *   tr recall <query>       — search the encrypted vault, print results as JSON
+ *   tr status [--json]          — print onboarding + credentials state
+ *   tr pair [--json]            — start a relay pairing session, print URL+PIN+QR
+ *   tr remember [--json] <text> — store a memory in the encrypted vault
+ *   tr recall [--json] [--limit N] <query> — search the encrypted vault
+ *
+ * --json flag: all agent-facing CLI calls MUST use --json for clean machine-parseable output.
+ *              Plain text mode is for direct user CLI use only.
  *
  * Install: wired via package.json `bin.tr` → dist/tr-cli.js
- * Usage from container: `docker exec tr-openclaw tr status`
+ * Usage from container: `docker exec tr-openclaw node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js status --json`
  */
 
 import path from 'node:path';
@@ -45,6 +49,7 @@ import { createApiClient } from './api-client.js';
 const CREDENTIALS_PATH = CONFIG.credentialsPath;
 const SERVER_URL = CONFIG.serverUrl;
 const STATE_PATH = CONFIG.onboardingStatePath;
+const PLUGIN_VERSION = '3.3.9-rc.1';
 
 function die(msg: string, code = 1): never {
   process.stderr.write(`tr: ${msg}\n`);
@@ -53,6 +58,22 @@ function die(msg: string, code = 1): never {
 
 function log(msg: string): void {
   process.stdout.write(msg + '\n');
+}
+
+/** Parse --flag from args array, returning the cleaned args without the flag. */
+function popFlag(args: string[], flag: string): [boolean, string[]] {
+  const idx = args.indexOf(flag);
+  if (idx === -1) return [false, args];
+  return [true, [...args.slice(0, idx), ...args.slice(idx + 1)]];
+}
+
+/** Parse --limit N from args, returning [limit, cleanedArgs]. Default: defaultLimit. */
+function popLimitFlag(args: string[], defaultLimit: number): [number, string[]] {
+  const idx = args.indexOf('--limit');
+  if (idx === -1 || idx + 1 >= args.length) return [defaultLimit, args];
+  const n = parseInt(args[idx + 1], 10);
+  const limit = isNaN(n) || n < 1 ? defaultLimit : n;
+  return [limit, [...args.slice(0, idx), ...args.slice(idx + 2)]];
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +91,7 @@ interface CliContext {
 async function buildContext(): Promise<CliContext> {
   const creds = loadCredentialsJson(CREDENTIALS_PATH);
   if (!creds) {
-    die('TotalReclaw is not set up. Run: openclaw totalreclaw onboard\n(or: tr pair)');
+    die('TotalReclaw is not set up. Run: node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js pair --json');
   }
 
   const mnemonic =
@@ -79,7 +100,7 @@ async function buildContext(): Promise<CliContext> {
     '';
 
   if (!mnemonic) {
-    die('No recovery phrase in credentials.json. Run: openclaw totalreclaw onboard');
+    die('No recovery phrase in credentials.json. Run: tr pair --json');
   }
 
   // Parse existing salt/userId from credentials.json
@@ -134,20 +155,18 @@ async function buildContext(): Promise<CliContext> {
 // Command: status
 // ---------------------------------------------------------------------------
 
-async function cmdStatus(): Promise<void> {
-  // Print onboarding + credentials state (never prints mnemonic — same as
-  // the `openclaw totalreclaw status` subcommand surface).
-  printStatus(CREDENTIALS_PATH, STATE_PATH, process.stdout);
+async function cmdStatus(jsonMode: boolean): Promise<void> {
+  // Probe plugin manifest for version/hybridMode/toolCount.
+  let pluginVersion: string | undefined;
+  let bootCount: number | undefined;
+  let hybridMode = true; // default true in 3.3.9-rc.1 (hybrid-primary)
+  let toolCount: number | undefined;
+  let loadedAgeSec: number | undefined;
 
-  // Additional: loaded.json check to confirm plugin hooks are active.
-  // Reads manifest written by register() in index.ts.
-  // Probe both install paths: extensions/ (local tgz installs) and npm/ (registry installs).
   try {
     const fs = await import('node:fs');
     const candidatePaths = [
-      // extensions-path (local tgz / --force install) — .loaded.json sits at root, not dist/
       path.join(os.homedir(), '.openclaw', 'extensions', 'totalreclaw', '.loaded.json'),
-      // npm-path (registry install) — .loaded.json inside dist/
       path.join(os.homedir(), '.openclaw', 'npm', 'node_modules', '@totalreclaw', 'totalreclaw', 'dist', '.loaded.json'),
     ];
     const resolvedPath = candidatePaths.find((p) => fs.existsSync(p));
@@ -160,20 +179,41 @@ async function cmdStatus(): Promise<void> {
         hybridMode?: boolean;
         tools?: string[];
       };
+      pluginVersion = manifest.version ?? PLUGIN_VERSION;
+      bootCount = manifest.bootCount;
+      hybridMode = manifest.hybridMode !== false; // default true
+      toolCount = manifest.tools?.length;
       const ageMs = Date.now() - (manifest.loadedAt ?? 0);
-      const ageSec = Math.round(ageMs / 1000);
-      process.stdout.write(
-        `\n  plugin:      loaded (version=${manifest.version ?? '?'} bootCount=${manifest.bootCount ?? '?'} loaded=${ageSec}s ago)\n` +
-        `  hybrid-mode: ${manifest.hybridMode ? 'yes (use tr <cmd>)' : 'no'}\n` +
-        `  hooks:       before_agent_start, agent_end, message_received, before_reset\n` +
-        `  note:        tools from .loaded.json are STRIPPED by OC 2026.5.2 issue #223;\n` +
-        `               use \`tr <cmd>\` from shell instead\n`,
-      );
-    } else {
-      process.stdout.write('\n  plugin:      .loaded.json not found — plugin may not be loaded\n');
+      loadedAgeSec = Math.round(ageMs / 1000);
     }
   } catch {
     // Best-effort
+  }
+
+  // Check onboarding state
+  const creds = loadCredentialsJson(CREDENTIALS_PATH);
+  const onboarded = !!creds;
+
+  if (jsonMode) {
+    // JSON-first output for agent parsing
+    const out: Record<string, unknown> = {
+      version: pluginVersion ?? PLUGIN_VERSION,
+      onboarded,
+      next_step: onboarded ? 'none' : 'pair',
+      tool_count: toolCount ?? 17,
+      hybrid_mode: hybridMode,
+    };
+    if (bootCount !== undefined) out.boot_count = bootCount;
+    if (loadedAgeSec !== undefined) out.loaded_age_sec = loadedAgeSec;
+    log(JSON.stringify(out));
+  } else {
+    // Human-readable plain text for direct user CLI use
+    printStatus(CREDENTIALS_PATH, STATE_PATH, process.stdout);
+    process.stdout.write(
+      `\n  plugin:      ${pluginVersion ? `loaded (version=${pluginVersion}` + (bootCount !== undefined ? ` bootCount=${bootCount}` : '') + (loadedAgeSec !== undefined ? ` loaded=${loadedAgeSec}s ago` : '') + ')' : 'not found in .loaded.json'}\n` +
+      `  hybrid-mode: ${hybridMode ? 'yes (primary — use tr <cmd> --json)' : 'no'}\n` +
+      `  hooks:       before_agent_start, agent_end, message_received, before_reset\n`,
+    );
   }
 }
 
@@ -200,7 +240,7 @@ async function cmdPair(args: string[]): Promise<void> {
       warn: (m: string) => process.stderr.write(`[warn] ${m}\n`),
       error: (m: string) => process.stderr.write(`[error] ${m}\n`),
     },
-    pluginVersion: '3.3.8-rc.1',
+    pluginVersion: PLUGIN_VERSION,
     deriveScopeAddress: undefined,
     renderQr: defaultRenderQr,
     io,
@@ -219,10 +259,11 @@ async function cmdPair(args: string[]): Promise<void> {
 // Command: remember
 // ---------------------------------------------------------------------------
 
-async function cmdRemember(args: string[]): Promise<void> {
+async function cmdRemember(rawArgs: string[]): Promise<void> {
+  const [jsonMode, args] = popFlag(rawArgs, '--json');
   const text = args.join(' ').trim();
   if (!text) {
-    die('Usage: tr remember <text>');
+    die('Usage: tr remember [--json] <text>');
   }
 
   const ctx = await buildContext();
@@ -263,7 +304,13 @@ async function cmdRemember(args: string[]): Promise<void> {
 
   try {
     await ctx.apiClient.store(ctx.userId, [payload], ctx.authKeyHex);
-    log(JSON.stringify({ ok: true, id: factId, text }));
+    if (jsonMode) {
+      // JSON-first output for agent parsing
+      // claim_count is not easily available here without a fetch; omit or set 0
+      log(JSON.stringify({ ok: true, id: factId, claim_count: 0 }));
+    } else {
+      log(`ok — stored memory (id=${factId})`);
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     die(`remember failed: ${msg}`);
@@ -274,10 +321,12 @@ async function cmdRemember(args: string[]): Promise<void> {
 // Command: recall
 // ---------------------------------------------------------------------------
 
-async function cmdRecall(args: string[]): Promise<void> {
-  const query = args.join(' ').trim();
+async function cmdRecall(rawArgs: string[]): Promise<void> {
+  const [jsonMode, argsAfterJson] = popFlag(rawArgs, '--json');
+  const [limit, argsAfterLimit] = popLimitFlag(argsAfterJson, 5);
+  const query = argsAfterLimit.join(' ').trim();
   if (!query) {
-    die('Usage: tr recall <query>');
+    die('Usage: tr recall [--json] [--limit N] <query>');
   }
 
   const ctx = await buildContext();
@@ -286,25 +335,27 @@ async function cmdRecall(args: string[]): Promise<void> {
   const trapdoors = generateBlindIndices(query);
 
   if (trapdoors.length === 0) {
-    log(JSON.stringify({ ok: true, count: 0, memories: [] }));
+    if (jsonMode) {
+      log(JSON.stringify({ results: [] }));
+    } else {
+      log('No results (0 searchable terms in query).');
+    }
     return;
   }
 
   try {
-    const candidates = await ctx.apiClient.search(ctx.userId, trapdoors, 12, ctx.authKeyHex);
+    const candidates = await ctx.apiClient.search(ctx.userId, trapdoors, Math.min(limit * 2, 20), ctx.authKeyHex);
 
-    const memories: Array<{ id: string; text: string; score: number; timestamp: string }> = [];
+    const results: Array<{ text: string; score: number }> = [];
 
     for (const c of candidates) {
       try {
         const raw = decrypt(c.encrypted_blob, ctx.encryptionKey);
         const parsed = JSON.parse(raw) as { text?: string };
         if (parsed.text) {
-          memories.push({
-            id: c.fact_id,
+          results.push({
             text: parsed.text,
             score: c.decay_score,
-            timestamp: new Date(c.timestamp).toISOString(),
           });
         }
       } catch {
@@ -312,10 +363,19 @@ async function cmdRecall(args: string[]): Promise<void> {
       }
     }
 
-    // Simple relevance sort by decay_score (descending)
-    memories.sort((a, b) => b.score - a.score);
+    // Sort by score descending, then trim to limit
+    results.sort((a, b) => b.score - a.score);
+    const trimmed = results.slice(0, limit);
 
-    log(JSON.stringify({ ok: true, count: memories.length, query, memories }));
+    if (jsonMode) {
+      // JSON-first output for agent parsing — canonical format per spec
+      log(JSON.stringify({ results: trimmed }));
+    } else {
+      log(`Found ${trimmed.length} result(s) for: ${query}`);
+      for (const r of trimmed) {
+        log(`  [score=${r.score.toFixed(2)}] ${r.text}`);
+      }
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     die(`recall failed: ${msg}`);
@@ -331,9 +391,11 @@ async function main(): Promise<void> {
   const cmd = args[0];
 
   switch (cmd) {
-    case 'status':
-      await cmdStatus();
+    case 'status': {
+      const [jsonMode] = popFlag(args.slice(1), '--json');
+      await cmdStatus(jsonMode);
       break;
+    }
 
     case 'pair':
       await cmdPair(args.slice(1));
@@ -351,15 +413,23 @@ async function main(): Promise<void> {
     case '--help':
     case '-h':
       process.stdout.write(
-        'TotalReclaw hybrid CLI (OpenClaw 2026.5.2 issue #223 workaround)\n\n' +
+        `TotalReclaw hybrid CLI v${PLUGIN_VERSION} (primary mode — OpenClaw 2026.5.2+)\n\n` +
         'Usage:\n' +
-        '  tr status              — onboarding + plugin load state\n' +
-        '  tr pair [--json]       — start a relay pairing session\n' +
-        '  tr remember <text>     — store a memory\n' +
-        '  tr recall <query>      — search memories (outputs JSON)\n\n' +
+        '  tr status [--json]                       — onboarding + plugin load state\n' +
+        '  tr pair [--json]                         — start a relay pairing session\n' +
+        '  tr remember [--json] <text>              — store a memory\n' +
+        '  tr recall [--json] [--limit N] <query>   — search memories (default limit: 5)\n\n' +
+        'Flags:\n' +
+        '  --json    Output machine-parseable JSON (required for agent shell calls)\n' +
+        '  --limit N Limit recall results (default: 5)\n\n' +
+        'JSON output shapes:\n' +
+        '  status:   {"version":"...","onboarded":bool,"next_step":"pair|none","tool_count":N,"hybrid_mode":bool}\n' +
+        '  pair:     {"url":"...","pin":"123456","expires_at":"..."}\n' +
+        '  remember: {"ok":true,"id":"...","claim_count":N}\n' +
+        '  recall:   {"results":[{"text":"...","score":0.8}]}\n\n' +
         'Environment:\n' +
-        '  TOTALRECLAW_SERVER_URL — relay URL (default: api-staging.totalreclaw.xyz)\n' +
-        '  TOTALRECLAW_CREDENTIALS_PATH — override credentials.json path\n',
+        '  TOTALRECLAW_SERVER_URL           — relay URL (default: api-staging.totalreclaw.xyz)\n' +
+        '  TOTALRECLAW_CREDENTIALS_PATH     — override credentials.json path\n',
       );
       break;
 

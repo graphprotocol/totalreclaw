@@ -24,6 +24,33 @@ metadata:
 
 # TotalReclaw Skill
 
+## CRITICAL: Relay-based architecture — read before anything else
+
+**TotalReclaw is RELAY-BASED. All memories require a paired account on the staging or production relay (depending on RC vs stable). There is NO local-only mode. NEVER claim memories are stored locally without an account.**
+
+Forbidden vocabulary — these claims are FALSE and MUST NEVER appear in your responses:
+- "local"
+- "local-only"
+- "stored locally"
+- "on disk"
+- "without an account"
+- "local memory"
+- "local storage"
+- any phrasing suggesting memories can be stored without pairing a relay account
+
+If you find yourself about to say any of these, STOP. The correct statement is: "TotalReclaw requires a paired relay account to store memories."
+
+## Hybrid-primary CLI (3.3.9-rc.1+)
+
+OpenClaw 2026.5.2 has a tool-policy-pipeline bug (issue #223) that strips non-bundled plugin tools. Plugin 3.3.9-rc.1+ makes the `tr` CLI **primary**:
+
+- Use `node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js <cmd> --json` for all agent memory operations.
+- `tr status --json` → verify install and onboarding state.
+- `tr pair --json` → get pairing URL+PIN (use IMMEDIATELY after install, no consent gate).
+- `tr remember --json "<fact>"` → store a memory.
+- `tr recall --json "<query>" --limit 5` → search memories.
+- Native `totalreclaw_*` tools still registered for back-compat; use them if available, but do NOT depend on their presence.
+
 > Canonical install + account-setup flow lives at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md> (OpenClaw) and <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md> (Hermes). When a user pastes one of those URLs in chat, fetch it and follow its agent-instructions section verbatim. The "Post-Install Setup" section below mirrors the same account-setup flow as a fallback.
 
 > **Gateway restart after install**: OpenClaw's default `gateway.reload.mode = "hybrid"` auto-restarts within 1-3s of plugin install — no agent action needed. If auto-reload doesn't fire (`gateway.reload.mode = off`), issue the plugin's `/totalreclaw-restart` slash command yourself (in-process, drains active runs; 5-tier auth fallback in 3.3.7-rc.2+ so default-config installs work without `allowFrom`). Manual user-prompted restart is fallback only if `/totalreclaw-restart` is unavailable. NEVER invoke external `docker restart` or `openclaw gateway restart` — your shell runs inside the gateway.
@@ -61,6 +88,7 @@ This matters because Telegram and similar transports edit the bot's messages liv
 - "Should I /totalreclaw-restart" / "Want me to restart" / "Let me check if the tool is bound" / "I need permission to restart" / "Do you have a public URL"
 - "Now installing…" / "Got it" / "In parallel…" / "Step 1a/1b/1c"
 - "manifest", "descriptor", "file-watcher", "polling", "auto-reload-detect", "find", "lookup", "detect", "probing", "let me try"
+- "local" / "local-only" / "stored locally" / "on disk" / "without an account" / "local memory" / "local storage" (hallucination guard — TR has no local mode)
 
 If the user explicitly asks ("what's it doing?", "why so quiet?", "show me the commands"), then narrate freely — the silence rule only governs the default install path.
 
@@ -520,17 +548,17 @@ When the user asks to import conversation history:
 
 ---
 
-## Post-Install Setup
+## Post-Install Setup (hybrid-primary — 3.3.9-rc.1+)
 
-If `totalreclaw_*` tools are bound to your toolset, run these steps to set up the user's TotalReclaw account. If they are NOT bound, the plugin isn't installed yet — follow the URL-driven install flow at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md> first. All install and verify steps run silently — only the user-visible lines below are written to chat.
+Under OpenClaw 2026.5.2+, `totalreclaw_*` tools may NOT be bound (issue #223). Use the `tr` CLI as primary. All install and verify steps run silently — only the user-visible lines below are written to chat.
 
 ### User-visible prose (THIS IS ALL YOU SAY)
 
-Speak only these lines, in order. Substitute the bracketed placeholders. The user already consented by pasting "Install TotalReclaw" + the canonical URL — proceed straight to account setup. The URL + PIN handed back from `totalreclaw_pair` is the real consent moment: surfacing them verbatim is what gives the user the chance to opt out by simply not opening the page.
+Speak only these lines, in order. Substitute the bracketed placeholders. The user already consented by pasting "Install TotalReclaw" + the canonical URL — proceed straight to account setup UNCONDITIONALLY. Do NOT ask permission or confirm before running `tr pair`.
 
 1. (only if existing credentials were detected, then stop)
    > ✓ TotalReclaw is already set up.
-2. (account-setup URL + PIN, immediately after `totalreclaw_pair` returns)
+2. (account-setup URL + PIN, immediately after `tr pair --json` returns — no consent gate)
    > Open &lt;url&gt; in your browser. Enter PIN &lt;pin&gt;. Generate or paste a 12-word recovery phrase. Reply `done` once it's sealed.
 3. (done + free-tier confirmation)
    > ✓ You're set up on the TotalReclaw free tier — 500 memories/month, unlimited reads. https://totalreclaw.xyz/pricing. Ask me to remember anything.
@@ -539,13 +567,17 @@ Speak only these lines, in order. Substitute the bracketed placeholders. The use
 
 1. **Check for existing credentials (silent unless found).** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit user-visible line 1 and stop.
 
-2. **Set up the user's TotalReclaw account via browser (emit user-visible line 2).** Call `totalreclaw_pair` silently. It returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}`. Then emit user-visible line 2 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…", "Ready to set up your account…") — line 2 itself is the only thing the user needs to see.
+2. **Set up the user's TotalReclaw account IMMEDIATELY — no consent gate.** Run:
+   ```
+   node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js pair --json
+   ```
+   Parse the JSON response `{"url": "...", "pin": "...", "expires_at": "..."}`. Emit user-visible line 2 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…") — line 2 itself is the only thing the user needs to see. If `tr pair --json` is unavailable, fall back to the `totalreclaw_pair` tool or `openclaw totalreclaw pair generate --url-pin-only`.
 
-   Render the QR if your transport supports image attachments (decode `qr_png_b64` to bytes and attach), or emit `qr_unicode` inline for terminal-only transports. The QR encodes only the URL — the PIN is a separate dual-channel confirmation, never bake it into the QR.
+   Render the QR if your transport supports image attachments (if the pair payload includes `qr_png_b64`, decode to bytes and attach), or emit `qr_unicode` inline for terminal-only transports. The QR encodes only the URL — the PIN is a separate dual-channel confirmation, never bake it into the QR.
 
-3. **Verify and confirm (silent until line 3).** After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again silently and resend line 2 once. If present, emit user-visible line 3 and stop.
+3. **Verify and confirm (silent until line 3).** After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — re-run `tr pair --json` and resend line 2 once. If present, emit user-visible line 3 and stop.
 
-**Never** call `totalreclaw_setup` or any phrase-touching CLI from your shell — those leak the phrase into LLM context. The ONLY agent-facilitated account-setup path is the `totalreclaw_pair` tool (registered under that name for backward compatibility — function-wise it is the account-setup tool).
+**Never** call `totalreclaw_setup` or any phrase-touching CLI from your shell — those leak the phrase into LLM context.
 
 ---
 

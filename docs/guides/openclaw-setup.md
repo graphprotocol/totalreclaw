@@ -46,18 +46,16 @@ Speak only these lines, in order. Substitute the bracketed placeholders with the
 
 1. (Step 1 — start)
    > Installing TotalReclaw…
-2. (Step 2 — after install + auto-reload + tool-bind verification)
-   > ✓ Installed (totalreclaw &lt;version&gt;)
-3. (Step 2b — optional, only if auto-reload didn't fire and you have to issue `/totalreclaw-restart`)
-   > Restarting OpenClaw to load the plugin…
-4. (Step 3 — only if existing credentials were detected, then stop)
+2. (Step 2 — after install + `tr status --json` confirms CLI works, hybrid mode)
+   > ✓ Installed (totalreclaw &lt;version&gt;, hybrid mode)
+3. (Step 3 — only if existing credentials were detected, then stop)
    > ✓ TotalReclaw is already set up.
-5. (Step 5 — account-setup URL + PIN, immediately after `totalreclaw_pair` returns)
+4. (Step 4 — account-setup URL + PIN, immediately after `tr pair --json` returns — no consent gate)
    > Open &lt;url&gt; in your browser. Enter PIN &lt;pin&gt;. Generate or paste a 12-word recovery phrase. Reply `done` once it's sealed.
-6. (Step 6 — done + free-tier confirmation)
+5. (Step 5 — done + free-tier confirmation)
    > ✓ You're set up on the TotalReclaw free tier — 500 memories/month, unlimited reads. https://totalreclaw.xyz/pricing. Ask me to remember anything.
 
-That is the complete user-facing transcript for a healthy install. Expected line count for a fresh install + setup is **5–6 lines** (line 4 is mutually exclusive with lines 5-6; line 3 only fires if `/totalreclaw-restart` was needed).
+That is the complete user-facing transcript for a healthy install. Expected line count for a fresh install + setup is **4–5 lines** (line 3 is mutually exclusive with lines 4-5; the `/totalreclaw-restart` cycle is no longer part of the primary path under hybrid mode).
 
 ### When to break silence (errors only)
 
@@ -112,54 +110,45 @@ Step 2 (`hooks.allowConversationAccess`) unblocks the plugin's `agent_end` hook 
 Both apply via hot-reload (no `/totalreclaw-restart` needed for either).
 
 Notes:
-- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.7-rc.3`.
+- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.9-rc.1`.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
-### Step 2 — Wait for auto-reload + verify tool bind (silent — emit user-visible line 2 on success)
+### Step 2 — Verify CLI works (hybrid-primary, 3.3.9-rc.1+) — emit user-visible line 2 on success
 
-OpenClaw's default config (`gateway.reload.mode = "hybrid"`) auto-restarts the gateway via a file-watcher within 1-3 seconds of the plugin install. Wait ~5 seconds, then verify with `openclaw plugins list | grep totalreclaw` and confirm the `totalreclaw_pair` tool is in your toolset.
+**Do NOT wait for tool binding. Do NOT check whether `totalreclaw_pair` is in your toolset.** Under OpenClaw 2026.5.2+, non-bundled plugin tools may be stripped (issue #223). The `tr` CLI is the primary path and works independently.
 
-When `totalreclaw_pair` is bound, capture the version string from `openclaw plugins list` (the line for `@totalreclaw/totalreclaw`) and emit user-visible line 2 (`✓ Installed (totalreclaw <version>)`). Then proceed silently to Step 3.
+Run:
+```bash
+node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js status --json
+```
 
-#### If `totalreclaw_pair` is not bound within 10 seconds — restart imperative (read carefully)
+Parse the JSON. When you receive `{"version": "...", "hybrid_mode": true, ...}`, emit user-visible line 2 (`✓ Installed (totalreclaw <version>, hybrid mode)`) with the version substituted. Then proceed silently to Step 3.
 
-Hybrid auto-reload didn't fire (likely `gateway.reload.mode = off`). The protocol is rigid:
+If `tr status` exits non-zero or the file is not found, wait 5s and retry once (the install may still be completing). If it still fails, tell the user the install didn't land and retry `openclaw plugins install @totalreclaw/totalreclaw@rc`.
 
-> **Your IMMEDIATE next message must be the literal slash command `/totalreclaw-restart` — nothing else. Do not narrate. Do not ask permission. Do not describe what `/totalreclaw-restart` does. Do not propose alternatives. Just send `/totalreclaw-restart`.**
-
-You may emit user-visible line 3 (`Restarting OpenClaw to load the plugin…`) ONCE in the same turn before sending `/totalreclaw-restart`. Nothing else. After `/totalreclaw-restart`, wait ~3s and re-run `openclaw plugins list`.
-
-`/totalreclaw-restart` is the plugin-registered slash command (3.3.7-rc.2+; renamed from `/restart` because OpenClaw's plugin registry reserves the bare name `restart` for the built-in). It reloads the gateway in-process — works from inside the gateway because it doesn't shell out (unlike `openclaw gateway restart`). The 5-tier auth fallback (issue #215, see below) attaches to this command name; the OpenClaw built-in `/restart` retains its allow-from-only semantics unchanged.
-
-#### If `/totalreclaw-restart` returns "You are not authorized to use this command"
-
-3.3.7-rc.1 (issue #215) shipped a 5-tier auth fallback for the plugin's restart override; rc.2 attached it to `/totalreclaw-restart` (rc.1 attempted to override the built-in `/restart`, which the registry hard-rejected — the fallback never ran). Default-config installs no longer hit this path. The plugin's `register()` registers `/totalreclaw-restart` with a fallback chain that allows a default-config user IF: they're explicitly listed in `commands.ownerAllowFrom` OR `channels.<provider>.allowFrom` OR they're the same identity the channel is bound to OR `credentials.json` exists + the channel was paired through OR the gateway has only seen ONE inbound user (the lone-user heuristic for fresh installs). Rejection only fires when an explicit allow-from is configured AND excludes the invoker.
-
-For 3.3.7-rc.2+ users the unauthorized message should not appear in the default install path. If it DOES appear, it means the user's config already specifies `commands.ownerAllowFrom` or `channels.<provider>.allowFrom` and excludes their channel id. Surface verbatim and stop. Do NOT loop `/totalreclaw-restart` calls. Do NOT keep retrying. Do NOT propose alternatives.
-
-> Your config restricts `/totalreclaw-restart` to a specific allow-list and your channel id is not in it. Run on your host: `jq '.channels.<channel>.allowFrom = ["<your-id>"]' ~/.openclaw/openclaw.json | sponge ~/.openclaw/openclaw.json && docker restart <your-container-name>`. Substitute `<channel>` with your channel name (e.g. `telegram`, `slack`), `<your-id>` with your user ID for that channel (Telegram: `@username` or numeric `chat_id`; Slack: workspace member ID), and `<your-container-name>` with your gateway container name (`docker ps` shows it). For non-Docker installs substitute `openclaw gateway restart` for the `docker restart` portion. On a managed service, ask the service's support to enable slash commands for your channel. Reply `done` after.
-
-Then wait for `done`. Do NOT retry the install. Do NOT keep restarting. Do NOT issue `/new` — it wipes the chat context, the agent forgets it was mid-install, and the user's next message is treated as a fresh install request which retries from scratch and re-trips the scanner block (Pedro QA, 3.3.5-rc.1).
-
-#### Fallback only if `/totalreclaw-restart` is unavailable
-
-Very old OpenClaw pre-2026.4 or managed services that strip slash commands: tell the user verbatim *"Auto-reload didn't fire and `/totalreclaw-restart` is unavailable. Please restart your OpenClaw gateway: `openclaw gateway restart` (native), `docker restart <your-container-name>` (Docker self-host — substitute the actual name; `docker ps` shows it), or your managed service's restart control. Reply `done` once it's back up."* Do NOT invoke any external `docker restart` or `openclaw gateway restart` yourself — your shell runs inside the gateway you'd be restarting; `/totalreclaw-restart` (in-process) and a user-prompted external restart are the only safe paths.
+**Note on `/totalreclaw-restart`**: this slash command is still registered for environments where users need a manual reload (managed services, special configs). If you need to issue it for some reason, issue the literal slash command `/totalreclaw-restart` — nothing else. But under hybrid-primary, restarting to restore tool binding is no longer needed — `tr` CLI works regardless.
 
 ### Step 3 — Check for existing credentials (silent unless found)
 
 Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit user-visible line 4 (`✓ TotalReclaw is already set up.`) and stop — the user is already set up. Otherwise continue silently.
 
-### Step 4 — Set up the user's TotalReclaw account (emit user-visible line 5)
+### Step 4 — Set up the user's TotalReclaw account IMMEDIATELY — no consent gate (emit user-visible line 5)
 
-Pasting the install URL was the consent moment for installing the plugin. The URL + PIN you're about to hand the user is the real consent moment for account creation — they have to open the page in their browser to proceed. There is no separate yes/no gate.
+Pasting the install URL was the consent moment for installing the plugin. The URL + PIN you're about to hand the user is the real consent moment for account creation — they have to open the page in their browser to proceed. There is NO separate yes/no gate. Do NOT ask "Would you like to set up an account?" — run `tr pair --json` immediately.
 
-Call the `totalreclaw_pair` tool silently (the account-setup tool — name kept for backward compatibility). It returns `{url, pin, qr_ascii, qr_png_b64, qr_unicode, expires_at_ms}`. Then emit user-visible line 5 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…", "Ready to set up your account…") — line 5 itself is the only thing the user needs to see.
+```bash
+node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js pair --json
+```
 
-Render the QR if your transport supports it: image-capable transports (Telegram, Slack, web chat) decode `qr_png_b64` to bytes and attach as an image; terminal-only transports (OpenClaw native CLI) emit `qr_unicode` inline. The QR encodes only the URL — the PIN is a separate dual-channel confirmation, never bake it into the QR.
+Parse the JSON `{"url": "...", "pin": "...", "expires_at": "..."}`. Emit user-visible line 5 (`Open <url> in your browser. Enter PIN <pin>. Generate or paste a 12-word recovery phrase. Reply done once it's sealed.`) with `<url>` and `<pin>` substituted. Do not pre-narrate — line 5 itself is the only thing the user needs to see.
+
+If `tr pair --json` is unavailable (old install path), fall back to the `totalreclaw_pair` native tool or `openclaw totalreclaw pair generate --url-pin-only`.
+
+Render the QR if the pair payload includes `qr_png_b64`: image-capable transports (Telegram, Slack, web chat) decode to bytes and attach as an image; terminal-only transports (OpenClaw native CLI) emit `qr_unicode` inline. The QR encodes only the URL — the PIN is a separate dual-channel confirmation, never bake it into the QR.
 
 ### Step 5 — Verify and confirm (silent until line 6)
 
-After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN likely expired — call `totalreclaw_pair` again silently and resend line 5 once. If present, emit user-visible line 6 (with the free-tier confirmation) and stop.
+After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN likely expired — re-run `tr pair --json` and resend line 5 once. If present, emit user-visible line 6 (with the free-tier confirmation) and stop.
 
 ### Phrase safety (HARD — never break)
 
