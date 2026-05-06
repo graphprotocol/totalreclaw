@@ -4,6 +4,22 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.10-rc.3] — 2026-05-06
+
+Pedro's 2026-05-05 manual QA on rc.10-rc.2 confirmed that even with the `setsid -f` instruction in SKILL.md, the agent freelances during install + pair: it restarted the gateway unprompted, re-rendered the QR to `/tmp/` (which OpenClaw's media-access policy blocks → `LocalMediaAccessError` on Telegram), wrote extra config that triggered another deferred SIGUSR1 reload, and ran `tr pair` in the foreground — all of which killed the pair WS and produced the 502 on browser respond. Plus the CLI binary's hard-coded `PLUGIN_VERSION` constant lagged the package version (CLI reported `3.3.9-rc.1` while the install record was `3.3.10-rc.2`).
+
+### Fixed
+
+- **`PLUGIN_VERSION` constant in `tr-cli.ts` is now auto-synced** from `package.json::version` by `skill/scripts/sync-version.mjs` (extended to cover this third site alongside the existing `SKILL.md` frontmatter and `skill.json` mirrors). The constant is the fallback the CLI returns from `tr status --json` when the on-disk `.loaded.json` manifest is missing — without sync, fresh-install boots before the manifest write report stale versions and break operator-side version checks.
+
+- **SKILL.md and `docs/guides/openclaw-setup.md` now have an explicit ⛔ FORBIDDEN section** listing every freelancing pattern from Pedro's QA, with the exact bad agent prose verbatim. The section is positioned BEFORE the setup flow so the agent reads it first. Forbidden actions: gateway restart (`/totalreclaw-restart`, SIGUSR1, `docker restart`), config writes to `~/.openclaw/openclaw.json` after install, QR re-render to `/tmp/totalreclaw-pair-qr.png`, foreground `tr pair --json` invocation (must use `setsid -f` verbatim), and narrative prose about CLI internals / version-lag / path resolution.
+
+### Implementation notes
+
+- `sync-version.mjs` now updates 3 sites: `SKILL.md` frontmatter, `skill.json::version`, `tr-cli.ts::PLUGIN_VERSION`. Idempotent — running twice on aligned tree is a no-op. Already wired into the publish workflows.
+- The FORBIDDEN section in SKILL.md and the setup-guide are mostly text duplicates by design — the guide is the agent's primary surface (URL prompt) but SKILL.md is loaded into context when `openclaw skills install totalreclaw` ran. Both must carry the rules so neither path is a bypass.
+- This RC does NOT yet ship the proper architectural fix for the 502 (HTTP-poll pair flow that doesn't require a persistent WS at all, planned for 3.3.11). It instead hardens the agent-side instructions so the existing `setsid -f` mechanism actually gets used.
+
 ## [3.3.10-rc.2] — 2026-05-05
 
 Critical 502 fix via shell-side detach (rc.10-rc.1's plugin-side `child_process` approach was reverted — scanner blocks `child_process` imports anywhere in the plugin tree). Pedro's manual QA on rc.4 confirmed the persistent 502 `gateway_disconnected` was NOT caused by relay idle close (PR #14's 5s+immediate WS keepalive was deployed and verified at sha `0ff812a`). Real cause: each `openclaw plugins install` writes `plugins.installs.totalreclaw.*` to the gateway config, triggering a deferred SIGUSR1 reload that eventually fires and kills any in-flight foreground subprocess — including the agent shell-tool's `node tr-cli pair --json` which holds the relay WS until the browser uploads the encrypted phrase.

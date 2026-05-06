@@ -67,6 +67,20 @@ If a step **actually fails**, surface the failure in one tight line — the erro
 
 Do NOT pre-narrate diagnostics that succeed. Do NOT narrate retries that succeed silently. Do NOT echo command output unless the user asks for it.
 
+### ⛔ FORBIDDEN actions during install + pair (3.3.10-rc.3 — hard rules from Pedro's 2026-05-05 QA)
+
+These freelancing patterns have broken pair flows. They are FORBIDDEN regardless of how clever the workaround feels:
+
+1. **Do NOT issue `/totalreclaw-restart`. Do NOT signal the gateway. Do NOT `docker restart`.** The plugin auto-patches the config and emits its own restart-required warn IF (and only if) one is needed. The gateway will restart itself when its reload pipeline decides to. **You restarting it kills the in-flight `setsid -f` pair subprocess and surfaces as 502 on the browser respond.**
+
+2. **Do NOT write to `~/.openclaw/openclaw.json`** after the install. The plugin's `patchOpenClawConfig()` already wrote `plugins.slots.memory`, `plugins.entries.totalreclaw.hooks.allowConversationAccess`, and `channels.telegram.streaming.mode` for you. Any further config write triggers a fresh deferred reload that eventually fires SIGUSR1 and kills pair. Forbidden tool calls: `openclaw config set …`, any redirect / sed / jq into `openclaw.json`.
+
+3. **Do NOT re-render the QR.** `tr pair --json` returns `qr_ascii` (Unicode) AND the pair page renders a real PNG. Saving the QR to `/tmp/totalreclaw-pair-qr.png` triggers OpenClaw's media-access policy block and Telegram delivery fails with `LocalMediaAccessError`. Just emit the URL + PIN as user-visible line 3 — that is your only QR responsibility.
+
+4. **Do NOT invoke `tr pair --json` in the foreground.** A foreground pair subprocess is killed when your shell-tool exec returns. The pair WS dies → relay returns 502. Step 4 below uses `setsid -f` for exactly this reason — copy that block VERBATIM. Do not "simplify". Do not drop the `setsid -f`. Do not omit `< /dev/null`.
+
+5. **Do NOT narrate.** Examples that have appeared in past QAs and MUST NEVER appear again: "Now let me verify the CLI…" / "Gateway needs a restart, let me restart it" / "Let me find and signal the gateway process" / "The CLI is at the npm path, not the extensions path" / "CLI reports itself as version X (lag)" / "Now let me also add the required post-install config" / "Let me save the QR as a PNG". All silent — these are internal details. Emit only the 4-5 user-visible lines.
+
 ### Forbidden vocabulary in agent prose
 
 Unless the user explicitly asks how the install works, the following words / patterns must not appear in your chat output during install + setup. These are the patterns that surface as edit churn in transports like Telegram:
@@ -110,7 +124,7 @@ Step 2 (`hooks.allowConversationAccess`) unblocks the plugin's `agent_end` hook 
 Both apply via hot-reload (no `/totalreclaw-restart` needed for either).
 
 Notes:
-- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.10-rc.2`.
+- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.10-rc.3`.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
 ### Step 2 — Verify CLI works (hybrid-primary, 3.3.9-rc.1+) — emit user-visible line 2 on success

@@ -41,6 +41,7 @@ const pluginDir = resolve(here, '..', 'plugin');
 const pkgPath = resolve(pluginDir, 'package.json');
 const skillMdPath = resolve(pluginDir, 'SKILL.md');
 const skillJsonPath = resolve(pluginDir, 'skill.json');
+const trCliPath = resolve(pluginDir, 'tr-cli.ts');
 
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 const canonical = pkg.version;
@@ -108,6 +109,28 @@ console.log(`sync-version: canonical = ${canonical}`);
     JSON.parse(after);
     writeFileSync(skillJsonPath, after);
     console.log(`sync-version: updated skill.json -> ${canonical}`);
+  }
+}
+
+// 3. tr-cli.ts — `const PLUGIN_VERSION = '<version>';` at top-of-file
+//    (3.3.10-rc.3 — the CLI binary stamps this into `tr status --json` output
+//    when the `.loaded.json` manifest fallback fires; without sync the
+//    CLI reports a stale version (e.g. "3.3.9-rc.1" while package is
+//    rc.10-rc.2 — Pedro's QA caught this 2026-05-05).
+{
+  const before = readFileSync(trCliPath, 'utf8');
+  const constLineRe = /^(const PLUGIN_VERSION = ')[^']*(';)/m;
+  if (!constLineRe.test(before)) {
+    console.error('FATAL: tr-cli.ts has no `const PLUGIN_VERSION = \'…\';` line to update');
+    process.exit(2);
+  }
+  const match = before.match(constLineRe);
+  if (match && match[0].includes(canonical)) {
+    console.log('sync-version: tr-cli.ts already aligned');
+  } else {
+    const after = before.replace(constLineRe, `$1${canonical}$2`);
+    writeFileSync(trCliPath, after);
+    console.log(`sync-version: updated tr-cli.ts PLUGIN_VERSION -> ${canonical}`);
   }
 }
 

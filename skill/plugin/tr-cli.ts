@@ -49,7 +49,10 @@ import { createApiClient } from './api-client.js';
 const CREDENTIALS_PATH = CONFIG.credentialsPath;
 const SERVER_URL = CONFIG.serverUrl;
 const STATE_PATH = CONFIG.onboardingStatePath;
-const PLUGIN_VERSION = '3.3.9-rc.1';
+// Auto-synced by skill/scripts/sync-version.mjs from skill/plugin/package.json::version.
+// Do not edit by hand — running tests will catch drift but the publish workflow
+// rewrites this constant at the start of every npm/ClawHub publish.
+const PLUGIN_VERSION = '3.3.10-rc.3';
 
 function die(msg: string, code = 1): never {
   process.stderr.write(`tr: ${msg}\n`);

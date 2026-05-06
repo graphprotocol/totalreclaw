@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Install + set up TotalReclaw encrypted memory for OpenClaw, then use tr CLI for remember / recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 3.3.9-rc.1
+version: 3.3.10-rc.3
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -45,6 +45,31 @@ If you find yourself about to say any of these, STOP. The correct statement is: 
 ## Top-level rule (read this before anything else)
 
 **Emit ONLY the user-visible lines listed below. Do not narrate tool calls. Do not describe what you're doing or about to do. Errors are the only allowed deviation, and only as a single tight line.** The expected user-facing transcript for a healthy install is **4–5 short lines TOTAL**. Anything more is a SKILL violation. Telegram and similar transports edit the bot's messages live as your tool calls progress — every interim "Let me check…" / "Plugin loaded. Let me verify…" line shows up to the user as awkward edit churn, even if you "delete" it. The fix is to never emit it in the first place.
+
+## ⛔ FORBIDDEN — do NOT do these (3.3.10-rc.3, hard rules from Pedro's 2026-05-05 QA)
+
+These are the freelancing patterns that have broken pair flows and made transcripts noisy. They are FORBIDDEN, full stop:
+
+1. **Do NOT issue `/totalreclaw-restart`.** Do NOT send `kill -USR1`. Do NOT call `openclaw gateway restart`. Do NOT `docker restart`. The plugin auto-patches the gateway config and emits a single restart-required warn IF (and only if) the gateway needs one. The gateway will restart itself when its reload pipeline decides to. **You restarting it KILLS the in-flight `setsid -f` pair subprocess and surfaces as a 502 on the browser respond.**
+
+2. **Do NOT write to `~/.openclaw/openclaw.json`.** The plugin's `patchOpenClawConfig()` already wrote `plugins.slots.memory`, `plugins.entries.totalreclaw.hooks.allowConversationAccess`, and `channels.telegram.streaming.mode` for you. Any further config write triggers a fresh deferred reload that eventually fires SIGUSR1 and kills the pair subprocess. Forbidden tool calls: `openclaw config set …`, `jq … > openclaw.json`, any `cat > openclaw.json`, any `sed -i openclaw.json`.
+
+3. **Do NOT re-render the QR.** `tr pair --json` already returns the QR as `qr_ascii` (Unicode block chars) AND the pair page itself renders a real PNG QR. Do NOT save the QR to `/tmp/totalreclaw-pair-qr.png` — OpenClaw's media-access policy blocks `/tmp/` paths and Telegram delivery fails with `LocalMediaAccessError: Local media path is not under an allowed directory`. The agent's only QR responsibility is to copy the URL+PIN into user-visible line 3. The transport (Telegram/web/CLI) renders the QR from the URL the user can already click.
+
+4. **Do NOT invoke `tr pair --json` in the foreground.** A foreground pair subprocess is killed when your shell-tool exec returns (the agent runtime cleans up child PIDs). The pair WS dies → relay returns 502 on the browser respond. **The setup-flow Step 4 below uses `setsid -f` for exactly this reason — copy that block VERBATIM. Do not "simplify" it. Do not drop the `setsid -f`. Do not redirect stdout differently. Do not omit `< /dev/null`.**
+
+5. **Do NOT narrate.** Examples of narration that have appeared in past QAs and MUST NEVER appear again:
+   - "Now let me verify the CLI and check for existing credentials." → silent.
+   - "Gateway needs a restart to load the plugin. Let me restart it." → DO NOT RESTART.
+   - "The gateway is running but as a container process, not via systemd. Let me find and signal the gateway process to reload." → DO NOT SIGNAL.
+   - "The CLI is at the npm path, not the extensions path. Let me use the correct path." → silent (the `TR_CLI` resolver below already handles both paths).
+   - "Plugin is X.Y.Z, CLI reports itself as A.B.C (version string lag in the CLI binary)." → silent (don't reveal CLI internals).
+   - "Now let me also add the required post-install config and render the QR as an image." → DO NOT WRITE CONFIG. DO NOT RE-RENDER QR.
+   - "The pair response already has the QR data. Let me save the QR as a PNG using the existing skill's pair-qr module." → DO NOT SAVE QR ANYWHERE.
+
+If `tr status --json` returns version that disagrees with `openclaw plugins inspect totalreclaw`, **that is fine — do not narrate it**. The plugin's CLI reports its own packaged version which may lag the install record by one RC during a publish cycle. Both work.
+
+If you find yourself about to do anything in this list, STOP. Re-read this section. Then run the literal commands in the setup flow below — exactly as written.
 
 ## Hybrid-primary architecture (3.3.9-rc.1)
 
