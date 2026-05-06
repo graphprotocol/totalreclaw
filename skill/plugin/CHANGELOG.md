@@ -4,6 +4,26 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.11-rc.3] — 2026-05-06
+
+Two real-bug fixes flagged by Pedro's pop-os QA on rc.11-rc.1/rc.2: credentials.json shipped with only `{mnemonic}` (no userId, no salt), and the subgraph "Invalid character 'q' at position 0" Bytes-decode error.
+
+### Fixed
+
+- **credentials.json now persists `userId` + `salt` at pair time.** Previously, `pair-cli-relay.ts::completePairing` wrote only `{mnemonic}` and deferred `/v1/register` + the `{userId, salt}` fields to the plugin's next `register()` load. When that load failed (Pedro's pop-os SIGUSR1 plugin-skip + various other transients), credentials stayed mnemonic-only and every subsequent operation re-attempted registration but never actually wrote the result. Fix: pair-cli-relay's completePairing now derives `keys = deriveKeys(mnemonic)`, computes `authKeyHash + saltHex`, calls `apiClient.register()` against the relay's `/v1/register` (converting `wss://…` → `https://…`), and writes the full `{mnemonic, salt(base64), userId, scope_address}` object to credentials.json before resolving the WS pair flow. USER_EXISTS in subgraph mode falls back to a deterministic userId derived from the auth-key hash. Pair flow is now self-contained: a successful pair leaves the user fully registered with complete credentials, regardless of subsequent plugin-load behavior.
+
+- **Subgraph "Invalid character 'q' at position 0" eliminated.** Plugin's Smart Account derivation has a fallback: when `deriveSmartAccountAddress(mnemonic)` throws, it set `subgraphOwner = userId`. But the subgraph's `owner` field is typed `Bytes!` (0x-prefixed hex), and userIds (UUIDs from `/v1/register`) often start with non-hex chars like `q`/`r`/`y`, so every subsequent subgraph query returned `Failed to decode Bytes value: Invalid character 'q' at position 0`. Fix: never fall back to `userId` for the Bytes! field. Instead leave `subgraphOwner = null` and emit a clear error explaining that subgraph reads/writes will be skipped this session until SA derivation succeeds. This surfaces the underlying mnemonic issue (or whatever the SA-derivation failure was) rather than masking it as a downstream subgraph decoding error.
+
+### Implementation notes
+
+- `pair-cli-relay.ts` now imports `deriveKeys` + `computeAuthKeyHash` from `crypto.js` and `createApiClient` from `api-client.js`. The added `/v1/register` call is best-effort — registration failure logs a warn and continues with a mnemonic-only credentials.json (the plugin's `register()` retries on next boot). USER_EXISTS specifically derives the userId deterministically (`authKeyHash.slice(0, 32)`) so the credentials are still complete.
+- `index.ts` SA-derivation fallback removed. `subgraphOwner` stays `null` on derivation failure. Existing call-sites already check for null/undefined before issuing subgraph queries; the change just stops poisoning those checks with a wrong-format string.
+- 81/81 fs-helpers + 21/21 register-command-name + 37/37 skill-md + 21/21 tr-cli-json + 40/40 trajectory-poller. check-scanner: 129 files, 0 flags.
+
+### Likely cures
+
+The pop-os "plugin doesn't load after SIGUSR1" symptom from rc.11-rc.1/rc.2 was probably a downstream effect of these two bugs: incomplete credentials → SA derivation fails → subgraphOwner falls back to userId → first subgraph query throws → plugin's register() bails before reaching the trajectory-poller setup. With creds complete at pair time AND no garbage-fallback for the Bytes field, plugin's register() should run to completion and the poller should fire.
+
 ## [3.3.11-rc.2] — 2026-05-06
 
 UX hardening on top of rc.1's trajectory-poller. Pedro's first install attempt on rc.1 surfaced two agent-prose violations the prior FORBIDDEN ACTIONS list didn't catch:

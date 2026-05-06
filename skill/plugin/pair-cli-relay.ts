@@ -58,6 +58,8 @@ import {
 } from './pair-remote-client.js';
 import { setRecoveryPhraseOverride } from './config.js';
 import { encodePng, encodeUnicode } from './pair-qr.js';
+import { deriveKeys, computeAuthKeyHash } from './crypto.js';
+import { createApiClient } from './api-client.js';
 import type {
   PairCliIo,
   PairCliJsonPayload,
@@ -272,6 +274,51 @@ export async function runRelayPairCli(
       phraseValidator: (p: string) => validateMnemonic(p, wordlist),
       completePairing: async ({ mnemonic }) => {
         try {
+          // 3.3.11-rc.3: derive auth key + salt from mnemonic and pre-register
+          // with the relay HERE (not deferred to the plugin's next register()
+          // load). Pedro's 2026-05-06 QA found that pop-os was leaving
+          // credentials.json with only `{mnemonic}` because the plugin's
+          // post-pair register() either didn't run (post-SIGUSR1 plugin-skip
+          // bug) or partially failed before writing userId/salt back to disk.
+          // Doing it inline here means a successful pair is self-contained:
+          // browser uploads phrase → completePairing derives keys → register
+          // → write {userId, salt, mnemonic, scope_address}. Plugin's
+          // register() on next boot just authenticates with the existing
+          // credentials.
+          const keys = deriveKeys(mnemonic);
+          const authKeyHash = computeAuthKeyHash(keys.authKey);
+          const saltHex = keys.salt.toString('hex');
+          const saltB64 = keys.salt.toString('base64');
+
+          let registeredUserId: string | undefined;
+          try {
+            // wss://… → https://… for the REST register call. The relay
+            // serves both protocols on the same host.
+            const httpsBase = opts.relayBaseUrl.replace(/^ws/, 'http').replace(/\/+$/, '');
+            const apiClient = createApiClient(httpsBase);
+            const result = await apiClient.register(authKeyHash, saltHex);
+            registeredUserId = result.user_id;
+            opts.logger.info(
+              `pair-cli (relay): registered user_id=${registeredUserId} (salt + auth-key persisted)`,
+            );
+          } catch (regErr) {
+            const msg = regErr instanceof Error ? regErr.message : String(regErr);
+            // USER_EXISTS in subgraph mode → derive userId deterministically
+            // from auth-key hash so the credentials are still complete.
+            // Other errors → continue with mnemonic-only creds; the plugin's
+            // register() will retry on next load.
+            if (msg.includes('USER_EXISTS')) {
+              registeredUserId = authKeyHash.slice(0, 32);
+              opts.logger.info(
+                `pair-cli (relay): USER_EXISTS — using derived userId=${registeredUserId}`,
+              );
+            } else {
+              opts.logger.warn(
+                `pair-cli (relay): /v1/register failed (best-effort, will retry on plugin load): ${msg}`,
+              );
+            }
+          }
+
           let scopeAddress: string | undefined;
           try {
             scopeAddress = await opts.deriveScopeAddress(mnemonic);
@@ -283,7 +330,8 @@ export async function runRelayPairCli(
             );
           }
           const creds = loadCredentialsJson(opts.credentialsPath) ?? {};
-          const next: typeof creds = { ...creds, mnemonic };
+          const next: typeof creds = { ...creds, mnemonic, salt: saltB64 };
+          if (registeredUserId) next.userId = registeredUserId;
           if (scopeAddress) next.scope_address = scopeAddress;
           if (!writeCredentialsJson(opts.credentialsPath, next)) {
             return { state: 'error', error: 'credentials_write_failed' };
@@ -297,6 +345,7 @@ export async function runRelayPairCli(
           });
           opts.logger.info(
             `pair-cli (relay): session ${session.token.slice(0, 8)}… completed; credentials written` +
+              (registeredUserId ? ` (userId=${registeredUserId.slice(0, 8)}…)` : '') +
               (scopeAddress ? ` (scope_address=${scopeAddress})` : ''),
           );
           return { state: 'active' };

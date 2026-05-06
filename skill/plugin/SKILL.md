@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Install + set up TotalReclaw encrypted memory for OpenClaw, then use tr CLI for remember / recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 3.3.11-rc.2
+version: 3.3.11-rc.3
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz

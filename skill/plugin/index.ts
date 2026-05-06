@@ -931,15 +931,28 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
   }
 
   // Derive Smart Account address for subgraph queries (on-chain owner identity).
+  // 3.3.11-rc.3: NEVER fall back to userId on derivation failure — the subgraph's
+  // `owner` field is typed `Bytes!` (0x-prefixed hex) and rejects userId UUIDs
+  // with `Failed to decode Bytes value: Invalid character 'q' at position 0`
+  // (because userIds often start with non-hex chars like q/r/y). When SA
+  // derivation fails the only safe path is to leave subgraphOwner unset and
+  // fail every subsequent on-chain operation with a clear "smart-account
+  // unavailable" error rather than spamming the subgraph with garbage Bytes.
   if (isSubgraphMode()) {
     try {
       const config = getSubgraphConfig();
       subgraphOwner = await deriveSmartAccountAddress(config.mnemonic, config.chainId);
       logger.info(`Subgraph owner (Smart Account): ${subgraphOwner}`);
     } catch (err) {
-      logger.warn(`Failed to derive Smart Account address: ${err instanceof Error ? err.message : String(err)}`);
-      // Fall back to userId — won't match subgraph Bytes format, but better than null
-      subgraphOwner = userId;
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error(
+        `Smart Account derivation failed: ${msg} — subgraph reads/writes will be skipped this session ` +
+          '(no Bytes-format owner available). Verify mnemonic in credentials.json.',
+      );
+      // Leave subgraphOwner undefined. Code paths that read it must guard
+      // against undefined and skip the subgraph round-trip rather than
+      // sending a malformed query.
+      subgraphOwner = null;
     }
   }
 
