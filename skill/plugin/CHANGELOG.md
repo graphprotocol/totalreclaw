@@ -4,6 +4,16 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.10-rc.5] — 2026-05-06
+
+Pedro flagged a gap in rc.10-rc.4: the agent terse line 3 ("Open <url>, enter PIN, generate phrase, reply `done`") doesn't tell the user what the BROWSER side will look like (3-step wizard, countdown, "I've written this down" checkbox, generate-vs-import tabs), and gives the agent no recovery script when the user reports browser-side issues like "page won't load" / "PIN expired" / "clicked button but nothing happened".
+
+### Changed
+
+- **SKILL.md and `openclaw-setup-quickstart.md` now include a "Browser flow context" section** describing the 3-step browser wizard so the agent KNOWS what the user is doing without proactively narrating it (silence rules still hold). Plus a 5-bullet "Common user issues" recovery script: page-won't-load → check URL host; PIN-expired → re-run pair; invalid-phrase on Log in → re-paste or switch tab; clicked-but-nothing-happened → 30 s wait then re-pair; where-do-I-write-it-down → paper / password manager / encrypted note.
+
+This RC is doc only — no plugin or CLI code changes. Same `tr-cli.js` binary as rc.4.
+
 ## [3.3.10-rc.4] — 2026-05-06
 
 Address OpenClaw's own meta-feedback on the rc.10-rc.3 setup guide (collected during a clean retest run by Pedro). Two functional fixes alongside doc cleanup:

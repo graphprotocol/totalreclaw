@@ -94,6 +94,21 @@ test -s ~/.totalreclaw/credentials.json
 
 Exit 0 → emit line 4. Exit 1 → re-run step 4 once and resend line 3 (PIN expired or phrase mismatch).
 
+## Browser flow context (don't narrate; recover gracefully on user question)
+
+After line 3 the user opens the URL and walks through a 3-step browser wizard. Know it so you can answer questions and recover from issues:
+
+1. **Step 1 of 3 — Enter PIN.** Six PIN cells, 10-min countdown in corner. Continue button enables when all 6 digits match.
+2. **Step 2 of 3 — Recovery phrase.** Default tab **Set up** generates a fresh 12-word BIP-39 phrase in-browser; **Log in** tab accepts a pasted existing phrase. User must check "I've written this down…" and click **Set up TotalReclaw**. Phrase encrypted in browser → relay only sees ciphertext → forwarded to plugin.
+3. **Step 3 of 3 — You're all set.** Confirmation. Browser already POSTed; relay completed forward; plugin wrote `~/.totalreclaw/credentials.json`.
+
+Common user issues — emit ONE tight line, don't pre-narrate:
+- "Page won't load" → check URL host (`api-staging.totalreclaw.xyz` for RC, `api.totalreclaw.xyz` for stable). Wrong host → generate fresh URL.
+- "PIN expired" / countdown ran out → re-run step 4, resend line 3.
+- "Invalid phrase" on Log in → typo or wrong-source phrase. User re-checks paste OR switches to **Set up** for a fresh one (loses existing memories).
+- "Clicked Set up but nothing happened" / 502 → wait 30s for any deferred gateway reload to complete; if persists, re-run step 4.
+- "Where do I write down the phrase?" → paper, password manager, encrypted note. NOT this chat. NOT cloud-synced screenshot. Phrase IS the account.
+
 ## CLI reference (post-setup)
 
 ```bash

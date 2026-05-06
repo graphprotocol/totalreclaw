@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Install + set up TotalReclaw encrypted memory for OpenClaw, then use tr CLI for remember / recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 3.3.10-rc.4
+version: 3.3.10-rc.5
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -170,6 +170,22 @@ Open <url> in your browser. Enter PIN <pin>. Generate or paste a 12-word recover
 Do NOT decode `qr_png_b64` (does not exist), do NOT save a PNG to `/tmp/totalreclaw-pair-qr.png` (`LocalMediaAccessError` blocks delivery), do NOT re-render the QR through any other library. The `qr_ascii` field is the single source of truth.
 
 The QR encodes ONLY the account-setup URL. The 6-digit PIN is a separate out-of-band confirmation — deliberately NOT baked into the QR (dual-channel design: scan + type). Never log, print, or re-emit the PIN outside the user-facing reply. The PIN must NOT end up in any other tool call, log file, or memory store.
+
+## Browser flow context (know it, narrate only on user question)
+
+After you emit user-visible line 3, the user opens the URL on their phone or desktop browser. They walk through a 3-step wizard before the relay forwards the encrypted phrase to the plugin. You don't narrate this proactively (silence rules). But you MUST know it so you can answer questions and recover from issues:
+
+1. **Step 1 of 3 — Enter your PIN.** Six PIN cells. The user types or pastes the 6-digit PIN you sent in line 3. "Continue" is disabled until all 6 digits match. There's a 10-minute countdown displayed in the corner.
+2. **Step 2 of 3 — Your recovery phrase.** Two tabs: **Set up** (default — generates a fresh 12-word BIP-39 phrase locally in the browser) and **Log in** (paste an existing phrase to restore on a new device). User must check **"I've written this down and stored it somewhere safe"** then click **Set up TotalReclaw**.
+3. **Step 3 of 3 — You're all set.** Confirmation screen with a "Close this page" link. The browser already POSTed the encrypted phrase by this point — the relay forwards to your gateway, the plugin decrypts, writes `~/.totalreclaw/credentials.json`, and your `awaitPhraseUpload` resolves.
+
+Common user-side issues during pair (recover gracefully — emit ONE tight line, don't pre-narrate):
+
+- **"The page won't load"** → check the URL is the staging URL (`api-staging.totalreclaw.xyz` for RC builds, `api.totalreclaw.xyz` for stable). If they used the wrong stub host, generate a fresh URL.
+- **"PIN says expired"** or countdown ran out → re-run the pair block (Step 4 above) and emit line 3 again with the fresh URL+PIN. The previous session is dead.
+- **"It says invalid phrase"** during Log in → the user pasted a phrase that isn't BIP-39 valid (typo or wrong source). Tell them to double-check and re-paste; or switch to **Set up** tab to generate a fresh one (loses existing memories).
+- **"I clicked Set up TotalReclaw but nothing happened"** / **502** → the gateway WS dropped before respond. The pair subprocess is alive (you used `setsid -f`). Wait 30s; if the user still sees the 502, re-run Step 4 (the deferred reload should have completed by then).
+- **"Where do I write down the phrase?"** → tell them: anywhere safe and durable — paper, password manager, encrypted note. NOT in this chat. NOT in a screenshot to cloud-synced photos. The phrase IS the account; losing it means losing all memories.
 
 ## Phrase safety (HARD — never break)
 
