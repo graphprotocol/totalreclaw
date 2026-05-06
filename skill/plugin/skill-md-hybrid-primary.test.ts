@@ -46,24 +46,50 @@ const topLevelSkillMd = fs.readFileSync(topLevelSkillMdPath, 'utf8');
 // 1. Relay-based architecture assertion (both files)
 // ---------------------------------------------------------------------------
 
-assert(
-  pluginSkillMd.includes('TotalReclaw is RELAY-BASED'),
-  'skill/plugin/SKILL.md: contains relay-based architecture assertion',
-);
+// 3.3.11-rc.2: phrasing migrated from "RELAY-BASED + NO local-only mode"
+// to the more accurate "decentralized network" framing — relay forwards
+// ciphertext but storage is on-chain. Tests now accept either phrasing
+// (older versions kept the relay-based framing; rc.2+ adds decentralized).
+const HAS_ARCHITECTURE_TRUTH_PLUGIN =
+  pluginSkillMd.includes('TotalReclaw is RELAY-BASED') ||
+  pluginSkillMd.includes('DECENTRALIZED NETWORK') ||
+  pluginSkillMd.includes('decentralized network');
 
 assert(
-  topLevelSkillMd.includes('TotalReclaw is RELAY-BASED'),
-  'skill/SKILL.md: contains relay-based architecture assertion',
+  HAS_ARCHITECTURE_TRUTH_PLUGIN,
+  'skill/plugin/SKILL.md: contains architecture truth (RELAY-BASED or DECENTRALIZED NETWORK)',
 );
 
-assert(
-  pluginSkillMd.includes('NO local-only mode'),
-  'skill/plugin/SKILL.md: explicitly states NO local-only mode',
-);
+const HAS_ARCHITECTURE_TRUTH_TOPLEVEL =
+  topLevelSkillMd.includes('TotalReclaw is RELAY-BASED') ||
+  topLevelSkillMd.includes('DECENTRALIZED NETWORK') ||
+  topLevelSkillMd.includes('decentralized network');
 
 assert(
-  topLevelSkillMd.includes('NO local-only mode'),
-  'skill/SKILL.md: explicitly states NO local-only mode',
+  HAS_ARCHITECTURE_TRUTH_TOPLEVEL,
+  'skill/SKILL.md: contains architecture truth (RELAY-BASED or DECENTRALIZED NETWORK)',
+);
+
+// rc.2 added centralized-custody bans alongside the existing local-only bans.
+// At least one of the two anti-centralization claims must be present.
+const HAS_NO_LOCAL_OR_NO_SERVER_PLUGIN =
+  pluginSkillMd.includes('NO local-only mode') ||
+  pluginSkillMd.includes('not on a single company server') ||
+  pluginSkillMd.includes('not on any single company');
+
+assert(
+  HAS_NO_LOCAL_OR_NO_SERVER_PLUGIN,
+  'skill/plugin/SKILL.md: anti-centralized-custody / no-local-only assertion present',
+);
+
+const HAS_NO_LOCAL_OR_NO_SERVER_TOPLEVEL =
+  topLevelSkillMd.includes('NO local-only mode') ||
+  topLevelSkillMd.includes('not on a single company server') ||
+  topLevelSkillMd.includes('not on any single company');
+
+assert(
+  HAS_NO_LOCAL_OR_NO_SERVER_TOPLEVEL,
+  'skill/SKILL.md: anti-centralized-custody / no-local-only assertion present',
 );
 
 // ---------------------------------------------------------------------------

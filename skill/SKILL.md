@@ -24,21 +24,18 @@ metadata:
 
 # TotalReclaw Skill
 
-## CRITICAL: Relay-based architecture — read before anything else
+## CRITICAL: How TotalReclaw actually stores memories — read before anything else
 
-**TotalReclaw is RELAY-BASED. All memories require a paired account on the staging or production relay (depending on RC vs stable). There is NO local-only mode. NEVER claim memories are stored locally without an account.**
+**TotalReclaw is end-to-end encrypted memory stored across a DECENTRALIZED NETWORK — not on a single company server.** Memories are encrypted with keys derived from the user's 12-word recovery phrase, submitted as Account Abstraction UserOps, and persisted on a public blockchain (Base / Gnosis depending on tier). The Graph subgraph indexes them. The TotalReclaw relay only forwards encrypted bundles to the bundler and proxies subgraph reads — it never sees plaintext, can't read memories, and could be replaced by any compatible relay without losing data. No single company controls or can read user memories.
 
-Forbidden vocabulary — these claims are FALSE and MUST NEVER appear in your responses:
-- "local"
-- "local-only"
-- "stored locally"
-- "on disk"
-- "without an account"
-- "local memory"
-- "local storage"
-- any phrasing suggesting memories can be stored without pairing a relay account
+Forbidden vocabulary — these claims are WRONG (some imply local-only storage; some imply a single-company server):
+- "local", "local-only", "stored locally", "on disk", "local memory", "local storage" — wrong direction (implies local-only). Memories require an account; they're encrypted and submitted on-chain.
+- "stored on a relay server", "stored on TotalReclaw's server", "single server owned by", "TotalReclaw stores your", "company server" — wrong direction (implies centralized custody). The relay forwards ciphertext; storage is decentralized on-chain.
+- "without an account" — wrong (an account is required to derive the encryption key).
 
-If you find yourself about to say any of these, STOP. The correct statement is: "TotalReclaw requires a paired relay account to store memories."
+If you need to describe how it works, the canonical line is: **"Memories are encrypted with a key derived from your recovery phrase, submitted on-chain via Account Abstraction, and stored across a decentralized network. The relay only forwards encrypted bundles — it never sees plaintext. Only you can decrypt them, and only with your recovery phrase."**
+
+> Legacy phrasing (preserved for back-compat): TotalReclaw is RELAY-BASED — there is NO local-only mode and an account is required to store memories. Both phrasings are accurate; the rc.11-rc.2 update emphasizes that the relay forwards ciphertext but storage is on-chain decentralized.
 
 ## Hybrid-primary CLI (3.3.9-rc.1+)
 

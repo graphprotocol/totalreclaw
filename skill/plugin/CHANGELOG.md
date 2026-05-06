@@ -4,6 +4,23 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.11-rc.2] — 2026-05-06
+
+UX hardening on top of rc.1's trajectory-poller. Pedro's first install attempt on rc.1 surfaced two agent-prose violations the prior FORBIDDEN ACTIONS list didn't catch:
+
+1. **Inter-line narration during install.** The agent emitted "Now let me verify the install:", "Now let me check if you already have credentials:", and "Need to pair. Let me kick that off:" between the four numbered user-visible lines. Each was edit churn the user shouldn't see — and the third leaked the internal word "pair", which the user doesn't know.
+2. **"Stored on a relay server" architectural claim.** When asked "how does this work?", the agent replied that memories are stored on a relay server. WRONG. Memories are encrypted with a key derived from the recovery phrase, submitted on-chain via Account Abstraction (UserOps), persisted on a public blockchain (Base for free tier, Gnosis for paid), and indexed by The Graph. The relay only forwards encrypted bundles — it never sees plaintext, can't read memories, and could be replaced by any compatible relay without losing data.
+
+### Changed
+
+- **SKILL.md "CRITICAL" section rewritten as "How TotalReclaw actually stores memories"** — leads with the on-chain decentralized architecture, not the relay. Forbidden vocabulary list expanded with centralized-custody phrasings ("stored on a relay server", "TotalReclaw's server", "single server owned by", "company server", etc.) alongside the existing local-only ban list.
+- **New "User-facing vocabulary" translation table.** Maps internal jargon (pair, relay, WS, trapdoor, subgraph, bundler, UserOp, mnemonic file, `setsid -f`) to user-facing phrases ("set up an account", "your account", "your recovery phrase"). The word "pair" is now explicitly forbidden in user-visible prose — it's an internal CLI command, not a user concept.
+- **New "Hard silence rules between numbered lines"** subsection with verbatim bad examples from this QA: "Now let me verify the install" / "Now let me check if you already have credentials" / "Need to pair. Let me kick that off" / "Standing by." / any "Let me X" prelude. The transcript the user sees is exactly the four numbered lines, nothing in between.
+- **New "How does TotalReclaw work?" canonical answer section.** Provides the long-form explanation plus three short slices ("Where are memories stored?" / "Is the relay reading my data?" / "What if TotalReclaw shuts down?") so the agent has a paste-ready truthful answer for common user questions. Mirrored in `openclaw-setup-quickstart.md`.
+- **Quickstart rules bumped from 5 to 7** with the same "no pair word" + "no centralized-custody phrasing" hard rules.
+
+This RC is doc + SKILL.md only — same `tr-cli.js` and `trajectory-poller.js` binaries as rc.1. The trajectory poller verified end-to-end (40/40 unit tests + live container smoke) in rc.1 ships unchanged.
+
 ## [3.3.11-rc.1] — 2026-05-06
 
 Auto-extraction restored without waiting on upstream OpenClaw. Pedro's pop-os QA on rc.10-rc.5 produced 0 extraction events across 2 h of Telegram chat — root cause confirmed in fresh canonical container (OpenClaw 2026.5.4): the `agent_end` hook is silently rejected for non-bundled plugins despite `plugins.entries.totalreclaw.hooks.allowConversationAccess=true` in config. Reproduces every gateway boot + every SIGUSR1 in-process restart. Plugin's `api.on('agent_end', handler)` call returns without error but the gateway never dispatches the event.

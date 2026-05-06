@@ -5,11 +5,13 @@
 
 ## Hard rules (read once, never break)
 
-1. Emit ONLY the four numbered user-visible lines below. No narration, no "let me check…", no version-lag commentary, no path-resolution prose.
-2. **Do NOT restart the gateway** (`/totalreclaw-restart`, `kill -USR1`, `docker restart`, `openclaw gateway restart`). The plugin self-patches and signals its own restart needs.
-3. **Do NOT write to `~/.openclaw/openclaw.json`**. The plugin's `patchOpenClawConfig()` already wrote `plugins.slots.memory`, `plugins.entries.totalreclaw.hooks.allowConversationAccess`, `channels.telegram.streaming.mode`. Any further write triggers a deferred SIGUSR1 reload that kills pair.
-4. **Do NOT save QR PNGs**. The `tr pair --json` payload returns `qr_ascii` — emit that inline in a code block. No `/tmp/totalreclaw-pair-qr.png`, no PNG decode, no `qr_png_b64` (legacy field, no longer exists).
-5. **`tr pair --json` MUST be invoked via `setsid -f`** so the WS-holding subprocess is in its own POSIX session and survives any subsequent gateway reload. Foreground `tr pair --json` is killed when your shell-tool exec returns → relay returns 502.
+1. **Emit ONLY the four numbered user-visible lines below.** No narration, no "let me check…", no "Now let me X", no "Need to Y", no "Standing by", no version-lag commentary, no path-resolution prose. The transcript Pedro sees during a healthy install is exactly four messages.
+2. **Never use the word "pair" / "pairing" / "paired" in user-facing text.** It's internal jargon. The user-facing word is **"set up an account"** / "your account". (Behind the scenes the CLI command is still `tr pair`; that's an implementation detail.)
+3. **Don't claim memories are "stored on a relay server" / "TotalReclaw's server" / any centralized-custody phrasing.** Memories are encrypted with a key derived from the recovery phrase, submitted on-chain (Account Abstraction), stored across a decentralized network, indexed via The Graph subgraph. The relay only forwards encrypted bundles. See "How does this work?" section below for the canonical answer.
+4. **Do NOT restart the gateway** (`/totalreclaw-restart`, `kill -USR1`, `docker restart`, `openclaw gateway restart`). The plugin self-patches and signals its own restart needs.
+5. **Do NOT write to `~/.openclaw/openclaw.json`**. The plugin's `patchOpenClawConfig()` already wrote everything it needs.
+6. **Do NOT save QR PNGs**. The `tr pair --json` payload returns `qr_ascii` — emit that inline in a code block. No `/tmp/totalreclaw-pair-qr.png`, no PNG decode, no `qr_png_b64` (legacy field, no longer exists).
+7. **The `tr pair --json` command MUST be invoked via `setsid -f`** so the WS-holding subprocess is in its own POSIX session and survives any subsequent gateway reload. Foreground invocation is killed when your shell-tool exec returns → relay returns 502.
 
 ## User-visible lines (the entire transcript)
 
@@ -108,6 +110,17 @@ Common user issues — emit ONE tight line, don't pre-narrate:
 - "Invalid phrase" on Log in → typo or wrong-source phrase. User re-checks paste OR switches to **Set up** for a fresh one (loses existing memories).
 - "Clicked Set up but nothing happened" / 502 → wait 30s for any deferred gateway reload to complete; if persists, re-run step 4.
 - "Where do I write down the phrase?" → paper, password manager, encrypted note. NOT this chat. NOT cloud-synced screenshot. Phrase IS the account.
+
+## "How does this work?" — canonical answer for user questions
+
+When the user asks "how does this work?" / "where are my memories stored?" / "is this safe?" — answer with this content. Do NOT say "stored on a relay server", "stored on TotalReclaw's server", or any phrasing that implies single-company custody.
+
+> **End-to-end encrypted, decentralized memory.** When you tell me to remember something, I encrypt it locally with a key derived from your 12-word recovery phrase, then submit it on-chain via Account Abstraction (a UserOperation). It lives on a public blockchain (Base Sepolia for free tier, Gnosis mainnet for paid). The Graph subgraph indexes it for fast retrieval. The TotalReclaw relay server only forwards encrypted bundles between your client and the chain — it never sees plaintext, can't read your memories, and could be replaced by any compatible relay without losing data. Your recovery phrase is the only thing that can decrypt the memories.
+
+Shorter slices:
+- **"Where are memories stored?"** → "Encrypted, on-chain (Base or Gnosis depending on tier), indexed by The Graph. Not on any single company's server."
+- **"Is the relay reading my data?"** → "No. The relay only forwards encrypted bundles. Plaintext never leaves your device. Only your recovery phrase can decrypt them."
+- **"What if TotalReclaw shuts down?"** → "Your memories survive. They're on a public blockchain. Any compatible relay (or self-hosted relay) can read them with your recovery phrase."
 
 ## CLI reference (post-setup)
 

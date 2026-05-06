@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Install + set up TotalReclaw encrypted memory for OpenClaw, then use tr CLI for remember / recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 3.3.11-rc.1
+version: 3.3.11-rc.2
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -30,21 +30,32 @@ metadata:
 >
 > If the user pastes either URL: prefer the quickstart for execution. Fetch the full guide only if the user asks for context or troubleshooting beyond what the quickstart covers. This SKILL.md mirrors the quickstart's hard rules so you can act even if the URL is unreachable.
 
-## CRITICAL: Relay-based architecture (read before anything else)
+## CRITICAL: How TotalReclaw actually stores memories (read before anything else)
 
-**TotalReclaw is RELAY-BASED. All memories require a paired account on the staging or production relay (depending on RC vs stable). There is NO local-only mode. NEVER claim memories are stored locally without an account.**
+**TotalReclaw is end-to-end encrypted memory stored across a DECENTRALIZED NETWORK — not on a single company server.** Memories are encrypted with keys derived from the user's 12-word recovery phrase, submitted as Account Abstraction UserOps, and persisted on a public blockchain (Base / Gnosis depending on tier). The Graph subgraph indexes them. The TotalReclaw relay only forwards encrypted bundles to the bundler and proxies subgraph reads — it never sees plaintext, can't read memories, and could be replaced by any compatible relay without losing data. No single company controls or can read user memories.
 
-Forbidden vocabulary — these claims are FALSE and MUST NEVER appear in your responses:
-- "local"
-- "local-only"
-- "stored locally"
-- "on disk"
-- "without an account"
-- "local memory"
-- "local storage"
-- any phrasing suggesting memories can be stored without pairing a relay account
+Forbidden vocabulary — these claims are WRONG (some imply local-only storage; some imply a single-company server):
+- "local", "local-only", "stored locally", "on disk", "local memory", "local storage" — wrong direction (implies local-only). Memories require an account; they're encrypted and submitted on-chain.
+- "stored on a relay server", "stored on TotalReclaw's server", "single server owned by", "TotalReclaw stores your", "company server" — wrong direction (implies centralized custody). The relay forwards ciphertext; storage is decentralized on-chain.
+- "without an account" — wrong (an account is required to derive the encryption key).
 
-If you find yourself about to say any of these, STOP. The correct statement is: "TotalReclaw requires a paired relay account to store memories — run `tr pair` to set one up."
+If you need to describe how it works, the canonical line is: **"Memories are encrypted with a key derived from your recovery phrase, submitted on-chain via Account Abstraction, and stored across a decentralized network. The relay only forwards encrypted bundles — it never sees plaintext. Only you can decrypt them, and only with your recovery phrase."**
+
+## User-facing vocabulary (substitute internal jargon for plain words)
+
+Internal terms that the user does NOT know — translate when you must speak:
+
+| Internal term | Say to the user |
+|---|---|
+| pair / pairing / paired account | "set up an account" / "your TotalReclaw account" |
+| relay / relay server | (don't mention; if forced, say "the encrypted-bundle forwarder") |
+| WS / WebSocket / handshake | (don't mention) |
+| trapdoor / blind index / dedup-key | (don't mention) |
+| subgraph / bundler / UserOp / Account Abstraction | (don't mention; if forced, "submitted on-chain to a decentralized network") |
+| credentials.json / mnemonic file | "your recovery phrase" |
+| `tr pair --json` / `setsid -f` / shell exec | (don't mention; just do the work silently) |
+
+The word "pair" is internal jargon — never use it in user-visible prose. The user-visible vocabulary is "set up an account", "your account", "your recovery phrase", "your memories".
 
 ## Top-level rule (read this before anything else)
 
@@ -93,6 +104,30 @@ Speak only these lines, in order. Substitute the bracketed placeholders with the
 
 If existing credentials are detected (step "Check for existing credentials" below), emit ONLY this line and stop:
    > ✓ TotalReclaw is already set up.
+
+### Hard silence rules between numbered lines
+
+Do NOT emit transitional / narrative lines between any of the four user-visible lines above. Specifically forbidden (verbatim examples from Pedro's 2026-05-06 QA):
+
+- ❌ "Now let me verify the install:" → silent. Just run `tr status --json`. Emit line 2 when it returns.
+- ❌ "Now let me check if you already have credentials:" → silent. Just run `test -s ~/.totalreclaw/credentials.json`.
+- ❌ "Need to pair. Let me kick that off:" → silent. Just run the `setsid -f` block. Emit line 3 when URL+PIN returns. ALSO never use the word "pair" in user-facing text — see vocabulary table above.
+- ❌ "Standing by." → silent. Acknowledgements between lines are noise.
+- ❌ Any "Let me X" / "Now I'll Y" / "Just give me a second" prelude.
+
+The transcript Pedro should see is exactly four messages — the four numbered lines, nothing in between.
+
+## How does TotalReclaw work? (canonical answer for user questions)
+
+When the user asks "how does this work?" / "where are my memories stored?" / "is this safe?" / similar — answer with this content. Do NOT say "stored on a relay server", "stored on TotalReclaw's server", or any phrasing that implies single-company custody. The actual architecture:
+
+> **End-to-end encrypted, decentralized memory.** When you tell me to remember something, I encrypt it locally with a key derived from your 12-word recovery phrase, then submit it on-chain via Account Abstraction (a UserOperation). It lives on a public blockchain (Base Sepolia for free tier, Gnosis mainnet for paid). The Graph subgraph indexes it for fast retrieval. The TotalReclaw relay server only forwards encrypted bundles between your client and the chain — it never sees plaintext, can't read your memories, and could be replaced by any compatible relay without losing data. Your recovery phrase is the only thing that can decrypt the memories. Nobody (not me, not TotalReclaw the company, not the relay operator) can read them without it.
+
+If the user asks shorter questions, reply with the relevant slice:
+
+- **"Where are memories stored?"** → "Encrypted, on-chain (Base or Gnosis depending on your tier), indexed by The Graph. Not on any single company's server."
+- **"Is the relay reading my data?"** → "No. The relay only forwards encrypted bundles. Plaintext never leaves your device. Only your recovery phrase can decrypt them."
+- **"What if TotalReclaw shuts down?"** → "Your memories survive. They're on a public blockchain. Any compatible relay (or self-hosted relay) can read them with your recovery phrase."
 
 ## Setup flow (hybrid-primary)
 
