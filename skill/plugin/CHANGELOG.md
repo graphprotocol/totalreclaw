@@ -4,6 +4,32 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.10-rc.4] — 2026-05-06
+
+Address OpenClaw's own meta-feedback on the rc.10-rc.3 setup guide (collected during a clean retest run by Pedro). Two functional fixes alongside doc cleanup:
+
+### Fixed
+
+- **QR delivery regression on Telegram.** rc.10-rc.3's FORBIDDEN list correctly banned saving the QR PNG to `/tmp/totalreclaw-pair-qr.png` (which OpenClaw's media-policy rejected with `LocalMediaAccessError`), but the existing "Rendering the QR on your transport" SKILL.md section still pointed agents at a non-existent `qr_png_b64` field and a `qr_unicode` field — leftover from an older skill/native-tool surface. The agent skipped QR entirely rather than render the wrong field. Fix: the section is rewritten around the actual `qr_ascii` field that `tr pair --json` returns. Single recommended path: emit `qr_ascii` inside a triple-backticked code block above user-visible line 3. Renders as block-char QR in monospace font on Telegram, Slack, web, and terminal — every transport. No PNG, no save-to-disk, no media-policy interaction.
+
+- **`--force` install path.** OpenClaw QA fed back that `openclaw plugins install` fails on a re-run when the plugin is already on disk. Both the quickstart and the long setup guide now document the `--force` flag for this case.
+
+- **`tr status --json` retry-fail escalation.** Quickstart spells out a three-level escalation: 1st failure → sleep 5s + retry; 2nd → re-run install with `--force`; 3rd → emit a tight error line and stop. The previous "retry once after 5s" guidance left the agent stranded when retry also failed.
+
+### Changed
+
+- **New file `docs/guides/openclaw-setup-quickstart.md` (~5 KB)** — agent-executable contract: hard rules, four user-visible lines, copy-paste shell snippets. No rationale prose. SKILL.md's header now points agents at the quickstart first; the long `openclaw-setup.md` is the human-readable companion. The 28 KB `openclaw-setup.md` was burning context on every agent fetch — quickstart cuts that ~5×.
+
+- **SKILL.md FORBIDDEN section trimmed.** OpenClaw's feedback noted the rc.3 list was patching past failures one by one with verbatim narration examples that bloated the skill without adding rules. The list is now four crisp action-bans (no gateway restart, no config write, no QR PNG save, mandatory `setsid -f` for pair) — the narration ban is folded into the existing top-level "emit only the numbered user-visible lines" rule.
+
+- **`openclaw-setup.md` audience map at top.** Explicit three-audience map (humans, agents, QA / Pedro) with cross-link to the quickstart, so agents that fetched the long URL by accident know to switch.
+
+### Implementation notes
+
+- `qr_ascii` already exists in `pair-cli-relay.ts` `PairCliJsonPayload`. No CLI change required.
+- The legacy SKILL.md QR-rendering section referenced the older native-`totalreclaw_pair` tool's payload shape (`qr_png_b64`, `qr_unicode`). The native tool surface is unchanged for back-compat — but it's deprioritized in 3.3.9-rc.1+ (issue #223 strips it). Hybrid CLI is now the documented path, and CLI returns `qr_ascii` only.
+- This RC is doc + SKILL.md only — no code changes. Same `tr-cli.js` binary as rc.3.
+
 ## [3.3.10-rc.3] — 2026-05-06
 
 Pedro's 2026-05-05 manual QA on rc.10-rc.2 confirmed that even with the `setsid -f` instruction in SKILL.md, the agent freelances during install + pair: it restarted the gateway unprompted, re-rendered the QR to `/tmp/` (which OpenClaw's media-access policy blocks → `LocalMediaAccessError` on Telegram), wrote extra config that triggered another deferred SIGUSR1 reload, and ran `tr pair` in the foreground — all of which killed the pair WS and produced the 502 on browser respond. Plus the CLI binary's hard-coded `PLUGIN_VERSION` constant lagged the package version (CLI reported `3.3.9-rc.1` while the install record was `3.3.10-rc.2`).

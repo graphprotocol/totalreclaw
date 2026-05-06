@@ -1,5 +1,7 @@
 # TotalReclaw for OpenClaw
 
+> **Audience map.** This guide serves three readers — **(a) humans** wanting to understand what their agent is about to do, **(b) the agent itself** that just fetched this URL, and **(c) Pedro / future-Pedro doing QA on a fresh VM**. The lean agent-executable version (~5 KB, no rationale prose) lives at [`openclaw-setup-quickstart.md`](./openclaw-setup-quickstart.md). If you are an agent and the user only pasted this guide URL, prefer the quickstart for execution and use this file for context.
+
 TotalReclaw gives your OpenClaw agent encrypted, persistent memory. The fastest path is a single chat message — your agent fetches this guide, you and your agent install the plugin together, and the agent walks you through setting up your TotalReclaw account.
 
 ## What this is and where it comes from
@@ -124,7 +126,8 @@ Step 2 (`hooks.allowConversationAccess`) unblocks the plugin's `agent_end` hook 
 Both apply via hot-reload (no `/totalreclaw-restart` needed for either).
 
 Notes:
-- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.10-rc.3`.
+- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.10-rc.4`.
+- If install reports `already exists` or non-zero on a re-run (the plugin is already on disk from a previous attempt), add `--force`: `openclaw plugins install @totalreclaw/totalreclaw@rc --force` and `openclaw skills install totalreclaw --force`.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
 ### Step 2 — Verify CLI works (hybrid-primary, 3.3.9-rc.1+) — emit user-visible line 2 on success

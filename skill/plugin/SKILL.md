@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Install + set up TotalReclaw encrypted memory for OpenClaw, then use tr CLI for remember / recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 3.3.10-rc.3
+version: 3.3.10-rc.4
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -24,7 +24,11 @@ metadata:
 
 # TotalReclaw — OpenClaw
 
-> The canonical install flow lives at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>. If a user pastes that URL in chat, fetch it and follow its agent-instructions section. This SKILL.md mirrors the same steps so you can act even if the URL is unreachable.
+> **Agent-executable quickstart (5 KB, copy-paste-runnable)**: <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup-quickstart.md>
+>
+> **Human-readable setup guide (full rationale, troubleshooting)**: <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>
+>
+> If the user pastes either URL: prefer the quickstart for execution. Fetch the full guide only if the user asks for context or troubleshooting beyond what the quickstart covers. This SKILL.md mirrors the quickstart's hard rules so you can act even if the URL is unreachable.
 
 ## CRITICAL: Relay-based architecture (read before anything else)
 
@@ -46,30 +50,17 @@ If you find yourself about to say any of these, STOP. The correct statement is: 
 
 **Emit ONLY the user-visible lines listed below. Do not narrate tool calls. Do not describe what you're doing or about to do. Errors are the only allowed deviation, and only as a single tight line.** The expected user-facing transcript for a healthy install is **4–5 short lines TOTAL**. Anything more is a SKILL violation. Telegram and similar transports edit the bot's messages live as your tool calls progress — every interim "Let me check…" / "Plugin loaded. Let me verify…" line shows up to the user as awkward edit churn, even if you "delete" it. The fix is to never emit it in the first place.
 
-## ⛔ FORBIDDEN — do NOT do these (3.3.10-rc.3, hard rules from Pedro's 2026-05-05 QA)
+## ⛔ FORBIDDEN ACTIONS (4 hard rules from 2026-05-05 QA)
 
-These are the freelancing patterns that have broken pair flows and made transcripts noisy. They are FORBIDDEN, full stop:
+These specific actions break the pair flow. Everything else is governed by the "emit only the numbered user-visible lines" rule above.
 
-1. **Do NOT issue `/totalreclaw-restart`.** Do NOT send `kill -USR1`. Do NOT call `openclaw gateway restart`. Do NOT `docker restart`. The plugin auto-patches the gateway config and emits a single restart-required warn IF (and only if) the gateway needs one. The gateway will restart itself when its reload pipeline decides to. **You restarting it KILLS the in-flight `setsid -f` pair subprocess and surfaces as a 502 on the browser respond.**
+1. **Do NOT restart the gateway.** No `/totalreclaw-restart`, no `kill -USR1`, no `docker restart`, no `openclaw gateway restart`. The plugin self-patches and signals its own restart needs. You restarting it kills the in-flight `setsid -f` pair subprocess → 502 on browser respond.
 
-2. **Do NOT write to `~/.openclaw/openclaw.json`.** The plugin's `patchOpenClawConfig()` already wrote `plugins.slots.memory`, `plugins.entries.totalreclaw.hooks.allowConversationAccess`, and `channels.telegram.streaming.mode` for you. Any further config write triggers a fresh deferred reload that eventually fires SIGUSR1 and kills the pair subprocess. Forbidden tool calls: `openclaw config set …`, `jq … > openclaw.json`, any `cat > openclaw.json`, any `sed -i openclaw.json`.
+2. **Do NOT write to `~/.openclaw/openclaw.json`.** The plugin's `patchOpenClawConfig()` already wrote `plugins.slots.memory`, `plugins.entries.totalreclaw.hooks.allowConversationAccess`, `channels.telegram.streaming.mode`. Any further write triggers a deferred SIGUSR1 reload that kills pair. No `openclaw config set …`, no `jq …>openclaw.json`, no `sed -i openclaw.json`.
 
-3. **Do NOT re-render the QR.** `tr pair --json` already returns the QR as `qr_ascii` (Unicode block chars) AND the pair page itself renders a real PNG QR. Do NOT save the QR to `/tmp/totalreclaw-pair-qr.png` — OpenClaw's media-access policy blocks `/tmp/` paths and Telegram delivery fails with `LocalMediaAccessError: Local media path is not under an allowed directory`. The agent's only QR responsibility is to copy the URL+PIN into user-visible line 3. The transport (Telegram/web/CLI) renders the QR from the URL the user can already click.
+3. **Do NOT save QR PNGs.** `tr pair --json` returns `qr_ascii` — emit that inline in a triple-backticked code block. No `/tmp/totalreclaw-pair-qr.png` (OpenClaw media-policy blocks it: `LocalMediaAccessError`). No PNG decode. No `qr_png_b64` (legacy field, no longer exists in payload).
 
-4. **Do NOT invoke `tr pair --json` in the foreground.** A foreground pair subprocess is killed when your shell-tool exec returns (the agent runtime cleans up child PIDs). The pair WS dies → relay returns 502 on the browser respond. **The setup-flow Step 4 below uses `setsid -f` for exactly this reason — copy that block VERBATIM. Do not "simplify" it. Do not drop the `setsid -f`. Do not redirect stdout differently. Do not omit `< /dev/null`.**
-
-5. **Do NOT narrate.** Examples of narration that have appeared in past QAs and MUST NEVER appear again:
-   - "Now let me verify the CLI and check for existing credentials." → silent.
-   - "Gateway needs a restart to load the plugin. Let me restart it." → DO NOT RESTART.
-   - "The gateway is running but as a container process, not via systemd. Let me find and signal the gateway process to reload." → DO NOT SIGNAL.
-   - "The CLI is at the npm path, not the extensions path. Let me use the correct path." → silent (the `TR_CLI` resolver below already handles both paths).
-   - "Plugin is X.Y.Z, CLI reports itself as A.B.C (version string lag in the CLI binary)." → silent (don't reveal CLI internals).
-   - "Now let me also add the required post-install config and render the QR as an image." → DO NOT WRITE CONFIG. DO NOT RE-RENDER QR.
-   - "The pair response already has the QR data. Let me save the QR as a PNG using the existing skill's pair-qr module." → DO NOT SAVE QR ANYWHERE.
-
-If `tr status --json` returns version that disagrees with `openclaw plugins inspect totalreclaw`, **that is fine — do not narrate it**. The plugin's CLI reports its own packaged version which may lag the install record by one RC during a publish cycle. Both work.
-
-If you find yourself about to do anything in this list, STOP. Re-read this section. Then run the literal commands in the setup flow below — exactly as written.
+4. **`tr pair --json` MUST run via `setsid -f`** (exact form below). Foreground invocation is killed when your shell-tool exec returns → 502.
 
 ## Hybrid-primary architecture (3.3.9-rc.1)
 
@@ -162,13 +153,21 @@ node "$TR_CLI" recall --json "where does the user work" --limit 5
 
 **Note on tool names**: `totalreclaw_remember`, `totalreclaw_recall`, etc. may or may not appear in your toolset depending on OpenClaw version. Under hybrid-primary, you use the `tr` CLI instead. If native tools ARE available (older OpenClaw or future OC fix), they work too — but always prefer `tr` for reliability.
 
-## Rendering the QR on your transport (rc.5+)
+## Rendering the QR on your transport (3.3.10-rc.4 — corrected)
 
-When you receive the `totalreclaw_pair` payload (from tool OR `tr pair --json`), render the QR based on your chat transport:
+`tr pair --json` returns a `qr_ascii` field — Unicode block-char QR (43 lines × ~43 cols). That is the ONLY QR field in the payload. The legacy `qr_png_b64` and `qr_unicode` field names referenced by older skill docs no longer exist.
 
-- **Transport supports image attachments** (Telegram, Slack, web chat, any transport with file/image upload): decode `qr_png_b64` from base64 to bytes, save to a tempfile with a `.png` suffix, and attach the tempfile as an image. Also show the URL + PIN as text so users who prefer clicking can still do so.
-- **Terminal-only transport** (OpenClaw native CLI chat, bare SSH shell): emit `qr_unicode` inline in your reply. It renders as block characters in most terminal fonts; the user scans from their phone.
-- **Web chat with inline-image support**: embed as `<img src="data:image/png;base64,<qr_png_b64>" alt="TotalReclaw account-setup QR">` if the chat client renders HTML; otherwise fall back to attachment.
+The simplest path that works on every transport (Telegram, Slack, web, terminal SSH): emit `qr_ascii` INLINE inside a triple-backtick code block right above user-visible line 3. Block-char QR renders correctly in monospace fonts on every modern transport — the user scans from their phone. The pair PAGE itself renders a real PNG QR alongside, so users on a desktop browser see both.
+
+Format the line-3 message as:
+
+```
+<qr_ascii contents — 43 lines of ▄▀█▄▀█ block chars>
+```
+
+Open <url> in your browser. Enter PIN <pin>. Generate or paste a 12-word recovery phrase. Reply `done` once it's sealed.
+
+Do NOT decode `qr_png_b64` (does not exist), do NOT save a PNG to `/tmp/totalreclaw-pair-qr.png` (`LocalMediaAccessError` blocks delivery), do NOT re-render the QR through any other library. The `qr_ascii` field is the single source of truth.
 
 The QR encodes ONLY the account-setup URL. The 6-digit PIN is a separate out-of-band confirmation — deliberately NOT baked into the QR (dual-channel design: scan + type). Never log, print, or re-emit the PIN outside the user-facing reply. The PIN must NOT end up in any other tool call, log file, or memory store.
 
