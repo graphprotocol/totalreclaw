@@ -1170,6 +1170,16 @@ export type OpenClawConfigPatchResult = 'patched' | 'unchanged' | 'skipped' | 'e
  *      this to "off" on first run for a clean UX. Existing explicit values
  *      ("partial", "block", "progress") are preserved.
  *
+ *   4. `plugins.bundledDiscovery = "compat"` (only if unset, and only when
+ *      `plugins.allow` is populated). When `plugins.allow` is a non-empty
+ *      array, OpenClaw 2026.5.x switches the loader into strict-allowlist
+ *      mode and silently rejects non-bundled plugins like totalreclaw —
+ *      EVEN IF they are listed in the allow array. Setting
+ *      `bundledDiscovery: "compat"` restores the looser behavior so allow-
+ *      listed non-bundled plugins load. Without this fix, users with
+ *      telegram or any model provider configured before TR install (which
+ *      populates allow) get a silent plugin-skip on every gateway boot.
+ *
  * Design constraints
  * ------------------
  * - SYNCHRONOUS — called during register() which must be sync.
@@ -1298,6 +1308,37 @@ export function patchOpenClawConfig(
           tg.streaming.mode = 'off';
           mutated = true;
         }
+      }
+    }
+
+    // --- Fix #4: plugins.bundledDiscovery = "compat" (3.3.11-rc.4) ---
+    //
+    // OpenClaw 2026.5.x: when `plugins.allow` is populated (any non-empty
+    // array), the gateway's plugin loader switches into strict-allowlist
+    // mode. In strict mode, NON-BUNDLED plugins like totalreclaw are
+    // silently rejected even when listed in `plugins.allow`, unless
+    // `plugins.bundledDiscovery = "compat"` is explicitly set. Pedro's
+    // 2026-05-07 QA on pop-os surfaced this — the gateway booted with only
+    // the bundled providers (telegram, device-pair) and skipped totalreclaw
+    // despite it being in the allow list. `openclaw doctor --fix` cures it
+    // by setting `bundledDiscovery: "compat"`, but users shouldn't need
+    // to run doctor manually for the plugin to load.
+    //
+    // Fix: when `plugins.allow` is a non-empty array AND
+    // `plugins.bundledDiscovery` is unset, set it to "compat". If the user
+    // explicitly chose "allowlist" (the stricter mode), preserve their
+    // choice — only first-run defaults are touched.
+    //
+    // This bug was missed by the auto-QA harness because the harness ran
+    // on a fresh canonical container with `plugins.allow=null`, hitting
+    // the auto-discover code path. Real users with telegram + a model
+    // provider configured before TR install have a populated allow list,
+    // hitting the strict-mode path. The auto-QA harness in 3.3.11-rc.4
+    // adds a populated-allow scenario to catch future regressions.
+    if (Array.isArray(cfg.plugins.allow) && cfg.plugins.allow.length > 0) {
+      if (cfg.plugins.bundledDiscovery === undefined) {
+        cfg.plugins.bundledDiscovery = 'compat';
+        mutated = true;
       }
     }
 

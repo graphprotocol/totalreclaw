@@ -3156,7 +3156,7 @@ const plugin = {
           api.logger.warn(
             'TotalReclaw: updated openclaw.json with required 2026.5.x keys ' +
               '(plugins.slots.memory + hooks.allowConversationAccess + ' +
-              'channels.telegram.streaming.mode). ' +
+              'channels.telegram.streaming.mode + plugins.bundledDiscovery). ' +
               'Gateway restart required for the changes to take effect. ' +
               'Run `/totalreclaw-restart` or restart the gateway manually.',
           );

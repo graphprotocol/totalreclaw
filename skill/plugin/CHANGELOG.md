@@ -4,6 +4,34 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.11-rc.4] — 2026-05-07
+
+Fix #4 added to `patchOpenClawConfig()`: the **populated-allowlist plugin-skip bug** that broke every realistic install path.
+
+### Fixed
+
+- **`plugins.bundledDiscovery: "compat"` now auto-set when `plugins.allow` is populated.** OpenClaw 2026.5.x switches the plugin loader into strict-allowlist mode whenever `plugins.allow` is a non-empty array. In that mode, **non-bundled plugins like totalreclaw are silently rejected even when listed in the allow array** unless `plugins.bundledDiscovery: "compat"` is set. Without the compat flag, the gateway boots with only the bundled providers (e.g. `[device-pair, telegram]`), the totalreclaw plugin is dropped on the floor, and `extractd:` log lines never appear because the plugin's `register()` never runs.
+
+  This bug surfaces on every real-world install path:
+  - User installs telegram + zai/openai/anthropic before installing TotalReclaw → `plugins.allow` populated → loader rejects totalreclaw on every gateway restart.
+  - Pedro's pop-os QA host hit this on rc.3 because the host had `['device-pair', 'google', 'telegram', 'totalreclaw', 'zai']` in `plugins.allow` from prior install cycles.
+  - `openclaw doctor --fix` was the manual cure (sets `bundledDiscovery: "compat"`), but users shouldn't need to run doctor for the plugin they just installed.
+
+  Fix: `patchOpenClawConfig()` now sets `plugins.bundledDiscovery = "compat"` when `plugins.allow` is a non-empty array AND `bundledDiscovery` is unset. Power-users who explicitly chose `"allowlist"` (the stricter mode) keep their setting — only first-run defaults are touched. `plugins.allow=null` (auto-discover mode) is left alone.
+
+### Auto-QA gap (acknowledged)
+
+The 3.3.11-rc.1 auto-QA harness ran on a fresh canonical OpenClaw 2026.5.4 container with `plugins.allow=null` (auto-discover mode). It hit the looser code path where the plugin loaded fine. The strict-allowlist code path was untested. As a result, rc.3 shipped with this bug, Pedro hit it on pop-os, and I had to chase it down post-publish.
+
+This RC adds:
+- 5 new fs-helpers test cases covering Fix #4: empty-allow no-op, populated-allow + missing-bundledDiscovery patches, empty-array allow no-op, explicit `"allowlist"` preserved, full pop-os-style scenario.
+- TODO for next iteration: expand the live-container auto-QA harness to run a populated-allowlist scenario (mimicking a real install with telegram + zai pre-configured) alongside the existing fresh-allow=null scenario.
+
+### Implementation notes
+
+- 92/92 fs-helpers tests green. 21/21 register-command-name + 37/37 skill-md + 21/21 tr-cli-json + 40/40 trajectory-poller + 10/10 manifest-shape. check-scanner: 129 files, 0 flags.
+- The patchOpenClawConfig restart-required warn now mentions all four keys (slots.memory + allowConversationAccess + telegram.streaming.mode + bundledDiscovery).
+
 ## [3.3.11-rc.3] — 2026-05-06
 
 Two real-bug fixes flagged by Pedro's pop-os QA on rc.11-rc.1/rc.2: credentials.json shipped with only `{mnemonic}` (no userId, no salt), and the subgraph "Invalid character 'q' at position 0" Bytes-decode error.

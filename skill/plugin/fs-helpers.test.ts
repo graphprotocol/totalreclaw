@@ -694,6 +694,146 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
   );
 }
 
+// --- Fix #4: plugins.bundledDiscovery = "compat" when plugins.allow populated (3.3.11-rc.4) ---
+
+{
+  // Sets bundledDiscovery=compat when allow is populated and the field is absent
+  const cfgPath = path.join(TMP, 'openclaw-allow-populated-no-bd.json');
+  const initial = {
+    plugins: {
+      installs: { totalreclaw: { version: '3.3.11-rc.4' } },
+      allow: ['device-pair', 'telegram', 'zai', 'totalreclaw'],
+      slots: { memory: 'totalreclaw' },
+      entries: { totalreclaw: { enabled: true, hooks: { allowConversationAccess: true } } },
+    },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'patched',
+    'patchOpenClawConfig: patches when allow populated + bundledDiscovery absent',
+  );
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const plugins = after.plugins as Record<string, unknown>;
+  assertEq(
+    plugins.bundledDiscovery,
+    'compat',
+    'patchOpenClawConfig: bundledDiscovery set to "compat" when allow is populated',
+  );
+  // Other keys preserved
+  assertEq(
+    (plugins.allow as string[]).includes('totalreclaw'),
+    true,
+    'patchOpenClawConfig: existing allow array preserved',
+  );
+}
+
+{
+  // Does NOT set bundledDiscovery when allow is empty / absent (auto-discover mode)
+  const cfgPath = path.join(TMP, 'openclaw-allow-empty.json');
+  const initial = {
+    plugins: {
+      installs: { totalreclaw: { version: '3.3.11-rc.4' } },
+      slots: { memory: 'totalreclaw' },
+      entries: { totalreclaw: { enabled: true, hooks: { allowConversationAccess: true } } },
+    },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'unchanged',
+    'patchOpenClawConfig: no bundledDiscovery patch when allow is absent (auto-discover mode)',
+  );
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const plugins = after.plugins as Record<string, unknown>;
+  assertEq(
+    plugins.bundledDiscovery,
+    undefined,
+    'patchOpenClawConfig: bundledDiscovery NOT set when allow absent',
+  );
+}
+
+{
+  // Does NOT set bundledDiscovery when allow is empty array
+  const cfgPath = path.join(TMP, 'openclaw-allow-empty-array.json');
+  const initial = {
+    plugins: {
+      installs: { totalreclaw: { version: '3.3.11-rc.4' } },
+      allow: [],
+      slots: { memory: 'totalreclaw' },
+      entries: { totalreclaw: { enabled: true, hooks: { allowConversationAccess: true } } },
+    },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'unchanged',
+    'patchOpenClawConfig: no bundledDiscovery patch when allow is empty array',
+  );
+}
+
+{
+  // Does NOT overwrite an explicit bundledDiscovery="allowlist" (power-user choice preserved)
+  const cfgPath = path.join(TMP, 'openclaw-bd-explicit-allowlist.json');
+  const initial = {
+    plugins: {
+      installs: { totalreclaw: { version: '3.3.11-rc.4' } },
+      allow: ['totalreclaw', 'telegram'],
+      bundledDiscovery: 'allowlist',
+      slots: { memory: 'totalreclaw' },
+      entries: { totalreclaw: { enabled: true, hooks: { allowConversationAccess: true } } },
+    },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'unchanged',
+    'patchOpenClawConfig: does not overwrite explicit bundledDiscovery=allowlist',
+  );
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const plugins = after.plugins as Record<string, unknown>;
+  assertEq(
+    plugins.bundledDiscovery,
+    'allowlist',
+    'patchOpenClawConfig: explicit "allowlist" preserved',
+  );
+}
+
+{
+  // Pop-os scenario: populated allow with totalreclaw, no bundledDiscovery, no streaming —
+  // exercises the exact missing-cure path that broke pop-os install on 2026-05-07.
+  const cfgPath = path.join(TMP, 'openclaw-popos-style.json');
+  const initial = {
+    plugins: {
+      installs: { totalreclaw: { version: '3.3.11-rc.4' } },
+      allow: ['device-pair', 'google', 'telegram', 'totalreclaw', 'zai'],
+      slots: { memory: 'totalreclaw' },
+      entries: { totalreclaw: { enabled: true, hooks: { allowConversationAccess: true } } },
+    },
+    channels: { telegram: { enabled: true, botToken: 'BOT' } },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'patched',
+    'patchOpenClawConfig: pop-os-style config gets patched (bundledDiscovery + telegram streaming)',
+  );
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const plugins = after.plugins as Record<string, unknown>;
+  const channels = after.channels as Record<string, Record<string, unknown>>;
+  assertEq(
+    plugins.bundledDiscovery,
+    'compat',
+    'patchOpenClawConfig: pop-os scenario sets bundledDiscovery=compat',
+  );
+  const tg = channels.telegram as Record<string, Record<string, unknown>>;
+  assertEq(
+    (tg.streaming as Record<string, unknown>)?.mode,
+    'off',
+    'patchOpenClawConfig: pop-os scenario also sets telegram streaming.mode=off',
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Integration: round-trip write → load → delete → reload
 // ---------------------------------------------------------------------------
