@@ -135,7 +135,7 @@ TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cl
 
 # Status check (parse JSON to confirm install + onboarding state)
 node "$TR_CLI" status --json
-# Returns: {"version":"3.3.10-rc.2","onboarded":false,"next_step":"pair","tool_count":17,"hybrid_mode":true}
+# Returns: {"version":"3.3.11-rc.1","onboarded":false,"next_step":"pair","tool_count":17,"hybrid_mode":true}
 
 # Pair / account setup — ALWAYS run via setsid -f to survive gateway restarts
 PAIR_OUT="/tmp/tr-pair-out-$(date +%s).json"
