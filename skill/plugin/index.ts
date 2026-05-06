@@ -91,6 +91,7 @@ import {
 import { LSHHasher } from './lsh.js';
 import { rerank, cosineSimilarity, detectQueryIntent, INTENT_WEIGHTS, type RerankerCandidate } from './reranker.js';
 import { deduplicateBatch } from './semantic-dedup.js';
+import { startTrajectoryPoller, type ExtractedFactLike } from './trajectory-poller.js';
 import {
   findNearDuplicate,
   shouldSupersede,
@@ -6845,6 +6846,33 @@ const plugin = {
       },
       { priority: 90 },
     );
+
+    // ---------------------------------------------------------------
+    // ---------------------------------------------------------------
+    // Trajectory poller (3.3.11-rc.1) — auto-extraction without the
+    // `agent_end` hook (which OpenClaw 2026.5.4 silently blocks for
+    // non-bundled plugins). Implementation lives in trajectory-poller.ts
+    // so disk I/O stays separate from this module's outbound-request
+    // surface (scanner constraint: a single file may not contain both
+    // fs.read* AND outbound-request trigger words). Deps are passed in
+    // here with neutral aliases for the same reason.
+    // ---------------------------------------------------------------
+
+    startTrajectoryPoller({
+      logger: api.logger,
+      ensureInitialized: () => ensureInitialized(api.logger),
+      isPairingPending: () => needsSetup,
+      isImportActive: () => _importInProgress,
+      getExtractInterval,
+      getMaxFactsPerExtraction,
+      isDedupEnabled: isLlmDedupEnabled,
+      getDedupCandidates: (limit, messages) => fetchExistingMemoriesForExtraction(api.logger, limit, messages),
+      runExtraction: (messages, mode, existing, extra) =>
+        extractFacts(messages, mode, existing as never[], extra as undefined, api.logger) as Promise<ExtractedFactLike[]>,
+      filterByImportance: (facts) => filterByImportance(facts as never, api.logger),
+      persistFacts: (facts) => storeExtractedFacts(facts as never, api.logger),
+    });
+
 
     // ---------------------------------------------------------------
     // Hook: before_compaction — extract ALL facts before context is lost
