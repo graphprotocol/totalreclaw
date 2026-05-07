@@ -52,7 +52,7 @@ const STATE_PATH = CONFIG.onboardingStatePath;
 // Auto-synced by skill/scripts/sync-version.mjs from skill/plugin/package.json::version.
 // Do not edit by hand — running tests will catch drift but the publish workflow
 // rewrites this constant at the start of every npm/ClawHub publish.
-const PLUGIN_VERSION = '3.3.11-rc.6';
+const PLUGIN_VERSION = '3.3.12-rc.1';
 
 function die(msg: string, code = 1): never {
   process.stderr.write(`tr: ${msg}\n`);
@@ -431,7 +431,7 @@ async function main(): Promise<void> {
         '  remember: {"ok":true,"id":"...","claim_count":N}\n' +
         '  recall:   {"results":[{"text":"...","score":0.8}]}\n\n' +
         'Environment:\n' +
-        '  TOTALRECLAW_SERVER_URL           — relay URL (default: api-staging.totalreclaw.xyz)\n' +
+        '  TOTALRECLAW_SERVER_URL           — relay URL (default: api.totalreclaw.xyz; staging: api-staging.totalreclaw.xyz)\n' +
         '  TOTALRECLAW_CREDENTIALS_PATH     — override credentials.json path\n',
       );
       break;

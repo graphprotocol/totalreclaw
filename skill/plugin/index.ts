@@ -807,9 +807,9 @@ let stagingBannerLogged = false;
  * directs the caller to `openclaw totalreclaw onboard`.
  */
 async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
-  // 3.3.3-rc.1: staging is the source default per #165. Stable build-time
-  // sed-replace flips `api-staging` -> `api` in dist/.
-  const serverUrl = CONFIG.serverUrl || 'https://api-staging.totalreclaw.xyz';
+  // 3.3.12-rc.1 (F flip): production is the source default for all builds.
+  // Staging is opt-in via TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz.
+  const serverUrl = CONFIG.serverUrl || 'https://api.totalreclaw.xyz';
   let masterPassword = CONFIG.recoveryPhrase;
 
   // 3.2.0: if the env var is unset, probe credentials.json for a
@@ -6262,24 +6262,28 @@ const plugin = {
           let stagingBannerSuppressed = false;
           if (!stagingBannerShown) {
             try {
-              const usingStagingDefault = CONFIG.serverUrl.includes('api-staging.totalreclaw.xyz');
-              const userOverrode = CONFIG.serverUrlEnvOverridden;
-              if (usingStagingDefault && !userOverrode) {
+              // 3.3.12-rc.1 (F flip): banner now fires when serverUrl resolves
+              // to api-staging.totalreclaw.xyz, which under the new contract
+              // can ONLY happen if (a) user opted in via env override, or
+              // (b) the artifact is broken / accidentally bound to staging.
+              // Either way the user benefits from seeing the warning.
+              const usingStaging = CONFIG.serverUrl.includes('api-staging.totalreclaw.xyz');
+              if (usingStaging) {
                 stagingBannerBlock =
-                  '## ⚠️ TotalReclaw is running in RC / staging mode\n\n' +
-                  'This build is bound to `api-staging.totalreclaw.xyz`. Staging has **no SLA** ' +
+                  '## ⚠️ TotalReclaw is running in staging mode\n\n' +
+                  'This session is bound to `api-staging.totalreclaw.xyz`. Staging has **no SLA** ' +
                   'and may be wiped between QA cycles. Do **NOT** use this build for real data.\n\n' +
-                  'For production, install the stable release: `openclaw plugins install ' +
-                  '@totalreclaw/totalreclaw` (no `@rc` suffix). To pin a custom server, set ' +
-                  '`TOTALRECLAW_SERVER_URL=https://api.totalreclaw.xyz` in your env.\n\n';
-                // Do NOT set stagingBannerShown=true here — see comment above.
-                // Logger emits once per gateway process; this is fine to
-                // gate on the same flag because the logger is operator-
-                // facing, not user-facing.
+                  'The default relay is `api.totalreclaw.xyz` (production). To return to production, ' +
+                  'unset `TOTALRECLAW_SERVER_URL`. To stay on staging, leave it set to ' +
+                  '`https://api-staging.totalreclaw.xyz`.\n\n';
+                // Do NOT set stagingBannerShown=true here — see comment in
+                // staging-banner-gate.test.ts. Banner-shown flips only via
+                // consumeBannerForPrepend() once a return path actually
+                // delivers the block.
                 stagingBannerSuppressed = true;
               } else {
-                // Non-RC artifact OR user override — never fire the banner this
-                // gateway-process lifetime.
+                // Production default OR custom URL — never fire the banner
+                // this gateway-process lifetime.
                 stagingBannerShown = true;
               }
             } catch {
@@ -6287,14 +6291,13 @@ const plugin = {
               stagingBannerShown = true;
             }
           }
-          // Operator-facing log: once per process, when we DETECT the
-          // staging build (banner-shown semantics are about user
-          // delivery; this log is independent).
+          // Operator-facing log: once per process, when we DETECT staging.
           if (stagingBannerSuppressed && !stagingBannerLogged) {
             stagingBannerLogged = true;
             api.logger.warn(
-              'TotalReclaw: RC/staging build active (api-staging.totalreclaw.xyz). ' +
-              'See docs/guides/release-process.md for the RC=staging / stable=production rule.',
+              'TotalReclaw: staging mode active (api-staging.totalreclaw.xyz). ' +
+              'Default is production (api.totalreclaw.xyz); staging is opt-in via ' +
+              'TOTALRECLAW_SERVER_URL.',
             );
           }
           /**

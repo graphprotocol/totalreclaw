@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Install + set up TotalReclaw encrypted memory for OpenClaw, then use tr CLI for remember / recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 3.3.11-rc.6
+version: 3.3.12-rc.1
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -226,7 +226,7 @@ After you emit user-visible line 3, the user opens the URL on their phone or des
 
 Common user-side issues during pair (recover gracefully — emit ONE tight line, don't pre-narrate):
 
-- **"The page won't load"** → check the URL is the staging URL (`api-staging.totalreclaw.xyz` for RC builds, `api.totalreclaw.xyz` for stable). If they used the wrong stub host, generate a fresh URL.
+- **"The page won't load"** → confirm the URL host is `api.totalreclaw.xyz` (the default for both stable and RC post-3.3.12-rc.1). If a `TOTALRECLAW_SERVER_URL` env override was set, the host might be `api-staging.totalreclaw.xyz` (staging, opt-in) or a self-hosted relay. Wrong stub host → generate a fresh URL.
 - **"PIN says expired"** or countdown ran out → re-run the pair block (Step 4 above) and emit line 3 again with the fresh URL+PIN. The previous session is dead.
 - **"It says invalid phrase"** during Log in → the user pasted a phrase that isn't BIP-39 valid (typo or wrong source). Tell them to double-check and re-paste; or switch to **Set up** tab to generate a fresh one (loses existing memories).
 - **"I clicked Set up TotalReclaw but nothing happened"** / **502** → the gateway WS dropped before respond. The pair subprocess is alive (you used `setsid -f`). Wait 30s; if the user still sees the 502, re-run Step 4 (the deferred reload should have completed by then).

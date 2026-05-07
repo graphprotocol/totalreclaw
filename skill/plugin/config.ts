@@ -138,15 +138,14 @@ export const CONFIG = {
   get sessionId(): string | null {
     return getSessionId();
   },
-  // 3.3.3-rc.1: source default is `api-staging.totalreclaw.xyz` per the
-  // codified RC=staging / stable=production rule (PR #165). The workflow
-  // step "Bind stable to production URLs" in `npm-publish.yml` /
-  // `publish-clawhub.yml` sed-replaces `api-staging.totalreclaw.xyz` ->
-  // `api.totalreclaw.xyz` across the built `dist/` tree (and skill.json /
-  // SKILL.md / CHANGELOG / CLAWHUB.md / package.json) when
-  // `release-type=stable`. RC publishes leave the staging URL untouched.
+  // 3.3.12-rc.1 (F flip): source default is `api.totalreclaw.xyz` (production)
+  // for BOTH stable and RC builds. Previously RC defaulted to staging, which
+  // stranded users who picked `@rc` with their memories on staging. Staging
+  // access is now opt-in via `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz`.
+  // No more publish-time URL rewrites — both release-types ship the same
+  // production default, and the workflow guard rails simply assert that.
   // User overrides via `TOTALRECLAW_SERVER_URL=...` always win.
-  serverUrl: (process.env.TOTALRECLAW_SERVER_URL || 'https://api-staging.totalreclaw.xyz').replace(/\/+$/, ''),
+  serverUrl: (process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz').replace(/\/+$/, ''),
   selfHosted: process.env.TOTALRECLAW_SELF_HOSTED === 'true',
   credentialsPath: process.env.TOTALRECLAW_CREDENTIALS_PATH || path.join(home, '.totalreclaw', 'credentials.json'),
   // 3.2.0 onboarding state file — separate from credentials.json so it
@@ -172,7 +171,7 @@ export const CONFIG = {
   // 3.3.1-rc.11 — relay base URL for the WebSocket-brokered pair flow.
   // `wss://` preferred; `https://` is rewritten in the remote-client.
   pairRelayUrl: (process.env.TOTALRECLAW_PAIR_RELAY_URL
-    || 'wss://api-staging.totalreclaw.xyz').replace(/\/+$/, ''),
+    || 'wss://api.totalreclaw.xyz').replace(/\/+$/, ''),
 
   // Chain — chainId is no longer user-configurable. It is auto-detected from
   // the relay billing response (free = Base Sepolia / 84532, Pro = Gnosis /

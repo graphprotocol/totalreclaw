@@ -57,7 +57,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Default relay endpoint. Caller passes `TOTALRECLAW_PAIR_RELAY_URL` via config. */
-export const DEFAULT_RELAY_URL = 'wss://api-staging.totalreclaw.xyz';
+export const DEFAULT_RELAY_URL = 'wss://api.totalreclaw.xyz';
 
 /** WebSocket connect + handshake timeout (ms). */
 const OPEN_TIMEOUT_MS = 10_000;

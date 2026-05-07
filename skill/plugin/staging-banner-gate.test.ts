@@ -1,32 +1,31 @@
 /**
- * staging-banner-gate.test.ts (3.3.4-rc.1)
+ * staging-banner-gate.test.ts (3.3.12-rc.1, F-flip rev)
  *
- * Pins the banner-emit invariant for the RC-staging banner introduced
- * in 3.3.3-rc.1 (PR #165).
+ * Pins the banner-emit invariant after the F flip (production = default for
+ * BOTH stable and RC; staging is opt-in via TOTALRECLAW_SERVER_URL).
  *
- * Bug found in 3.3.3-rc.1 QA (Pedro 2026-04-30): the banner appeared
- * NEVER across an entire conversation despite the build being bound to
- * staging. Root cause was structural: `stagingBannerShown` was set to
- * `true` AS SOON AS the banner block was constructed, but multiple
- * before_agent_start return paths returned `undefined` (e.g. zero
- * memory matches on the first turn), silently dropping the block AND
- * leaving the flag flipped — so subsequent calls never reconstructed
- * the block.
+ * Pre-flip semantics (3.3.4-rc.1):
+ *   - Source default = staging. Banner fired when `serverUrl` resolved to
+ *     api-staging.totalreclaw.xyz AND user did NOT override the env var.
+ *   - The intent was: warn QA they were on staging by default, suppress the
+ *     warning when an operator explicitly pinned a custom URL.
  *
- * Fix: the flag flips ONLY when a return path actually includes the
- * block in its `prependContext`, via `consumeBannerForPrepend()`.
+ * Post-flip semantics (3.3.12-rc.1):
+ *   - Source default = production. The ONLY way `serverUrl` resolves to
+ *     api-staging.totalreclaw.xyz is via an explicit env override (or, as a
+ *     defensive case, a broken artifact that accidentally bound to staging).
+ *   - The banner SHOULD fire whenever staging is bound, regardless of whether
+ *     the user "overrode" the default — the user benefits from the warning.
+ *   - When `serverUrl` is anything else (production default, or a custom URL
+ *     like a self-hosted relay), the banner is permanently suppressed for
+ *     this gateway-process lifetime.
  *
- * This test pins the invariant by simulating the helper's lifecycle
- * (build block → consume → flag flip) and verifying:
- *   - First consume returns the banner string + flips the flag.
- *   - Second consume returns '' (already delivered).
- *   - Build-but-NEVER-consume leaves the flag UNflipped (so the next
- *     before_agent_start invocation reconstructs the block).
+ * The lifecycle invariant (build → consume → flag flip) is preserved from the
+ * 3.3.4-rc.1 fix. `consumeBannerForPrepend()` flips the flag only once a
+ * return path actually delivers the block.
  *
- * The test re-implements the helper inline because the helper is a
- * closure over hook-local state in index.ts; pulling it out to a
- * standalone export would broaden the public surface unnecessarily.
- * The test asserts the SHAPE of the fix, not the runtime path.
+ * The test re-implements the helper inline because the helper is a closure
+ * over hook-local state in index.ts.
  */
 
 let passed = 0;
@@ -39,21 +38,19 @@ function assert(cond: boolean, name: string): void {
 
 function simulateBannerLifecycle(opts: {
   serverUrl: string;
-  serverUrlEnvOverridden: boolean;
   prependContextPathTaken: boolean;
 }): { stagingBannerShown: boolean; emittedBlock: string } {
   let stagingBannerShown = false;
   let stagingBannerBlock = '';
 
-  // Simulate the before_agent_start prologue.
+  // Simulate the before_agent_start prologue (post-F-flip semantics).
   if (!stagingBannerShown) {
-    const usingStagingDefault = opts.serverUrl.includes('api-staging.totalreclaw.xyz');
-    const userOverrode = opts.serverUrlEnvOverridden;
-    if (usingStagingDefault && !userOverrode) {
+    const usingStaging = opts.serverUrl.includes('api-staging.totalreclaw.xyz');
+    if (usingStaging) {
       stagingBannerBlock = '## staging-banner';
       // Critical: do NOT flip stagingBannerShown here.
     } else {
-      // Non-RC artifact OR user override — never fire this lifetime.
+      // Production default OR custom URL — never fire this lifetime.
       stagingBannerShown = true;
     }
   }
@@ -66,80 +63,72 @@ function simulateBannerLifecycle(opts: {
 
   let emittedBlock = '';
   if (opts.prependContextPathTaken) {
-    // Simulate a return path that calls `consumeBannerForPrepend()` inline.
     emittedBlock = consumeBannerForPrepend();
-  } else {
-    // Simulate a return-undefined path — block built but never delivered.
-    // No call to consume.
   }
 
   return { stagingBannerShown, emittedBlock };
 }
 
 // ---------------------------------------------------------------------------
-// Test 1: staging build + prepend path taken -> banner emitted, flag flipped.
-// ---------------------------------------------------------------------------
-
-{
-  const r = simulateBannerLifecycle({
-    serverUrl: 'https://api-staging.totalreclaw.xyz',
-    serverUrlEnvOverridden: false,
-    prependContextPathTaken: true,
-  });
-  assert(r.emittedBlock === '## staging-banner', 'staging + prepend: banner emitted on first call');
-  assert(r.stagingBannerShown === true, 'staging + prepend: flag flips on emit');
-}
-
-// ---------------------------------------------------------------------------
-// Test 2: staging build + RETURN UNDEFINED path -> banner NOT emitted,
-//         flag NOT flipped (next before_agent_start can retry).
-//
-// This is the 3.3.4-rc.1 fix: pre-fix, the flag flipped on build, so the
-// next call would skip block construction entirely. Post-fix, the flag
-// stays false and the next call reconstructs.
-// ---------------------------------------------------------------------------
-
-{
-  const r = simulateBannerLifecycle({
-    serverUrl: 'https://api-staging.totalreclaw.xyz',
-    serverUrlEnvOverridden: false,
-    prependContextPathTaken: false,
-  });
-  assert(r.emittedBlock === '', 'staging + return-undefined: nothing emitted');
-  assert(
-    r.stagingBannerShown === false,
-    '3.3.4-rc.1 fix: staging + return-undefined leaves flag UNflipped — next call retries',
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Test 3: stable build (production URL) -> never builds banner, flag flipped
-// to permanently suppress for this gateway-process lifetime.
+// Test 1: production default + prepend path -> NO banner, flag flipped to
+// permanently suppress. (Both stable and RC ship this default post-F-flip.)
 // ---------------------------------------------------------------------------
 
 {
   const r = simulateBannerLifecycle({
     serverUrl: 'https://api.totalreclaw.xyz',
-    serverUrlEnvOverridden: false,
     prependContextPathTaken: true,
   });
-  assert(r.emittedBlock === '', 'stable build: no banner emitted');
-  assert(r.stagingBannerShown === true, 'stable build: flag flipped to suppress');
+  assert(r.emittedBlock === '', 'production default: no banner emitted');
+  assert(r.stagingBannerShown === true, 'production default: flag flipped to suppress');
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: staging build BUT user-env override -> never builds banner, flag
-// flipped to permanently suppress (operator pinned a custom URL).
+// Test 2: staging via env override + prepend path -> banner emitted, flag
+// flipped. (Staging is now opt-in; if the user opted in, warn them.)
 // ---------------------------------------------------------------------------
 
 {
   const r = simulateBannerLifecycle({
     serverUrl: 'https://api-staging.totalreclaw.xyz',
-    serverUrlEnvOverridden: true,
     prependContextPathTaken: true,
   });
-  assert(r.emittedBlock === '', 'staging + user override: no banner emitted');
-  assert(r.stagingBannerShown === true, 'staging + user override: flag flipped to suppress');
+  assert(r.emittedBlock === '## staging-banner', 'staging override: banner emitted');
+  assert(r.stagingBannerShown === true, 'staging override: flag flips on emit');
+}
+
+// ---------------------------------------------------------------------------
+// Test 3: staging via env override + RETURN-UNDEFINED path -> banner NOT
+// emitted, flag NOT flipped (next before_agent_start can retry).
+//
+// Preserves the 3.3.4-rc.1 lifecycle fix: build does not flip the flag;
+// only consume does.
+// ---------------------------------------------------------------------------
+
+{
+  const r = simulateBannerLifecycle({
+    serverUrl: 'https://api-staging.totalreclaw.xyz',
+    prependContextPathTaken: false,
+  });
+  assert(r.emittedBlock === '', 'staging + return-undefined: nothing emitted');
+  assert(
+    r.stagingBannerShown === false,
+    'staging + return-undefined: flag UNflipped — next call retries',
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Test 4: custom self-hosted URL -> never builds banner, flag flipped to
+// permanently suppress. (Operator pinned their own relay.)
+// ---------------------------------------------------------------------------
+
+{
+  const r = simulateBannerLifecycle({
+    serverUrl: 'https://relay.example.com',
+    prependContextPathTaken: true,
+  });
+  assert(r.emittedBlock === '', 'custom URL: no banner emitted');
+  assert(r.stagingBannerShown === true, 'custom URL: flag flipped to suppress');
 }
 
 console.log(`\n# ${passed}/${passed + failed} passed`);

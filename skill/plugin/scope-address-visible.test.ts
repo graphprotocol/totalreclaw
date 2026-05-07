@@ -188,7 +188,7 @@ const SAMPLE_SCOPE = '0x1234567890abcdef1234567890abcdef12345678';
   try {
     const { statusTool } = await import('../src/tools/status.js');
     const result = await statusTool(
-      'https://api-staging.totalreclaw.xyz',
+      'https://api.totalreclaw.xyz',
       'deadbeef',
       SAMPLE_SCOPE,
     );

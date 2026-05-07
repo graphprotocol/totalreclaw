@@ -38,20 +38,18 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# 2.3.3-rc.1 — environment-binding rule (PR #165): RC artifacts default to
-# STAGING, stable artifacts default to PRODUCTION. The checked-in literal is
-# STAGING; the publish-python-client.yml workflow rewrites this single line
-# to the production URL when ``release-type=stable`` before
-# ``python -m build``. A pre-publish CI guard fails the build if a stable
-# wheel still contains ``api-staging`` or an RC wheel contains
-# ``api.totalreclaw.xyz`` (sans staging) — see the workflow for the regex.
+# 2.3.12-rc.1 (F flip) — environment-binding rule: BOTH stable and RC
+# wheels default to PRODUCTION. The publish-time rewrite that previously
+# differentiated stable vs. RC defaults is removed. Staging access is
+# opt-in via TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz
+# at runtime. A pre-publish CI guard fails the build if any wheel
+# contains ``api-staging`` (stranded staging defaults are forbidden).
 #
 # This is THE canonical default-URL site for the Python package. Every
 # other module that resolves a default URL imports
 # ``_HARDCODED_DEFAULT_URL`` (or calls ``_default_relay_url()``) from here.
-# Adding a second hardcoded URL elsewhere will silently desync the wheel
-# from the build-time injection rule. Don't.
-_HARDCODED_DEFAULT_URL = "https://api-staging.totalreclaw.xyz"
+# Adding a second hardcoded URL elsewhere will silently desync the wheel.
+_HARDCODED_DEFAULT_URL = "https://api.totalreclaw.xyz"
 
 
 def _default_relay_url() -> str:
@@ -62,9 +60,8 @@ def _default_relay_url() -> str:
     import) so env changes after import take effect.
 
     The fallback returned when the env var is unset is the value baked into
-    ``_HARDCODED_DEFAULT_URL`` at build time — staging for RC artifacts,
-    production for stable artifacts. See the module docstring for the
-    workflow that performs the substitution.
+    ``_HARDCODED_DEFAULT_URL`` — production for both stable and RC builds
+    (post-F-flip, 2.3.12-rc.1). Staging access is opt-in via the env var.
     """
     return os.environ.get("TOTALRECLAW_SERVER_URL") or _HARDCODED_DEFAULT_URL
 
