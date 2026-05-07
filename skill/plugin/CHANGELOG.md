@@ -4,6 +4,23 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.11-rc.6] — 2026-05-07
+
+UX fix: mandatory ack-before-first-tool-call on install. Pedro's rc.5 user QA found the agent went silent for ~60 s while running `openclaw plugins install` before emitting the first user-visible line. From the user's POV the prompt looked unanswered. This RC strengthens SKILL.md + the quickstart guide to require line 1 BEFORE the first shell tool call, with reassuring wait-time copy.
+
+### Changed
+
+- **SKILL.md user-visible line 1 reworded** from `Installing TotalReclaw…` to `Setting up TotalReclaw — this takes about a minute…` — adds explicit wait-time signal so the user knows to wait rather than resend.
+- **New "MANDATORY ACK BEFORE FIRST TOOL CALL" section** in SKILL.md top-level rules. Calls out forbidden vs required ordering: line 1 must precede any shell tool call (no `openclaw plugins install` → 60 s silent → emit line 1).
+- **Silence rules updated**: skipping line 1 entirely is now explicitly forbidden (previously the rule only forbade extra narration between lines, not omission of line 1).
+- **`docs/guides/openclaw-setup-quickstart.md` mirrors the change** with the same wait-time copy and an explicit "Line 1 fires BEFORE the first shell tool call — not after" sub-section.
+
+### Implementation notes
+
+- 4 new assertions in `skill-md-hybrid-primary.test.ts`: MANDATORY ACK section present, line 1 wait-time wording, Forbidden vs Required order documented, "Skipping line 1 entirely" listed as forbidden. 41/41 green.
+- All other test suites unchanged: 92/92 fs-helpers + 21/21 register-command-name + 21/21 tr-cli-json + 44/44 trajectory-poller + 10/10 manifest-shape. check-scanner: 129 files, 0 flags.
+- Pure documentation + spec change. No runtime code modified. Same poller behavior as rc.5.
+
 ## [3.3.11-rc.5] — 2026-05-07
 
 Trajectory poller hardening: cap extractions per poll iteration + skip stale trajectory files. Pedro's 2026-05-07 zai 429 cascade was caused by ~5 old session files all crossing the extract threshold in the same poll → 5 back-to-back LLM calls in seconds → daily quota tripped. Today's chat memories were lost because every extraction call returned 0 facts (LLM rejected with rate-limit).

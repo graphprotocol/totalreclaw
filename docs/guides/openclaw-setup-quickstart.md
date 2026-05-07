@@ -15,16 +15,23 @@
 
 ## User-visible lines (the entire transcript)
 
-1. `Installing TotalReclaw…`
+1. `Setting up TotalReclaw — this takes about a minute…`
 2. `✓ Installed (totalreclaw <version>, hybrid mode)`
 3. *Triple-backticked `qr_ascii` payload, then:* `Open <url> in your browser. Enter PIN <pin>. Generate or paste a 12-word recovery phrase. Reply \`done\` once it's sealed.`
 4. `✓ You're set up on the TotalReclaw free tier — 500 memories/month, unlimited reads. https://totalreclaw.xyz/pricing. Ask me to remember anything.`
 
 If `~/.totalreclaw/credentials.json` already exists and is non-empty, emit only `✓ TotalReclaw is already set up.` and stop.
 
+### ⚡ Line 1 fires BEFORE the first shell tool call — not after
+
+Install + setup runs ~1 minute of silent shell work. Without an immediate ack the user assumes the prompt didn't register. Emit line 1 the moment you decide to install — before resolving `TR_CLI`, before `openclaw plugins install`, before any tool call. Then start work silently.
+
+❌ Forbidden order: `openclaw plugins install` → 60 s silent → emit line 1.
+✅ Required order: emit line 1 → `openclaw plugins install` → … → emit line 2 when `tr status` returns.
+
 ## Steps (copy-paste verbatim)
 
-### 1. Install (silent — emit line 1 first)
+### 1. Install (emit line 1 FIRST, then run install silently)
 
 ```bash
 openclaw plugins install @totalreclaw/totalreclaw@rc

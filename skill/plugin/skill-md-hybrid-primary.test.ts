@@ -231,6 +231,38 @@ assert(
 );
 
 // ---------------------------------------------------------------------------
+// 8. MANDATORY ACK BEFORE FIRST TOOL CALL (3.3.11-rc.6 — Pedro 2026-05-07)
+// ---------------------------------------------------------------------------
+//
+// Pedro reported on rc.5 that the agent ran `openclaw plugins install` silently
+// for ~60s before emitting any user-visible line. From the user's POV the prompt
+// looked dead. SKILL.md must explicitly require line 1 BEFORE the first shell
+// tool call, with reassuring wait-time copy.
+
+assert(
+  /MANDATORY ACK BEFORE FIRST TOOL CALL/i.test(pluginSkillMd),
+  'skill/plugin/SKILL.md: contains MANDATORY ACK BEFORE FIRST TOOL CALL rule',
+);
+
+// Line 1 wording must include a wait-time signal so user knows to wait
+assert(
+  /Setting up TotalReclaw — this takes about a minute/.test(pluginSkillMd),
+  'skill/plugin/SKILL.md: line 1 includes wait-time signal "Setting up TotalReclaw — this takes about a minute…"',
+);
+
+// Forbidden order must be called out explicitly
+assert(
+  pluginSkillMd.includes('Forbidden order') && pluginSkillMd.includes('Required order'),
+  'skill/plugin/SKILL.md: documents Forbidden vs Required ack order explicitly',
+);
+
+// Skipping line 1 must be added to the silence-rules forbidden list
+assert(
+  /Skipping line 1 entirely/i.test(pluginSkillMd),
+  'skill/plugin/SKILL.md: silence rules forbid "skipping line 1 entirely"',
+);
+
+// ---------------------------------------------------------------------------
 
 console.log(`\n# ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

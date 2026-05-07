@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Install + set up TotalReclaw encrypted memory for OpenClaw, then use tr CLI for remember / recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 3.3.11-rc.5
+version: 3.3.11-rc.6
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -61,6 +61,15 @@ The word "pair" is internal jargon — never use it in user-visible prose. The u
 
 **Emit ONLY the user-visible lines listed below. Do not narrate tool calls. Do not describe what you're doing or about to do. Errors are the only allowed deviation, and only as a single tight line.** The expected user-facing transcript for a healthy install is **4–5 short lines TOTAL**. Anything more is a SKILL violation. Telegram and similar transports edit the bot's messages live as your tool calls progress — every interim "Let me check…" / "Plugin loaded. Let me verify…" line shows up to the user as awkward edit churn, even if you "delete" it. The fix is to never emit it in the first place.
 
+### ⚡ MANDATORY ACK BEFORE FIRST TOOL CALL
+
+**User-visible line 1 MUST be your FIRST output — emitted BEFORE you run any shell tool, plugin install, or `tr` command.** Install + setup takes 1–2 minutes of silent tool-execution; without an immediate ack the user assumes the request didn't register and may resend or abandon. The ack tells them work is happening.
+
+The ack is unconditional. It fires the moment you decide to install / set up TotalReclaw — even before you've resolved `TR_CLI`, even before you've checked whether the plugin is already installed, even before the first `openclaw plugins install` shell call. Send line 1, THEN start the work.
+
+Forbidden order (silent-then-narrate): ❌ run `openclaw plugins install` → wait 60s → emit line 1.
+Required order (ack-then-work): ✅ emit line 1 → run `openclaw plugins install` silently → emit line 2 when `tr status` returns.
+
 ## ⛔ FORBIDDEN ACTIONS (4 hard rules from 2026-05-05 QA)
 
 These specific actions break the pair flow. Everything else is governed by the "emit only the numbered user-visible lines" rule above.
@@ -93,8 +102,8 @@ Then invoke as `node "$TR_CLI" <cmd> [--json]`.
 
 Speak only these lines, in order. Substitute the bracketed placeholders with the real values. No prefaces. No suffixes. No narration.
 
-1. (start of install)
-   > Installing TotalReclaw…
+1. (FIRST output, emitted BEFORE any shell tool call — see "MANDATORY ACK" rule above)
+   > Setting up TotalReclaw — this takes about a minute…
 2. (after install + CLI verify — `tr status` works)
    > ✓ Installed (totalreclaw &lt;version&gt;, hybrid mode)
 3. (account-setup URL + PIN, IMMEDIATELY after `tr pair --json` returns — no consent gate)
@@ -114,8 +123,9 @@ Do NOT emit transitional / narrative lines between any of the four user-visible 
 - ❌ "Need to pair. Let me kick that off:" → silent. Just run the `setsid -f` block. Emit line 3 when URL+PIN returns. ALSO never use the word "pair" in user-facing text — see vocabulary table above.
 - ❌ "Standing by." → silent. Acknowledgements between lines are noise.
 - ❌ Any "Let me X" / "Now I'll Y" / "Just give me a second" prelude.
+- ❌ **Skipping line 1 entirely and going straight to shell tool calls.** Line 1 ack must precede the first tool call. Silent install = user thinks the prompt didn't register.
 
-The transcript Pedro should see is exactly four messages — the four numbered lines, nothing in between.
+The transcript Pedro should see is exactly four messages — the four numbered lines, nothing in between. Line 1 fires immediately. Lines 2–4 fire as work completes. No prose between.
 
 ## How does TotalReclaw work? (canonical answer for user questions)
 
