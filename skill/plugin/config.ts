@@ -170,8 +170,20 @@ export const CONFIG = {
   })() as 'relay' | 'local',
   // 3.3.1-rc.11 — relay base URL for the WebSocket-brokered pair flow.
   // `wss://` preferred; `https://` is rewritten in the remote-client.
-  pairRelayUrl: (process.env.TOTALRECLAW_PAIR_RELAY_URL
-    || 'wss://api.totalreclaw.xyz').replace(/\/+$/, ''),
+  //
+  // 3.3.12-rc.2 fix: derive from `TOTALRECLAW_SERVER_URL` when
+  // `TOTALRECLAW_PAIR_RELAY_URL` is not explicitly set. Pair WS endpoint
+  // lives on the SAME relay as the rest of the API — RC users who set
+  // `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` (per F
+  // flip / staging-opt-in flow) need pair to follow. Previous behavior
+  // had pair default to prod independently, which 404'd on WS upgrade
+  // because production relay version pre-dates the pair feature.
+  pairRelayUrl: (
+    process.env.TOTALRECLAW_PAIR_RELAY_URL
+    || (process.env.TOTALRECLAW_SERVER_URL
+      ? process.env.TOTALRECLAW_SERVER_URL.replace(/^https?:\/\//, 'wss://').replace(/^http:/, 'ws:')
+      : 'wss://api.totalreclaw.xyz')
+  ).replace(/\/+$/, ''),
 
   // Chain — chainId is no longer user-configurable. It is auto-detected from
   // the relay billing response (free = Base Sepolia / 84532, Pro = Gnosis /

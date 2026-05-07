@@ -4,6 +4,35 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.12-rc.2] — 2026-05-08
+
+Hot-fix on rc.1's F flip. Pair flow regression: rc.1 set `pairRelayUrl`'s default to `wss://api.totalreclaw.xyz` (production) independently of `serverUrl`. RC users who set `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` (per the staging-opt-in flow) had pair WS go to **prod**, which pre-dates the pair feature → 404 on WS upgrade → `totalreclaw_pair failed: Unexpected server response: 404`. End-to-end blocker: pair never completed → no credentials → no memories.
+
+### Fixed
+
+- **`config.ts pairRelayUrl` now derives from `TOTALRECLAW_SERVER_URL`** when `TOTALRECLAW_PAIR_RELAY_URL` is not explicitly set. Pair WS endpoint lives on the SAME relay as the rest of the API; previous independent default broke staging users.
+
+### Verified
+
+- WS upgrade to `wss://api-staging.totalreclaw.xyz/pair/session/open` returns 101 (real ws lib; curl with manual headers gets blocked by Cloudflare, irrelevant to plugin).
+- VPS install via `openclaw plugins install /tmp/totalreclaw-totalreclaw-3.3.12-rc.2.tgz` clean.
+- `totalreclaw_pair` tool now returns staging URL (`https://api-staging.totalreclaw.xyz/pair/p/<token>#pk=...`) + 6-digit PIN, 0 failures.
+
+## [3.3.12-rc.1] — 2026-05-07
+
+Install-flow architectural fix. Three changes:
+
+### Changed
+
+- **Prose-rewrite public quickstart guide** — drop LLM-imperative tone, all behavioral rules stay in bundled SKILL.md (loads via trusted skill-loader path, no WebFetch, no PI flag).
+- **F flip — RC + stable both default to prod URL.** Source default flipped from `api-staging.totalreclaw.xyz` → `api.totalreclaw.xyz`. Staging access via `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` env override. Removes "RC users land on staging chain with stranded memories" footgun.
+- **Compat bump** `>=2026.5.5` (peer-link reassertion fix in upstream OpenClaw).
+- **`skill.json` reconciled** — dropped stale `openclaw.minVersion: 0.1.0 / maxVersion: 1.0.0`; aligned with `package.json` compat range.
+
+### Known issue (fixed in rc.2)
+
+- Pair URL didn't follow `TOTALRECLAW_SERVER_URL` env. Staging users got pair WS to prod → 404. See rc.2 entry above.
+
 ## [3.3.11-rc.6] — 2026-05-07
 
 UX fix: mandatory ack-before-first-tool-call on install. Pedro's rc.5 user QA found the agent went silent for ~60 s while running `openclaw plugins install` before emitting the first user-visible line. From the user's POV the prompt looked unanswered. This RC strengthens SKILL.md + the quickstart guide to require line 1 BEFORE the first shell tool call, with reassuring wait-time copy.
