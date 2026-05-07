@@ -347,6 +347,31 @@ jobs:
         # See publish-clawhub.yml comment for full context.
         run: npm install -g clawhub@0.8.0
 
+      # Issue #206: without this step, `clawhub publish ./skill/plugin
+      # --version <stable>` shipped a tarball whose internal
+      # package.json / SKILL.md / skill.json still carried the prior
+      # `-rc.<N>` strings. The catalog tag moved to stable, but
+      # `clawhub install totalreclaw` users saw `"version": "X.Y.Z-rc.N"`
+      # inside the artifact. Mirror publish-clawhub.yml's "Resolve version
+      # + propagate to bundled tarball files" step so the promoted artifact
+      # is internally consistent with its stable tag.
+      - name: Stamp stable version into bundled tarball files
+        run: |
+          set -e
+          STABLE="${{ needs.derive-versions.outputs.stable-version }}"
+
+          node -e "
+          const fs = require('fs');
+          const p = require('./skill/plugin/package.json');
+          p.version = '${STABLE}';
+          fs.writeFileSync('./skill/plugin/package.json', JSON.stringify(p, null, 2) + '\n');
+          console.log('package.json::version =', p.version);
+          "
+
+          # Propagate into SKILL.md frontmatter + skill.json, then GATE.
+          node skill/scripts/sync-version.mjs
+          node skill/scripts/check-version-drift.mjs
+
       - name: Publish stable tags over the promoted version
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
