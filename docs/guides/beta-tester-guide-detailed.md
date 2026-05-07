@@ -162,7 +162,37 @@ Lower the same thresholds (`TOTALRECLAW_COSINE_THRESHOLD=0.10`, `TOTALRECLAW_REL
 
 ### Auto-extraction silently produces zero facts
 
-This usually means there's no LLM available. The plugin auto-detects your agent's provider key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY`, etc.). If none is set or all are rate-limited, extraction silently no-ops. Plugin 3.3.1+ logs a single INFO at startup when no LLM resolves; Hermes 2.3.1+ raises on first extraction attempt. Configure at least one provider key.
+This usually means there's no LLM available. The plugin auto-detects your agent's provider key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY`, etc.). If none is set, extraction silently no-ops. Plugin 3.3.1+ logs a single INFO at startup when no LLM resolves; Hermes 2.3.1+ raises on first extraction attempt. Configure at least one provider key.
+
+### Auto-extraction logs `LLMUpstreamOutageError` / 429 on rapid turns
+
+The extraction LLM (the cheap model derived from your provider key — e.g. z.ai's `glm-4.5-flash` for free-tier `ZAI_API_KEY`) can hit per-minute rate limits when several extraction windows fire in quick succession. The plugin retries the call (3 attempts, exponential backoff up to ~7s) and, if all attempts return 429, surfaces `LLMUpstreamOutageError` and skips that extraction window. **No facts are lost** — anything the agent stored via the `totalreclaw_remember` tool path on the same turn is unaffected, and the next extraction window retries cleanly.
+
+If you see this pattern frequently (rapid-turn workflows on a low-RPM provider), reduce extraction pressure or move to a higher-RPM endpoint:
+
+```bash
+TOTALRECLAW_EXTRACT_EVERY_TURNS=5    # default 3 — fewer extractions per session
+```
+
+Or override the extraction model via `openclaw.json` plugin config:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "totalreclaw": {
+        "config": {
+          "extraction": {
+            "model": "gpt-4.1-mini"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+For a full provider override (different key, base URL, etc.), use `extraction.llm` instead — see the plugin manifest for the full schema.
 
 ### Stored memories aren't surviving across sessions
 
