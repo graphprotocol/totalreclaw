@@ -454,7 +454,10 @@ async function runTests(): Promise<void> {
     });
   }
 
-  // 5f. Two independent session files — both polled in same iteration.
+  // 5f. Two independent session files — both crossing threshold in same poll.
+  // 3.3.11-rc.5 cap=1: only ONE extraction per poll iteration to avoid
+  // burst-firing the LLM rate-limiter. The deferred file's offset is
+  // preserved so the next poll picks it up.
   {
     const home = path.join(TMP, 'home-multi-session');
     writeTrajectoryFile(home, 'sess-a', [
@@ -467,7 +470,59 @@ async function runTests(): Promise<void> {
     ]);
     await withPoller(home, {}, async (h, calls) => {
       await h.pollOnce();
-      assertEq(calls.extraction, 2, 'pollOnce multi-session: extraction fires once per session that meets threshold');
+      assertEq(
+        calls.extraction,
+        1,
+        'pollOnce multi-session cap=1: only ONE extraction per poll, deferred file picks up next poll',
+      );
+      // Second poll: no new content on either file. Deferred file from poll-1
+      // already advanced its offset (cap-deferred files DO still record
+      // newOffset to avoid re-parsing the same lines).
+      await h.pollOnce();
+      // Cap-deferred files are at offset = newOffset, turnsAccum = N (preserved).
+      // Their content was already consumed; they don't re-extract until net-new
+      // messages arrive. So second poll is no-op extraction-wise.
+      assertEq(
+        calls.extraction,
+        1,
+        'pollOnce multi-session cap=1: second poll on unchanged files no-ops',
+      );
+    });
+  }
+
+  // 5g. Stale-file skip — trajectory file with mtime > 7 days old gets
+  // baseline offset captured but extraction skipped, preventing retroactive
+  // backlog burst on hosts with months of session-log history.
+  {
+    const home = path.join(TMP, 'home-stale-skip');
+    const file = writeTrajectoryFile(home, 'old-session', [
+      ['old user 1', 'old assistant 1'],
+      ['old user 2', 'old assistant 2'],
+    ]);
+    // Backdate mtime to 30 days ago.
+    const past = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    fs.utimesSync(file, past / 1000, past / 1000);
+    await withPoller(home, {}, async (h, calls) => {
+      await h.pollOnce();
+      assertEq(calls.extraction, 0, 'pollOnce stale-skip: extraction NOT called for >7-day-old trajectory');
+      assertEq(calls.persisted, 0, 'pollOnce stale-skip: nothing persisted');
+    });
+  }
+
+  // 5h. Recent file (within 7 days) is NOT skipped — sanity check that
+  // stale-skip only catches truly old files.
+  {
+    const home = path.join(TMP, 'home-recent-not-skipped');
+    const file = writeTrajectoryFile(home, 'recent-session', [
+      ['recent user 1', 'recent assistant 1'],
+      ['recent user 2', 'recent assistant 2'],
+    ]);
+    // Backdate to 3 days ago (within 7-day window).
+    const recent = Date.now() - 3 * 24 * 60 * 60 * 1000;
+    fs.utimesSync(file, recent / 1000, recent / 1000);
+    await withPoller(home, {}, async (h, calls) => {
+      await h.pollOnce();
+      assertEq(calls.extraction, 1, 'pollOnce recent-not-skipped: extraction fires for <7-day-old trajectory');
     });
   }
 }

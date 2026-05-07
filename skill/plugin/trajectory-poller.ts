@@ -127,6 +127,15 @@ export interface TrajectoryPollerHandle {
 
 const DEFAULT_POLL_INTERVAL_MS = 60_000;
 const STATE_FILE = path.join(os.homedir(), '.totalreclaw', 'extract-state.json');
+/**
+ * Skip trajectory files older than this. A user who installs
+ * TotalReclaw on a host with months of OpenClaw session log history
+ * shouldn't get a retroactive extraction backlog — we only care about
+ * ongoing chat from now forward (3.3.11-rc.5). Files with mtime older
+ * than this threshold get a one-time offset snapshot so they're never
+ * re-scanned, and skip the extraction path entirely.
+ */
+const STALE_TRAJECTORY_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /**
  * Start the trajectory poller. Runs an initial poll after 5 s, then
@@ -152,17 +161,54 @@ export function startTrajectoryPoller(
 
       const extractInterval = deps.getExtractInterval();
       let stateChanged = false;
+      // 3.3.11-rc.5: cap extractions per poll iteration. Pedro's
+      // 2026-05-07 zai 429 cascade was caused by N session files all
+      // crossing the extract threshold in the same poll → N back-to-back
+      // LLM calls trip the rate-limiter (especially on free tiers).
+      // With cap=1, extra files defer to the next poll iteration
+      // (60 s later by default). Their turnsAccum is preserved across
+      // polls so they don't lose progress.
+      let extractionsThisPoll = 0;
+      const MAX_EXTRACTIONS_PER_POLL = 1;
 
       for (const file of files) {
+        // Stale-file skip: trajectory files untouched for STALE_TRAJECTORY_AGE_MS
+        // are likely abandoned sessions (old test runs, dead chats). Skip them
+        // entirely — don't burn LLM budget on extraction from stale content
+        // that the user has effectively forgotten about.
+        let mtimeMs = 0;
+        try {
+          mtimeMs = fs.statSync(file).mtimeMs;
+        } catch {
+          continue;
+        }
+        if (Date.now() - mtimeMs > STALE_TRAJECTORY_AGE_MS) {
+          // Lazy-record offset so we don't repeatedly re-scan stale files —
+          // if the user later resumes this session, the offset is already
+          // current and we'll only extract net-new content.
+          if (!state[file]) {
+            try {
+              state[file] = { offset: fs.statSync(file).size, turnsAccum: 0 };
+              stateChanged = true;
+            } catch { /* ignore */ }
+          }
+          continue;
+        }
+
         const lastEntry = state[file] ?? { offset: 0, turnsAccum: 0 };
         const { messages, newOffset } = parseNewMessages(file, lastEntry.offset);
         if (newOffset === lastEntry.offset) continue; // nothing new
 
         const turnsAdded = countTurns(messages);
         const turnsAccum = lastEntry.turnsAccum + turnsAdded;
-        const shouldExtract = turnsAccum >= extractInterval && messages.length >= 2;
+        const shouldExtract =
+          turnsAccum >= extractInterval &&
+          messages.length >= 2 &&
+          extractionsThisPoll < MAX_EXTRACTIONS_PER_POLL;
 
         if (shouldExtract) {
+          extractionsThisPoll++;
+
           deps.logger.info(
             `extractd: ${path.basename(file)} -> ${turnsAccum}/${extractInterval} turns; running extraction (${messages.length} messages)`,
           );

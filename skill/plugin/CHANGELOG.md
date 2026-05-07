@@ -4,6 +4,27 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.11-rc.5] — 2026-05-07
+
+Trajectory poller hardening: cap extractions per poll iteration + skip stale trajectory files. Pedro's 2026-05-07 zai 429 cascade was caused by ~5 old session files all crossing the extract threshold in the same poll → 5 back-to-back LLM calls in seconds → daily quota tripped. Today's chat memories were lost because every extraction call returned 0 facts (LLM rejected with rate-limit).
+
+### Changed
+
+- **Cap = 1 extraction per poll iteration.** When multiple session files cross the extract-interval threshold in the same 60 s poll, only the first fires the LLM call. The rest defer to subsequent polls. Their `turnsAccum` and `offset` state is preserved, so they don't lose progress — they just stagger. With the default 60 s poll interval, 5 backlogged files take 5 minutes to drain instead of 5 seconds. Free-tier LLM rate limits don't trip.
+- **Stale-trajectory skip (>7 days mtime).** A user installing TotalReclaw on a host with months of OpenClaw session log history won't get a retroactive extraction backlog. Files with mtime older than 7 days are baseline-snapshotted (offset captured) but skip the extraction path entirely. If the user later resumes an old session, the offset is current and only net-new content extracts.
+
+### Implementation notes
+
+- `MAX_EXTRACTIONS_PER_POLL = 1` constant in `trajectory-poller.ts`. Sequential `for` loop already guarantees serialization within a poll; the cap just stops issuing additional LLM calls once the first one completes.
+- `STALE_TRAJECTORY_AGE_MS = 7 * 24 * 60 * 60 * 1000`. Stale files get a one-time offset record (`state[file] = {offset: stat.size, turnsAccum: 0}`) so they're never re-stat'd repeatedly. If the user re-engages an old session (writes new content → mtime refreshes), the stale-skip check fails and normal extraction resumes from the recorded offset.
+- 4 new test cases in `trajectory-poller.test.ts`: cap=1 multi-session deferral, second-poll-no-op-after-deferred-cap, stale-file skip (>7 days), recent-file (<7 days) NOT skipped. 44/44 green.
+- 92/92 fs-helpers + 21/21 register-command-name + 37/37 skill-md + 21/21 tr-cli-json + 44/44 trajectory-poller + 10/10 manifest-shape. check-scanner: 129 files, 0 flags.
+
+### Won't fix here
+
+- Pop-os specific delayed-load anomaly (~58 min from rc.4 install to plugin first-load) — couldn't reproduce in fresh container; pop-os has accumulated state from many install/wipe cycles. Auto-QA confirmed clean fresh-install path.
+- The retroactive-backlog scenario itself remains: if a user has ACTIVE sessions (mtime < 7 days) with high turn counts, they'll still drain over multiple polls. With cap=1 and 60 s interval, 5 active-but-backlogged files = 5 minutes to drain. Acceptable.
+
 ## [3.3.11-rc.4] — 2026-05-07
 
 Fix #4 added to `patchOpenClawConfig()`: the **populated-allowlist plugin-skip bug** that broke every realistic install path.
