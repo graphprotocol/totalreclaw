@@ -1,0 +1,64 @@
+name: Auto-merge L1 coding-agent PRs
+
+# Triggers on PRs labeled `auto-merge:L1` by the tr-implement-task skill.
+# Once all CI checks are green, squash-merges the PR + deletes the branch.
+#
+# This implements the Q1=B decision (Pedro 2026-05-08): L1 risk-tier PRs
+# (docs / isolated helpers / enum cleanup — no schema, reranker, or
+# security touch) auto-merge on green CI without coordinator review.
+# L2/L3 PRs go through the coordinator-review skill instead.
+#
+# Design doc: docs/plans/2026-05-08-autonomous-dispatch-design.md
+# Pipeline doc: docs/operations/autonomous-coding-pipeline.md (in totalreclaw-internal)
+
+on:
+  pull_request:
+    types: [labeled, unlabeled, synchronize, opened, reopened]
+  pull_request_review:
+    types: [submitted]
+  check_suite:
+    types: [completed]
+  status: {}
+
+jobs:
+  auto-merge:
+    if: contains(github.event.pull_request.labels.*.name, 'auto-merge:L1')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: read
+    steps:
+      - name: Wait for all checks to complete
+        uses: poseidon/wait-for-status-checks@v0.6.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          delay: 30
+          interval: 30
+          # Don't include the auto-merge job's own status in what we wait for.
+          ignore: 'auto-merge'
+
+      - name: Verify PR is from a coding-agent branch
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if [[ ! "$HEAD_REF" =~ ^agent/ ]]; then
+            echo "Refusing to auto-merge: head ref ($HEAD_REF) is not from agent/* branch"
+            exit 1
+          fi
+
+      - name: Verify PR has canonical-roadmap-task label
+        env:
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          if ! echo "$LABELS" | grep -q 'canonical-roadmap-task'; then
+            echo "Refusing to auto-merge: PR not labeled canonical-roadmap-task"
+            exit 1
+          fi
+
+      - name: Squash-merge the PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr merge "$PR_NUMBER" --squash --delete-branch
