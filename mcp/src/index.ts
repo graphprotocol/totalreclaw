@@ -2397,7 +2397,7 @@ async function main(): Promise<void> {
     console.error('TotalReclaw MCP server started (unconfigured — set TOTALRECLAW_RECOVERY_PHRASE in the MCP host config; see docs/guides/claude-code-setup.md)');
   }
 
-  // ── Trajectory poller (mcp-server 3.3.0-rc.2) ─────────────────────────
+  // ── Trajectory poller (mcp-server 3.3.0-rc.3) ─────────────────────────
   // Auto-extraction without relying on OpenClaw plugin's `agent_end` hook
   // (which 2026.5.4+ silently blocks for non-bundled plugins). The poller
   // scans `~/.openclaw/agents/<agent>/sessions/*.trajectory.jsonl` every
@@ -2405,13 +2405,14 @@ async function main(): Promise<void> {
   // {role, content}[] turns, and calls runExtraction() when the turn-
   // accumulator threshold is met.
   //
-  // 3.3.0-rc.2: poller is wired with a stub `runExtraction` that returns
-  // [] (no LLM extraction in MCP-only mode yet — full extractor + LLM
-  // client port lands in a follow-up RC). The architecturally meaningful
-  // pieces (file discovery, offset tracking, stale-skip, cap=1, gating
-  // on pairing/import) are LIVE so SKILL.md's "auto-extraction is on"
-  // claim holds true. Until the LLM port lands, agents MUST drive
-  // explicit `totalreclaw_remember` calls — see SKILL.md.
+  // 3.3.0-rc.3: real LLM-driven extraction wired in. The plugin's
+  // extractor + llm-client + auth-profile reader were ported into
+  // `src/extraction/` and feed the poller's `runExtraction` dep.
+  // Persistence routes through `handleRememberSubgraph` so the on-chain
+  // pipeline (protobuf v4 + store-time dedup + batch UserOp) is shared
+  // with the explicit `totalreclaw_remember` tool. Phrase-safety: the
+  // recovery phrase never crosses into the extraction LLM — see the
+  // top-of-file rationale in `extraction/extractor.ts`.
   startPollerSafely();
 
   const transport = new StdioServerTransport();
@@ -2424,13 +2425,45 @@ function startPollerSafely(): void {
     // calling main()) don't pay the import cost.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { startTrajectoryPoller } = require('./trajectory-poller.js') as typeof import('./trajectory-poller.js');
+    // 3.3.0-rc.3: live LLM-driven extraction wired in. The plugin's
+    // extractor + llm-client + auth-profile reader were ported into
+    // `mcp/src/extraction/` and are imported here.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const extraction = require('./extraction/extractor.js') as typeof import('./extraction/extractor.js');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const llmClient = require('./extraction/llm-client.js') as typeof import('./extraction/llm-client.js');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const profileReader = require('./extraction/llm-profile-reader.js') as typeof import('./extraction/llm-profile-reader.js');
+
     const logger = {
       info: (m: string) => console.error(`[trajectory-poller] ${m}`),
       warn: (m: string) => console.error(`[trajectory-poller] WARN ${m}`),
       error: (m: string) => console.error(`[trajectory-poller] ERROR ${m}`),
     };
 
-    let warnedNoLlm = false;
+    // ── Initialize the extraction LLM client ────────────────────────────────
+    // Resolution cascade (highest priority first):
+    //   1. Plugin-config override — N/A in MCP-only mode (no plugin manifest).
+    //   2. SDK-passed openclawProviders — N/A in MCP-only mode.
+    //   3. ~/.openclaw/agents/<agent>/agent/auth-profiles.json (or models.json
+    //      legacy fallback). This is the primary source for MCP-only users
+    //      because it's where their OpenClaw install already stores the keys.
+    //   4. Env-var fallback (ZAI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY,
+    //      ...) for self-hosted / dev setups.
+    //
+    // The `primaryModel` hint is left undefined — MCP-only mode has no
+    // single primary chat model concept (the user could be running
+    // OpenClaw with Claude Sonnet AND z.ai GLM-4.6 across different
+    // sessions). The cascade picks the first available cheap model from
+    // the priority list (zai > openai > anthropic > ...).
+    const authProfileKeys = profileReader.readAllProfileKeys({
+      root: profileReader.defaultAuthProfilesRoot(os.homedir()),
+    });
+    llmClient.initLLMClient({
+      authProfileKeys,
+      logger,
+    });
+
     startTrajectoryPoller({
       logger,
       ensureInitialized: async () => {
@@ -2450,25 +2483,83 @@ function startPollerSafely(): void {
         const parsed = raw ? parseInt(raw, 10) : NaN;
         return Number.isFinite(parsed) && parsed > 0 ? parsed : 6;
       },
+      // Dedup-via-existing-memories is OFF for rc.3. Turn-extraction always
+      // sees the full conversation + the importance bumps, so we drop a
+      // few "did we already store this?" UPDATE/NOOP signals; downstream
+      // store-time dedup (in handleRememberSubgraph) catches the actual
+      // duplicates via cosine-similarity. Wiring an MCP-side dedup pass is
+      // a follow-up — would call handleRecallSubgraph(state, {query: convText, k: 20})
+      // and pass the decrypted candidates here.
       isDedupEnabled: () => false,
       getDedupCandidates: async () => [],
-      // 3.3.0-rc.2: stub runExtraction. The full LLM-driven extractor +
-      // llm-client port lands in a follow-up RC. Phrase-safety hard rail:
-      // when porting, the recovery phrase MUST NEVER cross into the
-      // extraction prompt — only chat messages are passed in.
-      runExtraction: async () => {
-        if (!warnedNoLlm) {
-          warnedNoLlm = true;
-          logger.warn(
-            'MCP-only auto-extraction LLM not yet wired (3.3.0-rc.2 ships poller scaffold only). ' +
-              'Agents MUST call `totalreclaw_remember` explicitly per the SKILL.md trigger-phrase rules. ' +
-              'Plugin install path retains full LLM-driven extraction.',
-          );
-        }
-        return [];
+      // ── runExtraction: the real LLM-driven extractor ──
+      // Phrase-safety: `messages` is `{role, content}[]` parsed by the
+      // poller from OpenClaw's trajectory JSONL — user prompts +
+      // assistant replies only. The recovery phrase NEVER crosses this
+      // boundary; it lives in `subgraphState.mnemonic` (different call
+      // stack, used only for HD wallet derivation in subgraph/store.ts).
+      runExtraction: async (messages, mode) => {
+        const facts = await extraction.extractFacts(
+          messages,
+          mode,
+          undefined, // existingMemories — wired via getDedupCandidates path when isDedupEnabled() flips to true
+          undefined, // profileContext (no plugin profile in MCP-only mode)
+          logger,
+        );
+        return facts as unknown as Array<{ text: string; importance?: number; [k: string]: unknown }>;
       },
-      filterByImportance: (facts) => ({ kept: facts, dropped: 0 }),
-      persistFacts: async () => 0,
+      filterByImportance: (facts) => {
+        // The extractor already filters at parse-time (importance >= 6 unless
+        // DELETE). Trust that floor here — only drop the obvious noise that
+        // slipped through (e.g. 0/NaN sentinels). Same shape as the plugin's
+        // hook-side filter.
+        const kept: typeof facts = [];
+        let dropped = 0;
+        for (const f of facts) {
+          const imp = typeof f.importance === 'number' && Number.isFinite(f.importance) ? f.importance : 0;
+          if (imp >= 6) kept.push(f);
+          else dropped++;
+        }
+        return { kept, dropped };
+      },
+      // ── persistFacts: route through handleRememberSubgraph ──
+      // Encryption + protobuf v4 + on-chain submit + store-time dedup all
+      // live there. Calling it with a `facts` batch (NOT the explicit
+      // single-fact form) means batch-mode dedup logic runs (skip vs
+      // supersede heuristics). Returns the `created` count for the
+      // poller log line.
+      persistFacts: async (facts) => {
+        if (!subgraphState) {
+          logger.warn('persistFacts: subgraphState not yet resolved — skipping persist');
+          return 0;
+        }
+        // Map ExtractedFact → handleRememberSubgraph's batch-fact shape.
+        const factsArray = facts.map((f) => {
+          const fact = f as Record<string, unknown>;
+          return {
+            text: String(fact.text),
+            importance: typeof fact.importance === 'number' ? fact.importance : 5,
+            type: typeof fact.type === 'string' ? fact.type : 'claim',
+            scope: typeof fact.scope === 'string' ? fact.scope : 'unspecified',
+            reasoning: typeof fact.reasoning === 'string' ? fact.reasoning : undefined,
+          };
+        });
+        try {
+          const res = await handleRememberSubgraph(subgraphState, { facts: factsArray });
+          // handleRememberSubgraph returns MCP tool-response shape; parse
+          // the inner JSON to recover `created`.
+          const inner = res.content?.[0]?.text;
+          if (typeof inner === 'string') {
+            const parsed = JSON.parse(inner) as { created?: number };
+            return typeof parsed.created === 'number' ? parsed.created : 0;
+          }
+          return 0;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn(`persistFacts: handleRememberSubgraph threw: ${msg}`);
+          return 0;
+        }
+      },
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
