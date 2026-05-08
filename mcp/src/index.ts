@@ -46,6 +46,8 @@ import {
   handleSupport,
   accountToolDefinition,
   handleAccount,
+  pairToolDefinition,
+  handlePair,
 } from './tools/index.js';
 import { getLastBillingResponse } from './tools/status.js';
 import { setOnRememberCallback } from './tools/remember.js';
@@ -1885,6 +1887,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     unpinToolDefinition,
     retypeToolDefinition,
     setScopeToolDefinition,
+    pairToolDefinition,
   ],
 }));
 
@@ -1919,6 +1922,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (name === 'totalreclaw_support') {
     const walletAddress = subgraphState?.smartAccountAddress ?? null;
     return handleSupport(walletAddress);
+  }
+
+  // Handle pair tool (available in all modes — primary unconfigured-mode entry
+  // point so a user with no credentials can run an MCP-only install end-to-end:
+  // host adds MCP server → agent calls totalreclaw_pair → tool returns URL+PIN
+  // → user pairs in browser → server writes ~/.totalreclaw/credentials.json
+  // → user restarts host → server boots in subgraph mode).
+  if (name === 'totalreclaw_pair') {
+    return await handlePair(args as Record<string, unknown> | undefined);
   }
 
   // In unconfigured mode, all other tools return setup guidance pointing at

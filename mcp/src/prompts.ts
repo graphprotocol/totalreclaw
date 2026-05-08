@@ -209,6 +209,18 @@ WHEN NOT TO USE:
 - only billing → totalreclaw_status (lighter)
 - FULL recovery phrase → NEVER; password manager.`;
 
+export const PAIR_TOOL_DESCRIPTION = `Set up the user's TotalReclaw account (browser-side recovery-phrase generation or import).
+INVOKE WHEN USER SAYS:
+- "set up totalreclaw" / "set up my account"
+- "I don't have a totalreclaw recovery phrase yet" / "create a totalreclaw account"
+- ANY tool returns "not_configured" — propose this tool BEFORE asking the user to edit MCP config.
+DOES: opens a brief relay session, returns {url, pin, expires_at_ms}. Hand the URL + PIN to the user — they open the URL in any browser, the BROWSER generates (or imports) a 12-word phrase, encrypts it, uploads ciphertext to this MCP server. Server decrypts in-memory, writes ~/.totalreclaw/credentials.json (mode 0600). Phrase NEVER touches LLM context, chat transcript, stdout, or logs.
+AFTER PAIRING: tell the user to RESTART their MCP host (Claude Desktop / Cursor / Claude Code) so the server re-reads credentials.json and switches out of unconfigured mode.
+WHEN NOT TO USE:
+- user already has TOTALRECLAW_RECOVERY_PHRASE in env → tool will return URL but pairing is unnecessary
+- user explicitly wants terminal-only setup → point them at \`npx @totalreclaw/mcp-server setup\` (CLI wizard, runs OUTSIDE your shell tool)
+- NEVER ask the user to paste their phrase in chat. NEVER echo or print a phrase from any source.`;
+
 // ── Layer 5: Prompt Fallback Templates ───────────────────────────────────────
 
 export const PROMPT_DEFINITIONS = [

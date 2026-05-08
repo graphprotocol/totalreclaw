@@ -13,6 +13,12 @@ export { debriefToolDefinition, handleDebrief, parseDebriefResponse, DEBRIEF_SYS
 export { supportToolDefinition, handleSupport } from './support.js';
 export { accountToolDefinition, handleAccount } from './account.js';
 export {
+  pairToolDefinition,
+  handlePair,
+  runPairBackgroundTask,
+  resolvePairRelayUrl,
+} from './pair.js';
+export {
   pinToolDefinition,
   unpinToolDefinition,
   handlePin,

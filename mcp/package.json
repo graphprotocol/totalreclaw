@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/mcp-server",
-  "version": "3.2.1",
+  "version": "3.3.0-rc.1",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. MCP server with XChaCha20-Poly1305 E2EE, semantic search, import/export, and on-chain storage",
   "homepage": "https://totalreclaw.xyz",
   "main": "dist/index.js",
@@ -43,7 +43,8 @@
     "permissionless": "^0.3.4",
     "porter-stemmer": "^0.9.1",
     "tslib": "^2.8.1",
-    "viem": "^2.47.0"
+    "viem": "^2.47.0",
+    "ws": "^8.18.3"
   },
   "overrides": {
     "permissionless": {
@@ -53,6 +54,7 @@
   "devDependencies": {
     "@types/jest": "^29.5.0",
     "@types/node": "^20.11.0",
+    "@types/ws": "^8.5.12",
     "@typescript-eslint/eslint-plugin": "^6.19.0",
     "@typescript-eslint/parser": "^6.19.0",
     "eslint": "^8.56.0",
