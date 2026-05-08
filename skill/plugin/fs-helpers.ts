@@ -1202,6 +1202,9 @@ export type OpenClawConfigPatchResult = 'patched' | 'unchanged' | 'skipped' | 'e
  */
 export function patchOpenClawConfig(
   configPath?: string,
+  // 3.3.12-rc.3 — plugin version (used by Fix #6 to self-heal a stripped
+  // `plugins.installs.totalreclaw` record so Fix #1 (slot) can fire).
+  pluginVersion?: string,
 ): OpenClawConfigPatchResult {
   const home = process.env.HOME ?? '/home/node';
   const target = configPath ?? path.join(home, '.openclaw', 'openclaw.json');
@@ -1221,6 +1224,67 @@ export function patchOpenClawConfig(
     }
 
     let mutated = false;
+
+    // --- Fix #6 (3.3.12-rc.3): self-heal `plugins.installs.totalreclaw` ---
+    //
+    // OpenClaw 2026.5.6 has a config-rewrite-after-restart behaviour
+    // observed on Pedro's pop-os QA host (2026-05-08): `openclaw plugins
+    // install` writes the install record, gateway restart fires, but
+    // after the restart something STRIPS `plugins.installs.totalreclaw` (and
+    // sometimes `plugins.allow`, `plugins.entries.totalreclaw`,
+    // `plugins.slots.memory`) from openclaw.json. The plugin's binary
+    // remains in `~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/`,
+    // but `openclaw plugins list` shows it as `disabled` because no
+    // install record + no allow entry.
+    //
+    // Defensive self-heal: when this register() runs (which means the
+    // plugin IS physically loaded by the gateway), if the install record
+    // is missing or has no version, write a minimal record. This unlocks
+    // Fix #1 (slot) and avoids the user-visible "plugin disabled"
+    // condition without requiring `openclaw plugins install --force`.
+    //
+    // Phrase-safety: writes only metadata (version, spec, source,
+    // installedAt). No mnemonic / userId / SA leakage.
+    if (pluginVersion) {
+      if (typeof cfg.plugins.installs !== 'object' || cfg.plugins.installs === null) {
+        cfg.plugins.installs = {};
+      }
+      const existing = cfg.plugins.installs.totalreclaw;
+      const existingVersion = (typeof existing === 'object' && existing !== null && typeof existing.version === 'string')
+        ? existing.version
+        : null;
+      if (!existingVersion) {
+        cfg.plugins.installs.totalreclaw = {
+          ...(typeof existing === 'object' && existing !== null ? existing : {}),
+          version: pluginVersion,
+          spec: '@totalreclaw/totalreclaw',
+          source: 'self-heal',
+          installedAt: new Date().toISOString(),
+        };
+        mutated = true;
+      }
+    }
+
+    // --- Fix #5 (3.3.12-rc.3): plugins.allow includes "totalreclaw" ---
+    //
+    // OpenClaw 2026.5.x: when `plugins.allow` is a non-empty array, the
+    // gateway switches into strict-allowlist mode. Plugins NOT in the
+    // allow list are silently rejected at load time — even bundled ones
+    // are gated. Pedro's pop-os 2026-05-08 QA had `plugins.allow` =
+    // ['device-pair', 'google', 'telegram', 'zai'] AFTER `openclaw
+    // plugins install @totalreclaw/totalreclaw@rc` ran. The install
+    // command did NOT add 'totalreclaw' to the allow list. Plugin
+    // shipped as `disabled`. Setup never proceeded.
+    //
+    // Defensive: when allow is a non-empty array and 'totalreclaw' is
+    // not in it, append. Don't touch null/undefined allow (means
+    // auto-discover mode — plugin is reachable without explicit allow).
+    if (Array.isArray(cfg.plugins.allow) && cfg.plugins.allow.length > 0) {
+      if (!cfg.plugins.allow.includes('totalreclaw')) {
+        cfg.plugins.allow.push('totalreclaw');
+        mutated = true;
+      }
+    }
 
     // --- Fix #1: plugins.slots.memory = "totalreclaw" (gated on install) ---
     //

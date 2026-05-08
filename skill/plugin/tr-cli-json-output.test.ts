@@ -174,6 +174,104 @@ assert(
 );
 
 // ---------------------------------------------------------------------------
+// 7b. On-chain wiring (3.3.12-rc.4) — remember/recall/forget MUST use the
+//     subgraph + UserOp paths, NOT the defunct /v1/store and /v1/search
+//     HTTP endpoints (those return 404 since the on-chain pivot).
+// ---------------------------------------------------------------------------
+
+assert(
+  /from '\.\/subgraph-store\.js'/.test(src),
+  "tr-cli.ts: imports from subgraph-store.js (on-chain submission path)",
+);
+
+assert(
+  src.includes('submitFactBatchOnChain') && src.includes('encodeFactProtobuf'),
+  "tr-cli.ts: imports submitFactBatchOnChain + encodeFactProtobuf for on-chain writes",
+);
+
+assert(
+  src.includes('deriveSmartAccountAddress'),
+  "tr-cli.ts: imports deriveSmartAccountAddress (Smart Account owner derivation)",
+);
+
+assert(
+  /from '\.\/subgraph-search\.js'/.test(src),
+  "tr-cli.ts: imports from subgraph-search.js (subgraph query path)",
+);
+
+assert(
+  src.includes('searchSubgraph'),
+  "tr-cli.ts: imports searchSubgraph for recall (replaces api.search /v1/search)",
+);
+
+// cmdRemember must call the on-chain path
+const rememberFn = src.match(/async function cmdRemember[\s\S]*?\n\}\n/);
+assert(
+  rememberFn !== null && rememberFn[0].includes('submitFactBatchOnChain'),
+  "tr-cli.ts: cmdRemember calls submitFactBatchOnChain (NOT api.store)",
+);
+assert(
+  rememberFn !== null && !/ctx\.apiClient\.store\b/.test(rememberFn[0]),
+  "tr-cli.ts: cmdRemember does NOT call ctx.apiClient.store (the /v1/store path is dead)",
+);
+
+// cmdRecall must call searchSubgraph
+const recallFn = src.match(/async function cmdRecall[\s\S]*?\n\}\n/);
+assert(
+  recallFn !== null && recallFn[0].includes('searchSubgraph'),
+  "tr-cli.ts: cmdRecall calls searchSubgraph (NOT api.search)",
+);
+assert(
+  recallFn !== null && !/ctx\.apiClient\.search\b/.test(recallFn[0]),
+  "tr-cli.ts: cmdRecall does NOT call ctx.apiClient.search (the /v1/search path is dead)",
+);
+
+// cmdForget must exist + call submitFactBatchOnChain (tombstone path)
+assert(
+  /async function cmdForget/.test(src),
+  "tr-cli.ts: cmdForget defined (3.3.12-rc.4 — tombstone via UserOp)",
+);
+const forgetFn = src.match(/async function cmdForget[\s\S]*?\n\}\n/);
+assert(
+  forgetFn !== null && forgetFn[0].includes('submitFactBatchOnChain'),
+  "tr-cli.ts: cmdForget submits an on-chain tombstone via submitFactBatchOnChain",
+);
+assert(
+  forgetFn !== null && forgetFn[0].includes("source: 'tombstone'"),
+  "tr-cli.ts: cmdForget writes a tombstone payload (source='tombstone')",
+);
+
+// cmdExport must exist + use the subgraph helper
+assert(
+  /async function cmdExport/.test(src),
+  "tr-cli.ts: cmdExport defined (3.3.12-rc.4 — paginated subgraph dump)",
+);
+const exportFn = src.match(/async function cmdExport[\s\S]*?\n\}\n/);
+assert(
+  exportFn !== null && exportFn[0].includes('exportAllFacts'),
+  "tr-cli.ts: cmdExport delegates to exportAllFacts (scanner-isolated helper)",
+);
+
+// buildContext must derive the wallet address (Smart Account) from the mnemonic
+assert(
+  /walletAddress\s*=\s*await\s+deriveSmartAccountAddress/.test(src),
+  "tr-cli.ts: buildContext derives walletAddress from mnemonic via deriveSmartAccountAddress",
+);
+
+assert(
+  /setRecoveryPhraseOverride\s*\(/.test(src),
+  "tr-cli.ts: buildContext calls setRecoveryPhraseOverride so getSubgraphConfig sees the mnemonic",
+);
+
+// CRITICAL: verify NO calls to api.store / api.search (the defunct
+// /v1/store and /v1/search HTTP paths). Comments may mention the strings
+// for context — we only care that the methods aren't INVOKED.
+assert(
+  !/\bapiClient\.store\s*\(/.test(src) && !/\bapiClient\.search\s*\(/.test(src),
+  "tr-cli.ts: never invokes apiClient.store / apiClient.search (defunct /v1/store + /v1/search)",
+);
+
+// ---------------------------------------------------------------------------
 // 8. Phrase safety — mnemonic never in stdout
 // ---------------------------------------------------------------------------
 

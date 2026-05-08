@@ -88,12 +88,16 @@ def test_canonical_default_url_is_staging_in_source():
         "relay.py. The workflow regex assumes this exact assignment shape."
     )
     url = match.group(1)
-    assert url == "https://api-staging.totalreclaw.xyz", (
+    # F flip (3.3.12-rc.1, 2026-05-07): source-of-truth default flipped from
+    # staging to production. RC + stable both default to prod; staging access
+    # via TOTALRECLAW_SERVER_URL env override. Removes "RC users land on
+    # staging chain with stranded memories" footgun. publish-python-client.yml
+    # no longer rewrites this line — the source IS prod.
+    assert url == "https://api.totalreclaw.xyz", (
         f"Source-of-truth default URL is {url!r}, expected "
-        "https://api-staging.totalreclaw.xyz. The publish-python-client.yml "
-        "workflow rewrites this line for stable builds; if the on-tree "
-        "literal drifts away from staging, RC artifacts will silently "
-        "publish with the wrong default."
+        "https://api.totalreclaw.xyz (post-F-flip). RC + stable both default "
+        "to production; staging access is opt-in via TOTALRECLAW_SERVER_URL "
+        "env override."
     )
 
 

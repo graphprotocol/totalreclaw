@@ -3151,12 +3151,16 @@ const plugin = {
       // openclaw.json at startup, not dynamically). We emit a warn so
       // the user and ops scripts know to trigger a restart.
       try {
-        const patchResult = patchOpenClawConfig();
+        // 3.3.12-rc.3: pass pluginVersion so Fix #6 can self-heal a
+        // stripped `plugins.installs.totalreclaw` record (and unblock
+        // Fix #1 which gates on installs being present).
+        const patchResult = patchOpenClawConfig(undefined, pluginVersion ?? undefined);
         if (patchResult === 'patched') {
           api.logger.warn(
             'TotalReclaw: updated openclaw.json with required 2026.5.x keys ' +
               '(plugins.slots.memory + hooks.allowConversationAccess + ' +
-              'channels.telegram.streaming.mode + plugins.bundledDiscovery). ' +
+              'channels.telegram.streaming.mode + plugins.bundledDiscovery + ' +
+              'plugins.allow + plugins.installs.totalreclaw self-heal). ' +
               'Gateway restart required for the changes to take effect. ' +
               'Run `/totalreclaw-restart` or restart the gateway manually.',
           );
