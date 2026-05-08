@@ -2397,8 +2397,83 @@ async function main(): Promise<void> {
     console.error('TotalReclaw MCP server started (unconfigured — set TOTALRECLAW_RECOVERY_PHRASE in the MCP host config; see docs/guides/claude-code-setup.md)');
   }
 
+  // ── Trajectory poller (mcp-server 3.3.0-rc.2) ─────────────────────────
+  // Auto-extraction without relying on OpenClaw plugin's `agent_end` hook
+  // (which 2026.5.4+ silently blocks for non-bundled plugins). The poller
+  // scans `~/.openclaw/agents/<agent>/sessions/*.trajectory.jsonl` every
+  // 60s, parses new prompt.submitted + model.completed events into
+  // {role, content}[] turns, and calls runExtraction() when the turn-
+  // accumulator threshold is met.
+  //
+  // 3.3.0-rc.2: poller is wired with a stub `runExtraction` that returns
+  // [] (no LLM extraction in MCP-only mode yet — full extractor + LLM
+  // client port lands in a follow-up RC). The architecturally meaningful
+  // pieces (file discovery, offset tracking, stale-skip, cap=1, gating
+  // on pairing/import) are LIVE so SKILL.md's "auto-extraction is on"
+  // claim holds true. Until the LLM port lands, agents MUST drive
+  // explicit `totalreclaw_remember` calls — see SKILL.md.
+  startPollerSafely();
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
+}
+
+function startPollerSafely(): void {
+  try {
+    // Lazy-require so test environments that import this file (without
+    // calling main()) don't pay the import cost.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { startTrajectoryPoller } = require('./trajectory-poller.js') as typeof import('./trajectory-poller.js');
+    const logger = {
+      info: (m: string) => console.error(`[trajectory-poller] ${m}`),
+      warn: (m: string) => console.error(`[trajectory-poller] WARN ${m}`),
+      error: (m: string) => console.error(`[trajectory-poller] ERROR ${m}`),
+    };
+
+    let warnedNoLlm = false;
+    startTrajectoryPoller({
+      logger,
+      ensureInitialized: async () => {
+        // No-op: subgraphState is already resolved before main() finishes.
+      },
+      // Block extraction until the user has paired (no credentials.json).
+      isPairingPending: () => !subgraphState,
+      // No import-flow tracking in mcp-server today.
+      isImportActive: () => false,
+      getExtractInterval: () => {
+        const raw = process.env.TOTALRECLAW_EXTRACT_INTERVAL;
+        const parsed = raw ? parseInt(raw, 10) : NaN;
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+      },
+      getMaxFactsPerExtraction: () => {
+        const raw = process.env.TOTALRECLAW_MAX_FACTS_PER_EXTRACTION;
+        const parsed = raw ? parseInt(raw, 10) : NaN;
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : 6;
+      },
+      isDedupEnabled: () => false,
+      getDedupCandidates: async () => [],
+      // 3.3.0-rc.2: stub runExtraction. The full LLM-driven extractor +
+      // llm-client port lands in a follow-up RC. Phrase-safety hard rail:
+      // when porting, the recovery phrase MUST NEVER cross into the
+      // extraction prompt — only chat messages are passed in.
+      runExtraction: async () => {
+        if (!warnedNoLlm) {
+          warnedNoLlm = true;
+          logger.warn(
+            'MCP-only auto-extraction LLM not yet wired (3.3.0-rc.2 ships poller scaffold only). ' +
+              'Agents MUST call `totalreclaw_remember` explicitly per the SKILL.md trigger-phrase rules. ' +
+              'Plugin install path retains full LLM-driven extraction.',
+          );
+        }
+        return [];
+      },
+      filterByImportance: (facts) => ({ kept: facts, dropped: 0 }),
+      persistFacts: async () => 0,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[trajectory-poller] failed to start: ${msg}`);
+  }
 }
 
 main().catch((error) => {

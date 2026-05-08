@@ -52,6 +52,14 @@ on:
         required: false
         type: string
         default: totalreclaw
+      skill-source:
+        description: 'Skill source to publish: `plugin` (legacy plugin-bundled SKILL.md) or `mcp` (MCP-first SKILL.md from mcp/SKILL.md). Defaults to plugin until rc.2+ promote.'
+        required: false
+        type: choice
+        options:
+          - plugin
+          - mcp
+        default: plugin
 
 jobs:
   publish:
@@ -175,12 +183,38 @@ jobs:
           SLUG="${SLUG:-totalreclaw}"
           echo "Publishing to slug: $SLUG"
 
+          # 3.3.0-rc.2 (mcp-server): allow publishing the MCP-first skill
+          # bundle (SKILL.md sourced from mcp/SKILL.md) instead of the
+          # plugin's. Default remains `plugin` so existing dispatches keep
+          # working unchanged.
+          SKILL_SOURCE="${{ github.event.inputs.skill-source }}"
+          SKILL_SOURCE="${SKILL_SOURCE:-plugin}"
+          if [ "$SKILL_SOURCE" = "mcp" ]; then
+            PUBLISH_DIR="./mcp/skill-clawhub"
+            echo "Publishing MCP-first skill from $PUBLISH_DIR"
+            # Sync SKILL.md from mcp/SKILL.md into the publish dir.
+            cp ./mcp/SKILL.md "$PUBLISH_DIR/SKILL.md"
+            # Stamp version from mcp/package.json into skill-clawhub/skill.json.
+            node -e "
+            const fs = require('fs');
+            const mcpPkg = require('./mcp/package.json');
+            const skillPath = '$PUBLISH_DIR/skill.json';
+            const skill = JSON.parse(fs.readFileSync(skillPath, 'utf-8'));
+            skill.version = mcpPkg.version;
+            fs.writeFileSync(skillPath, JSON.stringify(skill, null, 2) + '\n');
+            console.log('mcp skill.json::version =', skill.version);
+            "
+          else
+            PUBLISH_DIR="./skill/plugin"
+            echo "Publishing plugin-bundled skill from $PUBLISH_DIR (legacy)"
+          fi
+
           clawhub login --token "$CLAWHUB_TOKEN" --no-browser
           # Using legacy `clawhub publish --slug` (CLI 0.8.0). 0.9.x's
           # `clawhub package publish --family code-plugin` would collide with
           # the existing `totalreclaw` slug already registered Family=Skill.
           # See install step above for full context.
-          clawhub publish ./skill/plugin \
+          clawhub publish "$PUBLISH_DIR" \
             --slug "$SLUG" \
             --version "$VERSION" \
             --tags "$TAGS" \

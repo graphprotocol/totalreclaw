@@ -1,0 +1,35 @@
+{
+  "name": "totalreclaw",
+  "version": "3.3.0-rc.2",
+  "description": "End-to-end encrypted, decentralized memory for AI agents — MCP-first install. XChaCha20-Poly1305 E2EE, on-chain via Account Abstraction, never seen in plaintext by any server.",
+  "author": "TotalReclaw Team",
+  "license": "MIT",
+  "homepage": "https://totalreclaw.xyz",
+  "repository": "https://github.com/p-diogo/totalreclaw",
+  "keywords": [
+    "memory",
+    "e2ee",
+    "e2e-encryption",
+    "encryption",
+    "privacy",
+    "agent-memory",
+    "persistent-context",
+    "mcp"
+  ],
+  "install": {
+    "type": "mcp",
+    "instructions": "openclaw mcp set totalreclaw '{\"command\":\"npx\",\"args\":[\"-y\",\"@totalreclaw/mcp-server\"]}'",
+    "description": "Registers @totalreclaw/mcp-server as a stdio-mode MCP server. The 18 totalreclaw_* tools become available under the totalreclaw__ namespace prefix in any OpenClaw agent session."
+  },
+  "openclaw": {
+    "compat": {
+      "openclawVersion": ">=2026.5.0"
+    },
+    "requires": {
+      "env": [],
+      "bins": ["node"]
+    },
+    "emoji": "🧠",
+    "os": ["macos", "linux", "windows"]
+  }
+}
