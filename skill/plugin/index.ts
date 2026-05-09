@@ -2255,7 +2255,7 @@ async function handlePluginImportFrom(
   const startTime = Date.now();
 
   const source = params.source as string;
-  const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini', 'memoclaw', 'generic-json', 'generic-csv'];
+  const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini'];
 
   if (!source || !validSources.includes(source)) {
     return { success: false, error: `Invalid source. Must be one of: ${validSources.join(', ')}` };
@@ -2628,7 +2628,7 @@ async function handleBatchImport(
   const offset = (params.offset as number) ?? 0;
   const batchSize = (params.batch_size as number) ?? 25;
 
-  const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini', 'memoclaw', 'generic-json', 'generic-csv'];
+  const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini'];
   if (!source || !validSources.includes(source)) {
     return { success: false, error: `Invalid source. Must be one of: ${validSources.join(', ')}` };
   }
@@ -5296,7 +5296,7 @@ const plugin = {
           properties: {
             source: {
               type: 'string',
-              enum: ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini', 'memoclaw', 'generic-json', 'generic-csv'],
+              enum: ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini'],
               description: 'The source system to import from (gemini: Google Takeout HTML; chatgpt: conversations.json or memory text; claude: memory text)',
             },
             api_key: {

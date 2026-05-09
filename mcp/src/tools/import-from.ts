@@ -7,7 +7,7 @@ import { type MemoryType } from '../memory-types.js';
 // We define these locally to avoid importing from outside the MCP rootDir.
 // The runtime import() below loads the actual adapter code at runtime.
 
-export type ImportSource = 'mem0' | 'mcp-memory' | 'chatgpt' | 'claude' | 'gemini' | 'memoclaw' | 'generic-json' | 'generic-csv';
+export type ImportSource = 'mem0' | 'mcp-memory' | 'chatgpt' | 'claude' | 'gemini';
 
 export interface ImportFromInput {
   source: ImportSource;
@@ -75,12 +75,12 @@ export const importFromToolDefinition = {
     properties: {
       source: {
         type: 'string',
-        enum: ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini', 'memoclaw', 'generic-json', 'generic-csv'],
+        enum: ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini'],
         description: 'The source system to import from (gemini: Google Takeout HTML; chatgpt: conversations.json or memory text; claude: memory text)',
       },
       api_key: {
         type: 'string',
-        description: 'API key for the source system (Mem0, MemoClaw). NOT stored — used only for this import.',
+        description: 'API key for the source system (Mem0). NOT stored — used only for this import.',
       },
       source_user_id: {
         type: 'string',
@@ -173,7 +173,7 @@ export async function handleImportFrom(
   const startTime = Date.now();
 
   // Validate source
-  const validSources: ImportSource[] = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini', 'memoclaw', 'generic-json', 'generic-csv'];
+  const validSources: ImportSource[] = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini'];
   if (!input.source || !validSources.includes(input.source)) {
     return errorResponse(`Invalid source. Must be one of: ${validSources.join(', ')}`);
   }

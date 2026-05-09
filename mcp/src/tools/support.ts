@@ -54,8 +54,8 @@ const TROUBLESHOOTING = [
   {
     issue: 'Import failed or memories not importing',
     solution:
-      'Ensure you are using the correct source format (mem0, mcp-memory, chatgpt, claude, generic-json, ' +
-      'generic-csv). Try dry_run=true first to preview what would be imported. If API keys are required, ' +
+      'Ensure you are using the correct source format (mem0, mcp-memory, chatgpt, claude, gemini). ' +
+      'Try dry_run=true first to preview what would be imported. If API keys are required, ' +
       'they are used in-memory only and never stored. Content fingerprint dedup prevents duplicate imports.',
   },
 ];

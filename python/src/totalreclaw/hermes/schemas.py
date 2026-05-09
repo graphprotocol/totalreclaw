@@ -284,7 +284,7 @@ IMPORT_FROM = {
         "properties": {
             "source": {
                 "type": "string",
-                "enum": ["gemini", "chatgpt", "claude", "mem0", "mcp-memory", "generic-json"],
+                "enum": ["gemini", "chatgpt", "claude", "mem0", "mcp-memory"],
                 "description": "The source system to import from",
             },
             "file_path": {
@@ -368,7 +368,7 @@ IMPORT_BATCH = {
         "properties": {
             "source": {
                 "type": "string",
-                "enum": ["gemini", "chatgpt", "claude", "mem0", "mcp-memory", "generic-json"],
+                "enum": ["gemini", "chatgpt", "claude", "mem0", "mcp-memory"],
                 "description": "The source system to import from (must match the initial import_from call)",
             },
             "file_path": {

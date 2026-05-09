@@ -10,7 +10,6 @@ from typing import List, Optional, Literal
 
 ImportSource = Literal[
     'mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini',
-    'memoclaw', 'generic-json', 'generic-csv',
 ]
 
 
