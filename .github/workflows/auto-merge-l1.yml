@@ -36,7 +36,7 @@ jobs:
           delay: 30
           interval: 30
           # Don't include the auto-merge job's own status in what we wait for.
-          ignore: 'auto-merge'
+          ignore: 'auto-merge,Publish to PyPI,Publish to crates.io,Publish to npm,Publish to ClawHub,publish-pypi,publish-crates,publish-npm,publish-clawhub'
 
       - name: Verify PR is from a coding-agent branch
         env:
