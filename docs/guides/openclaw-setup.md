@@ -12,7 +12,7 @@ TotalReclaw is open-source memory tooling for OpenClaw. The plugin is published 
 - ClawHub skill: `totalreclaw`
 - Source code: <https://github.com/p-diogo/totalreclaw>
 
-Everything runs locally except the encrypted-at-rest sync to TotalReclaw's relay (`api-staging.totalreclaw.xyz` for the free tier). The recovery phrase is generated and stays inside your browser — neither the agent, the relay, nor anyone else ever sees it.
+All cryptographic operations run on your device. Encrypted bundles are forwarded through the TotalReclaw relay (`api.totalreclaw.xyz` by default for both stable and RC builds; set `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` to opt into the staging relay). The recovery phrase is generated and stays inside your browser — neither the agent, the relay, nor anyone else ever sees it.
 
 If you already have OpenClaw running, paste this into your OpenClaw chat:
 
@@ -46,8 +46,8 @@ You are not asked to handle the recovery phrase. You are not asked to bypass aut
 
 Speak only these lines, in order. Substitute the bracketed placeholders with the real values. No prefaces. No suffixes. No narration around them.
 
-1. (Step 1 — start)
-   > Installing TotalReclaw…
+1. (Step 1 — start; emit BEFORE any shell tool call so the user knows work is happening)
+   > Setting up TotalReclaw — this takes about a minute…
 2. (Step 2 — after install + `tr status --json` confirms CLI works, hybrid mode)
    > ✓ Installed (totalreclaw &lt;version&gt;, hybrid mode)
 3. (Step 3 — only if existing credentials were detected, then stop)
@@ -117,7 +117,7 @@ openclaw skills install totalreclaw
 > **Auto-extraction caveat (3.3.11-rc.1).** OpenClaw 2026.5.4 currently ignores `allowConversationAccess` at hook registration time and silently blocks the plugin's `agent_end` hook for non-bundled plugins — auto-extraction would never fire via that path. The plugin works around this with a filesystem-polling backup that watches `~/.openclaw/agents/<agent>/sessions/*.trajectory.jsonl` every 60 s and runs the same extraction pipeline (NOT a hook event, so the gateway doesn't gate it). When upstream OpenClaw fixes the policy bug, the hook will resume firing alongside the poller; offset-based dedup prevents double-extraction.
 
 Notes:
-- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.11-rc.5`.
+- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.5`.
 - If install reports `already exists` or non-zero on a re-run (the plugin is already on disk from a previous attempt), add `--force`: `openclaw plugins install @totalreclaw/totalreclaw@rc --force` and `openclaw skills install totalreclaw --force`.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
@@ -158,7 +158,7 @@ Parse the JSON `{"v":1,"sid":"...","url":"...","pin":"...","mode":"...","expires
 
 If the cat output is empty after 2s, sleep 2 more seconds and try again (relay handshake can take up to 4s on a cold network). If `tr pair --json` is unavailable (old install path), fall back to the `totalreclaw_pair` native tool or `openclaw totalreclaw pair generate --url-pin-only`.
 
-Render the QR if the pair payload includes `qr_png_b64`: image-capable transports (Telegram, Slack, web chat) decode to bytes and attach as an image; terminal-only transports (OpenClaw native CLI) emit `qr_unicode` inline. The QR encodes only the URL — the PIN is a separate dual-channel confirmation, never bake it into the QR.
+The pair payload includes a `qr_ascii` field (Unicode block-char QR, ~43 lines × 43 cols) that renders correctly in monospace fonts on every modern transport. Emit it inline in a triple-backticked code block right above user-visible line 5 if your transport can render code blocks. The pair page renders a real PNG QR alongside, so users on a desktop browser see both. Do NOT save QR PNGs locally (`LocalMediaAccessError`). The QR encodes only the URL; the PIN is dual-channel — typed separately.
 
 ### Step 5 — Verify and confirm (silent until line 6)
 
@@ -217,15 +217,13 @@ openclaw plugins install @totalreclaw/totalreclaw            # stable
 # Under the default config (`gateway.reload.mode = "hybrid"`), OpenClaw's file-watcher
 # auto-restarts the gateway within 1-3s of the install — no manual restart needed.
 # Verify with: `openclaw plugins list | grep totalreclaw`.
-
-# If you have `gateway.reload.mode = off`, restart manually:
-# openclaw gateway restart                                   # native install
-# docker restart <your-openclaw-container>                   # Docker self-host
 ```
+
+The plugin self-restarts the gateway via SIGUSR1 when needed. You should not need to run `openclaw gateway restart` or `docker restart` yourself; if a restart appears stuck, file an issue rather than hand-restarting.
 
 Then in chat: *"Set up TotalReclaw"* — the agent will call `totalreclaw_pair` and hand you the URL + PIN. Open the URL in your browser to enter or generate your phrase.
 
-> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.11-rc.5`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
+> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.5`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
 
 <details>
 <summary>From-source install (for plugin development — self-host only)</summary>

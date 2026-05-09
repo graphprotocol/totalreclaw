@@ -801,6 +801,48 @@ export function isRetryable(errorMessage: string): boolean {
 // OpenAI-compatible chat completion
 // ---------------------------------------------------------------------------
 
+/**
+ * Provider base-URL hints for OpenAI-compatible endpoints that honour the
+ * `response_format: {"type": "json_object"}` body field. Sending the field
+ * to a provider that supports it makes JSON output deterministic; sending
+ * it to a provider that does NOT recognise the field is a 400.
+ *
+ * Why this exists (3.3.12-rc.6, 2026-05-09):
+ *   z.ai's GLM family (4.5-flash, 5-turbo, 5.1) silently returns EMPTY
+ *   `message.content` for the merged-extraction prompt unless this hint
+ *   is set. No error, no warning — the LLM just emits "" instead of the
+ *   expected `{"topics": [], "facts": []}` JSON. Plugin's parse step
+ *   then logs `0 raw facts` from a successful-but-empty branch.
+ *
+ *   This bug was found and fixed on the Python (Hermes) side in
+ *   2.3.1-rc.23 (see `python/src/totalreclaw/agent/llm_client.py`
+ *   `_supports_json_object_response_format`) but the plugin TS port did
+ *   not carry the fix — observed in plugin 3.3.12-rc.5 auto-QA on
+ *   2026-05-09: hook + poller both fired correctly but extraction
+ *   returned 0 facts on every batch despite trajectories containing
+ *   explicit "I prefer X" / "I work at Y" statements.
+ *
+ * Mirror of Python's `_supports_json_object_response_format`. Match by
+ * substring on a lowercased baseUrl so cosmetic prefix differences
+ * (https://, /v1, etc.) don't matter.
+ */
+const JSON_OBJECT_PROVIDER_HINTS = [
+  'z.ai',
+  'api.openai.com',
+  'groq.com',
+  'openrouter.ai',
+  'deepseek.com',
+  'mistral.ai',
+  'x.ai',
+  'together.xyz',
+] as const;
+
+export function supportsJsonObjectResponseFormat(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false;
+  const lower = baseUrl.toLowerCase();
+  return JSON_OBJECT_PROVIDER_HINTS.some((h) => lower.includes(h));
+}
+
 async function chatCompletionOpenAI(
   config: LLMClientConfig,
   messages: ChatMessage[],
@@ -816,6 +858,13 @@ async function chatCompletionOpenAI(
     temperature,
     max_completion_tokens: maxTokens,
   };
+
+  // 3.3.12-rc.6: hint the provider to return strict JSON. Critical for
+  // z.ai/GLM (silent-empty without it). See JSON_OBJECT_PROVIDER_HINTS
+  // doc above.
+  if (supportsJsonObjectResponseFormat(config.baseUrl)) {
+    body.response_format = { type: 'json_object' };
+  }
 
   try {
     const res = await fetch(url, {
@@ -834,7 +883,31 @@ async function chatCompletionOpenAI(
     }
 
     const json = (await res.json()) as ChatCompletionResponse;
-    return json.choices?.[0]?.message?.content ?? null;
+    const content = json.choices?.[0]?.message?.content ?? null;
+
+    // 3.3.12-rc.6: loud-on-empty. If the provider returned a 200 with
+    // empty content, this almost always means a missing response_format
+    // hint or a content-filter. Without this log the silent-empty
+    // failure mode (Python rc.23 / plugin rc.5) is invisible to ops.
+    if (content === '' || content === null) {
+      // Lazy import to avoid circular dep with the registered logger.
+      // Fall back to console.warn if logger unavailable.
+      const warn = (msg: string) => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (globalThis as any)?.console?.warn?.(msg);
+        } catch {
+          /* noop */
+        }
+      };
+      warn(
+        `[totalreclaw][llm-client] provider=${config.baseUrl} model=${config.model} ` +
+          `returned empty content (status=200). ` +
+          `If using z.ai/GLM/OpenAI-compat, check response_format hint is being sent.`,
+      );
+    }
+
+    return content;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`LLM call failed: ${msg}`);

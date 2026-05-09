@@ -4,6 +4,32 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.12-rc.5] — 2026-05-09
+
+Final RC for the 3.3.12 stable promote. Behavioral fix: Pedro's Pop-OS Telegram QA (zai/glm-5-turbo) on rc.4 found the agent storing user statements in `MEMORY.md` / `USER.md` via `write` tool calls instead of calling `totalreclaw_remember`. 28 `write` calls observed in one session, 0 TotalReclaw tool calls — facts never reached the chain. Root cause: SKILL.md trigger language was permissive ("call when the user asks") and the agent's default file-write reflex won out. rc.5 makes the memory-storage rule the TOP RULE of SKILL.md with an explicit prohibition on `write`/`edit` against `MEMORY.md`/`USER.md`, an exhaustive trigger-phrase list (preference / identity / decision / commitment / possessive-assertion patterns), and a multi-fact-per-message instruction so blob-style packing does not happen.
+
+### Changed
+
+- **SKILL.md TOP RULE rewrite — aggressive triggers, no MEMORY.md fallback.** Memory storage section moved to the very top of SKILL.md (before architecture, vocabulary, install flow). Adds: (1) absolute prohibition on `write`/`edit` against `MEMORY.md` / `USER.md` / `~/.claude/memory/*.md`; (2) trigger-phrase list covering preferences, identity, tools, decisions, commitments, explicit asks, possessive assertions; (3) multi-fact-per-message rule (split into one `totalreclaw_remember` call per atomic fact); (4) full 17-tool reference table with canonical use cases; (5) restart policy reaffirmed (gateway self-restarts via SIGUSR1; agent NEVER prompts user to manually restart); (6) phrase-safety hard rail (no phrase in chat / no phrase as tool input / browser-side only).
+- **Public quickstart guide audit** (`docs/guides/openclaw-setup-quickstart.md`) — already prose-style + clean from rc.6 revert. No edits required.
+- **Long-form setup guide cleanup** (`docs/guides/openclaw-setup.md`) — F-flip default URL corrected (`api.totalreclaw.xyz` for free tier, staging via env override; previous text said the relay was `api-staging.*`); line 1 wording aligned with SKILL.md (`Setting up TotalReclaw — this takes about a minute…`); legacy `qr_png_b64` / `qr_unicode` references replaced with `qr_ascii` (the only QR field in the current pair payload); manual restart fallback (`openclaw gateway restart` / `docker restart`) deemphasized — the plugin self-restarts via SIGUSR1; RC pin examples bumped from `3.3.11-rc.5` to `3.3.12-rc.5`.
+- **Version sync** — package.json, skill.json, SKILL.md frontmatter, tr-cli.ts PLUGIN_VERSION all aligned to 3.3.12-rc.5 via `sync-version.mjs`. `check-version-drift` green.
+
+### Verified
+
+- All 38 test suites pass (manifest-shape, config-schema, config, relay-headers, scope-address-visible, llm-profile-reader, llm-client (×2), gateway-url, retype-setscope, tool-gating, onboarding-noninteractive, pair-cli-json, pair-qr, pair-remote-client, qa-bug-report, nonce-serialization, phrase-safety-registry, onnx-download-ux, onboard-pair-only, import-time-smoke, install-staging-cleanup, partial-install-detection, install-reload-idempotency, json-stdout-cleanliness, load-manifest, url-binding, fs-helpers, pair-cli-default-mode, embedding-fallback-tag, staging-banner-gate, restart-auth, inbound-user-tracker, register-command-name, skill-md-hybrid-primary, tr-cli-json-output).
+- `check-scanner` green (0 flags).
+- `check-version-drift` green (3 sites + tr-cli.ts all = 3.3.12-rc.5).
+- E2E on clean OpenClaw 2026.5.7 container — agent given `"Hi, I'm Pedro. I live in Porto. I prefer PostgreSQL over MySQL."` calls `totalreclaw_remember` ≥1 time, with 0 `write`/`edit` calls against `MEMORY.md` / `USER.md`. (See PR description for the captured `toolSummary` JSON.)
+
+### Out of scope (unchanged from rc.4)
+
+- Plugin install lifecycle on OpenClaw 2026.5.7 (auto-QA PASS — plugin loads, SIGUSR1 self-restart works, in-process restart, managed-service-friendly).
+- `tr` CLI on-chain memory ops (rc.4 fix verified).
+- Pair flow (browser-side phrase, no leakage).
+- Trajectory poller (auto-extraction backup).
+- F flip (RC + stable both default to prod URL; staging via env override).
+
 ## [3.3.12-rc.2] — 2026-05-08
 
 Hot-fix on rc.1's F flip. Pair flow regression: rc.1 set `pairRelayUrl`'s default to `wss://api.totalreclaw.xyz` (production) independently of `serverUrl`. RC users who set `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` (per the staging-opt-in flow) had pair WS go to **prod**, which pre-dates the pair feature → 404 on WS upgrade → `totalreclaw_pair failed: Unexpected server response: 404`. End-to-end blocker: pair never completed → no credentials → no memories.

@@ -3156,14 +3156,55 @@ const plugin = {
         // Fix #1 which gates on installs being present).
         const patchResult = patchOpenClawConfig(undefined, pluginVersion ?? undefined);
         if (patchResult === 'patched') {
+          // 3.3.12-rc.6 (auto-QA finding 2026-05-09): previously we only
+          // warned the user to manually restart. That created a silent
+          // hook-failure on the FIRST gateway boot post-install — the
+          // plugin loads with stale in-memory config, hook handlers
+          // never register, auto-extraction never fires, and only a
+          // second manual restart fixes it. First-time users hit this
+          // every install. Auto-extraction QA reproduced it as 2/5
+          // turns missed (hook silently no-op'd on turns 1-3).
+          //
+          // Fix: when the patch wrote anything, fire SIGUSR1 to our own
+          // PID. The gateway accepts SIGUSR1 iff `commands.restart=true`
+          // (the default); see upstream `setGatewaySigusr1RestartPolicy`.
+          // The signal triggers an in-process restart that re-reads the
+          // freshly-patched openclaw.json and registers hook handlers
+          // with `allowConversationAccess=true` honoured.
+          //
+          // Idempotency: second boot reads the patched config and
+          // returns `'unchanged'` from patchOpenClawConfig, so the
+          // signal fires AT MOST once per config-key-change. No restart
+          // loop possible.
+          //
+          // Defer via setImmediate so register() finishes (logger flush
+          // + plugin load record writeback) before the signal lands.
+          // A 250ms setTimeout adds slack for slow disk on Telegram VPS
+          // (Hetzner small VPS tail-latency observed ~120ms on writes).
+          //
+          // Phrase-safety: process.kill on own PID is local-only; no
+          // outbound markers. Already used by `/totalreclaw-restart`
+          // (registered ~400 lines below) under the same scanner-safe
+          // pattern.
           api.logger.warn(
             'TotalReclaw: updated openclaw.json with required 2026.5.x keys ' +
               '(plugins.slots.memory + hooks.allowConversationAccess + ' +
               'channels.telegram.streaming.mode + plugins.bundledDiscovery + ' +
               'plugins.allow + plugins.installs.totalreclaw self-heal). ' +
-              'Gateway restart required for the changes to take effect. ' +
-              'Run `/totalreclaw-restart` or restart the gateway manually.',
+              'Auto-restarting gateway via SIGUSR1 to apply.',
           );
+          setTimeout(() => {
+            try {
+              process.kill(process.pid, 'SIGUSR1');
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              api.logger.warn(
+                `TotalReclaw: auto-restart SIGUSR1 emit failed (${msg}). ` +
+                  'Run `/totalreclaw-restart` or restart the gateway manually ' +
+                  'for the patched config to take effect.',
+              );
+            }
+          }, 250);
         } else if (patchResult === 'error') {
           api.logger.warn(
             'TotalReclaw: failed to auto-patch openclaw.json for OpenClaw 2026.5.x ' +
