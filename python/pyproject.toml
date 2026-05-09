@@ -55,6 +55,9 @@ dependencies = [
     # ``totalreclaw.pair.remote_client`` for the transport, and the
     # rc.10 blueprint in the internal repo for the full design.
     "websockets>=12.0,<14",
+    # imp-5 — RAM pre-flight check in import adapters uses psutil.virtual_memory()
+    # to detect available memory before loading large files.
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]

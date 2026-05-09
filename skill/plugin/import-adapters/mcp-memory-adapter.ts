@@ -64,6 +64,24 @@ export class MCPMemoryAdapter extends BaseImportAdapter {
     } else if (input.file_path) {
       try {
         const resolvedPath = input.file_path.replace(/^~/, os.homedir());
+        const fileStat = fs.statSync(resolvedPath);
+        const fileSizeMB = fileStat.size / (1024 * 1024);
+        if (fileSizeMB > 500) {
+          errors.push(
+            `File is too large to import: ${fileSizeMB.toFixed(1)}MB exceeds the 500MB cap. ` +
+            'Split the file into smaller chunks and import each separately.',
+          );
+          return { facts: [], chunks: [], totalMessages: 0, warnings, errors };
+        }
+        const freeMem = os.freemem();
+        if (freeMem < fileStat.size * 2) {
+          errors.push(
+            `Not enough free memory: ${(freeMem / (1024 * 1024)).toFixed(0)}MB available, ` +
+            `~${Math.ceil(fileStat.size * 2 / (1024 * 1024))}MB needed (2× file size). ` +
+            'Close other applications or split the file.',
+          );
+          return { facts: [], chunks: [], totalMessages: 0, warnings, errors };
+        }
         content = fs.readFileSync(resolvedPath, 'utf-8');
       } catch (e) {
         errors.push(`Failed to read file: ${e instanceof Error ? e.message : 'Unknown error'}`);
