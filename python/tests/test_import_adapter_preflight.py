@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-from unittest.mock import patch
 
 import pytest
 
@@ -16,15 +15,36 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_stat(size_bytes: int):
-    """Return a real os.stat_result with the given size, reusing /dev/null's stat."""
-    real = os.stat('/dev/null')
-    # os.stat_result is immutable but we can build a fake via os.stat_result((mode,...))
-    # Simpler: use unittest.mock.MagicMock
+# Sentinel path prefix used in size/RAM tests so the mock knows which calls
+# to intercept vs. delegate to the real os.stat.
+_FAKE_PATH_PREFIX = '/tmp/totalreclaw-preflight-fake-'
+
+
+def _make_fake_stat(size_bytes: int):
     from unittest.mock import MagicMock
     m = MagicMock()
     m.st_size = size_bytes
+    # Make st_mode look like a regular file (0o100644) so any S_ISDIR() checks
+    # on the mock return False rather than blowing up.
+    m.st_mode = 0o100644
     return m
+
+
+def _patched_stat(size_bytes: int):
+    """Return a drop-in replacement for os.stat that fakes size for preflight paths."""
+    _real_stat = os.stat
+
+    def _mock(*args, **kwargs):
+        path = str(args[0]) if args else str(kwargs.get('path', ''))
+        if _FAKE_PATH_PREFIX in path:
+            return _make_fake_stat(size_bytes)
+        return _real_stat(*args, **kwargs)
+
+    return _mock
+
+
+def _fake_path(suffix: str) -> str:
+    return f'{_FAKE_PATH_PREFIX}{suffix}'
 
 
 # ---------------------------------------------------------------------------
@@ -42,36 +62,35 @@ class TestFileSizeCap:
 
     def test_claude_adapter_rejects_oversized_file(self, monkeypatch) -> None:
         from totalreclaw.import_adapters.claude_adapter import ClaudeAdapter
-        monkeypatch.setattr(os, 'stat', lambda _: _make_stat(501 * 1024 * 1024))
-        result = ClaudeAdapter().parse(file_path='/tmp/fake-large.txt')
+        monkeypatch.setattr(os, 'stat', _patched_stat(501 * 1024 * 1024))
+        result = ClaudeAdapter().parse(file_path=_fake_path('claude.txt'))
         self._assert_size_error(result, 'Claude')
-        assert '501' in result.errors[0] or '500MB' in result.errors[0]
+        assert '501' in result.errors[0]
 
     def test_chatgpt_adapter_rejects_oversized_file(self, monkeypatch) -> None:
         from totalreclaw.import_adapters.chatgpt_adapter import ChatGPTAdapter
-        monkeypatch.setattr(os, 'stat', lambda _: _make_stat(600 * 1024 * 1024))
-        result = ChatGPTAdapter().parse(file_path='/tmp/fake-large.json')
+        monkeypatch.setattr(os, 'stat', _patched_stat(600 * 1024 * 1024))
+        result = ChatGPTAdapter().parse(file_path=_fake_path('chatgpt.json'))
         self._assert_size_error(result, 'ChatGPT')
 
     def test_gemini_adapter_rejects_oversized_file(self, monkeypatch) -> None:
         from totalreclaw.import_adapters.gemini_adapter import GeminiAdapter
-        monkeypatch.setattr(os, 'stat', lambda _: _make_stat(510 * 1024 * 1024))
-        result = GeminiAdapter().parse(file_path='/tmp/fake-large.html')
+        monkeypatch.setattr(os, 'stat', _patched_stat(510 * 1024 * 1024))
+        result = GeminiAdapter().parse(file_path=_fake_path('gemini.html'))
         self._assert_size_error(result, 'Gemini')
 
     def test_mem0_adapter_rejects_oversized_file(self, monkeypatch) -> None:
         from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
-        monkeypatch.setattr(os, 'stat', lambda _: _make_stat(520 * 1024 * 1024))
-        result = Mem0Adapter().parse(file_path='/tmp/fake-large.json')
+        monkeypatch.setattr(os, 'stat', _patched_stat(520 * 1024 * 1024))
+        result = Mem0Adapter().parse(file_path=_fake_path('mem0.json'))
         self._assert_size_error(result, 'Mem0')
 
     def test_error_message_names_actual_size(self, monkeypatch) -> None:
         from totalreclaw.import_adapters.claude_adapter import ClaudeAdapter
-        monkeypatch.setattr(os, 'stat', lambda _: _make_stat(501 * 1024 * 1024))
-        result = ClaudeAdapter().parse(file_path='/tmp/fake-large.txt')
-        # Error should name the actual file size (501.0MB)
+        monkeypatch.setattr(os, 'stat', _patched_stat(501 * 1024 * 1024))
+        result = ClaudeAdapter().parse(file_path=_fake_path('claude-size.txt'))
         assert '501' in result.errors[0], (
-            f'Error should name actual size: {result.errors[0]}'
+            f'Error should name actual size (501MB): {result.errors[0]}'
         )
 
 
@@ -84,12 +103,12 @@ class TestRamPreflight:
         import psutil
         from totalreclaw.import_adapters.claude_adapter import ClaudeAdapter
 
-        # 10MB file, but only 1MB free (< 2x = 20MB needed)
-        monkeypatch.setattr(os, 'stat', lambda _: _make_stat(10 * 1024 * 1024))
+        # 10MB file, only 1MB free (< 2x = 20MB needed)
+        monkeypatch.setattr(os, 'stat', _patched_stat(10 * 1024 * 1024))
         mock_vm = type('VM', (), {'available': 1 * 1024 * 1024})()
         monkeypatch.setattr(psutil, 'virtual_memory', lambda: mock_vm)
 
-        result = ClaudeAdapter().parse(file_path='/tmp/fake-low-mem.txt')
+        result = ClaudeAdapter().parse(file_path=_fake_path('claude-lowram.txt'))
         assert len(result.errors) > 0, 'Low RAM must return error'
         assert 'memory' in result.errors[0].lower(), (
             f'Error must mention memory: {result.errors[0]}'
@@ -100,11 +119,11 @@ class TestRamPreflight:
         from totalreclaw.import_adapters.chatgpt_adapter import ChatGPTAdapter
 
         # 100MB file, 50MB free → needs 200MB
-        monkeypatch.setattr(os, 'stat', lambda _: _make_stat(100 * 1024 * 1024))
+        monkeypatch.setattr(os, 'stat', _patched_stat(100 * 1024 * 1024))
         mock_vm = type('VM', (), {'available': 50 * 1024 * 1024})()
         monkeypatch.setattr(psutil, 'virtual_memory', lambda: mock_vm)
 
-        result = ChatGPTAdapter().parse(file_path='/tmp/fake-low-mem.json')
+        result = ChatGPTAdapter().parse(file_path=_fake_path('chatgpt-lowram.json'))
         assert len(result.errors) > 0
         err = result.errors[0]
         assert '50' in err, f'Error should name available RAM (50MB): {err}'
