@@ -112,12 +112,14 @@ openclaw skills install totalreclaw
 
 **Plugin BEFORE skill is deliberate** (3.3.4-rc.1, post-Pedro QA): the skill install triggers a config-driven SIGUSR1 gateway reload that can race a concurrent plugin install. Plugin-first lets the plugin land cleanly, then the skill's reload picks it up on the next gateway loop. If you accidentally do skill-first and the plugin install dies mid-flight, just retry `openclaw plugins install @totalreclaw/totalreclaw` once — it's idempotent.
 
-**No extra config steps needed.** As of 3.3.9-rc.2 the plugin's `register()` auto-patches `~/.openclaw/openclaw.json` with the three keys OpenClaw 2026.5.x looks for (`plugins.slots.memory`, `plugins.entries.totalreclaw.hooks.allowConversationAccess`, `channels.telegram.streaming.mode`) and emits a single restart-required warn if any were missing. You no longer need to run `openclaw config set …` manually.
+**No extra config steps needed.** As of 3.3.9-rc.2 the plugin's `register()` auto-patches `~/.openclaw/openclaw.json` with the keys OpenClaw 2026.5.x looks for (`plugins.slots.memory`, `plugins.entries.totalreclaw.hooks.allowConversationAccess`, `channels.telegram.streaming.mode`, `plugins.bundledDiscovery`, `plugins.allow`, `plugins.installs.totalreclaw`). As of 3.3.12-rc.6 the plugin auto-fires SIGUSR1 to its own PID after the patch, so the gateway in-process restart picks up the new keys without any manual `/totalreclaw-restart` from the user — hooks register cleanly on the first session post-install.
 
-> **Auto-extraction caveat (3.3.11-rc.1).** OpenClaw 2026.5.4 currently ignores `allowConversationAccess` at hook registration time and silently blocks the plugin's `agent_end` hook for non-bundled plugins — auto-extraction would never fire via that path. The plugin works around this with a filesystem-polling backup that watches `~/.openclaw/agents/<agent>/sessions/*.trajectory.jsonl` every 60 s and runs the same extraction pipeline (NOT a hook event, so the gateway doesn't gate it). When upstream OpenClaw fixes the policy bug, the hook will resume firing alongside the poller; offset-based dedup prevents double-extraction.
+> **Auto-extraction safety net (3.3.11-rc.1).** Even when the `agent_end` hook is gated by an upstream policy, the plugin runs a filesystem-polling backup that watches `~/.openclaw/agents/<agent>/sessions/*.trajectory.jsonl` every 60 s and runs the same extraction pipeline (NOT a hook event, so it's never gated). On 3.3.12-rc.6+ the hook fires alongside the poller; offset-based dedup prevents double-extraction.
+
+> **Plugin status caveat — OpenClaw 2026.5.7.** On the freshest OpenClaw releases the install path can occasionally land the plugin as `Status: disabled` after restart (upstream config-strip-on-restart). If `openclaw plugins list` shows totalreclaw as disabled, run `openclaw plugins enable totalreclaw` once and continue. The plugin remains on disk; only the registry flag needs flipping.
 
 Notes:
-- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.5`.
+- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.6`.
 - If install reports `already exists` or non-zero on a re-run (the plugin is already on disk from a previous attempt), add `--force`: `openclaw plugins install @totalreclaw/totalreclaw@rc --force` and `openclaw skills install totalreclaw --force`.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
@@ -223,7 +225,7 @@ The plugin self-restarts the gateway via SIGUSR1 when needed. You should not nee
 
 Then in chat: *"Set up TotalReclaw"* — the agent will call `totalreclaw_pair` and hand you the URL + PIN. Open the URL in your browser to enter or generate your phrase.
 
-> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.5`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
+> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.6`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
 
 <details>
 <summary>From-source install (for plugin development — self-host only)</summary>
