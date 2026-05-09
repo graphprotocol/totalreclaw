@@ -1415,3 +1415,71 @@ export function patchOpenClawConfig(
     return 'error';
   }
 }
+
+// ---------------------------------------------------------------------------
+// Credentials file permission check (cred-1 security hardening)
+// ---------------------------------------------------------------------------
+
+/** Subset of the OpenClaw logger used by the permission check. */
+export interface PermissionCheckLogger {
+  warn(msg: string): void;
+  error(msg: string): void;
+}
+
+/**
+ * Result of `checkCredentialsFileMode`.
+ *
+ * - `'ok'` — file absent (not yet created) or permissions are exactly 0600.
+ * - `'insecure'` — file present with mode broader than 0600; caller must refuse to continue.
+ * - `'warned'` — file is 0600 but lives on a tmpfs / shared-volume path; logged.
+ * - `'stat_error'` — `fs.statSync` failed for an unexpected reason; caller should warn + continue.
+ */
+export type CredentialsPermissionResult = 'ok' | 'insecure' | 'warned' | 'stat_error';
+
+const TMPFS_PREFIXES = ['/tmp/', '/dev/shm/', '/run/', '/var/run/'];
+
+export function checkCredentialsFileMode(
+  credPath: string,
+  logger: PermissionCheckLogger,
+): CredentialsPermissionResult {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(credPath);
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return 'ok';
+    logger.warn(`TotalReclaw: could not stat credentials file (${code ?? String(err)}); skipping permission check`);
+    return 'stat_error';
+  }
+
+  const mode = stat.mode & 0o777;
+  if (mode > 0o600) {
+    const modeStr = '0' + mode.toString(8);
+    logger.error(
+      `TotalReclaw: STARTUP REFUSED — credentials file has insecure permissions (${modeStr}).\n` +
+      `  File: ${credPath}\n` +
+      `  Fix:  chmod 600 "${credPath}"\n` +
+      `  Then restart your OpenClaw gateway.\n` +
+      `  Current mode ${modeStr} allows other OS users to read your recovery phrase.`,
+    );
+    return 'insecure';
+  }
+
+  try {
+    const real = fs.realpathSync(credPath);
+    for (const prefix of TMPFS_PREFIXES) {
+      if (real.startsWith(prefix)) {
+        logger.warn(
+          `TotalReclaw: credentials file is on a volatile/shared path (${real}). ` +
+          `It may be lost on reboot or be readable by other processes. ` +
+          `Consider moving it to a persistent private directory and updating TOTALRECLAW_CREDENTIALS_PATH.`,
+        );
+        return 'warned';
+      }
+    }
+  } catch {
+    // realpathSync can fail on unusual mounts — not actionable here
+  }
+
+  return 'ok';
+}

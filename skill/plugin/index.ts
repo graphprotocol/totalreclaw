@@ -170,6 +170,7 @@ import {
   writePluginManifest,
   writePluginError,
   readPluginLoadedManifest,
+  checkCredentialsFileMode,
   type OnboardingState,
 } from './fs-helpers.js';
 import { isRcBuild } from './qa-bug-report.js';
@@ -3219,6 +3220,23 @@ const plugin = {
       }
     } catch {
       rcMode = false;
+    }
+
+    // ---------------------------------------------------------------
+    // Credentials file permission check (cred-1 — fail-closed security gate)
+    // ---------------------------------------------------------------
+    // Must run before any tool registration so that a misconfigured host
+    // is rejected immediately rather than silently operating with an exposed
+    // credentials file. checkCredentialsFileMode returns 'insecure' if the
+    // file mode is broader than 0600 — throw to abort plugin load.
+    {
+      const permResult = checkCredentialsFileMode(CREDENTIALS_PATH, api.logger);
+      if (permResult === 'insecure') {
+        throw new Error(
+          `TotalReclaw refused to load: credentials file has insecure permissions. ` +
+          `Run: chmod 600 "${CREDENTIALS_PATH}" then restart the gateway.`,
+        );
+      }
     }
 
     // ---------------------------------------------------------------

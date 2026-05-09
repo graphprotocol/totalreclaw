@@ -327,10 +327,39 @@ Upgrade: *"Upgrade my TotalReclaw subscription."*
 
 ---
 
+## Threat model
+
+After a successful pair, your recovery phrase is stored in plaintext at `~/.totalreclaw/credentials.json` with mode `0600` (owner read/write only). Understanding what this does and doesn't protect is important.
+
+**`chmod 600` protects against:**
+
+- Other Unix user accounts on the same host reading your phrase directly.
+- Web server processes, CI runners, or container daemons running as different OS users.
+
+**`chmod 600` does NOT protect against:**
+
+- Root / sudo — system administrators can read any file.
+- Same-user processes — any process running as your Unix user can read the file. This includes every shell session, script, and agent running as you.
+- Physical disk access (stolen drive, VM snapshot, cloud-provider disk clone).
+- Tmpfs / shared-volume mounts — if `credentials.json` is on `/tmp/`, `/dev/shm/`, or similar, it may be readable by other processes in the same container namespace or lost on reboot. The plugin warns on startup if this is detected.
+- Cloud-backup leakage — if `~/.totalreclaw/` is inside a folder synced to iCloud, Dropbox, Backblaze, or similar, add it to your backup exclude list.
+
+**Fail-closed enforcement:** The plugin refuses to load if `credentials.json` is found with permissions broader than `0600`. If you see a startup error about insecure permissions, fix it with:
+
+```bash
+chmod 600 ~/.totalreclaw/credentials.json
+# Then restart your OpenClaw gateway.
+```
+
+For the full threat model, mitigations, and the credentials-at-rest roadmap, see [SECURITY.md](../SECURITY.md).
+
+---
+
 ## Further reading
 
 - [Feature Comparison](feature-comparison.md)
 - [Importing Memories](importing-memories.md)
 - [Memory types guide](memory-types-guide.md) — v1 taxonomy
 - [Detailed reference](beta-tester-guide-detailed.md) — env vars, extraction tuning, architecture
+- [Security](../SECURITY.md) — threat model and at-rest credential protection
 - [totalreclaw.xyz](https://totalreclaw.xyz)

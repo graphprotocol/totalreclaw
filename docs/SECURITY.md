@@ -1,6 +1,6 @@
 # TotalReclaw security model
 
-> Last reviewed: 2026-05-06 (3.3.11-rc.3)
+> Last reviewed: 2026-05-09 (cred-1)
 > If you find a vulnerability, please email security@totalreclaw.xyz with details. Do not file public issues for live exploits.
 
 ## What's protected (in-transit + on-chain)
@@ -51,7 +51,7 @@ This is a deliberate tradeoff. The plugin's daemon-mode auto-extraction needs th
 
 The plaintext-at-rest tradeoff is documented and being addressed in phases. See [totalreclaw-internal#229](https://github.com/p-diogo/totalreclaw-internal/issues/229) for the full UX matrix and phasing.
 
-- **Phase 1 (this RC family, 3.3.x)** — Document the threat model (this file) and audit chmod 600 enforcement. Plugin will refuse to load if credentials.json mode is broader than 600.
+- **Phase 1 (cred-1 — shipped)** — Document the threat model (this file) and enforce chmod 600 at plugin startup. The plugin now **refuses to load** if `credentials.json` is found with permissions broader than `0600`. Fix: `chmod 600 ~/.totalreclaw/credentials.json` then restart the gateway. The plugin also warns if the file is detected on a tmpfs or shared-volume mount (`/tmp/`, `/dev/shm/`, `/run/`, `/var/run/`).
 - **Phase 2 (3.4.0)** — Desktop OS-keychain wrap (macOS Keychain, Linux libsecret, Windows Credential Manager). Container deployments fall back to status quo.
 - **Phase 3 (3.4.x)** — Container deployment patterns. Documented LUKS / dm-crypt setup, plus optional `TOTALRECLAW_CREDENTIALS_PROVIDER=vault` config for HashiCorp Vault / Railway secrets / AWS Secrets Manager / GCP Secret Manager.
 - **Phase 4 (optional, 3.5+)** — TPM / Secure Enclave hardware-bound wrap. Defeats `docker save` and disk theft completely, at the cost of platform-specific code paths.

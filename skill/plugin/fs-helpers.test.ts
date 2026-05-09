@@ -23,6 +23,7 @@ import {
   deleteFileIfExists,
   readPluginVersion,
   patchOpenClawConfig,
+  checkCredentialsFileMode,
   type CredentialsFile,
 } from './fs-helpers.js';
 
@@ -832,6 +833,91 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
     'off',
     'patchOpenClawConfig: pop-os scenario also sets telegram streaming.mode=off',
   );
+}
+
+// ---------------------------------------------------------------------------
+// checkCredentialsFileMode — permission gate (cred-1)
+// ---------------------------------------------------------------------------
+
+{
+  // Mode tests need a non-tmpfs directory so the tmpfs-prefix warning doesn't
+  // fire for legitimately-secure (0600) files. /var/tmp is a persistent temp
+  // location that is NOT in TMPFS_PREFIXES.
+  const MODE_TMP = fs.mkdtempSync('/var/tmp/tr-mode-test-');
+
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const logger = {
+    warn: (m: string) => { warnings.push(m); },
+    error: (m: string) => { errors.push(m); },
+  };
+
+  // 1. File absent → 'ok' with no logging
+  {
+    warnings.length = 0; errors.length = 0;
+    const result = checkCredentialsFileMode(path.join(MODE_TMP, 'nonexistent-creds.json'), logger);
+    assertEq(result, 'ok', 'checkCredentialsFileMode: absent file returns ok');
+    assert(warnings.length === 0 && errors.length === 0, 'checkCredentialsFileMode: absent file no logging');
+  }
+
+  // 2. File with mode 0600 → 'ok'
+  {
+    warnings.length = 0; errors.length = 0;
+    const p = path.join(MODE_TMP, 'creds-600.json');
+    fs.writeFileSync(p, '{}');
+    fs.chmodSync(p, 0o600);
+    const result = checkCredentialsFileMode(p, logger);
+    assertEq(result, 'ok', 'checkCredentialsFileMode: mode 0600 returns ok');
+    assert(warnings.length === 0 && errors.length === 0, 'checkCredentialsFileMode: mode 0600 no logging');
+  }
+
+  // 3. File with mode 0644 → 'insecure' with error logged
+  {
+    warnings.length = 0; errors.length = 0;
+    const p = path.join(MODE_TMP, 'creds-644.json');
+    fs.writeFileSync(p, '{}');
+    fs.chmodSync(p, 0o644);
+    const result = checkCredentialsFileMode(p, logger);
+    assertEq(result, 'insecure', 'checkCredentialsFileMode: mode 0644 returns insecure');
+    assert(errors.length > 0, 'checkCredentialsFileMode: mode 0644 logs error');
+    assert(errors[0].includes('STARTUP REFUSED'), 'checkCredentialsFileMode: error mentions STARTUP REFUSED');
+    assert(errors[0].includes('chmod 600'), 'checkCredentialsFileMode: error includes fix command');
+  }
+
+  // 4. File with mode 0755 → 'insecure'
+  {
+    warnings.length = 0; errors.length = 0;
+    const p = path.join(MODE_TMP, 'creds-755.json');
+    fs.writeFileSync(p, '{}');
+    fs.chmodSync(p, 0o755);
+    const result = checkCredentialsFileMode(p, logger);
+    assertEq(result, 'insecure', 'checkCredentialsFileMode: mode 0755 returns insecure');
+  }
+
+  // 5. File with mode 0400 (read-only, more restrictive than 600) → 'ok'
+  {
+    warnings.length = 0; errors.length = 0;
+    const p = path.join(MODE_TMP, 'creds-400.json');
+    fs.writeFileSync(p, '{}');
+    fs.chmodSync(p, 0o400);
+    const result = checkCredentialsFileMode(p, logger);
+    assertEq(result, 'ok', 'checkCredentialsFileMode: mode 0400 (more restrictive) returns ok');
+    fs.chmodSync(p, 0o600); // restore so cleanup can delete
+  }
+
+  // 6. File in /tmp/ → 'warned' (tmpfs/shared-volume heuristic)
+  {
+    warnings.length = 0; errors.length = 0;
+    const p = path.join(TMP, 'creds-tmpfs.json');
+    fs.writeFileSync(p, '{}');
+    fs.chmodSync(p, 0o600);
+    const result = checkCredentialsFileMode(p, logger);
+    assertEq(result, 'warned', 'checkCredentialsFileMode: /tmp/ path returns warned');
+    assert(warnings.length > 0, 'checkCredentialsFileMode: /tmp/ path logs warning');
+    assert(warnings[0].includes('volatile'), 'checkCredentialsFileMode: warning mentions volatile');
+  }
+
+  try { fs.rmSync(MODE_TMP, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
 // ---------------------------------------------------------------------------
