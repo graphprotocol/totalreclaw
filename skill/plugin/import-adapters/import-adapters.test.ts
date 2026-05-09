@@ -14,6 +14,7 @@ import { Mem0Adapter } from './mem0-adapter.js';
 import { MCPMemoryAdapter } from './mcp-memory-adapter.js';
 import { ChatGPTAdapter } from './chatgpt-adapter.js';
 import { ClaudeAdapter } from './claude-adapter.js';
+import { GeminiAdapter } from './gemini-adapter.js';
 import { BaseImportAdapter } from './base-adapter.js';
 import { getAdapter } from './index.js';
 import type {
@@ -22,6 +23,8 @@ import type {
   ImportSource,
   ProgressCallback,
 } from './types.js';
+import fs from 'node:fs';
+import os from 'node:os';
 
 // ---------------------------------------------------------------------------
 // TAP Helpers
@@ -1097,6 +1100,82 @@ User prefers TypeScript over JavaScript`;
       assert(msg.includes('mcp-memory'), 'getAdapter error lists "mcp-memory" as valid source');
       assert(msg.includes('chatgpt'), 'getAdapter error lists "chatgpt" as valid source');
       assert(msg.includes('claude'), 'getAdapter error lists "claude" as valid source');
+    }
+  }
+
+  // =========================================================================
+  // File preflight — 500MB cap + RAM check
+  // =========================================================================
+
+  console.log('# File preflight checks');
+
+  // Monkey-patch helpers for statSync / freemem without a mocking framework.
+  async function withFakeStat(fakeSize: number, fn: () => Promise<void>): Promise<void> {
+    const orig = fs.statSync;
+    (fs as any).statSync = (_p: string) => ({ size: fakeSize } as fs.Stats);
+    await fn().finally(() => { (fs as any).statSync = orig; });
+  }
+  async function withFakeFreemem(fakeBytes: number, fn: () => Promise<void>): Promise<void> {
+    const orig = os.freemem;
+    os.freemem = () => fakeBytes;
+    await fn().finally(() => { os.freemem = orig; });
+  }
+
+  // --- 500MB hard cap returns an error with size info (Claude) ---
+  {
+    await withFakeStat(501 * 1024 * 1024, async () => {
+      const result = await new ClaudeAdapter().parse({ file_path: '/tmp/fake-large.txt' });
+      assert(result.errors.length > 0, 'Preflight: Claude oversized file returns error');
+      assert(
+        result.errors[0].includes('501') || result.errors[0].includes('500MB'),
+        `Preflight: Claude error mentions size/cap (got: ${result.errors[0]})`,
+      );
+      assert(result.chunks.length === 0, 'Preflight: no chunks on oversized file');
+    });
+  }
+
+  // --- 500MB hard cap (ChatGPT) ---
+  {
+    await withFakeStat(600 * 1024 * 1024, async () => {
+      const result = await new ChatGPTAdapter().parse({ file_path: '/tmp/fake-large.json' });
+      assert(result.errors.length > 0, 'Preflight: ChatGPT oversized file returns error');
+      assert(result.errors[0].includes('500MB'), 'Preflight: ChatGPT error mentions 500MB cap');
+    });
+  }
+
+  // --- 500MB hard cap (Gemini) ---
+  {
+    await withFakeStat(510 * 1024 * 1024, async () => {
+      const result = await new GeminiAdapter().parse({ file_path: '/tmp/fake-large.html' });
+      assert(result.errors.length > 0, 'Preflight: Gemini oversized file returns error');
+      assert(result.errors[0].includes('500MB'), 'Preflight: Gemini error mentions 500MB cap');
+    });
+  }
+
+  // --- RAM preflight triggers when freemem < 2x file size (Claude) ---
+  {
+    await withFakeFreemem(1 * 1024 * 1024, async () => {  // 1MB free
+      await withFakeStat(10 * 1024 * 1024, async () => {  // 10MB file (passes 500MB check)
+        const result = await new ClaudeAdapter().parse({ file_path: '/tmp/fake-low-mem.txt' });
+        assert(result.errors.length > 0, 'Preflight: low RAM returns error');
+        assert(
+          result.errors[0].toLowerCase().includes('memory'),
+          `Preflight: RAM error mentions memory (got: ${result.errors[0]})`,
+        );
+      });
+    });
+  }
+
+  // --- normal-sized file passes preflight (real temp file) ---
+  {
+    const tmpFile = os.tmpdir() + '/totalreclaw-preflight-test.txt';
+    fs.writeFileSync(tmpFile, 'User prefers dark mode\nUser works remotely\n', 'utf-8');
+    try {
+      const result = await new ClaudeAdapter().parse({ file_path: tmpFile });
+      assert(result.errors.length === 0, 'Preflight: normal file has no errors');
+      assert(result.chunks.length > 0, 'Preflight: normal file produces chunks');
+    } finally {
+      fs.unlinkSync(tmpFile);
     }
   }
 

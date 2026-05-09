@@ -4,11 +4,14 @@ Gemini import adapter -- parses Google Takeout HTML (My Activity.html).
 Ported from skill/plugin/import-adapters/gemini-adapter.ts
 """
 
+import math
 import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, Callable, List
+
+import psutil
 
 from .base_adapter import BaseImportAdapter
 from .types import AdapterParseResult, ConversationChunk
@@ -112,6 +115,30 @@ class GeminiAdapter(BaseImportAdapter):
         elif file_path:
             try:
                 resolved = os.path.expanduser(file_path)
+                stat = os.stat(resolved)
+                file_size_mb = stat.st_size / (1024 * 1024)
+                if file_size_mb > 500:
+                    errors.append(
+                        f'File is too large to import: {file_size_mb:.1f}MB exceeds the 500MB cap. '
+                        'Split the file into smaller chunks and import each separately.',
+                    )
+                    return AdapterParseResult(
+                        facts=[], chunks=[], total_messages=0,
+                        warnings=warnings, errors=errors,
+                    )
+                free_mem = psutil.virtual_memory().available
+                if free_mem < stat.st_size * 2:
+                    free_mb = free_mem / (1024 * 1024)
+                    need_mb = math.ceil(stat.st_size * 2 / (1024 * 1024))
+                    errors.append(
+                        f'Not enough free memory: {free_mb:.0f}MB available, '
+                        f'~{need_mb}MB needed (2× file size). '
+                        'Close other applications or split the file.',
+                    )
+                    return AdapterParseResult(
+                        facts=[], chunks=[], total_messages=0,
+                        warnings=warnings, errors=errors,
+                    )
                 with open(resolved, 'r', encoding='utf-8') as f:
                     html = f.read()
             except Exception as e:

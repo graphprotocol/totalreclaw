@@ -19,8 +19,11 @@ add it in a follow-up (TODO flagged in README).
 from __future__ import annotations
 
 import json
+import math
 import os
 from typing import Any, Callable, Dict, List, Optional
+
+import psutil
 
 from .base_adapter import BaseImportAdapter
 from .types import AdapterParseResult
@@ -69,6 +72,30 @@ class Mem0Adapter(BaseImportAdapter):
         elif file_path:
             try:
                 resolved = os.path.expanduser(file_path)
+                stat = os.stat(resolved)
+                file_size_mb = stat.st_size / (1024 * 1024)
+                if file_size_mb > 500:
+                    errors.append(
+                        f'File is too large to import: {file_size_mb:.1f}MB exceeds the 500MB cap. '
+                        'Split the file into smaller chunks and import each separately.',
+                    )
+                    return AdapterParseResult(
+                        facts=[], chunks=[], total_messages=0,
+                        warnings=warnings, errors=errors,
+                    )
+                free_mem = psutil.virtual_memory().available
+                if free_mem < stat.st_size * 2:
+                    free_mb = free_mem / (1024 * 1024)
+                    need_mb = math.ceil(stat.st_size * 2 / (1024 * 1024))
+                    errors.append(
+                        f'Not enough free memory: {free_mb:.0f}MB available, '
+                        f'~{need_mb}MB needed (2× file size). '
+                        'Close other applications or split the file.',
+                    )
+                    return AdapterParseResult(
+                        facts=[], chunks=[], total_messages=0,
+                        warnings=warnings, errors=errors,
+                    )
                 with open(resolved, 'r', encoding='utf-8') as f:
                     raw = f.read()
             except Exception as e:
