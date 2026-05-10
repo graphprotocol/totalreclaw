@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from totalreclaw.agent.debrief import DebriefItem
+from totalreclaw.agent.debrief import Crystal
 from totalreclaw.hermes import schemas
 from totalreclaw.hermes.state import PluginState
 
@@ -92,10 +92,10 @@ class TestDebriefTool:
     async def test_explicit_invocation_produces_summary_facts(self) -> None:
         """The tool must call the SAME code path as the auto-flow.
 
-        We fake ``generate_debrief`` so the test is LLM-free and assert:
-        1. The stored facts have ``type=summary``, ``provenance=derived``
-           (the v1 contract the auto-flow commits).
-        2. The tool's response surfaces the stored count + fact ids.
+        We fake ``generate_crystal`` so the test is LLM-free and assert:
+        1. The stored fact has ``type=summary``, ``provenance=derived``,
+           ``extra_metadata.subtype="session_crystal"`` (am-1 contract).
+        2. The tool's response surfaces the stored count + fact id.
         """
         from totalreclaw.hermes.tools import debrief
 
@@ -106,35 +106,38 @@ class TestDebriefTool:
             state.add_message("user", f"A meaningful user message about project X turn {i}")
             state.add_message("assistant", f"A long assistant response covering topic Y turn {i}")
 
-        fake_items = [
-            DebriefItem(text="Session concluded refactor of the auth module.", type="summary", importance=8),
-            DebriefItem(text="API migration still pending for billing module.", type="context", importance=7),
-        ]
+        fake_crystal = Crystal(
+            narrative="Refactored the auth module and identified pending API migration.",
+            key_outcomes=["auth module refactored"],
+            open_threads=["API migration still pending"],
+            lessons=["run tests before merging"],
+            importance=8,
+        )
 
         async def fake_generate(*args, **kwargs):
-            return fake_items
+            return fake_crystal
 
-        with patch("totalreclaw.agent.lifecycle.generate_debrief", new=fake_generate):
+        with patch("totalreclaw.agent.lifecycle.generate_crystal", new=fake_generate):
             result = json.loads(await debrief({}, state))
 
         # Verify the v1 contract — parity with ``on_session_end`` hook.
         calls = fake_client.remember.call_args_list
-        assert len(calls) == 2
-        for call in calls:
-            kwargs = call.kwargs
-            assert kwargs["fact_type"] == "summary"
-            assert kwargs["provenance"] == "derived"
-            assert kwargs["scope"] == "unspecified"
+        assert len(calls) == 1
+        kwargs = calls[0].kwargs
+        assert kwargs["fact_type"] == "summary"
+        assert kwargs["provenance"] == "derived"
+        assert kwargs["scope"] == "unspecified"
+        assert kwargs["extra_metadata"]["subtype"] == "session_crystal"
 
-        # Tool response surfaces the count + fact ids for the user.
-        assert result.get("stored") == 2
-        assert result.get("count") == 2
+        # Tool response surfaces the count + fact id for the user.
+        assert result.get("stored") == 1
+        assert result.get("count") == 1
         assert isinstance(result.get("fact_ids"), list)
-        assert len(result["fact_ids"]) == 2
+        assert len(result["fact_ids"]) == 1
 
     @pytest.mark.asyncio
     async def test_debrief_returns_zero_when_llm_yields_empty(self) -> None:
-        """LLM returns no items → tool reports stored=0 without erroring."""
+        """LLM returns None (trivial session) → tool reports stored=0 without erroring."""
         from totalreclaw.hermes.tools import debrief
 
         state, _client = _make_state_with_client()
@@ -143,9 +146,9 @@ class TestDebriefTool:
             state.add_message("assistant", f"reply {i}")
 
         async def fake_generate(*args, **kwargs):
-            return []
+            return None
 
-        with patch("totalreclaw.agent.lifecycle.generate_debrief", new=fake_generate):
+        with patch("totalreclaw.agent.lifecycle.generate_crystal", new=fake_generate):
             result = json.loads(await debrief({}, state))
 
         assert result.get("stored") == 0

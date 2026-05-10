@@ -166,6 +166,7 @@ def build_canonical_claim_v1(
     expires_at: Optional[str] = None,
     claim_id: Optional[str] = None,
     pin_status: Optional[str] = None,
+    extra_metadata: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Build a v1 ``MemoryClaimV1`` JSON blob.
 
@@ -294,6 +295,11 @@ def build_canonical_claim_v1(
     canonical["schema_version"] = V1_SCHEMA_VERSION
     if volatility and volatility in VALID_MEMORY_VOLATILITIES:
         canonical["volatility"] = volatility
+    # am-1: Crystal-shaped debrief — re-attach structured metadata dict.
+    # Same pattern as schema_version/volatility: passed through unchanged
+    # since the core validator doesn't know about it.
+    if extra_metadata and isinstance(extra_metadata, dict):
+        canonical["metadata"] = extra_metadata
 
     return json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
 

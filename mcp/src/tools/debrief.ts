@@ -1,11 +1,12 @@
 /**
- * TotalReclaw MCP Server - Session Debrief Tool
+ * TotalReclaw MCP Server - Session Debrief Tool (Crystal-shaped, am-1)
  *
- * Stores end-of-conversation summaries that capture broader context,
- * outcomes, and conclusions that individual memory storage may have missed.
+ * Stores one Crystal-shaped session summary per session. The Crystal replaces
+ * 5x free-form debrief items with a structured v1 summary that carries
+ * metadata.subtype="session_crystal" for filtered recall.
  *
- * For MCP: the host agent (Claude, Cursor, etc.) provides the facts array
- * directly — the MCP server does NOT make its own LLM calls.
+ * For MCP: the host agent (Claude, Cursor, etc.) provides the crystal directly
+ * — the MCP server does NOT make its own LLM calls.
  */
 
 import { TotalReclaw, FactMetadata } from '@totalreclaw/client';
@@ -18,6 +19,18 @@ export interface DebriefItem {
   text: string;
   type: 'summary' | 'context';
   importance: number;
+}
+
+/** Crystal-shaped session summary provided by the host agent. */
+export interface CrystalInput {
+  narrative: string;
+  key_outcomes?: string[];
+  files_affected?: string[];
+  open_threads?: string[];
+  lessons?: string[];
+  importance?: number;
+  session_id?: string;
+  source_message_ids?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -54,7 +67,7 @@ Return a JSON array (no markdown, no code fences):
 If the conversation was too short or trivial to warrant a debrief, return: []`;
 
 // ---------------------------------------------------------------------------
-// Parser
+// Parser (legacy free-form path — kept for backward compat)
 // ---------------------------------------------------------------------------
 
 /**
@@ -104,6 +117,34 @@ export function parseDebriefResponse(response: string): DebriefItem[] {
   }
 }
 
+/** Parse and validate a Crystal input from the tool args. */
+function parseCrystalInput(raw: unknown): CrystalInput | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const d = raw as Record<string, unknown>;
+  const narrative = typeof d.narrative === 'string' ? d.narrative.trim() : '';
+  if (narrative.length < 10) return null;
+
+  const strList = (key: string): string[] => {
+    const v = d[key];
+    if (!Array.isArray(v)) return [];
+    return v.map((x) => String(x).trim()).filter((x) => x.length > 0).slice(0, 10);
+  };
+
+  let importance = typeof d.importance === 'number' ? d.importance : 8;
+  importance = Math.max(1, Math.min(10, Math.round(importance)));
+
+  return {
+    narrative: narrative.slice(0, 512),
+    key_outcomes: strList('key_outcomes'),
+    files_affected: strList('files_affected'),
+    open_threads: strList('open_threads'),
+    lessons: strList('lessons'),
+    importance,
+    session_id: typeof d.session_id === 'string' ? d.session_id : undefined,
+    source_message_ids: strList('source_message_ids'),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tool Definition
 // ---------------------------------------------------------------------------
@@ -111,7 +152,7 @@ export function parseDebriefResponse(response: string): DebriefItem[] {
 export const debriefToolDefinition = {
   name: 'totalreclaw_debrief',
   description:
-    'Capture broader context/outcomes/open threads extraction missed. v1 summary, source=derived.\n' +
+    'Crystal session summary — one structured summary per session.\n' +
     '\nINVOKE WHEN USER SAYS:\n' +
     '- "goodbye" / "bye" / "thanks"\n' +
     '- "that\'s all" / "I\'m done"\n' +
@@ -121,25 +162,50 @@ export const debriefToolDefinition = {
     '- casual chat / Q&A — adds noise\n' +
     '- no prior totalreclaw_remember — no context\n' +
     '- unsure → skip; debriefs rare\n' +
-    '\nMAX 5 (1-3 sentences, importance 7-8). type: summary|context.',
+    '\nProvide a Crystal object. narrative is embedded; all other fields go in metadata.',
   inputSchema: {
     type: 'object',
-    properties: {
-      facts: {
-        type: 'array',
-        description: 'Array of debrief items to store',
-        items: {
-          type: 'object',
-          properties: {
-            text: { type: 'string', description: 'The debrief summary text (1-3 sentences)' },
-            type: { type: 'string', enum: ['summary', 'context'], description: 'summary=conclusion/outcome, context=broader project context' },
-            importance: { type: 'number', description: 'Importance 1-10 (typically 7-8 for debriefs)' },
+    oneOf: [
+      {
+        description: 'Crystal-shaped debrief (preferred, am-1)',
+        properties: {
+          crystal: {
+            type: 'object',
+            description: 'Structured Crystal session summary',
+            properties: {
+              narrative: { type: 'string', description: '1-2 sentence session summary (will be embedded)' },
+              key_outcomes: { type: 'array', items: { type: 'string' }, description: 'Decisions made, bugs fixed, conclusions reached' },
+              files_affected: { type: 'array', items: { type: 'string' }, description: 'File paths worked on (coding sessions)' },
+              open_threads: { type: 'array', items: { type: 'string' }, description: 'Unfinished items needing follow-up' },
+              lessons: { type: 'array', items: { type: 'string' }, description: 'Patterns, gotchas, insights worth remembering' },
+              importance: { type: 'number', description: 'Importance 1-10 (default 8)' },
+              session_id: { type: 'string', description: 'Optional session identifier' },
+            },
+            required: ['narrative'],
           },
-          required: ['text'],
         },
+        required: ['crystal'],
       },
-    },
-    required: ['facts'],
+      {
+        description: 'Legacy free-form debrief items (backward compat)',
+        properties: {
+          facts: {
+            type: 'array',
+            description: 'Array of debrief items to store',
+            items: {
+              type: 'object',
+              properties: {
+                text: { type: 'string', description: 'The debrief summary text (1-3 sentences)' },
+                type: { type: 'string', enum: ['summary', 'context'], description: 'summary=conclusion/outcome, context=broader project context' },
+                importance: { type: 'number', description: 'Importance 1-10 (typically 7-8 for debriefs)' },
+              },
+              required: ['text'],
+            },
+          },
+        },
+        required: ['facts'],
+      },
+    ],
   },
   annotations: {
     readOnlyHint: false,
@@ -154,53 +220,68 @@ export const debriefToolDefinition = {
 
 /**
  * Handle debrief in HTTP/self-hosted mode: validate, store via TotalReclaw client.
+ * Accepts Crystal-shaped input (preferred) or legacy facts array (backward compat).
  */
 export async function handleDebrief(
   client: TotalReclaw,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const input = args as Record<string, unknown>;
-  const factsInput = input?.facts;
 
+  // Crystal path (preferred)
+  if (input?.crystal !== undefined) {
+    const crystal = parseCrystalInput(input.crystal);
+    if (!crystal) {
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ success: false, error: 'Invalid crystal: narrative (10+ chars) is required' }) }],
+      };
+    }
+
+    try {
+      const metadata: FactMetadata = {
+        importance: crystal.importance! / 10,
+        source: 'mcp_debrief',
+        tags: [
+          'subtype:session_crystal',
+          'source:derived',
+          ...(crystal.files_affected && crystal.files_affected.length > 0 ? ['has:files_affected'] : []),
+        ],
+      };
+      const factId = await client.remember(crystal.narrative, metadata);
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ success: true, stored: 1, fact_id: factId, crystal: true }) }],
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ success: false, error: message }) }],
+      };
+    }
+  }
+
+  // Legacy facts array path
+  const factsInput = input?.facts;
   if (!Array.isArray(factsInput) || factsInput.length === 0) {
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify({
-          success: false,
-          error: 'Invalid input: "facts" array is required and must not be empty',
-        }),
+        text: JSON.stringify({ success: false, error: 'Provide either "crystal" (preferred) or "facts" array' }),
       }],
     };
   }
 
-  // Validate through the parser
   const validated = parseDebriefResponse(JSON.stringify(factsInput));
-
   if (validated.length === 0) {
     return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          success: true,
-          stored: 0,
-          message: 'No valid debrief items to store (filtered by validation)',
-        }),
-      }],
+      content: [{ type: 'text', text: JSON.stringify({ success: true, stored: 0, message: 'No valid debrief items (filtered)' }) }],
     };
   }
 
   let stored = 0;
   const results: Array<{ success: boolean; fact_id: string }> = [];
-
   for (const item of validated) {
     try {
-      const metadata: FactMetadata = {
-        importance: item.importance / 10,
-        source: 'mcp_debrief',
-        tags: [item.type],
-      };
-
+      const metadata: FactMetadata = { importance: item.importance / 10, source: 'mcp_debrief', tags: [item.type] };
       const factId = await client.remember(item.text, metadata);
       results.push({ success: true, fact_id: factId });
       stored++;
@@ -212,15 +293,6 @@ export async function handleDebrief(
   }
 
   return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify({
-        success: stored > 0,
-        stored,
-        total: validated.length,
-        results,
-      }),
-    }],
+    content: [{ type: 'text', text: JSON.stringify({ success: stored > 0, stored, total: validated.length, results }) }],
   };
 }
-

@@ -199,6 +199,24 @@ export interface ExtractedFact {
    * is skipped (facts.length < 5), by the `defaultVolatility` heuristic.
    */
   volatility?: MemoryVolatility;
+  /**
+   * am-1: Crystal-shaped debrief structured metadata. When present,
+   * re-attached as `metadata` on the v1 blob after core validation.
+   * Only set on Crystal debrief facts (type='summary', source='derived').
+   */
+  crystalMetadata?: CrystalMetadata;
+}
+
+/** Structured metadata for a Crystal-shaped session summary (am-1). */
+export interface CrystalMetadata {
+  subtype: 'session_crystal';
+  key_outcomes: string[];
+  open_threads: string[];
+  lessons: string[];
+  session_id?: string;
+  source_message_ids?: string[];
+  files_affected?: string[];    // coding hosts (OpenClaw, MCP)
+  topics_discussed?: string[];  // chat hosts (Hermes, NanoClaw)
 }
 
 const ALLOWED_ENTITY_TYPES: ReadonlySet<EntityType> = new Set([
@@ -922,6 +940,155 @@ export async function extractDebrief(
     return parseDebriefResponse(response);
   } catch {
     return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Crystal-shaped debrief (am-1) — one structured summary per session
+// ---------------------------------------------------------------------------
+
+const _CRYSTAL_COMMON_FIELDS = `Return a JSON object (no markdown, no code fences):
+{
+  "narrative": "1-2 sentence summary of what happened this session",
+  "key_outcomes": ["outcome or decision 1", "outcome or decision 2"],
+  "open_threads": ["unfinished item 1"],
+  "lessons": ["lesson or gotcha 1"],
+  "importance": 8
+}`;
+
+export const CRYSTAL_SYSTEM_PROMPT_CHAT = `You are crystallising a finished conversation into one structured session summary.
+
+The following facts were already extracted and stored during this conversation:
+{already_stored_facts}
+
+Write ONE Crystal that captures what turn-by-turn extraction missed. Include:
+- narrative: 1-2 sentences describing the conversation overall
+- key_outcomes: decisions made, problems solved, conclusions reached
+- open_threads: things left unfinished or needing follow-up
+- lessons: patterns, gotchas, or insights worth remembering
+- topics_discussed: the main subjects covered
+- importance: 7-10 (8 default)
+
+Do NOT repeat facts already stored. Return null for trivial or very short conversations.
+
+${_CRYSTAL_COMMON_FIELDS}
+
+Also include "topics_discussed": ["topic 1", "topic 2"] in the object.
+Return null (not an object) for trivial or very short conversations.`;
+
+export const CRYSTAL_SYSTEM_PROMPT_CODING = `You are crystallising a finished coding session into one structured session summary.
+
+The following facts were already extracted and stored during this conversation:
+{already_stored_facts}
+
+Write ONE Crystal that captures what turn-by-turn extraction missed. Include:
+- narrative: 1-2 sentences describing the session overall
+- key_outcomes: decisions made, bugs fixed, features built
+- open_threads: things left unfinished or needing follow-up
+- lessons: patterns, gotchas, or insights worth remembering
+- files_affected: file paths mentioned or worked on (extract from assistant messages)
+- importance: 7-10 (8 default)
+
+Do NOT repeat facts already stored. Return null for trivial or very short sessions.
+
+${_CRYSTAL_COMMON_FIELDS}
+
+Also include "files_affected": ["/path/to/file.ts", ...] in the object (may be []).
+Return null (not an object) for trivial or very short sessions.`;
+
+/** Parse an LLM Crystal response into a CrystalMetadata + narrative pair. */
+export function parseCrystalResponse(
+  response: string,
+  hostType: 'chat' | 'coding' = 'chat',
+): { narrative: string; importance: number; metadata: CrystalMetadata } | null {
+  let cleaned = response.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+  }
+  if (cleaned.toLowerCase() === 'null' || cleaned === '') return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    return null;
+  }
+
+  if (parsed === null) return null;
+  if (typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+
+  const d = parsed as Record<string, unknown>;
+  const narrative = typeof d.narrative === 'string' ? d.narrative.trim().slice(0, 512) : '';
+  if (narrative.length < 10) return null;
+
+  const strList = (key: string): string[] => {
+    const raw = d[key];
+    if (!Array.isArray(raw)) return [];
+    return raw.map((x) => String(x).trim()).filter((x) => x.length > 0).slice(0, 10);
+  };
+
+  let importance = typeof d.importance === 'number' ? d.importance : 8;
+  importance = Math.max(1, Math.min(10, Math.round(importance)));
+
+  const metadata: CrystalMetadata = {
+    subtype: 'session_crystal',
+    key_outcomes: strList('key_outcomes'),
+    open_threads: strList('open_threads'),
+    lessons: strList('lessons'),
+  };
+  if (hostType === 'coding') {
+    metadata.files_affected = strList('files_affected');
+  } else {
+    metadata.topics_discussed = strList('topics_discussed');
+  }
+
+  return { narrative, importance, metadata };
+}
+
+/**
+ * Extract a Crystal session summary using LLM.
+ *
+ * Returns null if LLM unavailable, session too short, or LLM returns null.
+ */
+export async function extractCrystal(
+  rawMessages: unknown[],
+  storedFactTexts: string[],
+  hostType: 'chat' | 'coding' = 'coding',
+): Promise<{ narrative: string; importance: number; metadata: CrystalMetadata } | null> {
+  const config = resolveLLMConfig();
+  if (!config) return null;
+
+  const parsed = rawMessages
+    .map(messageToText)
+    .filter((m): m is { role: string; content: string } => m !== null);
+
+  if (parsed.length < 8) return null;
+
+  const conversationText = truncateMessages(parsed, 12_000);
+  if (conversationText.length < 20) return null;
+
+  const alreadyStored = storedFactTexts.length > 0
+    ? storedFactTexts.map((t) => `- ${t}`).join('\n')
+    : '(none)';
+
+  const promptTemplate = hostType === 'coding'
+    ? CRYSTAL_SYSTEM_PROMPT_CODING
+    : CRYSTAL_SYSTEM_PROMPT_CHAT;
+  const systemPrompt = promptTemplate.replace('{already_stored_facts}', alreadyStored);
+
+  try {
+    const response = await chatCompletion(config, [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Crystallise this session:\n\n${conversationText}` },
+    ], {
+      retry: { attempts: 3, baseDelayMs: 1000 },
+      timeoutMs: 30_000,
+    });
+
+    if (!response) return null;
+    return parseCrystalResponse(response, hostType);
+  } catch {
+    return null;
   }
 }
 

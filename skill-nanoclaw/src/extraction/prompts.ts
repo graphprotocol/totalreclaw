@@ -345,6 +345,87 @@ export function parseDebriefResponse(response: string): DebriefItem[] {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Crystal-shaped debrief (am-1) — one structured summary per session
+// ---------------------------------------------------------------------------
+
+export const CRYSTAL_SYSTEM_PROMPT_CHAT = `You are crystallising a finished conversation into one structured session summary.
+
+The following facts were already extracted and stored during this conversation:
+{already_stored_facts}
+
+Write ONE Crystal that captures what turn-by-turn extraction missed. Include:
+- narrative: 1-2 sentences describing the conversation overall
+- key_outcomes: decisions made, problems solved, conclusions reached
+- open_threads: things left unfinished or needing follow-up
+- lessons: patterns, gotchas, or insights worth remembering
+- topics_discussed: the main subjects covered
+- importance: 7-10 (8 default)
+
+Do NOT repeat facts already stored. Return null for trivial or very short conversations.
+
+Return a JSON object (no markdown, no code fences):
+{
+  "narrative": "1-2 sentence summary of what happened this session",
+  "key_outcomes": ["outcome or decision 1"],
+  "open_threads": ["unfinished item 1"],
+  "lessons": ["lesson 1"],
+  "topics_discussed": ["topic 1"],
+  "importance": 8
+}
+
+Return null (not an object) for trivial or very short conversations.`;
+
+export interface CrystalResult {
+  narrative: string;
+  importance: number;
+  metadata: {
+    subtype: 'session_crystal';
+    key_outcomes: string[];
+    open_threads: string[];
+    lessons: string[];
+    topics_discussed?: string[];
+    files_affected?: string[];
+  };
+}
+
+export function parseCrystalResponse(response: string): CrystalResult | null {
+  let cleaned = response.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+  }
+  if (cleaned.toLowerCase() === 'null' || cleaned === '') return null;
+
+  let parsed: unknown;
+  try { parsed = JSON.parse(cleaned); } catch { return null; }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+
+  const d = parsed as Record<string, unknown>;
+  const narrative = typeof d.narrative === 'string' ? d.narrative.trim().slice(0, 512) : '';
+  if (narrative.length < 10) return null;
+
+  const strList = (key: string): string[] => {
+    const v = d[key];
+    if (!Array.isArray(v)) return [];
+    return v.map((x) => String(x).trim()).filter((x) => x.length > 0).slice(0, 10);
+  };
+
+  let importance = typeof d.importance === 'number' ? d.importance : 8;
+  importance = Math.max(1, Math.min(10, Math.round(importance)));
+
+  return {
+    narrative,
+    importance,
+    metadata: {
+      subtype: 'session_crystal',
+      key_outcomes: strList('key_outcomes'),
+      open_threads: strList('open_threads'),
+      lessons: strList('lessons'),
+      topics_discussed: strList('topics_discussed'),
+    },
+  };
+}
+
 export function formatConversationHistory(
   turns: Array<{ role: 'user' | 'assistant'; content: string; timestamp: Date }>
 ): string {

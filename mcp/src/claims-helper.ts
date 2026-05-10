@@ -361,6 +361,11 @@ export interface BuildV1ClaimInput {
    * treat absence as equivalent. Only emitted in the output when provided.
    */
   pinStatus?: PinStatus;
+  /**
+   * am-1: Crystal-shaped debrief structured metadata. Re-attached after
+   * core validation using the same plugin-extra pattern as schema_version.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -410,6 +415,10 @@ export function buildV1ClaimBlob(input: BuildV1ClaimInput): string {
   const validated = getWasm().validateMemoryClaimV1(JSON.stringify(claim));
   const parsed = JSON.parse(validated) as Record<string, unknown>;
   parsed.schema_version = MEMORY_CLAIM_V1_SCHEMA_VERSION;
+  // am-1: re-attach Crystal metadata after validation (same plugin-extra pattern).
+  if (input.metadata && typeof input.metadata === 'object') {
+    parsed.metadata = input.metadata;
+  }
   return JSON.stringify(parsed);
 }
 

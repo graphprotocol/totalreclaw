@@ -281,6 +281,11 @@ export function buildCanonicalClaimV1(input: BuildClaimV1Input): string {
   if (typeof input.embeddingModelId === 'string' && input.embeddingModelId.length > 0) {
     canonical.embedding_model_id = input.embeddingModelId;
   }
+  // am-1: Crystal-shaped debrief structured metadata. Re-attached after
+  // validation using the same plugin-extra pattern as volatility.
+  if (fact.crystalMetadata) {
+    canonical.metadata = fact.crystalMetadata;
+  }
 
   return JSON.stringify(canonical);
 }

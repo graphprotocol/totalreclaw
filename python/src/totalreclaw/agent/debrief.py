@@ -14,8 +14,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 from .llm_client import detect_llm_config, chat_completion
 
@@ -29,6 +29,42 @@ class DebriefItem:
     text: str
     type: str  # summary or context
     importance: int  # 1-10
+
+
+@dataclass
+class Crystal:
+    """Structured session summary replacing 5x free-form debrief items.
+
+    One Crystal per session, stored as v1 summary + metadata.subtype="session_crystal".
+    """
+    narrative: str                           # 1-2 sentence "what happened" (embedded as text)
+    key_outcomes: list[str] = field(default_factory=list)
+    open_threads: list[str] = field(default_factory=list)
+    lessons: list[str] = field(default_factory=list)
+    importance: int = 8
+    session_id: str = ""
+    source_message_ids: list[str] = field(default_factory=list)
+    # Per-host: exactly one of these is populated
+    files_affected: list[str] = field(default_factory=list)    # coding hosts
+    topics_discussed: list[str] = field(default_factory=list)  # chat hosts
+
+    def to_metadata(self) -> Dict[str, Any]:
+        """Produce the metadata dict stored alongside the v1 summary blob."""
+        meta: Dict[str, Any] = {
+            "subtype": "session_crystal",
+            "key_outcomes": self.key_outcomes,
+            "open_threads": self.open_threads,
+            "lessons": self.lessons,
+        }
+        if self.session_id:
+            meta["session_id"] = self.session_id
+        if self.source_message_ids:
+            meta["source_message_ids"] = self.source_message_ids
+        if self.files_affected:
+            meta["files_affected"] = self.files_affected
+        if self.topics_discussed:
+            meta["topics_discussed"] = self.topics_discussed
+        return meta
 
 
 DEBRIEF_SYSTEM_PROMPT = """You are reviewing a conversation that just ended. The following facts were
@@ -173,3 +209,162 @@ async def generate_debrief(
     except Exception as e:
         logger.warning("Debrief generation failed: %s", e)
         return []
+
+
+# ---------------------------------------------------------------------------
+# Crystal-shaped debrief (am-1) — one structured summary per session
+# ---------------------------------------------------------------------------
+
+_CRYSTAL_COMMON_FIELDS = """\
+Return a JSON object (no markdown, no code fences):
+{
+  "narrative": "1-2 sentence summary of what happened this session",
+  "key_outcomes": ["outcome or decision 1", "outcome or decision 2"],
+  "open_threads": ["unfinished item 1", "unfinished item 2"],
+  "lessons": ["lesson or gotcha learned 1"],
+  "importance": 8
+}"""
+
+CRYSTAL_SYSTEM_PROMPT_CHAT = """You are crystallising a finished conversation into one structured session summary.
+
+The following facts were already extracted and stored during this conversation:
+{already_stored_facts}
+
+Write ONE Crystal that captures what turn-by-turn extraction missed. Include:
+- narrative: 1-2 sentences describing the conversation overall
+- key_outcomes: decisions made, problems solved, conclusions reached
+- open_threads: things left unfinished or needing follow-up
+- lessons: patterns, gotchas, or insights worth remembering
+- topics_discussed: the main subjects covered
+- importance: 7-10 (8 default)
+
+Do NOT repeat facts already stored. If the conversation was too short or trivial, return: null
+
+""" + _CRYSTAL_COMMON_FIELDS + """
+
+Also include "topics_discussed": ["topic 1", "topic 2"] in the object.
+Return null (not an object) for trivial or very short conversations."""
+
+CRYSTAL_SYSTEM_PROMPT_CODING = """You are crystallising a finished coding session into one structured session summary.
+
+The following facts were already extracted and stored during this conversation:
+{already_stored_facts}
+
+Write ONE Crystal that captures what turn-by-turn extraction missed. Include:
+- narrative: 1-2 sentences describing the session overall
+- key_outcomes: decisions made, bugs fixed, features built
+- open_threads: things left unfinished or needing follow-up
+- lessons: patterns, gotchas, or insights worth remembering
+- files_affected: file paths mentioned or worked on (extract from assistant messages)
+- importance: 7-10 (8 default)
+
+Do NOT repeat facts already stored. If the session was too short or trivial, return: null
+
+""" + _CRYSTAL_COMMON_FIELDS + """
+
+Also include "files_affected": ["/path/to/file.py", ...] in the object (may be empty []).
+Return null (not an object) for trivial or very short sessions."""
+
+
+def parse_crystal_response(response: str, host_type: str = "chat") -> Optional[Crystal]:
+    """Parse LLM JSON response into a Crystal object.
+
+    Returns None for null/empty/trivial responses or parse failures.
+    """
+    cleaned = response.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+
+    if cleaned.lower() in ("null", "none", ""):
+        return None
+
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+
+    if parsed is None:
+        return None
+
+    if not isinstance(parsed, dict):
+        return None
+
+    narrative = str(parsed.get("narrative", "")).strip()
+    if len(narrative) < 10:
+        return None
+
+    def _str_list(key: str) -> list[str]:
+        raw = parsed.get(key, [])
+        if not isinstance(raw, list):
+            return []
+        return [str(x).strip() for x in raw if str(x).strip()]
+
+    importance = parsed.get("importance", 8)
+    try:
+        importance = max(1, min(10, int(importance)))
+    except (ValueError, TypeError):
+        importance = 8
+
+    return Crystal(
+        narrative=narrative[:512],
+        key_outcomes=_str_list("key_outcomes")[:10],
+        open_threads=_str_list("open_threads")[:10],
+        lessons=_str_list("lessons")[:10],
+        importance=importance,
+        files_affected=_str_list("files_affected") if host_type == "coding" else [],
+        topics_discussed=_str_list("topics_discussed") if host_type == "chat" else [],
+    )
+
+
+async def generate_crystal(
+    messages: list[dict],
+    stored_fact_texts: list[str],
+    host_type: str = "chat",
+) -> Optional[Crystal]:
+    """Generate a Crystal session summary using LLM.
+
+    Args:
+        messages: All conversation messages from the session.
+        stored_fact_texts: Texts of facts already stored (for dedup context).
+        host_type: "chat" (Hermes/NanoClaw) or "coding" (OpenClaw/MCP).
+
+    Returns:
+        A Crystal object, or None if LLM unavailable, session too short,
+        or LLM returns null for trivial sessions.
+    """
+    config = detect_llm_config()
+    if not config:
+        return None
+
+    if len(messages) < 8:
+        return None
+
+    conversation_text = _truncate_messages(messages)
+    if len(conversation_text) < 20:
+        return None
+
+    already_stored = (
+        "\n".join(f"- {t}" for t in stored_fact_texts)
+        if stored_fact_texts
+        else "(none)"
+    )
+
+    system_prompt_template = (
+        CRYSTAL_SYSTEM_PROMPT_CODING if host_type == "coding"
+        else CRYSTAL_SYSTEM_PROMPT_CHAT
+    )
+    system_prompt = system_prompt_template.replace("{already_stored_facts}", already_stored)
+
+    try:
+        response = await chat_completion(
+            config,
+            system_prompt,
+            f"Crystallise this session:\n\n{conversation_text}",
+        )
+        if not response:
+            return None
+        return parse_crystal_response(response, host_type=host_type)
+    except Exception as e:
+        logger.warning("Crystal generation failed: %s", e)
+        return None

@@ -58,7 +58,7 @@ import {
 import { createApiClient, type StoreFactPayload } from './api-client.js';
 import {
   extractFacts,
-  extractDebrief,
+  extractCrystal,
   isValidMemoryType,
   parseEntity,
   VALID_MEMORY_TYPES,
@@ -6988,27 +6988,25 @@ const plugin = {
           }
           turnsSinceLastExtraction = 0; // Reset C3 counter on compaction.
 
-          // Session debrief — after regular extraction.
-          // v1 mapping: DebriefItem { type: 'summary'|'context' } →
-          //   v1 type 'summary' (always, since context → claim would lose
-          //   the "this is a session summary" signal) + source 'derived'
-          //   (session debrief is a derived synthesis by definition).
+          // Session Crystal (am-1) — one structured summary replaces 5 free-form debrief items.
+          // Stored as v1 summary + metadata.subtype="session_crystal" for filtered recall.
           try {
             const storedTexts = facts.map((f) => f.text);
-            const debriefItems = await extractDebrief(evt.messages, storedTexts);
-            if (debriefItems.length > 0) {
-              const debriefFacts: ExtractedFact[] = debriefItems.map((d) => ({
-                text: d.text,
+            const crystal = await extractCrystal(evt.messages, storedTexts, 'coding');
+            if (crystal) {
+              const crystalFact: ExtractedFact = {
+                text: crystal.narrative,
                 type: 'summary' as MemoryType,
                 source: 'derived' as MemorySource,
-                importance: d.importance,
+                importance: crystal.importance,
                 action: 'ADD' as const,
-              }));
-              await storeExtractedFacts(debriefFacts, api.logger, 'openclaw_debrief');
-              api.logger.info(`Session debrief: stored ${debriefItems.length} items`);
+                crystalMetadata: crystal.metadata,
+              };
+              await storeExtractedFacts([crystalFact], api.logger, 'openclaw_debrief');
+              api.logger.info('Session Crystal stored');
             }
           } catch (debriefErr: unknown) {
-            api.logger.warn(`before_compaction debrief failed: ${debriefErr instanceof Error ? debriefErr.message : String(debriefErr)}`);
+            api.logger.warn(`before_compaction Crystal failed: ${debriefErr instanceof Error ? debriefErr.message : String(debriefErr)}`);
           }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
@@ -7053,27 +7051,25 @@ const plugin = {
           }
           turnsSinceLastExtraction = 0; // Reset C3 counter on reset.
 
-          // Session debrief — after regular extraction.
-          // v1 mapping: DebriefItem { type: 'summary'|'context' } →
-          //   v1 type 'summary' (always, since context → claim would lose
-          //   the "this is a session summary" signal) + source 'derived'
-          //   (session debrief is a derived synthesis by definition).
+          // Session Crystal (am-1) — one structured summary replaces 5 free-form debrief items.
+          // Stored as v1 summary + metadata.subtype="session_crystal" for filtered recall.
           try {
             const storedTexts = facts.map((f) => f.text);
-            const debriefItems = await extractDebrief(evt.messages, storedTexts);
-            if (debriefItems.length > 0) {
-              const debriefFacts: ExtractedFact[] = debriefItems.map((d) => ({
-                text: d.text,
+            const crystal = await extractCrystal(evt.messages, storedTexts, 'coding');
+            if (crystal) {
+              const crystalFact: ExtractedFact = {
+                text: crystal.narrative,
                 type: 'summary' as MemoryType,
                 source: 'derived' as MemorySource,
-                importance: d.importance,
+                importance: crystal.importance,
                 action: 'ADD' as const,
-              }));
-              await storeExtractedFacts(debriefFacts, api.logger, 'openclaw_debrief');
-              api.logger.info(`Session debrief: stored ${debriefItems.length} items`);
+                crystalMetadata: crystal.metadata,
+              };
+              await storeExtractedFacts([crystalFact], api.logger, 'openclaw_debrief');
+              api.logger.info('Session Crystal stored');
             }
           } catch (debriefErr: unknown) {
-            api.logger.warn(`before_reset debrief failed: ${debriefErr instanceof Error ? debriefErr.message : String(debriefErr)}`);
+            api.logger.warn(`before_reset Crystal failed: ${debriefErr instanceof Error ? debriefErr.message : String(debriefErr)}`);
           }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
