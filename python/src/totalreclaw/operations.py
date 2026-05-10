@@ -174,6 +174,7 @@ async def store_fact(
     scope: str = "unspecified",
     reasoning: Optional[str] = None,
     volatility: Optional[str] = None,
+    extra_metadata: Optional[dict] = None,
 ) -> str:
     """Encrypt and store a fact on-chain via relay.
 
@@ -230,6 +231,7 @@ async def store_fact(
         importance=importance_int,
         created_at=extracted_at or timestamp,
         claim_id=fact_id,
+        extra_metadata=extra_metadata,
     )
 
     encrypted_blob = encrypt(blob_plaintext, keys.encryption_key)

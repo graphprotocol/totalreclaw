@@ -1,12 +1,11 @@
 import type { TotalReclaw, FactMetadata } from '@totalreclaw/client';
 import type { LLMClient } from './agent-end';
-import type { ExtractedFact, MemoryType } from '../extraction/prompts';
+import type { ExtractedFact } from '../extraction/prompts';
 import {
   PRE_COMPACTION_PROMPT,
-  DEBRIEF_SYSTEM_PROMPT,
-  V0_TO_V1_TYPE,
+  CRYSTAL_SYSTEM_PROMPT_CHAT,
   validateExtractionResponse,
-  parseDebriefResponse,
+  parseCrystalResponse,
 } from '../extraction/prompts';
 import { handleQuotaError } from '../billing.js';
 
@@ -110,54 +109,45 @@ export async function preCompact(
       }
     }
 
-    // Session debrief — after regular extraction
+    // Session Crystal (am-1) — one structured summary replaces free-form debrief items.
     let debriefStored = 0;
-    if (llmClient && validation.facts && validation.facts.length > 0) {
+    if (llmClient && validation.facts && validation.facts.length > 0 && !quotaExceeded) {
       try {
-        // NanoClaw 3.1.0: ADD-only alignment — debrief context reflects
-        // only the facts that were actually stored by this hook.
         const storedTexts = validation.facts
           .filter(f => f.action === 'ADD')
           .map(f => f.text);
         const alreadyStored = storedTexts.length > 0
           ? storedTexts.map(t => `- ${t}`).join('\n')
           : '(none)';
-        const debriefSystemPrompt = DEBRIEF_SYSTEM_PROMPT.replace('{already_stored_facts}', alreadyStored);
+        const crystalSystemPrompt = CRYSTAL_SYSTEM_PROMPT_CHAT.replace('{already_stored_facts}', alreadyStored);
 
-        const debriefResponse = await llmClient.generate(
-          debriefSystemPrompt,
-          `Review this conversation and provide a debrief:\n\n${input.transcript}`,
+        const crystalResponse = await llmClient.generate(
+          crystalSystemPrompt,
+          `Crystallise this session:\n\n${input.transcript}`,
         );
 
-        const debriefItems = parseDebriefResponse(debriefResponse);
-        for (const item of debriefItems) {
-          if (quotaExceeded) break;
-          // Coerce legacy "context" to v1 "claim"; "summary" passes through.
-          const v1Type: MemoryType =
-            item.type === 'context' ? V0_TO_V1_TYPE.context : 'summary';
-          const debriefMetadata: FactMetadata = {
-            importance: item.importance / 10,
+        const crystal = parseCrystalResponse(crystalResponse);
+        if (crystal) {
+          const crystalMetadata: FactMetadata = {
+            importance: crystal.importance / 10,
             source: 'nanoclaw_debrief',
             tags: [
               `namespace:${input.groupFolder}`,
-              v1Type,
+              'summary',
               'source:derived',
+              'subtype:session_crystal',
             ],
           };
           try {
-            await client.remember(item.text, debriefMetadata);
+            await client.remember(crystal.narrative, crystalMetadata);
             debriefStored++;
+            console.error('Session Crystal stored');
           } catch (err: unknown) {
-            if (handleQuotaError(err)) {
-              quotaExceeded = true;
-            }
+            if (handleQuotaError(err)) quotaExceeded = true;
           }
         }
-        if (debriefStored > 0) {
-          console.error(`Session debrief: stored ${debriefStored} items`);
-        }
       } catch (debriefErr) {
-        console.error('Pre-compact debrief failed:', debriefErr);
+        console.error('Pre-compact Crystal failed:', debriefErr);
       }
     }
 

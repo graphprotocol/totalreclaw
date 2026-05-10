@@ -420,6 +420,7 @@ class TotalReclaw:
         scope: str = "unspecified",
         reasoning: Optional[str] = None,
         volatility: Optional[str] = None,
+        extra_metadata: Optional[dict] = None,
     ) -> str:
         """Store a fact. Returns the fact ID.
 
@@ -479,6 +480,7 @@ class TotalReclaw:
             scope=scope,
             reasoning=reasoning,
             volatility=volatility,
+            extra_metadata=extra_metadata,
             eoa_private_key=self._eoa_private_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 from .extraction import ExtractedFact, extract_facts_llm, extract_facts_heuristic
 from .contradiction import detect_and_resolve_contradictions
-from .debrief import generate_debrief
+from .debrief import generate_crystal
 from .loop_runner import (
     run_sync,
     InterpreterShutdownError,
@@ -446,21 +446,21 @@ def _auto_extract_inner(
 def session_debrief(
     state: "AgentState",
     stored_fact_texts: Optional[list[str]] = None,
+    host_type: str = "chat",
 ) -> list[str]:
-    """Run session debrief: extract broader context and store it.
+    """Run session debrief: generate one Crystal summary and store it.
+
+    Replaces the old 5-item free-form debrief with a single structured
+    Crystal (am-1). The Crystal is stored as v1 ``summary`` type with
+    ``metadata.subtype="session_crystal"`` for filtered recall queries.
 
     Args:
         state: The AgentState instance (must be configured).
         stored_fact_texts: Optional list of already-stored fact texts for dedup.
-            If None, an empty list is used.
+        host_type: "chat" (Hermes/NanoClaw) or "coding" (OpenClaw/MCP).
 
     Returns:
-        List of newly-stored debrief fact ids. Empty on short sessions,
-        unconfigured state, LLM unavailability, or any interior failure.
-        The return type widened from ``None`` in 2.1.0 so the explicit
-        ``totalreclaw_debrief`` tool can surface per-fact ids back to the
-        user. The auto ``on_session_end`` path ignores the return value —
-        behavior-compatible.
+        List containing the Crystal fact id, or empty list on failure.
     """
     if not state.is_configured():
         return []
@@ -478,48 +478,39 @@ def session_debrief(
 
     stored_fact_ids: list[str] = []
     try:
-        debrief_items = run_sync(generate_debrief(all_messages, stored_fact_texts))
-        if debrief_items:
-            for item in debrief_items:
-                try:
-                    # v1 debrief items are summaries with derived
-                    # provenance — the assistant-side debrief pipeline
-                    # synthesized them from the conversation, so the
-                    # v1 source is always "derived" (plugin parity).
-                    fact_id = run_sync(
-                        client.remember(
-                            item.text,
-                            importance=item.importance / 10.0,
-                            source="hermes_debrief",
-                            fact_type="summary",
-                            provenance="derived",
-                            scope="unspecified",
-                        )
+        crystal = run_sync(generate_crystal(all_messages, stored_fact_texts, host_type=host_type))
+        if crystal:
+            try:
+                fact_id = run_sync(
+                    client.remember(
+                        crystal.narrative,
+                        importance=crystal.importance / 10.0,
+                        source="hermes_debrief",
+                        fact_type="summary",
+                        provenance="derived",
+                        scope="unspecified",
+                        extra_metadata=crystal.to_metadata(),
                     )
-                    if fact_id:
-                        stored_fact_ids.append(fact_id)
-                except InterpreterShutdownError:
-                    raise
-                except Exception as e:
-                    if is_interpreter_shutdown_error(e):
-                        raise InterpreterShutdownError(str(e)) from e
-                    logger.warning("Failed to store debrief item: %s", e)
+                )
+                if fact_id:
+                    stored_fact_ids.append(fact_id)
+                    logger.info("Session Crystal stored (id=%s, importance=%d)", fact_id, crystal.importance)
+            except InterpreterShutdownError:
+                raise
+            except Exception as e:
+                if is_interpreter_shutdown_error(e):
+                    raise InterpreterShutdownError(str(e)) from e
+                logger.warning("Failed to store Crystal: %s", e)
     except InterpreterShutdownError:
-        # Debrief lost to interpreter shutdown. The auto-extract path
-        # already enqueued unprocessed messages for next-session drain
-        # (see issue #148 + ``pending_drain``). Debrief is a derived
-        # session summary — re-running on the drained messages would be
-        # pointless without the full session context, so we just log
-        # and return the partial list of debrief facts (if any).
         logger.warning(
-            "TotalReclaw: session debrief deferred — interpreter shutdown race; "
+            "TotalReclaw: session Crystal deferred — interpreter shutdown race; "
             "next session will re-run extract on the drained messages."
         )
     except Exception as e:
         if is_interpreter_shutdown_error(e):
             logger.warning(
-                "TotalReclaw: session debrief deferred — interpreter shutdown race."
+                "TotalReclaw: session Crystal deferred — interpreter shutdown race."
             )
         else:
-            logger.warning("Session debrief failed: %s", e)
+            logger.warning("Session Crystal generation failed: %s", e)
     return stored_fact_ids

@@ -978,33 +978,96 @@ async function handleDebriefSubgraph(
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const input = args as Record<string, unknown>;
-  const factsInput = input?.facts;
 
+  // ── Crystal path (am-1, preferred) ──────────────────────────────────────
+  if (input?.crystal !== undefined) {
+    const raw = input.crystal as Record<string, unknown>;
+    const narrative = typeof raw?.narrative === 'string' ? raw.narrative.trim().slice(0, 512) : '';
+    if (narrative.length < 10) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: 'crystal.narrative (10+ chars) is required' }) }] };
+    }
+
+    const strList = (key: string): string[] => {
+      const v = (raw as Record<string, unknown>)[key];
+      if (!Array.isArray(v)) return [];
+      return v.map((x) => String(x).trim()).filter((x) => x.length > 0).slice(0, 10);
+    };
+    let importance = typeof raw?.importance === 'number' ? raw.importance : 8;
+    importance = Math.max(1, Math.min(10, Math.round(importance)));
+
+    const crystalMetadata: Record<string, unknown> = {
+      subtype: 'session_crystal',
+      key_outcomes: strList('key_outcomes'),
+      open_threads: strList('open_threads'),
+      lessons: strList('lessons'),
+    };
+    const filesAffected = strList('files_affected');
+    if (filesAffected.length > 0) crystalMetadata.files_affected = filesAffected;
+    if (typeof raw?.session_id === 'string' && raw.session_id) crystalMetadata.session_id = raw.session_id;
+
+    try {
+      const wordIndices = generateBlindIndices(narrative);
+      const embedding = await generateEmbedding(narrative);
+      const lshIndices = state.lshHasher.hash(embedding);
+      const allIndices = [...wordIndices, ...lshIndices];
+
+      const blobPlaintext = buildV1ClaimBlob({
+        text: narrative,
+        type: 'summary',
+        source: 'derived',
+        importance,
+        metadata: crystalMetadata,
+      });
+      const encryptedBlob = encrypt(blobPlaintext, state.encryptionKey);
+      const contentFp = generateContentFingerprint(narrative, state.dedupKey);
+      const encryptedEmb = encryptEmbedding(embedding, state.encryptionKey);
+
+      const factId = crypto.randomUUID();
+      const factPayload: FactPayload = {
+        id: factId,
+        timestamp: new Date().toISOString(),
+        owner: state.smartAccountAddress,
+        encryptedBlob: Buffer.from(encryptedBlob, 'base64').toString('hex'),
+        blindIndices: allIndices,
+        decayScore: importance / 10,
+        source: 'mcp_debrief',
+        contentFp,
+        agentId: 'mcp-server',
+        encryptedEmbedding: encryptedEmb,
+      };
+
+      const batchConfig = getSubgraphConfig({
+        relayUrl: state.serverUrl,
+        mnemonic: state.mnemonic,
+        authKeyHex: Buffer.from(state.authKey).toString('hex'),
+        walletAddress: state.smartAccountAddress,
+      });
+      const batchResult = await submitFactBatchOnChain([encodeFactProtobuf(factPayload)], batchConfig);
+      console.error(`Crystal debrief stored (tx=${batchResult.txHash.slice(0, 10)}...)`);
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ success: batchResult.success, stored: batchResult.success ? 1 : 0, fact_id: factId, tx_hash: batchResult.txHash, crystal: true }) }],
+      };
+    } catch (error) {
+      console.error(`Crystal debrief failed: ${error instanceof Error ? error.message : String(error)}`);
+      return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: String(error) }) }] };
+    }
+  }
+
+  // ── Legacy facts array path (backward compat) ────────────────────────────
+  const factsInput = input?.facts;
   if (!Array.isArray(factsInput) || factsInput.length === 0) {
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify({
-          success: false,
-          error: 'Invalid input: "facts" array is required and must not be empty',
-        }),
+        text: JSON.stringify({ success: false, error: 'Provide either "crystal" (preferred) or "facts" array' }),
       }],
     };
   }
 
-  // Validate through the canonical parser
   const validated = parseDebriefResponse(JSON.stringify(factsInput));
-
   if (validated.length === 0) {
     return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          success: true,
-          stored: 0,
-          message: 'No valid debrief items to store (filtered by validation)',
-        }),
-      }],
+      content: [{ type: 'text', text: JSON.stringify({ success: true, stored: 0, message: 'No valid debrief items to store (filtered by validation)' }) }],
     };
   }
 
@@ -1018,15 +1081,6 @@ async function handleDebriefSubgraph(
       const lshIndices = state.lshHasher.hash(embedding);
       const allIndices = [...wordIndices, ...lshIndices];
 
-      // Memory Taxonomy v1: emit v1 inner blob with `type: 'summary'` (both
-      // tool-level 'summary' and 'context' map here — per spec §type-semantics,
-      // summary absorbs session-level synthesis regardless of whether the tool
-      // called it "summary" or "context"). `source: 'derived'` marks this as a
-      // derived-from-conversation claim (spec requires summary ∈ {derived,
-      // assistant}; derived is the better fit here).
-      //
-      // TOTALRECLAW_CLAIM_FORMAT=legacy was removed in v1; raw-text blobs are
-      // no longer produced on the write path.
       const blobPlaintext = buildV1ClaimBlob({
         text: item.text,
         type: 'summary',
@@ -1070,11 +1124,7 @@ async function handleDebriefSubgraph(
       });
       const batchResult = await submitFactBatchOnChain(pendingPayloads, batchConfig);
       for (const meta of pendingFactMeta) {
-        results.push({
-          success: batchResult.success,
-          fact_id: meta.factId,
-          tx_hash: batchResult.txHash,
-        });
+        results.push({ success: batchResult.success, fact_id: meta.factId, tx_hash: batchResult.txHash });
       }
       console.error(`Debrief: submitted ${batchResult.batchSize} items (tx=${batchResult.txHash.slice(0, 10)}...)`);
     } catch (error) {
@@ -1086,17 +1136,8 @@ async function handleDebriefSubgraph(
   }
 
   const stored = results.filter((r) => r.success).length;
-
   return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify({
-        success: stored > 0,
-        stored,
-        total: validated.length,
-        results,
-      }),
-    }],
+    content: [{ type: 'text', text: JSON.stringify({ success: stored > 0, stored, total: validated.length, results }) }],
   };
 }
 

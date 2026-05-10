@@ -126,12 +126,12 @@ def test_post_llm_call_forwards_v1_fields_to_remember_batch() -> None:
 
 
 def test_on_session_end_debrief_emits_v1_summaries() -> None:
-    """Debrief path forwards type='summary' + provenance='derived' to client.remember.
+    """Crystal debrief path stores one summary fact with provenance='derived' + subtype='session_crystal'.
 
     We call ``session_debrief`` directly (the function the hook invokes) so
     the test is independent of the hook's try/except wrapping.
     """
-    from totalreclaw.agent.debrief import DebriefItem
+    from totalreclaw.agent.debrief import Crystal
     from totalreclaw.agent.lifecycle import session_debrief
 
     state, fake_client = _make_state()
@@ -141,28 +141,31 @@ def test_on_session_end_debrief_emits_v1_summaries() -> None:
         state.add_message("user", f"User message {i} with content words here")
         state.add_message("assistant", f"Assistant reply {i} with different content here")
 
-    debrief_items = [
-        DebriefItem(text="Session conclusion summary here", type="summary", importance=8),
-        DebriefItem(text="Project context notes here for future", type="context", importance=7),
-    ]
+    fake_crystal = Crystal(
+        narrative="Session conclusion: refactored auth module and agreed on API migration plan.",
+        key_outcomes=["auth module refactored"],
+        open_threads=["API migration still pending"],
+        lessons=["run tests before merging"],
+        importance=8,
+    )
 
     async def fake_generate(*args, **kwargs):
-        return debrief_items
+        return fake_crystal
 
-    # Patch at the call site — lifecycle.py imports generate_debrief from
-    # totalreclaw.agent.debrief and then calls it locally.
-    with patch("totalreclaw.agent.lifecycle.generate_debrief", new=fake_generate):
+    # Patch at the call site — lifecycle.py imports generate_crystal from
+    # totalreclaw.agent.debrief and calls it locally.
+    with patch("totalreclaw.agent.lifecycle.generate_crystal", new=fake_generate):
         session_debrief(state)
 
-    # Both debrief items should have been stored with v1 provenance.
+    # Crystal produces exactly one remember call (not one per free-form item).
     calls = fake_client.remember.call_args_list
-    assert len(calls) == 2, f"expected 2 remember calls, got {len(calls)}"
+    assert len(calls) == 1, f"expected 1 remember call (Crystal), got {len(calls)}"
 
-    for call in calls:
-        kwargs = call.kwargs
-        assert kwargs["fact_type"] == "summary"
-        assert kwargs["provenance"] == "derived"
-        assert kwargs["scope"] == "unspecified"
+    kwargs = calls[0].kwargs
+    assert kwargs["fact_type"] == "summary"
+    assert kwargs["provenance"] == "derived"
+    assert kwargs["scope"] == "unspecified"
+    assert kwargs["extra_metadata"]["subtype"] == "session_crystal"
 
 
 # ---------------------------------------------------------------------------
