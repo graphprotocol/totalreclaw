@@ -3,10 +3,16 @@
  *
  * Uses Argon2id for recovery phrase to key derivation and HKDF for
  * deriving auth and encryption keys.
+ *
+ * Implementation note (1.3.0): switched from the native `argon2` npm
+ * package to `@noble/hashes/argon2id` (pure JS). Eliminates the native
+ * binding that crashed when OpenClaw's `npm install --ignore-scripts`
+ * skipped the postinstall binary download. Same algorithm + same
+ * parameters → output is byte-identical to the native implementation.
  */
 
 import * as crypto from 'crypto';
-import * as argon2 from 'argon2';
+import { argon2id } from '@noble/hashes/argon2.js';
 
 /**
  * Key derivation parameters
@@ -59,16 +65,15 @@ export async function deriveAuthKey(
   };
 
   try {
-    // First, derive a master key using Argon2id
-    const masterKey = await argon2.hash(masterPassword, {
-      type: argon2.argon2id,
-      salt: salt,
-      memoryCost: memoryCost,
-      timeCost: timeCost,
-      parallelism: parallelism,
-      hashLength: 32,
-      raw: true,
-    });
+    // First, derive a master key using Argon2id (pure-JS via @noble/hashes)
+    const masterKey = Buffer.from(
+      argon2id(masterPassword, salt, {
+        m: memoryCost,
+        t: timeCost,
+        p: parallelism,
+        dkLen: 32,
+      })
+    );
 
     // Then use HKDF to derive the auth key with context
     const authKey = hkdfSha256(
@@ -107,16 +112,15 @@ export async function deriveEncryptionKey(
   };
 
   try {
-    // First, derive a master key using Argon2id
-    const masterKey = await argon2.hash(masterPassword, {
-      type: argon2.argon2id,
-      salt: salt,
-      memoryCost: memoryCost,
-      timeCost: timeCost,
-      parallelism: parallelism,
-      hashLength: 32,
-      raw: true,
-    });
+    // First, derive a master key using Argon2id (pure-JS via @noble/hashes)
+    const masterKey = Buffer.from(
+      argon2id(masterPassword, salt, {
+        m: memoryCost,
+        t: timeCost,
+        p: parallelism,
+        dkLen: 32,
+      })
+    );
 
     // Then use HKDF to derive the encryption key with different context
     const encryptionKey = hkdfSha256(
@@ -156,16 +160,15 @@ export async function deriveKeys(
   };
 
   try {
-    // Derive master key once using Argon2id
-    const masterKey = await argon2.hash(masterPassword, {
-      type: argon2.argon2id,
-      salt: salt,
-      memoryCost: memoryCost,
-      timeCost: timeCost,
-      parallelism: parallelism,
-      hashLength: 32,
-      raw: true,
-    });
+    // Derive master key once using Argon2id (pure-JS via @noble/hashes)
+    const masterKey = Buffer.from(
+      argon2id(masterPassword, salt, {
+        m: memoryCost,
+        t: timeCost,
+        p: parallelism,
+        dkLen: 32,
+      })
+    );
 
     // Derive both keys using HKDF with different contexts
     const authKey = hkdfSha256(
