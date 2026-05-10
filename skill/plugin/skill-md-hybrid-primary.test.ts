@@ -231,35 +231,40 @@ assert(
 );
 
 // ---------------------------------------------------------------------------
-// 8. MANDATORY ACK BEFORE FIRST TOOL CALL (3.3.11-rc.6 — Pedro 2026-05-07)
+// 8. Plugin-driven setup (3.3.12-rc.7 — SKILL.md collapse 2026-05-10)
 // ---------------------------------------------------------------------------
 //
-// Pedro reported on rc.5 that the agent ran `openclaw plugins install` silently
-// for ~60s before emitting any user-visible line. From the user's POV the prompt
-// looked dead. SKILL.md must explicitly require line 1 BEFORE the first shell
-// tool call, with reassuring wait-time copy.
+// rc.7 removed the user-visible-line choreography from SKILL.md. The plugin now
+// drives setup autonomously: it auto-creates a pair session, writes
+// ~/.totalreclaw/.pair-pending.json with {url, pin, sid, expires_at_ms}, and
+// injects a `before_agent_start` context block to the agent. The agent's job
+// shrinks to: surface the injected URL+PIN verbatim. Tests that asserted
+// "MANDATORY ACK", numbered-line wording, forbidden/required ack order, and
+// "skipping line 1 entirely" were dropped because those rules were stripped
+// from SKILL.md per the rc.7 collapse — the plugin's hook injection IS the
+// line now, not the agent's narration.
+//
+// New assertions for the rc.7 pivot:
 
 assert(
-  /MANDATORY ACK BEFORE FIRST TOOL CALL/i.test(pluginSkillMd),
-  'skill/plugin/SKILL.md: contains MANDATORY ACK BEFORE FIRST TOOL CALL rule',
+  pluginSkillMd.includes('.pair-pending.json'),
+  'skill/plugin/SKILL.md: references the pair-pending file written by the plugin',
 );
 
-// Line 1 wording must include a wait-time signal so user knows to wait
 assert(
-  /Setting up TotalReclaw — this takes about a minute/.test(pluginSkillMd),
-  'skill/plugin/SKILL.md: line 1 includes wait-time signal "Setting up TotalReclaw — this takes about a minute…"',
+  /before_agent_start/.test(pluginSkillMd),
+  'skill/plugin/SKILL.md: references the before_agent_start hook injection',
 );
 
-// Forbidden order must be called out explicitly
+// The agent must be told to surface the injected values verbatim, not invent.
 assert(
-  pluginSkillMd.includes('Forbidden order') && pluginSkillMd.includes('Required order'),
-  'skill/plugin/SKILL.md: documents Forbidden vs Required ack order explicitly',
+  /VERBATIM/i.test(pluginSkillMd) || /verbatim/.test(pluginSkillMd),
+  'skill/plugin/SKILL.md: instructs agent to surface URL+PIN verbatim from injected context',
 );
 
-// Skipping line 1 must be added to the silence-rules forbidden list
 assert(
-  /Skipping line 1 entirely/i.test(pluginSkillMd),
-  'skill/plugin/SKILL.md: silence rules forbid "skipping line 1 entirely"',
+  /never invent values|do not invent|never modify|do not modify/i.test(pluginSkillMd),
+  'skill/plugin/SKILL.md: warns agent NOT to invent or modify pair values',
 );
 
 // ---------------------------------------------------------------------------
