@@ -172,6 +172,22 @@ def register(ctx):
         is_async=True,
         description="Process one batch of a large import",
     )
+    ctx.register_tool(
+        name="totalreclaw_import_status",
+        toolset="totalreclaw",
+        schema=schemas.IMPORT_STATUS,
+        handler=lambda args, **kw: tools.import_status(args, state, **kw),
+        is_async=True,
+        description="Check background import progress",
+    )
+    ctx.register_tool(
+        name="totalreclaw_import_abort",
+        toolset="totalreclaw",
+        schema=schemas.IMPORT_ABORT,
+        handler=lambda args, **kw: tools.import_abort(args, state, **kw),
+        is_async=True,
+        description="Cancel a running background import",
+    )
     # v2.1.0 Phase A parity additions — Stripe checkout + explicit debrief.
     ctx.register_tool(
         name="totalreclaw_upgrade",

@@ -521,9 +521,11 @@ class TestRegister:
         # for Hermes Python parity with plugin retype-setscope.ts (issue
         # #150). Count → 14 stable, 15 RC. Cross-link: plugin.yaml +
         # test_hermes_plugin_manifest_parity.py + this test must agree.
+        # imp-1 — `totalreclaw_import_status` + `totalreclaw_import_abort`
+        # added (background import Phase 1). Count → 16 stable, 17 RC.
         from totalreclaw import __version__
         from totalreclaw.hermes.qa_bug_report import is_rc_build
-        expected_tools = 15 if is_rc_build(__version__) else 14
+        expected_tools = 17 if is_rc_build(__version__) else 16
         assert ctx.register_tool.call_count == expected_tools, (
             f"expected {expected_tools} tools for version {__version__!r}, "
             f"got {ctx.register_tool.call_count}"

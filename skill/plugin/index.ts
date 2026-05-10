@@ -17,8 +17,10 @@
  *   - totalreclaw_consolidate  -- scan and merge near-duplicate memories
  *   - totalreclaw_pin          -- pin a memory so auto-resolution can never supersede it
  *   - totalreclaw_unpin        -- remove a pin, returning the memory to active status
- *   - totalreclaw_import_from  -- import memories from other tools (Mem0, MCP Memory, etc.)
- *   - totalreclaw_upgrade      -- create Stripe checkout for Pro upgrade
+ *   - totalreclaw_import_from   -- import memories from other tools (Mem0, MCP Memory, etc.)
+ *   - totalreclaw_import_status -- check background import progress
+ *   - totalreclaw_import_abort  -- cancel a running background import
+ *   - totalreclaw_upgrade       -- create Stripe checkout for Pro upgrade
  *   - totalreclaw_migrate      -- migrate testnet memories to mainnet after Pro upgrade
  *   - totalreclaw_onboarding_start -- non-secret pointer to the CLI wizard (3.2.0)
  *   - totalreclaw_setup        -- DEPRECATED in 3.2.0; redirects to the CLI wizard
@@ -194,6 +196,13 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import * as nodePath from 'node:path';
+import {
+  writeImportState,
+  readImportState,
+  isImportStale,
+  readMostRecentActiveImport,
+  type ImportState,
+} from './import-state-manager.js';
 
 // CJS-style require for the @totalreclaw/core WASM module. We keep this
 // load path lazy (only inside getSmartImportWasm() below) so a partial
@@ -992,6 +1001,26 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
       }
     } catch {
       // Best-effort — don't block initialization on billing check failure.
+    }
+  }
+
+  // 1h freshness auto-resume: if a previous session left an import in running
+  // state and last_updated is < 1h ago, re-spawn the background task.
+  // If > 1h, the status check will mark it stale when the user queries it.
+  const activeImport = readMostRecentActiveImport();
+  if (activeImport && activeImport.status === 'running' && !isImportStale(activeImport)) {
+    logger.info(
+      `Import ${activeImport.import_id}: resuming background task from chunk ${activeImport.batch_done * 25}/${activeImport.total_chunks}`,
+    );
+    // The import file path is needed for re-parse. If not present we can't resume automatically.
+    if (activeImport.file_path) {
+      void handlePluginImportFrom(
+        { source: activeImport.source, file_path: activeImport.file_path, resume_id: activeImport.import_id },
+        logger,
+      ).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn(`Import ${activeImport.import_id}: auto-resume failed: ${msg}`);
+      });
     }
   }
 }
@@ -2262,6 +2291,9 @@ async function handlePluginImportFrom(
     return { success: false, error: `Invalid source. Must be one of: ${validSources.join(', ')}` };
   }
 
+  // Generate import_id up front so dry-run responses and background tasks share it.
+  const importId = (params.resume_id as string | undefined) ?? crypto.randomUUID();
+
   try {
     const { getAdapter } = await import('./import-adapters/index.js');
     const adapter = getAdapter(source as import('./import-adapters/types.js').ImportSource);
@@ -2299,6 +2331,7 @@ async function handlePluginImportFrom(
         return {
           success: true,
           dry_run: true,
+          import_id: importId,
           source,
           total_chunks: totalChunks,
           total_messages: parseResult.totalMessages,
@@ -2306,19 +2339,19 @@ async function handlePluginImportFrom(
           estimated_batches: estimatedBatches,
           estimated_minutes: estimatedMinutes,
           batch_size: BATCH_SIZE,
-          use_background: totalChunks > 50,
           preview: parseResult.chunks.slice(0, 5).map((c) => ({
             title: c.title,
             messages: c.messages.length,
             first_message: c.messages[0]?.text.slice(0, 100),
           })),
-          note: `Estimated ${estimatedFacts} facts from ${totalChunks} chunks (~${estimatedMinutes} min).${totalChunks > 50 ? ' Recommended: background import via sessions_spawn.' : ''}`,
+          note: `Estimated ${estimatedFacts} facts from ${totalChunks} chunks (~${estimatedMinutes} min). Confirm to start background import.`,
           warnings: parseResult.warnings,
         };
       }
       return {
         success: true,
         dry_run: true,
+        import_id: importId,
         source,
         total_found: parseResult.facts.length,
         preview: parseResult.facts.slice(0, 10).map((f) => ({
@@ -2330,9 +2363,61 @@ async function handlePluginImportFrom(
       };
     }
 
-    // ── Path 1: Conversation chunks (ChatGPT, Claude) — LLM extraction ──
+    // ── Path 1: Conversation chunks (ChatGPT, Claude, Gemini) — background execution ──
     if (hasChunks) {
-      return handleChunkImport(parseResult.chunks, parseResult.totalMessages, source, logger, startTime, parseResult.warnings);
+      const totalChunks = parseResult.chunks.length;
+      const BATCH_SIZE = 25;
+      const SECONDS_PER_BATCH = 45;
+      const estimatedBatches = Math.ceil(totalChunks / BATCH_SIZE);
+      const estimatedMinutes = Math.ceil(estimatedBatches * SECONDS_PER_BATCH / 60);
+      const estimatedTotalFacts = Math.round(totalChunks * 2.5);
+      const now = new Date();
+
+      const initialState: ImportState = {
+        import_id: importId,
+        source,
+        status: 'running',
+        started_at: now.toISOString(),
+        last_updated: now.toISOString(),
+        total_chunks: totalChunks,
+        total_messages: parseResult.totalMessages,
+        batch_done: 0,
+        batch_total: estimatedBatches,
+        facts_stored: 0,
+        facts_extracted: 0,
+        dups_skipped: 0,
+        errors: [],
+        file_path: params.file_path as string | undefined,
+        estimated_total_facts: estimatedTotalFacts,
+        estimated_minutes: estimatedMinutes,
+        estimated_completion_iso: new Date(now.getTime() + estimatedBatches * SECONDS_PER_BATCH * 1000).toISOString(),
+        disclosure_confirmed: !!(params.disclosure_confirmed),
+      };
+      writeImportState(initialState);
+      logger.info(`Import ${importId}: background task started (${totalChunks} chunks, ~${estimatedMinutes}min)`);
+
+      void handleChunkImport(
+        parseResult.chunks, parseResult.totalMessages, source, logger, startTime, parseResult.warnings, importId,
+      ).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn(`Import ${importId}: background task failed: ${msg}`);
+        const failedState = readImportState(importId);
+        if (failedState && failedState.status === 'running') {
+          writeImportState({ ...failedState, status: 'failed', errors: [...failedState.errors, msg] });
+        }
+      });
+
+      return {
+        import_id: importId,
+        status: 'running',
+        source,
+        total_chunks: totalChunks,
+        estimated_batches: estimatedBatches,
+        estimated_minutes: estimatedMinutes,
+        estimated_completion_iso: initialState.estimated_completion_iso,
+        message: `Import started in background. ~${estimatedMinutes} min for ${totalChunks} chunks. Ask "how's the import?" to check progress with totalreclaw_import_status.`,
+        warnings: parseResult.warnings,
+      };
     }
 
     // ── Path 2: Pre-structured facts (Mem0, MCP Memory) — direct store ──
@@ -2373,7 +2458,7 @@ async function handlePluginImportFrom(
     return {
       success: totalStored > 0,
       source,
-      import_id: crypto.randomUUID(),
+      import_id: importId,
       total_found: parseResult.facts.length,
       imported: totalStored,
       skipped: parseResult.facts.length - totalStored,
@@ -2742,18 +2827,31 @@ async function handleChunkImport(
   logger: OpenClawPluginApi['logger'],
   startTime: number,
   warnings: string[],
+  importId?: string,
 ): Promise<Record<string, unknown>> {
   let totalExtracted = 0;
   let totalStored = 0;
   let chunksProcessed = 0;
   let chunksSkipped = 0;
+  const resolvedImportId = importId ?? crypto.randomUUID();
 
   let storeError: string | undefined;
 
   // --- Smart Import: Profile + Triage ---
   const smartCtx = await runSmartImportPipeline(chunks, logger);
 
+  const CHECKPOINT_EVERY = 25; // write state file every N chunks
+
   for (let i = 0; i < chunks.length; i++) {
+    // Check abort flag from state file before each chunk (background task may be cancelled).
+    if (importId) {
+      const currentState = readImportState(importId);
+      if (currentState?.status === 'aborted') {
+        logger.info(`Import ${importId}: abort flag detected at chunk ${i + 1}/${chunks.length}, stopping`);
+        break;
+      }
+    }
+
     const chunk = chunks[i];
     chunksProcessed++;
 
@@ -2808,6 +2906,26 @@ async function handleChunkImport(
         break; // Stop processing further chunks — a zombie UserOp may block writes
       }
     }
+
+    // Checkpoint state file periodically so _import_status reflects live progress.
+    if (importId && chunksProcessed % CHECKPOINT_EVERY === 0) {
+      const liveState = readImportState(importId);
+      if (liveState) {
+        const estimatedBatches = liveState.batch_total || 1;
+        const doneBatches = Math.floor(chunksProcessed / CHECKPOINT_EVERY);
+        const elapsed = Date.now() - new Date(liveState.started_at).getTime();
+        const secPerBatch = doneBatches > 0 ? elapsed / 1000 / doneBatches : 45;
+        const remaining = estimatedBatches - doneBatches;
+        const etaMs = remaining * secPerBatch * 1000;
+        writeImportState({
+          ...liveState,
+          batch_done: doneBatches,
+          facts_stored: totalStored,
+          facts_extracted: totalExtracted,
+          estimated_completion_iso: new Date(Date.now() + etaMs).toISOString(),
+        });
+      }
+    }
   }
 
   if (totalExtracted === 0 && chunks.length > 0 && !storeError && chunksSkipped < chunks.length) {
@@ -2822,10 +2940,27 @@ async function handleChunkImport(
     warnings.push(`Import stopped early: ${storeError}. ${chunks.length - chunksProcessed} chunk(s) not processed.`);
   }
 
+  // Final state file write for background imports.
+  if (importId) {
+    const finalState = readImportState(importId);
+    if (finalState) {
+      const finalStatus = storeError ? 'failed' : (finalState.status === 'aborted' ? 'aborted' : 'completed');
+      writeImportState({
+        ...finalState,
+        status: finalStatus,
+        batch_done: finalState.batch_total,
+        facts_stored: totalStored,
+        facts_extracted: totalExtracted,
+        errors: storeError ? [...finalState.errors, storeError] : finalState.errors,
+      });
+    }
+    _importInProgress = false;
+  }
+
   return {
     success: totalStored > 0 || totalExtracted > 0,
     source,
-    import_id: crypto.randomUUID(),
+    import_id: resolvedImportId,
     total_chunks: chunks.length,
     chunks_processed: chunksProcessed,
     chunks_skipped: chunksSkipped,
@@ -2841,6 +2976,90 @@ async function handleChunkImport(
     } : null,
     warnings,
     duration_ms: Date.now() - startTime,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Import status + abort handlers
+// ---------------------------------------------------------------------------
+
+async function handleImportStatus(
+  params: Record<string, unknown>,
+  logger: OpenClawPluginApi['logger'],
+): Promise<Record<string, unknown>> {
+  const importId = params.import_id as string | undefined;
+
+  let state: ImportState | null;
+  if (importId) {
+    state = readImportState(importId);
+    if (!state) return { error: `No import found with id: ${importId}` };
+  } else {
+    state = readMostRecentActiveImport();
+    if (!state) return { status: 'no_active_import', message: 'No active import found. Start one with totalreclaw_import_from.' };
+  }
+
+  // 1h freshness guard: mark stale imports as failed and prompt user to resume.
+  if (state.status === 'running' && isImportStale(state)) {
+    writeImportState({ ...state, status: 'failed', errors: [...state.errors, 'Stale: no progress in 1h'] });
+    logger.info(`Import ${state.import_id}: marked stale (no progress in 1h)`);
+    return {
+      import_id: state.import_id,
+      status: 'failed',
+      stale: true,
+      facts_stored: state.facts_stored,
+      message: 'Import appears stale — no progress in 1 hour. Resume with totalreclaw_import_from using the same file and resume_id.',
+      resume_id: state.import_id,
+    };
+  }
+
+  const now = Date.now();
+  const elapsedMs = now - new Date(state.started_at).getTime();
+  const secPerBatch = state.batch_done > 0 ? elapsedMs / 1000 / state.batch_done : 45;
+  const remaining = Math.max(0, state.batch_total - state.batch_done);
+  const etaSeconds = state.status === 'running' ? Math.round(remaining * secPerBatch) : 0;
+
+  return {
+    import_id: state.import_id,
+    status: state.status,
+    batch_done: state.batch_done,
+    batch_total: state.batch_total,
+    facts_stored: state.facts_stored,
+    dups_skipped: state.dups_skipped,
+    eta_seconds: etaSeconds,
+    completion_iso: state.status === 'running'
+      ? new Date(now + etaSeconds * 1000).toISOString()
+      : state.last_updated,
+    source: state.source,
+    started_at: state.started_at,
+    errors: state.errors,
+  };
+}
+
+async function handleImportAbort(
+  params: Record<string, unknown>,
+  logger: OpenClawPluginApi['logger'],
+): Promise<Record<string, unknown>> {
+  const importId = params.import_id as string | undefined;
+  if (!importId) return { error: 'import_id is required' };
+
+  const state = readImportState(importId);
+  if (!state) return { error: `No import found with id: ${importId}` };
+
+  if (state.status === 'aborted') {
+    return { aborted: true, idempotent: true, import_id: importId, facts_already_stored: state.facts_stored };
+  }
+  if (state.status === 'completed') {
+    return { error: 'Import already completed — nothing to abort', import_id: importId, facts_stored: state.facts_stored };
+  }
+
+  writeImportState({ ...state, status: 'aborted' });
+  logger.info(`Import ${importId}: abort requested (${state.facts_stored} facts already stored)`);
+
+  return {
+    aborted: true,
+    import_id: importId,
+    facts_already_stored: state.facts_stored,
+    message: 'Import abort requested. The background task will stop at the next chunk boundary. Already-stored facts are kept.',
   };
 }
 
@@ -5446,6 +5665,78 @@ const plugin = {
         },
       },
       { name: 'totalreclaw_import_batch' },
+    );
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_import_status
+    // ---------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: 'totalreclaw_import_status',
+        label: 'Import Status',
+        description:
+          'Check the progress of a background import. ' +
+          'If import_id is omitted, returns the most recent active import. ' +
+          'Returns status (running/completed/failed/aborted), batch progress, facts stored, and ETA. ' +
+          'Use this when the user asks "how\'s the import?" or "is it done yet?".',
+        parameters: {
+          type: 'object',
+          properties: {
+            import_id: {
+              type: 'string',
+              description: 'The import ID returned by totalreclaw_import_from. Omit for most recent active import.',
+            },
+          },
+          additionalProperties: false,
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            await requireFullSetup(api.logger);
+            return handleImportStatus(params, api.logger);
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            return { error: message };
+          }
+        },
+      },
+      { name: 'totalreclaw_import_status' },
+    );
+
+    // ---------------------------------------------------------------
+    // Tool: totalreclaw_import_abort
+    // ---------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: 'totalreclaw_import_abort',
+        label: 'Abort Import',
+        description:
+          'Cancel a running background import. Already-stored facts are kept (import is idempotent via fingerprint dedup). ' +
+          'The background task will stop at the next chunk boundary after receiving the abort signal. ' +
+          'Use when the user says "stop the import" or "cancel the import".',
+        parameters: {
+          type: 'object',
+          properties: {
+            import_id: {
+              type: 'string',
+              description: 'The import ID to abort (from totalreclaw_import_from or totalreclaw_import_status).',
+            },
+          },
+          required: ['import_id'],
+          additionalProperties: false,
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            await requireFullSetup(api.logger);
+            return handleImportAbort(params, api.logger);
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            return { error: message };
+          }
+        },
+      },
+      { name: 'totalreclaw_import_abort' },
     );
 
     // ---------------------------------------------------------------

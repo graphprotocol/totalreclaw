@@ -391,3 +391,44 @@ IMPORT_BATCH = {
         "required": ["source"],
     },
 }
+
+IMPORT_STATUS = {
+    "name": "totalreclaw_import_status",
+    "description": (
+        "Check the progress of a background import. "
+        "If import_id is omitted, returns the most recent active import. "
+        "Returns status (running/completed/failed/aborted), batch progress, facts stored, and ETA. "
+        "INVOKE WHEN USER SAYS:\n"
+        "- 'how's the import?' / 'is it done?' / 'import progress'\n"
+        "- 'check the import' / 'how many facts so far'\n"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "import_id": {
+                "type": "string",
+                "description": "The import ID returned by totalreclaw_import_from. Omit for most recent active import.",
+            },
+        },
+    },
+}
+
+IMPORT_ABORT = {
+    "name": "totalreclaw_import_abort",
+    "description": (
+        "Cancel a running background import. Already-stored facts are kept (import is idempotent). "
+        "The background task will stop at the next batch boundary. "
+        "INVOKE WHEN USER SAYS:\n"
+        "- 'stop the import' / 'cancel the import' / 'abort the import'\n"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "import_id": {
+                "type": "string",
+                "description": "The import ID to abort (from totalreclaw_import_from or totalreclaw_import_status).",
+            },
+        },
+        "required": ["import_id"],
+    },
+}

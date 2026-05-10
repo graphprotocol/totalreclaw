@@ -1,10 +1,13 @@
 """Tool handlers for TotalReclaw Hermes plugin."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import uuid
 from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -578,6 +581,7 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
     file_path = args.get("file_path")
     content = args.get("content")
     dry_run = args.get("dry_run", False)
+    resume_id = args.get("resume_id")
 
     if not source:
         from totalreclaw.import_adapters import list_sources
@@ -586,38 +590,146 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
             "available_sources": list_sources(),
         })
 
+    import_id = resume_id or str(uuid.uuid4())
+
     try:
         from totalreclaw.import_engine import ImportEngine
+        from totalreclaw.import_state import (
+            ImportState, write_import_state, read_import_state, is_import_stale,
+        )
 
         engine = ImportEngine(client=client, llm_extract=_make_extractor(state))
 
         if dry_run:
             estimate = engine.estimate(source=source, file_path=file_path, content=content)
+            estimate["import_id"] = import_id
             return json.dumps(estimate)
 
-        # For small imports, run all batches synchronously
         estimate = engine.estimate(source=source, file_path=file_path, content=content)
         total_items = estimate.get("total_chunks") or estimate.get("total_facts") or 0
 
         if total_items <= _SMALL_IMPORT_THRESHOLD:
-            # Process everything in one pass
-            result = await engine.process_batch(
-                source=source,
+            # Small import: process synchronously but still write state for tracking.
+            now = datetime.now(timezone.utc).isoformat()
+            batch_size = total_items or 25
+            istate = ImportState(
+                import_id=import_id, source=source, status="running",
+                started_at=now, last_updated=now,
+                total_chunks=total_items, batch_total=1, batch_done=0,
                 file_path=file_path,
-                content=content,
-                offset=0,
-                batch_size=total_items or 25,
+                estimated_total_facts=estimate.get("estimated_facts", 0),
+                estimated_minutes=estimate.get("estimated_minutes", 0),
             )
-            return json.dumps(asdict(result))
+            write_import_state(istate)
+            try:
+                result = await engine.process_batch(
+                    source=source, file_path=file_path, content=content,
+                    offset=0, batch_size=batch_size,
+                )
+                final = read_import_state(import_id) or istate
+                write_import_state(ImportState(
+                    **{**asdict(final),
+                       "status": "completed",
+                       "batch_done": 1,
+                       "facts_stored": result.facts_stored,
+                       "facts_extracted": result.facts_extracted,
+                    }
+                ))
+                return json.dumps({**asdict(result), "import_id": import_id})
+            except Exception as e:
+                final = read_import_state(import_id) or istate
+                write_import_state(ImportState(**{**asdict(final), "status": "failed", "errors": [str(e)]}))
+                raise
         else:
-            # For large imports, return estimate and instruct agent to use import_batch
-            estimate["message"] = (
-                f"Large import detected ({total_items} chunks). "
-                f"Use totalreclaw_import_batch to process in batches of {estimate['batch_size']}. "
-                f"Call with offset=0, then offset={estimate['batch_size']}, etc. "
-                f"Estimated {estimate['num_batches']} batches, ~{estimate['estimated_minutes']} minutes."
+            # Large import: spawn background asyncio.Task, return immediately.
+            num_batches = estimate.get("num_batches", 1) or 1
+            estimated_minutes = estimate.get("estimated_minutes", 0)
+            now_dt = datetime.now(timezone.utc)
+            eta_iso = datetime.fromtimestamp(
+                now_dt.timestamp() + num_batches * 45, tz=timezone.utc
+            ).isoformat()
+            istate = ImportState(
+                import_id=import_id, source=source, status="running",
+                started_at=now_dt.isoformat(), last_updated=now_dt.isoformat(),
+                total_chunks=total_items, batch_total=num_batches, batch_done=0,
+                file_path=file_path,
+                estimated_total_facts=estimate.get("estimated_facts", 0),
+                estimated_minutes=estimated_minutes,
+                estimated_completion_iso=eta_iso,
             )
-            return json.dumps(estimate)
+            write_import_state(istate)
+
+            async def _run_background() -> None:
+                from totalreclaw.import_state import read_import_state, write_import_state, ImportState
+                offset = 0
+                batch_size = estimate.get("batch_size", 25)
+                total_stored = 0
+                total_extracted = 0
+                batch_done = 0
+                try:
+                    while offset < total_items:
+                        # Check abort flag before each batch.
+                        current = read_import_state(import_id)
+                        if current and current.status == "aborted":
+                            logger.info("Import %s: abort flag detected at offset %d", import_id, offset)
+                            return
+                        result = await engine.process_batch(
+                            source=source, file_path=file_path, content=content,
+                            offset=offset, batch_size=batch_size,
+                        )
+                        total_stored += result.facts_stored
+                        total_extracted += result.facts_extracted
+                        batch_done += 1
+                        offset += batch_size
+                        # Checkpoint state.
+                        s = read_import_state(import_id)
+                        if s:
+                            elapsed = (datetime.now(timezone.utc).timestamp() - datetime.fromisoformat(
+                                s.started_at.replace("Z", "+00:00")).timestamp())
+                            sec_per_batch = elapsed / batch_done if batch_done else 45
+                            remaining = num_batches - batch_done
+                            eta_ms = remaining * sec_per_batch
+                            write_import_state(ImportState(**{
+                                **asdict(s),
+                                "batch_done": batch_done,
+                                "facts_stored": total_stored,
+                                "facts_extracted": total_extracted,
+                                "estimated_completion_iso": datetime.fromtimestamp(
+                                    datetime.now(timezone.utc).timestamp() + eta_ms,
+                                    tz=timezone.utc,
+                                ).isoformat(),
+                            }))
+                        if result.is_complete:
+                            break
+                    # Mark complete.
+                    s = read_import_state(import_id)
+                    if s and s.status == "running":
+                        write_import_state(ImportState(**{**asdict(s), "status": "completed",
+                                                          "batch_done": num_batches,
+                                                          "facts_stored": total_stored,
+                                                          "facts_extracted": total_extracted}))
+                    logger.info("Import %s: background complete (%d facts stored)", import_id, total_stored)
+                except Exception as e:
+                    s = read_import_state(import_id)
+                    if s and s.status == "running":
+                        write_import_state(ImportState(**{**asdict(s), "status": "failed",
+                                                          "errors": s.errors + [str(e)]}))
+                    logger.error("Import %s: background task failed: %s", import_id, e)
+
+            asyncio.ensure_future(_run_background())
+            return json.dumps({
+                "import_id": import_id,
+                "status": "running",
+                "source": source,
+                "total_chunks": total_items,
+                "estimated_batches": num_batches,
+                "estimated_minutes": estimated_minutes,
+                "estimated_completion_iso": eta_iso,
+                "message": (
+                    f"Import started in background. ~{estimated_minutes} min for {total_items} chunks. "
+                    "Ask \"how's the import?\" to check progress with totalreclaw_import_status."
+                ),
+            })
 
     except ValueError as e:
         return json.dumps({"error": str(e)})
@@ -659,3 +771,89 @@ async def import_batch(args: dict, state: "PluginState", **kwargs) -> str:
     except Exception as e:
         logger.error("totalreclaw_import_batch failed: %s", e)
         return json.dumps({"error": str(e)})
+
+
+async def import_status(args: dict, state: "PluginState", **kwargs) -> str:
+    """Check the progress of a background import."""
+    from totalreclaw.import_state import (
+        read_import_state, read_most_recent_active_import, is_import_stale, write_import_state, ImportState,
+    )
+    from dataclasses import asdict
+
+    import_id = args.get("import_id")
+
+    if import_id:
+        s = read_import_state(import_id)
+        if not s:
+            return json.dumps({"error": f"No import found with id: {import_id}"})
+    else:
+        s = read_most_recent_active_import()
+        if not s:
+            return json.dumps({"status": "no_active_import", "message": "No active import found. Start one with totalreclaw_import_from."})
+
+    # 1h freshness guard.
+    if s.status == "running" and is_import_stale(s):
+        write_import_state(ImportState(**{**asdict(s), "status": "failed",
+                                          "errors": s.errors + ["Stale: no progress in 1h"]}))
+        return json.dumps({
+            "import_id": s.import_id, "status": "failed", "stale": True,
+            "facts_stored": s.facts_stored,
+            "message": "Import appears stale — no progress in 1 hour. Resume with totalreclaw_import_from using the same file and resume_id.",
+            "resume_id": s.import_id,
+        })
+
+    now_ts = datetime.now(timezone.utc).timestamp()
+    try:
+        started_ts = datetime.fromisoformat(s.started_at.replace("Z", "+00:00")).timestamp()
+        elapsed = now_ts - started_ts
+    except Exception:
+        elapsed = 0
+    sec_per_batch = elapsed / s.batch_done if s.batch_done > 0 else 45
+    remaining = max(0, s.batch_total - s.batch_done)
+    eta_seconds = int(remaining * sec_per_batch) if s.status == "running" else 0
+
+    return json.dumps({
+        "import_id": s.import_id,
+        "status": s.status,
+        "batch_done": s.batch_done,
+        "batch_total": s.batch_total,
+        "facts_stored": s.facts_stored,
+        "dups_skipped": s.dups_skipped,
+        "eta_seconds": eta_seconds,
+        "completion_iso": (
+            datetime.fromtimestamp(now_ts + eta_seconds, tz=timezone.utc).isoformat()
+            if s.status == "running" else s.last_updated
+        ),
+        "source": s.source,
+        "started_at": s.started_at,
+        "errors": s.errors,
+    })
+
+
+async def import_abort(args: dict, state: "PluginState", **kwargs) -> str:
+    """Cancel a running background import."""
+    from totalreclaw.import_state import read_import_state, write_import_state, ImportState
+    from dataclasses import asdict
+
+    import_id = args.get("import_id")
+    if not import_id:
+        return json.dumps({"error": "import_id is required"})
+
+    s = read_import_state(import_id)
+    if not s:
+        return json.dumps({"error": f"No import found with id: {import_id}"})
+
+    if s.status == "aborted":
+        return json.dumps({"aborted": True, "idempotent": True, "import_id": import_id, "facts_already_stored": s.facts_stored})
+    if s.status == "completed":
+        return json.dumps({"error": "Import already completed — nothing to abort", "import_id": import_id, "facts_stored": s.facts_stored})
+
+    write_import_state(ImportState(**{**asdict(s), "status": "aborted"}))
+    logger.info("Import %s: abort requested (%d facts already stored)", import_id, s.facts_stored)
+
+    return json.dumps({
+        "aborted": True,
+        "import_id": import_id,
+        "facts_already_stored": s.facts_stored,
+        "message": "Import abort requested. The background task will stop at the next batch boundary. Already-stored facts are kept.",
+    })
