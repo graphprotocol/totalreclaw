@@ -173,8 +173,12 @@ import {
   writePluginError,
   readPluginLoadedManifest,
   checkCredentialsFileMode,
+  deletePairPendingFile,
+  defaultPairPendingPath,
   type OnboardingState,
 } from './fs-helpers.js';
+import { maybeStartAutoPair } from './auto-pair-on-load.js';
+import { installBeforeAgentStartHook as installPairPendingHook } from './pair-pending-injection.js';
 import { isRcBuild } from './qa-bug-report.js';
 import { decideToolGate, isGatedToolName } from './tool-gating.js';
 import {
@@ -842,9 +846,13 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
 
   if (!masterPassword) {
     needsSetup = true;
-    logger.info(
-      'TotalReclaw: no recovery phrase available — run `openclaw totalreclaw onboard` in a terminal to set up',
-    );
+    // 3.3.13 — replaced the stale "run `openclaw totalreclaw onboard` in a
+    // terminal to set up" log line. The auto-pair-on-load flow (kicked off
+    // from register()) now writes ~/.totalreclaw/.pair-pending.json with
+    // the URL + PIN the agent surfaces to the user on the next turn. The
+    // chat agent no longer hallucinates pair URLs — see the Pop-OS QA
+    // 2026-05-10 root-cause note in auto-pair-on-load.ts.
+    logger.info('TotalReclaw: no credentials found; auto-pair-on-load will surface a pair URL.');
     return;
   }
 
@@ -3459,6 +3467,79 @@ const plugin = {
     }
 
     // ---------------------------------------------------------------
+    // 3.3.13 — auto-pair-on-load (Pop-OS hallucination fix)
+    // ---------------------------------------------------------------
+    //
+    // If credentials.json is missing, open a relay pair session NOW and
+    // write URL + PIN + sid to ~/.totalreclaw/.pair-pending.json. The
+    // before_agent_start hook installed below reads that file and tells
+    // the agent the EXACT values to surface — the agent no longer guesses.
+    //
+    // Fire-and-forget so a relay outage never blocks plugin load. The
+    // sentinel write happens BEFORE the hook is registered, but the WS
+    // listener and credentials.json write run in the background after
+    // register() returns.
+    void (async () => {
+      try {
+        const result = await maybeStartAutoPair({
+          credentialsPath: CREDENTIALS_PATH,
+          pendingPath: defaultPairPendingPath(CREDENTIALS_PATH),
+          onboardingStatePath: CONFIG.onboardingStatePath,
+          relayBaseUrl: CONFIG.pairRelayUrl,
+          pluginVersion: pluginVersion ?? '3.3.0',
+          logger: api.logger,
+        });
+        switch (result.status) {
+          case 'creds_exist':
+            // No-op — happy path; user is already set up.
+            break;
+          case 'pending_reused':
+            api.logger.info(
+              'TotalReclaw: setup pending. Reusing existing pair URL at ~/.totalreclaw/.pair-pending.json — agent will surface URL+PIN to user on next turn.',
+            );
+            break;
+          case 'started':
+            api.logger.info(
+              'TotalReclaw: setup pending. Pair URL written to ~/.totalreclaw/.pair-pending.json — agent will surface URL+PIN to user on next turn.',
+            );
+            break;
+          case 'failed':
+            api.logger.warn(
+              `TotalReclaw: setup pending. Auto-pair failed (${result.error}). User must run \`tr pair --json\` manually OR call the totalreclaw_pair tool.`,
+            );
+            break;
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        api.logger.warn(
+          `TotalReclaw: setup pending. Auto-pair failed (${msg}). User must run \`tr pair --json\` manually OR call the totalreclaw_pair tool.`,
+        );
+      }
+    })();
+
+    // Install the before_agent_start hook that reads the sentinel and
+    // injects URL + PIN into the agent's context verbatim. Registered
+    // here so it lives alongside the other hook registrations in
+    // register(); the hook body itself never blocks on plugin load.
+    try {
+      installPairPendingHook(api, {
+        credentialsPath: CREDENTIALS_PATH,
+        pendingPath: defaultPairPendingPath(CREDENTIALS_PATH),
+        autoPairDepsFactory: () => ({
+          credentialsPath: CREDENTIALS_PATH,
+          pendingPath: defaultPairPendingPath(CREDENTIALS_PATH),
+          onboardingStatePath: CONFIG.onboardingStatePath,
+          relayBaseUrl: CONFIG.pairRelayUrl,
+          pluginVersion: pluginVersion ?? '3.3.0',
+          logger: api.logger,
+        }),
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      api.logger.warn(`TotalReclaw: failed to register pair-pending-injection hook: ${msg}`);
+    }
+
+    // ---------------------------------------------------------------
     // LLM client initialization (auto-detect provider from OpenClaw config)
     // ---------------------------------------------------------------
     //
@@ -3683,6 +3764,11 @@ const plugin = {
             credentialsCreatedAt: new Date().toISOString(),
             version: pluginVersion ?? '3.3.0',
           });
+          // 3.3.13 — sentinel cleanup. credentials.json is now the source
+          // of truth; the auto-pair-on-load .pair-pending.json sentinel
+          // must be removed so the before_agent_start hook stops surfacing
+          // the URL + PIN on subsequent turns.
+          deletePairPendingFile(defaultPairPendingPath(CREDENTIALS_PATH));
           return { state: 'active' };
         },
       });
@@ -6195,6 +6281,8 @@ const plugin = {
                           credentialsCreatedAt: new Date().toISOString(),
                           version: pluginVersion ?? '3.3.0',
                         });
+                        // 3.3.13 — sentinel cleanup; see auto-pair-on-load.ts.
+                        deletePairPendingFile(defaultPairPendingPath(CREDENTIALS_PATH));
                         api.logger.info(
                           `totalreclaw_pair(relay): session ${remoteSession.token.slice(0, 8)}… completed; credentials written${scopeAddress ? ` (scope_address=${scopeAddress})` : ''}`,
                         );
