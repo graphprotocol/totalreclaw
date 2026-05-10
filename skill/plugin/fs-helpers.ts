@@ -1483,3 +1483,110 @@ export function checkCredentialsFileMode(
 
   return 'ok';
 }
+
+// ---------------------------------------------------------------------------
+// Pair-pending sentinel (3.3.13 — auto-pair-on-load)
+// ---------------------------------------------------------------------------
+
+/**
+ * Shape of `~/.totalreclaw/.pair-pending.json`. Written by the auto-pair
+ * on plugin-load flow when no credentials.json exists; consumed by the
+ * `before_agent_start` hook to surface the URL + PIN to the user without
+ * the agent ever guessing them.
+ *
+ * Phrase-safety invariant: the recovery phrase is NEVER stored here. Only
+ * the URL + PIN + session token + relay-provided expiry. Phrase travels
+ * end-to-end encrypted from browser -> relay -> gateway and is written
+ * directly to credentials.json by the awaitPhraseUpload completion handler.
+ *
+ * `v` is a schema version so future migrations can detect old layouts.
+ */
+export interface PairPendingFile {
+  v: 1;
+  /** User-facing pair URL (https://...#pk=). */
+  url: string;
+  /** 6-digit PIN the user types into the browser. */
+  pin: string;
+  /** Relay-issued opaque session id. */
+  sid: string;
+  /** Session expiry from the relay (ms since epoch). */
+  expires_at_ms: number;
+  /** When the gateway opened this session (ms since epoch). */
+  created_at_ms: number;
+  /** Pair mode advertised to the relay. */
+  mode: 'generate' | 'import' | 'either';
+}
+
+/**
+ * Load `.pair-pending.json` if it exists and parses. Returns null on
+ * missing-file, corrupt JSON, or unknown schema version. Never throws.
+ */
+export function loadPairPendingFile(pendingPath: string): PairPendingFile | null {
+  try {
+    if (!fs.existsSync(pendingPath)) return null;
+    const raw = fs.readFileSync(pendingPath, 'utf-8');
+    const parsed = JSON.parse(raw) as Partial<PairPendingFile> & { v?: number };
+    if (parsed.v !== 1) return null;
+    if (typeof parsed.url !== 'string' || !parsed.url) return null;
+    if (typeof parsed.pin !== 'string' || !parsed.pin) return null;
+    if (typeof parsed.sid !== 'string' || !parsed.sid) return null;
+    if (typeof parsed.expires_at_ms !== 'number') return null;
+    if (typeof parsed.created_at_ms !== 'number') return null;
+    if (
+      parsed.mode !== 'generate'
+      && parsed.mode !== 'import'
+      && parsed.mode !== 'either'
+    ) return null;
+    return parsed as PairPendingFile;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write `.pair-pending.json` atomically-ish (single `writeFileSync`). Creates
+ * the parent directory if missing. Uses mode `0o600` to match credentials.json
+ * even though the contents are NOT secret (URL + PIN are surfaced to chat
+ * anyway) — defensive default for the .totalreclaw/ dir.
+ *
+ * Returns `true` on success, `false` on any I/O error.
+ */
+export function writePairPendingFile(
+  pendingPath: string,
+  payload: PairPendingFile,
+): boolean {
+  try {
+    const dir = path.dirname(pendingPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(pendingPath, JSON.stringify(payload), { mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Delete the pair-pending sentinel. Used by:
+ *   - the pair-completion path (after credentials.json is finalized)
+ *   - the auto-pair flow when it detects an expired pending session
+ *
+ * Returns `true` if a file was deleted, `false` otherwise (no file or error).
+ */
+export function deletePairPendingFile(pendingPath: string): boolean {
+  try {
+    if (!fs.existsSync(pendingPath)) return false;
+    fs.unlinkSync(pendingPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Default `.pair-pending.json` path derived from a credentials.json path:
+ * the sentinel lives in the same directory under the dot-prefixed name.
+ * Callers MAY pass an explicit path (tests, custom layouts) instead.
+ */
+export function defaultPairPendingPath(credentialsPath: string): string {
+  return path.join(path.dirname(credentialsPath), '.pair-pending.json');
+}
