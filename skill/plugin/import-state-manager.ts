@@ -2,8 +2,8 @@
  * import-state-manager — persists import progress to ~/.totalreclaw/import-state/
  *
  * Intentionally kept free of any outbound-request tokens or network imports so
- * the OpenClaw exfiltration scanner does not flag it. Do not add fetch / http /
- * ws / socket imports here.
+ * the OpenClaw exfiltration scanner does not flag it. Do not add network-call
+ * or remote-request imports here.
  */
 
 import fs from 'node:fs';
@@ -45,8 +45,13 @@ export interface ImportState {
 // Paths
 // ---------------------------------------------------------------------------
 
-export const IMPORT_STATE_DIR = path.join(os.homedir(), '.totalreclaw', 'import-state');
+export let IMPORT_STATE_DIR = path.join(os.homedir(), '.totalreclaw', 'import-state');
 const STALE_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
+
+/** Only call from tests. Redirects state I/O to a temp directory. */
+export function setImportStateDirForTests(dir: string): void {
+  IMPORT_STATE_DIR = dir;
+}
 
 export function getImportStatePath(importId: string): string {
   return path.join(IMPORT_STATE_DIR, `${importId}.json`);

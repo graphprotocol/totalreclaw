@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 # Threshold for "small" imports that run synchronously in import_from
 _SMALL_IMPORT_THRESHOLD = 50
 
+# Strong references to background import tasks so the event loop cannot GC them.
+_BG_TASKS: set[asyncio.Task] = set()
+
 
 async def remember(args: dict, state: "PluginState", **kwargs) -> str:
     """Store a memory in TotalReclaw (v1 taxonomy).
@@ -716,7 +719,9 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
                                                           "errors": s.errors + [str(e)]}))
                     logger.error("Import %s: background task failed: %s", import_id, e)
 
-            asyncio.ensure_future(_run_background())
+            _bg_task = asyncio.ensure_future(_run_background())
+            _BG_TASKS.add(_bg_task)
+            _bg_task.add_done_callback(_BG_TASKS.discard)
             return json.dumps({
                 "import_id": import_id,
                 "status": "running",

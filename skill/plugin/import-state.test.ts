@@ -7,15 +7,26 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { test, beforeEach, afterEach } from 'node:test';
 
-// Override IMPORT_STATE_DIR to a temp dir for tests.
 import {
   writeImportState,
   readImportState,
   isImportStale,
   readMostRecentActiveImport,
   listAllImportStates,
+  setImportStateDirForTests,
   type ImportState,
 } from './import-state-manager.js';
+
+let tmpDir: string;
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'import-state-test-'));
+  setImportStateDirForTests(tmpDir);
+});
+
+afterEach(() => {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
 
 function makeState(overrides: Partial<ImportState> = {}): ImportState {
   return {
