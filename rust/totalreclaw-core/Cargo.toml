@@ -68,6 +68,9 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v7"] }
 
+# Regex (secret detection)
+regex = "1"
+
 # Error handling
 thiserror = "2"
 
