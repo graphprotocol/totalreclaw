@@ -63,7 +63,7 @@ jobs:
           node-version: '22'
 
       - name: Install and test
-        run: cd client && rm -f package-lock.json && npm install --legacy-peer-deps && npm test
+        run: cd client && rm -f package-lock.json && npm install --legacy-peer-deps && npm test -- --forceExit
 
   app-tests:
     name: Web App Tests (Vitest)

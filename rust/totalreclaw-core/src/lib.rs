@@ -24,6 +24,7 @@
 //! - [`memory_types`] — Memory Taxonomy v1 string-level constants + runtime guard
 //! - [`prompts`] — Canonical extraction + compaction system prompts (2.2.0)
 //! - [`confirm`] — Read-after-write primitive for on-chain mutation tools (2.2.x)
+//! - [`secrets`] — API-key vault: detect + redact 14 secret pattern classes (am-6)
 
 pub mod blind;
 pub mod claims;
@@ -42,6 +43,7 @@ pub mod memory_types;
 pub mod prompts;
 pub mod protobuf;
 pub mod reranker;
+pub mod secrets;
 pub mod smart_import;
 pub mod stemmer;
 pub mod store;
