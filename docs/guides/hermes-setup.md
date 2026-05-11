@@ -240,8 +240,10 @@ Setting up your TotalReclaw account uses a brief WebSocket session that needs to
 
 Workarounds for one-shot CLI users:
 
-1. **Use daemon mode**: `hermes gateway run &` then `hermes chat -q "Set up TotalReclaw for me, see <URL>"` — the daemon owns the WS-keepalive while chat-q exits.
-2. **Use the standalone setup CLI**: `totalreclaw setup` (interactive, blocks until your account is set up — recovery phrase entered locally, never crosses LLM context).
+1. **Use daemon mode** (works for agents AND users): `hermes gateway run &` then `hermes chat -q "Set up TotalReclaw for me, see <URL>"` — the daemon owns the WS-keepalive while chat-q exits.
+2. **Use the standalone setup CLI** (**USER-IN-TERMINAL ONLY — NEVER from an agent shell**): `totalreclaw setup` (interactive, blocks until your account is set up — recovery phrase entered LOCALLY in the user's own terminal, never crosses LLM context).
+
+   ⚠️ **HARD RULE for agents reading this guide:** do NOT run `totalreclaw setup` via your shell tool. The CLI prints the recovery phrase to stdout, which enters your LLM context and the chat transcript — **phrase-safety violation**. The ONLY agent-facilitated account-setup path is the `totalreclaw_pair` tool (see Step 4 above). If the chat user is on a one-shot CLI without a daemon, tell them verbatim: *"Account setup needs a long-lived Hermes process. Either run `hermes gateway run &` first (then I'll continue), OR run `totalreclaw setup` yourself in your own terminal (do NOT ask me to run it)."*
 
 Once your account is set up, all daily operations (`hermes chat -q`, `--resume`, etc.) work fine — the lifecycle constraint is account-setup-flow-specific.
 
@@ -304,17 +306,20 @@ If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after upgrading also run `p
 
 ## Targeting a specific RC
 
-`pip install --pre totalreclaw` always resolves to the latest published release candidate on PyPI. For QA harnesses pinned to a known build, or for re-installing a specific RC after a regression in a newer one, pin the version explicitly:
+`pip install --pre totalreclaw` always resolves to the latest published release candidate on PyPI. For QA harnesses pinned to a known build, or for re-installing a specific RC after a regression in a newer one, pin the version explicitly. **Current published versions (as of 2026-05-11):** latest stable on PyPI = `totalreclaw==2.3.2`, latest RC = `totalreclaw==2.3.6rc3`. Check `pip index versions totalreclaw` (or `pip install totalreclaw==` and read the error) before pinning to be sure.
 
 ```bash
+# Fresh install of latest stable (recommended default):
+"$HERMES_PYTHON" -m pip install 'totalreclaw==2.3.2'
+
 # Fresh install of a specific RC (no --pre needed when the version is explicit):
-"$HERMES_PYTHON" -m pip install 'totalreclaw==2.3.1rc24'
+"$HERMES_PYTHON" -m pip install 'totalreclaw==2.3.6rc3'
 
 # Re-pin (downgrade) over a newer RC that's already installed:
-"$HERMES_PYTHON" -m pip install --force-reinstall 'totalreclaw==2.3.1rc24'
+"$HERMES_PYTHON" -m pip install --force-reinstall 'totalreclaw==2.3.6rc3'
 ```
 
-`uv pip install 'totalreclaw==2.3.1rc24' --reinstall` is the equivalent under `uv`. Stick with the same version family across plugin and Python package — mismatched versions can leave the gateway loading old tool signatures.
+`uv pip install 'totalreclaw==2.3.6rc3' --reinstall` is the equivalent under `uv`. Stick with the same version family across plugin and Python package — mismatched versions can leave the gateway loading old tool signatures.
 
 ---
 
