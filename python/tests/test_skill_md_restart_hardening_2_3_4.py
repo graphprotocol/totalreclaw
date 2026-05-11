@@ -268,80 +268,60 @@ def test_user_guide_mirrors_unauthorized_fallback_prose():
 
 
 def test_user_guide_mirrors_install_ordering():
-    """The pip-then-manifest order must also be in the user guide so
-    a user copy-pasting from the manual section doesn't race the
-    reload. Drift between SKILL.md and the user guide is a known
-    failure mode.
+    """The pip-install must precede `hermes plugins install` in the
+    canonical procedure so a copy-paster doesn't race the reload. Drift
+    between SKILL.md and the user guide is a known failure mode.
 
-    The check is scoped to the Step 1b code block (the canonical
-    copy-paste target), NOT the agent-instructions overview list at
-    the top of the guide which simply describes what each command
-    does and is not a copy-paste source.
+    2.3.6rc4 agent-only rewrite collapsed the numbered "Step 1a / 1b /
+    1c" headings into a flat "Install procedure" section. Test now
+    searches the whole Install-procedure section rather than a specific
+    sub-step heading, preserving the ordering invariant.
     """
     body = _read(USER_GUIDE)
-    # Locate the Step 1b code block — that's the user-facing canonical
-    # copy-paste target; the agent-instructions overview list at the
-    # top of the guide just describes commands and is not the source
-    # of truth for ordering.
-    step_1b_marker = "#### Step 1b"
-    step_1b_idx = body.find(step_1b_marker)
-    assert step_1b_idx > 0, (
-        "hermes-setup.md must contain a 'Step 1b' subsection with the "
-        "canonical install commands. Search for '#### Step 1b' returned "
-        "no match — has the section heading been renamed?"
+    # Locate the Install procedure section bounded by the next H2.
+    proc_marker = "## Install procedure"
+    proc_idx = body.find(proc_marker)
+    assert proc_idx > 0, (
+        "hermes-setup.md must contain an 'Install procedure' section. "
+        "Search returned no match — has the section heading been renamed?"
     )
-    # Also bound the search at the next top-level step heading so we
-    # don't accidentally pick up the manual-CLI block lower in the doc.
-    step_1c_idx = body.find("#### Step 1c", step_1b_idx)
-    step_1b_block = (
-        body[step_1b_idx:step_1c_idx] if step_1c_idx > 0 else body[step_1b_idx:]
+    next_section_idx = body.find("\n## ", proc_idx + len(proc_marker))
+    proc_block = (
+        body[proc_idx:next_section_idx] if next_section_idx > 0 else body[proc_idx:]
     )
 
-    pip_idx = step_1b_block.find('"$HERMES_PYTHON" -m pip install --pre totalreclaw')
-    plugin_idx = step_1b_block.find("hermes plugins install p-diogo/totalreclaw-hermes")
+    pip_idx = proc_block.find('"$HERMES_PYTHON" -m pip install')
+    plugin_idx = proc_block.find("hermes plugins install p-diogo/totalreclaw-hermes")
     assert pip_idx > 0 and plugin_idx > 0, (
-        "hermes-setup.md Step 1b must contain both the pip install and "
-        "the `hermes plugins install` canonical lines."
+        "hermes-setup.md Install procedure must contain both the pip "
+        "install and the `hermes plugins install` canonical lines."
     )
     assert pip_idx < plugin_idx, (
-        "hermes-setup.md Step 1b ordering regressed: pip install must "
+        "hermes-setup.md install ordering regressed: pip install must "
         "precede `hermes plugins install`. See the 2.3.4-rc.1 install-"
         "race finding from plugin-side QA."
     )
 
-    # Also pin ordering in the 'Fully manual (CLI only)' section — that
-    # block is the other copy-paste target and the original 2.3.3 prose
-    # had it in plugin-then-pip order. The 2.3.4-rc.1 fix re-ordered it.
-    manual_marker = "## Fully manual (CLI only"
-    manual_idx = body.find(manual_marker)
-    assert manual_idx > 0, (
-        "hermes-setup.md must retain the 'Fully manual (CLI only)' "
-        "section — that is the second copy-paste target users hit."
-    )
-    # Bound the search so we don't run off into Upgrading / Targeting.
-    next_section_idx = body.find("\n---\n", manual_idx)
-    manual_block = (
-        body[manual_idx:next_section_idx] if next_section_idx > 0 else body[manual_idx:]
-    )
-    manual_pip = manual_block.find("pip install --pre totalreclaw")
-    manual_plugin = manual_block.find("hermes plugins install p-diogo/totalreclaw-hermes")
-    assert manual_pip > 0 and manual_plugin > 0
-    assert manual_pip < manual_plugin, (
-        "'Fully manual (CLI only)' section must show pip install BEFORE "
-        "`hermes plugins install` — same install-race rationale as "
-        "Step 1b."
-    )
+    # 2.3.6rc4 agent-only rewrite removed the user-facing 'Fully manual
+    # (CLI only)' section — that content is targeted at humans, not
+    # agents, and was moved out of scope for this doc. The agent-only
+    # rewrite collapses the install flow into the single 'Install
+    # procedure' section asserted above. The ordering invariant is
+    # preserved there.
 
 
 def test_user_guide_calls_out_order_change_with_version_marker():
-    """The order change is part of 2.3.4-rc.1 hardening — the marker
-    helps a user reading the guide trace why the order is what it is
-    if they remember a different order from earlier RCs."""
+    """2.3.6rc4 agent-only rewrite: removed historical version-anchor
+    markers (the prior `2.3.4-rc.1` etc. trail) from the guide body
+    since they were noise for the agent audience. The install ordering
+    invariant itself is enforced by `test_user_guide_mirrors_install_ordering`;
+    this test now only asserts the structural location is well-defined
+    so a future rewrite that re-introduces drift still trips at least
+    one ordering test."""
     body = _read(USER_GUIDE)
-    assert "2.3.4-rc.1" in body, (
-        "hermes-setup.md must mention '2.3.4-rc.1' as the version "
-        "anchor for the install-order change so a user with stale "
-        "memory of pre-rc.X order can trace why it changed."
+    assert "## Install procedure" in body, (
+        "hermes-setup.md must have an explicit '## Install procedure' "
+        "section heading so ordering tests can scope correctly."
     )
 
 

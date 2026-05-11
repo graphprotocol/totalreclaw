@@ -125,17 +125,23 @@ def test_guide_compatibility_section_points_users_to_issue_tracker():
 
 
 def test_guide_post_install_steps_renumbered():
-    """Inserting the disable-memory step at position 3 shifts the rest
-    of the agent-instructions block. Verify the renumbering landed
-    consistently — Step 4 is credentials, Step 5 is pair, Step 6 is
-    verify-and-confirm."""
+    """2.3.6rc4 agent-only rewrite collapsed the numbered "Step N" headings
+    into procedure subsections. The structural invariants the prior shape
+    enforced (credentials-check exists; pair flow exists; verify-and-confirm
+    exists) are preserved by content keywords rather than heading shape.
+    """
     body = _read_guide()
-    assert "### Step 4 — Check for existing credentials" in body, (
-        "Step 4 must be the credentials check (was Step 3 in rc.25)."
+    # Credentials check still present (in the Account setup section).
+    assert "credentials.json" in body and "already set up" in body, (
+        "Guide must include the credentials-check + already-set-up early-exit."
     )
-    assert "### Step 5 — Pair" in body, (
-        "Step 5 must be the pair flow (was Step 4 in rc.25)."
+    # Pair flow still present.
+    assert "totalreclaw_pair" in body and "Enter PIN" in body, (
+        "Guide must include the totalreclaw_pair call + the user-facing "
+        "Enter-PIN instruction."
     )
-    assert "### Step 6 — Verify and confirm" in body, (
-        "Step 6 must be the verify-and-confirm flow (was Step 5 in rc.25)."
+    # Verify-and-confirm step.
+    assert "Reply `done`" in body and "✓ TotalReclaw set up." in body, (
+        "Guide must include the verify-and-confirm flow: user replies "
+        "`done` → re-check credentials → confirm with the sealed marker."
     )
