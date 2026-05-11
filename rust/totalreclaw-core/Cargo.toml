@@ -71,6 +71,9 @@ uuid = { version = "1", features = ["v7"] }
 # Error handling
 thiserror = "2"
 
+# Secret detection regex
+regex = "1"
+
 # ERC-4337 ABI encoding (feature-gated: managed service only)
 alloy-primitives = { version = "1", optional = true }
 alloy-sol-types = { version = "1", optional = true }
