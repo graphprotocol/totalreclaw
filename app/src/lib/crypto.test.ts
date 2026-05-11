@@ -1,0 +1,111 @@
+import { describe, it, expect } from "vitest";
+import { deriveSessionKeys, encryptBlob, decryptBlob, isMnemonicValid } from "./crypto";
+
+// BIP-39 test mnemonic (all-zeros entropy, BIP-39 spec vector)
+const TEST_MNEMONIC =
+  "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+// Golden vectors for TEST_MNEMONIC (canonical derivation):
+//   seed  = BIP-39 PBKDF2 512-bit output
+//   salt  = seed[0:32]
+//   keys  = HKDF-SHA256(seed, salt, <info>, 32)
+const GOLDEN_AUTH_KEY_HEX =
+  "5580b82ac0a8763328600dd335b139d0915de9a591970207d6820306a2a36ae7";
+const GOLDEN_ENC_KEY_HEX =
+  "a58fdc56e1d768461d95cd46b49e03727b2eb342ac558b9f3ebf1255b871f703";
+
+// Fixture ciphertext: encryptBlob('{"test":"golden"}', GOLDEN_ENC_KEY, nonce=zeros[24])
+// wire format: nonce[24] || tag[16] || ciphertext
+const FIXTURE_CIPHERTEXT_HEX =
+  "00000000000000000000000000000000000000000000000040445878d8a28677a8bc521153f0e771c33dad4a6764bf46768a56e76b8f670968";
+const FIXTURE_PLAINTEXT = '{"test":"golden"}';
+
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2)
+    out[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  return out;
+}
+
+describe("deriveSessionKeys", () => {
+  it("produces canonical authKey for known mnemonic (golden vector)", async () => {
+    const keys = await deriveSessionKeys(TEST_MNEMONIC);
+    expect(keys.authKeyHex).toBe(GOLDEN_AUTH_KEY_HEX);
+  });
+
+  it("produces canonical encryptionKey for known mnemonic (golden vector)", async () => {
+    const keys = await deriveSessionKeys(TEST_MNEMONIC);
+    const encHex = Array.from(keys.encryptionKey)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    expect(encHex).toBe(GOLDEN_ENC_KEY_HEX);
+  });
+
+  it("authKey and encryptionKey are distinct", async () => {
+    const keys = await deriveSessionKeys(TEST_MNEMONIC);
+    expect(keys.authKeyHex).not.toBe(GOLDEN_ENC_KEY_HEX);
+  });
+
+  it("is deterministic", async () => {
+    const k1 = await deriveSessionKeys(TEST_MNEMONIC);
+    const k2 = await deriveSessionKeys(TEST_MNEMONIC);
+    expect(k1.authKeyHex).toBe(k2.authKeyHex);
+    expect(
+      Array.from(k1.encryptionKey).join(","),
+    ).toBe(Array.from(k2.encryptionKey).join(","));
+  });
+
+  it("produces different keys for different mnemonics", async () => {
+    const k1 = await deriveSessionKeys(TEST_MNEMONIC);
+    const k2 = await deriveSessionKeys(
+      "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong",
+    );
+    expect(k1.authKeyHex).not.toBe(
+      Array.from(k2.authKey)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join(""),
+    );
+  });
+
+  it("rejects invalid mnemonic", async () => {
+    await expect(deriveSessionKeys("not valid mnemonic")).rejects.toThrow(
+      "Invalid 12-word recovery phrase",
+    );
+  });
+});
+
+describe("encryptBlob / decryptBlob round-trip", () => {
+  it("encrypt then decrypt returns original plaintext", async () => {
+    const { encryptionKey } = await deriveSessionKeys(TEST_MNEMONIC);
+    const original = JSON.stringify({ type: "fact", content: "hello world" });
+    const hex = encryptBlob(original, encryptionKey);
+    const decrypted = decryptBlob(hex, encryptionKey);
+    expect(decrypted).toBe(original);
+  });
+
+  it("decrypts known fixture ciphertext against canonical enc key", () => {
+    const encKey = hexToBytes(GOLDEN_ENC_KEY_HEX);
+    const decrypted = decryptBlob(FIXTURE_CIPHERTEXT_HEX, encKey);
+    expect(decrypted).toBe(FIXTURE_PLAINTEXT);
+  });
+
+  it("decryptBlob rejects tampered ciphertext", async () => {
+    const { encryptionKey } = await deriveSessionKeys(TEST_MNEMONIC);
+    const hex = encryptBlob("secret", encryptionKey);
+    // Flip last byte
+    const tampered =
+      hex.slice(0, -2) +
+      ((parseInt(hex.slice(-2), 16) ^ 0xff).toString(16).padStart(2, "0"));
+    expect(() => decryptBlob(tampered, encryptionKey)).toThrow();
+  });
+});
+
+describe("isMnemonicValid", () => {
+  it("accepts valid 12-word BIP-39 mnemonic", () => {
+    expect(isMnemonicValid(TEST_MNEMONIC)).toBe(true);
+  });
+
+  it("rejects invalid phrase", () => {
+    expect(isMnemonicValid("not a valid mnemonic phrase")).toBe(false);
+  });
+});

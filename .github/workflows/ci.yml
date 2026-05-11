@@ -65,6 +65,17 @@ jobs:
       - name: Install and test
         run: cd client && rm -f package-lock.json && npm install --legacy-peer-deps && npm test
 
+  app-tests:
+    name: Web App Tests (Vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install and test
+        run: cd app && npm ci && npm test
+
   plugin-build:
     name: Plugin Build Check
     runs-on: ubuntu-latest
