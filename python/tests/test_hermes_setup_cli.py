@@ -58,7 +58,7 @@ class TestRestoreFlow:
         stdin_text = f"restore\n{VALID_MNEMONIC}\n"
         io, stdout, stderr = _make_io(stdin_text)
 
-        rc = hermes_cli.run_setup(credentials_path=creds, io=io)
+        rc = hermes_cli.run_setup(credentials_path=creds, io=io, allow_non_tty=True)
 
         assert rc == 0, stderr.getvalue()
         assert creds.exists()
@@ -76,7 +76,7 @@ class TestRestoreFlow:
         stdin_text = f"restore\n{words_per_line}\n"
         io, stdout, _stderr = _make_io(stdin_text)
 
-        rc = hermes_cli.run_setup(credentials_path=creds, io=io)
+        rc = hermes_cli.run_setup(credentials_path=creds, io=io, allow_non_tty=True)
 
         assert rc == 0
         saved = json.loads(creds.read_text())
@@ -89,7 +89,7 @@ class TestRestoreFlow:
         stdin_text = f"restore\n{short}\n"
         io, _stdout, stderr = _make_io(stdin_text)
 
-        rc = hermes_cli.run_setup(credentials_path=creds, io=io)
+        rc = hermes_cli.run_setup(credentials_path=creds, io=io, allow_non_tty=True)
 
         assert rc != 0
         assert not creds.exists()
@@ -107,7 +107,7 @@ class TestRestoreFlow:
         stdin_text = f"restore\n{bad.strip()}\n"
         io, _stdout, stderr = _make_io(stdin_text)
 
-        rc = hermes_cli.run_setup(credentials_path=creds, io=io)
+        rc = hermes_cli.run_setup(credentials_path=creds, io=io, allow_non_tty=True)
 
         assert rc != 0
         assert not creds.exists()
@@ -119,7 +119,7 @@ class TestRestoreFlow:
         stdin_text = f"restore\n{VALID_MNEMONIC}\n"
         io, _stdout, stderr = _make_io(stdin_text, is_tty=False)
 
-        rc = hermes_cli.run_setup(credentials_path=creds, io=io)
+        rc = hermes_cli.run_setup(credentials_path=creds, io=io, allow_non_tty=True)
         assert rc == 0
         assert creds.exists()
         # Warning about visible input.
@@ -142,7 +142,7 @@ class TestGenerateFlow:
         io, stdout, stderr = _make_io(stdin_text)
 
         with patch.object(hermes_cli, "_generate_mnemonic", return_value=fake_mnem):
-            rc = hermes_cli.run_setup(credentials_path=creds, io=io)
+            rc = hermes_cli.run_setup(credentials_path=creds, io=io, allow_non_tty=True)
 
         assert rc == 0, stderr.getvalue()
         assert creds.exists()
@@ -178,7 +178,7 @@ class TestGenerateFlow:
         io, stdout, stderr = _make_io(stdin_text)
 
         with patch.object(hermes_cli, "_generate_mnemonic", return_value=fake_mnem):
-            rc = hermes_cli.run_setup(credentials_path=creds, io=io, emit_phrase=True)
+            rc = hermes_cli.run_setup(credentials_path=creds, io=io, emit_phrase=True, allow_non_tty=True)
 
         assert rc == 0, stderr.getvalue()
         assert creds.exists()
@@ -209,7 +209,7 @@ class TestGenerateFlow:
         io, stdout, stderr = _make_io(stdin_text)
 
         with patch.object(hermes_cli, "_generate_mnemonic", return_value=fake_mnem):
-            rc = hermes_cli.run_setup(credentials_path=creds, io=io, emit_phrase=True)
+            rc = hermes_cli.run_setup(credentials_path=creds, io=io, emit_phrase=True, allow_non_tty=True)
 
         assert rc != 0
         assert not creds.exists()
@@ -227,7 +227,7 @@ class TestGenerateFlow:
         io, _stdout, _stderr = _make_io(stdin_text, is_tty=False)
 
         with patch.object(hermes_cli, "_generate_mnemonic", return_value=fake_mnem):
-            rc = hermes_cli.run_setup(credentials_path=creds, io=io)
+            rc = hermes_cli.run_setup(credentials_path=creds, io=io, allow_non_tty=True)
 
         assert rc == 0
         assert creds.exists()
@@ -251,7 +251,7 @@ class TestOverwriteConfirmation:
         stdin_text = "n\n"
         io, stdout, _stderr = _make_io(stdin_text)
 
-        rc = hermes_cli.run_setup(credentials_path=creds, io=io)
+        rc = hermes_cli.run_setup(credentials_path=creds, io=io, allow_non_tty=True)
 
         assert rc == 0
         # File is untouched.
@@ -269,7 +269,7 @@ class TestOverwriteConfirmation:
         stdin_text = f"y\nrestore\n{VALID_MNEMONIC}\n"
         io, _stdout, stderr = _make_io(stdin_text)
 
-        rc = hermes_cli.run_setup(credentials_path=creds, io=io)
+        rc = hermes_cli.run_setup(credentials_path=creds, io=io, allow_non_tty=True)
 
         assert rc == 0, stderr.getvalue()
         saved = json.loads(creds.read_text())
@@ -294,7 +294,10 @@ class TestMainEntry:
         with patch.object(hermes_cli, "run_setup", return_value=0) as m:
             rc = hermes_cli.main(["setup", "--credentials-path", str(creds)])
         assert rc == 0
-        m.assert_called_once_with(credentials_path=creds, emit_phrase=False)
+        # 2.3.6rc4 P0: allow_non_tty=False is now part of the default call.
+        m.assert_called_once_with(
+            credentials_path=creds, emit_phrase=False, allow_non_tty=False
+        )
 
     def test_main_setup_emit_phrase_forwarded(self, tmp_path: Path) -> None:
         """`hermes setup --emit-phrase` forwards the flag to run_setup."""
@@ -302,4 +305,7 @@ class TestMainEntry:
         with patch.object(hermes_cli, "run_setup", return_value=0) as m:
             rc = hermes_cli.main(["setup", "--credentials-path", str(creds), "--emit-phrase"])
         assert rc == 0
-        m.assert_called_once_with(credentials_path=creds, emit_phrase=True)
+        # 2.3.6rc4 P0: allow_non_tty=False default carried alongside emit_phrase.
+        m.assert_called_once_with(
+            credentials_path=creds, emit_phrase=True, allow_non_tty=False
+        )

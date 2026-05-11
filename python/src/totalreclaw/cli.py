@@ -93,6 +93,7 @@ def _info(text: str) -> str:
 def run_setup(
     credentials_path: Optional[Path] = None,
     emit_phrase: bool = False,
+    allow_non_tty: bool = False,
 ) -> int:
     """Run the interactive setup wizard.
 
@@ -101,13 +102,23 @@ def run_setup(
     ``_try_eager_resolve_scope_address`` in ``hermes/cli.py``). This
     keeps behaviour identical across ``hermes setup`` and
     ``totalreclaw setup``.
+
+    2.3.3 P0: the ``allow_non_tty`` flag propagates through to the
+    shared wizard's agent-runtime gate. Default False — refuses to run
+    from non-TTY stdin or known agent-runtime env. See the docstring
+    in ``totalreclaw.hermes.cli._is_agent_runtime`` for the full
+    phrase-safety rationale.
     """
     # Delay import so `totalreclaw doctor` on a setup-less box doesn't pay
     # for eth_account's import cost.
     from totalreclaw.hermes.cli import run_setup as _hermes_run_setup
 
     path = credentials_path if credentials_path is not None else CANONICAL_CREDENTIALS_PATH
-    return _hermes_run_setup(credentials_path=path, emit_phrase=emit_phrase)
+    return _hermes_run_setup(
+        credentials_path=path,
+        emit_phrase=emit_phrase,
+        allow_non_tty=allow_non_tty,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +402,18 @@ def main(argv: Optional[list[str]] = None) -> int:
             "(stderr). Default: silent-save."
         ),
     )
+    sp_setup.add_argument(
+        "--allow-non-tty",
+        action="store_true",
+        default=False,
+        help=(
+            "2.3.3 — override the agent-runtime safety gate. Required for piped or "
+            "scripted invocation from a private user terminal (no agent involved). "
+            "Default: refuse to run when stdin is non-TTY OR when agent-runtime env "
+            "markers are present. NEVER use from an agent shell — use the "
+            "totalreclaw_pair tool instead."
+        ),
+    )
 
     sp_doctor = sub.add_parser(
         "doctor",
@@ -419,6 +442,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return run_setup(
             credentials_path=args.credentials_path,
             emit_phrase=getattr(args, "emit_phrase", False),
+            allow_non_tty=getattr(args, "allow_non_tty", False),
         )
     if args.command == "doctor":
         return run_doctor(

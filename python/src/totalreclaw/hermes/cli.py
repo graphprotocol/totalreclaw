@@ -434,10 +434,100 @@ def _run_generate(io: _IO, credentials_path: Path, emit_phrase: bool = False) ->
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Agent-runtime detection gate (2.3.3 — P0 phrase-safety hardening)
+# ---------------------------------------------------------------------------
+
+_AGENT_RUNTIME_ENV_MARKERS = (
+    # Hermes Agent framework markers
+    "HERMES_AGENT_RUN",
+    "HERMES_GATEWAY_RUN",
+    "HERMES_GATEWAY_ALLOW_ALL_USERS",
+    # OpenClaw markers (cross-runtime; we ship as plugin there too)
+    "OPENCLAW_AGENT",
+    "OPENCLAW_AGENT_RUN",
+    # MCP transport (Claude Desktop, Cursor, Windsurf consume our MCP server)
+    "MCP_TRANSPORT",
+    # Explicit opt-in marker callers can set to assert "agent context, never run setup"
+    "TOTALRECLAW_AGENT_CONTEXT",
+)
+
+
+def _is_agent_runtime() -> bool:
+    """Best-effort detect whether ``totalreclaw setup`` is being invoked
+    by an AI-agent's shell-exec tool rather than by a user in a real
+    terminal.
+
+    Why this gate exists (2.3.3, P0 phrase-safety):
+
+    On 2026-05-11 a Hermes chat agent invoked ``totalreclaw setup`` via
+    its shell tool. The default wizard does silent-save (does NOT print
+    the recovery phrase since 2.3.1rc2), so the phrase did not directly
+    cross LLM context in that specific run — but the wallet was created
+    via the local CLI wizard rather than via the architecturally-correct
+    browser-pair flow (``totalreclaw_pair`` tool). That bypass means:
+
+    1. The phrase sits in plaintext at ``~/.totalreclaw/credentials.json``
+       accessible to any subsequent agent shell command. A future agent
+       turn that runs ``cat ~/.totalreclaw/credentials.json`` immediately
+       leaks the phrase into LLM context.
+    2. The user never SEES the phrase in their browser (the browser-pair
+       flow's user-confirmed transcription step is skipped), so backup
+       depends on the agent / user remembering to ``cat`` the file later.
+    3. The phrase-safety architectural invariant — "recovery phrase
+       generated browser-side, never reaches the gateway or the agent in
+       plaintext" — is silently violated even if no single tool result
+       carries the phrase in this run.
+
+    Detection:
+    1. ``sys.stdin.isatty() == False`` — piped / no controlling terminal.
+       Standard signal that no user is typing into the wizard. Catches the
+       observed failure mode ``echo "generate" | totalreclaw setup``.
+    2. Specific env markers set by agent runtimes when they spawn
+       subprocesses. Set listed in ``_AGENT_RUNTIME_ENV_MARKERS``. Tested
+       env vars come from real Hermes / OpenClaw / MCP-host deployments.
+
+    Override:
+    Legitimate user automation (scripted installs in a private terminal,
+    CI bootstrap, etc.) can bypass this gate via the
+    ``--allow-non-tty`` CLI flag — see ``run_setup(allow_non_tty=...)``.
+    Documented loudly; the flag's help text says NEVER from agent.
+
+    Returns
+    -------
+    bool
+        True iff at least one agent-runtime signal fires.
+    """
+    if not sys.stdin.isatty():
+        return True
+    for marker in _AGENT_RUNTIME_ENV_MARKERS:
+        if os.environ.get(marker):
+            return True
+    return False
+
+
+_AGENT_GATE_REFUSAL = """
+❌ totalreclaw setup detected non-TTY stdin or an agent-runtime environment.
+
+You are an AI agent — do not run this CLI. The wizard writes the
+recovery phrase to a file that your subsequent shell tool calls can
+read into your LLM context, defeating the phrase-safety guarantee.
+
+Use the `totalreclaw_pair` tool instead. It returns {url, pin, expires_at_ms}.
+Surface the URL and PIN to the user verbatim — do not invent or modify
+the values. The user opens the URL in their browser, enters the PIN,
+and the browser generates the recovery phrase locally. The phrase
+never crosses your context.
+
+Procedure: https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md
+"""
+
+
 def run_setup(
     credentials_path: Optional[Path] = None,
     io: Optional[_IO] = None,
     emit_phrase: bool = False,
+    allow_non_tty: bool = False,
 ) -> int:
     """Run the interactive setup wizard. Returns exit code.
 
@@ -452,7 +542,21 @@ def run_setup(
         the phrase is displayed on stderr (rc.1 behaviour). Default
         False in 2.3.1rc2 — the phrase is never shown and the user is
         pointed at credentials.json instead.
+    allow_non_tty : bool
+        2.3.3 P0 hardening. When False (default), refuses to run if
+        ``_is_agent_runtime()`` fires (non-TTY OR agent env markers).
+        Pass True for legitimate user-side automation (private terminals,
+        CI bootstrap). NEVER pass True from agent shells — defeats the
+        phrase-safety guarantee. See ``_is_agent_runtime`` docstring for
+        the full rationale.
     """
+    # 2.3.3 — agent-runtime gate. Refuse to run if invoked from a
+    # non-TTY stdin or any known agent-runtime environment, unless the
+    # caller has opted out explicitly via allow_non_tty.
+    if not allow_non_tty and _is_agent_runtime():
+        sys.stderr.write(_AGENT_GATE_REFUSAL)
+        return 3
+
     path = credentials_path if credentials_path is not None else CANONICAL_CREDENTIALS_PATH
     wizard_io = io if io is not None else _IO()
 
@@ -519,6 +623,19 @@ def main(argv: Optional[list[str]] = None) -> int:
             "or shared screens."
         ),
     )
+    sp_setup.add_argument(
+        "--allow-non-tty",
+        action="store_true",
+        default=False,
+        help=(
+            "2.3.3 — override the agent-runtime safety gate. Required for piped or "
+            "scripted invocation from a private user terminal (no agent involved). "
+            "Default: refuse to run when stdin is non-TTY OR when agent-runtime env "
+            "markers are present, since wizard output flows back into the agent's LLM "
+            "context. NEVER use from an agent shell — use the totalreclaw_pair tool "
+            "instead. See the guide for details."
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -526,6 +643,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return run_setup(
             credentials_path=args.credentials_path,
             emit_phrase=getattr(args, "emit_phrase", False),
+            allow_non_tty=getattr(args, "allow_non_tty", False),
         )
 
     parser.print_help()
