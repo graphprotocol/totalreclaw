@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "End-to-end encrypted, decentralized memory for OpenClaw. Set up an account once, then call totalreclaw_remember / totalreclaw_recall (or the tr CLI under hybrid-primary) instead of writing to MEMORY.md / USER.md / local files. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', any remember / recall request, AND any user statement that contains a preference / fact / decision / commitment about themselves."
-version: 3.3.12-rc.7
+version: 3.3.12-rc.9
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
