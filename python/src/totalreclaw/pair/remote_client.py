@@ -47,9 +47,19 @@ from .crypto import decrypt_pairing_payload, generate_gateway_keypair, GatewayKe
 logger = logging.getLogger(__name__)
 
 
-# Default relay endpoint. Configurable via TOTALRECLAW_PAIR_RELAY_URL so
-# self-hosters can point at their own relay.
-DEFAULT_RELAY_URL = "wss://api-staging.totalreclaw.xyz"
+# Default relay endpoint. Production by default — both stable AND RC
+# Python clients install + pair against ``api.totalreclaw.xyz`` unless the
+# user opts into staging via env. This mirrors the documented contract in
+# ``docs/guides/hermes-setup.md`` (default = prod; staging = QA-only opt-in
+# via ``TOTALRECLAW_SERVER_URL`` / ``TOTALRECLAW_RELAY_URL`` /
+# ``TOTALRECLAW_PAIR_RELAY_URL``).
+#
+# History: prior to 2.3.6rc5 this constant was hardcoded to the staging
+# relay, which silently routed real-user pair sessions through staging
+# even when no env vars were set. Auto-QA 2026-05-11 (F1 finding) flagged
+# the drift between the guide's documented default and the package
+# behaviour. 2.3.6rc5 aligns them.
+DEFAULT_RELAY_URL = "wss://api.totalreclaw.xyz"
 
 
 @dataclass
@@ -75,11 +85,57 @@ def _default_client_id() -> str:
     return f"gw-{secrets.token_hex(8)}"
 
 
+def _http_to_ws(url: str) -> str:
+    """Convert ``https://`` → ``wss://`` and ``http://`` → ``ws://``.
+
+    The canonical server-URL env vars (``TOTALRECLAW_SERVER_URL``,
+    ``TOTALRECLAW_RELAY_URL``) are documented in ``hermes-setup.md`` with
+    ``https://`` prefixes (matching the relay's HTTP entrypoint), but
+    ``open_remote_pair_session`` needs a WebSocket-shape URL to dial.
+    Strip + replace the scheme so users don't have to remember which
+    env var takes which prefix.
+    """
+    if url.startswith("https://"):
+        return "wss://" + url[len("https://") :]
+    if url.startswith("http://"):
+        return "ws://" + url[len("http://") :]
+    return url  # already wss:// / ws:// or unprefixed
+
+
 def _resolve_relay_url() -> str:
-    """Read ``TOTALRECLAW_PAIR_RELAY_URL`` with a fallback to the staging default."""
+    """Resolve the pair relay URL using a 4-tier env cascade.
+
+    Cascade (highest priority first):
+
+    1. ``TOTALRECLAW_PAIR_RELAY_URL`` — pair-specific override. Used by
+       integration tests + self-hosters pointing the pair flow at a
+       relay distinct from the main TR server.
+    2. ``TOTALRECLAW_SERVER_URL`` — the canonical server URL env the
+       rest of the Python client reads (``relay.py``, ``onboarding.py``,
+       ``hermes/hooks.py``, ``hermes/pair_tool.py``). Honoured here so
+       pair behaviour matches the rest of the client. Auto-converted
+       from ``https://``/``http://`` to ``wss://``/``ws://``.
+    3. ``TOTALRECLAW_RELAY_URL`` — alias documented in
+       ``hermes-setup.md`` for clarity ("relay" vs "server"). Some
+       managed Hermes deployments set this instead of (or in addition
+       to) ``TOTALRECLAW_SERVER_URL``. Auto-scheme-converted.
+    4. ``DEFAULT_RELAY_URL`` — production (``wss://api.totalreclaw.xyz``).
+
+    Why the cascade exists (2.3.6rc5): the F1 finding in auto-QA on
+    2026-05-11 was that this function silently fell through to staging
+    even when the user / guide expected prod. The new cascade honours
+    every relay-URL env the rest of the client honours, in priority
+    order, before falling back to the prod default.
+    """
     v = os.environ.get("TOTALRECLAW_PAIR_RELAY_URL")
     if v:
         return v.rstrip("/")
+    v = os.environ.get("TOTALRECLAW_SERVER_URL")
+    if v:
+        return _http_to_ws(v.rstrip("/"))
+    v = os.environ.get("TOTALRECLAW_RELAY_URL")
+    if v:
+        return _http_to_ws(v.rstrip("/"))
     return DEFAULT_RELAY_URL.rstrip("/")
 
 
