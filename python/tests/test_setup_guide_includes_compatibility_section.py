@@ -1,25 +1,33 @@
-"""rc.26: ``docs/guides/hermes-setup.md`` must include the disable-memory
-agent-imperative step + a Compatibility section.
+"""2.3.6rc5: ``docs/guides/hermes-setup.md`` Compatibility section
+must honestly document Hermes's non-disable-able built-in memory.
 
-Context — rc.24 NO-GO finding (issue #167)
--------------------------------------------
+Context — rc5 finding (2026-05-12 Pop-OS QA)
+---------------------------------------------
 
-The public guide at ``docs/guides/hermes-setup.md`` is the canonical
-URL the user pastes into Hermes chat. The agent fetches it and follows
-its agent-instructions block. rc.26 ships path A (auto-disable
-built-in memory) and the doc MUST mirror SKILL.md so the agent does
-the same thing whether it loaded the local skill or fetched the URL.
+Pre-rc5: the guide claimed step 3 (``hermes tools disable memory``)
+"disables Hermes built-in memory". Verified false: that command only
+blocks the agent-callable ``memory`` tool. Hermes the gateway STILL
+writes ``~/.hermes/memories/USER.md`` autonomously. Upstream Hermes
+explicitly says built-in is "always active" per ``hermes memory --help``.
 
-What this test enforces
------------------------
+rc5 drops the false promise:
+- ``hermes tools disable memory`` is no longer in the install procedure
+  (kept as an optional aside in the Compatibility section since it
+  still has value blocking the agent-callable tool, but it's NOT
+  framed as a disable for the gateway-side writes).
+- The Compatibility section honestly states USER.md cannot be disabled.
+- A new ``## Recall behaviour`` section requires the agent to call
+  ``totalreclaw_recall`` for user-facing recall queries so the
+  canonical TotalReclaw read path is exercised even though USER.md is
+  also in context.
 
-The shipped ``hermes-setup.md`` MUST contain:
+What this test enforces (rc5 update)
+------------------------------------
 
-1. The ``hermes tools disable memory`` invocation in the agent-imperative
-   block (Step 3 in rc.26).
-2. The user-verbatim warning text mirroring SKILL.md.
-3. A ``## Compatibility with Hermes built-in memory`` section near the
-   bottom that documents dual-mode as unsupported.
+1. Compatibility section exists and honestly documents the non-disable.
+2. Recall-behaviour section exists and tells the agent to call
+   ``totalreclaw_recall`` for recall queries.
+3. Phrase-safety + tool reference still present (preserved invariants).
 """
 from __future__ import annotations
 
@@ -39,88 +47,99 @@ def _read_guide() -> str:
     return GUIDE_MD.read_text(encoding="utf-8")
 
 
-def test_guide_includes_disable_memory_agent_step():
-    """The agent-instructions block must include the disable-memory step."""
+def test_guide_does_not_falsely_claim_to_disable_built_in_memory():
+    """rc5 honesty: the guide must NOT claim that running
+    `hermes tools disable memory` actually disables Hermes built-in
+    memory writes. Upstream-verified false claim from rc.26.
+
+    The phrase "disable Hermes built-in memory" or "auto-disables"
+    must not appear as a claim that the gateway USER.md writes stop.
+    Mentions are allowed only in the Compatibility section's honest
+    framing (which acknowledges the gateway side cannot be disabled)."""
     body = _read_guide()
-    # Step heading + invocation (CRITICAL marker per the rc.26 plan).
-    assert "Disable Hermes built-in memory" in body, (
-        "hermes-setup.md must include a step heading 'Disable Hermes "
-        "built-in memory' in the agent-instructions block."
+    # The false-claim phrases from rc.26 must not appear.
+    assert "I've disabled Hermes' built-in `memory` tool so TotalReclaw is your primary memory" not in body, (
+        "rc5 dropped the false claim that `hermes tools disable memory` "
+        "makes TotalReclaw primary. Hermes built-in is non-disable-able "
+        "per upstream — the gateway writes USER.md regardless."
     )
-    assert "(CRITICAL)" in body, (
-        "Disable-memory step must be marked '(CRITICAL)' so the agent "
-        "treats it as non-optional during install."
-    )
-    assert "hermes tools disable memory" in body, (
-        "Agent-instructions block must invoke `hermes tools disable memory`."
+    assert "(CRITICAL)" not in body, (
+        "rc5 removed the (CRITICAL) marker on the disable-memory step "
+        "since that step was based on a false claim."
     )
 
 
-def test_guide_includes_user_verbatim_warning():
-    """Mirrors SKILL.md user-verbatim text."""
-    body = _read_guide()
-    assert "disabled Hermes' built-in `memory` tool" in body, (
-        "hermes-setup.md must mirror the SKILL.md user-verbatim warning."
-    )
-    assert "hermes tools enable memory" in body, (
-        "User-verbatim warning must include the re-enable command + "
-        "the NOT-recommended caveat."
-    )
-    assert "NOT recommended" in body, (
-        "Re-enable instruction must be explicitly NOT recommended while "
-        "TotalReclaw is installed."
-    )
-    assert "hermes memory reset" in body, (
-        "User-verbatim warning must include the optional `hermes memory "
-        "reset` pointer for wiping orphaned MEMORY.md / USER.md files."
-    )
-
-
-def test_guide_has_compatibility_section():
-    """The bottom-of-doc Compatibility section explains dual-mode."""
+def test_guide_includes_honest_compatibility_section():
+    """rc5: the Compatibility section exists and acknowledges the
+    upstream-verified reality that built-in memory cannot be disabled."""
     body = _read_guide()
     assert "## Compatibility with Hermes built-in memory" in body, (
         "hermes-setup.md must include a `## Compatibility with Hermes "
-        "built-in memory` section near the bottom — this is the durable "
-        "human-reader documentation of why dual-mode is unsupported."
+        "built-in memory` section explaining the dual-mode reality."
     )
-    # Compatibility content must explain the auto-disable + recommend
-    # against re-enabling.
-    assert "auto-disables" in body, (
-        "Compatibility section must state that the install flow "
-        "auto-disables Hermes built-in memory."
+    # Honest framing: built-in cannot be disabled.
+    assert "cannot be disabled" in body, (
+        "Compatibility section must honestly state that Hermes built-in "
+        "memory CANNOT be disabled (upstream design)."
     )
-    assert "DO NOT recommend re-enabling" in body, (
-        "Compatibility section must explicitly say DO NOT recommend "
-        "re-enabling while TotalReclaw is installed."
+    assert "always active" in body, (
+        "Compatibility section must reference the upstream Hermes "
+        "phrase 'always active' that documents the non-disable behaviour."
+    )
+    assert "USER.md" in body, (
+        "Compatibility section must name the actual file Hermes writes "
+        "to (~/.hermes/memories/USER.md) so users / readers can trace it."
     )
 
 
-def test_guide_compatibility_section_documents_switch_back_path():
-    """If the user wants to switch back to Hermes built-in memory,
-    the doc must show the canonical commands (enable + clear + uninstall)."""
+def test_guide_includes_canonical_cross_session_framing():
+    """rc5: the guide must clearly frame TotalReclaw as the canonical
+    cross-session store, with Hermes USER.md framed as a local
+    per-container context cache (not a memory store).
+    """
     body = _read_guide()
-    # Switch-back recipe — the canonical 3-step flow.
-    assert "totalreclaw forget --all" in body, (
-        "Compatibility section must document the optional "
-        "`totalreclaw forget --all` command for users switching back "
-        "to Hermes built-in memory."
+    assert "canonical cross-session store" in body, (
+        "Compatibility section must label TotalReclaw as the canonical "
+        "cross-session store so the dual-mode reality has a clear "
+        "value-prop anchor."
     )
-    assert "pip uninstall totalreclaw" in body, (
-        "Compatibility section must document the optional "
-        "`pip uninstall totalreclaw` command for users switching back."
+    # USER.md is framed as a CACHE / context layer, not a memory store.
+    assert "context cache" in body or "context layer" in body, (
+        "Compatibility section must frame USER.md as a local per-"
+        "container context cache, not a memory store."
     )
 
 
-def test_guide_compatibility_section_points_users_to_issue_tracker():
-    """Users who want dual-mode must be pointed at GitHub issues so we
-    can scope demand without committing to support upfront."""
+def test_guide_requires_totalreclaw_recall_for_recall_queries():
+    """rc5: a new ``## Recall behaviour`` section requires the agent to
+    call ``totalreclaw_recall`` for user-facing recall queries so the
+    canonical read path is exercised even when USER.md has the answer
+    in context."""
     body = _read_guide()
-    # rc.26 plan asked for a link to the GitHub discussion / issue
-    # tracker; we use the issues page.
+    assert "## Recall behaviour" in body, (
+        "hermes-setup.md must include a `## Recall behaviour` section "
+        "telling the agent how to handle user recall queries."
+    )
+    assert "totalreclaw_recall" in body, (
+        "Recall-behaviour section must explicitly direct the agent to "
+        "call the `totalreclaw_recall` tool."
+    )
+
+
+def test_guide_points_users_to_issue_tracker_for_dual_mode_feedback():
+    """rc5: users who want fully-disable-able built-in memory must be
+    pointed at Hermes upstream (since that's where the fix would land)
+    AND our own tracker for scope-of-demand signal."""
+    body = _read_guide()
+    # rc5 points at BOTH the upstream Hermes repo (where the actual fix
+    # would have to land) AND our own tracker.
+    assert "github.com/NousResearch/hermes-agent/issues" in body or "NousResearch/hermes-agent" in body, (
+        "Compatibility section must link to Hermes upstream issue "
+        "tracker since the fix has to land there, not in totalreclaw."
+    )
     assert "github.com/p-diogo/totalreclaw/issues" in body, (
-        "Compatibility section must link to the GitHub issue tracker so "
-        "users wanting dual-mode can flag demand."
+        "Compatibility section must also link to our own tracker so we "
+        "can scope demand independently."
     )
 
 
