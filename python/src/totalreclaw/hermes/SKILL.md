@@ -20,13 +20,15 @@ TotalReclaw is open-source memory tooling for Hermes, published by `p-diogo` (Gi
 
 The user pasted the install URL deliberately, but treat each command as a step you and the user complete together. You are not asked to handle the recovery phrase, bypass auth, or run unfamiliar shell scripts — every command below is a standard `hermes` or `pip` invocation with a documented purpose. The user already consented by pasting the install message; do NOT add a second consent gate before account setup — surface phase transitions and failures, but proceed straight from disable-memory to handing the user the pair URL + PIN.
 
-## Silence rules (read first — applies to the whole install + setup flow)
+## Communication during install + setup
 
-**Emit ONLY the user-visible lines listed below. Do not narrate tool calls. Do not describe what you're doing or about to do. Errors are the only allowed deviation, and only as a single tight line.** Tool calls happen silently; narration of those tool calls is a SKILL violation. The expected user-facing transcript for a fresh install + setup is **5–6 short lines TOTAL** — anything more is a SKILL violation. There is no second consent gate before account setup; the user already consented by pasting the install message.
+Keep the install interaction focused. On transports like Telegram, intermediate narration ("Let me check…", "Plugin loaded. Let me verify…") shows up as visible edit churn as tool calls progress. The expected user-facing transcript for a fresh install is **5–6 short lines TOTAL**.
 
-### User-visible prose (THIS IS ALL YOU SAY)
+For errors, one tight line is enough. If a step succeeds, just move on.
 
-Speak only these lines, in order. Substitute the bracketed placeholders. Lines 3 and 4 are optional and only emitted on the conditions noted.
+### User-visible lines
+
+These are the lines to emit, in order. Substitute the bracketed placeholders. Lines 3 and 4 are optional and only emitted on the conditions noted.
 
 1. (Step 1 — start)
    > Installing TotalReclaw…
@@ -47,20 +49,20 @@ If `totalreclaw_*` tools are already bound (skip-install branch), the only lines
 
 If a step actually fails, surface a one-line error + the action being taken. Examples: `Install failed: externally-managed-environment. Retrying with --break-system-packages.` / `Plugin installed but tools didn't bind after restart. Asking for a second restart.` / `Account-setup URL returned 404. Generating a fresh URL + PIN.` Do NOT pre-narrate diagnostics that succeed. Do NOT echo command output unless the user asks.
 
-### Forbidden vocabulary in agent prose
+### Phrases to avoid in agent prose
 
-Do not write these words / phrases in chat during install + setup unless the user explicitly asks how the install works: `Python`, `interpreter`, `venv`, `virtual environment`, `pip`, `ensurepip`, `bootstrap`, `find`, `lookup`, `detect`, `probing`, `let me try`, `in parallel`, `got it`, `now installing`, `Step 1a/1b/1c`. Also forbidden — narration patterns Pedro saw in 2026-05-01 QA Telegram transcripts:
+During install + setup, keep the following out of chat output unless the user explicitly asks how the install works: `Python`, `interpreter`, `venv`, `virtual environment`, `pip`, `ensurepip`, `bootstrap`, `find`, `lookup`, `detect`, `probing`, `let me try`, `in parallel`, `got it`, `now installing`, `Step 1a/1b/1c`. Also avoid narration patterns from 2026-05-01 QA Telegram transcripts:
 
 - "Let me check that…" / "Let me check if…" / "Let me verify…" / "Let me try…"
 - "Now installing…" / "Plugin loaded. Let me verify…" / "I'll try…"
 - "Quick fix…" / "One sec…" / "Got it, doing X…"
 - Any "I'm going to do X" / "About to do X" pre-narration of a tool call
 
-These are tool-call mechanics, not user-facing prose. The Telegram bot edit-and-delete behavior makes interim "doing X…" lines look broken to the user even when they get edited away. If the user asks ("what's it doing?", "show me the commands"), narrate freely — the silence rule only governs the default install path.
+These are tool-call mechanics, not user-facing prose. The Telegram bot edit-and-delete behavior makes interim "doing X…" lines look broken to the user even when they get edited away. If the user asks ("what's it doing?", "show me the commands"), narrate freely — the focused-transcript rule only governs the default install path.
 
-### Forbidden phrases when tools fail to bind (deny-list — 2.3.4-rc.1, strengthened in 2.3.5-rc.1)
+### Phrases that stall the install — restart autonomously
 
-When `totalreclaw_*` tools are missing post-install, you MUST issue `/restart` (or `/new` as fallback) **autonomously** and announce the action — never ask the user to authorize it, never stall, never hedge. The following phrases are anti-patterns and MUST NOT appear in chat in that situation:
+When `totalreclaw_*` tools are missing post-install, issue `/restart` (or `/new` as fallback) autonomously and announce the action. These stall-patterns have appeared in past QA and should be avoided:
 
 - "Should I /restart?" / "Should I issue /restart?" / "Want me to restart?" / "Do you want me to restart?"
 - "I need permission to /restart" / "Do you authorize /restart?" / "Confirming before I /restart…"
@@ -69,11 +71,11 @@ When `totalreclaw_*` tools are missing post-install, you MUST issue `/restart` (
 - "Is it OK if I restart?" / "I'll /restart now if that's OK"
 - Describing what `/restart` does ("This will drain runs and reload…") — just send the slash command
 
-The correct pattern is to issue `/restart` immediately and emit user-visible line 3 (`Restarting Hermes to load the plugin…`) as the single chat line. Step 2 of the setup flow is explicit about this — re-read it if you find yourself drafting any of the phrases above.
+The right pattern: issue `/restart` immediately and emit user-visible line 3 (`Restarting Hermes to load the plugin…`) as the single chat line. Step 2 of the setup flow is explicit about this.
 
 ## Setup flow
 
-If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jump to step 5. Otherwise run all steps in order. Numbered steps are internal procedure; user prose is only the lines listed in §"User-visible prose" above.
+If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jump to step 5. Otherwise run all steps in order. Numbered steps are internal procedure; user prose is only the lines listed in §"User-visible lines" above.
 
 1. **Install plugin + Python package (silent — emit user-visible line 1, then nothing until line 2).** Hermes 2026.4.16+ uses Git-based plugin discovery and a separate Python tool implementation. The Python package MUST go into the SAME Python environment that Hermes runs from (containerized venv, native venv, or system Python — whichever your install uses). Bare `pip install` may target the wrong Python on containerized deploys. Run all three substeps via your shell tool **without writing prose about them**:
    ```
@@ -145,9 +147,9 @@ If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jum
 
 7. **Verify and confirm (silent until line 6).** After user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again silently and resend line 5 once. If present, emit user-visible line 6 (with the free-tier confirmation) and stop.
 
-## Phrase safety (HARD — never break)
+## Phrase safety
 
-NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER invoke `totalreclaw setup`, `hermes setup`, or any phrase-touching CLI via your shell tool (stdout enters LLM context). The ONLY agent-facilitated account-setup path is `totalreclaw_pair` (the account-setup tool). If the user pastes a phrase anyway: tell them it is compromised, call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
+The recovery phrase must not cross LLM context. Do not echo, generate, or ask the user to paste a recovery phrase in chat. Do not invoke `totalreclaw setup`, `hermes setup`, or any phrase-touching CLI from your shell (their stdout enters LLM context). The only agent-facilitated account-setup path is `totalreclaw_pair`. If the user pastes a phrase in chat anyway, let them know it should be considered compromised and call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
 
 ## Usage (post-setup)
 

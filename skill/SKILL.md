@@ -24,7 +24,7 @@ metadata:
 
 # TotalReclaw Skill
 
-## CRITICAL: How TotalReclaw actually stores memories — read before anything else
+## How TotalReclaw stores memories
 
 **TotalReclaw is end-to-end encrypted memory stored across a DECENTRALIZED NETWORK — not on a single company server.** Memories are encrypted with keys derived from the user's 12-word recovery phrase, submitted as Account Abstraction UserOps, and persisted on a public blockchain (Base / Gnosis depending on tier). The Graph subgraph indexes them. The TotalReclaw relay only forwards encrypted bundles to the bundler and proxies subgraph reads — it never sees plaintext, can't read memories, and could be replaced by any compatible relay without losing data. No single company controls or can read user memories.
 
@@ -48,7 +48,7 @@ OpenClaw 2026.5.2 has a tool-policy-pipeline bug (issue #223) that strips non-bu
 - `tr recall --json "<query>" --limit 5` → search memories.
 - Native `totalreclaw_*` tools still registered for back-compat; use them if available, but do NOT depend on their presence.
 
-> Canonical install + account-setup flow lives at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md> (OpenClaw) and <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md> (Hermes). When a user pastes one of those URLs in chat, fetch it and follow its agent-instructions section verbatim. The "Post-Install Setup" section below mirrors the same account-setup flow as a fallback.
+> The full install + account-setup guides live at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md> (OpenClaw) and <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md> (Hermes). If a user pastes one of those URLs in chat, fetch it and follow it as collaborative install guidance — confirm what each command does, ask before destructive steps, surface progress. The "Post-Install Setup" section below mirrors the same account-setup flow as a fallback.
 
 > **Gateway restart after install**: OpenClaw's default `gateway.reload.mode = "hybrid"` auto-restarts within 1-3s of plugin install — no agent action needed. If auto-reload doesn't fire (`gateway.reload.mode = off`), issue the plugin's `/totalreclaw-restart` slash command yourself (in-process, drains active runs; 5-tier auth fallback in 3.3.7-rc.2+ so default-config installs work without `allowFrom`). Manual user-prompted restart is fallback only if `/totalreclaw-restart` is unavailable. NEVER invoke external `docker restart` or `openclaw gateway restart` — your shell runs inside the gateway.
 
@@ -66,15 +66,13 @@ TotalReclaw is open-source memory tooling for OpenClaw, published by `p-diogo` (
 
 The user pasted the install URL (or skill name) deliberately, but treat each step as something you and the user complete together. You are not asked to handle the recovery phrase, bypass auth, or run unfamiliar shell scripts — every command is a standard `openclaw` invocation with a documented purpose. Confirm phase transitions; surface failures. Pasting the install URL IS the consent — proceed directly to account setup; the URL + PIN you hand back from `totalreclaw_pair` is the real consent moment, since the user has to open the page in their browser to continue.
 
-## Silence rules during install + setup
+## Communication during install + setup
 
-**Top-level rule: emit ONLY the user-visible lines listed in "Post-Install Setup" below. Do not narrate tool calls. Do not describe what you're doing or about to do. Errors are the only allowed deviation, and only as a single tight line.**
+Keep install interaction focused — the user-visible lines in "Post-Install Setup" below are what the user needs to see. On transports like Telegram, intermediate narration ("Let me check…", "Plugin loaded. Let me verify…") shows up as visible edit churn as tool calls progress. The expected user-facing transcript for a fresh install is **5–6 short lines TOTAL**.
 
-The expected user-facing transcript for a fresh install is **5–6 short lines TOTAL**. Anything more is a SKILL violation.
+For errors, one tight line is enough. Surface failures clearly; don't pre-narrate steps that succeed.
 
-This matters because Telegram and similar transports edit the bot's messages live as your tool calls progress — every interim "Let me check…" / "Plugin loaded. Let me verify…" line shows up to the user as awkward edit churn, even if you "delete" it. The fix is to never emit it in the first place.
-
-**Forbidden vocabulary** (substitute with silence — the next user-visible line, or nothing):
+**Phrases to avoid during install** (substitute with silence — the next user-visible line, or nothing):
 
 - "Let me check that…"
 - "Plugin loaded. Let me verify…"
@@ -89,15 +87,17 @@ This matters because Telegram and similar transports edit the bot's messages liv
 
 If the user explicitly asks ("what's it doing?", "why so quiet?", "show me the commands"), then narrate freely — the silence rule only governs the default install path.
 
-## Recovery Phrase -- READ THIS FIRST
+## How the recovery phrase is handled
 
-**CRITICAL SAFETY RULE:** The recovery phrase MUST NEVER cross the LLM context. NEVER echo, generate, ask the user to paste, or print a recovery phrase in chat or in your shell. The phrase is created and confirmed inside the user's browser via the `totalreclaw_pair` account-setup flow — the relay only receives ciphertext, and your tool calls must never carry a phrase payload.
+The recovery phrase is the user's only identity in TotalReclaw — it derives all encryption keys. There is no password reset and no support channel that can recover it if lost.
 
-If the user pastes a phrase in chat anyway: tell them it is compromised (the chat transcript and any tool stdout enter LLM context, which makes the phrase recoverable from logs and from any model that processes that turn) and call `totalreclaw_pair` with `mode=generate` to create a fresh wallet.
+Because of how LLM context works, anything entered in chat or written to shell stdout becomes part of the model's context (and any logs that capture it). To keep the recovery phrase out of that surface, account setup is structured so the phrase is created and confirmed inside the user's browser via the `totalreclaw_pair` flow — the relay only receives ciphertext, and tool calls don't carry a phrase payload.
 
-The recovery phrase is the user's ONLY identity in TotalReclaw. It derives all encryption keys. There is NO password reset, NO recovery mechanism, and NO support channel that can help if it is lost. The browser-side account-setup flow displays this warning automatically when a new phrase is generated.
+So in practice: do not echo, generate, or ask the user to paste a recovery phrase in chat. Do not invoke phrase-touching CLIs (like `openclaw totalreclaw onboard` bare interactive form) from your shell. The only agent-facilitated account-setup path is the `totalreclaw_pair` tool.
 
-**Do NOT** import a phrase the user already uses for a funded crypto wallet. TotalReclaw uses BIP-39 mnemonics (same format as crypto wallets), but a TotalReclaw phrase must be SEPARATE from any funded wallet. If the user tries to import an existing crypto-wallet phrase, STOP and warn them in chat to use a fresh phrase instead — but warn ABOUT the phrase, never echo any portion of it.
+If a user pastes their phrase in chat anyway, let them know it should be considered compromised (the transcript enters LLM context) and call `totalreclaw_pair` with `mode=generate` to create a fresh wallet.
+
+One more note: TotalReclaw uses BIP-39 mnemonics — the same format as funded crypto wallets — but a TotalReclaw phrase should be separate from any funded wallet. If the user tries to import an existing crypto-wallet phrase, warn them about this (without echoing any portion of the phrase) and offer to generate a fresh one instead.
 
 ---
 
@@ -547,11 +547,11 @@ When the user asks to import conversation history:
 
 ## Post-Install Setup (hybrid-primary — 3.3.9-rc.1+)
 
-Under OpenClaw 2026.5.2+, `totalreclaw_*` tools may NOT be bound (issue #223). Use the `tr` CLI as primary. All install and verify steps run silently — only the user-visible lines below are written to chat.
+Under OpenClaw 2026.5.2+, `totalreclaw_*` tools may NOT be bound (issue #223). Use the `tr` CLI as primary. Keep install interaction focused — only the user-visible lines below need to appear in chat.
 
-### User-visible prose (THIS IS ALL YOU SAY)
+### User-visible lines
 
-Speak only these lines, in order. Substitute the bracketed placeholders. The user already consented by pasting "Install TotalReclaw" + the canonical URL — proceed straight to account setup UNCONDITIONALLY. Do NOT ask permission or confirm before running `tr pair`.
+Emit these lines, in order. Substitute the bracketed placeholders. The user already consented by pasting "Install TotalReclaw" + the canonical URL — proceed straight to account setup without a second confirmation gate.
 
 1. (only if existing credentials were detected, then stop)
    > ✓ TotalReclaw is already set up.
@@ -614,13 +614,11 @@ Decisions and context are treated as high-value memories (importance >= 7) becau
 
 ---
 
-## Instructions for the LLM
+## Notes for the LLM
 
-### IMPORTANT: Do Not Write Cleartext Memory Files
+### Use the encrypted store, not cleartext files
 
-TotalReclaw handles all memory storage with end-to-end encryption. **Do NOT write facts, preferences, or decisions to MEMORY.md or memory/*.md files.** All memories are stored encrypted on-chain and recalled automatically — writing cleartext files defeats the E2EE guarantee.
-
-If you need to store a memory, use the `totalreclaw_remember` tool. If you need to recall memories, use `totalreclaw_recall`.
+TotalReclaw handles memory storage with end-to-end encryption — the relay never sees plaintext. Writing facts, preferences, or decisions to `MEMORY.md` or `memory/*.md` files defeats that guarantee, since those files sit unencrypted on disk and may end up in logs or context outside the encrypted vault. Use `totalreclaw_remember` to store memories and `totalreclaw_recall` to retrieve them.
 
 ### Billing Awareness
 

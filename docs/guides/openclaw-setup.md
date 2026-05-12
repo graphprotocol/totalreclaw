@@ -26,13 +26,15 @@ This guide is the playbook your agent follows; you can read along to see what ea
 
 ## Agent instructions (read this if you are an OpenClaw agent that just fetched this URL)
 
-You have been asked to install TotalReclaw. **Run all install / verify steps silently** except for the user-visible lines explicitly listed below — those are the ONLY things you should write in chat. Tool calls happen; narration of those tool calls does not.
+You have been asked to install TotalReclaw. Keep the interaction focused — run each step, report progress on the user-visible lines below, and surface errors when they happen.
 
-The user pasted this URL deliberately, but treat each command as a step you and the user complete together. Confirm what you see at each phase. If anything looks wrong, surface it and stop — don't push through.
+Treat each command as a step you and the user complete together. Confirm what you see at each phase. If anything looks wrong, surface it and stop — don't push through.
 
-### Top-level rule (read this before anything else)
+### How to communicate during install
 
-**Emit ONLY the user-visible lines listed below. Do not narrate tool calls. Do not describe what you're doing or about to do. Errors are the only allowed deviation, and only as a single tight line.** Telegram and similar transports edit the bot's messages live as your tool calls progress — every interim "Let me check…" / "Plugin loaded. Let me verify…" line shows up to the user as awkward edit churn, even if your transport later "deletes" or rewrites it. The fix is to never emit it in the first place. The expected user-facing transcript for a healthy install is **5–6 short lines TOTAL**. Anything more is a SKILL violation.
+The user-visible lines below are what the user actually needs to see. On transports like Telegram, intermediate narration ("Let me check…", "Plugin loaded. Let me verify…") shows up as visible edit churn as your tool calls progress — often confusing rather than helpful. The default install path should produce **5–6 short lines TOTAL** in chat.
+
+For errors, one tight line is enough: the error text plus what you're doing about it. Don't pre-narrate steps that succeed.
 
 ### What you will run, and why each step is safe
 
@@ -42,9 +44,9 @@ The user pasted this URL deliberately, but treat each command as a step you and 
 
 You are not asked to handle the recovery phrase. You are not asked to bypass auth. Pasting the install URL IS the consent moment for installing the plugin; the URL + PIN you hand back from `totalreclaw_pair` is the real consent moment for account creation, since the user has to open the page in their browser to continue. There is no separate "yes/no" gate before account setup. If the user pastes a phrase in chat anyway, refuse to proceed — see "Phrase safety" below.
 
-### User-visible prose (THIS IS ALL YOU SAY)
+### User-visible lines
 
-Speak only these lines, in order. Substitute the bracketed placeholders with the real values. No prefaces. No suffixes. No narration around them.
+These are the lines to emit, in order. Substitute the bracketed placeholders with the real values. No prefaces or suffixes needed around them.
 
 1. (Step 1 — start; emit BEFORE any shell tool call so the user knows work is happening)
    > Setting up TotalReclaw — this takes about a minute…
@@ -69,9 +71,9 @@ If a step **actually fails**, surface the failure in one tight line — the erro
 
 Do NOT pre-narrate diagnostics that succeed. Do NOT narrate retries that succeed silently. Do NOT echo command output unless the user asks for it.
 
-### ⛔ FORBIDDEN actions during install + pair (3.3.10-rc.3 — hard rules from Pedro's 2026-05-05 QA)
+### Actions that break pair flows — avoid these (3.3.10-rc.3 notes from 2026-05-05 QA)
 
-These freelancing patterns have broken pair flows. They are FORBIDDEN regardless of how clever the workaround feels:
+These patterns have broken pair flows in previous QA rounds:
 
 1. **Do NOT issue `/totalreclaw-restart`. Do NOT signal the gateway. Do NOT `docker restart`.** The plugin auto-patches the config and emits its own restart-required warn IF (and only if) one is needed. The gateway will restart itself when its reload pipeline decides to. **You restarting it kills the in-flight `setsid -f` pair subprocess and surfaces as 502 on the browser respond.**
 
@@ -81,11 +83,11 @@ These freelancing patterns have broken pair flows. They are FORBIDDEN regardless
 
 4. **Do NOT invoke `tr pair --json` in the foreground.** A foreground pair subprocess is killed when your shell-tool exec returns. The pair WS dies → relay returns 502. Step 4 below uses `setsid -f` for exactly this reason — copy that block VERBATIM. Do not "simplify". Do not drop the `setsid -f`. Do not omit `< /dev/null`.
 
-5. **Do NOT narrate.** Examples that have appeared in past QAs and MUST NEVER appear again: "Now let me verify the CLI…" / "Gateway needs a restart, let me restart it" / "Let me find and signal the gateway process" / "The CLI is at the npm path, not the extensions path" / "CLI reports itself as version X (lag)" / "Now let me also add the required post-install config" / "Let me save the QR as a PNG". All silent — these are internal details. Emit only the 4-5 user-visible lines.
+5. **Avoid narrating internals.** Examples from past QAs that broke the experience: "Now let me verify the CLI…" / "Gateway needs a restart, let me restart it" / "Let me find and signal the gateway process" / "The CLI is at the npm path, not the extensions path" / "CLI reports itself as version X (lag)" / "Now let me also add the required post-install config" / "Let me save the QR as a PNG". These are internal details — emit only the 4–5 user-visible lines.
 
-### Forbidden vocabulary in agent prose
+### Phrases to avoid in agent prose
 
-Unless the user explicitly asks how the install works, the following words / patterns must not appear in your chat output during install + setup. These are the patterns that surface as edit churn in transports like Telegram:
+Unless the user explicitly asks how the install works, the following words / patterns tend to surface as edit churn in transports like Telegram during install + setup:
 
 - "Let me check that…"
 - "Plugin loaded. Let me verify…"
@@ -149,7 +151,7 @@ Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, em
 
 Pasting the install URL was the consent moment for installing the plugin. The URL + PIN you're about to hand the user is the real consent moment for account creation — they have to open the page in their browser to proceed. There is NO separate yes/no gate. Do NOT ask "Would you like to set up an account?" — run pair immediately.
 
-CRITICAL (3.3.10-rc.2): always invoke `tr pair --json` via `setsid -f` so the WS-holding subprocess is in its own session and survives any post-install gateway SIGUSR1 reload. A foreground `node tr-cli pair` is killed mid-flight when the gateway fires its deferred restart, surfacing as `Gateway could not finish pairing (502). The agent timed out or the ciphertext failed to decrypt — ask the agent to retry pairing.` on the user's browser.
+Important (3.3.10-rc.2): always invoke `tr pair --json` via `setsid -f` so the WS-holding subprocess is in its own session and survives any post-install gateway SIGUSR1 reload. A foreground `node tr-cli pair` is killed mid-flight when the gateway fires its deferred restart, surfacing as `Gateway could not finish pairing (502). The agent timed out or the ciphertext failed to decrypt — ask the agent to retry pairing.` on the user's browser.
 
 ```bash
 PAIR_OUT="/tmp/tr-pair-out-$(date +%s).json"
@@ -168,9 +170,11 @@ The pair payload includes a `qr_ascii` field (Unicode block-char QR, ~43 lines �
 
 After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN likely expired — re-run `tr pair --json` and resend line 5 once. If present, emit user-visible line 6 (with the free-tier confirmation) and stop.
 
-### Phrase safety (HARD — never break)
+### Phrase safety
 
-NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `openclaw totalreclaw onboard` (bare interactive form), `totalreclaw setup`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The ONLY agent-facilitated account-setup path is the `totalreclaw_pair` tool (the account-setup tool — name kept for backward compatibility). If the user pastes a phrase anyway: tell them it is compromised and call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
+The recovery phrase is the user's only identity in TotalReclaw — it derives all encryption keys and there is no recovery mechanism if lost.
+
+Do not echo, generate, or ask the user to paste a recovery phrase in chat. Do not invoke `openclaw totalreclaw onboard` (bare interactive form), `totalreclaw setup`, or any phrase-touching CLI via your shell tool — their stdout enters LLM context. The only agent-facilitated account-setup path is the `totalreclaw_pair` tool (name kept for backward compatibility). If the user pastes a phrase in chat anyway, let them know it should be considered compromised and call `totalreclaw_pair` with `mode=generate` to create a fresh wallet.
 
 ---
 
