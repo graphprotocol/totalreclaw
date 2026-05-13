@@ -12,7 +12,7 @@ This document describes how the agent installs and sets up TotalReclaw on Hermes
 | Channel | Version | Install command |
 |---|---|---|
 | stable (default) | `2.3.2` | `pip install totalreclaw` |
-| latest RC | `2.3.6rc5` | `pip install --pre --upgrade totalreclaw==2.3.6rc5` |
+| latest RC | `2.3.7rc1` | `pip install --pre --upgrade totalreclaw==2.3.7rc1` |
 
 Source of truth for what's currently published: `pip index versions totalreclaw`. The table above is updated on every PyPI release.
 
@@ -36,7 +36,7 @@ The agent installs the stable channel from the table above and proceeds to setup
 Install TotalReclaw RC <version>. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md
 ```
 
-`<version>` is a PEP 440 RC string the user picks (e.g. `2.3.6rc5`). When the user omits `<version>` and writes only `Install TotalReclaw RC`, the agent installs `latest RC` from the table.
+`<version>` is a PEP 440 RC string the user picks (e.g. `2.3.7rc1`). When the user omits `<version>` and writes only `Install TotalReclaw RC`, the agent installs `latest RC` from the table.
 
 ### RC against the staging relay (QA only)
 
@@ -60,7 +60,7 @@ This is not a rule the agent follows perfectly, but the more it can, the better 
 
 ## Install procedure
 
-After the procedure completes, **proceed directly to Account setup**. Do not ask the user "is it ready?" — that is the agent's job to know.
+After the procedure completes (the user replies `done` to the `/restart` request in step 4), **proceed directly to Account setup**. Do not ask the user "is it ready?" — the user's `done` IS the signal.
 
 1. Resolve the Hermes Python interpreter:
    ```bash
@@ -73,9 +73,11 @@ After the procedure completes, **proceed directly to Account setup**. Do not ask
    hermes plugins install p-diogo/totalreclaw-hermes --enable
    ```
    (Or `"$(dirname "$HERMES_PYTHON")/hermes" plugins install p-diogo/totalreclaw-hermes --enable` when `hermes` isn't on `PATH`.)
-4. Issue `/restart` in chat to reload the Hermes gateway with the new plugin tools active.
+4. **Ask the user to issue `/restart`** so the gateway reloads with the new plugin tools active. The agent does NOT issue `/restart` itself — agents have repeatedly mis-tracked restart state and issued it twice, killing the pair sidecar mid-flight. Emit ONE user-visible line:
 
-   **After `/restart` succeeds** (you see `Gateway restarted successfully`), the plugin IS loaded with all its tools. **Do NOT ask the user to restart again. Do NOT re-prompt the restart step. Proceed directly to Account setup.** Hermes's `Plugin discovery complete: 1 found, 1 enabled` is the canonical signal — by the time chat resumes after the restart-success notification, that signal has already fired.
+   > Send `/restart` in chat now. Reply `done` once you see `Gateway restarted successfully`.
+
+   Wait for the user to reply `done`. Do NOT proceed to Account setup until the user confirms. Do NOT issue `/restart` yourself.
 
 ---
 
@@ -83,17 +85,17 @@ After the procedure completes, **proceed directly to Account setup**. Do not ask
 
 The agent never generates the recovery phrase. Only the user's browser does, via the `totalreclaw_pair` tool.
 
-**This section starts AUTOMATICALLY after install procedure step 4 completes.** Do not wait for a user prompt; do not ask "want me to set up your account?". The user already consented by sending the install prompt.
+**This section starts AUTOMATICALLY after the user confirms `done` to the install-procedure step 4 `/restart` request.** Do not ask "want me to set up your account?". The user already consented by sending the install prompt.
 
 1. Check whether credentials already exist:
    ```bash
    test -s ~/.totalreclaw/credentials.json && echo "already set up"
    ```
    If present, emit `✓ TotalReclaw is already set up.` and skip to the Post-setup section below.
-2. Call the `totalreclaw_pair` tool. Inputs: none required (the tool defaults to `mode=generate`). The tool returns a JSON object: `{url, pin, expires_at_ms}`.
+2. Call the `totalreclaw_pair` tool. **Inputs: none required.** The tool defaults to `mode=either` — the browser pair page will render BOTH "Generate new" and "Import existing" tabs so the user picks at pair time. Do NOT pass `mode=generate` or `mode=import` explicitly unless the user has specifically asked for one path (e.g. *"restore my account"* → `mode=import`). The tool returns a JSON object: `{url, pin, expires_at_ms}`.
 3. Emit ONE user-visible line containing the URL and PIN verbatim:
 
-   > Open `<url>` in your browser. Enter PIN `<pin>`. Generate a 12-word recovery phrase. Reply `done` once the page says it's sealed.
+   > Open `<url>` in your browser. Enter PIN `<pin>`. On the page, choose **Generate new** (creates a fresh 12-word recovery phrase) OR **Import existing** (paste a phrase you already have). Reply `done` once the page says it's sealed.
 
    Do not paraphrase the URL or PIN. Do not invent values when the tool fails — surface the failure verbatim and stop.
 4. After the user replies `done`, re-check `~/.totalreclaw/credentials.json`. Present → continue to Post-setup. Absent → the PIN expired; call `totalreclaw_pair` again and resend step 3 once.
