@@ -60,7 +60,7 @@ This is not a rule the agent follows perfectly, but the more it can, the better 
 
 ## Install procedure
 
-After the procedure completes (the user replies `done` to the `/restart` request in step 4), **proceed directly to Account setup**. Do not ask the user "is it ready?" — the user's `done` IS the signal.
+After the procedure completes (the user replies *"Done — continue setting up TotalReclaw"* or equivalent to the restart request in step 4), **proceed directly to Account setup**. Do not ask the user "is it ready?" — the user's reply IS the signal.
 
 1. Resolve the Hermes Python interpreter:
    ```bash
@@ -73,11 +73,32 @@ After the procedure completes (the user replies `done` to the `/restart` request
    hermes plugins install p-diogo/totalreclaw-hermes --enable
    ```
    (Or `"$(dirname "$HERMES_PYTHON")/hermes" plugins install p-diogo/totalreclaw-hermes --enable` when `hermes` isn't on `PATH`.)
-4. **Ask the user to issue `/restart`** so the gateway reloads with the new plugin tools active. The agent does NOT issue `/restart` itself — agents have repeatedly mis-tracked restart state and issued it twice, killing the pair sidecar mid-flight. Emit ONE user-visible line:
+4. **Ask the user to restart the gateway** so the new plugin tools bind. The agent does NOT issue the restart itself — agents have repeatedly mis-tracked restart state and issued it twice, killing the pair sidecar mid-flight.
 
-   > Send `/restart` in chat now. Reply `done` once you see `Gateway restarted successfully`.
+   The restart command depends on which surface the user is chatting through. Hermes only intercepts the `/restart` slash command from messaging-platform adapters (Telegram, Discord, Slack, Matrix, Feishu, WhatsApp); in the CLI/TUI (`hermes chat`) the agent sees `/restart` as ordinary text and cannot execute it, and in docker the gateway has no systemd/launchd supervisor to respawn after a self-exit.
 
-   Wait for the user to reply `done`. Do NOT proceed to Account setup until the user confirms. Do NOT issue `/restart` yourself.
+   Probe the surface before emitting:
+
+   ```bash
+   IN_DOCKER=$(grep -q -E 'docker|containerd' /proc/1/cgroup 2>/dev/null && echo yes || echo no)
+   HAS_MSG_BOT="$(printenv | grep -E '^HERMES_(TELEGRAM|DISCORD|SLACK|MATRIX|FEISHU|WHATSAPP)_(BOT_TOKEN|HOMESERVER|APP_ID|PHONE_NUMBER_ID)=' | head -1)"
+   HAS_SYSTEMCTL=$(command -v systemctl >/dev/null 2>&1 && echo yes || echo no)
+   HAS_LAUNCHCTL=$(command -v launchctl >/dev/null 2>&1 && echo yes || echo no)
+   ```
+
+   Emit ONE user-visible line per the matrix below. **In every case the user is asked to reply with an unambiguous continuation phrase** — bare `done` is insufficient because, after a restart, chat history is gone and the agent needs both a system-injected nudge (rc.27+ ships this automatically when credentials are absent) AND an explicit user message to reliably resume the setup flow.
+
+   | Surface | Detected by | Emit (verbatim) |
+   |---|---|---|
+   | Messaging platform — user is chatting via Telegram / Discord / Slack / Matrix / Feishu / WhatsApp | `HAS_MSG_BOT != ""` | `> Send /restart in chat now. Once you see the gateway-restart confirmation, reply: "Done — continue setting up TotalReclaw".` |
+   | `hermes chat` inside docker | `IN_DOCKER=yes` AND `HAS_MSG_BOT == ""` | `> The /restart slash command is messaging-platform only and won't work from this CLI. Open a host shell (outside the container) and run: docker restart <container-name>. Wait for the container to come back up, reopen hermes chat, and reply: "Done — continue setting up TotalReclaw".` |
+   | `hermes chat` native install with systemd | `IN_DOCKER=no` AND `HAS_SYSTEMCTL=yes` AND `HAS_MSG_BOT == ""` | `> The /restart slash command won't work from this CLI. Open a second terminal and run: hermes gateway restart. When it returns, reply here: "Done — continue setting up TotalReclaw".` |
+   | `hermes chat` native install on macOS / launchd | `IN_DOCKER=no` AND `HAS_LAUNCHCTL=yes` AND `HAS_MSG_BOT == ""` | `> The /restart slash command won't work from this CLI. Open a second terminal and run: hermes gateway restart. When it returns, reply here: "Done — continue setting up TotalReclaw".` |
+   | Detection fails / ambiguous | none of the above match | Ask the user how they're chatting with Hermes (Telegram / Discord / Slack / Matrix / Feishu / WhatsApp / `hermes chat` in docker / `hermes chat` native), then emit the matching line above. |
+
+   Substitute the actual container name in the docker line — usually visible via `docker ps --format '{{.Names}}'`; if the agent runs that probe and finds exactly one container, splice the name in. Fall back to `<container-name>` placeholder otherwise.
+
+   Wait for the user's reply containing "continue" / "set up" / similar resumption language. Do NOT proceed to Account setup until the user confirms. Do NOT issue any restart yourself.
 
 ---
 
@@ -167,11 +188,14 @@ These are hard rules. None of them are negotiable.
 
 ## Diagnostics
 
-- Plugin not loaded after `/restart`: `"$(dirname "$HERMES_PYTHON")/hermes" plugins list` should show `totalreclaw` as enabled. If absent, re-run install procedure step 3.
+- Plugin not loaded after the restart: `"$(dirname "$HERMES_PYTHON")/hermes" plugins list` should show `totalreclaw` as enabled. If absent, re-run install procedure step 3.
 - `totalreclaw_pair` returns a URL that 404s on the browser: the relay is unreachable — check `TOTALRECLAW_SERVER_URL` env var matches the user's intended channel (prod default, or staging from the QA prompt).
 - `totalreclaw_pair` returns a 5xx: ask the user to retry; report the error code verbatim.
-- Tool not bound after install: `/restart` once. If still missing, the package install hit the wrong Python; re-resolve `HERMES_PYTHON` and re-install.
-- `/restart` returns "not authorized" or "command not found" (managed Hermes deployments may gate it behind RBAC): issue `/new` to start a fresh session instead — the plugin manifest is reloaded on session start and the new tools bind without a full gateway restart.
+- Tool not bound after install: restart once per Install procedure step 4. If still missing, the package install hit the wrong Python; re-resolve `HERMES_PYTHON` and re-install.
+- **Agent says `/restart` "can't do that here" / "I'm not able to issue that":** the user is in `hermes chat` (CLI/TUI), where `/restart` reaches the LLM as ordinary text instead of being intercepted. The `/restart` slash command is wired only in messaging-platform adapters (Telegram / Discord / Slack / Matrix / Feishu / WhatsApp). Switch the user to the correct restart command for their surface per the Install procedure step 4 matrix.
+- **`hermes gateway restart` from inside a docker container returns "no running gateway" or fails silently:** the container has no systemd / launchd service supervisor to respawn the gateway after a self-exit. The correct restart for docker is `docker restart <container-name>` from the **host** shell, not from inside the container.
+- **`/restart` returns "not authorized" or "command not found"** (managed Hermes deployments may gate it behind RBAC): issue `/new` to start a fresh session instead — the plugin manifest is reloaded on session start and the new tools bind without a full gateway restart.
+- **After restart, agent doesn't continue setup:** if the user replied only `done` without a continuation phrase, the agent may not infer it should resume. The rc.27+ proactive setup nudge fires on the first turn of every unconfigured session, so re-engaging the conversation with anything (even another bare message) should trigger the new-vs-restore question. If it doesn't, ask the user to type "Continue setting up TotalReclaw" verbatim.
 
 ---
 
