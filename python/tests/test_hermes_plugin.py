@@ -295,10 +295,44 @@ class TestHooks:
         assert state.get_quota_warning() is None
 
     def test_pre_llm_call_not_configured(self):
+        """2.3.7rc3 contract change: when the plugin is not configured,
+        pre_llm_call now SURFACES the setup nudge on first turn
+        regardless of message content (was: returned None unless the
+        message looked like a memory intent). The nudge must contain
+        the rc3 contract markers: ``totalreclaw_pair`` tool name +
+        ``create a new account`` / ``restore an existing one`` decision
+        copy. See ``TestRc3SetupNudgeFirstTurn`` in
+        ``test_v2_02_hermes_fixes.py`` for the rationale (abandoned-
+        mid-setup path after a /restart wipes chat history).
+
+        Note: ``_maybe_reconfigure_from_disk`` runs at the head of
+        ``pre_llm_call`` and re-stats ``credentials.json``, so dev
+        machines with a real ``~/.totalreclaw/credentials.json``
+        would silently flip the state to configured during the call
+        (test passed pre-rc3 by luck — returning None matched). Mock
+        ``Path.exists`` through the call so the test is deterministic.
+        """
         from totalreclaw.hermes.hooks import pre_llm_call
         state = _make_state()
-        result = pre_llm_call(state, is_first_turn=True, user_message="hello")
-        assert result is None
+        with patch.object(Path, "exists", return_value=False):
+            result = pre_llm_call(state, is_first_turn=True, user_message="hello")
+        assert result is not None, (
+            "rc3 expected the setup nudge on first turn of an "
+            "unconfigured session. Got None."
+        )
+        ctx = result.get("context", "").lower()
+        assert "totalreclaw_pair" in ctx
+        assert "create a new account" in ctx
+        assert "restore" in ctx
+
+        # rc3 latch contract — second call within the same session must
+        # NOT re-fire the nudge.
+        with patch.object(Path, "exists", return_value=False):
+            result2 = pre_llm_call(state, is_first_turn=False, user_message="more")
+        if result2 is not None:
+            ctx2 = result2.get("context", "").lower()
+            assert "totalreclaw_pair" not in ctx2
+            assert "create a new account" not in ctx2
 
     def test_pre_llm_call_injects_quota_warning(self):
         """pre_llm_call should inject and clear quota warning."""

@@ -63,19 +63,38 @@ def _rc_staging_banner_active() -> bool:
         return False
     return True
 
-#: Bug #6: when the user hasn't run ``totalreclaw_setup`` yet but is
-#: asking a natural memory-related question, inject a one-time context
-#: nudge telling the agent to offer setup. Otherwise Hermes's built-in
-#: ``memory`` tool absorbs the request and the user never discovers
-#: TotalReclaw is installed.
+#: Bug #6 + 2.3.7rc3: when the plugin is installed + enabled but the
+#: user hasn't completed pairing (no ``credentials.json`` on disk),
+#: inject a one-time-per-session context nudge telling the agent to
+#: PROACTIVELY ask whether the user wants to create a new account or
+#: restore an existing one — before answering whatever else they
+#: said. Catches the "abandoned mid-setup" case after a gateway
+#: ``/restart`` (or docker restart) wiped chat history: the agent
+#: would otherwise forget it was supposed to continue with
+#: ``totalreclaw_pair`` and silently treat the user's latest message
+#: as a fresh request.
+#:
+#: rc.26 → rc3 copy update: drop the implicit "user is asking about
+#: memory" framing — the nudge now fires on ANY first turn while
+#: unconfigured, so the copy must be unconditional + decision-focused.
 _SETUP_NUDGE = (
-    "## TotalReclaw setup nudge (one-time)\n"
-    "TotalReclaw is installed but not yet configured. If the user is "
-    "asking about remembering things across sessions, encrypted memory, "
-    "or cross-agent persistence, call `totalreclaw_setup` to generate a "
-    "BIP-39 recovery phrase and enable the vault. After that, use "
-    "`totalreclaw_remember` / `totalreclaw_recall` — they outrank any "
-    "built-in 'memory' tool for durability + encryption."
+    "## TotalReclaw setup not complete\n"
+    "The TotalReclaw plugin is installed and enabled, but the user "
+    "hasn't finished pairing (no credentials on disk yet). They may "
+    "have started setup in a previous session and lost chat history "
+    "from a gateway /restart — they probably don't realise setup is "
+    "incomplete.\n\n"
+    "Before answering the user's current message, proactively ask "
+    "something like: \"I notice you haven't finished setting up "
+    "TotalReclaw. Would you like to create a new account, or restore "
+    "an existing one with your 12-word recovery phrase?\"\n\n"
+    "Once they pick a path: if they want to create a new account, "
+    "call `totalreclaw_pair` with `mode=generate` (or no mode arg — "
+    "the default `mode=either` lets them choose on the browser page). "
+    "If they want to restore, call `totalreclaw_pair` with "
+    "`mode=import`. After pairing completes, use `totalreclaw_remember` "
+    "/ `totalreclaw_recall` for end-to-end encrypted memory — they "
+    "outrank any built-in `memory` tool for durability + encryption."
 )
 
 #: F4 (issue #167): for configured users, schema-level "prefer this tool"
@@ -272,6 +291,15 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
 
     state.reset_turn_counter()
 
+    # 2.3.7rc3 — reset the setup-nudge latch so each new session gets
+    # one proactive nudge. Without this, an unconfigured user who
+    # closed session A (nudge consumed) and opens session B inside the
+    # SAME daemon process never re-surfaces the nudge — silently
+    # stuck mid-setup. The latch deliberately persists across turns
+    # within a single session so the agent doesn't spam the prompt.
+    if hasattr(state, "_totalreclaw_setup_nudge_shown"):
+        state._totalreclaw_setup_nudge_shown = False
+
     # 2.3.3-rc.1 (PR #165) — emit the RC/staging banner exactly once per
     # session when the wheel is RC AND the user hasn't overridden the
     # server URL. Surfaced via the existing ``quota_warning`` channel so
@@ -416,15 +444,26 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
         # register so #192 stays fixed for the mid-session pair path.
         _eager_account_register(state)
 
-    # Bug #6 — unconfigured: one-time setup nudge, fires only when the
-    # user message looks like a memory intent. We never return None here
-    # so the Hermes agent sees the nudge as soon as memory semantics hit.
-    # The "shown once" flag lives as an ad-hoc attribute on the state
-    # instance — ``AgentState`` itself is owned by Phase 1's surface and
-    # we don't want to add state-management methods there from the plugin.
+    # Bug #6 + 2.3.7rc3 — unconfigured: one-time-per-session setup
+    # nudge. The original rc.26 implementation gated the nudge on
+    # ``_looks_like_memory_intent(user_message)`` — i.e. the nudge only
+    # surfaced if the user asked something memory-related on their very
+    # first turn. That worked for users who paired uninterrupted from
+    # the first prompt, but Pedro's 2.3.7rc2 QA (2026-05-14) hit the
+    # "abandoned mid-setup" path: the agent had asked the user to
+    # ``/restart``, the restart killed the daemon and wiped chat
+    # history, the user reopened chat and typed something unrelated
+    # (a greeting / unrelated question) → no memory intent → no nudge,
+    # so the agent silently moved on without resuming pairing.
+    #
+    # rc3 drops the memory-intent gate. If the plugin is loaded and
+    # creds.json is absent, fire the nudge on the FIRST TURN of EVERY
+    # session. The latch is reset in ``on_session_start`` (see below)
+    # so a user who closed session A unconfigured + opens session B
+    # gets a fresh nudge.
     if not state.is_configured():
         shown = getattr(state, "_totalreclaw_setup_nudge_shown", False)
-        if not shown and _looks_like_memory_intent(user_message):
+        if not shown:
             state._totalreclaw_setup_nudge_shown = True
             return {"context": _SETUP_NUDGE}
         return None

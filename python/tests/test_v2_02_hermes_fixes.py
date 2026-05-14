@@ -374,13 +374,22 @@ class TestBug6FirstRunNudge:
                     user_message="Can you remember that I prefer dark mode?",
                 )
 
-        # Should return a context nudge mentioning setup.
+        # Should return a context nudge offering setup.
         assert result is not None, "expected setup nudge on first turn"
-        ctx = result.get("context", "")
-        assert "totalreclaw_setup" in ctx.lower() or "set up" in ctx.lower()
+        ctx = result.get("context", "").lower()
+        # rc3 — copy now talks about pairing + new-vs-restore choice
+        # rather than the legacy ``totalreclaw_setup`` tool name. Accept
+        # either the legacy term or the rc3 contract markers.
+        assert (
+            "totalreclaw_pair" in ctx
+            or "create a new account" in ctx
+            or "totalreclaw_setup" in ctx
+        )
 
-    def test_pre_llm_call_nudge_only_fires_once(self):
-        """Second invocation should NOT re-inject the nudge."""
+    def test_pre_llm_call_nudge_only_fires_once_per_session(self):
+        """Second invocation in the same session should NOT re-inject
+        the nudge. The latch resets on ``on_session_start`` (see the
+        TestRc3SetupNudgeFirstTurn class)."""
         from totalreclaw.hermes.hooks import pre_llm_call
         from totalreclaw.hermes.state import PluginState
 
@@ -399,10 +408,11 @@ class TestBug6FirstRunNudge:
                     user_message="Can you remember another thing for me?",
                 )
         assert first is not None
-        # Second call: nudge should not re-fire (no "totalreclaw_setup" in ctx).
+        # Second call: nudge should not re-fire.
         if second is not None:
             ctx = second.get("context", "").lower()
-            assert "totalreclaw_setup" not in ctx
+            assert "totalreclaw_pair" not in ctx
+            assert "create a new account" not in ctx
 
     def test_pre_llm_call_configured_user_no_nudge(self):
         """Configured users don't see the setup nudge."""
@@ -423,7 +433,146 @@ class TestBug6FirstRunNudge:
         # No nudge when configured.
         if result is not None:
             ctx = result.get("context", "").lower()
-            assert "totalreclaw_setup" not in ctx
+            assert "totalreclaw_pair" not in ctx
+            assert "create a new account" not in ctx
+
+
+class TestRc3SetupNudgeFirstTurn:
+    """2.3.7rc3 — drop the memory-intent gate on the setup nudge.
+
+    rc.26 implementation only surfaced the nudge if the FIRST user
+    message looked like a memory intent (``remember X``, ``what do you
+    know about Y``, etc.). That worked for users who paired in one
+    uninterrupted conversation, but broke the "abandoned mid-setup"
+    path:
+
+      1. Agent installs the plugin, asks the user to ``/restart``.
+      2. ``/restart`` (or a docker restart of the gateway container)
+         kills the daemon and wipes chat history.
+      3. User reopens chat, types something unrelated (a greeting or
+         unrelated question).
+      4. No memory intent → no nudge → agent silently treats the
+         message as a fresh request, never resuming pairing.
+
+    Pedro hit this 2026-05-14 during 2.3.7rc2 QA. rc3 fix: fire the
+    nudge on EVERY first turn while unconfigured, regardless of
+    message content. Latch is reset in ``on_session_start`` so each
+    new session gets one nudge chance.
+    """
+
+    @staticmethod
+    def _make_unconfigured_state():
+        from totalreclaw.hermes.state import PluginState
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(Path, "exists", return_value=False):
+                state = PluginState()
+        assert not state.is_configured()
+        return state
+
+    def test_nudge_fires_on_first_turn_even_without_memory_intent(self):
+        """rc3 contract: a bare greeting on the first turn of an
+        unconfigured session MUST still produce the setup nudge.
+        rc.26 would have returned None here."""
+        from totalreclaw.hermes.hooks import pre_llm_call
+
+        state = self._make_unconfigured_state()
+        with patch.object(Path, "exists", return_value=False):
+            result = pre_llm_call(
+                state, is_first_turn=True, user_message="hello",
+            )
+        assert result is not None, (
+            "rc3 expected a nudge on a non-memory-intent first turn "
+            "(the 'abandoned mid-setup' path). Got None."
+        )
+        ctx = result.get("context", "").lower()
+        # rc3 contract markers — the nudge must surface the choice +
+        # the canonical pair-tool name.
+        assert "create a new account" in ctx, (
+            "rc3 nudge copy must include 'create a new account' so the "
+            "agent surfaces the new-vs-restore decision verbatim."
+        )
+        assert "restore" in ctx, (
+            "rc3 nudge copy must mention restore so the agent surfaces "
+            "the import path explicitly."
+        )
+        assert "totalreclaw_pair" in ctx, (
+            "rc3 nudge must point at the canonical pair-tool name."
+        )
+
+    def test_nudge_fires_on_first_turn_with_unrelated_question(self):
+        """Same as above but with a generic question (not a greeting).
+        Both shapes must trigger the nudge under rc3."""
+        from totalreclaw.hermes.hooks import pre_llm_call
+
+        state = self._make_unconfigured_state()
+        with patch.object(Path, "exists", return_value=False):
+            result = pre_llm_call(
+                state, is_first_turn=True,
+                user_message="What's 2+2?",
+            )
+        assert result is not None
+        ctx = result.get("context", "").lower()
+        assert "create a new account" in ctx
+        assert "totalreclaw_pair" in ctx
+
+    def test_nudge_latch_resets_on_session_start(self):
+        """Each new session must get one nudge chance. Without the
+        reset, a user who consumed the nudge in session A and opened
+        session B inside the same daemon process never re-surfaces the
+        nudge — silently stuck mid-setup."""
+        from totalreclaw.hermes.hooks import pre_llm_call, on_session_start
+
+        state = self._make_unconfigured_state()
+
+        # Session A: nudge fires, latch flips True.
+        with patch.object(Path, "exists", return_value=False):
+            first = pre_llm_call(
+                state, is_first_turn=True, user_message="hi",
+            )
+            assert first is not None
+            assert getattr(state, "_totalreclaw_setup_nudge_shown", False) is True
+
+            # Session A continues — second turn must not re-fire.
+            second = pre_llm_call(
+                state, is_first_turn=False, user_message="more",
+            )
+            if second is not None:
+                assert "create a new account" not in second.get("context", "").lower()
+
+            # NEW SESSION — on_session_start must reset the latch.
+            on_session_start(state, session_id="session-B")
+            assert state._totalreclaw_setup_nudge_shown is False, (
+                "on_session_start must reset the nudge latch so a new "
+                "session gets a fresh nudge."
+            )
+
+            # Session B first turn — nudge fires again.
+            third = pre_llm_call(
+                state, is_first_turn=True, user_message="hello again",
+            )
+            assert third is not None
+            assert "create a new account" in third.get("context", "").lower()
+
+    def test_nudge_does_not_fire_when_configured(self):
+        """Configured users must NEVER see the setup nudge, even on
+        first turn (regression guard — the rc3 ungating must not leak
+        into the configured path)."""
+        from totalreclaw.hermes.hooks import pre_llm_call
+
+        state = self._make_unconfigured_state()
+        state._client = MagicMock()  # Forge configured.
+
+        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+            with patch.object(Path, "exists", return_value=False):
+                result = pre_llm_call(
+                    state, is_first_turn=True, user_message="hello",
+                )
+        if result is not None:
+            ctx = result.get("context", "").lower()
+            assert "create a new account" not in ctx, (
+                "Configured users must not see the setup nudge."
+            )
+            assert "totalreclaw_pair" not in ctx
 
 
 class TestIssue167ToolPriorityNudge:
