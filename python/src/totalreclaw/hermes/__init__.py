@@ -269,6 +269,9 @@ def register(ctx):
     logger.info("TotalReclaw plugin registered (14+ tools, 6 hooks)")
 
 
+_RECURSION_GUARD_ENV = "_TOTALRECLAW_SKIP_BUILTIN_MEMORY_CHECK"
+
+
 def _warn_if_built_in_memory_enabled() -> None:
     """Check whether Hermes' built-in `memory` tool is currently enabled.
 
@@ -283,13 +286,35 @@ def _warn_if_built_in_memory_enabled() -> None:
     for "remember X" / "recall X" intents during natural conversation.
     The install flow disables the built-in via SKILL.md step 3, but
     this WARN catches users who re-enabled it manually.
+
+    Recursion guard (2.3.7rc2): this function shells out to
+    ``hermes tools list``. That subprocess is ALSO ``hermes`` — it
+    boots the gateway, discovers this plugin, calls ``register()``,
+    which calls this function, which spawns another ``hermes tools
+    list``... fork bomb. The 5s timeout per call does not help, since
+    each call forks multiple children before its own timeout fires.
+    We set a sentinel env var before spawning the subprocess so the
+    child plugin-load short-circuits and the recursion terminates at
+    depth 1.
     """
+    import os
     import shutil
     import subprocess
+
+    # Recursion guard: if we're loading inside the subprocess we
+    # spawned for the check itself, short-circuit.
+    if os.environ.get(_RECURSION_GUARD_ENV) == "1":
+        logger.debug(
+            "built-in memory check skipped — running inside the "
+            "spawned `hermes tools list` subprocess (recursion guard)"
+        )
+        return
 
     if shutil.which("hermes") is None:
         logger.debug("hermes CLI not found on PATH; skipping built-in memory check")
         return
+
+    child_env = {**os.environ, _RECURSION_GUARD_ENV: "1"}
 
     try:
         proc = subprocess.run(
@@ -298,6 +323,7 @@ def _warn_if_built_in_memory_enabled() -> None:
             text=True,
             timeout=5,
             check=False,
+            env=child_env,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError):
         logger.debug("hermes tools list failed; skipping built-in memory check", exc_info=True)

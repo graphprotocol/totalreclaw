@@ -19,16 +19,29 @@ must be best-effort — must NOT crash plugin load if the CLI is
 absent or returns garbage.
 
 Implementation lives in ``totalreclaw.hermes.__init__:_warn_if_built_in_memory_enabled``.
+
+Recursion-guard tests (2.3.7rc2)
+--------------------------------
+
+The 2.3.7rc2 hotfix adds a sentinel env var so the spawned
+``hermes tools list`` subprocess short-circuits its own plugin-load
+check (which would otherwise fork-bomb the host). Tests below
+verify: (a) the function early-returns when the sentinel is set,
+(b) the subprocess is invoked with the sentinel set in its env.
 """
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from totalreclaw.hermes import _warn_if_built_in_memory_enabled
+from totalreclaw.hermes import (
+    _RECURSION_GUARD_ENV,
+    _warn_if_built_in_memory_enabled,
+)
 
 
 def _make_proc(stdout: str = "", returncode: int = 0) -> MagicMock:
@@ -141,3 +154,93 @@ class TestWarnIfBuiltInMemoryEnabled:
                 _warn_if_built_in_memory_enabled()
             except Exception as exc:  # pragma: no cover
                 pytest.fail(f"_warn_if_built_in_memory_enabled raised: {exc!r}")
+
+
+class TestRecursionGuard:
+    """2.3.7rc2 hotfix: prevent fork-bomb from the
+    ``hermes tools list`` subprocess re-loading this plugin → calling
+    ``_warn_if_built_in_memory_enabled`` recursively → spawning
+    another ``hermes tools list``…
+
+    On pop-os 2026-05-14 this storm pinned a 4-core box (load avg 4.04,
+    7+ concurrent ``hermes tools list`` processes per container, dozens
+    of ``[hermes] <defunct>`` zombies). 5s timeout per call did NOT
+    help — each call forks many children before its own timeout fires.
+    """
+
+    def test_sentinel_env_var_short_circuits(self, caplog, monkeypatch):
+        """When ``_TOTALRECLAW_SKIP_BUILTIN_MEMORY_CHECK=1`` is set in
+        the parent env, the function MUST return immediately without
+        invoking ``shutil.which`` or ``subprocess.run`` — otherwise the
+        recursion can't terminate."""
+        monkeypatch.setenv(_RECURSION_GUARD_ENV, "1")
+        with patch("shutil.which") as mock_which, patch(
+            "subprocess.run"
+        ) as mock_run:
+            _warn_if_built_in_memory_enabled()
+        mock_which.assert_not_called()
+        mock_run.assert_not_called()
+
+    def test_sentinel_set_to_other_value_does_not_short_circuit(
+        self, monkeypatch
+    ):
+        """Only exact ``1`` triggers the short-circuit. Other values
+        (e.g. ``0``, ``false``, empty) must NOT short-circuit — this
+        keeps the guard predictable + minimises confusion if the env
+        leaks from an unrelated source."""
+        monkeypatch.setenv(_RECURSION_GUARD_ENV, "0")
+        with patch("shutil.which", return_value="/usr/bin/hermes"), patch(
+            "subprocess.run", return_value=_make_proc("foo  disabled\n")
+        ) as mock_run:
+            _warn_if_built_in_memory_enabled()
+        mock_run.assert_called_once()
+
+    def test_subprocess_invoked_with_sentinel_in_child_env(self, monkeypatch):
+        """The subprocess MUST be spawned with
+        ``_TOTALRECLAW_SKIP_BUILTIN_MEMORY_CHECK=1`` in its env.
+        Without this, the child plugin-load recurses → fork bomb."""
+        # Strip any pre-existing sentinel from the parent so the spawn
+        # path is exercised (not the early-return path).
+        monkeypatch.delenv(_RECURSION_GUARD_ENV, raising=False)
+        with patch("shutil.which", return_value="/usr/bin/hermes"), patch(
+            "subprocess.run", return_value=_make_proc("memory  disabled\n")
+        ) as mock_run:
+            _warn_if_built_in_memory_enabled()
+        mock_run.assert_called_once()
+        call = mock_run.call_args
+        passed_env = call.kwargs.get("env")
+        assert passed_env is not None, (
+            "subprocess.run MUST be called with an explicit env= so the "
+            "recursion-guard sentinel is set. Inheriting the parent env "
+            "won't work — the parent's env may not contain the sentinel."
+        )
+        assert passed_env.get(_RECURSION_GUARD_ENV) == "1", (
+            f"subprocess.run env MUST contain "
+            f"{_RECURSION_GUARD_ENV}=1 so the recursive plugin load "
+            f"short-circuits. Got: {passed_env.get(_RECURSION_GUARD_ENV)!r}"
+        )
+
+    def test_subprocess_env_preserves_parent_environment(self, monkeypatch):
+        """The child env MUST inherit the parent env (PATH, HOME,
+        TOTALRECLAW_* etc.) plus the sentinel — not be a stripped
+        env with only the sentinel. Otherwise the spawned ``hermes``
+        won't find its dependencies."""
+        monkeypatch.delenv(_RECURSION_GUARD_ENV, raising=False)
+        monkeypatch.setenv("TOTALRECLAW_TEST_MARKER", "preserved")
+        with patch("shutil.which", return_value="/usr/bin/hermes"), patch(
+            "subprocess.run", return_value=_make_proc("")
+        ) as mock_run:
+            _warn_if_built_in_memory_enabled()
+        passed_env = mock_run.call_args.kwargs["env"]
+        assert passed_env.get("TOTALRECLAW_TEST_MARKER") == "preserved", (
+            "Child env must inherit parent env vars; the sentinel is "
+            "an addition, not a replacement."
+        )
+
+    def test_recursion_guard_env_name_is_stable(self):
+        """The sentinel env var name is part of the contract between
+        parent + child processes. Pin it so a rename doesn't break the
+        guard for users on older deployed versions of the plugin (the
+        parent process may be running a newer version while a stale
+        subprocess from a transition window runs an older version)."""
+        assert _RECURSION_GUARD_ENV == "_TOTALRECLAW_SKIP_BUILTIN_MEMORY_CHECK"
