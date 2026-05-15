@@ -71,11 +71,24 @@ pub fn source_weight(source: MemorySource) -> f64 {
 /// v0 callers can stay with the legacy [`rerank`] API (no source awareness).
 /// v1+ callers use [`rerank_with_config`] with `apply_source_weights = true`
 /// so the final RRF score respects provenance per Retrieval v2 Tier 1.
+///
+/// The optional `bm25_weight_override` / `vector_weight_override` fields let
+/// callers pin fixed fusion weights instead of the default intent-weighted
+/// formula (`0.3 + 0.3*(1-intent)` / `0.3 + 0.3*intent`). Pass `None` for
+/// both to get the original adaptive behaviour (am-4 tunable-weight surface).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RerankerConfig {
     /// When true, multiply the final fused score by the source-weight for each
     /// candidate. When false, behaviour is identical to the v0 [`rerank`] fn.
     pub apply_source_weights: bool,
+    /// Optional fixed BM25 fusion weight (0.0..=1.0). Overrides the
+    /// intent-weighted formula when `Some`. Default: `None` (adaptive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bm25_weight_override: Option<f64>,
+    /// Optional fixed vector (cosine) fusion weight (0.0..=1.0). Overrides the
+    /// intent-weighted formula when `Some`. Default: `None` (adaptive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_weight_override: Option<f64>,
 }
 
 impl Default for RerankerConfig {
@@ -84,6 +97,8 @@ impl Default for RerankerConfig {
     fn default() -> Self {
         RerankerConfig {
             apply_source_weights: false,
+            bm25_weight_override: None,
+            vector_weight_override: None,
         }
     }
 }
@@ -225,8 +240,12 @@ pub fn rerank_with_config(
     let mut results: Vec<RankedResult> = Vec::with_capacity(candidates.len());
     for (i, candidate) in candidates.iter().enumerate() {
         let intent_score = cosine_scores[i].clamp(0.0, 1.0);
-        let bm25_weight = 0.3 + 0.3 * (1.0 - intent_score);
-        let cosine_weight = 0.3 + 0.3 * intent_score;
+        let bm25_weight = config
+            .bm25_weight_override
+            .unwrap_or(0.3 + 0.3 * (1.0 - intent_score));
+        let cosine_weight = config
+            .vector_weight_override
+            .unwrap_or(0.3 + 0.3 * intent_score);
 
         let rrf_bm25 = 1.0 / (RRF_K + bm25_ranks[i] as f64);
         let rrf_cosine = 1.0 / (RRF_K + cosine_ranks[i] as f64);
@@ -505,6 +524,7 @@ mod tests {
             10,
             RerankerConfig {
                 apply_source_weights: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -548,6 +568,7 @@ mod tests {
             10,
             RerankerConfig {
                 apply_source_weights: true,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -588,6 +609,7 @@ mod tests {
             10,
             RerankerConfig {
                 apply_source_weights: true,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -645,6 +667,7 @@ mod tests {
             10,
             RerankerConfig {
                 apply_source_weights: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -655,6 +678,7 @@ mod tests {
             10,
             RerankerConfig {
                 apply_source_weights: true,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -718,6 +742,7 @@ mod tests {
             10,
             RerankerConfig {
                 apply_source_weights: true,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -763,6 +788,7 @@ mod tests {
             10,
             RerankerConfig {
                 apply_source_weights: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -773,6 +799,7 @@ mod tests {
             10,
             RerankerConfig {
                 apply_source_weights: true,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -819,6 +846,7 @@ mod tests {
             10,
             RerankerConfig {
                 apply_source_weights: true,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -865,6 +893,7 @@ mod tests {
             3,
             RerankerConfig {
                 apply_source_weights: true,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -886,10 +915,89 @@ mod tests {
             10,
             RerankerConfig {
                 apply_source_weights: true,
+                ..Default::default()
             },
         )
         .unwrap();
         assert_eq!(ranked.len(), 1);
         assert!((ranked[0].source_weight - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_weight_override_bm25_only() {
+        // With bm25_weight_override=1.0 and vector_weight_override=0.0,
+        // the BM25 rank should dominate the fused score.
+        let candidates = vec![
+            cand("bm25_match", "dark mode preference setting", vec![0.0f32; 4], None),
+            cand("cosine_match", "unrelated text", vec![0.9f32, 0.1, 0.0, 0.0], None),
+        ];
+        let query_embedding = vec![0.9f32, 0.1, 0.0, 0.0];
+        let ranked = rerank_with_config(
+            "dark mode",
+            &query_embedding,
+            &candidates,
+            10,
+            RerankerConfig {
+                apply_source_weights: false,
+                bm25_weight_override: Some(1.0),
+                vector_weight_override: Some(0.0),
+            },
+        )
+        .unwrap();
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].id, "bm25_match", "BM25-only weighting must surface textual match");
+    }
+
+    #[test]
+    fn test_weight_override_defaults_to_adaptive_when_none() {
+        let candidates = vec![cand(
+            "c",
+            "dark mode preference",
+            vec![0.9f32, 0.1, 0.0, 0.0],
+            None,
+        )];
+        let query_embedding = vec![0.9f32, 0.1, 0.0, 0.0];
+
+        let adaptive = rerank("dark mode", &query_embedding, &candidates, 10).unwrap();
+        let explicit_none = rerank_with_config(
+            "dark mode",
+            &query_embedding,
+            &candidates,
+            10,
+            RerankerConfig {
+                apply_source_weights: false,
+                bm25_weight_override: None,
+                vector_weight_override: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(adaptive.len(), 1);
+        assert_eq!(explicit_none.len(), 1);
+        assert!(
+            (adaptive[0].score - explicit_none[0].score).abs() < 1e-12,
+            "None overrides must produce identical scores to the v0 adaptive path"
+        );
+    }
+
+    #[test]
+    fn test_reranker_config_serde_skips_none_overrides() {
+        let cfg = RerankerConfig::default();
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(!json.contains("bm25_weight_override"), "None fields must be omitted from JSON");
+        assert!(!json.contains("vector_weight_override"), "None fields must be omitted from JSON");
+
+        let cfg_with = RerankerConfig {
+            apply_source_weights: false,
+            bm25_weight_override: Some(0.7),
+            vector_weight_override: Some(0.3),
+        };
+        let json2 = serde_json::to_string(&cfg_with).unwrap();
+        assert!(json2.contains("0.7"));
+        assert!(json2.contains("0.3"));
+
+        let back: RerankerConfig = serde_json::from_str(&json2).unwrap();
+        assert_eq!(back.bm25_weight_override, Some(0.7));
+        assert_eq!(back.vector_weight_override, Some(0.3));
     }
 }

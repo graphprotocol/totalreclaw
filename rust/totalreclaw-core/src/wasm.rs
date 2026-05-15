@@ -393,6 +393,8 @@ pub fn wasm_rerank_with_config(
         .map_err(|e| JsError::new(&format!("Invalid candidates JSON: {}", e)))?;
     let config = reranker::RerankerConfig {
         apply_source_weights,
+        bm25_weight_override: None,
+        vector_weight_override: None,
     };
     let results = reranker::rerank_with_config(query, query_embedding, &candidates, top_k, config)
         .map_err(|e| JsError::new(&e.to_string()))?;
@@ -872,6 +874,52 @@ pub fn wasm_trapdoor_batch_size() -> usize {
 #[wasm_bindgen(js_name = "getPageSize")]
 pub fn wasm_page_size() -> usize {
     search::PAGE_SIZE
+}
+
+/// Generate trapdoors for multiple query reformulations (expansion pipeline).
+///
+/// `queries_json`: JSON array of query strings (original + reformulations).
+/// `embeddings_json`: JSON array of Float32Array-compatible arrays (one per query).
+/// `lsh_hasher`: A `WasmLshHasher` instance.
+///
+/// Returns a JsValue (JSON array of trapdoor-string arrays, one per query).
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "generateExpansionTrapdoors")]
+pub fn wasm_generate_expansion_trapdoors(
+    queries_json: &str,
+    embeddings_json: &str,
+    lsh_hasher: &WasmLshHasher,
+) -> Result<JsValue, JsError> {
+    let queries: Vec<String> = serde_json::from_str(queries_json)
+        .map_err(|e| JsError::new(&format!("Invalid queries JSON: {}", e)))?;
+    let embeddings: Vec<Vec<f32>> = serde_json::from_str(embeddings_json)
+        .map_err(|e| JsError::new(&format!("Invalid embeddings JSON: {}", e)))?;
+    let query_refs: Vec<&str> = queries.iter().map(|s| s.as_str()).collect();
+    let embedding_refs: Vec<&[f32]> = embeddings.iter().map(|v| v.as_slice()).collect();
+    let result =
+        search::generate_expansion_trapdoors(&query_refs, &embedding_refs, &lsh_hasher.inner)
+            .map_err(to_js_error)?;
+    serde_wasm_bindgen::to_value(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Merge multiple SubgraphFact sets from parallel query reformulations via RRF.
+///
+/// `fact_sets_json`: JSON array of SubgraphFact arrays (one array per reformulation).
+/// `rrf_k`: RRF k-parameter (use 60.0 for default behaviour).
+///
+/// Returns a JsValue (merged, deduplicated SubgraphFact array sorted by RRF score).
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "mergeExpansionResults")]
+pub fn wasm_merge_expansion_results(
+    fact_sets_json: &str,
+    rrf_k: f64,
+) -> Result<JsValue, JsError> {
+    let fact_sets: Vec<Vec<search::SubgraphFact>> = serde_json::from_str(fact_sets_json)
+        .map_err(|e| JsError::new(&format!("Invalid fact_sets JSON: {}", e)))?;
+    let set_refs: Vec<&[search::SubgraphFact]> = fact_sets.iter().map(|v| v.as_slice()).collect();
+    let config = search::ExpansionConfig { rrf_k };
+    let merged = search::merge_expansion_results(&set_refs, &config);
+    serde_wasm_bindgen::to_value(&merged).map_err(|e| JsError::new(&e.to_string()))
 }
 
 // ---------------------------------------------------------------------------

@@ -416,6 +416,8 @@ fn py_rerank_with_config(
         serde_json::from_str(candidates_json).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let config = reranker::RerankerConfig {
         apply_source_weights,
+        bm25_weight_override: None,
+        vector_weight_override: None,
     };
     let results = reranker::rerank_with_config(query, &query_embedding, &candidates, top_k, config)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -884,6 +886,50 @@ fn get_export_query() -> &'static str {
 #[pyfunction]
 fn hex_blob_to_base64(hex_blob: &str) -> Option<String> {
     search::hex_blob_to_base64(hex_blob)
+}
+
+/// Generate trapdoors for multiple query reformulations (expansion pipeline).
+///
+/// Args:
+///     queries: List of query strings (original query + reformulations).
+///     embeddings: List of embedding vectors (one list-of-floats per query).
+///     lsh_hasher: A LshHasher instance.
+///
+/// Returns:
+///     List of trapdoor-string lists, one per query.
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn generate_expansion_trapdoors(
+    queries: Vec<String>,
+    embeddings: Vec<Vec<f32>>,
+    lsh_hasher: &PyLshHasher,
+) -> PyResult<Vec<Vec<String>>> {
+    let query_refs: Vec<&str> = queries.iter().map(|s| s.as_str()).collect();
+    let embedding_refs: Vec<&[f32]> = embeddings.iter().map(|v| v.as_slice()).collect();
+    search::generate_expansion_trapdoors(&query_refs, &embedding_refs, &lsh_hasher.inner)
+        .map_err(to_pyerr)
+}
+
+/// Merge multiple SubgraphFact sets from parallel query reformulations via RRF.
+///
+/// Args:
+///     fact_sets_json: JSON string containing an array of SubgraphFact arrays
+///         (one array per reformulation, ordered by relevance).
+///     rrf_k: RRF k-parameter. Use 60.0 for default behaviour.
+///
+/// Returns:
+///     JSON string of the merged, deduplicated SubgraphFact array sorted by
+///     descending RRF score.
+#[cfg(feature = "managed")]
+#[pyfunction]
+fn merge_expansion_results(fact_sets_json: &str, rrf_k: f64) -> PyResult<String> {
+    let fact_sets: Vec<Vec<search::SubgraphFact>> = serde_json::from_str(fact_sets_json)
+        .map_err(|e| PyValueError::new_err(format!("Invalid fact_sets JSON: {}", e)))?;
+    let set_refs: Vec<&[search::SubgraphFact]> = fact_sets.iter().map(|v| v.as_slice()).collect();
+    let config = search::ExpansionConfig { rrf_k };
+    let merged = search::merge_expansion_results(&set_refs, &config);
+    serde_json::to_string(&merged)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1616,6 +1662,8 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(get_broadened_search_query, m)?)?;
         m.add_function(wrap_pyfunction!(get_export_query, m)?)?;
         m.add_function(wrap_pyfunction!(hex_blob_to_base64, m)?)?;
+        m.add_function(wrap_pyfunction!(generate_expansion_trapdoors, m)?)?;
+        m.add_function(wrap_pyfunction!(merge_expansion_results, m)?)?;
     }
 
     // Knowledge Graph Phase 1

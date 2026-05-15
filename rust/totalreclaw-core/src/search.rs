@@ -176,6 +176,36 @@ pub fn count_query() -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
+// Expansion pipeline config
+// ---------------------------------------------------------------------------
+
+/// Configuration for the query-expansion search pipeline.
+///
+/// The expansion pipeline lets the host generate 2-3 LLM reformulations of the
+/// original query, run parallel trapdoor searches per reformulation, then merge
+/// all result sets into one ranked list before decryption + reranking.
+///
+/// `rrf_k` controls the RRF merge step. The default (60.0) matches the value
+/// used in the single-query reranker and agentmemory's reference implementation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpansionConfig {
+    /// RRF k-parameter for multi-query merge. Higher values dampen the
+    /// influence of top-ranked documents. Default: 60.0.
+    #[serde(default = "default_rrf_k")]
+    pub rrf_k: f64,
+}
+
+fn default_rrf_k() -> f64 {
+    60.0
+}
+
+impl Default for ExpansionConfig {
+    fn default() -> Self {
+        ExpansionConfig { rrf_k: 60.0 }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Trapdoor generation
 // ---------------------------------------------------------------------------
 
@@ -201,6 +231,80 @@ pub fn generate_search_trapdoors(
     trapdoors.extend(lsh_buckets);
 
     Ok(trapdoors)
+}
+
+/// Generate trapdoors for multiple query reformulations in one call.
+///
+/// Convenience batch wrapper around `generate_search_trapdoors` for the
+/// expansion pipeline. Returns one `Vec<String>` of trapdoors per input query.
+/// `queries` and `query_embeddings` must have the same length.
+pub fn generate_expansion_trapdoors(
+    queries: &[&str],
+    query_embeddings: &[&[f32]],
+    lsh_hasher: &LshHasher,
+) -> Result<Vec<Vec<String>>> {
+    if queries.len() != query_embeddings.len() {
+        return Err(crate::Error::Crypto(format!(
+            "queries.len() ({}) != query_embeddings.len() ({})",
+            queries.len(),
+            query_embeddings.len()
+        )));
+    }
+    queries
+        .iter()
+        .zip(query_embeddings.iter())
+        .map(|(q, e)| generate_search_trapdoors(q, e, lsh_hasher))
+        .collect()
+}
+
+/// Merge multiple ordered `SubgraphFact` lists from parallel query reformulations.
+///
+/// Each input set is an already-deduplicated, ordered slice of facts returned
+/// from one reformulation query (position 0 = best match in that query).
+/// Facts that appear across multiple sets accumulate RRF score contributions
+/// and therefore surface higher in the merged output — this is the mechanism
+/// that yields 2-3x richer recall vs. a single query.
+///
+/// The returned list is deduplicated (by fact id), sorted by descending RRF
+/// score with a deterministic tie-break on id, and ready for `decrypt_and_rerank`.
+///
+/// Use `ExpansionConfig::default()` for standard k=60 RRF semantics.
+pub fn merge_expansion_results(
+    fact_sets: &[&[SubgraphFact]],
+    config: &ExpansionConfig,
+) -> Vec<SubgraphFact> {
+    if fact_sets.is_empty() {
+        return Vec::new();
+    }
+    if fact_sets.len() == 1 {
+        return fact_sets[0].to_vec();
+    }
+
+    // Accumulate per-fact RRF scores and keep the first-seen copy of each fact.
+    let mut scores: HashMap<String, f64> = HashMap::new();
+    let mut facts_by_id: HashMap<String, SubgraphFact> = HashMap::new();
+
+    for set in fact_sets {
+        for (rank, fact) in set.iter().enumerate() {
+            // 1-based rank: rank 0 in the slice → position 1 in the RRF formula.
+            let rrf = 1.0 / (config.rrf_k + (rank + 1) as f64);
+            *scores.entry(fact.id.clone()).or_insert(0.0) += rrf;
+            facts_by_id.entry(fact.id.clone()).or_insert_with(|| fact.clone());
+        }
+    }
+
+    // Sort by descending RRF score; tiebreak ascending by id for determinism.
+    let mut scored: Vec<(String, f64)> = scores.into_iter().collect();
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+
+    scored
+        .into_iter()
+        .filter_map(|(id, _)| facts_by_id.remove(&id))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -756,5 +860,135 @@ mod tests {
 
         // JSON without "t" key falls back
         assert_eq!(extract_text_from_blob(r#"{"x":"y"}"#), r#"{"x":"y"}"#);
+    }
+
+    fn make_fact(id: &str) -> SubgraphFact {
+        SubgraphFact {
+            id: id.to_string(),
+            encrypted_blob: "0xdeadbeef".to_string(),
+            encrypted_embedding: None,
+            decay_score: None,
+            timestamp: None,
+            created_at: None,
+            is_active: Some(true),
+            content_fp: None,
+        }
+    }
+
+    #[test]
+    fn test_expansion_config_default() {
+        let cfg = ExpansionConfig::default();
+        assert!((cfg.rrf_k - 60.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_merge_expansion_results_empty() {
+        let merged = merge_expansion_results(&[], &ExpansionConfig::default());
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn test_merge_expansion_results_single_set() {
+        let facts = vec![make_fact("a"), make_fact("b")];
+        let sets: Vec<&[SubgraphFact]> = vec![&facts];
+        let merged = merge_expansion_results(&sets, &ExpansionConfig::default());
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].id, "a");
+        assert_eq!(merged[1].id, "b");
+    }
+
+    #[test]
+    fn test_merge_expansion_results_deduplicates_across_sets() {
+        // "shared" appears in both sets; "only_a" and "only_b" are unique.
+        let set_a = vec![make_fact("shared"), make_fact("only_a")];
+        let set_b = vec![make_fact("shared"), make_fact("only_b")];
+        let sets: Vec<&[SubgraphFact]> = vec![&set_a, &set_b];
+        let merged = merge_expansion_results(&sets, &ExpansionConfig::default());
+        assert_eq!(merged.len(), 3, "should contain exactly 3 unique facts");
+        let ids: Vec<&str> = merged.iter().map(|f| f.id.as_str()).collect();
+        assert!(ids.contains(&"shared"), "shared fact must appear exactly once");
+        assert!(ids.contains(&"only_a"));
+        assert!(ids.contains(&"only_b"));
+    }
+
+    #[test]
+    fn test_merge_expansion_results_shared_fact_ranks_first() {
+        // A fact that appears first in both sets should score higher than one
+        // that appears only once, even at rank 0 in its set.
+        let set_a = vec![make_fact("shared"), make_fact("unique_a")];
+        let set_b = vec![make_fact("shared"), make_fact("unique_b")];
+        let sets: Vec<&[SubgraphFact]> = vec![&set_a, &set_b];
+        let merged = merge_expansion_results(&sets, &ExpansionConfig::default());
+        assert_eq!(merged[0].id, "shared");
+    }
+
+    #[test]
+    fn test_merge_expansion_results_deterministic_tiebreak() {
+        // Two facts each appear in only one set at rank 0 → equal RRF score.
+        // Tiebreak must be ascending by id.
+        let set_a = vec![make_fact("zzz")];
+        let set_b = vec![make_fact("aaa")];
+        let sets: Vec<&[SubgraphFact]> = vec![&set_a, &set_b];
+        let merged = merge_expansion_results(&sets, &ExpansionConfig::default());
+        assert_eq!(merged[0].id, "aaa");
+        assert_eq!(merged[1].id, "zzz");
+    }
+
+    #[test]
+    fn test_merge_expansion_results_rrf_k_parameter() {
+        // Higher k dampens top-rank scores; with k=1 vs k=1000 the relative
+        // ordering of a fact present in two sets vs one should be preserved.
+        let set_a = vec![make_fact("both"), make_fact("one_only")];
+        let set_b = vec![make_fact("both")];
+        let sets: Vec<&[SubgraphFact]> = vec![&set_a, &set_b];
+        for rrf_k in [1.0, 60.0, 1000.0] {
+            let merged = merge_expansion_results(&sets, &ExpansionConfig { rrf_k });
+            assert_eq!(merged[0].id, "both", "rrf_k={rrf_k}: cross-set fact must still rank first");
+        }
+    }
+
+    #[test]
+    fn test_generate_expansion_trapdoors_length_mismatch_errors() {
+        let keys = crate::crypto::derive_keys_from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        )
+        .unwrap();
+        let lsh_seed = crate::crypto::derive_lsh_seed(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            &keys.salt,
+        )
+        .unwrap();
+        let lsh_hasher = LshHasher::new(&lsh_seed, 640).unwrap();
+
+        let queries = ["q1", "q2"];
+        let embeddings: Vec<&[f32]> = vec![&[0.5f32; 640]]; // length mismatch
+        assert!(
+            generate_expansion_trapdoors(&queries, &embeddings, &lsh_hasher).is_err(),
+            "mismatched lengths should return an error"
+        );
+    }
+
+    #[test]
+    fn test_generate_expansion_trapdoors_returns_one_vec_per_query() {
+        let keys = crate::crypto::derive_keys_from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        )
+        .unwrap();
+        let lsh_seed = crate::crypto::derive_lsh_seed(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            &keys.salt,
+        )
+        .unwrap();
+        let lsh_hasher = LshHasher::new(&lsh_seed, 640).unwrap();
+
+        let emb = vec![0.5f32; 640];
+        let queries = ["dark mode", "theme settings", "UI color scheme"];
+        let embeddings: Vec<&[f32]> = vec![&emb, &emb, &emb];
+        let result = generate_expansion_trapdoors(&queries, &embeddings, &lsh_hasher).unwrap();
+
+        assert_eq!(result.len(), 3, "one trapdoor vec per query");
+        for vec in &result {
+            assert!(!vec.is_empty(), "each query should produce trapdoors");
+        }
     }
 }
