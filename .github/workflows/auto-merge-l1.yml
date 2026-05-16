@@ -47,10 +47,19 @@ jobs:
             exit 1
           fi
 
-      - name: Verify PR has canonical-roadmap-task label
+      # `agent/coord-*` heads = coordinator/skill self-fix PRs (docs to a skill,
+      # listener-fallback patches, etc). These are meta-pipeline work and don't
+      # carry `canonical-roadmap-task` by design. Allow them through as long as
+      # they passed the `agent/*` gate above.
+      - name: Verify PR has canonical-roadmap-task label (unless coord meta-fix)
         env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
+          if [[ "$HEAD_REF" =~ ^agent/coord- ]]; then
+            echo "agent/coord-* head — meta-pipeline PR, skipping canonical-roadmap-task check"
+            exit 0
+          fi
           if ! echo "$LABELS" | grep -q 'canonical-roadmap-task'; then
             echo "Refusing to auto-merge: PR not labeled canonical-roadmap-task"
             exit 1
