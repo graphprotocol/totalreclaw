@@ -8,7 +8,7 @@
  * `submitFactBatchOnChain(pendingPayloads, batchConfig)` call handles all
  * pending facts.
  *
- * The post-fix shape is structural: there must be exactly one batched call,
+ * The after-fix shape is structural: there must be exactly one batched call,
  * inside `storeExtractedFacts`, that passes the full `pendingPayloads` array
  * (not a slice / single-element wrapper), with no enclosing `for`/`while`
  * loop driving repeated calls. If this regresses, every multi-fact extraction
@@ -21,7 +21,7 @@
  * `npx tsx` — no jest / vitest module mocking. A behavioral test would need
  * either a refactor to dependency-injected callers or a mock-aware harness.
  * Both are out of scope for ops-3. Until that infrastructure lands, this
- * static guard pins the post-restoration shape.
+ * static guard pins the after-restoration shape.
  *
  * Run with: npx tsx storeextractedfacts-batched-submission.test.ts
  */
@@ -197,7 +197,7 @@ assert(
 // 6. Sanity: the import of submitFactBatchOnChain from subgraph-store still
 //    exists (catches the case where someone removes the import but leaves the
 //    call — TS would catch it, but if the imports are reshuffled this asserts
-//    the post-fix shape).
+//    the after-fix shape).
 // ---------------------------------------------------------------------------
 
 assert(
