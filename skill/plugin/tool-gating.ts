@@ -5,8 +5,8 @@
  *
  * Scope: the 3.2.0 state machine has two states (`fresh`, `active`). Memory
  * tools are blocked when state is anything other than `active`. Billing +
- * setup-adjacent tools remain usable — users need to be able to upgrade,
- * migrate, and start onboarding before their vault is active.
+ * setup-adjacent tools remain usable — users need to be able to upgrade
+ * and start onboarding before their vault is active.
  *
  * This module imports ONLY types + the state resolver. No I/O beyond what
  * `resolveOnboardingState` already does; no network; no env reads.
@@ -17,7 +17,7 @@ import type { OnboardingState } from './fs-helpers.js';
 /**
  * Tool names gated on `state=active`. Keep in sync with the actual
  * `registerTool` calls in `index.ts`. Anything NOT in this set is always
- * callable (e.g. totalreclaw_upgrade, totalreclaw_migrate,
+ * callable (e.g. totalreclaw_upgrade,
  * totalreclaw_onboarding_start, totalreclaw_setup).
  */
 export const GATED_TOOL_NAMES: readonly string[] = Object.freeze([

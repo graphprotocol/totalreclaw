@@ -19,7 +19,6 @@
       "totalreclaw_import_from",
       "totalreclaw_import_batch",
       "totalreclaw_upgrade",
-      "totalreclaw_migrate",
       "totalreclaw_pair",
       "totalreclaw_report_qa_bug"
     ]

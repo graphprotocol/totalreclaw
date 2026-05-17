@@ -41,14 +41,12 @@ const TROUBLESHOOTING = [
     issue: 'Quota exceeded / cannot store more memories',
     solution:
       'Free tier has a monthly write limit. Use totalreclaw_status to check your remaining quota. ' +
-      'Upgrade to Pro via totalreclaw_upgrade for unlimited permanent storage on Gnosis mainnet. ' +
-      'After upgrading, use totalreclaw_migrate to move existing memories from testnet to mainnet.',
+      'Upgrade to Pro via totalreclaw_upgrade for unlimited permanent storage on Gnosis mainnet.',
   },
   {
     issue: 'Memories not appearing after Pro upgrade',
     solution:
-      'After upgrading to Pro, run totalreclaw_migrate to copy memories from the testnet (Base Sepolia) ' +
-      'to mainnet (Gnosis). The billing cache refreshes every 2 hours -- restart the MCP server to ' +
+      'The billing cache refreshes every 2 hours -- restart the MCP server to ' +
       'force a refresh if your Pro tier is not yet recognized.',
   },
   {

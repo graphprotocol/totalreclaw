@@ -69,8 +69,8 @@ node "$TR_CLI" pair --json       # {"url":"...","pin":"123456","expires_at_ms":.
 
 Pair is UNCONDITIONAL when no credentials — pasting the install URL IS the consent. `tr --help` lists every subcommand.
 
-## Tools (17 native; same surface via `tr`)
+## Tools (16 native; same surface via `tr`)
 
-`totalreclaw_remember` · `totalreclaw_recall` · `totalreclaw_forget` · `totalreclaw_pair` · `totalreclaw_pin` · `totalreclaw_unpin` · `totalreclaw_retype` · `totalreclaw_set_scope` · `totalreclaw_export` · `totalreclaw_import_from` · `totalreclaw_import_batch` · `totalreclaw_consolidate` · `totalreclaw_status` · `totalreclaw_upgrade` · `totalreclaw_migrate` · `totalreclaw_onboarding_start` · `totalreclaw_report_qa_bug` (RC only).
+`totalreclaw_remember` · `totalreclaw_recall` · `totalreclaw_forget` · `totalreclaw_pair` · `totalreclaw_pin` · `totalreclaw_unpin` · `totalreclaw_retype` · `totalreclaw_set_scope` · `totalreclaw_export` · `totalreclaw_import_from` · `totalreclaw_import_batch` · `totalreclaw_consolidate` · `totalreclaw_status` · `totalreclaw_upgrade` · `totalreclaw_onboarding_start` · `totalreclaw_report_qa_bug` (RC only).
 
 Full guides: <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>

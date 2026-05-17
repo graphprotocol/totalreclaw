@@ -138,7 +138,6 @@ All 19 tools are invoked by the host agent from natural language context. Tool s
 | `totalreclaw_consolidate` | Merge duplicate and related memories |
 | `totalreclaw_debrief` | End-of-conversation summary to capture broader context |
 | `totalreclaw_upgrade` | Get a link to upgrade to Pro |
-| `totalreclaw_migrate` | Migrate testnet memories to mainnet after Pro upgrade |
 | `totalreclaw_account` | View account details (wallet, tier, quota, phrase hint) |
 | `totalreclaw_support` | Troubleshooting help + contact links |
 

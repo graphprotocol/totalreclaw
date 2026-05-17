@@ -141,7 +141,6 @@ The MCP server exposes these tools (the MCP host prefixes them with `totalreclaw
 | `totalreclaw_status` | Check onboarding state, version, billing tier |
 | `totalreclaw_account` | Show smart-account address + chain |
 | `totalreclaw_upgrade` | Open the Stripe upgrade flow (free → paid tier) |
-| `totalreclaw_migrate` | Move testnet memories to mainnet (Pro tier) |
 | `totalreclaw_support` | File a support ticket with diagnostic context |
 
 **Total: 18 tools.** All tools accept JSON input and return structured JSON in their response payload.
@@ -198,6 +197,6 @@ Shorter slices:
 
 ## Tool surface summary
 
-`totalreclaw__totalreclaw_pair` · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_retype` · `_set_scope` · `_export` · `_import` · `_import_from` · `_import_batch` · `_consolidate` · `_debrief` · `_status` · `_account` · `_upgrade` · `_migrate` · `_support` (19 tools — one of these is RC-only).
+`totalreclaw__totalreclaw_pair` · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_retype` · `_set_scope` · `_export` · `_import` · `_import_from` · `_import_batch` · `_consolidate` · `_debrief` · `_status` · `_account` · `_upgrade` · `_support` (18 tools — one of these is RC-only).
 
 **Default behavior summary**: the agent's job is to call `totalreclaw_remember` aggressively on user statements that match the trigger-phrase list, and `totalreclaw_recall` when the user asks about themselves. Local files (`MEMORY.md`, `USER.md`, etc.) are NOT for user memory — they are agent-persona configuration only.

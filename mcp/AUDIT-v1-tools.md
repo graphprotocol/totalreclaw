@@ -19,16 +19,15 @@ Registered tools (`mcp/src/index.ts:1828-1846`):
 9. `totalreclaw_consolidate`
 10. `totalreclaw_status`
 11. `totalreclaw_upgrade`
-12. `totalreclaw_migrate`
-13. `totalreclaw_debrief`
-14. `totalreclaw_support`
-15. `totalreclaw_account`
-16. `totalreclaw_pin`
-17. `totalreclaw_unpin`
-18. `totalreclaw_retype`
-19. `totalreclaw_set_scope`
+12. `totalreclaw_debrief`
+13. `totalreclaw_support`
+14. `totalreclaw_account`
+15. `totalreclaw_pin`
+16. `totalreclaw_unpin`
+17. `totalreclaw_retype`
+18. `totalreclaw_set_scope`
 
-(CLAUDE.md's "18 tools" bucket omits `totalreclaw_setup` + `totalreclaw_unpin`; the actually-registered total is 19. Kept that way.)
+(`totalreclaw_migrate` was deprecated in ops-3 when Pro consolidated onto Gnosis-only; historical audit entries below are preserved for context.)
 
 ## Audit table
 
@@ -47,8 +46,7 @@ Scores **before** this audit's fixes (/) and **after** (\):
 | 9 | `totalreclaw_consolidate` | N/A / N/A | 6 / 8 | added managed-service warning | rewrite |
 | 10 | `totalreclaw_status` | N/A / N/A | 6 / 8 | triggers added | rewrite |
 | 11 | `totalreclaw_upgrade` | N/A / N/A | 7 / 8 | triggers added | rewrite |
-| 12 | `totalreclaw_migrate` | N/A / N/A | 7 / 7 | workflow-style already strong | none |
-| 13 | `totalreclaw_debrief` | **NO** / **YES** | 6 / 8 | emitted v0 canonical — now emits v1 summary + source=derived | **A1** + rewrite |
+| 12 | `totalreclaw_debrief` | **NO** / **YES** | 6 / 8 | emitted v0 canonical — now emits v1 summary + source=derived | **A1** + rewrite |
 | 14 | `totalreclaw_support` | N/A / N/A | 6 / 8 | triggers added | rewrite |
 | 15 | `totalreclaw_account` | N/A / N/A | 7 / 8 | triggers added | rewrite |
 | 16 | `totalreclaw_pin` | PARTIAL / PARTIAL | 5 / 8 | description overhauled; blob format gap documented (A2) | rewrite + doc |
@@ -118,7 +116,7 @@ Documented this gap explicitly in the tool descriptions (both pin and unpin refe
 
 `mcp/tests/tool-descriptions.test.ts` — 44 assertions across 20 `test` cases:
 
-- **LLM-autonomy triggers:** Each tool's description has the minimum required natural-language trigger bullets (0 for setup/remember/import_batch/migrate where triggers live elsewhere, 2-3 for the rest).
+- **LLM-autonomy triggers:** Each tool's description has the minimum required natural-language trigger bullets (0 for setup/remember/import_batch where triggers live elsewhere, 2-3 for the rest).
 - **"WHEN NOT TO USE" guardrail:** Every user-facing tool with triggers also has an anti-over-invocation section.
 - **v1 blob round-trip:** `buildV1ClaimBlob` produces valid v1 JSON; `readBlobUnified` returns v1 surface for v1 blobs and falls back to v0 short-key for legacy blobs.
 - **A1 fix verification:** Debrief items built with `type: 'summary'`, `source: 'derived'` round-trip correctly. Tool-level `context` maps to v1 `summary`.

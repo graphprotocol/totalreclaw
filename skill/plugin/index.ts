@@ -21,7 +21,6 @@
  *   - totalreclaw_import_status -- check background import progress
  *   - totalreclaw_import_abort  -- cancel a running background import
  *   - totalreclaw_upgrade       -- create Stripe checkout for Pro upgrade
- *   - totalreclaw_migrate      -- migrate testnet memories to mainnet after Pro upgrade
  *   - totalreclaw_onboarding_start -- non-secret pointer to the CLI wizard (3.2.0)
  *   - totalreclaw_setup        -- DEPRECATED in 3.2.0; redirects to the CLI wizard
  *
@@ -1551,138 +1550,6 @@ function decryptFromHex(hexBlob: string, key: Buffer): string {
   return decrypt(b64, key);
 }
 
-// ---------------------------------------------------------------------------
-// Migration GraphQL helpers
-// ---------------------------------------------------------------------------
-
-interface MigrationFact {
-  id: string;
-  owner: string;
-  encryptedBlob: string;
-  encryptedEmbedding: string | null;
-  decayScore: string;
-  isActive: boolean;
-  contentFp: string;
-  source: string;
-  agentId: string;
-  version: number;
-  timestamp: string;
-}
-
-const MIGRATION_PAGE_SIZE = 1000;
-
-/** Execute a GraphQL query against a subgraph endpoint. Returns null on error. */
-async function migrationGqlQuery<T>(
-  endpoint: string,
-  query: string,
-  variables: Record<string, unknown>,
-  authKey?: string,
-): Promise<T | null> {
-  try {
-    const overrides: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (authKey) overrides['Authorization'] = `Bearer ${authKey}`;
-    const headers = buildRelayHeaders(overrides);
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ query, variables }),
-    });
-    if (!response.ok) return null;
-    const json = await response.json() as { data?: T; errors?: unknown[] };
-    return json.data ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/** Fetch all active facts by owner from a subgraph, paginated. */
-async function fetchAllFactsByOwner(
-  subgraphUrl: string,
-  owner: string,
-  authKey: string,
-): Promise<MigrationFact[]> {
-  const allFacts: MigrationFact[] = [];
-  let lastId = '';
-
-  while (true) {
-    const hasLastId = lastId !== '';
-    const query = hasLastId
-      ? `query($owner:Bytes!,$first:Int!,$lastId:String!){facts(where:{owner:$owner,isActive:true,id_gt:$lastId},first:$first,orderBy:id,orderDirection:asc){id owner encryptedBlob encryptedEmbedding decayScore isActive contentFp source agentId version timestamp}}`
-      : `query($owner:Bytes!,$first:Int!){facts(where:{owner:$owner,isActive:true},first:$first,orderBy:id,orderDirection:asc){id owner encryptedBlob encryptedEmbedding decayScore isActive contentFp source agentId version timestamp}}`;
-    const vars: Record<string, unknown> = hasLastId
-      ? { owner, first: MIGRATION_PAGE_SIZE, lastId }
-      : { owner, first: MIGRATION_PAGE_SIZE };
-
-    const data = await migrationGqlQuery<{ facts?: MigrationFact[] }>(subgraphUrl, query, vars, authKey);
-    const facts = data?.facts ?? [];
-    if (facts.length === 0) break;
-    allFacts.push(...facts);
-    if (facts.length < MIGRATION_PAGE_SIZE) break;
-    lastId = facts[facts.length - 1].id;
-  }
-
-  return allFacts;
-}
-
-/** Fetch content fingerprints from a subgraph for idempotency. */
-async function fetchContentFingerprintsByOwner(
-  subgraphUrl: string,
-  owner: string,
-  authKey: string,
-): Promise<Set<string>> {
-  const fps = new Set<string>();
-  let lastId = '';
-
-  while (true) {
-    const hasLastId = lastId !== '';
-    const query = hasLastId
-      ? `query($owner:Bytes!,$first:Int!,$lastId:String!){facts(where:{owner:$owner,isActive:true,id_gt:$lastId},first:$first,orderBy:id,orderDirection:asc){id contentFp}}`
-      : `query($owner:Bytes!,$first:Int!){facts(where:{owner:$owner,isActive:true},first:$first,orderBy:id,orderDirection:asc){id contentFp}}`;
-    const vars: Record<string, unknown> = hasLastId
-      ? { owner, first: MIGRATION_PAGE_SIZE, lastId }
-      : { owner, first: MIGRATION_PAGE_SIZE };
-
-    const data = await migrationGqlQuery<{ facts?: Array<{ id: string; contentFp: string }> }>(subgraphUrl, query, vars, authKey);
-    const facts = data?.facts ?? [];
-    if (facts.length === 0) break;
-    for (const f of facts) {
-      if (f.contentFp) fps.add(f.contentFp);
-    }
-    if (facts.length < MIGRATION_PAGE_SIZE) break;
-    lastId = facts[facts.length - 1].id;
-  }
-
-  return fps;
-}
-
-/** Fetch blind index hashes for given fact IDs. */
-async function fetchBlindIndicesByFactIds(
-  subgraphUrl: string,
-  factIds: string[],
-  authKey: string,
-): Promise<Map<string, string[]>> {
-  const result = new Map<string, string[]>();
-  const CHUNK = 50;
-
-  for (let i = 0; i < factIds.length; i += CHUNK) {
-    const chunk = factIds.slice(i, i + CHUNK);
-    const query = `query($factIds:[String!]!,$first:Int!){blindIndexes(where:{fact_in:$factIds},first:$first){hash fact{id}}}`;
-    const data = await migrationGqlQuery<{
-      blindIndexes?: Array<{ hash: string; fact: { id: string } }>;
-    }>(subgraphUrl, query, { factIds: chunk, first: 1000 }, authKey);
-
-    for (const entry of data?.blindIndexes ?? []) {
-      const existing = result.get(entry.fact.id) || [];
-      existing.push(entry.hash);
-      result.set(entry.fact.id, existing);
-    }
-  }
-
-  return result;
-}
-
 /**
  * Fetch existing memories from the vault to provide dedup context for extraction.
  * Returns a lightweight list of {id, text} pairs for the LLM prompt.
@@ -2216,38 +2083,28 @@ async function storeExtractedFacts(
     }
   }
 
-  // Submit subgraph payloads one fact at a time (sequential single-call UserOps).
-  // Batch executeBatch UserOps have persistent gas estimation issues on Base Sepolia
-  // that cause on-chain reverts. Single-fact UserOps use the simpler submitFactOnChain
-  // path which works reliably (same path as totalreclaw_remember). Each submission
-  // polls for receipt (120s) before proceeding, so nonce is consumed before the next.
+  // Submit all pending subgraph payloads in a single executeBatch UserOp.
   let batchError: string | undefined;
   if (pendingPayloads.length > 0 && isSubgraphMode()) {
     const batchConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
-    for (let i = 0; i < pendingPayloads.length; i++) {
-      const slice = [pendingPayloads[i]]; // Single fact per UserOp
-      try {
-        const result = await submitFactBatchOnChain(slice, batchConfig);
-        if (result.success) {
-          stored += slice.length;
-          logger.info(`Fact ${i + 1}/${pendingPayloads.length}: submitted on-chain (tx=${result.txHash.slice(0, 10)}…)`);
-        } else {
-          batchError = `On-chain batch submission failed (tx=${result.txHash.slice(0, 10)}…)`;
-          logger.warn(batchError);
-          break; // Stop submitting remaining batches
-        }
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('403') || errMsg.toLowerCase().includes('quota')) {
-          deleteFileIfExists(BILLING_CACHE_PATH);
-          batchError = `Quota exceeded — billing cache invalidated. ${errMsg}`;
-          logger.warn(batchError);
-          break;
-        } else {
-          batchError = `Batch submission failed: ${errMsg}`;
-          logger.warn(batchError);
-          break;
-        }
+    try {
+      const result = await submitFactBatchOnChain(pendingPayloads, batchConfig);
+      if (result.success) {
+        stored += pendingPayloads.length;
+        logger.info(`Submitted ${pendingPayloads.length} fact(s) on-chain (tx=${result.txHash.slice(0, 10)}…)`);
+      } else {
+        batchError = `On-chain batch submission failed (tx=${result.txHash.slice(0, 10)}…)`;
+        logger.warn(batchError);
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('403') || errMsg.toLowerCase().includes('quota')) {
+        deleteFileIfExists(BILLING_CACHE_PATH);
+        batchError = `Quota exceeded — billing cache invalidated. ${errMsg}`;
+        logger.warn(batchError);
+      } else {
+        batchError = `Batch submission failed: ${errMsg}`;
+        logger.warn(batchError);
       }
     }
   }
@@ -5904,189 +5761,6 @@ const plugin = {
     );
 
     // ---------------------------------------------------------------
-    // Tool: totalreclaw_migrate
-    // ---------------------------------------------------------------
-
-    api.registerTool(
-      {
-        name: 'totalreclaw_migrate',
-        label: 'Migrate Testnet to Mainnet',
-        description:
-          'Migrate memories from testnet (Base Sepolia) to mainnet (Gnosis) after upgrading to Pro. ' +
-          'Dry-run by default — set confirm=true to execute. Idempotent: re-running skips already-migrated facts.',
-        parameters: {
-          type: 'object',
-          properties: {
-            confirm: {
-              type: 'boolean',
-              description: 'Set to true to execute the migration. Without it, returns a dry-run preview.',
-              default: false,
-            },
-          },
-          additionalProperties: false,
-        },
-        async execute(_params: { confirm?: boolean }) {
-          try {
-            await requireFullSetup(api.logger);
-
-            if (!authKeyHex || !subgraphOwner) {
-              return {
-                content: [{ type: 'text', text: 'Plugin not fully initialized. Ensure TOTALRECLAW_RECOVERY_PHRASE is set.' }],
-              };
-            }
-
-            if (!isSubgraphMode()) {
-              return {
-                content: [{ type: 'text', text: 'Migration is only available with the managed service (subgraph mode).' }],
-              };
-            }
-
-            const confirm = _params?.confirm === true;
-            const serverUrl = CONFIG.serverUrl;
-
-            // 1. Check billing tier
-            const billingResp = await fetch(
-              `${serverUrl}/v1/billing/status?wallet_address=${encodeURIComponent(subgraphOwner)}`,
-              {
-                method: 'GET',
-                headers: buildRelayHeaders({
-                  'Authorization': `Bearer ${authKeyHex}`,
-                  'Content-Type': 'application/json',
-                }),
-              },
-            );
-            if (!billingResp.ok) {
-              return { content: [{ type: 'text', text: `Failed to check billing tier (HTTP ${billingResp.status}).` }] };
-            }
-            const billingData = await billingResp.json() as { tier: string };
-            if (billingData.tier !== 'pro') {
-              return {
-                content: [{ type: 'text', text: 'Migration requires Pro tier. Use totalreclaw_upgrade to upgrade first.' }],
-              };
-            }
-
-            // 2. Fetch testnet facts via relay (chain=testnet query param)
-            const testnetSubgraphUrl = `${serverUrl}/v1/subgraph?chain=testnet`;
-            const mainnetSubgraphUrl = `${serverUrl}/v1/subgraph`;
-
-            api.logger.info('Fetching testnet facts...');
-            const testnetFacts = await fetchAllFactsByOwner(testnetSubgraphUrl, subgraphOwner, authKeyHex);
-
-            if (testnetFacts.length === 0) {
-              return {
-                content: [{ type: 'text', text: 'No facts found on testnet. Nothing to migrate.' }],
-              };
-            }
-
-            // 3. Check mainnet for existing facts (idempotency)
-            api.logger.info('Checking mainnet for existing facts...');
-            const mainnetFps = await fetchContentFingerprintsByOwner(mainnetSubgraphUrl, subgraphOwner, authKeyHex);
-            const factsToMigrate = testnetFacts.filter(f => !f.contentFp || !mainnetFps.has(f.contentFp));
-            const alreadyOnMainnet = testnetFacts.length - factsToMigrate.length;
-
-            // 4. Dry-run
-            if (!confirm) {
-              const msg = factsToMigrate.length === 0
-                ? `All ${testnetFacts.length} testnet facts already exist on mainnet. Nothing to migrate.`
-                : `Found ${factsToMigrate.length} facts to migrate from testnet to Gnosis mainnet (${alreadyOnMainnet} already on mainnet). Call with confirm=true to proceed.`;
-              return {
-                content: [{ type: 'text', text: msg }],
-                details: {
-                  mode: 'dry_run',
-                  testnet_facts: testnetFacts.length,
-                  already_on_mainnet: alreadyOnMainnet,
-                  to_migrate: factsToMigrate.length,
-                },
-              };
-            }
-
-            // 5. Execute migration
-            if (factsToMigrate.length === 0) {
-              return {
-                content: [{ type: 'text', text: `All ${testnetFacts.length} testnet facts already exist on mainnet. Nothing to migrate.` }],
-              };
-            }
-
-            // Fetch blind indices
-            api.logger.info(`Fetching blind indices for ${factsToMigrate.length} facts...`);
-            const factIds = factsToMigrate.map(f => f.id);
-            const blindIndicesMap = await fetchBlindIndicesByFactIds(testnetSubgraphUrl, factIds, authKeyHex);
-
-            // Build protobuf payloads
-            const payloads: Buffer[] = [];
-            for (const fact of factsToMigrate) {
-              const blobHex = fact.encryptedBlob.startsWith('0x') ? fact.encryptedBlob.slice(2) : fact.encryptedBlob;
-              const indices = blindIndicesMap.get(fact.id) || [];
-              const factPayload: FactPayload = {
-                id: fact.id,
-                timestamp: new Date().toISOString(),
-                owner: subgraphOwner,
-                encryptedBlob: blobHex,
-                blindIndices: indices,
-                decayScore: parseFloat(fact.decayScore) || 0.5,
-                source: fact.source || 'migration',
-                contentFp: fact.contentFp || '',
-                agentId: fact.agentId || 'openclaw-plugin',
-                encryptedEmbedding: fact.encryptedEmbedding || undefined,
-                version: PROTOBUF_VERSION_V4,
-              };
-              payloads.push(encodeFactProtobuf(factPayload));
-            }
-
-            // Batch submit (15 per UserOp)
-            const BATCH_SIZE = 15;
-            const batchConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
-            let migrated = 0;
-            let failedBatches = 0;
-
-            for (let i = 0; i < payloads.length; i += BATCH_SIZE) {
-              const batch = payloads.slice(i, i + BATCH_SIZE);
-              const batchNum = Math.floor(i / BATCH_SIZE) + 1;
-              const totalBatches = Math.ceil(payloads.length / BATCH_SIZE);
-              api.logger.info(`Migrating batch ${batchNum}/${totalBatches} (${batch.length} facts)...`);
-
-              try {
-                const result = await submitFactBatchOnChain(batch, batchConfig);
-                if (result.success) {
-                  migrated += batch.length;
-                } else {
-                  failedBatches++;
-                }
-              } catch (err: unknown) {
-                const msg = err instanceof Error ? err.message : String(err);
-                api.logger.error(`Migration batch ${batchNum} failed: ${msg}`);
-                failedBatches++;
-              }
-            }
-
-            const resultMsg = failedBatches === 0
-              ? `Successfully migrated ${migrated} memories from testnet to Gnosis mainnet.`
-              : `Migrated ${migrated}/${factsToMigrate.length} memories. ${failedBatches} batch(es) failed — re-run to retry (idempotent).`;
-
-            return {
-              content: [{ type: 'text', text: resultMsg }],
-              details: {
-                mode: 'executed',
-                testnet_facts: testnetFacts.length,
-                already_on_mainnet: alreadyOnMainnet,
-                to_migrate: factsToMigrate.length,
-                migrated,
-                failed_batches: failedBatches,
-              },
-            };
-          } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
-            api.logger.error(`totalreclaw_migrate failed: ${message}`);
-            return {
-              content: [{ type: 'text', text: `Migration failed: ${humanizeError(message)}` }],
-            };
-          }
-        },
-      },
-      { name: 'totalreclaw_migrate' },
-    );
-
-    // ---------------------------------------------------------------
     // Tools: totalreclaw_setup + totalreclaw_onboarding_start —
     //   REMOVED in 3.3.1-rc.5 (phrase-safety carve-out closure).
     // ---------------------------------------------------------------
@@ -6629,7 +6303,7 @@ const plugin = {
     // `blockReason` string is LLM-visible but carries no secret — it's a
     // pointer to the CLI wizard.
     //
-    // Non-gated tools: totalreclaw_upgrade, totalreclaw_migrate,
+    // Non-gated tools: totalreclaw_upgrade,
     // totalreclaw_onboarding_start, totalreclaw_setup (deprecated).
     // Billing tools work pre-onboarding because they help the user reach a
     // Pro tier before they have memories to store; setup-adjacent tools

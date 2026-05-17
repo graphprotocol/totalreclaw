@@ -3,7 +3,7 @@
  *
  * Asserted properties:
  *   1. Every expected memory tool is in GATED_TOOL_NAMES.
- *   2. Non-memory tools (upgrade, migrate, setup, onboarding_start) are NOT gated.
+ *   2. Non-memory tools (upgrade, setup, onboarding_start) are NOT gated.
  *   3. state=active never blocks gated tools.
  *   4. state=fresh blocks gated tools with a non-secret pointer.
  *   5. state=null (resolution failure) blocks gated tools (safer default).
@@ -65,7 +65,6 @@ for (const t of EXPECTED_GATED) {
 // ---------------------------------------------------------------------------
 const EXPECTED_NOT_GATED = [
   'totalreclaw_upgrade',
-  'totalreclaw_migrate',
   'totalreclaw_setup',
   'totalreclaw_onboarding_start',
 ];

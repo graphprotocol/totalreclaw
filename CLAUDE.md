@@ -150,7 +150,6 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Mem0, MCP Memory, ChatGPT, Claude adapters |
 | `totalreclaw_import` | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | JSON/Markdown re-import (MCP only) |
 | `totalreclaw_upgrade` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Stripe checkout URL |
-| `totalreclaw_migrate` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Testnet-to-mainnet migration after Pro upgrade |
 | `totalreclaw_consolidate` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Self-hosted only (no batch delete on managed service) |
 | `totalreclaw_debrief` | Yes (auto) | Yes | Yes (auto) | Yes (auto) | Yes (via MCP) | Yes (debrief method) | Session debrief — broader context at conversation end |
 | **Automatic Memory** | | | | | | | |
@@ -238,7 +237,6 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | Hot cache | -- | Yes | Self-hosted doesn't need it |
 | Dual-chain routing | -- | Yes | Relay routes based on tier (free=Base Sepolia, pro=Gnosis) |
 | Client batching | -- | Yes | Multi-call UserOps via batcher.ts (managed service only, uses ERC-4337 executeBatch) |
-| Testnet-to-mainnet migration | -- | Yes | `totalreclaw_migrate` — copies facts from Base Sepolia to Gnosis after Pro upgrade. Idempotent, dry-run by default. |
 
 ### Known Gaps
 
@@ -250,11 +248,11 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | Export/import not on managed service (MCP) | LOW | MCP server's export and import tools are self-hosted only. OpenClaw plugin handles both modes. |
 | Crypto payments removed | LOW | Coinbase Commerce sunset March 31, 2026. Removed from relay, tools, and website. Stripe (fiat) is the sole payment method. |
 | Hermes not on PyPI (hermes-agent) | RESOLVED | `totalreclaw` 1.2.0 on PyPI includes generic agent layer (no hermes-agent dependency). OPENAI_BASE_URL fix + model detection included. |
-| Hermes no import/migrate/consolidate | MEDIUM | Python client does not yet implement import adapters, migrate tool, or consolidation. Core remember/recall/forget/export/status work. |
+| Hermes no import/consolidate | MEDIUM | Python client does not yet implement import adapters or consolidation. Core remember/recall/forget/export/status work. |
 | Hermes no client batching | LOW | Python client submits facts one-by-one (no ERC-4337 executeBatch). Acceptable for extraction volumes (max 15 facts). |
 | Hermes no store-time dedup | RESOLVED | Generic agent layer now performs cosine-based near-duplicate detection (>= 0.85) before storing. |
 | Hermes heuristic extraction only | LOW | Generic agent layer tries LLM extraction first, falls back to heuristic regex. LLM path requires compatible provider (OpenAI-compatible endpoint). |
-| ZeroClaw no import/migrate | LOW | Rust crate implements core Memory trait + status + export + upgrade (Stripe checkout) but not import adapters or migrate tool. |
+| ZeroClaw no import | LOW | Rust crate implements core Memory trait + status + export + upgrade (Stripe checkout) but not import adapters. |
 | ZeroClaw no client batching | RESOLVED | Rust crate supports executeBatch() multi-call UserOps (up to 15 facts per batch). |
 | ZeroClaw UserOp submission | RESOLVED | Native Rust ERC-4337 v0.7 UserOp construction via alloy-primitives/alloy-sol-types. Hash + signing verified byte-for-byte against viem. |
 | ZeroClaw client-consistency | RESOLVED | Rust crate now fully compliant: client ID header, billing cache (2h TTL), quota warnings, 403 handling, dynamic candidate pool, store-time cosine dedup (0.85), hot cache (30 entries), importance normalization, auto-recall top_k=8, broadened search fallback, chain ID auto-detect from billing. 24 spec compliance tests + 2 E2E tests against staging. |
@@ -342,7 +340,7 @@ Every new feature implementation MUST include:
 | Stripe-driven tiers | PLANNED | Stripe as source of truth for pricing/limits. Plan at `totalreclaw-internal/plans/2026-03-26-stripe-driven-tiers.md` |
 | LLM memory import (ChatGPT/Claude/Gemini) | PLANNED | Adapters for importing memory from major LLM providers |
 | Conflict resolution (Layers 3-4) | MEDIUM | Spec'd in v0.3.2, not implemented |
-| Migration tool (testnet to mainnet) | RESOLVED | Implemented as `totalreclaw_migrate` tool in MCP server + OpenClaw plugin. Dry-run by default, idempotent, batch submission. |
+| Migration tool (testnet to mainnet) | DEPRECATED (ops-3) | Removed in ops-3 single-chain consolidation; all users now on Gnosis mainnet. |
 | Startup validation | MEDIUM | Validate Pimlico/Stripe/Subgraph reachability on relay boot |
 | DB backup monitoring | LOW | Add alerting (Slack/email) if daily R2 backup fails |
 | Graceful shutdown | LOW | Not yet configured in uvicorn |
@@ -463,8 +461,8 @@ git checkout main
 - **Version**: v1.0.0 — tagged and released on GitHub 2026-04-18 (https://github.com/p-diogo/totalreclaw/releases/tag/release-v1.0.0). Memory Taxonomy v1 + Retrieval v2 Tier 1 shipped to production.
 - **Phase**: Private Beta; v1 is the default extraction + write path across every client with zero env-var toggles
 - **Packages published (v1.0.0)**: `@totalreclaw/core@2.0.0` (npm), `totalreclaw-core@2.0.0` (PyPI + crates.io), `@totalreclaw/mcp-server@3.0.1` (npm, post-QA protobuf v=4 fix), `@totalreclaw/skill-nanoclaw@3.0.0` (npm), `@totalreclaw/totalreclaw@3.0.2` (ClawHub, post-QA lockfile regen), `totalreclaw@2.0.1` (PyPI, post-QA `wallet_address` property fix), `totalreclaw-memory@2.0.0` (crates.io — first Rust release).
-- **Default mode**: Managed Service with dual-chain (free=Base Sepolia testnet, pro=Gnosis mainnet)
-- **Default chain ID**: auto-detected from billing tier. Free = 84532 (Base Sepolia), Pro = 100 (Gnosis). `TOTALRECLAW_CHAIN_ID` env var removed in v1.
+- **Default mode**: Managed Service on Gnosis mainnet (chain 100). Single-chain consolidation underway (ops-3 client-side dropped the `totalreclaw_migrate` tool and the Base Sepolia batching workaround; relay-side single-chain routing tracked under ops-1; Base Sepolia subgraph teardown is a manual Pedro step). Client billing-cache chain override remains but auto-resolves to Gnosis for both tiers once the relay returns chain 100 for all responses.
+- **Default chain ID**: auto-detected from billing tier (Gnosis = 100). `TOTALRECLAW_CHAIN_ID` env var removed in v1.
 - **Embedding model**: onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled). Only supported model in v1; `TOTALRECLAW_EMBEDDING_MODEL` env var removed.
 - **Memory taxonomy**: v1 (6 types: claim / preference / directive / commitment / episode / summary + 3 axes: source / scope / volatility). See `docs/specs/totalreclaw/memory-taxonomy-v1.md`.
 - **Outer protobuf**: v4 (inner blob now v1 JSON; subgraph schema unchanged). See `totalreclaw-internal/docs/plans/2026-04-18-protobuf-v4-design.md`.

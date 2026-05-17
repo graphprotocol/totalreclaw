@@ -8,7 +8,6 @@ export { importBatchToolDefinition, handleImportBatch } from './import-batch.js'
 export { consolidateToolDefinition, handleConsolidate } from './consolidate.js';
 export { statusToolDefinition, handleStatus } from './status.js';
 export { upgradeToolDefinition, handleUpgrade } from './upgrade.js';
-export { migrateToolDefinition } from './migrate.js';
 export { debriefToolDefinition, handleDebrief, parseDebriefResponse, DEBRIEF_SYSTEM_PROMPT, type DebriefItem } from './debrief.js';
 export { supportToolDefinition, handleSupport } from './support.js';
 export { accountToolDefinition, handleAccount } from './account.js';
@@ -46,11 +45,3 @@ export {
   executeSetScope,
   validateSetScopeArgs,
 } from './set-scope.js';
-export {
-  fetchAllFactsFromSubgraph,
-  fetchMainnetContentFps,
-  fetchBlindIndicesForFacts,
-  checkBillingTier,
-  type SubgraphFactFull,
-  type MigrationResult,
-} from './migrate.js';

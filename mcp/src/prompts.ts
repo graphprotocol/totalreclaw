@@ -156,17 +156,10 @@ INVOKE WHEN USER SAYS:
 - "how much does it cost?" (share pricing from checkout, don't hardcode)
 - after \`quota_exceeded\` — offer inline
 - "unlimited memory?" / "make my memories permanent"
-DOES: calls relay checkout, returns one-time Stripe URL. On success suggest totalreclaw_migrate.
+DOES: calls relay checkout, returns one-time Stripe URL.
 WHEN NOT TO USE:
 - user already Pro (check totalreclaw_status)
 - unrelated — don't volunteer upgrades`;
-
-export const MIGRATE_TOOL_DESCRIPTION = `Copy memories Base Sepolia → Gnosis after Pro upgrade. Chain-agnostic encrypted data.
-INVOKE WHEN user just upgraded via totalreclaw_upgrade, asks about testnet→mainnet migration, wants permanent on-chain storage.
-SAFETY: dry-run default, idempotent, testnet never deleted.
-WHEN NOT TO USE: user on Free tier (nothing to migrate).
-PARAMS: confirm (true=execute, omit=preview).
-WORKFLOW: 1) w/o confirm → share preview. 2) on approval → confirm=true. 3) report progress.`;
 
 export const IMPORT_FROM_TOOL_DESCRIPTION = `Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, MemoClaw, JSON/CSV.
 INVOKE WHEN USER SAYS:

@@ -96,7 +96,6 @@ describe('Expected v1 MCP tool names (documentation)', () => {
     // Account / billing
     'totalreclaw_status',
     'totalreclaw_upgrade',
-    'totalreclaw_migrate',
     // Consolidation / debrief
     'totalreclaw_consolidate',
     'totalreclaw_debrief',
@@ -112,7 +111,7 @@ describe('Expected v1 MCP tool names (documentation)', () => {
   it('documents the expected v1 tool set', () => {
     // Snapshot check — any new tool added/removed in MCP 3.0.0+ should
     // be reflected here so cross-client test writers know the contract.
-    expect(EXPECTED_TOOLS).toHaveLength(18);
+    expect(EXPECTED_TOOLS).toHaveLength(17);
     expect(EXPECTED_TOOLS).toContain('totalreclaw_pin');
     expect(EXPECTED_TOOLS).toContain('totalreclaw_retype');
     expect(EXPECTED_TOOLS).toContain('totalreclaw_set_scope');

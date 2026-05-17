@@ -345,60 +345,6 @@ Upgrade to TotalReclaw Pro for unlimited encrypted memories on Gnosis mainnet.
 
 ---
 
-### totalreclaw_migrate
-
-Migrate memories from testnet (Base Sepolia) to mainnet (Gnosis) after upgrading to Pro.
-
-**When to use:** After a user successfully upgrades to Pro. Their memories are on the free-tier testnet and need to be copied to permanent mainnet storage.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| confirm | boolean | No | Set to `true` to execute the migration. Without it, returns a dry-run preview. Default: `false` |
-
-**Example (dry-run):**
-```json
-{}
-```
-
-**Example (execute):**
-```json
-{
-  "confirm": true
-}
-```
-
-**Returns (dry-run):**
-```json
-{
-  "mode": "dry_run",
-  "testnet_facts": 47,
-  "already_on_mainnet": 0,
-  "to_migrate": 47,
-  "message": "Found 47 facts to migrate from testnet to Gnosis mainnet. Call with confirm=true to proceed."
-}
-```
-
-**Returns (executed):**
-```json
-{
-  "mode": "executed",
-  "testnet_facts": 47,
-  "migrated": 47,
-  "failed_batches": 0,
-  "message": "Successfully migrated 47 memories from testnet to Gnosis mainnet."
-}
-```
-
-**Safety:**
-- Dry-run by default: call without `confirm=true` to preview what will be migrated
-- Idempotent: re-running skips facts that already exist on mainnet (by content fingerprint)
-- Testnet facts are never deleted (they remain as a backup)
-- Handles partial failures: if a batch fails, re-run to retry (only unmigrated facts are sent)
-
----
-
 ### totalreclaw_import_from
 
 Import memories from other AI memory tools into TotalReclaw.
@@ -671,15 +617,6 @@ Use when:
 - The user hits their free tier memory limit (403 quota exceeded)
 - The user asks about upgrading, pricing, or getting Pro
 - After a `totalreclaw_status` call shows the user is on the free tier and they want more
-
-#### totalreclaw_migrate
-
-Use when:
-- The user has just upgraded to Pro and their memories are still on testnet
-- The user asks about migrating testnet memories to mainnet
-- After a successful `totalreclaw_upgrade`, proactively offer migration
-
-Always do a dry-run first (call without `confirm=true`), show the preview, then ask the user to confirm before executing.
 
 #### totalreclaw_export
 

@@ -115,7 +115,6 @@ If your IronClaw version supports event-triggered routines (e.g., `on_thread_idl
 | `totalreclaw_import_from` | Import from Mem0, ChatGPT, Claude, or MCP Memory Server |
 | `totalreclaw_consolidate` | Merge duplicate memories (self-hosted only) |
 | `totalreclaw_upgrade` | Get a Stripe checkout link for Pro |
-| `totalreclaw_migrate` | Migrate testnet memories to mainnet after Pro upgrade |
 | `totalreclaw_debrief` | Summarize and store key takeaways from a session |
 | `totalreclaw_support` | Get help and troubleshooting information |
 | `totalreclaw_account` | View account details and wallet address |
