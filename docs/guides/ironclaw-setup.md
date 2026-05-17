@@ -115,17 +115,14 @@ If your IronClaw version supports event-triggered routines (e.g., `on_thread_idl
 | `totalreclaw_import_from` | Import from Mem0, ChatGPT, Claude, or MCP Memory Server |
 | `totalreclaw_consolidate` | Merge duplicate memories (self-hosted only) |
 | `totalreclaw_upgrade` | Get a Stripe checkout link for Pro |
-| `totalreclaw_migrate` | Migrate testnet memories to mainnet after Pro upgrade |
 | `totalreclaw_debrief` | Summarize and store key takeaways from a session |
 | `totalreclaw_support` | Get help and troubleshooting information |
 | `totalreclaw_account` | View account details and wallet address |
 
 ## Pricing
 
-| Tier | Memories | Storage | Price |
-|------|----------|---------|-------|
-| **Free** | Unlimited | Testnet (trial -- may be reset) | $0 |
-| **Pro** | Unlimited | Permanent on-chain (Gnosis) | See [totalreclaw.xyz/pricing](https://totalreclaw.xyz/pricing/) |
+- **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
+- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit [totalreclaw.xyz/pricing](https://totalreclaw.xyz/pricing/). See `totalreclaw_status` for current pricing.
 
 Upgrade anytime via the `totalreclaw_upgrade` tool -- the agent handles it for you.
 

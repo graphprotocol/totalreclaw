@@ -180,7 +180,7 @@ MCP is the lowest-overhead integration but the most explicit. You'll talk natura
 | **Status** | "What's my TotalReclaw status?" |
 | **Import from** | "Import my Gemini history from ~/Downloads/..." |
 | **Debrief** | "Debrief this session" — captures session-level summaries |
-| **Upgrade / Migrate / Account** | billing flow tools (Stripe checkout, testnet → mainnet migration) |
+| **Upgrade / Account** | billing flow tools (Stripe checkout, account details) |
 
 Talk naturally — the host LLM picks the right tool from context. See [memory types guide](./memory-types-guide.md) for the v1 taxonomy.
 
@@ -212,12 +212,10 @@ Same phrase, same memories. Switch agents without losing anything. To migrate, c
 
 ## Billing
 
-| Tier | Storage | Price |
-|------|---------|-------|
-| **Free** | Unlimited on Base Sepolia testnet (may reset) | $0 |
-| **Pro** | Permanent on Gnosis mainnet | $3.99/month |
+- **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
+- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>. See `totalreclaw_status` for current pricing.
 
-Both tiers have unlimited reads. Upgrade: *"Upgrade my TotalReclaw subscription."*
+Upgrade: *"Upgrade my TotalReclaw subscription."*
 
 [Pricing](https://totalreclaw.xyz/pricing)
 

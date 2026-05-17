@@ -119,7 +119,7 @@ The server only ever sees ciphertext and hashed tokens.
 
 ## Available Tools
 
-All 19 tools are invoked by the host agent from natural language context. Tool schemas include v1 taxonomy fields (`type`, `source`, `scope`, `reasoning`).
+All 18 tools are invoked by the host agent from natural language context. Tool schemas include v1 taxonomy fields (`type`, `source`, `scope`, `reasoning`).
 
 | Tool | Description |
 |------|-------------|
@@ -138,7 +138,6 @@ All 19 tools are invoked by the host agent from natural language context. Tool s
 | `totalreclaw_consolidate` | Merge duplicate and related memories |
 | `totalreclaw_debrief` | End-of-conversation summary to capture broader context |
 | `totalreclaw_upgrade` | Get a link to upgrade to Pro |
-| `totalreclaw_migrate` | Migrate testnet memories to mainnet after Pro upgrade |
 | `totalreclaw_account` | View account details (wallet, tier, quota, phrase hint) |
 | `totalreclaw_support` | Troubleshooting help + contact links |
 
@@ -174,14 +173,12 @@ See [`docs/specs/totalreclaw/memory-taxonomy-v1.md`](../docs/specs/totalreclaw/m
 | `TOTALRECLAW_CREDENTIALS_PATH` | Override credentials file location | `~/.totalreclaw/credentials.json` |
 | `TOTALRECLAW_CACHE_PATH` | Override encrypted cache file location | `~/.totalreclaw/cache.enc` |
 
-> **v1 env cleanup:** `TOTALRECLAW_CHAIN_ID`, `TOTALRECLAW_EMBEDDING_MODEL`, `TOTALRECLAW_STORE_DEDUP`, `TOTALRECLAW_LLM_MODEL`, `TOTALRECLAW_SESSION_ID`, `TOTALRECLAW_TAXONOMY_VERSION`, `TOTALRECLAW_CLAIM_FORMAT`, and `TOTALRECLAW_DIGEST_MODE` were removed. Chain is auto-detected from billing tier (free = Base Sepolia, Pro = Gnosis). The MCP server silently ignores these vars for a transition period. See the [env vars reference](../docs/guides/env-vars-reference.md).
+> **v1 env cleanup:** `TOTALRECLAW_CHAIN_ID`, `TOTALRECLAW_EMBEDDING_MODEL`, `TOTALRECLAW_STORE_DEDUP`, `TOTALRECLAW_LLM_MODEL`, `TOTALRECLAW_SESSION_ID`, `TOTALRECLAW_TAXONOMY_VERSION`, `TOTALRECLAW_CLAIM_FORMAT`, and `TOTALRECLAW_DIGEST_MODE` were removed. All tiers use Gnosis mainnet; chain selection is no longer user-configurable. The MCP server silently ignores these vars for a transition period. See the [env vars reference](../docs/guides/env-vars-reference.md).
 
 ## Free Tier & Pricing
 
-| Tier | Memories | Reads | Storage | Price |
-|------|----------|-------|---------|-------|
-| **Free** | 500/month | Unlimited | Testnet (trial) | $0 |
-| **Pro** | Unlimited | Unlimited | Permanent on-chain (Gnosis) | See `totalreclaw_status` |
+- **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
+- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>.
 
 Pay with card via Stripe. Use `totalreclaw_status` to check current pricing. Counter resets monthly.
 

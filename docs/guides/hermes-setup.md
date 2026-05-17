@@ -137,13 +137,13 @@ Emit verbatim:
 >
 > Back up your 12-word recovery phrase NOW — store it offline (password manager, paper, hardware key). It is the only way to recover your encrypted memory vault if you lose access to this device. We cannot recover it for you.
 >
-> Account status: `<tier>` tier, `<used>` / `<limit>` writes used, stored on `<network>`. Ask me to remember anything and I'll save it to your encrypted vault.
+> Account status: `<tier>` tier, `<used>` / `<limit>` writes used, stored on Gnosis mainnet. Ask me to remember anything and I'll save it to your encrypted vault.
 
-(`<tier>`, `<used>`, `<limit>`, `<network>` from `totalreclaw_status`. `<network>` is `Base Sepolia (testnet)` for free tier, `Gnosis (mainnet)` for Pro.)
+(`<tier>`, `<used>`, `<limit>` from `totalreclaw_status`. All tiers store on Gnosis mainnet.)
 
 This block ships on first successful pair completion. On subsequent install runs where credentials already exist (early-exit in Account setup step 1), instead emit just:
 
-> ✓ TotalReclaw is already set up. Account status: `<tier>` tier, `<used>` / `<limit>` writes used, stored on `<network>`.
+> ✓ TotalReclaw is already set up. Account status: `<tier>` tier, `<used>` / `<limit>` writes used, stored on Gnosis mainnet.
 
 ---
 

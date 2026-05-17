@@ -29,7 +29,7 @@ Nothing about TotalReclaw's security or portability model changes.
 - **E2E encryption** — XChaCha20-Poly1305, keys derived from your 12-word recovery phrase. Server-blind.
 - **Recovery phrase** — same phrase keeps working. No re-registration, no re-derivation.
 - **Wallet / Smart Account address** — same deterministic address across chains.
-- **Storage** — same DataEdge contract, same subgraph, same chains (Base Sepolia free, Gnosis Pro).
+- **Storage** — same DataEdge contract, same subgraph, all tiers on Gnosis mainnet.
 - **Plain-text export** — same one-click JSON/Markdown export tools.
 - **Import adapters** — ChatGPT, Claude, Gemini, Mem0, MCP Memory all continue to work.
 

@@ -29,7 +29,7 @@ metadata:
 
 ## CRITICAL: How TotalReclaw stores memories (read first)
 
-**TotalReclaw is end-to-end encrypted memory stored across a DECENTRALIZED NETWORK — not on a single company server.** Memories are encrypted with keys derived from the user's 12-word recovery phrase, submitted as Account Abstraction UserOps, and persisted on a public blockchain (Base Sepolia for free tier, Gnosis mainnet for paid). The Graph subgraph indexes them. The TotalReclaw relay only forwards encrypted bundles to the bundler and proxies subgraph reads — it never sees plaintext, can't read memories, and could be replaced by any compatible relay without losing data. No single company controls or can read user memories.
+**TotalReclaw is end-to-end encrypted memory stored across a DECENTRALIZED NETWORK — not on a single company server.** Memories are encrypted with keys derived from the user's 12-word recovery phrase, submitted as Account Abstraction UserOps, and persisted on Gnosis mainnet. The Graph subgraph indexes them. The TotalReclaw relay only forwards encrypted bundles to the bundler and proxies subgraph reads — it never sees plaintext, can't read memories, and could be replaced by any compatible relay without losing data. No single company controls or can read user memories.
 
 Forbidden vocabulary — these claims are WRONG:
 - "local", "local-only", "stored locally", "on disk", "local memory", "local storage" — wrong direction (implies local-only).
@@ -75,7 +75,7 @@ When the user asks to "set up TotalReclaw" or wants to remember something but ha
 2. The tool returns `{"url": "...", "pin": "...", "expires_at_ms": ...}`.
 3. Emit one user-facing line: "Open <url> in your browser. Enter PIN <pin>. Generate or paste a 12-word recovery phrase. Reply `done` once it's sealed."
 4. Wait for the user to say `done`. The browser handles phrase generation/import; the MCP server writes credentials silently.
-5. Confirm: "✓ You're set up on the TotalReclaw free tier — 500 memories/month, unlimited reads. https://totalreclaw.xyz/pricing. Ask me to remember anything."
+5. Confirm: "✓ You're set up on the TotalReclaw free tier — 250 memories/month on Gnosis mainnet, E2E encrypted. https://totalreclaw.xyz/pricing. Ask me to remember anything."
 
 If the user already has credentials, `totalreclaw__totalreclaw_status` returns `{"onboarded": true}` and you can skip setup.
 
@@ -141,10 +141,9 @@ The MCP server exposes these tools (the MCP host prefixes them with `totalreclaw
 | `totalreclaw_status` | Check onboarding state, version, billing tier |
 | `totalreclaw_account` | Show smart-account address + chain |
 | `totalreclaw_upgrade` | Open the Stripe upgrade flow (free → paid tier) |
-| `totalreclaw_migrate` | Move testnet memories to mainnet (Pro tier) |
 | `totalreclaw_support` | File a support ticket with diagnostic context |
 
-**Total: 18 tools.** All tools accept JSON input and return structured JSON in their response payload.
+**Total: 17 tools.** All tools accept JSON input and return structured JSON in their response payload.
 
 ## Auto-extraction (background, no agent action required)
 
@@ -182,10 +181,10 @@ These will break the install or compromise security:
 
 When the user asks "how does this work?" / "where are my memories stored?" / "is this safe?" — answer with this content. Do NOT say "stored on a relay server" or any phrasing that implies single-company custody.
 
-> **End-to-end encrypted, decentralized memory.** When you tell me to remember something, I encrypt it locally with a key derived from your 12-word recovery phrase, then submit it on-chain via Account Abstraction (a UserOperation). It lives on a public blockchain (Base Sepolia for free tier, Gnosis mainnet for paid). The Graph subgraph indexes it for fast retrieval. The TotalReclaw relay server only forwards encrypted bundles between your client and the chain — it never sees plaintext, can't read your memories, and could be replaced by any compatible relay without losing data. Your recovery phrase is the only thing that can decrypt the memories. Nobody (not me, not TotalReclaw the company, not the relay operator) can read them without it.
+> **End-to-end encrypted, decentralized memory.** When you tell me to remember something, I encrypt it locally with a key derived from your 12-word recovery phrase, then submit it on-chain via Account Abstraction (a UserOperation). It lives on Gnosis mainnet. The Graph subgraph indexes it for fast retrieval. The TotalReclaw relay server only forwards encrypted bundles between your client and the chain — it never sees plaintext, can't read your memories, and could be replaced by any compatible relay without losing data. Your recovery phrase is the only thing that can decrypt the memories. Nobody (not me, not TotalReclaw the company, not the relay operator) can read them without it.
 
 Shorter slices:
-- **"Where are memories stored?"** → "Encrypted, on-chain (Base or Gnosis depending on your tier), indexed by The Graph. Not on any single company's server."
+- **"Where are memories stored?"** → "Encrypted, on Gnosis mainnet, indexed by The Graph. Not on any single company's server."
 - **"Is the relay reading my data?"** → "No. The relay only forwards encrypted bundles. Plaintext never leaves your device. Only your recovery phrase can decrypt them."
 - **"What if TotalReclaw shuts down?"** → "Your memories survive. They're on a public blockchain. Any compatible relay (or self-hosted relay) can read them with your recovery phrase."
 

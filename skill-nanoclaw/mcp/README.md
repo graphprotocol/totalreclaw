@@ -38,5 +38,4 @@ RUN npm install -g @totalreclaw/mcp-server
 | `TOTALRECLAW_CREDENTIALS_PATH` | No | `/workspace/.totalreclaw/credentials.json` |
 | `TOTALRECLAW_CACHE_PATH` | No | `/workspace/.totalreclaw/cache.enc` |
 
-Chain ID is no longer user-configurable (auto-detected from billing tier:
-free = Base Sepolia, Pro = Gnosis). See [`docs/guides/env-vars-reference.md`](../../docs/guides/env-vars-reference.md).
+Chain ID is no longer user-configurable — all tiers use Gnosis mainnet. See [`docs/guides/env-vars-reference.md`](../../docs/guides/env-vars-reference.md).

@@ -29,7 +29,6 @@ All clients ship v1 by default. Stable production versions: core 2.2.0, plugin 3
 | Set scope (v1) | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | -- |
 | Import from Mem0 / ChatGPT / Claude / Gemini | Yes | Yes | Yes | Yes | Yes | -- |
 | Upgrade to Pro | Yes | Yes | Yes | -- | Yes | -- |
-| Migrate (testnet to mainnet) | Yes | Yes | Yes | -- | Yes | -- |
 | Consolidate (bulk dedup) | Yes | Yes | Yes | -- | Yes | -- |
 | **Dedup** | | | | | | |
 | Cosine near-duplicate prevention | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -77,7 +76,7 @@ All platforms support two storage modes. The encryption is identical -- the diff
 | | Managed Service (default) | Self-Hosted |
 |---|---|---|
 | **Storage** | On-chain (Gnosis Chain) via The Graph | Your PostgreSQL database |
-| **Free tier** | Unlimited on Base Sepolia testnet | Unlimited (your infrastructure) |
-| **Pro tier** | Permanent on Gnosis mainnet ($3.99/mo) | N/A |
+| **Free tier** | 250 memories/month on Gnosis mainnet, permanent | Subject to your infrastructure |
+| **Pro tier** | 1,500 memories/month on Gnosis mainnet, permanent (see `totalreclaw_status` for current pricing) | N/A |
 | **Setup** | Nothing -- works out of the box | Set `TOTALRECLAW_SELF_HOSTED=true` + server URL |
 | **Consolidation tool** | Not available (no batch delete on-chain) | Available |

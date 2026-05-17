@@ -117,7 +117,7 @@ These env vars existed in earlier versions and are now silently ignored. Delete 
 
 | Removed var | Why it is gone |
 |---|---|
-| `TOTALRECLAW_CHAIN_ID` | Chain is auto-detected from your tier. Free = Base Sepolia (84532), Pro = Gnosis mainnet (100). |
+| `TOTALRECLAW_CHAIN_ID` | All tiers use Gnosis mainnet; chain selection is no longer user-configurable. |
 | `TOTALRECLAW_EMBEDDING_MODEL` | Harrier-OSS-v1-270M (640d) is the only supported model in v1. |
 | `TOTALRECLAW_STORE_DEDUP` | Store-time near-duplicate detection is always on. |
 | `TOTALRECLAW_LLM_MODEL` / `TOTALRECLAW_EXTRACTION_MODEL` | LLM is picked automatically from the available provider. Model choice is not user-tunable. |

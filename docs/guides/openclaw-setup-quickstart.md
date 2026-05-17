@@ -1,6 +1,6 @@
 # TotalReclaw — OpenClaw quickstart
 
-TotalReclaw is end-to-end encrypted, decentralized memory for AI agents. Memories are encrypted on your device with a key derived from your 12-word recovery phrase, then submitted on-chain via Account Abstraction. Storage lives across a public blockchain (Base Sepolia for the free tier, Gnosis mainnet for paid). Only your recovery phrase can decrypt them.
+TotalReclaw is end-to-end encrypted, decentralized memory for AI agents. Memories are encrypted on your device with a key derived from your 12-word recovery phrase, then submitted on-chain via Account Abstraction. Storage lives on Gnosis mainnet (permanent, public blockchain). Only your recovery phrase can decrypt them.
 
 This page is a short summary for humans. The full setup guide with rationale and troubleshooting is at [`openclaw-setup.md`](./openclaw-setup.md).
 
@@ -30,7 +30,7 @@ After install, ask your agent something like *"set up TotalReclaw"* or just *"re
 2. **Generate or paste a 12-word recovery phrase** — the browser handles this end-to-end encrypted, so the phrase never enters the chat or the relay. Pick *Set up* for a fresh phrase, or *Log in* if you already have one from another device.
 3. **Confirm.** The browser will tell you when you are all set.
 
-You are then on the free tier (500 memories per month, unlimited reads). Paid tiers and custom relays are at <https://totalreclaw.xyz/pricing>.
+You are then on the free tier (250 memories per month on Gnosis mainnet, E2E encrypted, no credit card required). Pro tier raises the cap to 1,500 memories per month — pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>. Self-hosting and custom relays are also documented at that link.
 
 ## Write down the recovery phrase
 
@@ -49,7 +49,7 @@ Once set up, just talk to your agent normally. It will pull relevant memories in
 
 ## Privacy and decentralization
 
-TotalReclaw is end-to-end encrypted. The TotalReclaw relay only forwards encrypted bundles between your device and the blockchain — it never sees plaintext, can't read your memories, and could be replaced by any compatible relay without losing data. Storage lives on a public blockchain (Base Sepolia for free, Gnosis mainnet for Pro), indexed by The Graph. No single company controls or can read your memories.
+TotalReclaw is end-to-end encrypted. The TotalReclaw relay only forwards encrypted bundles between your device and the blockchain — it never sees plaintext, can't read your memories, and could be replaced by any compatible relay without losing data. Storage lives on Gnosis mainnet, indexed by The Graph. No single company controls or can read your memories.
 
 ## Troubleshooting
 

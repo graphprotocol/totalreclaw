@@ -26,7 +26,7 @@ metadata:
 
 ## CRITICAL: How TotalReclaw actually stores memories — read before anything else
 
-**TotalReclaw is end-to-end encrypted memory stored across a DECENTRALIZED NETWORK — not on a single company server.** Memories are encrypted with keys derived from the user's 12-word recovery phrase, submitted as Account Abstraction UserOps, and persisted on a public blockchain (Base / Gnosis depending on tier). The Graph subgraph indexes them. The TotalReclaw relay only forwards encrypted bundles to the bundler and proxies subgraph reads — it never sees plaintext, can't read memories, and could be replaced by any compatible relay without losing data. No single company controls or can read user memories.
+**TotalReclaw is end-to-end encrypted memory stored across a DECENTRALIZED NETWORK — not on a single company server.** Memories are encrypted with keys derived from the user's 12-word recovery phrase, submitted as Account Abstraction UserOps, and persisted on Gnosis mainnet. The Graph subgraph indexes them. The TotalReclaw relay only forwards encrypted bundles to the bundler and proxies subgraph reads — it never sees plaintext, can't read memories, and could be replaced by any compatible relay without losing data. No single company controls or can read user memories.
 
 Forbidden vocabulary — these claims are WRONG (some imply local-only storage; some imply a single-company server):
 - "local", "local-only", "stored locally", "on disk", "local memory", "local storage" — wrong direction (implies local-only). Memories require an account; they're encrypted and submitted on-chain.
@@ -322,7 +322,7 @@ DRY RUN -- no memories were deleted. Run without dry_run to apply.
 
 ### totalreclaw_upgrade
 
-Upgrade to TotalReclaw Pro for unlimited encrypted memories on Gnosis mainnet.
+Upgrade to TotalReclaw Pro for a higher monthly memory cap on Gnosis mainnet. See `totalreclaw_status` for current pricing.
 
 **Parameters:**
 
@@ -342,60 +342,6 @@ Upgrade to TotalReclaw Pro for unlimited encrypted memories on Gnosis mainnet.
   "message": "Open this URL to upgrade to Pro: https://checkout.stripe.com/c/pay/..."
 }
 ```
-
----
-
-### totalreclaw_migrate
-
-Migrate memories from testnet (Base Sepolia) to mainnet (Gnosis) after upgrading to Pro.
-
-**When to use:** After a user successfully upgrades to Pro. Their memories are on the free-tier testnet and need to be copied to permanent mainnet storage.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| confirm | boolean | No | Set to `true` to execute the migration. Without it, returns a dry-run preview. Default: `false` |
-
-**Example (dry-run):**
-```json
-{}
-```
-
-**Example (execute):**
-```json
-{
-  "confirm": true
-}
-```
-
-**Returns (dry-run):**
-```json
-{
-  "mode": "dry_run",
-  "testnet_facts": 47,
-  "already_on_mainnet": 0,
-  "to_migrate": 47,
-  "message": "Found 47 facts to migrate from testnet to Gnosis mainnet. Call with confirm=true to proceed."
-}
-```
-
-**Returns (executed):**
-```json
-{
-  "mode": "executed",
-  "testnet_facts": 47,
-  "migrated": 47,
-  "failed_batches": 0,
-  "message": "Successfully migrated 47 memories from testnet to Gnosis mainnet."
-}
-```
-
-**Safety:**
-- Dry-run by default: call without `confirm=true` to preview what will be migrated
-- Idempotent: re-running skips facts that already exist on mainnet (by content fingerprint)
-- Testnet facts are never deleted (they remain as a backup)
-- Handles partial failures: if a batch fails, re-run to retry (only unmigrated facts are sent)
 
 ---
 
@@ -558,7 +504,7 @@ Speak only these lines, in order. Substitute the bracketed placeholders. The use
 2. (account-setup URL + PIN, immediately after `tr pair --json` returns — no consent gate)
    > Open &lt;url&gt; in your browser. Enter PIN &lt;pin&gt;. Generate or paste a 12-word recovery phrase. Reply `done` once it's sealed.
 3. (done + free-tier confirmation)
-   > ✓ You're set up on the TotalReclaw free tier — 500 memories/month, unlimited reads. https://totalreclaw.xyz/pricing. Ask me to remember anything.
+   > ✓ You're set up on the TotalReclaw free tier — 250 memories/month on Gnosis mainnet, E2E encrypted. https://totalreclaw.xyz/pricing. Ask me to remember anything.
 
 ### Steps
 
@@ -607,7 +553,7 @@ TotalReclaw extracts and stores seven types of memories:
 | Decision | Choices you made WITH reasoning | "Chose PostgreSQL because data is relational and needs ACID" |
 | Episodic | Notable events or experiences | "Deployed v1.0 to production on March 15" |
 | Goal | Your objectives or plans | "Wants to launch public beta by end of Q1" |
-| Context | Active project/task context | "Working on TotalReclaw v1.2, staging on Base Sepolia" |
+| Context | Active project/task context | "Working on the v1.2 release, currently focused on the storage layer" |
 | Summary | Key outcomes from discussions | "Agreed to use phased rollout for mainnet migration" |
 
 Decisions and context are treated as high-value memories (importance >= 7) because they provide the most useful information for future conversations.
@@ -624,7 +570,7 @@ If you need to store a memory, use the `totalreclaw_remember` tool. If you need 
 
 ### Billing Awareness
 
-TotalReclaw has a free tier (500 memories/month, unlimited reads). The plugin monitors quota usage automatically:
+TotalReclaw has a free tier (250 memories/month on Gnosis mainnet, E2E encrypted, no credit card required). Pro tier raises the cap to 1,500 memories/month and adds LLM-guided dedup; see `totalreclaw_status` for current pricing. The plugin monitors quota usage automatically:
 - If usage exceeds 80%, a warning is injected into your context at conversation start
 - If a write fails with quota exceeded (403), inform the user and suggest visiting https://totalreclaw.xyz/pricing
 - Use `totalreclaw_status` when the user asks about their subscription, quota, or billing
@@ -671,15 +617,6 @@ Use when:
 - The user hits their free tier memory limit (403 quota exceeded)
 - The user asks about upgrading, pricing, or getting Pro
 - After a `totalreclaw_status` call shows the user is on the free tier and they want more
-
-#### totalreclaw_migrate
-
-Use when:
-- The user has just upgraded to Pro and their memories are still on testnet
-- The user asks about migrating testnet memories to mainnet
-- After a successful `totalreclaw_upgrade`, proactively offer migration
-
-Always do a dry-run first (call without `confirm=true`), show the preview, then ask the user to confirm before executing.
 
 #### totalreclaw_export
 

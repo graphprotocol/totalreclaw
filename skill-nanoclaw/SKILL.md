@@ -30,7 +30,7 @@ Ask the agent: *"Do you have access to TotalReclaw memory tools?"* It should con
 
 ### Step 4: Free tier
 
-After setup, the agent is on the free tier: 500 memories per month, unlimited reads and searches. The skill warns automatically when quota usage exceeds 80%. For unlimited memories, the user can upgrade via the `totalreclaw_upgrade` tool or visit https://totalreclaw.xyz/pricing.
+After setup, the agent is on the free tier: 250 memories per month on Gnosis mainnet, permanent storage, E2E encrypted, no credit card required. The skill warns automatically when quota usage exceeds 80%. To raise the cap to 1,500 memories/month and enable LLM-guided dedup, the user can upgrade via the `totalreclaw_upgrade` tool or visit https://totalreclaw.xyz/pricing.
 
 ---
 
@@ -108,7 +108,7 @@ Check subscription status and usage quota.
 
 ### totalreclaw_upgrade
 
-Upgrade to TotalReclaw Pro for unlimited encrypted memories on Gnosis mainnet.
+Upgrade to TotalReclaw Pro for a higher monthly memory cap on Gnosis mainnet. See `totalreclaw_status` for current pricing.
 
 **Parameters:** None (uses the current wallet address automatically)
 
@@ -161,7 +161,7 @@ TotalReclaw extracts and stores seven types of memories:
 | Decision | Choices made WITH reasoning | "Chose PostgreSQL because data is relational and needs ACID" |
 | Episodic | Notable events or experiences | "Deployed v1.0 to production on March 15" |
 | Goal | Objectives or plans | "Wants to launch public beta by end of Q1" |
-| Context | Active project/task context | "Working on TotalReclaw v1.2, staging on Base Sepolia" |
+| Context | Active project/task context | "Working on the v1.2 release, currently focused on the storage layer" |
 | Summary | Key outcomes from discussions | "Agreed to use phased rollout for mainnet migration" |
 
 Decisions and context are treated as high-value memories (importance >= 7) because they provide the most useful information for future conversations.
@@ -182,7 +182,7 @@ NanoClaw integrates TotalReclaw through three lifecycle hooks in the agent-runne
 
 ## Billing and Quota
 
-TotalReclaw has a free tier (500 memories/month, unlimited reads). The skill monitors quota usage automatically:
+TotalReclaw has a free tier (250 memories/month on Gnosis mainnet, E2E encrypted, no credit card required). Pro tier raises the cap to 1,500 memories/month and adds LLM-guided dedup; see `totalreclaw_status` for current pricing. The skill monitors quota usage automatically:
 
 - At conversation start (`before-agent-start`), billing status is fetched from the relay and cached for 2 hours
 - If usage exceeds 80%, a warning is injected into the agent context

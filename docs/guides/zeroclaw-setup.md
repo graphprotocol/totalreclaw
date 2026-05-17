@@ -107,8 +107,8 @@ Switch agents, keep your memories. No export/import needed.
 
 Check [totalreclaw.xyz/pricing](https://totalreclaw.xyz/pricing) for current pricing.
 
-- **Free tier** — Base Sepolia testnet, unlimited writes (testnet data may be reset)
-- **Pro tier** — Gnosis mainnet, unlimited
+- **Free tier** — 250 memories/month on Gnosis mainnet. Permanent, E2E encrypted, no credit card required.
+- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup. See `totalreclaw_status` for current pricing.
 
 ## Troubleshooting
 

@@ -186,12 +186,8 @@ If you want separate memory per instance, use **different recovery phrases** or 
 
 ## Billing
 
-| Tier | Writes | Reads | Storage | Price |
-|------|--------|-------|---------|-------|
-| **Free** | Unlimited | Unlimited | Testnet (Base Sepolia) | $0 |
-| **Pro** | Unlimited | Unlimited | Permanent on-chain (Gnosis) | $3.99/month |
-
-The free tier stores on Base Sepolia testnet (unlimited, but testnet data may be reset). Upgrade to Pro for permanent storage on Gnosis mainnet.
+- **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
+- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>. See `totalreclaw_status` for current pricing.
 
 To upgrade, ask the agent: *"How do I upgrade TotalReclaw?"*
 
@@ -221,9 +217,9 @@ To upgrade, ask the agent: *"How do I upgrade TotalReclaw?"*
 
 ### Quota exceeded (403 errors)
 
-- The free tier is unlimited on testnet, but a high abuse-prevention cap exists server-side
+- The free tier allows 250 memories per month; Pro raises that to 1,500
 - If you encounter a 403, check with *"What's my TotalReclaw status?"*
-- Upgrade to Pro for permanent mainnet storage
+- Upgrade to Pro for a higher monthly cap and LLM-guided dedup
 
 ### First startup is slow
 

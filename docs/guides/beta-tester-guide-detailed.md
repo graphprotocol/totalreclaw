@@ -72,7 +72,7 @@ When a fact is stored:
 3. Blind search trapdoors are generated for keyword tokens (HMAC-SHA256 with a per-user index secret).
 4. A 384-dim embedding (`Xenova/all-MiniLM-L6-v2`, INT8 quantized) is computed locally for semantic search.
 5. The encrypted blob, blind indices, content fingerprint, and (for v1) the protobuf-packed taxonomy fields are wrapped in a v=4 outer envelope and submitted via ERC-4337 UserOp to the EventfulDataEdge contract.
-6. The Pimlico paymaster sponsors gas. Free-tier writes hit Base Sepolia testnet; Pro-tier writes hit Gnosis mainnet. Chain auto-detection comes from your billing tier.
+6. The Pimlico paymaster sponsors gas. All writes (free and Pro) go to Gnosis mainnet.
 7. The Graph indexes the on-chain event so it's queryable seconds later.
 
 ### Retrieval pipeline (read path)
@@ -243,7 +243,7 @@ These vars were removed in the v1 env cleanup and are silently ignored:
 
 `TOTALRECLAW_CHAIN_ID`, `TOTALRECLAW_EMBEDDING_MODEL`, `TOTALRECLAW_STORE_DEDUP`, `TOTALRECLAW_LLM_MODEL`, `TOTALRECLAW_SESSION_ID`, `TOTALRECLAW_TAXONOMY_VERSION`, `TOTALRECLAW_CLAIM_FORMAT`, `TOTALRECLAW_DIGEST_MODE`.
 
-Chain ID is auto-detected from billing tier. Embedding model is fixed (`Xenova/all-MiniLM-L6-v2`). Extraction model is auto-derived from the provider key. v1 taxonomy is always on.
+All tiers run on Gnosis mainnet; chain selection is no longer user-configurable. Embedding model is fixed (`Xenova/all-MiniLM-L6-v2`). Extraction model is auto-derived from the provider key. v1 taxonomy is always on.
 
 ---
 
@@ -297,7 +297,7 @@ After setup, run this sequence to confirm everything is wired. Step numbers corr
 | 5 | Say *"Forget that my favorite color is blue."* | Agent confirms deletion |
 | 6 | Ask *"What's my favorite color?"* again | Agent doesn't know |
 | 7 | Say *"Export all my memories as markdown."* | Markdown list, no deleted color memory |
-| 8 | Verify on-chain: `https://thegraph.com/explorer/subgraph/p-diogo/totalreclaw` (free tier on Base Sepolia → check the testnet subgraph) — query for your Smart Account address | Encrypted blobs visible with `version: 4` outer envelope and v1 taxonomy fields in the inner protobuf |
+| 8 | Verify on-chain: `https://thegraph.com/explorer/subgraph/p-diogo/totalreclaw` (Gnosis mainnet subgraph) — query for your Smart Account address | Encrypted blobs visible with `version: 4` outer envelope and v1 taxonomy fields in the inner protobuf |
 
 Any step failing → check [Troubleshooting](#10-troubleshooting) and `~/.openclaw/extensions/totalreclaw/` (or equivalent) logs.
 

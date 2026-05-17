@@ -19,7 +19,7 @@
 
 Two storage modes: **Managed Service** (default -- on-chain via The Graph, accessed through relay) and **Self-Hosted** (PostgreSQL backend you run yourself). The client-side E2EE pipeline is identical for both.
 
-Managed Service uses a **dual-chain model**: Free tier stores on **Base Sepolia** testnet (chain 84532), Pro tier stores on **Gnosis mainnet** (chain 100). The relay routes bundler and subgraph requests to the correct chain based on user tier. Smart Account addresses are deterministic across both chains (CREATE2).
+Managed Service uses a **single-chain model**: all tiers (free and Pro) store on **Gnosis mainnet** (chain 100). The relay routes bundler and subgraph requests to Gnosis. Smart Account addresses are deterministic (CREATE2).
 
 ```
 +-------------------------------------------------------------------------+
@@ -40,11 +40,11 @@ Managed Service uses a **dual-chain model**: Free tier stores on **Base Sepolia*
 |   MANAGED SERVICE (default)   |  |   SELF-HOSTED (alternative)   |
 +-------------------------------+  +-------------------------------+
 |  On-chain: DataEdge contract  |  |  PostgreSQL Tables:           |
-|  Free: Base Sepolia (84532)   |  |  - raw_events (immutable log) |
-|  Pro: Gnosis mainnet (100)    |  |  - facts (blind_indices,      |
-|  Relay: Pimlico bundler       |  |          decay_score)         |
-|  Index: The Graph subgraph    |  |                               |
+|  All tiers: Gnosis (100)      |  |  - raw_events (immutable log) |
+|  Relay: Pimlico bundler       |  |  - facts (blind_indices,      |
+|  Index: The Graph subgraph    |  |          decay_score)         |
 |  Query: GraphQL via relay     |  |                               |
+|                               |  |                               |
 +-------------------------------+  +-------------------------------+
               |                                 |
               +----------------+----------------+
@@ -119,7 +119,7 @@ Specs are organized by product area under `docs/specs/`:
 ### Subgraph (Decentralized) -- `docs/specs/subgraph/`
 | Spec | File | Status |
 |------|------|--------|
-| Seed-to-Subgraph v1.0 | `seed-to-subgraph.md` | Implemented, deployed to Base Sepolia + Gnosis mainnet |
+| Seed-to-Subgraph v1.0 | `seed-to-subgraph.md` | Implemented, deployed to Gnosis mainnet |
 | Billing & Onboarding | `billing-and-onboarding.md` | Implemented (Stripe) |
 | Paymaster Comparison | `paymaster-comparison.md` | Complete (Pimlico chosen) |
 
@@ -150,7 +150,6 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Mem0, MCP Memory, ChatGPT, Claude adapters |
 | `totalreclaw_import` | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | JSON/Markdown re-import (MCP only) |
 | `totalreclaw_upgrade` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Stripe checkout URL |
-| `totalreclaw_migrate` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Testnet-to-mainnet migration after Pro upgrade |
 | `totalreclaw_consolidate` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Self-hosted only (no batch delete on managed service) |
 | `totalreclaw_debrief` | Yes (auto) | Yes | Yes (auto) | Yes (auto) | Yes (via MCP) | Yes (debrief method) | Session debrief — broader context at conversation end |
 | **Automatic Memory** | | | | | | | |
@@ -202,8 +201,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Server-side extraction config | Yes | -- | Yes | -- | -- | Yes | Relay returns `extraction_interval` + `max_facts_per_extraction` in billing status |
 | Unified extraction interval (3 turns) | Yes | -- | Yes | Yes | -- | Yes | Server-tunable via relay config (no npm publish needed) |
 | Max facts per extraction | Yes | -- | Yes | Yes | -- | Yes | Server-tunable via relay config (default 15) |
-| Chain ID auto-detect (billing) | Yes | Yes | Yes | -- | -- | Yes | Defaults to 84532 (Base Sepolia/free); auto-detects Pro tier from billing, switches to 100 (Gnosis) |
-| Dual-chain routing | -- | -- | -- | -- | -- | Relay-side: routes to Base Sepolia (free) or Gnosis mainnet (pro) |
+| Chain ID (Gnosis-only) | Yes | Yes | Yes | -- | -- | Yes | All tiers route to Gnosis mainnet (chain 100); no per-tier chain switching |
 | **Batching** | | | | | | |
 | Client batching (multi-call UserOps) | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Hermes stores facts one-by-one (no ERC-4337 batch support in Python) |
 | **Billing** | | | | | | |
@@ -221,9 +219,9 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 
 ### Storage Mode Support
 
-Features across Self-Hosted (PostgreSQL) and Managed Service (default, dual-chain via The Graph).
+Features across Self-Hosted (PostgreSQL) and Managed Service (default, Gnosis mainnet via The Graph).
 
-Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited memories, test network — may be reset), **Pro** = Gnosis mainnet (pricing from Stripe, unlimited, permanent on-chain storage).
+Managed Service single-chain tier model: **Free** = 250 memories/month on Gnosis mainnet (permanent, E2E encrypted, no credit card required), **Pro** = 1,500 memories/month on Gnosis mainnet (permanent, LLM-guided dedup, custom extraction interval; pricing via Stripe — see `totalreclaw_status`).
 
 | Feature | Self-Hosted | Managed Service | Notes |
 |---------|:-:|:-:|-------|
@@ -236,9 +234,8 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | Store-time dedup (supersede) | Yes | Yes | Managed service: via on-chain tombstone |
 | Billing / Status | Yes | Yes | Both query relay billing endpoint |
 | Hot cache | -- | Yes | Self-hosted doesn't need it |
-| Dual-chain routing | -- | Yes | Relay routes based on tier (free=Base Sepolia, pro=Gnosis) |
+| Single-chain routing (Gnosis) | -- | Yes | Relay routes all writes to Gnosis mainnet regardless of tier |
 | Client batching | -- | Yes | Multi-call UserOps via batcher.ts (managed service only, uses ERC-4337 executeBatch) |
-| Testnet-to-mainnet migration | -- | Yes | `totalreclaw_migrate` — copies facts from Base Sepolia to Gnosis after Pro upgrade. Idempotent, dry-run by default. |
 
 ### Known Gaps
 
@@ -258,7 +255,7 @@ Managed Service two-tier chain model: **Free** = Base Sepolia testnet (unlimited
 | ZeroClaw no client batching | RESOLVED | Rust crate supports executeBatch() multi-call UserOps (up to 15 facts per batch). |
 | ZeroClaw UserOp submission | RESOLVED | Native Rust ERC-4337 v0.7 UserOp construction via alloy-primitives/alloy-sol-types. Hash + signing verified byte-for-byte against viem. |
 | ZeroClaw client-consistency | RESOLVED | Rust crate now fully compliant: client ID header, billing cache (2h TTL), quota warnings, 403 handling, dynamic candidate pool, store-time cosine dedup (0.85), hot cache (30 entries), importance normalization, auto-recall top_k=8, broadened search fallback, chain ID auto-detect from billing. 24 spec compliance tests + 2 E2E tests against staging. |
-| Hermes no chain ID auto-detect | LOW | Python client defaults to 84532 (Base Sepolia) but does not auto-detect Pro tier from billing to switch to chain 100 (Gnosis). Pro users must set `chain_id=100` manually. |
+| Hermes chain ID default | RESOLVED | All tiers use Gnosis mainnet (chain 100); per-tier chain switching removed. |
 | Debrief bypasses store-time dedup | LOW | MCP, NanoClaw, Hermes call `client.remember()` directly for debrief items (no cosine dedup). Only OpenClaw routes through `storeExtractedFacts()`. LLM-level dedup via prompt + server-side content fingerprint mitigate. |
 | Hermes debrief stores without embedding | LOW | `hooks.py` stores debrief items without embedding param — no LSH bucket hashes, search relies on word-level blind indices only. |
 | NanoClaw debrief no 8-message guard | LOW | `pre-compact.ts` triggers debrief based on extraction results, not conversation length. LLM prompt handles it, but no code-level guard like other clients. |
@@ -342,7 +339,7 @@ Every new feature implementation MUST include:
 | Stripe-driven tiers | PLANNED | Stripe as source of truth for pricing/limits. Plan at `totalreclaw-internal/plans/2026-03-26-stripe-driven-tiers.md` |
 | LLM memory import (ChatGPT/Claude/Gemini) | PLANNED | Adapters for importing memory from major LLM providers |
 | Conflict resolution (Layers 3-4) | MEDIUM | Spec'd in v0.3.2, not implemented |
-| Migration tool (testnet to mainnet) | RESOLVED | Implemented as `totalreclaw_migrate` tool in MCP server + OpenClaw plugin. Dry-run by default, idempotent, batch submission. |
+| Single-chain (Gnosis-only) policy | RESOLVED | All tiers run on Gnosis mainnet; per-tier chain switching and the legacy cross-chain migration tool have been retired. |
 | Startup validation | MEDIUM | Validate Pimlico/Stripe/Subgraph reachability on relay boot |
 | DB backup monitoring | LOW | Add alerting (Slack/email) if daily R2 backup fails |
 | Graceful shutdown | LOW | Not yet configured in uvicorn |
@@ -415,9 +412,8 @@ Full CI/CD pipeline documented in `totalreclaw-internal/docs/ci-cd-pipeline.md`.
 3. **npm packages tested against staging before publish.** Run `tests/verify-publish.sh` after every publish.
 4. **Subgraph deploys to staging first.** Verify indexing before deploying to production subgraph.
 5. **After every subgraph deploy, immediately update the relay's `SUBGRAPH_ENDPOINT` env var on Railway.** The relay queries the subgraph via this URL — a stale version means the relay reads from an outdated schema. Update both services:
-   - **Staging** (free tier, Base Sepolia): `railway variables set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/totalreclaw---base-sepolia/<new-version>" -s totalreclaw`
-   - **Production** (free tier, Base Sepolia): `railway variables set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/totalreclaw---base-sepolia/<new-version>" -s totalreclaw-production`
-   - **Production** (pro tier, Gnosis): `railway variables set "PRO_SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<new-version>" -s totalreclaw-production`
+   - **Staging**: `railway variables set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<new-version>" -s totalreclaw`
+   - **Production**: `railway variables set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<new-version>" -s totalreclaw-production`
    Setting env vars triggers an automatic Railway redeploy. Verify the relay restarts cleanly by checking `/health`.
 
 For deployment procedures, invoke the `deploy-totalreclaw` skill.
@@ -429,7 +425,7 @@ For deployment procedures, invoke the `deploy-totalreclaw` skill.
 | **Staging** | `totalreclaw` | `https://api-staging.totalreclaw.xyz` | Auto on push to `main` |
 | **Production** | `totalreclaw-production` | `https://api.totalreclaw.xyz` | Manual via `railway up -s totalreclaw-production -d` |
 
-**IMPORTANT: All tests (E2E, integration, smoke, cross-client) MUST hit the staging relay (`api-staging.totalreclaw.xyz`), NEVER production.** Both environments use Base Sepolia testnet for free-tier users. Test registrations send `X-TotalReclaw-Test: true` header and show as `[TEST]` in Telegram notifications.
+**IMPORTANT: All tests (E2E, integration, smoke, cross-client) MUST hit the staging relay (`api-staging.totalreclaw.xyz`), NEVER production.** Both environments run on Gnosis mainnet (chain 100) under the single-chain policy. Test registrations send `X-TotalReclaw-Test: true` header and show as `[TEST]` in Telegram notifications.
 
 ### Relay Quick Reference
 
@@ -463,15 +459,15 @@ git checkout main
 - **Version**: v1.0.0 — tagged and released on GitHub 2026-04-18 (https://github.com/p-diogo/totalreclaw/releases/tag/release-v1.0.0). Memory Taxonomy v1 + Retrieval v2 Tier 1 shipped to production.
 - **Phase**: Private Beta; v1 is the default extraction + write path across every client with zero env-var toggles
 - **Packages published (v1.0.0)**: `@totalreclaw/core@2.0.0` (npm), `totalreclaw-core@2.0.0` (PyPI + crates.io), `@totalreclaw/mcp-server@3.0.1` (npm, post-QA protobuf v=4 fix), `@totalreclaw/skill-nanoclaw@3.0.0` (npm), `@totalreclaw/totalreclaw@3.0.2` (ClawHub, post-QA lockfile regen), `totalreclaw@2.0.1` (PyPI, post-QA `wallet_address` property fix), `totalreclaw-memory@2.0.0` (crates.io — first Rust release).
-- **Default mode**: Managed Service with dual-chain (free=Base Sepolia testnet, pro=Gnosis mainnet)
-- **Default chain ID**: auto-detected from billing tier. Free = 84532 (Base Sepolia), Pro = 100 (Gnosis). `TOTALRECLAW_CHAIN_ID` env var removed in v1.
+- **Default mode**: Managed Service on Gnosis mainnet (single-chain policy — applies to both free and Pro tiers)
+- **Chain ID**: 100 (Gnosis mainnet) for all tiers. `TOTALRECLAW_CHAIN_ID` env var removed in v1; chain selection is not user-configurable.
 - **Embedding model**: onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled). Only supported model in v1; `TOTALRECLAW_EMBEDDING_MODEL` env var removed.
 - **Memory taxonomy**: v1 (6 types: claim / preference / directive / commitment / episode / summary + 3 axes: source / scope / volatility). See `docs/specs/totalreclaw/memory-taxonomy-v1.md`.
 - **Outer protobuf**: v4 (inner blob now v1 JSON; subgraph schema unchanged). See `totalreclaw-internal/docs/plans/2026-04-18-protobuf-v4-design.md`.
 - **Crypto core**: `@totalreclaw/core@2.0.0` (Rust WASM for npm, PyO3 for PyPI) — adds `MemoryClaimV1` types, `validateMemoryClaimV1`, `rerankWithConfig` (Tier 1 source-weighted reranker), `parseMemoryTypeV1` / `parseMemorySource`. 455 native + 498 WASM + 508 PyO3 tests pass. Legacy v0 `rerank()` preserved for back-compat.
 - **OpenClaw integration**: Plugin installs without force flags (`openclaw plugins install`), hot-reload setup via `TOTALRECLAW_HOT_RELOAD=true`, auto-recall on `before_agent_start`, auto-extraction on `agent_end`, LLM config sourced from OpenClaw providers, plaintext fallback prevention
-- **Relay**: Billing, Pimlico sponsorship, dual-chain routing, and query proxying extracted to private `totalreclaw-relay` TypeScript repo (p-diogo/totalreclaw-relay). Public server retains only self-hosted functionality (storage, search, auth).
+- **Relay**: Billing, Pimlico sponsorship, Gnosis-mainnet routing, and query proxying extracted to private `totalreclaw-relay` TypeScript repo (p-diogo/totalreclaw-relay). Public server retains only self-hosted functionality (storage, search, auth).
 - **Server-side tuning**: Relay billing response carries `extraction_interval`, `max_facts_per_extraction`, `max_candidate_pool`, and (planned) `ephemeral_ttl_days`. Clients read these from the billing cache — no npm/PyPI publish required to retune.
-- **Staging**: Base Sepolia (chain 84532) -- free testnet, no gas costs
-- **Production**: Gnosis mainnet (chain 100) -- Pro tier only
+- **Staging**: Gnosis mainnet (chain 100) — staging relay endpoint, Pimlico-sponsored gas
+- **Production**: Gnosis mainnet (chain 100) — production relay endpoint, Pimlico-sponsored gas
 - **All releases via CI**: GitHub Actions workflows for npm, PyPI, and ClawHub. Never publish manually.

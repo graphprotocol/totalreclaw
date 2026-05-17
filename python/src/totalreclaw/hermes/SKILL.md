@@ -39,7 +39,7 @@ Speak only these lines, in order. Substitute the bracketed placeholders. Lines 3
 5. (Step 5 — account setup; emit immediately after disable-memory, no consent gate)
    > Open &lt;url&gt; in your browser. Enter PIN &lt;pin&gt;. Generate or paste a 12-word recovery phrase. Reply `done` once it's sealed.
 6. (Step 6 — done + free-tier confirmation)
-   > ✓ You're set up on the TotalReclaw free tier — 500 memories/month, unlimited reads. <https://totalreclaw.xyz/pricing>. Ask me to remember anything.
+   > ✓ You're set up on the TotalReclaw free tier — 250 memories/month on Gnosis mainnet, E2E encrypted. <https://totalreclaw.xyz/pricing>. Ask me to remember anything.
 
 If `totalreclaw_*` tools are already bound (skip-install branch), the only lines emitted are `✓ TotalReclaw is already set up.` (skip-to-stop) OR lines 5+6 (skip-to-account-setup branch). 5–6 lines max for a fresh install. No filler.
 
