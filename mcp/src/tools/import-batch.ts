@@ -119,13 +119,13 @@ export async function handleImportBatch(
     };
   }
 
-  // All sources in this tool are conversation-based — Pro-only.
+  // All imports are Pro-only.
   const billing = getLastBillingResponse();
   if (billing && billing.tier !== 'pro') {
     return {
       content: [{ type: 'text', text: JSON.stringify({
         success: false,
-        error: `Batch conversation import is a Pro feature. Run totalreclaw_upgrade to upgrade your plan, then retry. Free-tier users can still import pre-structured facts from Mem0 or MCP Memory via totalreclaw_import_from.`,
+        error: `Memory imports are a Pro feature. Run totalreclaw_upgrade to upgrade your plan, then retry. Free-tier users can still capture memories one at a time via totalreclaw_remember.`,
       }) }],
     };
   }

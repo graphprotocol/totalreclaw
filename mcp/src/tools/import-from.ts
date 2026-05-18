@@ -175,18 +175,16 @@ export async function handleImportFrom(
 
   // Validate source
   const validSources: ImportSource[] = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini'];
-  // Conversation-based sources run user conversation history through the LLM
-  // extraction pipeline. Gated to Pro tier — Free users can still import
-  // pre-structured facts from Mem0 / MCP Memory.
-  const proOnlySources: ImportSource[] = ['chatgpt', 'claude', 'gemini'];
   if (!input.source || !validSources.includes(input.source)) {
     return errorResponse(`Invalid source. Must be one of: ${validSources.join(', ')}`);
   }
-  if (proOnlySources.includes(input.source)) {
+  // All imports are Pro-only. Free tier can use totalreclaw_remember to capture
+  // memories one at a time but cannot bulk-import from external sources.
+  {
     const billing = getLastBillingResponse();
     if (billing && billing.tier !== 'pro') {
       return errorResponse(
-        `Conversation-based imports (${proOnlySources.join(', ')}) are a Pro feature. Run totalreclaw_upgrade to upgrade your plan, then retry. Free-tier users can still import pre-structured facts from Mem0 or MCP Memory.`,
+        `Memory imports are a Pro feature. Run totalreclaw_upgrade to upgrade your plan, then retry. Free-tier users can still capture memories one at a time via totalreclaw_remember.`,
       );
     }
   }

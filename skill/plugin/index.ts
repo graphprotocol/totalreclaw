@@ -2294,21 +2294,19 @@ async function handlePluginImportFrom(
 
   const source = params.source as string;
   const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini'];
-  // Conversation-based sources run user conversation history through the LLM
-  // extraction pipeline. Gated to Pro tier — Free users can still import
-  // pre-structured facts from Mem0 / MCP Memory.
-  const proOnlySources = ['chatgpt', 'claude', 'gemini'];
 
   if (!source || !validSources.includes(source)) {
     return { success: false, error: `Invalid source. Must be one of: ${validSources.join(', ')}` };
   }
 
-  if (proOnlySources.includes(source)) {
+  // All imports are Pro-only. Free tier can use totalreclaw_remember to
+  // capture memories interactively but cannot bulk-import from external sources.
+  {
     const cache = readBillingCache();
     if (cache?.tier !== 'pro') {
       return {
         success: false,
-        error: `Conversation-based imports (${proOnlySources.join(', ')}) are a Pro feature. Run \`totalreclaw_upgrade\` to upgrade your plan, then retry. Free-tier users can still import pre-structured facts from Mem0 or MCP Memory.`,
+        error: `Memory imports are a Pro feature. Run \`totalreclaw_upgrade\` to upgrade your plan, then retry. Free-tier users can still capture memories one at a time via \`totalreclaw_remember\`.`,
         requires: 'pro',
       };
     }
@@ -2738,16 +2736,17 @@ async function handleBatchImport(
   const batchSize = (params.batch_size as number) ?? 25;
 
   const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini'];
-  const proOnlySources = ['chatgpt', 'claude', 'gemini'];
   if (!source || !validSources.includes(source)) {
     return { success: false, error: `Invalid source. Must be one of: ${validSources.join(', ')}` };
   }
-  if (proOnlySources.includes(source)) {
+
+  // All imports are Pro-only — see handlePluginImportFrom.
+  {
     const cache = readBillingCache();
     if (cache?.tier !== 'pro') {
       return {
         success: false,
-        error: `Conversation-based imports (${proOnlySources.join(', ')}) are a Pro feature. Run \`totalreclaw_upgrade\` to upgrade your plan, then retry. Free-tier users can still import pre-structured facts from Mem0 or MCP Memory.`,
+        error: `Memory imports are a Pro feature. Run \`totalreclaw_upgrade\` to upgrade your plan, then retry. Free-tier users can still capture memories one at a time via \`totalreclaw_remember\`.`,
         requires: 'pro',
       };
     }
