@@ -2294,9 +2294,24 @@ async function handlePluginImportFrom(
 
   const source = params.source as string;
   const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini'];
+  // Conversation-based sources run user conversation history through the LLM
+  // extraction pipeline. Gated to Pro tier — Free users can still import
+  // pre-structured facts from Mem0 / MCP Memory.
+  const proOnlySources = ['chatgpt', 'claude', 'gemini'];
 
   if (!source || !validSources.includes(source)) {
     return { success: false, error: `Invalid source. Must be one of: ${validSources.join(', ')}` };
+  }
+
+  if (proOnlySources.includes(source)) {
+    const cache = readBillingCache();
+    if (cache?.tier !== 'pro') {
+      return {
+        success: false,
+        error: `Conversation-based imports (${proOnlySources.join(', ')}) are a Pro feature. Run \`totalreclaw_upgrade\` to upgrade your plan, then retry. Free-tier users can still import pre-structured facts from Mem0 or MCP Memory.`,
+        requires: 'pro',
+      };
+    }
   }
 
   // Generate import_id up front so dry-run responses and background tasks share it.
@@ -2723,8 +2738,19 @@ async function handleBatchImport(
   const batchSize = (params.batch_size as number) ?? 25;
 
   const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini'];
+  const proOnlySources = ['chatgpt', 'claude', 'gemini'];
   if (!source || !validSources.includes(source)) {
     return { success: false, error: `Invalid source. Must be one of: ${validSources.join(', ')}` };
+  }
+  if (proOnlySources.includes(source)) {
+    const cache = readBillingCache();
+    if (cache?.tier !== 'pro') {
+      return {
+        success: false,
+        error: `Conversation-based imports (${proOnlySources.join(', ')}) are a Pro feature. Run \`totalreclaw_upgrade\` to upgrade your plan, then retry. Free-tier users can still import pre-structured facts from Mem0 or MCP Memory.`,
+        requires: 'pro',
+      };
+    }
   }
 
   const startTime = Date.now();

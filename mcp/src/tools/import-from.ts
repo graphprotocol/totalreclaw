@@ -2,6 +2,7 @@ import { TotalReclaw, FactMetadata } from '@totalreclaw/client';
 import { resolve } from 'node:path';
 import { IMPORT_FROM_TOOL_DESCRIPTION } from '../prompts.js';
 import { type MemoryType } from '../memory-types.js';
+import { getLastBillingResponse } from './status.js';
 
 // ── Types (mirrored from skill/plugin/import-adapters/types.ts) ─────────────
 // We define these locally to avoid importing from outside the MCP rootDir.
@@ -174,8 +175,20 @@ export async function handleImportFrom(
 
   // Validate source
   const validSources: ImportSource[] = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini'];
+  // Conversation-based sources run user conversation history through the LLM
+  // extraction pipeline. Gated to Pro tier — Free users can still import
+  // pre-structured facts from Mem0 / MCP Memory.
+  const proOnlySources: ImportSource[] = ['chatgpt', 'claude', 'gemini'];
   if (!input.source || !validSources.includes(input.source)) {
     return errorResponse(`Invalid source. Must be one of: ${validSources.join(', ')}`);
+  }
+  if (proOnlySources.includes(input.source)) {
+    const billing = getLastBillingResponse();
+    if (billing && billing.tier !== 'pro') {
+      return errorResponse(
+        `Conversation-based imports (${proOnlySources.join(', ')}) are a Pro feature. Run totalreclaw_upgrade to upgrade your plan, then retry. Free-tier users can still import pre-structured facts from Mem0 or MCP Memory.`,
+      );
+    }
   }
 
   try {
