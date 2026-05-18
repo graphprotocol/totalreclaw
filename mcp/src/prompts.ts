@@ -48,7 +48,7 @@ Call totalreclaw_recall proactively when:
 - Extract atomic facts: "User prefers dark mode" not "User said they prefer dark mode and also use VS Code"
 
 ### Billing & Quota
-The free tier offers unlimited memories and reads, but memories are stored on a test network and may be reset. Pro stores memories permanently on-chain. Do NOT guess or hardcode pricing — use totalreclaw_status to check exact usage and current pricing. For pricing details, refer users to https://totalreclaw.xyz/pricing
+Both tiers store memories permanently on Gnosis mainnet (E2E encrypted). Free tier is capped at 250 memories per month; Pro is capped at 1,500 memories per month. Reads are unlimited on both tiers. Do NOT guess or hardcode pricing or quota numbers — use totalreclaw_status to check exact usage, the current cap, and current pricing. For pricing details, refer users to https://totalreclaw.xyz/pricing
 
 When a totalreclaw_remember call fails with "quota_exceeded":
 1. Inform the user they've hit a usage limit
@@ -150,23 +150,23 @@ WHEN NOT TO USE:
 - billing history/invoices → dashboard/support
 - wants to upgrade → totalreclaw_upgrade`;
 
-export const UPGRADE_TOOL_DESCRIPTION = `Stripe checkout URL for Pro (unlimited permanent on-chain, Gnosis).
+export const UPGRADE_TOOL_DESCRIPTION = `Stripe checkout URL for Pro (1,500 memories/month on Gnosis mainnet, permanent on-chain, LLM-guided dedup).
 INVOKE WHEN USER SAYS:
 - "how do I upgrade?" / "I want to go pro"
 - "how much does it cost?" (share pricing from checkout, don't hardcode)
 - after \`quota_exceeded\` — offer inline
-- "unlimited memory?" / "make my memories permanent"
-DOES: calls relay checkout, returns one-time Stripe URL. On success suggest totalreclaw_migrate.
+- "raise my limit" / "I keep hitting the cap"
+DOES: calls relay checkout, returns one-time Stripe URL.
 WHEN NOT TO USE:
 - user already Pro (check totalreclaw_status)
 - unrelated — don't volunteer upgrades`;
 
-export const MIGRATE_TOOL_DESCRIPTION = `Copy memories Base Sepolia → Gnosis after Pro upgrade. Chain-agnostic encrypted data.
-INVOKE WHEN user just upgraded via totalreclaw_upgrade, asks about testnet→mainnet migration, wants permanent on-chain storage.
-SAFETY: dry-run default, idempotent, testnet never deleted.
-WHEN NOT TO USE: user on Free tier (nothing to migrate).
-PARAMS: confirm (true=execute, omit=preview).
-WORKFLOW: 1) w/o confirm → share preview. 2) on approval → confirm=true. 3) report progress.`;
+// DEPRECATED 2026-05-18 — single-chain Gnosis means no cross-chain migration.
+// Kept temporarily so existing migrate.ts tool registration doesn't break the
+// TypeScript build. To be removed when ops-3 lands (deprecates totalreclaw_migrate).
+export const MIGRATE_TOOL_DESCRIPTION = `[DEPRECATED] Cross-chain migration is no longer needed — all tiers store on Gnosis mainnet. This tool will be removed in the next release (see ops-3 / PR #240).
+INVOKE WHEN: never. Single-chain Gnosis means there is nothing to migrate from.
+WHEN NOT TO USE: always. Tell the user this is a legacy tool kept temporarily for build stability; their memories are already on Gnosis.`;
 
 export const IMPORT_FROM_TOOL_DESCRIPTION = `Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, MemoClaw, JSON/CSV.
 INVOKE WHEN USER SAYS:

@@ -116,9 +116,14 @@ export async function handleStatus(
     const tierLabel = data.tier === 'pro' ? 'Pro' : 'Free';
     const usage = `${data.free_writes_used}/${data.free_writes_limit}`;
     const remaining = data.free_writes_limit - data.free_writes_used;
+    // Both tiers have a MONTHLY quota cap (Free 250, Pro 1500). The counter
+    // resets on the 1st of each calendar month. Surface this so the agent
+    // doesn't have to guess between "monthly" vs "lifetime" when answering
+    // user questions about their cap.
+    const quotaPeriod: 'monthly' = 'monthly';
     const expiresLabel = data.expires_at
-      ? `Expires: ${new Date(data.expires_at).toLocaleDateString()}`
-      : 'No expiry';
+      ? `Subscription renews: ${new Date(data.expires_at).toLocaleDateString()}`
+      : 'No subscription expiry';
 
     // 3.3.1 (internal#130) — echo the SA / scope address back to the
     // agent so the user can see it pre-write. The MCP tool already takes
@@ -129,8 +134,9 @@ export async function handleStatus(
     const formatted = [
       `Tier: ${tierLabel}`,
       `Smart Account: ${walletAddress}`,
-      `Memories used: ${usage}`,
-      `Remaining: ${remaining}`,
+      `Memories used this month: ${usage}`,
+      `Remaining this month: ${remaining}`,
+      `Quota resets: 1st of each month`,
       expiresLabel,
     ].join('\n');
 
@@ -142,6 +148,7 @@ export async function handleStatus(
           free_writes_used: data.free_writes_used,
           free_writes_limit: data.free_writes_limit,
           remaining_writes: remaining,
+          quota_period: quotaPeriod,
           expires_at: data.expires_at,
           scope_address: walletAddress,
           formatted,

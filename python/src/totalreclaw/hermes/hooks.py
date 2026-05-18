@@ -364,12 +364,25 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
             state.update_from_billing(billing)
 
             used = billing.get("free_writes_used", 0)
-            limit = max(billing.get("free_writes_limit", 500), 1)
+            limit = max(billing.get("free_writes_limit", 250), 1)
+            tier = billing.get("tier", "free")
             if used / limit > 0.8:
                 pct = int(used / limit * 100)
+                if tier == "pro":
+                    nudge = (
+                        "Pro cap is 1,500 memories/month. The quota resets on "
+                        "the 1st of next month."
+                    )
+                else:
+                    nudge = (
+                        "Free cap is 250 memories/month. Upgrade to Pro for "
+                        "1,500 memories/month on Gnosis mainnet — run "
+                        "totalreclaw_upgrade or visit "
+                        "https://totalreclaw.xyz/pricing."
+                    )
                 state.set_quota_warning(
-                    f"TotalReclaw: {used}/{limit} memories used this month ({pct}%). "
-                    "Consider upgrading to Pro for unlimited storage."
+                    f"TotalReclaw: {used}/{limit} memories used this month "
+                    f"({pct}%). {nudge}"
                 )
                 logger.info("TotalReclaw: Memory usage >80%% — quota warning set")
     except Exception:
