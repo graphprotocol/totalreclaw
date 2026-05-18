@@ -90,3 +90,32 @@ jobs:
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
+
+      # Fire qa-autopilot on the internal repo against this preview URL. The
+      # phrase + reporting stay private over there. Skipped if the dispatch
+      # PAT isn't configured yet (gate-by-secret-presence in the next step).
+      - name: Check internal-dispatch PAT
+        id: dispatch_gate
+        if: github.event_name == 'pull_request' && steps.deploy.outputs.deployment-url != ''
+        env:
+          PAT: ${{ secrets.INTERNAL_DISPATCH_PAT }}
+        run: |
+          if [ -n "$PAT" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::INTERNAL_DISPATCH_PAT not set — skipping QA autopilot dispatch"
+          fi
+
+      - name: Trigger QA autopilot on totalreclaw-internal
+        if: steps.dispatch_gate.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.INTERNAL_DISPATCH_PAT }}
+          PREVIEW_URL: ${{ steps.deploy.outputs.deployment-url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh workflow run qa-autopilot.yml \
+            --repo p-diogo/totalreclaw-internal \
+            --ref main \
+            --field target_url="$PREVIEW_URL" \
+            --field pr_number="$PR_NUMBER"
