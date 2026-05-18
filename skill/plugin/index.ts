@@ -6853,7 +6853,7 @@ const plugin = {
             if (cache && cache.free_writes_limit > 0) {
               const usageRatio = cache.free_writes_used / cache.free_writes_limit;
               if (usageRatio >= QUOTA_WARNING_THRESHOLD) {
-                billingWarning = `\n\nTotalReclaw quota warning: ${cache.free_writes_used}/${cache.free_writes_limit} writes used this month (${Math.round(usageRatio * 100)}%). Visit https://totalreclaw.xyz/pricing to upgrade.`;
+                billingWarning = `\n\nTotalReclaw quota warning: ${cache.free_writes_used}/${cache.free_writes_limit} memories used this month (${Math.round(usageRatio * 100)}%). Visit https://totalreclaw.xyz/pricing to upgrade.`;
               }
             }
           } catch {

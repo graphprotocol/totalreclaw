@@ -257,7 +257,7 @@ If you were on plugin 3.3.1-rc.2 or Hermes 2.3.1rc2, after upgrading also run `p
 | **Auto-extract** | Every 3 turns, extracts important facts (preferences, decisions, context) and stores them encrypted. |
 | **Pre-compaction flush** | Before the context window is compacted, all pending facts are extracted and saved. |
 | **Session debrief** | At session end, captures up to 5 session-level summaries. |
-| **Quota warning at ≥80%** | When monthly free-tier writes cross 80%, a one-line warning is injected at conversation start so you know before you hit the limit. |
+| **Quota warning at ≥80%** | When monthly free-tier memories cross 80%, a one-line warning is injected at conversation start so you know before you hit the limit. |
 
 ---
 
@@ -274,7 +274,7 @@ Ask the agent naturally; the plugin picks the right tool.
 | **Retype** | "That should be a preference, not a fact" (types: `claim`, `preference`, `directive`, `commitment`, `episode`, `summary`) |
 | **Set scope** | "File that under work" (scopes: `work`, `personal`, `health`, `family`, `creative`, `finance`, `misc`) |
 | **Export** | "Export all my TotalReclaw memories as plain text" |
-| **Status** | "What's my TotalReclaw status?" — surfaces tier, monthly writes used / limit, reset date, upgrade URL |
+| **Status** | "What's my TotalReclaw status?" — surfaces tier, monthly memories used / limit, reset date, upgrade URL |
 | **Import from** | "Import my Gemini history from ~/Downloads/..." |
 | **Account setup** | "Set up TotalReclaw for me" — returns URL + PIN |
 
@@ -297,7 +297,7 @@ See [Importing Memories](importing-memories.md).
 - **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
 - **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>. See `totalreclaw_status` for current pricing.
 
-The plugin warns you automatically when you cross 80% of the monthly free-tier write limit (injected at conversation start). Check anytime by asking *"what's my TotalReclaw status?"* — that calls `totalreclaw_status` and reports tier, writes used, writes limit, reset date, and upgrade URL.
+The plugin warns you automatically when you cross 80% of the monthly free-tier memory limit (injected at conversation start). Check anytime by asking *"what's my TotalReclaw status?"* — that calls `totalreclaw_status` and reports tier, memories used, memory limit, reset date, and upgrade URL.
 
 Upgrade: *"Upgrade my TotalReclaw subscription."*
 

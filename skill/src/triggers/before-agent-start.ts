@@ -260,7 +260,7 @@ export async function beforeAgentStart(
     if (billingData && billingData.free_writes_limit > 0) {
       const usageRatio = billingData.free_writes_used / billingData.free_writes_limit;
       if (usageRatio >= QUOTA_WARNING_THRESHOLD) {
-        billingWarning = `\n\n⚠️ TotalReclaw quota warning: ${billingData.free_writes_used}/${billingData.free_writes_limit} writes used this month (${Math.round(usageRatio * 100)}%). ` +
+        billingWarning = `\n\n⚠️ TotalReclaw quota warning: ${billingData.free_writes_used}/${billingData.free_writes_limit} memories used this month (${Math.round(usageRatio * 100)}%). ` +
           (billingData.upgrade_url ? `Upgrade: ${billingData.upgrade_url}` : 'Resets next month.');
       }
     }

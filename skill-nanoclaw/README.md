@@ -195,7 +195,7 @@ This makes TotalReclaw a universal memory layer across all your AI agents.
 - Check the namespace -- memories in the `work` namespace are not visible in `main`
 
 **Quota exceeded (403 errors)**
-- Free tier allows 500 writes per month. Ask the agent: "What's my TotalReclaw status?"
+- Free tier allows 250 memories per month. Ask the agent: "What's my TotalReclaw status?"
 - Upgrade to Pro: ask the agent "How do I upgrade TotalReclaw?"
 
 ## Learn More

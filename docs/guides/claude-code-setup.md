@@ -227,7 +227,7 @@ Upgrade: *"Upgrade my TotalReclaw subscription."*
 - **Agent can't see TotalReclaw tools after restart**: confirm `claude mcp list` (Claude Code) or your host's MCP UI lists `totalreclaw`. Verify `TOTALRECLAW_RECOVERY_PHRASE` is set in the config (host won't strip stderr from the spawned `mcp-server` process — check your host's MCP server logs for the `TotalReclaw configured` line). If the env var is missing, the server starts in unconfigured mode and tool calls return `{"error": "TotalReclaw is not configured"}`.
 - **"Not authenticated" / 401**: check your phrase — exact words, exact order, lowercase, single spaces.
 - **First-run is slow / model download**: the embedding model is ~600 MB, downloaded once and cached. Be patient on first call.
-- **Quota exceeded (403)**: free tier has a monthly write cap. Upgrade with *"Upgrade my TotalReclaw subscription"*.
+- **Quota exceeded (403)**: free tier has a monthly memory cap. Upgrade with *"Upgrade my TotalReclaw subscription"*.
 - **Recovery phrase appeared in chat**: file a bug. Rotate by generating a new wallet via the OpenClaw or Hermes browser account-setup flow. The leaked phrase is unrecoverable once shipped through LLM context.
 
 ---

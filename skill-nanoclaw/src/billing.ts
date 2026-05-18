@@ -243,7 +243,7 @@ export function getQuotaWarning(cache: BillingCache | null): string {
 
   const usageRatio = cache.free_writes_used / cache.free_writes_limit;
   if (usageRatio >= QUOTA_WARNING_THRESHOLD) {
-    return `\n\nTotalReclaw quota warning: ${cache.free_writes_used}/${cache.free_writes_limit} writes used this month (${Math.round(usageRatio * 100)}%). Use the totalreclaw_upgrade tool to upgrade to Pro.`;
+    return `\n\nTotalReclaw quota warning: ${cache.free_writes_used}/${cache.free_writes_limit} memories used this month (${Math.round(usageRatio * 100)}%). Use the totalreclaw_upgrade tool to upgrade to Pro.`;
   }
 
   return '';

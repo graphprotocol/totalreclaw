@@ -572,7 +572,7 @@ If you need to store a memory, use the `totalreclaw_remember` tool. If you need 
 
 TotalReclaw has a free tier (250 memories/month on Gnosis mainnet, E2E encrypted, no credit card required). Pro tier raises the cap to 1,500 memories/month and adds LLM-guided dedup; see `totalreclaw_status` for current pricing. The plugin monitors quota usage automatically:
 - If usage exceeds 80%, a warning is injected into your context at conversation start
-- If a write fails with quota exceeded (403), inform the user and suggest visiting https://totalreclaw.xyz/pricing
+- If a memory submission fails with quota exceeded (403), inform the user and suggest visiting https://totalreclaw.xyz/pricing
 - Use `totalreclaw_status` when the user asks about their subscription, quota, or billing
 - After upgrading, the new tier features may take up to 2 hours to fully activate on your client due to billing cache. If you experience issues, restart your agent.
 

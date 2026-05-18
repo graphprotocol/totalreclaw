@@ -129,7 +129,7 @@ export async function handleStatus(
     const formatted = [
       `Tier: ${tierLabel}`,
       `Smart Account: ${walletAddress}`,
-      `Writes used: ${usage}`,
+      `Memories used: ${usage}`,
       `Remaining: ${remaining}`,
       expiresLabel,
     ].join('\n');

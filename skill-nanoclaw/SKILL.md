@@ -186,7 +186,7 @@ TotalReclaw has a free tier (250 memories/month on Gnosis mainnet, E2E encrypted
 
 - At conversation start (`before-agent-start`), billing status is fetched from the relay and cached for 2 hours
 - If usage exceeds 80%, a warning is injected into the agent context
-- If a write fails with quota exceeded (403), the billing cache is invalidated so the next conversation start re-fetches and warns the user
+- If a memory submission fails with quota exceeded (403), the billing cache is invalidated so the next conversation start re-fetches and warns the user
 - Use `totalreclaw_status` when the user asks about their subscription, quota, or billing
 - Use `totalreclaw_status` to check current tier and pricing. Use `totalreclaw_upgrade` to generate a Stripe checkout URL for Pro.
 

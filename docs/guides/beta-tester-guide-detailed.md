@@ -355,7 +355,7 @@ Internal: see `~/.claude/skills/qa-totalreclaw.md` (TotalReclaw team only). Runs
 
 ### Free-tier quota exceeded (403)
 
-Reads are never metered. The cap is monthly write volume on the free tier. Upgrade to Pro: *"Upgrade my TotalReclaw subscription."* Counter resets monthly.
+Reads are never metered. The cap is monthly memory volume on the free tier. Upgrade to Pro: *"Upgrade my TotalReclaw subscription."* Counter resets monthly.
 
 ### Slow retrieval
 

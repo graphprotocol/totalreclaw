@@ -128,7 +128,7 @@ The agent never generates the recovery phrase. Only the user's browser does, via
 After credentials.json is confirmed present (step 4 above), call `totalreclaw_status` once and emit a single user-visible block containing:
 
 - A recovery-phrase backup reminder (verbatim — the user just generated it in their browser; this is the reminder to actually save it somewhere durable).
-- Current account state from `totalreclaw_status` (tier, write count, free-write limit, network).
+- Current account state from `totalreclaw_status` (tier, memory count, free-tier memory limit, network).
 - A short confirmation that the agent will now use TotalReclaw for memory operations.
 
 Emit verbatim:
@@ -137,13 +137,13 @@ Emit verbatim:
 >
 > Back up your 12-word recovery phrase NOW — store it offline (password manager, paper, hardware key). It is the only way to recover your encrypted memory vault if you lose access to this device. We cannot recover it for you.
 >
-> Account status: `<tier>` tier, `<used>` / `<limit>` writes used, stored on Gnosis mainnet. Ask me to remember anything and I'll save it to your encrypted vault.
+> Account status: `<tier>` tier, `<used>` / `<limit>` memories used, stored on Gnosis mainnet. Ask me to remember anything and I'll save it to your encrypted vault.
 
 (`<tier>`, `<used>`, `<limit>` from `totalreclaw_status`. All tiers store on Gnosis mainnet.)
 
 This block ships on first successful pair completion. On subsequent install runs where credentials already exist (early-exit in Account setup step 1), instead emit just:
 
-> ✓ TotalReclaw is already set up. Account status: `<tier>` tier, `<used>` / `<limit>` writes used, stored on Gnosis mainnet.
+> ✓ TotalReclaw is already set up. Account status: `<tier>` tier, `<used>` / `<limit>` memories used, stored on Gnosis mainnet.
 
 ---
 
@@ -179,7 +179,7 @@ These are hard rules. None of them are negotiable.
 | `totalreclaw_recall` | Retrieve memories. Always called for user-facing recall queries (see Recall behaviour above). |
 | `totalreclaw_forget` | Tombstone a memory. |
 | `totalreclaw_pin` | Pin a memory so it's surfaced in every recall. |
-| `totalreclaw_status` | Report account tier + write counts. |
+| `totalreclaw_status` | Report account tier + memory counts. |
 | `totalreclaw_export` | Export the full vault. |
 | `totalreclaw_set_scope` | Switch active scope. |
 | `totalreclaw_retype` | Change a memory's taxonomy type. |
