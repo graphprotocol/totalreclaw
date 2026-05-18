@@ -43,17 +43,8 @@ export interface VaultItem {
   decayScore: number;
 }
 
-/** Paginated response from GET /v1/export */
-export interface ExportResponse {
-  success: boolean;
-  error_code?: string;
-  error_message?: string;
-  facts: RawFact[];
-  cursor?: string;
-  has_more: boolean;
-  total_count?: number;
-}
-
+/** Raw fact shape consumed by the SPA's decrypt path. Normalized from the
+ *  subgraph GraphQL response, which uses camelCase + hex strings. */
 export interface RawFact {
   id: string;
   encrypted_blob: string;
@@ -61,24 +52,55 @@ export interface RawFact {
   decay_score: number;
   version: number;
   source: string;
+  /** ISO-8601 — derived from the subgraph's `createdAt` Unix timestamp */
   created_at: string;
   updated_at: string;
   encrypted_embedding?: string;
 }
 
-/** Keys derived from the 12-word mnemonic — held in CryptoContext only */
+/** Keys derived from the 12-word mnemonic — held in CryptoContext only.
+ *  walletAddress is the deterministic ERC-4337 Smart Account address that owns
+ *  the on-chain vault (returned by the relay's /v1/smart-account endpoint). */
 export interface SessionKeys {
   mnemonic: string;
   authKey: Uint8Array;
   encryptionKey: Uint8Array;
   authKeyHex: string;
+  /** EOA derived from BIP-32 m/44'/60'/0'/0/0 — owns the Smart Account */
+  eoaAddress: string;
+  /** Smart Account address — the `owner` field used to query the subgraph */
+  walletAddress: string;
+  /** Chain ID for subgraph routing (84532 free / 100 pro). Pro detection
+   *  happens after billing/status returns — defaults to free at derivation. */
+  chainId: number;
 }
 
-/** Response from GET /v1/account */
-export interface AccountInfo {
-  user_id: string;
-  created_at: string;
-  fact_count: number;
+/** Response from GET /v1/billing/status?wallet_address=... */
+export interface BillingStatus {
+  wallet_address: string;
+  tier: "free" | "pro";
+  writes_used?: number;
+  writes_limit?: number;
+  reads_used?: number;
+  reads_limit?: number;
+  features?: Record<string, unknown>;
+  /** Server-computed extraction tuning knobs (not relevant for read-only SPA) */
+  extraction_interval?: number;
+  max_facts_per_extraction?: number;
+  max_candidate_pool?: number;
+}
+
+/** Subgraph GraphQL response — `facts` entity per docs/specs/subgraph/seed-to-subgraph.md.
+ *  Note: `source` was removed from the schema in v0.6.0 (Session 53). */
+export interface SubgraphFact {
+  id: string;
+  encryptedBlob: string;
+  encryptedEmbedding?: string;
+  decayScore: string;
+  timestamp: string;
+  createdAt: string;
+  version: number;
+  isActive: boolean;
 }
 
 export const TYPE_COLORS: Record<string, string> = {

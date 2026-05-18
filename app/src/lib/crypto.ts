@@ -8,8 +8,14 @@
 
 import { validateMnemonic, mnemonicToSeed } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
+import { HDKey } from "@scure/bip32";
+import { secp256k1 } from "@noble/curves/secp256k1";
+import { keccak_256 } from "@noble/hashes/sha3";
 import { xchacha20poly1305 } from "@noble/ciphers/chacha";
 import { SessionKeys } from "./types";
+
+const BIP44_PATH = "m/44'/60'/0'/0/0";
+const DEFAULT_CHAIN_ID = 84532; // Base Sepolia (free tier)
 
 // HKDF-SHA256 via WebCrypto SubtleCrypto
 async function hkdf(
@@ -65,17 +71,73 @@ export function isMnemonicValid(phrase: string): boolean {
 }
 
 /**
- * Derive session keys from a 12-word BIP-39 mnemonic.
+ * Derive the EOA Ethereum address that owns the ERC-4337 Smart Account.
  *
- * Matches client/src/crypto/seed.ts deriveKeysFromMnemonic() + mcp/src/subgraph/crypto.ts:
- *   seed = BIP-39 PBKDF2(mnemonic, "mnemonic", 2048, SHA-512, 64 bytes)
- *   salt = seed[0:32]
- *   authKey = HKDF-SHA256(seed, salt, "totalreclaw-auth-key-v1",       32)
- *   encKey  = HKDF-SHA256(seed, salt, "totalreclaw-encryption-key-v1", 32)
+ * Mirrors the canonical client/src/crypto/seed.ts derivation:
+ *   - BIP-32 HD key at m/44'/60'/0'/0/0
+ *   - secp256k1 uncompressed public key (65 bytes, leading 0x04)
+ *   - EOA = keccak256(pubkey[1:65])[12:32] (last 20 bytes)
  *
- * BIP-32 derivation is NOT used for session keys (only needed for UserOp signing).
+ * Returns lowercase 0x-prefixed hex (not EIP-55 checksummed).
  */
-export async function deriveSessionKeys(mnemonic: string): Promise<SessionKeys> {
+function deriveEoaFromSeed(seed: Uint8Array): string {
+  const hdKey = HDKey.fromMasterSeed(seed);
+  const child = hdKey.derive(BIP44_PATH);
+  if (!child.privateKey) {
+    throw new Error("BIP-32 derivation failed");
+  }
+  const pubUncompressed = secp256k1.getPublicKey(child.privateKey, false); // 65 bytes
+  const hash = keccak_256(pubUncompressed.slice(1));
+  const addr = hash.slice(-20);
+  return "0x" + bytesToHex(addr);
+}
+
+/**
+ * Fetch the deterministic Smart Account address from the relay.
+ *
+ * The relay calls `SimpleAccountFactory.getAddress(eoa, 0)` via a public RPC
+ * (CREATE2 view function). Same answer on every chain where the factory is
+ * deployed — but we still pass chainId so the relay routes to the correct
+ * RPC endpoint.
+ */
+async function fetchSmartAccountAddress(
+  serverUrl: string,
+  eoa: string,
+  chainId: number,
+): Promise<string> {
+  const url = `${serverUrl.replace(/\/$/, "")}/v1/smart-account?eoa=${eoa}&chain=${chainId}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`smart-account derivation failed (${res.status}): ${body}`);
+  }
+  const json = (await res.json()) as { smart_account?: string };
+  if (!json.smart_account || !/^0x[0-9a-fA-F]{40}$/.test(json.smart_account)) {
+    throw new Error("smart-account response missing valid address");
+  }
+  return json.smart_account.toLowerCase();
+}
+
+/**
+ * Derive session keys + Smart Account address from a 12-word BIP-39 mnemonic.
+ *
+ * Mirrors client/src/crypto/seed.ts deriveKeysFromMnemonic() + the Smart
+ * Account derivation flow used by every other client. The Smart Account
+ * address is fetched from the relay (browser can't easily call the factory
+ * view function without bundle-heavy deps).
+ *
+ *   seed     = BIP-39 PBKDF2(mnemonic, "mnemonic", 2048, SHA-512, 64 bytes)
+ *   salt     = seed[0:32]
+ *   authKey  = HKDF-SHA256(seed, salt, "totalreclaw-auth-key-v1",       32)
+ *   encKey   = HKDF-SHA256(seed, salt, "totalreclaw-encryption-key-v1", 32)
+ *   eoa      = keccak256(secp256k1_pubkey(BIP32(m/44'/60'/0'/0/0)))[-20:]
+ *   wallet   = SimpleAccountFactory.getAddress(eoa, 0) [via relay]
+ */
+export async function deriveSessionKeys(
+  mnemonic: string,
+  serverUrl: string,
+  chainId: number = DEFAULT_CHAIN_ID,
+): Promise<SessionKeys> {
   const normalized = mnemonic.trim().toLowerCase();
   if (!isMnemonicValid(normalized)) {
     throw new Error("Invalid 12-word recovery phrase");
@@ -83,14 +145,26 @@ export async function deriveSessionKeys(mnemonic: string): Promise<SessionKeys> 
 
   const seed = await mnemonicToSeed(normalized); // 512-bit BIP-39 seed
   const salt = seed.slice(0, 32);
-  const authKey = await hkdf(seed, salt, "totalreclaw-auth-key-v1", 32);
-  const encryptionKey = await hkdf(seed, salt, "totalreclaw-encryption-key-v1", 32);
+  const [authKey, encryptionKey, eoaAddress] = await Promise.all([
+    hkdf(seed, salt, "totalreclaw-auth-key-v1", 32),
+    hkdf(seed, salt, "totalreclaw-encryption-key-v1", 32),
+    Promise.resolve(deriveEoaFromSeed(seed)),
+  ]);
+
+  const walletAddress = await fetchSmartAccountAddress(
+    serverUrl,
+    eoaAddress,
+    chainId,
+  );
 
   return {
     mnemonic: normalized,
     authKey,
     encryptionKey,
     authKeyHex: bytesToHex(authKey),
+    eoaAddress,
+    walletAddress,
+    chainId,
   };
 }
 

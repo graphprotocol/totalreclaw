@@ -1,5 +1,10 @@
-import { describe, it, expect } from "vitest";
-import { deriveSessionKeys, encryptBlob, decryptBlob, isMnemonicValid } from "./crypto";
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import {
+  deriveSessionKeys,
+  encryptBlob,
+  decryptBlob,
+  isMnemonicValid,
+} from "./crypto";
 
 // BIP-39 test mnemonic (all-zeros entropy, BIP-39 spec vector)
 const TEST_MNEMONIC =
@@ -14,6 +19,12 @@ const GOLDEN_AUTH_KEY_HEX =
 const GOLDEN_ENC_KEY_HEX =
   "a58fdc56e1d768461d95cd46b49e03727b2eb342ac558b9f3ebf1255b871f703";
 
+// EOA for TEST_MNEMONIC at BIP-32 m/44'/60'/0'/0/0 — well-known test vector.
+const GOLDEN_EOA = "0x9858effd232b4033e47d90003d41ec34ecaeda94";
+
+const SERVER_URL = "https://relay.test";
+const MOCK_SMART_ACCOUNT = "0xcafef00dcafef00dcafef00dcafef00dcafef00d";
+
 // Fixture ciphertext: encryptBlob('{"test":"golden"}', GOLDEN_ENC_KEY, nonce=zeros[24])
 // wire format: nonce[24] || tag[16] || ciphertext
 const FIXTURE_CIPHERTEXT_HEX =
@@ -27,56 +38,101 @@ function hexToBytes(hex: string): Uint8Array {
   return out;
 }
 
+beforeEach(() => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/v1/smart-account")) {
+      return new Response(
+        JSON.stringify({ smart_account: MOCK_SMART_ACCOUNT, chain_id: 84532 }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return new Response("not mocked: " + url, { status: 404 });
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("deriveSessionKeys", () => {
   it("produces canonical authKey for known mnemonic (golden vector)", async () => {
-    const keys = await deriveSessionKeys(TEST_MNEMONIC);
+    const keys = await deriveSessionKeys(TEST_MNEMONIC, SERVER_URL);
     expect(keys.authKeyHex).toBe(GOLDEN_AUTH_KEY_HEX);
   });
 
   it("produces canonical encryptionKey for known mnemonic (golden vector)", async () => {
-    const keys = await deriveSessionKeys(TEST_MNEMONIC);
+    const keys = await deriveSessionKeys(TEST_MNEMONIC, SERVER_URL);
     const encHex = Array.from(keys.encryptionKey)
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
     expect(encHex).toBe(GOLDEN_ENC_KEY_HEX);
   });
 
+  it("derives canonical EOA for TEST_MNEMONIC", async () => {
+    const keys = await deriveSessionKeys(TEST_MNEMONIC, SERVER_URL);
+    expect(keys.eoaAddress).toBe(GOLDEN_EOA);
+  });
+
+  it("fetches walletAddress from /v1/smart-account using the EOA", async () => {
+    const keys = await deriveSessionKeys(TEST_MNEMONIC, SERVER_URL);
+    expect(keys.walletAddress).toBe(MOCK_SMART_ACCOUNT);
+
+    const fetchMock = vi.mocked(fetch);
+    const calledUrl = String(fetchMock.mock.calls[0][0]);
+    expect(calledUrl).toContain("/v1/smart-account");
+    expect(calledUrl).toContain(`eoa=${GOLDEN_EOA}`);
+    expect(calledUrl).toContain("chain=84532");
+  });
+
   it("authKey and encryptionKey are distinct", async () => {
-    const keys = await deriveSessionKeys(TEST_MNEMONIC);
+    const keys = await deriveSessionKeys(TEST_MNEMONIC, SERVER_URL);
     expect(keys.authKeyHex).not.toBe(GOLDEN_ENC_KEY_HEX);
   });
 
   it("is deterministic", async () => {
-    const k1 = await deriveSessionKeys(TEST_MNEMONIC);
-    const k2 = await deriveSessionKeys(TEST_MNEMONIC);
+    const k1 = await deriveSessionKeys(TEST_MNEMONIC, SERVER_URL);
+    const k2 = await deriveSessionKeys(TEST_MNEMONIC, SERVER_URL);
     expect(k1.authKeyHex).toBe(k2.authKeyHex);
-    expect(
-      Array.from(k1.encryptionKey).join(","),
-    ).toBe(Array.from(k2.encryptionKey).join(","));
+    expect(Array.from(k1.encryptionKey).join(",")).toBe(
+      Array.from(k2.encryptionKey).join(","),
+    );
+    expect(k1.eoaAddress).toBe(k2.eoaAddress);
   });
 
   it("produces different keys for different mnemonics", async () => {
-    const k1 = await deriveSessionKeys(TEST_MNEMONIC);
+    const k1 = await deriveSessionKeys(TEST_MNEMONIC, SERVER_URL);
     const k2 = await deriveSessionKeys(
-      "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong",
+      "legal winner thank year wave sausage worth useful legal winner thank yellow",
+      SERVER_URL,
     );
     expect(k1.authKeyHex).not.toBe(
       Array.from(k2.authKey)
         .map((b) => b.toString(16).padStart(2, "0"))
         .join(""),
     );
+    expect(k1.eoaAddress).not.toBe(k2.eoaAddress);
   });
 
   it("rejects invalid mnemonic", async () => {
-    await expect(deriveSessionKeys("not valid mnemonic")).rejects.toThrow(
-      "Invalid 12-word recovery phrase",
+    await expect(
+      deriveSessionKeys("not valid mnemonic", SERVER_URL),
+    ).rejects.toThrow("Invalid 12-word recovery phrase");
+  });
+
+  it("surfaces relay errors with status code", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response("rate-limited", { status: 429 }),
     );
+    await expect(
+      deriveSessionKeys(TEST_MNEMONIC, SERVER_URL),
+    ).rejects.toThrow(/smart-account derivation failed \(429\)/);
   });
 });
 
 describe("encryptBlob / decryptBlob round-trip", () => {
   it("encrypt then decrypt returns original plaintext", async () => {
-    const { encryptionKey } = await deriveSessionKeys(TEST_MNEMONIC);
+    const { encryptionKey } = await deriveSessionKeys(TEST_MNEMONIC, SERVER_URL);
     const original = JSON.stringify({ type: "fact", content: "hello world" });
     const hex = encryptBlob(original, encryptionKey);
     const decrypted = decryptBlob(hex, encryptionKey);
@@ -90,7 +146,7 @@ describe("encryptBlob / decryptBlob round-trip", () => {
   });
 
   it("decryptBlob rejects tampered ciphertext", async () => {
-    const { encryptionKey } = await deriveSessionKeys(TEST_MNEMONIC);
+    const { encryptionKey } = await deriveSessionKeys(TEST_MNEMONIC, SERVER_URL);
     const hex = encryptBlob("secret", encryptionKey);
     // Flip last byte
     const tampered =

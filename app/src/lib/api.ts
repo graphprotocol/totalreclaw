@@ -1,23 +1,30 @@
 import {
-  ExportResponse,
-  AccountInfo,
+  BillingStatus,
   RawFact,
   VaultItem,
   MemoryClaimV1,
   MemoryTypeV1,
   MEMORY_TYPES_V1,
+  SubgraphFact,
 } from "./types";
-import { decryptBlob, encryptBlob } from "./crypto";
+import { decryptBlob } from "./crypto";
 import { SessionKeys } from "./types";
 
 const SERVER_URL =
-  import.meta.env.VITE_SERVER_URL?.replace(/\/$/, "") ?? "https://relay.totalreclaw.xyz";
+  import.meta.env.VITE_SERVER_URL?.replace(/\/$/, "") ??
+  "https://api.totalreclaw.xyz";
+
+export function getServerUrl(): string {
+  return SERVER_URL;
+}
 
 function authHeaders(keys: SessionKeys): HeadersInit {
   return {
     Authorization: `Bearer ${keys.authKeyHex}`,
     "Content-Type": "application/json",
     Accept: "application/json",
+    "X-Wallet-Address": keys.walletAddress,
+    "X-TotalReclaw-Client": "ts-spa-vault",
   };
 }
 
@@ -40,36 +47,136 @@ async function apiFetch<T>(
   return res.json() as Promise<T>;
 }
 
-export async function getAccount(keys: SessionKeys): Promise<AccountInfo> {
-  return apiFetch<AccountInfo>("/v1/account", keys);
+/**
+ * Idempotent vault registration. Required before any authenticated relay call
+ * succeeds — the relay looks up the user by sha256(authKey), and 401s if no
+ * row exists. Re-registering is a no-op.
+ */
+export async function registerSession(keys: SessionKeys): Promise<void> {
+  const authKeyHashHex = await sha256Hex(keys.authKey);
+  // salt is the first 32 bytes of the BIP-39 seed, but the SPA already exposes
+  // a stable salt via the relay's persisted record. Per the auth design,
+  // re-registering with the same auth_key_hash is idempotent regardless of
+  // salt — relay does an existsByAuthHash short-circuit. We send a 32-byte
+  // dummy salt that's deterministic from authKey so the relay never sees a
+  // changing value across logins from the same SPA session.
+  const saltHex = await sha256Hex(
+    concat(new TextEncoder().encode("totalreclaw-spa-salt-v1"), keys.authKey),
+  );
+  const res = await fetch(`${SERVER_URL}/v1/register`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-TotalReclaw-Client": "ts-spa-vault",
+    },
+    body: JSON.stringify({
+      auth_key_hash: authKeyHashHex,
+      salt: saltHex,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`register → ${res.status}: ${body}`);
+  }
 }
 
-/** Fetch all facts via cursor-paginated export. Returns raw encrypted facts. */
+export async function getAccount(keys: SessionKeys): Promise<BillingStatus> {
+  const path = `/v1/billing/status?wallet_address=${keys.walletAddress}`;
+  return apiFetch<BillingStatus>(path, keys);
+}
+
+interface SubgraphResponse<T> {
+  data?: T;
+  errors?: Array<{ message: string }>;
+}
+
+const PAGE_QUERY = `
+  query VaultExport($owner: Bytes!, $first: Int!, $skip: Int!) {
+    facts(
+      where: { owner: $owner, isActive: true }
+      first: $first
+      skip: $skip
+      orderBy: createdAt
+      orderDirection: desc
+    ) {
+      id
+      encryptedBlob
+      encryptedEmbedding
+      decayScore
+      timestamp
+      createdAt
+      version
+      isActive
+    }
+  }
+`;
+
+const PAGE_SIZE = 1000; // Graph Studio caps `first` at 1000
+
+/**
+ * Fetch all active facts owned by the Smart Account via the relay's
+ * subgraph proxy. Pagination via skip (deterministic ordering on createdAt).
+ */
 export async function exportAllFacts(
   keys: SessionKeys,
   onProgress?: (loaded: number, total: number | undefined) => void,
 ): Promise<RawFact[]> {
   const all: RawFact[] = [];
-  let cursor: string | undefined;
-  let total: number | undefined;
+  let skip = 0;
 
-  do {
-    const params = new URLSearchParams({ limit: "1000" });
-    if (cursor) params.set("cursor", cursor);
-    const page = await apiFetch<ExportResponse>(
-      `/v1/export?${params}`,
+  for (;;) {
+    const res = await apiFetch<SubgraphResponse<{ facts: SubgraphFact[] }>>(
+      "/v1/subgraph",
       keys,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          query: PAGE_QUERY,
+          variables: {
+            owner: keys.walletAddress,
+            first: PAGE_SIZE,
+            skip,
+          },
+        }),
+      },
     );
-    if (!page.success) {
-      throw new Error(page.error_message ?? "Export failed");
+
+    if (res.errors?.length) {
+      throw new Error(`subgraph: ${res.errors.map((e) => e.message).join("; ")}`);
     }
-    all.push(...page.facts);
-    total = page.total_count;
-    cursor = page.has_more ? page.cursor : undefined;
-    onProgress?.(all.length, total);
-  } while (cursor);
+
+    const page = res.data?.facts ?? [];
+    for (const fact of page) {
+      all.push(subgraphFactToRawFact(fact));
+    }
+    onProgress?.(all.length, undefined);
+
+    if (page.length < PAGE_SIZE) break;
+    skip += PAGE_SIZE;
+  }
 
   return all;
+}
+
+function subgraphFactToRawFact(sf: SubgraphFact): RawFact {
+  const createdAtMs = Number(sf.createdAt || sf.timestamp) * 1000;
+  const iso = Number.isFinite(createdAtMs)
+    ? new Date(createdAtMs).toISOString()
+    : new Date().toISOString();
+  return {
+    id: sf.id,
+    encrypted_blob: sf.encryptedBlob.replace(/^0x/, ""),
+    blind_indices: [], // subgraph carries blind indices separately; not needed for read path
+    decay_score: Number(sf.decayScore),
+    version: sf.version,
+    // `source` was removed from the subgraph Fact entity in v0.6.0. The
+    // decrypted MemoryClaim carries its own `source` field (taxonomy v1),
+    // so this stub is only used to keep the RawFact shape stable.
+    source: "",
+    created_at: iso,
+    updated_at: iso,
+    encrypted_embedding: sf.encryptedEmbedding?.replace(/^0x/, "") || undefined,
+  };
 }
 
 function resolveType(claim: MemoryClaimV1, tags: string[]): MemoryTypeV1 | string {
@@ -108,54 +215,52 @@ export function decryptFacts(
   return items;
 }
 
+// ---------------------------------------------------------------------------
+// Write path — Phase 2 (managed-mode UserOp construction not yet implemented).
+// These stubs preserve the hook surface so the UI compiles + renders. Calls
+// that hit the write path will surface a clear error to the user.
+// ---------------------------------------------------------------------------
+
+const WRITES_NOT_IMPLEMENTED =
+  "Vault writes are not yet available in the web app. Use a TotalReclaw agent (Claude Desktop, OpenClaw, etc.) to modify your vault.";
+
 export async function deleteFact(
-  factId: string,
-  keys: SessionKeys,
+  _factId: string,
+  _keys: SessionKeys,
 ): Promise<void> {
-  await apiFetch<unknown>(`/v1/facts/${factId}`, keys, { method: "DELETE" });
+  throw new Error(WRITES_NOT_IMPLEMENTED);
 }
 
 export async function batchDeleteFacts(
-  factIds: string[],
-  keys: SessionKeys,
+  _factIds: string[],
+  _keys: SessionKeys,
 ): Promise<void> {
-  if (factIds.length === 0) return;
-  // Server supports up to 500 per batch
-  for (let i = 0; i < factIds.length; i += 500) {
-    const batch = factIds.slice(i, i + 500);
-    await apiFetch<unknown>("/v1/facts/batch-delete", keys, {
-      method: "POST",
-      body: JSON.stringify({ fact_ids: batch }),
-    });
-  }
+  throw new Error(WRITES_NOT_IMPLEMENTED);
 }
 
-/** Re-store a modified claim (retype or pin update). Reuses existing blind indices. */
 export async function updateClaim(
-  item: VaultItem,
-  updatedClaim: MemoryClaimV1,
-  keys: SessionKeys,
+  _item: VaultItem,
+  _updatedClaim: MemoryClaimV1,
+  _keys: SessionKeys,
 ): Promise<void> {
-  const newBlob = encryptBlob(
-    JSON.stringify(updatedClaim),
-    keys.encryptionKey,
-  );
+  throw new Error(WRITES_NOT_IMPLEMENTED);
+}
 
-  // First delete the old fact, then store the new one
-  // (server /v1/store is append-only; deletion is the update mechanism)
-  await apiFetch<unknown>(`/v1/facts/${item.id}`, keys, { method: "DELETE" });
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
 
-  await apiFetch<unknown>("/v1/store", keys, {
-    method: "POST",
-    body: JSON.stringify({
-      facts: [
-        {
-          id: item.id,
-          encrypted_blob: newBlob,
-          blind_indices: item.blindIndices,
-          decay_score: item.decayScore,
-        },
-      ],
-    }),
-  });
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", bytes as unknown as ArrayBuffer);
+  const arr = new Uint8Array(hash);
+  return Array.from(arr)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
 }

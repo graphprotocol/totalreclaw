@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { clsx } from "clsx";
 import { isMnemonicValid, deriveSessionKeys } from "../lib/crypto";
+import { getServerUrl, registerSession } from "../lib/api";
 import { useCrypto } from "../contexts/CryptoContext";
 
 const WORD_COUNT = 12;
@@ -67,7 +68,8 @@ export function PairPage() {
 
       setLoading(true);
       try {
-        const keys = await deriveSessionKeys(phrase);
+        const keys = await deriveSessionKeys(phrase, getServerUrl());
+        await registerSession(keys);
         setKeys(keys);
         navigate("/vault", { replace: true });
       } catch (err) {
