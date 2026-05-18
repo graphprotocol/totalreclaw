@@ -407,12 +407,13 @@ def test_parse_facts_response_for_compaction_floor_5() -> None:
 # ---------------------------------------------------------------------------
 
 
+# v2-lenient (core 2.4.0+) — per docs/specs/totalreclaw/retrieval-v2.md §Tier 1.
 def test_source_weight_user_is_1() -> None:
     assert source_weight("user") == 1.0
 
 
-def test_source_weight_assistant_is_0_55() -> None:
-    assert source_weight("assistant") == pytest.approx(0.55, abs=0.001)
+def test_source_weight_assistant_is_0_85_v2_lenient() -> None:
+    assert source_weight("assistant") == pytest.approx(0.85, abs=0.001)
 
 
 def test_source_weight_legacy_none_fallback() -> None:
@@ -420,8 +421,8 @@ def test_source_weight_legacy_none_fallback() -> None:
     assert LEGACY_CLAIM_FALLBACK_WEIGHT == 0.85
 
 
-def test_source_weight_user_inferred_is_0_9() -> None:
-    assert source_weight("user-inferred") == pytest.approx(0.9, abs=0.001)
+def test_source_weight_user_inferred_is_0_95_v2_lenient() -> None:
+    assert source_weight("user-inferred") == pytest.approx(0.95, abs=0.001)
 
 
 def test_rerank_with_source_weights_promotes_user_over_assistant() -> None:
@@ -458,7 +459,8 @@ def test_rerank_with_source_weights_promotes_user_over_assistant() -> None:
     assert results[0].source == "user"
     assert results[0].source_weight == 1.0
     assert results[1].source == "assistant"
-    assert results[1].source_weight == pytest.approx(0.55, abs=0.001)
+    # v2-lenient (core 2.4.0+): assistant=0.85, not v1's 0.55.
+    assert results[1].source_weight == pytest.approx(0.85, abs=0.001)
 
 
 def test_rerank_without_source_weights_omits_weight_field() -> None:

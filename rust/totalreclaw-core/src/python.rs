@@ -2172,22 +2172,23 @@ mod tests {
 
     #[test]
     fn py_source_weight_known_values() {
+        // v2-lenient (core 2.4.0+) — per docs/specs/totalreclaw/retrieval-v2.md §Tier 1.
         // Direct call — no GIL needed because py_source_weight returns f64.
         assert_eq!(py_source_weight("user"), 1.00);
-        assert_eq!(py_source_weight("user-inferred"), 0.90);
-        assert_eq!(py_source_weight("derived"), 0.70);
-        assert_eq!(py_source_weight("external"), 0.70);
-        assert_eq!(py_source_weight("assistant"), 0.55);
+        assert_eq!(py_source_weight("user-inferred"), 0.95);
+        assert_eq!(py_source_weight("derived"), 0.85);
+        assert_eq!(py_source_weight("external"), 0.85);
+        assert_eq!(py_source_weight("assistant"), 0.85);
     }
 
     #[test]
     fn py_source_weight_unknown_returns_fallback() {
-        // Policy: unknown source string -> user-inferred (0.90), not 0.85.
-        // 0.85 is ONLY the fallback for missing-source candidates in the
-        // reranker. The binding here maps string -> MemorySource -> weight,
+        // Policy: unknown source string -> user-inferred (v2-lenient 0.95),
+        // not 0.85. The 0.85 fallback is ONLY for missing-source candidates in
+        // the reranker. The binding here maps string -> MemorySource -> weight,
         // and from_str_lossy routes unknowns to UserInferred.
-        assert_eq!(py_source_weight("bot"), 0.90);
-        assert_eq!(py_source_weight(""), 0.90);
+        assert_eq!(py_source_weight("bot"), 0.95);
+        assert_eq!(py_source_weight(""), 0.95);
     }
 
     #[test]

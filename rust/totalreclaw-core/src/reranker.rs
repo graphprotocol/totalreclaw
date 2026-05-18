@@ -36,10 +36,30 @@ const RRF_K: f64 = 60.0;
 /// Source-weight multipliers applied to the final fused score when
 /// [`RerankerConfig::apply_source_weights`] is enabled.
 ///
+/// **v2-lenient (core 2.4.0+, default):** bench-validated across 3+ corpora
+/// per `docs/plans/2026-04-28-v2-lenient-promotion-proposal.md`. Net effect:
+/// strictly improves on v1 when B1 entity-trapdoors are on (+3pp acc, +50pp
+/// on assistant-source recall) and matches v1 when B1 is off — no loss on
+/// any corpus measured (LongMemEval-500, Gemini, ChatGPT-export big-vault).
+///
 /// Values sourced from `docs/specs/totalreclaw/retrieval-v2.md` §Tier 1. The
 /// array is sorted highest-to-lowest trust; values MUST NOT be edited without
 /// updating the spec + recalibrating via the E13 retrieval benchmark.
 pub const SOURCE_WEIGHTS: &[(MemorySource, f64)] = &[
+    (MemorySource::User, 1.00),
+    (MemorySource::UserInferred, 0.95),
+    (MemorySource::Derived, 0.85),
+    (MemorySource::External, 0.85),
+    (MemorySource::Assistant, 0.85),
+];
+
+/// Legacy v1 source-weight multipliers retained for back-compat / spike work.
+///
+/// Pre-2.4.0 default. Kept exported so callers that want to compare v1 vs
+/// v2-lenient ranking (e.g. the retrieval-benchmark harness) can opt in
+/// without re-implementing the table. Production callers MUST use
+/// [`SOURCE_WEIGHTS`] (v2-lenient).
+pub const SOURCE_WEIGHTS_V1_LEGACY: &[(MemorySource, f64)] = &[
     (MemorySource::User, 1.00),
     (MemorySource::UserInferred, 0.90),
     (MemorySource::Derived, 0.70),
@@ -50,8 +70,12 @@ pub const SOURCE_WEIGHTS: &[(MemorySource, f64)] = &[
 /// Fallback weight applied to candidates that have no `source` field.
 ///
 /// Used for legacy v0 claims written before Memory Taxonomy v1 introduced
-/// the `source` axis. Value (0.85) sits between `user-inferred` (0.90) and
-/// `derived` / `external` (0.70) — mild penalty without erasing legacy data.
+/// the `source` axis. Value (0.85) sits below `user` (1.00) /
+/// `user-inferred` (0.95) and equals the v2-lenient floor for
+/// derived / external / assistant — mild penalty for unknown provenance
+/// without erasing legacy data. (Under the prior v1 weight matrix, 0.85
+/// sat between `user-inferred` 0.90 and `derived`/`external` 0.70; same
+/// numeric value, slightly different relative position post-v2-lenient.)
 pub const LEGACY_CLAIM_FALLBACK_WEIGHT: f64 = 0.85;
 
 /// Return the source-weight multiplier for a known [`MemorySource`].
@@ -486,11 +510,25 @@ mod tests {
 
     #[test]
     fn test_source_weight_table_matches_spec() {
+        // v2-lenient (core 2.4.0+) — per docs/specs/totalreclaw/retrieval-v2.md §Tier 1.
         assert_eq!(source_weight(MemorySource::User), 1.00);
-        assert_eq!(source_weight(MemorySource::UserInferred), 0.90);
-        assert_eq!(source_weight(MemorySource::Derived), 0.70);
-        assert_eq!(source_weight(MemorySource::External), 0.70);
-        assert_eq!(source_weight(MemorySource::Assistant), 0.55);
+        assert_eq!(source_weight(MemorySource::UserInferred), 0.95);
+        assert_eq!(source_weight(MemorySource::Derived), 0.85);
+        assert_eq!(source_weight(MemorySource::External), 0.85);
+        assert_eq!(source_weight(MemorySource::Assistant), 0.85);
+    }
+
+    #[test]
+    fn test_source_weights_v1_legacy_preserved() {
+        // Legacy v1 const kept exported for back-compat / benchmark spike work.
+        // Production callers must not consume this — use [`SOURCE_WEIGHTS`].
+        let v1: std::collections::HashMap<_, _> =
+            SOURCE_WEIGHTS_V1_LEGACY.iter().copied().collect();
+        assert_eq!(v1[&MemorySource::User], 1.00);
+        assert_eq!(v1[&MemorySource::UserInferred], 0.90);
+        assert_eq!(v1[&MemorySource::Derived], 0.70);
+        assert_eq!(v1[&MemorySource::External], 0.70);
+        assert_eq!(v1[&MemorySource::Assistant], 0.55);
     }
 
     #[test]
@@ -579,14 +617,14 @@ mod tests {
             "user source must outrank assistant on base-score tie"
         );
         assert_eq!(ranked[1].id, "a");
-        // Sanity-check the per-result source_weight field.
+        // Sanity-check the per-result source_weight field (v2-lenient).
         assert!((ranked[0].source_weight - 1.00).abs() < 1e-12);
-        assert!((ranked[1].source_weight - 0.55).abs() < 1e-12);
-        // Assistant score must be ~55% of user score on tie.
+        assert!((ranked[1].source_weight - 0.85).abs() < 1e-12);
+        // Assistant score must be ~85% of user score on tie (v2-lenient ratio).
         let ratio = ranked[1].score / ranked[0].score;
         assert!(
-            (ratio - 0.55).abs() < 1e-6,
-            "assistant/user ratio should equal 0.55, got {}",
+            (ratio - 0.85).abs() < 1e-6,
+            "assistant/user ratio should equal 0.85 (v2-lenient), got {}",
             ratio
         );
     }
@@ -618,7 +656,7 @@ mod tests {
             ranked[0].score > 0.0,
             "assistant score must not drop to zero"
         );
-        assert!((ranked[0].source_weight - 0.55).abs() < 1e-12);
+        assert!((ranked[0].source_weight - 0.85).abs() < 1e-12);
     }
 
     #[test]
@@ -699,16 +737,24 @@ mod tests {
             );
         }
 
-        // And the canonical ordering: user (1.00) > inferred (0.90) > ext/derived
-        // (0.70) > assistant (0.55). All base scores are equal, so source
-        // weight is the only discriminator.
+        // v2-lenient canonical ordering: user (1.00) > inferred (0.95) >
+        // derived / ext / assistant (all 0.85). All base scores are equal, so
+        // source weight is the only discriminator. Three-way 0.85 tie resolves
+        // via stable input-order tie-break — assistant entered as "asst"
+        // candidate first in the vec above, before derived + ext.
         let ids: Vec<_> = on.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids[0], "user");
         assert_eq!(ids[1], "inferred");
-        // derived and ext both at 0.70 — deterministic tie-break on id.
-        assert_eq!(ids[2], "derived");
-        assert_eq!(ids[3], "ext");
-        assert_eq!(ids[4], "asst");
+        // Three-way 0.85 tie (asst / derived / ext) — order is
+        // implementation-defined but stable. Assert membership of the tail
+        // rather than a specific permutation.
+        let tail: std::collections::HashSet<&str> = ids[2..5].iter().copied().collect();
+        let expected_tail: std::collections::HashSet<&str> =
+            ["asst", "derived", "ext"].iter().copied().collect();
+        assert_eq!(
+            tail, expected_tail,
+            "v2-lenient: asst/derived/ext tie at 0.85 — all three must occupy the tail"
+        );
     }
 
     #[test]
@@ -747,12 +793,26 @@ mod tests {
         )
         .unwrap();
 
-        // On a three-way tie the legacy fallback (0.85) sits between assistant (0.55)
-        // and user (1.00) — so the ordering MUST be user > legacy > assistant.
+        // v2-lenient: legacy fallback (0.85) ties with assistant (0.85), both
+        // ranked under user (1.00). User must come first; legacy + assistant
+        // tie at second/third on stable tie-break.
         assert_eq!(ranked[0].id, "user");
-        assert_eq!(ranked[1].id, "legacy");
-        assert_eq!(ranked[2].id, "asst");
-        assert!((ranked[1].source_weight - LEGACY_CLAIM_FALLBACK_WEIGHT).abs() < 1e-12);
+        let tail: std::collections::HashSet<&str> =
+            [ranked[1].id.as_str(), ranked[2].id.as_str()].into_iter().collect();
+        let expected_tail: std::collections::HashSet<&str> =
+            ["legacy", "asst"].into_iter().collect();
+        assert_eq!(
+            tail, expected_tail,
+            "v2-lenient: legacy + assistant tie at 0.85 — both must occupy the tail"
+        );
+        // Whichever of legacy/asst placed second must carry the correct weight.
+        for r in &ranked[1..=2] {
+            if r.id == "legacy" {
+                assert!((r.source_weight - LEGACY_CLAIM_FALLBACK_WEIGHT).abs() < 1e-12);
+            } else {
+                assert!((r.source_weight - 0.85).abs() < 1e-12);
+            }
+        }
     }
 
     #[test]
@@ -812,10 +872,11 @@ mod tests {
             "uniform source must not change relative ordering"
         );
 
-        // And every score in the weighted run must equal the unweighted score times 0.55.
+        // And every score in the weighted run must equal the unweighted score times 0.85
+        // (v2-lenient assistant weight).
         for (w, u) in on.iter().zip(off.iter()) {
-            assert!((w.score - u.score * 0.55).abs() < 1e-12);
-            assert!((w.source_weight - 0.55).abs() < 1e-12);
+            assert!((w.score - u.score * 0.85).abs() < 1e-12);
+            assert!((w.source_weight - 0.85).abs() < 1e-12);
         }
     }
 

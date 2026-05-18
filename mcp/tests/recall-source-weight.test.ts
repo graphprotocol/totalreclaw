@@ -66,7 +66,8 @@ describe('handleRecall — Retrieval v2 Tier 1 source weighting', () => {
     const body = JSON.parse(out.content[0].text);
     expect(body.memories).toHaveLength(2);
 
-    // User claim must rank first because sourceWeight(user)=1.0, sourceWeight(assistant)=0.55.
+    // User claim must rank first because sourceWeight(user)=1.0,
+    // sourceWeight(assistant)=0.85 (v2-lenient, core 2.4.0+).
     expect(body.memories[0].fact_id).toBe('user-fact-id');
     expect(body.memories[0].source).toBe('user');
     expect(body.memories[1].fact_id).toBe('assistant-fact-id');
@@ -75,7 +76,7 @@ describe('handleRecall — Retrieval v2 Tier 1 source weighting', () => {
     // Weighted scores reflect the multiplier.
     expect(body.memories[0].score).toBeGreaterThan(body.memories[1].score);
     expect(body.memories[0].source_weight).toBe(1.0);
-    expect(body.memories[1].source_weight).toBe(0.55);
+    expect(body.memories[1].source_weight).toBe(0.85);
   });
 
   test('unspecified / missing source falls back to legacy fallback weight', async () => {

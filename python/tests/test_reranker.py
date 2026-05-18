@@ -63,18 +63,19 @@ class TestCosineSimilarity:
 
 
 class TestSourceWeight:
+    # v2-lenient (core 2.4.0+) — per docs/specs/totalreclaw/retrieval-v2.md §Tier 1.
     def test_user_is_one(self) -> None:
         assert source_weight("user") == 1.0
 
     def test_user_inferred(self) -> None:
-        assert source_weight("user-inferred") == pytest.approx(0.9, abs=1e-3)
+        assert source_weight("user-inferred") == pytest.approx(0.95, abs=1e-3)
 
     def test_derived_and_external(self) -> None:
-        assert source_weight("derived") == pytest.approx(0.7, abs=1e-3)
-        assert source_weight("external") == pytest.approx(0.7, abs=1e-3)
+        assert source_weight("derived") == pytest.approx(0.85, abs=1e-3)
+        assert source_weight("external") == pytest.approx(0.85, abs=1e-3)
 
     def test_assistant(self) -> None:
-        assert source_weight("assistant") == pytest.approx(0.55, abs=1e-3)
+        assert source_weight("assistant") == pytest.approx(0.85, abs=1e-3)
 
     def test_none_falls_back_to_legacy(self) -> None:
         assert source_weight(None) == LEGACY_CLAIM_FALLBACK_WEIGHT
@@ -173,7 +174,8 @@ class TestRerank:
                          apply_source_weights=True)
         assert results[0].id == "user"
         assert results[0].source_weight == pytest.approx(1.0, abs=1e-3)
-        assert results[1].source_weight == pytest.approx(0.55, abs=1e-3)
+        # v2-lenient (core 2.4.0+): assistant=0.85, not v1's 0.55.
+        assert results[1].source_weight == pytest.approx(0.85, abs=1e-3)
 
     def test_apply_source_weights_false_leaves_weight_none(self) -> None:
         emb = [1.0, 0.0]

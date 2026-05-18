@@ -286,12 +286,16 @@ export interface RerankerResult extends RerankerCandidate {
 // of truth and will be used directly by MCP/Python adapters.
 // ---------------------------------------------------------------------------
 
+// v2-lenient (core 2.4.0+, default). Bench-validated across 3+ corpora per
+// docs/plans/2026-04-28-v2-lenient-promotion-proposal.md. Mirrors
+// `SOURCE_WEIGHTS` in rust/totalreclaw-core/src/reranker.rs — values MUST
+// stay in lockstep or the cross-runtime parity test fails.
 const SOURCE_WEIGHTS: Record<string, number> = {
   'user': 1.0,
-  'user-inferred': 0.9,
-  'derived': 0.7,
-  'external': 0.7,
-  'assistant': 0.55,
+  'user-inferred': 0.95,
+  'derived': 0.85,
+  'external': 0.85,
+  'assistant': 0.85,
 };
 
 const LEGACY_FALLBACK_WEIGHT = 0.85;
@@ -383,9 +387,10 @@ export function applyMMR(
  *
  * When `applySourceWeights` is true, the final RRF score for each candidate
  * is multiplied by a Retrieval v2 Tier 1 source weight based on the
- * candidate's `source` field (user=1.0, user-inferred=0.9, derived/external=0.7,
- * assistant=0.55). Candidates without a `source` field use the legacy
- * fallback weight (0.85). This is the flag equivalent of core
+ * candidate's `source` field. v2-lenient (core 2.4.0+, default):
+ * user=1.0, user-inferred=0.95, derived/external/assistant=0.85.
+ * Candidates without a `source` field use the legacy fallback weight (0.85).
+ * This is the flag equivalent of core
  * `rerankWithConfig(.., apply_source_weights=true)`.
  */
 export function rerank(
@@ -494,7 +499,7 @@ export function rerank(
   }
 
   // When source weights are applied the RRF-scaled scores may no longer be in
-  // descending order (weighted=0.55 assistant could slip below a weighted=1.0
+  // descending order (weighted=0.85 assistant could slip below a weighted=1.0
   // user fact that was originally ranked lower). Re-sort so the top-K picked
   // by MMR is meaningful.
   if (applySourceWeights) {

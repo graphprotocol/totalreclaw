@@ -459,13 +459,14 @@ assertEq(
 // getSourceWeight — Retrieval v2 Tier 1 table
 // ---------------------------------------------------------------------------
 
+// v2-lenient (core 2.4.0+) — per docs/specs/totalreclaw/retrieval-v2.md §Tier 1.
 assertEq(getSourceWeight('user'), 1.0, 'sourceWeight: user = 1.0');
-assertEq(getSourceWeight('user-inferred'), 0.9, 'sourceWeight: user-inferred = 0.9');
-assertEq(getSourceWeight('derived'), 0.7, 'sourceWeight: derived = 0.7');
-assertEq(getSourceWeight('external'), 0.7, 'sourceWeight: external = 0.7');
-assertEq(getSourceWeight('assistant'), 0.55, 'sourceWeight: assistant = 0.55');
+assertEq(getSourceWeight('user-inferred'), 0.95, 'sourceWeight: user-inferred = 0.95');
+assertEq(getSourceWeight('derived'), 0.85, 'sourceWeight: derived = 0.85');
+assertEq(getSourceWeight('external'), 0.85, 'sourceWeight: external = 0.85');
+assertEq(getSourceWeight('assistant'), 0.85, 'sourceWeight: assistant = 0.85');
 assertEq(getSourceWeight(undefined), 0.85, 'sourceWeight: missing = 0.85 (legacy fallback)');
-assertEq(getSourceWeight('unknown'), 0.9, 'sourceWeight: unknown = 0.9 (core falls back to user-inferred via from_str_lossy)');
+assertEq(getSourceWeight('unknown'), 0.95, 'sourceWeight: unknown = 0.95 (core falls back to user-inferred via from_str_lossy)');
 
 // ---------------------------------------------------------------------------
 // rerank with applySourceWeights=true: user > assistant on tied content
@@ -499,7 +500,7 @@ assertEq(getSourceWeight('unknown'), 0.9, 'sourceWeight: unknown = 0.9 (core fal
   assert(withWeights.length === 2, 'rerank: returns both candidates');
   assertEq(withWeights[0].id, 'user-1', 'rerank w/ source weights: user > assistant on tied content');
   assert(withWeights[0].sourceWeight === 1.0, 'rerank w/ source weights: user_weight = 1.0');
-  assert(withWeights[1].sourceWeight === 0.55, 'rerank w/ source weights: assistant_weight = 0.55');
+  assert(withWeights[1].sourceWeight === 0.85, 'rerank w/ source weights: assistant_weight = 0.85 (v2-lenient)');
 
   // Control: without source weights, order should be stable (no preference).
   const withoutWeights = rerank('PostgreSQL analytics', embedding, candidates, 2, undefined, false);

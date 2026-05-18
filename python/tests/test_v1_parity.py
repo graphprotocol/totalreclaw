@@ -145,11 +145,12 @@ def test_core_parse_memory_type_v1_passthrough(v1_type: str) -> None:
 @pytest.mark.parametrize(
     "source,expected",
     [
+        # v2-lenient (core 2.4.0+) — per docs/specs/totalreclaw/retrieval-v2.md §Tier 1.
         ("user", 1.0),
-        ("user-inferred", 0.9),
-        ("external", 0.7),
-        ("derived", 0.7),
-        ("assistant", 0.55),
+        ("user-inferred", 0.95),
+        ("external", 0.85),
+        ("derived", 0.85),
+        ("assistant", 0.85),
     ],
 )
 def test_python_source_weight_matches_core(source: str, expected: float) -> None:

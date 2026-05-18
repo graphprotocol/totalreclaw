@@ -68,30 +68,34 @@ top N (default 8)
 
 **Change:**
 
-Add a multiplier to the final RRF score based on source:
+Add a multiplier to the final RRF score based on source. The values below
+(v2-lenient) shipped in `@totalreclaw/core@2.4.0` per the kg-1 promote
+([`docs/plans/2026-04-28-v2-lenient-promotion-proposal.md`](../../plans/2026-04-28-v2-lenient-promotion-proposal.md)).
+For the historical v1 weight matrix that shipped 2.0.0–2.2.0, see
+[Tier 1 v1 (deprecated)](#tier-1-v1-deprecated) below.
 
 ```rust
-// rust/totalreclaw-core/src/reranker.rs
+// rust/totalreclaw-core/src/reranker.rs (v2-lenient, core 2.4.0+)
 
-const SOURCE_WEIGHT: [(MemorySource, f64); 5] = [
+pub const SOURCE_WEIGHTS: &[(MemorySource, f64)] = &[
     (MemorySource::User,          1.00),  // user explicitly said it
-    (MemorySource::UserInferred,  0.90),  // extractor inferred from user signals
-    (MemorySource::Derived,       0.70),  // digest, summary, consolidation
-    (MemorySource::External,      0.70),  // imported from another system
-    (MemorySource::Assistant,     0.55),  // assistant-authored (heavy penalty)
+    (MemorySource::UserInferred,  0.95),  // extractor inferred from user signals
+    (MemorySource::Derived,       0.85),  // digest, summary, consolidation
+    (MemorySource::External,      0.85),  // imported from another system
+    (MemorySource::Assistant,     0.85),  // assistant-authored (mild penalty)
 ];
 
-fn source_weight(source: &MemorySource) -> f64 {
-    SOURCE_WEIGHT.iter()
-        .find(|(s, _)| s == source)
+pub fn source_weight(source: MemorySource) -> f64 {
+    SOURCE_WEIGHTS.iter()
+        .find(|(s, _)| *s == source)
         .map(|(_, w)| *w)
-        .unwrap_or(0.85) // unknown source = moderate penalty
+        .unwrap_or(LEGACY_CLAIM_FALLBACK_WEIGHT) // 0.85, for missing-source candidates
 }
 
 pub fn rerank(candidates: &[Candidate], query: &Query) -> Vec<ScoredCandidate> {
     // ... existing BM25 + cosine + RRF ...
     for scored in &mut scored_candidates {
-        scored.final_score *= source_weight(&scored.claim.source);
+        scored.final_score *= source_weight(scored.claim.source);
     }
     scored_candidates.sort_by(|a, b| b.final_score.partial_cmp(&a.final_score).unwrap());
     scored_candidates.truncate(query.top_k);
@@ -99,9 +103,12 @@ pub fn rerank(candidates: &[Candidate], query: &Query) -> Vec<ScoredCandidate> {
 }
 ```
 
-**Weight calibration:**
+**Weight calibration (v2-lenient):**
 
-Exact values TBD during E13 retrieval benchmark. Above defaults are starting guess.
+Bench-validated across 3+ corpora (LongMemEval-500 big-vault, Gemini big-vault,
+ChatGPT-export big-vault) per the v2-lenient promotion proposal. Net effect
+when paired with B1 entity-trapdoors: +3 pp accuracy overall, +50 pp on
+assistant-sourced recall, no measured loss on any corpus.
 
 Constraints:
 - `user` = 1.0 (anchor — never penalize explicit user statements)
@@ -109,6 +116,31 @@ Constraints:
 - Never drop to zero — all facts remain eligible for top-k
 
 **Effort:** ~20 lines + 10 tests. 1 day including calibration on benchmark data.
+
+### Tier 1 v1 (deprecated)
+
+Shipped in `@totalreclaw/core@2.0.0` through `2.2.0`. Replaced by v2-lenient
+in core 2.4.0. The legacy weight matrix is preserved as
+`SOURCE_WEIGHTS_V1_LEGACY` in `rust/totalreclaw-core/src/reranker.rs` for
+back-compat / benchmark spike work; production callers MUST consume the
+default `SOURCE_WEIGHTS` (v2-lenient) above.
+
+```rust
+// v1 (pre-2.4.0). Retained as SOURCE_WEIGHTS_V1_LEGACY.
+pub const SOURCE_WEIGHTS_V1_LEGACY: &[(MemorySource, f64)] = &[
+    (MemorySource::User,          1.00),
+    (MemorySource::UserInferred,  0.90),
+    (MemorySource::Derived,       0.70),
+    (MemorySource::External,      0.70),
+    (MemorySource::Assistant,     0.55),  // heavy penalty (v1)
+];
+```
+
+Why v1 was replaced: the heavy penalty on assistant-sourced facts (0.55)
+disproportionately penalized recalled facts that were extracted from
+assistant turns, even when the underlying content was user-confirmed. v2-lenient
+compresses the gap, retaining provenance ordering but letting strong-signal
+assistant-source facts surface when the user query targets them.
 
 **Test vectors:**
 - Query "Bangkok hotel" against Pipeline F vault. Expected top-1: `source:assistant` claim "Sheraton Grande Sukhumvit" beats user turn "I want to go to Bangkok" (because former has high cosine + specific entity).
@@ -252,7 +284,7 @@ All 5 clients share `@totalreclaw/core` reranker. Change once, ships everywhere.
 ## Testing strategy
 
 **Unit tests (Tier 1, MUST):**
-- Weight application correctness (user score unchanged, assistant score ×0.55, etc.)
+- Weight application correctness (user score unchanged, assistant score ×0.85 v2-lenient / ×0.55 v1, etc.)
 - Total ordering preservation (no equal-score instability)
 - Edge case: missing source field defaults to moderate penalty
 - Edge case: all candidates source=assistant → ordering still reflects base score
@@ -270,7 +302,7 @@ All 5 clients share `@totalreclaw/core` reranker. Change once, ships everywhere.
 ## Open items
 
 1. **Source weight calibration** — values above are starting guess. Tune during E13 or via A/B against small beta cohort.
-2. **Tier boundary: where does `derived` sit?** Digests/summaries are authoritative reductions of user facts, not noise. Current draft = 0.70 (below user-inferred). Alternative: equal to user (1.0) since derived items are computed from user content. Decide with concrete examples during implementation.
+2. **Tier boundary: where does `derived` sit?** Digests/summaries are authoritative reductions of user facts, not noise. v1 draft = 0.70 (below user-inferred); v2-lenient bumped this to 0.85 (equal to assistant + external) based on bench data — the heavy v1 penalty on derived content was empirically over-aggressive. Alternative still open: equal to user (1.0) since derived items are computed from user content. Decide with concrete bench data when next E13 calibration runs.
 3. **Handling legacy vaults post-v1** — users who stored under v0 (no source field) get `source: user-inferred` by default at normalization? Or fail-safe to `assistant` (most penalized)? Need backward-compat decision at migration.
 4. **Intent extractor LLM vs regex** — Tier 2-4 can use either. LLM = more accurate but +1 call per query. Regex = free but brittle. Start regex.
 5. **Source weight user override** — should users be able to re-weight globally ("I want assistant-authored facts to rank as high as user")? Probably no in v1. Reopen if demand.

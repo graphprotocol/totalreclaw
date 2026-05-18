@@ -406,8 +406,8 @@ pub fn wasm_rerank_with_config(
 /// Accepted values: "user" | "user-inferred" | "assistant" | "external" | "derived".
 ///
 /// Unknown input is routed through `MemorySource::from_str_lossy` which
-/// falls back to `user-inferred` (weight 0.90). Callers who need the
-/// "no source field at all" fallback (weight 0.85) should call
+/// falls back to `user-inferred` (v2-lenient weight 0.95). Callers who need
+/// the "no source field at all" fallback (weight 0.85) should call
 /// `legacyClaimFallbackWeight()` instead.
 #[wasm_bindgen(js_name = "sourceWeight")]
 pub fn wasm_source_weight(source: &str) -> f64 {

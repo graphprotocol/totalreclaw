@@ -27,7 +27,7 @@ dependencies = [
     # Upper bound stays at <3.0.0 to match the TypeScript clients'
     # `^2.0.0` semver semantics — a future core@3 will be a breaking
     # change and must bump this constraint in lockstep.
-    "totalreclaw-core>=2.2.0,<3.0.0",
+    "totalreclaw-core==2.4.0rc1",
     "httpx>=0.27",
     "onnxruntime>=1.24",
     "numpy>=1.26",

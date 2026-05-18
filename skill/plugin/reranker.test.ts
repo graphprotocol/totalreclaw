@@ -68,11 +68,12 @@ console.log('# cosineSimilarity');
 console.log('# getSourceWeight');
 
 {
+  // v2-lenient (core 2.4.0+) — per docs/specs/totalreclaw/retrieval-v2.md §Tier 1.
   assert(getSourceWeight('user') === 1.0, 'sourceWeight: user = 1.0');
-  assert(getSourceWeight('user-inferred') === 0.9, 'sourceWeight: user-inferred = 0.9');
-  assert(getSourceWeight('derived') === 0.7, 'sourceWeight: derived = 0.7');
-  assert(getSourceWeight('external') === 0.7, 'sourceWeight: external = 0.7');
-  assert(getSourceWeight('assistant') === 0.55, 'sourceWeight: assistant = 0.55');
+  assert(getSourceWeight('user-inferred') === 0.95, 'sourceWeight: user-inferred = 0.95');
+  assert(getSourceWeight('derived') === 0.85, 'sourceWeight: derived = 0.85');
+  assert(getSourceWeight('external') === 0.85, 'sourceWeight: external = 0.85');
+  assert(getSourceWeight('assistant') === 0.85, 'sourceWeight: assistant = 0.85');
   assert(getSourceWeight(undefined) === 0.85, 'sourceWeight: undefined -> 0.85 (legacy fallback)');
 }
 
@@ -138,7 +139,7 @@ console.log('# rerank (core delegation)');
 }
 
 {
-  // applySourceWeights=true: user (1.0) beats assistant (0.55) on tied content
+  // applySourceWeights=true: user (1.0) beats assistant (0.85, v2-lenient) on tied content
   const embedding = new Array(8).fill(0).map((_, i) => (i % 3) * 0.1);
   const candidates: RerankerCandidate[] = [
     { id: 'asst', text: 'prefers PostgreSQL for analytics', embedding, source: 'assistant' },
@@ -147,7 +148,7 @@ console.log('# rerank (core delegation)');
   const ranked = rerank('PostgreSQL analytics', embedding, candidates, 2, undefined, true);
   assert(ranked[0].id === 'user', 'rerank: user > assistant w/ source weights');
   assertClose(ranked[0].sourceWeight ?? 0, 1.0, 1e-6, 'rerank: user weight = 1.0');
-  assertClose(ranked[1].sourceWeight ?? 0, 0.55, 1e-6, 'rerank: assistant weight = 0.55');
+  assertClose(ranked[1].sourceWeight ?? 0, 0.85, 1e-6, 'rerank: assistant weight = 0.85 (v2-lenient)');
 }
 
 {
