@@ -7546,6 +7546,12 @@ const plugin = {
 
 export default plugin;
 
+// Test-only handler exports for import-gating tests. See import-gating.test.ts.
+export {
+  handlePluginImportFrom as __handlePluginImportFromForTesting,
+  handleBatchImport as __handleBatchImportForTesting,
+};
+
 /**
  * Reset all module-level state for test isolation.
  * ONLY call this from test code — never in production.

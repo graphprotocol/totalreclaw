@@ -54,6 +54,11 @@ export function getLastBillingResponse(): BillingStatusResponse | null {
   return lastBillingResponse;
 }
 
+/** Test-only: override the cached billing response. */
+export function __setLastBillingResponseForTesting(value: BillingStatusResponse | null): void {
+  lastBillingResponse = value;
+}
+
 /**
  * Handle a totalreclaw_status tool call.
  *
