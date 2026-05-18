@@ -100,6 +100,29 @@ After the procedure completes (the user replies *"Done — continue setting up T
 
    Wait for the user's reply containing "continue" / "set up" / similar resumption language. Do NOT proceed to Account setup until the user confirms. Do NOT issue any restart yourself.
 
+5. **Install the MemoryProvider sidecar** (2.4.0+ / issue #275 — Path B).
+
+   TotalReclaw also ships as a Hermes `MemoryProvider`, gaining `on_pre_compress` and `on_memory_write` hooks that capture writes the Background Review subsystem cannot reach via the generic plugin path (the BG-review whitelist is hardcoded to `["memory", "skills"]` toolsets, see [#7193](https://github.com/NousResearch/hermes-agent/issues/7193)). This unlocks captured writes during long-session compression + background extraction.
+
+   Hermes activates exactly **one** memory provider at a time. Probe what's active before deciding:
+
+   ```bash
+   ACTIVE_PROVIDER=$(hermes memory-status --hermes-home "${HERMES_HOME:-$HOME/.hermes}" 2>/dev/null | jq -r '.provider // "none"')
+   # ``hermes memory-status`` ships with the totalreclaw CLI (subcommand
+   # registered alongside ``hermes setup``). It grep-reads ``config.yaml``
+   # — does not depend on an upstream ``hermes memory status --json``
+   # command (which is not yet released).
+   ```
+
+   Branch on the result:
+
+   | `ACTIVE_PROVIDER` | Agent behaviour |
+   |---|---|
+   | `"none"` / `""` / `"totalreclaw"` | Silently run `hermes activate-memory-provider` (drops sidecar + sets `memory.provider=totalreclaw`). No prompt. |
+   | Anything else (`honcho`, `byterover`, `openviking`, ...) | Emit ONE line: *"Hermes is currently using `<X>` as the memory provider. Switch to TotalReclaw (E2E-encrypted, on-chain, cross-device) or install TotalReclaw as tools-only? Reply `switch` or `tools-only`."*<br/>**Branch:**<br/>• `switch` → warn first (*"Switching deactivates `<X>` — your existing `<X>` memories stay on disk but won't be queried by the agent until you switch back."*), then run `hermes activate-memory-provider`.<br/>• `tools-only` → run `hermes install-memory-provider` (sidecar only, no activation). TR tools remain available; the active provider stays `<X>`. |
+
+   The install commands are idempotent. Re-running on an already-installed sidecar is safe — the managed marker comment prevents clobbering hand-edited files (pass `--force` to override).
+
 ---
 
 ## Account setup
@@ -196,6 +219,39 @@ These are hard rules. None of them are negotiable.
 - **`hermes gateway restart` from inside a docker container returns "no running gateway" or fails silently:** the container has no systemd / launchd service supervisor to respawn the gateway after a self-exit. The correct restart for docker is `docker restart <container-name>` from the **host** shell, not from inside the container.
 - **`/restart` returns "not authorized" or "command not found"** (managed Hermes deployments may gate it behind RBAC): issue `/new` to start a fresh session instead — the plugin manifest is reloaded on session start and the new tools bind without a full gateway restart.
 - **After restart, agent doesn't continue setup:** if the user replied only `done` without a continuation phrase, the agent may not infer it should resume. The rc.27+ proactive setup nudge fires on the first turn of every unconfigured session, so re-engaging the conversation with anything (even another bare message) should trigger the new-vs-restore question. If it doesn't, ask the user to type "Continue setting up TotalReclaw" verbatim.
+
+---
+
+## Memory provider modes
+
+Two TotalReclaw paths exist into Hermes; they coexist but serve different surfaces.
+
+| Mode | What's active | When to use | How to set |
+|---|---|---|---|
+| **Active provider** | Generic plugin tools + lifecycle hooks **+** `MemoryProvider` hooks (`on_pre_compress`, `on_memory_write`, `on_session_end`, `on_turn_start`). Captures Background-Review writes the toolset whitelist would otherwise drop. | The user has no other memory provider configured, or wants TR to be the canonical cross-session store. Default for fresh installs. | `hermes activate-memory-provider` |
+| **Tools-only** | Generic plugin tools + lifecycle hooks only. No `MemoryProvider` hooks — they fire on the user's other active provider (Honcho / Byterover / OpenViking / ...). | The user already has another provider configured and wants to keep using it alongside TR's chat tools. | `hermes install-memory-provider` (no `--activate`) |
+
+The two install commands are idempotent. Re-running on an already-installed sidecar overwrites with the current shim content (catches package upgrades) without disturbing the rest of the install. The sidecar refuses to clobber a hand-edited file unless `--force` is passed.
+
+Switching providers manually (post-install):
+
+```bash
+# Switch TO TotalReclaw
+hermes activate-memory-provider
+
+# Switch BACK to another provider (after a `switch` choice the user regrets)
+hermes memory set-provider <name>   # upstream Hermes CLI
+```
+
+Switching deactivates the previous provider — its memories remain on disk but the agent stops querying them until you switch back. New memories go through whichever provider is active at write time.
+
+Status check:
+
+```bash
+hermes memory-status              # JSON: {"provider": "totalreclaw"|"honcho"|"none"|...}
+```
+
+This grep-reads `~/.hermes/config.yaml` (or `$HERMES_HOME/config.yaml`) and does not depend on an upstream `hermes memory status --json` command (which is not yet released as of 2026-05-15 — see Path B spec §"Open questions for upstream").
 
 ---
 

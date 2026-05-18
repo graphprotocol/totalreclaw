@@ -26,3 +26,11 @@ provides_hooks:
   - on_session_end
   - on_session_finalize
   - on_session_reset
+# Issue #275 — Path B MemoryProvider integration. The provider class
+# (totalreclaw.hermes.memory_provider.TotalReclawMemoryProvider) is
+# installed at $HERMES_HOME/plugins/memory/totalreclaw/__init__.py by
+# the `hermes install-memory-provider` CLI subcommand — not auto-loaded
+# from this plugin manifest. This key advertises the available
+# provider for manifest-parity tests + future tooling.
+provides_memory_provider:
+  - totalreclaw

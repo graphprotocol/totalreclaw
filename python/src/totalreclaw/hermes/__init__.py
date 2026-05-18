@@ -266,6 +266,16 @@ def register(ctx):
     except Exception:  # pragma: no cover — defensive check must not crash
         logger.debug("built-in memory enablement check skipped", exc_info=True)
 
+    # Issue #275 — Path B MemoryProvider integration.
+    # The ``TotalReclawMemoryProvider`` class lives at
+    # ``totalreclaw.hermes.memory_provider``; we deliberately do NOT
+    # import / register it here. Activation happens via the sidecar shim
+    # at ``$HERMES_HOME/plugins/memory/totalreclaw/__init__.py`` — see
+    # ``totalreclaw hermes install-memory-provider``. This separation
+    # keeps users with another active provider (Honcho, Byterover, ...)
+    # unaffected by plugin import: TR tools stay available, but
+    # MemoryProvider hooks only fire when TR is the active provider.
+
     logger.info("TotalReclaw plugin registered (14+ tools, 6 hooks)")
 
 

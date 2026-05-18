@@ -133,9 +133,21 @@ If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jum
 
 4. **Verify `totalreclaw_pair` is bound (silent).** If still missing after restart, surface a one-line error: `Plugin installed but tools didn't bind after restart. Issuing /restart again.` and re-issue `/restart` once **autonomously** — do NOT ask the user "should I /restart again?". Do not loop the install. If the second `/restart` still doesn't bind tools, try `/new` once (fresh session may pick up the binding without a reload). If both `/restart` retries AND `/new` fail to bind the tool, fall back to the manual user-prompted restart path (see step 2 fallback) once. If any restart attempt returns "not authorized", apply the unauthorized fallback from step 2 — do NOT retry `/restart` after an unauthorized response.
 
-5. **Check for existing credentials (silent).** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit `✓ TotalReclaw is already set up.` and stop. Otherwise continue silently.
+5. **Install the MemoryProvider sidecar (silent — issue #275 / Path B, 2.4.0+).** Two TotalReclaw paths exist into Hermes: the always-on generic plugin (tools + lifecycle hooks) and the optional `MemoryProvider` sidecar that unlocks `on_pre_compress` + `on_memory_write` (captures Background-Review writes the toolset whitelist blocks). Decide silently:
 
-6. **Set up the user's TotalReclaw account (emit user-visible line 5).** No second consent prompt — the user already consented by pasting the install message. Proceed directly from step 5 (no credentials yet) to handing them the pair URL + PIN.
+   ```bash
+   ACTIVE_PROVIDER=$(hermes memory-status --hermes-home "${HERMES_HOME:-$HOME/.hermes}" 2>/dev/null | jq -r '.provider // "none"')
+   ```
+
+   - **`none` / empty / `totalreclaw`** → run `hermes activate-memory-provider` silently. No user prose.
+   - **Any other provider name** (`honcho`, `byterover`, `openviking`, ...) → break silence with ONE line: *"Hermes is currently using `<X>` as memory provider. Switch to TotalReclaw (E2E-encrypted, on-chain) or install TotalReclaw as tools-only? Reply `switch` or `tools-only`."*
+     - On `switch` → run `hermes activate-memory-provider` then emit *"Switched to TotalReclaw. Your existing `<X>` memories stay on disk but won't be queried by the agent until you switch back."* (one line).
+     - On `tools-only` → run `hermes install-memory-provider` (sidecar only, no `--activate`). Emit *"Installed TotalReclaw as tools-only. `<X>` remains your active provider."* (one line).
+   - DO NOT ask any follow-up question about memory-provider preference. The matrix decides — no clarifying prompts beyond the single `switch / tools-only` choice. The deny-list above applies.
+
+6. **Check for existing credentials (silent).** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit `✓ TotalReclaw is already set up.` and stop. Otherwise continue silently.
+
+7. **Set up the user's TotalReclaw account (emit user-visible line 5).** No second consent prompt — the user already consented by pasting the install message. Proceed directly from step 6 (no credentials yet) to handing them the pair URL + PIN.
 
    **Daemon-mode preflight before calling the tool.** This account-setup step opens a short-lived WebSocket to the relay that must stay alive while the user completes the browser handshake. If you are running inside a one-shot agent process (`hermes chat -q "..."`, single-prompt CLI, transient invocation that exits as soon as the LLM responds), the WS dies before the user can finish entering their phrase and the browser POST returns 404. BEFORE calling `totalreclaw_pair`, detect short-lived process invocation. If detected, **break silence** and surface this caveat to the user verbatim:
    > *Setting up your TotalReclaw account needs a long-lived Hermes process to keep the session alive while you finish the browser flow. One-shot `hermes chat -q "..."` invocations exit too quickly. Either (1) run `hermes gateway run &` in another terminal first (daemon mode owns the WS-keepalive while chat-q exits), or (2) use the standalone `totalreclaw setup` CLI (interactive, blocks until account-setup completes, recovery phrase entered locally never crosses LLM context). Once your account is set up, daily operations (`hermes chat -q`, `--resume`, etc.) work normally.*
@@ -143,7 +155,7 @@ If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jum
 
    Call `totalreclaw_pair` silently (the account-setup tool — name kept for backward compatibility). Returns `{url, pin, expires_at_ms}`. Then emit user-visible line 5 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…", "Let me generate the URL…") — line 5 is the only thing the user needs to see.
 
-7. **Verify and confirm (silent until line 6).** After user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again silently and resend line 5 once. If present, emit user-visible line 6 (with the free-tier confirmation) and stop.
+8. **Verify and confirm (silent until line 6).** After user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again silently and resend line 5 once. If present, emit user-visible line 6 (with the free-tier confirmation) and stop.
 
 ## Phrase safety (HARD — never break)
 

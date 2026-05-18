@@ -637,6 +637,56 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
     )
 
+    # Issue #275 — Path B MemoryProvider integration.
+    # Install / activate / status commands for the Hermes
+    # ``plugins/memory/totalreclaw/`` sidecar shim.
+    sp_install_mp = sub.add_parser(
+        "install-memory-provider",
+        help=(
+            "Drop the Hermes MemoryProvider sidecar so Hermes discovers "
+            "TotalReclaw as an installable memory provider. Idempotent. "
+            "Does NOT activate by default — combine with --activate or "
+            "use 'activate-memory-provider'."
+        ),
+    )
+    sp_install_mp.add_argument(
+        "--hermes-home",
+        type=Path,
+        default=None,
+        help="Override $HERMES_HOME (default: env $HERMES_HOME or ~/.hermes).",
+    )
+    sp_install_mp.add_argument(
+        "--activate",
+        action="store_true",
+        default=False,
+        help="Also write memory.provider=totalreclaw to Hermes config.yaml.",
+    )
+    sp_install_mp.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Overwrite a hand-edited sidecar (default: refuse).",
+    )
+
+    sp_activate_mp = sub.add_parser(
+        "activate-memory-provider",
+        help=(
+            "Drop the sidecar AND set memory.provider=totalreclaw. "
+            "Shorthand for 'install-memory-provider --activate'."
+        ),
+    )
+    sp_activate_mp.add_argument("--hermes-home", type=Path, default=None)
+    sp_activate_mp.add_argument("--force", action="store_true", default=False)
+
+    sp_memory_status = sub.add_parser(
+        "memory-status",
+        help=(
+            "Print the currently-active Hermes memory provider as JSON. "
+            "Used by the agent's swap-prompt UX."
+        ),
+    )
+    sp_memory_status.add_argument("--hermes-home", type=Path, default=None)
+
     args = parser.parse_args(argv)
 
     if args.command == "setup":
@@ -645,6 +695,30 @@ def main(argv: Optional[list[str]] = None) -> int:
             emit_phrase=getattr(args, "emit_phrase", False),
             allow_non_tty=getattr(args, "allow_non_tty", False),
         )
+
+    if args.command in {"install-memory-provider", "activate-memory-provider"}:
+        from .install_memory_provider import install_and_activate
+
+        activate = args.command == "activate-memory-provider" or getattr(args, "activate", False)
+        try:
+            result = install_and_activate(
+                hermes_home=args.hermes_home,
+                activate=activate,
+                force=args.force,
+            )
+        except RuntimeError as exc:
+            sys.stderr.write(f"{exc}\n")
+            return 2
+
+        sys.stdout.write(json.dumps(result, indent=2) + "\n")
+        return 0
+
+    if args.command == "memory-status":
+        from .install_memory_provider import read_active_provider
+
+        provider = read_active_provider(args.hermes_home) or "none"
+        sys.stdout.write(json.dumps({"provider": provider}, indent=2) + "\n")
+        return 0
 
     parser.print_help()
     return 0
