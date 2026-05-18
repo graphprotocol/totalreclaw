@@ -1,0 +1,11 @@
+{
+  "name": "totalreclaw-qa-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "qa": "node qa-vault.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
