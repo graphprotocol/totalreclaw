@@ -169,6 +169,50 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
 - "status" → `totalreclaw_status`. "upgrade" → `totalreclaw_upgrade` (paste Stripe URL verbatim).
 - "import from Mem0 / ChatGPT / Claude / Gemini / mcp-memory-server" → `totalreclaw_import_from` with `dry_run=True` first.
 
+## Tiers + pricing
+
+**Canonical source for live numbers:** `totalreclaw_status` (returns `tier`, `free_writes_used`, `free_writes_limit`, `network` for the current account). **Canonical source for catalogue / prices:** <https://totalreclaw.xyz/pricing>. Don't invent dollar amounts — quote what `totalreclaw_status` returns or point at the URL.
+
+| Tier | Monthly write cap | Network | Notes |
+|---|---|---|---|
+| **Free** | 250 memories/month | Gnosis mainnet, permanent, E2E encrypted | No credit card. Cap resets monthly. |
+| **Pro** | 1,500 memories/month | Gnosis mainnet, same encryption | Adds LLM-guided dedup at the relay. Stripe checkout via `totalreclaw_upgrade`. |
+
+Both tiers: encryption / ownership / on-chain durability are identical. Tier only changes the monthly write cap + Pro's dedup feature.
+
+### Automatic quota signalling
+
+The plugin fetches billing on every `on_session_start` and caches it for 2 hours. The plugin auto-injects warnings into your context at these thresholds — when you see them, surface them to the user:
+
+- **>80% usage** — soft warning. Mention casually: *"You're at `<used>` / `<limit>` of your free-tier quota this month. Upgrade to Pro for 1,500/month — want me to open the upgrade link?"* Wait for confirmation before calling `totalreclaw_upgrade`.
+- **403 quota exceeded** on a write → billing cache invalidated, warning re-injects next turn. Surface the error verbatim + offer `totalreclaw_upgrade` immediately.
+- **First successful pair** → setup-flow line 6 already includes tier + limit + network. Do not re-emit the same info on subsequent first-message-of-session.
+
+Do NOT compute "you have X left" math yourself — `totalreclaw_status` returns `free_writes_used` and `free_writes_limit` already. Quote them verbatim.
+
+### Upgrade flow
+
+User intent → action:
+
+| User signal | Action |
+|---|---|
+| "How much does it cost?" / "What's the pricing?" / "Is it free?" | Cite the table above + pricing URL. Don't quote a `$` figure unless the user explicitly asked for the current Pro price AND you just called `totalreclaw_status`. |
+| User asks to upgrade / asks how to get Pro / hits a 403 | Call `totalreclaw_upgrade` → returns a Stripe checkout URL. Emit ONE user-visible line: *"Open `<url>` in your browser to complete the upgrade. Reply `done` once the payment page confirms."* DO NOT paraphrase the URL. |
+| User reports payment succeeded ("done") | Call `totalreclaw_status` once to refresh the cached tier. Emit a single confirmation: *"✓ You're now on TotalReclaw Pro — 1,500 memories/month on Gnosis mainnet."* |
+| User wants to cancel / downgrade | Direct them to <https://totalreclaw.xyz/pricing> — Stripe customer portal is the only canonical cancel path. The plugin does not expose a downgrade tool. |
+
+### Forbidden tier claims (deny-list)
+
+These statements are WRONG. Never write any of them — they fabricate pricing model that doesn't exist:
+
+- "There's a free trial period" — there isn't. Free tier is permanent.
+- "Memories expire" — memories are permanent on Gnosis mainnet, regardless of tier.
+- "You need to upgrade to use encryption" — E2E encryption is identical across tiers.
+- "Self-hosted is automatically Pro" — self-hosted bypasses the managed relay; tiers/limits only apply to managed users.
+- "Pro = unlimited" — Pro is **1,500/month**, NOT unlimited. Saying "unlimited" silently breaks user expectations when they hit the cap.
+- Mentioning testnet (Base Sepolia) to managed users — Base Sepolia is dev/QA only, never the production network for free or Pro.
+- Inventing `$` amounts. The current Pro monthly price is the one returned by `totalreclaw_status` OR shown at the pricing URL — never anywhere else.
+
 ## Diagnostics
 
 - `totalreclaw_*` tools not visible → gateway not restarted after install; issue Hermes' `/restart` slash command (in-process, drains active runs) **autonomously** — never ask the user for permission to restart. If `/restart` returns "not authorized" / "command not found", DO NOT loop on `/restart`; try `/new` once (fresh session may pick up freshly-bound tools), then escalate to a one-line user-prompted restart per step 2's unauthorized fallback. Wait for `done`.
