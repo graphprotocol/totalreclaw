@@ -76,6 +76,9 @@ Managed Service uses a **single-chain model**: all tiers (free and Pro) store on
 ├── rust/                  # Rust crate for ZeroClaw memory backend
 │   └── totalreclaw-memory/  # Native Rust implementation (crypto, relay, Memory trait)
 ├── mcp/                   # Generic MCP server (for Claude Desktop, etc.)
+├── app/                   # Vault SPA (Vite + React + TS, managed-mode reads via relay subgraph proxy)
+├── tools/                 # QA + ops helpers
+│   └── qa-vault.mjs       # Playwright vault driver (keychain or QA_RECOVERY_PHRASE env)
 ├── contracts/             # Solidity smart contracts (EventfulDataEdge, Paymaster)
 ├── subgraph/              # Graph Node indexer (AssemblyScript mappings)
 ├── database/              # Database schema (schema.sql)
@@ -451,6 +454,26 @@ git checkout main
 # 3. Version bump + publish: cd client && npm version patch && npm run build && npm publish
 # 4. Verify: ./tests/verify-publish.sh
 ```
+
+### Vault SPA (`app/`)
+
+End-user web UI for the managed-mode vault. Recovery-phrase → derive EOA + Smart Account address → read encrypted facts from the subgraph through the relay → decrypt client-side. Phase 1 (reads) shipped 2026-05-17 in [#236](https://github.com/p-diogo/totalreclaw/pull/236); writes (delete/pin/retype via ERC-4337 UserOps) are stubbed pending Phase 2.
+
+- **Stack**: Vite + React 18 + TS strict, `@tanstack/react-query`, `@noble/curves`/`@noble/hashes`/`@scure/bip32`/`@scure/bip39` for crypto (no viem in bundle).
+- **Relay endpoints used**: `GET /v1/smart-account?eoa=&chain=` (deterministic Smart Account derivation via `SimpleAccountFactory.getAddress`), `POST /v1/register` (idempotent), `GET /v1/billing/status?wallet_address=`, `POST /v1/subgraph` (GraphQL — `facts(where: { owner, isActive: true })` paginated).
+- **Hosting**: Cloudflare Pages project `totalreclaw-app`. `main` → prod alias (`app.totalreclaw.xyz` once attached); branches → `<branch>.totalreclaw-app.pages.dev`. CI in `.github/workflows/deploy-app.yml` (test-gated + path-scoped). Build env: `VITE_SERVER_URL=https://api-staging.totalreclaw.xyz` for previews, `https://api.totalreclaw.xyz` for prod.
+- **Relay CORS**: `CORS_ORIGINS` env var supports leftmost-subdomain wildcards. Current set covers `https://totalreclaw.xyz`, `https://app.totalreclaw.xyz`, `https://totalreclaw-app.pages.dev`, `https://*.totalreclaw-app.pages.dev`; staging also allows `http://localhost:5173` and `http://127.0.0.1:5173` for dev.
+
+### QA Autopilot (vault SPA)
+
+Autonomous regression harness for the vault SPA. Driver lives in `tools/qa-vault.mjs` (Playwright, reads phrase from macOS keychain locally or `QA_RECOVERY_PHRASE` env in CI, redacts any phrase fragment from console/network output, exits non-zero on regression).
+
+- **Trigger 1 — preview deploy**: public-repo `deploy-app.yml` fires `gh workflow run qa-autopilot.yml` against `p-diogo/totalreclaw-internal` after every Pages preview, passing the preview URL + PR number. Gated by the `INTERNAL_DISPATCH_PAT` secret.
+- **Trigger 2 — daily cron**: 07:30 UTC against production (`https://app.totalreclaw.xyz`).
+- **Trigger 3 — manual**: `gh workflow run qa-autopilot.yml -R p-diogo/totalreclaw-internal -f target_url=<url>`.
+- **On regression**: internal workflow opens an issue on the public repo tagged `qa-autopilot` with the run URL, redacted summary, and a 14-day artifact retaining the full JSON report + screenshot. Phrase + screenshots stay on the private side; only sanitized summary leaks across the wall.
+- **Required secrets**: `QA_RECOVERY_PHRASE` + `PUBLIC_ISSUE_PAT` on `totalreclaw-internal`; `INTERNAL_DISPATCH_PAT` on `totalreclaw`. All three are fine-grained PATs scoped to a single repo with minimum permission (`issues:write` and `actions:write` respectively).
+- **Docs**: see `docs/guides/qa-autopilot.md`.
 
 ---
 
