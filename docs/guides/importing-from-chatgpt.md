@@ -11,7 +11,7 @@ ChatGPT stores your data in two places. You can import from either or both.
 | Method | What it contains | Best for |
 |--------|-----------------|----------|
 | **ChatGPT Memories** (recommended) | Pre-curated facts ChatGPT saved about you | Quick import, high-quality facts |
-| **conversations.json** | Full conversation export with all messages | Comprehensive extraction (slower) |
+| **conversations.json** | Full conversation export with all messages | Comprehensive extraction (slower, LLM-driven) |
 
 ---
 
@@ -37,17 +37,17 @@ Then paste the copied text when asked. Or provide it directly:
 
 > "Import these ChatGPT memories: [paste text]"
 
-The agent calls `totalreclaw_import_from` with `source: "chatgpt"` and your pasted content. Each line becomes an encrypted memory in your TotalReclaw vault.
+The agent calls `totalreclaw_import_from` with `source: "chatgpt"` and your pasted content. Each line is run through an LLM extraction pass that classifies it and normalises it into an atomic fact, then encrypted into your TotalReclaw vault.
 
 ### What to expect
 
-ChatGPT memories are already curated facts (e.g., "User prefers dark mode", "User works at Acme Corp"), so they import cleanly with minimal noise. A typical import of 50-100 memories takes a few seconds.
+ChatGPT memories are already curated facts (e.g., "User prefers dark mode", "User works at Acme Corp"), so they import cleanly with minimal noise. A typical import of 50-100 memories takes 1-2 minutes — the bottleneck is the LLM extraction pass, not network or storage.
 
 ---
 
 ## Method 2: Import conversations.json
 
-The full data export contains every conversation you have had with ChatGPT. TotalReclaw scans the user messages for fact-like statements using pattern matching (no LLM required).
+The full data export contains every conversation you have had with ChatGPT. TotalReclaw uses **LLM extraction** to identify facts, preferences, decisions, and other personal context from your conversations.
 
 ### Step 1: Export your ChatGPT data
 
@@ -65,30 +65,35 @@ Tell your agent:
 
 > "Import my ChatGPT conversations from /path/to/conversations.json"
 
-Or paste the JSON content directly. For large exports, providing the file path is recommended.
+Or paste the JSON content directly. For large exports, providing the file path is recommended (drag-and-drop is the preferred path on OpenClaw + Hermes).
 
 The agent calls `totalreclaw_import_from` with `source: "chatgpt"` and the file path or content.
 
 ### How extraction works
 
-TotalReclaw scans your user messages (not assistant responses) for fact-like statements:
+TotalReclaw uses **LLM extraction** (not pattern matching) to identify facts from your conversation history. The pipeline is:
 
-- **Personal info**: "I am...", "I work at...", "I live in...", "My name is..."
-- **Preferences**: "I like...", "I prefer...", "I don't like...", "My favorite..."
-- **Decisions**: "I decided...", "I chose...", "We agreed..."
-- **Goals**: "I want to...", "I plan to...", "I'm working on..."
-
-Messages that are purely questions, greetings, or very short responses are skipped.
+1. **Parse**: walk the `conversations.json` mapping tree and pull user + assistant messages in chronological order. Both roles are included because the assistant's response often clarifies what the user meant.
+2. **Chunk**: split each conversation into batches of ~20 messages (`CHUNK_SIZE`). Large conversations become multiple chunks (`part 1/N`, `part 2/N`, ...).
+3. **Extract**: each chunk is run through an LLM (the host's LLM on MCP integrations; your gateway's LLM on OpenClaw; Hermes' configured LLM otherwise). The LLM identifies facts, preferences, decisions, goals, and context.
+4. **Triage + profile**: extracted facts are deduplicated and merged into a coherent profile via the smart-import pipeline (see [`rust/totalreclaw-core/src/smart_import.rs`](https://github.com/p-diogo/totalreclaw/blob/main/rust/totalreclaw-core/src/smart_import.rs) for the schema).
+5. **Encrypt + store**: each surviving fact is encrypted with your TotalReclaw key (XChaCha20-Poly1305), fingerprinted for dedup, and stored.
 
 ### What to expect
 
-The extraction is deliberately conservative -- it uses pattern matching, not an LLM, to keep things fast and deterministic. For a typical export with thousands of conversations, expect:
+Because extraction is LLM-driven and runs per-chunk, processing time scales with the number of conversations:
 
-- **Processing time**: A few seconds (all local, no API calls)
-- **Extraction rate**: Roughly 1-5% of user messages contain extractable facts
-- **Quality**: Good for personal info and preferences; may miss subtle or implicit facts
+- **Small exports** (<50 chunks, ~1000 messages): ~30 seconds
+- **Typical exports** (a few hundred conversations): 5-15 minutes
+- **Large exports** (3,000+ conversations): 10-60+ minutes depending on your LLM provider and rate limits
 
-If you want higher-quality extraction, use Method 1 (ChatGPT memories) instead -- ChatGPT has already done the hard work of identifying what matters.
+The import runs in the **background** on OpenClaw + Hermes — you can keep chatting with your agent during the import. Ask "how's the import?" anytime to see progress. On MCP integrations (Claude Desktop, Claude Code, Cursor, Windsurf), the host's LLM drives the extraction loop one chunk per turn, so you'll see chunks process in the foreground.
+
+### Privacy disclosure
+
+LLM extraction sends your conversation content **in cleartext** to your LLM provider. Before the import starts, your agent will show an explicit privacy disclosure naming the provider (e.g., "Anthropic via Claude on Hermes", "OpenAI via your OpenClaw gateway") and ask for explicit confirmation. TotalReclaw itself never sees plaintext — but the LLM doing the extraction does.
+
+If you don't want to expose conversation content to your LLM, use **Method 1 (ChatGPT memories)** — the memories are already pre-curated short facts, and while they still go through LLM normalisation, the surface area is far smaller than full conversations.
 
 ---
 
@@ -98,7 +103,22 @@ Always preview before importing:
 
 > "Import my ChatGPT memories with dry run first"
 
-This parses your data and shows a preview of the first 10 facts without storing anything. Review and confirm before running the actual import.
+This parses your data and shows an estimate: `total_chunks`, `est_facts`, `est_minutes`, `est_completion_iso`, and the projected LLM cost. Review and confirm before running the actual import.
+
+---
+
+## File size limits
+
+- **Hard cap**: 500 MB per import file. Larger files are rejected up-front with guidance to split.
+- **RAM pre-flight**: imports require ~10× the file size in free RAM (JSON parse peak overhead). The tool checks available memory before loading and aborts with a clear error if the gateway / host doesn't have enough headroom. Workarounds: split the export, or upgrade your VPS.
+- **Streaming parser**: not yet — phase 2 follow-up.
+
+---
+
+## Tier gating
+
+- **Free tier**: one import lifetime (across all sources). Subsequent attempts are blocked with an upgrade prompt.
+- **Pro tier** ($3.99/mo): unlimited imports. The pre-flight projects the LLM cost vs your subscription; soft warning if the projection exceeds $1.00, hard block above $5.00 (you can override with a flag).
 
 ---
 
@@ -109,13 +129,20 @@ Imported memories behave identically to natively stored ones:
 - **Searchable immediately** via `totalreclaw_recall`
 - **Encrypted** with your recovery phrase (XChaCha20-Poly1305)
 - **Tagged** with `import_source:chatgpt` for filtering
-- **Deduplicated** -- re-importing the same data skips duplicates automatically
+- **Deduplicated** -- re-importing the same data skips duplicates automatically (content fingerprint)
+
+---
+
+## Abort + resume
+
+- **Abort**: say "stop the import" — the background loop exits at the next chunk boundary. Already-stored facts stay (dedup makes resume idempotent).
+- **Resume**: re-run the import with the same file. State persists in `~/.totalreclaw/import-state/<import_id>.json`; the loop picks up from the last completed chunk. On OpenClaw + Hermes, restarts auto-resume if the previous run was less than 1 hour ago.
 
 ---
 
 ## Tips
 
-- **Start with memories, not conversations.** ChatGPT memories are pre-curated and import cleanly. The full conversation export is noisier.
+- **Start with memories, not conversations.** ChatGPT memories are pre-curated and import cleanly with minimal LLM cost. The full conversation export is noisier and costs more LLM tokens.
 - **Review after import.** Run `totalreclaw_recall` with a few queries to verify the imported facts make sense.
 - **Use consolidate after large imports.** If you import from both methods, run `totalreclaw_consolidate` with `dry_run=true` to find and merge near-duplicates.
 - **Curate manually if needed.** Use `totalreclaw_forget` to remove any imported facts that are outdated or incorrect.

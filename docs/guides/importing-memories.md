@@ -185,45 +185,9 @@ Copy your memories from Claude: Settings -> Memory -> select all and copy.
 
 ## Importing from Gemini
 
-Google does not have a dedicated "memory" feature like ChatGPT or Claude, but your Gemini conversation history contains the same kind of personal facts, preferences, and decisions. TotalReclaw extracts these from the Google Takeout export.
+See the dedicated guide: **[Importing from Gemini](importing-from-gemini.md)**
 
-### Step 1: Export from Google Takeout
-
-1. Go to [takeout.google.com](https://takeout.google.com)
-2. Click "Deselect all"
-3. Scroll down and select **"Gemini Apps"** only
-4. Click "Next step" -> "Create export"
-5. Wait for the email with the download link (usually 1-5 minutes)
-6. Download and unzip the archive
-7. Find the file at: `Takeout/My Activity/Gemini Apps/My Activity.html`
-
-### Step 2: Import into TotalReclaw
-
-Ask your agent:
-
-> "Import my Gemini conversation history from ~/Downloads/Takeout/My Activity/Gemini Apps/My Activity.html"
-
-Or more explicitly:
-
-> "Use totalreclaw_import_from with source=gemini and file_path=~/Downloads/Takeout/My Activity/Gemini Apps/My Activity.html"
-
-The agent will:
-
-1. Run a dry-run first showing the estimate (conversations found, estimated facts, time)
-2. Ask for your confirmation
-3. For small exports: process everything at once
-4. For large exports (3,000+ conversations): process in batches with progress updates
-
-### What gets imported
-
-The tool parses your Gemini conversations, groups them into sessions (conversations within 30 minutes of each other), then uses LLM extraction to identify important facts, preferences, decisions, and context. Generic Q&A conversations (recipes, product lookups) may not produce facts -- only personal, long-term-valuable information is extracted.
-
-### Important notes
-
-- The HTML file is processed entirely on your device -- never sent to any server unencrypted
-- Large exports (3,000+ conversations) may take 10-30 minutes depending on your LLM provider
-- Attachments (images, PDFs, audio) in the Gemini export are not imported -- only text conversations
-- The import is idempotent: re-running it won't create duplicates
+Export from [takeout.google.com](https://takeout.google.com) (select **Gemini Apps**), then import the `My Activity.html` file from the unzipped archive. Uses LLM extraction with a privacy disclosure before extraction starts.
 
 ---
 
