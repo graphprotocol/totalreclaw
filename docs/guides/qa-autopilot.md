@@ -1,4 +1,43 @@
-# QA Autopilot — Vault SPA
+# QA Autopilot
+
+Family of autonomous regression workflows that exercise TotalReclaw's user-facing surfaces against staging / preview / prod, and (on failure) open a labeled issue on the public repo for triage by `tr-triage-and-fix` or any other coding agent.
+
+> **Canonical QA index lives privately at `totalreclaw-internal/docs/qa/README.md`.** It covers the full three-tier QA stack — autopilot (this doc), the `qa-totalreclaw` human-in-loop skill that drives real-user QA against the Hetzner VPS, and the `tr-triage-and-fix` autonomous fix loop. This file is the public, autopilot-only surface; everything VPS-side or skill-side is documented privately.
+
+## Family framework
+
+All autopilot workflows share these conventions:
+
+- **Live on the internal repo** (`p-diogo/totalreclaw-internal`). Phrases, PATs, screenshots, and raw transcripts stay private. Only a sanitized issue body escapes to the public repo.
+- **One label**, `qa-autopilot`, across every surface. One label = one triage queue. The issue **title prefix** differentiates: `qa-autopilot:vault-spa: ...`, `qa-autopilot:relay: ...`, `qa-autopilot:cross-client: ...`.
+- **Workflow filename**: `qa-autopilot-<surface>.yml`. Surface names match the title prefix.
+- **Three trigger shapes**:
+  - `workflow_dispatch` (manual + cross-repo `gh workflow run` dispatch)
+  - `schedule` (cron baseline against prod / staging)
+  - (optional) `repository_dispatch` from the deploy workflow of the surface being tested
+- **Common output**: stdout JSON with the fields `target`, `reachedX` (per surface), `*ErrorCount`, `visibleError`. Driver exits non-zero on any regression signal; workflow uploads `qa-output/*` as a 14-day artifact and opens the issue.
+- **Common secrets** on the internal repo:
+  - `QA_RECOVERY_PHRASE` — BIP-39 phrase for a **dummy** vault (zero real assets). Reused across surfaces.
+  - `PUBLIC_ISSUE_PAT` — fine-grained PAT with `Issues: Read and write` on `p-diogo/totalreclaw` only.
+- **On the public repo (`p-diogo/totalreclaw`)**:
+  - `INTERNAL_DISPATCH_PAT` — fine-grained PAT with `Actions: Read and write` on `p-diogo/totalreclaw-internal` only. Used by deploy workflows to fire the matching autopilot.
+
+## Current coverage
+
+| Surface | Workflow | Driver | Status |
+|---|---|---|---|
+| **Vault SPA** | `qa-autopilot.yml` | `totalreclaw/tools/qa-vault.mjs` | Live ✅ |
+| Relay smoke | `qa-autopilot-relay.yml` (planned) | `totalreclaw/tests/e2e-relay/smoke-test.ts` | Not wired |
+| Managed-mode end-to-end | `qa-autopilot-managed.yml` (planned) | `totalreclaw-internal/e2e/` | Not wired |
+| Cross-client parity | `qa-autopilot-cross-client.yml` (planned) | `totalreclaw/tests/parity/cross-impl-test.ts` + `totalreclaw-internal/e2e/cross-client/` | Not wired |
+| Agent lifecycle (Docker) | `qa-autopilot-agent.yml` (planned) | `totalreclaw-internal/e2e/` (OpenClaw Docker) | Not wired |
+| Pro tier upgrade | `qa-autopilot-pro-upgrade.yml` (planned) | None — needs Stripe-live-mode test path | Not wired |
+
+Each planned surface ships as its own PR following the same template as the vault-SPA workflow. Add to this table as they land.
+
+---
+
+## Vault SPA autopilot (jobs[0])
 
 End-to-end regression harness for the vault SPA at `app/`. Drives a headless browser through the recovery-phrase → `/vault` flow against any deployed URL, captures console + network + visible errors, and opens an issue on the public repo when something regresses.
 
