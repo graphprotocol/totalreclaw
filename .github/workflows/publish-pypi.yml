@@ -48,7 +48,7 @@ jobs:
           - os: windows-latest
             target: x86_64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
         with:
@@ -91,7 +91,7 @@ jobs:
           args: --release --features python-extension --out dist -i python3.12
           manylinux: auto
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: wheels-${{ matrix.os }}-${{ matrix.target }}
           path: rust/totalreclaw-core/dist/*.whl
@@ -100,7 +100,7 @@ jobs:
     name: Build source distribution
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Apply RC version suffix (rc mode only)
         if: inputs.release-type == 'rc'
@@ -135,7 +135,7 @@ jobs:
           command: sdist
           args: --out dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: sdist
           path: rust/totalreclaw-core/dist/*.tar.gz
@@ -148,7 +148,7 @@ jobs:
     permissions:
       id-token: write  # OIDC trusted publishing (no API token needed)
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true

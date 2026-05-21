@@ -34,7 +34,7 @@ jobs:
 
     steps:
       - name: Checkout PR head
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -62,7 +62,7 @@ jobs:
 
       - name: Post PR comment on failure
         if: failure() && steps.sync.outputs.exit_code != '0'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           # Pass the diff report via env to sidestep template-literal
           # escaping pitfalls (backticks, ${...}) if the script's output

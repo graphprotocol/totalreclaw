@@ -28,7 +28,7 @@ jobs:
     name: Phrase Safety
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: jetli/wasm-pack-action@v0.4.0
         with:
@@ -38,7 +38,7 @@ jobs:
           cd rust/totalreclaw-core
           wasm-pack build --target nodejs --out-dir pkg --features wasm
           node -e "const p=require('./pkg/package.json'); p.name='@totalreclaw/core'; require('fs').writeFileSync('./pkg/package.json', JSON.stringify(p,null,2)+'\n')"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
       - name: Run phrase-safety guard (markdown / SKILL.md)
@@ -55,10 +55,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
 
@@ -69,8 +69,8 @@ jobs:
     name: Web App Tests (Vitest)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
       - name: Install and test
@@ -81,10 +81,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
 
@@ -136,7 +136,7 @@ jobs:
     name: MCP Server Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # NOTE: The `mcp` package now depends on `@totalreclaw/core@^2.0.0` from
       # npm (previously a `file:` dep against the local wasm-pack output). The
       # local WASM build below is now dead code — `npm install` resolves core
@@ -156,7 +156,7 @@ jobs:
           wasm-pack build --target nodejs --out-dir pkg --features wasm
           # wasm-pack emits package name "totalreclaw-core"; consumers expect "@totalreclaw/core"
           node -e "const p=require('./pkg/package.json'); p.name='@totalreclaw/core'; require('fs').writeFileSync('./pkg/package.json', JSON.stringify(p,null,2)+'\n')"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
       - name: Install, build, and test
@@ -166,7 +166,7 @@ jobs:
     name: Rust Core Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
@@ -178,7 +178,7 @@ jobs:
     name: Python Client Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
@@ -205,14 +205,14 @@ jobs:
   #   name: E2E Relay Smoke Tests
   #   runs-on: ubuntu-latest
   #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v5
+  #     - uses: actions/checkout@v5
   #       with:
   #         repository: p-diogo/totalreclaw-relay
   #         path: totalreclaw-relay
   #         token: ${{ secrets.RELAY_REPO_TOKEN }}
   #     - name: Set up Node.js
-  #       uses: actions/setup-node@v4
+  #       uses: actions/setup-node@v5
   #       with:
   #         node-version: '20'
   #     - name: Start relay + PostgreSQL

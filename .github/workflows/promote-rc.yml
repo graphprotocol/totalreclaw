@@ -109,7 +109,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [derive-versions]
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
@@ -207,9 +207,9 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
@@ -267,7 +267,7 @@ jobs:
     permissions:
       id-token: write  # OIDC trusted publishing
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
         with:
@@ -309,7 +309,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Note on crates promote
         run: |
@@ -334,9 +334,9 @@ jobs:
       (inputs.package == 'clawhub' || inputs.package == 'all') &&
       inputs.dry-run == false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
 
@@ -401,7 +401,7 @@ jobs:
     # The auto-tag-on-RC-publish fix already shipped in publish-*.yml workflows
     # (see #139 / rc.21 backfill); this mirrors it for stable promote.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Required so `git rev-list -n 1 "v$RC"` can resolve the RC tag.
           # Default checkout sets up a shallow clone of the requested ref only;
