@@ -242,6 +242,18 @@ jobs:
           console.log('RC version:', p.version);
           "
 
+      - name: Upgrade npm to latest (required for tokenless OIDC publish)
+        if: inputs.dry-run == false
+        # The npm CLI shipped with Node 22 (npm 10.x) signs provenance with
+        # OIDC but still expects a legacy auth token for the actual PUT.
+        # Tokenless OIDC trusted publishing (where the OIDC token IS the
+        # auth) requires npm >= 11.5.1. Without this upgrade, the workflow
+        # signed sigstore provenance successfully but the PUT 404'd
+        # (2026-05-24 run 26374302750).
+        run: |
+          npm install -g npm@latest
+          npm --version
+
       - name: Publish
         if: inputs.dry-run == false
         # OIDC trusted publishing — npm trusts this workflow file
