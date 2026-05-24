@@ -244,16 +244,20 @@ jobs:
 
       - name: Publish
         if: inputs.dry-run == false
+        # OIDC trusted publishing — npm trusts this workflow file
+        # (`npm-publish.yml`) per the @totalreclaw/mcp-server package's
+        # Trusted Publisher config on npmjs.com. NO `NODE_AUTH_TOKEN` env —
+        # setting it would short-circuit OIDC and force npm to use the
+        # secret-token path (which caused the 2026-05-19 / 2026-05-24 E404
+        # failures after `NPM_TOKEN` expired).
         run: |
           cd mcp
           TAG="latest"
           if [ "${{ inputs.release-type }}" = "rc" ]; then
             TAG="rc"
           fi
-          echo "Publishing with dist-tag: $TAG"
-          npm publish --access public --tag "$TAG"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          echo "Publishing with dist-tag: $TAG (OIDC trusted publishing)"
+          npm publish --access public --tag "$TAG" --provenance
 
       - name: Report version
         run: |
