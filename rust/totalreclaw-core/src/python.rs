@@ -16,7 +16,7 @@ use crate::search;
 use crate::userop;
 use crate::{
     blind, claims, confirm, contradiction, crypto, debrief, digest, feedback_log, fingerprint, lsh,
-    protobuf, reranker, store,
+    pin_intent, protobuf, reranker, store,
 };
 
 // ---------------------------------------------------------------------------
@@ -523,6 +523,55 @@ fn py_is_pinned_claim_json(claim_json: &str) -> bool {
 #[pyo3(name = "cosine_similarity")]
 fn py_cosine_similarity(a: Vec<f32>, b: Vec<f32>) -> f64 {
     reranker::cosine_similarity_f32(&a, &b)
+}
+
+// ---------------------------------------------------------------------------
+// Pin tier / boost / intent (kg-2 / F1 Pin UX 2.2.8)
+// ---------------------------------------------------------------------------
+
+/// Compute the pin tier's multiplicative boost at a given timestamp.
+///
+/// Args:
+///     tier_json: Internally-tagged JSON, e.g. ``{"tier":"soft","pinned_at":1716000000}``,
+///         ``{"tier":"hard"}``, or ``{"tier":"none"}``.
+///     now_unix: Seconds since epoch.
+///     config_json: JSON of ``PinConfig``,
+///         e.g. ``{"soft_half_life_days":90,"soft_max_boost":1.5,"hard_boost":1.5}``.
+///
+/// Returns:
+///     Multiplicative boost factor (1.0 for ``none``).
+#[pyfunction]
+#[pyo3(name = "pin_boost")]
+fn py_pin_boost(tier_json: &str, now_unix: i64, config_json: &str) -> PyResult<f64> {
+    let tier: claims::PinTier = serde_json::from_str(tier_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid PinTier json: {}", e)))?;
+    let config: claims::PinConfig = serde_json::from_str(config_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid PinConfig json: {}", e)))?;
+    Ok(claims::pin_boost(tier, now_unix, &config))
+}
+
+/// Return the locked-default ``PinConfig`` as JSON.
+#[pyfunction]
+#[pyo3(name = "default_pin_config")]
+fn py_default_pin_config() -> PyResult<String> {
+    serde_json::to_string(&claims::PinConfig::default())
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Classify natural-language pin/unpin intent from a user utterance.
+///
+/// Returns:
+///     JSON of ``PinIntent`` when a trigger phrase matches, or ``None`` when
+///     no recognised pin gesture is present.
+#[pyfunction]
+#[pyo3(name = "classify_pin_intent")]
+fn py_classify_pin_intent(text: &str) -> PyResult<Option<String>> {
+    match pin_intent::classify_pin_intent(text) {
+        Some(intent) => Ok(Some(
+            serde_json::to_string(&intent).map_err(|e| PyValueError::new_err(e.to_string()))?,
+        )),
+        None => Ok(None),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1630,6 +1679,9 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_parse_pin_status, m)?)?;
     m.add_function(wrap_pyfunction!(py_is_pinned_claim_json, m)?)?;
     m.add_function(wrap_pyfunction!(py_cosine_similarity, m)?)?;
+    m.add_function(wrap_pyfunction!(py_pin_boost, m)?)?;
+    m.add_function(wrap_pyfunction!(py_default_pin_config, m)?)?;
+    m.add_function(wrap_pyfunction!(py_classify_pin_intent, m)?)?;
 
     // Wallet derivation
     m.add_function(wrap_pyfunction!(derive_eoa, m)?)?;

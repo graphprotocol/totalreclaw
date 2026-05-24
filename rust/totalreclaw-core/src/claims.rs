@@ -196,6 +196,105 @@ pub fn is_pinned_json(claim_json: &str) -> bool {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Two-tier pin model (kg-2 / F1 Pin UX 2.2.8)
+//
+// Tier semantics are spec'd in `docs/plans/2026-04-26-pin-ux-2.2.8-design-questions.md`
+// §Q2; defaults are locked in `docs/plans/2026-04-28-f1-pin-ux-defaults.md`.
+//
+// Step 1 (this PR): the enum + boost arithmetic land in core only. Wiring
+// into the reranker (`apply_pin_boost` flag) and into client extraction /
+// MCP / Hermes lands in follow-up PRs per the design-doc sequencing.
+// ---------------------------------------------------------------------------
+
+/// Two-tier pin model. Cross-language wire format is internally-tagged:
+/// `{"tier":"none"}`, `{"tier":"soft","pinned_at":1716578400}`, `{"tier":"hard"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "tier", rename_all = "snake_case")]
+pub enum PinTier {
+    /// Unpinned. Reranker treats as base score (boost = 1.0).
+    None,
+    /// Soft pin — decays exponentially per [`PinConfig::soft_half_life_days`].
+    /// Auto-extraction does NOT silently supersede; contradiction must be
+    /// surfaced to the agent for user disambiguation.
+    Soft {
+        /// Unix timestamp (seconds since epoch) of the original pin gesture.
+        pinned_at: i64,
+    },
+    /// Hard pin — fixed boost forever per [`PinConfig::hard_boost`].
+    /// Auto-extraction silently drops conflicting new statements.
+    Hard,
+}
+
+/// Tunable parameters for [`pin_boost`].
+///
+/// Defaults are the Pedro-signed-off recommendation in
+/// `docs/plans/2026-04-28-f1-pin-ux-defaults.md` §TL;DR:
+///
+/// | Knob | Default | Override range |
+/// |---|---|---|
+/// | `soft_half_life_days` | 90 | 30–180 |
+/// | `soft_max_boost` | 1.5× | 1.2–2.0× |
+/// | `hard_boost` | 1.5× | (fixed; no decay) |
+///
+/// The relay `billing/status` endpoint will ship these in the FeatureFlags
+/// response (same pattern as `extraction_interval`, `max_facts_per_extraction`)
+/// so production retuning works without a core/client republish.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PinConfig {
+    pub soft_half_life_days: u32,
+    pub soft_max_boost: f64,
+    pub hard_boost: f64,
+}
+
+impl Default for PinConfig {
+    fn default() -> Self {
+        Self {
+            soft_half_life_days: 90,
+            soft_max_boost: 1.5,
+            hard_boost: 1.5,
+        }
+    }
+}
+
+/// Compute the multiplicative boost a candidate should receive in the
+/// reranker's post-fusion score, given its [`PinTier`] and the current time.
+///
+/// Curve: `boost = 1.0 + (max_boost - 1.0) * exp(-age_days * ln(2) / half_life)`.
+///
+/// Soft pin reference table (defaults: half-life 90d, max boost 1.5×):
+///
+/// | Age | Boost |
+/// |---|---|
+/// | 0d   | 1.500 |
+/// | 30d  | 1.397 |
+/// | 90d  | 1.250 |
+/// | 180d | 1.125 |
+/// | 365d | 1.030 |
+/// | 730d | 1.001 |
+///
+/// Edge cases:
+/// - `PinTier::None` always returns 1.0 (no boost).
+/// - Future-pinned soft tier (`pinned_at > now_unix`) returns the full
+///   `soft_max_boost` rather than > max (clock-skew tolerance).
+/// - `soft_half_life_days == 0` is treated as "no decay" (full max boost).
+pub fn pin_boost(tier: PinTier, now_unix: i64, config: &PinConfig) -> f64 {
+    match tier {
+        PinTier::None => 1.0,
+        PinTier::Hard => config.hard_boost,
+        PinTier::Soft { pinned_at } => {
+            let age_seconds = now_unix.saturating_sub(pinned_at) as f64;
+            let age_days = age_seconds / 86_400.0;
+            if age_days <= 0.0 || config.soft_half_life_days == 0 {
+                return config.soft_max_boost;
+            }
+            let half_life = config.soft_half_life_days as f64;
+            let decay = (-age_days * std::f64::consts::LN_2 / half_life).exp();
+            1.0 + (config.soft_max_boost - 1.0) * decay
+        }
+    }
+}
+
 /// The action to take after checking pin status and tie-zone guard during
 /// contradiction resolution.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2011,5 +2110,156 @@ mod tests {
             },
             "v1 pinned blob must trigger SkipNew::ExistingPinned"
         );
+    }
+
+    // === PinTier / pin_boost (kg-2 / F1 Pin UX 2.2.8) ===
+
+    const DAY: i64 = 86_400;
+
+    fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
+        (a - b).abs() < tol
+    }
+
+    #[test]
+    fn pin_boost_none_is_one() {
+        let cfg = PinConfig::default();
+        assert_eq!(pin_boost(PinTier::None, 0, &cfg), 1.0);
+        assert_eq!(pin_boost(PinTier::None, 1_700_000_000, &cfg), 1.0);
+    }
+
+    #[test]
+    fn pin_boost_hard_is_constant() {
+        let cfg = PinConfig::default();
+        assert_eq!(pin_boost(PinTier::Hard, 0, &cfg), 1.5);
+        assert_eq!(pin_boost(PinTier::Hard, 1_700_000_000, &cfg), 1.5);
+        // Hard never decays even at very large now.
+        assert_eq!(pin_boost(PinTier::Hard, i64::MAX, &cfg), 1.5);
+    }
+
+    /// Reproduces the locked decay table from
+    /// `docs/plans/2026-04-28-f1-pin-ux-defaults.md` Q1.
+    ///
+    /// Acceptance criterion #2 from the design doc:
+    /// > Time-decay curve table from Q1 is reproducible by feeding
+    /// > `(pinned_at, now)` pairs into `pin_boost` and asserting the result
+    /// > against the table values within 1e-6.
+    #[test]
+    fn pin_boost_soft_decay_table_q1() {
+        let cfg = PinConfig::default(); // 90d half-life, 1.5× max
+        let now = 1_716_000_000_i64;
+        let cases = [
+            (0_i64, 1.500_000_f64),
+            (30, 1.397_240),
+            (90, 1.250_000),
+            (180, 1.125_000),
+            (365, 1.030_354),
+            (730, 1.001_842),
+        ];
+        for (age_days, expected) in cases {
+            let pinned_at = now - age_days * DAY;
+            let got = pin_boost(PinTier::Soft { pinned_at }, now, &cfg);
+            assert!(
+                approx_eq(got, expected, 1e-3),
+                "decay table mismatch at {age_days}d: expected {expected:.6}, got {got:.6}"
+            );
+        }
+    }
+
+    /// Tighter check on the half-life invariant: at exactly one half-life,
+    /// the boost increment should be exactly half of `(max_boost - 1)`.
+    /// Tolerance 1e-6 per the acceptance criterion.
+    #[test]
+    fn pin_boost_soft_half_life_invariant_strict() {
+        let cfg = PinConfig::default();
+        let now = 2_000_000_000_i64;
+        let pinned_at = now - 90 * DAY;
+        let got = pin_boost(PinTier::Soft { pinned_at }, now, &cfg);
+        // At 1 half-life: increment is exactly (max - 1) * 0.5
+        // = (1.5 - 1.0) * 0.5 = 0.25; boost = 1.25 exactly.
+        assert!(
+            approx_eq(got, 1.25, 1e-6),
+            "half-life invariant failed: expected 1.250000, got {got:.9}"
+        );
+    }
+
+    #[test]
+    fn pin_boost_soft_future_pinned_returns_max() {
+        // Clock skew: a soft pin "in the future" from this client's clock
+        // should still get full max boost, not > max.
+        let cfg = PinConfig::default();
+        let now = 1_000_000_000_i64;
+        let pinned_at = now + 60 * DAY;
+        let got = pin_boost(PinTier::Soft { pinned_at }, now, &cfg);
+        assert_eq!(got, cfg.soft_max_boost);
+    }
+
+    #[test]
+    fn pin_boost_soft_zero_half_life_means_no_decay() {
+        // Tunable: setting half-life to 0 disables decay (max boost forever).
+        // Edge case but allowed via config.
+        let cfg = PinConfig {
+            soft_half_life_days: 0,
+            soft_max_boost: 1.5,
+            hard_boost: 1.5,
+        };
+        let now = 2_000_000_000_i64;
+        let pinned_at = now - 10_000 * DAY;
+        assert_eq!(pin_boost(PinTier::Soft { pinned_at }, now, &cfg), 1.5);
+    }
+
+    #[test]
+    fn pin_boost_soft_custom_max_boost() {
+        // Override the boost ceiling — 2.0× max, 30d half-life.
+        let cfg = PinConfig {
+            soft_half_life_days: 30,
+            soft_max_boost: 2.0,
+            hard_boost: 1.5,
+        };
+        let now = 2_000_000_000_i64;
+        // At age=0: full 2.0× boost
+        assert_eq!(pin_boost(PinTier::Soft { pinned_at: now }, now, &cfg), 2.0);
+        // At age=30 (half-life): boost = 1.0 + (2.0 - 1.0) * 0.5 = 1.5
+        let got_30 = pin_boost(PinTier::Soft { pinned_at: now - 30 * DAY }, now, &cfg);
+        assert!(approx_eq(got_30, 1.5, 1e-6), "got {got_30}");
+    }
+
+    #[test]
+    fn pin_config_default_matches_signed_off_values() {
+        let cfg = PinConfig::default();
+        assert_eq!(cfg.soft_half_life_days, 90);
+        assert_eq!(cfg.soft_max_boost, 1.5);
+        assert_eq!(cfg.hard_boost, 1.5);
+    }
+
+    #[test]
+    fn pin_tier_serde_internally_tagged() {
+        let none = PinTier::None;
+        let soft = PinTier::Soft { pinned_at: 1_700_000_000 };
+        let hard = PinTier::Hard;
+        assert_eq!(serde_json::to_string(&none).unwrap(), r#"{"tier":"none"}"#);
+        assert_eq!(
+            serde_json::to_string(&soft).unwrap(),
+            r#"{"tier":"soft","pinned_at":1700000000}"#
+        );
+        assert_eq!(serde_json::to_string(&hard).unwrap(), r#"{"tier":"hard"}"#);
+
+        // Round-trip
+        for t in [none, soft, hard] {
+            let j = serde_json::to_string(&t).unwrap();
+            let back: PinTier = serde_json::from_str(&j).unwrap();
+            assert_eq!(t, back);
+        }
+    }
+
+    #[test]
+    fn pin_config_serde_roundtrip() {
+        let cfg = PinConfig {
+            soft_half_life_days: 45,
+            soft_max_boost: 1.8,
+            hard_boost: 2.0,
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: PinConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(cfg, back);
     }
 }

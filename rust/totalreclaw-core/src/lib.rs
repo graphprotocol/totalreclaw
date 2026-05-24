@@ -22,6 +22,7 @@
 //! - [`consolidation`] — Store-time near-duplicate detection + supersede logic
 //! - [`smart_import`] — Smart import profiling (prompt construction + response parsing)
 //! - [`memory_types`] — Memory Taxonomy v1 string-level constants + runtime guard
+//! - [`pin_intent`] — Natural-language pin/unpin intent classifier (kg-2 / F1 Pin UX 2.2.8)
 //! - [`prompts`] — Canonical extraction + compaction system prompts (2.2.0)
 //! - [`confirm`] — Read-after-write primitive for on-chain mutation tools (2.2.x)
 //! - [`secrets`] — API-key vault: detect + redact 14 secret pattern classes (am-6)
@@ -40,6 +41,7 @@ pub mod fingerprint;
 pub mod hotcache;
 pub mod lsh;
 pub mod memory_types;
+pub mod pin_intent;
 pub mod prompts;
 pub mod protobuf;
 pub mod reranker;

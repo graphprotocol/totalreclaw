@@ -10,6 +10,7 @@ use wasm_bindgen::prelude::*;
 use crate::blind;
 use crate::claims;
 use crate::confirm;
+use crate::pin_intent;
 use crate::contradiction;
 use crate::crypto;
 use crate::debrief;
@@ -486,6 +487,48 @@ pub fn wasm_is_pinned_claim_json(claim_json: &str) -> bool {
 #[wasm_bindgen(js_name = "cosineSimilarity")]
 pub fn wasm_cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     reranker::cosine_similarity_f32(a, b)
+}
+
+// ---------------------------------------------------------------------------
+// Pin tier / boost / intent (kg-2 / F1 Pin UX 2.2.8)
+// ---------------------------------------------------------------------------
+
+/// Compute the [`PinTier`]'s multiplicative boost at a given timestamp.
+///
+/// `tier_json`: internally-tagged JSON, e.g. `{"tier":"soft","pinned_at":1716000000}`,
+/// `{"tier":"hard"}`, `{"tier":"none"}`.
+/// `now_unix`: seconds since epoch.
+/// `config_json`: JSON of [`PinConfig`], e.g. `{"soft_half_life_days":90,"soft_max_boost":1.5,"hard_boost":1.5}`.
+///
+/// Returns the multiplicative boost factor (1.0 for `none`).
+#[wasm_bindgen(js_name = "pinBoost")]
+pub fn wasm_pin_boost(tier_json: &str, now_unix: i64, config_json: &str) -> Result<f64, JsError> {
+    let tier: claims::PinTier = serde_json::from_str(tier_json)
+        .map_err(|e| JsError::new(&format!("invalid PinTier json: {}", e)))?;
+    let config: claims::PinConfig = serde_json::from_str(config_json)
+        .map_err(|e| JsError::new(&format!("invalid PinConfig json: {}", e)))?;
+    Ok(claims::pin_boost(tier, now_unix, &config))
+}
+
+/// Return the locked-default [`PinConfig`] as JSON. Clients that don't want
+/// to retune can pass this verbatim to [`wasm_pin_boost`].
+#[wasm_bindgen(js_name = "defaultPinConfig")]
+pub fn wasm_default_pin_config() -> Result<String, JsError> {
+    serde_json::to_string(&claims::PinConfig::default())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Classify natural-language pin/unpin intent from a user utterance.
+///
+/// Returns JSON of [`PinIntent`] when a trigger phrase matches, or `null` when
+/// the utterance contains no recognised pin gesture. Lowercase normalization
+/// is applied internally — callers pass the raw user text.
+#[wasm_bindgen(js_name = "classifyPinIntent")]
+pub fn wasm_classify_pin_intent(text: &str) -> Result<String, JsError> {
+    match pin_intent::classify_pin_intent(text) {
+        Some(intent) => serde_json::to_string(&intent).map_err(|e| JsError::new(&e.to_string())),
+        None => Ok("null".to_string()),
+    }
 }
 
 // ---------------------------------------------------------------------------
