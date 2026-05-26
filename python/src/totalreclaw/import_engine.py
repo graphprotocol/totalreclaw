@@ -52,6 +52,18 @@ DEFAULT_BATCH_SIZE = 25    # Chunks per batch
 CHUNK_SIZE = 20            # Messages per conversation chunk (matches adapters)
 INTER_CHUNK_DELAY = 2.0    # Seconds between LLM extraction calls (rate-limit mitigation)
 
+# Maximum facts per batched UserOperation. Mirrors userop.MAX_BATCH_SIZE; kept
+# local to avoid importing from userop here (consistent with lifecycle.py's
+# _LIFECYCLE_MAX_BATCH). If the userop constant changes, update both.
+IMPORT_MAX_BATCH_SIZE = 15
+
+# Gnosis mainnet chain ID — the Pro-tier chain where batched UserOps are
+# economically meaningful. Free-tier (Base Sepolia, 84532) falls back to
+# per-fact submission per the spec §5 chain-gate. Per PRD-IMP, imports run
+# Pro-only, so this gate evaluates true in practice; the explicit check keeps
+# the cost claim self-verifying and tolerates future free-tier import flows.
+_GNOSIS_CHAIN_ID = 100
+
 
 class ImportEngine:
     """Agent-agnostic batch import engine.
@@ -228,11 +240,15 @@ class ImportEngine:
             )
 
         facts_extracted = 0
-        facts_stored = 0
         errors: list[str] = []
         chunks_with_no_facts = 0
         extraction_failures = 0
+        all_extracted: list[dict] = []
 
+        # Extraction phase: collect facts from every chunk in the batch so the
+        # subsequent store phase can chunk across chunks into Gnosis-batched
+        # UserOps (spec §5). Per-chunk granularity is preserved for extraction
+        # errors and "no facts produced" warnings.
         for i, chunk in enumerate(batch):
             # Rate-limit: add delay between LLM calls (skip before the first one)
             if i > 0:
@@ -243,27 +259,19 @@ class ImportEngine:
                 if not extracted:
                     chunks_with_no_facts += 1
                 facts_extracted += len(extracted)
-
-                for fact in extracted:
-                    try:
-                        await self._store_fact(fact)
-                        facts_stored += 1
-                    except Exception as e:
-                        msg = str(e)
-                        # Content fingerprint dedup (409) is expected
-                        if '409' in msg or 'duplicate' in msg or 'fingerprint' in msg:
-                            logger.debug("Skipped duplicate: %s", fact.get('text', '')[:60])
-                        else:
-                            errors.append(f"Store failed: {msg}")
-                            if len(errors) >= 20:
-                                errors.append("Error limit reached (20). Remaining facts in this batch skipped.")
-                                break
+                all_extracted.extend(extracted)
             except Exception as e:
                 extraction_failures += 1
                 errors.append(f"Extraction failed for chunk '{chunk.title}': {repr(e)}")
 
             if len(errors) >= 20:
                 break
+
+        # Store phase: one batched UserOp per ≤15-fact chunk on Gnosis, or a
+        # per-fact remember() loop on free-tier / unresolvable chain.
+        facts_stored, store_errors = await self._store_facts_chunked(all_extracted)
+        if store_errors:
+            errors.extend(store_errors)
 
         # Surface extraction problems as warnings so the user gets feedback
         if extraction_failures > 0:
@@ -321,27 +329,19 @@ class ImportEngine:
                 duration_ms=_now_ms() - start_ms,
             )
 
-        facts_stored = 0
-        errors: list[str] = []
-
-        for fact in batch:
-            try:
-                fact_dict = {
-                    'text': fact.text,
-                    'type': fact.type,
-                    'importance': fact.importance,
-                }
-                await self._store_fact(fact_dict)
-                facts_stored += 1
-            except Exception as e:
-                msg = str(e)
-                if '409' in msg or 'duplicate' in msg or 'fingerprint' in msg:
-                    logger.debug("Skipped duplicate: %s", fact.text[:60])
-                else:
-                    errors.append(f"Store failed for '{fact.text[:60]}': {msg}")
-                    if len(errors) >= 20:
-                        errors.append("Error limit reached (20). Remaining facts skipped.")
-                        break
+        # Convert NormalizedFact dataclass instances to the dict shape the
+        # store helper expects. Routes through the chunked-batch helper:
+        # one ≤15-fact remember_batch UserOp on Gnosis, per-fact remember()
+        # everywhere else (spec §5).
+        fact_dicts = [
+            {
+                'text': fact.text,
+                'type': fact.type,
+                'importance': fact.importance,
+            }
+            for fact in batch
+        ]
+        facts_stored, errors = await self._store_facts_chunked(fact_dicts)
 
         return BatchImportResult(
             success=facts_stored > 0 or not errors,
@@ -406,17 +406,18 @@ class ImportEngine:
 
         return valid
 
-    async def _store_fact(self, fact: dict) -> str:
-        """Embed and store a single fact via the client.
+    @staticmethod
+    def _prepare_fact_payload(fact: dict) -> dict:
+        """Build the per-fact payload shape shared by ``client.remember`` and
+        ``client.remember_batch``.
 
-        Returns the stored fact ID.
+        Normalises importance from the 1-10 input scale to the 0.0-1.0 scale
+        the client expects, and best-effort attaches an embedding.
         """
         text = fact["text"]
         importance = fact.get("importance", 5)
-        # Normalize importance from 1-10 to 0.0-1.0
         importance_normalized = max(0.0, min(1.0, importance / 10.0))
 
-        # Try to generate embedding (optional -- client works without it)
         embedding = None
         try:
             from totalreclaw.embedding import get_embedding
@@ -424,12 +425,113 @@ class ImportEngine:
         except Exception:
             pass
 
+        return {
+            "text": text,
+            "importance": importance_normalized,
+            "embedding": embedding,
+        }
+
+    async def _store_fact(self, fact: dict) -> str:
+        """Embed and store a single fact via the client.
+
+        Returns the stored fact ID.
+        """
+        payload = self._prepare_fact_payload(fact)
         return await self._client.remember(
-            text,
-            embedding=embedding,
-            importance=importance_normalized,
+            payload["text"],
+            embedding=payload["embedding"],
+            importance=payload["importance"],
             source="import",
         )
+
+    async def _resolve_chain_id_safely(self) -> Optional[int]:
+        """Resolve ``client.chain_id`` defensively.
+
+        Returns the resolved chain id, or ``None`` if resolution fails (test
+        clients without a real ``_ensure_chain_id`` coroutine, offline runs,
+        etc.). Callers must treat ``None`` as "not Gnosis" and use the
+        per-fact fallback path.
+        """
+        try:
+            return await self._client._ensure_chain_id()
+        except Exception:
+            return None
+
+    async def _store_facts_chunked(
+        self,
+        facts: list[dict],
+    ) -> tuple[int, list[str]]:
+        """Store ``facts`` via chunked batched UserOps when the client is on
+        Gnosis (chain 100); otherwise via per-fact ``client.remember`` calls.
+
+        Per spec ``docs/specs/imp/281-gnosis-batching-chain-gate.md`` §5 +
+        decomposition imp-11: buffer facts into groups of ≤15 and submit one
+        ``client.remember_batch`` per group on chain 100. PRD-IMP's Pro-only
+        import gate guarantees ``chain_id == 100`` on this code path; the
+        explicit check keeps the cost claim self-verifying.
+
+        Returns ``(facts_stored, errors)`` so callers can aggregate into the
+        existing ``BatchImportResult`` shape.
+
+        Dedup (HTTP 409 / fingerprint) is logged at DEBUG and not counted as
+        an error. Other failures are surfaced via the returned error list,
+        capped at 20 entries to match the per-fact loop's contract.
+        """
+        if not facts:
+            return 0, []
+
+        chain_id = await self._resolve_chain_id_safely()
+        errors: list[str] = []
+        facts_stored = 0
+
+        if chain_id == _GNOSIS_CHAIN_ID:
+            for chunk_start in range(0, len(facts), IMPORT_MAX_BATCH_SIZE):
+                chunk = facts[chunk_start:chunk_start + IMPORT_MAX_BATCH_SIZE]
+                payloads = [self._prepare_fact_payload(f) for f in chunk]
+                try:
+                    ids = await self._client.remember_batch(payloads, source="import")
+                    facts_stored += len(ids)
+                    if len(ids) < len(chunk):
+                        logger.debug(
+                            "remember_batch returned %d ids for %d-fact chunk "
+                            "(likely fingerprint dedup of subset)",
+                            len(ids), len(chunk),
+                        )
+                except Exception as e:
+                    msg = str(e)
+                    if '409' in msg or 'duplicate' in msg or 'fingerprint' in msg:
+                        logger.debug(
+                            "Batch of %d facts rejected as duplicate", len(chunk),
+                        )
+                    else:
+                        errors.append(
+                            f"Batch store failed ({len(chunk)} facts): {msg}"
+                        )
+                        if len(errors) >= 20:
+                            errors.append(
+                                "Error limit reached (20). Remaining facts in this batch skipped."
+                            )
+                            break
+            return facts_stored, errors
+
+        # Per-fact fallback: free-tier / non-Gnosis / chain probe failed.
+        for fact in facts:
+            try:
+                await self._store_fact(fact)
+                facts_stored += 1
+            except Exception as e:
+                msg = str(e)
+                if '409' in msg or 'duplicate' in msg or 'fingerprint' in msg:
+                    logger.debug("Skipped duplicate: %s", fact.get('text', '')[:60])
+                else:
+                    errors.append(f"Store failed: {msg}")
+                    if len(errors) >= 20:
+                        errors.append(
+                            "Error limit reached (20). Remaining facts in this batch skipped."
+                        )
+                        break
+
+        return facts_stored, errors
 
 
 def _now_ms() -> int:
