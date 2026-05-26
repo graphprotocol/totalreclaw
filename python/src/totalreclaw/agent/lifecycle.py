@@ -389,6 +389,19 @@ def _auto_extract_inner(
             fact_ids = run_sync(
                 client.remember_batch(chunk_dicts, source="hermes-auto")
             )
+            # imp-15 telemetry: one structured line per submission so Axiom can
+            # verify userop_count/fact_count ratio per #281 spec §6 T-6. The
+            # chain-gate (Pro batch / free single) lands in a sister work-leaf;
+            # until then lifecycle.py always batches → submission_path="batch",
+            # userop_count=1 per chunk.
+            try:
+                _chain_id = client.chain_id
+            except Exception:
+                _chain_id = getattr(client, "_chain_id", None)
+            logger.info(
+                "submission_telemetry submission_path=%s fact_count=%d userop_count=%d chain_id=%s",
+                "batch", len(chunk_dicts), 1, _chain_id,
+            )
         except InterpreterShutdownError:
             raise
         except Exception as e:
