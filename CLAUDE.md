@@ -206,7 +206,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Max facts per extraction | Yes | -- | Yes | Yes | -- | Yes | Server-tunable via relay config (default 15) |
 | Chain ID (Gnosis-only) | Yes | Yes | Yes | -- | -- | Yes | All tiers route to Gnosis mainnet (chain 100); no per-tier chain switching |
 | **Batching** | | | | | | |
-| Client batching (multi-call UserOps) | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Hermes stores facts one-by-one (no ERC-4337 batch support in Python) |
+| Client batching (multi-call UserOps) | Yes | Yes | Yes (via MCP) | Yes (Gnosis Pro) | Yes (via MCP) | Yes | Hermes batches on Gnosis Pro (chain 100) via `client.remember_batch()` shipped in PyPI 2.0.0+; Base Sepolia free-tier (chain 84532) writes one fact per UserOp pending Path A gas-estimation diagnosis |
 | **Billing** | | | | | | |
 | Quota warnings (>80%) | Yes | -- | Yes | Yes | -- | Yes | Injected via on_session_start hook; ZeroClaw via quota_warning() method |
 | 403 handling + cache invalidation | Yes | Yes | Yes | -- | Yes (via MCP) | Yes | ZeroClaw invalidates billing cache on 403, returns QuotaExceeded error |
@@ -251,7 +251,8 @@ Managed Service single-chain tier model: **Free** = 250 memories/month on Gnosis
 | Crypto payments removed | LOW | Coinbase Commerce sunset March 31, 2026. Removed from relay, tools, and website. Stripe (fiat) is the sole payment method. |
 | Hermes not on PyPI (hermes-agent) | RESOLVED | `totalreclaw` 1.2.0 on PyPI includes generic agent layer (no hermes-agent dependency). OPENAI_BASE_URL fix + model detection included. |
 | Hermes no import/migrate/consolidate | MEDIUM | Python client does not yet implement import adapters, migrate tool, or consolidation. Core remember/recall/forget/export/status work. |
-| Hermes no client batching | LOW | Python client submits facts one-by-one (no ERC-4337 executeBatch). Acceptable for extraction volumes (max 15 facts). |
+| Hermes no client batching | RESOLVED | Python batch path shipped in PyPI 2.0.0+ (`client.remember_batch()`), now chain-aware after imp-10: Gnosis Pro (chain 100) batches up to 15 facts per UserOp; Base Sepolia free-tier (chain 84532) still single-fact pending Path A gas-estimation diagnosis (tracked separately). |
+| Free-tier (Base Sepolia) batch UserOps | LOW | Free-tier (Base Sepolia) writes one fact per UserOp pending Path A gas-estimation diagnosis. Gnosis Pro tier batches normally via `executeBatch`. |
 | Hermes no store-time dedup | RESOLVED | Generic agent layer now performs cosine-based near-duplicate detection (>= 0.85) before storing. |
 | Hermes heuristic extraction only | LOW | Generic agent layer tries LLM extraction first, falls back to heuristic regex. LLM path requires compatible provider (OpenAI-compatible endpoint). |
 | ZeroClaw no import/migrate | LOW | Rust crate implements core Memory trait + status + export + upgrade (Stripe checkout) but not import adapters or migrate tool. |
