@@ -690,6 +690,100 @@ pub struct MemoryEntityV1 {
     pub role: Option<String>,
 }
 
+/// Sentinel value for [`MemoryMetadataV1::subtype`] identifying a session-end
+/// Crystal debrief written by Hermes (and other v1 clients that adopt the
+/// session-end batching pipeline). See `docs/specs/memq/session-end-batching-and-dedup.md`
+/// §3.2.
+pub const MEMORY_METADATA_SUBTYPE_SESSION_CRYSTAL: &str = "session_crystal";
+
+/// Typed metadata payload carried inside the encrypted v1 blob.
+///
+/// Used by clients that need to ship structured ancillary data alongside a
+/// [`MemoryClaimV1`] — e.g. Hermes session-end batching tags a Crystal +
+/// every uncovered fact in the same UserOp with a shared
+/// [`session_id`](Self::session_id), and Crystal debriefs carry their full
+/// structured shape (`key_outcomes` / `open_threads` / `lessons` /
+/// `topics_discussed` / `files_affected`) here rather than mashing it into
+/// the searchable `text` surface.
+///
+/// **Cross-client guarantee** (memory-taxonomy-v1.md §6): the field on
+/// [`MemoryClaimV1::metadata`] is optional and defaults to `None` — pre-v1.1
+/// vault entries written before this struct existed continue to decode + search
+/// correctly. v1 readers MUST tolerate every field absent. Unknown JSON keys
+/// inside the `metadata` object are silently dropped on parse (forward-compat
+/// for future client extensions); known fields round-trip losslessly.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryMetadataV1 {
+    /// Discriminator for client-specific metadata flavors. The only
+    /// documented value today is `"session_crystal"` (see
+    /// [`MEMORY_METADATA_SUBTYPE_SESSION_CRYSTAL`]); unknown values are
+    /// preserved on round-trip but readers should treat them as opaque.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtype: Option<String>,
+
+    /// Client-local UUIDv7 tying a Crystal + N atomic facts to one session.
+    /// Encrypted-blob-only — never appears on-chain or in the subgraph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+
+    /// Atomic-fact: brief explanatory note ("why this fact matters").
+    /// Spec-bounded to ≤200 chars by the LLM prompt; consumers should treat
+    /// longer values as user-error rather than a hard parse failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+
+    /// Crystal: decisions / results from the session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub key_outcomes: Vec<String>,
+
+    /// Crystal: unresolved questions / follow-on work surfaced in the session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_threads: Vec<String>,
+
+    /// Crystal: generalisable lessons / non-obvious takeaways.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lessons: Vec<String>,
+
+    /// Crystal: topic tags for sibling-expansion / clustering at recall time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub topics_discussed: Vec<String>,
+
+    /// Crystal: file paths touched during the session (coding-agent sessions).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_affected: Vec<String>,
+}
+
+impl MemoryMetadataV1 {
+    /// True when every field is at its default — used by the serde
+    /// `skip_serializing_if` predicate on [`MemoryClaimV1::metadata`] so a
+    /// `Some(MemoryMetadataV1::default())` collapses to JSON omission and
+    /// preserves the spec's ~90-byte canonical-blob overhead target for
+    /// claims that don't carry ancillary metadata.
+    pub fn is_empty(&self) -> bool {
+        self.subtype.is_none()
+            && self.session_id.is_none()
+            && self.context.is_none()
+            && self.key_outcomes.is_empty()
+            && self.open_threads.is_empty()
+            && self.lessons.is_empty()
+            && self.topics_discussed.is_empty()
+            && self.files_affected.is_empty()
+    }
+
+    /// True when [`subtype`](Self::subtype) is the documented session-Crystal
+    /// sentinel.
+    pub fn is_session_crystal(&self) -> bool {
+        self.subtype.as_deref() == Some(MEMORY_METADATA_SUBTYPE_SESSION_CRYSTAL)
+    }
+}
+
+fn is_default_metadata_v1(m: &Option<MemoryMetadataV1>) -> bool {
+    match m {
+        None => true,
+        Some(m) => m.is_empty(),
+    }
+}
+
 fn default_schema_version_v1() -> String {
     MEMORY_CLAIM_V1_SCHEMA_VERSION.to_string()
 }
@@ -787,6 +881,16 @@ pub struct MemoryClaimV1 {
     /// produce uniform pin-detection semantics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_status: Option<PinStatus>,
+
+    // ── METADATA (v1.1, additive) ────────────────────────────────
+    /// Typed metadata payload (Hermes session-end Crystal + atomic-fact context
+    /// enrichment). Absence is equivalent to `Some(MemoryMetadataV1::default())`
+    /// on the wire (an all-default metadata is omitted from JSON to preserve
+    /// the canonical-blob overhead target). Pre-v1.1 vault entries without this
+    /// field deserialise to `None`; v1 readers MUST tolerate the absence per
+    /// memory-taxonomy-v1.md §6 cross-client guarantees.
+    #[serde(default, skip_serializing_if = "is_default_metadata_v1")]
+    pub metadata: Option<MemoryMetadataV1>,
 }
 
 impl MemoryTypeV1 {
@@ -1745,6 +1849,7 @@ mod tests {
             confidence: None,
             superseded_by: None,
             pin_status: None,
+            metadata: None,
         }
     }
 
@@ -1769,6 +1874,7 @@ mod tests {
             confidence: Some(0.92),
             superseded_by: None,
             pin_status: None,
+            metadata: None,
         }
     }
 
@@ -1810,6 +1916,8 @@ mod tests {
         assert!(!json.contains("entities"));
         // pin_status = None -> omitted (v1.1 additive, absence == "unpinned")
         assert!(!json.contains("pin_status"));
+        // metadata = None -> omitted (v1.1 additive, absence == no ancillary fields)
+        assert!(!json.contains("metadata"));
     }
 
     #[test]
@@ -1834,6 +1942,7 @@ mod tests {
         assert!(c.confidence.is_none());
         assert!(c.superseded_by.is_none());
         assert!(c.pin_status.is_none());
+        assert!(c.metadata.is_none());
     }
 
     #[test]
@@ -1869,6 +1978,7 @@ mod tests {
             confidence: None,
             superseded_by: None,
             pin_status: None,
+            metadata: None,
         };
         let json = serde_json::to_string(&c).unwrap();
         let expected = r#"{"id":"01900000-0000-7000-8000-000000000000","text":"prefers PostgreSQL","type":"preference","source":"user","created_at":"2026-04-17T10:00:00Z"}"#;
@@ -2261,5 +2371,144 @@ mod tests {
         let json = serde_json::to_string(&cfg).unwrap();
         let back: PinConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg, back);
+    }
+
+    // === MemoryMetadataV1 / typed Crystal metadata (memq-1) ===
+
+    fn crystal_v1_claim() -> MemoryClaimV1 {
+        let mut c = full_v1_claim();
+        c.memory_type = MemoryTypeV1::Summary;
+        c.source = MemorySource::Derived;
+        c.metadata = Some(MemoryMetadataV1 {
+            subtype: Some(MEMORY_METADATA_SUBTYPE_SESSION_CRYSTAL.to_string()),
+            session_id: Some("01902d40-7a2b-7f12-9c44-1c5e7d2af6a1".to_string()),
+            context: None,
+            key_outcomes: vec![
+                "Locked Fork C-refined".to_string(),
+                "session_id field is encrypted-only".to_string(),
+            ],
+            open_threads: vec!["Confirm Q4 quota bug fix scope".to_string()],
+            lessons: vec![
+                "Mem0 v2 single-pass ADD-only is the dominant 2026 pattern".to_string(),
+            ],
+            topics_discussed: vec![
+                "session-end batching".to_string(),
+                "dedup".to_string(),
+                "Crystal".to_string(),
+            ],
+            files_affected: vec!["rust/totalreclaw-core/src/claims.rs".to_string()],
+        });
+        c
+    }
+
+    #[test]
+    fn memory_metadata_v1_crystal_round_trip() {
+        let c = crystal_v1_claim();
+        let json = serde_json::to_string(&c).unwrap();
+        let back: MemoryClaimV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+        let m = back.metadata.as_ref().expect("metadata round-trip");
+        assert!(m.is_session_crystal());
+        assert_eq!(m.key_outcomes.len(), 2);
+        assert_eq!(m.topics_discussed.len(), 3);
+        assert_eq!(m.files_affected, vec!["rust/totalreclaw-core/src/claims.rs"]);
+        // Surface JSON shape matches spec §3.2 example
+        assert!(json.contains("\"subtype\":\"session_crystal\""));
+        assert!(json.contains("\"session_id\":\"01902d40-7a2b-7f12-9c44-1c5e7d2af6a1\""));
+    }
+
+    #[test]
+    fn memory_metadata_v1_atomic_fact_round_trip() {
+        // Atomic fact carrying just session_id + context (no Crystal fields).
+        let mut c = minimal_v1_claim();
+        c.text = "Pedro works at thegraph.foundation".to_string();
+        c.memory_type = MemoryTypeV1::Claim;
+        c.metadata = Some(MemoryMetadataV1 {
+            subtype: None,
+            session_id: Some("01902d40-7a2b-7f12-9c44-1c5e7d2af6a1".to_string()),
+            context: Some(
+                "Mentioned in passing while discussing org-level email routing.".to_string(),
+            ),
+            ..Default::default()
+        });
+        let json = serde_json::to_string(&c).unwrap();
+        let back: MemoryClaimV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+        // Crystal-only fields stay absent in the JSON for atomic facts.
+        assert!(!json.contains("key_outcomes"));
+        assert!(!json.contains("open_threads"));
+        assert!(!json.contains("lessons"));
+        assert!(!json.contains("topics_discussed"));
+        assert!(!json.contains("files_affected"));
+        assert!(!json.contains("subtype"));
+        // Required atomic-fact fields present.
+        assert!(json.contains("\"session_id\":"));
+        assert!(json.contains("\"context\":"));
+    }
+
+    #[test]
+    fn memory_metadata_v1_legacy_blob_without_metadata_parses() {
+        // Pre-v1.1 vault entries (memory-taxonomy-v1.md §6 cross-client) must
+        // continue to decode + search correctly with the new optional field.
+        let json = r#"{
+            "id":"01900000-0000-7000-8000-000000000000",
+            "text":"prefers PostgreSQL",
+            "type":"preference",
+            "source":"user",
+            "created_at":"2026-04-17T10:00:00Z"
+        }"#;
+        let c: MemoryClaimV1 = serde_json::from_str(json).unwrap();
+        assert!(c.metadata.is_none());
+    }
+
+    #[test]
+    fn memory_metadata_v1_empty_metadata_omitted_on_serialize() {
+        // A Some(default) metadata serialises away — preserves the ~90-byte
+        // canonical-blob overhead target on claims that don't carry ancillary
+        // metadata. Symmetric with the pin_status = None handling.
+        let mut c = minimal_v1_claim();
+        c.metadata = Some(MemoryMetadataV1::default());
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(!json.contains("metadata"));
+        // Round-trip surfaces as None (empty Some collapses on re-parse via skip rule).
+        let back: MemoryClaimV1 = serde_json::from_str(&json).unwrap();
+        assert!(back.metadata.is_none());
+    }
+
+    #[test]
+    fn memory_metadata_v1_unknown_keys_ignored() {
+        // Forward-compat: a future client may add metadata fields we don't
+        // know about yet. Per memory-taxonomy-v1.md §6, v1.0 readers MUST
+        // ignore unknown metadata keys (no deny_unknown_fields).
+        let json = r#"{
+            "id":"01900000-0000-7000-8000-000000000000",
+            "text":"summary",
+            "type":"summary",
+            "source":"derived",
+            "created_at":"2026-04-17T10:00:00Z",
+            "metadata":{
+                "subtype":"session_crystal",
+                "session_id":"01902d40-7a2b-7f12-9c44-1c5e7d2af6a1",
+                "future_field":"some new client value",
+                "another_unknown":[1,2,3]
+            }
+        }"#;
+        let c: MemoryClaimV1 = serde_json::from_str(json).unwrap();
+        let m = c.metadata.expect("metadata parsed");
+        assert!(m.is_session_crystal());
+        assert_eq!(
+            m.session_id.as_deref(),
+            Some("01902d40-7a2b-7f12-9c44-1c5e7d2af6a1")
+        );
+    }
+
+    #[test]
+    fn memory_metadata_v1_is_session_crystal_predicate() {
+        let mut m = MemoryMetadataV1::default();
+        assert!(!m.is_session_crystal());
+        m.subtype = Some("session_crystal".to_string());
+        assert!(m.is_session_crystal());
+        m.subtype = Some("other_subtype".to_string());
+        assert!(!m.is_session_crystal());
     }
 }
