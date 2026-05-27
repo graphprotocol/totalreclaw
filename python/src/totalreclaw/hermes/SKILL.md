@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Install + set up TotalReclaw encrypted memory for Hermes, then use totalreclaw_remember / totalreclaw_recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 2.3.5rc1
+version: 2.4.4
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -163,11 +163,63 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
 
 ## Usage (post-setup)
 
-- Stable user facts / preferences / identity / "remember X" → `totalreclaw_remember` (don't ask permission).
-- First-person factual query ("do I / what's my / where do I …") → `totalreclaw_recall` FIRST, then answer from returned facts. If 0 results, say so.
-- "forget / pin / unpin X" → `totalreclaw_recall` first for `fact_id`, then `totalreclaw_forget` / `_pin` / `_unpin`.
-- "status" → `totalreclaw_status`. "upgrade" → `totalreclaw_upgrade` (paste Stripe URL verbatim).
-- "import from Mem0 / ChatGPT / Claude / Gemini / mcp-memory-server" → `totalreclaw_import_from` with `dry_run=True` first.
+### Storing memories — when + how
+
+**There are two write paths:**
+
+1. **Auto-extraction (background, every ~3 turns + at session end).** The plugin runs a `post_llm_call` hook that extracts facts from recent conversation and stores them on chain. You don't trigger this; it runs by itself. Look for `TotalReclaw: extracted N memories` lines in the gateway log if you want to confirm a turn was captured.
+
+2. **Explicit `totalreclaw_remember`** — call this only when the user says something the auto-extraction is likely to MISS or when they explicitly say "remember X" / "save that I X":
+   - One-off declarative statements outside a natural conversation flow ("my birthday is March 14", "I prefer Postgres over MySQL")
+   - Verbatim quotes the user wants preserved exactly ("write down the AWS account ID exactly: 123…")
+   - Decisions the user wants ledgered with reasoning ("we picked X because Y")
+   - Anything the user marks with imperative language: "remember", "save", "store", "don't forget", "keep this"
+
+**Don't double-call.** If auto-extraction just fired (recent log lines show extraction), skip the manual `totalreclaw_remember` — embedding dedup will silently drop the duplicate, but you waste a write against quota.
+
+**Don't store transient noise.** Skip `totalreclaw_remember` for:
+- Casual greetings, banter, acknowledgements
+- Tool-output paste-backs the user didn't write themselves
+- Commands / instructions the user issued to YOU (not facts about the user) — "open this file" is not a memory
+- Repeating things the user just said back to them in a single turn
+- Anything the user said while explicitly testing memory ("just to test, remember the word elephant" — store it, but don't store the user's own meta-commentary on the test)
+
+**Memory types (taxonomy v1).** Each stored fact gets a type. The extractor auto-tags; if you call `totalreclaw_remember` manually, pass `type=` when the right one is obvious — saves a `totalreclaw_retype` later:
+- `claim` — factual statement about the user / world ("I live in Lisbon")
+- `preference` — taste / choice ("I prefer espresso over filter")
+- `directive` — durable instruction to the agent ("always summarize in bullets", "never use semicolons")
+- `commitment` — promise / obligation ("I'll review the PR by Friday")
+- `episode` — notable event with time anchor ("on 2026-03-12 I went to Berlin for a conference")
+- `summary` — multi-turn debrief output. Don't write these manually; `totalreclaw_debrief` produces them.
+
+**Scopes.** Each fact also gets a scope (work / personal / health / family / creative / finance / misc / unspecified). The extractor infers; you can pass `scope=` explicitly when the user's intent is clear (a health fact during a work conversation should still be `scope=health`). To re-scope an existing fact: `totalreclaw_recall` for the `fact_id`, then `totalreclaw_set_scope`.
+
+### Summaries — `totalreclaw_debrief`
+
+Auto-fires once per session via the `on_session_end` hook (when the gateway closes the session — `/new`, idle timeout, restart). You almost never call this manually.
+
+**Manual call ONLY when** the user explicitly asks for a session recap mid-conversation: "summarize what we discussed", "give me a debrief on this session", "what's the rolling memory of this chat?". One-shot call, no args needed — the tool walks the current session buffer.
+
+### Recall — when + how
+
+- **First-person factual query** ("do I / what's my / where do I / what did I say about / what do you know about me / am I supposed to / when did I …") → `totalreclaw_recall` FIRST, then answer from returned facts. If 0 results, say so honestly — DO NOT fabricate from session context. This is non-negotiable: the rc.5 recall-behaviour rule says agents MUST call `totalreclaw_recall` even when the answer appears to be in the current context window. Hermes' built-in `USER.md` cache is local; TotalReclaw on chain is canonical + cross-device.
+- **Specific-fact lookups** ("what's my AWS account ID?") → `totalreclaw_recall` with a tight query. The reranker (BM25 + cosine + RRF + source-weighted v2-lenient) is sharper on specific queries.
+
+### Mutating existing facts
+
+Pattern is always **recall first → mutate second**, because the mutation tools need `fact_id`:
+
+- `forget X` → `totalreclaw_recall("X")` → pick the right `fact_id` → `totalreclaw_forget(fact_id)`. Tombstones the fact (still on chain for audit; recall filters it out).
+- `pin X as canonical` → recall → `totalreclaw_pin(fact_id)`. Pinned facts surface in every subsequent recall regardless of query similarity.
+- `unpin X` → recall → `totalreclaw_unpin(fact_id)`.
+- `change type of X to <type>` → recall → `totalreclaw_retype(fact_id, type)`. Use when extractor misclassified.
+- `change scope of X to <scope>` → recall → `totalreclaw_set_scope(fact_id, scope)`.
+
+### Status / upgrade / import
+
+- "status" / "how am I doing on quota" / "what tier am I on" → `totalreclaw_status` (no args). Returns tier, used/limit, network, smart-account address.
+- "upgrade" / "go Pro" → `totalreclaw_upgrade` (returns a Stripe checkout URL — paste verbatim, no paraphrase).
+- "import from Mem0 / ChatGPT / Claude / Gemini / mcp-memory-server" → `totalreclaw_import_from` with `dry_run=True` first to surface the count + estimated free-tier impact, then ask the user to confirm before the real run.
 
 ## Tiers + pricing
 
@@ -222,4 +274,4 @@ These statements are WRONG. Never write any of them — they fabricate pricing m
 
 ## Tool surface
 
-`totalreclaw_pair` (ONLY account-setup path) · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_export` · `_status` · `_upgrade` · `_import_from` · `_import_batch` · `_debrief` · `_report_qa_bug` (RC only).
+`totalreclaw_pair` (ONLY account-setup path) · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_retype` · `_set_scope` · `_export` · `_status` · `_upgrade` · `_import_from` · `_import_batch` · `_debrief` · `_report_qa_bug` (RC only).
