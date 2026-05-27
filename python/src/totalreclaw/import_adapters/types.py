@@ -64,3 +64,11 @@ class BatchImportResult:
     is_complete: bool
     errors: List[str] = field(default_factory=list)
     duration_ms: int = 0
+    # Smart-import (imp-4): chunks the triage pass marked SKIP for this
+    # batch, plus a snapshot of the profile+triage pipeline that ran for
+    # the import (None when smart-import didn't run — no LLM, fact-only
+    # sources, or older core wheels). Keys mirror the plugin's
+    # ``smart_import`` payload shape (extract_count / skip_count /
+    # profile_duration_ms).
+    chunks_skipped: int = 0
+    smart_import: Optional[dict] = None

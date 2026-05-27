@@ -8,7 +8,7 @@ import os
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from .state import PluginState
@@ -532,7 +532,20 @@ def _make_extractor(state: "PluginState"):
     )
     from totalreclaw.agent.llm_client import detect_llm_config, chat_completion
 
-    async def extract(messages: list[dict], timestamp: str) -> list[dict]:
+    async def extract(
+        messages: list[dict],
+        timestamp: str,
+        *,
+        enriched_system_prompt: Optional[str] = None,
+    ) -> list[dict]:
+        """Hermes extraction callable.
+
+        ``enriched_system_prompt`` (imp-4): when the ``ImportEngine``'s
+        smart-import pipeline produced a profile-enriched system prompt,
+        it's forwarded here so this LLM call sees the same profile
+        context the plugin injects via ``runSmartImportPipeline``. Falls
+        back to ``EXTRACTION_SYSTEM_PROMPT`` when unset.
+        """
         # Try Hermes config first, fall back to env var detection
         config = _read_hermes_llm_config() or detect_llm_config()
         if not config:
@@ -552,7 +565,8 @@ def _make_extractor(state: "PluginState"):
             f"{conversation_text}"
         )
 
-        response = await chat_completion(config, EXTRACTION_SYSTEM_PROMPT, user_prompt)
+        system_prompt = enriched_system_prompt or EXTRACTION_SYSTEM_PROMPT
+        response = await chat_completion(config, system_prompt, user_prompt)
         if not response:
             return []
 
@@ -572,6 +586,38 @@ def _make_extractor(state: "PluginState"):
         ]
 
     return extract
+
+
+def _make_llm_completion(state: "PluginState"):
+    """Build an async prompt-only LLM completion callable for smart-import.
+
+    Mirrors ``_make_extractor`` but exposes a ``(prompt: str) -> str | None``
+    surface for the smart-import profile + triage passes. The pipeline's
+    prompts (from ``totalreclaw_core``) are self-contained and don't need
+    a separate system instruction, so we pass them through as the user
+    message with an empty system slot.
+
+    Returns ``None`` (the *function*, not the *callable*) when no LLM
+    config can be resolved at construction time so the caller wires
+    ``llm_completion=None`` and ``ImportEngine`` falls back to blind
+    extraction. The config lookup is repeated *inside* the closure so
+    transient env changes (e.g. Hermes restart) are picked up.
+    """
+    from totalreclaw.agent.llm_client import detect_llm_config, chat_completion
+
+    async def complete(prompt: str) -> Optional[str]:
+        config = _read_hermes_llm_config() or detect_llm_config()
+        if not config:
+            logger.warning(
+                "smart_import: no LLM config (checked Hermes config + env vars); "
+                "profile/triage passes will fall back to blind extraction",
+            )
+            return None
+        # Empty system prompt — the smart-import prompts built by
+        # totalreclaw_core are self-contained (see smart_import.rs:178+).
+        return await chat_completion(config, "", prompt)
+
+    return complete
 
 
 async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
@@ -601,7 +647,11 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
             ImportState, write_import_state, read_import_state, is_import_stale,
         )
 
-        engine = ImportEngine(client=client, llm_extract=_make_extractor(state))
+        engine = ImportEngine(
+            client=client,
+            llm_extract=_make_extractor(state),
+            llm_completion=_make_llm_completion(state),
+        )
 
         if dry_run:
             estimate = engine.estimate(source=source, file_path=file_path, content=content)
@@ -761,7 +811,11 @@ async def import_batch(args: dict, state: "PluginState", **kwargs) -> str:
     try:
         from totalreclaw.import_engine import ImportEngine
 
-        engine = ImportEngine(client=client, llm_extract=_make_extractor(state))
+        engine = ImportEngine(
+            client=client,
+            llm_extract=_make_extractor(state),
+            llm_completion=_make_llm_completion(state),
+        )
         result = await engine.process_batch(
             source=source,
             file_path=file_path,

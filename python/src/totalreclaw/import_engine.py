@@ -41,6 +41,11 @@ from .import_adapters import (
     NormalizedFact,
     ConversationChunk,
 )
+from ._smart_import import (
+    SmartImportContext,
+    is_chunk_skipped,
+    run_smart_import_pipeline,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,19 +81,58 @@ class ImportEngine:
         Async callable with signature::
 
             async (messages: list[dict], timestamp: str) -> list[dict]
+            async (messages: list[dict], timestamp: str, *,
+                   enriched_system_prompt: str | None) -> list[dict]
 
         Each returned dict should have: ``text``, ``type``, ``importance`` (1-10).
         If not provided, conversation-based sources (ChatGPT, Claude, Gemini)
         will not be extractable -- only pre-structured sources (Mem0) will work.
+        Smart-import (imp-4) calls this callable with a profile-enriched
+        system prompt via the ``enriched_system_prompt`` keyword; callables
+        that don't accept the kwarg are still invoked (introspection
+        fallback) so existing integrations keep working.
+    llm_completion : callable, optional
+        Async callable with signature ``async (prompt: str) -> str | None``.
+        Used by the smart-import profile + triage passes to call the LLM
+        directly with a self-contained prompt. When omitted, smart-import
+        is disabled and the engine falls back to blind extraction (same
+        behavior as core wheels < 2.2.0).
+    enable_smart_import : bool, default True
+        Master switch for the smart-import pipeline. Set to ``False`` to
+        force blind extraction even when ``llm_completion`` is wired (used
+        by tests + as a safety hatch).
+    base_extraction_prompt : str, optional
+        Extraction system prompt to enrich. When omitted, the engine
+        resolves ``EXTRACTION_SYSTEM_PROMPT`` from
+        :mod:`totalreclaw.agent.extraction` lazily so callers don't have
+        to import it. Tests can inject a stub here to avoid the lazy
+        import.
     """
 
     def __init__(
         self,
         client,  # TotalReclaw instance
         llm_extract: Optional[Callable[..., Awaitable[list[dict]]]] = None,
+        *,
+        llm_completion: Optional[Callable[[str], Awaitable[Optional[str]]]] = None,
+        enable_smart_import: bool = True,
+        base_extraction_prompt: Optional[str] = None,
     ):
         self._client = client
         self._llm_extract = llm_extract
+        self._llm_completion = llm_completion
+        self._enable_smart_import = enable_smart_import
+        self._base_extraction_prompt = base_extraction_prompt
+        #: Cached smart-import context — built once per engine instance on
+        #: the first ``process_batch`` call with chunk-based content. None
+        #: until the pipeline has run; ``_smart_import_attempted`` is the
+        #: sentinel that distinguishes "not yet tried" from "tried, fell
+        #: back" (the latter caches a None so we don't retry per batch).
+        self._smart_ctx: Optional[SmartImportContext] = None
+        self._smart_import_attempted: bool = False
+        #: Cached introspection of whether ``llm_extract`` accepts the
+        #: ``enriched_system_prompt`` kwarg. Computed on first call.
+        self._llm_extract_accepts_enriched: Optional[bool] = None
 
     # ── Estimate ─────────────────────────────────────────────────────────
 
@@ -239,6 +283,14 @@ class ImportEngine:
                 duration_ms=_now_ms() - start_ms,
             )
 
+        # Smart-import (imp-4): build profile + triage decisions from the
+        # FULL chunks list (not just this batch slice) so context spans the
+        # whole file. Runs once per ImportEngine instance and is cached for
+        # later batches. Falls back gracefully when llm_completion is None,
+        # core lacks bindings, or any step fails.
+        smart_ctx = await self._maybe_run_smart_import(parsed.chunks)
+        chunks_skipped = 0
+
         facts_extracted = 0
         errors: list[str] = []
         chunks_with_no_facts = 0
@@ -249,13 +301,37 @@ class ImportEngine:
         # subsequent store phase can chunk across chunks into Gnosis-batched
         # UserOps (spec §5). Per-chunk granularity is preserved for extraction
         # errors and "no facts produced" warnings.
+        extracted_chunk_count = 0
         for i, chunk in enumerate(batch):
-            # Rate-limit: add delay between LLM calls (skip before the first one)
-            if i > 0:
+            global_index = offset + i
+
+            # Smart-import: skip chunks classified as SKIP by triage. We
+            # still count them toward chunks_processed (matches plugin
+            # behavior in handleBatchImport at index.ts:2773-2778) but they
+            # never reach the LLM extractor.
+            if smart_ctx is not None:
+                skipped, reason = is_chunk_skipped(global_index, smart_ctx.decisions)
+                if skipped:
+                    logger.info(
+                        "import: skipping chunk %d/%d: '%s' (%s)",
+                        global_index + 1, total_chunks, chunk.title, reason,
+                    )
+                    chunks_skipped += 1
+                    continue
+
+            # Rate-limit: add delay between LLM calls (skip before the first
+            # actually-extracted call so triaged-out chunks don't waste time).
+            if extracted_chunk_count > 0:
                 await asyncio.sleep(INTER_CHUNK_DELAY)
+            extracted_chunk_count += 1
 
             try:
-                extracted = await self._extract_from_chunk(chunk)
+                extracted = await self._extract_from_chunk(
+                    chunk,
+                    enriched_system_prompt=(
+                        smart_ctx.enriched_system_prompt if smart_ctx else None
+                    ),
+                )
                 if not extracted:
                     chunks_with_no_facts += 1
                 facts_extracted += len(extracted)
@@ -273,17 +349,32 @@ class ImportEngine:
         if store_errors:
             errors.extend(store_errors)
 
-        # Surface extraction problems as warnings so the user gets feedback
+        # Surface extraction problems as warnings so the user gets feedback.
+        # Triaged-out chunks aren't "0-fact failures" so we subtract
+        # chunks_skipped from the denominator before deciding whether to
+        # raise the "all chunks produced 0 facts" alarm (otherwise a clean
+        # all-SKIP batch would look like a silent LLM failure).
+        attempted = chunks_processed - chunks_skipped
         if extraction_failures > 0:
             errors.insert(0, f"{extraction_failures} chunk(s) failed during LLM extraction")
-        if chunks_with_no_facts > 0 and facts_extracted == 0:
+        if attempted > 0 and chunks_with_no_facts >= attempted and facts_extracted == 0:
             errors.insert(0,
-                f"All {chunks_processed} chunks produced 0 facts. "
+                f"All {attempted} extracted chunks produced 0 facts. "
                 "This usually means LLM extraction calls failed (timeout or rate limit). "
                 "Check logs for details or retry the import."
             )
         elif chunks_with_no_facts > 0:
-            errors.append(f"{chunks_with_no_facts}/{chunks_processed} chunks produced 0 facts (possible LLM failures)")
+            errors.append(
+                f"{chunks_with_no_facts}/{attempted} chunks produced 0 facts (possible LLM failures)"
+            )
+
+        smart_import_summary = None
+        if smart_ctx is not None:
+            smart_import_summary = {
+                "extract_count": smart_ctx.extract_count,
+                "skip_count": smart_ctx.skip_count,
+                "profile_duration_ms": smart_ctx.duration_ms,
+            }
 
         return BatchImportResult(
             success=facts_stored > 0 or (not errors and chunks_with_no_facts == 0),
@@ -297,6 +388,8 @@ class ImportEngine:
             is_complete=is_complete,
             errors=errors,
             duration_ms=_now_ms() - start_ms,
+            chunks_skipped=chunks_skipped,
+            smart_import=smart_import_summary,
         )
 
     # ── Internal: Fact Batch (pre-structured sources) ────────────────────
@@ -359,11 +452,23 @@ class ImportEngine:
 
     # ── Internal Helpers ─────────────────────────────────────────────────
 
-    async def _extract_from_chunk(self, chunk: ConversationChunk) -> list[dict]:
+    async def _extract_from_chunk(
+        self,
+        chunk: ConversationChunk,
+        enriched_system_prompt: Optional[str] = None,
+    ) -> list[dict]:
         """Call the llm_extract callable to extract facts from a conversation chunk.
 
         Converts the chunk's messages to the format expected by the extractor:
         [{"role": "user"|"assistant", "content": "..."}]
+
+        When ``enriched_system_prompt`` is provided AND the configured
+        ``llm_extract`` callable accepts the ``enriched_system_prompt``
+        kwarg, the prompt is forwarded so the LLM extraction uses the
+        smart-import profile context (matches the plugin's call shape in
+        ``extractFacts(messages, 'full', existing, enrichedSystemPrompt)``).
+        Otherwise the kwarg is silently dropped so older callables keep
+        working unchanged.
         """
         # Normalize message format (adapters use 'text', extractors use 'content')
         messages = [
@@ -372,7 +477,12 @@ class ImportEngine:
         ]
 
         timestamp = chunk.timestamp or ""
-        extracted = await self._llm_extract(messages, timestamp)
+        if enriched_system_prompt and self._extractor_accepts_enriched_kwarg():
+            extracted = await self._llm_extract(
+                messages, timestamp, enriched_system_prompt=enriched_system_prompt,
+            )
+        else:
+            extracted = await self._llm_extract(messages, timestamp)
 
         # Validate and normalize extracted facts
         valid: list[dict] = []
@@ -405,6 +515,85 @@ class ImportEngine:
             })
 
         return valid
+
+    # ── Smart-import helpers (imp-4) ────────────────────────────────────
+
+    def _extractor_accepts_enriched_kwarg(self) -> bool:
+        """Introspect ``self._llm_extract`` to detect ``enriched_system_prompt``.
+
+        Cached on the engine instance so we pay the ``inspect`` cost once.
+        Callables defined as ``async def fn(messages, timestamp, **kwargs)``
+        also count — ``**kwargs`` swallows arbitrary kwargs, so we should
+        forward in that case too.
+        """
+        if self._llm_extract_accepts_enriched is not None:
+            return self._llm_extract_accepts_enriched
+
+        accepts = False
+        try:
+            import inspect
+
+            sig = inspect.signature(self._llm_extract)
+            for param in sig.parameters.values():
+                if param.name == "enriched_system_prompt":
+                    accepts = True
+                    break
+                if param.kind is inspect.Parameter.VAR_KEYWORD:
+                    accepts = True
+                    break
+        except (TypeError, ValueError):
+            # Builtins / C-level callables / partials without a signature.
+            # Safe default is "doesn't accept" so we keep the 2-arg shape.
+            accepts = False
+
+        self._llm_extract_accepts_enriched = accepts
+        return accepts
+
+    async def _maybe_run_smart_import(
+        self,
+        chunks: list[ConversationChunk],
+    ) -> Optional[SmartImportContext]:
+        """Build (or return cached) smart-import context for the current import.
+
+        Runs once per ``ImportEngine`` instance. Subsequent batches reuse
+        the cached context — a small optimisation over the plugin which
+        rebuilds the profile on every batch call (the plugin keeps engine
+        lifecycle short; in Hermes the engine survives the full background
+        import task so caching is correct).
+        """
+        if self._smart_import_attempted:
+            return self._smart_ctx
+        self._smart_import_attempted = True
+
+        if not self._enable_smart_import:
+            logger.info("smart_import: disabled via enable_smart_import=False")
+            return None
+
+        if self._llm_completion is None:
+            return None
+
+        base_prompt = self._base_extraction_prompt
+        if base_prompt is None:
+            # Lazy import — avoids forcing the agent.extraction module load
+            # path on callers that don't use smart-import (e.g. Mem0-only
+            # fact imports, tests with a stub base_extraction_prompt).
+            try:
+                from totalreclaw.agent.extraction import EXTRACTION_SYSTEM_PROMPT
+                base_prompt = EXTRACTION_SYSTEM_PROMPT
+            except Exception as e:  # noqa: BLE001
+                logger.info(
+                    "smart_import: could not resolve EXTRACTION_SYSTEM_PROMPT (%s); "
+                    "falling back to blind extraction", e,
+                )
+                return None
+
+        self._smart_ctx = await run_smart_import_pipeline(
+            chunks=chunks,
+            llm_completion=self._llm_completion,
+            base_extraction_prompt=base_prompt,
+            logger_override=logger,
+        )
+        return self._smart_ctx
 
     @staticmethod
     def _prepare_fact_payload(fact: dict) -> dict:
