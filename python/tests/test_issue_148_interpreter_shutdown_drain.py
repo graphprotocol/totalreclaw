@@ -208,6 +208,12 @@ class _FakeState:
     def set_quota_warning(self, w: str):
         self.quota_warning = w
 
+    # memq-3 — ``hooks.on_session_start`` now calls ``state.start_session()``
+    # to mint a fresh UUIDv7 per session. The fake just returns a fixed id;
+    # tests don't depend on its value.
+    def start_session(self) -> str:
+        return "fake-session-id"
+
 
 def test_auto_extract_catches_recall_shutdown_and_enqueues(pending_path):
     from totalreclaw.agent.lifecycle import auto_extract

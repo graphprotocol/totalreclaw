@@ -79,6 +79,28 @@ _warn_removed_env_vars_once()
 # ---------------------------------------------------------------------------
 
 
+def _uuid7() -> str:
+    """Generate a UUIDv7 (RFC 9562) — 48-bit ms timestamp + random tail.
+
+    Time-ordered + k-sortable. Stdlib ``uuid.uuid7`` lands in CPython
+    3.14; this package's floor is 3.11, so the implementation is
+    inlined here. Format: ``xxxxxxxx-xxxx-7xxx-Yxxx-xxxxxxxxxxxx`` with
+    version nibble ``7`` and variant nibble in ``{8,9,a,b}``.
+    """
+    ts_ms = int(time.time() * 1000) & 0xFFFFFFFFFFFF
+    rand_a = int.from_bytes(os.urandom(2), "big") & 0x0FFF
+    rand_b = int.from_bytes(os.urandom(8), "big") & 0x3FFFFFFFFFFFFFFF
+    val = (
+        (ts_ms << 80)
+        | (0x7 << 76)
+        | (rand_a << 64)
+        | (0b10 << 62)
+        | rand_b
+    )
+    h = f"{val:032x}"
+    return f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
+
+
 def _extract_mnemonic_from_creds(creds: dict) -> str:
     """Pull a plausible mnemonic out of a parsed credentials.json blob.
 
@@ -130,6 +152,7 @@ class AgentState:
         self._min_importance = DEFAULT_MIN_IMPORTANCE
         self._quota_warning: Optional[str] = None
         self._server_url = server_url
+        self._session_id: Optional[str] = None
 
         # Apply env var overrides (highest priority)
         self._apply_env_overrides()
@@ -262,6 +285,32 @@ class AgentState:
     def get_client(self):
         """Return the TotalReclaw client, or None if not configured."""
         return self._client
+
+    # Session id (memq-3)
+    #
+    # In-memory only — never persisted to disk per the memq spec
+    # (encrypted-blob-only). Populated on session start by the hermes
+    # ``on_session_start`` hook, cleared on ``on_session_finalize``.
+    # Consumers (extraction → Crystal → debrief) tag emissions with
+    # this ID so all artefacts from one Hermes session share a key.
+    @property
+    def session_id(self) -> Optional[str]:
+        """Current session UUIDv7, or ``None`` when no session active."""
+        return self._session_id
+
+    def start_session(self) -> str:
+        """Generate + store a fresh UUIDv7 for the current session.
+
+        Returns the new id so callers (hooks, tests) can log it.
+        Repeated calls produce fresh, time-ordered ids — each call is
+        treated as the start of a new session.
+        """
+        self._session_id = _uuid7()
+        return self._session_id
+
+    def end_session(self) -> None:
+        """Clear the session id. Idempotent."""
+        self._session_id = None
 
     # Turn tracking
     def reset_turn_counter(self) -> None:

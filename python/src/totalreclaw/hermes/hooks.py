@@ -290,6 +290,11 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
     logger.debug("TotalReclaw on_session_start: %s", session_id)
 
     state.reset_turn_counter()
+    # memq-3 — assign a fresh UUIDv7 to AgentState so per-session
+    # artefacts (extraction → Crystal → debrief) can be keyed by it.
+    # Runs before the unconfigured-state early-return so log-only
+    # sessions still get an id.
+    state.start_session()
 
     # 2.3.7rc3 — reset the setup-nudge latch so each new session gets
     # one proactive nudge. Without this, an unconfigured user who
@@ -602,6 +607,10 @@ def on_session_finalize(state: "PluginState", **kwargs) -> None:
     debrief while the full conversation buffer is still intact.
     """
     if not state.is_configured():
+        # memq-3 — still clear the session id we set in on_session_start
+        # for unconfigured sessions so the invariant "session_id is None
+        # outside an active session" holds in every code path.
+        state.end_session()
         return
 
     try:
@@ -618,6 +627,9 @@ def on_session_finalize(state: "PluginState", **kwargs) -> None:
             logger.warning("TotalReclaw on_session_finalize debrief failed: %s", e)
     finally:
         state.clear_messages()
+        # memq-3 — clear session id alongside the message buffer so the
+        # next on_session_start gets a fresh id.
+        state.end_session()
 
 
 def on_session_reset(state: "PluginState", **kwargs) -> None:

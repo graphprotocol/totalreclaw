@@ -208,6 +208,11 @@ class _FakeState:
     def get_cached_billing(self):
         return None
 
+    # memq-3 — ``hooks.on_session_start`` now calls ``state.start_session()``
+    # to mint a fresh UUIDv7 per session. Tests don't depend on the id.
+    def start_session(self) -> str:
+        return "fake-session-id"
+
 
 def test_owner_addresses_returns_both_when_sa_set():
     eoa = "0xc8d4183100000000000000000000000000000000"
