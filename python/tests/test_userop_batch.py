@@ -103,6 +103,60 @@ class TestBatchCalldataFixtureParity:
         assert required.issubset(BATCH_FIXTURE.keys())
 
 
+class TestSharedParityFixture:
+    """Cross-language parity against the shared fixture used by the TS
+    sibling at ``tests/parity/userop-batch-parity.test.ts``.
+
+    Both languages load ``tests/parity/fixtures/userop-batch-v1.json``
+    and assert byte-identical ``executeBatch`` calldata for the same
+    15-fact payload set. Both tests passing CI is the cross-client
+    byte-identity guarantee (TS plugin / Python client produce the same
+    on-chain UserOp for the same logical batch).
+
+    Source-of-truth encoder for the fixture:
+    ``rust/totalreclaw-core::userop::encode_batch_call``. Regenerate via
+    ``python tests/parity/fixtures/generate-userop-batch-fixture.py``.
+    """
+
+    _SHARED_FIXTURE_PATH = (
+        Path(__file__).resolve().parents[2]
+        / "tests"
+        / "parity"
+        / "fixtures"
+        / "userop-batch-v1.json"
+    )
+
+    @pytest.fixture(scope="class")
+    def shared_fixture(self) -> dict:
+        with self._SHARED_FIXTURE_PATH.open() as f:
+            return json.load(f)
+
+    def test_python_byte_matches_shared_fixture(
+        self, shared_fixture: dict
+    ) -> None:
+        payloads = [bytes.fromhex(h) for h in shared_fixture["payloads_hex"]]
+        calldata_hex = encode_execute_batch_calldata_for_data_edge(payloads)
+        assert calldata_hex.startswith("0x")
+        assert calldata_hex[2:] == shared_fixture["expected_calldata_hex"], (
+            "Python batch calldata diverges from the shared cross-language "
+            "fixture. If the TS sibling also fails in lockstep, the Rust "
+            "core ABI changed (regenerate the fixture). If only this side "
+            "fails, the Python encoder has drifted from the Rust core."
+        )
+        assert (
+            len(calldata_hex[2:]) // 2
+            == shared_fixture["expected_calldata_bytes"]
+        )
+
+    def test_shared_fixture_uses_executeBatch_selector(
+        self, shared_fixture: dict
+    ) -> None:
+        assert shared_fixture["expected_calldata_hex"].startswith("47e1da2a")
+        assert (
+            shared_fixture["meta"]["selector_executeBatch"] == "0x47e1da2a"
+        )
+
+
 class TestBatchVsSingleParity:
     """A batch of 1 must be byte-identical to the single-fact path.
 

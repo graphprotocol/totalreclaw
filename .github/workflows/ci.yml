@@ -196,6 +196,28 @@ jobs:
           pip install -e ".[dev]"
           python -m pytest tests/ -v --ignore=tests/test_staging_integration.py --ignore=tests/cross_client_e2e.py --ignore=tests/test_cross_client.py -x
 
+  cross-language-parity:
+    name: Cross-Language Parity Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'v0.14.0'
+      - name: Build @totalreclaw/core (WASM)
+        run: |
+          cd rust/totalreclaw-core
+          wasm-pack build --target nodejs --out-dir pkg --features wasm
+          node -e "const p=require('./pkg/package.json'); p.name='@totalreclaw/core'; require('fs').writeFileSync('./pkg/package.json', JSON.stringify(p,null,2)+'\n')"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Install parity-test deps
+        run: cd tests/parity && npm install --no-audit --no-fund
+      - name: Cross-language executeBatch calldata parity (TS/WASM side)
+        run: cd tests/parity && npx tsx userop-batch-parity.test.ts
+
   # NOTE: Relay unit tests run in the private totalreclaw-relay repo CI.
   # This job runs the E2E smoke test against a real relay + PostgreSQL
   # using Docker Compose. Requires access to totalreclaw-relay repo.
