@@ -33,9 +33,6 @@ interface IAccountWithOwner {
  * - replay protection via monotonic per-(account, signer) nonce
  *
  * STILL PENDING (separate work-leafs)
- * - cred-6: `executeBatch` per-inner-call scope validation. Stage 2 SAFE-defaults
- *           to SIG_VALIDATION_FAILED on any executeBatch callData so batched
- *           UserOps cannot bypass scope until cred-6 lands.
  * - cred-7: Pimlico CREATE2 cross-chain deploy + kernel v3 wiring.
  * - cred-8: subgraph indexing of SessionKeyInstalled / SessionKeyRevoked
  *           (out of scope for the validator itself).
@@ -48,9 +45,10 @@ interface IAccountWithOwner {
  *      Grants are valid until explicit revoke (PRD-01 §9 Q2).
  *   3. `valueMax` is enforced to be exactly 0 on the inner `execute` call —
  *      session keys cannot move ETH from the Smart Account.
- *   4. Per-inner-call scope validation under `executeBatch` ships in cred-6.
- *      Stage 2 rejects all executeBatch UserOps; this is intentional and
- *      documented in the cred spec (§4.2 "module-implementation note").
+ *   4. `executeBatch` per-inner-call scope validation (cred-6, spec §4.2):
+ *      every inner call is checked individually for `target` / `value == 0` /
+ *      selector membership. Validating only the outer selector or sampling
+ *      the first inner is insufficient. Empty batches are rejected.
  */
 contract SessionKeyModule is ISessionKeyModule {
     // -------------------------------------------------------------------------
@@ -348,8 +346,11 @@ contract SessionKeyModule is ISessionKeyModule {
         }
     }
 
-    /// @dev Single-call scope validation. Cred-6 wires the per-inner-call
-    ///      branch for executeBatch; stage 2 rejects all batches.
+    /// @dev Scope validation. `execute` checks the outer single call's
+    ///      `target` + `value`; `executeBatch` recurses into every inner call
+    ///      and verifies each one against the grant. Spec §4.2 cross-spec
+    ///      invariant requires per-inner validation — sampling first inner or
+    ///      validating only outer selector is insufficient.
     function _isCallDataInScope(
         bytes calldata callData,
         address grantTarget,
@@ -372,9 +373,34 @@ contract SessionKeyModule is ISessionKeyModule {
         }
 
         if (outerSel == EXECUTE_BATCH_SELECTOR) {
-            // STAGE 2 — cred-6 lands per-inner-call validation. Reject for
-            // now so batched UserOps cannot bypass scope until cred-6 ships.
-            return false;
+            // executeBatch(address[] targets, uint256[] values, bytes[] datas).
+            // 3 × 32-byte head offsets at minimum.
+            if (callData.length < 4 + 32 * 3) return false;
+            (
+                address[] memory targets,
+                uint256[] memory values,
+                bytes[] memory datas
+            ) = abi.decode(callData[4:], (address[], uint256[], bytes[]));
+
+            uint256 n = targets.length;
+            // Empty batches add no value and let a misconfigured client slip
+            // a no-op past validation — reject explicitly.
+            if (n == 0) return false;
+            if (values.length != n || datas.length != n) return false;
+
+            for (uint256 i = 0; i < n; i++) {
+                if (targets[i] != grantTarget) return false;
+                if (values[i] != 0) return false;
+                bytes memory inner = datas[i];
+                if (inner.length < 4) return false;
+                bytes4 innerSel;
+                // solhint-disable-next-line no-inline-assembly
+                assembly {
+                    innerSel := mload(add(inner, 0x20))
+                }
+                if (!_inSelectors(innerSel, allowedSelectors)) return false;
+            }
+            return true;
         }
 
         return false;

@@ -35,12 +35,12 @@ contract MockSmartAccount {
 
 /**
  * @title SessionKeyModuleTest
- * @notice Foundry tests for cred-5 stage 2 — real validator body.
- *         Per spec `docs/specs/cred/session-key-delegation.md` §6.1.
+ * @notice Foundry tests for cred-5 stage 2 (single-call validator) and cred-6
+ *         (per-inner-call executeBatch validation). Per spec
+ *         `docs/specs/cred/session-key-delegation.md` §6.1 + §4.2.
  *
- *         The vm.skip'd tests in stage 1 are now implemented. Tests that
- *         depend on later work-leafs (cred-6 batch validation, cred-7
- *         cross-chain deploy) remain skipped with a clarifying comment.
+ *         Tests that depend on cred-7 (cross-chain CREATE2 deploy) remain
+ *         skipped with a clarifying comment.
  */
 contract SessionKeyModuleTest is Test {
     SessionKeyModule internal module;
@@ -334,29 +334,120 @@ contract SessionKeyModuleTest is Test {
 
     // ============================================================
     // Spec §4.2 cross-spec invariant — per-inner-call validation
-    // under executeBatch. Lands in cred-6. Stage 2 SAFE-defaults
-    // to SIG_VALIDATION_FAILED for any executeBatch UserOp.
+    // under executeBatch (cred-6).
     // ============================================================
 
-    function test_executeBatch_rejected_until_cred6() public {
+    function test_session_key_accepts_batch_with_all_in_scope_inner_calls() public {
         _installGrant(1);
 
-        // Even with executeBatch in the grant's allowlist, stage 2 rejects.
-        bytes32 hash2 = keccak256("batch-attempt");
-        bytes memory ecdsaSig = _signWithKey(signerPriv, hash2);
-        bytes memory batchCallData = abi.encodePacked(EXECUTE_BATCH_SEL, hex"00");
-        PackedUserOperation memory op = _makePackedOp(batchCallData, ecdsaSig);
+        bytes[] memory inners = new bytes[](3);
+        inners[0] = abi.encodePacked(EXECUTE_SEL, hex"deadbeef");
+        inners[1] = abi.encodePacked(EXECUTE_SEL, hex"cafe");
+        inners[2] = abi.encodePacked(EXECUTE_BATCH_SEL, hex"01");
 
-        uint256 vd = account.callValidator(module, op, hash2);
-        assertEq(vd, 1, "stage 2 must reject all executeBatch - wait for cred-6");
+        bytes memory cd = _batchCallData(DATA_EDGE, inners);
+        bytes32 h = keccak256("batch-all-in-scope");
+        PackedUserOperation memory op = _makePackedOp(cd, _signWithKey(signerPriv, h));
+
+        uint256 vd = account.callValidator(module, op, h);
+        assertEq(vd, 0, "batch with all in-scope inner calls must SIG_VALIDATION_SUCCESS");
     }
 
     function test_session_key_rejects_batch_with_out_of_scope_inner_call() public {
-        vm.skip(true); // cred-6
+        _installGrant(1);
+
+        bytes4 badSel = bytes4(keccak256("transferOwnership(address)"));
+        bytes[] memory inners = new bytes[](3);
+        inners[0] = abi.encodePacked(EXECUTE_SEL, hex"deadbeef");
+        inners[1] = abi.encodePacked(badSel, hex"00"); // out-of-scope
+        inners[2] = abi.encodePacked(EXECUTE_SEL, hex"cafe");
+
+        bytes memory cd = _batchCallData(DATA_EDGE, inners);
+        bytes32 h = keccak256("batch-out-of-scope");
+        PackedUserOperation memory op = _makePackedOp(cd, _signWithKey(signerPriv, h));
+
+        uint256 vd = account.callValidator(module, op, h);
+        assertEq(vd, 1, "batch with any out-of-scope inner must SIG_VALIDATION_FAILED");
     }
 
-    function test_session_key_accepts_batch_with_all_in_scope_inner_calls() public {
-        vm.skip(true); // cred-6
+    function test_session_key_rejects_batch_with_wrong_target() public {
+        _installGrant(1);
+
+        address[] memory tgts = new address[](2);
+        tgts[0] = DATA_EDGE;
+        tgts[1] = address(0xBAD); // wrong target on second inner
+        uint256[] memory vals = new uint256[](2);
+        bytes[] memory inners = new bytes[](2);
+        inners[0] = abi.encodePacked(EXECUTE_SEL, hex"00");
+        inners[1] = abi.encodePacked(EXECUTE_SEL, hex"00");
+
+        bytes memory cd = abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(tgts, vals, inners));
+        bytes32 h = keccak256("batch-wrong-target");
+        PackedUserOperation memory op = _makePackedOp(cd, _signWithKey(signerPriv, h));
+
+        uint256 vd = account.callValidator(module, op, h);
+        assertEq(vd, 1, "batch with wrong target on any inner must SIG_VALIDATION_FAILED");
+    }
+
+    function test_session_key_rejects_batch_with_nonzero_inner_value() public {
+        _installGrant(1);
+
+        address[] memory tgts = new address[](2);
+        tgts[0] = DATA_EDGE;
+        tgts[1] = DATA_EDGE;
+        uint256[] memory vals = new uint256[](2);
+        vals[1] = 1 wei; // non-zero value on second inner
+        bytes[] memory inners = new bytes[](2);
+        inners[0] = abi.encodePacked(EXECUTE_SEL, hex"00");
+        inners[1] = abi.encodePacked(EXECUTE_SEL, hex"00");
+
+        bytes memory cd = abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(tgts, vals, inners));
+        bytes32 h = keccak256("batch-nonzero-value");
+        PackedUserOperation memory op = _makePackedOp(cd, _signWithKey(signerPriv, h));
+
+        uint256 vd = account.callValidator(module, op, h);
+        assertEq(vd, 1, "batch with non-zero inner value must SIG_VALIDATION_FAILED");
+    }
+
+    function test_session_key_rejects_empty_batch() public {
+        _installGrant(1);
+
+        bytes[] memory inners = new bytes[](0);
+        bytes memory cd = _batchCallData(DATA_EDGE, inners);
+        bytes32 h = keccak256("batch-empty");
+        PackedUserOperation memory op = _makePackedOp(cd, _signWithKey(signerPriv, h));
+
+        uint256 vd = account.callValidator(module, op, h);
+        assertEq(vd, 1, "empty batch must SIG_VALIDATION_FAILED");
+    }
+
+    function test_session_key_rejects_batch_with_short_inner_data() public {
+        _installGrant(1);
+
+        bytes[] memory inners = new bytes[](2);
+        inners[0] = abi.encodePacked(EXECUTE_SEL, hex"00");
+        inners[1] = hex"abcd"; // 2 bytes — no selector
+        bytes memory cd = _batchCallData(DATA_EDGE, inners);
+        bytes32 h = keccak256("batch-short-inner");
+        PackedUserOperation memory op = _makePackedOp(cd, _signWithKey(signerPriv, h));
+
+        uint256 vd = account.callValidator(module, op, h);
+        assertEq(vd, 1, "batch with sub-4-byte inner data must SIG_VALIDATION_FAILED");
+    }
+
+    /// Forge-snapshot-style gas budget: per-inner-call overhead < 5K gas
+    /// (spec §6.1 acceptance criterion).
+    function test_batch_per_inner_gas_under_5k() public {
+        _installGrant(1);
+
+        uint256 small = _measureBatchValidationGas(2);
+        uint256 large = _measureBatchValidationGas(10);
+
+        // (large - small) covers 8 extra inner calls.
+        assertGt(large, small, "larger batch must use more gas");
+        uint256 perInner = (large - small) / 8;
+        emit log_named_uint("per-inner gas overhead", perInner);
+        assertLt(perInner, 5000, "per-inner-call overhead must be < 5K gas");
     }
 
     // ============================================================
@@ -459,6 +550,39 @@ contract SessionKeyModuleTest is Test {
         bytes memory data
     ) internal pure returns (bytes memory) {
         return abi.encodePacked(EXECUTE_SEL, abi.encode(tgt, value, data));
+    }
+
+    /// @dev Build `executeBatch(targets, values, datas)` calldata where every
+    ///      inner call shares `target` and value = 0.
+    function _batchCallData(
+        address target,
+        bytes[] memory datas
+    ) internal pure returns (bytes memory) {
+        uint256 n = datas.length;
+        address[] memory targets = new address[](n);
+        uint256[] memory values = new uint256[](n);
+        for (uint256 i = 0; i < n; i++) {
+            targets[i] = target;
+            values[i] = 0;
+        }
+        return abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+    }
+
+    /// @dev Measure validator gas for a batch of N in-scope inner calls.
+    function _measureBatchValidationGas(uint256 n) internal returns (uint256) {
+        bytes[] memory inners = new bytes[](n);
+        for (uint256 i = 0; i < n; i++) {
+            inners[i] = abi.encodePacked(EXECUTE_SEL, hex"deadbeef");
+        }
+        bytes memory cd = _batchCallData(DATA_EDGE, inners);
+        bytes32 h = keccak256(abi.encode("batch-gas", n));
+        PackedUserOperation memory op = _makePackedOp(cd, _signWithKey(signerPriv, h));
+
+        uint256 gStart = gasleft();
+        uint256 vd = account.callValidator(module, op, h);
+        uint256 gUsed = gStart - gasleft();
+        assertEq(vd, 0, "gas-budget probe: batch must succeed");
+        return gUsed;
     }
 
     function _makePackedOp(
