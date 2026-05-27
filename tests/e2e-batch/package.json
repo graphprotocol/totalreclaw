@@ -8,7 +8,8 @@
     "test:batch": "npx tsx batch-e2e.ts --test B",
     "test:tombstone": "npx tsx batch-e2e.ts --test D",
     "test:routing": "npx tsx batch-e2e.ts --test E",
-    "test:search": "npx tsx batch-e2e.ts --test F"
+    "test:search": "npx tsx batch-e2e.ts --test F",
+    "test:gnosis": "npx tsx gnosis-batch-cycle.test.ts"
   },
   "dependencies": {
     "@scure/bip39": "^1.5.4",
