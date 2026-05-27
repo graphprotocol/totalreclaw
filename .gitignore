@@ -128,3 +128,7 @@ subgraph/tests/e2e-results/*.txt
 # Package lockfiles use local file: refs that break CI
 client/package-lock.json
 mcp/package-lock.json
+
+# Foundry vendored libraries — install via 'forge install foundry-rs/forge-std' from contracts/
+contracts/lib/forge-std/
+contracts/out/

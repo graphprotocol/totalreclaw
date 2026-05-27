@@ -1,0 +1,33 @@
+# Foundry config for the TotalReclaw contracts package.
+#
+# Coexists with the existing Hardhat setup (`hardhat.config.ts` + the TS tests
+# under `test/`). Foundry is added 2026-05-27 for the cred-5 session-key
+# delegation work (per `docs/specs/cred/session-key-delegation.md` — the
+# Solidity-side spec requires Foundry-style unit tests + a `forge snapshot`
+# gas budget on the per-inner-call validator).
+#
+# Conventions:
+# - Solidity sources stay under `contracts/` (matches the Hardhat layout).
+# - Foundry tests go under `test/` alongside the existing `.test.ts` files,
+#   distinguished by the `.t.sol` extension. Hardhat ignores `.t.sol`;
+#   Foundry ignores `.test.ts`. Both build systems can coexist on this dir.
+# - External Solidity libs (ZeroDev kernel v3, account-abstraction v0.7
+#   contracts) land under `lib/` via `forge install` in cred-5 stage 2;
+#   `remappings.txt` keeps Hardhat oblivious to them.
+[profile.default]
+src = "contracts"
+test = "test"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.24"
+optimizer = true
+optimizer_runs = 200
+via_ir = false
+# Hardhat's TS tests are filename-matched on `.test.ts`. We exclude them
+# from Foundry's compilation set so `forge build` doesn't trip on TS files.
+extra_output = ["storageLayout"]
+
+[fmt]
+line_length = 100
+tab_width = 4
+bracket_spacing = false
