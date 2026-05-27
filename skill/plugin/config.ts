@@ -148,6 +148,42 @@ export const CONFIG = {
   serverUrl: (process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz').replace(/\/+$/, ''),
   selfHosted: process.env.TOTALRECLAW_SELF_HOSTED === 'true',
   credentialsPath: process.env.TOTALRECLAW_CREDENTIALS_PATH || path.join(home, '.totalreclaw', 'credentials.json'),
+  // cred-3 stage 1 — credential-provider abstraction.
+  //
+  // `file` (default) preserves the legacy behavior: read/write
+  // `credentialsPath` directly via fs-helpers.
+  //
+  // `external` instructs the plugin to load credentials from an
+  // out-of-process source at boot. Two transports are supported (mutually
+  // exclusive — JSON wins if both set):
+  //   1. `externalCredentialsJson` — raw JSON string of CredentialsFile,
+  //      injected at process start by the secret manager (Railway secrets,
+  //      Docker `--env-file`, K8s envFrom). Most ergonomic for cloud
+  //      deployments where the secret manager already exposes secrets as
+  //      env vars.
+  //   2. `externalCredentialsPath` — filesystem path to a JSON file the
+  //      secret manager mounts (Docker Compose `secrets:` block,
+  //      K8s secret volumeMount, tmpfs populated by an ops wrapper that
+  //      fetches from AWS Secrets Manager / Hetzner Vault before boot).
+  //
+  // `external` mode is read-only: write/clear are no-ops with a warning
+  // (the secret manager owns the source of truth — the plugin must not
+  // write back through this path).
+  //
+  // See `docs/guides/production-deployment.md` for the LUKS / dm-crypt
+  // pattern and managed-secret-store wiring examples.
+  credentialsProvider: (() => {
+    const v = (process.env.TOTALRECLAW_CREDENTIALS_PROVIDER ?? '').trim().toLowerCase();
+    return v === 'external' ? 'external' : 'file';
+  })() as 'file' | 'external',
+  externalCredentialsJson: (() => {
+    const v = (process.env.TOTALRECLAW_EXTERNAL_CREDENTIALS_JSON ?? '').trim();
+    return v.length > 0 ? v : null;
+  })() as string | null,
+  externalCredentialsPath: (() => {
+    const v = (process.env.TOTALRECLAW_EXTERNAL_CREDENTIALS_PATH ?? '').trim();
+    return v.length > 0 ? v : null;
+  })() as string | null,
   // 3.2.0 onboarding state file — separate from credentials.json so it
   // never contains secrets. Loaded on every plugin init + on every
   // before_tool_call gate check.
