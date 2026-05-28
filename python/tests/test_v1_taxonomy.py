@@ -535,3 +535,19 @@ def test_extraction_system_prompt_is_merged_topic() -> None:
     prompt = EXTRACTION_SYSTEM_PROMPT
     assert "PHASE 1" in prompt
     assert "PHASE 2" in prompt
+
+
+def test_issue_344_commitment_vs_episode_disambiguation() -> None:
+    """The TYPE section must disambiguate commitment (future) from episode (durative past).
+
+    Regression guard for QA-bug #344: glm-5-turbo on 2.4.4rc1 classified
+    "I've been building TotalReclaw for the past year" as ``commitment`` instead
+    of ``episode``. The prompt now spells out the tense test and lists this
+    exact phrase as a worked example.
+    """
+    prompt = EXTRACTION_SYSTEM_PROMPT
+    assert "FUTURE intent" in prompt
+    assert "NOT past-tense" in prompt or "NOT past tense" in prompt
+    assert "time anchor" in prompt
+    assert "durative" in prompt
+    assert "building TotalReclaw for the past year" in prompt

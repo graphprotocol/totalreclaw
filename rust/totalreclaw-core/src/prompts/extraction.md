@@ -36,9 +36,16 @@ TYPE (6 values)
 - claim: factual assertion (absorbs fact/context/decision; decisions populate reasoning field)
 - preference: likes/dislikes/tastes
 - directive: imperative rule ("always X", "never Y")
-- commitment: future intent ("will do X")
-- episode: notable event
+- commitment: FUTURE intent only ("will do X", "going to do X", "I plan to ship Y"). NOT past-tense ("I built X"), NOT ongoing/durative ("I've been doing X for Y", "I work on X"). Tense test: if the verb refers to work already done or currently in progress without an explicit future end-state, it is NOT a commitment.
+- episode: notable event with a time anchor — past ("I shipped X last quarter") or ongoing/durative ("I've been building X for the past year", "I have worked at Y for 5 years"). Use this for present-perfect-progressive statements about durable activity.
 - summary: derived synthesis (source must be derived|assistant) — do NOT emit for turn-extraction
+
+Type disambiguation examples (memorize these — they are the most-confused pairs):
+- "I've been building TotalReclaw for the past year" → episode (durative past, NOT commitment).
+- "I will ship TotalReclaw v2 next month" → commitment (explicit future).
+- "I work as a software engineer in Porto" → claim (factual assertion about user).
+- "I'm going to migrate to PostgreSQL" → commitment (explicit future intent).
+- "I migrated to PostgreSQL last year" → episode (past event with time anchor).
 
 ═══════════════════════════════════════════════════════════════
 SOURCE (provenance, CRITICAL)
