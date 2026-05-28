@@ -197,19 +197,22 @@ class AgentState:
             self.configure(mnemonic)
             return
 
-        # Check credentials file — accept both canonical ``mnemonic`` and
-        # legacy ``recovery_phrase`` spellings.
-        creds_path = Path.home() / ".totalreclaw" / "credentials.json"
-        if creds_path.exists():
-            try:
-                creds = json.loads(creds_path.read_text())
-            except Exception:
-                return
-            if not isinstance(creds, dict):
-                return
-            mnemonic = _extract_mnemonic_from_creds(creds)
-            if mnemonic:
-                self.configure(mnemonic)
+        # cred-3 stage 3 — route credential discovery through the
+        # credential-provider abstraction so Hermes can boot against an
+        # env-var (TOTALRECLAW_EXTERNAL_CREDENTIALS_JSON) or mounted file
+        # (TOTALRECLAW_EXTERNAL_CREDENTIALS_PATH) secret manager.
+        # TOTALRECLAW_CREDENTIALS_PROVIDER=external switches transports;
+        # default 'file' mode is byte-identical to the prior path.
+        # Accepts both canonical ``mnemonic`` and legacy ``recovery_phrase``
+        # spellings.
+        from totalreclaw.credential_provider import get_credential_provider
+
+        creds = get_credential_provider().load()
+        if creds is None:
+            return
+        mnemonic = _extract_mnemonic_from_creds(creds)
+        if mnemonic:
+            self.configure(mnemonic)
 
     def configure(self, mnemonic: str) -> None:
         """Configure the TotalReclaw client with a mnemonic.
@@ -233,32 +236,35 @@ class AgentState:
         relay_url = self._server_url or _default_relay_url()
         self._client = TotalReclaw(mnemonic=mnemonic, relay_url=relay_url)
 
-        # Save credentials — preserve legacy shape when present, write
-        # canonical shape otherwise.
-        creds_path = Path.home() / ".totalreclaw" / "credentials.json"
-        creds_path.parent.mkdir(parents=True, exist_ok=True)
+        # cred-3 stage 3 — route the credential write through the
+        # credential-provider abstraction. In default ``file`` mode this is
+        # byte-identical to the prior path. In ``external`` mode the
+        # provider is read-only: secret-manager owns the source of truth,
+        # so ``provider.save()`` returns ``False`` and we skip the write
+        # (the secret already lives in the manager — no point writing to
+        # disk and splitting the source of truth).
+        from totalreclaw.credential_provider import get_credential_provider
+
+        provider = get_credential_provider()
 
         should_preserve_legacy = False
-        if creds_path.exists():
-            try:
-                existing = json.loads(creds_path.read_text())
-                if (
-                    isinstance(existing, dict)
-                    and "mnemonic" not in existing
-                    and isinstance(existing.get("recovery_phrase"), str)
-                    and existing.get("recovery_phrase", "").strip() == mnemonic.strip()
-                ):
-                    should_preserve_legacy = True
-            except Exception:
-                pass
+        if provider.mode == "file":
+            existing = provider.load()
+            if (
+                isinstance(existing, dict)
+                and "mnemonic" not in existing
+                and isinstance(existing.get("recovery_phrase"), str)
+                and existing.get("recovery_phrase", "").strip() == mnemonic.strip()
+            ):
+                # Existing file has legacy ``recovery_phrase`` shape and
+                # matches the configured mnemonic — leave the file
+                # untouched (Bug #7 / Wave 2a write policy).
+                should_preserve_legacy = True
 
-        if should_preserve_legacy:
-            # Leave the file untouched. Same mnemonic, same content —
-            # no reason to rewrite and risk a partial update.
-            pass
-        else:
-            creds_path.write_text(json.dumps({"mnemonic": mnemonic}))
-            creds_path.chmod(0o600)
+        if not should_preserve_legacy:
+            # In ``external`` mode this is a no-op (returns False); the
+            # secret manager already holds the credentials.
+            provider.save({"mnemonic": mnemonic})
 
         # 2.3.2-rc.1 (#192): clear any stale eager-account-register
         # latch attached by ``totalreclaw.hermes.hooks._eager_account_
