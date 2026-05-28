@@ -26,6 +26,10 @@ via_ir = false
 # Hardhat's TS tests are filename-matched on `.test.ts`. We exclude them
 # from Foundry's compilation set so `forge build` doesn't trip on TS files.
 extra_output = ["storageLayout"]
+# cred-9 cross-language parity tests read the shared fixture at
+# `tests/parity/fixtures/session-key-grant-v1.json` (one level up from the
+# Foundry root). Grant read access to that path so `vm.readFile` works.
+fs_permissions = [{ access = "read", path = "../tests/parity/fixtures/" }]
 
 [fmt]
 line_length = 100

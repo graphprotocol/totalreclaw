@@ -360,6 +360,114 @@ contract SessionKeyModuleTest is Test {
     }
 
     // ============================================================
+    // cred-9 — cross-language parity fixture.
+    // Loads `tests/parity/fixtures/session-key-grant-v1.json` and asserts
+    // the Solidity-computed EIP-712 grant digest + ecrecover'd master EOA
+    // match the values the TS sibling (and the in-flight Python sibling
+    // cred-8 #333) commit to. Locks byte-equality across all three
+    // implementations of `_grantDigest`.
+    // ============================================================
+
+    function test_parity_fixture_matches_solidity_digest_and_recovers_master() public {
+        string memory json = vm.readFile(
+            "../tests/parity/fixtures/session-key-grant-v1.json"
+        );
+
+        SessionKeyModule.PermissionGrant memory g;
+        g.version = uint8(vm.parseJsonUint(json, ".grant.version"));
+        g.account = vm.parseJsonAddress(json, ".grant.account");
+        g.signer = vm.parseJsonAddress(json, ".grant.signer");
+        g.target = vm.parseJsonAddress(json, ".grant.scope.target");
+        // valueMax / nonce / issuedAt are emitted as JSON strings (uint256-safe
+        // across languages); parse via parseJsonString + parseUint.
+        g.valueMax = vm.parseUint(
+            vm.parseJsonString(json, ".grant.scope.valueMax")
+        );
+        g.nonce = vm.parseUint(vm.parseJsonString(json, ".grant.nonce"));
+        g.issuedAt = vm.parseUint(vm.parseJsonString(json, ".grant.issuedAt"));
+        g.chainId = vm.parseJsonUint(json, ".domain.chainId");
+        g.verifyingContract = vm.parseJsonAddress(json, ".domain.verifyingContract");
+        g.masterSignature = vm.parseJsonBytes(json, ".ecdsa_signature");
+
+        // bytes4[] — no native parseJsonBytes4Array; read each as bytes + cast.
+        bytes memory sel0 = vm.parseJsonBytes(json, ".grant.scope.selectors[0]");
+        bytes memory sel1 = vm.parseJsonBytes(json, ".grant.scope.selectors[1]");
+        g.selectors = new bytes4[](2);
+        g.selectors[0] = bytes4(sel0);
+        g.selectors[1] = bytes4(sel1);
+        assertEq(g.selectors[0], EXECUTE_SEL, "fixture selectors[0] is execute");
+        assertEq(g.selectors[1], EXECUTE_BATCH_SEL, "fixture selectors[1] is executeBatch");
+
+        bytes32 expectedDigest = vm.parseJsonBytes32(json, ".eip712_hash");
+        address expectedMaster = vm.parseJsonAddress(json, ".accounts.master_address");
+
+        // 1. Solidity-computed digest matches the fixture.
+        bytes32 computedDigest = _grantDigestExt(g);
+        assertEq(
+            computedDigest,
+            expectedDigest,
+            "Solidity _grantDigest matches fixture.eip712_hash"
+        );
+
+        // 2. ecrecover on fixture sig + digest recovers the master EOA. This
+        //    is the same primitive `SessionKeyModule.validateSessionKeyUserOp`
+        //    uses to authorise the lazy-install path.
+        (bytes32 r, bytes32 s, uint8 v) = _splitSig65(g.masterSignature);
+        address recovered = ecrecover(expectedDigest, v, r, s);
+        assertEq(recovered, expectedMaster, "ecrecover yields fixture master EOA");
+    }
+
+    function test_parity_fixture_install_blob_decodes_to_same_grant() public {
+        string memory json = vm.readFile(
+            "../tests/parity/fixtures/session-key-grant-v1.json"
+        );
+
+        bytes memory installSig = vm.parseJsonBytes(json, ".abi_encoded_install_sig");
+
+        // The fixture's install blob must decode through the same shape the
+        // module's `_decodeInstallSig` consumes: `(PermissionGrant, bytes)`.
+        (SessionKeyModule.PermissionGrant memory g, bytes memory sessionSig) = abi.decode(
+            installSig,
+            (SessionKeyModule.PermissionGrant, bytes)
+        );
+
+        // Sanity-spot-check critical fields against the fixture's grant block.
+        assertEq(uint256(g.version), vm.parseJsonUint(json, ".grant.version"));
+        assertEq(g.account, vm.parseJsonAddress(json, ".grant.account"));
+        assertEq(g.signer, vm.parseJsonAddress(json, ".grant.signer"));
+        assertEq(g.target, vm.parseJsonAddress(json, ".grant.scope.target"));
+        assertEq(g.chainId, vm.parseJsonUint(json, ".domain.chainId"));
+        assertEq(g.verifyingContract, vm.parseJsonAddress(json, ".domain.verifyingContract"));
+        assertEq(g.selectors.length, 2);
+        assertEq(g.selectors[0], EXECUTE_SEL);
+        assertEq(g.selectors[1], EXECUTE_BATCH_SEL);
+        assertEq(g.masterSignature.length, 65);
+
+        // The trailing session-side sig in the blob must recover to the
+        // fixture's session EOA (same ecrecover primitive the steady-state
+        // validator path uses).
+        bytes32 mockUserOpHash = vm.parseJsonBytes32(json, ".session.mock_user_op_hash");
+        address expectedSession = vm.parseJsonAddress(json, ".accounts.session_address");
+        (bytes32 r, bytes32 s, uint8 v) = _splitSig65(sessionSig);
+        address recoveredSession = ecrecover(mockUserOpHash, v, r, s);
+        assertEq(recoveredSession, expectedSession, "trailing session sig recovers to session EOA");
+    }
+
+    /// @dev Splits a 65-byte (r, s, v) signature. Mirrors
+    ///      `SessionKeyModule._recoverEcdsa` layout.
+    function _splitSig65(
+        bytes memory sig
+    ) internal pure returns (bytes32 r, bytes32 s, uint8 v) {
+        require(sig.length == 65, "sig length");
+        // solhint-disable-next-line no-inline-assembly
+        assembly {
+            r := mload(add(sig, 0x20))
+            s := mload(add(sig, 0x40))
+            v := byte(0, mload(add(sig, 0x60)))
+        }
+    }
+
+    // ============================================================
     // Helpers
     // ============================================================
 

@@ -5,13 +5,15 @@
   "type": "module",
   "description": "Parity tests: verify NanoClaw produces byte-identical outputs to the OpenClaw plugin",
   "scripts": {
-    "test": "npx tsx parity-test.ts"
+    "test": "npx tsx parity-test.ts",
+    "test:session-key-grant": "npx tsx session-key-grant-roundtrip.ts"
   },
   "dependencies": {
     "@noble/ciphers": "^2.1.1",
     "@noble/hashes": "^2.0.1",
     "@scure/bip39": "^2.0.1",
     "porter-stemmer": "^0.9.1",
-    "tsx": "^4.7.0"
+    "tsx": "^4.7.0",
+    "viem": "^2.21.0"
   }
 }
