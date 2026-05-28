@@ -22,6 +22,71 @@ _SMALL_IMPORT_THRESHOLD = 50
 _BG_TASKS: set[asyncio.Task] = set()
 
 
+# First-person agent-voice phrases. LLMs use these to declare their own
+# operational decisions. A genuine user-attributed directive about a tool
+# reads as imperative to YOU ("always use X") rather than first-person from
+# the agent ("I'll always use X").
+_AGENT_VOICE_PHRASES = (
+    "i'll always",
+    "i will always",
+    "i should always",
+    "i'll use",
+    "i will use",
+    "i'll prefer",
+    "i will prefer",
+    "i'll favor",
+    "i will favor",
+    "i'll favour",
+    "i will favour",
+    "i'll call",
+    "i will call",
+    "i'll route",
+    "i will route",
+    "i'll switch",
+    "i will switch",
+)
+
+# Internal totalreclaw tool names. End users do not refer to internal tool
+# names in natural speech — when the stored text mentions one alongside
+# first-person agent voice, the source is almost certainly the LLM's own
+# operational reasoning leaking into a remember() call.
+_INTERNAL_TOOL_NAMES = (
+    "totalreclaw_remember",
+    "totalreclaw_recall",
+    "totalreclaw_forget",
+    "totalreclaw_pin",
+    "totalreclaw_unpin",
+    "totalreclaw_status",
+    "totalreclaw_debrief",
+    "totalreclaw_pair",
+    "totalreclaw_import_from",
+    "totalreclaw_import_batch",
+    "totalreclaw_set_scope",
+    "totalreclaw_retype",
+    "totalreclaw_upgrade",
+    "totalreclaw_export",
+    "totalreclaw_report_qa_bug",
+)
+
+
+def _is_likely_agent_self_directive(text: str) -> bool:
+    """Block writes that read as the agent's own operational decisions.
+
+    Catches the issue #337 / QA F5 pattern: agent calls totalreclaw_remember
+    with text like "I'll always use totalreclaw_remember and totalreclaw_recall
+    over the built-in memory tool". SKILL.md 2.4.4 instructs not to do this
+    but glm-class models ignore the rule, so enforcement moves to the tool
+    call site. Match requires BOTH first-person agent voice AND an internal
+    tool-name mention — neither alone is sufficient.
+    """
+    if not text:
+        return False
+    lower = text.lower()
+    has_agent_voice = any(p in lower for p in _AGENT_VOICE_PHRASES)
+    has_tool_name = any(t in lower for t in _INTERNAL_TOOL_NAMES)
+    return has_agent_voice and has_tool_name
+
+
 async def remember(args: dict, state: "PluginState", **kwargs) -> str:
     """Store a memory in TotalReclaw (v1 taxonomy).
 
@@ -44,6 +109,22 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
     text = args.get("text", "").strip()
     if not text:
         return json.dumps({"error": "No text provided"})
+
+    if _is_likely_agent_self_directive(text):
+        logger.warning(
+            "totalreclaw_remember blocked agent self-directive: %r",
+            text[:200],
+        )
+        return json.dumps({
+            "stored": False,
+            "blocked": "agent_self_directive",
+            "reason": (
+                "Text reads as an agent operational decision (first-person "
+                "agent voice + internal totalreclaw_* tool-name reference). "
+                "The user did not explicitly say this; storing it would "
+                "pollute the vault with a fabricated user directive. Skip."
+            ),
+        })
 
     # Default importance to 8 for explicit remember (matches plugin).
     raw_importance = args.get("importance", 8)
