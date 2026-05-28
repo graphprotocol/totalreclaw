@@ -43,6 +43,10 @@ Speak only these lines, in order. Substitute the bracketed placeholders. Lines 3
 
 If `totalreclaw_*` tools are already bound (skip-install branch), the only lines emitted are `✓ TotalReclaw is already set up.` (skip-to-stop) OR lines 5+6 (skip-to-account-setup branch). 5–6 lines max for a fresh install. No filler.
 
+**Line 5 is the ENTIRE browser instruction.** Do NOT supplement it with a numbered bullet list ("1. Open the URL  2. Enter the PIN  3. Generate a phrase  4. Reply done"), a "Summary of what's done so far" recap, or a trailing "Waiting for you to complete the browser flow…" line. Line 5 already contains every step the user needs; restating it as bullets or recapping prior turns is a SKILL violation.
+
+**Line 6 is VERBATIM.** Quote it character-for-character on the `done` turn — do not paraphrase, do not substitute numbers, do not change "250 memories/month" to "50,000 writes" or any other figure, do not add a preamble ("All green. Here's the summary:", "Everything looks good!", "✓ Setup complete. Tier info:"). The exact prescribed text in line 6 is the only acceptable output for that turn.
+
 ### Errors break silence — but tightly
 
 If a step actually fails, surface a one-line error + the action being taken. Examples: `Install failed: externally-managed-environment. Retrying with --break-system-packages.` / `Plugin installed but tools didn't bind after restart. Asking for a second restart.` / `Account-setup URL returned 404. Generating a fresh URL + PIN.` Do NOT pre-narrate diagnostics that succeed. Do NOT echo command output unless the user asks.
@@ -70,6 +74,19 @@ When `totalreclaw_*` tools are missing post-install, you MUST issue `/restart` (
 - Describing what `/restart` does ("This will drain runs and reload…") — just send the slash command
 
 The correct pattern is to issue `/restart` immediately and emit user-visible line 3 (`Restarting Hermes to load the plugin…`) as the single chat line. Step 2 of the setup flow is explicit about this — re-read it if you find yourself drafting any of the phrases above.
+
+### Forbidden expansion patterns on line 5 + line 6 turns (deny-list — 2.4.4-rc.2, from auto-QA 2026-05-28 #340 #342)
+
+When emitting line 5 (pair URL + PIN) the prescribed text IS the complete browser instruction. When emitting line 6 (done confirmation) the prescribed text IS the complete done confirmation. The following expansion patterns appeared in the 2026-05-28 auto-QA transcript and MUST NOT appear in chat:
+
+- A numbered list re-stating browser steps after line 5: "1. Open the URL  2. Enter the PIN  3. Generate or paste a 12-word recovery phrase  4. Reply `done`". Line 5 already says all of this in one sentence — restating as bullets is forbidden.
+- A "Summary of what's done so far" / "What we did" / "What I did" / "Here's where we are" recap block before or after line 5. The user does not need a status reconciliation — the prescribed lines are the status.
+- A trailing "Waiting for you to complete the browser flow…" / "Standing by…" / "Let me know when you're done…" line after line 5. Line 5's `Reply \`done\` once it's sealed.` already encodes the wait state.
+- On the `done` turn: running `hermes doctor`, `totalreclaw_status`, `hermes plugins list`, or any other diagnostic / status command for verification. Step 8's prescribed verification is `test -s ~/.totalreclaw/credentials.json` (silent shell call, no output emitted). Do not invent verification commands and do not emit their output.
+- On the `done` turn: emitting a preamble before line 6 — "All green. Here's the summary:", "Everything looks good!", "✓ Setup complete. Tier info:", "Here are your tier details:". Line 6 IS the confirmation; preamble is duplicative.
+- On the `done` turn: paraphrasing line 6 with different numbers — "50,000 writes", "1 million memories", "unlimited tier", "free trial", or any tier figure not in the prescribed line 6 text. The figure is `250 memories/month` for free tier, full stop. If `totalreclaw_status` would return different numbers (e.g. staging shows higher limits), STILL emit line 6 verbatim — the prescribed text is canonical for the setup-flow confirmation.
+
+These patterns inflated the 2026-05-28 install transcript from the 5–6 line budget to ~12 lines. If you find yourself drafting any of the above, delete it and emit only the prescribed line.
 
 ## Setup flow
 
@@ -155,7 +172,7 @@ If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jum
 
    Call `totalreclaw_pair` silently (the account-setup tool — name kept for backward compatibility). Returns `{url, pin, expires_at_ms}`. Then emit user-visible line 5 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…", "Let me generate the URL…") — line 5 is the only thing the user needs to see.
 
-8. **Verify and confirm (silent until line 6).** After user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again silently and resend line 5 once. If present, emit user-visible line 6 (with the free-tier confirmation) and stop.
+8. **Verify and confirm (silent until line 6).** After user says `done`, re-run `test -s ~/.totalreclaw/credentials.json` — this is the ONLY verification. Do NOT run `hermes doctor`, `totalreclaw_status`, `hermes plugins list`, or any other diagnostic on this turn (see deny-list above). If credentials are missing, the PIN expired — call `totalreclaw_pair` again silently and resend line 5 once. If present, emit user-visible line 6 VERBATIM (do not paraphrase, do not substitute tier numbers, do not add preamble) and stop.
 
 ## Phrase safety (HARD — never break)
 
