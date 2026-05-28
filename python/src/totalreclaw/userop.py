@@ -27,12 +27,21 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import httpx
 from eth_hash.auto import keccak
 
 import totalreclaw_core
+
+from .grant import (
+    SessionKeyPermissionGrant,
+    encode_install_signature,
+    sign_digest,
+)
+
+if TYPE_CHECKING:
+    from .relay import RelayClient
 
 logger = logging.getLogger(__name__)
 
@@ -767,3 +776,173 @@ async def build_and_send_userop_batch(
                     await asyncio.sleep(2 ** attempt)
                     continue
                 raise
+
+
+# ---------------------------------------------------------------------------
+# Session-key signing (cred-8 — spec §4.3)
+# ---------------------------------------------------------------------------
+
+
+def sign_userop_with_session_key(
+    user_op: dict,
+    session_priv_key: bytes,
+    entry_point: str,
+    chain_id: int,
+    include_grant: bool = False,
+    grant: Optional[SessionKeyPermissionGrant] = None,
+) -> bytes:
+    """Build the v0.7 UserOp signature for a session-key-only signer.
+
+    Two output shapes, selected by ``include_grant``:
+
+    - ``include_grant=False`` (steady state): raw 65-byte ECDSA over the
+      EntryPoint UserOp hash. The session signer must already be installed
+      in the SessionKeyModule (lazy-installed by an earlier UserOp).
+    - ``include_grant=True`` (first UserOp post-pair): ``abi.encode(
+      PermissionGrant, ecdsaSig)`` matching ``SessionKeyModule._decodeInstallSig``.
+      The module installs the entry on first encounter and validates the
+      current call's scope.
+
+    Unlike :func:`sign_user_op_hash` (which applies the EIP-191
+    ``\\x19Ethereum Signed Message:\\n32`` prefix used by SimpleAccount's
+    legacy validator), this function signs the userOpHash raw — matching
+    ``SessionKeyModule._recoverEcdsa(userOpHash, sig)`` exactly.
+
+    Parameters
+    ----------
+    user_op : dict
+        Fully-built UserOp (sender, nonce, callData, gas limits, paymaster
+        fields). The ``signature`` field is ignored — pass any placeholder.
+    session_priv_key : bytes
+        32-byte secp256k1 private key of the session signer.
+    entry_point : str
+        ERC-4337 EntryPoint address used for the hash computation
+        (typically :data:`ENTRYPOINT_V07`).
+    chain_id : int
+        EVM chain id used for hash computation. MUST match the chain the
+        UserOp targets and (if ``include_grant=True``) ``grant.chain_id``.
+    include_grant : bool
+        Whether to wrap the ECDSA sig with the install-grant payload.
+    grant : SessionKeyPermissionGrant, optional
+        Required when ``include_grant=True``. MUST already carry a
+        ``master_signature`` (call :meth:`SessionKeyPermissionGrant.sign`
+        first). The module rejects mismatched ``signer`` / ``account`` /
+        ``chain_id`` / ``verifyingContract`` — caller is responsible for
+        consistency.
+
+    Returns
+    -------
+    bytes
+        Raw signature bytes ready to drop into ``user_op["signature"]``
+        (hex-encode with ``"0x" + sig.hex()`` if assigning to JSON).
+    """
+    if len(session_priv_key) != 32:
+        raise ValueError(
+            f"session_priv_key must be 32 bytes; got {len(session_priv_key)}"
+        )
+
+    user_op_hash = compute_user_op_hash(user_op, entry_point, chain_id)
+    ecdsa_sig = sign_digest(user_op_hash, session_priv_key)
+
+    if not include_grant:
+        return ecdsa_sig
+
+    if grant is None:
+        raise ValueError("grant is required when include_grant=True")
+    if grant.chain_id != chain_id:
+        raise ValueError(
+            f"grant.chain_id ({grant.chain_id}) != userOp chain_id ({chain_id})"
+        )
+    if len(grant.master_signature) != 65:
+        raise ValueError(
+            "grant.master_signature must be set before include_grant=True"
+        )
+    return encode_install_signature(grant, ecdsa_sig)
+
+
+# ---------------------------------------------------------------------------
+# Subgraph helper — confirm the lazy install landed before dropping the grant
+# ---------------------------------------------------------------------------
+
+
+# Standard TheGraph entity-collection name for the SessionKeyModule's
+# ``SessionKeyInstalled(address indexed account, address indexed signer,
+# uint256 nonce)`` event. The subgraph indexing of this event is open per
+# spec §11.Q4 — when the subgraph ships, this name is the contract.
+_SESSION_KEY_INSTALLED_QUERY: str = (
+    "query SessionKeyInstalled($account: Bytes!, $signer: Bytes!) {\n"
+    "  sessionKeyInstalleds(\n"
+    "    where: { account: $account, signer: $signer }\n"
+    "    first: 1\n"
+    "  ) {\n"
+    "    id\n"
+    "    nonce\n"
+    "  }\n"
+    "}"
+)
+
+
+# Chain id → subgraph routing key used by relay's ``query_subgraph(chain=...)``.
+_SUBGRAPH_CHAIN_KEY: dict[int, str] = {
+    84532: "base-sepolia",
+    100: "gnosis",
+}
+
+
+async def session_key_grant_was_installed(
+    smart_account: str,
+    signer: str,
+    chain_id: int,
+    relay_client: "RelayClient",
+) -> bool:
+    """Return True iff the SessionKeyModule has emitted
+    ``SessionKeyInstalled(smart_account, signer, *)`` on ``chain_id``.
+
+    Callers use this to switch ``sign_userop_with_session_key`` from
+    ``include_grant=True`` (lazy-install path, ~5K extra gas) to
+    ``include_grant=False`` (steady state) after the first write confirms.
+
+    Best-effort: if the relay's subgraph proxy is unreachable, the schema
+    isn't bumped yet (spec §11.Q4), or the query errors, returns False so
+    the caller keeps sending the install payload. The on-chain module is
+    idempotent on the install path — re-sending a grant the module has
+    already accepted just re-runs validation cheaply.
+
+    Parameters
+    ----------
+    smart_account : str
+        Smart Account (CREATE2) address.
+    signer : str
+        Session signer EOA address.
+    chain_id : int
+        Chain id (84532 = Base Sepolia, 100 = Gnosis).
+    relay_client : RelayClient
+        Active relay client used for the ``/v1/subgraph`` proxy call.
+    """
+    chain_key = _SUBGRAPH_CHAIN_KEY.get(chain_id)
+    if chain_key is None:
+        logger.debug(
+            "session_key_grant_was_installed: no subgraph mapping for chain %d",
+            chain_id,
+        )
+        return False
+    variables = {
+        "account": smart_account.lower(),
+        "signer": signer.lower(),
+    }
+    try:
+        result = await relay_client.query_subgraph(
+            _SESSION_KEY_INSTALLED_QUERY, variables, chain=chain_key
+        )
+    except Exception as e:
+        logger.debug(
+            "session_key_grant_was_installed: subgraph query failed (%s); "
+            "treating as not-installed",
+            e,
+        )
+        return False
+    data = result.get("data") if isinstance(result, dict) else None
+    if not data:
+        return False
+    entries = data.get("sessionKeyInstalleds") or []
+    return len(entries) > 0
