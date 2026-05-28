@@ -207,18 +207,36 @@ def test_skill_md_install_order_python_first_then_manifest():
     `hermes plugins install` line. The reverse order races a
     config-driven SIGUSR1 reload — the manifest registers, the reload
     fires, the gateway finds no implementations, binding fails.
+
+    NB (issue #341, 2026-05-28): Step 1's header may legitimately name
+    both commands as prose ("TWO commands are REQUIRED: pip install AND
+    hermes plugins install ...") to harden against the rc.2.4.4 skip
+    finding. That prose mention can precede the shell block, so this
+    test checks the manifest line that appears *after* the pip line —
+    i.e. the executable shell-block ordering, which is what the agent
+    actually runs.
     """
     body = _read(SKILL_MD)
-    pip_idx = body.find('"$HERMES_PYTHON" -m pip install --pre totalreclaw')
-    plugin_idx = body.find("hermes plugins install p-diogo/totalreclaw-hermes")
+    pip_line = '"$HERMES_PYTHON" -m pip install --pre totalreclaw'
+    manifest_line = "hermes plugins install p-diogo/totalreclaw-hermes"
+    pip_idx = body.find(pip_line)
     assert pip_idx > 0, (
         "SKILL.md must contain the canonical `$HERMES_PYTHON -m pip "
         "install --pre totalreclaw` line in Step 1b."
     )
+    # Find the manifest line that comes after the pip line — the shell-
+    # block pair the agent executes. A header-prose mention of the same
+    # command before the shell block is fine.
+    plugin_idx = body.find(manifest_line, pip_idx)
     assert plugin_idx > 0, (
-        "SKILL.md must contain the canonical `hermes plugins install "
-        "p-diogo/totalreclaw-hermes` line in Step 1b."
+        "SKILL.md must contain a `hermes plugins install "
+        "p-diogo/totalreclaw-hermes` line AFTER the pip install line in "
+        "Step 1b's shell block. If the manifest line only appears in "
+        "prose before the shell block, the agent has no executable "
+        "command to run."
     )
+    # Strict ordering check is now implicit (we searched from pip_idx
+    # forward) but keep the assertion for the explicit error message.
     assert pip_idx < plugin_idx, (
         "SKILL.md Step 1b ordering regressed: pip install must precede "
         "`hermes plugins install` so the Python package is on disk "

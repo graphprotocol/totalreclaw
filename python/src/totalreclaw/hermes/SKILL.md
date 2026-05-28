@@ -75,24 +75,18 @@ The correct pattern is to issue `/restart` immediately and emit user-visible lin
 
 If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jump to step 5. Otherwise run all steps in order. Numbered steps are internal procedure; user prose is only the lines listed in §"User-visible prose" above.
 
-1. **Install plugin + Python package (silent — emit user-visible line 1, then nothing until line 2).** Hermes 2026.4.16+ uses Git-based plugin discovery and a separate Python tool implementation. The Python package MUST go into the SAME Python environment that Hermes runs from (containerized venv, native venv, or system Python — whichever your install uses). Bare `pip install` may target the wrong Python on containerized deploys. Run all three substeps via your shell tool **without writing prose about them**:
+1. **Install plugin + Python package (silent — emit user-visible line 1, then nothing until line 2).** **TWO shell commands are REQUIRED in this step, in this order: (a) `pip install --pre totalreclaw` AND (b) `hermes plugins install p-diogo/totalreclaw-hermes --enable`. You MUST run both. Do NOT skip (b) on the grounds that `totalreclaw_*` tools auto-bind from the pip install alone — Hermes v0.10.0+ Python-plugin auto-discovery binds the tools, but without the manifest under `~/.hermes/plugins/` you lose `hermes plugins list` visibility, upgrade management, and the safe restart path; the install is half-done.** Hermes 2026.4.16+ uses Git-based plugin discovery and a separate Python tool implementation. The Python package MUST go into the SAME Python environment that Hermes runs from (containerized venv, native venv, or system Python — whichever your install uses). Bare `pip install` may target the wrong Python on containerized deploys. Run all three substeps via your shell tool **without writing prose about them**:
    ```
    # 1a. Detect the Hermes interpreter inside its own shell context — for
    # Docker, that means `docker exec -it <container> bash` first. Silent.
    HERMES_PYTHON="$(command -v python3)"
 
-   # 1b. Install both halves into the right env. Silent.
-   # Order matters: Python package FIRST, plugin manifest SECOND. Some
-   # Hermes deploys (and OpenClaw 2026.4.16+ on the parallel skill+plugin
-   # bundle — finding from today's plugin-side QA) trigger a
-   # gateway-config-driven SIGUSR1 reload as soon as the plugin manifest
-   # registers via `hermes plugins install ... --enable`. If the Python
-   # package isn't on disk by the time that reload fires, the gateway
-   # loads the manifest, finds no `totalreclaw_*` implementations,
-   # silently fails to bind, and the agent then loops on Step 2 trying
-   # to restart again. Installing the Python package FIRST guarantees
-   # the implementations are present before the manifest registers and
-   # any reload-trigger arrives. Do not invert this order.
+   # 1b. Install both halves into the right env (BOTH commands required —
+   # see step header). Order matters: pip install FIRST, plugin manifest
+   # SECOND, because some Hermes deploys trigger a SIGUSR1 reload as soon
+   # as the manifest registers; the Python implementations must be on
+   # disk before that reload fires or tools silently fail to bind. Do not
+   # invert. Do not skip the second command. Silent.
    "$HERMES_PYTHON" -m pip install --pre totalreclaw
    hermes plugins install p-diogo/totalreclaw-hermes --enable
 
