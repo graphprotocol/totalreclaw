@@ -137,7 +137,11 @@ def uninstall_sidecar(hermes_home: Optional[Path] = None) -> bool:
     return True
 
 
-_PROVIDER_LINE_RE = re.compile(r"^(\s*)provider\s*:\s*(\S+)\s*$", re.MULTILINE)
+# Trailing `[ \t]*$` (horizontal whitespace only) is load-bearing: `\s*$`
+# would let the engine consume the line-terminating `\n` (since `\s` matches
+# newlines and `$` matches end-of-string), so the replacement would smash the
+# value into the next top-level key. See test_issue_351_*.
+_PROVIDER_LINE_RE = re.compile(r"^(\s*)provider\s*:\s*(\S+)[ \t]*$", re.MULTILINE)
 _MEMORY_BLOCK_RE = re.compile(
     r"^(memory:\s*\n(?:[ \t]+.*\n?)*)",
     re.MULTILINE,

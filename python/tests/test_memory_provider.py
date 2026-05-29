@@ -538,6 +538,48 @@ class TestInstallMemoryProvider:
         assert "other: keep_me" in body
         assert "flag: true" in body
 
+    def test_issue_351_provider_last_in_block_preserves_yaml(self, tmp_path: Path):
+        # Pre-state: 'provider:' is the LAST line of the memory block and a
+        # top-level key (delegation:) follows on the next line. Pre-fix, the
+        # provider-line regex's trailing \s*$ consumed the line-terminating
+        # newline and the replacement smashed `delegation:` onto the same
+        # line as the new provider value, producing invalid YAML.
+        import yaml as _yaml
+        cfg = imp.config_path(tmp_path)
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(
+            "memory:\n"
+            "  memory_enabled: true\n"
+            "  provider: none\n"
+            "delegation:\n"
+            "  enabled: false\n",
+            encoding="utf-8",
+        )
+        imp.set_active_provider("totalreclaw", hermes_home=tmp_path)
+        body = cfg.read_text(encoding="utf-8")
+        assert "totalreclawdelegation" not in body
+        assert "provider: totalreclaw\ndelegation:" in body
+        parsed = _yaml.safe_load(body)
+        assert parsed["memory"]["provider"] == "totalreclaw"
+        assert parsed["memory"]["memory_enabled"] is True
+        assert "delegation" in parsed
+
+    def test_issue_351_provider_at_eof_preserves_yaml(self, tmp_path: Path):
+        import yaml as _yaml
+        cfg = imp.config_path(tmp_path)
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(
+            "other: keep_me\n"
+            "memory:\n"
+            "  provider: none\n",
+            encoding="utf-8",
+        )
+        imp.set_active_provider("totalreclaw", hermes_home=tmp_path)
+        body = cfg.read_text(encoding="utf-8")
+        parsed = _yaml.safe_load(body)
+        assert parsed["other"] == "keep_me"
+        assert parsed["memory"]["provider"] == "totalreclaw"
+
     def test_install_and_activate_combines_steps(self, tmp_path: Path):
         result = imp.install_and_activate(hermes_home=tmp_path, activate=True)
 
