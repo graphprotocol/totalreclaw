@@ -334,29 +334,177 @@ contract SessionKeyModuleTest is Test {
 
     // ============================================================
     // Spec §4.2 cross-spec invariant — per-inner-call validation
-    // under executeBatch. Lands in cred-6. Stage 2 SAFE-defaults
-    // to SIG_VALIDATION_FAILED for any executeBatch UserOp.
+    // under executeBatch (cred-6). Every inner is validated against
+    // grant.target, value==0, and selector ∈ grant.selectors.
     // ============================================================
 
-    function test_executeBatch_rejected_until_cred6() public {
+    function test_malformed_executeBatch_calldata_rejected() public {
         _installGrant(1);
 
-        // Even with executeBatch in the grant's allowlist, stage 2 rejects.
-        bytes32 hash2 = keccak256("batch-attempt");
+        // Outer selector is executeBatch (in the allowlist) but the payload
+        // is too short to abi.decode into (address[], uint256[], bytes[]).
+        // The validator's self-external try/catch must surface the decode
+        // revert as SIG_VALIDATION_FAILED, not bubble it up.
+        bytes32 hash2 = keccak256("malformed-batch");
         bytes memory ecdsaSig = _signWithKey(signerPriv, hash2);
         bytes memory batchCallData = abi.encodePacked(EXECUTE_BATCH_SEL, hex"00");
         PackedUserOperation memory op = _makePackedOp(batchCallData, ecdsaSig);
 
         uint256 vd = account.callValidator(module, op, hash2);
-        assertEq(vd, 1, "stage 2 must reject all executeBatch - wait for cred-6");
+        assertEq(vd, 1, "malformed executeBatch payload must SIG_VALIDATION_FAILED");
     }
 
     function test_session_key_rejects_batch_with_out_of_scope_inner_call() public {
-        vm.skip(true); // cred-6
+        _installGrant(1);
+
+        // 3-inner batch: first two in-scope, third targets a different
+        // address. Per spec §4.2 step 4 ("Return SIG_VALIDATION_FAILED on
+        // the first non-matching inner"), this rejects.
+        address[] memory targets = new address[](3);
+        uint256[] memory values = new uint256[](3);
+        bytes[] memory datas = new bytes[](3);
+
+        targets[0] = DATA_EDGE;
+        targets[1] = DATA_EDGE;
+        targets[2] = address(0xBADC0DE); // out-of-scope target
+        for (uint256 i = 0; i < 3; i++) {
+            values[i] = 0;
+            datas[i] = abi.encodePacked(EXECUTE_SEL, uint256(i)); // selector ∈ allowlist
+        }
+
+        bytes32 h = keccak256("out-of-scope-inner");
+        bytes memory sig = _signWithKey(signerPriv, h);
+        bytes memory cd = abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+        PackedUserOperation memory op = _makePackedOp(cd, sig);
+
+        uint256 vd = account.callValidator(module, op, h);
+        assertEq(vd, 1, "single out-of-scope inner must fail the whole batch");
     }
 
     function test_session_key_accepts_batch_with_all_in_scope_inner_calls() public {
-        vm.skip(true); // cred-6
+        _installGrant(1);
+
+        // 3-inner batch: every inner targets DATA_EDGE with value=0 and an
+        // allowed selector. Validator must return SIG_VALIDATION_SUCCESS.
+        bytes memory cd = _inScopeBatchCallData(3);
+
+        bytes32 h = keccak256("all-in-scope-3");
+        bytes memory sig = _signWithKey(signerPriv, h);
+        PackedUserOperation memory op = _makePackedOp(cd, sig);
+
+        uint256 vd = account.callValidator(module, op, h);
+        assertEq(vd, 0, "all-in-scope batch must SIG_VALIDATION_SUCCESS");
+    }
+
+    function test_session_key_rejects_batch_with_nonzero_value_inner() public {
+        _installGrant(1);
+
+        // Session keys cannot move ETH (spec §4.2 + invariant 3). Any
+        // values[i] != 0 → reject.
+        address[] memory targets = new address[](2);
+        uint256[] memory values = new uint256[](2);
+        bytes[] memory datas = new bytes[](2);
+        targets[0] = DATA_EDGE;
+        targets[1] = DATA_EDGE;
+        values[0] = 0;
+        values[1] = 1 wei;
+        datas[0] = abi.encodePacked(EXECUTE_SEL, uint256(0));
+        datas[1] = abi.encodePacked(EXECUTE_SEL, uint256(1));
+
+        bytes32 h = keccak256("nonzero-value-inner");
+        bytes memory sig = _signWithKey(signerPriv, h);
+        bytes memory cd = abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+        PackedUserOperation memory op = _makePackedOp(cd, sig);
+
+        uint256 vd = account.callValidator(module, op, h);
+        assertEq(vd, 1, "any nonzero value in batch must SIG_VALIDATION_FAILED");
+    }
+
+    function test_session_key_rejects_batch_with_out_of_scope_inner_selector() public {
+        // Install grant with ONLY execute in the allowlist (no executeBatch
+        // as inner selector). Then batch with an inner whose selector is
+        // not in the grant — reject.
+        bytes4[] memory onlyExec = new bytes4[](1);
+        onlyExec[0] = EXECUTE_BATCH_SEL; // outer must be in grant for the batch path to be reachable
+
+        SessionKeyModule.PermissionGrant memory grant = _buildGrant(
+            address(account),
+            signer,
+            DATA_EDGE,
+            onlyExec,
+            1
+        );
+        bytes32 installH = keccak256("install-batch-only");
+        // Install batch: outer = executeBatch (in grant), inner = executeBatch (in grant).
+        bytes memory installCd = _batchWithSingleInner(EXECUTE_BATCH_SEL);
+        bytes memory installSig = abi.encode(grant, _signWithKey(signerPriv, installH));
+        PackedUserOperation memory installOp = _makePackedOp(installCd, installSig);
+        assertEq(
+            account.callValidator(module, installOp, installH),
+            0,
+            "install must succeed with all-in-scope inner"
+        );
+
+        // Now build a batch whose inner uses EXECUTE_SEL — NOT in grant.
+        bytes memory cd = _batchWithSingleInner(EXECUTE_SEL);
+        bytes32 h = keccak256("inner-sel-bad");
+        bytes memory sig = _signWithKey(signerPriv, h);
+        PackedUserOperation memory op = _makePackedOp(cd, sig);
+
+        uint256 vd = account.callValidator(module, op, h);
+        assertEq(vd, 1, "inner selector not in grant must SIG_VALIDATION_FAILED");
+    }
+
+    function test_session_key_rejects_empty_batch() public {
+        _installGrant(1);
+
+        // Empty batch is defensively rejected — there is no positive
+        // proof of in-scope work being performed.
+        address[] memory targets = new address[](0);
+        uint256[] memory values = new uint256[](0);
+        bytes[] memory datas = new bytes[](0);
+
+        bytes32 h = keccak256("empty-batch");
+        bytes memory sig = _signWithKey(signerPriv, h);
+        bytes memory cd = abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+        PackedUserOperation memory op = _makePackedOp(cd, sig);
+
+        uint256 vd = account.callValidator(module, op, h);
+        assertEq(vd, 1, "empty executeBatch must SIG_VALIDATION_FAILED");
+    }
+
+    /// @dev Gas-budget assertion: per-inner-call validator overhead must be
+    ///      under the 5K-gas budget set by the cred-6 issue acceptance
+    ///      criteria. Compares the gas of a 2-inner batch and a 6-inner
+    ///      batch; the delta divided by 4 is the per-inner cost.
+    function test_session_key_batch_per_inner_gas_under_5k_budget() public {
+        _installGrant(1);
+
+        bytes memory cd2 = _inScopeBatchCallData(2);
+        bytes memory cd6 = _inScopeBatchCallData(6);
+
+        bytes32 h2 = keccak256("batch-gas-2");
+        bytes32 h6 = keccak256("batch-gas-6");
+        bytes memory sig2 = _signWithKey(signerPriv, h2);
+        bytes memory sig6 = _signWithKey(signerPriv, h6);
+
+        PackedUserOperation memory op2 = _makePackedOp(cd2, sig2);
+        PackedUserOperation memory op6 = _makePackedOp(cd6, sig6);
+
+        uint256 g0 = gasleft();
+        uint256 vd2 = account.callValidator(module, op2, h2);
+        uint256 gas2 = g0 - gasleft();
+        assertEq(vd2, 0, "2-inner in-scope batch must succeed");
+
+        uint256 g1 = gasleft();
+        uint256 vd6 = account.callValidator(module, op6, h6);
+        uint256 gas6 = g1 - gasleft();
+        assertEq(vd6, 0, "6-inner in-scope batch must succeed");
+
+        // (gas6 - gas2) isolates the cost of the 4 additional inner calls.
+        uint256 perInner = (gas6 - gas2) / 4;
+        emit log_named_uint("per-inner validator gas", perInner);
+        assertLt(perInner, 5000, "per-inner-call overhead must be under 5K gas");
     }
 
     // ============================================================
@@ -567,6 +715,33 @@ contract SessionKeyModuleTest is Test {
         bytes memory data
     ) internal pure returns (bytes memory) {
         return abi.encodePacked(EXECUTE_SEL, abi.encode(tgt, value, data));
+    }
+
+    /// @dev Build an `executeBatch(...)` call whose inners all target
+    ///      DATA_EDGE with value=0 and use EXECUTE_SEL as the inner selector
+    ///      (which is in the default `_twoSelectors()` grant allowlist).
+    function _inScopeBatchCallData(uint256 n) internal pure returns (bytes memory) {
+        address[] memory targets = new address[](n);
+        uint256[] memory values = new uint256[](n);
+        bytes[] memory datas = new bytes[](n);
+        for (uint256 i = 0; i < n; i++) {
+            targets[i] = DATA_EDGE;
+            values[i] = 0;
+            datas[i] = abi.encodePacked(EXECUTE_SEL, uint256(i));
+        }
+        return abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+    }
+
+    /// @dev Build a single-inner `executeBatch(...)` call with the given
+    ///      inner selector. Used to test inner-selector allowlist checks.
+    function _batchWithSingleInner(bytes4 innerSel) internal pure returns (bytes memory) {
+        address[] memory targets = new address[](1);
+        uint256[] memory values = new uint256[](1);
+        bytes[] memory datas = new bytes[](1);
+        targets[0] = DATA_EDGE;
+        values[0] = 0;
+        datas[0] = abi.encodePacked(innerSel, uint256(0));
+        return abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
     }
 
     function _makePackedOp(

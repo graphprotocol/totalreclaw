@@ -21,11 +21,12 @@ interface IAccountWithOwner {
 
 /**
  * @title SessionKeyModule
- * @notice cred-5 stage 2 — real validator body. Per
+ * @notice cred-5 stage 2 + cred-6 — real validator body with per-inner-call
+ *         executeBatch scope validation. Per
  *         `docs/specs/cred/session-key-delegation.md` §4.2.
  *
  * STAGES SHIPPED IN THIS FILE
- * - validateSessionKeyUserOp (single-call path; executeBatch defers to cred-6)
+ * - validateSessionKeyUserOp (single-call path AND executeBatch per-inner)
  * - revokeSessionKey (caller == account, idempotent)
  * - isSessionKeyActive / getSessionKeyGrant (read-side)
  * - lazy install on first UserOp via `abi.encode(PermissionGrant, ecdsaSig)`
@@ -33,9 +34,6 @@ interface IAccountWithOwner {
  * - replay protection via monotonic per-(account, signer) nonce
  *
  * STILL PENDING (separate work-leafs)
- * - cred-6: `executeBatch` per-inner-call scope validation. Stage 2 SAFE-defaults
- *           to SIG_VALIDATION_FAILED on any executeBatch callData so batched
- *           UserOps cannot bypass scope until cred-6 lands.
  * - cred-7: Pimlico CREATE2 cross-chain deploy + kernel v3 wiring.
  * - cred-8: subgraph indexing of SessionKeyInstalled / SessionKeyRevoked
  *           (out of scope for the validator itself).
@@ -48,9 +46,12 @@ interface IAccountWithOwner {
  *      Grants are valid until explicit revoke (PRD-01 §9 Q2).
  *   3. `valueMax` is enforced to be exactly 0 on the inner `execute` call —
  *      session keys cannot move ETH from the Smart Account.
- *   4. Per-inner-call scope validation under `executeBatch` ships in cred-6.
- *      Stage 2 rejects all executeBatch UserOps; this is intentional and
- *      documented in the cred spec (§4.2 "module-implementation note").
+ *   4. Per-inner-call scope validation under `executeBatch` (cred-6): every
+ *      inner call's target, value-zero, and selector are individually checked
+ *      against the grant; a single out-of-scope inner fails the whole batch.
+ *      No "outer-selector-passes" shortcut, no first-inner sampling, no
+ *      partial-execution. The same pattern MUST be applied to any future
+ *      call-aggregator (`multicall`, etc.) per spec §4.2.
  */
 contract SessionKeyModule is ISessionKeyModule {
     // -------------------------------------------------------------------------
@@ -348,13 +349,15 @@ contract SessionKeyModule is ISessionKeyModule {
         }
     }
 
-    /// @dev Single-call scope validation. Cred-6 wires the per-inner-call
-    ///      branch for executeBatch; stage 2 rejects all batches.
+    /// @dev Scope validation for both `execute` and `executeBatch` outer calls.
+    ///      Marked `view` (not `pure`) because the `executeBatch` branch uses
+    ///      a self-external try/catch around `abi.decode` so malformed batch
+    ///      payloads return false instead of reverting validateUserOp.
     function _isCallDataInScope(
         bytes calldata callData,
         address grantTarget,
         bytes4[] memory allowedSelectors
-    ) internal pure returns (bool) {
+    ) internal view returns (bool) {
         if (callData.length < 4) return false;
         bytes4 outerSel = bytes4(callData[:4]);
 
@@ -372,12 +375,73 @@ contract SessionKeyModule is ISessionKeyModule {
         }
 
         if (outerSel == EXECUTE_BATCH_SELECTOR) {
-            // STAGE 2 — cred-6 lands per-inner-call validation. Reject for
-            // now so batched UserOps cannot bypass scope until cred-6 ships.
-            return false;
+            // executeBatch(address[] targets, uint256[] values, bytes[] datas).
+            // Per spec §4.2 cross-spec invariant + #281 OQ-A: every inner call
+            // is individually validated. First non-match → false; no partial
+            // execution semantics.
+            try this._decodeExecuteBatch(callData[4:]) returns (
+                address[] memory targets,
+                uint256[] memory values,
+                bytes[] memory datas
+            ) {
+                return _isBatchInScope(targets, values, datas, grantTarget, allowedSelectors);
+            } catch {
+                return false;
+            }
         }
 
         return false;
+    }
+
+    /// @dev Public-but-only-self entry for the try/catch decode of the
+    ///      executeBatch payload. External so revert-on-malformed surfaces
+    ///      cleanly in the catch — mirrors the `_decodeInstallSig` pattern.
+    function _decodeExecuteBatch(
+        bytes calldata payload
+    )
+        external
+        pure
+        returns (address[] memory targets, uint256[] memory values, bytes[] memory datas)
+    {
+        (targets, values, datas) = abi.decode(payload, (address[], uint256[], bytes[]));
+    }
+
+    /// @dev Per-inner-call scope assertion. Reject on:
+    ///      - empty batch (no useful work; defensive — spec is silent but
+    ///        nothing else in the pipeline currently emits zero-inner batches)
+    ///      - mismatched array lengths (defensive — abi.decode does not check)
+    ///      - any inner with wrong target, non-zero value, missing selector,
+    ///        or selector not in the grant's allowlist
+    ///      Returns true only when EVERY inner passes.
+    function _isBatchInScope(
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory datas,
+        address grantTarget,
+        bytes4[] memory allowedSelectors
+    ) internal pure returns (bool) {
+        uint256 n = targets.length;
+        if (n == 0) return false;
+        if (values.length != n || datas.length != n) return false;
+
+        for (uint256 i = 0; i < n; i++) {
+            if (targets[i] != grantTarget) return false;
+            if (values[i] != 0) return false;
+
+            bytes memory inner = datas[i];
+            if (inner.length < 4) return false;
+
+            // First 4 bytes of `inner` — the in-memory layout is
+            // (length: 32 bytes)(data...), so mload at offset 0x20 yields
+            // a word whose top 4 bytes are the selector.
+            bytes4 innerSel;
+            // solhint-disable-next-line no-inline-assembly
+            assembly {
+                innerSel := mload(add(inner, 0x20))
+            }
+            if (!_inSelectors(innerSel, allowedSelectors)) return false;
+        }
+        return true;
     }
 
     function _inSelectors(bytes4 needle, bytes4[] memory hay) internal pure returns (bool) {
