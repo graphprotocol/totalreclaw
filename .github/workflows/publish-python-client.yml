@@ -77,6 +77,39 @@ jobs:
           print('\n'.join(new_text.splitlines()[:10]))
           PY
 
+      # Sync SKILL.md frontmatter `version:` field to the (post-mutation)
+      # pyproject.toml version. Issue #352: rc.2.4.4rc2 shipped with
+      # SKILL.md `version: 2.3.1rc10` because the field was hardcoded in
+      # source and the publish workflow only mutated pyproject.toml.
+      # Agents load SKILL.md from the installed package — a stale version
+      # there causes them to follow an old install script that diverges
+      # from the current setup guide. Mirroring the pyproject mutation
+      # here closes that drift structurally.
+      - name: Sync SKILL.md version field to pyproject.toml version
+        run: |
+          python3 <<'PY'
+          import re, pathlib
+          pyproject = pathlib.Path('python/pyproject.toml').read_text()
+          m = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, flags=re.MULTILINE)
+          if not m:
+              raise SystemExit("pyproject.toml version line not found")
+          target_version = m.group(1)
+          skill = pathlib.Path('python/src/totalreclaw/hermes/SKILL.md')
+          text = skill.read_text()
+          new_text, n = re.subn(
+              r'(^version:\s*).*$',
+              lambda mm: f'{mm.group(1)}{target_version}',
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if n != 1:
+              raise SystemExit("SKILL.md frontmatter `version:` line not found")
+          skill.write_text(new_text)
+          print(f"SKILL.md version field synced to {target_version}")
+          print('\n'.join(new_text.splitlines()[:8]))
+          PY
+
       # 2.3.12-rc.1 (F flip): no URL rewrite needed — the source at
       # `_HARDCODED_DEFAULT_URL` already binds to production for both
       # release types.
