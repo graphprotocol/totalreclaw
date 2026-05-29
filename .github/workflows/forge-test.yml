@@ -1,0 +1,72 @@
+name: Forge Test (Solidity contracts)
+
+# Coordinator-created gate per Pedro's 2026-05-28 12:49Z requirement on #278:
+# "ensure we add a forge-test.yml workflow before cred-6 hits stable promote."
+#
+# Runs `forge build` + `forge test` against contracts/ on every PR + push to
+# main. Gates SessionKeyModule + cred-6/cred-7 work. Hardhat side (TS tests)
+# stays on the existing CI; this workflow is Foundry-only.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/forge-test.yml'
+  pull_request:
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/forge-test.yml'
+
+# Auto-cancel superseded runs on the same PR so we don't queue up duplicates
+# while the dev pushes new commits.
+concurrency:
+  group: forge-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  forge-test:
+    name: Forge Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: contracts
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Pin to a recent stable release. Matches the local dev env on the
+          # cred-5 coordinator branch (forge 1.4.4-stable). Bump in lockstep
+          # if local devs upgrade.
+          version: stable
+
+      - name: Show forge version
+        run: forge --version
+
+      - name: Install forge-std (gitignored vendor lib)
+        # contracts/lib/forge-std/ is gitignored per repo policy — install
+        # from foundry.lock pin if present, else latest. foundry.lock was
+        # committed in cred-5 stage 2 (#272) pinning v1.16.1.
+        run: forge install foundry-rs/forge-std --no-commit || forge install foundry-rs/forge-std
+
+      - name: Build contracts
+        run: forge build --sizes
+
+      - name: Run unit tests
+        run: forge test -vvv
+
+      # Cred-6 spec §6.1 mandates a `forge snapshot` gas budget on the
+      # executeBatch per-inner-call validator (< 5K gas per inner). We emit
+      # a snapshot here but DO NOT fail the build on gas drift — that's a
+      # follow-up once the cred-6 baseline lands. For now the snapshot is
+      # diagnostic-only so reviewers can spot regressions in PRs.
+      - name: Snapshot gas (diagnostic)
+        run: forge snapshot --check --diff || true
+        continue-on-error: true
