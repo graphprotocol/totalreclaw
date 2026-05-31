@@ -8,6 +8,8 @@
     "build": "graph build",
     "deploy:local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 totalreclaw/subgraph",
     "create:local": "graph create --node http://localhost:8020/ totalreclaw/subgraph",
+    "build:staging": "graph build subgraph-gnosis-staging.yaml",
+    "deploy:staging": "graph deploy --studio total-reclaw-gnosis-staging subgraph-gnosis-staging.yaml",
     "test:gas": "tsx --tsconfig tsconfig.node.json tests/gas-measurement.ts",
     "test:e2e": "tsx --tsconfig tsconfig.node.json tests/e2e-ombh-validation.ts",
     "test:scaling": "tsx --tsconfig tsconfig.node.json tests/scaling-analysis.ts"

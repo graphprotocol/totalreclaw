@@ -1,0 +1,37 @@
+specVersion: 0.0.5
+description: TotalReclaw — STAGING subgraph (Gnosis mainnet, isolated DataEdge). Indexes the staging-only EventfulDataEdge so staging on-chain activity is isolated from the production subgraph. Part of ops-6 (totalreclaw-internal#363 staging-chain-isolation).
+repository: https://github.com/p-diogo/totalreclaw
+schema:
+  file: ./schema.graphql
+dataSources:
+  - kind: ethereum
+    name: EventfulDataEdge
+    network: gnosis
+    source:
+      # Isolated STAGING DataEdge — distinct from production's 0xC445…c36f.
+      # Predicted CREATE2 address (ops-5, contracts/script/DeployDataEdgeStaging.s.sol).
+      # Verified against contracts/deployed-addresses.json → stagingGnosis.eventfulDataEdge.
+      address: "0xE7a4D2677B686e13775Ba9092631089e35F0BB91"
+      abi: EventfulDataEdge
+      # TODO(ops-5 broadcast): set to the staging DataEdge deploy block.
+      # Until the contract is broadcast on Gnosis this value is a placeholder.
+      # On broadcast, read the deploy-tx block from the forge broadcast receipt
+      # (or contracts/deployed-addresses.json → stagingGnosis.blockNumber) and
+      # set it here BEFORE `graph deploy` — a too-low startBlock makes indexing
+      # crawl from that block forward (slow); a too-high one misses early facts.
+      startBlock: 45217698
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - Fact
+        - BlindIndex
+        - GlobalState
+      abis:
+        - name: EventfulDataEdge
+          file: ./abis/EventfulDataEdge.json
+      eventHandlers:
+        - event: Log(bytes)
+          handler: handleLog
+      file: ./src/mapping.ts
