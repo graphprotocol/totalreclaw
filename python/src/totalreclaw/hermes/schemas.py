@@ -69,6 +69,22 @@ REMEMBER = {
                     "to the on-chain decayScore via /10."
                 ),
             },
+            "force": {
+                "type": "boolean",
+                "description": (
+                    "Bypass the F7 duplicate-suppression check. Default false. "
+                    "The plugin's post_llm_call hook auto-extracts facts from "
+                    "recent user messages every ~3 turns. By default, "
+                    "totalreclaw_remember suppresses manual writes that match "
+                    "a recent user message (substring-containment on normalized "
+                    "text), since auto-extraction will capture them. Set "
+                    "force=true ONLY for verbatim-preserve cases — exact "
+                    "quotes / IDs / numbers the user wants stored as-is and "
+                    "you believe the extractor would paraphrase. For ordinary "
+                    "'remember X' intents, omit this param + trust the "
+                    "auto-extract path."
+                ),
+            },
         },
         "required": ["text"],
     },

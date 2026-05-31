@@ -53,6 +53,79 @@ jobs:
       - name: Install build tools
         run: pip install build
 
+      # 2026-05-29 (closes totalreclaw-internal#356): same-version race
+      # guard. Two workflow dispatches against rc-number=2 from
+      # different branches on 2026-05-28 silently burnt the rc2 slot:
+      # the first publish at 14:04 UTC (PR #285 F5 fix) succeeded and
+      # took the slot; the second at 23:22 UTC (PR #286 F6+F7 work)
+      # failed at Test step + would have hit PyPI's "version already
+      # exists" 400 anyway. Downstream QA was misled into reporting
+      # the F6+F7 code as "missing from package" when the actual
+      # cause was the upload race. Fail-loud BEFORE Build + Test + Upload
+      # so the operator knows immediately to bump rc-number.
+      - name: Guard against same-version PyPI collision (rc + stable)
+        if: inputs.dry-run != true
+        env:
+          INPUT_RELEASE_TYPE: ${{ inputs.release-type }}
+          INPUT_RC_NUMBER: ${{ inputs.rc-number }}
+        run: |
+          cd python
+          BASE_VERSION=$(grep '^version' pyproject.toml | sed -E 's/version *= *"([^"]+)"/\1/')
+          # Apply rc suffix exactly the way "Apply RC version suffix"
+          # step below applies it, so the guard's target matches what
+          # the publish step will upload.
+          if [ "$INPUT_RELEASE_TYPE" = "rc" ]; then
+            BASE_NO_RC=$(echo "$BASE_VERSION" | sed -E 's/rc[0-9]+$//')
+            TARGET_VERSION="${BASE_NO_RC}rc${INPUT_RC_NUMBER}"
+          else
+            TARGET_VERSION="$BASE_VERSION"
+          fi
+          echo "Target version: $TARGET_VERSION (release-type=$INPUT_RELEASE_TYPE)"
+
+          # Probe PyPI with one retry on transient 5xx. Fail closed on
+          # network errors — uncertain state is worse than blocked.
+          for attempt in 1 2; do
+            HTTP_CODE=$(curl -sS -o /dev/null -w '%{http_code}' \
+                        "https://pypi.org/pypi/totalreclaw/${TARGET_VERSION}/json" || echo "000")
+            echo "PyPI probe attempt $attempt: HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" = "404" ]; then
+              echo "Version slot free. Proceeding to build."
+              exit 0
+            fi
+            if [ "$HTTP_CODE" = "200" ]; then
+              cat >&2 <<EOM
+          ::error::Version ${TARGET_VERSION} already exists on PyPI.
+
+          This usually means another workflow run published this RC number first
+          from a different branch (the same-version race documented in
+          totalreclaw-internal#356). To resolve:
+
+            1. Bump rc-number to the next free integer:
+                 gh workflow run publish-python-client.yml \\
+                   --ref ${{ github.ref_name }} \\
+                   -f release-type=rc -f rc-number=<next>
+
+            2. Or, if you intended to ship the same content as the existing
+               ${TARGET_VERSION} on PyPI, no action needed — that build is live.
+
+            3. Or, if you need to change the BASE version, edit
+               python/pyproject.toml's `version = "..."` first.
+
+          The workflow refuses to proceed because pip / PyPI's idempotency
+          guarantee blocks re-upload; downstream auto-QA would mis-diagnose
+          the failure as missing code.
+          EOM
+              exit 1
+            fi
+            # 5xx / network error: short sleep then retry once.
+            if [ "$attempt" = "1" ]; then
+              echo "Transient PyPI response. Retrying after 5s..."
+              sleep 5
+            fi
+          done
+          echo "::error::PyPI returned HTTP $HTTP_CODE after retry. Refusing to proceed on uncertain state — re-dispatch when PyPI is reachable." >&2
+          exit 1
+
       - name: Apply RC version suffix (rc mode only)
         if: inputs.release-type == 'rc'
         run: |

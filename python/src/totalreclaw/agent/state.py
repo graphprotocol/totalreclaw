@@ -101,6 +101,27 @@ def _uuid7() -> str:
     return f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
 
 
+def _normalize_for_dedup(text: str) -> str:
+    """Normalize a message for substring-comparison dedup.
+
+    Lowercases, strips punctuation, collapses whitespace. Output is
+    suitable for the F7 manual-vs-auto-extract suppression check —
+    NOT for embedding-based semantic similarity, which lives in
+    storage-layer dedup. This is a cheap pre-filter at the tool-
+    handler boundary.
+    """
+    import re
+    if not text:
+        return ""
+    # Lowercase + strip leading/trailing whitespace.
+    t = text.lower().strip()
+    # Drop punctuation. Keep alphanumerics + spaces.
+    t = re.sub(r"[^\w\s]", " ", t)
+    # Collapse runs of whitespace to single spaces.
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
 def _extract_mnemonic_from_creds(creds: dict) -> str:
     """Pull a plausible mnemonic out of a parsed credentials.json blob.
 
@@ -153,6 +174,13 @@ class AgentState:
         self._quota_warning: Optional[str] = None
         self._server_url = server_url
         self._session_id: Optional[str] = None
+        # 2.4.4rc2 (F7) — auto-extract pending-queue tracking. Each
+        # post_llm_call appends an entry for the just-completed turn's
+        # user message; the totalreclaw_remember tool consults this
+        # buffer to suppress duplicates of content the next auto-
+        # extraction batch will capture. Bounded to last 10 entries.
+        self._pending_extract_buffer: list[dict] = []
+        self._suppressed_manual_writes: int = 0
 
         # Apply env var overrides (highest priority)
         self._apply_env_overrides()
@@ -358,6 +386,97 @@ class AgentState:
         """Clear all messages and reset the processed index."""
         self._messages.clear()
         self._last_processed_idx = 0
+
+    # ------------------------------------------------------------------
+    # 2.4.4rc2 (F7) — pending-auto-extract buffer + suppression API.
+    # See `plans/2026-05-29-skill-md-enforcement-hooks.md` for full
+    # design. The buffer is bounded to the last 10 entries to cap
+    # memory. The suppression check compares against the LAST
+    # `lookback_turns` (default 3, matches the extraction cadence).
+    # ------------------------------------------------------------------
+    def track_pending_extract(self, user_message: str) -> None:
+        """Record `user_message` for the current turn as pending auto-
+        extraction. Called from the ``post_llm_call`` hook regardless
+        of whether the every-N-turns extraction fires this turn —
+        the entry is what the next batch will process.
+
+        Defensive: tolerates state subclasses / mocks that don't
+        initialise ``_pending_extract_buffer`` in their ``__init__``.
+        Lazy-create the attribute on first use rather than crash with
+        AttributeError. Surfaces the same behaviour for legacy
+        ``_FakeState`` test mocks built before this attribute existed.
+        """
+        if not user_message or not user_message.strip():
+            return
+        if not hasattr(self, "_pending_extract_buffer"):
+            self._pending_extract_buffer = []
+        normalized = _normalize_for_dedup(user_message)
+        self._pending_extract_buffer.append({
+            "turn": getattr(self, "_turn_count", 0),
+            "text": user_message.strip(),
+            "text_normalized": normalized,
+        })
+        # Bound buffer to last 10 entries.
+        if len(self._pending_extract_buffer) > 10:
+            self._pending_extract_buffer = self._pending_extract_buffer[-10:]
+
+    def manual_remember_is_dup_of_pending(
+        self,
+        text: str,
+        lookback_turns: int = 3,
+    ) -> bool:
+        """Return True if `text` is a near-duplicate of a recent user
+        message that auto-extraction will capture. Used by
+        ``totalreclaw_remember`` to suppress eager manual writes that
+        would race the ``post_llm_call`` extraction pipeline.
+
+        Heuristic: substring-containment of the normalized forms in
+        either direction, against entries within `lookback_turns` of
+        the current turn count. Embedding similarity would be more
+        accurate but adds latency to every manual write; the
+        substring check catches the common case (agent paraphrases
+        the user's just-spoken sentence).
+        """
+        if not text or not text.strip():
+            return False
+        norm = _normalize_for_dedup(text)
+        if not norm:
+            return False
+        if not hasattr(self, "_pending_extract_buffer"):
+            return False
+        cutoff = getattr(self, "_turn_count", 0) - lookback_turns
+        for entry in self._pending_extract_buffer:
+            if entry["turn"] < cutoff:
+                continue
+            other = entry["text_normalized"]
+            if not other:
+                continue
+            # Either direction of containment counts. Catches agent
+            # paraphrase-shortening AND verbatim echo.
+            if norm in other or other in norm:
+                return True
+        return False
+
+    def increment_suppressed_writes(self) -> None:
+        """Increment the suppressed-manual-writes counter (F7)."""
+        if not hasattr(self, "_suppressed_manual_writes"):
+            self._suppressed_manual_writes = 0
+        self._suppressed_manual_writes += 1
+
+    def get_suppressed_writes_count(self) -> int:
+        """Total manual ``totalreclaw_remember`` calls suppressed this
+        session because they matched a pending auto-extract entry.
+        Surfaced via ``totalreclaw_status`` so users can observe the
+        dedup mechanism working."""
+        return getattr(self, "_suppressed_manual_writes", 0)
+
+    def clear_pending_extract_buffer(self) -> None:
+        """Reset the pending-extract buffer + the suppressed-writes
+        counter. Called at session boundaries (``on_session_start``,
+        ``on_session_reset``) so the buffer reflects only the active
+        session."""
+        self._pending_extract_buffer = []
+        self._suppressed_manual_writes = 0
 
     # Billing cache
     def get_cached_billing(self) -> Optional[dict]:

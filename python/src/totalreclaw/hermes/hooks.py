@@ -136,6 +136,96 @@ def _looks_like_memory_intent(user_message: str) -> bool:
     return any(kw in lower for kw in _MEMORY_INTENT_KEYWORDS)
 
 
+#: 2.4.4rc2 (F6) — phrases that indicate the user is asking for a
+#: session-level summary / debrief. Any of these matches triggers the
+#: pre_llm_call debrief nudge.
+_DEBRIEF_INTENT_KEYWORDS = (
+    "summarize what we",
+    "summarize this session",
+    "summary of what we",
+    "summary of this session",
+    "session summary",
+    "session recap",
+    "session debrief",
+    "give me a summary",
+    "give me a debrief",
+    "give me a recap",
+    "what did we discuss",
+    "what did we cover",
+    "what did we talk about",
+    "what have we discussed",
+    "what have we covered",
+    "rolling memory",
+    "debrief on this",
+    "recap on this",
+    "recap of this",
+)
+
+#: Negative patterns — message matches a debrief keyword but is asking
+#: about something SPECIFIC, not the session itself. Skip the nudge.
+_DEBRIEF_NEGATIVE_GATES = (
+    "summary of the code",
+    "summary of the doc",
+    "summary of the file",
+    "summary of the function",
+    "summary of the article",
+    "summary of the paper",
+    "summary of the pr",
+    "summary of the issue",
+    "recap of the doc",
+    "recap of the article",
+    "debrief on the code",
+    "debrief on the doc",
+)
+
+
+def _detect_debrief_intent(user_message: str) -> bool:
+    """2.4.4rc2 (F6) — return True if `user_message` is asking for a
+    session-level debrief / summary.
+
+    Used by ``pre_llm_call`` to inject a strong "you MUST call
+    `totalreclaw_debrief` this turn" nudge into the agent's context.
+    QA on 2.4.4rc1 found the agent producing plain-text recaps without
+    calling the tool, despite SKILL.md prose telling it to. Markdown
+    rules aren't enough for glm-5-turbo; hook-level enforcement is.
+
+    Heuristic: positive keyword match + negative-gate exclusion (so
+    "summary of the code" doesn't trigger). Conservative on false
+    positives — better to under-nudge than nudge when the user wasn't
+    actually asking for a debrief.
+    """
+    if not user_message or not user_message.strip():
+        return False
+    lower = user_message.lower()
+    if not any(kw in lower for kw in _DEBRIEF_INTENT_KEYWORDS):
+        return False
+    # If any negative gate matches, suppress.
+    if any(neg in lower for neg in _DEBRIEF_NEGATIVE_GATES):
+        return False
+    return True
+
+
+#: 2.4.4rc2 (F6) — context block injected into pre_llm_call when the
+#: user explicitly asks for a session debrief. The agent MUST call
+#: ``totalreclaw_debrief`` (no args) this turn before responding;
+#: plain-text recaps without the tool call were the rc1 QA failure.
+_DEBRIEF_NUDGE = (
+    "## TotalReclaw — user requested session debrief\n"
+    "The user's message matches the debrief-intent pattern (rc.5+ rule). "
+    "Before responding, you MUST call `totalreclaw_debrief()` with no args "
+    "to capture a structured session summary into the user's vault. After "
+    "the tool returns its summary, write your natural-language response to "
+    "the user using the summary content.\n\n"
+    "Do NOT skip the tool call. Plain-text recaps without `totalreclaw_debrief` "
+    "lose the summary forever — the on_session_end hook may not fire for this "
+    "session (e.g. user keeps chatting). The 2.4.4 SKILL.md ## Usage section "
+    "explicitly says: 'Manual call ONLY when the user explicitly asks for a "
+    "session recap mid-conversation: summarize what we discussed, give me a "
+    "debrief on this session, what's the rolling memory of this chat?'. All "
+    "three trigger phrases the user used match this rule. CALL THE TOOL."
+)
+
+
 def _get_hermes_llm_config():
     """Get LLM config from Hermes's own config files.
 
@@ -290,6 +380,20 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
     logger.debug("TotalReclaw on_session_start: %s", session_id)
 
     state.reset_turn_counter()
+    # 2.4.4rc2 (F7) — reset the pending-auto-extract buffer + the
+    # suppressed-writes counter at session boundaries. A previous
+    # session's pending entries are stale + would suppress legitimate
+    # writes in the new session. Defensive: tolerate legacy state
+    # subclasses / test mocks that don't expose the method.
+    if hasattr(state, "clear_pending_extract_buffer"):
+        state.clear_pending_extract_buffer()
+    # 2.4.4rc2 (F6) — reset the debrief-nudge latch so each new
+    # session can independently nudge the agent if the user requests
+    # a debrief.
+    if hasattr(state, "_totalreclaw_debrief_nudge_turn"):
+        state._totalreclaw_debrief_nudge_turn = -1
+    if hasattr(state, "_totalreclaw_debrief_skip_count"):
+        state._totalreclaw_debrief_skip_count = 0
     # memq-3 — assign a fresh UUIDv7 to AgentState so per-session
     # artefacts (extraction → Crystal → debrief) can be keyed by it.
     # Runs before the unconfigured-state early-return so log-only
@@ -495,6 +599,23 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
     if user_message and _looks_like_memory_intent(user_message):
         context_parts.append(_TOOL_PRIORITY_NUDGE)
 
+    # 2.4.4rc2 (F6) — debrief-intent nudge. Fires when the user message
+    # matches one of the canonical session-debrief phrases. Latched per
+    # turn so we don't re-inject on the same turn (would happen if
+    # pre_llm_call runs multiple times per LLM call); reset at session
+    # start. We DO fire it again on a SUBSEQUENT turn if the agent
+    # skipped the previous nudge — the F6 fallback in post_llm_call
+    # detects skip + the next turn's nudge tries again.
+    if user_message and _detect_debrief_intent(user_message):
+        last_nudge_turn = getattr(state, "_totalreclaw_debrief_nudge_turn", -1)
+        if last_nudge_turn != state.turn_count:
+            state._totalreclaw_debrief_nudge_turn = state.turn_count
+            context_parts.append(_DEBRIEF_NUDGE)
+            logger.info(
+                "TotalReclaw: injected debrief nudge on turn %d (intent matched)",
+                state.turn_count,
+            )
+
     # Inject quota warning (once per session)
     quota_warning = state.get_quota_warning()
     if quota_warning:
@@ -527,8 +648,14 @@ def post_llm_call(state: "PluginState", **kwargs) -> None:
     """
     # Always track turns and messages (client may be configured mid-session)
     state.increment_turn()
-    state.add_message("user", kwargs.get("user_message", ""))
+    user_msg = kwargs.get("user_message", "")
+    state.add_message("user", user_msg)
     state.add_message("assistant", kwargs.get("assistant_response", ""))
+
+    # 2.4.4rc2 (F7) — track this turn's user message in the pending-
+    # auto-extract buffer so subsequent manual `totalreclaw_remember`
+    # calls can suppress duplicates. Idempotent for empty messages.
+    state.track_pending_extract(user_msg)
 
     # Fix #191 safety net — same rationale as in pre_llm_call. If the
     # user paired between on_session_start and now, this picks up the

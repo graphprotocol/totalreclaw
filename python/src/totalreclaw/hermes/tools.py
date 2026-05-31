@@ -126,6 +126,33 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
             ),
         })
 
+    # 2.4.4rc2 (F7) — suppress manual remember calls that duplicate
+    # content the next auto-extract batch will capture. The agent can
+    # force a write via ``force=true`` for verbatim-preserve cases
+    # (e.g. exact quotes the extractor would paraphrase). The
+    # suppression check uses a cheap substring-containment on
+    # normalized strings; embedding dedup at storage time catches the
+    # rest. Counter surfaces in `totalreclaw_status` for observability.
+    force_write = bool(args.get("force", False))
+    if not force_write and state.manual_remember_is_dup_of_pending(text):
+        state.increment_suppressed_writes()
+        logger.info(
+            "totalreclaw_remember suppressed (duplicate of pending auto-extract): %r",
+            text[:200],
+        )
+        return json.dumps({
+            "stored": False,
+            "suppressed": "duplicate_of_pending_auto_extract",
+            "reason": (
+                "This content matches a recent user message that the "
+                "post_llm_call hook's auto-extraction will capture in the "
+                "next batch (every ~3 turns). Manual storage is redundant "
+                "and would waste quota. Pass force=true if you must store "
+                "verbatim (e.g. an exact quote the extractor would "
+                "paraphrase)."
+            ),
+        })
+
     # Default importance to 8 for explicit remember (matches plugin).
     raw_importance = args.get("importance", 8)
     try:
