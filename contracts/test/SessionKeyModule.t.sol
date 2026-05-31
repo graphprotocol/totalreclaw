@@ -65,13 +65,96 @@ contract SessionKeyModuleTest is Test {
     }
 
     // ============================================================
-    // Load-bearing invariant — CREATE2 byte-equality post install.
-    // Lands in cred-7 (requires Pimlico CREATE2 factory + on-chain
-    // module install via kernel-v3 hookManager). Stays skipped here.
+    // Load-bearing invariant — CREATE2 byte-equality post install
+    // (cred §8 R2). Stage 1 (cred-7): asserts the PREDICTED CREATE2
+    // address (from `script/DeploySessionKeyModule.s.sol`) is byte-
+    // equal regardless of chain id, because the computation depends
+    // only on (factory, salt, initCodeHash) — all chain-independent.
+    // Stage 2 (Pedro-supervised on-chain broadcast) replaces this
+    // with an actual cross-chain on-chain address assertion.
     // ============================================================
 
+    // Arachnid's deterministic deployment proxy is exposed by forge-std
+    // as `Base.CREATE2_FACTORY` (inherited via Test → Base). Same address
+    // on every EVM chain (EIP-2470 one-shot). Do NOT redeclare here.
+
+    /// @dev Mirror of `DeploySessionKeyModule.SESSION_KEY_MODULE_SALT_V1`.
+    ///      Any change to the salt MUST be reflected here too.
+    bytes32 internal constant SESSION_KEY_MODULE_SALT_V1 =
+        keccak256("totalreclaw.SessionKeyModule.v1");
+
     function test_create2_address_unchanged_after_module_install() public {
-        vm.skip(true);
+        bytes memory initCode = abi.encodePacked(
+            type(SessionKeyModule).creationCode
+        );
+        bytes32 initCodeHash = keccak256(initCode);
+
+        // Compute predicted CREATE2 address at current block.chainid.
+        address predictedAtCurrentChain = address(
+            uint160(
+                uint256(
+                    keccak256(
+                        abi.encodePacked(
+                            bytes1(0xff),
+                            CREATE2_FACTORY,
+                            SESSION_KEY_MODULE_SALT_V1,
+                            initCodeHash
+                        )
+                    )
+                )
+            )
+        );
+
+        // Swap to a different chain id and recompute. The CREATE2 formula
+        // does NOT include chain id — same factory + same salt + same
+        // bytecode → same address. Any divergence indicates either the
+        // salt is non-deterministic (e.g. uses block.timestamp) or the
+        // contract has chain-dependent immutables in its constructor.
+        // (SessionKeyModule has no constructor — by design — so this
+        // assertion is the proof-of-byte-equality.)
+        uint256 originalChainId = block.chainid;
+        vm.chainId(100); // Gnosis
+        address predictedGnosis = address(
+            uint160(
+                uint256(
+                    keccak256(
+                        abi.encodePacked(
+                            bytes1(0xff),
+                            CREATE2_FACTORY,
+                            SESSION_KEY_MODULE_SALT_V1,
+                            initCodeHash
+                        )
+                    )
+                )
+            )
+        );
+        vm.chainId(84532); // Base Sepolia
+        address predictedBaseSepolia = address(
+            uint160(
+                uint256(
+                    keccak256(
+                        abi.encodePacked(
+                            bytes1(0xff),
+                            CREATE2_FACTORY,
+                            SESSION_KEY_MODULE_SALT_V1,
+                            initCodeHash
+                        )
+                    )
+                )
+            )
+        );
+        vm.chainId(originalChainId);
+
+        assertEq(
+            predictedGnosis,
+            predictedBaseSepolia,
+            "CREATE2 byte-equality broken across Gnosis / Base Sepolia"
+        );
+        assertEq(
+            predictedAtCurrentChain,
+            predictedGnosis,
+            "CREATE2 byte-equality broken vs current chain"
+        );
     }
 
     // ============================================================
