@@ -12,7 +12,7 @@ This document describes how the agent installs and sets up TotalReclaw on Hermes
 | Channel | Version | Install command |
 |---|---|---|
 | stable (default) | `2.4.3` | `pip install totalreclaw` |
-| latest RC | `2.4.0rc2` | `pip install --pre --upgrade totalreclaw==2.4.0rc2` |
+| latest RC | `2.4.4rc5` | `pip install --pre --upgrade totalreclaw==2.4.4rc5` |
 
 Source of truth for what's currently published: `pip index versions totalreclaw`. The table above is updated on every PyPI release.
 
