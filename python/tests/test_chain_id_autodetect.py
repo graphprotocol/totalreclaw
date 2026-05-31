@@ -229,3 +229,80 @@ async def test_legacy_chain_id_env_is_ignored() -> None:
         with billing_patch:
             chain_id = await client.resolve_chain_id()
     assert chain_id == 84532  # free-tier default, NOT 9999
+
+
+# ---------------------------------------------------------------------------
+# Root fix (#364 / relay #21): consume the relay's AUTHORITATIVE chain_id.
+#
+# After ops-1 (single-chain Gnosis), the relay's GET /v1/billing/status
+# returns an explicit ``chain_id`` sourced from getChainConfigForTier(tier).
+# The client MUST consume it verbatim and stop deriving the chain from the
+# hardcoded tier->chain map. This lets a free user be flipped to Gnosis with
+# ZERO client release — the relay env change propagates automatically.
+#
+# The local tier->chain map is retained ONLY as a graceful fallback for an
+# old relay that doesn't yet emit the field (additive/non-breaking rollout).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_authoritative_chain_id_overrides_free_tier_map() -> None:
+    """THE migration scenario: free tier but relay says chain_id=100.
+
+    Post ops-1 the relay reports a free user's authoritative chain as Gnosis.
+    The client must sign for 100 even though the legacy tier-map would say
+    84532 for ``tier == 'free'``.
+    """
+    client = _make_client()
+    patch_ctx, _ = _patch_billing({"tier": "free", "chain_id": 100})
+    with patch_ctx:
+        chain_id = await client.resolve_chain_id()
+    assert chain_id == 100
+
+
+@pytest.mark.asyncio
+async def test_authoritative_chain_id_overrides_pro_tier_map() -> None:
+    """Authoritative field wins in BOTH directions — pro reported on 84532."""
+    client = _make_client()
+    patch_ctx, _ = _patch_billing({"tier": "pro", "chain_id": 84532})
+    with patch_ctx:
+        chain_id = await client.resolve_chain_id()
+    assert chain_id == 84532
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_tier_map_when_chain_id_field_absent() -> None:
+    """Old relay (no chain_id field) -> graceful fallback to the tier-map."""
+    client = _make_client()
+    patch_ctx, _ = _patch_billing({"tier": "pro"})  # no chain_id key
+    with patch_ctx:
+        chain_id = await client.resolve_chain_id()
+    assert chain_id == 100  # tier-map fallback still works
+
+
+@pytest.mark.asyncio
+async def test_invalid_chain_id_field_falls_back_to_tier_map() -> None:
+    """A malformed chain_id (non-int / null / zero) is ignored — fall back
+    to the tier-map rather than signing for a garbage chain."""
+    for bad in ("not-a-number", None, 0, -1, 1.5):
+        client = _make_client()
+        patch_ctx, _ = _patch_billing({"tier": "free", "chain_id": bad})
+        with patch_ctx:
+            chain_id = await client.resolve_chain_id()
+        assert chain_id == 84532, f"bad chain_id {bad!r} should fall back to tier-map"
+
+
+@pytest.mark.asyncio
+async def test_remember_signs_for_authoritative_chain_id() -> None:
+    """End-to-end: a free user whose relay reports chain_id=100 must have
+    ``remember`` sign the UserOp for Gnosis (100), not Base Sepolia."""
+    client = _make_client()
+    billing_patch, _ = _patch_billing({"tier": "free", "chain_id": 100})
+    mock_userop = AsyncMock(return_value="0xabc123")
+
+    with billing_patch, patch(
+        "totalreclaw.operations.build_and_send_userop", new=mock_userop,
+    ):
+        await client.remember("Free user migrated to Gnosis")
+
+    assert mock_userop.await_args.kwargs["chain_id"] == 100

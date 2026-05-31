@@ -61,6 +61,34 @@ DEFAULT_CHAIN_ID_PRO: int = 100
 CHAIN_ID_AUTODETECT_TIMEOUT_SECONDS: float = 5.0
 
 
+def _chain_id_from_billing(payload: object) -> int:
+    """Resolve the target chain id from a ``/v1/billing/status`` payload.
+
+    Precedence (root fix #364 / totalreclaw-relay#21):
+
+    1. **Authoritative ``chain_id`` field** — consumed verbatim when the relay
+       emits a positive integer. The relay sources it from its own
+       ``getChainConfigForTier(tier)``, so after the ops-1 single-chain Gnosis
+       cutover a free user's chain flips to 100 with **zero client release** —
+       the relay env change propagates automatically.
+    2. **Legacy tier->chain map** — graceful fallback for an older relay that
+       does not yet emit the field (the field is additive / non-breaking):
+       ``tier == 'pro'`` -> Gnosis (100), otherwise Base Sepolia (84532).
+
+    A malformed ``chain_id`` (missing, null, string, float, bool, ``<= 0``)
+    is ignored and falls through to the tier map rather than signing a UserOp
+    for a garbage chain.
+    """
+    if isinstance(payload, dict):
+        raw = payload.get("chain_id")
+        # ``bool`` is a subclass of ``int`` — exclude True/False explicitly.
+        if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+            return raw
+        if payload.get("tier") == "pro":
+            return DEFAULT_CHAIN_ID_PRO
+    return DEFAULT_CHAIN_ID_FREE
+
+
 def _get_eoa_account(mnemonic: str):
     """Derive the EOA (externally-owned account) from a BIP-39 mnemonic.
 
@@ -256,24 +284,30 @@ class TotalReclaw:
             pass
 
     async def resolve_chain_id(self) -> int:
-        """Auto-detect target chain ID from billing tier.
+        """Auto-detect the target chain ID from ``/v1/billing/status``.
 
-        Mirrors the MCP behavior (``mcp/src/index.ts`` ~346). Makes a
-        best-effort ``GET /v1/billing/status?wallet_address=<sa>`` call and
-        returns:
+        Makes a best-effort ``GET /v1/billing/status?wallet_address=<sa>``
+        call and resolves the chain via :func:`_chain_id_from_billing`:
 
-        * :data:`DEFAULT_CHAIN_ID_PRO` (100, Gnosis mainnet) if the
-          response's ``tier == "pro"``.
-        * :data:`DEFAULT_CHAIN_ID_FREE` (84532, Base Sepolia) otherwise.
+        * **Authoritative ``chain_id``** from the relay is consumed verbatim
+          when present (root fix #364 / totalreclaw-relay#21). This decouples
+          chain selection from a hardcoded tier map, so the ops-1 single-chain
+          Gnosis cutover flips free users to chain 100 with **no client
+          release** — the relay env change propagates automatically.
+        * **Tier-map fallback** for an older relay that does not yet emit the
+          field: ``tier == "pro"`` -> 100 (Gnosis), otherwise 84532 (Base
+          Sepolia). Mirrors the MCP behavior (``mcp/src/index.ts`` ~346);
+          the MCP/TS client needs an equivalent ``chain_id`` upgrade.
 
         Errors from the billing endpoint (network, auth, malformed JSON)
         are swallowed — we fall back to the free-tier chain so the client
         is usable offline. The result is cached on the client for the
         lifetime of the instance.
 
-        Without this, Pro users' Python writes were signed for Base
-        Sepolia but the relay routed them to Gnosis, producing silent AA23
-        failures (QA-V1CLEAN-VPS-20260418 Bug #11).
+        Without authoritative resolution, Pro users' Python writes were
+        signed for Base Sepolia but the relay routed them to Gnosis,
+        producing silent AA23 failures (QA-V1CLEAN-VPS-20260418 Bug #11);
+        post-ops-1 the same failure would hit free users.
         """
         if self._chain_id_resolved:
             return self._chain_id
@@ -303,11 +337,7 @@ class TotalReclaw:
                     headers=headers,
                 )
             if resp.status_code == 200:
-                payload = resp.json()
-                if isinstance(payload, dict) and payload.get("tier") == "pro":
-                    self._chain_id = DEFAULT_CHAIN_ID_PRO
-                else:
-                    self._chain_id = DEFAULT_CHAIN_ID_FREE
+                self._chain_id = _chain_id_from_billing(resp.json())
             else:
                 self._chain_id = DEFAULT_CHAIN_ID_FREE
         except Exception:
