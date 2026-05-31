@@ -430,7 +430,7 @@ Full CI/CD pipeline documented in `totalreclaw-internal/docs/ci-cd-pipeline.md`.
    - **Production**: `railway variables set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<new-version>" -s totalreclaw-production`
    Setting env vars triggers an automatic Railway redeploy. Verify the relay restarts cleanly by checking `/health`.
 
-For deployment procedures, invoke the `deploy-totalreclaw` skill.
+For deployment procedures, follow the canonical runbook **[`docs/guides/deployment.md`](docs/guides/deployment.md)** (version-controlled source of truth — verified service↔env↔domain map, TS-relay `/health` contract, deploy-SHA sentinel, SHA hard-gate, subgraph + rollback). The machine-local `deploy-totalreclaw` skill mirrors it; if they disagree, the doc wins.
 
 ### Relay Environments
 
