@@ -6,5 +6,16 @@
   "totalReclawPaymaster": "0xd10Be4669c739C3315616f7E6a2D7Dbd7033e7aD",
   "deployedAt": "2026-03-20T12:55:55.353Z",
   "deployer": "0x5C6A2E495F032E31Fc4c042085Bea0006B9C7A06",
-  "blockNumber": 39121533
+  "blockNumber": 39121533,
+  "stagingGnosis": {
+    "network": "gnosis",
+    "chainId": 100,
+    "eventfulDataEdge": "0xE7a4D2677B686e13775Ba9092631089e35F0BB91",
+    "status": "PREDICTED (not yet broadcast)",
+    "create2Factory": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+    "create2Salt": "keccak256(\"totalreclaw.EventfulDataEdge.staging.v1\")",
+    "purpose": "Isolated staging DataEdge on Gnosis — distinct address from prod 0xC445 (ops-5, staging-chain-isolation spec). Broadcast via script/DeployDataEdgeStaging.s.sol --broadcast when funded.",
+    "deployedAt": null,
+    "blockNumber": null
+  }
 }
