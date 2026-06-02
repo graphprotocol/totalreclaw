@@ -113,8 +113,9 @@ export function SessionDetailView() {
                   key={v}
                   type="button"
                   onClick={() => setView(v)}
+                  aria-pressed={view === v}
                   className={clsx(
-                    "rounded-pill px-3 py-1.5 text-xs font-semibold transition duration-150 ease-keeper",
+                    "rounded-pill px-3 py-1.5 text-xs font-semibold transition duration-150 ease-keeper focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-1",
                     view === v ? "bg-clay text-warm-white shadow-soft" : "text-ink-muted hover:text-ink",
                   )}
                 >

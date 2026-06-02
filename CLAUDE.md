@@ -465,6 +465,10 @@ End-user web UI for the managed-mode vault. Recovery-phrase → derive EOA + Sma
 - **Hosting**: Cloudflare Pages project `totalreclaw-app`. `main` → prod alias (`app.totalreclaw.xyz` once attached); branches → `<branch>.totalreclaw-app.pages.dev`. CI in `.github/workflows/deploy-app.yml` (test-gated + path-scoped). Build env: `VITE_SERVER_URL=https://api-staging.totalreclaw.xyz` for previews, `https://api.totalreclaw.xyz` for prod.
 - **Relay CORS**: `CORS_ORIGINS` env var supports leftmost-subdomain wildcards. Current set covers `https://totalreclaw.xyz`, `https://app.totalreclaw.xyz`, `https://totalreclaw-app.pages.dev`, `https://*.totalreclaw-app.pages.dev`; staging also allows `http://localhost:5173` and `http://127.0.0.1:5173` for dev.
 
+#### Look-and-feel prototype (branch `prototype/spa-look-and-feel`)
+
+A throwaway UI/UX prototype of the SPA (warm **"The Keeper"** direction) lives at `app/src/proto/`, served under `/proto/*` with a gallery front door at `/proto`. **Non-functional** — seed data only, no auth/crypto/relay; the real `/pair` / `/vault` / `/claim` routes are untouched. Run `npm --prefix app run dev` → `http://localhost:5173/proto`. Design context at repo root: `PRODUCT.md` + `DESIGN.md` + `.impeccable/`. Routes + locked decisions: `app/src/proto/README.md`. The real Phase-1 SPA spec remains `totalreclaw-internal/docs/specs/web/spa-phase1.md`; deferred pair-an-agent + PRD-01 auth work is tracked in `totalreclaw-internal/docs/notes/2026-06-02-spa-prototype-deferred-pairing.md`.
+
 ### QA Autopilot (vault SPA)
 
 Autonomous regression harness for the vault SPA. Driver lives in `tools/qa-vault.mjs` (Playwright, reads phrase from macOS keychain locally or `QA_RECOVERY_PHRASE` env in CI, redacts any phrase fragment from console/network output, exits non-zero on regression).

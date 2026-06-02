@@ -4,6 +4,7 @@ import { clsx } from "clsx";
 import { SEED_SESSIONS, relativeDate, type SeedFact, type SeedSession } from "./seed";
 import { kindOf, labelOf, neighborRefs, sessionsForNode } from "./explore-data";
 import { sourceLabel, typeBucket } from "./presentation";
+import { count } from "./format";
 
 const BUCKET_TONE: Record<string, string> = {
   rule: "bg-clay-tint text-clay-deep",
@@ -64,7 +65,7 @@ function SessionDrill({ session, onBack }: { session: SeedSession; onBack: () =>
       )}
 
       <div className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-ink-muted">
-        {session.facts.length} memories
+        {count(session.facts.length, "memory", "memories")}
       </div>
       <ul className="space-y-2.5">
         {session.facts.map((f) => (
@@ -129,7 +130,7 @@ export function ExplorePanel({ nodeId, onSelectNode }: Props) {
       )}
 
       <div className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-ink-muted">
-        {sessions.length} {sessions.length === 1 ? "session" : "sessions"}
+        {count(sessions.length, "session")}
       </div>
       <div className="space-y-2.5">
         {sessions.map((s) => (
@@ -142,7 +143,7 @@ export function ExplorePanel({ nodeId, onSelectNode }: Props) {
             <div className="mb-1 flex items-center justify-between gap-2 text-xs text-ink-muted">
               <span className="font-mono">{relativeDate(s.date)}</span>
               <span>
-                {s.facts.length} facts · {s.crystal.openThreads.length} threads
+                {count(s.facts.length, "fact")} · {count(s.crystal.openThreads.length, "thread")}
               </span>
             </div>
             <p className="font-display text-[1.05rem] leading-snug text-ink">{s.crystal.narrative}</p>

@@ -86,7 +86,7 @@ export function ProtoOnboarding() {
           <div className="rounded-card bg-surface p-6 shadow-soft">
             {step === 0 && (
               <div className="text-center">
-                <h1 className="font-display text-[1.8rem] leading-tight text-ink">Create your vault</h1>
+                <h1 className="text-balance font-display text-[1.8rem] leading-tight text-ink">Create your vault</h1>
                 <p className="mt-3 text-sm leading-relaxed text-ink-muted">
                   Your memory is encrypted on your device.{" "}
                   <span className="font-semibold text-ink">We can't read it</span> — and we can't
@@ -226,7 +226,7 @@ export function ProtoOnboarding() {
                     </li>
                   ))}
                 </ul>
-                <PrimaryBtn onClick={() => navigate("/proto/kg")} className="mt-6">
+                <PrimaryBtn onClick={() => navigate("/proto/timeline")} className="mt-6">
                   Open your vault
                 </PrimaryBtn>
               </div>

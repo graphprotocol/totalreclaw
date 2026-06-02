@@ -8,7 +8,7 @@ export function MindMapView() {
       <ProtoHeader />
       <main className="animate-page-in mx-auto w-full max-w-2xl px-4 pb-24 pt-8">
         <div className="mb-5">
-          <h1 className="font-display text-[2rem] leading-tight text-ink">How it connects</h1>
+          <h1 className="text-balance font-display text-[2rem] leading-tight text-ink">How it connects</h1>
           <p className="mt-1.5 text-sm leading-relaxed text-ink-muted">
             Your topics and entities as a living graph. Drag a node, scroll or pinch to zoom, hover
             to focus a cluster.

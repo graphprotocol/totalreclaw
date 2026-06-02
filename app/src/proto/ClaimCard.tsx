@@ -77,7 +77,7 @@ export function ClaimCard({ fact, presentation = "type", style, onPin, onRetype,
             onClick={onPin}
             aria-label={fact.pinned ? "Unpin memory" : "Pin memory"}
             className={clsx(
-              "rounded-control p-1.5 transition active:scale-90",
+              "rounded-control p-1.5 transition active:scale-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-1",
               fact.pinned ? "text-clay" : "text-ink-muted hover:bg-warm-white hover:text-ink",
             )}
           >
@@ -98,7 +98,7 @@ export function ClaimCard({ fact, presentation = "type", style, onPin, onRetype,
             type="button"
             onClick={() => (menu ? close() : setMenu(true))}
             aria-label="More actions"
-            className="rounded-control p-1.5 text-ink-muted transition hover:bg-warm-white hover:text-ink"
+            className="rounded-control p-1.5 text-ink-muted transition hover:bg-warm-white hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-1"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
               <circle cx="5" cy="12" r="1.8" />

@@ -41,7 +41,7 @@ export function ProtoIndex() {
     <div className="min-h-screen bg-warm-white">
       <ProtoHeader />
       <main className="animate-page-in mx-auto w-full max-w-3xl px-4 pb-24 pt-8">
-        <h1 className="font-display text-[2rem] leading-tight text-ink">Prototype gallery</h1>
+        <h1 className="text-balance font-display text-[2rem] leading-tight text-ink">Prototype gallery</h1>
         <p className="mt-1.5 text-sm leading-relaxed text-ink-muted">
           The warm "Keeper" direction — every screen, seed data, no login. Variants noted on the
           right.

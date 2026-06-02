@@ -24,8 +24,9 @@ function Chip({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={clsx(
-        "rounded-pill px-3 py-1 text-xs font-semibold transition duration-150 ease-keeper",
+        "rounded-pill px-3 py-1 text-xs font-semibold transition duration-150 ease-keeper focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-1",
         active
           ? "bg-clay-tint text-clay-deep ring-1 ring-clay/40"
           : "border border-hairline bg-surface text-ink-muted hover:text-ink",
@@ -86,7 +87,7 @@ export function TimelineView() {
       <main className="animate-page-in mx-auto w-full max-w-2xl px-4 pb-24 pt-8">
         <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h1 className="font-display text-[2rem] leading-tight text-ink">Your memory</h1>
+            <h1 className="text-balance font-display text-[2rem] leading-tight text-ink">Your memory</h1>
             <p className="mt-1.5 text-sm text-ink-muted">
               {filtered.length} of {SEED_SESSIONS.length} sessions
               {entity ? ` · about ${entity}` : ""}. Only you can read this.
@@ -98,8 +99,9 @@ export function TimelineView() {
                 key={v}
                 type="button"
                 onClick={() => setView(v)}
+                aria-pressed={view === v}
                 className={clsx(
-                  "rounded-pill px-3 py-1.5 text-xs font-semibold transition duration-150 ease-keeper",
+                  "rounded-pill px-3 py-1.5 text-xs font-semibold transition duration-150 ease-keeper focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-1",
                   view === v ? "bg-clay text-warm-white shadow-soft" : "text-ink-muted hover:text-ink",
                 )}
               >
@@ -178,7 +180,6 @@ export function TimelineView() {
               style={{ animationDelay: `${i * 60}ms` }}
               onEntityClick={setEntity}
               href={hrefFor(session.id)}
-              presentation={view}
             />
           ))}
           {filtered.length === 0 && (

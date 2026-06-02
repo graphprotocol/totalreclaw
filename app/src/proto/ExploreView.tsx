@@ -12,7 +12,7 @@ export function ExploreView() {
       <ProtoHeader />
       <main className="animate-page-in mx-auto w-full max-w-5xl px-4 pb-24 pt-6">
         <div className="mb-4">
-          <h1 className="font-display text-[1.9rem] leading-tight text-ink">Explore</h1>
+          <h1 className="text-balance font-display text-[1.9rem] leading-tight text-ink">Explore</h1>
           <p className="mt-1 text-sm text-ink-muted">
             Tap a topic or entity, then open a session to read its memories.
           </p>

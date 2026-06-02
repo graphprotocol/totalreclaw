@@ -16,7 +16,7 @@ export function ProtoPair() {
   const [words, setWords] = useState<string[]>(Array(WORD_COUNT).fill(""));
   const inputs = useRef<(HTMLInputElement | null)[]>([]);
 
-  const open = useCallback(() => navigate("/proto/kg"), [navigate]);
+  const open = useCallback(() => navigate("/proto/timeline"), [navigate]);
 
   const setWord = useCallback((i: number, v: string) => {
     const parts = v.trim().split(/\s+/);
@@ -55,7 +55,7 @@ export function ProtoPair() {
       <div className="flex min-h-[calc(100vh-57px)] items-center justify-center px-4 py-10">
         <div className="animate-page-in w-full max-w-md">
           <div className="mb-7 text-center">
-            <h1 className="font-display text-[2rem] leading-tight text-ink">Welcome back</h1>
+            <h1 className="text-balance font-display text-[2rem] leading-tight text-ink">Welcome back</h1>
             <p className="mt-2 text-sm leading-relaxed text-ink-muted">
               Unlock your memory on this device.
             </p>

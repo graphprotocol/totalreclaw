@@ -1,20 +1,8 @@
 import type { CSSProperties } from "react";
 import { Link } from "react-router-dom";
-import { clsx } from "clsx";
 import { EntityChip } from "./EntityChip";
 import { relativeDate, type SeedSession } from "./seed";
-import { type Presentation } from "./presentation";
-
-// Small ink-toned dot per memory type present in the session (a glance hint;
-// the readable labels live on the Claim Cards inside the session detail).
-const TYPE_DOT: Record<string, string> = {
-  claim: "bg-type-claim-ink",
-  preference: "bg-type-preference-ink",
-  directive: "bg-type-directive-ink",
-  commitment: "bg-type-commitment-ink",
-  episode: "bg-type-episode-ink",
-  summary: "bg-type-summary-ink",
-};
+import { count } from "./format";
 
 interface Props {
   session: SeedSession;
@@ -23,36 +11,25 @@ interface Props {
   onEntityClick?: (label: string) => void;
   /** When set, the card body links to this route (the entity chips stay separate). */
   href?: string;
-  presentation?: Presentation;
 }
 
 /** Signature component: a session as a page from a journal, headlined by its Crystal. */
-export function SessionCard({ session, style, onEntityClick, href, presentation = "type" }: Props) {
+export function SessionCard({ session, style, onEntityClick, href }: Props) {
   const { crystal, facts, entities } = session;
-  const typesPresent = Array.from(new Set(facts.map((f) => f.type)));
   const shownEntities = entities.slice(0, 3);
   const moreEntities = entities.length - shownEntities.length;
 
   const body = (
     <>
-      <header className="mb-3 flex items-center justify-between gap-3">
-        <time className="font-mono text-xs text-ink-muted">{relativeDate(session.date)}</time>
-        {presentation !== "source" && (
-          <div className="flex items-center gap-1.5" aria-hidden>
-            {typesPresent.map((t) => (
-              <span key={t} className={clsx("h-1.5 w-1.5 rounded-full", TYPE_DOT[t])} />
-            ))}
-          </div>
-        )}
-      </header>
-
+      <time className="mb-3 block font-mono text-xs text-ink-muted">
+        {relativeDate(session.date)}
+      </time>
       <p
         className="font-display text-[1.35rem] leading-snug text-ink"
         style={{ textWrap: "pretty" } as CSSProperties}
       >
         {crystal.narrative}
       </p>
-
       {crystal.keyOutcomes.length > 0 && (
         <ul className="mt-3 space-y-1.5">
           {crystal.keyOutcomes.slice(0, 2).map((outcome) => (
@@ -84,7 +61,8 @@ export function SessionCard({ session, style, onEntityClick, href, presentation 
 
       <footer className="mt-4 flex flex-wrap items-center gap-2">
         <span className="rounded-pill bg-warm-white px-2.5 py-1 font-mono text-xs text-ink-muted ring-1 ring-hairline">
-          {facts.length} facts · {entities.length} entities · {crystal.openThreads.length} threads
+          {count(facts.length, "fact")} · {count(entities.length, "entity", "entities")} ·{" "}
+          {count(crystal.openThreads.length, "thread")}
         </span>
         {shownEntities.map((entity) => (
           <EntityChip key={entity} label={entity} onClick={onEntityClick} />
