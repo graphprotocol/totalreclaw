@@ -48,8 +48,9 @@ export function ProtoIndex() {
         </p>
 
         <div className="mt-6 space-y-4">
-          <Group title="First run" desc="Unlock screen (non-functional — 'Open vault' always continues).">
-            <Row to="/proto/pair" label="Pair / unlock" />
+          <Group title="First run & auth" desc="Non-functional — every button just continues to the vault.">
+            <Row to="/proto/onboarding" label="Create a vault (onboarding)" hint="generate + back up" />
+            <Row to="/proto/pair" label="Unlock" hint="passkey + recovery" />
           </Group>
 
           <Group title="Timeline" desc="Session timeline with filters + presentation toggle.">
