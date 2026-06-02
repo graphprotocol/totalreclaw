@@ -48,9 +48,13 @@ export function ProtoIndex() {
         </p>
 
         <div className="mt-6 space-y-4">
+          <Group title="First run" desc="Unlock screen (non-functional — 'Open vault' always continues).">
+            <Row to="/proto/pair" label="Pair / unlock" />
+          </Group>
+
           <Group title="Timeline" desc="Session timeline with filters + presentation toggle.">
-            <Row to="/proto/timeline" label="Timeline" hint="By type" />
-            <Row to="/proto/timeline?view=source" label="Timeline" hint="By source" />
+            <Row to="/proto/timeline" label="Timeline" hint="By source (default)" />
+            <Row to="/proto/timeline?view=type" label="Timeline" hint="By type" />
           </Group>
 
           <Group title="Session detail" desc="Crystal + curatable memories (pin / retype / delete + undo).">
@@ -61,17 +65,15 @@ export function ProtoIndex() {
                 label={`${s.crystal.narrative.slice(0, 48)}…`}
               />
             ))}
-            <Row to="/proto/session/s1?view=source" label="Same session, source-forward" hint="By source" />
+            <Row to="/proto/session/s1?view=type" label="Same session, by type" hint="By type" />
           </Group>
 
-          <Group title="Mind-map (KG)" desc="Two graph engines, A/B toggle in-page.">
-            <Row to="/proto/kg?engine=flow" label="Designed nodes" hint="React Flow" />
-            <Row to="/proto/kg?engine=force" label="Cinematic" hint="force-graph" />
+          <Group title="Mind-map (KG)" desc="Topics & entities as a living graph (React Flow).">
+            <Row to="/proto/kg" label="Mind-map" />
           </Group>
 
-          <Group title="Explore" desc="Two navigation models, A/B toggle in-page.">
-            <Row to="/proto/explore?mode=graph" label="Graph-first" hint="recommended" />
-            <Row to="/proto/explore?mode=workspace" label="Workspace" hint="denser" />
+          <Group title="Explore" desc="Graph → tap a node → its sessions → open one to read its memories.">
+            <Row to="/proto/explore" label="Explore" hint="graph-first" />
           </Group>
         </div>
       </main>

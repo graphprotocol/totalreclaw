@@ -28,12 +28,12 @@ function Section({ label, items, dot }: { label: string; items: string[]; dot: s
 export function SessionDetailView() {
   const { id } = useParams();
   const [params, setParams] = useSearchParams();
-  const view: Presentation = params.get("view") === "source" ? "source" : "type";
+  const view: Presentation = params.get("view") === "type" ? "type" : "source";
   const setView = (v: Presentation) =>
     setParams(
       (prev) => {
         const next = new URLSearchParams(prev);
-        if (v === "source") next.set("view", "source");
+        if (v === "type") next.set("view", "type");
         else next.delete("view");
         return next;
       },
@@ -73,7 +73,7 @@ export function SessionDetailView() {
       <ProtoHeader />
       <main className="animate-page-in mx-auto w-full max-w-2xl px-4 pb-28 pt-6">
         <Link
-          to={`/proto/timeline${view === "source" ? "?view=source" : ""}`}
+          to={`/proto/timeline${view === "type" ? "?view=type" : ""}`}
           className="inline-flex items-center gap-1 text-sm font-semibold text-ink-muted transition hover:text-ink"
         >
           ← Timeline

@@ -39,12 +39,12 @@ function Chip({
 /** Session timeline. A/B: "By type" (taxonomy filters) vs "By source" (provenance filters). */
 export function TimelineView() {
   const [params, setParams] = useSearchParams();
-  const view: Presentation = params.get("view") === "source" ? "source" : "type";
+  const view: Presentation = params.get("view") === "type" ? "type" : "source";
   const setView = (v: Presentation) =>
     setParams(
       (prev) => {
         const next = new URLSearchParams(prev);
-        if (v === "source") next.set("view", "source");
+        if (v === "type") next.set("view", "type");
         else next.delete("view");
         return next;
       },
@@ -78,7 +78,7 @@ export function TimelineView() {
     setOpenOnly(false);
     setEntity(null);
   };
-  const hrefFor = (id: string) => `/proto/session/${id}${view === "source" ? "?view=source" : ""}`;
+  const hrefFor = (id: string) => `/proto/session/${id}${view === "type" ? "?view=type" : ""}`;
 
   return (
     <div className="min-h-screen bg-warm-white">
