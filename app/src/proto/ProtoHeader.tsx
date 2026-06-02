@@ -13,9 +13,12 @@ export function ProtoHeader() {
   return (
     <header className="sticky top-0 z-30 border-b border-hairline bg-warm-white">
       <div className="mx-auto flex w-full max-w-2xl items-center justify-between px-4 py-3">
-        <span className="font-display text-lg font-medium tracking-tight text-ink">
+        <Link
+          to="/proto"
+          className="font-display text-lg font-medium tracking-tight text-ink transition hover:text-clay-deep"
+        >
           TotalReclaw
-        </span>
+        </Link>
         <nav className="flex items-center gap-1">
           {TABS.map((t) => {
             const active = pathname === t.to;

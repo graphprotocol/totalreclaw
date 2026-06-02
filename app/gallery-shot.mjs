@@ -1,0 +1,10 @@
+import { chromium } from "playwright";
+const OUT = "/Users/pdiogo/Documents/code/totalreclaw/app/proto-shots";
+const browser = await chromium.launch();
+const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 }, deviceScaleFactor: 1 });
+const p = await ctx.newPage();
+await p.goto("http://localhost:5173/proto", { waitUntil: "domcontentloaded" });
+await p.waitForTimeout(1200);
+await p.screenshot({ path: `${OUT}/proto-gallery.png`, fullPage: true });
+console.log("done");
+await browser.close();
