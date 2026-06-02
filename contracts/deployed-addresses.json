@@ -11,11 +11,12 @@
     "network": "gnosis",
     "chainId": 100,
     "eventfulDataEdge": "0xE7a4D2677B686e13775Ba9092631089e35F0BB91",
-    "status": "PREDICTED (not yet broadcast)",
+    "status": "DEPLOYED",
     "create2Factory": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
     "create2Salt": "keccak256(\"totalreclaw.EventfulDataEdge.staging.v1\")",
-    "purpose": "Isolated staging DataEdge on Gnosis — distinct address from prod 0xC445 (ops-5, staging-chain-isolation spec). Broadcast via script/DeployDataEdgeStaging.s.sol --broadcast when funded.",
-    "deployedAt": null,
-    "blockNumber": null
+    "purpose": "Isolated staging DataEdge on Gnosis — distinct address from prod 0xC445 (ops-5, staging-chain-isolation spec).",
+    "deployedAt": "2026-06-01",
+    "deployTx": "0x94f08afe7f26ed9d660d4181ca562d991cc14f408900a9c45a727226b8f87be6",
+    "blockNumber": 46464196
   }
 }

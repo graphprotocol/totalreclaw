@@ -13,13 +13,9 @@ dataSources:
       # Verified against contracts/deployed-addresses.json → stagingGnosis.eventfulDataEdge.
       address: "0xE7a4D2677B686e13775Ba9092631089e35F0BB91"
       abi: EventfulDataEdge
-      # TODO(ops-5 broadcast): set to the staging DataEdge deploy block.
-      # Until the contract is broadcast on Gnosis this value is a placeholder.
-      # On broadcast, read the deploy-tx block from the forge broadcast receipt
-      # (or contracts/deployed-addresses.json → stagingGnosis.blockNumber) and
-      # set it here BEFORE `graph deploy` — a too-low startBlock makes indexing
-      # crawl from that block forward (slow); a too-high one misses early facts.
-      startBlock: 45217698
+      # Staging DataEdge deploy block on Gnosis (ops-5 broadcast 2026-06-01,
+      # tx 0x94f08afe…7be6). The contract emits no events before this block.
+      startBlock: 46464196
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
