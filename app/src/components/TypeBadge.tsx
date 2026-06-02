@@ -7,11 +7,11 @@ interface Props {
 }
 
 export function TypeBadge({ type, className }: Props) {
-  const colors = TYPE_COLORS[type] ?? "bg-slate-100 text-slate-600";
+  const colors = TYPE_COLORS[type] ?? "bg-type-claim text-type-claim-ink";
   return (
     <span
       className={clsx(
-        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+        "inline-flex items-center rounded-pill px-2.5 py-0.5 font-sans text-xs font-semibold",
         colors,
         className,
       )}

@@ -6,5 +6,30 @@
   html {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background-color: #fbfaf8; /* warm-white */
+    color: #2b2824; /* ink */
+    font-family: "Figtree", ui-sans-serif, system-ui, sans-serif;
+  }
+
+  /* Fraunces optical sizing + a touch of softness for the journal-warm feel. */
+  .font-display {
+    font-optical-sizing: auto;
+    font-variation-settings: "SOFT" 30, "opsz" 40;
+  }
+}
+
+/* Reduced motion: every entrance/lift collapses to instant. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

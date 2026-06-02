@@ -3,6 +3,10 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import { PairPage } from "./pages/PairPage";
 import { VaultPage } from "./pages/VaultPage";
 import { ClaimPage } from "./pages/ClaimPage";
+import { TimelineView } from "./proto/TimelineView";
+import { MindMapView } from "./proto/MindMapView";
+import { ExploreView } from "./proto/ExploreView";
+import { SessionDetailView } from "./proto/SessionDetailView";
 import { useCrypto } from "./contexts/CryptoContext";
 
 export function App() {
@@ -30,6 +34,11 @@ export function App() {
           </ProtectedRoute>
         }
       />
+      {/* Look-and-feel prototype routes (seed data, no auth) — see /DESIGN.md */}
+      <Route path="/proto/timeline" element={<TimelineView />} />
+      <Route path="/proto/kg" element={<MindMapView />} />
+      <Route path="/proto/explore" element={<ExploreView />} />
+      <Route path="/proto/session/:id" element={<SessionDetailView />} />
       <Route
         path="/"
         element={<Navigate to={keys ? "/vault" : "/pair"} replace />}

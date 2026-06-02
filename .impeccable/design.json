@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-01T00:00:00Z",
+  "title": "Design System: TotalReclaw Vault",
+  "extensions": {
+    "colorMeta": {
+      "clay": { "role": "primary", "displayName": "Clay", "canonical": "oklch(0.60 0.125 42)", "tonalRamp": ["oklch(0.30 0.09 40)", "oklch(0.40 0.11 41)", "oklch(0.52 0.13 40)", "oklch(0.60 0.125 42)", "oklch(0.70 0.10 44)", "oklch(0.82 0.07 46)", "oklch(0.92 0.04 48)", "oklch(0.97 0.018 50)"] },
+      "clay-deep": { "role": "primary", "displayName": "Clay Deep", "canonical": "oklch(0.52 0.13 40)" },
+      "clay-tint": { "role": "primary", "displayName": "Clay Tint", "canonical": "oklch(0.95 0.03 48)" },
+      "warm-white": { "role": "neutral", "displayName": "Warm White", "canonical": "oklch(0.985 0.003 70)", "tonalRamp": ["oklch(0.27 0.012 50)", "oklch(0.40 0.010 55)", "oklch(0.55 0.008 60)", "oklch(0.70 0.006 60)", "oklch(0.82 0.005 65)", "oklch(0.90 0.006 60)", "oklch(0.96 0.004 65)", "oklch(0.985 0.003 70)"] },
+      "ink": { "role": "neutral", "displayName": "Warm Charcoal", "canonical": "oklch(0.27 0.012 50)" },
+      "ink-muted": { "role": "neutral", "displayName": "Ink Muted", "canonical": "oklch(0.48 0.012 55)" },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "oklch(0.90 0.006 60)" },
+      "type-claim-bg": { "role": "tertiary", "displayName": "Claim Tint (warm neutral)", "canonical": "oklch(0.95 0.006 60)" },
+      "type-claim-ink": { "role": "tertiary", "displayName": "Claim Ink", "canonical": "oklch(0.40 0.010 55)" },
+      "type-preference-bg": { "role": "tertiary", "displayName": "Preference Tint (calm blue)", "canonical": "oklch(0.95 0.030 240)" },
+      "type-preference-ink": { "role": "tertiary", "displayName": "Preference Ink", "canonical": "oklch(0.42 0.075 245)" },
+      "type-directive-bg": { "role": "tertiary", "displayName": "Directive Tint (soft violet)", "canonical": "oklch(0.95 0.035 300)" },
+      "type-directive-ink": { "role": "tertiary", "displayName": "Directive Ink", "canonical": "oklch(0.43 0.100 300)" },
+      "type-commitment-bg": { "role": "tertiary", "displayName": "Commitment Tint (honey)", "canonical": "oklch(0.95 0.050 82)" },
+      "type-commitment-ink": { "role": "tertiary", "displayName": "Commitment Ink", "canonical": "oklch(0.45 0.080 70)" },
+      "type-episode-bg": { "role": "tertiary", "displayName": "Episode Tint (muted neutral)", "canonical": "oklch(0.94 0.004 60)" },
+      "type-episode-ink": { "role": "tertiary", "displayName": "Episode Ink", "canonical": "oklch(0.46 0.008 55)" },
+      "type-summary-bg": { "role": "tertiary", "displayName": "Summary Tint (gentle green)", "canonical": "oklch(0.95 0.040 150)" },
+      "type-summary-ink": { "role": "tertiary", "displayName": "Summary Ink", "canonical": "oklch(0.43 0.070 155)" }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display (Fraunces)", "purpose": "Page titles, empty-state headlines, the landing card." },
+      "headline": { "displayName": "Headline (Fraunces)", "purpose": "Section headers and the claim text worth reading slowly." },
+      "body": { "displayName": "Body (Figtree)", "purpose": "UI prose, descriptions, help text. Measure 65-75ch." },
+      "mono": { "displayName": "Mono (JetBrains Mono)", "purpose": "Machine artifacts only: IDs, timestamps, addresses." }
+    },
+    "shadows": [
+      { "name": "soft", "value": "0 1px 2px rgba(43,40,36,0.04), 0 2px 8px rgba(43,40,36,0.06)", "purpose": "Resting cards and claim rows." },
+      { "name": "raised", "value": "0 4px 16px rgba(43,40,36,0.10)", "purpose": "Hover/press on interactive cards." },
+      { "name": "overlay", "value": "0 8px 32px rgba(43,40,36,0.14)", "purpose": "Dialogs, action sheets, mobile detail sheet." }
+    ],
+    "motion": [
+      { "name": "ease-keeper", "value": "cubic-bezier(0.165, 0.84, 0.44, 1)", "purpose": "Default ease-out for state transitions and lifts." },
+      { "name": "duration-fast", "value": "120ms", "purpose": "Hover, focus, chip toggles." },
+      { "name": "duration-base", "value": "200ms", "purpose": "Card lift, sheet open, optimistic pin fill." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single loud control on a screen: Open vault, Save changes.",
+      "html": "<button class=\"ds-btn-primary\">Open vault</button>",
+      "css": ".ds-btn-primary { font-family: Figtree, ui-sans-serif, system-ui, sans-serif; font-weight: 600; font-size: 13px; letter-spacing: 0.01em; color: #FBFAF8; background: #C16240; border: none; border-radius: 12px; padding: 12px 20px; cursor: pointer; transition: background 120ms cubic-bezier(0.165,0.84,0.44,1), transform 200ms cubic-bezier(0.165,0.84,0.44,1), box-shadow 200ms cubic-bezier(0.165,0.84,0.44,1); } .ds-btn-primary:hover { background: #A54B2E; transform: translateY(-1px); box-shadow: 0 4px 16px rgba(43,40,36,0.10); } .ds-btn-primary:focus-visible { outline: 2px solid #C16240; outline-offset: 2px; } @media (prefers-reduced-motion: reduce) { .ds-btn-primary { transition: background 120ms; } .ds-btn-primary:hover { transform: none; } }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Low-emphasis actions: Cancel, secondary nav.",
+      "html": "<button class=\"ds-btn-ghost\">Cancel</button>",
+      "css": ".ds-btn-ghost { font-family: Figtree, ui-sans-serif, system-ui, sans-serif; font-weight: 600; font-size: 13px; color: #2B2824; background: #FFFFFF; border: 1px solid transparent; border-radius: 12px; padding: 12px 16px; cursor: pointer; transition: border-color 120ms cubic-bezier(0.165,0.84,0.44,1), background 120ms cubic-bezier(0.165,0.84,0.44,1); } .ds-btn-ghost:hover { border-color: #E7E3DF; } .ds-btn-ghost:focus-visible { outline: 2px solid #C16240; outline-offset: 2px; }"
+    },
+    {
+      "name": "Type Badge",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Memory type pill. Label text is mandatory; color reinforces, never stands alone.",
+      "html": "<span class=\"ds-type-badge\">preference</span>",
+      "css": ".ds-type-badge { display: inline-flex; align-items: center; font-family: Figtree, ui-sans-serif, system-ui, sans-serif; font-weight: 600; font-size: 13px; line-height: 1.2; color: #3F5B7A; background: #E6EDF6; border-radius: 9999px; padding: 5px 12px; }"
+    },
+    {
+      "name": "Filter Chip (selected)",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "An active filter in the vault filter bar.",
+      "html": "<button class=\"ds-chip-selected\">Pinned</button>",
+      "css": ".ds-chip-selected { font-family: Figtree, ui-sans-serif, system-ui, sans-serif; font-weight: 600; font-size: 13px; color: #A54B2E; background: #F7E7DD; border: 1px solid #C16240; border-radius: 9999px; padding: 5px 12px; cursor: pointer; transition: background 120ms cubic-bezier(0.165,0.84,0.44,1); } .ds-chip-selected:focus-visible { outline: 2px solid #C16240; outline-offset: 2px; }"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Vault search field with a leading magnifier.",
+      "html": "<div class=\"ds-search\"><svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" fill=\"none\" stroke=\"#685E57\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"11\" cy=\"11\" r=\"7\"></circle><line x1=\"21\" y1=\"21\" x2=\"16.65\" y2=\"16.65\"></line></svg><input type=\"text\" placeholder=\"Search your memory\" /></div>",
+      "css": ".ds-search { display: flex; align-items: center; gap: 8px; background: #FFFFFF; border: 1px solid #E7E3DF; border-radius: 12px; padding: 10px 14px; transition: border-color 120ms cubic-bezier(0.165,0.84,0.44,1), box-shadow 120ms cubic-bezier(0.165,0.84,0.44,1); } .ds-search:focus-within { border-color: #C16240; box-shadow: 0 0 0 2px rgba(193,98,64,0.35); } .ds-search input { border: none; outline: none; background: transparent; font-family: Figtree, ui-sans-serif, system-ui, sans-serif; font-size: 16px; color: #2B2824; width: 100%; } .ds-search input::placeholder { color: #685E57; }"
+    },
+    {
+      "name": "Claim Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Signature component. A single memory rendered to read and groom: serif memory text, type pill, quiet metadata, in-place pin.",
+      "html": "<article class=\"ds-claim\"><button class=\"ds-claim-pin\" aria-label=\"Pin memory\"><svg viewBox=\"0 0 24 24\" width=\"16\" height=\"16\" fill=\"#C16240\"><path d=\"M14 3l7 7-3 1-3 5-2-2-4 5-1-1 5-4-2-2 5-3 1-3z\"></path></svg></button><p class=\"ds-claim-text\">Prefers morning meetings and protects deep-work afternoons.</p><div class=\"ds-claim-meta\"><span class=\"ds-type-badge\">preference</span><span class=\"ds-claim-sub\">from your agent &middot; work &middot; 3 days ago</span></div></article>",
+      "css": ".ds-claim { position: relative; background: #FFFFFF; border-radius: 16px; padding: 16px; box-shadow: 0 1px 2px rgba(43,40,36,0.04), 0 2px 8px rgba(43,40,36,0.06); transition: box-shadow 200ms cubic-bezier(0.165,0.84,0.44,1), transform 200ms cubic-bezier(0.165,0.84,0.44,1); } .ds-claim:hover { box-shadow: 0 4px 16px rgba(43,40,36,0.10); transform: translateY(-1px); } .ds-claim-text { font-family: Fraunces, Georgia, serif; font-weight: 500; font-size: 18px; line-height: 1.35; color: #2B2824; margin: 0 0 12px; padding-right: 28px; text-wrap: pretty; } .ds-claim-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } .ds-type-badge { display: inline-flex; align-items: center; font-family: Figtree, ui-sans-serif, system-ui, sans-serif; font-weight: 600; font-size: 13px; color: #3F5B7A; background: #E6EDF6; border-radius: 9999px; padding: 5px 12px; } .ds-claim-sub { font-family: Figtree, ui-sans-serif, system-ui, sans-serif; font-size: 13px; color: #685E57; } .ds-claim-pin { position: absolute; top: 12px; right: 12px; background: none; border: none; padding: 4px; cursor: pointer; border-radius: 8px; } .ds-claim-pin:hover { background: #F7E7DD; } .ds-claim-pin:focus-visible { outline: 2px solid #C16240; outline-offset: 2px; } @media (prefers-reduced-motion: reduce) { .ds-claim:hover { transform: none; } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Keeper",
+    "overview": "The vault is a calm, trusted archivist of your life. Not a database you administer, a collection you visit. Warmth comes from a clay accent, a humanist serif for the things worth reading slowly, generous rounding, and gentle warm-toned shadow, never from decoration. The real promise is trust, conveyed by clarity and honesty, not lock icons or scare-copy. It rejects the SaaS dashboard, the crypto wallet, and the raw developer tool.",
+    "keyCharacteristics": [
+      "Warm minimalism: restraint with a pulse, never sterility.",
+      "One clay accent carries the warmth; the surface stays a true warm-white, never cream.",
+      "Fraunces serif for memory text; Figtree sans for UI; JetBrains Mono for machine artifacts only.",
+      "Soft and tactile: gentle warm shadows, rounded corners, pill chips.",
+      "Phone-first and glanceable; fast on a 10,000-item vault."
+    ],
+    "rules": [
+      { "name": "The One Clay Rule", "body": "Clay appears on <=10% of any screen: primary action, active state, pinned. If two clay things compete in one viewport, one is wrong.", "section": "colors" },
+      { "name": "The No-Cream Rule", "body": "The background is warm-white (#FBFAF8), never the cream/sand/parchment band. Warmth is carried by the clay accent and the serif, not a beige field.", "section": "colors" },
+      { "name": "The Serif-for-Memory Rule", "body": "The user's actual memory text is set in Fraunces; UI chrome is Figtree. What is worth reading slowly looks different from the controls.", "section": "typography" },
+      { "name": "The Mono-Stays-Backstage Rule", "body": "Monospace is for machine artifacts only. A human-written sentence in JetBrains Mono means the UI has tipped into developer-tool. Forbidden.", "section": "typography" },
+      { "name": "The Warm-Shadow Rule", "body": "Every shadow is tinted toward ink-warm rgba(43,40,36,...), never pure black. A gray lift on this warm field reads cold and cheap.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep the background Warm White (#FBFAF8); carry warmth through Clay and Fraunces, not a tinted field.",
+      "Do set the user's memory text in Fraunces and UI chrome in Figtree.",
+      "Do keep Clay to <=10% of any screen: primary action, active state, pinned.",
+      "Do tint every shadow toward warm ink, never pure black.",
+      "Do always show the type label text on badges; color reinforces, never stands alone.",
+      "Do write privacy and curation copy in plain second person.",
+      "Do keep delete calm and reversible in tone (30-day recovery), not a red alarm."
+    ],
+    "donts": [
+      "Don't build a generic SaaS dashboard: no identical card grids, no hero-metric tiles, no Linear/Vercel chrome.",
+      "Don't let it read as a crypto wallet: no neon-on-dark, no decorative gradients, no glassmorphism, no chain/wallet/gas language.",
+      "Don't slump into a raw developer tool: no JSON dumps, no terminal aesthetic, no monospace for human content, no unstyled tables.",
+      "Don't clone agentmemory.dev's look; reference its IA if useful, never its visuals.",
+      "Don't use a cream/sand/beige body background, gradient text, side-stripe border-left accents, or glass cards.",
+      "Don't put two competing Clay elements in one viewport."
+    ]
+  }
+}

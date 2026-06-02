@@ -132,3 +132,7 @@ mcp/package-lock.json
 # Foundry vendored libraries — install via 'forge install foundry-rs/forge-std' from contracts/
 contracts/lib/forge-std/
 contracts/out/
+
+# Impeccable SPA prototype: regenerable screenshot artifacts + live-mode runtime state
+proto-shots/
+.impeccable/live/sessions/

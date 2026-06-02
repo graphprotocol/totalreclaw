@@ -103,11 +103,14 @@ export interface SubgraphFact {
   isActive: boolean;
 }
 
+// Warm "Keeper" type palette — soft tint + accessible ink (see /DESIGN.md).
+// Tokens defined in tailwind.config.ts. Color reinforces the mandatory text
+// label; it is never the sole signal (color-blind + AA).
 export const TYPE_COLORS: Record<string, string> = {
-  preference: "bg-blue-100 text-blue-800",
-  directive: "bg-purple-100 text-purple-800",
-  commitment: "bg-orange-100 text-orange-800",
-  episode: "bg-gray-100 text-gray-700",
-  summary: "bg-green-100 text-green-800",
-  claim: "bg-slate-100 text-slate-700",
+  claim: "bg-type-claim text-type-claim-ink",
+  preference: "bg-type-preference text-type-preference-ink",
+  directive: "bg-type-directive text-type-directive-ink",
+  commitment: "bg-type-commitment text-type-commitment-ink",
+  episode: "bg-type-episode text-type-episode-ink",
+  summary: "bg-type-summary text-type-summary-ink",
 };
