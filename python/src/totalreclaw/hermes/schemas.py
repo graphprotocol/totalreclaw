@@ -100,7 +100,12 @@ RECALL = {
         "context would help answer the current question. Always call "
         "this before falling back on a generic or built-in 'memory' "
         "tool — TotalReclaw is the user's durable, on-chain, long-term "
-        "store and the built-in tool is only session-scoped. Returns "
+        "store and the built-in tool is only session-scoped. Call it even "
+        "when the answer appears to already be in your current context — that "
+        "in-context copy may be a stale local cache, so for ANY first-person "
+        "factual question ('do I…', 'what's my…', 'what did I say about…') "
+        "call recall FIRST and answer from the results; if it returns nothing, "
+        "say so honestly and do NOT fabricate from context. Returns "
         "top-ranked memories via BM25 + semantic similarity + Tier 1 "
         "source-weighted reranking."
     ),

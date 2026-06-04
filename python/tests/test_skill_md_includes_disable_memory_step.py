@@ -1,128 +1,87 @@
-"""rc.26: SKILL.md must include the ``hermes tools disable memory`` step.
+"""Disable-built-in-memory coverage — POST-CONSOLIDATION (2026-06-05).
 
-Context — rc.24 NO-GO finding (issue #167)
--------------------------------------------
+History
+=======
+rc.26 (issue #167) shipped a `(CRITICAL)` "disable built-in memory" install
+step in SKILL.md, on the theory that Hermes' built-in `memory` tool steals
+"remember/recall" intents from TotalReclaw. The 2026-06-05 consolidation
+(docs/plans/2026-06-04-hermes-skill-consolidation-design.md) moved install +
+compatibility content into the canonical install doc `hermes-setup.md`, which
+already carried the *accurate* stance — validated against Hermes upstream:
 
-rc.24 chat-flow QA showed that Hermes' built-in ``memory`` tool steals
-"remember X" / "recall X" intents from ``totalreclaw_remember`` during
-natural conversation, causing memories to land in MEMORY.md instead of
-TotalReclaw's encrypted vault. rc.25 shipped path B (tool-description
-bias). rc.26 ships path A (hard-coded exclusivity): the install flow
-auto-disables the built-in memory tool, and the dual-mode setup is
-documented as unsupported.
+    Hermes built-in memory (USER.md / MEMORY.md) CANNOT be fully disabled. The
+    built-in layer is always active; `hermes tools disable memory` only blocks
+    the AGENT from calling the `memory` tool — the gateway keeps writing
+    USER.md. So disabling is an OPTIONAL partial mitigation, not a `(CRITICAL)`
+    on/off switch.
 
-What this test enforces
------------------------
-
-The shipped ``SKILL.md`` MUST contain:
-
-1. The ``hermes tools disable memory`` invocation.
-2. The user-verbatim warning text exactly as decided in the rc.26 plan
-   (re-enable instructions + ``hermes memory reset`` pointer).
-
-Test source: SKILL.md is the canonical spec for what the agent does at
-install time. If a future refactor breaks this block, the rc.26 fix
-silently regresses and we re-introduce the rc.24 bug.
+The `(CRITICAL)` framing in SKILL.md was the overstated side of a drift. These
+tests now pin the accurate coverage in hermes-setup.md, and assert SKILL.md no
+longer carries the install-time disable step (it's not usage). The real
+intent-stealing mitigation is the tool-description bias in `tools.py` +
+`totalreclaw_recall`'s "call me first" steering, which the usage skill keeps.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 
-SKILL_MD = (
-    Path(__file__).resolve().parent.parent
-    / "src"
-    / "totalreclaw"
-    / "hermes"
-    / "SKILL.md"
-)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+SKILL_MD = _REPO_ROOT / "python" / "src" / "totalreclaw" / "hermes" / "SKILL.md"
+INSTALL_DOC = _REPO_ROOT / "docs" / "guides" / "hermes-setup.md"
 
 
-def _read_skill_md() -> str:
-    assert SKILL_MD.exists(), f"SKILL.md not found at {SKILL_MD}"
-    return SKILL_MD.read_text(encoding="utf-8")
+def _read(path: Path) -> str:
+    assert path.exists(), f"{path} not found at {path}"
+    return path.read_text(encoding="utf-8")
 
 
-def test_skill_md_invokes_hermes_tools_disable_memory():
-    """SKILL.md must instruct the agent to run ``hermes tools disable memory``."""
-    body = _read_skill_md()
+def test_install_doc_documents_disable_memory_command():
+    """hermes-setup.md must mention the `hermes tools disable memory`
+    command so the agent knows the (partial) mitigation exists."""
+    body = _read(INSTALL_DOC)
     assert "hermes tools disable memory" in body, (
-        "SKILL.md must include the literal `hermes tools disable memory` "
-        "command — the rc.26 fix for issue #167 (Hermes built-in memory "
-        "steals memory intents from TotalReclaw)."
+        "hermes-setup.md must document the `hermes tools disable memory` "
+        "command (issue #167 mitigation)."
     )
 
 
-def test_skill_md_marks_disable_step_critical():
-    """The disable-memory step must be marked CRITICAL so install
-    flows that skim the doc don't treat it as optional polish."""
-    body = _read_skill_md()
-    assert "Disable Hermes built-in memory" in body, (
-        "SKILL.md must contain a step heading mentioning 'Disable Hermes "
-        "built-in memory' so the agent doesn't skip past it."
+def test_install_doc_states_builtin_memory_cannot_be_fully_disabled():
+    """The accurate, validated stance: built-in memory is always active and
+    cannot be fully disabled — `disable memory` only blocks the agent tool.
+    Pin this so a future rewrite doesn't regress to the overstated
+    'disabling turns it off' framing."""
+    body = _read(INSTALL_DOC)
+    assert "cannot be disabled" in body, (
+        "hermes-setup.md must state built-in memory cannot be fully "
+        "disabled (Hermes upstream: the built-in layer is always active)."
     )
-    # The plan asked for a CRITICAL marker on the step heading.
-    assert "(CRITICAL)" in body, (
-        "Disable-memory step must be marked '(CRITICAL)' in the heading so "
-        "the agent treats it as non-optional during install."
-    )
-
-
-def test_skill_md_includes_user_verbatim_warning_text():
-    """The user-verbatim block must include the re-enable + reset
-    pointers exactly as the rc.26 plan dictates."""
-    body = _read_skill_md()
-    # Mention that built-in memory is disabled.
-    assert "disabled Hermes' built-in `memory` tool" in body, (
-        "SKILL.md must include the user-verbatim warning that TotalReclaw "
-        "disabled the built-in memory tool."
-    )
-    # Re-enable instruction.
-    assert "hermes tools enable memory" in body, (
-        "SKILL.md must instruct the user how to re-enable Hermes built-in "
-        "memory (and warn it's NOT recommended while TotalReclaw is "
-        "installed)."
-    )
-    assert "NOT recommended" in body, (
-        "User-verbatim warning must explicitly say re-enabling is NOT "
-        "recommended while TotalReclaw is installed."
-    )
-    # Wipe-files pointer.
-    assert "hermes memory reset" in body, (
-        "SKILL.md must reference `hermes memory reset` as the optional "
-        "wipe step for orphaned MEMORY.md / USER.md files."
+    assert "only blocks" in body.lower() or "does NOT stop" in body, (
+        "hermes-setup.md must clarify `hermes tools disable memory` only "
+        "blocks the AGENT tool and does NOT stop the gateway's USER.md "
+        "writes — otherwise the agent over-promises a full disable."
     )
 
 
-def test_skill_md_explains_why_dual_mode_is_anti_pattern():
-    """The step must explain WHY built-in memory must be disabled —
-    so a future refactor doesn't accidentally drop the reasoning + the
-    instruction together."""
-    body = _read_skill_md()
-    # Match the explanatory clause about intent-stealing / silent bug.
-    assert "competes" in body.lower() or "steal" in body.lower(), (
-        "Disable-memory step must explain that the built-in memory tool "
-        "competes / steals intents from TotalReclaw — preserves the why "
-        "if the doc gets refactored."
-    )
-    # The "MEMORY.md instead of vault" failure mode must be called out
-    # by name so a future contributor reading only the install flow
-    # understands the data-loss surface.
-    assert "MEMORY.md" in body, (
-        "Disable-memory step must reference MEMORY.md by name so the "
-        "failure mode (data lands in the wrong file) is explicit."
-    )
+def test_install_doc_names_the_failure_mode_files():
+    """The failure-mode files (USER.md / MEMORY.md) must be named so the
+    agent + a future contributor understand where data wrongly lands."""
+    body = _read(INSTALL_DOC)
+    assert "MEMORY.md" in body
+    assert "USER.md" in body
 
 
-def test_skill_md_keeps_post_install_steps_renumbered():
-    """The disable-memory step inserted itself between restart-gateway
-    and verify-tool-bound, so subsequent steps re-number. SKIP-install
-    fast-path pointer must point at the credential-check step (now
-    step 5), not step 4 as in rc.25."""
-    body = _read_skill_md()
-    assert "SKIP install and jump to step 5" in body, (
-        "After inserting the disable-memory step, the fast-path pointer "
-        "for already-installed plugins MUST jump to step 5 (credential "
-        "check), not step 4 — otherwise the agent mis-routes for "
-        "returning users."
+def test_skill_md_does_not_carry_install_disable_step():
+    """Post-consolidation, the usage skill must NOT carry the install-time
+    disable-memory step — that's the install doc's job. The intent-stealing
+    mitigation in the usage skill is `totalreclaw_recall`-first steering, not
+    a CLI install command."""
+    body = _read(SKILL_MD)
+    assert "hermes tools disable memory" not in body, (
+        "SKILL.md (usage-only) must NOT contain the install-time `hermes "
+        "tools disable memory` command — it lives in hermes-setup.md."
+    )
+    assert "(CRITICAL)" not in body, (
+        "The overstated '(CRITICAL) disable memory' install framing must not "
+        "be in the usage skill."
     )

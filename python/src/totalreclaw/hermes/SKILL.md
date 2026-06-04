@@ -1,161 +1,17 @@
 ---
 name: totalreclaw
-description: "Install + set up TotalReclaw encrypted memory for Hermes, then use totalreclaw_remember / totalreclaw_recall. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any remember / recall request."
-version: 2.4.4
+description: "Encrypted memory for Hermes — remember, recall, forget, pin, re-type / re-scope, check status & quota, upgrade, and import the user's saved memories. Trigger on 'install / set up TotalReclaw', 'restore my recovery phrase', or ANY request to remember, recall, forget, search, manage, or report on the user's memory or quota — not just remember / recall."
+version: 2.5.0
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
 ---
 
-# TotalReclaw — Hermes
+# TotalReclaw — Hermes (usage)
 
-> The canonical install flow lives at <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md>. If a user pastes that URL in chat, fetch it and follow its agent-instructions section. This SKILL.md mirrors the same steps so you can act even if the URL is unreachable.
-
-## Provenance (what you are installing)
-
-TotalReclaw is open-source memory tooling for Hermes, published by `p-diogo` (GitHub-verified):
-- Hermes plugin: <https://github.com/p-diogo/totalreclaw-hermes>
-- PyPI: <https://pypi.org/project/totalreclaw/>
-- Source: <https://github.com/p-diogo/totalreclaw>
-
-The user pasted the install URL deliberately, but treat each command as a step you and the user complete together. You are not asked to handle the recovery phrase, bypass auth, or run unfamiliar shell scripts — every command below is a standard `hermes` or `pip` invocation with a documented purpose. The user already consented by pasting the install message; do NOT add a second consent gate before account setup — surface phase transitions and failures, but proceed straight from disable-memory to handing the user the pair URL + PIN.
-
-## Silence rules (read first — applies to the whole install + setup flow)
-
-**Emit ONLY the user-visible lines listed below. Do not narrate tool calls. Do not describe what you're doing or about to do. Errors are the only allowed deviation, and only as a single tight line.** Tool calls happen silently; narration of those tool calls is a SKILL violation. The expected user-facing transcript for a fresh install + setup is **5–6 short lines TOTAL** — anything more is a SKILL violation. There is no second consent gate before account setup; the user already consented by pasting the install message.
-
-### User-visible prose (THIS IS ALL YOU SAY)
-
-Speak only these lines, in order. Substitute the bracketed placeholders. Lines 3 and 4 are optional and only emitted on the conditions noted.
-
-1. (Step 1 — start)
-   > Installing TotalReclaw…
-2. (Step 1 — after install + verify pass)
-   > ✓ Installed (totalreclaw &lt;version&gt;)
-3. (optional, only if the agent had to issue `/restart` because tools didn't auto-bind)
-   > Restarting Hermes to load the plugin…
-4. (optional, only if `hermes tools disable memory` succeeded)
-   > Disabled Hermes' built-in `memory` tool — TotalReclaw is now your primary memory.
-5. (Step 5 — account setup; emit immediately after disable-memory, no consent gate)
-   > Open &lt;url&gt; in your browser. Enter PIN &lt;pin&gt;. Generate or paste a 12-word recovery phrase. Reply `done` once it's sealed.
-6. (Step 6 — done + free-tier confirmation)
-   > ✓ You're set up on the TotalReclaw free tier — 250 memories/month on Gnosis mainnet, E2E encrypted. <https://totalreclaw.xyz/pricing>. Ask me to remember anything.
-
-If `totalreclaw_*` tools are already bound (skip-install branch), the only lines emitted are `✓ TotalReclaw is already set up.` (skip-to-stop) OR lines 5+6 (skip-to-account-setup branch). 5–6 lines max for a fresh install. No filler.
-
-### Errors break silence — but tightly
-
-If a step actually fails, surface a one-line error + the action being taken. Examples: `Install failed: externally-managed-environment. Retrying with --break-system-packages.` / `Plugin installed but tools didn't bind after restart. Asking for a second restart.` / `Account-setup URL returned 404. Generating a fresh URL + PIN.` Do NOT pre-narrate diagnostics that succeed. Do NOT echo command output unless the user asks.
-
-### Forbidden vocabulary in agent prose
-
-Do not write these words / phrases in chat during install + setup unless the user explicitly asks how the install works: `Python`, `interpreter`, `venv`, `virtual environment`, `pip`, `ensurepip`, `bootstrap`, `find`, `lookup`, `detect`, `probing`, `let me try`, `in parallel`, `got it`, `now installing`, `Step 1a/1b/1c`. Also forbidden — narration patterns Pedro saw in 2026-05-01 QA Telegram transcripts:
-
-- "Let me check that…" / "Let me check if…" / "Let me verify…" / "Let me try…"
-- "Now installing…" / "Plugin loaded. Let me verify…" / "I'll try…"
-- "Quick fix…" / "One sec…" / "Got it, doing X…"
-- Any "I'm going to do X" / "About to do X" pre-narration of a tool call
-
-These are tool-call mechanics, not user-facing prose. The Telegram bot edit-and-delete behavior makes interim "doing X…" lines look broken to the user even when they get edited away. If the user asks ("what's it doing?", "show me the commands"), narrate freely — the silence rule only governs the default install path.
-
-### Forbidden phrases when tools fail to bind (deny-list — 2.3.4-rc.1, strengthened in 2.3.5-rc.1)
-
-When `totalreclaw_*` tools are missing post-install, you MUST issue `/restart` (or `/new` as fallback) **autonomously** and announce the action — never ask the user to authorize it, never stall, never hedge. The following phrases are anti-patterns and MUST NOT appear in chat in that situation:
-
-- "Should I /restart?" / "Should I issue /restart?" / "Want me to restart?" / "Do you want me to restart?"
-- "I need permission to /restart" / "Do you authorize /restart?" / "Confirming before I /restart…"
-- "Do you have a public URL?" / "Can you give me a URL?" (the install is local; no URL is needed at restart-time)
-- "Let me check if the tool is bound." / "Let me verify…" (verification is a silent shell call, not a chat line)
-- "Is it OK if I restart?" / "I'll /restart now if that's OK"
-- Describing what `/restart` does ("This will drain runs and reload…") — just send the slash command
-
-The correct pattern is to issue `/restart` immediately and emit user-visible line 3 (`Restarting Hermes to load the plugin…`) as the single chat line. Step 2 of the setup flow is explicit about this — re-read it if you find yourself drafting any of the phrases above.
-
-## Setup flow
-
-If `totalreclaw_*` tools are already bound to your toolset, SKIP install and jump to step 5. Otherwise run all steps in order. Numbered steps are internal procedure; user prose is only the lines listed in §"User-visible prose" above.
-
-1. **Install plugin + Python package (silent — emit user-visible line 1, then nothing until line 2).** Hermes 2026.4.16+ uses Git-based plugin discovery and a separate Python tool implementation. The Python package MUST go into the SAME Python environment that Hermes runs from (containerized venv, native venv, or system Python — whichever your install uses). Bare `pip install` may target the wrong Python on containerized deploys. Run all three substeps via your shell tool **without writing prose about them**:
-   ```
-   # 1a. Detect the Hermes interpreter inside its own shell context — for
-   # Docker, that means `docker exec -it <container> bash` first. Silent.
-   HERMES_PYTHON="$(command -v python3)"
-
-   # 1b. Install both halves into the right env. Silent.
-   # Order matters: Python package FIRST, plugin manifest SECOND. Some
-   # Hermes deploys (and OpenClaw 2026.4.16+ on the parallel skill+plugin
-   # bundle — finding from today's plugin-side QA) trigger a
-   # gateway-config-driven SIGUSR1 reload as soon as the plugin manifest
-   # registers via `hermes plugins install ... --enable`. If the Python
-   # package isn't on disk by the time that reload fires, the gateway
-   # loads the manifest, finds no `totalreclaw_*` implementations,
-   # silently fails to bind, and the agent then loops on Step 2 trying
-   # to restart again. Installing the Python package FIRST guarantees
-   # the implementations are present before the manifest registers and
-   # any reload-trigger arrives. Do not invert this order.
-   "$HERMES_PYTHON" -m pip install --pre totalreclaw
-   hermes plugins install p-diogo/totalreclaw-hermes --enable
-
-   # 1c. Confirm the package resolved through Hermes' interpreter. Silent.
-   "$HERMES_PYTHON" -m pip show totalreclaw | head -2
-   ```
-   When 1c reports the package, capture the version and emit user-visible line 2 (`✓ Installed (totalreclaw <version>)`). If `pip show` errors with `Package(s) not found`, the install landed in a different environment — silently re-detect `$HERMES_PYTHON` and re-run 1b once. Surface a one-line error only if the second attempt also fails. Failure handling (still silent unless the retry also fails):
-   - `externally-managed-environment` (Debian/Ubuntu/Docker system Python): retry the `pip install` line with `--break-system-packages`.
-   - `pip: command not found` / `No module named pip` (Hermes container shipped without pip): bootstrap silently with `"$HERMES_PYTHON" -m ensurepip --upgrade`, then retry 1b.
-   - `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment): break silence and tell the user verbatim *"Your environment doesn't expose the Hermes CLI to me. Please install `p-diogo/totalreclaw-hermes` and the `totalreclaw` Python package via your service's plugins UI, then reply `done`. Also disable Hermes' built-in `memory` tool in the same UI if available — running both creates a silent intent-stealing bug."* Wait for `done` and skip to step 4 (verify account-setup tool bound).
-
-2. **Restart the gateway autonomously via Hermes' built-in `/restart` slash command.** Hermes registers `/restart` as a session-scope slash command (see `hermes_cli/commands.py`: `CommandDef("restart", "Gracefully restart the gateway after draining active runs", "Session", ...)`). It drains active runs first, then reloads — safer than `kill -USR1` and works from inside the gateway because it's an in-process command, not an external CLI.
-
-   **When tools are missing post-install, your IMMEDIATE next message must be the literal slash command `/restart` — nothing else. Do not narrate. Do not ask permission. Do not describe what /restart does. Just send `/restart`.** The silence rule + the deny-list above govern this — the right move is to act, then announce.
-
-   After Hermes returns from the restart, emit user-visible line 3 (`Restarting Hermes to load the plugin…`) as the single confirmation line. Resume at step 3.
-
-   **If `/restart` returns "You are not authorized to use this command" / "command not found" / refused** (managed Hermes deployments that gate session-scope slash commands behind RBAC, or strip them altogether): surface the unauthorized response verbatim as a single tight user-visible line:
-   > *"Your Hermes deployment doesn't expose `/restart` to me. Run on your host: `hermes gateway restart` (native) OR `docker restart <your-hermes-container>` (Docker self-host — `docker ps` shows the name). Reply `done` after."*
-   Then wait for `done`. **Do NOT loop /restart calls.** Do NOT keep retrying `/restart` after an unauthorized response — the gate isn't going to flip mid-session and the loop just spams the user. (Optional preceding hop: try `/new` once — `/new` opens a fresh session within the same gateway and may pick up freshly-bound tools without a reload. Skip straight to the user-prompted line if `/new` is unavailable in your environment.)
-
-   **Fallback only if `/restart` is structurally unavailable** (very old Hermes pre-2026.4 with no `/restart` command at all, or the user has explicitly requested manual control): pick the right restart command for the user's deploy and emit it as a single user-visible line (`Please restart your Hermes gateway: <restart-command>. Reply \`done\` once it's back up.`):
-   - Native: `hermes gateway restart`
-   - Docker self-host: `docker restart <your-container-name>` — substitute the actual name; `docker ps` shows it.
-   - Managed service: their restart control.
-   - systemd / launchd supervised: `kill -USR1 $(cat ~/.hermes/gateway.pid)` triggers a graceful-drain restart.
-
-   Do NOT run any external `docker restart` / `kill` yourself — your shell is inside the gateway you'd be restarting. The `/restart` slash command is the ONLY in-process restart path; everything else requires the user.
-
-3. **Disable Hermes built-in memory tool (CRITICAL).** (Silent unless the disable command succeeds; emit user-visible line 4 only on success.) Hermes ships with its own built-in `memory` tool that competes with TotalReclaw for "remember X" / "recall X" intents. Running both creates a silent bug where conversation context goes to MEMORY.md instead of TotalReclaw's encrypted vault. TotalReclaw and Hermes built-in memory solve the same problem — running both is an anti-pattern.
-
-   Run silently via your shell tool:
-   ```bash
-   hermes tools disable memory
-   ```
-
-   If the command succeeds, emit user-visible line 4 (`Disabled Hermes' built-in `memory` tool — TotalReclaw is now your primary memory.`). The shipped line is intentionally short (5–6-line transcript budget — see silence rules). The longer disabled Hermes' built-in `memory` tool warning text — re-enable instructions (`hermes tools enable memory`, NOT recommended while TotalReclaw is installed) and orphaned-file cleanup (`hermes memory reset` for stale MEMORY.md / USER.md) — is documented in the user guide; the agent does not need to recite that in chat. If the command errors with `command not found` or "tool not found" (older Hermes versions, managed services that don't expose the CLI, or the built-in `memory` tool was already removed), skip line 4 silently and continue — the rc.25 tool-description bias still steers the LLM toward `totalreclaw_remember` as a fallback. Do not surface the disable failure.
-
-4. **Verify `totalreclaw_pair` is bound (silent).** If still missing after restart, surface a one-line error: `Plugin installed but tools didn't bind after restart. Issuing /restart again.` and re-issue `/restart` once **autonomously** — do NOT ask the user "should I /restart again?". Do not loop the install. If the second `/restart` still doesn't bind tools, try `/new` once (fresh session may pick up the binding without a reload). If both `/restart` retries AND `/new` fail to bind the tool, fall back to the manual user-prompted restart path (see step 2 fallback) once. If any restart attempt returns "not authorized", apply the unauthorized fallback from step 2 — do NOT retry `/restart` after an unauthorized response.
-
-5. **Install the MemoryProvider sidecar (silent — issue #275 / Path B, 2.4.0+).** Two TotalReclaw paths exist into Hermes: the always-on generic plugin (tools + lifecycle hooks) and the optional `MemoryProvider` sidecar that unlocks `on_pre_compress` + `on_memory_write` (captures Background-Review writes the toolset whitelist blocks). Decide silently:
-
-   ```bash
-   ACTIVE_PROVIDER=$(hermes memory-status --hermes-home "${HERMES_HOME:-$HOME/.hermes}" 2>/dev/null | jq -r '.provider // "none"')
-   ```
-
-   - **`none` / empty / `totalreclaw`** → run `hermes activate-memory-provider` silently. No user prose.
-   - **Any other provider name** (`honcho`, `byterover`, `openviking`, ...) → break silence with ONE line: *"Hermes is currently using `<X>` as memory provider. Switch to TotalReclaw (E2E-encrypted, on-chain) or install TotalReclaw as tools-only? Reply `switch` or `tools-only`."*
-     - On `switch` → run `hermes activate-memory-provider` then emit *"Switched to TotalReclaw. Your existing `<X>` memories stay on disk but won't be queried by the agent until you switch back."* (one line).
-     - On `tools-only` → run `hermes install-memory-provider` (sidecar only, no `--activate`). Emit *"Installed TotalReclaw as tools-only. `<X>` remains your active provider."* (one line).
-   - DO NOT ask any follow-up question about memory-provider preference. The matrix decides — no clarifying prompts beyond the single `switch / tools-only` choice. The deny-list above applies.
-
-6. **Check for existing credentials (silent).** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit `✓ TotalReclaw is already set up.` and stop. Otherwise continue silently.
-
-7. **Set up the user's TotalReclaw account (emit user-visible line 5).** No second consent prompt — the user already consented by pasting the install message. Proceed directly from step 6 (no credentials yet) to handing them the pair URL + PIN.
-
-   **Daemon-mode preflight before calling the tool.** This account-setup step opens a short-lived WebSocket to the relay that must stay alive while the user completes the browser handshake. If you are running inside a one-shot agent process (`hermes chat -q "..."`, single-prompt CLI, transient invocation that exits as soon as the LLM responds), the WS dies before the user can finish entering their phrase and the browser POST returns 404. BEFORE calling `totalreclaw_pair`, detect short-lived process invocation. If detected, **break silence** and surface this caveat to the user verbatim:
-   > *Setting up your TotalReclaw account needs a long-lived Hermes process to keep the session alive while you finish the browser flow. One-shot `hermes chat -q "..."` invocations exit too quickly. Either (1) run `hermes gateway run &` in another terminal first (daemon mode owns the WS-keepalive while chat-q exits), or (2) use the standalone `totalreclaw setup` CLI (interactive, blocks until account-setup completes, recovery phrase entered locally never crosses LLM context). Once your account is set up, daily operations (`hermes chat -q`, `--resume`, etc.) work normally.*
-   Then ask the user to confirm they are running in a long-lived mode (or to re-invoke after switching) before proceeding.
-
-   Call `totalreclaw_pair` silently (the account-setup tool — name kept for backward compatibility). Returns `{url, pin, expires_at_ms}`. Then emit user-visible line 5 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…", "Let me generate the URL…") — line 5 is the only thing the user needs to see.
-
-8. **Verify and confirm (silent until line 6).** After user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — call `totalreclaw_pair` again silently and resend line 5 once. If present, emit user-visible line 6 (with the free-tier confirmation) and stop.
+> **This is the post-install usage skill.** If `totalreclaw_*` tools are already bound to your toolset, use the guidance below.
+>
+> **Not installed yet, or the tools are missing?** The install + account-setup flow is a separate document: <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md>. Fetch it and follow its agent-instructions. Do NOT improvise install steps from this file — this doc is **usage only**, and the install flow has its own silence rules that live in that guide.
 
 ## Phrase safety (HARD — never break)
 
@@ -163,30 +19,82 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
 
 ## Usage (post-setup)
 
-- Stable user facts / preferences / identity / "remember X" → `totalreclaw_remember` (don't ask permission).
-- First-person factual query ("do I / what's my / where do I …") → `totalreclaw_recall` FIRST, then answer from returned facts. If 0 results, say so.
-- "forget / pin / unpin X" → `totalreclaw_recall` first for `fact_id`, then `totalreclaw_forget` / `_pin` / `_unpin`.
-- "status" → `totalreclaw_status`. "upgrade" → `totalreclaw_upgrade` (paste Stripe URL verbatim).
-- "import from Mem0 / ChatGPT / Claude / Gemini / mcp-memory-server" → `totalreclaw_import_from` with `dry_run=True` first.
+### Storing memories — when + how
+
+**There are two write paths:**
+
+1. **Auto-extraction (background, every ~3 turns + at session end).** The plugin runs a `post_llm_call` hook that extracts facts from recent conversation and stores them. You don't trigger this; it runs by itself. Look for `TotalReclaw: extracted N memories` lines in the gateway log if you want to confirm a turn was captured.
+
+2. **Explicit `totalreclaw_remember`** — call this only when the user says something the auto-extraction is likely to MISS or when they explicitly say "remember X" / "save that I X":
+   - One-off declarative statements outside a natural conversation flow ("my birthday is March 14", "I prefer Postgres over MySQL")
+   - Verbatim quotes the user wants preserved exactly ("write down the AWS account ID exactly: 123…")
+   - Decisions the user wants ledgered with reasoning ("we picked X because Y")
+   - Anything the user marks with imperative language: "remember", "save", "store", "don't forget", "keep this"
+
+**Don't double-call.** If auto-extraction just fired (recent log lines show extraction), skip the manual `totalreclaw_remember` — embedding dedup will silently drop the duplicate, but you waste a write against quota.
+
+**Don't store transient noise.** Skip `totalreclaw_remember` for:
+- Casual greetings, banter, acknowledgements
+- Tool-output paste-backs the user didn't write themselves
+- Commands / instructions the user issued to YOU (not facts about the user) — "open this file" is not a memory
+- Repeating things the user just said back to them in a single turn
+- Anything the user said while explicitly testing memory ("just to test, remember the word elephant" — store it, but don't store the user's own meta-commentary on the test)
+
+**Memory types (taxonomy v1).** Each stored fact gets a type. The extractor auto-tags; if you call `totalreclaw_remember` manually, pass `type=` when the right one is obvious — saves a `totalreclaw_retype` later:
+- `claim` — factual statement about the user / world ("I live in Lisbon")
+- `preference` — taste / choice ("I prefer espresso over filter")
+- `directive` — durable instruction to the agent ("always summarize in bullets", "never use semicolons")
+- `commitment` — promise / obligation ("I'll review the PR by Friday")
+- `episode` — notable event with time anchor ("on 2026-03-12 I went to Berlin for a conference")
+- `summary` — multi-turn debrief output. Don't write these manually; `totalreclaw_debrief` produces them.
+
+**Scopes.** Each fact also gets a scope (work / personal / health / family / creative / finance / misc / unspecified). The extractor infers; you can pass `scope=` explicitly when the user's intent is clear (a health fact during a work conversation should still be `scope=health`). To re-scope an existing fact: `totalreclaw_recall` for the `fact_id`, then `totalreclaw_set_scope`.
+
+### Summaries — `totalreclaw_debrief`
+
+Auto-fires once per session via the `on_session_end` hook (when the gateway closes the session — `/new`, idle timeout, restart). You almost never call this manually.
+
+**Manual call ONLY when** the user explicitly asks for a session recap mid-conversation: "summarize what we discussed", "give me a debrief on this session", "what's the rolling memory of this chat?". One-shot call, no args needed — the tool walks the current session buffer.
+
+### Recall — when + how
+
+- **First-person factual query** ("do I / what's my / where do I / what did I say about / what do you know about me / am I supposed to / when did I …") → `totalreclaw_recall` FIRST, then answer from returned facts. If 0 results, say so honestly — DO NOT fabricate from session context. This is non-negotiable: agents MUST call `totalreclaw_recall` even when the answer appears to be in the current context window. Hermes' built-in `USER.md` cache is local; the TotalReclaw vault is canonical + cross-device.
+- **Specific-fact lookups** ("what's my AWS account ID?") → `totalreclaw_recall` with a tight query. The reranker (BM25 + cosine + RRF + source-weighted) is sharper on specific queries.
+
+### Mutating existing facts
+
+Pattern is always **recall first → mutate second**, because the mutation tools need `fact_id`:
+
+- `forget X` → `totalreclaw_recall("X")` → pick the right `fact_id` → `totalreclaw_forget(fact_id)`. Tombstones the fact (still retained for audit; recall filters it out).
+- `pin X as canonical` → recall → `totalreclaw_pin(fact_id)`. Pinned facts surface in every subsequent recall regardless of query similarity.
+- `unpin X` → recall → `totalreclaw_unpin(fact_id)`.
+- `change type of X to <type>` → recall → `totalreclaw_retype(fact_id, type)`. Use when the extractor misclassified.
+- `change scope of X to <scope>` → recall → `totalreclaw_set_scope(fact_id, scope)`.
+
+### Status / upgrade / import
+
+- "status" / "how am I doing on quota" / "what tier am I on" → `totalreclaw_status` (no args). Returns tier, used / limit, and smart-account address.
+- "upgrade" / "go Pro" → `totalreclaw_upgrade` (returns a Stripe checkout URL — paste verbatim, no paraphrase).
+- "import from Mem0 / ChatGPT / Claude / Gemini / mcp-memory-server" → `totalreclaw_import_from` with `dry_run=True` first to surface the count + estimated free-tier impact, then ask the user to confirm before the real run.
 
 ## Tiers + pricing
 
-**Canonical source for live numbers:** `totalreclaw_status` (returns `tier`, `free_writes_used`, `free_writes_limit`, `network` for the current account). **Canonical source for catalogue / prices:** <https://totalreclaw.xyz/pricing>. Don't invent dollar amounts — quote what `totalreclaw_status` returns or point at the URL.
+**Canonical source for live numbers:** `totalreclaw_status` (returns `tier`, `free_writes_used`, `free_writes_limit` for the current account). **Canonical source for catalogue / prices:** <https://totalreclaw.xyz/pricing>. Don't invent dollar amounts and don't name the underlying network — quote what `totalreclaw_status` returns or point at the URL.
 
-| Tier | Monthly write cap | Network | Notes |
-|---|---|---|---|
-| **Free** | 250 memories/month | Gnosis mainnet, permanent, E2E encrypted | No credit card. Cap resets monthly. |
-| **Pro** | 1,500 memories/month | Gnosis mainnet, same encryption | Adds LLM-guided dedup at the relay. Stripe checkout via `totalreclaw_upgrade`. |
+| Tier | Monthly memory cap | Notes |
+|---|---|---|
+| **Free** | 250 memories/month | Permanent, end-to-end encrypted. No credit card. Cap resets monthly. |
+| **Pro** | 1,500 memories/month | Same encryption + ownership. Adds LLM-guided dedup. Stripe checkout via `totalreclaw_upgrade`. |
 
-Both tiers: encryption / ownership / on-chain durability are identical. Tier only changes the monthly write cap + Pro's dedup feature.
+Both tiers: encryption, ownership, and on-chain durability are identical. Tier only changes the monthly memory cap + Pro's dedup feature.
 
 ### Automatic quota signalling
 
-The plugin fetches billing on every `on_session_start` and caches it for 2 hours. The plugin auto-injects warnings into your context at these thresholds — when you see them, surface them to the user:
+The plugin fetches billing on every `on_session_start` and caches it for 2 hours. It auto-injects warnings into your context at these thresholds — when you see them, surface them to the user:
 
 - **>80% usage** — soft warning. Mention casually: *"You're at `<used>` / `<limit>` of your free-tier quota this month. Upgrade to Pro for 1,500/month — want me to open the upgrade link?"* Wait for confirmation before calling `totalreclaw_upgrade`.
 - **403 quota exceeded** on a write → billing cache invalidated, warning re-injects next turn. Surface the error verbatim + offer `totalreclaw_upgrade` immediately.
-- **First successful pair** → setup-flow line 6 already includes tier + limit + network. Do not re-emit the same info on subsequent first-message-of-session.
+- **First successful pair** → the setup-flow confirmation already includes tier + limit. Do not re-emit the same info on subsequent first-message-of-session.
 
 Do NOT compute "you have X left" math yourself — `totalreclaw_status` returns `free_writes_used` and `free_writes_limit` already. Quote them verbatim.
 
@@ -198,28 +106,28 @@ User intent → action:
 |---|---|
 | "How much does it cost?" / "What's the pricing?" / "Is it free?" | Cite the table above + pricing URL. Don't quote a `$` figure unless the user explicitly asked for the current Pro price AND you just called `totalreclaw_status`. |
 | User asks to upgrade / asks how to get Pro / hits a 403 | Call `totalreclaw_upgrade` → returns a Stripe checkout URL. Emit ONE user-visible line: *"Open `<url>` in your browser to complete the upgrade. Reply `done` once the payment page confirms."* DO NOT paraphrase the URL. |
-| User reports payment succeeded ("done") | Call `totalreclaw_status` once to refresh the cached tier. Emit a single confirmation: *"✓ You're now on TotalReclaw Pro — 1,500 memories/month on Gnosis mainnet."* |
-| User wants to cancel / downgrade | Direct them to <https://totalreclaw.xyz/pricing> — Stripe customer portal is the only canonical cancel path. The plugin does not expose a downgrade tool. |
+| User reports payment succeeded ("done") | Call `totalreclaw_status` once to refresh the cached tier. Emit a single confirmation: *"✓ You're now on TotalReclaw Pro — 1,500 memories/month."* |
+| User wants to cancel / downgrade | Direct them to <https://totalreclaw.xyz/pricing> — the Stripe customer portal is the only canonical cancel path. The plugin does not expose a downgrade tool. |
 
 ### Forbidden tier claims (deny-list)
 
-These statements are WRONG. Never write any of them — they fabricate pricing model that doesn't exist:
+These statements are WRONG. Never write any of them — they fabricate a pricing model that doesn't exist:
 
-- "There's a free trial period" — there isn't. Free tier is permanent.
-- "Memories expire" — memories are permanent on Gnosis mainnet, regardless of tier.
+- "There's a free trial period" — there isn't. The free tier is permanent.
+- "Memories expire" — memories are permanent regardless of tier.
 - "You need to upgrade to use encryption" — E2E encryption is identical across tiers.
-- "Self-hosted is automatically Pro" — self-hosted bypasses the managed relay; tiers/limits only apply to managed users.
+- "Self-hosted is automatically Pro" — self-hosted bypasses the managed relay; tiers / limits only apply to managed users.
 - "Pro = unlimited" — Pro is **1,500/month**, NOT unlimited. Saying "unlimited" silently breaks user expectations when they hit the cap.
-- Mentioning testnet (Base Sepolia) to managed users — Base Sepolia is dev/QA only, never the production network for free or Pro.
+- **Naming the underlying network / chain to the user** (e.g. "Gnosis", "mainnet", "Base Sepolia", "testnet") — users don't need it and it only confuses. Cite tier + quota via `totalreclaw_status`; never the chain.
 - Inventing `$` amounts. The current Pro monthly price is the one returned by `totalreclaw_status` OR shown at the pricing URL — never anywhere else.
 
 ## Diagnostics
 
-- `totalreclaw_*` tools not visible → gateway not restarted after install; issue Hermes' `/restart` slash command (in-process, drains active runs) **autonomously** — never ask the user for permission to restart. If `/restart` returns "not authorized" / "command not found", DO NOT loop on `/restart`; try `/new` once (fresh session may pick up freshly-bound tools), then escalate to a one-line user-prompted restart per step 2's unauthorized fallback. Wait for `done`.
-- User says done but `credentials.json` missing → PIN expired or entered wrong phrase; call `totalreclaw_pair` again.
-- `onboarding required` → credentials missing; redo from the account-setup step.
+- `totalreclaw_*` tools not visible → the gateway wasn't restarted after install. This is an **install** problem — follow the install guide (<https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md>), which owns the `/restart` procedure.
+- User says done but `credentials.json` missing → PIN expired or wrong phrase entered; call `totalreclaw_pair` again.
+- `onboarding required` → credentials missing; redo from the account-setup step in the install guide.
 - `quota exceeded` → `totalreclaw_status`, then offer `totalreclaw_upgrade`.
 
 ## Tool surface
 
-`totalreclaw_pair` (ONLY account-setup path) · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_export` · `_status` · `_upgrade` · `_import_from` · `_import_batch` · `_debrief` · `_report_qa_bug` (RC only).
+`totalreclaw_pair` (ONLY account-setup path) · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_retype` · `_set_scope` · `_export` · `_status` · `_upgrade` · `_import_from` · `_import_batch` · `_debrief` · `_report_qa_bug` (RC only).

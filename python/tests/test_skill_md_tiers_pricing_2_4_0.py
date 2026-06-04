@@ -49,15 +49,19 @@ def test_skill_includes_tiers_pricing_section():
 
 
 def test_skill_pricing_table_has_free_tier_with_250_cap():
-    """Canonical free-tier numbers from skill-nanoclaw/SKILL.md."""
+    """Canonical free-tier cap. Post-consolidation (2026-06-05) the table
+    names NO chain/network — docs name no chain; `totalreclaw_status` /
+    billing is the canonical source, so the ops-1 single-chain flip needs
+    zero doc edits."""
     body = _read_skill()
     assert "250 memories/month" in body, (
-        "Free-tier monthly cap must be stated as '250 memories/month' "
-        "verbatim — matches canonical copy in skill-nanoclaw/SKILL.md."
+        "Free-tier monthly cap must be stated as '250 memories/month'."
     )
-    assert "Gnosis mainnet" in body, (
-        "Free tier network must be named 'Gnosis mainnet' (NOT Base "
-        "Sepolia — that's testnet, dev-only)."
+    # The only permitted chain mention is the deny-list entry telling the
+    # agent NOT to name a chain/network to the user.
+    assert "Naming the underlying network / chain" in body, (
+        "SKILL.md must carry the deny-list entry forbidding the agent from "
+        "naming the underlying chain/network to the user."
     )
 
 
@@ -161,18 +165,16 @@ def test_skill_forbidden_claims_denylist():
     )
 
 
-def test_skill_existing_setup_flow_unaffected():
-    """Backwards-compat: the rc2 additions must not break the existing
-    setup-flow / phrase-safety / silence-rules sections."""
+def test_skill_usage_skill_core_sections_present():
+    """Post-consolidation (2026-06-05): the usage skill keeps phrase-safety,
+    the pair tool reference, and the usage section. The install-flow sections
+    (## Silence rules / ## Setup flow) moved OUT to hermes-setup.md, and the
+    setup confirmation line (with 'free tier' copy) now lives in that install
+    doc — not the usage skill."""
     body = _read_skill()
-    # rc.26+ invariants — these MUST still be in place.
-    assert "## Silence rules" in body
     assert "## Phrase safety" in body
     assert "totalreclaw_pair" in body
-    # The post-setup confirmation line still mentions the free tier.
-    assert "TotalReclaw free tier" in body, (
-        "Setup-flow line 6 (the confirmation copy) must still mention "
-        "'TotalReclaw free tier' — that's the first surfacing point "
-        "to the user, and removing it would break the rc.26 setup-line "
-        "contract."
-    )
+    assert "## Usage (post-setup)" in body
+    # Install-flow sections must NOT have leaked back into the usage skill.
+    assert "## Silence rules" not in body
+    assert "## Setup flow" not in body
