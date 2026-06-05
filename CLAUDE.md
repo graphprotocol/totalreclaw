@@ -19,13 +19,13 @@
 
 Two storage modes: **Managed Service** (default -- on-chain via The Graph, accessed through relay) and **Self-Hosted** (PostgreSQL backend you run yourself). The client-side E2EE pipeline is identical for both.
 
-Managed Service chain routing (current, verified 2026-05-30 against Railway env):
+Managed Service chain routing (**single-chain Gnosis — ops-1 shipped 2026-06-05, `totalreclaw-internal#283` closed**):
 
-- **Dual-chain is LIVE.** The relay routes by tier: **Free → Base Sepolia (chain 84532)**, **Pro → Gnosis mainnet (chain 100)**. Env vars: `PIMLICO_CHAIN_ID=84532` (free), `PRO_PIMLICO_CHAIN_ID=100` (pro) on both `totalreclaw` (staging) and `totalreclaw-production`.
-- **Single-chain Gnosis is the TARGET, not yet shipped.** The intent (per product owner) is for both tiers to run on Gnosis mainnet, because the real cost unit is **Pimlico UserOps (chain-independent) — we don't pay gas directly** — so there's no economic reason to keep free on a testnet. The migration is tracked as **ops-1 (`totalreclaw-internal#283`, OPEN, P0)** ("deprecate Base Sepolia routing — single-chain Gnosis"). Until ops-1 lands, treat any "single-chain" wording elsewhere as aspirational.
-- **Known mismatch (bug):** `GET /v1/tiers` advertises `features.chain = "gnosis"` for the **free** tier, but the router still sends free writes to Base Sepolia. Advertise/route mismatch — tracked alongside ops-1.
+- **Single-chain Gnosis is LIVE.** Both tiers run on **Gnosis mainnet (chain 100)**. Env: `PIMLICO_CHAIN_ID=100` (free) and `PRO_PIMLICO_CHAIN_ID=100` (pro) on both `totalreclaw` (staging) and `totalreclaw-production`. The legacy Free → Base Sepolia (84532) routing was retired in ops-1.
+- **Why single-chain:** the real cost unit is **Pimlico UserOps (chain-independent) — we don't pay gas directly** — so there's no economic reason to keep free on a testnet; and, decisively, a free→pro upgrade must not strand data. With both tiers on the same chain + DataEdge + subgraph, an upgrade is a pure `tier='pro'` flag flip with zero data migration. Verified live: a free registration's `GET /v1/billing/status` returns `chain_id: 100`.
+- **Clients are chain-aware via billing.** The relay returns authoritative `chain_id` + `data_edge_address` in `/v1/billing/status` (sourced from the per-tier chain-router); chain-aware clients consume them verbatim, so a future chain change needs zero client release.
 
-Smart Account addresses are deterministic (CREATE2) and byte-equal across chains. The DataEdge contract is currently the **same address `0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca` on both chains AND shared between staging and production** — staging on-chain writes are NOT isolated from production. Staging-isolation (separate DataEdge instance + dedicated staging subgraph on Gnosis) is specced in `totalreclaw-internal/docs/specs/ops/staging-chain-isolation.md`.
+Smart Account addresses are deterministic (CREATE2) and byte-equal across chains. **Production** DataEdge = `0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca` (both tiers), indexed by the `total-reclaw-gnosis` subgraph. **Staging is on-chain isolated** (shipped): its own DataEdge `0xE7a4D2677B686e13775Ba9092631089e35F0BB91` + dedicated `total-reclaw-gnosis-staging` subgraph, so staging writes never touch production data. See `totalreclaw-internal/docs/specs/ops/staging-chain-isolation.md`.
 
 ```
 +-------------------------------------------------------------------------+
@@ -210,9 +210,9 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Server-side extraction config | Yes | -- | Yes | -- | -- | Yes | Relay returns `extraction_interval` + `max_facts_per_extraction` in billing status |
 | Unified extraction interval (3 turns) | Yes | -- | Yes | Yes | -- | Yes | Server-tunable via relay config (no npm publish needed) |
 | Max facts per extraction | Yes | -- | Yes | Yes | -- | Yes | Server-tunable via relay config (default 15) |
-| Chain auto-detect from billing | Yes | Yes | Yes | -- | -- | Yes | Client reads its chain from the relay billing response. Relay routes per tier: Free → Base Sepolia (84532), Pro → Gnosis (100). Single-chain Gnosis is the target (ops-1). |
+| Chain auto-detect from billing | Yes | Yes | Yes | -- | -- | Yes | Client reads its chain from the relay billing response. Relay routes both tiers to Gnosis (100) — single-chain shipped (ops-1, #283 closed 2026-06-05). |
 | **Batching** | | | | | | |
-| Client batching (multi-call UserOps) | Yes | Yes | Yes (via MCP) | Yes (Gnosis Pro) | Yes (via MCP) | Yes | Hermes batches on Gnosis Pro (chain 100) via `client.remember_batch()` shipped in PyPI 2.0.0+; Base Sepolia free-tier (chain 84532) writes one fact per UserOp pending Path A gas-estimation diagnosis |
+| Client batching (multi-call UserOps) | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes | Hermes batches via `client.remember_batch()` (PyPI 2.0.0+). With both tiers on Gnosis (chain 100) post-ops-1, free batches via the same `executeBatch` path as pro — the old Base Sepolia gas-estimation blocker no longer applies (free-tier batch not yet independently E2E-verified post-flip) |
 | **Billing** | | | | | | |
 | Quota warnings (>80%) | Yes | -- | Yes | Yes | -- | Yes | Injected via on_session_start hook; ZeroClaw via quota_warning() method |
 | 403 handling + cache invalidation | Yes | Yes | Yes | -- | Yes (via MCP) | Yes | ZeroClaw invalidates billing cache on 403, returns QuotaExceeded error |
@@ -230,9 +230,9 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 
 Features across Self-Hosted (PostgreSQL) and Managed Service (default, Gnosis mainnet via The Graph).
 
-Managed Service tier model (current routing): **Free** = 250 memories/month, currently on **Base Sepolia** (chain 84532; migrating to Gnosis per ops-1) — permanent, E2E encrypted, no credit card required. **Pro** = 1,500 memories/month on **Gnosis mainnet** (chain 100) — permanent, LLM-guided dedup, custom extraction interval, **plus import (ChatGPT/Gemini/Claude) which is a Pro-only feature**; pricing via Stripe — see `totalreclaw_status`. Target end-state (ops-1): both tiers on Gnosis.
+Managed Service tier model (single-chain Gnosis — ops-1 shipped, #283 closed 2026-06-05): **Free** = 250 memories/month on **Gnosis mainnet** (chain 100) — permanent, E2E encrypted, no credit card required. **Pro** = 1,500 memories/month on **Gnosis mainnet** (chain 100) — permanent, LLM-guided dedup, custom extraction interval, **plus import (ChatGPT/Gemini/Claude) which is a Pro-only feature**; pricing via Stripe — see `totalreclaw_status`. Both tiers run on Gnosis; the only difference is quota + Pro features.
 
-**Batching (UserOp `executeBatch`) is a universal mechanism, not a tier feature.** Cost = Pimlico UserOps (chain-independent), so batching 15 facts → 1 UserOp cuts cost 15× for everyone. Hermes auto-extraction (`lifecycle.py`) already batches unconditionally for both tiers; the import engine chunk-batches. The Gnosis-only chain gate (`batch-gate.ts`/`batch_gate.py`, imp-16) exists today only because of a **Base Sepolia gas-estimation bug** (free chain) — a technical blocker, NOT a pricing decision. Once ops-1 puts free on Gnosis, that gate becomes a no-op and batching is cleanly universal. Distinction to keep straight: **batching = universal; the import feature = Pro-only** (the batching inside import is incidental).
+**Batching (UserOp `executeBatch`) is a universal mechanism, not a tier feature.** Cost = Pimlico UserOps (chain-independent), so batching 15 facts → 1 UserOp cuts cost 15× for everyone. Hermes auto-extraction (`lifecycle.py`) already batches unconditionally for both tiers; the import engine chunk-batches. The Gnosis-only chain gate (`batch-gate.ts`/`batch_gate.py`, imp-16) was only ever a guard against a **Base Sepolia gas-estimation bug** (the old free chain) — a technical blocker, NOT a pricing decision. Now that ops-1 (#283, closed 2026-06-05) has put free on Gnosis, that gate is a no-op and batching is cleanly universal. Distinction to keep straight: **batching = universal; the import feature = Pro-only** (the batching inside import is incidental).
 
 | Feature | Self-Hosted | Managed Service | Notes |
 |---------|:-:|:-:|-------|
@@ -245,8 +245,8 @@ Managed Service tier model (current routing): **Free** = 250 memories/month, cur
 | Store-time dedup (supersede) | Yes | Yes | Managed service: via on-chain tombstone |
 | Billing / Status | Yes | Yes | Both query relay billing endpoint |
 | Hot cache | -- | Yes | Self-hosted doesn't need it |
-| Tier-based chain routing | -- | Yes | **Dual-chain (current):** Free → Base Sepolia (84532), Pro → Gnosis (100). Single-chain Gnosis is the target (ops-1, `totalreclaw-internal#283`). |
-| Client batching | -- | Yes | Multi-call UserOps via batcher.ts (managed service only, uses ERC-4337 executeBatch). Universal mechanism; gated to Gnosis today only by the Sepolia gas bug. |
+| Single-chain Gnosis routing | -- | Yes | **Single-chain shipped** (ops-1, `totalreclaw-internal#283` closed 2026-06-05): both Free and Pro route to Gnosis (chain 100). The legacy Free → Base Sepolia (84532) routing is retired. |
+| Client batching | -- | Yes | Multi-call UserOps via batcher.ts (managed service only, uses ERC-4337 executeBatch). Universal mechanism; with both tiers on Gnosis post-ops-1 the old Gnosis-only gate is a no-op. |
 
 ### Known Gaps
 
@@ -259,15 +259,15 @@ Managed Service tier model (current routing): **Free** = 250 memories/month, cur
 | Crypto payments removed | LOW | Coinbase Commerce sunset March 31, 2026. Removed from relay, tools, and website. Stripe (fiat) is the sole payment method. |
 | Hermes not on PyPI (hermes-agent) | RESOLVED | `totalreclaw` 1.2.0 on PyPI includes generic agent layer (no hermes-agent dependency). OPENAI_BASE_URL fix + model detection included. |
 | Hermes no import/migrate/consolidate | MEDIUM | Python client does not yet implement import adapters, migrate tool, or consolidation. Core remember/recall/forget/export/status work. |
-| Hermes no client batching | RESOLVED | Python batch path shipped in PyPI 2.0.0+ (`client.remember_batch()`), now chain-aware after imp-10: Gnosis Pro (chain 100) batches up to 15 facts per UserOp; Base Sepolia free-tier (chain 84532) still single-fact pending Path A gas-estimation diagnosis (tracked separately). |
-| Free-tier (Base Sepolia) batch UserOps | LOW | Free-tier (Base Sepolia) writes one fact per UserOp pending Path A gas-estimation diagnosis. Gnosis Pro tier batches normally via `executeBatch`. |
+| Hermes no client batching | RESOLVED | Python batch path shipped in PyPI 2.0.0+ (`client.remember_batch()`). With both tiers on Gnosis (chain 100) post-ops-1 (#283, closed 2026-06-05), free and pro both batch up to 15 facts per UserOp via `executeBatch` — the old Base Sepolia gas-estimation blocker no longer applies. Free-tier batch not yet independently E2E-verified post-flip. |
+| Free-tier batch UserOps on Gnosis | RESOLVED | ops-1 (#283, closed 2026-06-05) moved free to Gnosis (chain 100), so free batches via the same `executeBatch` path as pro; the old Base Sepolia gas-estimation blocker is gone. Not yet independently E2E-verified post-flip. |
 | Hermes no store-time dedup | RESOLVED | Generic agent layer now performs cosine-based near-duplicate detection (>= 0.85) before storing. |
 | Hermes heuristic extraction only | LOW | Generic agent layer tries LLM extraction first, falls back to heuristic regex. LLM path requires compatible provider (OpenAI-compatible endpoint). |
 | ZeroClaw no import/migrate | LOW | Rust crate implements core Memory trait + status + export + upgrade (Stripe checkout) but not import adapters or migrate tool. |
 | ZeroClaw no client batching | RESOLVED | Rust crate supports executeBatch() multi-call UserOps (up to 15 facts per batch). |
 | ZeroClaw UserOp submission | RESOLVED | Native Rust ERC-4337 v0.7 UserOp construction via alloy-primitives/alloy-sol-types. Hash + signing verified byte-for-byte against viem. |
 | ZeroClaw client-consistency | RESOLVED | Rust crate now fully compliant: client ID header, billing cache (2h TTL), quota warnings, 403 handling, dynamic candidate pool, store-time cosine dedup (0.85), hot cache (30 entries), importance normalization, auto-recall top_k=8, broadened search fallback, chain ID auto-detect from billing. 24 spec compliance tests + 2 E2E tests against staging. |
-| Hermes chain ID default | RESOLVED | Hermes auto-detects chain from the relay billing response (no hardcoded chain). Relay routing is per-tier (Free → Sepolia, Pro → Gnosis) until ops-1 lands single-chain. |
+| Hermes chain ID default | RESOLVED | Hermes auto-detects chain from the relay billing response (no hardcoded chain). Post-ops-1 (#283, closed 2026-06-05) the relay routes both tiers to Gnosis (chain 100) — single-chain. |
 | Debrief bypasses store-time dedup | LOW | MCP, NanoClaw, Hermes call `client.remember()` directly for debrief items (no cosine dedup). Only OpenClaw routes through `storeExtractedFacts()`. LLM-level dedup via prompt + server-side content fingerprint mitigate. |
 | Hermes debrief stores without embedding | LOW | `hooks.py` stores debrief items without embedding param — no LSH bucket hashes, search relies on word-level blind indices only. |
 | NanoClaw debrief no 8-message guard | LOW | `pre-compact.ts` triggers debrief based on extraction results, not conversation length. LLM prompt handles it, but no code-level guard like other clients. |
@@ -351,9 +351,9 @@ Every new feature implementation MUST include:
 | Stripe-driven tiers | PLANNED | Stripe as source of truth for pricing/limits. Plan at `totalreclaw-internal/plans/2026-03-26-stripe-driven-tiers.md` |
 | LLM memory import (ChatGPT/Claude/Gemini) | PLANNED | Adapters for importing memory from major LLM providers |
 | Conflict resolution (Layers 3-4) | MEDIUM | Spec'd in v0.3.2, not implemented |
-| Single-chain (Gnosis-only) policy | **IN PROGRESS — P0** | **NOT shipped.** Dual-chain is live: Free → Base Sepolia (84532), Pro → Gnosis (100) — verified 2026-05-30 against Railway. Migration tracked as ops-1 (`totalreclaw-internal#283`, OPEN). **Primary driver = live data-loss-on-upgrade:** Stripe upgrade is a bare `tier='pro'` flag flip with no data migration, so a free user's Sepolia vault is stranded/invisible on free→pro upgrade (the `migrate` bridge was retired in ops-3). Gated on the staging-isolation dry-run (`totalreclaw-internal#363`) before the prod flip. |
-| Staging on-chain isolation | **OPEN** | Staging + production share the same Gnosis DataEdge (`0xC445…`) and subgraph — staging Pro writes pollute prod data. Fix specced in `totalreclaw-internal/docs/specs/ops/staging-chain-isolation.md` (separate DataEdge instance + dedicated staging subgraph on Gnosis). |
-| `/v1/tiers` advertise/route mismatch | **OPEN (bug)** | tiers endpoint reports `features.chain="gnosis"` for free, but routing sends free writes to Base Sepolia. Resolve with / alongside ops-1. |
+| Single-chain (Gnosis-only) policy | RESOLVED | **Shipped — ops-1 (`totalreclaw-internal#283`, CLOSED 2026-06-05).** Both tiers route to Gnosis mainnet (chain 100); the legacy Free → Base Sepolia (84532) routing is retired. This closes the data-loss-on-upgrade risk: a Stripe free→pro upgrade is now a pure `tier='pro'` flag flip with zero data migration, since the free vault already lives on Gnosis. |
+| Staging on-chain isolation | RESOLVED | **Shipped.** Staging runs an isolated DataEdge (`0xE7a4D2677B686e13775Ba9092631089e35F0BB91`) + dedicated `total-reclaw-gnosis-staging` subgraph, so staging writes never touch production data. See `totalreclaw-internal/docs/specs/ops/staging-chain-isolation.md`. |
+| `/v1/tiers` advertise/route mismatch | RESOLVED | Post-ops-1, free routes to Gnosis (chain 100), matching the `features.chain="gnosis"` the tiers endpoint advertises — advertise and route now agree. |
 | Startup validation | MEDIUM | Validate Pimlico/Stripe/Subgraph reachability on relay boot |
 | DB backup monitoring | LOW | Add alerting (Slack/email) if daily R2 backup fails |
 | Graceful shutdown | LOW | Not yet configured in uvicorn |
@@ -439,7 +439,7 @@ For deployment procedures, follow the canonical runbook **[`docs/guides/deployme
 | **Staging** | `totalreclaw` | `https://api-staging.totalreclaw.xyz` | Auto on push to `main` |
 | **Production** | `totalreclaw-production` | `https://api.totalreclaw.xyz` | Manual via `railway up -s totalreclaw-production -d` |
 
-**IMPORTANT: All tests (E2E, integration, smoke, cross-client) MUST hit the staging relay (`api-staging.totalreclaw.xyz`), NEVER production.** Staging routes the same way as production today (Free → Base Sepolia 84532, Pro → Gnosis 100) — NOT single-chain. **Caveat:** staging currently shares the Gnosis DataEdge + subgraph with production (no on-chain isolation yet — see staging-chain-isolation spec), so a Pro-tier staging E2E writes a real (test-tagged) tx to the shared Gnosis subgraph. Test registrations send `X-TotalReclaw-Test: true` header and show as `[TEST]` in Telegram notifications.
+**IMPORTANT: All tests (E2E, integration, smoke, cross-client) MUST hit the staging relay (`api-staging.totalreclaw.xyz`), NEVER production.** Staging runs single-chain Gnosis (chain 100) for both tiers — same routing as production post-ops-1 (#283, closed 2026-06-05). Staging is on-chain **isolated**: it writes to its own DataEdge (`0xE7a4D2677B686e13775Ba9092631089e35F0BB91`) + dedicated `total-reclaw-gnosis-staging` subgraph, so staging E2E txs never touch production data. Test registrations send `X-TotalReclaw-Test: true` header and show as `[TEST]` in Telegram notifications.
 
 ### Relay Quick Reference
 
@@ -493,7 +493,7 @@ Autonomous regression harness for the vault SPA. Driver lives in `tools/qa-vault
 - **Version**: v1.0.0 — tagged and released on GitHub 2026-04-18 (https://github.com/p-diogo/totalreclaw/releases/tag/release-v1.0.0). Memory Taxonomy v1 + Retrieval v2 Tier 1 shipped to production.
 - **Phase**: Private Beta; v1 is the default extraction + write path across every client with zero env-var toggles
 - **Packages published (v1.0.0)**: `@totalreclaw/core@2.0.0` (npm), `totalreclaw-core@2.0.0` (PyPI + crates.io), `@totalreclaw/mcp-server@3.0.1` (npm, post-QA protobuf v=4 fix), `@totalreclaw/skill-nanoclaw@3.0.0` (npm), `@totalreclaw/totalreclaw@3.0.2` (ClawHub, post-QA lockfile regen), `totalreclaw@2.0.1` (PyPI, post-QA `wallet_address` property fix), `totalreclaw-memory@2.0.0` (crates.io — first Rust release).
-- **Default mode**: Managed Service. **Chain routing is dual-chain (current):** Free → Base Sepolia (84532), Pro → Gnosis (100). Single-chain Gnosis for both tiers is the target (ops-1, `totalreclaw-internal#283`, OPEN). Verified against Railway 2026-05-30.
+- **Default mode**: Managed Service. **Chain routing is single-chain Gnosis (ops-1 shipped, `totalreclaw-internal#283` closed 2026-06-05):** both Free and Pro route to Gnosis mainnet (chain 100). The legacy Free → Base Sepolia (84532) routing is retired.
 - **Chain ID**: client `TOTALRECLAW_CHAIN_ID` env var removed in v1 — the client auto-detects its chain from the relay billing response (the relay decides per tier). So the client is chain-agnostic; the relay's `PIMLICO_CHAIN_ID` / `PRO_PIMLICO_CHAIN_ID` env vars are the source of truth.
 - **Embedding model**: onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled). Only supported model in v1; `TOTALRECLAW_EMBEDDING_MODEL` env var removed.
 - **Memory taxonomy**: v1 (6 types: claim / preference / directive / commitment / episode / summary + 3 axes: source / scope / volatility). See `docs/specs/totalreclaw/memory-taxonomy-v1.md`.
