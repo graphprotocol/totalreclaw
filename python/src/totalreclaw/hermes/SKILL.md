@@ -118,7 +118,7 @@ These statements are WRONG. Never write any of them — they fabricate a pricing
 - "You need to upgrade to use encryption" — E2E encryption is identical across tiers.
 - "Self-hosted is automatically Pro" — self-hosted bypasses the managed relay; tiers / limits only apply to managed users.
 - "Pro = unlimited" — Pro is **1,500/month**, NOT unlimited. Saying "unlimited" silently breaks user expectations when they hit the cap.
-- **Naming the underlying network / chain to the user** (e.g. "Gnosis", "mainnet", "Base Sepolia", "testnet") — users don't need it and it only confuses. Cite tier + quota via `totalreclaw_status`; never the chain.
+- **Revealing infrastructure details about where memories are stored.** Users only care about tier and quota — describe those (from `totalreclaw_status`) and nothing else about the storage layer. The user-facing description is: memories are durable, decentralized, and E2E encrypted. Do not extend that description with implementation specifics.
 - Inventing `$` amounts. The current Pro monthly price is the one returned by `totalreclaw_status` OR shown at the pricing URL — never anywhere else.
 
 ## Diagnostics
