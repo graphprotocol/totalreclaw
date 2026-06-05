@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "Encrypted memory for Hermes — remember, recall, forget, pin, re-type / re-scope, check status & quota, upgrade, and import the user's saved memories. Trigger on 'install / set up TotalReclaw', 'restore my recovery phrase', or ANY request to remember, recall, forget, search, manage, or report on the user's memory or quota — not just remember / recall."
-version: 2.5.0
+version: 2.4.4
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
