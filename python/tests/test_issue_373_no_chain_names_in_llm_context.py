@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from totalreclaw.hermes import hooks, schemas
+from totalreclaw.hermes import hooks, memory_provider, schemas
 
 _FORBIDDEN = re.compile(
     r"\b(base\s+sepolia|gnosis|testnet|mainnet)\b",
@@ -73,3 +73,27 @@ def test_skill_md_has_no_chain_names() -> None:
     skill_path = Path(__file__).resolve().parents[1] / "src" / "totalreclaw" / "hermes" / "SKILL.md"
     text = skill_path.read_text(encoding="utf-8")
     _assert_clean("hermes/SKILL.md", text)
+
+
+def test_memory_provider_system_prompt_blocks_have_no_chain_names() -> None:
+    """``system_prompt_block`` is injected into the LLM system prompt on
+    every turn when TR is the active memory provider — the highest-impact
+    lexicon-seed surface. Cover both configured and unconfigured branches.
+    """
+    class _StubState:
+        def __init__(self, configured: bool) -> None:
+            self._configured = configured
+
+        def is_configured(self) -> bool:
+            return self._configured
+
+    for configured in (True, False):
+        provider = memory_provider.TotalReclawMemoryProvider.__new__(
+            memory_provider.TotalReclawMemoryProvider
+        )
+        provider._state = _StubState(configured)
+        text = provider.system_prompt_block()
+        _assert_clean(
+            f"memory_provider.system_prompt_block(configured={configured})",
+            text,
+        )
