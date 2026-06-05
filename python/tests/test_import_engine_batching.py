@@ -25,6 +25,24 @@ from totalreclaw.import_engine import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _stub_embedding(monkeypatch):
+    """Stub the embedding model for this module.
+
+    These tests assert *batching* behaviour (one ``remember_batch`` per
+    ≤15-fact group), not embedding correctness. ``_store_facts_chunked`` calls
+    ``_prepare_fact_payload`` → real ``get_embedding`` (the 344 MB Harrier ONNX
+    model) for every fact, which costs ~23 s/fact on CI — so the 14- and
+    15-fact cases ran ~5-6 min EACH and blew the python-tests ``timeout-minutes``
+    (the operation-cancelled failure on doc-only PR #302). The payload attaches
+    the embedding best-effort and the assertions never inspect the vector, so a
+    constant stub is sound and keeps the batching logic running in milliseconds.
+    """
+    import totalreclaw.embedding as _emb
+
+    monkeypatch.setattr(_emb, "get_embedding", lambda _text: [0.0] * 640)
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
