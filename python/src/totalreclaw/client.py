@@ -89,6 +89,29 @@ def _chain_id_from_billing(payload: object) -> int:
     return DEFAULT_CHAIN_ID_FREE
 
 
+def _data_edge_from_billing(payload: object) -> Optional[str]:
+    """Resolve the authoritative DataEdge address from ``/v1/billing/status``.
+
+    The relay reports ``data_edge_address`` for the wallet's environment+chain
+    (root fix #366) — e.g. the isolated staging Gnosis DataEdge differs from
+    prod's. Returns ``None`` when the field is absent or malformed, in which
+    case callers fall back to the core's default DataEdge (correct for prod).
+    Only a syntactically valid ``0x``-prefixed 20-byte hex string is accepted;
+    a bad value is ignored rather than risking writes to a wrong contract.
+    """
+    if isinstance(payload, dict):
+        raw = payload.get("data_edge_address")
+        if isinstance(raw, str):
+            s = raw.strip()
+            if (
+                s.startswith("0x")
+                and len(s) == 42
+                and all(c in "0123456789abcdefABCDEF" for c in s[2:])
+            ):
+                return s
+    return None
+
+
 def _get_eoa_account(mnemonic: str):
     """Derive the EOA (externally-owned account) from a BIP-39 mnemonic.
 
@@ -247,6 +270,11 @@ class TotalReclaw:
         # user override is exposed here.
         self._chain_id: int = DEFAULT_CHAIN_ID_FREE
         self._chain_id_resolved: bool = False
+        # Relay-authoritative DataEdge for this environment (#366), captured
+        # from /v1/billing/status alongside chain_id. None -> the core's
+        # default DataEdge (correct for prod). Set for chain/env-isolated
+        # environments such as the staging Gnosis DataEdge.
+        self._data_edge_address: Optional[str] = None
 
     async def resolve_address(self) -> str:
         """Resolve the CREATE2 Smart Account address via RPC.
@@ -337,7 +365,9 @@ class TotalReclaw:
                     headers=headers,
                 )
             if resp.status_code == 200:
-                self._chain_id = _chain_id_from_billing(resp.json())
+                payload = resp.json()
+                self._chain_id = _chain_id_from_billing(payload)
+                self._data_edge_address = _data_edge_from_billing(payload)
             else:
                 self._chain_id = DEFAULT_CHAIN_ID_FREE
         except Exception:
@@ -515,6 +545,7 @@ class TotalReclaw:
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,
+            data_edge_address=self._data_edge_address,
         )
 
     async def remember_batch(
@@ -615,6 +646,7 @@ class TotalReclaw:
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,
+            data_edge_address=self._data_edge_address,
             source=source,
         )
 
@@ -653,6 +685,7 @@ class TotalReclaw:
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,
+            data_edge_address=self._data_edge_address,
         )
 
     async def pin_fact(self, fact_id: str) -> dict:
@@ -681,6 +714,7 @@ class TotalReclaw:
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,
+            data_edge_address=self._data_edge_address,
         )
 
     async def unpin_fact(self, fact_id: str) -> dict:
@@ -701,6 +735,7 @@ class TotalReclaw:
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,
+            data_edge_address=self._data_edge_address,
         )
 
     async def retype(self, fact_id: str, new_type: str) -> dict:
@@ -730,6 +765,7 @@ class TotalReclaw:
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,
+            data_edge_address=self._data_edge_address,
         )
 
     async def set_scope(self, fact_id: str, new_scope: str) -> dict:
@@ -752,6 +788,7 @@ class TotalReclaw:
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,
+            data_edge_address=self._data_edge_address,
         )
 
     async def export_all(self) -> list[dict]:

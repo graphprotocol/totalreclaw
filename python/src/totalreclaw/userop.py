@@ -123,13 +123,28 @@ def _encode_uint256(value: int) -> str:
     return hex(value)[2:].zfill(64)
 
 
-def encode_execute_calldata_for_data_edge(protobuf_payload: bytes) -> str:
+def encode_execute_calldata_for_data_edge(
+    protobuf_payload: bytes,
+    data_edge_address: str | None = None,
+) -> str:
     """ABI-encode ``SimpleAccount.execute(dataEdge, 0, protobuf)`` calldata.
 
-    Delegates to totalreclaw_core.encode_single_call() which hardcodes the
-    DataEdge address and value=0. Returns 0x-prefixed hex.
+    Delegates to ``totalreclaw_core.encode_single_call()``. When
+    ``data_edge_address`` is provided (the relay's authoritative
+    ``data_edge_address`` from ``/v1/billing/status``, #366) the inner call
+    targets that DataEdge; otherwise the core's default DataEdge is used.
+    Returns 0x-prefixed hex.
+
+    The optional 2nd arg is only passed through when set, so this stays
+    compatible with a ``totalreclaw-core`` older than 2.5.0 (which does not
+    accept it) on the default path.
     """
-    calldata_bytes = totalreclaw_core.encode_single_call(protobuf_payload)
+    if data_edge_address is not None:
+        calldata_bytes = totalreclaw_core.encode_single_call(
+            protobuf_payload, data_edge_address
+        )
+    else:
+        calldata_bytes = totalreclaw_core.encode_single_call(protobuf_payload)
     return "0x" + calldata_bytes.hex()
 
 
@@ -141,11 +156,17 @@ MAX_BATCH_SIZE: int = 15
 
 def encode_execute_batch_calldata_for_data_edge(
     protobuf_payloads: list[bytes],
+    data_edge_address: str | None = None,
 ) -> str:
     """ABI-encode ``SimpleAccount.executeBatch(dests, values, datas)`` calldata.
 
-    Delegates to :func:`totalreclaw_core.encode_batch_call` which hardcodes
-    the DataEdge address (same target for every call) and ``value=0``.
+    Delegates to :func:`totalreclaw_core.encode_batch_call`. When
+    ``data_edge_address`` is provided (relay-authoritative, #366) every inner
+    call targets that DataEdge; otherwise the core's default is used.
+    The Rust core returns ``execute(...)`` calldata (not ``executeBatch``)
+    when ``len(protobuf_payloads) == 1`` so a batch-of-1 is byte-identical
+    to the single-fact fast path — this preserves gas parity with the TS
+    plugin's ``encodeBatchCalls`` helper.
     The Rust core returns ``execute(...)`` calldata (not ``executeBatch``)
     when ``len(protobuf_payloads) == 1`` so a batch-of-1 is byte-identical
     to the single-fact fast path — this preserves gas parity with the TS
@@ -176,7 +197,12 @@ def encode_execute_batch_calldata_for_data_edge(
             f"Batch size {len(protobuf_payloads)} exceeds maximum of "
             f"{MAX_BATCH_SIZE}"
         )
-    calldata_bytes = totalreclaw_core.encode_batch_call(protobuf_payloads)
+    if data_edge_address is not None:
+        calldata_bytes = totalreclaw_core.encode_batch_call(
+            protobuf_payloads, data_edge_address
+        )
+    else:
+        calldata_bytes = totalreclaw_core.encode_batch_call(protobuf_payloads)
     return "0x" + calldata_bytes.hex()
 
 
@@ -329,6 +355,7 @@ async def build_and_send_userop(
     chain_id: int = 84532,
     client_id: str = "python-client",
     session_id: Optional[str] = None,
+    data_edge_address: Optional[str] = None,
 ) -> str:
     """Build, sign, and submit a UserOperation through the relay.
 
@@ -383,8 +410,10 @@ async def build_and_send_userop(
     async with sender_lock, httpx.AsyncClient(timeout=30.0) as http:
         # 1. Encode the execute calldata (idempotent, does not depend on nonce)
         #    SmartAccount.execute(dataEdgeAddress, 0, protobufPayload)
-        #    Delegates to Rust core which hardcodes DataEdge address + value=0
-        call_data = encode_execute_calldata_for_data_edge(protobuf_payload)
+        #    DataEdge target is relay-authoritative (#366) when supplied.
+        call_data = encode_execute_calldata_for_data_edge(
+            protobuf_payload, data_edge_address
+        )
 
         # Retry loop for AA25 nonce conflicts.  When two UserOps race for
         # the same nonce the bundler rejects one with AA25.  Re-fetching
@@ -531,6 +560,7 @@ async def build_and_send_userop_batch(
     chain_id: int = 84532,
     client_id: str = "python-client",
     session_id: Optional[str] = None,
+    data_edge_address: Optional[str] = None,
 ) -> str:
     """Build, sign, and submit a BATCHED UserOperation through the relay.
 
@@ -634,7 +664,7 @@ async def build_and_send_userop_batch(
         #    so we compute it before the retry loop. Delegates to the
         #    Rust core for byte-parity with the TS plugin.
         call_data = encode_execute_batch_calldata_for_data_edge(
-            protobuf_payloads
+            protobuf_payloads, data_edge_address
         )
 
         # Retry loop for AA25 nonce conflicts.  When two UserOps race for

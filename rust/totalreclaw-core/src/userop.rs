@@ -17,7 +17,15 @@ use alloy_sol_types::{sol, SolCall};
 
 use crate::{Error, Result};
 
-/// DataEdge contract address (same on all chains).
+/// Default DataEdge contract address (prod Gnosis + Base Sepolia).
+///
+/// Used when a caller does not supply an explicit DataEdge. Chain/environment
+/// isolation (e.g. the staging Gnosis DataEdge, which differs from prod) is
+/// handled by passing an authoritative address to [`encode_single_call_to`] /
+/// [`encode_batch_call_to`] — the relay reports it via `/v1/billing/status`
+/// (`data_edge_address`). Writing to the wrong DataEdge strands facts outside
+/// the indexing subgraph, so the parameterized path errors on a bad address
+/// rather than silently falling back.
 pub const DATA_EDGE_ADDRESS: &str = "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca";
 
 /// EntryPoint v0.7 address.
@@ -43,12 +51,27 @@ sol! {
 /// The DataEdge contract has a fallback() that emits Log(bytes),
 /// so the inner calldata IS the raw protobuf payload.
 pub fn encode_single_call(protobuf_payload: &[u8]) -> Vec<u8> {
-    let dest: Address = DATA_EDGE_ADDRESS.parse().unwrap();
+    // Default DataEdge. The hardcoded const is always a valid address.
+    encode_single_call_to(protobuf_payload, DATA_EDGE_ADDRESS)
+        .expect("hardcoded DATA_EDGE_ADDRESS must parse")
+}
+
+/// Like [`encode_single_call`] but targets an explicit DataEdge address.
+///
+/// Chain/environment-aware clients resolve the authoritative DataEdge from the
+/// relay (`/v1/billing/status` → `data_edge_address`) and pass it here — the
+/// isolated staging Gnosis DataEdge differs from prod's, and on the wrong
+/// contract facts land outside the indexing subgraph (silent data loss).
+/// Errors on an unparseable address rather than defaulting.
+pub fn encode_single_call_to(protobuf_payload: &[u8], data_edge: &str) -> Result<Vec<u8>> {
+    let dest: Address = data_edge
+        .parse()
+        .map_err(|_| Error::Crypto(format!("invalid DataEdge address: {data_edge}")))?;
     let value = U256::ZERO;
     let data = Bytes::copy_from_slice(protobuf_payload);
 
     let call = executeCall { dest, value, data };
-    call.abi_encode()
+    Ok(call.abi_encode())
 }
 
 /// Encode multiple fact submissions as SimpleAccount.executeBatch() calldata.
@@ -56,6 +79,16 @@ pub fn encode_single_call(protobuf_payload: &[u8]) -> Vec<u8> {
 /// Each protobuf payload becomes one call to DataEdge's fallback().
 /// All calls have value=0.
 pub fn encode_batch_call(protobuf_payloads: &[Vec<u8>]) -> Result<Vec<u8>> {
+    encode_batch_call_to(protobuf_payloads, DATA_EDGE_ADDRESS)
+}
+
+/// Like [`encode_batch_call`] but targets an explicit DataEdge address.
+///
+/// See [`encode_single_call_to`] for why the DataEdge is now a parameter.
+/// A batch of 1 is byte-identical to the single-fact `execute()` fast path
+/// (gas parity with the TS plugin), so it delegates to
+/// [`encode_single_call_to`] with the same address.
+pub fn encode_batch_call_to(protobuf_payloads: &[Vec<u8>], data_edge: &str) -> Result<Vec<u8>> {
     if protobuf_payloads.is_empty() {
         return Err(Error::Crypto("Batch must contain at least 1 payload".into()));
     }
@@ -69,10 +102,12 @@ pub fn encode_batch_call(protobuf_payloads: &[Vec<u8>]) -> Result<Vec<u8>> {
 
     // Single payload -> use execute() (no batch overhead)
     if protobuf_payloads.len() == 1 {
-        return Ok(encode_single_call(&protobuf_payloads[0]));
+        return encode_single_call_to(&protobuf_payloads[0], data_edge);
     }
 
-    let dest: Address = DATA_EDGE_ADDRESS.parse().unwrap();
+    let dest: Address = data_edge
+        .parse()
+        .map_err(|_| Error::Crypto(format!("invalid DataEdge address: {data_edge}")))?;
     let dests: Vec<Address> = vec![dest; protobuf_payloads.len()];
     let values: Vec<U256> = vec![U256::ZERO; protobuf_payloads.len()];
     let datas: Vec<Bytes> = protobuf_payloads
@@ -355,6 +390,74 @@ mod tests {
         let payloads: Vec<Vec<u8>> = (0..16).map(|i| vec![i as u8]).collect();
         let result = encode_batch_call(&payloads);
         assert!(result.is_err());
+    }
+
+    // ---- chain/env-aware DataEdge (#366) ----
+
+    /// Isolated staging Gnosis DataEdge (differs from the prod default).
+    const STAGING_DATA_EDGE: &str = "0xE7a4D2677B686e13775Ba9092631089e35F0BB91";
+
+    fn contains_address(calldata: &[u8], addr: &str) -> bool {
+        let parsed: Address = addr.parse().unwrap();
+        let needle = parsed.as_slice(); // 20 raw bytes
+        calldata.windows(needle.len()).any(|w| w == needle)
+    }
+
+    #[test]
+    fn test_encode_single_call_to_default_matches_legacy_path() {
+        let payload = b"test protobuf data";
+        assert_eq!(
+            encode_single_call_to(payload, DATA_EDGE_ADDRESS).unwrap(),
+            encode_single_call(payload),
+            "default address must be byte-identical to the legacy hardcoded path"
+        );
+    }
+
+    #[test]
+    fn test_encode_single_call_to_targets_custom_dataedge() {
+        let payload = b"test protobuf data";
+        let default = encode_single_call_to(payload, DATA_EDGE_ADDRESS).unwrap();
+        let staging = encode_single_call_to(payload, STAGING_DATA_EDGE).unwrap();
+        assert_ne!(default, staging, "a different DataEdge must produce different calldata");
+        assert!(
+            contains_address(&staging, STAGING_DATA_EDGE),
+            "calldata must embed the staging DataEdge address"
+        );
+        assert!(!contains_address(&staging, DATA_EDGE_ADDRESS));
+    }
+
+    #[test]
+    fn test_encode_single_call_to_invalid_address_errors() {
+        assert!(encode_single_call_to(b"x", "not-an-address").is_err());
+        assert!(encode_single_call_to(b"x", "0x1234").is_err());
+    }
+
+    #[test]
+    fn test_encode_batch_call_to_threads_custom_dest() {
+        let payloads = vec![b"a".to_vec(), b"b".to_vec()];
+        let default = encode_batch_call_to(&payloads, DATA_EDGE_ADDRESS).unwrap();
+        let staging = encode_batch_call_to(&payloads, STAGING_DATA_EDGE).unwrap();
+        assert_eq!(&staging[..4], &[0x47, 0xe1, 0xda, 0x2a], "executeBatch selector");
+        assert_ne!(default, staging);
+        assert!(contains_address(&staging, STAGING_DATA_EDGE));
+    }
+
+    #[test]
+    fn test_batch_of_one_to_uses_execute_with_custom_dest() {
+        let payloads = vec![b"solo".to_vec()];
+        let batch1 = encode_batch_call_to(&payloads, STAGING_DATA_EDGE).unwrap();
+        assert_eq!(&batch1[..4], &[0xb6, 0x1d, 0x27, 0xf6], "execute() selector for batch-of-1");
+        assert_eq!(
+            batch1,
+            encode_single_call_to(b"solo", STAGING_DATA_EDGE).unwrap(),
+            "batch-of-1 must equal single_call_to with the same DataEdge"
+        );
+    }
+
+    #[test]
+    fn test_encode_batch_call_to_invalid_address_errors() {
+        let payloads = vec![b"a".to_vec(), b"b".to_vec()];
+        assert!(encode_batch_call_to(&payloads, "bad").is_err());
     }
 
     #[test]

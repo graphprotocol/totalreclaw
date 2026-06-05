@@ -175,6 +175,7 @@ async def store_fact(
     reasoning: Optional[str] = None,
     volatility: Optional[str] = None,
     extra_metadata: Optional[dict] = None,
+    data_edge_address: Optional[str] = None,
 ) -> str:
     """Encrypt and store a fact on-chain via relay.
 
@@ -284,6 +285,7 @@ async def store_fact(
         chain_id=chain_id,
         client_id=relay._client_id,
         session_id=getattr(relay, "_session_id", None),
+        data_edge_address=data_edge_address,
     )
 
     return fact_id
@@ -306,6 +308,7 @@ async def store_fact_batch(
     chain_id: int = 84532,
     source: str = "python-client",
     agent_id: str = "python-client",
+    data_edge_address: Optional[str] = None,
 ) -> list[str]:
     """Encrypt and store N facts in a single batched on-chain UserOp.
 
@@ -490,6 +493,7 @@ async def store_fact_batch(
         chain_id=chain_id,
         client_id=relay._client_id,
         session_id=getattr(relay, "_session_id", None),
+        data_edge_address=data_edge_address,
     )
 
     return fact_ids
@@ -699,6 +703,7 @@ async def forget_fact(
     eoa_address: Optional[str] = None,
     sender: Optional[str] = None,
     chain_id: int = 84532,
+    data_edge_address: Optional[str] = None,
 ) -> bool:
     """Write a tombstone on-chain to soft-delete a fact.
 
@@ -733,6 +738,7 @@ async def forget_fact(
             chain_id=chain_id,
             client_id=relay._client_id,
             session_id=getattr(relay, "_session_id", None),
+            data_edge_address=data_edge_address,
         )
         # Read-after-write: wait until the subgraph has flipped the fact's
         # isActive bit. Forget keeps its bool return contract — a False here
@@ -1006,6 +1012,7 @@ async def _change_claim_status(
     sender: Optional[str],
     chain_id: int,
     lsh_hasher: Optional[LSHHasher],
+    data_edge_address: Optional[str] = None,
 ) -> dict:
     """Shared implementation for ``pin_fact`` / ``unpin_fact``.
 
@@ -1277,6 +1284,7 @@ async def _change_claim_status(
         chain_id=chain_id,
         client_id=relay._client_id,
         session_id=getattr(relay, "_session_id", None),
+        data_edge_address=data_edge_address,
     )
 
     # Read-after-write: poll the subgraph until the new (pinned/unpinned)
@@ -1310,6 +1318,7 @@ async def pin_fact(
     sender: Optional[str] = None,
     chain_id: int = 84532,
     lsh_hasher: Optional[LSHHasher] = None,
+    data_edge_address: Optional[str] = None,
 ) -> dict:
     """Pin a claim so auto-resolution cannot supersede it.
 
@@ -1363,6 +1372,7 @@ async def pin_fact(
         sender=sender,
         chain_id=chain_id,
         lsh_hasher=lsh_hasher,
+        data_edge_address=data_edge_address,
     )
 
 
@@ -1376,6 +1386,7 @@ async def unpin_fact(
     sender: Optional[str] = None,
     chain_id: int = 84532,
     lsh_hasher: Optional[LSHHasher] = None,
+    data_edge_address: Optional[str] = None,
 ) -> dict:
     """Inverse of :func:`pin_fact` — move a pinned claim back to ``active``.
 
@@ -1394,6 +1405,7 @@ async def unpin_fact(
         sender=sender,
         chain_id=chain_id,
         lsh_hasher=lsh_hasher,
+        data_edge_address=data_edge_address,
     )
 
 

@@ -604,31 +604,52 @@ fn derive_eoa_address(mnemonic: &str) -> PyResult<String> {
 ///
 /// Args:
 ///     protobuf_payload: Raw protobuf bytes.
+///     data_edge_address: Optional 0x-prefixed DataEdge address. When omitted
+///         (or None), uses the default DataEdge (prod). Chain/environment-aware
+///         clients pass the authoritative address from the relay's
+///         /v1/billing/status `data_edge_address` field (#366). Raises
+///         ValueError on an unparseable address.
 ///
 /// Returns:
 ///     bytes (ABI-encoded calldata).
 #[cfg(feature = "managed")]
 #[pyfunction]
-fn encode_single_call<'py>(py: Python<'py>, protobuf_payload: &[u8]) -> Bound<'py, PyBytes> {
-    let encoded = userop::encode_single_call(protobuf_payload);
-    PyBytes::new(py, &encoded)
+#[pyo3(signature = (protobuf_payload, data_edge_address=None))]
+fn encode_single_call<'py>(
+    py: Python<'py>,
+    protobuf_payload: &[u8],
+    data_edge_address: Option<&str>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let encoded = match data_edge_address {
+        Some(addr) => userop::encode_single_call_to(protobuf_payload, addr)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+        None => userop::encode_single_call(protobuf_payload),
+    };
+    Ok(PyBytes::new(py, &encoded))
 }
 
 /// Encode multiple fact submissions as SimpleAccount.executeBatch() calldata.
 ///
 /// Args:
 ///     payloads: List of bytes (raw protobuf payloads).
+///     data_edge_address: Optional 0x-prefixed DataEdge address (see
+///         encode_single_call). Omit / None for the default DataEdge.
 ///
 /// Returns:
 ///     bytes (ABI-encoded calldata).
 #[cfg(feature = "managed")]
 #[pyfunction]
+#[pyo3(signature = (payloads, data_edge_address=None))]
 fn encode_batch_call<'py>(
     py: Python<'py>,
     payloads: Vec<Vec<u8>>,
+    data_edge_address: Option<&str>,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let encoded =
-        userop::encode_batch_call(&payloads).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let encoded = match data_edge_address {
+        Some(addr) => userop::encode_batch_call_to(&payloads, addr),
+        None => userop::encode_batch_call(&payloads),
+    }
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(PyBytes::new(py, &encoded))
 }
 

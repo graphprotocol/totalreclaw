@@ -27,7 +27,10 @@ dependencies = [
     # Upper bound stays at <3.0.0 to match the TypeScript clients'
     # `^2.0.0` semver semantics — a future core@3 will be a breaking
     # change and must bump this constraint in lockstep.
-    "totalreclaw-core>=2.4.0,<3.0.0",
+    # >=2.5.0: chain/env-aware DataEdge param on encode_single_call /
+    # encode_batch_call (#366). Once the relay reports data_edge_address,
+    # the client passes it through and requires the parameterized core API.
+    "totalreclaw-core>=2.5.0,<3.0.0",
     "httpx>=0.27",
     "onnxruntime>=1.24",
     "numpy>=1.26",

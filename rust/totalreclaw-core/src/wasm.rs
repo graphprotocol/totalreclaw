@@ -567,6 +567,21 @@ pub fn wasm_encode_single_call(protobuf_payload: &[u8]) -> Vec<u8> {
     userop::encode_single_call(protobuf_payload)
 }
 
+/// Like `encodeSingleCall` but targets an explicit DataEdge address.
+///
+/// Chain/environment-aware clients pass the authoritative address from the
+/// relay's `/v1/billing/status` `data_edge_address` (#366) — the isolated
+/// staging Gnosis DataEdge differs from prod's. Throws on a bad address.
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "encodeSingleCallTo")]
+pub fn wasm_encode_single_call_to(
+    protobuf_payload: &[u8],
+    data_edge_address: &str,
+) -> Result<Vec<u8>, JsError> {
+    userop::encode_single_call_to(protobuf_payload, data_edge_address)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Encode multiple fact submissions as SimpleAccount.executeBatch() calldata.
 ///
 /// `payloads_json`: JSON array of hex-encoded payload strings (e.g. `["deadbeef", "cafebabe"]`).
@@ -581,6 +596,22 @@ pub fn wasm_encode_batch_call(payloads_json: &str) -> Result<Vec<u8>, JsError> {
         .map(|h| hex::decode(h.trim_start_matches("0x")).unwrap_or_default())
         .collect();
     userop::encode_batch_call(&payloads).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Like `encodeBatchCall` but targets an explicit DataEdge address (#366).
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "encodeBatchCallTo")]
+pub fn wasm_encode_batch_call_to(
+    payloads_json: &str,
+    data_edge_address: &str,
+) -> Result<Vec<u8>, JsError> {
+    let hex_strings: Vec<String> = serde_json::from_str(payloads_json)
+        .map_err(|e| JsError::new(&format!("Invalid payloads JSON: {}", e)))?;
+    let payloads: Vec<Vec<u8>> = hex_strings
+        .iter()
+        .map(|h| hex::decode(h.trim_start_matches("0x")).unwrap_or_default())
+        .collect();
+    userop::encode_batch_call_to(&payloads, data_edge_address).map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Compute the ERC-4337 v0.7 UserOp hash for signing.

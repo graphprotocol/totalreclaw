@@ -306,3 +306,85 @@ async def test_remember_signs_for_authoritative_chain_id() -> None:
         await client.remember("Free user migrated to Gnosis")
 
     assert mock_userop.await_args.kwargs["chain_id"] == 100
+
+
+# ---------------------------------------------------------------------------
+# Relay-authoritative DataEdge (#366): consume data_edge_address from billing
+# and thread it to the write path. Pairs with the chain_id root fix above —
+# rc5 signed for the right chain but wrote to the wrong (hardcoded) DataEdge,
+# stranding facts on the isolated staging Gnosis DataEdge.
+# ---------------------------------------------------------------------------
+
+STAGING_DATA_EDGE = "0xE7a4D2677B686e13775Ba9092631089e35F0BB91"
+
+
+@pytest.mark.asyncio
+async def test_resolve_captures_authoritative_data_edge_address() -> None:
+    client = _make_client()
+    patch_ctx, _ = _patch_billing(
+        {"tier": "free", "chain_id": 100, "data_edge_address": STAGING_DATA_EDGE}
+    )
+    with patch_ctx:
+        await client.resolve_chain_id()
+    assert client._data_edge_address == STAGING_DATA_EDGE
+
+
+@pytest.mark.asyncio
+async def test_remember_threads_data_edge_address_to_write() -> None:
+    """THE ops-9 fix: a staging free user must write to the relay-reported
+    DataEdge, not the hardcoded default."""
+    client = _make_client()
+    billing_patch, _ = _patch_billing(
+        {"tier": "free", "chain_id": 100, "data_edge_address": STAGING_DATA_EDGE}
+    )
+    mock_userop = AsyncMock(return_value="0xabc123")
+    with billing_patch, patch(
+        "totalreclaw.operations.build_and_send_userop", new=mock_userop,
+    ):
+        await client.remember("Free user on isolated staging Gnosis")
+    assert mock_userop.await_args.kwargs["data_edge_address"] == STAGING_DATA_EDGE
+
+
+@pytest.mark.asyncio
+async def test_data_edge_absent_threads_none() -> None:
+    """Old relay (no data_edge_address) → None → core default (prod-correct)."""
+    client = _make_client()
+    billing_patch, _ = _patch_billing({"tier": "free", "chain_id": 100})
+    mock_userop = AsyncMock(return_value="0xabc123")
+    with billing_patch, patch(
+        "totalreclaw.operations.build_and_send_userop", new=mock_userop,
+    ):
+        await client.remember("No data edge field")
+    assert mock_userop.await_args.kwargs["data_edge_address"] is None
+
+
+@pytest.mark.asyncio
+async def test_malformed_data_edge_address_ignored() -> None:
+    """A non-address value is ignored rather than risking a wrong target."""
+    for bad in ("not-an-address", "0x1234", "0xZZZ", 100, None, ""):
+        client = _make_client()
+        patch_ctx, _ = _patch_billing(
+            {"tier": "free", "chain_id": 100, "data_edge_address": bad}
+        )
+        with patch_ctx:
+            await client.resolve_chain_id()
+        assert client._data_edge_address is None, f"bad data_edge {bad!r} should be ignored"
+
+
+def test_encode_wrapper_passes_data_edge_to_core() -> None:
+    """userop.py wrapper forwards an explicit DataEdge to the core encoder."""
+    from unittest.mock import MagicMock
+    import totalreclaw.userop as uop
+
+    fake_core = MagicMock()
+    fake_core.encode_single_call.return_value = b"\xde\xad"
+    with patch.object(uop, "totalreclaw_core", fake_core):
+        uop.encode_execute_calldata_for_data_edge(b"payload", STAGING_DATA_EDGE)
+    fake_core.encode_single_call.assert_called_once_with(b"payload", STAGING_DATA_EDGE)
+
+    fake_core.reset_mock()
+    fake_core.encode_single_call.return_value = b"\xbe\xef"
+    with patch.object(uop, "totalreclaw_core", fake_core):
+        uop.encode_execute_calldata_for_data_edge(b"payload")  # default path
+    # Default path must NOT pass a 2nd arg (back-compat with pre-2.5.0 core).
+    fake_core.encode_single_call.assert_called_once_with(b"payload")
