@@ -70,11 +70,13 @@ After the procedure completes (the user replies *"Done — continue setting up T
    test -x "$HERMES_PYTHON" || HERMES_PYTHON="$(find / -maxdepth 6 -name hermes -type f -executable 2>/dev/null | head -1 | xargs -I{} head -1 {} | sed 's|^#!||')"
    ```
 2. Install the package using `"$HERMES_PYTHON" -m pip install <pin>`, where `<pin>` is the row from the Versions table chosen by the user's prompt.
-3. Register the plugin manifest:
+3. **(Optional — usually skip.)** Register the plugin in the Hermes manifest registry. The `totalreclaw` package declares a `hermes_agent.plugins` entry point in its `pyproject.toml`, so the pip install in step 2 already auto-registers the plugin; the gateway discovers it via entry-points at boot and `hermes tools list` shows it bound. Run this step only when `hermes tools list` does NOT show `totalreclaw` after step 4 — e.g. an older Hermes that doesn't scan entry-points:
    ```bash
    hermes plugins install p-diogo/totalreclaw-hermes --enable
    ```
    (Or `"$(dirname "$HERMES_PYTHON")/hermes" plugins install p-diogo/totalreclaw-hermes --enable` when `hermes` isn't on `PATH`.)
+
+   Note: `hermes plugins list` reads the manifest registry only — entry-point-registered plugins (the default for TotalReclaw) appear in `hermes tools list` but NOT in `hermes plugins list`. This is expected; the plugin is still active.
 4. **Ask the user to restart the gateway** so the new plugin tools bind. The agent does NOT — and *cannot* — issue the restart itself. Two facts from the Hermes internals make this non-negotiable:
    - **Only the user can trigger a restart.** Hermes parses slash commands from **user input only**; an agent that emits `/restart` (or `/new`) in its reply just sends plain text that does nothing — on *every* surface (CLI/TUI and messaging platforms alike). (`gateway/platforms/base.py` parses commands off inbound user events; agent output is returned verbatim.)
    - **A full gateway restart is required.** There is no hot-reload — `hermes plugins install` only writes files and prints *"Restart the gateway for the plugin to take effect."* Plugins are discovered **once at gateway boot**, and starting a new session (`/new`) does NOT re-scan them. So `/new` is not a shortcut; only a full restart binds the freshly-installed plugin.
@@ -217,7 +219,7 @@ These are hard rules. None of them are negotiable.
 
 ## Diagnostics
 
-- Plugin not loaded after the restart: `"$(dirname "$HERMES_PYTHON")/hermes" plugins list` should show `totalreclaw` as enabled. If absent, re-run install procedure step 3.
+- Plugin not loaded after the restart: `"$(dirname "$HERMES_PYTHON")/hermes" tools list` should show `totalreclaw` as enabled (entry-point-registered plugins land in `tools list`, not `plugins list`). If absent, re-check that step 2 actually pip-installed into the Hermes interpreter (not user-site) and that step 4 restarted the gateway process; as a last resort, run the optional step 3 manifest-registration fallback.
 - `totalreclaw_pair` returns a URL that 404s on the browser: the relay is unreachable — check `TOTALRECLAW_SERVER_URL` env var matches the user's intended channel (prod default, or staging from the QA prompt).
 - `totalreclaw_pair` returns a 5xx: ask the user to retry; report the error code verbatim.
 - Tool not bound after install: restart once per Install procedure step 4. If still missing, the package install hit the wrong Python; re-resolve `HERMES_PYTHON` and re-install.
