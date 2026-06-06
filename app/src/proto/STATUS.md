@@ -3,8 +3,19 @@
 > **Monitor this file.** It's the single source of truth for where the SPA work stands.
 > Updated on every prototype commit. Branch: `prototype/spa-look-and-feel`.
 
-**Last updated:** 2026-06-06 · **Branch HEAD:** see latest commit on `prototype/spa-look-and-feel`
-**One-line:** Design-validated look-and-feel prototype is underway. **No functional SPA yet** (no auth/crypto/relay).
+**Last updated:** 2026-06-07 · **Branch HEAD:** see latest commit on `prototype/spa-look-and-feel`
+**One-line:** Design surface complete. **No functional SPA yet** (no auth/crypto/relay). **Next = functional build; kickoff ready (see below).**
+
+---
+
+## Next: functional build — kickoff ready (2026-06-07)
+
+**Decision (Pedro):** ADOPT this Keeper prototype as the design + IA **source of truth** for the real functional SPA. Build it for real on a **fresh branch off `main`** (NOT this prototype branch); rework the old Phase-1 reads pages (#236) to the Keeper design; this branch stays as reference.
+
+- **Carry forward (locked):** Nav = Memory · Review + settings gear; Review = hero; Lineage = drill-in. Unlock = passkey-first, phrase = recovery fallback. Import = agent capability (SPA hosts how-to). No SPA search oracle. Source-forward. Conflict card gated on #306.
+- **THE CRUX (settle before wiring):** WebAuthn/passkey = *authentication*, not key derivation. E2EE keys derive from the recovery phrase. To kill the typed mnemonic without breaking E2EE (server never sees plaintext/master key), pick: **(a)** WebAuthn PRF → wrap/unwrap seed client-side, or **(b)** passkey-authorized session-key delegation (per `session-key-delegation` cred work).
+- **Process:** assess (lead with uncertainties) → decide architecture WITH Pedro (brainstorming, no code) → design doc → port screens + wire ↔ relay. Tests = STAGING only. Secrets = L3 (never print/log/cross-context).
+- **Read order:** this file → `README.md` → memory `project_spa_warm_prototype.md` → `totalreclaw-internal/docs/specs/web/spa-phase1.md` → `session-key-delegation.md` + PRD-01 + PRD-02 → `2026-05-23-spa-auth-passkey-flow.md`.
 
 ---
 
