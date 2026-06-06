@@ -76,7 +76,8 @@ export function ProtoIndex() {
 
           <Group title="First run & auth" desc="Non-functional — every button just continues to the vault.">
             <Row to="/proto/onboarding" label="Create a vault (onboarding)" hint="generate + back up" />
-            <Row to="/proto/pair" label="Unlock" hint="passkey + recovery" />
+            <Row to="/proto/pair" label="Unlock" hint="passkey → check-in → Review" />
+            <Row to="/proto/checkin" label="Check-in ('still true?')" hint="the on-open ritual" />
           </Group>
 
           <Group title="Earlier explorations" desc="Demoted from primary nav — the global graph is a glance, not a workspace. Lineage replaced it.">

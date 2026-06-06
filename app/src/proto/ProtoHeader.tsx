@@ -1,10 +1,14 @@
 import { Link, useLocation } from "react-router-dom";
 import { clsx } from "clsx";
+import { REVIEW_ITEMS } from "./review-data";
 
 const TABS = [
   { to: "/proto/timeline", label: "Memory" },
   { to: "/proto/review", label: "Review" },
 ];
+
+// "Needs you" count → the always-visible signal that Review has something for you.
+const NEEDS_YOU = REVIEW_ITEMS.filter((i) => i.kind === "conflict" || i.kind === "stale").length;
 
 /** Sticky wordmark + tab switch. Solid warm-white, hairline base — no glass. */
 export function ProtoHeader() {
@@ -26,7 +30,7 @@ export function ProtoHeader() {
                 key={t.to}
                 to={t.to}
                 className={clsx(
-                  "rounded-pill px-3 py-1.5 text-sm font-semibold transition duration-150 ease-keeper focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2",
+                  "inline-flex items-center rounded-pill px-3 py-1.5 text-sm font-semibold transition duration-150 ease-keeper focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2",
                   active
                     ? "bg-clay-tint text-clay-deep"
                     : "text-ink-muted hover:text-ink",
@@ -34,6 +38,14 @@ export function ProtoHeader() {
                 aria-current={active ? "page" : undefined}
               >
                 {t.label}
+                {t.to === "/proto/review" && NEEDS_YOU > 0 && (
+                  <span
+                    className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-clay px-1 text-[0.65rem] font-bold text-warm-white"
+                    aria-label={`${NEEDS_YOU} need your attention`}
+                  >
+                    {NEEDS_YOU}
+                  </span>
+                )}
               </Link>
             );
           })}

@@ -16,7 +16,9 @@ export function ProtoPair() {
   const [words, setWords] = useState<string[]>(Array(WORD_COUNT).fill(""));
   const inputs = useRef<(HTMLInputElement | null)[]>([]);
 
-  const open = useCallback(() => navigate("/proto/timeline"), [navigate]);
+  // Land where you're needed: returning unlock runs the on-open "still true?" ritual,
+  // which then drops you into Review (where the needs-you items live).
+  const open = useCallback(() => navigate("/proto/checkin"), [navigate]);
 
   const setWord = useCallback((i: number, v: string) => {
     const parts = v.trim().split(/\s+/);

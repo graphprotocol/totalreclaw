@@ -13,6 +13,7 @@ import { ProtoIndex } from "./proto/ProtoIndex";
 import { ProtoPair } from "./proto/ProtoPair";
 import { ProtoPairAgent } from "./proto/ProtoPairAgent";
 import { ImportGuide } from "./proto/ImportGuide";
+import { ProtoCheckin } from "./proto/ProtoCheckin";
 import { ProtoOnboarding } from "./proto/ProtoOnboarding";
 import { useCrypto } from "./contexts/CryptoContext";
 
@@ -46,6 +47,7 @@ export function App() {
       <Route path="/proto/pair" element={<ProtoPair />} />
       <Route path="/proto/pair-agent" element={<ProtoPairAgent />} />
       <Route path="/proto/import" element={<ImportGuide />} />
+      <Route path="/proto/checkin" element={<ProtoCheckin />} />
       <Route path="/proto/onboarding" element={<ProtoOnboarding />} />
       <Route path="/proto/timeline" element={<TimelineView />} />
       <Route path="/proto/review" element={<ReviewView />} />
