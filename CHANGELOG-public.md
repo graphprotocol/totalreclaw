@@ -2,6 +2,28 @@
 
 > **Note:** This file lists releases promoted to the public registries' stable tags. Active release-candidate work (`@rc` dist-tag on npm, `rcN` on PyPI, etc.) is tracked in the internal release-pipeline tracker, not here.
 
+## totalreclaw 2.4.4 — Stable promote (2026-06-06)
+
+Hermes client stable line (Python `totalreclaw` 2.3.1 → 2.4.4). This cycle focused on the Hermes integration and the managed service's move to a single chain. (OpenClaw plugin + MCP server are unchanged this cycle.)
+
+### `totalreclaw` (Python client + Hermes plugin) → 2.4.4
+
+- **Chain-aware client.** The client now reads its chain + DataEdge contract from the relay's billing response and writes to whatever the relay reports — so the managed service's single-chain Gnosis migration shipped with **zero client release**. (#293, #299)
+- **Hermes setup hardened (pre-stable QA).** Install now verifies the runtime version actually matches the requested pin — catching a venv-shadowing trap that silently ran old code — re-instates the built-in-memory disable step, and clarifies restart behaviour per surface (gateway vs standalone `hermes chat`). (#370, #371, #379)
+- **Forget is now durable on-chain.** A subgraph decoder bug meant a delete only took effect in the relay's hot view, never on the indexed ledger — fixed; tombstones now flip `isActive=false`. (#374)
+- **Extraction reliability.** Auto-extraction retries with the flagship model when the cheap extraction model returns empty, so memory capture no longer silently drops a turn's facts. (#376)
+- **Chain-agnostic copy.** Tier / upgrade / status messaging no longer names the underlying chain — `totalreclaw_status` is the single source for tier + quota. (#373)
+- **Also:** memory-provider sidecar (Path B), smart imports (ChatGPT / Claude / Gemini), Gnosis batched UserOps, `retype` / `set_scope` tools. (#234, #274, #267)
+
+Full client detail: `python/CHANGELOG.md` → `[2.4.4]`.
+
+### Managed-service infrastructure (this cycle)
+
+- **Single-chain Gnosis.** Both Free and Pro tiers now run on Gnosis mainnet (chain 100); the legacy Free → Base Sepolia routing was retired. This closes the data-loss-on-upgrade risk — a Free→Pro upgrade no longer strands a user's vault on a different chain. (ops-1)
+- **Staging on-chain isolation.** Staging writes to its own DataEdge contract + dedicated subgraph, isolated from production data. (ops-5 / ops-6)
+- **`@totalreclaw/core` / `totalreclaw-core` 2.5.0.** Chain/environment-aware DataEdge encoding (the client passes the relay-reported DataEdge instead of a hardcoded address). Published to npm + PyPI + crates.io.
+- **Subgraph `decay_score` decoder fix.** The indexer now parses the real on-chain decay score (was stubbed to a constant), so delete/decay reflect on-chain. Staging deployed; production redeploy follows the stable promote.
+
 ## 3.3.1 / 2.3.1 / mcp-server 3.2.1 — Stable promote (2026-04-27)
 
 Consolidated stable line covering plugin 3.2.0 → 3.3.1, Python client 2.2.1 → 2.3.1, MCP server 3.2.0 → 3.2.1. Highlights from the rc.1 → rc.27 line:

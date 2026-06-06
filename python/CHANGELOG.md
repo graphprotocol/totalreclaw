@@ -6,6 +6,41 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.4] — 2026-06-06
+
+Stable line for the `totalreclaw` Python client + `totalreclaw.hermes` plugin, consolidating the 2.4.0 → 2.4.4rc7 cycle. Headline: the client is now **chain-aware** (it reads its chain + DataEdge from the relay, so the managed service's single-chain Gnosis migration needed zero client release), plus a pre-stable QA hardening pass over the install / setup / extraction / delete paths.
+
+### Added
+
+- **Chain-aware client.** The client reads the authoritative `chain_id` (#293, root fix #364) and `data_edge_address` (#299, root fix #366) from `GET /v1/billing/status` and writes UserOps to whatever chain + DataEdge the relay reports — no hardcoded tier→chain map. A managed-service chain change (e.g. the single-chain Gnosis cutover) now propagates with **no client release**. Old clients fall back to their built-in defaults (forward-compatible).
+- **`MemoryProvider` sidecar — Path B (#234, #275).** Optional Hermes memory-provider integration unlocks the `on_pre_compress` + `on_memory_write` hooks, capturing Background-Review writes the generic plugin path can't reach.
+- **Smart-import pipeline (#274).** ChatGPT / Claude / Gemini conversation imports run through a triage + chunked-extraction pipeline; standalone Gemini import guide refreshed (#249).
+- **Gnosis chunked batching (#267, #268).** Import + auto-extraction batch up to 15 facts per `executeBatch` UserOp on Gnosis (~15× cost reduction), behind a boot-time chain-gate kill-switch.
+- **Credential-provider abstraction + session-key signing (#273, #275, #277).** Hermes boot routes through a credential-provider; EIP-712 session-key signing + lazy-install payload (auth-hardening groundwork).
+- **`totalreclaw_retype` / `totalreclaw_set_scope`** on-chain mutation tools; `session_id` on `AgentState` (uuid7, #264).
+
+### Changed
+
+- **Hermes docs consolidated (#300).** `SKILL.md` is now the per-turn **usage** skill (install flow removed → a one-line pointer); `hermes-setup.md` is the single canonical **install** doc. Restart guidance was validated against the Hermes source: the agent **cannot** self-restart (slash commands execute from user input only), a full gateway restart is required to bind a freshly-installed plugin, and `/new` does **not** re-scan plugins.
+- **No user-facing chain names (#373).** Tier / status / upgrade copy no longer names a chain (Gnosis / Base Sepolia) — `totalreclaw_status` is the canonical source for tier + quota. The upgrade copy now states the real Pro delta (1,500 vs 250 cap + LLM-dedup), not a (now-false) chain difference.
+- **Reranker v2-lenient source weights** promoted to default (via core 2.4.0, #245).
+- **Install step 3 (`hermes plugins install`) is skip-by-default (#375)** — the package auto-registers via its entry point on `pip install`; the manual manifest registration is an older-Hermes fallback.
+
+### Fixed
+
+- **Install no longer silently runs old code (#370).** A Hermes venv without pip fell back to system `pip --user` (`~/.local`), and the venv's own bundled `totalreclaw` then shadowed it. The install step now prefers `uv pip` (handles venv-without-pip), bootstraps `ensurepip`, always `--upgrade`s, and **verifies the runtime `__version__` matches the pin**.
+- **Built-in `memory` tool actually disabled on install (#371).** The `hermes tools disable memory` step is explicit again (it had been demoted to an optional note), preventing the split-brain where memories land in `MEMORY.md` instead of the encrypted vault.
+- **Pair sidecar never crashes the pairing (#372).** `_configure_sidecar_logging` degrades to no-file logging when the log path isn't writable, instead of raising `FileNotFoundError` mid-handshake.
+- **Forget now flips `isActive=false` on-chain (#374).** The subgraph decoder was stubbing `decay_score` to a constant `1.0`, so a tombstone's `decay_score=0` was discarded and a forget never deactivated the fact on the indexed ledger (the relay hot view dropped it, the ledger kept it). The decoder now parses the real IEEE-754 f64.
+- **Auto-extraction recovers from empty cheap-model responses (#376).** When the extraction model returns empty content, the client retries once with the flagship chat model on the same endpoint (no endpoint flip), so a turn's facts aren't silently dropped.
+- **Restart guidance for the `hermes chat` CLI (#379).** Standalone `hermes chat` (no gateway daemon) → exit + re-invoke (a fresh process re-discovers the plugin), not `/restart`.
+- **Self-directive guard at `totalreclaw_remember` (#285); `install_memory_provider` newline-eating regex (#287, #351).**
+- **CI reliability:** onnxruntime install hang + per-job timeouts (#295); embedding-model stub in the import-batching tests so the suite doesn't time out (#305).
+
+### Notes
+
+- **#378** (status writes-count inconsistency) and **#377** (single-shot extraction defers a turn) were determined **not to be bugs**: the relay write-counter is monotonic (an apparent decrease across calls means different test wallets / a re-register), and single-shot `hermes chat -q` correctly persists unprocessed messages for next-session drain. Both documented in the guide.
+
 ## [2.3.6rc2] — 2026-05-04
 
 Coordinated bundle with plugin `3.3.7-rc.2`. Hermes side of the `/totalreclaw-restart` rename (issue #215, follow-up).
