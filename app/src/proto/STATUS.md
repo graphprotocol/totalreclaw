@@ -71,10 +71,15 @@ Nav = **Memory · Review**. Lineage is a drill-in (from Review/Memory), not a na
 
 ## Open design backlog (next candidates)
 
-1. **Mobile / responsive pass** — desktop-centered today (max-w-2xl). ← in progress (Pedro: do this next)
-2. **Make it functional** — wire any/all screens to real auth/crypto/relay (this is the real Phase-1 build, per `spa-phase1.md`).
+The design surface feels complete for a look-and-feel prototype. Remaining work is mostly
+implementation, not design:
 
-**Recently done:** settings/account + export home — `c0c7b17` · home loop (badge + check-in + landing) — `e2f37f9` · search→filter + import-origin + audit fixes — `777249d`.
+1. **Make it functional** — wire the screens to real auth/crypto/relay (the real Phase-1 build, per `spa-phase1.md`). This is where the deferred functional tracks live: PRD-01 (pairing/auth), #306/#307 (conflict persistence + card), #317 (agent-identity provenance).
+2. (Optional design) revisit if new needs surface — notifications outside the app, an ambient "constellation" graph, etc.
+
+**Mobile:** verified responsive at 390px (zero overflow) — `e3d983b`.
+
+**Recently done:** mobile pass — `e3d983b` · settings/account + export home — `c0c7b17` · home loop — `e2f37f9` · search→filter + import-origin + audit fixes — `777249d`.
 
 ## Reference
 
@@ -86,6 +91,7 @@ Nav = **Memory · Review**. Lineage is a drill-in (from Review/Memory), not a na
 
 ## Changelog (prototype branch)
 
+- `e3d983b` — mobile/responsive pass: verified zero overflow at 390px; import command stacks + wordmark shrinks on narrow screens.
 - `c0c7b17` — settings/account corner (`/proto/settings`): account/usage, security & recovery, paired agents (named + revoke), export (.json/.md + heads-up), danger zone. Header gear.
 - `e2f37f9` — home loop: Review nav badge + on-open "still true?" check-in ritual (`/proto/checkin`) + landing logic (returning unlock → check-in → Review).
 - `777249d` — drop standalone search → keyword filter in Memory; show import origin ("Imported · ChatGPT"); audit fixes (source-only, Lineage drill-in, onboarding→empty). Issue #317 filed (agent-identity provenance).
