@@ -6,7 +6,6 @@ import { ClaimPage } from "./pages/ClaimPage";
 import { TimelineView } from "./proto/TimelineView";
 import { ReviewView } from "./proto/ReviewView";
 import { LineageView } from "./proto/LineageView";
-import { SearchView } from "./proto/SearchView";
 import { MindMapView } from "./proto/MindMapView";
 import { ExploreView } from "./proto/ExploreView";
 import { SessionDetailView } from "./proto/SessionDetailView";
@@ -49,7 +48,6 @@ export function App() {
       <Route path="/proto/import" element={<ImportGuide />} />
       <Route path="/proto/onboarding" element={<ProtoOnboarding />} />
       <Route path="/proto/timeline" element={<TimelineView />} />
-      <Route path="/proto/search" element={<SearchView />} />
       <Route path="/proto/review" element={<ReviewView />} />
       <Route path="/proto/lineage" element={<LineageView />} />
       <Route path="/proto/lineage/:id" element={<LineageView />} />

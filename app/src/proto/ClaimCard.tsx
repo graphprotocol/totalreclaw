@@ -53,7 +53,7 @@ export function ClaimCard({ fact, presentation = "type", style, onPin, onRetype,
                   )}
                   aria-hidden
                 />
-                {sourceLabel(fact.source)}
+                {fact.importSource ? `Imported from ${fact.importSource}` : sourceLabel(fact.source)}
               </span>
               {bucket && (
                 <span

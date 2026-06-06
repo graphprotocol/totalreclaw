@@ -19,8 +19,8 @@ npm --prefix app run dev      # from repo root → http://localhost:5173/proto
 
 ## Routes
 
-Primary nav is **Memory · Review · Lineage**. The global mind-map + graph-first Explore are demoted
-out of nav (gallery-only) — Lineage replaced them as the meaningful, scalable graph.
+Primary nav is **Memory · Review**. **Lineage** is a drill-in (reached from Review/Memory cards), not
+a top-nav destination. Global mind-map + graph-first Explore are gallery-only.
 
 | Route | Screen |
 |-------|--------|
@@ -31,8 +31,7 @@ out of nav (gallery-only) — Lineage replaced them as the meaningful, scalable 
 | `/proto/import` | **Import guide** — SPA hosts the how-to (per-source export steps + the exact agent command); the agent runs the import. Source toggle ChatGPT/Gemini/Claude; privacy note flips curated (no LLM) vs full-history (cleartext to agent LLM). Mirrors `docs/guides/importing-from-*.md`. |
 | `/proto/review` | **Review (hero)** — memory health / Watchtower feed: Needs-you (conflict, still-true?) + Handled-for-you (changed, secret). One-tap actions. See `docs/specs/totalreclaw/memory-review-surface.md`. |
 | `/proto/lineage/:id` | **Lineage** — one belief's typed evolution (`replaced by` / `contradicts` / `led to`). The only graph in the product. |
-| `/proto/search` | **Search** — find anything: instant local lexical search over your decrypted memories (highlighted matches, type/source/scope/date). Retrieval is SPA; a *written answer* is an "ask your paired agent" hand-off (synthesis = agent). Global search icon in the header. |
-| `/proto/timeline` | Session timeline (= "Memory" tab); filters (scope/type/source/open-threads + tap-entity); `?view=type` toggles presentation (default **By source**). Cold-start arc: `?empty` (day-0) → `?first` (first-memory "aha", confirm/correct) → `?warming` (taking shape) → full. |
+| `/proto/timeline` | Session timeline (= "Memory" tab). **Keyword filter** (narrows what's shown; for answers, ask your agent) + source/scope/open-threads/tap-entity filters (source-forward; type/source toggle removed). Imported sessions show their origin ("Imported · ChatGPT"). Cold-start arc: `?empty` (day-0) → `?first` (first-memory "aha", confirm/correct) → `?warming` (taking shape) → full. |
 | `/proto/review?empty` | **Cold-start Review (fresh)** — day-1 "nothing to review yet" that teaches the four card types; distinct from the cleared "all clear" state. |
 | `/proto/session/:id` | Session detail: Crystal + curatable Claim Cards (pin/retype/delete + 10s undo) |
 | `/proto/kg` | Mind-map (React Flow) — **demoted**, ambient/gallery-only |
@@ -54,6 +53,14 @@ out of nav (gallery-only) — Lineage replaced them as the meaningful, scalable 
   tool; the relay is server-blind; the SPA is a thin decrypt/curate client with no model. So the SPA
   **states** import as a post-pairing capability (cold-start note + the pair-an-agent "what your agent
   can do" list) and never offers an in-app import button.
+- **No SPA "search your memory" oracle.** Semantic search/answers need the LLM (agent). The SPA keeps
+  only a humble **keyword filter** inside Memory (narrows what's shown) + an "ask your agent for an
+  answer" pointer. Standalone search page removed.
+- **Imported memories show their origin** ("Imported · ChatGPT/Gemini/Claude") on the card, session
+  header, and per-memory. Deeper agent-identity provenance ("John (Hermes)") is backend work — issue #317.
+- **Lineage is drill-in, not a nav tab.** It's a detail view of one belief; reached from Review/Memory.
+- **Source-forward only** — the By type/By source toggle was dropped (source default; type is just a badge).
+- **Onboarding lands on the empty vault** (`?empty` → pair on-ramp), not a pre-filled timeline.
 - **React Flow** is the KG engine (Cinematic/force-graph engine was evaluated then dropped).
 - **Explore** is graph-first, sessions-first (no aggregated fact dump); Workspace mode dropped.
 - Timeline + session detail default to **By source** (provenance), type demoted to plain

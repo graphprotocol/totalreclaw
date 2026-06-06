@@ -1,12 +1,11 @@
 import { useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { clsx } from "clsx";
 import { ProtoHeader } from "./ProtoHeader";
 import { ClaimCard } from "./ClaimCard";
 import { EntityChip } from "./EntityChip";
 import { UndoToast } from "./UndoToast";
 import { SEED_SESSIONS, relativeDate, type SeedFact } from "./seed";
-import { type Presentation } from "./presentation";
 import type { MemoryTypeV1 } from "../lib/types";
 
 function Section({ label, items, dot }: { label: string; items: string[]; dot: string }) {
@@ -27,18 +26,6 @@ function Section({ label, items, dot }: { label: string; items: string[]; dot: s
 
 export function SessionDetailView() {
   const { id } = useParams();
-  const [params, setParams] = useSearchParams();
-  const view: Presentation = params.get("view") === "type" ? "type" : "source";
-  const setView = (v: Presentation) =>
-    setParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        if (v === "type") next.set("view", "type");
-        else next.delete("view");
-        return next;
-      },
-      { replace: true },
-    );
   const session = useMemo(
     () => SEED_SESSIONS.find((s) => s.id === id) ?? SEED_SESSIONS[0],
     [id],
@@ -73,7 +60,7 @@ export function SessionDetailView() {
       <ProtoHeader />
       <main className="animate-page-in mx-auto w-full max-w-2xl px-4 pb-28 pt-6">
         <Link
-          to={`/proto/timeline${view === "type" ? "?view=type" : ""}`}
+          to="/proto/timeline"
           className="inline-flex items-center gap-1 text-sm font-semibold text-ink-muted transition hover:text-ink"
         >
           ← Timeline
@@ -91,6 +78,15 @@ export function SessionDetailView() {
             {c.narrative}
           </h1>
 
+          {session.importSource && (
+            <span className="mt-2.5 inline-flex items-center gap-1.5 rounded-pill bg-clay-tint px-2.5 py-1 text-xs font-semibold text-clay-deep">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />
+              </svg>
+              Imported from {session.importSource}
+            </span>
+          )}
+
           {c.keyOutcomes.length > 0 && (
             <Section label="Key outcomes" items={c.keyOutcomes} dot="h-1.5 w-1.5 bg-clay" />
           )}
@@ -103,33 +99,15 @@ export function SessionDetailView() {
         </div>
 
         <div className="mt-8">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h2 className="font-display text-xl text-ink">
-              {facts.length} {facts.length === 1 ? "memory" : "memories"}
-            </h2>
-            <div className="inline-flex rounded-pill p-1 ring-1 ring-hairline">
-              {(["type", "source"] as Presentation[]).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setView(v)}
-                  aria-pressed={view === v}
-                  className={clsx(
-                    "rounded-pill px-3 py-1.5 text-xs font-semibold transition duration-150 ease-keeper focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-1",
-                    view === v ? "bg-clay text-warm-white shadow-soft" : "text-ink-muted hover:text-ink",
-                  )}
-                >
-                  {v === "type" ? "By type" : "By source"}
-                </button>
-              ))}
-            </div>
-          </div>
+          <h2 className="mb-3 font-display text-xl text-ink">
+            {facts.length} {facts.length === 1 ? "memory" : "memories"}
+          </h2>
           <div className="space-y-3">
             {facts.map((f, i) => (
               <ClaimCard
                 key={f.id}
                 fact={f}
-                presentation={view}
+                presentation="source"
                 style={{ animationDelay: `${i * 60}ms` }}
                 onPin={() => pin(f.id)}
                 onRetype={(t) => retype(f.id, t)}

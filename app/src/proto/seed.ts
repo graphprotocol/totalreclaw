@@ -10,6 +10,8 @@ export interface SeedFact {
   source: string;
   scope: string;
   pinned?: boolean;
+  /** Origin when this memory was imported (e.g. "ChatGPT", "Gemini", "Claude"). */
+  importSource?: string;
 }
 
 export interface SeedSession {
@@ -24,6 +26,8 @@ export interface SeedSession {
   };
   facts: SeedFact[];
   entities: string[];
+  /** Set when the whole session was brought in from another tool. */
+  importSource?: string;
 }
 
 export const SEED_SESSIONS: SeedSession[] = [
@@ -119,6 +123,24 @@ export const SEED_SESSIONS: SeedSession[] = [
     facts: [
       { id: "f15", text: "Writing an essay on memory and forgetting.", type: "episode", source: "user", scope: "creative" },
       { id: "f16", text: "Admires Borges' 'Funes the Memorious' as a frame for the piece.", type: "preference", source: "user", scope: "creative" },
+    ],
+  },
+  {
+    id: "s6",
+    date: "2026-04-09",
+    hash8: "c41a7e90",
+    importSource: "ChatGPT",
+    crystal: {
+      narrative:
+        "Earlier history brought over from ChatGPT — long-running notes on coffee, travel, and work setup.",
+      keyOutcomes: ["Imported 38 memories; 6 looked like duplicates and were skipped."],
+      openThreads: [],
+    },
+    entities: ["coffee", "travel", "desk setup"],
+    facts: [
+      { id: "f17", text: "Drinks a single flat white in the morning, never after noon.", type: "preference", source: "external", scope: "personal", importSource: "ChatGPT" },
+      { id: "f18", text: "Prefers aisle seats on long flights.", type: "preference", source: "external", scope: "personal", importSource: "ChatGPT" },
+      { id: "f19", text: "Uses a standing desk and a split keyboard to manage wrist strain.", type: "claim", source: "external", scope: "work", importSource: "ChatGPT" },
     ],
   },
 ];

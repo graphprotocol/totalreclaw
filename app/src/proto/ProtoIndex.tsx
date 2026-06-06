@@ -54,10 +54,8 @@ export function ProtoIndex() {
             <Row to="/proto/lineage/july-trip" label="Lineage — a plan that evolved" hint="supersede thread" />
           </Group>
 
-          <Group title="Memory — see everything, clearly" desc="The trust foundation: session timeline + Crystal headlines + curation.">
-            <Row to="/proto/search" label="Search — find anything" hint="SPA finds · agent answers" />
-            <Row to="/proto/timeline" label="Timeline" hint="By source (default)" />
-            <Row to="/proto/timeline?view=type" label="Timeline" hint="By type" />
+          <Group title="Memory — see everything, clearly" desc="The trust foundation: session timeline + keyword filter + Crystal headlines + curation.">
+            <Row to="/proto/timeline" label="Timeline" hint="filter + by source" />
             {SEED_SESSIONS.map((s) => (
               <Row
                 key={s.id}

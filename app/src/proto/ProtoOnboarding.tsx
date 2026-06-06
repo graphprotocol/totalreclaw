@@ -226,7 +226,7 @@ export function ProtoOnboarding() {
                     </li>
                   ))}
                 </ul>
-                <PrimaryBtn onClick={() => navigate("/proto/timeline")} className="mt-6">
+                <PrimaryBtn onClick={() => navigate("/proto/timeline?empty")} className="mt-6">
                   Open your vault
                 </PrimaryBtn>
               </div>

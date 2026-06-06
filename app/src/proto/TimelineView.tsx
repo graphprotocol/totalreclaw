@@ -5,7 +5,7 @@ import { ProtoHeader } from "./ProtoHeader";
 import { SessionCard } from "./SessionCard";
 import { KeeperEmpty, GhostGlimpse } from "./KeeperEmpty";
 import { SEED_SESSIONS } from "./seed";
-import { sourceShort, type Presentation } from "./presentation";
+import { sourceShort } from "./presentation";
 
 const HOW_IT_FILLS = [
   { n: "1", t: "Pair an agent", d: "Hermes, Claude, any MCP agent." },
@@ -174,7 +174,6 @@ function WarmingTimeline() {
 }
 
 const SCOPES = [...new Set(SEED_SESSIONS.flatMap((s) => s.facts.map((f) => f.scope)))];
-const TYPES = [...new Set(SEED_SESSIONS.flatMap((s) => s.facts.map((f) => f.type)))];
 const SOURCES = [...new Set(SEED_SESSIONS.flatMap((s) => s.facts.map((f) => f.source)))];
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -206,27 +205,17 @@ function Chip({
 
 /** Session timeline. A/B: "By type" (taxonomy filters) vs "By source" (provenance filters). */
 export function TimelineView() {
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
   const empty = params.has("empty"); // cold-start preview: ?empty
   const first = params.has("first"); // first-memory "aha" moment: ?first
   const warming = params.has("warming"); // warming-up (few memories): ?warming
-  const view: Presentation = params.get("view") === "type" ? "type" : "source";
-  const setView = (v: Presentation) =>
-    setParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        if (v === "type") next.set("view", "type");
-        else next.delete("view");
-        return next;
-      },
-      { replace: true },
-    );
 
   const [scope, setScope] = useState<string | null>(null);
-  const [type, setType] = useState<string | null>(null);
   const [source, setSource] = useState<string | null>(null);
   const [openOnly, setOpenOnly] = useState(false);
   const [entity, setEntity] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const query = q.trim().toLowerCase();
 
   const filtered = useMemo(
     () =>
@@ -234,22 +223,26 @@ export function TimelineView() {
         if (openOnly && s.crystal.openThreads.length === 0) return false;
         if (entity && !s.entities.includes(entity)) return false;
         if (scope && !s.facts.some((f) => f.scope === scope)) return false;
-        if (view === "type" && type && !s.facts.some((f) => f.type === type)) return false;
-        if (view === "source" && source && !s.facts.some((f) => f.source === source)) return false;
+        if (source && !s.facts.some((f) => f.source === source)) return false;
+        if (query) {
+          const hay =
+            `${s.crystal.narrative} ${s.crystal.keyOutcomes.join(" ")} ${s.crystal.openThreads.join(" ")} ${s.facts.map((f) => f.text).join(" ")} ${s.entities.join(" ")}`.toLowerCase();
+          if (!hay.includes(query)) return false;
+        }
         return true;
       }),
-    [scope, type, source, openOnly, entity, view],
+    [scope, source, openOnly, entity, query],
   );
 
-  const anyFilter = Boolean(scope || type || source || openOnly || entity);
+  const anyFilter = Boolean(scope || source || openOnly || entity || query);
   const clearAll = () => {
     setScope(null);
-    setType(null);
     setSource(null);
     setOpenOnly(false);
     setEntity(null);
+    setQ("");
   };
-  const hrefFor = (id: string) => `/proto/session/${id}${view === "type" ? "?view=type" : ""}`;
+  const hrefFor = (id: string) => `/proto/session/${id}`;
 
   if (empty) return <MemoryEmpty />;
   if (first) return <FirstMemory />;
@@ -259,30 +252,35 @@ export function TimelineView() {
     <div className="min-h-screen bg-warm-white">
       <ProtoHeader />
       <main className="animate-page-in mx-auto w-full max-w-2xl px-4 pb-24 pt-8">
-        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="text-balance font-display text-[2rem] leading-tight text-ink">Your memory</h1>
-            <p className="mt-1.5 text-sm text-ink-muted">
-              {filtered.length} of {SEED_SESSIONS.length} sessions
-              {entity ? ` · about ${entity}` : ""}. Only you can read this.
-            </p>
+        <div className="mb-4">
+          <h1 className="text-balance font-display text-[2rem] leading-tight text-ink">Your memory</h1>
+          <p className="mt-1.5 text-sm text-ink-muted">
+            {filtered.length} of {SEED_SESSIONS.length} sessions
+            {entity ? ` · about ${entity}` : ""}. Only you can read this.
+          </p>
+        </div>
+
+        {/* Keyword filter — narrows what's shown. Not an answer engine: for that, ask your agent. */}
+        <div className="mb-4">
+          <div className="relative">
+            <svg
+              className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-muted"
+              width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Filter your memory by keyword…"
+              aria-label="Filter your memory by keyword"
+              className="w-full rounded-control border border-hairline bg-surface py-2.5 pl-10 pr-3 text-sm text-ink shadow-soft transition placeholder:text-ink-muted/60 focus:border-clay focus:outline-none focus:ring-2 focus:ring-clay/30"
+            />
           </div>
-          <div className="inline-flex rounded-pill p-1 ring-1 ring-hairline">
-            {(["type", "source"] as Presentation[]).map((v) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => setView(v)}
-                aria-pressed={view === v}
-                className={clsx(
-                  "rounded-pill px-3 py-1.5 text-xs font-semibold transition duration-150 ease-keeper focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-1",
-                  view === v ? "bg-clay text-warm-white shadow-soft" : "text-ink-muted hover:text-ink",
-                )}
-              >
-                {v === "type" ? "By type" : "By source"}
-              </button>
-            ))}
-          </div>
+          <p className="mt-1.5 text-xs text-ink-muted">
+            Looking for an answer, not just a memory? Ask your agent — it can reason over all of this.
+          </p>
         </div>
 
         <div className="mb-6 space-y-2.5">
@@ -311,29 +309,16 @@ export function TimelineView() {
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
-            {view === "type" ? (
-              <>
-                <span className="mr-0.5 text-xs font-semibold text-ink-muted">Type</span>
-                {TYPES.map((t) => (
-                  <Chip key={t} active={type === t} onClick={() => setType(type === t ? null : t)}>
-                    {t}
-                  </Chip>
-                ))}
-              </>
-            ) : (
-              <>
-                <span className="mr-0.5 text-xs font-semibold text-ink-muted">Source</span>
-                {SOURCES.map((sc) => (
-                  <Chip
-                    key={sc}
-                    active={source === sc}
-                    onClick={() => setSource(source === sc ? null : sc)}
-                  >
-                    {sourceShort(sc)}
-                  </Chip>
-                ))}
-              </>
-            )}
+            <span className="mr-0.5 text-xs font-semibold text-ink-muted">Source</span>
+            {SOURCES.map((sc) => (
+              <Chip
+                key={sc}
+                active={source === sc}
+                onClick={() => setSource(source === sc ? null : sc)}
+              >
+                {sourceShort(sc)}
+              </Chip>
+            ))}
             {anyFilter && (
               <button
                 type="button"
