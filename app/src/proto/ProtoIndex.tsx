@@ -68,6 +68,8 @@ export function ProtoIndex() {
 
           <Group title="Cold start — day-1, empty vault" desc="An empty memory vault is an activation surface, not a dead end. The on-ramp that fills it.">
             <Row to="/proto/timeline?empty" label="Memory — empty" hint="on-ramp + glimpse" />
+            <Row to="/proto/timeline?first" label="Memory — first memory (aha)" hint="confirm / correct" />
+            <Row to="/proto/timeline?warming" label="Memory — warming up" hint="taking shape" />
             <Row to="/proto/review?empty" label="Review — fresh (never reviewed)" hint="teaches the cards" />
             <Row to="/proto/pair-agent" label="Pair an agent" hint="stub · not the real auth" />
             <Row to="/proto/import" label="Import guide (ChatGPT / Gemini / Claude)" hint="SPA shows how · agent does it" />

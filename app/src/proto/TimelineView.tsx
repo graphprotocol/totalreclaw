@@ -71,6 +71,108 @@ function MemoryEmpty() {
   );
 }
 
+// The first thing the Keeper keeps — shown as a one-time moment, not a silent card.
+const FIRST_MEMORY = {
+  text: "You're happiest doing focused work in the morning, before meetings start.",
+  badge: "preference",
+};
+
+function FirstMemory() {
+  return (
+    <div className="min-h-screen bg-warm-white">
+      <ProtoHeader />
+      <main className="animate-page-in mx-auto w-full max-w-xl px-4 pb-24 pt-14">
+        <div className="text-center">
+          <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-clay-tint text-clay-deep">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+              <path d="M12 2 9.5 9.5 2 12l7.5 2.5L12 22l2.5-7.5L22 12l-7.5-2.5Z" />
+            </svg>
+          </div>
+          <h1 className="text-balance font-display text-[2rem] leading-tight text-ink">I kept my first memory</h1>
+          <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-ink-muted">
+            From your conversation just now. Did I get it right?
+          </p>
+        </div>
+
+        <article className="animate-fade-up mt-6 rounded-card bg-surface p-5 shadow-soft">
+          <span className="rounded-pill bg-type-preference px-2.5 py-0.5 text-xs font-semibold text-type-preference-ink">
+            {FIRST_MEMORY.badge}
+          </span>
+          <p className="mt-2.5 font-display text-[1.2rem] leading-snug text-ink">{FIRST_MEMORY.text}</p>
+          <p className="mt-2 text-xs text-ink-muted">from you · just now</p>
+        </article>
+
+        <div className="mt-5 flex flex-wrap justify-center gap-2">
+          <Link
+            to="/proto/timeline?warming"
+            className="rounded-control bg-clay px-5 py-2.5 font-sans text-sm font-semibold text-warm-white shadow-soft transition duration-150 ease-keeper hover:-translate-y-px hover:bg-clay-deep hover:shadow-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2"
+          >
+            Yes, that's right
+          </Link>
+          <Link
+            to="/proto/timeline?warming"
+            className="rounded-control border border-hairline bg-warm-white px-4 py-2.5 font-sans text-sm font-semibold text-ink transition hover:border-ink-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2"
+          >
+            Not quite — edit
+          </Link>
+          <Link
+            to="/proto/timeline?empty"
+            className="rounded-control px-4 py-2.5 font-sans text-sm font-semibold text-ink-muted transition hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2"
+          >
+            Forget it
+          </Link>
+        </div>
+
+        <p className="mx-auto mt-7 max-w-sm text-center text-sm leading-relaxed text-ink-muted">
+          From here I'll keep what matters quietly — you'll only hear from me when something needs you
+          in{" "}
+          <Link to="/proto/review" className="font-semibold text-clay-deep hover:underline">
+            Review
+          </Link>
+          .
+        </p>
+      </main>
+    </div>
+  );
+}
+
+function WarmingTimeline() {
+  const shown = SEED_SESSIONS.slice(0, 1);
+  return (
+    <div className="min-h-screen bg-warm-white">
+      <ProtoHeader />
+      <main className="animate-page-in mx-auto w-full max-w-2xl px-4 pb-24 pt-8">
+        <div className="mb-5">
+          <h1 className="text-balance font-display text-[2rem] leading-tight text-ink">Your memory</h1>
+          <p className="mt-1.5 text-sm leading-relaxed text-ink-muted">
+            Taking shape — a few memories so far. Keep talking, and it grows on its own.
+          </p>
+        </div>
+        <div className="space-y-4">
+          {shown.map((session, i) => (
+            <SessionCard
+              key={session.id}
+              session={session}
+              style={{ animationDelay: `${i * 60}ms` }}
+              onEntityClick={() => {}}
+              href={`/proto/session/${session.id}`}
+            />
+          ))}
+          <div className="rounded-card border border-dashed border-hairline p-6 text-center">
+            <p className="text-sm text-ink-muted">More will appear here as you talk — nothing to do.</p>
+            <Link
+              to="/proto/review"
+              className="mt-1.5 inline-block text-sm font-semibold text-clay-deep transition hover:underline"
+            >
+              Anything that needs you shows up in Review →
+            </Link>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+
 const SCOPES = [...new Set(SEED_SESSIONS.flatMap((s) => s.facts.map((f) => f.scope)))];
 const TYPES = [...new Set(SEED_SESSIONS.flatMap((s) => s.facts.map((f) => f.type)))];
 const SOURCES = [...new Set(SEED_SESSIONS.flatMap((s) => s.facts.map((f) => f.source)))];
@@ -106,6 +208,8 @@ function Chip({
 export function TimelineView() {
   const [params, setParams] = useSearchParams();
   const empty = params.has("empty"); // cold-start preview: ?empty
+  const first = params.has("first"); // first-memory "aha" moment: ?first
+  const warming = params.has("warming"); // warming-up (few memories): ?warming
   const view: Presentation = params.get("view") === "type" ? "type" : "source";
   const setView = (v: Presentation) =>
     setParams(
@@ -148,6 +252,8 @@ export function TimelineView() {
   const hrefFor = (id: string) => `/proto/session/${id}${view === "type" ? "?view=type" : ""}`;
 
   if (empty) return <MemoryEmpty />;
+  if (first) return <FirstMemory />;
+  if (warming) return <WarmingTimeline />;
 
   return (
     <div className="min-h-screen bg-warm-white">
