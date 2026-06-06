@@ -155,7 +155,51 @@ differ. Ship with the table below in front of you.
    # (stable-version auto-derived to 2.1.0)
    ```
 
-6. **Announce.** GitHub release, Telegram notification, website update.
+6. **Generate the changelog.** Dispatch `changelog.yml` for the stable
+   version (see "Changelog automation" below). It opens a reviewable PR
+   with the auto-generated section; review and merge it.
+
+7. **Announce.** GitHub release, Telegram notification, website update.
+
+## Changelog automation (git-cliff)
+
+`python/CHANGELOG.md` entries are generated from
+[Conventional Commits](https://www.conventionalcommits.org/) by
+`.github/workflows/changelog.yml` (driven by `cliff.toml`). This replaces
+hand-assembling the "what changed" bullet list each release.
+
+**Design — decoupled on purpose.** The workflow is standalone and never runs
+inside the publish workflows. A changelog failure can't block a release, and
+every generated section lands as a normal, reviewable PR. git-cliff renders one
+bullet per commit subject; enrich the prose before merging if you like — the
+Keep-a-Changelog preamble and all prior entries are preserved (the new section
+is spliced in above the first `## [` heading, not blindly prepended).
+
+**Dispatch it after a stable publish:**
+
+```bash
+# Normal run (a python-v<prev> tag already exists -> range auto-detected):
+gh workflow run changelog.yml -f version=2.4.5
+
+# First run / bootstrap (no python-v* tag exists yet) -> give the lower bound
+# explicitly: the tag or SHA where the PREVIOUS stable shipped.
+gh workflow run changelog.yml -f version=2.4.5 -f from_ref=<prev-stable-sha>
+
+# Preview only — render to the run's job summary, no file edit, no PR:
+gh workflow run changelog.yml -f version=2.4.5 -f from_ref=<sha> -f dry_run=true
+```
+
+**Monorepo scoping.** This repo ships several independently-versioned packages
+from one history with a shared tag namespace. Two guards keep the python range
+honest: a per-package tag namespace (`python-v[0-9]*`, so the plugin's
+`v3.3.x` tags can't bound the range) and a path filter (`--include-path
+"python/**"`). Other packages reuse the same `cliff.toml` and override both on
+the CLI (`-f tag_namespace=...`, `-f package_glob=...`).
+
+**Bootstrap note.** Until a stable publish creates the first `python-v<version>`
+tag, `from_ref` is REQUIRED (the workflow fails loud rather than dumping the
+whole history). A planned fast-follow tags `python-v<version>` automatically on
+stable publish, after which `from_ref` can be omitted.
 
 ## Troubleshooting
 

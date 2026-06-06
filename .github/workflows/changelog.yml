@@ -1,0 +1,178 @@
+name: Changelog (git-cliff)
+
+# Generate a changelog section from Conventional Commits and open a reviewable
+# PR. DECOUPLED from the release-critical publish workflows by design: a
+# changelog failure can never block a release, and every generated entry is
+# reviewed in a normal PR before it lands.
+#
+# Why this exists: the python client CHANGELOG.md was hand-assembled per
+# release. This automates the mechanical part (the bullet list of what changed)
+# while keeping the curated preamble and prior entries intact.
+#
+# See docs/guides/release-process.md -> "Changelog automation (git-cliff)".
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'New version the entry documents (no v prefix), e.g. 2.4.5'
+        required: true
+        type: string
+      from_ref:
+        description: 'Lower bound of the commit range (tag or SHA). Blank = auto-detect the last python-v* tag. REQUIRED on the first run, before any python-v* tag exists.'
+        required: false
+        type: string
+        default: ''
+      package_glob:
+        description: 'Path filter — only commits touching this glob are included'
+        required: false
+        type: string
+        default: 'python/**'
+      changelog_file:
+        description: 'Changelog file to insert the new section into'
+        required: false
+        type: string
+        default: 'python/CHANGELOG.md'
+      tag_namespace:
+        description: 'Tag pattern that bounds this package version line (git glob == git-cliff regex for these names)'
+        required: false
+        type: string
+        default: 'python-v[0-9]*'
+      dry_run:
+        description: 'Render to the job summary only — no file edit, no PR'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  changelog:
+    name: Generate + open PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # full history + tags for range detection
+
+      - name: Resolve commit range
+        id: range
+        env:
+          FROM_REF: ${{ inputs.from_ref }}
+          TAG_NS: ${{ inputs.tag_namespace }}
+        run: |
+          set -euo pipefail
+          if [ -n "${FROM_REF}" ]; then
+            if ! git rev-parse --verify "${FROM_REF}^{commit}" >/dev/null 2>&1; then
+              echo "::error::from_ref '${FROM_REF}' is not a valid commit/tag."
+              exit 1
+            fi
+            echo "range=${FROM_REF}..HEAD" >> "$GITHUB_OUTPUT"
+            echo "unreleased=" >> "$GITHUB_OUTPUT"
+            echo "Resolved explicit range: ${FROM_REF}..HEAD"
+          else
+            LAST_TAG="$(git tag --list "${TAG_NS}" --sort=-creatordate | head -n1 || true)"
+            if [ -z "${LAST_TAG}" ]; then
+              echo "::error::No tag matches '${TAG_NS}' yet and no from_ref was given."
+              echo "::error::First-run bootstrap: pass from_ref=<sha-or-tag of the previous stable release> so the range has a lower bound. Once a stable publish tags python-v<version>, future runs auto-detect and from_ref can be left blank."
+              exit 1
+            fi
+            echo "range=" >> "$GITHUB_OUTPUT"
+            echo "unreleased=--unreleased" >> "$GITHUB_OUTPUT"
+            echo "Auto-detected last tag: ${LAST_TAG} (using --unreleased)"
+          fi
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          # Pin the exact version the config + template were validated against.
+          tool: git-cliff@2.13.1
+
+      - name: Run git-cliff
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+          UNRELEASED: ${{ steps.range.outputs.unreleased }}
+          VERSION: ${{ inputs.version }}
+          TAG_NS: ${{ inputs.tag_namespace }}
+          GLOB: ${{ inputs.package_glob }}
+          OUT: ${{ runner.temp }}/fragment.md
+        run: |
+          set -euo pipefail
+          # Globby vars are double-quoted so the shell can't expand them; the
+          # range/unreleased flags are plain (a 'sha..HEAD' string or a flag).
+          # This is the exact invocation validated locally against git-cliff 2.13.1.
+          git-cliff --config cliff.toml \
+            ${RANGE:-} ${UNRELEASED:-} \
+            --tag "${VERSION}" \
+            --tag-pattern "${TAG_NS}" \
+            --include-path "${GLOB}" \
+            > "${OUT}"
+          echo "Wrote fragment to ${OUT}"
+
+      - name: Publish fragment to job summary
+        run: |
+          {
+            echo "### Generated changelog fragment — v${{ inputs.version }}"
+            echo ''
+            echo '```markdown'
+            cat "${{ runner.temp }}/fragment.md"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Insert fragment below preamble
+        if: ${{ inputs.dry_run != true }}
+        env:
+          FILE: ${{ inputs.changelog_file }}
+          FRAG: ${{ runner.temp }}/fragment.md
+        run: |
+          # Splice the new section immediately above the first existing
+          # '## [' version heading — i.e. after the Keep-a-Changelog preamble.
+          # This preserves the curated header AND every prior entry, unlike a
+          # naive prepend (which lands the section above the file title).
+          # Done in python so blank-line normalization is deterministic: the
+          # git-cliff fragment carries a leading blank and no trailing blank
+          # (trim=true), so we strip surrounding blanks and rejoin with exactly
+          # one blank line on each side regardless of git-cliff's whitespace.
+          python3 - <<'PY'
+          import os, sys, pathlib
+          file = pathlib.Path(os.environ["FILE"])
+          frag = pathlib.Path(os.environ["FRAG"]).read_text().strip("\n")
+          if not frag.strip():
+              print("::warning::git-cliff produced an empty fragment (no matching commits in range). Nothing to insert.")
+              sys.exit(0)
+          text = file.read_text()
+          lines = text.splitlines(keepends=True)
+          idx = next((i for i, l in enumerate(lines) if l.startswith("## [")), None)
+          if idx is None:
+              new = text.rstrip("\n") + "\n\n" + frag + "\n"
+          else:
+              preamble = "".join(lines[:idx]).rstrip("\n")
+              rest = "".join(lines[idx:])
+              new = preamble + "\n\n" + frag + "\n\n" + rest
+          file.write_text(new)
+          print(f"Inserted section into {file}.")
+          PY
+
+      - name: Open changelog PR
+        if: ${{ inputs.dry_run != true }}
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: ci/changelog-${{ inputs.version }}
+          base: main
+          commit-message: "docs(changelog): python client ${{ inputs.version }}"
+          title: "docs(changelog): python client ${{ inputs.version }}"
+          body: |
+            Auto-generated changelog section for **python client `${{ inputs.version }}`**, produced by `.github/workflows/changelog.yml` (git-cliff) from Conventional Commits.
+
+            - **Range:** `${{ steps.range.outputs.range || format('last {0} tag .. HEAD', inputs.tag_namespace) }}`
+            - **Path filter:** `${{ inputs.package_glob }}`
+            - **File:** `${{ inputs.changelog_file }}`
+
+            **Review before merge.** git-cliff renders one bullet per commit subject — enrich prose, regroup, or trim noise as needed. The Keep-a-Changelog preamble and all prior entries are preserved.
+
+            🤖 Generated with [Claude Code](https://claude.com/claude-code)
+          delete-branch: true
+          add-paths: |
+            ${{ inputs.changelog_file }}

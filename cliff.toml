@@ -1,0 +1,72 @@
+# git-cliff configuration — automated changelog from Conventional Commits.
+# Drives `.github/workflows/changelog.yml`.
+#
+# MONOREPO SCOPING. This repo ships several independently-versioned packages
+# (python client 2.4.x, plugin/ClawHub 3.3.x, core 2.x, ...) from one git
+# history with a SHARED tag namespace. A naive `tag_pattern = "v[0-9]*"` would
+# scope the python changelog against the most recent *plugin* tag (e.g.
+# `v3.3.12-rc.11`), producing a wrong commit range. Two guards keep runs honest:
+#   1. Per-package tag namespace: stable python releases are tagged
+#      `python-v<version>`; `tag_pattern` below only matches those.
+#   2. Per-run path filter: the workflow passes `--include-path "python/**"` so
+#      only commits that touched the python tree appear.
+# Other packages reuse this same config and override the namespace on the CLI
+# with `--tag-pattern "<pkg>-v[0-9]*"` + their own `--include-path`.
+# Docs: https://git-cliff.org/docs/configuration
+
+[changelog]
+# Prepend mode: the workflow runs `--unreleased --prepend <FILE>`, so this body
+# renders ONLY the new version's section and prepends it above existing,
+# hand-curated history. The file header already exists in CHANGELOG.md.
+header = ""
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] — {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}\
+- {{ commit.message | split(pat="\n") | first | upper_first }}
+{% endfor %}\
+{% endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+# Drop anything that isn't a conventional commit (merge commits, raw subjects).
+filter_unconventional = true
+split_commits = false
+# Map commit type -> changelog group. Order here = render order.
+commit_parsers = [
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^perf", group = "Changed" },
+    { message = "^refactor", group = "Changed" },
+    { message = "^docs", group = "Documentation" },
+    # Noise: never appears in a user-facing changelog.
+    { message = "^chore\\(release\\)", skip = true },
+    { message = "^chore: bump", skip = true },
+    { message = "^chore", skip = true },
+    { message = "^test", skip = true },
+    { message = "^ci", skip = true },
+    { message = "^style", skip = true },
+    { message = "^build", skip = true },
+    { message = "^Merge", skip = true },
+    # Anything else conventional but unmapped -> Changed (don't silently drop).
+    { message = ".*", group = "Changed" },
+]
+protect_breaking_commits = true
+filter_commits = false
+# Per-package namespace (see MONOREPO SCOPING header). Only python release tags
+# match — the plugin's shared `v3.3.x` tags are deliberately excluded so the
+# python changelog range is never bounded by an unrelated package's release.
+# The workflow may override this on the CLI with `--tag-pattern` for other
+# packages. Note: this same string doubles as the git glob the workflow feeds
+# to `git tag --list` when auto-detecting the previous tag — for these tag
+# names the glob and regex interpretations select the identical set.
+tag_pattern = "python-v[0-9]*"
+topo_order = false
+sort_commits = "oldest"
