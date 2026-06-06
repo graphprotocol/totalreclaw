@@ -26,6 +26,7 @@
 - **Review** (`/proto/review`) — **the hero.** Memory-health "Watchtower" feed: *Needs you* (conflict, still-true?) + *Handled for you* (changed, secret). One-tap actions. Per-card honesty legend.
 - **Lineage** (`/proto/lineage/:id`) — the only graph in the product: one belief's typed evolution (replaced-by / contradicts / led-to).
 - **Memory** (`/proto/timeline`, `/proto/session/:id`) — session timeline + Crystal headlines + curation (pin/retype/delete+undo). `?empty` → cold-start.
+- **Settings / account** (`/proto/settings`, header gear) — account (vault/plan/usage), security & recovery (passkey, reveal phrase), **paired agents** (named instances "John (Hermes)" + revoke), **export** (.json/.md with unencrypted-file heads-up), import link, danger zone.
 - **Find** — a keyword **filter inside Memory** (narrows what's shown) + an "ask your agent for an answer" pointer. No standalone search page: semantic answers need the LLM (agent). Imported sessions show their origin ("Imported · ChatGPT").
 - **Cold-start activation arc** — empty Memory (`?empty`, on-ramp + ghosted glimpse) → first-memory "aha" (`?first`, confirm/correct the first captured memory) → warming-up (`?warming`, taking shape) → full. Plus fresh Review (`/proto/review?empty`, teaches the card types).
 - **Pair-an-agent** (`/proto/pair-agent`) — **visual stub** (faux QR + code). NOT real pairing.
@@ -66,15 +67,14 @@ Nav = **Memory · Review**. Lineage is a drill-in (from Review/Memory), not a na
 - **Pair-an-agent** is a visual stub — real pairing = **PRD-01** (Hermes auth-hardening, session keys), deferred.
 - **Conflict card** is designed but **gated on backend #306** (engine auto-resolves + discards contradictions today).
 - **Import** is guide-only; the agent executes (`totalreclaw_import_from`).
-- **Not built:** an **export / portability** surface (the "one-click plain-text export" value prop has no SPA home yet); a settings/account corner (recovery, devices); deeper agent-identity provenance (#317).
+- **Not built (functionally):** everything is non-functional UI. Export, revoke, reveal-phrase, delete are visual only. Deeper agent-identity provenance is backend (#317). Mobile/responsive not yet done.
 
 ## Open design backlog (next candidates)
 
-1. **Settings / account corner** — recovery, paired devices/agents, danger zone. ← in progress (Pedro: do this next)
-2. **Mobile / responsive pass** — desktop-centered today (max-w-2xl). ← queued after settings (Pedro)
-3. **Export / portability surface** — the "one-click plain-text export" value prop (client-side decrypt → .json/.md download) has no SPA home; sensitive-action framing.
+1. **Mobile / responsive pass** — desktop-centered today (max-w-2xl). ← in progress (Pedro: do this next)
+2. **Make it functional** — wire any/all screens to real auth/crypto/relay (this is the real Phase-1 build, per `spa-phase1.md`).
 
-**Recently done:** home loop (Review badge + check-in ritual + landing logic) — `e2f37f9` · search→filter + import-origin + audit fixes — `777249d` · first-memory "aha" — `1cafb9a`.
+**Recently done:** settings/account + export home — `c0c7b17` · home loop (badge + check-in + landing) — `e2f37f9` · search→filter + import-origin + audit fixes — `777249d`.
 
 ## Reference
 
@@ -86,6 +86,7 @@ Nav = **Memory · Review**. Lineage is a drill-in (from Review/Memory), not a na
 
 ## Changelog (prototype branch)
 
+- `c0c7b17` — settings/account corner (`/proto/settings`): account/usage, security & recovery, paired agents (named + revoke), export (.json/.md + heads-up), danger zone. Header gear.
 - `e2f37f9` — home loop: Review nav badge + on-open "still true?" check-in ritual (`/proto/checkin`) + landing logic (returning unlock → check-in → Review).
 - `777249d` — drop standalone search → keyword filter in Memory; show import origin ("Imported · ChatGPT"); audit fixes (source-only, Lineage drill-in, onboarding→empty). Issue #317 filed (agent-identity provenance).
 - `0625299` — vault search (`/proto/search`): SPA-local lexical find + highlight; "ask your agent" for a written answer (synthesis = agent). Global header search icon. **(superseded by 777249d)**
