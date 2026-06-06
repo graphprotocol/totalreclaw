@@ -19,20 +19,32 @@ npm --prefix app run dev      # from repo root → http://localhost:5173/proto
 
 ## Routes
 
+Primary nav is **Memory · Review · Lineage**. The global mind-map + graph-first Explore are demoted
+out of nav (gallery-only) — Lineage replaced them as the meaningful, scalable graph.
+
 | Route | Screen |
 |-------|--------|
 | `/proto` | Gallery index |
 | `/proto/onboarding` | Create-a-vault: generate real BIP-39 phrase → backup gate → confirm 4 words → passkey → tour |
 | `/proto/pair` | Unlock — passkey-first; recovery phrase = new-device/lost-passkey fallback |
-| `/proto/timeline` | Session timeline; filters (scope/type/source/open-threads + tap-entity); `?view=type` toggles presentation (default **By source**) |
+| `/proto/review` | **Review (hero)** — memory health / Watchtower feed: Needs-you (conflict, still-true?) + Handled-for-you (changed, secret). One-tap actions. See `docs/specs/totalreclaw/memory-review-surface.md`. |
+| `/proto/lineage/:id` | **Lineage** — one belief's typed evolution (`replaced by` / `contradicts` / `led to`). The only graph in the product. |
+| `/proto/timeline` | Session timeline (= "Memory" tab); filters (scope/type/source/open-threads + tap-entity); `?view=type` toggles presentation (default **By source**) |
 | `/proto/session/:id` | Session detail: Crystal + curatable Claim Cards (pin/retype/delete + 10s undo) |
-| `/proto/kg` | Mind-map (React Flow) |
-| `/proto/explore` | Graph-first explorer: tap node → its sessions → open one → its memories (in place) |
+| `/proto/kg` | Mind-map (React Flow) — **demoted**, ambient/gallery-only |
+| `/proto/explore` | Graph-first explorer — **demoted**, superseded by Review + Lineage |
 
 ## Locked design decisions (with Pedro)
 
 - Warm/personal "The Keeper": warm-white `#FBFAF8` bg (never cream), single **clay** accent
   `#C16240`, **Fraunces** serif for memory text + **Figtree** UI + JetBrains Mono.
+- **Review is the hero.** Market research: users adopt memory products for retrieval correctness, not
+  graph exploration. Reframed the surface to a memory-health Watchtower ("what needs a human"). The
+  graph is demoted to the narrow **Lineage** lens (typed, per-thread, scales). See
+  `docs/specs/totalreclaw/memory-review-surface.md` (Phase 3.1.1).
+- **Conflict card is gated on backend.** Engine auto-resolves + discards contradictions today; the
+  card needs `conflict-resolution.md` §12 (Layer 5: persist unresolved contradictions). Tracked as a
+  blocked-by roadmap item. Every other card rides shipped data the SPA decrypts client-side.
 - **React Flow** is the KG engine (Cinematic/force-graph engine was evaluated then dropped).
 - **Explore** is graph-first, sessions-first (no aggregated fact dump); Workspace mode dropped.
 - Timeline + session detail default to **By source** (provenance), type demoted to plain

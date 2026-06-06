@@ -31,6 +31,10 @@ export default {
         "type-episode-ink": "#655F58",
         "type-summary": "#DDEFE2",
         "type-summary-ink": "#3E6B4E",
+        // Muted status dots for the prototype's "what's backed by real engine data"
+        // honesty legend — sage / amber / clay. Not brand surface colors.
+        emerald: "#5B8A6B",
+        amber: "#C89A3C",
       },
       fontFamily: {
         display: ["Fraunces", "Georgia", "serif"],

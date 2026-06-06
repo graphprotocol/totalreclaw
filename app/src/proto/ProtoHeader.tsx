@@ -2,9 +2,9 @@ import { Link, useLocation } from "react-router-dom";
 import { clsx } from "clsx";
 
 const TABS = [
-  { to: "/proto/timeline", label: "Timeline" },
-  { to: "/proto/kg", label: "Mind-map" },
-  { to: "/proto/explore", label: "Explore" },
+  { to: "/proto/timeline", label: "Memory" },
+  { to: "/proto/review", label: "Review" },
+  { to: "/proto/lineage", label: "Lineage" },
 ];
 
 /** Sticky wordmark + tab switch. Solid warm-white, hairline base — no glass. */

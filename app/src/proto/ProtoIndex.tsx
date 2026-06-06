@@ -48,33 +48,32 @@ export function ProtoIndex() {
         </p>
 
         <div className="mt-6 space-y-4">
+          <Group title="Review — the Keeper watches your memory" desc="Memory health: conflicts, stale facts, what changed, secrets caught. The reason to open the app.">
+            <Row to="/proto/review" label="Your review" hint="hero · needs-you feed" />
+            <Row to="/proto/lineage/where-pedro-works" label="Lineage — why a belief changed" hint="conflict thread" />
+            <Row to="/proto/lineage/july-trip" label="Lineage — a plan that evolved" hint="supersede thread" />
+          </Group>
+
+          <Group title="Memory — see everything, clearly" desc="The trust foundation: session timeline + Crystal headlines + curation.">
+            <Row to="/proto/timeline" label="Timeline" hint="By source (default)" />
+            <Row to="/proto/timeline?view=type" label="Timeline" hint="By type" />
+            {SEED_SESSIONS.map((s) => (
+              <Row
+                key={s.id}
+                to={`/proto/session/${s.id}`}
+                label={`${s.crystal.narrative.slice(0, 44)}…`}
+              />
+            ))}
+          </Group>
+
           <Group title="First run & auth" desc="Non-functional — every button just continues to the vault.">
             <Row to="/proto/onboarding" label="Create a vault (onboarding)" hint="generate + back up" />
             <Row to="/proto/pair" label="Unlock" hint="passkey + recovery" />
           </Group>
 
-          <Group title="Timeline" desc="Session timeline with filters + presentation toggle.">
-            <Row to="/proto/timeline" label="Timeline" hint="By source (default)" />
-            <Row to="/proto/timeline?view=type" label="Timeline" hint="By type" />
-          </Group>
-
-          <Group title="Session detail" desc="Crystal + curatable memories (pin / retype / delete + undo).">
-            {SEED_SESSIONS.map((s) => (
-              <Row
-                key={s.id}
-                to={`/proto/session/${s.id}`}
-                label={`${s.crystal.narrative.slice(0, 48)}…`}
-              />
-            ))}
-            <Row to="/proto/session/s1?view=type" label="Same session, by type" hint="By type" />
-          </Group>
-
-          <Group title="Mind-map (KG)" desc="Topics & entities as a living graph (React Flow).">
-            <Row to="/proto/kg" label="Mind-map" />
-          </Group>
-
-          <Group title="Explore" desc="Graph → tap a node → its sessions → open one to read its memories.">
-            <Row to="/proto/explore" label="Explore" hint="graph-first" />
+          <Group title="Earlier explorations" desc="Demoted from primary nav — the global graph is a glance, not a workspace. Lineage replaced it.">
+            <Row to="/proto/kg" label="Mind-map (global graph)" hint="ambient only" />
+            <Row to="/proto/explore" label="Explore (graph-first drill)" hint="superseded by Review" />
           </Group>
         </div>
       </main>
