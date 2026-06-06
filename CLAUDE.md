@@ -427,8 +427,16 @@ Full CI/CD pipeline documented in `totalreclaw-internal/docs/ci-cd-pipeline.md`.
 4. **Subgraph deploys to staging first.** Verify indexing before deploying to production subgraph.
 5. **After every subgraph deploy, immediately update the relay's `SUBGRAPH_ENDPOINT` env var on Railway.** The relay queries the subgraph via this URL — a stale version means the relay reads from an outdated schema. Update both services:
    - **Staging**: `railway variables set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<new-version>" -s totalreclaw`
-   - **Production**: `railway variables set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<new-version>" -s totalreclaw-production`
-   Setting env vars triggers an automatic Railway redeploy. Verify the relay restarts cleanly by checking `/health`.
+   - **Production** (production runs TWO endpoint vars — free `SUBGRAPH_ENDPOINT` + `PRO_SUBGRAPH_ENDPOINT` — update BOTH): `railway variables --set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<new-version>" --set "PRO_SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<new-version>" -s totalreclaw-production`
+   Setting env vars triggers an automatic Railway redeploy. Verify the relay restarts cleanly by checking `/health`. NOTE: `railway variables --set` may time out on the response yet still apply — re-read with `railway variables -s <svc> --json` to confirm before retrying. Also: deploy the prod subgraph from `subgraph/subgraph-gnosis-mainnet.yaml` (the default `subgraph.yaml` is a stale base-sepolia manifest — a bare `graph deploy` targets the wrong chain).
+
+6. **After every release event, update the release pipeline tracker (MANDATORY).** The single source of truth for "what's live / next RC / what's been QA'd" is **`totalreclaw-internal/docs/release-pipeline.md`**. The session that runs the event updates it **the same session** — never defer to a follow-up:
+   - **RC publish** (workflow success) → update Latest RC + Status + history.
+   - **Stable promote** (you dispatched `release-type=stable`) → swap the new version into Production, set Status `promoted`, append history.
+   - **Prod infra change** (subgraph redeploy, relay endpoint repoint, chain flip) → note it under the affected integration.
+   - **QA verdict** (GO / NO-GO) → update Status + blocker.
+
+   This rule is canonical in `totalreclaw-internal/CLAUDE.md` (§"Release pipeline tracker") but is repeated HERE because release events are dispatched from THIS (public) repo — an agent operating only in the public repo otherwise never loads the rule and the tracker silently rots. (Added 2026-06-06 after a 2.4.4 stable promote shipped without a tracker update; the tracker had gone a month stale.)
 
 For deployment procedures, follow the canonical runbook **[`docs/guides/deployment.md`](docs/guides/deployment.md)** (version-controlled source of truth — verified service↔env↔domain map, TS-relay `/health` contract, deploy-SHA sentinel, SHA hard-gate, subgraph + rollback). The machine-local `deploy-totalreclaw` skill mirrors it; if they disagree, the doc wins.
 
