@@ -247,7 +247,7 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
             return (
                 "## TotalReclaw memory\n"
                 "TotalReclaw is the active memory provider for this user. "
-                "Memories are end-to-end encrypted, on-chain (Base / Gnosis), "
+                "Memories are end-to-end encrypted, on-chain, "
                 "and portable across every AI tool the user runs. Prefer "
                 "`totalreclaw_remember` / `totalreclaw_recall` for any "
                 "user-fact, preference, directive, commitment, or episode."
