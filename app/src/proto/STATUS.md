@@ -74,7 +74,7 @@ Nav = **Memory · Review**. Lineage is a drill-in (from Review/Memory), not a na
 The design surface feels complete for a look-and-feel prototype. Remaining work is mostly
 implementation, not design:
 
-1. **Make it functional** — wire the screens to real auth/crypto/relay (the real Phase-1 build, per `spa-phase1.md`). This is where the deferred functional tracks live: PRD-01 (pairing/auth), #306/#307 (conflict persistence + card), #317 (agent-identity provenance).
+1. **Make it functional** — wire the screens to real auth/crypto/relay (the real Phase-1 build, per `spa-phase1.md`). Deferred functional tracks now on GitHub: PRD-01 (pairing/auth), #306/#307 (conflict persistence + card), #317 (agent-identity provenance), **#323 (functional export)**.
 2. (Optional design) revisit if new needs surface — notifications outside the app, an ambient "constellation" graph, etc.
 
 **Mobile:** verified responsive at 390px (zero overflow) — `e3d983b`.
