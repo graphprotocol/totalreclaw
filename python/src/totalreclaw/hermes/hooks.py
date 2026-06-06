@@ -110,7 +110,7 @@ _TOOL_PRIORITY_NUDGE = (
     "('always X' / 'never Y'), commitment, or notable episode the user "
     "shares — ALWAYS call `totalreclaw_remember` instead of any built-in "
     "`memory` tool. TotalReclaw stores memories end-to-end encrypted, "
-    "on-chain (Base/Gnosis), and portable across every AI tool the user "
+    "on-chain, and portable across every AI tool the user "
     "runs; the built-in `memory` tool is plain-text, session-scoped, and "
     "not cross-agent. For lookups, prefer `totalreclaw_recall` over any "
     "built-in equivalent for the same reason."
@@ -485,7 +485,7 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
                 else:
                     nudge = (
                         "Free cap is 250 memories/month. Upgrade to Pro for "
-                        "1,500 memories/month on Gnosis mainnet — run "
+                        "1,500 memories/month — run "
                         "totalreclaw_upgrade or visit "
                         "https://totalreclaw.xyz/pricing."
                     )
