@@ -28,6 +28,7 @@ out of nav (gallery-only) — Lineage replaced them as the meaningful, scalable 
 | `/proto/onboarding` | Create-a-vault: generate real BIP-39 phrase → backup gate → confirm 4 words → passkey → tour |
 | `/proto/pair` | Unlock — passkey-first; recovery phrase = new-device/lost-passkey fallback |
 | `/proto/pair-agent` | **Pair-an-agent stub** — faux QR + 6-digit code + "waiting…". Visual only; NOT real pairing (PRD-01). The cold-start on-ramp destination. |
+| `/proto/import` | **Import guide** — SPA hosts the how-to (per-source export steps + the exact agent command); the agent runs the import. Source toggle ChatGPT/Gemini/Claude; privacy note flips curated (no LLM) vs full-history (cleartext to agent LLM). Mirrors `docs/guides/importing-from-*.md`. |
 | `/proto/review` | **Review (hero)** — memory health / Watchtower feed: Needs-you (conflict, still-true?) + Handled-for-you (changed, secret). One-tap actions. See `docs/specs/totalreclaw/memory-review-surface.md`. |
 | `/proto/lineage/:id` | **Lineage** — one belief's typed evolution (`replaced by` / `contradicts` / `led to`). The only graph in the product. |
 | `/proto/timeline` | Session timeline (= "Memory" tab); filters (scope/type/source/open-threads + tap-entity); `?view=type` toggles presentation (default **By source**). `?empty` → cold-start empty vault. |

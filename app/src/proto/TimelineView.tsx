@@ -45,8 +45,11 @@ function MemoryEmpty() {
             </Link>
           </div>
           <p className="mx-auto mt-3 max-w-sm text-xs leading-relaxed text-ink-muted">
-            Already have memories in ChatGPT, Gemini, or Claude? Pair an agent first, then ask it to
-            import them — that's where the model that reads your old chats lives.
+            Already have memories in ChatGPT, Gemini, or Claude? Pair an agent, then ask it to import
+            them — that's where the model that reads your old chats lives.{" "}
+            <Link to="/proto/import" className="font-semibold text-clay-deep hover:underline">
+              See how →
+            </Link>
           </p>
 
           <div className="mt-7 grid gap-3 text-left sm:grid-cols-3">

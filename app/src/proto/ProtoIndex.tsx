@@ -70,6 +70,7 @@ export function ProtoIndex() {
             <Row to="/proto/timeline?empty" label="Memory — empty" hint="on-ramp + glimpse" />
             <Row to="/proto/review?empty" label="Review — fresh (never reviewed)" hint="teaches the cards" />
             <Row to="/proto/pair-agent" label="Pair an agent" hint="stub · not the real auth" />
+            <Row to="/proto/import" label="Import guide (ChatGPT / Gemini / Claude)" hint="SPA shows how · agent does it" />
           </Group>
 
           <Group title="First run & auth" desc="Non-functional — every button just continues to the vault.">

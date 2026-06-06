@@ -93,7 +93,10 @@ export function ProtoPairAgent() {
               <li className="flex gap-2.5">
                 <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-clay" aria-hidden />
                 <span>
-                  <span className="font-semibold">Import your history</span> from ChatGPT, Gemini, or Claude.
+                  <span className="font-semibold">Import your history</span> from ChatGPT, Gemini, or Claude.{" "}
+                  <Link to="/proto/import" className="font-semibold text-clay-deep hover:underline">
+                    See how
+                  </Link>
                 </span>
               </li>
               <li className="flex gap-2.5">
