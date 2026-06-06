@@ -55,6 +55,7 @@ export function ProtoIndex() {
           </Group>
 
           <Group title="Memory — see everything, clearly" desc="The trust foundation: session timeline + Crystal headlines + curation.">
+            <Row to="/proto/search" label="Search — find anything" hint="SPA finds · agent answers" />
             <Row to="/proto/timeline" label="Timeline" hint="By source (default)" />
             <Row to="/proto/timeline?view=type" label="Timeline" hint="By type" />
             {SEED_SESSIONS.map((s) => (
