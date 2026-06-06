@@ -47,6 +47,11 @@ out of nav (gallery-only) — Lineage replaced them as the meaningful, scalable 
 - **Conflict card is gated on backend.** Engine auto-resolves + discards contradictions today; the
   card needs `conflict-resolution.md` §12 (Layer 5: persist unresolved contradictions). Tracked as a
   blocked-by roadmap item. Every other card rides shipped data the SPA decrypts client-side.
+- **Import is an AGENT capability, never an SPA action.** Import (ChatGPT/Gemini/Claude) runs LLM
+  extraction over the export, and the LLM lives in the agent — `totalreclaw_import_from` is an agent
+  tool; the relay is server-blind; the SPA is a thin decrypt/curate client with no model. So the SPA
+  **states** import as a post-pairing capability (cold-start note + the pair-an-agent "what your agent
+  can do" list) and never offers an in-app import button.
 - **React Flow** is the KG engine (Cinematic/force-graph engine was evaluated then dropped).
 - **Explore** is graph-first, sessions-first (no aggregated fact dump); Workspace mode dropped.
 - Timeline + session detail default to **By source** (provenance), type demoted to plain

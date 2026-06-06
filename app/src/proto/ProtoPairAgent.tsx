@@ -81,6 +81,32 @@ export function ProtoPairAgent() {
             </div>
           </div>
 
+          <div className="mt-5 rounded-card border border-hairline bg-warm-white p-4 text-left">
+            <p className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
+              Once connected, your agent can
+            </p>
+            <ul className="mt-2.5 space-y-2 text-sm text-ink">
+              <li className="flex gap-2.5">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-clay" aria-hidden />
+                Remember &amp; recall as you talk — automatically.
+              </li>
+              <li className="flex gap-2.5">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-clay" aria-hidden />
+                <span>
+                  <span className="font-semibold">Import your history</span> from ChatGPT, Gemini, or Claude.
+                </span>
+              </li>
+              <li className="flex gap-2.5">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-clay" aria-hidden />
+                Export everything in plain text, anytime.
+              </li>
+            </ul>
+            <p className="mt-3 border-t border-hairline pt-2.5 text-xs leading-relaxed text-ink-muted">
+              Import runs inside your agent — that's where the model that reads your old chats lives. The
+              vault only ever sees finished, encrypted memories.
+            </p>
+          </div>
+
           <div className="mt-5 flex items-center justify-between gap-3">
             <Link to="/proto/timeline" className="text-sm font-semibold text-ink-muted transition hover:text-ink">
               I'll do this later

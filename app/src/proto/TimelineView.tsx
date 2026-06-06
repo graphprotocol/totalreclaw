@@ -36,20 +36,18 @@ function MemoryEmpty() {
             </>
           }
         >
-          <div className="mt-6 flex flex-wrap justify-center gap-2.5">
+          <div className="mt-6 flex justify-center">
             <Link
               to="/proto/pair-agent"
-              className="rounded-control bg-clay px-4 py-2.5 font-sans text-sm font-semibold text-warm-white shadow-soft transition duration-150 ease-keeper hover:-translate-y-px hover:bg-clay-deep hover:shadow-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2"
+              className="rounded-control bg-clay px-5 py-2.5 font-sans text-sm font-semibold text-warm-white shadow-soft transition duration-150 ease-keeper hover:-translate-y-px hover:bg-clay-deep hover:shadow-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2"
             >
               Pair an agent
             </Link>
-            <button
-              type="button"
-              className="rounded-control border border-hairline bg-warm-white px-4 py-2.5 font-sans text-sm font-semibold text-ink transition hover:border-ink-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2"
-            >
-              Import from ChatGPT, Gemini…
-            </button>
           </div>
+          <p className="mx-auto mt-3 max-w-sm text-xs leading-relaxed text-ink-muted">
+            Already have memories in ChatGPT, Gemini, or Claude? Pair an agent first, then ask it to
+            import them — that's where the model that reads your old chats lives.
+          </p>
 
           <div className="mt-7 grid gap-3 text-left sm:grid-cols-3">
             {HOW_IT_FILLS.map((s) => (
