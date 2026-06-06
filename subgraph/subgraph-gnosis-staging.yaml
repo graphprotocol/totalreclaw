@@ -1,3 +1,4 @@
+# STAGING — Gnosis (isolated DataEdge). Deploy via `npm run deploy:staging`.
 specVersion: 0.0.5
 description: TotalReclaw — STAGING subgraph (Gnosis mainnet, isolated DataEdge). Indexes the staging-only EventfulDataEdge so staging on-chain activity is isolated from the production subgraph. Part of ops-6 (totalreclaw-internal#363 staging-chain-isolation).
 repository: https://github.com/p-diogo/totalreclaw

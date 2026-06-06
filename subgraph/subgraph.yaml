@@ -1,3 +1,6 @@
+# DEFAULT — mirrors PROD (Gnosis mainnet). A bare `graph deploy`/`graph build`
+# (no manifest arg) targets production. Per-target manifests:
+# subgraph-gnosis-mainnet.yaml (prod) / subgraph-gnosis-staging.yaml (staging).
 specVersion: 0.0.5
 description: TotalReclaw — End-to-end encrypted memory vault subgraph
 repository: https://github.com/p-diogo/totalreclaw
@@ -6,13 +9,14 @@ schema:
 dataSources:
   - kind: ethereum
     name: EventfulDataEdge
-    # Local dev: hardhat | Production: gnosis | Testnet: gnosis-chiado
-    # deploy-contracts.sh updates address + startBlock for localhost deploys
-    network: base-sepolia
+    # PROD config (Gnosis mainnet, chain 100). Kept in sync with
+    # subgraph-gnosis-mainnet.yaml so a manifest-less deploy hits prod.
+    # deploy-contracts.sh updates address + startBlock for localhost deploys.
+    network: gnosis
     source:
       address: "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca"
       abi: EventfulDataEdge
-      startBlock: 39870000
+      startBlock: 45217698
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
