@@ -63,9 +63,14 @@ from totalreclaw.agent.llm_client import (
 class _FakeResp:
     """Stub of ``httpx.Response`` exercising only what _call_openai uses."""
 
-    def __init__(self, payload: dict, status_code: int = 200) -> None:
+    def __init__(
+        self, payload: dict, status_code: int = 200, headers: dict | None = None
+    ) -> None:
         self._payload = payload
         self.status_code = status_code
+        # _call_openai's empty-content diag scans response headers for
+        # rate-limit/quota markers; mirror httpx.Response.headers.
+        self.headers = headers or {}
 
     def json(self) -> dict:
         return self._payload

@@ -1244,6 +1244,26 @@ def _supports_json_object_response_format(base_url: str) -> bool:
     return any(hint in lower for hint in _JSON_OBJECT_PROVIDER_HINTS)
 
 
+def _is_zai_base_url(base_url: str) -> bool:
+    """Return True for either z.ai endpoint (Coding ``/coding/paas/v4`` or
+    Standard ``/paas/v4``).
+
+    Used to gate the ``thinking: {"type": "disabled"}`` request body field
+    (see :func:`_call_openai`). z.ai's GLM models default to a server-side
+    *thinking* mode that spends generation budget emitting chain-of-thought
+    into ``message.reasoning_content``. For cheap, structured extraction
+    calls that reasoning budget is pure waste — disabling it is an
+    efficiency win (faster, fewer completion tokens) and reduces the chance
+    of a content/``reasoning_content`` split. (NB: thinking mode is NOT the
+    root cause of #376 — at a realistic token budget GLM populates
+    ``content`` with thinking on or off; the #376 empties were
+    environmental/quota. See the empty-content recovery + diag below.)
+    """
+    if not base_url:
+        return False
+    return "z.ai" in base_url.lower()
+
+
 async def _call_openai(
     config: LLMConfig,
     system_prompt: str,
@@ -1288,6 +1308,33 @@ async def _call_openai(
         # what flips zai/GLM from empty-content responses to structured
         # output. See F2 in the rc.23 QA report.
         body["response_format"] = {"type": "json_object"}
+    if _is_zai_base_url(config.base_url):
+        # EFFICIENCY: z.ai's GLM-4.5-series-and-up models (including the
+        # cheap extraction workhorse ``glm-4.5-flash``) default to
+        # ``thinking: {"type": "enabled"}``. With thinking on, the model
+        # spends generation budget emitting chain-of-thought into
+        # ``message.reasoning_content`` before answering. For our cheap,
+        # JSON-shaped extraction prompts that reasoning pass adds latency
+        # and burns completion tokens for no quality gain.
+        #
+        # Sending ``thinking: {"type": "disabled"}`` tells GLM to answer
+        # directly in ``content``. z.ai's documented parameter (default
+        # "enabled"; allowed "enabled"/"disabled"); applies to GLM-4.5
+        # series and higher and is a no-op on providers that ignore it.
+        # SAME provider, SAME endpoint, SAME key — only the request body
+        # changes. We deliberately do NOT flip the endpoint (the
+        # Coding-plan key is endpoint-scoped; flipping 401s).
+        #
+        # NOTE: this is NOT the #376 fix. At a realistic max_tokens budget
+        # GLM populates ``content`` regardless of thinking mode; the #376
+        # QA empties were instant 200-empty responses (quota/throttle,
+        # ~14ms), not thinking-mode content/reasoning splits. Disabling
+        # thinking is an efficiency + hardening measure that ALSO removes
+        # one possible empty-content path; the real #376 fix (detect
+        # quota-exhausted instant-empty → surface an actionable error) is
+        # tracked separately. The recovery + rich diag below cover any
+        # residual empty-content case.
+        body["thinking"] = {"type": "disabled"}
 
     async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
         resp = await client.post(
@@ -1301,25 +1348,65 @@ async def _call_openai(
         resp.raise_for_status()
         data = resp.json()
         choice = (data.get("choices") or [{}])[0]
-        content = choice.get("message", {}).get("content")
+        message = choice.get("message", {}) or {}
+        content = message.get("content")
         if not content:
-            # F2 — empty responses must be loud, not silent. Prior to
-            # rc.24 this was logged as a generic "returned None/empty"
-            # downstream in extraction.py at INFO. Surface the actual
-            # response shape (finish_reason, usage) at WARN here so the
-            # operator can correlate empty extraction batches with the
-            # provider response without enabling DEBUG.
+            # OBSERVABILITY + HARDENING: GLM (and some other reasoning
+            # models, e.g. Gemma on OpenAI-compat endpoints) can leave
+            # ``content`` empty while placing the actual answer in
+            # ``reasoning_content`` when thinking mode is active. We send
+            # ``thinking: {"type": "disabled"}`` for z.ai above so this
+            # path should not trigger there, but if a provider/version
+            # ignores that flag we recover the payload here instead of
+            # silently dropping the extraction turn. The extraction parser
+            # already strips ``<think>`` wrappers and bracket-scans for the
+            # JSON body, so a reasoning_content blob that wraps the JSON
+            # parses cleanly. (Recovery is a safety net, not the #376 fix —
+            # #376's empties were truly empty, no reasoning_content to
+            # recover; those fall through to the rich diag below.)
+            reasoning = message.get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning.strip():
+                logger.warning(
+                    "LLM returned empty content but non-empty "
+                    "reasoning_content (provider=%s, model=%s, "
+                    "reasoning_chars=%d) — recovering from reasoning_content. "
+                    "If this recurs on z.ai, ensure the request is not "
+                    "overriding thinking back to enabled.",
+                    config.base_url,
+                    config.model,
+                    len(reasoning),
+                )
+                return reasoning
+            # Truly empty (no content AND no reasoning_content to recover).
+            # Surface the FULL response shape at WARN so the cause is
+            # diagnosable on the next run without DEBUG (#318): raw HTTP
+            # status + rate-limit/quota headers + a body snippet, on top of
+            # finish_reason/usage/message-keys. This is what distinguishes an
+            # exhausted/throttled key (instant 200-empty, rl headers) from a
+            # token-budget or formatting issue (finish_reason=length, usage).
+            rl_headers = {
+                k: v for k, v in resp.headers.items()
+                if any(t in k.lower() for t in ("ratelimit", "quota", "x-request-id", "retry-after"))
+            }
             logger.warning(
                 "LLM returned empty content (provider=%s, model=%s, "
-                "system_chars=%d, user_chars=%d, finish_reason=%s, usage=%s, "
-                "json_response_format=%s)",
+                "http_status=%s, system_chars=%d, user_chars=%d, finish_reason=%s, "
+                "usage=%s, json_response_format=%s, message_keys=%s, "
+                "reasoning_content_present=%s, reasoning_content_chars=%d, "
+                "rl_headers=%s, body_snippet=%r)",
                 config.base_url,
                 config.model,
+                resp.status_code,
                 len(system_prompt or ""),
                 len(user_prompt or ""),
                 choice.get("finish_reason"),
                 data.get("usage"),
                 "response_format" in body,
+                sorted(message.keys()),
+                reasoning is not None,
+                len(reasoning or ""),
+                rl_headers,
+                str(message)[:400],
             )
         return content
 

@@ -1082,10 +1082,20 @@ async def extract_facts_llm(
         # Reaching here means BOTH the cheap model and the chat-model
         # fallback (#376) came back empty.
         logger.warning(
-            "extract_facts_llm: chat_completion returned None/empty — "
-            "auto-extraction will be a no-op for this turn. "
-            "See preceding 'LLM returned empty content' log for the "
-            "underlying response shape (finish_reason / usage)."
+            "extract_facts_llm: chat_completion returned None/empty for "
+            "BOTH the cheap extraction model (%r) and the chat-model #376 "
+            "fallback (%r) on %s — auto-extraction is a NO-OP for this turn. "
+            "ACTION: set TOTALRECLAW_EXTRACTION_MODEL to a model that returns "
+            "content on your endpoint (for z.ai Coding/Standard, a known-good "
+            "value is 'glm-4.5-flash'; this is already the default, so if it "
+            "is STILL empty your key/plan may not serve it — try your chat "
+            "model name explicitly, e.g. TOTALRECLAW_EXTRACTION_MODEL=%s). "
+            "See the preceding 'LLM returned empty content' log for the "
+            "underlying response shape (finish_reason / usage).",
+            config.model,
+            chat_config.model,
+            config.base_url,
+            chat_config.model,
         )
         return []
 
@@ -1196,10 +1206,19 @@ async def extract_facts_compaction(
         # to capture facts before the conversation is collapsed; a
         # silent empty-response here is a hard data-loss event.
         logger.warning(
-            "extract_facts_compaction: chat_completion returned None/empty — "
-            "compaction extraction will be a no-op for this conversation. "
-            "See preceding 'LLM returned empty content' log for the "
-            "underlying response shape."
+            "extract_facts_compaction: chat_completion returned None/empty "
+            "for the extraction model (%r) on %s — compaction extraction is a "
+            "NO-OP for this conversation (hard data-loss: this is the last "
+            "chance to capture facts before the context is collapsed). "
+            "ACTION: set TOTALRECLAW_EXTRACTION_MODEL to a model that returns "
+            "content on your endpoint (for z.ai a known-good value is "
+            "'glm-4.5-flash'; if that is STILL empty, set it to your chat "
+            "model name, e.g. TOTALRECLAW_EXTRACTION_MODEL=%s). See the "
+            "preceding 'LLM returned empty content' log for the underlying "
+            "response shape.",
+            config.model,
+            config.base_url,
+            chat_config.model,
         )
         return []
 
