@@ -1048,6 +1048,28 @@ async def extract_facts_llm(
         logger.warning("extract_facts_llm: chat_completion threw: %s", e)
         return []
 
+    if not response and config.model != chat_config.model:
+        # #376: the cheap extraction model returned empty. Retry ONCE with
+        # the user's flagship chat model on the SAME endpoint (Pedro's
+        # 2026-04-26 directive: never flip the endpoint — the API key is
+        # endpoint-scoped). The flagship is more capable and recovers turns
+        # the cheap workhorse silently empties. Same key/auth; only the
+        # model differs from ``config``.
+        logger.warning(
+            "extract_facts_llm: cheap extraction model %r returned empty — "
+            "retrying once with chat model %r (#376 fallback).",
+            config.model, chat_config.model,
+        )
+        try:
+            response = await chat_completion(
+                chat_config, EXTRACTION_SYSTEM_PROMPT, user_prompt
+            )
+        except Exception as e:
+            logger.warning(
+                "extract_facts_llm: #376 fallback chat_completion threw: %s", e
+            )
+            response = None
+
     if not response:
         # F2 (rc.24) — bumped from INFO to WARNING. An empty extraction
         # response is a CORRECTNESS bug, not a routine event: the LLM
@@ -1057,6 +1079,8 @@ async def extract_facts_llm(
         # already logs the underlying request shape (finish_reason,
         # usage, response_format) at WARN; this line tells the operator
         # WHERE the empty bubbled up so they can correlate the two.
+        # Reaching here means BOTH the cheap model and the chat-model
+        # fallback (#376) came back empty.
         logger.warning(
             "extract_facts_llm: chat_completion returned None/empty — "
             "auto-extraction will be a no-op for this turn. "
