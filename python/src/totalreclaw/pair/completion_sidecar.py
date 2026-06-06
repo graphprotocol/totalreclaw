@@ -151,13 +151,29 @@ def _configure_sidecar_logging() -> None:
     except OSError:
         pass
 
-    handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
-    handler.setLevel(logging.INFO)
-    handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s %(levelname)s %(name)s [pair-sidecar pid=%(process)d] %(message)s"
+    # Logging is a best-effort audit trail. Building the file handler can
+    # fail (missing/stale dir, a stale docker bind-mount inode after a
+    # state wipe, permissions, read-only or full disk). That MUST NOT crash
+    # the sidecar — its job is completing the pairing, not logging (#372).
+    handler: logging.Handler
+    try:
+        # Defensive: ensure the parent exists even if _totalreclaw_dir()'s
+        # mkdir was defeated by a stale mount.
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s %(levelname)s %(name)s [pair-sidecar pid=%(process)d] %(message)s"
+            )
         )
-    )
+    except OSError:
+        # Degrade to no-file logging; pairing continues normally.
+        handler = logging.NullHandler()
+
+    handler.setLevel(logging.INFO)
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     # Replace any existing handlers so the sidecar doesn't double-log
