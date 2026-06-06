@@ -25,7 +25,7 @@
 - **Review** (`/proto/review`) — **the hero.** Memory-health "Watchtower" feed: *Needs you* (conflict, still-true?) + *Handled for you* (changed, secret). One-tap actions. Per-card honesty legend.
 - **Lineage** (`/proto/lineage/:id`) — the only graph in the product: one belief's typed evolution (replaced-by / contradicts / led-to).
 - **Memory** (`/proto/timeline`, `/proto/session/:id`) — session timeline + Crystal headlines + curation (pin/retype/delete+undo). `?empty` → cold-start.
-- **Cold-start** — empty Memory (`?empty`, on-ramp + ghosted glimpse) and fresh Review (`/proto/review?empty`, teaches the card types).
+- **Cold-start activation arc** — empty Memory (`?empty`, on-ramp + ghosted glimpse) → first-memory "aha" (`?first`, confirm/correct the first captured memory) → warming-up (`?warming`, taking shape) → full. Plus fresh Review (`/proto/review?empty`, teaches the card types).
 - **Pair-an-agent** (`/proto/pair-agent`) — **visual stub** (faux QR + code). NOT real pairing.
 - **Import guide** (`/proto/import`) — SPA hosts the how-to (per-source export steps + exact agent command); the agent runs the import.
 
@@ -61,13 +61,14 @@ Nav = **Memory · Review · Lineage**. Mind-map + Explore demoted to gallery-onl
 - **Pair-an-agent** is a visual stub — real pairing = **PRD-01** (Hermes auth-hardening, session keys), deferred.
 - **Conflict card** is designed but **gated on backend #306** (engine auto-resolves + discards contradictions today).
 - **Import** is guide-only; the agent executes (`totalreclaw_import_from`).
-- **Not built:** first-memory "aha" moment, vault search/ask, the home/return loop + "still true?" on-open ritual.
+- **Not built:** vault search/ask, the home/return loop + "still true?" on-open ritual.
 
 ## Open design backlog (next candidates)
 
-1. **First-memory "aha"** — empty → first captured memory (confirm/correct) → warming-up timeline (1–3 memories). The activation→retention hinge.
-2. **Search / Ask the vault** — find/browse is SPA; semantic *ask* is likely agent-side (scope per decision #3).
-3. **Home loop + "still true?" ritual** — make Review a habit, not a one-time visit.
+1. **Search / Ask the vault** — find/browse is SPA; semantic *ask* is likely agent-side (scope per decision #3).
+2. **Home loop + "still true?" ritual** — make Review a habit, not a one-time visit; landing logic (Review when it needs you, else Memory) + Review tab badge.
+
+**Recently done:** first-memory "aha" + warming-up timeline (cold-start activation arc) — `1cafb9a`.
 
 ## Reference
 
@@ -79,6 +80,7 @@ Nav = **Memory · Review · Lineage**. Mind-map + Explore demoted to gallery-onl
 
 ## Changelog (prototype branch)
 
+- `1cafb9a` — first-memory "aha" + warming-up timeline (cold-start activation arc: empty → first → warming → full).
 - `4ba5eba` — import guide (`/proto/import`): SPA hosts the how-to, agent runs the import.
 - `90f9743` — fix: import is an agent capability, not an SPA action (removed misleading in-app import button).
 - `fc8da9c` — cold-start / empty-vault surfaces + pair-an-agent stub.
