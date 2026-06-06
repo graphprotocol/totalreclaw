@@ -25,12 +25,12 @@
 - **Review** (`/proto/review`) — **the hero.** Memory-health "Watchtower" feed: *Needs you* (conflict, still-true?) + *Handled for you* (changed, secret). One-tap actions. Per-card honesty legend.
 - **Lineage** (`/proto/lineage/:id`) — the only graph in the product: one belief's typed evolution (replaced-by / contradicts / led-to).
 - **Memory** (`/proto/timeline`, `/proto/session/:id`) — session timeline + Crystal headlines + curation (pin/retype/delete+undo). `?empty` → cold-start.
-- **Search** (`/proto/search`, global header icon) — instant lexical search over decrypted memories (match highlight, type/source/scope/age). SPA does retrieval; a written answer is an "ask your paired agent" hand-off (synthesis = agent).
+- **Find** — a keyword **filter inside Memory** (narrows what's shown) + an "ask your agent for an answer" pointer. No standalone search page: semantic answers need the LLM (agent). Imported sessions show their origin ("Imported · ChatGPT").
 - **Cold-start activation arc** — empty Memory (`?empty`, on-ramp + ghosted glimpse) → first-memory "aha" (`?first`, confirm/correct the first captured memory) → warming-up (`?warming`, taking shape) → full. Plus fresh Review (`/proto/review?empty`, teaches the card types).
 - **Pair-an-agent** (`/proto/pair-agent`) — **visual stub** (faux QR + code). NOT real pairing.
 - **Import guide** (`/proto/import`) — SPA hosts the how-to (per-source export steps + exact agent command); the agent runs the import.
 
-Nav = **Memory · Review · Lineage**. Mind-map + Explore demoted to gallery-only.
+Nav = **Memory · Review**. Lineage is a drill-in (from Review/Memory), not a nav tab. Mind-map + Explore are gallery-only.
 
 ## Locked design decisions
 
@@ -38,8 +38,11 @@ Nav = **Memory · Review · Lineage**. Mind-map + Explore demoted to gallery-onl
 2. **Graph survives only as the narrow Lineage lens** (typed edges, single belief, scales). Generic mind-map/explore demoted.
 3. **SPA = decrypt / view / curate / instruct. The agent does anything needing the LLM** (extract, import, generate). Corollary: Review *actions* (resolve/forget/pin = writes/tombstones) are fine in the SPA; extraction/import/generation are agent-only.
 4. **Import is an agent capability.** The SPA hosts the how-to (`/proto/import`) but never runs an import. Privacy note flips curated-memory (pattern, no LLM) vs full-history (cleartext to the agent's LLM, with disclosure).
-5. Cold-start empty states are **activation surfaces** (single on-ramp = pair an agent).
-6. Timeline/session default = **By source** (provenance); 6-type taxonomy demoted to `rule/to-do/preference` badges.
+5. Cold-start empty states are **activation surfaces** (single on-ramp = pair an agent). Onboarding lands on the empty vault (`?empty`), not a pre-filled timeline.
+6. **Source-forward only** — type/source toggle dropped; 6-type taxonomy is just a badge.
+7. **No SPA search oracle** — semantic answers need the LLM (agent); the SPA keeps only a keyword filter + "ask your agent" pointer.
+8. **Imported memories show their origin** in the UI; deeper agent-identity provenance ("John (Hermes)") is backend — issue #317.
+9. **Lineage is a drill-in, not a nav tab.**
 
 ## Specs (in draft PR #308)
 
@@ -62,14 +65,16 @@ Nav = **Memory · Review · Lineage**. Mind-map + Explore demoted to gallery-onl
 - **Pair-an-agent** is a visual stub — real pairing = **PRD-01** (Hermes auth-hardening, session keys), deferred.
 - **Conflict card** is designed but **gated on backend #306** (engine auto-resolves + discards contradictions today).
 - **Import** is guide-only; the agent executes (`totalreclaw_import_from`).
-- **Not built:** the home/return loop + "still true?" on-open ritual; semantic/embedding ranking in search (lexical only today — embedding rank would need the model, likely agent-side).
+- **Not built:** the home/return loop + "still true?" on-open ritual; an **export / portability** surface (the "one-click plain-text export" value prop has no SPA home yet); a settings/account corner (recovery, devices); deeper agent-identity provenance (#317).
 
 ## Open design backlog (next candidates)
 
 1. **Home loop + "still true?" ritual** — make Review a habit, not a one-time visit; landing logic (Review when it needs you, else Memory) + Review tab badge + on-open check-in.
-2. **Mobile / responsive pass** — the prototype is desktop-centered (max-w-2xl); a memory-review product is a phone-checked surface.
+2. **Export / portability surface** — the "one-click plain-text export" value prop (client-side decrypt → .json/.md download) has no SPA home; sensitive-action framing.
+3. **Settings / account corner** — recovery, paired devices/agents, danger zone.
+4. **Mobile / responsive pass** — desktop-centered today (max-w-2xl); deferred per Pedro (nail desktop first).
 
-**Recently done:** vault search (SPA finds, agent answers) — `0625299` · first-memory "aha" + warming-up timeline — `1cafb9a`.
+**Recently done:** dropped search page → keyword filter + import-origin + audit fixes — `777249d` · vault search — `0625299` · first-memory "aha" — `1cafb9a`.
 
 ## Reference
 
@@ -81,7 +86,8 @@ Nav = **Memory · Review · Lineage**. Mind-map + Explore demoted to gallery-onl
 
 ## Changelog (prototype branch)
 
-- `0625299` — vault search (`/proto/search`): SPA-local lexical find + highlight; "ask your agent" for a written answer (synthesis = agent). Global header search icon.
+- `777249d` — drop standalone search → keyword filter in Memory; show import origin ("Imported · ChatGPT"); audit fixes (source-only, Lineage drill-in, onboarding→empty). Issue #317 filed (agent-identity provenance).
+- `0625299` — vault search (`/proto/search`): SPA-local lexical find + highlight; "ask your agent" for a written answer (synthesis = agent). Global header search icon. **(superseded by 777249d)**
 - `1cafb9a` — first-memory "aha" + warming-up timeline (cold-start activation arc: empty → first → warming → full).
 - `4ba5eba` — import guide (`/proto/import`): SPA hosts the how-to, agent runs the import.
 - `90f9743` — fix: import is an agent capability, not an SPA action (removed misleading in-app import button).
