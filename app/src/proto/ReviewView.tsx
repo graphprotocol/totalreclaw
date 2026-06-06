@@ -1,7 +1,8 @@
 import { useMemo, useState, type CSSProperties } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { clsx } from "clsx";
 import { ProtoHeader } from "./ProtoHeader";
+import { KeeperEmpty } from "./KeeperEmpty";
 import { count } from "./format";
 import {
   REVIEW_ITEMS,
@@ -91,6 +92,50 @@ const iconConflict = I(<><path d="M12 9v4" /><path d="M12 17h.01" /><path d="m3.
 const iconStale = I(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>);
 const iconChanged = I(<><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 4v4h4" /></>);
 const iconSecret = I(<><rect x="4" y="10" width="16" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>);
+
+/* ---------- fresh (day-1) empty state ---------- */
+
+const WHAT_I_WATCH = [
+  { icon: iconConflict, label: "Conflicts", desc: "when two memories disagree" },
+  { icon: iconStale, label: "Still true?", desc: "gentle checks on aging facts" },
+  { icon: iconChanged, label: "Changes", desc: "when I update what I believe" },
+  { icon: iconSecret, label: "Secrets", desc: "keys caught and locked away" },
+];
+
+function FreshEmpty() {
+  return (
+    <KeeperEmpty
+      icon={
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      }
+      title="Nothing to review yet"
+      body="I'm already watching. As your memory grows, I'll bring anything that needs a human right here — you'll never have to go looking."
+    >
+      <div className="mx-auto mt-6 max-w-xs space-y-2.5 text-left">
+        {WHAT_I_WATCH.map((w) => (
+          <div key={w.label} className="flex items-center gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-clay-tint text-clay-deep">
+              {w.icon}
+            </span>
+            <p className="text-sm text-ink">
+              <span className="font-semibold">{w.label}</span>{" "}
+              <span className="text-ink-muted">— {w.desc}</span>
+            </p>
+          </div>
+        ))}
+      </div>
+      <Link
+        to="/proto/pair-agent"
+        className="mt-7 inline-block rounded-control bg-clay px-4 py-2.5 font-sans text-sm font-semibold text-warm-white shadow-soft transition duration-150 ease-keeper hover:-translate-y-px hover:bg-clay-deep hover:shadow-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2"
+      >
+        Pair an agent to begin
+      </Link>
+    </KeeperEmpty>
+  );
+}
 
 /* ---------- per-kind cards ---------- */
 
@@ -246,6 +291,8 @@ function Section({
 }
 
 export function ReviewView() {
+  const [params] = useSearchParams();
+  const fresh = params.has("empty"); // cold-start preview: ?empty (day-1, never reviewed)
   const [done, setDone] = useState<Record<string, true>>({});
   const [leaving, setLeaving] = useState<string | null>(null);
 
@@ -269,11 +316,13 @@ export function ReviewView() {
           <h1 className="text-balance font-display text-[2rem] leading-tight text-ink">Your review</h1>
           <p className="mt-1.5 max-w-prose text-sm leading-relaxed text-ink-muted">
             I keep watch over your memory and bring you what needs a human.
-            {visible.length > 0 && <> {count(needsYou.length, "thing")} to decide today.</>}
+            {!fresh && visible.length > 0 && <> {count(needsYou.length, "thing")} to decide today.</>}
           </p>
         </header>
 
-        {visible.length === 0 ? (
+        {fresh ? (
+          <FreshEmpty />
+        ) : visible.length === 0 ? (
           <div className="animate-fade-up rounded-card bg-surface px-6 py-14 text-center shadow-soft">
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-clay-tint">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#A54B2E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

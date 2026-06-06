@@ -1,10 +1,74 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { clsx } from "clsx";
 import { ProtoHeader } from "./ProtoHeader";
 import { SessionCard } from "./SessionCard";
+import { KeeperEmpty, GhostGlimpse } from "./KeeperEmpty";
 import { SEED_SESSIONS } from "./seed";
 import { sourceShort, type Presentation } from "./presentation";
+
+const HOW_IT_FILLS = [
+  { n: "1", t: "Pair an agent", d: "Hermes, Claude, any MCP agent." },
+  { n: "2", t: "Talk normally", d: "No saving, no tagging. Just chat." },
+  { n: "3", t: "I keep what matters", d: "You stay in control of all of it." },
+];
+
+function MemoryEmpty() {
+  return (
+    <div className="min-h-screen bg-warm-white">
+      <ProtoHeader />
+      <main className="animate-page-in mx-auto w-full max-w-2xl px-4 pb-24 pt-12">
+        <KeeperEmpty
+          icon={
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+              <path d="M12 2 9.5 9.5 2 12l7.5 2.5L12 22l2.5-7.5L22 12l-7.5-2.5Z" />
+            </svg>
+          }
+          title="Your memory starts here"
+          body={
+            <>
+              Nothing here yet — and that's right. As you talk with your agents, I'll quietly keep
+              what matters and bring anything worth your eyes to{" "}
+              <Link to="/proto/review" className="font-semibold text-clay-deep hover:underline">
+                Review
+              </Link>
+              . You won't type memories in by hand.
+            </>
+          }
+        >
+          <div className="mt-6 flex flex-wrap justify-center gap-2.5">
+            <Link
+              to="/proto/pair-agent"
+              className="rounded-control bg-clay px-4 py-2.5 font-sans text-sm font-semibold text-warm-white shadow-soft transition duration-150 ease-keeper hover:-translate-y-px hover:bg-clay-deep hover:shadow-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2"
+            >
+              Pair an agent
+            </Link>
+            <button
+              type="button"
+              className="rounded-control border border-hairline bg-warm-white px-4 py-2.5 font-sans text-sm font-semibold text-ink transition hover:border-ink-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2"
+            >
+              Import from ChatGPT, Gemini…
+            </button>
+          </div>
+
+          <div className="mt-7 grid gap-3 text-left sm:grid-cols-3">
+            {HOW_IT_FILLS.map((s) => (
+              <div key={s.n} className="rounded-control border border-hairline bg-warm-white p-3">
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-clay-tint font-mono text-xs font-semibold text-clay-deep">
+                  {s.n}
+                </span>
+                <p className="mt-2 text-sm font-semibold text-ink">{s.t}</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-ink-muted">{s.d}</p>
+              </div>
+            ))}
+          </div>
+        </KeeperEmpty>
+
+        <GhostGlimpse />
+      </main>
+    </div>
+  );
+}
 
 const SCOPES = [...new Set(SEED_SESSIONS.flatMap((s) => s.facts.map((f) => f.scope)))];
 const TYPES = [...new Set(SEED_SESSIONS.flatMap((s) => s.facts.map((f) => f.type)))];
@@ -40,6 +104,7 @@ function Chip({
 /** Session timeline. A/B: "By type" (taxonomy filters) vs "By source" (provenance filters). */
 export function TimelineView() {
   const [params, setParams] = useSearchParams();
+  const empty = params.has("empty"); // cold-start preview: ?empty
   const view: Presentation = params.get("view") === "type" ? "type" : "source";
   const setView = (v: Presentation) =>
     setParams(
@@ -80,6 +145,8 @@ export function TimelineView() {
     setEntity(null);
   };
   const hrefFor = (id: string) => `/proto/session/${id}${view === "type" ? "?view=type" : ""}`;
+
+  if (empty) return <MemoryEmpty />;
 
   return (
     <div className="min-h-screen bg-warm-white">

@@ -27,9 +27,11 @@ out of nav (gallery-only) — Lineage replaced them as the meaningful, scalable 
 | `/proto` | Gallery index |
 | `/proto/onboarding` | Create-a-vault: generate real BIP-39 phrase → backup gate → confirm 4 words → passkey → tour |
 | `/proto/pair` | Unlock — passkey-first; recovery phrase = new-device/lost-passkey fallback |
+| `/proto/pair-agent` | **Pair-an-agent stub** — faux QR + 6-digit code + "waiting…". Visual only; NOT real pairing (PRD-01). The cold-start on-ramp destination. |
 | `/proto/review` | **Review (hero)** — memory health / Watchtower feed: Needs-you (conflict, still-true?) + Handled-for-you (changed, secret). One-tap actions. See `docs/specs/totalreclaw/memory-review-surface.md`. |
 | `/proto/lineage/:id` | **Lineage** — one belief's typed evolution (`replaced by` / `contradicts` / `led to`). The only graph in the product. |
-| `/proto/timeline` | Session timeline (= "Memory" tab); filters (scope/type/source/open-threads + tap-entity); `?view=type` toggles presentation (default **By source**) |
+| `/proto/timeline` | Session timeline (= "Memory" tab); filters (scope/type/source/open-threads + tap-entity); `?view=type` toggles presentation (default **By source**). `?empty` → cold-start empty vault. |
+| `/proto/review?empty` | **Cold-start Review (fresh)** — day-1 "nothing to review yet" that teaches the four card types; distinct from the cleared "all clear" state. |
 | `/proto/session/:id` | Session detail: Crystal + curatable Claim Cards (pin/retype/delete + 10s undo) |
 | `/proto/kg` | Mind-map (React Flow) — **demoted**, ambient/gallery-only |
 | `/proto/explore` | Graph-first explorer — **demoted**, superseded by Review + Lineage |

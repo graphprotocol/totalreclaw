@@ -11,6 +11,7 @@ import { ExploreView } from "./proto/ExploreView";
 import { SessionDetailView } from "./proto/SessionDetailView";
 import { ProtoIndex } from "./proto/ProtoIndex";
 import { ProtoPair } from "./proto/ProtoPair";
+import { ProtoPairAgent } from "./proto/ProtoPairAgent";
 import { ProtoOnboarding } from "./proto/ProtoOnboarding";
 import { useCrypto } from "./contexts/CryptoContext";
 
@@ -42,6 +43,7 @@ export function App() {
       {/* Look-and-feel prototype routes (seed data, no auth) — see /DESIGN.md */}
       <Route path="/proto" element={<ProtoIndex />} />
       <Route path="/proto/pair" element={<ProtoPair />} />
+      <Route path="/proto/pair-agent" element={<ProtoPairAgent />} />
       <Route path="/proto/onboarding" element={<ProtoOnboarding />} />
       <Route path="/proto/timeline" element={<TimelineView />} />
       <Route path="/proto/review" element={<ReviewView />} />

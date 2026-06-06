@@ -66,6 +66,12 @@ export function ProtoIndex() {
             ))}
           </Group>
 
+          <Group title="Cold start — day-1, empty vault" desc="An empty memory vault is an activation surface, not a dead end. The on-ramp that fills it.">
+            <Row to="/proto/timeline?empty" label="Memory — empty" hint="on-ramp + glimpse" />
+            <Row to="/proto/review?empty" label="Review — fresh (never reviewed)" hint="teaches the cards" />
+            <Row to="/proto/pair-agent" label="Pair an agent" hint="stub · not the real auth" />
+          </Group>
+
           <Group title="First run & auth" desc="Non-functional — every button just continues to the vault.">
             <Row to="/proto/onboarding" label="Create a vault (onboarding)" hint="generate + back up" />
             <Row to="/proto/pair" label="Unlock" hint="passkey + recovery" />
