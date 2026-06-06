@@ -154,14 +154,14 @@ export function ImportGuide() {
             </div>
             <div className="mt-3 pl-10">
               <p className="text-sm text-ink-muted">In your paired agent, say:</p>
-              <div className="mt-2 flex items-stretch gap-2">
+              <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-stretch">
                 <code className="flex-1 rounded-control border border-hairline bg-warm-white px-3.5 py-2.5 font-mono text-sm text-ink">
                   {src.command}
                 </code>
                 <button
                   type="button"
                   onClick={copy}
-                  className="shrink-0 rounded-control bg-clay px-3.5 text-sm font-semibold text-warm-white shadow-soft transition duration-150 ease-keeper hover:bg-clay-deep focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2"
+                  className="shrink-0 rounded-control bg-clay px-3.5 py-2.5 text-sm font-semibold text-warm-white shadow-soft transition duration-150 ease-keeper hover:bg-clay-deep focus:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2"
                 >
                   {copied ? "Copied" : "Copy"}
                 </button>

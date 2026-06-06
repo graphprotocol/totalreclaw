@@ -18,7 +18,7 @@ export function ProtoHeader() {
       <div className="mx-auto flex w-full max-w-2xl items-center justify-between px-4 py-3">
         <Link
           to="/proto"
-          className="font-display text-lg font-medium tracking-tight text-ink transition hover:text-clay-deep"
+          className="font-display text-base font-medium tracking-tight text-ink transition hover:text-clay-deep sm:text-lg"
         >
           TotalReclaw
         </Link>
