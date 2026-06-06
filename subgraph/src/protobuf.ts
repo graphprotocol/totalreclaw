@@ -116,10 +116,19 @@ export function decodeFact(data: Bytes): DecodedFact {
       if (offset + 8 > data.length) break;
 
       if (fieldNumber == 6) {
-        // decay_score — read as raw bytes, convert to string for BigDecimal
-        // AssemblyScript does not have native f64 from bytes, so we store raw
-        // For PoC, we default to 1.0 and let the client set the real value
-        fact.decayScore = BigDecimal.fromString("1.0");
+        // decay_score (#374 fix): protobuf encodes this f64 as 8 little-endian
+        // bytes. Reassemble them into a u64 and reinterpret the bits as an
+        // IEEE-754 double. Previously this was stubbed to a constant 1.0, so a
+        // tombstone's decay_score=0 never reached the mapping and `isActive`
+        // (computed as decayScore >= INACTIVE_THRESHOLD) never flipped to
+        // false on a forget — the relay hot view dropped the fact but the
+        // on-chain ledger kept it active.
+        let bits: u64 = 0;
+        for (let b = 0; b < 8; b++) {
+          bits = bits | (u64(data[offset + b]) << u64(8 * b));
+        }
+        let dval = reinterpret<f64>(bits);
+        fact.decayScore = BigDecimal.fromString(dval.toString());
       }
       offset += 8;
     } else if (wireType == 2) {
