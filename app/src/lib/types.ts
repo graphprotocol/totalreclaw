@@ -71,6 +71,9 @@ export interface VaultItem {
   /** Blind indices from the server (reused when re-storing) */
   blindIndices: string[];
   decayScore: number;
+  /** On-chain active flag. false = tombstoned/superseded (only present when the
+   *  history fetch includes inactive facts; defaults true for the active view). */
+  isActive: boolean;
 }
 
 /** Raw fact shape consumed by the SPA's decrypt path. Normalized from the
@@ -86,6 +89,7 @@ export interface RawFact {
   created_at: string;
   updated_at: string;
   encrypted_embedding?: string;
+  is_active: boolean;
 }
 
 /** Keys derived from the 12-word mnemonic — held in CryptoContext only.

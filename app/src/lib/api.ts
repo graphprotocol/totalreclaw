@@ -90,6 +90,16 @@ interface SubgraphResponse<T> {
   errors?: Array<{ message: string }>;
 }
 
+const FACT_FIELDS = `
+      id
+      encryptedBlob
+      encryptedEmbedding
+      decayScore
+      timestamp
+      createdAt
+      version
+      isActive`;
+
 const PAGE_QUERY = `
   query VaultExport($owner: Bytes!, $first: Int!, $skip: Int!) {
     facts(
@@ -98,15 +108,22 @@ const PAGE_QUERY = `
       skip: $skip
       orderBy: createdAt
       orderDirection: desc
-    ) {
-      id
-      encryptedBlob
-      encryptedEmbedding
-      decayScore
-      timestamp
-      createdAt
-      version
-      isActive
+    ) {${FACT_FIELDS}
+    }
+  }
+`;
+
+// Full history (active + tombstoned/superseded) — powers Lineage + the Review
+// "changed" feed, which need the superseded versions the active view filters out.
+const PAGE_QUERY_ALL = `
+  query VaultHistory($owner: Bytes!, $first: Int!, $skip: Int!) {
+    facts(
+      where: { owner: $owner }
+      first: $first
+      skip: $skip
+      orderBy: createdAt
+      orderDirection: desc
+    ) {${FACT_FIELDS}
     }
   }
 `;
@@ -120,9 +137,11 @@ const PAGE_SIZE = 1000; // Graph Studio caps `first` at 1000
 export async function exportAllFacts(
   keys: SessionKeys,
   onProgress?: (loaded: number, total: number | undefined) => void,
+  opts?: { includeInactive?: boolean },
 ): Promise<RawFact[]> {
   const all: RawFact[] = [];
   let skip = 0;
+  const query = opts?.includeInactive ? PAGE_QUERY_ALL : PAGE_QUERY;
 
   for (;;) {
     const res = await apiFetch<SubgraphResponse<{ facts: SubgraphFact[] }>>(
@@ -131,7 +150,7 @@ export async function exportAllFacts(
       {
         method: "POST",
         body: JSON.stringify({
-          query: PAGE_QUERY,
+          query,
           variables: {
             owner: keys.walletAddress,
             first: PAGE_SIZE,
@@ -176,6 +195,7 @@ function subgraphFactToRawFact(sf: SubgraphFact): RawFact {
     created_at: iso,
     updated_at: iso,
     encrypted_embedding: sf.encryptedEmbedding?.replace(/^0x/, "") || undefined,
+    is_active: sf.isActive,
   };
 }
 
@@ -207,6 +227,7 @@ export function decryptFacts(
         rawBlob: fact.encrypted_blob,
         blindIndices: fact.blind_indices,
         decayScore: fact.decay_score,
+        isActive: fact.is_active ?? true,
       });
     } catch {
       // skip undecryptable facts silently (wrong key, corrupt, etc.)

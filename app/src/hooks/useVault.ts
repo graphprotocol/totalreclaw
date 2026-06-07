@@ -9,6 +9,7 @@ import {
 } from "../lib/api";
 
 export const VAULT_QUERY_KEY = ["vault"] as const;
+export const VAULT_HISTORY_QUERY_KEY = ["vault", "history"] as const;
 
 export function useVault(keys: SessionKeys | null) {
   return useQuery({
@@ -16,6 +17,21 @@ export function useVault(keys: SessionKeys | null) {
     queryFn: async () => {
       if (!keys) return [];
       const raw = await exportAllFacts(keys);
+      return decryptFacts(raw, keys);
+    },
+    enabled: !!keys,
+    staleTime: 30_000,
+  });
+}
+
+/** Full history incl. tombstoned/superseded facts — for Lineage + the Review
+ *  "changed" feed (the active view filters superseded versions out). */
+export function useVaultHistory(keys: SessionKeys | null) {
+  return useQuery({
+    queryKey: VAULT_HISTORY_QUERY_KEY,
+    queryFn: async () => {
+      if (!keys) return [];
+      const raw = await exportAllFacts(keys, undefined, { includeInactive: true });
       return decryptFacts(raw, keys);
     },
     enabled: !!keys,

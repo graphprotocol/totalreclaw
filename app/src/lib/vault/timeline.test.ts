@@ -27,6 +27,7 @@ function item(
     rawBlob: "",
     blindIndices: [],
     decayScore: 1,
+    isActive: true,
   };
 }
 
