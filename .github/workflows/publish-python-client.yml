@@ -276,3 +276,66 @@ jobs:
         with:
           verbose: true
           attestations: false
+
+  # After a successful RC publish, bump the human-readable "Most recent RC"
+  # marker in the Hermes setup guide. The install commands are version-agnostic
+  # (self-resolving), so this is display-only — but it keeps the doc the agent
+  # fetches honest about what the newest cut is, with zero manual upkeep.
+  bump-rc-doc:
+    name: Bump latest-RC marker in hermes-setup.md
+    needs: [publish]
+    if: ${{ inputs.release-type == 'rc' && inputs.dry-run == false }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compute target RC version
+        id: ver
+        run: |
+          BASE_VERSION=$(grep '^version' python/pyproject.toml | sed -E 's/version *= *"([^"]+)"/\1/')
+          BASE_NO_RC=$(echo "$BASE_VERSION" | sed -E 's/rc[0-9]+$//')
+          echo "v=${BASE_NO_RC}rc${{ inputs.rc-number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Update the LATEST_RC marker
+        run: |
+          python - "${{ steps.ver.outputs.v }}" <<'PY'
+          import sys, re, pathlib
+          v = sys.argv[1]
+          p = pathlib.Path("docs/guides/hermes-setup.md")
+          s = p.read_text()
+          repl = f"<!-- LATEST_RC -->_Most recent RC published: `{v}`._<!-- /LATEST_RC -->"
+          s2, n = re.subn(r"<!-- LATEST_RC -->.*?<!-- /LATEST_RC -->", repl, s, flags=re.S)
+          if n == 0:
+              raise SystemExit("LATEST_RC marker not found in hermes-setup.md — was it removed?")
+          p.write_text(s2)
+          print(f"hermes-setup.md latest-RC marker -> {v}")
+          PY
+
+      - name: Open / update the marker PR
+        id: cpr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: ci/latest-rc-marker
+          base: main
+          commit-message: "docs(hermes-setup): latest RC = ${{ steps.ver.outputs.v }}"
+          title: "docs(hermes-setup): latest RC = ${{ steps.ver.outputs.v }}"
+          body: |
+            Auto-bump of the display-only "Most recent RC published" marker after the **${{ steps.ver.outputs.v }}** PyPI publish, by `publish-python-client.yml`.
+
+            The install commands in the guide are version-agnostic (`pip install --pre --upgrade totalreclaw`), so this number never affects an install — it just keeps the doc the Hermes agent fetches honest about the newest cut.
+
+            🤖 Generated with [Claude Code](https://claude.com/claude-code)
+          delete-branch: true
+          add-paths: |
+            docs/guides/hermes-setup.md
+
+      - name: Enable auto-merge (best-effort)
+        if: steps.cpr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge --squash --auto "${{ steps.cpr.outputs.pull-request-number }}" \
+            || echo "auto-merge not enabled — marker PR #${{ steps.cpr.outputs.pull-request-number }} left for review/auto-merge-l1."
