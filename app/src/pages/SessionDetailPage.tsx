@@ -28,7 +28,8 @@ function CrystalList({ title, items }: { title: string; items: string[] }) {
 export function SessionDetailPage() {
   const { slug } = useParams();
   const { keys } = useCrypto();
-  const { data: items = [], isLoading } = useVault(keys);
+  const { data, isLoading } = useVault(keys);
+  const items = data?.items ?? [];
 
   const group = useMemo(
     () => buildTimeline(items).find((g) => sessionSlug(g) === slug) ?? null,

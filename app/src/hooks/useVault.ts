@@ -11,13 +11,21 @@ import {
 export const VAULT_QUERY_KEY = ["vault"] as const;
 export const VAULT_HISTORY_QUERY_KEY = ["vault", "history"] as const;
 
+/** Decrypted vault + how many ciphertext rows the subgraph returned. `fetched`
+ *  lets the UI tell "0 on chain" apart from "fetched N but couldn't decrypt"
+ *  (wrong key / older format / wrong chain) — so "empty" never lies. */
+export interface VaultData {
+  items: VaultItem[];
+  fetched: number;
+}
+
 export function useVault(keys: SessionKeys | null) {
   return useQuery({
     queryKey: VAULT_QUERY_KEY,
-    queryFn: async () => {
-      if (!keys) return [];
+    queryFn: async (): Promise<VaultData> => {
+      if (!keys) return { items: [], fetched: 0 };
       const raw = await exportAllFacts(keys);
-      return decryptFacts(raw, keys);
+      return { items: decryptFacts(raw, keys), fetched: raw.length };
     },
     enabled: !!keys,
     staleTime: 30_000,

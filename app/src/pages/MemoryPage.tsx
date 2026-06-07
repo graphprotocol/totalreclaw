@@ -7,7 +7,9 @@ import { SessionCard } from "../components/SessionCard";
 
 export function MemoryPage() {
   const { keys } = useCrypto();
-  const { data: items = [], isLoading, isError, error } = useVault(keys);
+  const { data, isLoading, isError, error } = useVault(keys);
+  const items = data?.items ?? [];
+  const fetched = data?.fetched ?? 0;
   const [filter, setFilter] = useState("");
 
   const groups = useMemo(() => buildTimeline(items), [items]);
@@ -50,12 +52,32 @@ export function MemoryPage() {
           </p>
         )}
 
-        {!isLoading && !isError && groups.length === 0 && (
+        {/* Fetched ciphertext but none decrypted → wrong key / older format / wrong chain. */}
+        {!isLoading && !isError && groups.length === 0 && fetched > 0 && (
           <div className="mt-10 rounded-card bg-surface p-8 text-center shadow-soft">
-            <h2 className="font-display text-xl font-semibold text-ink">Your vault is empty</h2>
-            <p className="mx-auto mt-2 max-w-sm text-ink-muted">
-              Memories appear here once you pair an agent and start a conversation. Your agent
-              extracts and encrypts them; only you can read them.
+            <h2 className="font-display text-xl font-semibold text-ink">
+              Couldn’t read these memories
+            </h2>
+            <p className="mx-auto mt-2 max-w-md text-ink-muted">
+              Found {fetched} encrypted {fetched === 1 ? "entry" : "entries"} on-chain, but couldn’t
+              decrypt them with this key. That usually means a different recovery phrase, or memories
+              written in an older format or on another chain than this vault (this app reads Gnosis).
+            </p>
+          </div>
+        )}
+
+        {/* Genuinely nothing on-chain for this account. */}
+        {!isLoading && !isError && groups.length === 0 && fetched === 0 && (
+          <div className="mt-10 rounded-card bg-surface p-8 text-center shadow-soft">
+            <h2 className="font-display text-xl font-semibold text-ink">No memories yet</h2>
+            <p className="mx-auto mt-2 max-w-md text-ink-muted">
+              Your agent fills this as you chat with it — it extracts and encrypts each memory; only
+              you can read them. You don’t need to pair anything here to browse; your recovery phrase
+              is enough.
+            </p>
+            <p className="mx-auto mt-3 max-w-md text-sm text-ink-muted">
+              Expecting memories? Make sure your agent uses the <em>same recovery phrase</em> and is
+              on <em>Gnosis</em> (chain 100) — older Base Sepolia vaults won’t appear here.
             </p>
           </div>
         )}
