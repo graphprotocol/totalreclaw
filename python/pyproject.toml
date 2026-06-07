@@ -30,9 +30,12 @@ dependencies = [
     # >=2.5.0: chain/env-aware DataEdge param on encode_single_call /
     # encode_batch_call (#366). Once the relay reports data_edge_address,
     # the client passes it through and requires the parameterized core API.
-    # Also 2.5.0: import adapters delegate ALL Gemini format parsing to the
+    # >=2.5.1: import adapters delegate ALL Gemini format parsing to the
     # hoisted `totalreclaw_core.parse_gemini` (no Python-side parser fallback).
-    "totalreclaw-core>=2.5.0,<3.0.0",
+    # parse_gemini was ADDED in core 2.5.1 — PyPI core 2.5.0 (published
+    # 2026-06-05 for #366) predates it, so the floor must be 2.5.1 or the
+    # adapter raises AttributeError at runtime against a 2.5.0 wheel.
+    "totalreclaw-core>=2.5.1,<3.0.0",
     "httpx>=0.27",
     "onnxruntime>=1.24",
     "numpy>=1.26",

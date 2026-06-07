@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "totalreclaw-core"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
