@@ -9,12 +9,12 @@ This document describes how the agent installs and sets up TotalReclaw on Hermes
 
 ## Versions
 
-| Channel | Version | Install command |
+| Channel | Resolves to | Install command |
 |---|---|---|
-| stable (default) | `2.4.4` | `pip install totalreclaw` |
-| latest RC | `2.4.4rc7` | `pip install --pre --upgrade totalreclaw==2.4.4rc7` |
+| stable (default) | newest final | `pip install totalreclaw` |
+| latest RC | newest pre-release | `pip install --pre --upgrade totalreclaw` |
 
-Source of truth for what's currently published: `pip index versions totalreclaw`. The table above is updated on every PyPI release.
+**Both rows are version-agnostic by design — neither pins a number, so this table never goes stale when an RC is cut.** `pip install totalreclaw` always lands the newest *final*; `pip install --pre --upgrade totalreclaw` always lands the newest *pre-release*. To install a SPECIFIC version, pin it: `pip install --pre totalreclaw==<version>`. `pip index versions totalreclaw` shows exactly what's live on PyPI.
 
 ---
 
@@ -36,7 +36,7 @@ The agent installs the stable channel from the table above and proceeds to setup
 Install TotalReclaw RC <version>. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md
 ```
 
-`<version>` is a PEP 440 RC string the user picks (e.g. `2.3.7rc1`). When the user omits `<version>` and writes only `Install TotalReclaw RC`, the agent installs `latest RC` from the table.
+`<version>` is a PEP 440 RC string the user picks (e.g. `2.4.4rc9`). When the user omits `<version>` and writes only `Install TotalReclaw RC`, the agent installs the **newest pre-release** via `pip install --pre --upgrade totalreclaw` (no pin — always the latest cut, so this never needs the doc to be bumped).
 
 ### RC against the staging relay (QA only)
 
@@ -71,7 +71,9 @@ After the procedure completes (the user replies *"Done — continue setting up T
    ```
 2. **Install the package into the Hermes interpreter — and VERIFY the runtime version actually landed there.** rc6 QA (F2/#370): when the Hermes venv has no pip of its own, `"$HERMES_PYTHON" -m pip` fails with `No module named pip`, the agent silently falls back to the *system* `pip --user` (`~/.local`), and the venv's own bundled `totalreclaw` then **shadows** the `.local` copy — so the OLD code runs the whole session. Install with this order, then verify:
    ```bash
-   PIN="<pin>"   # the row from the Versions table, e.g. totalreclaw==2.4.4rc7
+   # Latest RC (user gave NO version): PIN="totalreclaw" — `--pre` resolves the newest pre-release.
+   # Explicit version (user typed "RC <version>"): PIN="totalreclaw==<version>", e.g. totalreclaw==2.4.4rc9
+   PIN="<pin>"
    # (a) Prefer uv — installs into the target interpreter even when that venv has no pip:
    uv pip install --python "$HERMES_PYTHON" --pre --upgrade "$PIN" 2>/dev/null \
      || { # (b) No uv: bootstrap pip into the venv, then install with --upgrade:
@@ -80,7 +82,7 @@ After the procedure completes (the user replies *"Done — continue setting up T
    # (c) VERIFY the version the Hermes interpreter actually IMPORTS (not just what pip installed):
    "$HERMES_PYTHON" -c "import totalreclaw as t; print('RUNTIME', t.__version__, t.__file__)"
    ```
-   The printed `RUNTIME` version MUST match `<pin>`. If it's OLDER (e.g. a venv-bundled `2.3.1rc26` shadowing the fresh install), the package landed in the wrong site — re-run (a) with `--force-reinstall`, or remove the stale copy, until the runtime version matches. **Do NOT proceed to setup on a version mismatch** — the whole flow silently runs old code (the rc6 NO-GO root cause).
+   The printed `RUNTIME` `__file__` MUST be under `$HERMES_PYTHON`'s own site-packages (NOT `~/.local/...`), and — for an explicit `==` pin — the version MUST equal it. (For the unpinned latest-RC path, just confirm the version is a pre-release, i.e. contains `rc`, and loads from the Hermes interpreter.) If `__file__` points at `~/.local` or the version is an OLDER build than expected (e.g. a venv-bundled `2.3.1rc26` shadowing the fresh install), the package landed in the wrong site — re-run (a) with `--force-reinstall`, or remove the stale copy, until `RUNTIME` loads from the Hermes interpreter. **Do NOT proceed to setup on a shadow / version mismatch** — the whole flow silently runs old code (the rc6 NO-GO root cause).
 3. **Skip by default — rc6 QA F7/#375: running this is a no-op on current Hermes.** The `totalreclaw` package declares a `hermes_agent.plugins` entry point in its `pyproject.toml`, so step 2's pip install **already auto-registers** the plugin; the gateway binds it via entry-points at boot and `hermes tools list` shows it. ONLY run the manual manifest registration below if `hermes tools list` does NOT show `totalreclaw` after the step-4 restart — e.g. an older Hermes that doesn't scan entry-points:
    ```bash
    hermes plugins install p-diogo/totalreclaw-hermes --enable
