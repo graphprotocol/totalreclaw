@@ -332,10 +332,18 @@ jobs:
           add-paths: |
             docs/guides/hermes-setup.md
 
-      - name: Enable auto-merge (best-effort)
+      - name: Merge the marker PR (hands-off)
         if: steps.cpr.outputs.pull-request-number
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr merge --squash --auto "${{ steps.cpr.outputs.pull-request-number }}" \
-            || echo "auto-merge not enabled — marker PR #${{ steps.cpr.outputs.pull-request-number }} left for review/auto-merge-l1."
+          PR="${{ steps.cpr.outputs.pull-request-number }}"
+          # The marker change is one regex-replaced display line on a doc with
+          # no required status checks. peter-evans opens the PR with
+          # GITHUB_TOKEN, and GITHUB_TOKEN PRs do NOT trigger CI — so `--auto`
+          # (which waits for checks) would hang forever. Merge immediately;
+          # fall back to --auto only if a future required check blocks the
+          # direct merge; never leave it dangling silently otherwise.
+          gh pr merge --squash --delete-branch "$PR" \
+            || gh pr merge --squash --delete-branch --auto "$PR" \
+            || echo "::warning::marker PR #$PR could not be merged automatically — merge it manually."
