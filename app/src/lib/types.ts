@@ -11,7 +11,31 @@ export type MemoryTypeV1 = (typeof MEMORY_TYPES_V1)[number];
 
 export type PinStatus = "pinned" | "unpinned";
 
-/** Inner JSON blob stored encrypted in the vault (v1.1 schema) */
+/** Structured entity reference inside a v1 claim (core MemoryEntityV1). */
+export interface MemoryEntityV1 {
+  name: string;
+  type?: string;
+  role?: string;
+}
+
+/** Typed metadata payload inside the encrypted v1 blob (core MemoryMetadataV1).
+ *  Carries the Hermes session-end Crystal structure. All fields optional —
+ *  pre-v1.1 / non-batched entries omit `metadata` entirely. */
+export interface MemoryMetadataV1 {
+  /** "session_crystal" marks the Crystal debrief of a session. */
+  subtype?: string;
+  /** Client-local UUIDv7 tying a Crystal + N atomic facts to one session. */
+  session_id?: string;
+  context?: string;
+  key_outcomes?: string[];
+  open_threads?: string[];
+  lessons?: string[];
+  topics_discussed?: string[];
+  files_affected?: string[];
+}
+
+/** Inner JSON blob stored encrypted in the vault (v1.1 schema — mirrors
+ *  rust/totalreclaw-core MemoryClaimV1). Unmodeled fields are ignored on parse. */
 export interface MemoryClaimV1 {
   id: string;
   text: string;
@@ -19,13 +43,19 @@ export interface MemoryClaimV1 {
   source: string;
   created_at: string;
   schema_version: "1.0";
-  importance?: number;
-  tags?: string[];
   scope?: string;
+  volatility?: string;
+  entities?: MemoryEntityV1[];
   reasoning?: string;
+  expires_at?: string;
+  importance?: number;
+  confidence?: number;
   pin_status?: PinStatus;
-  supersedes?: string[];
   superseded_by?: string;
+  metadata?: MemoryMetadataV1;
+  /** legacy/extra fields tolerated for back-compat */
+  tags?: string[];
+  supersedes?: string[];
 }
 
 /** Decrypted vault item ready for UI consumption */
