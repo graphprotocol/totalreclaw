@@ -51,7 +51,10 @@ jobs:
           # Production main → real prod relay. Anything else (PR previews,
           # branch builds) → staging relay. Keep this in sync with the
           # CORS_ORIGINS env var on each Railway service.
-          VITE_SERVER_URL: ${{ github.ref == 'refs/heads/main' && 'https://api.totalreclaw.xyz' || 'https://api-staging.totalreclaw.xyz' }}
+          # TEMPORARY (qa/spa-prod-preview ONLY): point this throwaway preview at
+          # the PROD relay so Pedro can QA the A.1 read surface against his real
+          # vault (read-only; writes disabled in A.1). DO NOT MERGE this branch.
+          VITE_SERVER_URL: ${{ (github.ref == 'refs/heads/main' || github.head_ref == 'qa/spa-prod-preview') && 'https://api.totalreclaw.xyz' || 'https://api-staging.totalreclaw.xyz' }}
         run: npm run build
 
       - name: Publish to Cloudflare Pages
@@ -83,7 +86,7 @@ jobs:
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const marker = "<!-- vault-spa-preview -->";
-            const body = `${marker}\n🔗 **Vault SPA preview**: ${url}\n\nBacked by staging relay (\`api-staging.totalreclaw.xyz\`).`;
+            const body = `${marker}\n🔗 **Vault SPA preview**: ${url}\n\n⚠️ TEMPORARY QA preview — backed by **PRODUCTION** relay (\`api.totalreclaw.xyz\`). Read-only QA only. Do not merge this branch.`;
             const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
             const existing = comments.find(c => c.body && c.body.includes(marker));
             if (existing) {
