@@ -2,8 +2,8 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { BootstrapPage } from "./pages/BootstrapPage";
 import { UnlockPage } from "./pages/UnlockPage";
-import { VaultPage } from "./pages/VaultPage";
-import { ClaimPage } from "./pages/ClaimPage";
+import { MemoryPage } from "./pages/MemoryPage";
+import { SessionDetailPage } from "./pages/SessionDetailPage";
 import { useCrypto } from "./contexts/CryptoContext";
 
 export function App() {
@@ -18,31 +18,31 @@ export function App() {
   }
 
   const home =
-    status === "unlocked" ? "/vault" : status === "no-vault" ? "/bootstrap" : "/unlock";
+    status === "unlocked" ? "/memory" : status === "no-vault" ? "/bootstrap" : "/unlock";
 
   return (
     <Routes>
       <Route
         path="/bootstrap"
-        element={status === "unlocked" ? <Navigate to="/vault" replace /> : <BootstrapPage />}
+        element={status === "unlocked" ? <Navigate to="/memory" replace /> : <BootstrapPage />}
       />
       <Route
         path="/unlock"
-        element={status === "unlocked" ? <Navigate to="/vault" replace /> : <UnlockPage />}
+        element={status === "unlocked" ? <Navigate to="/memory" replace /> : <UnlockPage />}
       />
       <Route
-        path="/vault"
+        path="/memory"
         element={
           <ProtectedRoute>
-            <VaultPage />
+            <MemoryPage />
           </ProtectedRoute>
         }
       />
       <Route
-        path="/claim/:id"
+        path="/memory/session/:slug"
         element={
           <ProtectedRoute>
-            <ClaimPage />
+            <SessionDetailPage />
           </ProtectedRoute>
         }
       />
