@@ -6,7 +6,7 @@
  * Swap the XChaCha20 path to @totalreclaw/core WASM when #104 ships (rc.16+).
  */
 
-import { validateMnemonic, mnemonicToSeed } from "@scure/bip39";
+import { validateMnemonic, mnemonicToSeed, generateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
 import { HDKey } from "@scure/bip32";
 import { secp256k1 } from "@noble/curves/secp256k1";
@@ -68,6 +68,34 @@ function base64ToBytes(b64: string): Uint8Array {
 
 export function isMnemonicValid(phrase: string): boolean {
   return validateMnemonic(phrase.trim().toLowerCase(), wordlist);
+}
+
+/** Hex-encode bytes (lowercase, no 0x). Exported for the auth wrap/unlock path. */
+export { bytesToHex };
+
+/** Generate a fresh 12-word BIP-39 recovery phrase (128-bit entropy). */
+export function generateRecoveryPhrase(): string {
+  return generateMnemonic(wordlist, 128);
+}
+
+/**
+ * L3 — phrase-safety. Derive the master-wallet EOA *private* key (32 bytes)
+ * from the mnemonic, at BIP-32 m/44'/60'/0'/0/0. Used ONLY to wrap the master
+ * key at bootstrap (passkey-PRF at-rest model) and to sign UserOps in A.2.
+ * NEVER log, print, or transmit the result. Caller must zero it after use.
+ */
+export async function deriveEoaPrivateKey(mnemonic: string): Promise<Uint8Array> {
+  const normalized = mnemonic.trim().toLowerCase();
+  if (!isMnemonicValid(normalized)) {
+    throw new Error("Invalid recovery phrase");
+  }
+  const seed = await mnemonicToSeed(normalized);
+  const hdKey = HDKey.fromMasterSeed(seed);
+  const child = hdKey.derive(BIP44_PATH);
+  if (!child.privateKey) {
+    throw new Error("BIP-32 derivation failed");
+  }
+  return child.privateKey; // 32 bytes
 }
 
 /**
