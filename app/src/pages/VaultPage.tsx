@@ -19,7 +19,7 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 type SortKey = "newest" | "oldest" | "type" | "pinned";
 
 export function VaultPage() {
-  const { keys, clearKeys } = useCrypto();
+  const { keys, lock } = useCrypto();
   const navigate = useNavigate();
   const { data: items = [], isLoading, error } = useVault(keys);
   const batchDelete = useBatchDelete(keys!);
@@ -104,9 +104,9 @@ export function VaultPage() {
   }, [selected, batchDelete]);
 
   const handleSignOut = useCallback(() => {
-    clearKeys();
-    navigate("/pair", { replace: true });
-  }, [clearKeys, navigate]);
+    lock();
+    navigate("/unlock", { replace: true });
+  }, [lock, navigate]);
 
   // Clear selection when filter changes
   useEffect(() => {
