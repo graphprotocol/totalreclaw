@@ -48,7 +48,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 export function SettingsPage() {
   const { keys, smartAccount, chainId, forgetDevice } = useCrypto();
   const navigate = useNavigate();
-  const { data: items = [] } = useVault(keys);
+  const { data } = useVault(keys);
+  const items = data?.items ?? [];
   const { data: account } = useQuery({
     queryKey: ["billing", smartAccount],
     queryFn: () => getAccount(keys!),
