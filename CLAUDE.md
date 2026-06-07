@@ -156,7 +156,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | `totalreclaw_forget` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (via Memory trait) | |
 | `totalreclaw_export` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (via Memory trait) | |
 | `totalreclaw_status` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (billing cache) | |
-| `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Mem0, MCP Memory, ChatGPT, Claude adapters |
+| `totalreclaw_import_from` | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | -- | Mem0, MCP Memory, ChatGPT, Claude, Gemini adapters. Gemini parsing (MyActivity.json + HTML + Saved-info paste) is hoisted to `@totalreclaw/core@2.5.0` `parseGemini` — one universal, locale-robust, lossless parser shared by TS (WASM) + Python (PyO3). |
 | `totalreclaw_import` | -- | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | JSON/Markdown re-import (MCP only) |
 | `totalreclaw_upgrade` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Stripe checkout URL |
 | `totalreclaw_consolidate` | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | -- | Self-hosted only (no batch delete on managed service) |

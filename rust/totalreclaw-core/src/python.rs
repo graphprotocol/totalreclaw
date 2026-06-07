@@ -1785,6 +1785,9 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Smart import profiling
     crate::smart_import::register_python_functions(m)?;
 
+    // Import format parsers (Gemini JSON / saved-info)
+    crate::import_parsers::register_python_functions(m)?;
+
     // Memory Taxonomy v1 constants + guard
     crate::memory_types::register_python_functions(m)?;
 

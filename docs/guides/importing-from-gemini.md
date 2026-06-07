@@ -16,6 +16,20 @@ Google doesn't have a dedicated "memory" feature like ChatGPT or Claude, but you
 6. Download and unzip the archive
 7. Find the file at: `Takeout/My Activity/Gemini Apps/My Activity.html`
 
+**HTML is the default and works fully** — that's what most people get, so just use it. If you want the JSON format instead (a more stable, documented schema), look for the per-product format toggle next to "Gemini Apps" on the Takeout page and switch it to **JSON** — but the toggle is easy to miss, and HTML imports just as completely (`MyActivity.json` is also accepted automatically if you have it).
+
+> **Heads up:** in Takeout, the data lives under **My Activity → Gemini Apps**, *not* the top-level "Gemini" product (that one only exports your custom Gems, not chats). Gemini Apps Activity must have been **on** when the chats happened, or there's no history to export.
+
+Both the JSON and HTML files are accepted. The adapter auto-detects the format — you don't pick anything in TotalReclaw.
+
+### Alternative: "Saved info"
+
+Gemini's [**Saved info**](https://gemini.google.com/saved-info) page (the personal facts Gemini remembers about you) is **not** exportable as a file. To import it, open the page, copy the bullet list, and paste it to your agent:
+
+> "Import these into TotalReclaw as Gemini saved info: «paste the bullets»"
+
+The agent passes the pasted text to `totalreclaw_import_from` with `source: "gemini"`; the adapter recognises a plain-text bullet list and treats each line as a memory.
+
 ---
 
 ## Step 2: Import into TotalReclaw
@@ -42,7 +56,10 @@ The flow:
 
 TotalReclaw uses **LLM extraction** to identify facts from your Gemini conversations:
 
-1. **Parse**: read the Takeout HTML and pull out individual Gemini turns (user prompt + Gemini response) with their timestamps. Timestamps come from Google's `D MMM YYYY, HH:MM:SS TZ` format (e.g., `1 Apr 2026, 18:39:35 WEST`) and are normalised to ISO 8601.
+1. **Parse**: read the export and pull out individual Gemini turns (user prompt + Gemini response) with their timestamps.
+   - **JSON (`MyActivity.json`)**: each record's `title` holds the prompt (the leading `Prompted ` marker is stripped), `subtitles[].name` (or `description`) holds Gemini's reply, and `time` is already ISO 8601. Records whose `header` isn't a Gemini one are skipped, so a combined My Activity export won't pull in Search/Maps activity.
+   - **HTML (`My Activity.html`)**: turns are scraped from `outer-cell` divs; timestamps come from Google's `D MMM YYYY, HH:MM:SS TZ` format (e.g., `1 Apr 2026, 18:39:35 WEST`) and are normalised to ISO 8601.
+   - **Saved-info paste**: each non-empty line (bullet markers stripped) becomes one memory item directly.
 2. **Sessionise**: group consecutive turns into pseudo-sessions, splitting whenever the gap between turns exceeds 30 minutes. This recovers a conversation structure Takeout doesn't preserve directly.
 3. **Chunk**: split each session into batches of ~20 messages (`CHUNK_SIZE`).
 4. **Extract**: each chunk is run through an LLM (the host's LLM on MCP integrations; your gateway's LLM on OpenClaw; Hermes' configured LLM otherwise). The LLM identifies facts, preferences, decisions, goals, and context. Generic Q&A turns (recipe lookups, product searches, weather) typically produce zero facts — only personal, long-term-valuable information is extracted.
@@ -89,7 +106,7 @@ Always preview before importing:
 
 > "Import my Gemini history with dry run first"
 
-This parses the HTML and shows the estimate (sessions found, chunks, estimated facts, time, projected LLM cost) without storing anything. Review and confirm before running the actual import.
+This parses the export and shows the estimate (sessions found, chunks, estimated facts, time, projected LLM cost) without storing anything. Review and confirm before running the actual import.
 
 ---
 
