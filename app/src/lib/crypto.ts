@@ -95,6 +95,9 @@ export async function deriveEoaPrivateKey(mnemonic: string): Promise<Uint8Array>
   if (!child.privateKey) {
     throw new Error("BIP-32 derivation failed");
   }
+  if (child.privateKey.length !== 32) {
+    throw new Error("derived master private key has unexpected length");
+  }
   return child.privateKey; // 32 bytes
 }
 
@@ -186,7 +189,6 @@ export async function deriveSessionKeys(
   );
 
   return {
-    mnemonic: normalized,
     authKey,
     encryptionKey,
     authKeyHex: bytesToHex(authKey),

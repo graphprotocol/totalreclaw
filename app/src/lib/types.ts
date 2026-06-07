@@ -96,7 +96,9 @@ export interface RawFact {
  *  walletAddress is the deterministic ERC-4337 Smart Account address that owns
  *  the on-chain vault (returned by the relay's /v1/smart-account endpoint). */
 export interface SessionKeys {
-  mnemonic: string;
+  // NOTE: the mnemonic is intentionally NOT held here. It touches RAM only as a
+  // transient local during bootstrap/recovery, then is dropped — never persisted
+  // in app-wide state (phrase-safety invariant). See CryptoContext.
   authKey: Uint8Array;
   encryptionKey: Uint8Array;
   authKeyHex: string;

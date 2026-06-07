@@ -18,6 +18,7 @@ import {
   useRef,
   ReactNode,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { SessionKeys } from "../lib/types";
 import {
   deriveSessionKeys,
@@ -28,13 +29,7 @@ import {
 import { isPasskeyPrfAvailable } from "../lib/auth/prf-support";
 import { enrolPasskey, getPrfSecret, PrfUnsupportedError } from "../lib/auth/passkey";
 import { wrapKey, unwrapKey, deriveMasterWrapSecret } from "../lib/auth/wrap";
-import {
-  saveVaultRecord,
-  loadVaultRecord,
-  hasAnyVault,
-  clearVault,
-  type VaultRecord,
-} from "../lib/vault/idb";
+import { saveVaultRecord, loadVaultRecord, hasAnyVault, clearVault } from "../lib/vault/idb";
 import { registerSession } from "../lib/api";
 
 const SERVER_URL =
@@ -97,7 +92,6 @@ function sessionKeysFromUnwrapped(
   chainId: number,
 ): SessionKeys {
   return {
-    mnemonic: "",
     authKey,
     encryptionKey: vaultKey,
     authKeyHex: bytesToHex(authKey),
@@ -114,6 +108,7 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
   const [chainId, setChainId] = useState<number | null>(null);
   // Credential id of this device's passkey — used to scope re-assertions (A.2).
   const credIdRef = useRef<Uint8Array | null>(null);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     let cancelled = false;
@@ -144,33 +139,38 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
       if (!(await isPasskeyPrfAvailable())) throw new PrfUnsupportedError();
 
       const sk = await deriveSessionKeys(mnemonic, SERVER_URL, cid);
-      const masterPriv = await deriveEoaPrivateKey(mnemonic);
-      const userId = crypto.getRandomValues(new Uint8Array(16));
+      const masterPriv = await deriveEoaPrivateKey(mnemonic); // validated 32 bytes
+      let prfSecret: Uint8Array | null = null;
+      let masterWrapSecret: Uint8Array | null = null;
+      try {
+        // Register BEFORE any local persistence so a relay failure leaves no
+        // half-built vault (idempotent on retry).
+        await registerSession(sk);
 
-      const { credentialId } = await enrolPasskey({ userId, userName });
-      const { prfSecret } = await getPrfSecret({ credentialId });
-      const masterWrapSecret = deriveMasterWrapSecret(prfSecret);
+        const userId = crypto.getRandomValues(new Uint8Array(16));
+        const { credentialId } = await enrolPasskey({ userId, userName });
+        prfSecret = (await getPrfSecret({ credentialId })).prfSecret;
+        masterWrapSecret = deriveMasterWrapSecret(prfSecret);
 
-      const rec: VaultRecord = {
-        v: 1,
-        smart_account: sk.walletAddress,
-        chain_id: cid,
-        credential_id: b64urlEncode(credentialId),
-        wrapped_vault_key: wrapKey(sk.encryptionKey, prfSecret),
-        wrapped_auth_key: wrapKey(sk.authKey, prfSecret),
-        wrapped_master_key: wrapKey(masterPriv, masterWrapSecret),
-        created_at: nowSeconds(),
-      };
-      await saveVaultRecord(rec);
-      await registerSession(sk);
-
-      credIdRef.current = credentialId;
-      // Zero transient secrets (the unlocked vault + auth keys live on in `sk`).
-      masterPriv.fill(0);
-      prfSecret.fill(0);
-      masterWrapSecret.fill(0);
-
-      enterUnlocked(sk, sk.walletAddress, cid);
+        await saveVaultRecord({
+          v: 1,
+          smart_account: sk.walletAddress,
+          chain_id: cid,
+          credential_id: b64urlEncode(credentialId),
+          wrapped_vault_key: wrapKey(sk.encryptionKey, prfSecret),
+          wrapped_auth_key: wrapKey(sk.authKey, prfSecret),
+          wrapped_master_key: wrapKey(masterPriv, masterWrapSecret),
+          created_at: nowSeconds(),
+        });
+        credIdRef.current = credentialId;
+        // `sk` carries no mnemonic (see SessionKeys) — safe to hold unlocked.
+        enterUnlocked(sk, sk.walletAddress, cid);
+      } finally {
+        // Best-effort zero of every transient secret, even on error.
+        masterPriv.fill(0);
+        prfSecret?.fill(0);
+        masterWrapSecret?.fill(0);
+      }
     },
     [enterUnlocked],
   );
@@ -180,12 +180,18 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
     if (!rec) throw new Error("No vault on this device. Restore with your recovery phrase.");
     const credId = b64urlDecode(rec.credential_id);
     const { prfSecret } = await getPrfSecret({ credentialId: credId });
-    const vaultKey = unwrapKey(rec.wrapped_vault_key, prfSecret);
-    const authKey = unwrapKey(rec.wrapped_auth_key, prfSecret);
-    prfSecret.fill(0);
-
+    let sk: SessionKeys;
+    try {
+      const vaultKey = unwrapKey(rec.wrapped_vault_key, prfSecret);
+      const authKey = unwrapKey(rec.wrapped_auth_key, prfSecret);
+      sk = sessionKeysFromUnwrapped(vaultKey, authKey, rec.smart_account, rec.chain_id);
+    } catch {
+      // AEAD failure (wrong/foreign record, tamper) — nudge to recovery.
+      throw new Error("Couldn’t unlock on this device. Try your recovery phrase.");
+    } finally {
+      prfSecret.fill(0);
+    }
     credIdRef.current = credId;
-    const sk = sessionKeysFromUnwrapped(vaultKey, authKey, rec.smart_account, rec.chain_id);
     // Idempotent: ensures the relay user row exists (cheap; needed on fresh relay state).
     await registerSession(sk).catch(() => {});
     enterUnlocked(sk, rec.smart_account, rec.chain_id);
@@ -200,27 +206,32 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
       if (opts?.reEnrol) {
         if (!(await isPasskeyPrfAvailable())) throw new PrfUnsupportedError();
         const masterPriv = await deriveEoaPrivateKey(mnemonic);
-        const userId = crypto.getRandomValues(new Uint8Array(16));
-        const { credentialId } = await enrolPasskey({
-          userId,
-          userName: opts?.userName ?? "TotalReclaw vault",
-        });
-        const { prfSecret } = await getPrfSecret({ credentialId });
-        const masterWrapSecret = deriveMasterWrapSecret(prfSecret);
-        await saveVaultRecord({
-          v: 1,
-          smart_account: sk.walletAddress,
-          chain_id: cid,
-          credential_id: b64urlEncode(credentialId),
-          wrapped_vault_key: wrapKey(sk.encryptionKey, prfSecret),
-          wrapped_auth_key: wrapKey(sk.authKey, prfSecret),
-          wrapped_master_key: wrapKey(masterPriv, masterWrapSecret),
-          created_at: nowSeconds(),
-        });
-        credIdRef.current = credentialId;
-        masterPriv.fill(0);
-        prfSecret.fill(0);
-        masterWrapSecret.fill(0);
+        let prfSecret: Uint8Array | null = null;
+        let masterWrapSecret: Uint8Array | null = null;
+        try {
+          const userId = crypto.getRandomValues(new Uint8Array(16));
+          const { credentialId } = await enrolPasskey({
+            userId,
+            userName: opts?.userName ?? "TotalReclaw vault",
+          });
+          prfSecret = (await getPrfSecret({ credentialId })).prfSecret;
+          masterWrapSecret = deriveMasterWrapSecret(prfSecret);
+          await saveVaultRecord({
+            v: 1,
+            smart_account: sk.walletAddress,
+            chain_id: cid,
+            credential_id: b64urlEncode(credentialId),
+            wrapped_vault_key: wrapKey(sk.encryptionKey, prfSecret),
+            wrapped_auth_key: wrapKey(sk.authKey, prfSecret),
+            wrapped_master_key: wrapKey(masterPriv, masterWrapSecret),
+            created_at: nowSeconds(),
+          });
+          credIdRef.current = credentialId;
+        } finally {
+          masterPriv.fill(0);
+          prfSecret?.fill(0);
+          masterWrapSecret?.fill(0);
+        }
       }
 
       enterUnlocked(sk, sk.walletAddress, cid);
@@ -242,8 +253,10 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
     credIdRef.current?.fill(0);
     credIdRef.current = null;
     setKeysState(null);
+    // Drop decrypted plaintext (VaultItem[]) from the react-query cache.
+    queryClient.clear();
     setStatus("locked");
-  }, [keys]);
+  }, [keys, queryClient]);
 
   const forgetDevice = useCallback<CryptoContextValue["forgetDevice"]>(async () => {
     const sa = smartAccount;

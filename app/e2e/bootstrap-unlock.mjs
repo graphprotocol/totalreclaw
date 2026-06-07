@@ -141,6 +141,29 @@ try {
   check("zero phrase at rest (localStorage empty)", storage.local === 0);
   check("zero phrase at rest (sessionStorage empty)", storage.session === 0);
 
+  // M1: no phrase word may appear in any persisted IndexedDB value (the wrapped
+  // blobs are ciphertext bytes). `words` stays in-script; never logged.
+  const phraseLeak = await page.evaluate(
+    (words) =>
+      new Promise((res) => {
+        const open = indexedDB.open("keyval-store");
+        open.onsuccess = () => {
+          const tx = open.result.transaction("keyval", "readonly");
+          const req = tx.objectStore("keyval").getAll();
+          req.onsuccess = () => {
+            const dump = JSON.stringify(req.result, (_k, v) =>
+              v instanceof Uint8Array ? Array.from(v) : v,
+            ).toLowerCase();
+            res(words.some((w) => w && dump.includes(w.toLowerCase())));
+          };
+          req.onerror = () => res(false);
+        };
+        open.onerror = () => res(false);
+      }),
+    words,
+  );
+  check("no phrase word appears in any persisted IndexedDB value", phraseLeak === false);
+
   await page.screenshot({ path: "e2e/shot-memory.png" });
 
   // --- 3. Lock + unlock with passkey ---
