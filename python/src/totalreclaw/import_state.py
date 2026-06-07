@@ -37,6 +37,16 @@ class ImportState:
     estimated_minutes: int = 0
     estimated_completion_iso: str = ""
     disclosure_confirmed: bool = False
+    #: Set True once the agent has proactively told the user this import
+    #: finished (the completion-notification one-shot). Prevents re-announcing
+    #: the same completed import on every subsequent turn.
+    announced: bool = False
+
+
+def _coerce_state(data: dict) -> "ImportState":
+    """Build ImportState from a dict, tolerating unknown/legacy keys."""
+    allowed = {f.name for f in __import__("dataclasses").fields(ImportState)}
+    return ImportState(**{k: v for k, v in data.items() if k in allowed})
 
 
 def _state_path(import_id: str) -> Path:
@@ -53,7 +63,7 @@ def write_import_state(state: ImportState) -> None:
 def read_import_state(import_id: str) -> Optional[ImportState]:
     try:
         data = json.loads(_state_path(import_id).read_text(encoding="utf-8"))
-        return ImportState(**data)
+        return _coerce_state(data)
     except Exception:
         return None
 
@@ -75,7 +85,7 @@ def read_most_recent_active_import() -> Optional[ImportState]:
         for p in IMPORT_STATE_DIR.glob("*.json"):
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
-                state = ImportState(**data)
+                state = _coerce_state(data)
                 if state.status in ("running", "pending"):
                     candidates.append(state)
             except Exception:
@@ -85,3 +95,31 @@ def read_most_recent_active_import() -> Optional[ImportState]:
         return max(candidates, key=lambda s: s.started_at)
     except Exception:
         return None
+
+
+def read_completed_unannounced_imports() -> List[ImportState]:
+    """Return completed imports the agent has not yet proactively reported.
+
+    Used by the Hermes ``pre_llm_call`` hook to inject a one-shot
+    "import finished" note so the agent tells the user without being asked.
+    """
+    out: List[ImportState] = []
+    try:
+        for p in IMPORT_STATE_DIR.glob("*.json"):
+            try:
+                state = _coerce_state(json.loads(p.read_text(encoding="utf-8")))
+                if state.status == "completed" and not state.announced:
+                    out.append(state)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return sorted(out, key=lambda s: s.last_updated)
+
+
+def mark_import_announced(import_id: str) -> None:
+    """Latch a completed import as announced so it is not reported twice."""
+    state = read_import_state(import_id)
+    if state is not None and not state.announced:
+        state.announced = True
+        write_import_state(state)

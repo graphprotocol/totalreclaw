@@ -622,6 +622,29 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
         context_parts.append(quota_warning)
         state.clear_quota_warning()
 
+    # Proactive import-completion notice (PRD-IMP OQ-5) — one-shot per
+    # completed import. The background import task only writes
+    # status=completed; this surfaces it on the next turn so the agent tells
+    # the user the import finished WITHOUT being asked (pull -> push).
+    try:
+        from totalreclaw.import_state import (
+            read_completed_unannounced_imports,
+            mark_import_announced,
+        )
+        for done in read_completed_unannounced_imports():
+            dups = (
+                f", {done.dups_skipped} duplicate(s) skipped"
+                if done.dups_skipped else ""
+            )
+            context_parts.append(
+                f"[totalreclaw] The background import from {done.source} just "
+                f"finished: {done.facts_stored} memories stored{dups}. Proactively "
+                "tell the user the import is done and briefly what was imported."
+            )
+            mark_import_announced(done.import_id)
+    except Exception as e:  # never let notification break the turn
+        logger.debug("import-completion injection skipped: %s", e)
+
     if is_first_turn and user_message:
         # Auto-recall relevant memories for the first turn
         try:

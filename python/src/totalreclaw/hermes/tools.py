@@ -769,6 +769,38 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
         estimate = engine.estimate(source=source, file_path=file_path, content=content)
         total_items = estimate.get("total_chunks") or estimate.get("total_facts") or 0
 
+        # ── Tier gate (PRD-IMP §6: import is a Pro-only feature) ───────────
+        # Interim client-side UX gate: a free-tier user hits the upgrade wall
+        # BEFORE any LLM extraction or on-chain write, so they aren't charged
+        # cost/quota by surprise. The relay still enforces the real write
+        # quota server-side. Full "free gets 1 lifetime trial" enforcement is
+        # pending the relay `import_count_lifetime` field (imp-3); until then
+        # this is strict Pro-only. Fails OPEN if billing is unreachable
+        # (self-hosted / offline) so those flows are not blocked.
+        try:
+            billing = await client.status()
+            tier = (getattr(billing, "tier", "") or "").strip().lower()
+        except Exception:
+            tier = ""
+        if tier and tier != "pro":
+            return json.dumps({
+                "blocked": True,
+                "reason": "import_is_pro_only",
+                "tier": tier,
+                "import_id": import_id,
+                "estimated_facts": estimate.get("estimated_facts"),
+                "estimated_minutes": estimate.get("estimated_minutes"),
+                "message": (
+                    "Importing your AI memory history is a Pro feature. Your "
+                    f"archive looks like ~{estimate.get('estimated_facts', '?')} "
+                    "memories (~"
+                    f"{estimate.get('estimated_minutes', '?')} min to import). "
+                    "Upgrade to Pro ($3.99/mo) to run it — call "
+                    "totalreclaw_upgrade for a checkout link. Nothing was "
+                    "extracted or stored."
+                ),
+            })
+
         if total_items <= _SMALL_IMPORT_THRESHOLD:
             # Small import: process synchronously but still write state for tracking.
             now = datetime.now(timezone.utc).isoformat()
