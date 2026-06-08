@@ -204,6 +204,8 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
 
 async def recall(args: dict, state: "PluginState", **kwargs) -> str:
     """Search memories in TotalReclaw."""
+    from totalreclaw.agent.recall import _fmt_date
+
     client = state.get_client()
     if not client:
         return json.dumps({"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."})
@@ -226,7 +228,13 @@ async def recall(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({
             "count": len(results),
             "memories": [
-                {"id": r.id, "text": r.text, "type": r.category, "score": round(r.rrf_score, 4)}
+                {
+                    "id": r.id,
+                    "text": r.text,
+                    "type": r.category,
+                    "date": _fmt_date(getattr(r, "created_at", None)),
+                    "score": round(r.rrf_score, 4),
+                }
                 for r in results
             ],
         })

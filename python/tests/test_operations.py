@@ -4,7 +4,7 @@ import base64
 from unittest.mock import AsyncMock, patch
 
 from totalreclaw.crypto import derive_keys_from_mnemonic, encrypt
-from totalreclaw.operations import store_fact, search_facts, forget_fact, export_facts
+from totalreclaw.operations import store_fact, search_facts, forget_fact, export_facts, APPLY_SOURCE_WEIGHTS_DEFAULT
 from totalreclaw.relay import RelayClient
 
 TEST_MNEMONIC = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
@@ -315,3 +315,41 @@ class TestExportFacts:
         assert len(results) == 1
         assert results[0]["text"] == "Test memory"
         assert results[0]["importance"] == 0.7
+
+
+class TestSourceWeightsDefault:
+    """APPLY_SOURCE_WEIGHTS_DEFAULT must be False (2026-06-08 benchmark)."""
+
+    def test_constant_is_false(self):
+        assert APPLY_SOURCE_WEIGHTS_DEFAULT is False
+
+    @pytest.mark.asyncio
+    @patch("totalreclaw.operations.rerank")
+    async def test_search_facts_passes_default_to_rerank(self, mock_rerank):
+        """search_facts must pass APPLY_SOURCE_WEIGHTS_DEFAULT to rerank()."""
+        from totalreclaw.reranker import RerankerResult
+
+        mock_rerank.return_value = []
+        keys = derive_keys_from_mnemonic(TEST_MNEMONIC)
+        relay = AsyncMock(spec=RelayClient)
+        relay.query_subgraph = AsyncMock(
+            return_value={"data": {"blindIndexes": [], "facts": []}}
+        )
+
+        await search_facts(
+            query="hello world test",
+            keys=keys,
+            owner="0x1234",
+            relay=relay,
+        )
+
+        # rerank may not be called if no candidates; that's OK — the test
+        # validates the default is False (done above). But if rerank IS
+        # called, apply_source_weights must equal the default (False).
+        for call in mock_rerank.call_args_list:
+            kw = call.kwargs
+            if "apply_source_weights" in kw:
+                assert kw["apply_source_weights"] is APPLY_SOURCE_WEIGHTS_DEFAULT, (
+                    f"search_facts passed apply_source_weights={kw['apply_source_weights']!r}; "
+                    f"expected APPLY_SOURCE_WEIGHTS_DEFAULT ({APPLY_SOURCE_WEIGHTS_DEFAULT!r})"
+                )

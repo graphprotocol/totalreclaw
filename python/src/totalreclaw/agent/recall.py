@@ -10,6 +10,7 @@ integration (Hermes, LangChain, CrewAI, or custom agents).
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
 
 from .loop_runner import run_sync
@@ -18,6 +19,46 @@ if TYPE_CHECKING:
     from .state import AgentState
 
 logger = logging.getLogger(__name__)
+
+
+def _fmt_date(created_at) -> str:
+    """Format a Unix-seconds timestamp as 'YYYY-MM-DD', or '' if missing/invalid.
+
+    created_at may be a float, int, or None (legacy entries pre-dating the
+    createdAt subgraph field). The empty string signals to the caller to omit
+    the date tag entirely rather than rendering a placeholder.
+    """
+    if not created_at:
+        return ""
+    try:
+        return datetime.fromtimestamp(float(created_at), tz=timezone.utc).strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
+def _format_recall_context(results) -> str:
+    """Format a list of RerankerResult objects as the LLM recall context block.
+
+    Each memory line includes its recorded date when available:
+      - [category] (YYYY-MM-DD) text
+      - [category] text    (when date is absent)
+
+    A current-date + temporal-reasoning header is prepended so the LLM
+    can compute time deltas without guessing the reference point.
+    """
+    def _line(r):
+        d = _fmt_date(getattr(r, "created_at", None))
+        return f"- [{r.category}] ({d}) {r.text}" if d else f"- [{r.category}] {r.text}"
+
+    memories = "\n".join(_line(r) for r in results)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    header = (
+        f"## Relevant memories from TotalReclaw\n"
+        f"The current date is {today}. Each memory is tagged with the date it was "
+        f"recorded. When the question involves timing or duration, reason carefully "
+        f"about the dates and compute differences precisely.\n"
+    )
+    return f"{header}{memories}"
 
 
 def auto_recall(
@@ -52,8 +93,7 @@ def auto_recall(
         results = run_sync(client.recall(query, top_k=top_k))
 
         if results:
-            memories = "\n".join(f"- [{r.category}] {r.text}" for r in results)
-            return f"## Relevant memories from TotalReclaw\n{memories}"
+            return _format_recall_context(results)
     except Exception as e:
         logger.warning("TotalReclaw auto-recall failed: %s", e)
 
@@ -85,8 +125,7 @@ async def auto_recall_async(
     try:
         results = await client.recall(query, top_k=top_k)
         if results:
-            memories = "\n".join(f"- [{r.category}] {r.text}" for r in results)
-            return f"## Relevant memories from TotalReclaw\n{memories}"
+            return _format_recall_context(results)
     except Exception as e:
         logger.warning("TotalReclaw auto-recall failed: %s", e)
 

@@ -13,6 +13,12 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Retrieval v2 Tier 1 source-weighting default. OFF as of 2026-06-08: the
+# agent-experienced benchmark (core 2.4.0) showed it tie-or-worse on the shipped
+# retrieval path (recall is already saturated, so provenance reweighting only
+# reorders). See totalreclaw-internal docs/benchmarks/2026-06-07-agent-experienced-baseline.md.
+APPLY_SOURCE_WEIGHTS_DEFAULT = False
+
 import json as _json
 
 import totalreclaw_core as _core
@@ -690,9 +696,9 @@ async def search_facts(
     if not candidates:
         return []
 
-    # Retrieval v2 Tier 1: source-weighted reranking is always ON as of
-    # totalreclaw 2.0.0, matching the TS plugin's default path.
-    return rerank(query, query_embedding, candidates, top_k=top_k, apply_source_weights=True)
+    # Retrieval v2 Tier 1 source-weighting: OFF by default as of 2026-06-08
+    # (benchmark showed tie-or-worse; see APPLY_SOURCE_WEIGHTS_DEFAULT).
+    return rerank(query, query_embedding, candidates, top_k=top_k, apply_source_weights=APPLY_SOURCE_WEIGHTS_DEFAULT)
 
 
 async def forget_fact(
