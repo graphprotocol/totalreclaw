@@ -111,7 +111,13 @@ pub fn parse_debrief_response(response: &str) -> Vec<DebriefItem> {
             Some(t) if t.trim().len() >= 5 => {
                 let trimmed = t.trim();
                 if trimmed.len() > 512 {
-                    trimmed[..512].to_string()
+                    // Snap to a char boundary so multibyte/accented text never
+                    // panics (byte 512 can land inside a multi-byte char).
+                    let mut end = 512;
+                    while end > 0 && !trimmed.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    trimmed[..end].to_string()
                 } else {
                     trimmed.to_string()
                 }

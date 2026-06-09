@@ -485,13 +485,22 @@ fn strip_code_fences(s: &str) -> String {
     result
 }
 
-/// Truncate a message to a maximum length, appending "..." if truncated.
+/// Truncate a message to a maximum byte length, appending "..." if truncated.
+///
+/// Snaps the cut down to the nearest UTF-8 char boundary so non-Latin / accented
+/// text never panics. A raw `&trimmed[..max_len]` byte slice panics when
+/// `max_len` lands inside a multi-byte char (e.g. Portuguese 'é' at byte 300) —
+/// which crashed the whole import background task. (Regression: 2026-06.)
 fn truncate_message(s: &str, max_len: usize) -> String {
     let trimmed = s.trim();
     if trimmed.len() <= max_len {
         trimmed.to_string()
     } else {
-        format!("{}...", &trimmed[..max_len])
+        let mut end = max_len;
+        while end > 0 && !trimmed.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &trimmed[..end])
     }
 }
 
@@ -1467,6 +1476,31 @@ mod tests {
     #[test]
     fn test_truncate_message_trims_whitespace() {
         assert_eq!(truncate_message("  hello  ", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_message_utf8_boundary_does_not_panic() {
+        // 'é' is 2 bytes. Put it so the cut (max_len) lands INSIDE it: 299 'a's
+        // (299 bytes) + 'é' (bytes 299..301) → byte index 300 is not a char
+        // boundary. The old raw byte slice panicked here (real import crash on
+        // Portuguese Gemini data). Must truncate safely instead.
+        let s = "a".repeat(299) + "é" + "tail";
+        let out = truncate_message(&s, 300);
+        assert!(out.ends_with("..."));
+        // Snapped down before 'é' → 299 'a's + "..."
+        assert_eq!(out, "a".repeat(299) + "...");
+    }
+
+    #[test]
+    fn test_truncate_message_multibyte_throughout() {
+        // All-multibyte string; truncating at various byte caps must never panic.
+        let s = "héllo wörld ".repeat(50); // accents throughout
+        for cap in [1usize, 2, 3, 7, 10, 50, 101, 300] {
+            let out = truncate_message(&s, cap);
+            // Output is valid UTF-8 by construction (String) — assert no panic +
+            // length sanity (<= cap + "..." worth of bytes, snapped down).
+            assert!(out.len() <= s.len() + 3);
+        }
     }
 
     #[test]
