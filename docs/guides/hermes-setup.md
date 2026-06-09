@@ -50,9 +50,11 @@ The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` a
 
 ---
 
-## Conversational style
+## Conversational style — HARD RULE for install + setup
 
-This is not a rule the agent follows perfectly, but the more it can, the better the UX:
+**The user must NOT see install mechanics. Narrating shell / `pip` / `venv` / interpreter-detection / "let me verify…" during install or setup is a DEFECT** — it spams the chat with garbage (QA regression, 2026-06). This is not aspirational: run every tool/shell step **silently** and emit ONLY the short verbatim lines each procedure names. **Budget for a full install + setup: ≤6 short user-visible lines, total.** If you wrote more than that, you narrated something that should have been silent — delete it.
+
+(Post-setup usage replies are normal conversation — this hard rule governs the install + account-setup path specifically.)
 
 - Do not surface tool-call mechanics verbatim to the user. The user does not need to see `🐍 execute_code: "from hermes_tools import terminal..."` or `📚 skill_view: "..."` or `📋 todo: "planning N tasks"`. Run the tools silently and emit only the user-visible lines listed in the procedures below.
 - Use the explicit verbatim emit lines where the procedure provides them. Otherwise keep replies short and to-the-point.
@@ -64,14 +66,16 @@ This is not a rule the agent follows perfectly, but the more it can, the better 
 
 ## Install procedure
 
+**The ENTIRE install procedure (steps 1–4) is SILENT except for exactly TWO user-visible lines:** (1) `✓ Installed totalreclaw <version>` after step 2 verifies, and (2) the restart request from step 4. Steps 1, 3, and the shell/verify mechanics of step 2 produce **zero** chat output — run them with your shell tool and say nothing about them. No `pip`, no `venv`, no "let me verify", no "resolving the interpreter".
+
 After the procedure completes (the user replies *"Done — continue setting up TotalReclaw"* or equivalent to the restart request in step 4), **proceed directly to Account setup**. Do not ask the user "is it ready?" — the user's reply IS the signal.
 
-1. Resolve the Hermes Python interpreter:
+1. **(SILENT — emit nothing.)** Resolve the Hermes Python interpreter:
    ```bash
    HERMES_PYTHON="$(command -v hermes >/dev/null 2>&1 && head -1 "$(command -v hermes)" | sed 's|^#!||')"
    test -x "$HERMES_PYTHON" || HERMES_PYTHON="$(find / -maxdepth 6 -name hermes -type f -executable 2>/dev/null | head -1 | xargs -I{} head -1 {} | sed 's|^#!||')"
    ```
-2. **Install the package into the Hermes interpreter — and VERIFY the runtime version actually landed there.** rc6 QA (F2/#370): when the Hermes venv has no pip of its own, `"$HERMES_PYTHON" -m pip` fails with `No module named pip`, the agent silently falls back to the *system* `pip --user` (`~/.local`), and the venv's own bundled `totalreclaw` then **shadows** the `.local` copy — so the OLD code runs the whole session. Install with this order, then verify:
+2. **(SILENT except the single `✓ Installed totalreclaw <version>` line, emitted only AFTER (c) verifies.) Install the package into the Hermes interpreter — and VERIFY the runtime version actually landed there.** rc6 QA (F2/#370): when the Hermes venv has no pip of its own, `"$HERMES_PYTHON" -m pip` fails with `No module named pip`, the agent silently falls back to the *system* `pip --user` (`~/.local`), and the venv's own bundled `totalreclaw` then **shadows** the `.local` copy — so the OLD code runs the whole session. Install with this order, then verify:
    ```bash
    # Latest RC (user gave NO version): PIN="totalreclaw" — `--pre` resolves the newest pre-release.
    # Explicit version (user typed "RC <version>"): PIN="totalreclaw==<version>", e.g. totalreclaw==2.4.4rc9
@@ -85,7 +89,7 @@ After the procedure completes (the user replies *"Done — continue setting up T
    "$HERMES_PYTHON" -c "import totalreclaw as t; print('RUNTIME', t.__version__, t.__file__)"
    ```
    The printed `RUNTIME` `__file__` MUST be under `$HERMES_PYTHON`'s own site-packages (NOT `~/.local/...`), and — for an explicit `==` pin — the version MUST equal it. (For the unpinned latest-RC path, just confirm the version is a pre-release, i.e. contains `rc`, and loads from the Hermes interpreter.) If `__file__` points at `~/.local` or the version is an OLDER build than expected (e.g. a venv-bundled `2.3.1rc26` shadowing the fresh install), the package landed in the wrong site — re-run (a) with `--force-reinstall`, or remove the stale copy, until `RUNTIME` loads from the Hermes interpreter. **Do NOT proceed to setup on a shadow / version mismatch** — the whole flow silently runs old code (the rc6 NO-GO root cause).
-3. **Skip by default — rc6 QA F7/#375: running this is a no-op on current Hermes.** The `totalreclaw` package declares a `hermes_agent.plugins` entry point in its `pyproject.toml`, so step 2's pip install **already auto-registers** the plugin; the gateway binds it via entry-points at boot and `hermes tools list` shows it. ONLY run the manual manifest registration below if `hermes tools list` does NOT show `totalreclaw` after the step-4 restart — e.g. an older Hermes that doesn't scan entry-points:
+3. **(SILENT — emit nothing; skipped by default.) Skip by default — rc6 QA F7/#375: running this is a no-op on current Hermes.** The `totalreclaw` package declares a `hermes_agent.plugins` entry point in its `pyproject.toml`, so step 2's pip install **already auto-registers** the plugin; the gateway binds it via entry-points at boot and `hermes tools list` shows it. ONLY run the manual manifest registration below if `hermes tools list` does NOT show `totalreclaw` after the step-4 restart — e.g. an older Hermes that doesn't scan entry-points:
    ```bash
    hermes plugins install p-diogo/totalreclaw-hermes --enable
    ```
