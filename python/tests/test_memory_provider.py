@@ -778,3 +778,56 @@ class TestDisableBuiltinMemory:
         # Create block when absent.
         t3 = imp._set_memory_key("", "memory_enabled", "false")
         assert t3.startswith("memory:") and "memory_enabled: false" in t3
+
+
+class TestNativeAutoMemory:
+    """§5.2 (#351) — prefetch/sync_turn delegate to the shared §5.1 entry points."""
+
+    def test_prefetch_delegates_to_recall_for_query(self):
+        state = _make_state(configured=True)
+        provider = TotalReclawMemoryProvider(state)
+        with patch("totalreclaw.hermes.hooks.recall_for_query", return_value="CTX") as rq:
+            out = provider.prefetch("who am I?", session_id="s1")
+        assert out == "CTX"
+        rq.assert_called_once_with(state, "who am I?", top_k=8)
+
+    def test_prefetch_empty_when_unconfigured(self):
+        state = _make_state(configured=False)
+        provider = TotalReclawMemoryProvider(state)
+        with patch("totalreclaw.hermes.hooks.recall_for_query") as rq:
+            assert provider.prefetch("q") == ""
+        rq.assert_not_called()
+
+    def test_prefetch_swallows_errors(self):
+        state = _make_state(configured=True)
+        provider = TotalReclawMemoryProvider(state)
+        with patch("totalreclaw.hermes.hooks.recall_for_query", side_effect=RuntimeError("x")):
+            assert provider.prefetch("q") == ""
+
+    def test_prefetch_none_becomes_empty(self):
+        state = _make_state(configured=True)
+        provider = TotalReclawMemoryProvider(state)
+        with patch("totalreclaw.hermes.hooks.recall_for_query", return_value=None):
+            assert provider.prefetch("q") == ""
+
+    def test_sync_turn_delegates_to_ingest_turn(self):
+        state = _make_state(configured=True)
+        provider = TotalReclawMemoryProvider(state)
+        with patch("totalreclaw.hermes.hooks.ingest_turn") as it:
+            provider.sync_turn("u", "a", session_id="s1")
+        it.assert_called_once_with(state, "u", "a")
+
+    def test_sync_turn_accepts_messages_kwarg(self):
+        state = _make_state(configured=True)
+        provider = TotalReclawMemoryProvider(state)
+        with patch("totalreclaw.hermes.hooks.ingest_turn") as it:
+            provider.sync_turn(
+                "u", "a", session_id="s1", messages=[{"role": "user", "content": "u"}]
+            )
+        it.assert_called_once_with(state, "u", "a")
+
+    def test_sync_turn_swallows_errors(self):
+        state = _make_state(configured=True)
+        provider = TotalReclawMemoryProvider(state)
+        with patch("totalreclaw.hermes.hooks.ingest_turn", side_effect=RuntimeError("x")):
+            provider.sync_turn("u", "a")  # must not raise

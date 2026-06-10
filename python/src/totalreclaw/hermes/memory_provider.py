@@ -261,6 +261,63 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         )
 
     # ------------------------------------------------------------------
+    # Native auto-memory (provider conformance §5.2 — #351)
+    #
+    # These are the two methods every other Hermes memory provider
+    # (honcho/mem0/supermemory/…) implements; they are what makes the
+    # native ``memory`` flow route through TotalReclaw. Both delegate to
+    # the shared hook-free entry points in ``hooks.py`` (§5.1), so the
+    # provider and the legacy lifecycle hooks share ONE code path.
+    #
+    # DORMANT until activation (#346 sidecar path + §5.3): the provider is
+    # not discovered yet, so these don't run live. §5.3 gates the plugin's
+    # ``pre_llm_call``/``post_llm_call`` memory work off when TR is the
+    # active provider (single driver) AND reconciles turn counting — at
+    # which point ``sync_turn`` (driven every turn via
+    # ``memory_manager.sync_all``) becomes the sole turn counter and the
+    # ``on_turn_start`` override below is dropped. Landing these now (while
+    # dormant) keeps the activation PR small and reviewable.
+    # ------------------------------------------------------------------
+
+    def prefetch(self, query: str, *, session_id: str = "") -> str:
+        """Auto-recall context for the upcoming turn (native memory path).
+
+        Delegates to the shared ``hooks.recall_for_query`` — the same recall
+        the plugin's ``pre_llm_call`` uses. Returns "" when unconfigured or on
+        any error (the manager treats empty as "no context", never fatal).
+        """
+        if not self._state.is_configured():
+            return ""
+        try:
+            from .hooks import recall_for_query
+
+            return recall_for_query(self._state, query, top_k=8) or ""
+        except Exception as exc:  # pragma: no cover — non-fatal per ABC contract
+            logger.warning("TotalReclaw MemoryProvider.prefetch failed: %s", exc)
+            return ""
+
+    def sync_turn(
+        self,
+        user_content: str,
+        assistant_content: str,
+        *,
+        session_id: str = "",
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """Persist a completed turn (native auto-extract path).
+
+        Delegates to the shared ``hooks.ingest_turn`` — record the turn +
+        interval-gated extraction, the same logic the plugin's
+        ``post_llm_call`` runs. Idempotent + safe on errors.
+        """
+        try:
+            from .hooks import ingest_turn
+
+            ingest_turn(self._state, user_content, assistant_content)
+        except Exception as exc:  # pragma: no cover — non-fatal per ABC contract
+            logger.warning("TotalReclaw MemoryProvider.sync_turn failed: %s", exc)
+
+    # ------------------------------------------------------------------
     # Optional lifecycle hooks
     # ------------------------------------------------------------------
 
