@@ -102,7 +102,13 @@ class BillingStatus:
 @dataclass
 class CheckoutResponse:
     checkout_url: str
-    session_id: str
+    # The relay's POST /v1/billing/checkout success payload is
+    # ``{success, checkout_url}`` — it does NOT return a session id (the
+    # Stripe Session id stays server-side). The client never uses it, so it
+    # is optional; hard-reading ``data["session_id"]`` here is what raised
+    # ``KeyError: 'session_id'`` and surfaced as "Failed to create checkout
+    # session: 'session_id'" on every upgrade attempt.
+    session_id: Optional[str] = None
 
 
 class RelayClient:
@@ -306,7 +312,16 @@ class RelayClient:
         )
         resp.raise_for_status()
         data = resp.json()
-        return CheckoutResponse(checkout_url=data["checkout_url"], session_id=data["session_id"])
+        # The relay returns HTTP 200 even on its own error path, with
+        # ``{success: false, error_code, error_message}`` and NO
+        # ``checkout_url`` (see relay src/routes/billing.ts). Detect that and
+        # raise a readable error instead of a bare ``KeyError: 'checkout_url'``.
+        checkout_url = data.get("checkout_url")
+        if not checkout_url:
+            detail = data.get("error_message") or data.get("error_code") or "relay returned no checkout_url"
+            raise RuntimeError(f"relay checkout failed: {detail}")
+        # ``session_id`` is optional — the relay does not send it.
+        return CheckoutResponse(checkout_url=checkout_url, session_id=data.get("session_id"))
 
     async def close(self):
         """Close any cached httpx clients across all loops we've touched.

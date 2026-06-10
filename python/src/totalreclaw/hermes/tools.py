@@ -559,14 +559,18 @@ async def upgrade(args: dict, state: "PluginState", **kwargs) -> str:
                 pass
 
         checkout = await client._relay.create_checkout()
-        return json.dumps({
+        payload = {
             "checkout_url": checkout.checkout_url,
-            "session_id": checkout.session_id,
             "message": (
                 f"Open this URL in your browser to complete the upgrade "
                 f"to Pro: {checkout.checkout_url}"
             ),
-        })
+        }
+        # The relay does not return a Stripe session id; only include the
+        # field if some future relay build starts sending one.
+        if checkout.session_id:
+            payload["session_id"] = checkout.session_id
+        return json.dumps(payload)
     except Exception as e:
         logger.error("totalreclaw_upgrade failed: %s", e)
         return json.dumps({"error": f"Failed to create checkout session: {e}"})
