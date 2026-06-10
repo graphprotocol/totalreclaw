@@ -49,7 +49,10 @@ dependencies = [
     # adapter raises AttributeError at runtime against a 2.5.0 wheel.
     # >=2.5.2: fixes a UTF-8 byte-slice panic in smart_import/debrief that
     # crashed imports of accented/non-Latin corpora (e.g. Portuguese 'é').
-    "totalreclaw-core>=2.5.2,<3.0.0",
+    # >=2.5.3: exposes format_memory_date / recall_context_header /
+    # format_recall_context so Hermes recall.py delegates to the shared
+    # core formatter (zero-behavior-change refactor, chore/wire-hermes-recall-core).
+    "totalreclaw-core>=2.5.3,<3.0.0",
     "httpx>=0.27",
     "onnxruntime>=1.24",
     "numpy>=1.26",

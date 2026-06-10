@@ -9,9 +9,12 @@ integration (Hermes, LangChain, CrewAI, or custom agents).
 """
 from __future__ import annotations
 
+import json
 import logging
-from datetime import datetime, timezone
+import time
 from typing import Optional, TYPE_CHECKING
+
+import totalreclaw_core
 
 from .loop_runner import run_sync
 
@@ -27,11 +30,14 @@ def _fmt_date(created_at) -> str:
     created_at may be a float, int, or None (legacy entries pre-dating the
     createdAt subgraph field). The empty string signals to the caller to omit
     the date tag entirely rather than rendering a placeholder.
+
+    Delegates to :func:`totalreclaw_core.format_memory_date` — thin shim kept
+    for backward-compatible imports (hermes/tools.py and tests reference it).
     """
     if not created_at:
         return ""
     try:
-        return datetime.fromtimestamp(float(created_at), tz=timezone.utc).strftime("%Y-%m-%d")
+        return totalreclaw_core.format_memory_date(int(float(created_at)))
     except Exception:
         return ""
 
@@ -45,20 +51,19 @@ def _format_recall_context(results) -> str:
 
     A current-date + temporal-reasoning header is prepended so the LLM
     can compute time deltas without guessing the reference point.
-    """
-    def _line(r):
-        d = _fmt_date(getattr(r, "created_at", None))
-        return f"- [{r.category}] ({d}) {r.text}" if d else f"- [{r.category}] {r.text}"
 
-    memories = "\n".join(_line(r) for r in results)
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    header = (
-        f"## Relevant memories from TotalReclaw\n"
-        f"The current date is {today}. Each memory is tagged with the date it was "
-        f"recorded. When the question involves timing or duration, reason carefully "
-        f"about the dates and compute differences precisely.\n"
-    )
-    return f"{header}{memories}"
+    Delegates to :func:`totalreclaw_core.format_recall_context` — the shared
+    Rust implementation is byte-identical to the previous pure-Python body.
+    """
+    items = [
+        {
+            "category": str(r.category),
+            "text": str(r.text),
+            "created_at": int(float(getattr(r, "created_at", None) or 0)),
+        }
+        for r in results
+    ]
+    return totalreclaw_core.format_recall_context(json.dumps(items), int(time.time()))
 
 
 def auto_recall(
