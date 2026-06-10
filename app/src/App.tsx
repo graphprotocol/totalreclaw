@@ -16,6 +16,7 @@ import { ImportGuide } from "./proto/ImportGuide";
 import { ProtoCheckin } from "./proto/ProtoCheckin";
 import { ProtoSettings } from "./proto/ProtoSettings";
 import { ProtoOnboarding } from "./proto/ProtoOnboarding";
+import { MemoryRedesign } from "./proto/MemoryRedesign";
 import { useCrypto } from "./contexts/CryptoContext";
 
 export function App() {
@@ -52,6 +53,7 @@ export function App() {
       <Route path="/proto/settings" element={<ProtoSettings />} />
       <Route path="/proto/onboarding" element={<ProtoOnboarding />} />
       <Route path="/proto/timeline" element={<TimelineView />} />
+      <Route path="/proto/memory-v2" element={<MemoryRedesign />} />
       <Route path="/proto/review" element={<ReviewView />} />
       <Route path="/proto/lineage" element={<LineageView />} />
       <Route path="/proto/lineage/:id" element={<LineageView />} />
