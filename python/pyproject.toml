@@ -12,7 +12,19 @@ name = "totalreclaw"
 # which would have caused stable builds to mis-publish AND broke the
 # regex-based mutation logic on subsequent RCs. Keep this at the next
 # stable target with NO rc suffix. F3 fix in rc.24.
-version = "2.4.4"
+#
+# CRITICAL POST-PROMOTE RULE (added 2026-06-10): the moment a stable
+# version ships, BUMP THIS to the next target. `2.4.4` stable promoted
+# 2026-06-06 but this base was left at `2.4.4`, so every later RC cut as
+# `2.4.4rcN` (rc8/rc9/rc10). PEP 440 ranks a final release ABOVE its own
+# pre-releases (`2.4.4` > `2.4.4rc10`), so `pip install --pre --upgrade
+# totalreclaw` — the documented "latest RC" path — silently resolved to
+# `2.4.4` STABLE, NOT the RC. The RCs were unreachable except by exact
+# pin. Verified: dry-run "Would install totalreclaw-2.4.4". Fix: base is
+# now `2.4.5`, so RCs cut as `2.4.5rcN` outrank `2.4.4` and the
+# version-agnostic install path lands them. NEVER leave the base equal to
+# an already-published stable.
+version = "2.4.5"
 description = "End-to-end encrypted memory for AI agents — Python client (Memory Taxonomy v1)"
 readme = "README.md"
 license = "MIT"
