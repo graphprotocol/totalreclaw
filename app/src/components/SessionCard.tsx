@@ -8,11 +8,13 @@ interface Props {
   group: SessionGroup;
   href: string;
   style?: CSSProperties;
+  /** When set, entity chips filter the timeline instead of being inert. */
+  onEntityClick?: (label: string) => void;
 }
 
 /** A session as a page from a journal, headlined by its Crystal. (Ported from
  *  the Keeper prototype SessionCard; wired to real decrypted vault data.) */
-export function SessionCard({ group, href, style }: Props) {
+export function SessionCard({ group, href, style, onEntityClick }: Props) {
   const outcomes = group.crystal?.claim.metadata?.key_outcomes ?? [];
   const shownEntities = group.entityNames.slice(0, 3);
   const moreEntities = group.entityNames.length - shownEntities.length;
@@ -54,7 +56,7 @@ export function SessionCard({ group, href, style }: Props) {
           {count(group.openThreads, "thread")}
         </span>
         {shownEntities.map((entity) => (
-          <EntityChip key={entity} label={entity} />
+          <EntityChip key={entity} label={entity} onClick={onEntityClick} />
         ))}
         {moreEntities > 0 && <span className="text-xs text-ink-muted">+{moreEntities} more</span>}
       </footer>
