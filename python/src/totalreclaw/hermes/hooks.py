@@ -646,9 +646,9 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
         logger.debug("import-completion injection skipped: %s", e)
 
     if is_first_turn and user_message:
-        # Auto-recall relevant memories for the first turn
+        # Auto-recall relevant memories for the first turn (shared entry point).
         try:
-            memories_ctx = auto_recall(user_message, state, top_k=8)
+            memories_ctx = recall_for_query(state, user_message, top_k=8)
             if memories_ctx:
                 context_parts.append(memories_ctx)
         except Exception as e:
@@ -660,43 +660,42 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
     return {"context": "\n\n".join(context_parts)}
 
 
-def post_llm_call(state: "PluginState", **kwargs) -> None:
-    """Auto-extract facts every N turns.
+# ---------------------------------------------------------------------------
+# Hook-free shared memory entry points (Hermes provider conformance §5.1).
+#
+# Recall and extract already live in the cross-client agent layer
+# (``agent.recall.auto_recall`` / ``agent.lifecycle.auto_extract``). These two
+# wrappers expose the Hermes-side *orchestration* (turn bookkeeping, interval
+# gating, extraction-LLM resolution) as plain functions that take a
+# ``PluginState`` and no Hermes hook kwargs — so the lifecycle hooks below AND
+# the Hermes ``MemoryProvider`` (§5.2: ``prefetch`` → ``recall_for_query``,
+# ``sync_turn`` → ``ingest_turn``) can share one code path. No behavior change
+# vs the previous inline ``pre_llm_call`` / ``post_llm_call`` logic.
+# ---------------------------------------------------------------------------
 
-    Bug #5: when Hermes's LLM config can't be resolved AND no fallback
-    env-vars are set, we surface a one-time quota-channel warning so the
-    user sees the failure in their next assistant turn. Prior behavior
-    was a debug-only log; users hit 7+ natural-conversation turns and
-    watched no memories appear, with nothing to explain why.
+
+def recall_for_query(
+    state: "PluginState", query: str, *, top_k: int = 8
+) -> Optional[str]:
+    """Recall a context block for *query* (hook-free).
+
+    Thin wrapper over the shared ``agent.recall.auto_recall``; the single
+    entry point the Hermes hook (``pre_llm_call``) and the provider
+    (``prefetch``) both call.
     """
-    # Always track turns and messages (client may be configured mid-session)
-    state.increment_turn()
-    user_msg = kwargs.get("user_message", "")
-    state.add_message("user", user_msg)
-    state.add_message("assistant", kwargs.get("assistant_response", ""))
+    return auto_recall(query, state, top_k=top_k)
 
-    # 2.4.4rc2 (F7) — track this turn's user message in the pending-
-    # auto-extract buffer so subsequent manual `totalreclaw_remember`
-    # calls can suppress duplicates. Idempotent for empty messages.
-    state.track_pending_extract(user_msg)
 
-    # Fix #191 safety net — same rationale as in pre_llm_call. If the
-    # user paired between on_session_start and now, this picks up the
-    # creds without a gateway restart. Idempotent + cheap.
-    if _maybe_reconfigure_from_disk(state):
-        _eager_account_register(state)
+def _resolve_extraction_llm_config(state: "PluginState"):
+    """Resolve the LLM config for auto-extraction.
 
-    if not state.is_configured():
-        return
-
-    extraction_interval = state.get_extraction_interval()
-    if state.turn_count % extraction_interval != 0:
-        return
-
-    # Resolve LLM config and surface a user-visible warning if it fails.
+    Hermes config first, then env-var detection (so non-Hermes-hosted agents
+    work). If neither resolves, surface a one-time quota-channel warning so the
+    user sees *why* memories stopped appearing (Bug #5). Returns the config or
+    ``None`` — ``auto_extract`` treats ``None`` as a safe silent skip.
+    """
     llm_config = _get_hermes_llm_config()
     if llm_config is None:
-        # Also try env-var detection so non-Hermes-hosted agents work.
         try:
             from totalreclaw.agent.llm_client import detect_llm_config
             llm_config = detect_llm_config()
@@ -704,8 +703,6 @@ def post_llm_call(state: "PluginState", **kwargs) -> None:
             llm_config = None
 
     if llm_config is None:
-        # Surface once per session via the existing quota-warning channel
-        # so the user sees an explanation in their next assistant turn.
         _warned_attr = "_totalreclaw_llm_missing_warned"
         if not getattr(state, _warned_attr, False):
             setattr(state, _warned_attr, True)
@@ -722,15 +719,62 @@ def post_llm_call(state: "PluginState", **kwargs) -> None:
                 "TotalReclaw: no LLM config for auto-extraction; surfacing "
                 "one-time warning via quota channel"
             )
-        # Fall through — ``_auto_extract`` will itself log the silent-skip
-        # path; it's safe to call with ``llm_config=None``. Callers that
-        # mock ``extract_facts_llm`` directly still see the wiring path.
+    return llm_config
 
-    # Extract and store facts (use Hermes LLM config so model name is resolved)
+
+def ingest_turn(
+    state: "PluginState", user_message: str, assistant_response: str
+) -> None:
+    """Record a completed turn and run interval-gated auto-extraction (hook-free).
+
+    The shared core of ``post_llm_call``: bookkeeping always runs (the client
+    may be configured mid-session); extraction runs only when configured and on
+    the Nth turn. Reused by the Hermes ``MemoryProvider.sync_turn`` (§5.2).
+    Mirrors the previous inline ``post_llm_call`` behavior exactly.
+    """
+    # Always track turns and messages (client may be configured mid-session).
+    state.increment_turn()
+    state.add_message("user", user_message)
+    state.add_message("assistant", assistant_response)
+    # 2.4.4rc2 (F7) — pending-extract buffer so later manual
+    # `totalreclaw_remember` calls can suppress duplicates. Idempotent on "".
+    state.track_pending_extract(user_message)
+
+    if not state.is_configured():
+        return
+
+    if state.turn_count % state.get_extraction_interval() != 0:
+        return
+
+    llm_config = _resolve_extraction_llm_config(state)
+    # Fall through with llm_config possibly None — ``_auto_extract`` logs the
+    # silent-skip path itself; callers that mock ``extract_facts_llm`` directly
+    # still exercise the wiring.
     try:
         _auto_extract(state, mode="turn", llm_config=llm_config)
     except Exception as e:
         logger.warning("TotalReclaw post_llm_call extraction failed: %s", e)
+
+
+def post_llm_call(state: "PluginState", **kwargs) -> None:
+    """Auto-extract facts every N turns (Hermes ``post_llm_call`` hook).
+
+    Hermes-hook-specific wrapper around :func:`ingest_turn`: the only extra is
+    the Fix #191 mid-session reconfigure (pick up creds if the user paired
+    between ``on_session_start`` and now, without a gateway restart). Reordering
+    the reconfigure ahead of the turn bookkeeping is behavior-equivalent — the
+    two touch disjoint state (creds vs turn-count/messages).
+    """
+    # Fix #191 safety net — pick up a mid-session pair before ingest_turn
+    # decides whether the user is configured. Idempotent + cheap.
+    if _maybe_reconfigure_from_disk(state):
+        _eager_account_register(state)
+
+    ingest_turn(
+        state,
+        kwargs.get("user_message", ""),
+        kwargs.get("assistant_response", ""),
+    )
 
 
 def on_session_end(state: "PluginState", **kwargs) -> None:
