@@ -441,11 +441,28 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
 
     try:
         billing = await client.status()
+        # Surface the account identity so the agent can answer "what's my
+        # account ID / address?" — previously NO tool exposed it, so the agent
+        # had nothing to report. The Smart Account address IS the account ID;
+        # it is a public on-chain address (NOT the recovery phrase) and safe to
+        # show. Resolve it if status() didn't already.
+        sa = getattr(client, "_wallet_address", None)
+        if not sa:
+            try:
+                ensure = getattr(client, "_ensure_address", None)
+                if callable(ensure):
+                    await ensure()
+                sa = getattr(client, "_wallet_address", None)
+            except Exception:
+                sa = None
         return json.dumps({
             "tier": billing.tier,
             "free_writes_used": billing.free_writes_used,
             "free_writes_limit": billing.free_writes_limit,
             "expires_at": billing.expires_at,
+            "account_id": sa,
+            "wallet_address": sa,
+            "eoa_address": getattr(client, "_eoa_address", None),
         })
     except Exception as e:
         logger.error("totalreclaw_status failed: %s", e)
