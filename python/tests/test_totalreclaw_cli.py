@@ -128,3 +128,46 @@ class TestDoctor:
         # stable — the message differentiates via the "REGISTERED" / "not
         # registered" / "Stable build" wording.
         assert "totalreclaw_report_qa_bug" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# memory-status + activate-memory-provider (#351 §5.4) — the commands older
+# setup guides referenced as `hermes activate-memory-provider` (which never
+# existed). Now real subcommands of the `totalreclaw` console script.
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryProviderCli:
+    def test_memory_status_fresh_is_none(self, tmp_path: Path, capsys):
+        rc = tr_cli.main(["memory-status", "--hermes-home", str(tmp_path)])
+        out = json.loads(capsys.readouterr().out.strip())
+        assert rc == 0
+        assert out == {"provider": "none"}
+
+    def test_activate_then_status_is_totalreclaw(self, tmp_path: Path, capsys):
+        rc = tr_cli.main(["activate-memory-provider", "--hermes-home", str(tmp_path)])
+        assert rc == 0
+        act_out = capsys.readouterr().out
+        assert "active provider:  totalreclaw" in act_out
+        assert "builtin disabled: True" in act_out
+
+        rc2 = tr_cli.main(["memory-status", "--hermes-home", str(tmp_path)])
+        assert rc2 == 0
+        assert json.loads(capsys.readouterr().out.strip()) == {"provider": "totalreclaw"}
+
+    def test_activate_writes_sidecar_at_discoverable_path(self, tmp_path: Path, capsys):
+        tr_cli.main(["activate-memory-provider", "--hermes-home", str(tmp_path)])
+        capsys.readouterr()
+        # Discoverable user-provider path = $HERMES_HOME/plugins/<name>/, NOT
+        # the nested plugins/memory/<name>/ (that one Hermes never scans).
+        assert (tmp_path / "plugins" / "totalreclaw" / "__init__.py").exists()
+        assert not (tmp_path / "plugins" / "memory" / "totalreclaw").exists()
+
+    def test_activate_disables_builtin_in_config(self, tmp_path: Path, capsys):
+        tr_cli.main(["activate-memory-provider", "--hermes-home", str(tmp_path)])
+        capsys.readouterr()
+        import yaml
+        cfg = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+        assert cfg["memory"]["provider"] == "totalreclaw"
+        assert cfg["memory"]["memory_enabled"] is False
+        assert cfg["memory"]["user_profile_enabled"] is False

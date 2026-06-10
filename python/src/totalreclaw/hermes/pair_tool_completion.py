@@ -85,6 +85,30 @@ def complete_pairing(
             eoa or "unknown",
             sid_frag,
         )
+        # Provider conformance (#351 §5.4): make TotalReclaw the native, sole
+        # Hermes memory provider the moment the user pairs. Installs the
+        # MemoryProvider sidecar at the discoverable path, sets
+        # ``memory.provider: totalreclaw``, and disables Hermes' builtin local
+        # store (so it stops running in parallel — the split-brain). Without
+        # this, a fresh install pairs but never activates the provider, leaving
+        # the builtin active. Best-effort: a failure here must NEVER fail an
+        # otherwise-successful pairing. Touches only config + sidecar files —
+        # no key/phrase/crypto code (phrase-safety preserved).
+        try:
+            from .install_memory_provider import install_and_activate
+
+            activation = install_and_activate()
+            logger.info(
+                "pair-tool: TotalReclaw activated as the Hermes memory provider "
+                "(sidecar=%s, builtin_disabled=%s)",
+                activation.get("sidecar_path"),
+                activation.get("builtin_disabled"),
+            )
+        except Exception as activate_err:  # pragma: no cover — best-effort
+            logger.warning(
+                "pair-tool: provider auto-activation skipped (non-fatal): %r",
+                activate_err,
+            )
         return CompletePairingResult(state="active", account_id=eoa)
     except Exception as err:  # pragma: no cover — defensive
         logger.error(

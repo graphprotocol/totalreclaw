@@ -127,15 +127,17 @@ After the procedure completes (the user replies *"Done — continue setting up T
 
    Wait for the user's reply containing "continue" / "set up" / similar resumption language. Do NOT proceed to Account setup until the user confirms. Do NOT issue any restart yourself.
 
-5. **Install the MemoryProvider sidecar** (2.4.0+ / issue #275 — Path B).
+5. **Install the MemoryProvider sidecar** (2.4.0+ / issue #275 — Path B). **AUTOMATIC as of 2.4.5rc3 — normally a no-op; skip it.**
 
-   TotalReclaw also ships as a Hermes `MemoryProvider`, gaining `on_pre_compress` and `on_memory_write` hooks that capture writes the Background Review subsystem cannot reach via the generic plugin path (the BG-review whitelist is hardcoded to `["memory", "skills"]` toolsets, see [#7193](https://github.com/NousResearch/hermes-agent/issues/7193)). This unlocks captured writes during long-session compression + background extraction.
+   > **As of 2.4.5rc3, account setup (pairing) AUTOMATICALLY activates TotalReclaw as the native Hermes memory provider** — it installs the provider sidecar at the discoverable path, sets `memory.provider=totalreclaw`, and disables Hermes' builtin local store (so it stops running in parallel — the split-brain). For a normal install you can **skip this step**; pairing handles it. The steps below remain as a **manual fallback / verification** path — and fix the older guide's broken `totalreclaw activate-memory-provider` reference (it was never a real subcommand, which is why activation silently never happened pre-rc3). The real commands live on the **`totalreclaw`** console script.
 
-   Hermes activates exactly **one** memory provider at a time. Probe what's active before deciding:
+   TotalReclaw ships as a Hermes `MemoryProvider`: the native `memory` flow (auto-recall via `prefetch`, auto-persist via `sync_turn`) routes through TotalReclaw, exactly like the bundled providers (honcho/mem0/…). When TR is the active provider the plugin's lifecycle hooks defer to it (single-driver — no double-fire), and the Background Review subsystem reaches TR via the native `memory` path (the BG-review whitelist is `["memory","skills"]`, see [#7193](https://github.com/NousResearch/hermes-agent/issues/7193)).
+
+   To verify or manually (re)activate — Hermes activates exactly **one** memory provider at a time. Probe what's active:
 
    ```bash
-   ACTIVE_PROVIDER=$(hermes memory-status --hermes-home "${HERMES_HOME:-$HOME/.hermes}" 2>/dev/null | jq -r '.provider // "none"')
-   # ``hermes memory-status`` ships with the totalreclaw CLI (subcommand
+   ACTIVE_PROVIDER=$(totalreclaw memory-status --hermes-home "${HERMES_HOME:-$HOME/.hermes}" 2>/dev/null | jq -r '.provider // "none"')
+   # ``totalreclaw memory-status`` ships with the totalreclaw CLI (subcommand
    # registered alongside ``hermes setup``). It grep-reads ``config.yaml``
    # — does not depend on an upstream ``hermes memory status --json``
    # command (which is not yet released).
@@ -145,8 +147,8 @@ After the procedure completes (the user replies *"Done — continue setting up T
 
    | `ACTIVE_PROVIDER` | Agent behaviour |
    |---|---|
-   | `"none"` / `""` / `"totalreclaw"` | Silently run `hermes activate-memory-provider` (drops sidecar + sets `memory.provider=totalreclaw`). No prompt. |
-   | Anything else (`honcho`, `byterover`, `openviking`, ...) | Emit ONE line: *"Hermes is currently using `<X>` as the memory provider. Switch to TotalReclaw (E2E-encrypted, on-chain, cross-device) or install TotalReclaw as tools-only? Reply `switch` or `tools-only`."*<br/>**Branch:**<br/>• `switch` → warn first (*"Switching deactivates `<X>` — your existing `<X>` memories stay on disk but won't be queried by the agent until you switch back."*), then run `hermes activate-memory-provider`.<br/>• `tools-only` → run `hermes install-memory-provider` (sidecar only, no activation). TR tools remain available; the active provider stays `<X>`. |
+   | `"none"` / `""` / `"totalreclaw"` | Silently run `totalreclaw activate-memory-provider` (drops sidecar + sets `memory.provider=totalreclaw`). No prompt. |
+   | Anything else (`honcho`, `byterover`, `openviking`, ...) | Emit ONE line: *"Hermes is currently using `<X>` as the memory provider. Switch to TotalReclaw (E2E-encrypted, on-chain, cross-device) or install TotalReclaw as tools-only? Reply `switch` or `tools-only`."*<br/>**Branch:**<br/>• `switch` → warn first (*"Switching deactivates `<X>` — your existing `<X>` memories stay on disk but won't be queried by the agent until you switch back."*), then run `totalreclaw activate-memory-provider`.<br/>• `tools-only` → run `totalreclaw install-memory-provider` (sidecar only, no activation). TR tools remain available; the active provider stays `<X>`. |
 
    The install commands are idempotent. Re-running on an already-installed sidecar is safe — the managed marker comment prevents clobbering hand-edited files (pass `--force` to override).
 
@@ -264,8 +266,8 @@ Two TotalReclaw paths exist into Hermes; they coexist but serve different surfac
 
 | Mode | What's active | When to use | How to set |
 |---|---|---|---|
-| **Active provider** | Generic plugin tools + lifecycle hooks **+** `MemoryProvider` hooks (`on_pre_compress`, `on_memory_write`, `on_session_end`, `on_turn_start`). Captures Background-Review writes the toolset whitelist would otherwise drop. | The user has no other memory provider configured, or wants TR to be the canonical cross-session store. Default for fresh installs. | `hermes activate-memory-provider` |
-| **Tools-only** | Generic plugin tools + lifecycle hooks only. No `MemoryProvider` hooks — they fire on the user's other active provider (Honcho / Byterover / OpenViking / ...). | The user already has another provider configured and wants to keep using it alongside TR's chat tools. | `hermes install-memory-provider` (no `--activate`) |
+| **Active provider** | Generic plugin tools + lifecycle hooks **+** `MemoryProvider` hooks (`on_pre_compress`, `on_memory_write`, `on_session_end`, `on_turn_start`). Captures Background-Review writes the toolset whitelist would otherwise drop. | The user has no other memory provider configured, or wants TR to be the canonical cross-session store. Default for fresh installs. | `totalreclaw activate-memory-provider` |
+| **Tools-only** | Generic plugin tools + lifecycle hooks only. No `MemoryProvider` hooks — they fire on the user's other active provider (Honcho / Byterover / OpenViking / ...). | The user already has another provider configured and wants to keep using it alongside TR's chat tools. | `totalreclaw install-memory-provider` (no `--activate`) |
 
 The two install commands are idempotent. Re-running on an already-installed sidecar overwrites with the current shim content (catches package upgrades) without disturbing the rest of the install. The sidecar refuses to clobber a hand-edited file unless `--force` is passed.
 
@@ -273,7 +275,7 @@ Switching providers manually (post-install):
 
 ```bash
 # Switch TO TotalReclaw
-hermes activate-memory-provider
+totalreclaw activate-memory-provider
 
 # Switch BACK to another provider (after a `switch` choice the user regrets)
 hermes memory set-provider <name>   # upstream Hermes CLI
@@ -284,7 +286,7 @@ Switching deactivates the previous provider — its memories remain on disk but 
 Status check:
 
 ```bash
-hermes memory-status              # JSON: {"provider": "totalreclaw"|"honcho"|"none"|...}
+totalreclaw memory-status              # JSON: {"provider": "totalreclaw"|"honcho"|"none"|...}
 ```
 
 This grep-reads `~/.hermes/config.yaml` (or `$HERMES_HOME/config.yaml`) and does not depend on an upstream `hermes memory status --json` command (which is not yet released as of 2026-05-15 — see Path B spec §"Open questions for upstream").

@@ -436,6 +436,48 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Override the relay URL for the reachability check.",
     )
 
+    # `activate-memory-provider` — make TotalReclaw the native Hermes
+    # MemoryProvider (#351 §5.4). Installs the provider sidecar at the
+    # discoverable path, sets `memory.provider: totalreclaw`, and disables the
+    # builtin local store. Pairing auto-runs this; the subcommand exists for
+    # manual / recovery / existing-user-upgrade use. (The `hermes
+    # activate-memory-provider` form referenced by older setup guides was never
+    # a real command — that's why activation silently never happened.)
+    sp_activate = sub.add_parser(
+        "activate-memory-provider",
+        help=(
+            "Activate TotalReclaw as the native Hermes memory provider "
+            "(installs the provider sidecar, sets memory.provider=totalreclaw, "
+            "disables the builtin store). Idempotent."
+        ),
+    )
+    sp_activate.add_argument(
+        "--hermes-home", type=Path, default=None,
+        help="Override the Hermes home (default: $HERMES_HOME or ~/.hermes).",
+    )
+    # `install-memory-provider` — tools-only: drop the sidecar WITHOUT making
+    # TR the active provider or disabling the builtin (for users who keep
+    # another provider active but want TR's tools available).
+    sp_install = sub.add_parser(
+        "install-memory-provider",
+        help="Install the TotalReclaw provider sidecar WITHOUT activating it "
+             "(tools-only; leaves the active provider + builtin untouched).",
+    )
+    sp_install.add_argument(
+        "--hermes-home", type=Path, default=None,
+        help="Override the Hermes home (default: $HERMES_HOME or ~/.hermes).",
+    )
+    # `memory-status` — JSON-print the active memory provider. Used by setup
+    # guides to decide whether to activate. Stable JSON shape: {"provider": ...}.
+    sp_mstatus = sub.add_parser(
+        "memory-status",
+        help="Print the active Hermes memory provider as JSON: {\"provider\": ...}.",
+    )
+    sp_mstatus.add_argument(
+        "--hermes-home", type=Path, default=None,
+        help="Override the Hermes home (default: $HERMES_HOME or ~/.hermes).",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "setup":
@@ -449,6 +491,41 @@ def main(argv: Optional[list[str]] = None) -> int:
             credentials_path=args.credentials_path,
             relay_url=args.relay_url,
         )
+
+    if args.command == "activate-memory-provider":
+        from totalreclaw.hermes.install_memory_provider import install_and_activate
+
+        result = install_and_activate(hermes_home=getattr(args, "hermes_home", None))
+        print(
+            f"TotalReclaw is now the active Hermes memory provider.\n"
+            f"  sidecar:          {result['sidecar_path']}\n"
+            f"  active provider:  {result['active_provider']}\n"
+            f"  builtin disabled: {result['builtin_disabled']}\n"
+            f"Restart the gateway for the change to take effect."
+        )
+        return 0
+
+    if args.command == "install-memory-provider":
+        from totalreclaw.hermes.install_memory_provider import install_and_activate
+
+        result = install_and_activate(
+            hermes_home=getattr(args, "hermes_home", None), activate=False
+        )
+        print(
+            f"TotalReclaw provider sidecar installed (tools-only, not activated).\n"
+            f"  sidecar:         {result['sidecar_path']}\n"
+            f"  active provider: {result['active_provider'] or 'unchanged'}\n"
+            f"Run `totalreclaw activate-memory-provider` to make it the active provider."
+        )
+        return 0
+
+    if args.command == "memory-status":
+        import json as _json
+        from totalreclaw.hermes.install_memory_provider import read_active_provider
+
+        provider = read_active_provider(getattr(args, "hermes_home", None)) or "none"
+        print(_json.dumps({"provider": provider}))
+        return 0
 
     # No subcommand — check whether setup has been done, then nudge accordingly.
     if not CANONICAL_CREDENTIALS_PATH.exists():
