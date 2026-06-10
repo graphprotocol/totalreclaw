@@ -1,9 +1,11 @@
 /**
- * Retrieval v2 Tier 1 — recall source-weighted ordering test.
+ * Recall ordering test — source-weighting DISABLED (alignment 2026-06-08).
  *
  * Mocks the `@totalreclaw/client` client and verifies that `handleRecall`
- * applies the core's source-weight multiplier to produce user-favoring
- * ordering when two candidates tie on base score.
+ * ranks purely by BASE score and does NOT multiply by the provenance
+ * source-weight (the 2026-06-08 agent-experienced benchmark showed source
+ * weighting tie-or-worse on the shipped path). `source` / `source_weight`
+ * are still surfaced in the output for observability, but must not affect order.
  */
 
 export {};
@@ -50,41 +52,43 @@ function makeV1Fact(id: string, text: string, source: string, baseScore: number)
   };
 }
 
-describe('handleRecall — Retrieval v2 Tier 1 source weighting', () => {
+describe('handleRecall — source-weighting disabled (ranks by base score)', () => {
   beforeEach(() => {
     mockRecall.mockReset();
   });
 
-  test('user source beats assistant source when base scores are equal', async () => {
-    // Two candidates with identical base score, different sources.
-    const assistantFact = makeV1Fact('assistant-fact-id', 'Sheraton Grande Sukhumvit', 'assistant', 0.8);
+  test('source weight does NOT override base score (assistant w/ higher base beats user)', async () => {
+    // Discriminating case: under the OLD Tier-1 weighting, user(0.8 × 1.0)=0.80
+    // would beat assistant(0.85 × 0.85)=0.7225 → user first. With weighting OFF,
+    // ranking is by base score → the higher-base assistant fact ranks first.
+    const assistantFact = makeV1Fact('assistant-fact-id', 'Sheraton Grande Sukhumvit', 'assistant', 0.85);
     const userFact = makeV1Fact('user-fact-id', 'I want to go to Bangkok', 'user', 0.8);
-    mockRecall.mockResolvedValueOnce([assistantFact, userFact]);
+    mockRecall.mockResolvedValueOnce([userFact, assistantFact]);
 
     const client = createMockClient() as any;
     const out = await handleRecall(client, { query: 'Bangkok trip' });
     const body = JSON.parse(out.content[0].text);
     expect(body.memories).toHaveLength(2);
 
-    // User claim must rank first because sourceWeight(user)=1.0,
-    // sourceWeight(assistant)=0.85 (v2-lenient, core 2.4.0+).
-    expect(body.memories[0].fact_id).toBe('user-fact-id');
-    expect(body.memories[0].source).toBe('user');
-    expect(body.memories[1].fact_id).toBe('assistant-fact-id');
-    expect(body.memories[1].source).toBe('assistant');
+    // Higher base score wins regardless of provenance.
+    expect(body.memories[0].fact_id).toBe('assistant-fact-id');
+    expect(body.memories[1].fact_id).toBe('user-fact-id');
 
-    // Weighted scores reflect the multiplier.
-    expect(body.memories[0].score).toBeGreaterThan(body.memories[1].score);
-    expect(body.memories[0].source_weight).toBe(1.0);
-    expect(body.memories[1].source_weight).toBe(0.85);
+    // score == base_score (no source-weight multiplication).
+    expect(body.memories[0].score).toBeCloseTo(0.85);
+    expect(body.memories[0].score).toBe(body.memories[0].base_score);
+    expect(body.memories[1].score).toBeCloseTo(0.8);
+    // source_weight still surfaced for observability, but does not affect order.
+    expect(body.memories[0].source_weight).toBeDefined();
   });
 
-  test('unspecified / missing source falls back to legacy fallback weight', async () => {
+  test('source weight is informational only — equal base scores keep their base score', async () => {
+    // Two equal-base candidates, different sources. Neither is reweighted:
+    // both keep score == base_score; user is NOT promoted over assistant.
     const noSourceFact = {
       fact: {
         id: 'no-source',
-        // plain-text blob (no v1 schema)
-        text: 'legacy text',
+        text: 'legacy text', // plain-text blob (no v1 schema)
         embedding: [1, 0, 0],
         metadata: { importance: 0.6, tags: [] },
         decayScore: 0.6,
@@ -101,11 +105,11 @@ describe('handleRecall — Retrieval v2 Tier 1 source weighting', () => {
     const client = createMockClient() as any;
     const out = await handleRecall(client, { query: 'test' });
     const body = JSON.parse(out.content[0].text);
-    expect(body.memories[0].fact_id).toBe('user-id'); // user > fallback
-    expect(body.memories[0].source_weight).toBe(1.0);
-    expect(body.memories[1].fact_id).toBe('no-source');
-    // Fallback weight applied (legacy; should be the core constant).
-    expect(body.memories[1].source_weight).toBeLessThan(1.0);
+    // Both keep base score 1.0 — no provenance reweighting promotes one over the other.
+    for (const m of body.memories) {
+      expect(m.score).toBe(m.base_score);
+      expect(m.score).toBeCloseTo(1.0);
+    }
   });
 
   test('all-assistant candidates still return top-k ordered by base score', async () => {

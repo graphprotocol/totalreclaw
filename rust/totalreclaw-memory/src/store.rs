@@ -319,6 +319,8 @@ pub fn build_memory_claim_v1(input: &V1StoreInput) -> MemoryClaimV1 {
         // v1.1 additive field: pin_status is user-controlled via totalreclaw_pin.
         // Extraction-path claims start unpinned (field absent).
         pin_status: None,
+        // v1.2 additive field: structured metadata bag (reserved for future use).
+        metadata: None,
     }
 }
 

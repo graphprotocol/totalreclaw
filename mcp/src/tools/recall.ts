@@ -139,12 +139,14 @@ export async function handleRecall(
       return { r, category, source, scope };
     });
 
-    // Retrieval v2 Tier 1: multiply final score by source weight from core.
+    // Source-weights off (recall alignment 2026-06-08; tie-or-worse on shipped path).
+    // Preserve source/source_weight fields in output for observability but do not
+    // multiply into the ranking score.
     const core = getWasm();
     const weighted = parsedMap
       .map(({ r, category, source, scope }) => {
-        const w = source ? core.sourceWeight(source) : core.legacyClaimFallbackWeight();
-        return { r, category, source, scope, weightedScore: r.score * w, sourceWeight: w };
+        const sourceWeight = source ? core.sourceWeight(source) : core.legacyClaimFallbackWeight();
+        return { r, category, source, scope, weightedScore: r.score, sourceWeight };
       })
       .sort((a, b) => b.weightedScore - a.weightedScore);
 

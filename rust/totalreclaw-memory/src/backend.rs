@@ -555,7 +555,9 @@ impl TotalReclawMemory {
             &rerank_candidates,
             limit,
             RerankerConfig {
-                apply_source_weights: true,
+                // source-weights off (recall alignment 2026-06-08; tie-or-worse on shipped path)
+                apply_source_weights: false,
+                ..RerankerConfig::default()
             },
         )?;
 

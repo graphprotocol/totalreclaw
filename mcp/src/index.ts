@@ -1294,7 +1294,7 @@ async function handleRecallSubgraph(
       decryptedCandidates,
       k,
       weights,
-      /* applySourceWeights (Retrieval v2 Tier 1) */ true,
+      /* applySourceWeights (Retrieval v2 Tier 1) */ false,
     );
 
     // 8. Format results

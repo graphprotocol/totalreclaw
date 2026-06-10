@@ -4483,7 +4483,7 @@ const plugin = {
               rerankerCandidates,
               k,
               INTENT_WEIGHTS[queryIntent],
-              /* applySourceWeights (Retrieval v2 Tier 1) */ true,
+              /* applySourceWeights (Retrieval v2 Tier 1) */ false,
             );
 
             if (reranked.length === 0) {
@@ -7050,7 +7050,7 @@ const plugin = {
               rerankerCandidates,
               8,
               INTENT_WEIGHTS[hookQueryIntent],
-              /* applySourceWeights (Retrieval v2 Tier 1) */ true,
+              /* applySourceWeights (Retrieval v2 Tier 1) */ false,
             );
 
             // Update hot cache with reranked results.
@@ -7174,7 +7174,7 @@ const plugin = {
             rerankerCandidates,
             8,
             INTENT_WEIGHTS[srvHookIntent],
-            /* applySourceWeights (Retrieval v2 Tier 1) */ true,
+            /* applySourceWeights (Retrieval v2 Tier 1) */ false,
             );
 
           if (reranked.length === 0) return undefined;
