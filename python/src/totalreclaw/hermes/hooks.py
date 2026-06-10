@@ -645,7 +645,13 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
     except Exception as e:  # never let notification break the turn
         logger.debug("import-completion injection skipped: %s", e)
 
-    if is_first_turn and user_message:
+    # Single-driver gate (§5.3, #351): when TotalReclaw is the ACTIVE Hermes
+    # MemoryProvider, its ``prefetch`` already supplies recall for every turn —
+    # so the hook must NOT also auto-recall (that was the double-injection). The
+    # flag is set by the provider's ``initialize``; it stays False on dormant
+    # installs / non-provider clients, where the hook remains the recall driver.
+    _provider_driven = getattr(state, "_provider_active", False) is True
+    if is_first_turn and user_message and not _provider_driven:
         # Auto-recall relevant memories for the first turn (shared entry point).
         try:
             memories_ctx = recall_for_query(state, user_message, top_k=8)
@@ -766,9 +772,18 @@ def post_llm_call(state: "PluginState", **kwargs) -> None:
     two touch disjoint state (creds vs turn-count/messages).
     """
     # Fix #191 safety net — pick up a mid-session pair before ingest_turn
-    # decides whether the user is configured. Idempotent + cheap.
+    # decides whether the user is configured. Always runs (the provider does
+    # not handle mid-session reconfigure), so it stays outside the gate below.
     if _maybe_reconfigure_from_disk(state):
         _eager_account_register(state)
+
+    # Single-driver gate (§5.3, #351): when TotalReclaw is the active provider,
+    # its ``sync_turn`` (→ ``ingest_turn``) already records the turn + runs the
+    # interval-gated extraction. Running ``ingest_turn`` here too would
+    # double-count the turn and double-extract. The flag is False on dormant
+    # installs / non-provider clients, where this hook remains the extract driver.
+    if getattr(state, "_provider_active", False) is True:
+        return
 
     ingest_turn(
         state,

@@ -12,14 +12,18 @@ from __future__ import annotations
 import logging
 
 from . import schemas, tools, hooks, pair_tool
-from .state import PluginState
+from .state import PluginState, get_shared_state
 
 logger = logging.getLogger(__name__)
 
 
 def register(ctx):
     """Called by Hermes plugin system at startup."""
-    state = PluginState()
+    # Provider conformance §5.3 (#351): the entry-point plugin and the
+    # MemoryProvider sidecar must share ONE PluginState so the provider's
+    # per-turn recall/extract and the plugin's tools/hooks observe the same
+    # buffer + turn counter + the `_provider_active` single-driver flag.
+    state = get_shared_state()
 
     # 2.3.1 first-run onboarding parity with plugin 3.3.0. Emit the
     # welcome + branch-question copy to stdout the first time the

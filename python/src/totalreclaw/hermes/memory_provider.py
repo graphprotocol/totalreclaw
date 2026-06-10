@@ -111,10 +111,13 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
     def __init__(self, state: Optional["PluginState"] = None) -> None:
         super().__init__()
         if state is None:
-            # Default path — Hermes' loader instantiates with no args.
-            # Lazy-import to avoid a circular import at module load.
-            from .state import PluginState
-            state = PluginState()
+            # Default path — Hermes' loader instantiates with no args. Use the
+            # PROCESS-SHARED state (§5.3) so this provider and the entry-point
+            # plugin's tools/hooks observe the same client + buffer + turn
+            # counter + `_provider_active` flag. Lazy-import avoids a circular
+            # import at module load.
+            from .state import get_shared_state
+            state = get_shared_state()
         self._state = state
         self._session_id: Optional[str] = None
 
@@ -137,27 +140,32 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         return self._state.is_configured()
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
-        """Per-session init. Matches the generic plugin's session-start path."""
+        """Per-session init + single-driver activation (§5.3).
+
+        Sets the ``_provider_active`` flag on the shared state. From here the
+        plugin's ``pre_llm_call``/``post_llm_call`` hooks SKIP recall + extract
+        (this provider's ``prefetch``/``sync_turn`` own them) — that's the
+        single-driver split that ends the double-fire.
+
+        Session lifecycle (setup, billing, banner, debrief) is DELEGATED to the
+        plugin's ``on_session_start``/``on_session_finalize`` hooks, which always
+        run on Hermes (entry-point plugin) and are well-tested. So this no longer
+        calls ``on_session_start`` itself — doing so would double it.
+        """
         self._session_id = session_id
-
-        from .hooks import on_session_start
-
-        try:
-            on_session_start(self._state, session_id=session_id, **kwargs)
-        except Exception as exc:
-            logger.warning("TotalReclaw MemoryProvider.initialize failed: %s", exc)
+        # Mark this process as provider-driven so the lifecycle hooks defer
+        # recall/extract to us. getattr-default-False elsewhere keeps dormant
+        # installs (provider never initialized) on the legacy hook path.
+        self._state._provider_active = True  # type: ignore[attr-defined]
 
     def shutdown(self) -> None:
-        """Best-effort flush at agent exit. Mirrors ``on_session_finalize``."""
-        if not self._state.is_configured():
-            return
+        """Best-effort flush at agent exit.
 
-        from .hooks import on_session_finalize
-
-        try:
-            on_session_finalize(self._state)
-        except Exception as exc:
-            logger.warning("TotalReclaw MemoryProvider.shutdown failed: %s", exc)
+        Session-end flush/debrief is delegated to the plugin's
+        ``on_session_finalize`` hook (single-driver §5.3) — calling it here too
+        would double the debrief. No-op beyond that.
+        """
+        return
 
     # ------------------------------------------------------------------
     # Tool surface
@@ -322,18 +330,16 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
     # ------------------------------------------------------------------
 
     def on_turn_start(self, turn_number: int, message: str, **kwargs: Any) -> None:
-        """Per-user-turn tick.
+        """Per-user-turn tick — intentionally a counting no-op (§5.3).
 
-        Upstream bug NousResearch/hermes-agent#7193: this hook does not
-        fire for some configs. The generic plugin's ``post_llm_call``
-        keeps the turn counter accurate as a fallback. To avoid
-        double-counting on configs where BOTH hooks fire, we trust the
-        caller-supplied ``turn_number`` when valid, otherwise increment.
+        Turn counting is owned solely by ``sync_turn`` (via ``ingest_turn``),
+        which Hermes drives every turn through ``memory_manager.sync_all`` —
+        reliable, unlike ``on_turn_start`` (upstream NousResearch/hermes-agent
+        #7193 doesn't fire it for some configs). Incrementing here too would
+        double-count against ``sync_turn``. Kept as a no-op so the ABC hook
+        stays satisfied without touching the turn counter.
         """
-        if isinstance(turn_number, int) and turn_number >= 0:
-            self._state._turn_count = turn_number  # type: ignore[attr-defined]
-        else:
-            self._state.increment_turn()
+        return
 
     def on_pre_compress(self, messages: Optional[List[Dict[str, Any]]] = None, **kwargs: Any) -> str:
         """Hermes compaction hook — extract facts before context discard."""
@@ -359,23 +365,15 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         return _summarize_facts_for_compression(stored)
 
     def on_session_end(self, messages: Optional[List[Dict[str, Any]]] = None, **kwargs: Any) -> None:
-        """Session-boundary hook — flush + debrief.
+        """Session-boundary hook — intentionally a no-op (§5.3).
 
-        Mirrors the generic plugin's ``on_session_finalize``. Safe to
-        run alongside it: ``auto_extract`` is idempotent via the
-        unprocessed-buffer pointer, and the debrief writes a single
-        session-summary fact that's embedding-deduped against any
-        debrief written by the parallel hook in the same session.
+        Flush + debrief is delegated to the plugin's ``on_session_finalize``
+        hook, which always runs on Hermes (entry-point plugin) and is the
+        single, well-tested session-end path. Running it here too would double
+        the debrief (the old "embedding-deduped alongside" band-aid is no longer
+        needed under the single-driver split).
         """
-        if not self._state.is_configured():
-            return
-
-        from .hooks import on_session_finalize
-
-        try:
-            on_session_finalize(self._state, **kwargs)
-        except Exception as exc:
-            logger.warning("TotalReclaw on_session_end finalize failed: %s", exc)
+        return
 
     def on_memory_write(self, action: str, target: str, content: str) -> None:
         """Mirror Hermes-side ``add user-fact`` writes into TotalReclaw.

@@ -45,27 +45,25 @@ def _make_state(configured: bool = True) -> PluginState:
 
 
 class TestOnTurnStart:
-    """Test 1 — on_turn_start increments / overrides turn counter when fired."""
+    """§5.3 — on_turn_start is a counting no-op; sync_turn owns the counter."""
 
-    def test_overrides_to_supplied_turn_number(self):
+    def test_does_not_touch_turn_count_with_number(self):
         state = _make_state()
         provider = TotalReclawMemoryProvider(state)
-
         provider.on_turn_start(turn_number=5, message="hi")
+        # No longer sets the counter — sync_turn (via ingest_turn) owns it.
+        assert state.turn_count == 0
 
-        assert state.turn_count == 5
-
-    def test_increments_when_turn_number_missing(self):
+    def test_does_not_increment_when_turn_number_missing(self):
         state = _make_state()
         provider = TotalReclawMemoryProvider(state)
-        # baseline
         state.increment_turn()
         state.increment_turn()
         assert state.turn_count == 2
 
         provider.on_turn_start(turn_number=None, message="hi")
 
-        assert state.turn_count == 3
+        assert state.turn_count == 2  # unchanged — no double-count vs sync_turn
 
 
 # ---------------------------------------------------------------------------
@@ -295,27 +293,24 @@ class TestCoreLifecycle:
         provider = TotalReclawMemoryProvider(state)
         assert provider.is_available() is False
 
-    def test_initialize_invokes_session_start_hook(self):
+    def test_initialize_sets_provider_active_and_delegates_session_start(self):
+        # §5.3: initialize sets the single-driver flag and does NOT call
+        # on_session_start (the plugin's hook owns session lifecycle — calling
+        # it here too would double it).
         state = _make_state()
         provider = TotalReclawMemoryProvider(state)
 
         with patch("totalreclaw.hermes.hooks.on_session_start") as on_start:
             provider.initialize(session_id="sess-1", platform="cli")
 
-        on_start.assert_called_once()
+        on_start.assert_not_called()
         assert provider._session_id == "sess-1"
+        assert state._provider_active is True
 
-    def test_shutdown_runs_session_finalize(self):
+    def test_shutdown_delegates_finalize_to_plugin(self):
+        # §5.3: shutdown no longer calls on_session_finalize — the plugin's
+        # on_session_finalize hook is the single session-end debrief path.
         state = _make_state(configured=True)
-        provider = TotalReclawMemoryProvider(state)
-
-        with patch("totalreclaw.hermes.hooks.on_session_finalize") as finalize:
-            provider.shutdown()
-
-        finalize.assert_called_once()
-
-    def test_shutdown_skipped_when_unconfigured(self):
-        state = _make_state(configured=False)
         provider = TotalReclawMemoryProvider(state)
 
         with patch("totalreclaw.hermes.hooks.on_session_finalize") as finalize:
