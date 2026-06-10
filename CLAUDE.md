@@ -115,6 +115,7 @@ Specs are organized by product area under `docs/specs/`:
 | **Tiered Retrieval (impl deep dive)** | `tiered-retrieval.md` | Shipped |
 | Server PoC v0.3.1b (Auth + Dedup) | `server.md` | Partially implemented |
 | Client Consistency | `client-consistency.md` | Canonical reference for all 5 clients |
+| **Hermes Provider Conformance** | `hermes-provider-conformance.md` | **Design / proposal — conform Hermes integration to the native `MemoryProvider` contract (`prefetch`/`sync_turn`); fixes split-brain + double-fire** |
 | OpenClaw Skill | `skill-openclaw.md` | Implemented |
 | NanoClaw Skill | `skill-nanoclaw.md` | Implemented |
 | MCP Server | `mcp-server.md` | Implemented |
