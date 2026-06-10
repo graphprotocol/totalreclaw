@@ -44,6 +44,7 @@ pub mod memory_types;
 pub mod pin_intent;
 pub mod prompts;
 pub mod protobuf;
+pub mod recall_context;
 pub mod import_parsers;
 pub mod reranker;
 pub mod secrets;

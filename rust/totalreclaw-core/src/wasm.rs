@@ -1695,6 +1695,44 @@ pub fn wasm_confirm_indexed_default_timeout_ms() -> u32 {
 }
 
 // ---------------------------------------------------------------------------
+// Recall context formatter
+// ---------------------------------------------------------------------------
+
+/// Unix seconds → `"YYYY-MM-DD"` (UTC). Returns `""` for `0` or negative.
+///
+/// Maps directly to [`crate::recall_context::format_memory_date`].
+#[wasm_bindgen(js_name = "formatMemoryDate")]
+pub fn wasm_format_memory_date(created_at_unix: i64) -> String {
+    crate::recall_context::format_memory_date(created_at_unix)
+}
+
+/// Build the recall-context header string (current-date + temporal-reasoning nudge).
+///
+/// `now_unix`: current time as Unix seconds.
+/// Returns the header with a trailing newline, e.g.:
+/// `"## Relevant memories from TotalReclaw\nThe current date is 2024-01-15. ..."`
+#[wasm_bindgen(js_name = "recallContextHeader")]
+pub fn wasm_recall_context_header(now_unix: i64) -> String {
+    crate::recall_context::recall_context_header(now_unix)
+}
+
+/// Build the full recall-context block: header + one line per memory item.
+///
+/// `items_json`: JSON array of `{ category, text, created_at }`. Any field
+/// may be absent (defaults to empty string / 0). Bad or empty JSON → header
+/// only (no panic).
+///
+/// Output line format:
+/// - With date:    `"- [category] (YYYY-MM-DD) text"`
+/// - Without date: `"- [category] text"`
+///
+/// `now_unix`: current time as Unix seconds (used in the header date).
+#[wasm_bindgen(js_name = "formatRecallContext")]
+pub fn wasm_format_recall_context(items_json: &str, now_unix: i64) -> String {
+    crate::recall_context::format_recall_context(items_json, now_unix)
+}
+
+// ---------------------------------------------------------------------------
 // Tests (non-wasm runtime — direct Rust fn invocation)
 // ---------------------------------------------------------------------------
 

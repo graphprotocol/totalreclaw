@@ -16,7 +16,7 @@ use crate::search;
 use crate::userop;
 use crate::{
     blind, claims, confirm, contradiction, crypto, debrief, digest, feedback_log, fingerprint, lsh,
-    pin_intent, protobuf, reranker, store,
+    pin_intent, protobuf, recall_context, reranker, store,
 };
 
 // ---------------------------------------------------------------------------
@@ -1616,6 +1616,49 @@ fn py_filter_shadow_mode(actions_json: &str, mode: &str) -> PyResult<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Recall context formatter
+// ---------------------------------------------------------------------------
+
+/// Unix seconds → ``"YYYY-MM-DD"`` (UTC).
+///
+/// Returns an empty string for ``0``, negative values, or any value that
+/// cannot be represented as a valid UTC date (overflow).
+#[pyfunction]
+#[pyo3(name = "format_memory_date")]
+fn py_format_memory_date(created_at_unix: i64) -> String {
+    recall_context::format_memory_date(created_at_unix)
+}
+
+/// Build the recall-context header string (current-date + temporal-reasoning nudge).
+///
+/// ``now_unix``: current time as Unix seconds.
+/// Returns the header with a trailing newline, e.g.:
+/// ``"## Relevant memories from TotalReclaw\\nThe current date is 2024-01-15. ..."``
+#[pyfunction]
+#[pyo3(name = "recall_context_header")]
+fn py_recall_context_header(now_unix: i64) -> String {
+    recall_context::recall_context_header(now_unix)
+}
+
+/// Build the full recall-context block: header + one line per memory item.
+///
+/// ``items_json``: JSON array of ``{ category, text, created_at }``. Any field
+/// may be absent (defaults to empty string / 0). Bad or empty JSON → header
+/// only (no exception raised).
+///
+/// Output line format:
+///
+/// - With date:    ``"- [category] (YYYY-MM-DD) text"``
+/// - Without date: ``"- [category] text"``
+///
+/// ``now_unix``: current time as Unix seconds (used in the header date).
+#[pyfunction]
+#[pyo3(name = "format_recall_context")]
+fn py_format_recall_context(items_json: &str, now_unix: i64) -> String {
+    recall_context::format_recall_context(items_json, now_unix)
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -1796,6 +1839,11 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(confirm_indexed_parse, m)?)?;
     m.add_function(wrap_pyfunction!(confirm_indexed_default_poll_ms, m)?)?;
     m.add_function(wrap_pyfunction!(confirm_indexed_default_timeout_ms, m)?)?;
+
+    // Recall context formatter
+    m.add_function(wrap_pyfunction!(py_format_memory_date, m)?)?;
+    m.add_function(wrap_pyfunction!(py_recall_context_header, m)?)?;
+    m.add_function(wrap_pyfunction!(py_format_recall_context, m)?)?;
 
     Ok(())
 }
