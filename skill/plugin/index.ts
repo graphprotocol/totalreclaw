@@ -4327,7 +4327,7 @@ const plugin = {
             // 4. Request more candidates than needed so we can re-rank client-side.
             // 5. Decrypt candidates (text + embeddings) and build reranker input.
             const rerankerCandidates: RerankerCandidate[] = [];
-            const metaMap = new Map<string, { metadata: Record<string, unknown>; timestamp: number }>();
+            const metaMap = new Map<string, { metadata: Record<string, unknown>; timestamp: number; category?: string }>();
 
             if (isSubgraphMode()) {
               // --- Subgraph search path ---
@@ -4518,6 +4518,9 @@ const plugin = {
                 memories: reranked.map((m) => ({
                   factId: m.id,
                   text: m.text,
+                  date: m.createdAt != null
+                    ? getSmartImportWasm().formatMemoryDate(BigInt(m.createdAt))
+                    : '',
                 })),
               },
             };
@@ -7001,7 +7004,7 @@ const plugin = {
 
             // 5. Decrypt subgraph results and build reranker input.
             const rerankerCandidates: RerankerCandidate[] = [];
-            const hookMetaMap = new Map<string, { importance: number; age: string }>();
+            const hookMetaMap = new Map<string, { importance: number; age: string; category?: string }>();
 
             for (const result of subgraphResults) {
               try {
@@ -7076,15 +7079,19 @@ const plugin = {
 
             // Relevance gate removed in rc.22 (see recall tool comment).
 
-            // 7. Build context string.
-            const lines = reranked.map((m, i) => {
+            // 7. Build context string using core's unified recall formatter (adds dates + header).
+            const recallItems = reranked.map((m) => {
               const meta = hookMetaMap.get(m.id);
-              const importance = meta?.importance ?? 5;
-              const age = meta?.age ?? '';
-              const typeTag = meta?.category ? `[${meta.category}] ` : '';
-              return `${i + 1}. ${typeTag}${m.text} (importance: ${importance}/10, ${age})`;
+              return {
+                category: meta?.category ?? 'claim',
+                text: m.text,
+                created_at: m.createdAt ?? 0,
+              };
             });
-            const contextString = `## Relevant Memories\n\n${lines.join('\n')}`;
+            const contextString = getSmartImportWasm().formatRecallContext(
+              JSON.stringify(recallItems),
+              BigInt(Math.floor(Date.now() / 1000)),
+            );
 
             return { prependContext: consumeBannerForPrepend() + contextString + welcomeBack + billingWarning };
           }
@@ -7125,7 +7132,7 @@ const plugin = {
 
           // 5. Decrypt candidates (text + embeddings) and build reranker input.
           const rerankerCandidates: RerankerCandidate[] = [];
-          const hookMetaMap = new Map<string, { importance: number; age: string }>();
+          const hookMetaMap = new Map<string, { importance: number; age: string; category?: string }>();
 
           for (const candidate of candidates) {
             try {
@@ -7181,14 +7188,17 @@ const plugin = {
 
           // Relevance gate removed in rc.22 (see recall tool comment).
 
-          // 7. Build context string.
-          const lines = reranked.map((m, i) => {
-            const meta = hookMetaMap.get(m.id);
-            const importance = meta?.importance ?? 5;
-            const age = meta?.age ?? '';
-            return `${i + 1}. ${m.text} (importance: ${importance}/10, ${age})`;
-          });
-          const contextString = `## Relevant Memories\n\n${lines.join('\n')}`;
+          // 7. Build context string using core's unified recall formatter (adds dates + header).
+          // Server mode has no category metadata, so we use 'claim' as default.
+          const srvRecallItems = reranked.map((m) => ({
+            category: 'claim',
+            text: m.text,
+            created_at: m.createdAt ?? 0,
+          }));
+          const contextString = getSmartImportWasm().formatRecallContext(
+            JSON.stringify(srvRecallItems),
+            BigInt(Math.floor(Date.now() / 1000)),
+          );
 
           return { prependContext: consumeBannerForPrepend() + contextString + welcomeBack + billingWarning };
         } catch (err: unknown) {

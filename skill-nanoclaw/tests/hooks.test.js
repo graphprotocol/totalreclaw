@@ -45,7 +45,7 @@ describe('beforeAgentStart', () => {
 
     expect(result.memories).toHaveLength(1);
     expect(result.memories[0].text).toBe('User prefers TypeScript');
-    expect(result.contextString).toContain('## Relevant Memories');
+    expect(result.contextString).toContain('## Relevant memories from TotalReclaw');
   });
 
   it('should filter by namespace', async () => {

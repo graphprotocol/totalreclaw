@@ -1298,6 +1298,8 @@ async function handleRecallSubgraph(
     );
 
     // 8. Format results
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const subgraphCore = require('@totalreclaw/core') as typeof import('@totalreclaw/core');
     const memories = reranked.map((r) => ({
       fact_id: r.id,
       fact_text: r.text,
@@ -1312,6 +1314,9 @@ async function handleRecallSubgraph(
       age_days: r.createdAt
         ? Math.floor((Date.now() / 1000 - r.createdAt) / 86400)
         : 0,
+      date: r.createdAt != null
+        ? subgraphCore.formatMemoryDate(BigInt(r.createdAt))
+        : '',
     }));
 
     return {

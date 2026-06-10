@@ -153,6 +153,7 @@ export async function handleRecall(
     const memories = weighted.map(({ r, category, source, scope, weightedScore, sourceWeight }) => {
       const ageMs = Date.now() - r.fact.createdAt.getTime();
       const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+      const createdAtUnix = BigInt(Math.floor(r.fact.createdAt.getTime() / 1000));
       return {
         fact_id: r.fact.id,
         fact_text: r.fact.text,
@@ -165,6 +166,7 @@ export async function handleRecall(
         importance: Math.round((r.fact.metadata.importance ?? 0.5) * 10),
         age_days: ageDays,
         decay_score: r.decayAdjustedScore,
+        date: core.formatMemoryDate(createdAtUnix),
       };
     });
 

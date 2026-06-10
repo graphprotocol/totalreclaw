@@ -1,4 +1,5 @@
 import type { TotalReclaw } from '@totalreclaw/client';
+import * as core from '@totalreclaw/core';
 import {
   getBillingContext,
   fetchBillingStatus,
@@ -18,6 +19,7 @@ export interface BeforeAgentStartOutput {
     text: string;
     score: number;
     type: string;
+    createdAt?: number;
   }>;
   latencyMs: number;
 }
@@ -47,6 +49,7 @@ export async function beforeAgentStart(
       text: r.fact.text,
       score: r.score,
       type: r.fact.metadata.tags?.find(t => ALL_TYPES.has(t)) || 'claim',
+      createdAt: r.fact.createdAt ? Math.floor(r.fact.createdAt.getTime() / 1000) : undefined,
     }));
 
     // --- Billing check ---
@@ -88,10 +91,11 @@ export async function beforeAgentStart(
   }
 }
 
-function formatMemoriesForContext(memories: Array<{ text: string; score: number; type: string }>): string {
-  const lines = ['## Relevant Memories\n'];
-  for (const m of memories) {
-    lines.push(`- [${m.type}] ${m.text}`);
-  }
-  return lines.join('\n');
+function formatMemoriesForContext(memories: Array<{ text: string; score: number; type: string; createdAt?: number }>): string {
+  const items = memories.map(m => ({
+    category: m.type,
+    text: m.text,
+    created_at: m.createdAt ?? 0,
+  }));
+  return core.formatRecallContext(JSON.stringify(items), BigInt(Math.floor(Date.now() / 1000)));
 }
