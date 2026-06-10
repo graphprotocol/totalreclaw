@@ -692,3 +692,89 @@ class TestCliMemoryProvider:
         captured = capsys.readouterr()
         assert rc == 2
         assert "Refusing to overwrite" in captured.err
+
+
+class TestDisableBuiltinMemory:
+    """Strategy 1: silence Hermes' builtin local memory so TR is the sole system."""
+
+    def test_disable_sets_both_flags_fresh_config(self, tmp_path: Path):
+        imp.disable_builtin_memory(hermes_home=tmp_path)
+        text = imp.config_path(tmp_path).read_text(encoding="utf-8")
+        import yaml
+        cfg = yaml.safe_load(text)
+        assert cfg["memory"]["memory_enabled"] is False
+        assert cfg["memory"]["user_profile_enabled"] is False
+
+    def test_disable_flips_existing_true_flags_and_preserves_keys(self, tmp_path: Path):
+        cfg = imp.config_path(tmp_path)
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(
+            "memory:\n"
+            "  memory_enabled: true\n"
+            "  user_profile_enabled: true\n"
+            "  memory_char_limit: 2200\n"
+            "  provider: totalreclaw\n"
+            "delegation:\n  foo: bar\n",
+            encoding="utf-8",
+        )
+        imp.disable_builtin_memory(hermes_home=tmp_path)
+        import yaml
+        parsed = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+        assert parsed["memory"]["memory_enabled"] is False
+        assert parsed["memory"]["user_profile_enabled"] is False
+        # Unrelated keys preserved.
+        assert parsed["memory"]["memory_char_limit"] == 2200
+        assert parsed["memory"]["provider"] == "totalreclaw"
+        assert parsed["delegation"]["foo"] == "bar"
+
+    def test_disable_is_idempotent(self, tmp_path: Path):
+        imp.disable_builtin_memory(hermes_home=tmp_path)
+        first = imp.config_path(tmp_path).read_text(encoding="utf-8")
+        imp.disable_builtin_memory(hermes_home=tmp_path)
+        second = imp.config_path(tmp_path).read_text(encoding="utf-8")
+        assert first == second
+
+    def test_disable_inserts_into_block_without_those_keys(self, tmp_path: Path):
+        cfg = imp.config_path(tmp_path)
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text("memory:\n  provider: totalreclaw\n", encoding="utf-8")
+        imp.disable_builtin_memory(hermes_home=tmp_path)
+        import yaml
+        parsed = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+        assert parsed["memory"]["provider"] == "totalreclaw"
+        assert parsed["memory"]["memory_enabled"] is False
+        assert parsed["memory"]["user_profile_enabled"] is False
+
+    def test_install_and_activate_disables_builtin(self, tmp_path: Path):
+        result = imp.install_and_activate(hermes_home=tmp_path, activate=True)
+        assert result["builtin_disabled"] is True
+        import yaml
+        parsed = yaml.safe_load(imp.config_path(tmp_path).read_text(encoding="utf-8"))
+        assert parsed["memory"]["provider"] == "totalreclaw"
+        assert parsed["memory"]["memory_enabled"] is False
+        assert parsed["memory"]["user_profile_enabled"] is False
+
+    def test_tools_only_does_not_disable_builtin(self, tmp_path: Path):
+        # Another provider is active → tools-only branch must NOT touch builtin.
+        cfg = imp.config_path(tmp_path)
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(
+            "memory:\n  provider: honcho\n  memory_enabled: true\n", encoding="utf-8"
+        )
+        result = imp.install_and_activate(hermes_home=tmp_path, activate=False)
+        assert result["builtin_disabled"] is False
+        import yaml
+        parsed = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+        assert parsed["memory"]["memory_enabled"] is True  # untouched
+        assert parsed["memory"]["provider"] == "honcho"
+
+    def test_set_memory_key_replace_and_insert(self):
+        # Replace existing.
+        t = imp._set_memory_key("memory:\n  memory_enabled: true\n", "memory_enabled", "false")
+        assert "memory_enabled: false" in t and "true" not in t
+        # Insert when key missing but block present.
+        t2 = imp._set_memory_key("memory:\n  provider: x\n", "memory_enabled", "false")
+        assert "provider: x" in t2 and "memory_enabled: false" in t2
+        # Create block when absent.
+        t3 = imp._set_memory_key("", "memory_enabled", "false")
+        assert t3.startswith("memory:") and "memory_enabled: false" in t3

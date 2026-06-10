@@ -228,6 +228,67 @@ def set_active_provider(
     return path
 
 
+def _memory_key_re(key: str) -> "re.Pattern[str]":
+    """Match ``<indent><key>: <value>`` inside the memory block."""
+    return re.compile(rf"^(\s*){re.escape(key)}\s*:\s*(\S+)[ \t]*$", re.MULTILINE)
+
+
+def _set_memory_key(text: str, key: str, value: str) -> str:
+    """Return *text* with ``memory.<key>: <value>`` set.
+
+    Replaces the key in-place if present in the ``memory:`` block, appends it
+    to the block if the block exists but the key doesn't, or creates a
+    ``memory:`` block if there is none. Mirrors :func:`set_active_provider`'s
+    YAML-surgery approach (no full YAML parse — preserves comments/ordering).
+    """
+    key_re = _memory_key_re(key)
+    block_match = _MEMORY_BLOCK_RE.search(text)
+    if block_match:
+        block = block_match.group(1)
+        if key_re.search(block):
+            new_block = key_re.sub(rf"\g<1>{key}: {value}", block, count=1)
+        else:
+            stripped = block.rstrip("\n")
+            new_block = stripped + f"\n  {key}: {value}\n"
+        return text[: block_match.start(1)] + new_block + text[block_match.end(1):]
+    sep = "" if (text == "" or text.endswith("\n")) else "\n"
+    return text + sep + f"memory:\n  {key}: {value}\n"
+
+
+def disable_builtin_memory(hermes_home: Optional[Path] = None) -> Path:
+    """Silence Hermes' builtin local memory so TotalReclaw is the sole system.
+
+    Sets ``memory_enabled: false`` AND ``user_profile_enabled: false`` in the
+    ``memory:`` block. Hermes loads its builtin ``MemoryStore`` (which reads +
+    injects ``~/.hermes/memories/MEMORY.md`` and maintains ``~/.hermes/profiles/``)
+    when *either* flag is true (``agent_init.py``), so both must be false to
+    fully quiet it. TotalReclaw's own auto-recall/extract runs via its lifecycle
+    hooks, which are independent of these flags — so disabling the builtin does
+    NOT disable TotalReclaw; it just removes the parallel local store
+    (the 2026-06-10 split-brain). ``provider: builtin`` (set by the user) is the
+    explicit opt-in to switch back to local files.
+
+    Returns the config path written.
+    """
+    path = config_path(hermes_home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = ""
+    if path.exists():
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+    text = _set_memory_key(text, "memory_enabled", "false")
+    text = _set_memory_key(text, "user_profile_enabled", "false")
+    path.write_text(text, encoding="utf-8")
+    logger.info(
+        "TotalReclaw: disabled builtin memory (memory_enabled=false, "
+        "user_profile_enabled=false) in %s",
+        path,
+    )
+    return path
+
+
 def install_and_activate(
     hermes_home: Optional[Path] = None,
     *,
@@ -242,13 +303,22 @@ def install_and_activate(
     sidecar = install_sidecar(hermes_home, force=force)
     previous = read_active_provider(hermes_home)
     activated = False
+    builtin_disabled = False
     if activate:
         set_active_provider("totalreclaw", hermes_home)
         activated = True
+        # Make TotalReclaw the SOLE memory system: silence the builtin local
+        # store so it stops loading/injecting MEMORY.md + maintaining local
+        # profiles in parallel (the split-brain). TR keeps running via its own
+        # lifecycle hooks. Switching back to local files = user sets
+        # `memory.provider: builtin` explicitly.
+        disable_builtin_memory(hermes_home)
+        builtin_disabled = True
 
     return {
         "sidecar_path": str(sidecar),
         "previous_provider": previous or "",
         "active_provider": "totalreclaw" if activated else (previous or ""),
         "activated": activated,
+        "builtin_disabled": builtin_disabled,
     }
