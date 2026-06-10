@@ -477,7 +477,9 @@ class TestInstallMemoryProvider:
         body = result_path.read_text(encoding="utf-8")
         assert "managed-by: totalreclaw.hermes.install_memory_provider" in body
         assert "TotalReclawMemoryProvider" in body
-        assert result_path == tmp_path / "plugins" / "memory" / "totalreclaw" / "__init__.py"
+        # Fixed 2026-06-10: Hermes scans $HERMES_HOME/plugins/<name>/ for
+        # user providers, NOT the nested plugins/memory/<name>/ (bundled-only).
+        assert result_path == tmp_path / "plugins" / "totalreclaw" / "__init__.py"
 
     def test_install_sidecar_idempotent_on_managed_file(self, tmp_path: Path):
         imp.install_sidecar(hermes_home=tmp_path)
@@ -580,7 +582,8 @@ class TestInstallMemoryProvider:
 
         assert result["activated"] is True
         assert result["active_provider"] == "totalreclaw"
-        assert "plugins/memory/totalreclaw/__init__.py" in result["sidecar_path"]
+        assert "plugins/totalreclaw/__init__.py" in result["sidecar_path"]
+        assert "plugins/memory/totalreclaw" not in result["sidecar_path"]
         assert imp.read_active_provider(tmp_path) == "totalreclaw"
 
     def test_install_and_activate_tools_only_branch(self, tmp_path: Path):
@@ -607,7 +610,31 @@ class TestInstallMemoryProvider:
     def test_hermes_home_env_override(self, tmp_path: Path):
         with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
             path = imp.sidecar_path()
-        assert path == tmp_path / "plugins" / "memory" / "totalreclaw" / "__init__.py"
+        assert path == tmp_path / "plugins" / "totalreclaw" / "__init__.py"
+
+    def test_install_migrates_stale_legacy_sidecar(self, tmp_path: Path):
+        # Simulate a pre-fix install: a managed sidecar at the OLD nested path
+        # that Hermes never scanned.
+        legacy = tmp_path / "plugins" / "memory" / "totalreclaw" / "__init__.py"
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text(imp._SIDECAR_CONTENT, encoding="utf-8")
+
+        imp.install_sidecar(hermes_home=tmp_path)
+
+        # New (correct) sidecar exists; stale legacy one is gone.
+        assert imp.sidecar_path(tmp_path).exists()
+        assert imp.sidecar_path(tmp_path) == tmp_path / "plugins" / "totalreclaw" / "__init__.py"
+        assert not legacy.exists()
+
+    def test_migrate_leaves_hand_edited_legacy_untouched(self, tmp_path: Path):
+        # A hand-edited file at the legacy path must NOT be deleted.
+        legacy = tmp_path / "plugins" / "memory" / "totalreclaw" / "__init__.py"
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text("# hand-written, not managed\n", encoding="utf-8")
+
+        imp.install_sidecar(hermes_home=tmp_path)
+
+        assert legacy.exists()  # untouched — lacks the managed marker
 
 
 # ---------------------------------------------------------------------------
