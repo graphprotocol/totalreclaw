@@ -751,6 +751,15 @@ pub struct MemoryMetadataV1 {
     /// Crystal: file paths touched during the session (coding-agent sessions).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files_affected: Vec<String>,
+
+    /// Provenance: the external provider an imported memory originated from —
+    /// `"gemini"`, `"chatgpt"`, `"claude"`, `"mem0"`, etc. Set on every claim
+    /// the import pipeline writes (alongside `source = External`), so a vault
+    /// reader (SPA) can badge "Imported from <provider>". Encrypted-blob-only —
+    /// never on-chain. `None` for memories that weren't imported; pre-existing
+    /// claims without this key parse fine via serde default (back-compat).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_source: Option<String>,
 }
 
 impl MemoryMetadataV1 {
@@ -768,6 +777,7 @@ impl MemoryMetadataV1 {
             && self.lessons.is_empty()
             && self.topics_discussed.is_empty()
             && self.files_affected.is_empty()
+            && self.import_source.is_none()
     }
 
     /// True when [`subtype`](Self::subtype) is the documented session-Crystal
@@ -2397,6 +2407,7 @@ mod tests {
                 "Crystal".to_string(),
             ],
             files_affected: vec!["rust/totalreclaw-core/src/claims.rs".to_string()],
+            import_source: None,
         });
         c
     }
@@ -2415,6 +2426,53 @@ mod tests {
         // Surface JSON shape matches spec §3.2 example
         assert!(json.contains("\"subtype\":\"session_crystal\""));
         assert!(json.contains("\"session_id\":\"01902d40-7a2b-7f12-9c44-1c5e7d2af6a1\""));
+    }
+
+    #[test]
+    fn memory_metadata_v1_import_source_round_trip() {
+        // Imported atomic fact: source=External + provenance import_source.
+        let mut c = minimal_v1_claim();
+        c.source = MemorySource::External;
+        c.metadata = Some(MemoryMetadataV1 {
+            session_id: Some("01902d40-7a2b-7f12-9c44-1c5e7d2af6a1".to_string()),
+            import_source: Some("gemini".to_string()),
+            ..Default::default()
+        });
+        let json = serde_json::to_string(&c).unwrap();
+        let back: MemoryClaimV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+        assert_eq!(
+            back.metadata.as_ref().unwrap().import_source.as_deref(),
+            Some("gemini")
+        );
+        assert!(json.contains("\"import_source\":\"gemini\""));
+    }
+
+    #[test]
+    fn memory_metadata_v1_import_source_omitted_when_none() {
+        // A claim without import_source must NOT serialize the key (keeps the
+        // canonical blob lean) AND must parse fine (back-compat for pre-import
+        // claims that never had the field).
+        let mut m = MemoryMetadataV1::default();
+        assert!(m.is_empty());
+        m.session_id = Some("s".to_string());
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(!json.contains("import_source"));
+        // Older blob shape (no import_source key) parses to None.
+        let parsed: MemoryMetadataV1 =
+            serde_json::from_str(r#"{"session_id":"s"}"#).unwrap();
+        assert!(parsed.import_source.is_none());
+    }
+
+    #[test]
+    fn memory_metadata_v1_import_source_counts_for_is_empty() {
+        // import_source alone must make is_empty() false (so it survives the
+        // skip_serializing_if collapse on MemoryClaimV1::metadata).
+        let m = MemoryMetadataV1 {
+            import_source: Some("chatgpt".to_string()),
+            ..Default::default()
+        };
+        assert!(!m.is_empty());
     }
 
     #[test]

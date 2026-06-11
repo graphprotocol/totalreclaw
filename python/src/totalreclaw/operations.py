@@ -430,6 +430,11 @@ async def store_fact_batch(
         reasoning = raw.get("reasoning")
         volatility = raw.get("volatility")
         extracted_at = raw.get("extracted_at")
+        # Per-fact typed metadata (#356): session_id + import_source for
+        # imports, Crystal fields for session-summary claims. Threaded into the
+        # canonical claim's ``metadata`` exactly like the single-fact
+        # ``store_fact`` path; absent for normal writes.
+        extra_metadata = raw.get("extra_metadata")
 
         # v1 canonical claim — identical shape to ``store_fact``.
         fact_stub = {
@@ -447,6 +452,7 @@ async def store_fact_batch(
             importance=importance_int,
             created_at=extracted_at or shared_timestamp,
             claim_id=fact_id,
+            extra_metadata=extra_metadata,
         )
 
         encrypted_blob = encrypt(blob_plaintext, keys.encryption_key)

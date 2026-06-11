@@ -69,6 +69,63 @@ IMPORT_MAX_BATCH_SIZE = 15
 # the cost claim self-verifying and tolerates future free-tier import flows.
 _GNOSIS_CHAIN_ID = 100
 
+# #356 — Crystal (session-summary) constants. One Crystal per imported
+# conversation: a `type="summary"` claim whose metadata.subtype="session_crystal"
+# ties it (+ the conversation's atomic facts) to a shared session_id. The SPA
+# renders this as a session card headline; the atomic facts sit beneath.
+_CRYSTAL_IMPORTANCE = 8           # anchored "high" per the v1 importance rubric
+_METADATA_SUBTYPE_SESSION_CRYSTAL = "session_crystal"
+# Valid v1 MemorySource for imported memories (the old "import" was not a valid
+# MemorySource — see #356 Problem 2).
+_IMPORT_PROVENANCE = "external"
+
+
+def _uuid7() -> str:
+    """Return a UUIDv7 (time-ordered) string.
+
+    Python's stdlib has no ``uuid.uuid7`` before 3.14, so we build one: 48-bit
+    big-endian Unix-ms timestamp, version nibble 7, RFC-4122 variant, the rest
+    random. Time-ordered so a vault reader can sort sessions chronologically
+    without a separate timestamp. Encrypted-blob-only — never on-chain.
+    """
+    import os
+    import uuid
+
+    unix_ms = int(time.time() * 1000) & ((1 << 48) - 1)
+    b = bytearray(unix_ms.to_bytes(6, "big") + os.urandom(10))
+    b[6] = (b[6] & 0x0F) | 0x70  # version 7
+    b[8] = (b[8] & 0x3F) | 0x80  # RFC-4122 variant
+    return str(uuid.UUID(bytes=bytes(b)))
+
+
+def _as_str_list(v) -> list:
+    """Coerce an LLM-returned value into a clean list[str] (≤8 entries)."""
+    if not isinstance(v, list):
+        return []
+    out = [str(x).strip() for x in v if isinstance(x, (str, int, float)) and str(x).strip()]
+    return out[:8]
+
+
+def _extract_json_object(raw: str):
+    """Best-effort parse of the first top-level JSON object in *raw*.
+
+    LLMs often wrap JSON in prose / code fences; grab the outermost
+    ``{ ... }`` and parse it. Returns the dict or None.
+    """
+    import json
+
+    if not raw:
+        return None
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        obj = json.loads(raw[start:end + 1])
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
 
 class ImportEngine:
     """Agent-agnostic batch import engine.
@@ -228,11 +285,11 @@ class ImportEngine:
 
         if has_chunks:
             return await self._process_chunk_batch(
-                parsed, offset, batch_size, start_ms,
+                parsed, offset, batch_size, start_ms, source,
             )
         else:
             return await self._process_fact_batch(
-                parsed, offset, batch_size, start_ms,
+                parsed, offset, batch_size, start_ms, source,
             )
 
     # ── Internal: Chunk Batch (conversation-based sources) ───────────────
@@ -243,8 +300,16 @@ class ImportEngine:
         offset: int,
         batch_size: int,
         start_ms: int,
+        source: str = "",
     ) -> BatchImportResult:
-        """Process a batch of conversation chunks via LLM extraction."""
+        """Process a batch of conversation chunks via LLM extraction.
+
+        #356: each chunk is treated as one **session** — every fact it produces
+        shares a freshly-minted UUIDv7 ``session_id`` and carries
+        ``source="external"`` + ``metadata.import_source=<source>``; a single
+        Crystal (session-summary) claim per conversation is emitted alongside
+        the atomic facts so the SPA can render a session card.
+        """
         total_chunks = len(parsed.chunks)
         batch = parsed.chunks[offset:offset + batch_size]
         chunks_processed = len(batch)
@@ -335,6 +400,20 @@ class ImportEngine:
                 if not extracted:
                     chunks_with_no_facts += 1
                 facts_extracted += len(extracted)
+
+                # #356 — this conversation = one session. Tag every atomic fact
+                # with the shared session_id + external provenance + provider,
+                # then emit a Crystal (session summary) so the SPA groups them
+                # under a real headline instead of day-grouping loose facts.
+                session_id = _uuid7()
+                for f in extracted:
+                    self._tag_import_fact(f, session_id, source)
+                if extracted:
+                    crystal = await self._make_crystal(
+                        chunk, extracted, session_id, source
+                    )
+                    if crystal is not None:
+                        all_extracted.append(crystal)
                 all_extracted.extend(extracted)
             except Exception as e:
                 extraction_failures += 1
@@ -400,8 +479,16 @@ class ImportEngine:
         offset: int,
         batch_size: int,
         start_ms: int,
+        source: str = "",
     ) -> BatchImportResult:
-        """Process a batch of pre-structured facts (Mem0, MCP Memory, etc.)."""
+        """Process a batch of pre-structured facts (Mem0, MCP Memory, etc.).
+
+        #356: fact-based sources have no conversation boundaries, so (per the
+        spec) we don't mint per-conversation sessions or Crystals here — but we
+        still stamp external provenance + ``import_source`` so the SPA badges
+        "Imported from <source>". Conversation sources (Crystals) are the
+        priority and get the full treatment in ``_process_chunk_batch``.
+        """
         total = len(parsed.facts)
         batch = parsed.facts[offset:offset + batch_size]
         processed = len(batch)
@@ -431,6 +518,10 @@ class ImportEngine:
                 'text': fact.text,
                 'type': fact.type,
                 'importance': fact.importance,
+                # #356 — external provenance + provider badge (no session/Crystal
+                # for flat fact sources).
+                'provenance': _IMPORT_PROVENANCE,
+                'extra_metadata': ({'import_source': source} if source else None),
             }
             for fact in batch
         ]
@@ -614,10 +705,123 @@ class ImportEngine:
         except Exception:
             pass
 
-        return {
+        payload = {
             "text": text,
             "importance": importance_normalized,
             "embedding": embedding,
+        }
+        # #356 — carry v1 provenance + typed metadata (session_id, import_source,
+        # Crystal fields) through to the canonical claim. Imports set
+        # provenance="external"; the engine attaches per-conversation session_id +
+        # import_source in extra_metadata. Only include keys that are present so
+        # non-import callers are unaffected.
+        if fact.get("provenance"):
+            payload["provenance"] = fact["provenance"]
+        if fact.get("fact_type"):
+            payload["fact_type"] = fact["fact_type"]
+        if fact.get("extra_metadata"):
+            payload["extra_metadata"] = fact["extra_metadata"]
+        return payload
+
+    @staticmethod
+    def _tag_import_fact(fact: dict, session_id: str, source: str) -> None:
+        """Stamp an imported atomic fact (in place) with v1 external provenance
+        + session/provider metadata (#356)."""
+        fact["provenance"] = _IMPORT_PROVENANCE
+        meta = fact.get("extra_metadata")
+        if not isinstance(meta, dict):
+            meta = {}
+        meta["session_id"] = session_id
+        if source:
+            meta["import_source"] = source
+        fact["extra_metadata"] = meta
+
+    @staticmethod
+    def _crystal_prompt(chunk, facts: list[dict]) -> str:
+        """Build the one-shot summary prompt for a conversation's Crystal."""
+        title = (getattr(chunk, "title", None) or "Untitled conversation")
+        msgs = getattr(chunk, "messages", None) or []
+        # Cap the transcript we feed the summarizer (first + last few turns is
+        # plenty to characterize a conversation; keeps tokens bounded).
+        def _msg_text(m):
+            if isinstance(m, dict):
+                return f"{m.get('role', 'user')}: {(m.get('text') or m.get('content') or '')}"
+            return str(m)
+        head = [_msg_text(m) for m in msgs[:6]]
+        tail = [_msg_text(m) for m in msgs[-4:]] if len(msgs) > 6 else []
+        transcript = "\n".join(head + (["..."] + tail if tail else []))[:4000]
+        fact_lines = "\n".join(f"- {f.get('text', '')}" for f in facts[:20])[:2000]
+        return (
+            "Summarize this single conversation into a compact JSON object. "
+            "Return ONLY JSON, no prose. Schema:\n"
+            '{"summary": "<=200-char one-line gist", '
+            '"key_outcomes": ["decisions/results"], '
+            '"open_threads": ["unresolved follow-ups"], '
+            '"topics_discussed": ["short topic tags"]}\n\n'
+            f"Title: {title}\n\nTranscript:\n{transcript}\n\n"
+            f"Facts already extracted from it:\n{fact_lines}\n"
+        )
+
+    async def _make_crystal(
+        self, chunk, facts: list[dict], session_id: str, source: str
+    ) -> Optional[dict]:
+        """Build one Crystal (session-summary) claim for an imported conversation.
+
+        Uses ``self._llm_completion`` for a single summary call; falls back to a
+        synthetic Crystal (no LLM enrichment) when the LLM is unavailable or
+        errors, so a session card always has a headline. Returns a fact-dict
+        ready for the store path (``type="summary"``, ``subtype="session_crystal"``,
+        shared ``session_id`` + provenance/provider).
+        """
+        # A Crystal is a session SUMMARY — it needs a summarizer. When no
+        # ``llm_completion`` is wired we skip it rather than emit a low-value
+        # title-only synthetic (the atomic facts still carry the shared
+        # session_id + provenance, so they remain grouped). "One summary call
+        # per conversation" per #356.
+        if self._llm_completion is None:
+            return None
+
+        title = (getattr(chunk, "title", None) or "Imported conversation").strip()
+        summary_text: Optional[str] = None
+        key_outcomes: list = []
+        open_threads: list = []
+        topics: list = []
+
+        if self._llm_completion is not None:
+            try:
+                raw = await self._llm_completion(self._crystal_prompt(chunk, facts))
+                data = _extract_json_object(raw) if raw else None
+                if isinstance(data, dict):
+                    s = (data.get("summary") or "").strip()
+                    summary_text = s or None
+                    key_outcomes = _as_str_list(data.get("key_outcomes"))
+                    open_threads = _as_str_list(data.get("open_threads"))
+                    topics = _as_str_list(data.get("topics_discussed"))
+            except Exception as e:  # never let a Crystal failure break the import
+                logger.debug("crystal summary LLM call failed: %s", e)
+
+        if not summary_text:
+            summary_text = f"Imported conversation: {title}"
+
+        meta: dict = {
+            "subtype": _METADATA_SUBTYPE_SESSION_CRYSTAL,
+            "session_id": session_id,
+        }
+        if source:
+            meta["import_source"] = source
+        if key_outcomes:
+            meta["key_outcomes"] = key_outcomes
+        if open_threads:
+            meta["open_threads"] = open_threads
+        if topics:
+            meta["topics_discussed"] = topics
+
+        return {
+            "text": summary_text[:512],
+            "importance": _CRYSTAL_IMPORTANCE,
+            "fact_type": "summary",
+            "provenance": _IMPORT_PROVENANCE,
+            "extra_metadata": meta,
         }
 
     async def _store_fact(self, fact: dict) -> str:
@@ -631,6 +835,12 @@ class ImportEngine:
             embedding=payload["embedding"],
             importance=payload["importance"],
             source="import",
+            # #356 — v1 provenance + typed metadata (session_id, import_source,
+            # Crystal fields). Defaults preserve prior behavior for callers that
+            # don't set them.
+            provenance=payload.get("provenance", "user"),
+            fact_type=payload.get("fact_type", "claim"),
+            extra_metadata=payload.get("extra_metadata"),
         )
 
     async def _resolve_chain_id_safely(self) -> Optional[int]:

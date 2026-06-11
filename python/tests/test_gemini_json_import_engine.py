@@ -39,10 +39,13 @@ class _RecordingClient:
         self._fail_texts = set(fail_texts or [])
         self._n = 0
 
-    async def remember(self, text, embedding=None, importance=None, source=None):
+    async def remember(self, text, embedding=None, importance=None, source=None,
+                       provenance=None, fact_type=None, extra_metadata=None, **kw):
         self.calls.append({
             "text": text, "embedding": embedding,
             "importance": importance, "source": source,
+            "provenance": provenance, "fact_type": fact_type,
+            "extra_metadata": extra_metadata,
         })
         if text in self._fail_texts:
             # Mimic the relay's content-fingerprint dedup response.
@@ -93,12 +96,21 @@ def test_gemini_json_flows_through_engine_to_store(monkeypatch) -> None:
     assert result.errors == []
 
     # Every store carried an embedding and the import provenance tag.
+    # No llm_completion → no Crystal; just the 2 atomic facts.
     assert len(client.calls) == 2
     assert all(c["embedding"] == [0.1, 0.2, 0.3] for c in client.calls)
     assert all(c["source"] == "import" for c in client.calls)
     stored = {c["text"] for c in client.calls}
     assert "User moved to Berlin for a new job" in stored
     assert "User is allergic to peanuts" in stored
+
+    # #356 — every imported fact has v1 external provenance + provider +
+    # a session_id; both facts of one conversation share that session_id.
+    assert all(c["provenance"] == "external" for c in client.calls)
+    metas = [c["extra_metadata"] or {} for c in client.calls]
+    assert all(m.get("import_source") == "gemini" for m in metas)
+    session_ids = {m.get("session_id") for m in metas}
+    assert len(session_ids) == 1 and None not in session_ids  # one shared session
 
 
 def test_gemini_json_duplicate_is_skipped_not_errored(monkeypatch) -> None:

@@ -52,7 +52,7 @@ dependencies = [
     # >=2.5.3: exposes format_memory_date / recall_context_header /
     # format_recall_context so Hermes recall.py delegates to the shared
     # core formatter (zero-behavior-change refactor, chore/wire-hermes-recall-core).
-    "totalreclaw-core>=2.5.3,<3.0.0",
+    "totalreclaw-core>=2.5.4,<3.0.0",
     "httpx>=0.27",
     "onnxruntime>=1.24",
     "numpy>=1.26",
