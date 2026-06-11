@@ -299,7 +299,7 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         try:
             from .hooks import recall_for_query
 
-            return recall_for_query(self._state, query, top_k=8) or ""
+            return recall_for_query(self._state, query, top_k=self._state.get_recall_top_k()) or ""
         except Exception as exc:  # pragma: no cover — non-fatal per ABC contract
             logger.warning("TotalReclaw MemoryProvider.prefetch failed: %s", exc)
             return ""

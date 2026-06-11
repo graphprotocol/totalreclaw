@@ -173,21 +173,23 @@ def test_on_session_end_debrief_emits_v1_summaries() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_pre_llm_call_invokes_recall_with_top_k_8() -> None:
-    """pre_llm_call runs auto-recall with top_k=8 on the first turn."""
+def test_pre_llm_call_invokes_recall_with_top_k_default() -> None:
+    """pre_llm_call runs auto-recall with DEFAULT_RECALL_TOP_K (16) on the first turn."""
     from totalreclaw.hermes.hooks import pre_llm_call
+    from totalreclaw.agent.state import DEFAULT_RECALL_TOP_K
 
     state, fake_client = _make_state()
 
-    # Fake auto_recall — we just assert the hook invokes it.
+    # Fake auto_recall — we just assert the hook invokes it with the correct top_k.
     with patch("totalreclaw.hermes.hooks.auto_recall") as fake_auto_recall:
         fake_auto_recall.return_value = "## Memories\n- user prefers dark mode"
         result = pre_llm_call(state, is_first_turn=True, user_message="what do i prefer?")
 
     assert fake_auto_recall.called
-    # top_k=8 should be passed through (Hermes hook default).
+    # top_k should come from state.get_recall_top_k() == DEFAULT_RECALL_TOP_K (16).
     call = fake_auto_recall.call_args
-    assert call.kwargs.get("top_k") == 8 or (len(call.args) >= 3 and call.args[2] == 8)
+    actual_top_k = call.kwargs.get("top_k") or (call.args[2] if len(call.args) >= 3 else None)
+    assert actual_top_k == DEFAULT_RECALL_TOP_K
 
 
 def test_pre_llm_call_silently_no_op_when_not_first_turn() -> None:

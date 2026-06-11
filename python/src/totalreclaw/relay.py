@@ -88,6 +88,7 @@ class BillingFeatures:
     extraction_interval: Optional[int] = None
     max_facts_per_extraction: Optional[int] = None
     max_candidate_pool: Optional[int] = None
+    recall_top_k: Optional[int] = None
 
 
 @dataclass
@@ -294,6 +295,7 @@ class RelayClient:
                 extraction_interval=f.get("extraction_interval"),
                 max_facts_per_extraction=f.get("max_facts_per_extraction"),
                 max_candidate_pool=f.get("max_candidate_pool"),
+                recall_top_k=f.get("recall_top_k"),
             )
         return BillingStatus(
             tier=data["tier"],

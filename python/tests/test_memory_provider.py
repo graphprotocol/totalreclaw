@@ -811,7 +811,7 @@ class TestNativeAutoMemory:
         with patch("totalreclaw.hermes.hooks.recall_for_query", return_value="CTX") as rq:
             out = provider.prefetch("who am I?", session_id="s1")
         assert out == "CTX"
-        rq.assert_called_once_with(state, "who am I?", top_k=8)
+        rq.assert_called_once_with(state, "who am I?", top_k=state.get_recall_top_k())
 
     def test_prefetch_empty_when_unconfigured(self):
         state = _make_state(configured=False)

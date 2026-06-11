@@ -214,7 +214,7 @@ async def recall(args: dict, state: "PluginState", **kwargs) -> str:
     if not query:
         return json.dumps({"error": "No query provided"})
 
-    top_k = args.get("top_k", 8)
+    top_k = args.get("top_k", state.get_recall_top_k())
 
     try:
         query_embedding = None

@@ -9,6 +9,7 @@ from pathlib import Path
 from totalreclaw.hermes.state import (
     PluginState, BILLING_CACHE_TTL,
     DEFAULT_EXTRACTION_INTERVAL, DEFAULT_MAX_FACTS, DEFAULT_MIN_IMPORTANCE,
+    DEFAULT_RECALL_TOP_K,
 )
 from totalreclaw.hermes import schemas
 
@@ -75,6 +76,67 @@ class TestPluginState:
         assert state.get_extraction_interval() == DEFAULT_EXTRACTION_INTERVAL
         assert state.get_max_facts_per_extraction() == DEFAULT_MAX_FACTS
         assert state.get_min_importance() == DEFAULT_MIN_IMPORTANCE
+        assert state.get_recall_top_k() == DEFAULT_RECALL_TOP_K
+
+    # --- recall_top_k config ---
+
+    def test_recall_top_k_default_is_16(self):
+        """Default recall top_k is 16 with no env var or billing override."""
+        state = _make_state()
+        assert state.get_recall_top_k() == 16
+        assert DEFAULT_RECALL_TOP_K == 16
+
+    def test_recall_top_k_billing_cache_override(self):
+        """Billing cache recall_top_k overrides default."""
+        state = _make_state()
+        state.update_from_billing({"features": {"recall_top_k": 32}})
+        assert state.get_recall_top_k() == 32
+
+    def test_recall_top_k_env_override(self):
+        """TOTALRECLAW_RECALL_TOP_K env var overrides default."""
+        state = _make_state(TOTALRECLAW_RECALL_TOP_K="24")
+        assert state.get_recall_top_k() == 24
+
+    def test_recall_top_k_env_beats_billing_cache(self):
+        """Env var recall_top_k is not overridden by billing cache (env wins)."""
+        state = _make_state(TOTALRECLAW_RECALL_TOP_K="24")
+        state.update_from_billing({"features": {"recall_top_k": 40}})
+        assert state.get_recall_top_k() == 24  # env wins
+
+    def test_recall_top_k_billing_beats_default(self):
+        """Billing cache recall_top_k overrides DEFAULT_RECALL_TOP_K when no env set."""
+        state = _make_state()
+        assert state.get_recall_top_k() == DEFAULT_RECALL_TOP_K
+        state.update_from_billing({"features": {"recall_top_k": 40}})
+        assert state.get_recall_top_k() == 40  # billing wins over default
+
+    def test_recall_top_k_invalid_env_keeps_default(self):
+        """Invalid TOTALRECLAW_RECALL_TOP_K env value keeps default."""
+        state = _make_state(TOTALRECLAW_RECALL_TOP_K="not_a_number")
+        assert state.get_recall_top_k() == DEFAULT_RECALL_TOP_K
+
+    def test_recall_top_k_zero_env_keeps_default(self):
+        """Zero value for TOTALRECLAW_RECALL_TOP_K is rejected (must be >0)."""
+        state = _make_state(TOTALRECLAW_RECALL_TOP_K="0")
+        assert state.get_recall_top_k() == DEFAULT_RECALL_TOP_K
+
+    def test_recall_top_k_invalid_billing_keeps_current(self):
+        """Invalid recall_top_k in billing features is silently ignored."""
+        state = _make_state()
+        state.update_from_billing({"features": {"recall_top_k": "bad"}})
+        assert state.get_recall_top_k() == DEFAULT_RECALL_TOP_K
+
+    def test_recall_top_k_zero_billing_keeps_current(self):
+        """Zero recall_top_k in billing features is ignored (must be >0)."""
+        state = _make_state()
+        state.update_from_billing({"features": {"recall_top_k": 0}})
+        assert state.get_recall_top_k() == DEFAULT_RECALL_TOP_K
+
+    def test_recall_top_k_no_billing_features_keeps_default(self):
+        """update_from_billing with no features leaves recall_top_k at default."""
+        state = _make_state()
+        state.update_from_billing({})
+        assert state.get_recall_top_k() == DEFAULT_RECALL_TOP_K
 
     def test_update_from_billing_sets_server_config(self):
         """Server-driven extraction config from billing features dict."""
@@ -352,17 +414,18 @@ class TestHooks:
         result2 = pre_llm_call(state, is_first_turn=False, user_message="")
         assert result2 is None
 
-    def test_pre_llm_call_auto_recall_top_k_8(self):
-        """Auto-recall should use top_k=8."""
+    def test_pre_llm_call_auto_recall_top_k_default(self):
+        """Auto-recall should use DEFAULT_RECALL_TOP_K (16) when no override."""
         from totalreclaw.hermes.hooks import pre_llm_call
+        from totalreclaw.hermes.state import DEFAULT_RECALL_TOP_K
 
         state = _make_state()
         mock_client = MagicMock()
         mock_result = MagicMock()
         mock_result.text = "User prefers dark mode"
 
-        async def mock_recall(query, top_k=8):
-            assert top_k == 8, f"Expected top_k=8, got top_k={top_k}"
+        async def mock_recall(query, top_k=DEFAULT_RECALL_TOP_K):
+            assert top_k == DEFAULT_RECALL_TOP_K, f"Expected top_k={DEFAULT_RECALL_TOP_K}, got top_k={top_k}"
             return [mock_result]
 
         mock_client.recall = mock_recall
@@ -381,7 +444,7 @@ class TestHooks:
         mock_result = MagicMock()
         mock_result.text = "User likes Python"
 
-        async def mock_recall(query, top_k=8):
+        async def mock_recall(query, top_k=16):
             return [mock_result]
 
         mock_client.recall = mock_recall

@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_EXTRACTION_INTERVAL = 3
 DEFAULT_MAX_FACTS = 15
 DEFAULT_MIN_IMPORTANCE = 6
+DEFAULT_RECALL_TOP_K = 16
 BILLING_CACHE_TTL = 7200  # 2 hours
 STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity threshold for near-duplicate detection
 
@@ -171,6 +172,7 @@ class AgentState:
         self._extraction_interval = DEFAULT_EXTRACTION_INTERVAL
         self._max_facts = DEFAULT_MAX_FACTS
         self._min_importance = DEFAULT_MIN_IMPORTANCE
+        self._recall_top_k = DEFAULT_RECALL_TOP_K
         self._quota_warning: Optional[str] = None
         self._server_url = server_url
         self._session_id: Optional[str] = None
@@ -207,8 +209,18 @@ class AgentState:
             except ValueError:
                 pass
 
+        recall_top_k_env = os.environ.get("TOTALRECLAW_RECALL_TOP_K")
+        if recall_top_k_env:
+            try:
+                val = int(recall_top_k_env)
+                if val > 0:
+                    self._recall_top_k = val
+            except ValueError:
+                pass
+
         self._env_interval_override = interval_env is not None
         self._env_importance_override = importance_env is not None
+        self._env_recall_top_k_override = recall_top_k_env is not None
 
     def _try_auto_configure(self) -> None:
         """Try to configure from env vars or config file.
@@ -503,6 +515,18 @@ class AgentState:
         """Return the minimum importance threshold for extraction."""
         return self._min_importance
 
+    def get_recall_top_k(self) -> int:
+        """Return the recall top_k limit.
+
+        Precedence (highest first):
+          1. Billing-cache value (``features.recall_top_k``) — set by
+             ``update_from_billing`` unless overridden by env var.
+          2. ``TOTALRECLAW_RECALL_TOP_K`` env var — applied at init by
+             ``_apply_env_overrides`` and protected from server override.
+          3. ``DEFAULT_RECALL_TOP_K`` (16) — compile-time default.
+        """
+        return self._recall_top_k
+
     def update_from_billing(self, billing_status: dict) -> None:
         """Update extraction config from billing endpoint's features dict.
 
@@ -527,6 +551,17 @@ class AgentState:
                 self._max_facts = int(server_max_facts)
             except (ValueError, TypeError):
                 pass
+
+        # Only apply server recall_top_k if no env var override
+        if not self._env_recall_top_k_override:
+            server_recall_top_k = features.get("recall_top_k")
+            if server_recall_top_k is not None:
+                try:
+                    val = int(server_recall_top_k)
+                    if val > 0:
+                        self._recall_top_k = val
+                except (ValueError, TypeError):
+                    pass
 
     # Quota warning
     def set_quota_warning(self, warning: str) -> None:

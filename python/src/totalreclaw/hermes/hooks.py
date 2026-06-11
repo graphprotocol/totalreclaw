@@ -654,7 +654,7 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
     if is_first_turn and user_message and not _provider_driven:
         # Auto-recall relevant memories for the first turn (shared entry point).
         try:
-            memories_ctx = recall_for_query(state, user_message, top_k=8)
+            memories_ctx = recall_for_query(state, user_message, top_k=state.get_recall_top_k())
             if memories_ctx:
                 context_parts.append(memories_ctx)
         except Exception as e:
@@ -681,7 +681,7 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
 
 
 def recall_for_query(
-    state: "PluginState", query: str, *, top_k: int = 8
+    state: "PluginState", query: str, *, top_k: int = 16
 ) -> Optional[str]:
     """Recall a context block for *query* (hook-free).
 
