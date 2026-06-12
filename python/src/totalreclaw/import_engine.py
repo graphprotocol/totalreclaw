@@ -106,6 +106,29 @@ def _as_str_list(v) -> list:
     return out[:8]
 
 
+def _derive_title_from_facts(facts: list[dict], max_len: int = 60) -> str:
+    """Derive a Crystal title from the highest-importance extracted fact.
+
+    This is the fallback used when the LLM is unavailable or returns bad JSON.
+    Picks the fact with the highest importance score and truncates to max_len
+    chars. The result is a specific, fact-grounded headline rather than a
+    generic "Gemini session" or chunk title.
+    """
+    if not facts:
+        return "Imported session"
+    # Sort by importance descending; break ties by fact text length (prefer
+    # longer, more specific descriptions over short generic ones).
+    best = max(facts, key=lambda f: (f.get("importance", 5), len(f.get("text", ""))))
+    text = (best.get("text") or "").strip()
+    if not text:
+        return "Imported session"
+    if len(text) <= max_len:
+        return text
+    # Truncate at a word boundary
+    truncated = text[:max_len].rsplit(" ", 1)[0]
+    return (truncated + "…") if truncated else text[:max_len]
+
+
 def _extract_json_object(raw: str):
     """Best-effort parse of the first top-level JSON object in *raw*.
 
@@ -190,6 +213,28 @@ class ImportEngine:
         #: Cached introspection of whether ``llm_extract`` accepts the
         #: ``enriched_system_prompt`` kwarg. Computed on first call.
         self._llm_extract_accepts_enriched: Optional[bool] = None
+        #: Cached semantic session assignments: list of sessions, each a list of
+        #: chunk indices. Computed once per ImportEngine instance on the first
+        #: ``_process_chunk_batch`` call (embedding all chunks is expensive).
+        #: None means "not yet computed".
+        self._session_assignments: Optional[list[list[int]]] = None
+        #: Cached turn counts per session (parallel to _session_assignments).
+        #: Used to detect singleton sessions (< 2 turns = no Crystal).
+        self._session_turn_counts: Optional[list[int]] = None
+        #: Cached STABLE session_id per session (parallel to
+        #: _session_assignments). Minted ONCE in _get_session_assignments and
+        #: reused across every batch — so a session whose chunks straddle a
+        #: batch boundary keeps a single session_id (was a per-batch regen bug).
+        self._session_ids: Optional[list[str]] = None
+        #: Cross-batch accumulation state for Crystal emission. A session can
+        #: span multiple _process_chunk_batch calls; we accumulate its facts
+        #: and only emit its Crystal once, on whichever batch completes it.
+        #: chunk indices processed so far (across all batches):
+        self._processed_chunk_indices: set[int] = set()
+        #: session_id -> list of extracted facts seen so far across batches:
+        self._session_facts_accum: dict[str, list[dict]] = {}
+        #: session_ids whose Crystal has already been emitted (emit-once guard):
+        self._crystallized_session_ids: set[str] = set()
 
     # ── Estimate ─────────────────────────────────────────────────────────
 
@@ -302,13 +347,36 @@ class ImportEngine:
         start_ms: int,
         source: str = "",
     ) -> BatchImportResult:
-        """Process a batch of conversation chunks via LLM extraction.
+        """Process a batch of conversation chunks via LLM extraction with
+        semantic session grouping.
 
-        #356: each chunk is treated as one **session** — every fact it produces
-        shares a freshly-minted UUIDv7 ``session_id`` and carries
-        ``source="external"`` + ``metadata.import_source=<source>``; a single
-        Crystal (session-summary) claim per conversation is emitted alongside
-        the atomic facts so the SPA can render a session card.
+        Semantic session grouping (feat/semantic-session-grouping):
+        Instead of treating each chunk as its own session (the old #356 approach
+        that created one Crystal per 30-min window), we now:
+
+          1. Flatten ALL chunks (not just the current batch slice) into an ordered
+             turn stream: each chunk's messages are paired as user→assistant turns
+             with the chunk's timestamp for the time-gap check.
+          2. Embed each turn's ``prompt + " " + reply`` text via the local Harrier
+             model (L2-normalised 640d vectors — identical to the production
+             recall path).
+          3. Call ``segment_sessions(timestamps, embeddings, 1800, 0.55)`` to
+             group turns into semantic sessions via centroid-walk segmentation.
+          4. For each semantic session:
+               - If it has ≥2 turns: mint one UUIDv7 ``session_id``, tag all
+                 facts with it, and emit ONE Crystal.
+               - If it has exactly 1 turn (singleton): tag facts with
+                 ``source=external`` + ``import_source`` ONLY — no
+                 ``session_id``, no Crystal. Singletons are typically standalone
+                 one-off queries; emitting a Crystal for them would create noise.
+          5. Segmentation runs once per ImportEngine instance and is cached.
+             Store batching (Gnosis UserOps) is unaffected.
+
+        The slice [offset:offset+batch_size] controls WHICH CHUNKS are extracted
+        in this call (rate-limit / multi-call resume), but segment_sessions is
+        computed over the FULL chunk list and its result is cached — so a session
+        that spans multiple batches gets a single session_id regardless of how
+        many process_batch() calls it takes to exhaust the chunks.
         """
         total_chunks = len(parsed.chunks)
         batch = parsed.chunks[offset:offset + batch_size]
@@ -349,12 +417,43 @@ class ImportEngine:
             )
 
         # Smart-import (imp-4): build profile + triage decisions from the
-        # FULL chunks list (not just this batch slice) so context spans the
-        # whole file. Runs once per ImportEngine instance and is cached for
-        # later batches. Falls back gracefully when llm_completion is None,
-        # core lacks bindings, or any step fails.
+        # FULL chunks list so context spans the whole file. Runs once per
+        # ImportEngine instance and is cached for later batches.
         smart_ctx = await self._maybe_run_smart_import(parsed.chunks)
         chunks_skipped = 0
+
+        # ── Semantic session grouping ─────────────────────────────────────────
+        # Compute (or reuse cached) session assignments for ALL chunks. Each
+        # "turn" here is one chunk (the adapter's 30-min windows already enforce
+        # coarse boundaries; the semantic step refines within them).
+        # Within a chunk, turns are user→assistant pairs. For segmentation
+        # purposes we treat each CHUNK as a single "turn" (embedding over the
+        # combined messages). This is a conscious simplification: cross-chunk
+        # semantic grouping is the primary value-add; within-chunk turn-level
+        # segmentation would require re-parsing messages and is out of scope
+        # for this pass.
+        session_assignments = await self._get_session_assignments(parsed.chunks)
+
+        # Build a map: chunk_global_index -> (session_id, is_singleton).
+        # is_singleton is True when the session has < 2 TURNS (not chunks).
+        # CRITICAL: session_ids come from the CACHED self._session_ids (minted
+        # once in _get_session_assignments), NOT regenerated here — otherwise a
+        # session straddling a batch boundary would get a different id per batch
+        # and its facts would never group together. Same applies to turn counts.
+        turn_counts = self._session_turn_counts or []
+        session_ids = self._session_ids or []
+        session_is_singleton: dict[int, bool] = {}  # chunk_index -> bool
+        session_id_map: dict[int, str] = {}  # chunk_index -> session_id (shared)
+        # chunk_index -> session index (into session_assignments), for accum keys
+        chunk_to_session_idx: dict[int, int] = {}
+        for sess_i, sess_chunk_indices in enumerate(session_assignments):
+            sid = session_ids[sess_i] if sess_i < len(session_ids) else _uuid7()
+            turn_count = turn_counts[sess_i] if sess_i < len(turn_counts) else len(sess_chunk_indices)
+            singleton = turn_count < 2
+            for idx in sess_chunk_indices:
+                session_is_singleton[idx] = singleton
+                session_id_map[idx] = sid
+                chunk_to_session_idx[idx] = sess_i
 
         facts_extracted = 0
         errors: list[str] = []
@@ -362,18 +461,11 @@ class ImportEngine:
         extraction_failures = 0
         all_extracted: list[dict] = []
 
-        # Extraction phase: collect facts from every chunk in the batch so the
-        # subsequent store phase can chunk across chunks into Gnosis-batched
-        # UserOps (spec §5). Per-chunk granularity is preserved for extraction
-        # errors and "no facts produced" warnings.
+        # Extraction phase
         extracted_chunk_count = 0
         for i, chunk in enumerate(batch):
             global_index = offset + i
 
-            # Smart-import: skip chunks classified as SKIP by triage. We
-            # still count them toward chunks_processed (matches plugin
-            # behavior in handleBatchImport at index.ts:2773-2778) but they
-            # never reach the LLM extractor.
             if smart_ctx is not None:
                 skipped, reason = is_chunk_skipped(global_index, smart_ctx.decisions)
                 if skipped:
@@ -384,8 +476,6 @@ class ImportEngine:
                     chunks_skipped += 1
                     continue
 
-            # Rate-limit: add delay between LLM calls (skip before the first
-            # actually-extracted call so triaged-out chunks don't waste time).
             if extracted_chunk_count > 0:
                 await asyncio.sleep(INTER_CHUNK_DELAY)
             extracted_chunk_count += 1
@@ -401,19 +491,30 @@ class ImportEngine:
                     chunks_with_no_facts += 1
                 facts_extracted += len(extracted)
 
-                # #356 — this conversation = one session. Tag every atomic fact
-                # with the shared session_id + external provenance + provider,
-                # then emit a Crystal (session summary) so the SPA groups them
-                # under a real headline instead of day-grouping loose facts.
-                session_id = _uuid7()
-                for f in extracted:
-                    self._tag_import_fact(f, session_id, source)
-                if extracted:
-                    crystal = await self._make_crystal(
-                        chunk, extracted, session_id, source
-                    )
-                    if crystal is not None:
-                        all_extracted.append(crystal)
+                is_singleton = session_is_singleton.get(global_index, True)
+                session_id = session_id_map.get(global_index)
+
+                if is_singleton:
+                    # Singleton: external provenance + import_source, NO session_id,
+                    # NO Crystal. This matches the spec for standalone quick queries.
+                    for f in extracted:
+                        f["provenance"] = _IMPORT_PROVENANCE
+                        meta = f.get("extra_metadata")
+                        if not isinstance(meta, dict):
+                            meta = {}
+                        if source:
+                            meta["import_source"] = source
+                        f["extra_metadata"] = meta
+                else:
+                    # Multi-turn session: tag with the STABLE session_id +
+                    # provenance, and accumulate facts cross-batch so the
+                    # Crystal (emitted on the batch that completes the session)
+                    # summarizes the WHOLE session, not just this batch's slice.
+                    for f in extracted:
+                        self._tag_import_fact(f, session_id, source)
+                    if session_id is not None:
+                        self._session_facts_accum.setdefault(session_id, []).extend(extracted)
+
                 all_extracted.extend(extracted)
             except Exception as e:
                 extraction_failures += 1
@@ -422,17 +523,66 @@ class ImportEngine:
             if len(errors) >= 20:
                 break
 
-        # Store phase: one batched UserOp per ≤15-fact chunk on Gnosis, or a
+        # Mark EVERY chunk in this batch slice as processed — including chunks
+        # that were smart-import-skipped or that failed extraction. A chunk is
+        # "processed" once we've passed over it; otherwise a session containing
+        # a skipped chunk would never be considered complete and would never get
+        # a Crystal. This set persists across batches on the instance.
+        self._processed_chunk_indices.update(range(offset, offset + chunks_processed))
+
+        # ── Crystal emission (cross-batch complete) ───────────────────────────
+        # Emit ONE Crystal per multi-turn session, exactly once, on whichever
+        # batch completes the session (i.e. once ALL of its chunks have been
+        # processed across all batches so far). Facts are pulled from the
+        # cross-batch accumulator so the Crystal summarizes the WHOLE session
+        # even when its chunks straddled a batch boundary.
+        turn_counts = self._session_turn_counts or []
+        crystals_to_emit: list[dict] = []
+        for sess_i, sess_chunk_indices in enumerate(session_assignments):
+            # Singleton check uses TURN count (not chunk count): a session with
+            # 1 chunk but 2+ turns (merged Gemini entries) is NOT a singleton.
+            sess_turn_count = turn_counts[sess_i] if sess_i < len(turn_counts) else len(sess_chunk_indices)
+            if sess_turn_count < 2:
+                continue  # singleton — no Crystal
+
+            sid = session_id_map.get(sess_chunk_indices[0]) if sess_chunk_indices else None
+            if sid is None or sid in self._crystallized_session_ids:
+                continue  # no id, or already crystallized on an earlier batch
+
+            # Complete = all of this session's chunks processed (any batch).
+            if not all(idx in self._processed_chunk_indices for idx in sess_chunk_indices):
+                continue  # still waiting on chunks in a later batch
+
+            sess_facts = self._session_facts_accum.get(sid, [])
+            if not sess_facts:
+                # Session complete but produced no facts (all extractions empty
+                # or skipped). Mark crystallized so we don't retry it forever.
+                self._crystallized_session_ids.add(sid)
+                continue
+
+            # Gather all chunks for this session for the Crystal prompt context.
+            sess_chunks = [parsed.chunks[idx] for idx in sess_chunk_indices
+                           if idx < len(parsed.chunks)]
+            try:
+                crystal = await self._make_crystal(sess_chunks, sess_facts, sid, source)
+                if crystal is not None:
+                    crystals_to_emit.append(crystal)
+            except Exception as e:
+                logger.debug("Crystal emission failed for session %s: %s", sid, e)
+            finally:
+                # Emit-once guard: mark crystallized whether or not _make_crystal
+                # produced output, so we never double-emit on a later batch.
+                self._crystallized_session_ids.add(sid)
+
+        # Prepend Crystals so the SPA receives the session header before its facts.
+        all_extracted = crystals_to_emit + all_extracted
+
+        # Store phase: one batched UserOp per ≤15-fact chunk on Gnosis, or
         # per-fact remember() loop on free-tier / unresolvable chain.
         facts_stored, store_errors = await self._store_facts_chunked(all_extracted)
         if store_errors:
             errors.extend(store_errors)
 
-        # Surface extraction problems as warnings so the user gets feedback.
-        # Triaged-out chunks aren't "0-fact failures" so we subtract
-        # chunks_skipped from the denominator before deciding whether to
-        # raise the "all chunks produced 0 facts" alarm (otherwise a clean
-        # all-SKIP batch would look like a silent LLM failure).
         attempted = chunks_processed - chunks_skipped
         if extraction_failures > 0:
             errors.insert(0, f"{extraction_failures} chunk(s) failed during LLM extraction")
@@ -686,6 +836,178 @@ class ImportEngine:
         )
         return self._smart_ctx
 
+    async def _get_session_assignments(
+        self,
+        chunks: list,
+    ) -> list[list[int]]:
+        """Compute (or return cached) semantic session assignments for all chunks.
+
+        TURN-BASED SEGMENTATION: We flatten all chunks into individual turns
+        (user->assistant pairs) and run segment_sessions over turns. A "turn"
+        here is defined as one user->assistant exchange. Within a chunk, pairs
+        are formed from the messages list. The turn-level approach means:
+          - A Gemini chunk with 4 messages (2 user+2 assistant) = 2 turns
+          - Two 2-turn chunks close in time = 4 turns in potentially 1 session
+          - A single-message chunk = 1 turn = singleton session (no Crystal)
+
+        Returns: list of sessions, each session is a list of CHUNK indices
+        (into the ``chunks`` parameter). Sessions that contain turns from
+        multiple chunks map each chunk to the session containing its first turn.
+
+        Caches the result on the instance for consistency across batches.
+        Falls back to "one chunk = one session" if embedding fails.
+        """
+        if self._session_assignments is not None:
+            return self._session_assignments
+
+        if not chunks:
+            self._session_assignments = []
+            self._session_turn_counts = []
+            self._session_ids = []
+            return self._session_assignments
+
+        from totalreclaw.session_segmentation import segment_sessions
+        from datetime import datetime
+
+        # ── Flatten chunks -> turns ─────────────────────────────────────────
+        # Each turn = (chunk_index, timestamp, prompt_text, reply_text).
+        # For segmentation the "turn text" = prompt + " " + reply.
+        # For timestamp we use the chunk timestamp (all messages in a chunk
+        # share the same 30-min window boundary — the adapter already broke
+        # on time gaps; within a chunk turns are contiguous and we use the
+        # chunk timestamp for all of them since per-message timestamps are
+        # not available).
+        turns: list[tuple[int, object, str]] = []  # (chunk_idx, ts, text)
+        for chunk_idx, chunk in enumerate(chunks):
+            ts_raw = getattr(chunk, "timestamp", None)
+            ts_float = None
+            if ts_raw:
+                try:
+                    dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                    ts_float = dt.timestamp()
+                except Exception:
+                    pass
+
+            msgs = getattr(chunk, "messages", None) or []
+            # Pair messages: user -> assistant. Skip unpaired trailing messages.
+            i = 0
+            while i < len(msgs):
+                m = msgs[i]
+                role = (m.get("role") or "user") if isinstance(m, dict) else "user"
+                if role == "user":
+                    text_u = (m.get("text") or m.get("content") or "") if isinstance(m, dict) else str(m)
+                    text_a = ""
+                    if i + 1 < len(msgs):
+                        next_m = msgs[i + 1]
+                        next_role = (next_m.get("role") or "assistant") if isinstance(next_m, dict) else "assistant"
+                        if next_role == "assistant":
+                            text_a = (next_m.get("text") or next_m.get("content") or "") if isinstance(next_m, dict) else str(next_m)
+                            i += 2
+                        else:
+                            i += 1
+                    else:
+                        i += 1
+                    combined = (text_u + " " + text_a).strip()[:1000]
+                    turns.append((chunk_idx, ts_float, combined))
+                else:
+                    i += 1
+
+            # If no user messages found, treat the whole chunk as a single turn
+            if not any(t[0] == chunk_idx for t in turns):
+                all_text = " ".join(
+                    (m.get("text") or m.get("content") or "") if isinstance(m, dict) else str(m)
+                    for m in msgs
+                ).strip()[:1000]
+                turns.append((chunk_idx, ts_float, all_text))
+
+        if not turns:
+            # All chunks are empty — one-chunk-per-session fallback.
+            self._session_assignments = [[i] for i in range(len(chunks))]
+            self._session_turn_counts = [1 for _ in range(len(chunks))]
+            self._session_ids = [_uuid7() for _ in self._session_assignments]
+            return self._session_assignments
+
+        # ── Embed turns ─────────────────────────────────────────────────────
+        timestamps = [t[1] for t in turns]
+        embeddings = []
+        for _, _, text in turns:
+            try:
+                from totalreclaw.embedding import get_embedding
+                emb = get_embedding(text) if text else [0.0] * 640
+            except Exception:
+                emb = [1.0] + [0.0] * 639
+            embeddings.append(emb)
+
+        # ── Segment turns -> sessions of turns ──────────────────────────────
+        try:
+            turn_sessions = segment_sessions(
+                timestamps, embeddings,
+                gap_seconds=1800,
+                sim_threshold=0.55,
+            )
+        except Exception as e:
+            logger.warning("session_segmentation failed (%s); falling back to one-chunk-per-session", e)
+            self._session_assignments = [[i] for i in range(len(chunks))]
+            self._session_turn_counts = [1 for _ in range(len(chunks))]
+            self._session_ids = [_uuid7() for _ in self._session_assignments]
+            return self._session_assignments
+
+        # ── Map turn-level sessions to chunk-level sessions ──────────────────
+        # A chunk belongs to the session that contains its FIRST turn.
+        # We also track the TOTAL number of turns per session for the
+        # singleton check (< 2 turns = singleton, no Crystal).
+        chunk_to_session: dict[int, int] = {}
+        session_turn_counts: list[int] = []
+        for sess_idx, turn_indices in enumerate(turn_sessions):
+            session_turn_counts.append(len(turn_indices))
+            for tidx in turn_indices:
+                chunk_idx = turns[tidx][0]
+                if chunk_idx not in chunk_to_session:
+                    chunk_to_session[chunk_idx] = sess_idx
+
+        # Rebuild as list of chunk-index lists (one per turn-level session).
+        # Sessions are ordered by first-appearing chunk.
+        session_chunks: list[list[int]] = [[] for _ in turn_sessions]
+        for chunk_idx in range(len(chunks)):
+            sess_idx = chunk_to_session.get(chunk_idx)
+            if sess_idx is None:
+                # Chunk had no turns at all — append as own session.
+                session_chunks.append([chunk_idx])
+                session_turn_counts.append(0)
+            else:
+                if chunk_idx not in session_chunks[sess_idx]:
+                    session_chunks[sess_idx].append(chunk_idx)
+
+        # Remove empty sessions (can happen if a turn-session mapped to 0 chunks).
+        self._session_assignments = [s for s in session_chunks if s]
+
+        # Attach turn counts to each session for the singleton check in
+        # _process_chunk_batch. We store it separately on the instance.
+        self._session_turn_counts: list[int] = []
+        for s in self._session_assignments:
+            # Sum turns from all turn_sessions that contain chunks of this session.
+            total_turns = sum(
+                session_turn_counts[sess_idx]
+                for sess_idx, tc in enumerate(turn_sessions)
+                if any(turns[tidx][0] in s for tidx in tc)
+            )
+            self._session_turn_counts.append(total_turns)
+
+        # Mint a STABLE session_id per session ONCE here. Reused across every
+        # batch so cross-batch sessions keep one id (and one Crystal).
+        self._session_ids = [_uuid7() for _ in self._session_assignments]
+
+        logger.debug(
+            "session_segmentation: %d chunks -> %d turn-sessions -> %d sessions "
+            "(%d singletons)",
+            len(chunks),
+            len(turn_sessions),
+            len(self._session_assignments),
+            sum(1 for s in self._session_assignments
+                if self._session_turn_counts[self._session_assignments.index(s)] < 2),
+        )
+        return self._session_assignments
+
     @staticmethod
     def _prepare_fact_payload(fact: dict) -> dict:
         """Build the per-fact payload shape shared by ``client.remember`` and
@@ -738,8 +1060,19 @@ class ImportEngine:
 
     @staticmethod
     def _crystal_prompt(chunk, facts: list[dict]) -> str:
-        """Build the one-shot summary prompt for a conversation's Crystal."""
-        title = (getattr(chunk, "title", None) or "Untitled conversation")
+        """Build the one-shot summary prompt for a conversation's Crystal.
+
+        The LLM is instructed to return a JSON object with BOTH a ``title``
+        (short human-readable headline, <=60 chars) and a ``summary`` (<=200-char
+        gist). The title is generated from the GROUPED FACTS so the headline
+        reflects the actual substance of the session, not just the raw transcript.
+
+        Pedro's explicit request (2026-06-12): title must be derived from the
+        session's grouped facts, not just the transcript. The prompt provides
+        both the facts (primary signal) and the transcript (context) so the LLM
+        can generate a focused headline like "Buying a Kia EV — range, pricing,
+        financing" rather than a vague summary of the conversation flow.
+        """
         msgs = getattr(chunk, "messages", None) or []
         # Cap the transcript we feed the summarizer (first + last few turns is
         # plenty to characterize a conversation; keeps tokens bounded).
@@ -750,63 +1083,96 @@ class ImportEngine:
         head = [_msg_text(m) for m in msgs[:6]]
         tail = [_msg_text(m) for m in msgs[-4:]] if len(msgs) > 6 else []
         transcript = "\n".join(head + (["..."] + tail if tail else []))[:4000]
-        fact_lines = "\n".join(f"- {f.get('text', '')}" for f in facts[:20])[:2000]
+        # Facts listed first — they are the PRIMARY signal for the title.
+        # Sort by importance descending so the highest-value facts anchor the title.
+        sorted_facts = sorted(facts, key=lambda f: f.get("importance", 5), reverse=True)
+        fact_lines = "\n".join(
+            f"- [{f.get('type', 'fact')}] (importance={f.get('importance', 5)}) {f.get('text', '')}"
+            for f in sorted_facts[:20]
+        )[:2000]
         return (
-            "Summarize this single conversation into a compact JSON object. "
+            "You are given the EXTRACTED FACTS from a conversation plus the conversation "
+            "transcript as context. Generate a compact JSON object summarizing the session.\n"
             "Return ONLY JSON, no prose. Schema:\n"
-            '{"summary": "<=200-char one-line gist", '
-            '"key_outcomes": ["decisions/results"], '
+            '{"title": "<=60-char human headline, e.g. \'Buying a Kia EV — range, pricing, financing\' "' + ', '
+            '"summary": "<=200-char one-line gist of what was actually discussed", '
+            '"key_outcomes": ["decisions or results"], '
             '"open_threads": ["unresolved follow-ups"], '
             '"topics_discussed": ["short topic tags"]}\n\n'
-            f"Title: {title}\n\nTranscript:\n{transcript}\n\n"
-            f"Facts already extracted from it:\n{fact_lines}\n"
+            f"Extracted facts (primary signal for the title):\n{fact_lines}\n\n"
+            f"Conversation transcript (context):\n{transcript}\n"
         )
 
     async def _make_crystal(
-        self, chunk, facts: list[dict], session_id: str, source: str
+        self, session_chunks, facts: list[dict], session_id: str, source: str
     ) -> Optional[dict]:
-        """Build one Crystal (session-summary) claim for an imported conversation.
+        """Build one Crystal (session-summary) claim for an imported session.
 
-        Uses ``self._llm_completion`` for a single summary call; falls back to a
-        synthetic Crystal (no LLM enrichment) when the LLM is unavailable or
-        errors, so a session card always has a headline. Returns a fact-dict
-        ready for the store path (``type="summary"``, ``subtype="session_crystal"``,
-        shared ``session_id`` + provenance/provider).
+        Uses ``self._llm_completion`` for a SINGLE call that returns BOTH a
+        ``title`` (short human-readable headline, <=60 chars) and a ``summary``
+        (<=200-char gist).  The title is the Crystal's primary text — it's what
+        the SPA renders as the session-card headline in VaultRow.
+
+        Title selection:
+          1. LLM returns ``{"title": "...", "summary": "..."}`` — use ``title``
+             as Crystal text AND store it in ``metadata["session_title"]``.
+          2. LLM fails (no LLM, JSON parse error, or empty title field) — derive
+             the title from the highest-importance extracted fact (truncated to
+             ~60 chars).  Never fall back to the raw chunk title or the generic
+             "Gemini session" / "Imported conversation" string.
+
+        When no ``llm_completion`` is wired we skip the Crystal entirely rather
+        than emit a low-value synthetic (the atomic facts still carry the shared
+        session_id + provenance, so they remain grouped). "One summary call
+        per conversation" per #356.
         """
-        # A Crystal is a session SUMMARY — it needs a summarizer. When no
-        # ``llm_completion`` is wired we skip it rather than emit a low-value
-        # title-only synthetic (the atomic facts still carry the shared
-        # session_id + provenance, so they remain grouped). "One summary call
-        # per conversation" per #356.
         if self._llm_completion is None:
             return None
 
-        title = (getattr(chunk, "title", None) or "Imported conversation").strip()
+        # Build a representative "chunk" for the prompt from all chunks in the
+        # session (combines messages from every chunk for transcript context).
+        class _SessionProxy:
+            def __init__(self, chunks_list):
+                self.title = None
+                self.messages = []
+                for c in chunks_list:
+                    self.messages.extend(getattr(c, "messages", None) or [])
+
+        proxy_chunk = _SessionProxy(session_chunks)
+
+        crystal_title: Optional[str] = None
         summary_text: Optional[str] = None
         key_outcomes: list = []
         open_threads: list = []
         topics: list = []
 
-        if self._llm_completion is not None:
-            try:
-                raw = await self._llm_completion(self._crystal_prompt(chunk, facts))
-                data = _extract_json_object(raw) if raw else None
-                if isinstance(data, dict):
-                    s = (data.get("summary") or "").strip()
-                    summary_text = s or None
-                    key_outcomes = _as_str_list(data.get("key_outcomes"))
-                    open_threads = _as_str_list(data.get("open_threads"))
-                    topics = _as_str_list(data.get("topics_discussed"))
-            except Exception as e:  # never let a Crystal failure break the import
-                logger.debug("crystal summary LLM call failed: %s", e)
+        try:
+            raw = await self._llm_completion(self._crystal_prompt(proxy_chunk, facts))
+            data = _extract_json_object(raw) if raw else None
+            if isinstance(data, dict):
+                t = (data.get("title") or "").strip()
+                crystal_title = t[:60] if t else None
+                s = (data.get("summary") or "").strip()
+                summary_text = s or None
+                key_outcomes = _as_str_list(data.get("key_outcomes"))
+                open_threads = _as_str_list(data.get("open_threads"))
+                topics = _as_str_list(data.get("topics_discussed"))
+        except Exception as e:  # never let a Crystal failure break the import
+            logger.debug("crystal summary LLM call failed: %s", e)
 
-        if not summary_text:
-            summary_text = f"Imported conversation: {title}"
+        # Fallback: derive title from the highest-importance extracted fact
+        if not crystal_title:
+            crystal_title = _derive_title_from_facts(facts)
 
+        # The Crystal's text IS the title (what the SPA renders as the card
+        # headline in VaultRow -> item.claim.text). summary is stored in metadata.
         meta: dict = {
             "subtype": _METADATA_SUBTYPE_SESSION_CRYSTAL,
             "session_id": session_id,
+            "session_title": crystal_title,
         }
+        if summary_text:
+            meta["session_summary"] = summary_text
         if source:
             meta["import_source"] = source
         if key_outcomes:
@@ -817,7 +1183,7 @@ class ImportEngine:
             meta["topics_discussed"] = topics
 
         return {
-            "text": summary_text[:512],
+            "text": crystal_title[:512],
             "importance": _CRYSTAL_IMPORTANCE,
             "fact_type": "summary",
             "provenance": _IMPORT_PROVENANCE,

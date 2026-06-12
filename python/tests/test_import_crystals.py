@@ -45,6 +45,10 @@ def _install_fake_embedding(monkeypatch):
     monkeypatch.setattr(emb, "get_embedding", lambda t: [0.1, 0.2, 0.3])
 
 
+# Two entries in the same 30-min window: the Gemini adapter merges them into
+# ONE chunk with 4 messages (2 turns). A 2-turn chunk is NOT a singleton so it
+# emits a Crystal. This was updated for feat/semantic-session-grouping: the old
+# single-entry fixture produced a 1-turn singleton which no longer emits a Crystal.
 _GEMINI_ONE_CONVO = json.dumps([
     {
         "header": "Gemini Apps",
@@ -52,6 +56,13 @@ _GEMINI_ONE_CONVO = json.dumps([
         "time": "2026-05-14T09:21:03.512Z",
         "products": ["Gemini Apps"],
         "subtitles": [{"name": "Congrats on the move to Berlin!"}],
+    },
+    {
+        "header": "Gemini Apps",
+        "title": "Prompted What are the best neighbourhoods in Berlin?",
+        "time": "2026-05-14T09:24:00.000Z",
+        "products": ["Gemini Apps"],
+        "subtitles": [{"name": "Prenzlauer Berg and Mitte are popular."}],
     },
 ])
 
@@ -100,8 +111,11 @@ def test_crystal_emitted_with_llm(monkeypatch):
         return [{"text": "User moved to Berlin", "type": "fact", "importance": 8}]
 
     async def fake_completion(prompt):
+        # New schema: {title, summary, key_outcomes, open_threads, topics_discussed}
+        # Crystal text = title (the LLM-generated headline), not summary.
         return (
-            '{"summary": "User relocated to Berlin for a new job", '
+            '{"title": "Moving to Berlin for a new job", '
+            '"summary": "User relocated to Berlin for a new job", '
             '"key_outcomes": ["moved to Berlin"], "open_threads": [], '
             '"topics_discussed": ["relocation", "work"]}'
         )
@@ -124,21 +138,27 @@ def test_crystal_emitted_with_llm(monkeypatch):
         if (p.get("extra_metadata") or {}).get("subtype") != "session_crystal"
     ]
     assert len(crystals) == 1, "exactly one Crystal per conversation"
-    assert len(atomic) == 1
 
     cm = crystals[0]["extra_metadata"]
     assert crystals[0]["fact_type"] == "summary"
     assert crystals[0]["provenance"] == "external"
-    assert crystals[0]["text"] == "User relocated to Berlin for a new job"
+    # Crystal TEXT = LLM title (the headline the SPA renders as the card title)
+    assert crystals[0]["text"] == "Moving to Berlin for a new job"
+    # Summary stored in metadata (not as Crystal text)
+    assert cm["session_summary"] == "User relocated to Berlin for a new job"
+    assert cm["session_title"] == "Moving to Berlin for a new job"
     assert cm["import_source"] == "gemini"
     assert cm["key_outcomes"] == ["moved to Berlin"]
     assert cm["topics_discussed"] == ["relocation", "work"]
 
-    # Crystal + atomic fact share the SAME session_id.
-    assert cm["session_id"] == atomic[0]["extra_metadata"]["session_id"]
-    # Atomic fact carries external provenance + provider.
-    assert atomic[0]["provenance"] == "external"
-    assert atomic[0]["extra_metadata"]["import_source"] == "gemini"
+    # Crystal + atomic facts share the SAME session_id.
+    crystal_sid = cm["session_id"]
+    for atom in atomic:
+        assert atom["extra_metadata"]["session_id"] == crystal_sid, \
+            "All facts must share the Crystal's session_id"
+    # Atomic facts carry external provenance + provider.
+    assert all(a["provenance"] == "external" for a in atomic)
+    assert all(a["extra_metadata"]["import_source"] == "gemini" for a in atomic)
 
 
 def test_crystal_synthetic_fallback_on_bad_llm(monkeypatch):
@@ -160,9 +180,14 @@ def test_crystal_synthetic_fallback_on_bad_llm(monkeypatch):
         p for p in _payloads(client)
         if (p.get("extra_metadata") or {}).get("subtype") == "session_crystal"
     ]
-    # LLM exists but returned garbage → still a Crystal, synthetic headline.
+    # LLM exists but returned garbage -> still a Crystal.
+    # Fallback title is now derived from the highest-importance fact (not
+    # the generic "Imported conversation:" string).
     assert len(crystals) == 1
-    assert crystals[0]["text"].startswith("Imported conversation:")
+    title = crystals[0]["text"]
+    # Should be from the top-importance fact, NOT the generic fallback
+    assert "User moved to Berlin" in title or "Berlin" in title, \
+        f"Fallback title should reference the top fact, got: {title!r}"
     assert crystals[0]["extra_metadata"]["import_source"] == "gemini"
 
 
@@ -173,7 +198,8 @@ def test_no_crystal_without_llm_completion(monkeypatch):
     async def fake_extract(messages, timestamp):
         return [{"text": "User moved to Berlin", "type": "fact", "importance": 8}]
 
-    # No llm_completion → no Crystal, but atomic facts still get session_id.
+    # No llm_completion → no Crystal. Multi-turn sessions still get session_id
+    # (the session grouping happens regardless of whether a Crystal is emitted).
     engine = ImportEngine(client=client, llm_extract=fake_extract)
     asyncio.run(engine.process_batch(source="gemini", content=_GEMINI_ONE_CONVO))
 
@@ -183,7 +209,10 @@ def test_no_crystal_without_llm_completion(monkeypatch):
         for p in payloads
     )
     assert all(p["provenance"] == "external" for p in payloads)
-    assert all(p["extra_metadata"]["session_id"] for p in payloads)
+    # _GEMINI_ONE_CONVO now has 2 entries -> 1 chunk with 2 turns -> multi-turn
+    # session -> atomic facts DO get session_id (unlike singletons).
+    assert all((p.get("extra_metadata") or {}).get("session_id") for p in payloads), \
+        "Multi-turn session facts must have session_id even without llm_completion"
 
 
 # ── operations: metadata threads into the canonical claim ────────────────
