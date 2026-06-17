@@ -95,7 +95,11 @@ def auto_recall(
         return None
 
     try:
-        results = run_sync(client.recall(query, top_k=top_k))
+        results = run_sync(
+            client.recall(
+                query, top_k=top_k, max_candidates=state.get_max_candidate_pool()
+            )
+        )
 
         if results:
             return _format_recall_context(results)
@@ -128,7 +132,9 @@ async def auto_recall_async(
         return None
 
     try:
-        results = await client.recall(query, top_k=top_k)
+        results = await client.recall(
+            query, top_k=top_k, max_candidates=state.get_max_candidate_pool()
+        )
         if results:
             return _format_recall_context(results)
     except Exception as e:

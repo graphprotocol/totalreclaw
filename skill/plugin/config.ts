@@ -260,6 +260,12 @@ export const CONFIG = {
   // See: docs/specs/totalreclaw/client-consistency.md
   cosineThreshold: parseFloat(process.env.TOTALRECLAW_COSINE_THRESHOLD ?? '0.15'),
   extractInterval: parseInt(process.env.TOTALRECLAW_EXTRACT_INTERVAL ?? process.env.TOTALRECLAW_EXTRACT_EVERY_TURNS ?? '3', 10),
+  // Self-hosted fallback for max-facts-per-extraction. `undefined` when the
+  // env var is unset so getMaxFactsPerExtraction() can fall through to the
+  // billing cache then the built-in MAX_FACTS_PER_EXTRACTION constant.
+  maxFactsPerExtraction: process.env.TOTALRECLAW_MAX_FACTS_PER_EXTRACTION
+    ? parseInt(process.env.TOTALRECLAW_MAX_FACTS_PER_EXTRACTION, 10)
+    : undefined,
   relevanceThreshold: parseFloat(process.env.TOTALRECLAW_RELEVANCE_THRESHOLD ?? '0.3'),
   semanticSkipThreshold: parseFloat(process.env.TOTALRECLAW_SEMANTIC_SKIP_THRESHOLD ?? '0.85'),
   cacheTtlMs: parseInt(process.env.TOTALRECLAW_CACHE_TTL_MS ?? String(5 * 60 * 1000), 10),

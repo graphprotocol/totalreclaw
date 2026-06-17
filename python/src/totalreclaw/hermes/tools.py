@@ -224,7 +224,12 @@ async def recall(args: dict, state: "PluginState", **kwargs) -> str:
         except Exception:
             pass
 
-        results = await client.recall(query, query_embedding=query_embedding, top_k=top_k)
+        results = await client.recall(
+            query,
+            query_embedding=query_embedding,
+            top_k=top_k,
+            max_candidates=state.get_max_candidate_pool(),
+        )
         return json.dumps({
             "count": len(results),
             "memories": [

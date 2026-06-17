@@ -22,6 +22,7 @@ DEFAULT_EXTRACTION_INTERVAL = 3
 DEFAULT_MAX_FACTS = 15
 DEFAULT_MIN_IMPORTANCE = 6
 DEFAULT_RECALL_TOP_K = 16
+DEFAULT_MAX_CANDIDATE_POOL = 250
 BILLING_CACHE_TTL = 7200  # 2 hours
 STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity threshold for near-duplicate detection
 
@@ -173,6 +174,10 @@ class AgentState:
         self._max_facts = DEFAULT_MAX_FACTS
         self._min_importance = DEFAULT_MIN_IMPORTANCE
         self._recall_top_k = DEFAULT_RECALL_TOP_K
+        # Server-advertised candidate-pool size (from billing features).
+        # ``None`` until update_from_billing populates it; getter falls back
+        # to env override then DEFAULT_MAX_CANDIDATE_POOL.
+        self._max_candidate_pool_server: Optional[int] = None
         self._quota_warning: Optional[str] = None
         self._server_url = server_url
         self._session_id: Optional[str] = None
@@ -218,9 +223,19 @@ class AgentState:
             except ValueError:
                 pass
 
+        max_facts_env = os.environ.get("TOTALRECLAW_MAX_FACTS_PER_EXTRACTION")
+        if max_facts_env:
+            try:
+                val = int(max_facts_env)
+                if val > 0:
+                    self._max_facts = val
+            except ValueError:
+                pass
+
         self._env_interval_override = interval_env is not None
         self._env_importance_override = importance_env is not None
         self._env_recall_top_k_override = recall_top_k_env is not None
+        self._env_max_facts_override = max_facts_env is not None
 
     def _try_auto_configure(self) -> None:
         """Try to configure from env vars or config file.
@@ -527,6 +542,33 @@ class AgentState:
         """
         return self._recall_top_k
 
+    def get_max_candidate_pool(self) -> int:
+        """Return the search candidate-pool size.
+
+        Precedence (highest first), matching the ZeroClaw Rust crate:
+          1. Tier-aware env override — ``CANDIDATE_POOL_MAX_PRO`` (pro) or
+             ``CANDIDATE_POOL_MAX_FREE`` (free/unknown), resolved at call
+             time so the tier from the live billing cache is respected.
+          2. Billing-cache value (``features.max_candidate_pool``) — set by
+             ``update_from_billing``.
+          3. ``DEFAULT_MAX_CANDIDATE_POOL`` (250) — compile-time default.
+        """
+        tier = (self.get_cached_billing() or {}).get("tier")
+        env_name = (
+            "CANDIDATE_POOL_MAX_PRO" if tier == "pro" else "CANDIDATE_POOL_MAX_FREE"
+        )
+        env_val = os.environ.get(env_name)
+        if env_val:
+            try:
+                val = int(env_val)
+                if val > 0:
+                    return val
+            except ValueError:
+                pass
+        if self._max_candidate_pool_server is not None:
+            return self._max_candidate_pool_server
+        return DEFAULT_MAX_CANDIDATE_POOL
+
     def update_from_billing(self, billing_status: dict) -> None:
         """Update extraction config from billing endpoint's features dict.
 
@@ -545,10 +587,21 @@ class AgentState:
                 except (ValueError, TypeError):
                     pass
 
-        server_max_facts = features.get("max_facts_per_extraction")
-        if server_max_facts is not None:
+        # Only apply server max_facts if no env var override
+        if not self._env_max_facts_override:
+            server_max_facts = features.get("max_facts_per_extraction")
+            if server_max_facts is not None:
+                try:
+                    self._max_facts = int(server_max_facts)
+                except (ValueError, TypeError):
+                    pass
+
+        server_pool = features.get("max_candidate_pool")
+        if server_pool is not None:
             try:
-                self._max_facts = int(server_max_facts)
+                val = int(server_pool)
+                if val > 0:
+                    self._max_candidate_pool_server = val
             except (ValueError, TypeError):
                 pass
 

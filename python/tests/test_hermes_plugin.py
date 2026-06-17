@@ -138,6 +138,72 @@ class TestPluginState:
         state.update_from_billing({})
         assert state.get_recall_top_k() == DEFAULT_RECALL_TOP_K
 
+    # --- max_facts_per_extraction config (#364 self-host env parity) ---
+
+    def test_max_facts_default_is_15(self):
+        """Default max_facts is 15 with no env var or billing override."""
+        state = _make_state()
+        assert state.get_max_facts_per_extraction() == 15
+
+    def test_max_facts_env_override(self):
+        """TOTALRECLAW_MAX_FACTS_PER_EXTRACTION env var overrides default."""
+        state = _make_state(TOTALRECLAW_MAX_FACTS_PER_EXTRACTION="25")
+        assert state.get_max_facts_per_extraction() == 25
+
+    def test_max_facts_billing_override(self):
+        """Billing cache max_facts overrides default when no env set."""
+        state = _make_state()
+        state.update_from_billing({"features": {"max_facts_per_extraction": 30}})
+        assert state.get_max_facts_per_extraction() == 30
+
+    def test_max_facts_env_beats_billing(self):
+        """Env var max_facts is not overridden by billing cache (env wins)."""
+        state = _make_state(TOTALRECLAW_MAX_FACTS_PER_EXTRACTION="25")
+        state.update_from_billing({"features": {"max_facts_per_extraction": 30}})
+        assert state.get_max_facts_per_extraction() == 25
+
+    def test_max_facts_invalid_env_keeps_default(self):
+        """Invalid TOTALRECLAW_MAX_FACTS_PER_EXTRACTION keeps default."""
+        state = _make_state(TOTALRECLAW_MAX_FACTS_PER_EXTRACTION="nope")
+        assert state.get_max_facts_per_extraction() == 15
+
+    # --- max_candidate_pool config (#364 — wire dead billing field) ---
+
+    def test_candidate_pool_default_is_250(self):
+        """Default candidate pool is 250 with no env var or billing override."""
+        state = _make_state()
+        assert state.get_max_candidate_pool() == 250
+
+    def test_candidate_pool_billing_override(self):
+        """Billing cache max_candidate_pool overrides default."""
+        state = _make_state()
+        state.update_from_billing({"features": {"max_candidate_pool": 800}})
+        assert state.get_max_candidate_pool() == 800
+
+    def test_candidate_pool_env_free_override(self):
+        """CANDIDATE_POOL_MAX_FREE applies when tier is free/unknown.
+
+        The pool env is read at call time (tier-aware, matching the Rust
+        crate), so the override is patched around the getter call.
+        """
+        state = _make_state()
+        with patch.dict(os.environ, {"CANDIDATE_POOL_MAX_FREE": "500"}):
+            assert state.get_max_candidate_pool() == 500
+
+    def test_candidate_pool_env_pro_tier_aware(self):
+        """CANDIDATE_POOL_MAX_PRO applies when billing tier is pro."""
+        state = _make_state()
+        state.set_billing_cache({"tier": "pro"})
+        with patch.dict(os.environ, {"CANDIDATE_POOL_MAX_PRO": "1200"}):
+            assert state.get_max_candidate_pool() == 1200
+
+    def test_candidate_pool_env_beats_billing(self):
+        """Tier-aware env override wins over billing-advertised pool."""
+        state = _make_state()
+        state.update_from_billing({"features": {"max_candidate_pool": 800}})
+        with patch.dict(os.environ, {"CANDIDATE_POOL_MAX_FREE": "500"}):
+            assert state.get_max_candidate_pool() == 500
+
     def test_update_from_billing_sets_server_config(self):
         """Server-driven extraction config from billing features dict."""
         state = _make_state()
@@ -424,7 +490,7 @@ class TestHooks:
         mock_result = MagicMock()
         mock_result.text = "User prefers dark mode"
 
-        async def mock_recall(query, top_k=DEFAULT_RECALL_TOP_K):
+        async def mock_recall(query, top_k=DEFAULT_RECALL_TOP_K, max_candidates=250):
             assert top_k == DEFAULT_RECALL_TOP_K, f"Expected top_k={DEFAULT_RECALL_TOP_K}, got top_k={top_k}"
             return [mock_result]
 
@@ -444,7 +510,7 @@ class TestHooks:
         mock_result = MagicMock()
         mock_result.text = "User likes Python"
 
-        async def mock_recall(query, top_k=16):
+        async def mock_recall(query, top_k=16, max_candidates=250):
             return [mock_result]
 
         mock_client.recall = mock_recall

@@ -661,6 +661,11 @@ function getMaxFactsPerExtraction(): number {
   }
   const cache = readBillingCache();
   if (cache?.features?.max_facts_per_extraction != null) return cache.features.max_facts_per_extraction;
+  // Env override is read in config.ts (env access is centralized there so
+  // the env-harvesting scanner-sim stays a no-op for index.ts).
+  if (CONFIG.maxFactsPerExtraction && CONFIG.maxFactsPerExtraction > 0) {
+    return CONFIG.maxFactsPerExtraction;
+  }
   return MAX_FACTS_PER_EXTRACTION;
 }
 

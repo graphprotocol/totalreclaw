@@ -323,12 +323,12 @@ export function getExtractInterval(): number {
 }
 
 /**
- * Get the max facts per extraction from billing cache or constant fallback.
+ * Get the max facts per extraction from billing cache or env/constant fallback.
  */
 export function getMaxFactsPerExtraction(): number {
   const cache = readBillingCache();
   if (cache?.features?.max_facts_per_extraction != null) return cache.features.max_facts_per_extraction;
-  return 15;
+  return parseInt(process.env.TOTALRECLAW_MAX_FACTS_PER_EXTRACTION || '15', 10);
 }
 
 // ---------------------------------------------------------------------------

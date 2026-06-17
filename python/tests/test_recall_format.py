@@ -130,7 +130,7 @@ class TestAutoRecallFormat:
         """Build a minimal AgentState mock that returns `results` from recall."""
         mock_client = MagicMock()
 
-        async def _recall(query, top_k=8):
+        async def _recall(query, top_k=8, max_candidates=250):
             return results
 
         mock_client.recall = _recall
@@ -181,7 +181,7 @@ class TestAutoRecallAsyncFormat:
     def _make_state(self, results):
         mock_client = MagicMock()
 
-        async def _recall(query, top_k=8):
+        async def _recall(query, top_k=8, max_candidates=250):
             return results
 
         mock_client.recall = _recall
@@ -238,7 +238,7 @@ class TestHermesRecallDateField:
 
         mock_client = MagicMock()
 
-        async def _recall(query, query_embedding=None, top_k=8):
+        async def _recall(query, query_embedding=None, top_k=8, max_candidates=250):
             return [mock_result]
 
         mock_client.recall = _recall
@@ -270,7 +270,7 @@ class TestHermesRecallDateField:
 
         mock_client = MagicMock()
 
-        async def _recall(query, query_embedding=None, top_k=8):
+        async def _recall(query, query_embedding=None, top_k=8, max_candidates=250):
             return [mock_result]
 
         mock_client.recall = _recall
@@ -300,7 +300,7 @@ class TestHermesRecallDateField:
 
         mock_client = MagicMock()
 
-        async def _recall(query, query_embedding=None, top_k=8):
+        async def _recall(query, query_embedding=None, top_k=8, max_candidates=250):
             return [mock_result]
 
         mock_client.recall = _recall

@@ -228,7 +228,10 @@ pub fn get_max_facts_per_extraction(cache: Option<&BillingCache>) -> u32 {
             return max;
         }
     }
-    DEFAULT_MAX_FACTS_PER_EXTRACTION
+    std::env::var("TOTALRECLAW_MAX_FACTS_PER_EXTRACTION")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_MAX_FACTS_PER_EXTRACTION)
 }
 
 /// Get the max candidate pool size for search.

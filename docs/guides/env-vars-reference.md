@@ -150,6 +150,10 @@ Self-hosted deployments can still set the following as env-var fallbacks — on 
 | `TOTALRECLAW_TRAPDOOR_BATCH_SIZE` | Trapdoors per subgraph query | `5` |
 | `TOTALRECLAW_SUBGRAPH_PAGE_SIZE` | Graph Studio page size | `1000` |
 | `TOTALRECLAW_EXTRACT_INTERVAL` | Turns between auto-extractions | `3` |
+| `TOTALRECLAW_MAX_FACTS_PER_EXTRACTION` | Max facts captured per auto-extraction batch | `15` |
+| `TOTALRECLAW_RECALL_TOP_K` | Results returned per recall (after reranking) | `16` |
+| `CANDIDATE_POOL_MAX_FREE` | Search candidate-pool size (free / unknown tier) | `250` (Hermes) / `100` (ZeroClaw) |
+| `CANDIDATE_POOL_MAX_PRO` | Search candidate-pool size (pro tier) | `250` |
 | `TOTALRECLAW_DATA_EDGE_ADDRESS` | DataEdge contract address (self-hosted chain only) | Built-in |
 | `TOTALRECLAW_ENTRYPOINT_ADDRESS` | ERC-4337 EntryPoint (self-hosted chain only) | v0.7 address |
 | `TOTALRECLAW_RPC_URL` | Alternative RPC URL (self-hosted chain only) | Relay bundler |
