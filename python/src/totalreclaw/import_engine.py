@@ -594,7 +594,11 @@ class ImportEngine:
             )
         elif chunks_with_no_facts > 0:
             errors.append(
-                f"{chunks_with_no_facts}/{attempted} chunks produced 0 facts (possible LLM failures)"
+                f"{chunks_with_no_facts}/{attempted} chunks produced 0 facts — either the "
+                "LLM returned an empty response (timeout / rate limit / model "
+                "declined) or every candidate was filtered below the import "
+                "thresholds (text < 5 chars or importance < 6). Set "
+                "TOTALRECLAW_LOG=DEBUG to log per-chunk extractor responses."
             )
 
         smart_import_summary = None

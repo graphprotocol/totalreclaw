@@ -730,6 +730,41 @@ def _make_extractor(state: "PluginState"):
     return extract
 
 
+def _get_or_create_import_engine(state: "PluginState", source: str, file_path: Optional[str]):
+    """Return a cached ``ImportEngine`` for ``(source, file_path)``, creating one if needed.
+
+    The agent's manual paging flow drives multi-batch imports through repeated
+    ``totalreclaw_import_batch`` tool calls (one per offset). Each call lands as
+    a fresh tool invocation, so without this cache the engine — and its
+    smart-import profile + session-assignment state — is rebuilt every call,
+    paying the 17-25 min profiling pass per batch on large imports (#389).
+
+    Only ``file_path`` imports are cached. ``content``-based imports have no
+    stable cache key, so they keep the per-call engine (uncached) behaviour.
+    """
+    from totalreclaw.import_engine import ImportEngine
+
+    cache = getattr(state, "_import_engines", None)
+    if cache is None:
+        cache = {}
+        state._import_engines = cache
+
+    cache_key = (source, file_path) if file_path else None
+    if cache_key is not None:
+        engine = cache.get(cache_key)
+        if engine is not None:
+            return engine
+
+    engine = ImportEngine(
+        client=state.get_client(),
+        llm_extract=_make_extractor(state),
+        llm_completion=_make_llm_completion(state),
+    )
+    if cache_key is not None:
+        cache[cache_key] = engine
+    return engine
+
+
 def _make_llm_completion(state: "PluginState"):
     """Build an async prompt-only LLM completion callable for smart-import.
 
@@ -983,13 +1018,7 @@ async def import_batch(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": "No source specified"})
 
     try:
-        from totalreclaw.import_engine import ImportEngine
-
-        engine = ImportEngine(
-            client=client,
-            llm_extract=_make_extractor(state),
-            llm_completion=_make_llm_completion(state),
-        )
+        engine = _get_or_create_import_engine(state, source, file_path)
         result = await engine.process_batch(
             source=source,
             file_path=file_path,
