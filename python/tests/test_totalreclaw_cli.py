@@ -171,3 +171,69 @@ class TestMemoryProviderCli:
         assert cfg["memory"]["provider"] == "totalreclaw"
         assert cfg["memory"]["memory_enabled"] is False
         assert cfg["memory"]["user_profile_enabled"] is False
+
+    # ------------------------------------------------------------------
+    # #390: the top-level CLI must surface the `--force` flag that
+    # install_sidecar() advertises in its error message. Pre-fix, the
+    # error said "Pass force=True (or --force on the CLI) to replace it"
+    # but the console-script CLI didn't register --force, leaving users
+    # stuck whenever they hit a hand-edited sidecar (e.g. after manual
+    # plugin debugging).
+    # ------------------------------------------------------------------
+
+    def test_issue_390_activate_memory_provider_accepts_force(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        """`totalreclaw activate-memory-provider --force` overwrites a hand-edited sidecar."""
+        # Seed a hand-edited (managed-marker-less) sidecar at the discoverable path.
+        sidecar_dir = tmp_path / "plugins" / "totalreclaw"
+        sidecar_dir.mkdir(parents=True)
+        hand_edited = "# hand-rolled sidecar by the user — no managed-marker\n"
+        (sidecar_dir / "__init__.py").write_text(hand_edited, encoding="utf-8")
+
+        # Without --force the CLI must refuse cleanly (exit 2, error on stderr).
+        rc_no_force = tr_cli.main(
+            ["activate-memory-provider", "--hermes-home", str(tmp_path)]
+        )
+        captured_no_force = capsys.readouterr()
+        assert rc_no_force == 2
+        assert "Refusing to overwrite" in captured_no_force.err
+        assert "--force" in captured_no_force.err
+        # The hand-edited file is untouched.
+        assert (sidecar_dir / "__init__.py").read_text(encoding="utf-8") == hand_edited
+
+        # With --force the CLI overwrites it.
+        rc_force = tr_cli.main(
+            ["activate-memory-provider", "--hermes-home", str(tmp_path), "--force"]
+        )
+        captured_force = capsys.readouterr()
+        assert rc_force == 0
+        assert "active provider:  totalreclaw" in captured_force.out
+        # The managed marker is now present.
+        rewritten = (sidecar_dir / "__init__.py").read_text(encoding="utf-8")
+        assert "managed-by: totalreclaw.hermes.install_memory_provider" in rewritten
+
+    def test_issue_390_install_memory_provider_accepts_force(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        """`totalreclaw install-memory-provider --force` overwrites a hand-edited sidecar (tools-only path)."""
+        sidecar_dir = tmp_path / "plugins" / "totalreclaw"
+        sidecar_dir.mkdir(parents=True)
+        (sidecar_dir / "__init__.py").write_text("# user-authored\n", encoding="utf-8")
+
+        rc_no_force = tr_cli.main(
+            ["install-memory-provider", "--hermes-home", str(tmp_path)]
+        )
+        captured_no_force = capsys.readouterr()
+        assert rc_no_force == 2
+        assert "Refusing to overwrite" in captured_no_force.err
+
+        rc_force = tr_cli.main(
+            ["install-memory-provider", "--hermes-home", str(tmp_path), "--force"]
+        )
+        captured_force = capsys.readouterr()
+        assert rc_force == 0
+        # tools-only path: provider is NOT switched to totalreclaw.
+        assert "tools-only" in captured_force.out
+        rewritten = (sidecar_dir / "__init__.py").read_text(encoding="utf-8")
+        assert "managed-by: totalreclaw.hermes.install_memory_provider" in rewritten

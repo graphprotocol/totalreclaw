@@ -107,6 +107,14 @@ After the procedure completes (the user replies *"Done — continue setting up T
    ```bash
    IN_DOCKER=$(grep -q -E 'docker|containerd' /proc/1/cgroup 2>/dev/null && echo yes || echo no)
    HAS_MSG_BOT="$(printenv | grep -E '^HERMES_(TELEGRAM|DISCORD|SLACK|MATRIX|FEISHU|WHATSAPP)_(BOT_TOKEN|HOMESERVER|APP_ID|PHONE_NUMBER_ID)=' | head -1)"
+   # Fallback (#390): some Hermes gateway deployments expose only
+   # HERMES_SESSION_PLATFORM=<telegram|discord|slack|matrix|feishu|whatsapp> —
+   # the bot-token vars live in a separate secret store the agent shell can't see.
+   # Without this fallback the probe falls into the "Detection fails / ambiguous"
+   # row and asks the user a question that the env already answered.
+   [ -z "$HAS_MSG_BOT" ] && printenv HERMES_SESSION_PLATFORM 2>/dev/null \
+     | grep -q -E '^(telegram|discord|slack|matrix|feishu|whatsapp)$' \
+     && HAS_MSG_BOT="HERMES_SESSION_PLATFORM=$(printenv HERMES_SESSION_PLATFORM)"
    HAS_SYSTEMCTL=$(command -v systemctl >/dev/null 2>&1 && echo yes || echo no)
    HAS_LAUNCHCTL=$(command -v launchctl >/dev/null 2>&1 && echo yes || echo no)
    ```
@@ -127,7 +135,22 @@ After the procedure completes (the user replies *"Done — continue setting up T
 
    Wait for the user's reply containing "continue" / "set up" / similar resumption language. Do NOT proceed to Account setup until the user confirms. Do NOT issue any restart yourself.
 
-5. **Install the MemoryProvider sidecar** (2.4.0+ / issue #275 — Path B). **AUTOMATIC as of 2.4.5rc3 — normally a no-op; skip it.**
+5. **(SILENT — emit nothing on the GO path.) Verify the plugin tools bound after restart (#390).** Entry-point auto-discovery (step 3 explainer) is usually fine, but a small fraction of Hermes deployments don't re-scan entry points on a single restart, leaving `totalreclaw_pair` and the rest unregistered — and the agent then can't proceed because *every* Account-setup step routes through plugin-registered tools. Probe + auto-fallback to the manual manifest install:
+   ```bash
+   if ! ( "$(dirname "$HERMES_PYTHON")/hermes" tools list 2>/dev/null | grep -q '\btotalreclaw' \
+          || hermes tools list 2>/dev/null | grep -q '\btotalreclaw' ); then
+     "$(dirname "$HERMES_PYTHON")/hermes" plugins install p-diogo/totalreclaw-hermes --enable 2>/dev/null \
+       || hermes plugins install p-diogo/totalreclaw-hermes --enable
+     # Manifest write requires ANOTHER restart for the tools to bind. Re-emit the
+     # surface-matched restart line from step 4 ONCE and wait for the user.
+     NEEDS_SECOND_RESTART=yes
+   fi
+   ```
+   - If `NEEDS_SECOND_RESTART=yes`: re-emit the matching restart line from the step-4 matrix verbatim (same surface — Telegram / docker / systemd / launchd / standalone), wait for the user's continuation reply, then re-run the `tools list | grep` probe ONE MORE time.
+   - If after the second restart `tools list` still shows no `totalreclaw`: surface the failure verbatim (`> Couldn't bind the totalreclaw plugin tools after install. Check 'hermes plugins list' / 'hermes tools list' and the gateway logs.`) and **stop** — do NOT proceed to Account setup with no tools bound (the `totalreclaw_pair` call below would fail and there is no CLI fallback per the phrase-safety rule).
+   - If the probe passed on the first restart: proceed silently to Account setup.
+
+6. **Install the MemoryProvider sidecar** (2.4.0+ / issue #275 — Path B). **AUTOMATIC as of 2.4.5rc3 — normally a no-op; skip it.**
 
    > **As of 2.4.5rc3, account setup (pairing) AUTOMATICALLY activates TotalReclaw as the native Hermes memory provider** — it installs the provider sidecar at the discoverable path, sets `memory.provider=totalreclaw`, and disables Hermes' builtin local store (so it stops running in parallel — the split-brain). For a normal install you can **skip this step**; pairing handles it. The steps below remain as a **manual fallback / verification** path — and fix the older guide's broken `totalreclaw activate-memory-provider` reference (it was never a real subcommand, which is why activation silently never happened pre-rc3). The real commands live on the **`totalreclaw`** console script.
 
@@ -152,7 +175,7 @@ After the procedure completes (the user replies *"Done — continue setting up T
 
    The install commands are idempotent. Re-running on an already-installed sidecar is safe — the managed marker comment prevents clobbering hand-edited files (pass `--force` to override).
 
-6. **Disable the agent's built-in `memory` tool** (rc6 QA F3/#371 — required; it was being skipped). Hermes' built-in `memory` toolset competes with TotalReclaw for "remember / recall" intents — with both active the agent writes to the built-in `MEMORY.md` / `USER.md` instead of the TotalReclaw vault, causing split-brain memory (QA observed this on the forget path). Run:
+7. **Disable the agent's built-in `memory` tool** (rc6 QA F3/#371 — required; it was being skipped). Hermes' built-in `memory` toolset competes with TotalReclaw for "remember / recall" intents — with both active the agent writes to the built-in `MEMORY.md` / `USER.md` instead of the TotalReclaw vault, causing split-brain memory (QA observed this on the forget path). Run:
    ```bash
    "$(dirname "$HERMES_PYTHON")/hermes" tools disable memory 2>/dev/null || hermes tools disable memory
    ```
@@ -165,6 +188,8 @@ After the procedure completes (the user replies *"Done — continue setting up T
 The agent never generates the recovery phrase. Only the user's browser does, via the `totalreclaw_pair` tool.
 
 **This section starts AUTOMATICALLY after the user confirms `done` to the install-procedure step 4 `/restart` request.** Do not ask "want me to set up your account?". The user already consented by sending the install prompt.
+
+> **Precondition (#390):** `totalreclaw_pair` is a *plugin-registered tool*, not a CLI subcommand — it only resolves once the plugin has bound after gateway restart. Install-procedure step 5 (`Verify the plugin tools bound after restart`) is the gate; do NOT skip it. If step 5 reported a fallback restart was needed, only enter this section after the SECOND restart and after the verify probe returned `totalreclaw` present in `hermes tools list`.
 
 1. Check whether credentials already exist:
    ```bash

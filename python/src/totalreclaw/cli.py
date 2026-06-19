@@ -455,6 +455,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--hermes-home", type=Path, default=None,
         help="Override the Hermes home (default: $HERMES_HOME or ~/.hermes).",
     )
+    sp_activate.add_argument(
+        "--force", action="store_true", default=False,
+        help="Overwrite a hand-edited sidecar (default: refuse). "
+             "Surfaced because install_sidecar() raises with a 'Pass --force' "
+             "hint; without this flag the hint was unreachable (#390).",
+    )
     # `install-memory-provider` — tools-only: drop the sidecar WITHOUT making
     # TR the active provider or disabling the builtin (for users who keep
     # another provider active but want TR's tools available).
@@ -466,6 +472,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp_install.add_argument(
         "--hermes-home", type=Path, default=None,
         help="Override the Hermes home (default: $HERMES_HOME or ~/.hermes).",
+    )
+    sp_install.add_argument(
+        "--force", action="store_true", default=False,
+        help="Overwrite a hand-edited sidecar (default: refuse).",
     )
     # `memory-status` — JSON-print the active memory provider. Used by setup
     # guides to decide whether to activate. Stable JSON shape: {"provider": ...}.
@@ -495,7 +505,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.command == "activate-memory-provider":
         from totalreclaw.hermes.install_memory_provider import install_and_activate
 
-        result = install_and_activate(hermes_home=getattr(args, "hermes_home", None))
+        try:
+            result = install_and_activate(
+                hermes_home=getattr(args, "hermes_home", None),
+                force=getattr(args, "force", False),
+            )
+        except RuntimeError as exc:
+            sys.stderr.write(f"{exc}\n")
+            return 2
         print(
             f"TotalReclaw is now the active Hermes memory provider.\n"
             f"  sidecar:          {result['sidecar_path']}\n"
@@ -508,9 +525,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.command == "install-memory-provider":
         from totalreclaw.hermes.install_memory_provider import install_and_activate
 
-        result = install_and_activate(
-            hermes_home=getattr(args, "hermes_home", None), activate=False
-        )
+        try:
+            result = install_and_activate(
+                hermes_home=getattr(args, "hermes_home", None),
+                activate=False,
+                force=getattr(args, "force", False),
+            )
+        except RuntimeError as exc:
+            sys.stderr.write(f"{exc}\n")
+            return 2
         print(
             f"TotalReclaw provider sidecar installed (tools-only, not activated).\n"
             f"  sidecar:         {result['sidecar_path']}\n"
