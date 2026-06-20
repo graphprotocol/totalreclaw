@@ -460,6 +460,9 @@ class ImportEngine:
         chunks_with_no_facts = 0
         extraction_failures = 0
         all_extracted: list[dict] = []
+        # Per-chunk "0 facts" diagnostics (issue #389 follow-up).
+        chunk_diagnostics: list[dict] = []
+        reason_counts: dict[str, int] = {}
 
         # Extraction phase
         extracted_chunk_count = 0
@@ -481,7 +484,7 @@ class ImportEngine:
             extracted_chunk_count += 1
 
             try:
-                extracted = await self._extract_from_chunk(
+                extracted, zero_reason = await self._extract_from_chunk(
                     chunk,
                     enriched_system_prompt=(
                         smart_ctx.enriched_system_prompt if smart_ctx else None
@@ -489,6 +492,12 @@ class ImportEngine:
                 )
                 if not extracted:
                     chunks_with_no_facts += 1
+                    chunk_diagnostics.append({
+                        "index": global_index,
+                        "title": chunk.title,
+                        "reason": zero_reason,
+                    })
+                    reason_counts[zero_reason] = reason_counts.get(zero_reason, 0) + 1
                 facts_extracted += len(extracted)
 
                 is_singleton = session_is_singleton.get(global_index, True)
@@ -586,19 +595,18 @@ class ImportEngine:
         attempted = chunks_processed - chunks_skipped
         if extraction_failures > 0:
             errors.insert(0, f"{extraction_failures} chunk(s) failed during LLM extraction")
+        zero_summary = _summarize_zero_fact_reasons(reason_counts)
         if attempted > 0 and chunks_with_no_facts >= attempted and facts_extracted == 0:
             errors.insert(0,
-                f"All {attempted} extracted chunks produced 0 facts. "
-                "This usually means LLM extraction calls failed (timeout or rate limit). "
-                "Check logs for details or retry the import."
+                f"All {attempted} extracted chunks produced 0 facts — {zero_summary}. "
+                "Set TOTALRECLAW_LOG=DEBUG to log per-chunk extractor responses, "
+                "or inspect chunk_diagnostics for which chunks failed and why."
             )
         elif chunks_with_no_facts > 0:
             errors.append(
-                f"{chunks_with_no_facts}/{attempted} chunks produced 0 facts — either the "
-                "LLM returned an empty response (timeout / rate limit / model "
-                "declined) or every candidate was filtered below the import "
-                "thresholds (text < 5 chars or importance < 6). Set "
-                "TOTALRECLAW_LOG=DEBUG to log per-chunk extractor responses."
+                f"{chunks_with_no_facts}/{attempted} chunks produced 0 facts — {zero_summary}. "
+                "Set TOTALRECLAW_LOG=DEBUG to log per-chunk extractor responses, "
+                "or inspect chunk_diagnostics for which chunks failed and why."
             )
 
         smart_import_summary = None
@@ -623,6 +631,7 @@ class ImportEngine:
             duration_ms=_now_ms() - start_ms,
             chunks_skipped=chunks_skipped,
             smart_import=smart_import_summary,
+            chunk_diagnostics=chunk_diagnostics or None,
         )
 
     # ── Internal: Fact Batch (pre-structured sources) ────────────────────
@@ -701,7 +710,7 @@ class ImportEngine:
         self,
         chunk: ConversationChunk,
         enriched_system_prompt: Optional[str] = None,
-    ) -> list[dict]:
+    ) -> tuple[list[dict], Optional[str]]:
         """Call the llm_extract callable to extract facts from a conversation chunk.
 
         Converts the chunk's messages to the format expected by the extractor:
@@ -714,6 +723,11 @@ class ImportEngine:
         ``extractFacts(messages, 'full', existing, enrichedSystemPrompt)``).
         Otherwise the kwarg is silently dropped so older callables keep
         working unchanged.
+
+        Returns ``(valid_facts, reason)`` where ``reason`` is None when facts
+        were produced, otherwise a ``REASON_*`` constant explaining why this
+        chunk yielded nothing (issue #389 follow-up) — used to populate
+        ``BatchImportResult.chunk_diagnostics``.
         """
         # Normalize message format (adapters use 'text', extractors use 'content')
         messages = [
@@ -729,13 +743,19 @@ class ImportEngine:
         else:
             extracted = await self._llm_extract(messages, timestamp)
 
-        # Validate and normalize extracted facts
+        # Validate and normalize extracted facts. Track why candidates are
+        # dropped so an empty result can be classified (issue #389).
         valid: list[dict] = []
+        dropped_text = 0
+        dropped_importance = 0
+        dropped_nondict = 0
         for item in (extracted or []):
             if not isinstance(item, dict):
+                dropped_nondict += 1
                 continue
             text = str(item.get("text", "")).strip()
             if len(text) < 5:
+                dropped_text += 1
                 continue
 
             fact_type = str(item.get("type", "fact"))
@@ -751,6 +771,7 @@ class ImportEngine:
 
             # Skip low-importance facts (same threshold as auto-extraction)
             if importance < 6:
+                dropped_importance += 1
                 continue
 
             valid.append({
@@ -759,7 +780,10 @@ class ImportEngine:
                 "importance": importance,
             })
 
-        return valid
+        reason = _classify_zero_fact_reason(
+            len(valid), len(extracted or []), dropped_text, dropped_importance, dropped_nondict,
+        )
+        return valid, reason
 
     # ── Smart-import helpers (imp-4) ────────────────────────────────────
 
@@ -1301,6 +1325,64 @@ class ImportEngine:
                         break
 
         return facts_stored, errors
+
+
+# ── Per-chunk "0 facts" diagnostics (issue #389 follow-up) ──────────────
+# When a chunk produces no storable facts, classify *why* so the aggregate
+# message + BatchImportResult.chunk_diagnostics can name each failing chunk
+# instead of the old vague "(possible LLM failures)" line. Engine-only: we
+# cannot split empty-LLM-response from parse-failure without widening the
+# llm_extract contract, so both collapse to REASON_EXTRACTOR_EMPTY
+# (TOTALRECLAW_LOG=DEBUG still sub-splits them inside the extractor).
+REASON_EXTRACTOR_EMPTY = "extractor_empty"
+REASON_FILTERED_IMPORTANCE = "filtered_importance"
+REASON_FILTERED_TEXT = "filtered_text"
+REASON_FILTERED = "filtered"
+REASON_MALFORMED = "malformed"
+
+
+def _classify_zero_fact_reason(
+    valid_count: int,
+    raw_count: int,
+    dropped_text: int,
+    dropped_importance: int,
+    dropped_nondict: int,
+) -> Optional[str]:
+    """Classify why a chunk produced 0 storable facts.
+
+    Returns None when the chunk actually yielded facts (no diagnostic). Buckets:
+    extractor returned nothing; all candidates filtered for importance < 6; all
+    filtered for text < 5 chars; all items malformed (non-dict); or a mix.
+    """
+    if valid_count > 0:
+        return None
+    if raw_count == 0:
+        return REASON_EXTRACTOR_EMPTY
+    # Every item was a non-dict (malformed extractor output) — distinct from a
+    # fact that failed a threshold. Only triggers when nothing else was dropped.
+    if dropped_nondict and not dropped_text and not dropped_importance:
+        return REASON_MALFORMED
+    if dropped_importance and not dropped_text:
+        return REASON_FILTERED_IMPORTANCE
+    if dropped_text and not dropped_importance:
+        return REASON_FILTERED_TEXT
+    return REASON_FILTERED
+
+
+def _summarize_zero_fact_reasons(reason_counts: dict) -> str:
+    """Human-readable "N <reason>" summary, joined by '; '. 'unknown' if empty."""
+    parts: list[str] = []
+    for reason, label in (
+        (REASON_EXTRACTOR_EMPTY, "extractor returned no facts"),
+        (REASON_FILTERED_IMPORTANCE, "filtered below importance (<6)"),
+        (REASON_FILTERED_TEXT, "filtered (text <5 chars)"),
+        (REASON_MALFORMED, "extractor returned malformed (non-dict) output"),
+        (REASON_FILTERED, "filtered (other)"),
+    ):
+        n = reason_counts.get(reason, 0)
+        if n:
+            parts.append(f"{n} {label}")
+    return "; ".join(parts) if parts else "unknown"
 
 
 def _now_ms() -> int:
