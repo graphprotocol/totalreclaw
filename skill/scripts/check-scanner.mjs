@@ -69,7 +69,14 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', 'pkg', '.git', 'coverage']);
 // Mirrors OpenClaw `skill-scanner-*.js` SOURCE_RULES[env-harvesting]:
 //   pattern:         /process\.env/
 //   requiresContext: /\bfetch\b|\bpost\b|http\.request/i
-const ENV_PATTERN = /process\.env/;
+// Tightened 2026-06-21 (Task 0.2 of the OpenClaw native integration,
+// docs/plans/2026-06-21-openclaw-native-integration-plan.md): the
+// env-harvesting rule is enforced on the FULL file text (comments included
+// — strip nothing) so a comment containing the literal `process.env`
+// adjacent to a `fetch`/`post`/`http.request` token trips the rule, the
+// historical `config.ts`/H3 trap. Word boundaries on both patterns so a
+// substring like `myprocess.envX` does NOT trip.
+const ENV_PATTERN = /\bprocess\.env\b/;
 const CONTEXT_PATTERN = /\bfetch\b|\bpost\b|http\.request/i;
 
 // Mirrors OpenClaw SOURCE_RULES[potential-exfiltration] EXACTLY — the real
@@ -151,8 +158,18 @@ function allLinesMatching(lines, re) {
 // CLI parsing
 // ---------------------------------------------------------------------------
 
-let ROOT = DEFAULT_ROOT;
+// ROOT resolution order (Task 0.2, 2026-06-21):
+//   1. --root PATH / --root=PATH (legacy explicit form)
+//   2. positional argv[2] (bare target dir — the form the publish gate
+//      and the test harness pass; resolved relative to cwd so it behaves
+//      the same whether invoked as `node ../scripts/check-scanner.mjs
+//      <dir>` from skill/plugin or as `node skill/scripts/check-scanner.mjs
+//      <dir>` from the worktree root)
+//   3. default skill/plugin/ (resolved relative to this script, NOT cwd —
+//      so `npm run check-scanner` from skill/plugin works with no args)
+let ROOT;
 const jsonMode = process.argv.includes('--json');
+let positionalRoot = null;
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i];
   if (a === '--root') {
@@ -165,7 +182,12 @@ for (let i = 2; i < process.argv.length; i++) {
     i++;
   } else if (a.startsWith('--root=')) {
     ROOT = path.resolve(a.slice('--root='.length));
+  } else if (!a.startsWith('--') && positionalRoot === null) {
+    positionalRoot = a;
   }
+}
+if (ROOT === undefined) {
+  ROOT = positionalRoot !== null ? path.resolve(positionalRoot) : DEFAULT_ROOT;
 }
 
 const envFindings = [];
