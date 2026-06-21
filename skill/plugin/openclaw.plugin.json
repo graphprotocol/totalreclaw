@@ -3,8 +3,13 @@
   "name": "TotalReclaw",
   "description": "End-to-end encrypted memory vault for AI agents",
   "kind": "memory",
+  "activation": {
+    "onStartup": false
+  },
   "contracts": {
     "tools": [
+      "memory_search",
+      "memory_get",
       "totalreclaw_remember",
       "totalreclaw_recall",
       "totalreclaw_forget",

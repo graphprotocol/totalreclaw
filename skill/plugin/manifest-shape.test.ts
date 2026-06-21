@@ -141,6 +141,95 @@ let manifest: Record<string, unknown>;
   );
 }
 
+{
+  // 1e. (Task 2.8) contracts.tools must be a string array.
+  const tools = (manifest as { contracts?: { tools?: unknown } }).contracts?.tools;
+  assert(Array.isArray(tools), 'manifest contracts.tools is an array');
+  assert(
+    Array.isArray(tools) && tools.every((t) => typeof t === 'string'),
+    'manifest contracts.tools entries are all strings',
+  );
+}
+
+{
+  // 1f. (Task 2.8) The native OpenClaw contract tools `memory_search` and
+  // `memory_get` MUST be declared. Task 2.7 registers them via
+  // `api.registerTool(..., { names: ['memory_search', 'memory_get'] })` in
+  // `registerNativeMemory`. OpenClaw's loader enforces registered⊆declared
+  // (see registry.registerTool → findUndeclaredPluginToolNames): a registered
+  // tool that is NOT in contracts.tools triggers a level:"error" diagnostic
+  // and the registration is silently dropped. So the declaration here is
+  // load-bearing, not cosmetic.
+  const tools = ((manifest as { contracts?: { tools?: string[] } }).contracts?.tools) ?? [];
+  assert(
+    tools.includes('memory_search'),
+    'manifest contracts.tools includes "memory_search" (native contract tool, registered by Task 2.7)',
+  );
+  assert(
+    tools.includes('memory_get'),
+    'manifest contracts.tools includes "memory_get" (native contract tool, registered by Task 2.7)',
+  );
+}
+
+{
+  // 1g. (Task 2.8) SEQUENCING GUARD — the 17 legacy `totalreclaw_*` tool
+  // names MUST still be declared here. They are still registered by the
+  // pre-Phase-3.2 plugin code path (the agent-facing custom tools). Because
+  // the loader enforces registered⊆declared, removing the declarations here
+  // BEFORE the registrations are retired (Phase 3.2) would silently break
+  // every totalreclaw_* tool at load time with a level:"error" diagnostic.
+  //
+  // Phase 3.2 MUST remove the totalreclaw_* registrations (in index.ts) AND
+  // their contracts.tools entries TOGETHER, in the same commit, before the
+  // RC cut. This assertion will flip to "not includes" at that time. Until
+  // then, it guards against a premature half-drop.
+  const tools = ((manifest as { contracts?: { tools?: string[] } }).contracts?.tools) ?? [];
+  const legacyStillDeclared = [
+    'totalreclaw_remember',
+    'totalreclaw_recall',
+    'totalreclaw_forget',
+    'totalreclaw_export',
+    'totalreclaw_status',
+    'totalreclaw_preload_embedder',
+    'totalreclaw_consolidate',
+    'totalreclaw_pin',
+    'totalreclaw_unpin',
+    'totalreclaw_retype',
+    'totalreclaw_set_scope',
+    'totalreclaw_import_from',
+    'totalreclaw_import_batch',
+    'totalreclaw_upgrade',
+    'totalreclaw_migrate',
+    'totalreclaw_pair',
+    'totalreclaw_report_qa_bug',
+  ];
+  for (const name of legacyStillDeclared) {
+    assert(
+      tools.includes(name),
+      `manifest contracts.tools still includes "${name}" (Phase 3.2 lockstep guard — see comment)`,
+    );
+  }
+}
+
+{
+  // 1h. (Task 2.8) activation.onStartup === false — the plugin must NOT be
+  // auto-started by the gateway on cold boot; it activates lazily when the
+  // memory slot resolves to it. Mirrors the bundled memory-core manifest
+  // (extensions/memory-core/openclaw.plugin.json). Field shape confirmed via
+  // normalizeManifestActivation in manifest loader (2026.6.8): only
+  // { onStartup: boolean } is consumed here.
+  const activation = (manifest as { activation?: { onStartup?: unknown } }).activation;
+  assert(
+    activation !== undefined && typeof activation === 'object',
+    'manifest has an "activation" object',
+  );
+  assertEq(
+    (activation as { onStartup?: unknown })?.onStartup,
+    false,
+    'manifest activation.onStartup === false (lazy activation, matches memory-core)',
+  );
+}
+
 // ---------------------------------------------------------------------------
 // 2. JS plugin definition assertions (source inspection)
 // ---------------------------------------------------------------------------
