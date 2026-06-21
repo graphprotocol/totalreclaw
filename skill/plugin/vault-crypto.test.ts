@@ -42,6 +42,8 @@ import {
   aeadDecrypt,
   encryptPairingPayload,
   decryptPairingPayload,
+  computeSharedSecret,
+  derivePublicFromPrivate,
   AEAD_KEY_BYTES,
   AEAD_NONCE_BYTES,
 } from './vault-crypto.js';
@@ -113,23 +115,51 @@ check(
 // Hard contract 1 (cont.): AES-256-GCM round-trip (pair-crypto path).
 // ---------------------------------------------------------------------------
 //
-// NOTE: the x25519 JWK private-key import path requires Node 18.19..24.
-// Node 26 tightens JWK OKP validation and rejects the empty-`x`
-// placeholder used during the public-half derivation. The pair-crypto
-// unit test fails identically on Node 26 against unchanged code, so this
-// is a pre-existing environment incompatibility — not a Task 1.1
-// regression. We attempt the round-trip but tolerate ERR_CRYPTO_INVALID_JWK
-// on newer Node so this contract test does not fail for the wrong reason.
-// The vault (WASM) round-trip above is the load-bearing assertion.
+// The x25519 private-key construction path (vault-crypto.ts'
+// privateKeyFromB64) builds the KeyObject via the canonical RFC 8410
+// PKCS#8 DER envelope, accepted by every Node that supports X25519
+// (18.19+) INCLUDING Node 26 (which tightened JWK OKP validation and
+// rejected the legacy empty-`x` JWK placeholder with
+// ERR_CRYPTO_INVALID_JWK, breaking the production pair path on Node 26).
+//
+// Key-material invariant asserted below: the new PKCS#8 path yields the
+// IDENTICAL private scalar + ECDH shared secret that the legacy JWK path
+// produced, proved against RFC 7748 §6.1 test vector 1 (the canonical
+// x25519 interop check). If that vector passes, the new path is
+// bit-for-bit equivalent for every consumer of the pair-crypto primitives
+// (pair-cli / pair-http / pair-remote-client / index.ts dynamic pair).
 
-function isNode26JwkIncompat(e: unknown): boolean {
-  return (
-    e instanceof Error &&
-    (e as { code?: string }).code === 'ERR_CRYPTO_INVALID_JWK'
+// RFC 7748 §6.1 test vector 1 — the gold-standard x25519 interop check.
+// Independent of our own generateKeyPairSync randomness, so a regression
+// in privateKeyFromB64 surfaces as a hard assertion failure here.
+{
+  const alicePrivHex = '77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a';
+  const alicePubHex  = '8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a';
+  const bobPubHex    = 'de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f';
+  const expectedHex  = '4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742';
+
+  const aliceSkB64 = Buffer.from(alicePrivHex, 'hex').toString('base64url');
+  const bobPkB64 = Buffer.from(bobPubHex, 'hex').toString('base64url');
+
+  // ECDH through privateKeyFromB64 must match the RFC 7748 expected secret.
+  const ss = computeSharedSecret({ skLocalB64: aliceSkB64, pkRemoteB64: bobPkB64 });
+  check(
+    ss.toString('hex') === expectedHex,
+    'RFC 7748 vec 1: privateKeyFromB64 (PKCS8 path) ECDH matches expected shared secret',
+  );
+
+  // The public half derived from the constructed KeyObject must match
+  // Alice's known public — proves the KeyObject carries the correct
+  // private scalar (any corruption would change the derived public).
+  const derivedAlicePub = derivePublicFromPrivate(aliceSkB64);
+  check(
+    Buffer.from(derivedAlicePub, 'base64url').toString('hex') === alicePubHex,
+    'RFC 7748 vec 1: createPublicKey(privateKeyFromB64(x)) === Alice public',
   );
 }
 
-try {
+// Full pair-crypto AEAD round-trip with a fresh ephemeral keypair.
+{
   const gw = generateGatewayKeypair();
   const device = generateGatewayKeypair();
   const sid = 'sess-test-vault-crypto-round-trip';
@@ -190,14 +220,6 @@ try {
     Buffer.from(oneShotDec).equals(pairPt),
     'encryptPairingPayload then decryptPairingPayload round-trip',
   );
-} catch (e) {
-  if (isNode26JwkIncompat(e)) {
-    console.log(
-      `# SKIP AES-256-GCM round-trip: Node ${process.version} rejects JWK OKP empty-x placeholder (pre-existing infra incompat, not a Task 1.1 regression)`,
-    );
-  } else {
-    throw e;
-  }
 }
 
 // ---------------------------------------------------------------------------

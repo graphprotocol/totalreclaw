@@ -391,10 +391,33 @@ function publicKeyFromB64(pkB64: PublicKeyB64): ReturnType<typeof createPublicKe
 /**
  * Re-constitute a Node `KeyObject` from raw base64url private-key bytes.
  *
- * JWK OKP private keys require the `x` (public) field too; we derive it
- * by first constructing a temporary KeyObject from `d` alone, then
- * exporting its public half. This is cheap (one scalarmult) and keeps
- * the call sites clean.
+ * Builds the X25519 private KeyObject via the canonical RFC 8410 PKCS#8
+ * DER envelope (fixed 16-byte ASN.1 prefix + the raw 32-byte scalar),
+ * passed to `createPrivateKey` with `format: 'der', type: 'pkcs8'`. The
+ * resulting KeyObject's private material is byte-for-byte the 32 bytes
+ * we passed in — verified by the RFC 7748 test vector 1 ECDH assertion
+ * in pair-crypto.test.ts (Alice's known private scalar → the known
+ * shared secret with Bob's known public).
+ *
+ * WHY NOT JWK: a JWK OKP private key nominally requires the `x`
+ * (public) field alongside `d` (private) per RFC 8037. The legacy path
+ * worked around that by constructing a throwaway KeyObject with an
+ * EMPTY `x: ''` placeholder, deriving the real public half, then
+ * rebuilding the JWK with the real `x`. Node ≤ 24 tolerated the empty
+ * `x`; **Node ≥ 26 validates OKP JWK completeness and rejects the
+ * placeholder with `ERR_CRYPTO_INVALID_JWK`** — breaking QR pairing
+ * for any user on Node 26. The PKCS#8 DER path avoids JWK entirely and
+ * is accepted by every Node version that supports X25519 (18.19+); it
+ * is also how Node itself encodes X25519 private keys on export.
+ *
+ * Key-material invariant: the X25519 private scalar IS the `d` value
+ * (the 32 raw bytes we accept as input). The DER envelope carries it
+ * verbatim with no additional salt/derivation step, so any ECDH shared
+ * secret derived from the resulting KeyObject matches the shared
+ * secret the OLD JWK path produced for the same input bytes — both
+ * paths feed the identical scalar to `diffieHellman`. This equivalence
+ * is asserted at the top of vault-crypto.test.ts (RFC 7748 vector) and
+ * in pair-crypto.test.ts (round-trip + RFC 7748).
  *
  * Mirror of the browser-side WebCrypto `importKey('raw', ...)` path.
  */
@@ -404,24 +427,23 @@ function privateKeyFromB64(skB64: PrivateKeyB64): ReturnType<typeof createPrivat
     throw new Error(`pair-crypto: private key must be ${X25519_KEY_BYTES} bytes (got ${raw.length})`);
   }
 
-  // The JWK OKP format requires `x` (public) alongside `d` (private).
-  // Derive `x` by first constructing a public KeyObject from the scalar
-  // via the OKP JWK path — Node accepts `d` alone and returns a usable
-  // private KeyObject from which we can derive the public half.
-  const tempPriv = createPrivateKey({
-    key: { kty: 'OKP', crv: 'X25519', d: raw.toString('base64url'), x: '' },
-    format: 'jwk',
-  });
-  // Derive the public half.
-  const pubObj = createPublicKey(tempPriv);
-  const pubJwk = pubObj.export({ format: 'jwk' }) as { x: string };
-
-  // Re-construct with the full (x, d) pair. This is the canonical form
-  // the rest of the code holds onto.
-  return createPrivateKey({
-    key: { kty: 'OKP', crv: 'X25519', d: raw.toString('base64url'), x: pubJwk.x },
-    format: 'jwk',
-  });
+  // Canonical RFC 8410 PKCS#8 envelope for a CurvePrivateKey (X25519):
+  //   SEQUENCE (46 bytes) {
+  //     INTEGER 0                              -- PKCS#8 version
+  //     SEQUENCE { OID 1.3.101.110 }           -- id-X25519
+  //     OCTET STRING (34 bytes) {
+  //       OCTET STRING (32 bytes) { <raw scalar> }
+  //     }
+  //   }
+  // The 16-byte prefix is the constant ASN.1 scaffolding; the trailing
+  // 32 bytes are the raw private scalar. Hardcoding the prefix is safe
+  // because the X25519 OID and PKCS#8 structure are fixed by RFC 8410.
+  const PKCS8_X25519_PREFIX = Buffer.from(
+    '302e020100300506032b656e04220420',
+    'hex',
+  );
+  const pkcs8Der = Buffer.concat([PKCS8_X25519_PREFIX, raw]);
+  return createPrivateKey({ key: pkcs8Der, format: 'der', type: 'pkcs8' });
 }
 
 /** Extract the raw 32-byte public-key bytes from a Node KeyObject to base64url. */
