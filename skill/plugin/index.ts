@@ -194,6 +194,8 @@ import {
 import { detectFirstRun, buildWelcomePrepend, type GatewayMode } from './first-run.js';
 import { buildPairRoutes } from './pair-http.js';
 import { detectGatewayHost } from './gateway-url.js';
+import { registerNativeMemory, type TrNativeMemoryDeps } from './native-memory.js';
+import type { TrFact, TrPinnedFact, TrQuotaState } from './memory-runtime.js';
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import crypto from 'node:crypto';
@@ -3074,6 +3076,336 @@ async function handleImportAbort(
     facts_already_stored: state.facts_stored,
     message: 'Import abort requested. The background task will stop at the next chunk boundary. Already-stored facts are kept.',
   };
+}
+
+// ---------------------------------------------------------------------------
+// buildRecallDeps — bind the real recall pipeline into the closures the
+// native MemoryPluginCapability wiring helper (Task 2.7) consumes.
+//
+// WHY THIS LIVES IN index.ts (not in native-memory.ts):
+//   The real `recall` / `getById` closures must reach unexported index.ts
+//   helpers (generateBlindIndices, generateEmbedding, getLSHHasher,
+//   computeCandidatePool, isDigestBlob, readClaimFromBlob, searchSubgraph,
+//   searchSubgraphBroadened, getSubgraphFactCount, fetchFactById,
+//   ensureInitialized) AND module-level state (authKeyHex, encryptionKey,
+//   userId, subgraphOwner). Lifting these out of index.ts is a high
+//   blast-radius refactor with scanner-trap risk — out of scope for 2.7.
+//
+//   native-memory.ts (the wiring helper) is pure orchestration and stays
+//   scanner-trivial; the closures stay here where the rest of the plugin's
+//   network surface lives.
+//
+// LAZY CONTEXT RESOLUTION:
+//   The paired-account context (authKeyHex / encryptionKey / userId /
+//   subgraphOwner) is NOT resolved synchronously at register() time. It is
+//   populated by `initialize()` on the first tool/hook call via
+//   `ensureInitialized()`. So each closure calls `ensureInitialized(logger)`
+//   internally before touching the module-level state — exactly what
+//   `requireFullSetup` does for the existing totalreclaw_recall tool.
+//
+//   If setup is incomplete (no credentials), `ensureInitialized` returns
+//   with `needsSetup=true`; the closures then surface a typed error
+//   (`getMemorySearchManager` will return `{ manager: null, error }` from
+//   the runtime wrapper, which the tools convert into the disabled-result
+//   payload the agent recognizes).
+//
+// SCANNER NOTE:
+//   This file (index.ts) is NOT scanner-clean — it is the plugin's network
+//   surface and contains the env+net pair legitimately (centralized via
+//   config.ts reads + relay.ts). The closures here CALL the scanner-clean
+//   subgraph-search / vault-crypto / reranker modules but do not add any
+//   NEW env-harvesting or exfiltration pattern: they read only the
+//   already-resolved module-level state. `check-scanner` was already
+//   non-zero on index.ts before this task (the file legitimately pairs
+//   config reads with network calls); the closures do not change that
+//   posture. The NEW files (native-memory.ts, register-native.test.ts)
+//   are scanner-clean by construction (verified).
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the deps for the native MemoryPluginCapability. Returns the
+ * `recall` / `getById` closures bound to the real subgraph + decrypt +
+ * reranker pipeline, plus optional `quota` / `pinned` prompt-builder inputs
+ * (currently defaulted — see TODO(task 2.7b / H1 gate) below).
+ *
+ * `logger` is threaded in so the closures can call `ensureInitialized` (the
+ * lazy-init seam used by every other tool handler in this file).
+ *
+ * @param logger  the OpenClaw plugin logger (forwarded into ensureInitialized)
+ */
+function buildRecallDeps(logger: OpenClawPluginApi['logger']): TrNativeMemoryDeps {
+  // -------------------------------------------------------------------
+  // recall(): the load-bearing closure. Mirrors the totalreclaw_recall
+  // tool handler (index.ts:4299-4531) MINUS the result formatting +
+  // hot-cache bookkeeping (those are tool concerns; the native memory
+  // pipeline only needs the TrFact[]). Returns TrFact[] shaped for the
+  // TrMemorySearchManager adapter (memory-runtime.ts).
+  // -------------------------------------------------------------------
+  const recall: TrNativeMemoryDeps['recall'] = async (
+    query,
+    opts,
+  ): Promise<TrFact[]> => {
+    // Lazy-init: this is the first seam the closure hits, exactly like
+    // totalreclaw_recall's `requireFullSetup(api.logger)`. If the user
+    // is not paired, ensureInitialized returns with needsSetup=true; we
+    // surface that as an empty result (the runtime wrapper will report
+    // `manager: null` upstream if appropriate, but a search with no
+    // credentials returning [] is also fine — the agent treats empty
+    // results as "no memories found").
+    await ensureInitialized(logger);
+
+    // Guard: if setup is incomplete OR we're missing the pipeline state,
+    // return []. This is fail-soft: the user sees "no memories" rather
+    // than a thrown error out of the memory_search tool boundary.
+    if (needsSetup || !encryptionKey || !authKeyHex) return [];
+    // subgraphOwner may be null on SA-derivation failure (see initialize()).
+    // The subgraph path requires a non-null owner (Bytes!); if missing,
+    // we cannot run recall — return [].
+    if (isSubgraphMode() && !subgraphOwner) return [];
+
+    const k = Math.min(opts?.maxResults ?? 8, 20);
+
+    // 1. Generate word trapdoors (blind indices for the query).
+    const wordTrapdoors = generateBlindIndices(query);
+
+    // 2. Generate query embedding + LSH trapdoors (may fail gracefully).
+    let queryEmbedding: number[] | null = null;
+    let lshTrapdoors: string[] = [];
+    try {
+      queryEmbedding = await generateEmbedding(query, { isQuery: true });
+      const hasher = getLSHHasher(logger);
+      if (hasher && queryEmbedding) {
+        lshTrapdoors = hasher.hash(queryEmbedding);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`native recall: embedding/LSH generation failed (using word-only trapdoors): ${msg}`);
+    }
+
+    // 3. Merge word + LSH trapdoors.
+    const allTrapdoors = [...wordTrapdoors, ...lshTrapdoors];
+    if (allTrapdoors.length === 0) return [];
+
+    // 4. Build reranker candidates from the decrypted subgraph results.
+    const rerankerCandidates: RerankerCandidate[] = [];
+
+    if (isSubgraphMode()) {
+      // --- Subgraph search path (the canonical path for managed installs) ---
+      const factCount = await getSubgraphFactCount(subgraphOwner || userId!, authKeyHex);
+      const pool = computeCandidatePool(factCount);
+      let subgraphResults = await searchSubgraph(subgraphOwner || userId!, allTrapdoors, pool, authKeyHex);
+
+      // Broadened search + merge — vocabulary-mismatch safety net (mirrors
+      // the recall tool: ensures "preferences" still matches "prefer").
+      try {
+        const broadenedResults = await searchSubgraphBroadened(subgraphOwner || userId!, pool, authKeyHex);
+        const existingIds = new Set(subgraphResults.map((r) => r.id));
+        for (const br of broadenedResults) {
+          if (!existingIds.has(br.id)) subgraphResults.push(br);
+        }
+      } catch {
+        // best-effort
+      }
+
+      for (const result of subgraphResults) {
+        try {
+          const docJson = decryptFromHex(result.encryptedBlob, encryptionKey);
+          if (isDigestBlob(docJson)) continue;
+          const doc = readClaimFromBlob(docJson);
+
+          let decryptedEmbedding: number[] | undefined;
+          if (result.encryptedEmbedding) {
+            try {
+              decryptedEmbedding = JSON.parse(
+                decryptFromHex(result.encryptedEmbedding, encryptionKey),
+              );
+            } catch {
+              // embedding decryption failed -- proceed without it
+            }
+          }
+
+          // Dim-mismatch fallback: regenerate the embedding from text so
+          // the reranker's cosine component stays meaningful across model
+          // upgrades. Mirrors the recall tool exactly.
+          if (decryptedEmbedding && decryptedEmbedding.length !== getEmbeddingDims()) {
+            try {
+              decryptedEmbedding = await generateEmbedding(doc.text);
+            } catch {
+              decryptedEmbedding = undefined;
+            }
+          }
+
+          rerankerCandidates.push({
+            id: result.id,
+            text: doc.text,
+            embedding: decryptedEmbedding,
+            importance: doc.importance / 10,
+            createdAt: result.timestamp ? parseInt(result.timestamp, 10) : undefined,
+            // Retrieval v2 Tier 1 source — surfaced so applySourceWeights
+            // could multiply the final RRF score (left false here to match
+            // the recall tool's current behavior; TODO(task 2.7b): wire
+            // source weighting for the native path at the H1 QA gate).
+            source: typeof doc.metadata?.source === 'string' ? doc.metadata.source : undefined,
+          });
+        } catch {
+          // Skip candidates we cannot decrypt (corrupted / wrong key).
+        }
+      }
+    } else {
+      // --- Server search path (legacy / self-hosted) ---
+      // The non-subgraph path uses apiClient.search. The native memory
+      // pipeline is intended for managed (subgraph) installs, but we keep
+      // parity with the recall tool so self-hosted users get recall too.
+      if (!apiClient || !userId) return [];
+      const factCount = await getFactCount(logger);
+      const pool = computeCandidatePool(factCount);
+      const candidates = await apiClient.search(userId, allTrapdoors, pool, authKeyHex);
+
+      for (const candidate of candidates) {
+        try {
+          const docJson = decryptFromHex(candidate.encrypted_blob, encryptionKey);
+          if (isDigestBlob(docJson)) continue;
+          const doc = readClaimFromBlob(docJson);
+
+          let decryptedEmbedding: number[] | undefined;
+          if (candidate.encrypted_embedding) {
+            try {
+              decryptedEmbedding = JSON.parse(
+                decryptFromHex(candidate.encrypted_embedding, encryptionKey),
+              );
+            } catch {
+              // embedding decryption failed
+            }
+          }
+
+          if (decryptedEmbedding && decryptedEmbedding.length !== getEmbeddingDims()) {
+            try {
+              decryptedEmbedding = await generateEmbedding(doc.text);
+            } catch {
+              decryptedEmbedding = undefined;
+            }
+          }
+
+          rerankerCandidates.push({
+            id: candidate.fact_id,
+            text: doc.text,
+            embedding: decryptedEmbedding,
+            importance: doc.importance / 10,
+            createdAt: typeof candidate.timestamp === 'number'
+              ? candidate.timestamp / 1000
+              : new Date(candidate.timestamp).getTime() / 1000,
+            source: typeof doc.metadata?.source === 'string' ? doc.metadata.source : undefined,
+          });
+        } catch {
+          // Skip candidates we cannot decrypt.
+        }
+      }
+    }
+
+    // 5. Re-rank with BM25 + cosine + intent-weighted RRF fusion.
+    const queryIntent = detectQueryIntent(query);
+    const reranked = rerank(
+      query,
+      queryEmbedding ?? [],
+      rerankerCandidates,
+      k,
+      INTENT_WEIGHTS[queryIntent],
+      // applySourceWeights=false — matches the recall tool's current
+      // behavior. TODO(task 2.7b / H1 gate): flip to true for the native
+      // path so Retrieval v2 Tier 1 source weighting takes effect.
+      false,
+    );
+
+    // 6. Map RerankerResult -> TrFact. The score field is rrfScore (the
+    // final fused + weighted score the manager's defensive sort uses).
+    return reranked.map((m) => ({
+      id: m.id,
+      plaintext: m.text,
+      score: m.rrfScore,
+      // pinned is intentionally not surfaced here today — pinned status
+      // lives in claim metadata and there's no clean read-side aggregate
+      // to lift in this task. See getById + pinned TODO below.
+    }));
+  };
+
+  // -------------------------------------------------------------------
+  // getById(): the load-bearing reverse-path closure. Mirrors the
+  // pin/unpin tool's fetchFactById -> decrypt pattern (the readFile
+  // reverse-path for memory_get). Returns { id, plaintext } or null.
+  // -------------------------------------------------------------------
+  const getById: TrNativeMemoryDeps['getById'] = async (
+    id,
+  ): Promise<{ id: string; plaintext: string } | null> => {
+    await ensureInitialized(logger);
+
+    // Fail-soft on missing setup / encryption key.
+    if (needsSetup || !encryptionKey || !authKeyHex) return null;
+
+    // The subgraph path is the canonical one; fetchFactById resolves the
+    // fact by UUID and guards against owner mismatch (defense-in-depth
+    // against stale IDs from another user's recall results — see
+    // subgraph-search.ts fetchFactById docstring).
+    if (isSubgraphMode()) {
+      if (!subgraphOwner) return null;
+      try {
+        const result = await fetchFactById(subgraphOwner, id, authKeyHex);
+        if (!result) return null;
+        const docJson = decryptFromHex(result.encryptedBlob, encryptionKey);
+        if (isDigestBlob(docJson)) return null;
+        const doc = readClaimFromBlob(docJson);
+        return { id, plaintext: doc.text };
+      } catch {
+        return null;
+      }
+    }
+
+    // Server-path: apiClient doesn't expose a clean get-by-id; fall back
+    // to a recall-style lookup using the id as a single trapdoor. This is
+    // a degenerate path for self-hosted installs and rarely hit (the
+    // native memory pipeline targets managed subgraph installs). Document
+    // rather than gold-plate.
+    // TODO(task 2.7b / H1 gate): wire apiClient get-by-id if/when exposed.
+    if (!apiClient || !userId) return null;
+    try {
+      const candidates = await apiClient.search(userId, [id], 10, authKeyHex);
+      const hit = candidates.find((c) => c.fact_id === id);
+      if (!hit) return null;
+      const docJson = decryptFromHex(hit.encrypted_blob, encryptionKey);
+      if (isDigestBlob(docJson)) return null;
+      const doc = readClaimFromBlob(docJson);
+      return { id, plaintext: doc.text };
+    } catch {
+      return null;
+    }
+  };
+
+  // -------------------------------------------------------------------
+  // quota + pinned: prompt-builder inputs. These drive the warning /
+  // pinned-facts blocks in buildPromptSection (memory-runtime.ts).
+  //
+  // TODO(task 2.7b / H1 QA gate): bind these to the real paired-account
+  // state. The hooks to lift are:
+  //   - quota: readBillingCache() in billing-cache.ts exposes
+  //     { free_writes_used, free_writes_limit } — when used/limit > 0.8
+  //     pass { usedPct }, and on a recently-observed 403 pass { denied }.
+  //     The billing cache is refreshed by the trajectory-poller after
+  //     each capture attempt; today we default to undefined so no
+  //     warning fires (fail-quiet — better than a false warning).
+  //   - pinned: there is no clean read-side `fetchPinnedFacts(owner)`
+  //     aggregate today. pin.ts writes pinned status into claim metadata;
+  //     a pinned-facts read would need either (a) a subgraph query
+  //     filtering on the pinned status, or (b) reuse of the hot-cache
+  //     pinned list. Both are extraction work — out of scope for 2.7.
+  //     Default to [] (no pinned block emitted).
+  //
+  // Returning undefined / [] here is the documented correct default. The
+  // wiring helper accepts a deps object without quota/pinned, and the
+  // prompt builder emits no warning / no pinned block in that case.
+  // -------------------------------------------------------------------
+  const quota: TrQuotaState | undefined = undefined;
+  const pinned: TrPinnedFact[] | undefined = undefined;
+
+  return { recall, getById, quota, pinned };
 }
 
 // ---------------------------------------------------------------------------
@@ -7472,6 +7804,53 @@ const plugin = {
       },
       { priority: 5 },
     );
+
+    // ---------------------------------------------------------------
+    // OpenClaw native memory integration (Task 2.7) — register TR as the
+    // memory backend: the MemoryPluginCapability + the memory_search /
+    // memory_get tools the active-memory sub-agent drives.
+    // ---------------------------------------------------------------
+    //
+    // This is THE integration point. For TR to BE the memory backend (not
+    // just a tool plugin), it must register all four against TR's own
+    // pipeline:
+    //   1. api.registerMemoryCapability({ promptBuilder, flushPlanResolver, runtime })
+    //   2. api.registerTool(() => createMemorySearchTool(runtime), { names: ['memory_search'] })
+    //   3. api.registerTool(() => createMemoryGetTool(runtime),    { names: ['memory_get'] })
+    //
+    // Placement: BEFORE the .loaded.json manifest write so the two new
+    // tool names are captured by the monkey-patched registerTool wrapper
+    // (which records `name` / `names` into _registeredToolNames). The
+    // conventional names survive the tool-policy strip in OC 2026.5.x
+    // (issue #223) — they are passed via the `names` opts.
+    //
+    // Deps: buildRecallDeps captures `api.logger` so the closures can call
+    // ensureInitialized lazily on first use. The paired-account context
+    // (authKeyHex / encryptionKey / userId / subgraphOwner) is NOT
+    // resolved here — it's populated by initialize() on the first tool
+    // call. The closures call ensureInitialized internally (see
+    // buildRecallDeps docstring).
+    //
+    // Scanner note: this call is fine inside register() because
+    // register() itself is not scanner-clean (the file pairs config reads
+    // with network calls legitimately). The scanner-clean surface is
+    // native-memory.ts (the wiring helper), which never touches env or
+    // net primitives.
+    //
+    // Graceful degradation: the wiring is wrapped in try/catch so a
+    // failure in the native memory pipeline cannot block plugin load.
+    // The legacy totalreclaw_* tools (registered above) continue to work
+    // as the capture fallback; the memory_search/memory_get tools fail
+    // soft (disabled-result payloads) if the native path is unavailable.
+    try {
+      registerNativeMemory(api, buildRecallDeps(api.logger));
+      api.logger.info('TotalReclaw: registered native MemoryPluginCapability + memory_search/memory_get tools');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      api.logger.warn(
+        `TotalReclaw: native memory capability registration failed (legacy totalreclaw_* tools remain available): ${msg}`,
+      );
+    }
 
     // ---------------------------------------------------------------
     // 3.3.2-rc.1 (issue #186) — write `.loaded.json` manifest
