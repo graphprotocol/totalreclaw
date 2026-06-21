@@ -57,6 +57,25 @@ DEFAULT_BATCH_SIZE = 25    # Chunks per batch
 CHUNK_SIZE = 20            # Messages per conversation chunk (matches adapters)
 INTER_CHUNK_DELAY = 2.0    # Seconds between LLM extraction calls (rate-limit mitigation)
 
+# Max concurrent LLM extractions within one import batch (#392 Part 1). A
+# semaphore bounds concurrency, not request rate, so INTER_CHUNK_DELAY pacing
+# is retained inside each permit to avoid glm/zai 429s. Env-tunable
+# (TOTALRECLAW_IMPORT_CONCURRENCY), conservative default. Clamped to [1, 10].
+IMPORT_CONCURRENCY_DEFAULT = 4
+
+
+def _import_concurrency() -> int:
+    """Resolve import extraction concurrency from env, clamped to [1, 10]."""
+    import os
+    raw = os.environ.get("TOTALRECLAW_IMPORT_CONCURRENCY")
+    if not raw:
+        return IMPORT_CONCURRENCY_DEFAULT
+    try:
+        return max(1, min(10, int(raw)))
+    except (TypeError, ValueError):
+        return IMPORT_CONCURRENCY_DEFAULT
+
+
 # Maximum facts per batched UserOperation. Mirrors userop.MAX_BATCH_SIZE; kept
 # local to avoid importing from userop here (consistent with lifecycle.py's
 # _LIFECYCLE_MAX_BATCH). If the userop constant changes, update both.
@@ -464,11 +483,19 @@ class ImportEngine:
         chunk_diagnostics: list[dict] = []
         reason_counts: dict[str, int] = {}
 
-        # Extraction phase
-        extracted_chunk_count = 0
+        # Extraction phase (#392 Part 1: concurrent). Two passes:
+        #   1. Sequentially decide which chunks to extract (smart-import SKIP
+        #      decisions are made up-front so chunks_skipped is right and
+        #      skipped chunks never reach the LLM).
+        #   2. Fire the LLM extractions concurrently under a bounded semaphore,
+        #      then accumulate results IN CHUNK-INDEX ORDER (asyncio.gather
+        #      preserves input order regardless of completion order), so the
+        #      #376 diagnostics, session/Crystal tagging, and per-chunk error
+        #      reporting behave exactly as the sequential version did.
+        enriched = smart_ctx.enriched_system_prompt if smart_ctx else None
+        to_extract: list[tuple[int, ConversationChunk]] = []
         for i, chunk in enumerate(batch):
             global_index = offset + i
-
             if smart_ctx is not None:
                 skipped, reason = is_chunk_skipped(global_index, smart_ctx.decisions)
                 if skipped:
@@ -478,59 +505,81 @@ class ImportEngine:
                     )
                     chunks_skipped += 1
                     continue
+            to_extract.append((global_index, chunk))
 
-            if extracted_chunk_count > 0:
+        concurrency = _import_concurrency()
+        sem: Optional[asyncio.Semaphore] = asyncio.Semaphore(concurrency) if concurrency > 1 else None
+
+        async def _extract_one(chunk: ConversationChunk):
+            if sem is not None:
+                # Concurrent: the semaphore bounds in-flight requests and
+                # natural LLM latency paces the refill, so no artificial delay
+                # (it would just serialize waves). glm/zai tolerate the small
+                # concurrency burst; dial TOTALRECLAW_IMPORT_CONCURRENCY=1 to
+                # fall back to the paced sequential path if a provider 429s.
+                async with sem:
+                    return await self._extract_from_chunk(chunk, enriched_system_prompt=enriched)
+            # Sequential fallback (concurrency == 1): keep the original
+            # inter-call pacing so a conservative setting still rate-limits.
+            if INTER_CHUNK_DELAY > 0:
                 await asyncio.sleep(INTER_CHUNK_DELAY)
-            extracted_chunk_count += 1
+            return await self._extract_from_chunk(chunk, enriched_system_prompt=enriched)
 
-            try:
-                extracted, zero_reason = await self._extract_from_chunk(
-                    chunk,
-                    enriched_system_prompt=(
-                        smart_ctx.enriched_system_prompt if smart_ctx else None
-                    ),
-                )
-                if not extracted:
-                    chunks_with_no_facts += 1
-                    chunk_diagnostics.append({
-                        "index": global_index,
-                        "title": chunk.title,
-                        "reason": zero_reason,
-                    })
-                    reason_counts[zero_reason] = reason_counts.get(zero_reason, 0) + 1
-                facts_extracted += len(extracted)
+        # return_exceptions so one chunk's failure doesn't cancel the batch.
+        raw_results = await asyncio.gather(
+            *[_extract_one(chunk) for _, chunk in to_extract],
+            return_exceptions=True,
+        )
 
-                is_singleton = session_is_singleton.get(global_index, True)
-                session_id = session_id_map.get(global_index)
-
-                if is_singleton:
-                    # Singleton: external provenance + import_source, NO session_id,
-                    # NO Crystal. This matches the spec for standalone quick queries.
-                    for f in extracted:
-                        f["provenance"] = _IMPORT_PROVENANCE
-                        meta = f.get("extra_metadata")
-                        if not isinstance(meta, dict):
-                            meta = {}
-                        if source:
-                            meta["import_source"] = source
-                        f["extra_metadata"] = meta
-                else:
-                    # Multi-turn session: tag with the STABLE session_id +
-                    # provenance, and accumulate facts cross-batch so the
-                    # Crystal (emitted on the batch that completes the session)
-                    # summarizes the WHOLE session, not just this batch's slice.
-                    for f in extracted:
-                        self._tag_import_fact(f, session_id, source)
-                    if session_id is not None:
-                        self._session_facts_accum.setdefault(session_id, []).extend(extracted)
-
-                all_extracted.extend(extracted)
-            except Exception as e:
+        # NOTE: the original sequential loop short-circuited at >=20 errors and
+        # skipped remaining chunks' LLM calls. Under concurrency all calls have
+        # already fired by this point, so the cap now only stops *accumulating*
+        # later chunks' results (same stored-facts outcome at the cap).
+        for (global_index, chunk), res in zip(to_extract, raw_results):
+            if isinstance(res, BaseException):
                 extraction_failures += 1
-                errors.append(f"Extraction failed for chunk '{chunk.title}': {repr(e)}")
+                errors.append(f"Extraction failed for chunk '{chunk.title}': {repr(res)}")
+                if len(errors) >= 20:
+                    break
+                continue
 
-            if len(errors) >= 20:
-                break
+            extracted, zero_reason = res
+            if not extracted:
+                chunks_with_no_facts += 1
+                chunk_diagnostics.append({
+                    "index": global_index,
+                    "title": chunk.title,
+                    "reason": zero_reason,
+                })
+                reason_counts[zero_reason] = reason_counts.get(zero_reason, 0) + 1
+            facts_extracted += len(extracted)
+
+            is_singleton = session_is_singleton.get(global_index, True)
+            session_id = session_id_map.get(global_index)
+
+            if is_singleton:
+                # Singleton: external provenance + import_source, NO session_id,
+                # NO Crystal. This matches the spec for standalone quick queries.
+                for f in extracted:
+                    f["provenance"] = _IMPORT_PROVENANCE
+                    meta = f.get("extra_metadata")
+                    if not isinstance(meta, dict):
+                        meta = {}
+                    if source:
+                        meta["import_source"] = source
+                    f["extra_metadata"] = meta
+            else:
+                # Multi-turn session: tag with the STABLE session_id +
+                # provenance, and accumulate facts cross-batch so the
+                # Crystal (emitted on the batch that completes the session)
+                # summarizes the WHOLE session, not just this batch's slice.
+                for f in extracted:
+                    self._tag_import_fact(f, session_id, source)
+                if session_id is not None:
+                    self._session_facts_accum.setdefault(session_id, []).extend(extracted)
+
+            all_extracted.extend(extracted)
+
 
         # Mark EVERY chunk in this batch slice as processed — including chunks
         # that were smart-import-skipped or that failed extraction. A chunk is
