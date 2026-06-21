@@ -64,9 +64,16 @@ export interface TrFact {
   pinned?: boolean;
 }
 
-/** recall() runs the real subgraph-search + decrypt + reranker pipeline. */
+/**
+ * recall() runs the real subgraph-search + decrypt + reranker pipeline.
+ * `signal` lets the caller cancel an in-flight recall (forwarded from
+ * active-memory's search); `sessionKey` scopes the recall to a session.
+ */
 export interface TrRecallFn {
-  (query: string, opts?: { maxResults?: number }): Promise<TrFact[]>;
+  (
+    query: string,
+    opts?: { maxResults?: number; signal?: AbortSignal; sessionKey?: string },
+  ): Promise<TrFact[]>;
 }
 
 /** getById() decrypts a single fact by id (the readFile reverse path). */
@@ -111,18 +118,25 @@ function toLineCount(s: string): number {
 
 export function createTrMemorySearchManager(deps: TrMemorySearchManagerDeps) {
   /**
-   * search(): run recall, filter by minScore if requested, and synthesize
-   * file-shaped MemorySearchResult hits. recall() is responsible for
-   * ordering by relevance; we only slice to maxResults and (optionally)
-   * drop below-minScore hits.
+   * search(): run recall, sort defensively by score, filter by minScore if
+   * requested, and synthesize file-shaped MemorySearchResult hits. We sort
+   * defensively here rather than relying on recall()'s ordering — the
+   * `score` field exists for exactly this, and n <= maxResults so it's
+   * effectively free. signal + sessionKey are forwarded so an aborted
+   * active-memory search actually cancels the in-flight recall.
    */
   async function search(
     query: string,
-    opts?: { maxResults?: number; minScore?: number },
+    opts?: { maxResults?: number; minScore?: number; signal?: AbortSignal; sessionKey?: string },
   ) {
     const max = opts?.maxResults ?? DEFAULT_MAX_RESULTS;
     const minScore = opts?.minScore;
-    const facts = await deps.recall(query, { maxResults: max });
+    const facts = await deps.recall(query, {
+      maxResults: max,
+      signal: opts?.signal,
+      sessionKey: opts?.sessionKey,
+    });
+    facts.sort((a, b) => b.score - a.score);
     const filtered = minScore === undefined ? facts : facts.filter((f) => f.score >= minScore!);
     return filtered.slice(0, max).map((f) => ({
       path: `${FACT_PATH_PREFIX}${f.id}`,
@@ -163,7 +177,10 @@ export function createTrMemorySearchManager(deps: TrMemorySearchManagerDeps) {
       path: `${FACT_PATH_PREFIX}${id}`,
       truncated,
       from,
-      lines: sliceEnd - from + 1,
+      // Clamp to non-negative: when `from` exceeds totalLines (e.g. reading
+      // past the end of a 1-line fact), sliceEnd - from + 1 goes negative.
+      // A bridge must never surface a negative line count.
+      lines: Math.max(0, sliceEnd - from + 1),
       nextFrom,
     };
   }
@@ -181,10 +198,12 @@ export function createTrMemorySearchManager(deps: TrMemorySearchManagerDeps) {
    * that state, so the probes report ok until 2.3 gives them real hooks.
    */
   async function probeEmbeddingAvailability() {
+    // TODO(task 2.3): replace with real embedder probe.
     return { ok: true };
   }
 
   async function probeVectorAvailability() {
+    // TODO(task 2.3): replace with real vector-store probe.
     return true;
   }
 
