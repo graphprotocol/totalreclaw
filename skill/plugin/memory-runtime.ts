@@ -45,7 +45,11 @@
  *     memory subsystem calls. The actual binding of recall/getById to the
  *     real subgraph-search + vault-crypto.decrypt + reranker pipeline
  *     happens in Task 2.7's `buildRecallDeps` inside register().
- *   - Task 2.4 (future): `promptBuilder` (guidance + quota + pinned).
+ *   - Task 2.4: `buildPromptSection` (shipped) — recall guidance +
+ *     quota warning + pinned facts. Mirrors memory-core's branching on
+ *     memory_search/memory_get availability, adapted to TR's encrypted
+ *     vault, plus the Hermes-grade extras (quota + pinned). The real
+ *     quota/pinned binding happens in Task 2.7's `buildRecallDeps`.
  *   - Task 2.5 (future): `flushPlanResolver`.
  */
 
@@ -87,6 +91,49 @@ export interface TrGetFn {
 export interface TrMemorySearchManagerDeps {
   recall: TrRecallFn;
   getById: TrGetFn;
+}
+
+// ---------------------------------------------------------------------------
+// Types — promptBuilder (Task 2.4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Quota state injected into `buildPromptSection` so the prompt guidance can
+ * warn the agent (and indirectly the user) that new memories may not be
+ * saved. Mirrors Hermes `on_session_start`'s quota-warning logic.
+ *
+ * Two shapes, discriminated by presence of `denied`:
+ *   - `{ usedPct }`   — percentage of the monthly write budget consumed.
+ *                      Warns when STRICTLY greater than 80 (matches Hermes
+ *                      `used / limit > 0.8`).
+ *   - `{ denied: true }` — the last capture attempt was rejected by the
+ *                      relay (HTTP 403 / quota exhausted). Always warns.
+ *
+ * Caller (Task 2.7's `buildRecallDeps` in register()) binds this to the
+ * paired account's real billing/quota state; the value is read from the
+ * TR client, NOT from the host environment, which keeps this file
+ * scanner-clean.
+ */
+export type TrQuotaState = { usedPct: number } | { denied: true };
+
+/**
+ * A pinned fact surfaced as always-relevant context by the prompt builder.
+ * `id` is the on-chain fact id (also usable as a `memory_get` citation);
+ * `plaintext` is the already-decrypted text (the caller in 2.7 decrypts).
+ */
+export interface TrPinnedFact {
+  id: string;
+  plaintext: string;
+}
+
+/**
+ * Injected deps for `buildPromptSection`. Carries the runtime quota state
+ * and the decrypted pinned facts so the builder itself performs no
+ * environment read and no network I/O — it just renders strings.
+ */
+export interface TrPromptBuilderDeps {
+  quota?: TrQuotaState;
+  pinned?: TrPinnedFact[];
 }
 
 // ---------------------------------------------------------------------------
@@ -293,4 +340,133 @@ export function createTrMemoryPluginRuntime(deps: TrMemorySearchManagerDeps) {
       // See closeMemorySearchManager — no-op until 2.7 binds pool resources.
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// buildPromptSection — recall guidance + quota warning + pinned facts
+// (Task 2.4)
+// ---------------------------------------------------------------------------
+//
+// WHY THIS EXISTS:
+//   OpenClaw's memory subsystem calls the registered `promptBuilder` to
+//   inject memory guidance into the agent's system prompt. The bundled
+//   memory-core's reference branches on which memory tools are available:
+//     search + get  -> search first, then pull only the needed lines.
+//     search only   -> search and answer from the matching results.
+//     get only      -> pull only the needed lines.
+//     neither       -> no guidance.
+//   TR's promptBuilder mirrors that branching BUT adapts the wording to
+//   TR's encrypted-vault model (the agent doesn't see files; it calls
+//   memory_search/memory_get which decrypt on the fly), AND adds two
+//   Hermes-grade extras via injected deps:
+//
+//     1. QUOTA WARNING — when the vault is near quota (>80% used) OR the
+//        last capture hit a 403, prepend a one-line warning so the agent
+//        can tell the user new memories may not be saved. Mirrors Hermes
+//        `on_session_start`'s billing-cache >0.8 + 403 path.
+//
+//     2. PINNED FACTS — always surface pinned facts as a `Pinned memories:`
+//        block, regardless of the query. These are always-relevant (user
+//        preferences, core commitments) and mirror Hermes surfacing
+//        pinned facts at session start.
+//
+//   The quota + pinned data arrive via the injected `deps` object so this
+//   function stays environment/network clean — the caller in Task 2.7's
+//   `buildRecallDeps` binds real quota/pinned from the paired account.
+//   `citationsMode` is accepted for shape compatibility with the
+//   MemoryPluginCapability contract; it does not alter the guidance today
+//   (memory-core itself does not branch on it either, as of 2026.6.8).
+//
+// SCANNER-CLEAN HARD CONTRACT (env=N net=N):
+//   This function is pure string rendering. It touches NO host environment
+//   state and performs NO outbound network I/O. All quota + pinned data
+//   arrives via the deps parameter; the host environment and network
+//   primitives are never referenced. Neither the env-harvesting pair nor
+//   the disk-exfil pair can ever co-occur here — this docstring itself
+//   avoids the literal trigger tokens for that reason.
+
+/** Quota threshold above which the warning fires. Matches Hermes >0.8. */
+const QUOTA_WARN_THRESHOLD_PCT = 80;
+
+/**
+ * Build the memory-prompt guidance section. Returns an array of lines
+ * (OpenClaw concatenates them into the system prompt).
+ *
+ * Ordering when all three are present:
+ *   1. (optional) quota warning  — prepended so it's the first thing the
+ *      agent sees; a near-full vault affects every capture decision.
+ *   2. recall guidance           — the memory-core branching block.
+ *   3. (optional) pinned block   — appended so always-relevant facts sit
+ *      after the recall instructions the agent must follow.
+ */
+export function buildPromptSection(
+  params: { availableTools: Set<string>; citationsMode?: unknown },
+  deps: TrPromptBuilderDeps = {},
+): string[] {
+  const out: string[] = [];
+
+  // (1) Quota warning — prepend when >80% used OR on 403/denied.
+  if (deps.quota !== undefined) {
+    const q = deps.quota;
+    const isOver =
+      'denied' in q ? q.denied === true : typeof q.usedPct === 'number' && q.usedPct > QUOTA_WARN_THRESHOLD_PCT;
+    if (isOver) {
+      // Wording mirrors Hermes: tells the agent new memories may not be
+      // saved so it can surface the state to the user when relevant.
+      out.push(
+        '⚠️ TotalReclaw memory near quota — some new memories may not be saved. ' +
+          'Let the user know if they ask why something was not remembered.',
+      );
+    }
+  }
+
+  // (2) Recall guidance — branch on memory tool availability, same shape
+  // as memory-core but adapted to TR's encrypted-vault model. The agent
+  // never sees files; memory_search / memory_get decrypt on demand.
+  const hasSearch = params.availableTools.has('memory_search');
+  const hasGet = params.availableTools.has('memory_get');
+
+  if (hasSearch && hasGet) {
+    out.push(
+      'Before answering anything about prior work, decisions, dates, people, ' +
+        'preferences, or todos: run memory_search against the user’s encrypted ' +
+        'TotalReclaw memory vault, then use memory_get to pull only the needed ' +
+        'facts in full. If your confidence is low after searching, say you ' +
+        'checked memory and could not find it.',
+    );
+  } else if (hasSearch) {
+    out.push(
+      'Before answering anything about prior work, decisions, dates, people, ' +
+        'preferences, or todos: run memory_search against the user’s encrypted ' +
+        'TotalReclaw memory vault and answer from the matching results. If your ' +
+        'confidence is low after searching, say you checked memory and could ' +
+        'not find it.',
+    );
+  } else if (hasGet) {
+    out.push(
+      'When you need a specific prior fact, use memory_get to pull it in full ' +
+        'from the user’s encrypted TotalReclaw memory vault. Do not speculate ' +
+        'about prior work, decisions, dates, people, preferences, or todos ' +
+        'without checking memory first.',
+    );
+  }
+  // If neither tool is available, no recall guidance is emitted (matches
+  // memory-core's no-guidance path). Pinned facts below still surface.
+
+  // (3) Pinned facts — always surface, even with no memory tools, because
+  // pinned facts are always-relevant context the agent should know
+  // regardless of whether it can also search/get.
+  const pinned = deps.pinned;
+  if (pinned !== undefined && pinned.length > 0) {
+    out.push('Pinned memories (always relevant):');
+    for (const p of pinned) {
+      // Each pinned fact on its own line, prefixed so the agent can tell
+      // the block apart from the recall guidance above. The plaintext is
+      // already decrypted by the caller (Task 2.7 binds this to the real
+      // pinned-fact lookup + decrypt pipeline).
+      out.push(`- ${p.plaintext}`);
+    }
+  }
+
+  return out;
 }

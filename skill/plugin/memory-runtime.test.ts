@@ -29,6 +29,7 @@
 
 import { strict as assert } from 'node:assert';
 import {
+  buildPromptSection,
   createTrMemorySearchManager,
   createTrMemoryPluginRuntime,
   FACT_PATH_PREFIX,
@@ -187,5 +188,159 @@ const gotHostile = await throwingRuntime.getMemorySearchManager({
   agentId: 'a1',
 });
 assert.ok(gotHostile.manager, 'construction does not invoke recall, so manager is returned');
+
+// ---------------------------------------------------------------------------
+// Task 2.4 — buildPromptSection (recall guidance + quota + pinned)
+// Mirrors memory-core's branching on memory_search/memory_get availability,
+// adapted to TR's encrypted-vault model, plus TR extras (quota warning +
+// pinned facts) injected via a deps object so the function stays
+// environment/network clean.
+// ---------------------------------------------------------------------------
+
+// --- Branching: mirrors memory-core's availableTools.has() logic ---
+// (a) BOTH tools present -> guidance mentions memory_search AND memory_get.
+const both = buildPromptSection(
+  { availableTools: new Set(['memory_search', 'memory_get']) },
+  {},
+);
+assert.ok(
+  both.some((l) => /memory_search/.test(l)) && both.some((l) => /memory_get/.test(l)),
+  'both-tools branch mentions memory_search and memory_get',
+);
+// The both-branch guidance must reference the vault (TR-specific wording),
+// not the memory-core file-system phrasing.
+assert.ok(
+  both.some((l) => /vault/i.test(l)),
+  'guidance references the TR memory vault, not file paths',
+);
+
+// (b) memory_get only -> mentions memory_get, NOT memory_search.
+const onlyGet = buildPromptSection(
+  { availableTools: new Set(['memory_get']) },
+  {},
+);
+assert.ok(
+  onlyGet.some((l) => /memory_get/.test(l)) && !onlyGet.some((l) => /memory_search/.test(l)),
+  'memory_get-only branch mentions memory_get but not memory_search',
+);
+
+// (c) memory_search only -> mentions memory_search, NOT memory_get.
+const onlySearch = buildPromptSection(
+  { availableTools: new Set(['memory_search']) },
+  {},
+);
+assert.ok(
+  onlySearch.some((l) => /memory_search/.test(l)) && !onlySearch.some((l) => /memory_get/.test(l)),
+  'memory_search-only branch mentions memory_search but not memory_get',
+);
+
+// (d) NEITHER memory tool -> NO recall guidance. An empty array is allowed
+// (memory-core returns no guidance when neither tool is available).
+const neitherTools = buildPromptSection(
+  { availableTools: new Set(['unrelated_tool']) },
+  {},
+);
+assert.ok(
+  !neitherTools.some((l) => /memory_search/.test(l)),
+  'no search guidance when memory_search absent',
+);
+assert.ok(
+  !neitherTools.some((l) => /memory_get/.test(l)),
+  'no get guidance when memory_get absent',
+);
+
+// --- Pinned facts: ALWAYS surface, even when neither memory tool is on ---
+const neitherWithPinned = buildPromptSection(
+  { availableTools: new Set(['unrelated_tool']) },
+  { pinned: [{ id: 'p1', plaintext: 'User is vegetarian.' }] },
+);
+assert.ok(
+  neitherWithPinned.some((l) => /vegetarian/i.test(l)),
+  'pinned facts surface even without memory tools',
+);
+// And with tools present, pinned still appends.
+const bothWithPinned = buildPromptSection(
+  { availableTools: new Set(['memory_search', 'memory_get']) },
+  { pinned: [{ id: 'p2', plaintext: 'Birthday is March 5.' }, { id: 'p3', plaintext: 'Prefers Scala.' }] },
+);
+assert.ok(
+  bothWithPinned.some((l) => /March 5/.test(l)) && bothWithPinned.some((l) => /Scala/.test(l)),
+  'multiple pinned facts each surface',
+);
+// Empty pinned array -> no pinned block (no spurious header).
+const noPinned = buildPromptSection(
+  { availableTools: new Set(['memory_search']) },
+  { pinned: [] },
+);
+assert.ok(
+  !noPinned.some((l) => /pinned/i.test(l)),
+  'empty pinned array produces no pinned block',
+);
+
+// --- Quota warning: fires when >80% used OR on 403/denied ---
+const overQuota = buildPromptSection(
+  { availableTools: new Set(['memory_search']) },
+  { quota: { usedPct: 90 } },
+);
+assert.ok(overQuota.some((l) => /quota/i.test(l)), 'quota warning fires when >80% used');
+
+const atThreshold = buildPromptSection(
+  { availableTools: new Set(['memory_search']) },
+  { quota: { usedPct: 81 } },
+);
+assert.ok(atThreshold.some((l) => /quota/i.test(l)), 'quota warning fires just over 80%');
+
+const denied = buildPromptSection(
+  { availableTools: new Set(['memory_search']) },
+  { quota: { denied: true } },
+);
+assert.ok(denied.some((l) => /quota/i.test(l)), 'quota warning fires on 403/denied');
+
+// --- Quota warning: does NOT fire at/below 80% ---
+const underQuota = buildPromptSection(
+  { availableTools: new Set(['memory_search']) },
+  { quota: { usedPct: 50 } },
+);
+assert.ok(!underQuota.some((l) => /quota/i.test(l)), 'no quota warning at 50%');
+
+const at80 = buildPromptSection(
+  { availableTools: new Set(['memory_search']) },
+  { quota: { usedPct: 80 } },
+);
+assert.ok(!at80.some((l) => /quota/i.test(l)), 'no quota warning at exactly 80% (boundary)');
+
+// --- Quota warning + pinned both compose: warning prepended, pinned appended ---
+const composed = buildPromptSection(
+  { availableTools: new Set(['memory_search', 'memory_get']) },
+  {
+    quota: { usedPct: 95 },
+    pinned: [{ id: 'p1', plaintext: 'User is vegetarian.' }],
+  },
+);
+const quotaIdx = composed.findIndex((l) => /quota/i.test(l));
+const pinnedIdx = composed.findIndex((l) => /vegetarian/i.test(l));
+const guidanceIdx = composed.findIndex((l) => /memory_search/.test(l));
+assert.ok(quotaIdx >= 0 && pinnedIdx >= 0 && guidanceIdx >= 0, 'all three blocks present');
+assert.ok(
+  quotaIdx < guidanceIdx,
+  'quota warning precedes recall guidance',
+);
+assert.ok(
+  pinnedIdx > guidanceIdx,
+  'pinned block follows recall guidance',
+);
+
+// --- citationsMode is accepted but does not alter the contracts above ---
+// (We don't assert on it today; OpenClaw passes it through and memory-core
+// currently does not branch on it either. The param is accepted for shape
+// compatibility with the MemoryPluginCapability contract.)
+const withCitations = buildPromptSection(
+  { availableTools: new Set(['memory_search']), citationsMode: 'always' as any },
+  {},
+);
+assert.ok(
+  withCitations.some((l) => /memory_search/.test(l)),
+  'citationsMode does not suppress recall guidance',
+);
 
 console.log('memory-runtime.test OK');
