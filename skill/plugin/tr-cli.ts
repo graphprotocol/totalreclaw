@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 /**
- * tr — TotalReclaw hybrid CLI (3.3.9-rc.1 primary architecture)
+ * tr — TotalReclaw CLI (explicit-write + curation surface)
  *
- * OpenClaw 2026.5.2 has a tool-policy-pipeline bug (issue #223) that strips non-bundled plugin
- * tools before they reach the agent toolset. In 3.3.9-rc.1, this CLI is the PRIMARY path for
- * all agent memory operations (not a fallback). The agent runs `tr <cmd> --json` from shell;
- * hooks (before_agent_start, agent_end, message_received, before_reset) continue via the
- * unbroken hook code path.
+ * Scope (Phase 3.3 — OpenClaw native integration): recall is now NATIVE.
+ * The agent reads memories via OpenClaw's bundled `memory_search` /
+ * `memory_get` tools (backed by the MemoryPluginCapability + TrMemorySearchManager
+ * adapter registered in `index.ts`). This CLI no longer ships a recall path.
+ *
+ * What's still CLI-only (no native agent-facing surface):
+ *   - explicit write (`tr remember`) — the conventional memory contract has no
+ *     agent-facing write tool; auto-extraction stores facts via hooks.
+ *   - curation / lifecycle (`tr forget`, `tr export`).
+ *   - onboarding + pairing (`tr status`, `tr pair`).
  *
  * Phrase-safety: this CLI reads credentials.json (mnemonic at rest) but NEVER
  * prints the mnemonic to stdout, stderr, or any log. Phrase only enters via QR-pair
@@ -16,14 +21,12 @@
  *   tr status [--json]          — print onboarding + credentials state
  *   tr pair [--json]            — start a relay pairing session, print URL+PIN+QR
  *   tr remember [--json] <text> — store a memory in the encrypted vault (on-chain)
- *   tr recall [--json] [--limit N] <query> — search the encrypted vault (subgraph)
- *   tr forget [--json] <factId> — tombstone a memory on-chain
+ *   tr forget [--json] <factId> — tombstone a memory on-chain (find the id via memory_search)
  *   tr export [--json] [--format json|markdown] — dump all memories from the subgraph
  *
- * 3.3.12-rc.4 — switched remember/recall/forget/export from `/v1/store` and
+ * 3.3.12-rc.4 — switched remember/forget/export from `/v1/store` and
  * `/v1/search` (those endpoints were removed during the on-chain pivot —
- * relay returns 404) to the on-chain UserOp + subgraph paths used by the
- * native MCP tools (`totalreclaw_remember`, `totalreclaw_recall`, etc).
+ * relay returns 404) to the on-chain UserOp + subgraph paths.
  *
  * --json flag: all agent-facing CLI calls MUST use --json for clean machine-parseable output.
  *              Plain text mode is for direct user CLI use only.
@@ -43,7 +46,6 @@ import {
   deriveKeys,
   computeAuthKeyHash,
   encrypt,
-  decrypt,
   generateBlindIndices,
   generateContentFingerprint,
 } from './crypto.js';
@@ -56,10 +58,6 @@ import {
   PROTOBUF_VERSION_V4,
   type FactPayload,
 } from './subgraph-store.js';
-import {
-  searchSubgraph,
-  searchSubgraphBroadened,
-} from './subgraph-search.js';
 import { exportAllFacts } from './tr-cli-export-helper.js';
 
 // ---------------------------------------------------------------------------
@@ -90,15 +88,6 @@ function popFlag(args: string[], flag: string): [boolean, string[]] {
   return [true, [...args.slice(0, idx), ...args.slice(idx + 1)]];
 }
 
-/** Parse --limit N from args, returning [limit, cleanedArgs]. Default: defaultLimit. */
-function popLimitFlag(args: string[], defaultLimit: number): [number, string[]] {
-  const idx = args.indexOf('--limit');
-  if (idx === -1 || idx + 1 >= args.length) return [defaultLimit, args];
-  const n = parseInt(args[idx + 1], 10);
-  const limit = isNaN(n) || n < 1 ? defaultLimit : n;
-  return [limit, [...args.slice(0, idx), ...args.slice(idx + 2)]];
-}
-
 /** Parse --format VALUE from args, returning [value, cleanedArgs]. */
 function popOptionFlag(
   args: string[],
@@ -118,13 +107,6 @@ function popOptionFlag(
 function toHexBlob(plaintext: string, encryptionKey: Buffer): string {
   const b64 = encrypt(plaintext, encryptionKey);
   return Buffer.from(b64, 'base64').toString('hex');
-}
-
-/** Inverse of toHexBlob — used by recall/export to decrypt subgraph blobs. */
-function fromHexBlob(hexBlob: string, encryptionKey: Buffer): string {
-  const hex = hexBlob.startsWith('0x') ? hexBlob.slice(2) : hexBlob;
-  const b64 = Buffer.from(hex, 'hex').toString('base64');
-  return decrypt(b64, encryptionKey);
 }
 
 // ---------------------------------------------------------------------------
@@ -414,96 +396,6 @@ async function cmdRemember(rawArgs: string[]): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Command: recall
-// ---------------------------------------------------------------------------
-
-async function cmdRecall(rawArgs: string[]): Promise<void> {
-  const [jsonMode, argsAfterJson] = popFlag(rawArgs, '--json');
-  const [limit, argsAfterLimit] = popLimitFlag(argsAfterJson, 5);
-  const query = argsAfterLimit.join(' ').trim();
-  if (!query) {
-    die('Usage: tr recall [--json] [--limit N] <query>');
-  }
-
-  const ctx = await buildContext();
-
-  // Generate word trapdoors for blind search. The CLI does not run the
-  // ONNX embedder (that's a 700 MB lazy bundle in the gateway) so we send
-  // word-only trapdoors. The reranker in the native MCP path would add LSH
-  // trapdoors on top — we live without them here in exchange for a much
-  // smaller CLI footprint.
-  const trapdoors = generateBlindIndices(query);
-  const pool = Math.max(limit * 4, 20);
-
-  try {
-    let candidates = await searchSubgraph(
-      ctx.walletAddress,
-      trapdoors,
-      pool,
-      ctx.authKeyHex,
-    );
-
-    // Always run broadened search and merge — ensures vocabulary mismatches
-    // (e.g., "preferences" vs "prefer") don't cause recall failures. This
-    // mirrors the native tool path in index.ts (line 3978).
-    try {
-      const broadened = await searchSubgraphBroadened(
-        ctx.walletAddress,
-        pool,
-        ctx.authKeyHex,
-      );
-      const seen = new Set(candidates.map((r) => r.id));
-      for (const br of broadened) {
-        if (!seen.has(br.id)) candidates.push(br);
-      }
-    } catch {
-      // best-effort; broadened-only failures shouldn't block trapdoor results
-    }
-
-    const results: Array<{ text: string; score: number }> = [];
-
-    for (const c of candidates) {
-      try {
-        const docJson = fromHexBlob(c.encryptedBlob, ctx.encryptionKey);
-        const parsed = JSON.parse(docJson) as {
-          text?: string;
-          importance?: number;
-          metadata?: { importance?: number };
-        };
-        if (!parsed.text) continue;
-        // The CLI is intentionally simple — score by decayScore (importance
-        // proxy) instead of running the full BM25 + cosine reranker that
-        // the native MCP path uses. Agents calling the CLI typically just
-        // want the top-N by importance.
-        const decay = typeof c.decayScore === 'string'
-          ? parseInt(c.decayScore, 10)
-          : (c.decayScore as unknown as number);
-        const score = Number.isFinite(decay) ? decay / 10 : 0.5;
-        results.push({ text: parsed.text, score });
-      } catch {
-        // Skip undecryptable / non-JSON (digest blobs, tombstones, etc.)
-      }
-    }
-
-    // Sort by score descending, then trim to limit.
-    results.sort((a, b) => b.score - a.score);
-    const trimmed = results.slice(0, limit);
-
-    if (jsonMode) {
-      log(JSON.stringify({ results: trimmed }));
-    } else {
-      log(`Found ${trimmed.length} result(s) for: ${query}`);
-      for (const r of trimmed) {
-        log(`  [score=${r.score.toFixed(2)}] ${r.text}`);
-      }
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    die(`recall failed: ${msg}`);
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Command: forget
 // ---------------------------------------------------------------------------
 
@@ -513,13 +405,13 @@ async function cmdForget(rawArgs: string[]): Promise<void> {
   if (!factId) {
     die('Usage: tr forget [--json] <factId>');
   }
-  // UUID-v4-ish shape check — same validation as the native totalreclaw_forget
-  // tool (index.ts line 4225). Prevents fabricated / natural-language IDs
-  // from reaching the UserOp path and silently no-op'ing on-chain.
+  // UUID-v4-ish shape check — same validation the old totalreclaw_forget
+  // tool applied. Prevents fabricated / natural-language IDs from reaching
+  // the UserOp path and silently no-op'ing on-chain.
   if (!/^[0-9a-f-]{8,}$/i.test(factId)) {
     die(
       `forget failed: "${factId.slice(0, 60)}" doesn't look like a memory ID. ` +
-        `Run \`tr recall --json <query>\` first and pass a result's id.`,
+        `Ask the agent to look it up via memory_search (or tr export) and pass a result's id.`,
     );
   }
 
@@ -640,8 +532,15 @@ async function main(): Promise<void> {
       break;
 
     case 'recall':
-      await cmdRecall(args.slice(1));
-      break;
+      // Retired in Phase 3.3 — recall is now native via the bundled
+      // memory_search / memory_get tools (MemoryPluginCapability). Surface
+      // a clear pointer instead of falling through to "unknown command"
+      // so agents / users running stale prompts get actionable guidance.
+      die(
+        'tr recall was retired — recall is now native. ' +
+          'The agent reads memories via the memory_search tool automatically; ' +
+          'use `tr export` to dump every memory outside the agent.',
+      );
 
     case 'forget':
       await cmdForget(args.slice(1));
@@ -655,22 +554,21 @@ async function main(): Promise<void> {
     case '--help':
     case '-h':
       process.stdout.write(
-        `TotalReclaw hybrid CLI v${PLUGIN_VERSION} (primary mode — OpenClaw 2026.5.2+)\n\n` +
+        `TotalReclaw CLI v${PLUGIN_VERSION} (recall is native — memory_search tool)\n\n` +
         'Usage:\n' +
-        '  tr status [--json]                       — onboarding + plugin load state\n' +
-        '  tr pair [--json]                         — start a relay pairing session\n' +
-        '  tr remember [--json] <text>              — store a memory (on-chain UserOp)\n' +
-        '  tr recall [--json] [--limit N] <query>   — search memories (default limit: 5)\n' +
-        '  tr forget [--json] <factId>              — tombstone a memory on-chain\n' +
+        '  tr status [--json]                          — onboarding + plugin load state\n' +
+        '  tr pair [--json]                            — start a relay pairing session\n' +
+        '  tr remember [--json] <text>                 — store a memory (on-chain UserOp)\n' +
+        '  tr forget [--json] <factId>                 — tombstone a memory on-chain\n' +
         '  tr export [--json] [--format json|markdown] — dump every memory in the vault\n\n' +
+        'Recall: NOT a CLI command. The agent recalls via the bundled memory_search tool.\n' +
+        '        To dump memories outside the agent, use `tr export`.\n\n' +
         'Flags:\n' +
-        '  --json    Output machine-parseable JSON (required for agent shell calls)\n' +
-        '  --limit N Limit recall results (default: 5)\n\n' +
+        '  --json    Output machine-parseable JSON (required for agent shell calls)\n\n' +
         'JSON output shapes:\n' +
         '  status:   {"version":"...","onboarded":bool,"next_step":"pair|none","tool_count":N,"hybrid_mode":bool}\n' +
         '  pair:     {"url":"...","pin":"123456","expires_at":"..."}\n' +
         '  remember: {"ok":true,"id":"...","claim_count":N}\n' +
-        '  recall:   {"results":[{"text":"...","score":0.8}]}\n' +
         '  forget:   {"ok":true,"id":"...","tx_hash":"0x..."}\n' +
         '  export:   {"count":N,"facts":[{"id":"...","text":"...","metadata":{...},"created_at":"..."}]}\n\n' +
         'Environment:\n' +

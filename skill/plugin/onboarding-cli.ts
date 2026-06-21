@@ -68,7 +68,8 @@ import {
  *
  * The phrase-print branch will be REMOVED in the next RC after rc.18.
  * Users running on a TTY can still complete the flow in rc.18; agents
- * MUST use `--pair-only` or the `totalreclaw_pair` tool today.
+ * MUST use `--pair-only` (or `tr pair --url-pin`) — the legacy
+ * `totalreclaw_pair` agent tool was retired in Phase 3.2.
  */
 export const PHRASE_PRINT_DEPRECATION_WARNING =
   '\nDEPRECATION (issue #95): the interactive `openclaw totalreclaw onboard` flow\n' +
@@ -135,7 +136,7 @@ export const COPY = {
     '\nDone. Your phrase is saved at ~/.totalreclaw/credentials.json (mode 0600).\n' +
     'Memory tools are now active.\n\n' +
     '  Next: run `openclaw chat` to start. Existing memories tied to this\n' +
-    '        phrase will be available via totalreclaw_recall.\n',
+    '        phrase are recalled automatically by the agent via memory_search.\n',
   skipped:
     '\nSkipped. Run `openclaw totalreclaw onboard` anytime to resume.\n' +
     'Memory tools remain disabled until you do.\n',

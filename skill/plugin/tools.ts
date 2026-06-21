@@ -175,8 +175,8 @@ export interface TrMemorySearchManagerLike {
  * An AgentToolResult. `{ content: [{type:'text', text: JSON.stringify(payload)}] }`
  * — the agent parses the JSON in `text`. This matches memory-core's
  * `jsonResult(payload)` helper (dist/common-BYJ5YAFM.d.ts l.103) and the
- * shape every other TR tool returns (see e.g. totalreclaw_remember in
- * index.ts).
+ * shape the retired TR agent tools used to return (the convention is kept
+ * for the native memory_search/memory_get wrappers).
  */
 export interface AgentToolResultLike {
   content: Array<{ type: 'text'; text: string }>;

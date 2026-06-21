@@ -8,37 +8,48 @@
 /**
  * TotalReclaw Plugin for OpenClaw
  *
- * Registers runtime tools so OpenClaw can execute TotalReclaw operations:
- *   - totalreclaw_remember     -- store an encrypted memory
- *   - totalreclaw_recall       -- search and decrypt memories
- *   - totalreclaw_forget       -- soft-delete a memory
- *   - totalreclaw_export       -- export all memories (JSON or Markdown)
- *   - totalreclaw_status       -- check billing/subscription status
- *   - totalreclaw_consolidate  -- scan and merge near-duplicate memories
- *   - totalreclaw_pin          -- pin a memory so auto-resolution can never supersede it
- *   - totalreclaw_unpin        -- remove a pin, returning the memory to active status
- *   - totalreclaw_import_from   -- import memories from other tools (Mem0, MCP Memory, etc.)
- *   - totalreclaw_import_status -- check background import progress
- *   - totalreclaw_import_abort  -- cancel a running background import
- *   - totalreclaw_upgrade       -- create Stripe checkout for Pro upgrade
- *   - totalreclaw_migrate      -- migrate testnet memories to mainnet after Pro upgrade
- *   - totalreclaw_onboarding_start -- non-secret pointer to the CLI wizard (3.2.0)
- *   - totalreclaw_setup        -- DEPRECATED in 3.2.0; redirects to the CLI wizard
+ * Phase 3 — OpenClaw native integration. The agent reads memories via the
+ * bundled NATIVE tools `memory_search` / `memory_get`, registered through
+ * the host's MemoryPluginCapability by `registerNativeMemory` (see
+ * `native-memory.ts`). The TrMemorySearchManager adapter binds those tools
+ * to TotalReclaw's encrypted subgraph + decrypt + reranker pipeline.
+ *
+ * The legacy `totalreclaw_*` agent tools (remember / recall / forget / export
+ * / status / pin / unpin / retype / set_scope / import_from / import_status
+ * / import_abort / upgrade / migrate / onboarding_start / setup /
+ * report_qa_bug) were RETIRED in Task 3.2. Their capabilities now live on:
+ *   - read (recall):        native `memory_search` / `memory_get`.
+ *   - explicit write:       CLI `tr remember` (the conventional memory
+ *                            contract ships no agent-facing write tool;
+ *                            auto-extraction handles implicit writes).
+ *   - curation/lifecycle:   CLI `tr forget` / `tr export` + the
+ *                            registerCli `openclaw totalreclaw ...` surface.
+ *   - onboarding/pair:      CLI `tr pair` + the 4 `/plugin/totalreclaw/pair/*`
+ *                            HTTP routes (registerHttpRoute bundle).
+ *
+ * Hooks registered here:
+ *   - `before_agent_start` — injects relevant memories into the agent's
+ *     context (via the MemoryPluginCapability's promptBuilder) and a
+ *     non-secret onboarding hint when the user has not paired yet.
+ *   - `before_tool_call` — gates the native `memory_search` / `memory_get`
+ *     tools behind onboarding state `active` so an unpaired agent gets an
+ *     actionable pointer to `tr pair --url-pin` instead of the adapter's
+ *     silent fail-soft empty result (see `tool-gating.ts`).
+ *   - `agent_end`, `message_received`, `before_reset` — auto-extraction
+ *     + digest bookkeeping (unchanged).
  *
  * Also registers:
- *   - `before_agent_start` hook that automatically injects relevant memories
- *     into the agent's context (and a non-secret onboarding hint when the
- *     user has not completed the CLI setup yet).
- *   - `before_tool_call` hook that gates every memory tool until onboarding
- *     state is `active` (3.2.0).
- *   - `registerCli` subcommand `openclaw totalreclaw onboard` — the ONLY
- *     surface that generates or accepts a recovery phrase. Lives entirely on
- *     the user's terminal; the phrase never enters an LLM request or a
- *     session transcript.
+ *   - `registerCli` subcommand `openclaw totalreclaw ...` — pair / onboard /
+ *     status / pin / unpin / retype / set_scope / import / export. The
+ *     `onboard` subcommand is the ONLY surface that generates or accepts a
+ *     recovery phrase; it lives entirely on the user's terminal and the
+ *     phrase never enters an LLM request or a session transcript.
+ *   - `registerHttpRoute` — the 4 QR-pair endpoints under
+ *     `/plugin/totalreclaw/pair/*` (browser-facing, plugin-auth).
  *   - `registerCommand` slash command `/totalreclaw {onboard,status}` — a
- *     non-secret pointer that directs the user to the CLI wizard.
+ *     non-secret pointer to the CLI wizard.
  *
- * Security: in 3.2.0, the recovery phrase NEVER appears in tool responses,
+ * Security: the recovery phrase NEVER appears in tool responses,
  * `prependContext` blocks, slash-command replies, or any other surface that
  * is sent to the LLM provider or persisted to the session transcript. See
  * `docs/plans/2026-04-20-plugin-320-secure-onboarding.md` in the internal
@@ -440,16 +451,18 @@ function buildPairingUrl(
         // issue #110 fix 4: inside Docker the LAN IP is container-internal
         // and useless. Loopback localhost only works for `docker exec`
         // tests. The CORRECT pair URL for Docker is the relay-brokered
-        // path served by the `totalreclaw_pair` agent tool (CONFIG.pairMode
-        // === 'relay' since rc.11). The CLI-only path here cannot mint a
-        // relay session synchronously (the relay handshake needs a WS
-        // round-trip), so we emit the loopback URL with a LOUD warning
-        // pointing the operator at the agent tool / publicUrl override.
+        // path served by `tr pair` / the `/plugin/totalreclaw/pair/*` HTTP
+        // routes (CONFIG.pairMode === 'relay' since rc.11). The CLI-only
+        // path here cannot mint a relay session synchronously (the relay
+        // handshake needs a WS round-trip), so we emit the loopback URL
+        // with a LOUD warning pointing the operator at the pair CLI /
+        // publicUrl override.
         api.logger.warn(
           `TotalReclaw: Docker container detected — pairing URL falling back to ` +
             `http://localhost:${port}, which is unreachable from the host browser. ` +
-            `Use the totalreclaw_pair AGENT TOOL (relay-brokered, universally reachable) ` +
-            `instead of the CLI fallback, OR set plugins.entries.totalreclaw.config.publicUrl ` +
+            `Run \`tr pair --url-pin\` (or \`openclaw totalreclaw pair generate --url-pin-only\`) ` +
+            `on the gateway host to mint a relay-brokered pair URL that reaches the host browser, ` +
+            `OR set plugins.entries.totalreclaw.config.publicUrl ` +
             `to your gateway's host-reachable URL (e.g. http://<host-ip>:${port} when the ` +
             `Docker port is published). Setting TOTALRECLAW_PAIR_MODE=relay is the default; ` +
             `air-gapped operators on TOTALRECLAW_PAIR_MODE=local must publish a port + set publicUrl.`,
@@ -684,9 +697,10 @@ const MEMORY_HEADER = `# Memory
 
 > **TotalReclaw is active.** Your encrypted memories are loaded automatically
 > at the start of each conversation — no need to search this file for them.
-> Use \`totalreclaw_remember\` to store new memories and \`totalreclaw_recall\`
-> to search. Do NOT write user facts, preferences, or decisions to this file.
-> This file is for workspace-level notes only (non-sensitive).
+> Recall is automatic via the memory_search tool; to explicitly store a fact,
+> run \`tr remember "<text>"\` in a shell. Do NOT write user facts,
+> preferences, or decisions to this file. This file is for workspace-level
+> notes only (non-sensitive).
 
 `;
 
@@ -1044,10 +1058,16 @@ function isDocker(): boolean {
 }
 
 function buildSetupErrorMsg(): string {
-  return 'TotalReclaw setup required. Use the `totalreclaw_setup` tool with a 12-word BIP-39 recovery phrase.\n\n' +
-    '1. Ask the user if they have an existing recovery phrase, or generate a new one with `npx @totalreclaw/mcp-server setup`.\n' +
-    '2. Call `totalreclaw_setup` with the phrase — no gateway restart needed.\n' +
-    '   (Optional: set TOTALRECLAW_SELF_HOSTED=true if using your own server instead of the managed service.)';
+  // NOTE: the legacy `totalreclaw_setup` agent tool was retired in 3.2.0
+  // (phrase-safety: the agent must never accept or relay a recovery phrase).
+  // The ONLY setup surface is the QR-pair flow: the agent cannot mint a
+  // pair URL itself, so it must direct the user to the CLI. This message is
+  // thrown by `requireFullSetup` (currently only reached via dead 3.2 tool
+  // handlers; kept accurate so any future caller gets the correct pointer).
+  return 'TotalReclaw setup required. Pairing is QR-only — the recovery phrase is generated and encrypted in-browser and never enters this chat.\n\n' +
+    'Run `tr pair --url-pin` on the gateway host (or `openclaw totalreclaw pair generate --url-pin-only`) ' +
+    'and hand the user the returned `url` and `pin`. The user opens the URL in a browser to complete pairing. ' +
+    'Do NOT ask the user for a recovery phrase and do NOT attempt to generate or relay one yourself.';
 }
 
 function buildSetupErrorMsgLegacy(): string {
@@ -1083,8 +1103,9 @@ const SETUP_ERROR_MSG = buildSetupErrorMsg();
  * Ensure `initialize()` has completed (runs at most once).
  *
  * If `needsSetup` is true after init, attempts a hot-reload from
- * credentials.json in case the mnemonic was written there by a
- * `totalreclaw_setup` tool call or `npx @totalreclaw/mcp-server setup`.
+ * credentials.json in case the mnemonic was just written there by the
+ * pair-completion HTTP route (`/plugin/totalreclaw/pair/respond` →
+ * `completePairing`) or the `tr pair` CLI on another process.
  */
 async function ensureInitialized(logger: OpenClawPluginApi['logger']): Promise<void> {
   if (!initPromise) {
@@ -1093,7 +1114,7 @@ async function ensureInitialized(logger: OpenClawPluginApi['logger']): Promise<v
   await initPromise;
 
   // Hot-reload: if setup is still needed, check if credentials.json
-  // now has a mnemonic (written by totalreclaw_setup or MCP setup CLI).
+  // now has a mnemonic (written by the pair HTTP route / `tr pair` CLI).
   if (needsSetup) {
     await attemptHotReload(logger);
   }
@@ -1103,9 +1124,9 @@ async function ensureInitialized(logger: OpenClawPluginApi['logger']): Promise<v
  * Attempt to hot-reload credentials from credentials.json.
  *
  * Called when `needsSetup` is true — checks if credentials.json contains
- * a mnemonic (written by the `totalreclaw_setup` tool or MCP setup CLI).
- * If found, re-derives keys and completes initialization without requiring
- * a gateway restart.
+ * a mnemonic (written by the pair-completion HTTP route or `tr pair` CLI
+ * on another process). If found, re-derives keys and completes
+ * initialization without requiring a gateway restart.
  */
 async function attemptHotReload(logger: OpenClawPluginApi['logger']): Promise<void> {
   try {
@@ -1131,9 +1152,18 @@ async function attemptHotReload(logger: OpenClawPluginApi['logger']): Promise<vo
 /**
  * Force re-initialization with a specific mnemonic.
  *
- * Called by the `totalreclaw_setup` tool. Clears stale credentials from
- * disk so that `initialize()` treats this as a fresh registration and
- * persists the NEW mnemonic + freshly derived salt/userId.
+ * LEGACY (Phase 3.2): the only caller was the `totalreclaw_setup` agent
+ * tool, which was retired because accepting a recovery phrase via an agent
+ * tool violated phrase-safety (the phrase must never enter an LLM context).
+ * The function currently has NO callers; it is retained because the
+ * credential-rotation invariant documented below still describes a real
+ * trap for any future credential-rotating surface, and removing the body
+ * would lose that institutional knowledge. Safe to delete once confirmed
+ * unused across the whole plugin tree.
+ *
+ * Clears stale credentials from disk so that `initialize()` treats this as
+ * a fresh registration and persists the NEW mnemonic + freshly derived
+ * salt/userId.
  *
  * Without clearing credentials.json first, `initialize()` would load the
  * OLD salt and userId, derive keys from (new mnemonic + old salt), skip
@@ -1803,7 +1833,7 @@ function relativeTime(isoOrMs: string | number): string {
  * Configurable via TOTALRECLAW_MIN_IMPORTANCE env var (default: 3).
  *
  * NOTE: This filter is ONLY applied to auto-extraction (hooks).
- * The explicit `totalreclaw_remember` tool always stores regardless of importance.
+ * The explicit `tr remember` CLI always stores regardless of importance.
  */
 const MIN_IMPORTANCE_THRESHOLD = CONFIG.minImportance;
 
@@ -2225,7 +2255,7 @@ async function storeExtractedFacts(
   // Submit subgraph payloads one fact at a time (sequential single-call UserOps).
   // Batch executeBatch UserOps have persistent gas estimation issues on Base Sepolia
   // that cause on-chain reverts. Single-fact UserOps use the simpler submitFactOnChain
-  // path which works reliably (same path as totalreclaw_remember). Each submission
+  // path which works reliably (same path the `tr remember` CLI uses). Each submission
   // polls for receipt (120s) before proceeding, so nonce is consumed before the next.
   let batchError: string | undefined;
   if (pendingPayloads.length > 0 && isSubgraphMode()) {
@@ -2278,11 +2308,12 @@ async function storeExtractedFacts(
 }
 
 // ---------------------------------------------------------------------------
-// Import handler (for totalreclaw_import_from tool)
+// Import handler (for the registerCli `openclaw totalreclaw import-from` surface)
 // ---------------------------------------------------------------------------
 
 /**
- * Handle import_from tool calls in the plugin context.
+ * Handle import_from calls (CLI subcommand path; was the totalreclaw_import_from
+ * agent tool before Phase 3.2 retired the agent tools).
  *
  * Two paths:
  * 1. Pre-structured sources (Mem0, MCP Memory) — adapter returns facts directly,
@@ -2429,7 +2460,7 @@ async function handlePluginImportFrom(
         estimated_batches: estimatedBatches,
         estimated_minutes: estimatedMinutes,
         estimated_completion_iso: initialState.estimated_completion_iso,
-        message: `Import started in background. ~${estimatedMinutes} min for ${totalChunks} chunks. Ask "how's the import?" to check progress with totalreclaw_import_status.`,
+        message: `Import started in background. ~${estimatedMinutes} min for ${totalChunks} chunks. (The totalreclaw_import_status agent tool was retired in Phase 3.2; progress is tracked in import-state.json and auto-resumes on gateway restart. A CLI status surface will ship in a follow-up.)`,
         warnings: parseResult.warnings,
       };
     }
@@ -3009,7 +3040,7 @@ async function handleImportStatus(
     if (!state) return { error: `No import found with id: ${importId}` };
   } else {
     state = readMostRecentActiveImport();
-    if (!state) return { status: 'no_active_import', message: 'No active import found. Start one with totalreclaw_import_from.' };
+    if (!state) return { status: 'no_active_import', message: 'No active import found. (The totalreclaw_import_from agent tool was retired in Phase 3.2; a CLI import surface will ship in a follow-up. Auto-resume still picks up running imports on gateway restart.)' };
   }
 
   // 1h freshness guard: mark stale imports as failed and prompt user to resume.
@@ -3021,7 +3052,7 @@ async function handleImportStatus(
       status: 'failed',
       stale: true,
       facts_stored: state.facts_stored,
-      message: 'Import appears stale — no progress in 1 hour. Resume with totalreclaw_import_from using the same file and resume_id.',
+      message: 'Import appears stale — no progress in 1 hour. Restart the gateway to trigger auto-resume (the totalreclaw_import_from agent tool was retired in Phase 3.2; a CLI resume surface will ship in a follow-up).',
       resume_id: state.import_id,
     };
   }
@@ -3099,8 +3130,9 @@ async function handleImportAbort(
 //   subgraphOwner) is NOT resolved synchronously at register() time. It is
 //   populated by `initialize()` on the first tool/hook call via
 //   `ensureInitialized()`. So each closure calls `ensureInitialized(logger)`
-//   internally before touching the module-level state — exactly what
-//   `requireFullSetup` does for the existing totalreclaw_recall tool.
+//   internally before touching the module-level state — the same lazy-init
+//   seam the retired totalreclaw_recall tool used to use (then via
+//   `requireFullSetup`).
 //
 //   If setup is incomplete (no credentials), `ensureInitialized` returns
 //   with `needsSetup=true`; the closures then surface a typed error
@@ -3134,8 +3166,10 @@ async function handleImportAbort(
  */
 function buildRecallDeps(logger: OpenClawPluginApi['logger']): TrNativeMemoryDeps {
   // -------------------------------------------------------------------
-  // recall(): the load-bearing closure. Mirrors the totalreclaw_recall
-  // tool handler (index.ts:4299-4531) MINUS the result formatting +
+  // recall(): the load-bearing closure. This is the search/decrypt/rerank
+  // pipeline that backs the native memory_search tool via the
+  // TrMemorySearchManager adapter. It replaced the retired totalreclaw_recall
+  // agent tool handler (Phase 3.2) MINUS the tool-level result formatting +
   // hot-cache bookkeeping (those are tool concerns; the native memory
   // pipeline only needs the TrFact[]). Returns TrFact[] shaped for the
   // TrMemorySearchManager adapter (memory-runtime.ts).
@@ -3144,12 +3178,12 @@ function buildRecallDeps(logger: OpenClawPluginApi['logger']): TrNativeMemoryDep
     query,
     opts,
   ): Promise<TrFact[]> => {
-    // Lazy-init: this is the first seam the closure hits, exactly like
-    // totalreclaw_recall's `requireFullSetup(api.logger)`. If the user
+    // Lazy-init: this is the first seam the closure hits. If the user
     // is not paired, ensureInitialized returns with needsSetup=true; we
-    // surface that as an empty result (the runtime wrapper will report
-    // `manager: null` upstream if appropriate, but a search with no
-    // credentials returning [] is also fine — the agent treats empty
+    // surface that as an empty result (the before_tool_call gate in
+    // tool-gating.ts normally intercepts memory_search BEFORE this runs
+    // when state != active, but fail-soft here too — a search with no
+    // credentials returning [] is benign; the agent treats empty
     // results as "no memories found").
     await ensureInitialized(logger);
 
@@ -3499,9 +3533,11 @@ const plugin = {
     // RC-build detection (3.3.1-rc.3)
     // ---------------------------------------------------------------
     //
-    // `isRcBuild` reads the plugin's own version string. When true, the
-    // `totalreclaw_report_qa_bug` tool is registered at the end of this
-    // function — stable builds never see it. The version is resolved via
+    // `isRcBuild` reads the plugin's own version string. The resulting
+    // `rcMode` flag is currently logged but has no gating effect after
+    // Task 3.2 retired the RC-only `totalreclaw_report_qa_bug` agent tool
+    // (the only former consumer). The flag is retained for the log line and
+    // any future RC-gated diagnostic surface. The version is resolved via
     // `readPluginVersion` from fs-helpers.ts (scanner-safe, pure-fs).
     let rcMode = false;
     // Plugin version resolved from package.json once at register time. Reused
@@ -3577,10 +3613,10 @@ const plugin = {
 
       // 3.3.3-rc.1 (issue #187 — ONNX decouple): kick off a non-blocking
       // bundle prefetch so the ~700 MB embedder tarball starts streaming
-      // as soon as the gateway boots, BEFORE the user completes
-      // `totalreclaw_pair`. Decouples the model download from the
-      // pair-completion gate the previous flow imposed via
-      // `requireFullSetup()` -> first `generateEmbedding()` call.
+      // as soon as the gateway boots, BEFORE the user completes pairing
+      // (`tr pair` / the `/plugin/totalreclaw/pair/*` HTTP route). Decouples
+      // the model download from the pair-completion gate the previous flow
+      // imposed via `requireFullSetup()` -> first `generateEmbedding()` call.
       // Fire-and-forget — never awaits, never throws on failure (the next
       // `generateEmbedding()` call retries via the same idempotent path).
       // Disabled when `TOTALRECLAW_DISABLE_EMBEDDER_PREFETCH=1` (CI / tests
@@ -3786,14 +3822,14 @@ const plugin = {
             break;
           case 'failed':
             api.logger.warn(
-              `TotalReclaw: setup pending. Auto-pair failed (${result.error}). User must run \`tr pair --json\` manually OR call the totalreclaw_pair tool.`,
+              `TotalReclaw: setup pending. Auto-pair failed (${result.error}). User must run \`tr pair --url-pin\` manually (or the agent can shell out to it).`,
             );
             break;
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         api.logger.warn(
-          `TotalReclaw: setup pending. Auto-pair failed (${msg}). User must run \`tr pair --json\` manually OR call the totalreclaw_pair tool.`,
+          `TotalReclaw: setup pending. Auto-pair failed (${msg}). User must run \`tr pair --url-pin\` manually (or the agent can shell out to it).`,
         );
       }
     })();
@@ -4355,18 +4391,20 @@ const plugin = {
     );
 
     // ---------------------------------------------------------------
-    // Hook: before_tool_call (3.2.0 memory-tool gate)
+    // Hook: before_tool_call (memory-tool gate)
     // ---------------------------------------------------------------
     //
-    // Blocks every memory tool until onboarding state is `active`. The
-    // `blockReason` string is LLM-visible but carries no secret — it's a
-    // pointer to the CLI wizard.
+    // Phase 3.3: gates the bundled NATIVE memory tools (memory_search,
+    // memory_get) until onboarding state is `active`. The blockReason string
+    // is LLM-visible but carries no secret — it's a pointer to the CLI pair
+    // surface (`tr pair --url-pin`). Without this gate, an unpaired agent
+    // would hit the adapter's fail-soft empty-result path and surface
+    // "no memories found" with no actionable guidance.
     //
-    // Non-gated tools: totalreclaw_upgrade, totalreclaw_migrate,
-    // totalreclaw_onboarding_start, totalreclaw_setup (deprecated).
-    // Billing tools work pre-onboarding because they help the user reach a
-    // Pro tier before they have memories to store; setup-adjacent tools
-    // return their own routing messages.
+    // Non-gated tools: every other tool the agent sees (read/write helpers,
+    // the host's own tools, etc.). The pair surface is intentionally not
+    // gated — users must be able to start onboarding before the vault is
+    // active.
     //
     // Decision logic lives in `tool-gating.ts` so it's unit-testable
     // without a full plugin host.
@@ -4528,18 +4566,18 @@ const plugin = {
                 '## TotalReclaw setup pending\n\n' +
                 'TotalReclaw encrypted memory is installed but not yet set up on this machine. ' +
                 'If the user asks about memory features or wants to configure TotalReclaw, ' +
-                'call the `totalreclaw_pair` tool — it returns a pairing URL + 6-digit PIN ' +
-                'the user opens in a browser (phrase is generated and encrypted in-browser, ' +
-                'never leaves their device in plaintext). If `totalreclaw_pair` is not in ' +
-                'your tool list (container-based agents sometimes miss it), shell out to ' +
-                '`openclaw totalreclaw pair generate --url-pin-only` on the gateway host — ' +
-                'it emits a single JSON line `{v,url,pin,expires_at_ms}` with no phrase ' +
-                'material; hand the user the `url` and `pin`.\n\n' +
+                'pairing is QR-only and CLI-driven (there is no agent tool for it). Run ' +
+                '`tr pair --url-pin` in a shell on the gateway host — it emits a single JSON ' +
+                'line `{v,url,pin,expires_at_ms}` with no phrase material. Hand the user the ' +
+                '`url` and `pin`; they open the URL in a browser where the recovery phrase is ' +
+                'generated and encrypted in-browser and never leaves their device in plaintext. ' +
+                'Once pairing completes, memory_search/memory_get unlock automatically and this ' +
+                'banner stops appearing.\n\n' +
                 '**Do NOT** attempt to generate, display, or relay a recovery phrase in chat. ' +
                 '**Do NOT** run `openclaw totalreclaw onboard` — that CLI emits the recovery ' +
-                'phrase on stdout and would leak it into the LLM transcript. Use `pair` ' +
-                '(tool or `--url-pin-only` CLI) instead; `onboard` is reserved for users ' +
-                'running it directly in their own local terminal.',
+                'phrase on stdout and would leak it into the LLM transcript. Use `tr pair --url-pin` ' +
+                '(or `openclaw totalreclaw pair generate --url-pin-only`) instead; `onboard` is ' +
+                'reserved for users running it directly in their own local terminal.',
             };
           }
 
@@ -4555,7 +4593,7 @@ const plugin = {
             const tier = cache?.tier || 'free';
             const tierInfo = tier === 'pro'
               ? 'You are on the **Pro** tier — unlimited memories, permanently stored on Gnosis mainnet.'
-              : 'You are on the **Free** tier — memories stored on testnet. Use the totalreclaw_upgrade tool to upgrade to Pro for permanent on-chain storage.';
+              : 'You are on the **Free** tier — memories stored on testnet. (The totalreclaw_upgrade agent tool was retired in Phase 3.2; a CLI upgrade surface will ship in a follow-up.)';
             welcomeBack = `\n\nTotalReclaw is active. I will automatically remember important things from our conversations and recall relevant context at the start of each session. ${tierInfo}`;
           }
 
@@ -5232,16 +5270,21 @@ const plugin = {
     //
     // Graceful degradation: the wiring is wrapped in try/catch so a
     // failure in the native memory pipeline cannot block plugin load.
-    // The legacy totalreclaw_* tools (registered above) continue to work
-    // as the capture fallback; the memory_search/memory_get tools fail
-    // soft (disabled-result payloads) if the native path is unavailable.
+    // NOTE (Phase 3.3): the legacy totalreclaw_* agent tools that used to
+    // serve as the capture fallback were RETIRED in Task 3.2. If this
+    // registration fails, the agent has NO memory surface until the cause
+    // is fixed and the gateway restarted. The before_tool_call gate stays
+    // armed (memory_search/memory_get are simply never registered), and
+    // auto-extraction hooks still fire on the message_received / agent_end
+    // cadence — they write to the subgraph directly, so memories keep
+    // getting captured even if the agent can't read them mid-session.
     try {
       registerNativeMemory(api, buildRecallDeps(api.logger));
       api.logger.info('TotalReclaw: registered native MemoryPluginCapability + memory_search/memory_get tools');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       api.logger.warn(
-        `TotalReclaw: native memory capability registration failed (legacy totalreclaw_* tools remain available): ${msg}`,
+        `TotalReclaw: native memory capability registration failed — agent memory_search/memory_get UNAVAILABLE until fixed: ${msg}`,
       );
     }
 
