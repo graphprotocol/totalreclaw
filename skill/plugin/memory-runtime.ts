@@ -97,7 +97,7 @@ export interface TrRecallFn {
   ): Promise<TrFact[]>;
 }
 
-/** getById() decrypts a single fact by id (the readFile reverse path). */
+/** getById() decrypts a single fact by id (the read-back reverse path). */
 export interface TrGetFn {
   (id: string): Promise<{ id: string; plaintext: string } | null>;
 }

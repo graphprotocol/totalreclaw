@@ -3330,7 +3330,7 @@ function buildRecallDeps(logger: OpenClawPluginApi['logger']): TrNativeMemoryDep
 
   // -------------------------------------------------------------------
   // getById(): the load-bearing reverse-path closure. Mirrors the
-  // pin/unpin tool's fetchFactById -> decrypt pattern (the readFile
+  // pin/unpin tool's fetchFactById -> decrypt pattern (the read-back
   // reverse-path for memory_get). Returns { id, plaintext } or null.
   // -------------------------------------------------------------------
   const getById: TrNativeMemoryDeps['getById'] = async (
