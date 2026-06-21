@@ -74,15 +74,15 @@
  *   and performs NO outbound network I/O. The manager arrives via the
  *   injected runtime; the tool handler only awaits its methods.
  *
- *   The TR manager exposes a content-read method whose name, written
- *   verbatim, would collide with the scanner's exfil rule when paired
- *   with any network-word elsewhere in the file. To keep this file clean
- *   WITHOUT obscuring the call, the manager reference is typed loosely and
- *   the method is reached by its real property name on the instance; the
- *   comment prose deliberately uses the synonyms "content read" / "load"
- *   rather than the literal token. `npm run check-scanner` must remain
- *   0 flags; this docstring itself avoids co-occurring the disk-read token
- *   with a network-request token for that reason.
+ *   The TR adapter's content-read method is `readFile` (its canonical name).
+ *   It is called here by that literal name — the scanner's per-file exfil
+ *   rule requires env+net token co-occurrence to flag, and this file has no
+ *   network token, so the bare method name is clean. (Earlier revisions
+ *   obscured the name behind a `readContent`/`readFile` indirection on a
+ *   mistaken belief that the name alone was a trigger; that indirection was
+ *   dead code and has been removed.)
+ *
+ *   `npm run check-scanner` must remain 0 flags.
  *
  *   `npm run build` uses `--noCheck`, so structural/loose typing where
  *   OpenClaw's types aren't importable is safe (the plugin does not depend
@@ -150,7 +150,9 @@ export interface TrMemoryPluginRuntimeLike {
  * The subset of the TR MemorySearchManager these tools call. Methods the
  * tools do not use (status / probes / close) are omitted so the loose type
  * stays minimal. The content-read method is named the same as on the real
- * adapter; the comment above explains the scanner-clean wording convention.
+ * adapter (`readFile`) — this file is pure orchestration with no network
+ * token, so the literal method name does not trip the scanner's per-file
+ * exfil rule (which requires env+net co-occurrence).
  */
 export interface TrMemorySearchManagerLike {
   search(
@@ -162,6 +164,11 @@ export interface TrMemorySearchManagerLike {
       sessionKey?: string;
     },
   ): Promise<MemorySearchResult[]>;
+  readFile(p: {
+    relPath: string;
+    from?: number;
+    lines?: number;
+  }): Promise<MemoryGetResult>;
 }
 
 /**
@@ -359,6 +366,11 @@ export function createMemorySearchTool(runtime: TrMemoryPluginRuntimeLike): Agen
 
       let resolved;
       try {
+        // NOTE: memory-core passes `undefined` here normally (and `"cli"` for
+        // one-shot CLI runs); TR's runtime currently ignores `purpose`, so
+        // this is a no-op today. Kept as "search" for parity with the
+        // memory-core shape; flagged for correctness if Task 2.7 ever keys
+        // behavior off `purpose`.
         resolved = await runtime.getMemorySearchManager({ purpose: 'search' });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -409,10 +421,10 @@ export function createMemorySearchTool(runtime: TrMemoryPluginRuntimeLike): Agen
  *   - On a thrown read error: returns a disabled result keyed on the path.
  *   - On success: forwards the manager's read result in an AgentToolResult.
  *
- * The read method on the manager is reached by its real property name on the
- * instance (scanner-cleanliness — see the file-level docstring). The loose
- * manager type is widened here to include that method without forcing the
- * canonical manager type to be imported.
+ * The read is a direct `manager.readFile(...)` call — `readFile` is the
+ * canonical method name on the TR adapter (TrMemorySearchManager). This file
+ * holds no network token, so the literal method name does not trip the
+ * scanner's per-file exfil rule (which requires env+net co-occurrence).
  *
  * @param runtime  the TR MemoryPluginRuntime (captured at register() time)
  */
@@ -471,36 +483,8 @@ export function createMemoryGetTool(runtime: TrMemoryPluginRuntimeLike): AgentTo
         });
       }
 
-      // Reach the content-read method on the manager by its real name. The
-      // manager type is widened locally so we don't have to import the
-      // canonical adapter type (keeps tools.ts free of a memory-runtime.ts
-      // dependency + avoids a cycle).
-      type ManagerWithRead = TrMemorySearchManagerLike & {
-        readContent?(p: {
-          relPath: string;
-          from?: number;
-          lines?: number;
-        }): Promise<MemoryGetResult>;
-      };
-      const mgr = resolved.manager as ManagerWithRead;
-      // Prefer readContent (the TR adapter's indirection name) and fall back
-      // to the canonical name. The fallback keeps the tool robust to a
-      // future rename of the adapter's read method.
-      const readFn = (mgr.readContent ??
-        (mgr as unknown as {
-          readFile?(p: { relPath: string; from?: number; lines?: number }): Promise<MemoryGetResult>;
-        }).readFile)?.bind(mgr);
-      if (typeof readFn !== 'function') {
-        return jsonResult({
-          path: relPath,
-          text: '',
-          disabled: true,
-          error: 'memory manager does not expose a read method',
-        });
-      }
-
       try {
-        const result = await readFn({
+        const result = await resolved.manager.readFile({
           relPath,
           ...(from !== undefined ? { from } : {}),
           ...(lines !== undefined ? { lines } : {}),

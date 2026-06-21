@@ -7,8 +7,8 @@
  * memory-core tools OpenClaw's `active-memory` sub-agent already knows how
  * to call — same `name`, same parameter schema field names, same handler
  * delegation to the TR MemorySearchManager (search → manager.search(query),
- * get → manager.readFile via a property reference that keeps this file
- * scanner-clean), and an AgentToolResult-shaped return value.
+ * get → manager.readFile via a direct method call), and an
+ * AgentToolResult-shaped return value.
  *
  * The shape under test was reverse-engineered from OpenClaw 2026.6.8's
  * bundled memory-core at
@@ -67,15 +67,12 @@ const fakeManager = {
       },
     ];
   },
-  // NOTE: property access via bracket notation on the fake so the literal
-  // method name does not need to appear here. The real tools.ts accesses the
-  // manager the same way (scanner-cleanliness — see tools.ts docstring).
 };
 
-// The read method is installed via a property name that the real tools.ts
-// also uses as an indirection, so neither this test nor tools.ts contains the
-// raw trigger token adjacent to a network-word. `lastReadArgs` is captured.
-(fakeManager as any).readContent = async (params: { relPath: string; from?: number; lines?: number }) => {
+// The read method on the real TR adapter is `readFile` (its canonical name).
+// tools.ts calls it directly; this fake mirrors that name so the test
+// exercises the real adapter method. `lastReadArgs` is captured.
+(fakeManager as any).readFile = async (params: { relPath: string; from?: number; lines?: number }) => {
   managerReadCalls++;
   lastReadArgs = params;
   return {
@@ -314,7 +311,7 @@ const throwingManager = {
     throw new Error('subgraph timeout');
   },
 };
-(throwingManager as any).readContent = async () => {
+(throwingManager as any).readFile = async () => {
   throw new Error('decrypt failed');
 };
 const throwingRuntime = {
