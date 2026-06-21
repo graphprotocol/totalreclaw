@@ -2,12 +2,13 @@
  * Subgraph store path — writes facts on-chain via ERC-4337 UserOps.
  *
  * Used when the managed service is active (TOTALRECLAW_SELF_HOSTED is not
- * "true"). Replaces the HTTP POST to /v1/store with an on-chain transaction
+ * "true"). Replaces the HTTP request to /v1/store with an on-chain transaction
  * flow.
  *
- * Uses @totalreclaw/core WASM for calldata encoding, UserOp hashing, and
- * ECDSA signing. Raw fetch() for all JSON-RPC calls to the relay bundler
- * and chain RPCs. No viem, no permissionless.
+ * Uses @totalreclaw/core WASM for calldata encoding and UserOp hashing;
+ * `signUserOp` (ECDSA) lives in `vault-crypto.ts`. All JSON-RPC calls to
+ * the relay bundler and chain RPCs go through `relay.ts` (the plugin's
+ * single network site). No viem, no permissionless.
  */
 
 // Lazy-load WASM via createRequire — the shipped bundle is ESM-only and
@@ -22,61 +23,8 @@ function getWasm() {
 }
 import { CONFIG } from './config.js';
 import { buildRelayHeaders } from './relay-headers.js';
-
-// ---------------------------------------------------------------------------
-// Pimlico 429 retry helper
-// ---------------------------------------------------------------------------
-
-/**
- * Wrap a fetch-based JSON-RPC call with exponential backoff for HTTP 429
- * (rate limit) responses from Pimlico. Max 5 retries with 5s base delay,
- * doubling each attempt, capped at 60s, plus random jitter (0-1000ms).
- * Total retry window: ~135s (5+10+20+40+60 plus jitter).
- * All other HTTP errors throw immediately.
- */
-async function rpcWithRetry(
-  url: string,
-  headers: Record<string, string>,
-  method: string,
-  params: unknown[],
-): Promise<any> {
-  const maxRetries = 5;
-  const baseDelay = 5000;   // 5 seconds
-  const maxDelay = 60_000;  // 60 seconds cap
-  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params });
-
-  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
-    const resp = await fetch(url, { method: 'POST', headers, body });
-
-    if (resp.ok) {
-      const json = await resp.json() as { result?: any; error?: { message: string } };
-      if (json.error) {
-        // Check if the RPC-level error message indicates a rate limit
-        if (attempt <= maxRetries && /429|rate limit/i.test(json.error.message)) {
-          const delay = Math.min(Math.pow(2, attempt - 1) * baseDelay, maxDelay) + Math.floor(Math.random() * 1000);
-          console.error(`Pimlico rate limited, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})...`);
-          await new Promise(r => setTimeout(r, delay));
-          continue;
-        }
-        throw new Error(`RPC ${method}: ${json.error.message}`);
-      }
-      return json.result;
-    }
-
-    // HTTP-level 429 — retry with backoff
-    if (resp.status === 429 && attempt <= maxRetries) {
-      const delay = Math.min(Math.pow(2, attempt - 1) * baseDelay, maxDelay) + Math.floor(Math.random() * 1000);
-      console.error(`Pimlico rate limited, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})...`);
-      await new Promise(r => setTimeout(r, delay));
-      continue;
-    }
-
-    throw new Error(`Relay returned HTTP ${resp.status} for ${method}`);
-  }
-
-  // Should not be reached, but satisfies TypeScript
-  throw new Error(`RPC ${method}: max retries exceeded`);
-}
+import { rpcRequest, rpcWithRetry } from './relay.js';
+import { signUserOp } from './vault-crypto.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -202,17 +150,12 @@ export async function deriveSmartAccountAddress(mnemonic: string, chainId?: numb
   const calldata = `0x${selector}${ownerPadded}${saltPadded}`;
 
   const rpcUrl = CONFIG.rpcUrl || getDefaultRpcUrl(resolvedChainId);
-  const response = await fetch(rpcUrl, {
-    method: 'POST',
+  const json = await rpcRequest({
+    url: rpcUrl,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'eth_call',
-      params: [{ to: factoryAddress, data: calldata }, 'latest'],
-    }),
+    method: 'eth_call',
+    params: [{ to: factoryAddress, data: calldata }, 'latest'],
   });
-  const json = await response.json() as { result?: string; error?: { message: string } };
   if (json.error) {
     throw new Error(`Failed to resolve Smart Account address: ${json.error.message}`);
   }
@@ -220,7 +163,7 @@ export async function deriveSmartAccountAddress(mnemonic: string, chainId?: numb
     throw new Error('Failed to resolve Smart Account address: empty result');
   }
   // Result is a 32-byte ABI-encoded address — take last 20 bytes
-  return `0x${json.result.slice(-40)}`.toLowerCase();
+  return `0x${(json.result as string).slice(-40)}`.toLowerCase();
 }
 
 // ---------------------------------------------------------------------------
@@ -315,16 +258,14 @@ async function getInitCode(
   }
 
   // Check if the Smart Account contract is deployed
-  const codeResp = await fetch(rpcUrl, {
-    method: 'POST',
+  const codeJson = await rpcRequest({
+    url: rpcUrl,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0', id: 1, method: 'eth_getCode',
-      params: [sender, 'latest'],
-    }),
+    method: 'eth_getCode',
+    params: [sender, 'latest'],
   });
-  const codeJson = await codeResp.json() as { result?: string };
-  const isDeployed = codeJson.result && codeJson.result !== '0x' && codeJson.result !== '0x0';
+  const codeResult = codeJson.result as string | undefined;
+  const isDeployed = codeResult && codeResult !== '0x' && codeResult !== '0x0';
 
   if (isDeployed) {
     deployedAccounts.add(sender.toLowerCase());
@@ -344,7 +285,7 @@ async function getInitCode(
 }
 
 // ---------------------------------------------------------------------------
-// On-chain submission (ERC-4337 UserOps via raw fetch)
+// On-chain submission (ERC-4337 UserOps via relay.ts network site)
 // ---------------------------------------------------------------------------
 
 /**
@@ -356,7 +297,7 @@ async function getInitCode(
  * 3. UserOp hashing (ERC-4337 v0.7)
  * 4. ECDSA signing (EIP-191 prefixed)
  *
- * All JSON-RPC calls go through raw fetch() to the relay bundler endpoint.
+ * All JSON-RPC calls go through `relay.ts` to the relay bundler endpoint.
  */
 export async function submitFactOnChain(
   protobufPayload: Buffer,
@@ -397,7 +338,7 @@ async function submitFactOnChainLocked(
 
   // Helper for JSON-RPC calls to relay bundler (with 429 retry)
   async function rpc(method: string, params: unknown[]): Promise<any> {
-    return rpcWithRetry(bundlerUrl, headers, method, params);
+    return rpcWithRetry({ url: bundlerUrl, headers, method, params });
   }
 
   const entryPoint = config.entryPointAddress || getWasm().getEntryPointAddress();
@@ -431,16 +372,13 @@ async function submitFactOnChainLocked(
     nonce = nonceResult || '0x0';
   } catch {
     // Fallback to public RPC if bundler doesn't support eth_call
-    const nonceResp = await fetch(rpcUrl, {
-      method: 'POST',
+    const nonceJson = await rpcRequest({
+      url: rpcUrl,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: 1, method: 'eth_call',
-        params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
-      }),
+      method: 'eth_call',
+      params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
     });
-    const nonceJson = await nonceResp.json() as { result?: string };
-    nonce = nonceJson.result || '0x0';
+    nonce = (nonceJson.result as string) || '0x0';
   }
 
   // 6. Build unsigned UserOp (v0.7 fields, camelCase for Rust JSON serde)
@@ -467,7 +405,7 @@ async function submitFactOnChainLocked(
   // 8. Hash and sign the UserOp via WASM
   const opJson = JSON.stringify(unsignedOp);
   const hashHex = getWasm().hashUserOp(opJson, entryPoint, BigInt(config.chainId));
-  const sigHex = getWasm().signUserOp(hashHex, eoa.private_key);
+  const sigHex = signUserOp(hashHex, eoa.private_key);
   unsignedOp.signature = `0x${sigHex}`;
 
   // 9. Submit the signed UserOp (with AA25 nonce conflict retry)
@@ -492,16 +430,13 @@ async function submitFactOnChainLocked(
         const retryNonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
         retryNonce = retryNonceResult || '0x0';
       } catch {
-        const retryNonceResp = await fetch(rpcUrl, {
-          method: 'POST',
+        const retryNonceJson = await rpcRequest({
+          url: rpcUrl,
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0', id: 1, method: 'eth_call',
-            params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
-          }),
+          method: 'eth_call',
+          params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
         });
-        const retryNonceJson = await retryNonceResp.json() as { result?: string };
-        retryNonce = retryNonceJson.result || '0x0';
+        retryNonce = (retryNonceJson.result as string) || '0x0';
       }
 
       // Rebuild unsigned UserOp with fresh nonce and initCode
@@ -526,7 +461,7 @@ async function submitFactOnChainLocked(
       Object.assign(retryOp, retrySponsor);
       const retryOpJson = JSON.stringify(retryOp);
       const retryHashHex = getWasm().hashUserOp(retryOpJson, entryPoint, BigInt(config.chainId));
-      const retrySigHex = getWasm().signUserOp(retryHashHex, eoa.private_key);
+      const retrySigHex = signUserOp(retryHashHex, eoa.private_key);
       retryOp.signature = `0x${retrySigHex}`;
 
       userOpHash = await rpc('eth_sendUserOperation', [retryOp, entryPoint]);
@@ -614,7 +549,7 @@ async function submitFactBatchOnChainLocked(
 
   // Helper for JSON-RPC calls to relay bundler (with 429 retry)
   async function rpc(method: string, params: unknown[]): Promise<any> {
-    return rpcWithRetry(bundlerUrl, headers, method, params);
+    return rpcWithRetry({ url: bundlerUrl, headers, method, params });
   }
   const entryPoint = config.entryPointAddress || getWasm().getEntryPointAddress();
 
@@ -643,16 +578,13 @@ async function submitFactBatchOnChainLocked(
     const nonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
     nonce = nonceResult || '0x0';
   } catch {
-    const nonceResp = await fetch(rpcUrl, {
-      method: 'POST',
+    const nonceJson = await rpcRequest({
+      url: rpcUrl,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: 1, method: 'eth_call',
-        params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
-      }),
+      method: 'eth_call',
+      params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
     });
-    const nonceJson = await nonceResp.json() as { result?: string };
-    nonce = nonceJson.result || '0x0';
+    nonce = (nonceJson.result as string) || '0x0';
   }
 
   // Build unsigned UserOp
@@ -693,7 +625,7 @@ async function submitFactBatchOnChainLocked(
   // Hash and sign via WASM
   const opJson = JSON.stringify(unsignedOp);
   const hashHex = getWasm().hashUserOp(opJson, entryPoint, BigInt(config.chainId));
-  const sigHex = getWasm().signUserOp(hashHex, eoa.private_key);
+  const sigHex = signUserOp(hashHex, eoa.private_key);
   unsignedOp.signature = `0x${sigHex}`;
 
   // Submit (with AA25 nonce conflict retry)
@@ -718,16 +650,13 @@ async function submitFactBatchOnChainLocked(
         const retryNonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
         retryNonce = retryNonceResult || '0x0';
       } catch {
-        const retryNonceResp = await fetch(rpcUrl, {
-          method: 'POST',
+        const retryNonceJson = await rpcRequest({
+          url: rpcUrl,
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0', id: 1, method: 'eth_call',
-            params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
-          }),
+          method: 'eth_call',
+          params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
         });
-        const retryNonceJson = await retryNonceResp.json() as { result?: string };
-        retryNonce = retryNonceJson.result || '0x0';
+        retryNonce = (retryNonceJson.result as string) || '0x0';
       }
 
       // Rebuild unsigned UserOp with fresh nonce and initCode
@@ -752,7 +681,7 @@ async function submitFactBatchOnChainLocked(
       Object.assign(retryOp, retrySponsor);
       const retryOpJson = JSON.stringify(retryOp);
       const retryHashHex = getWasm().hashUserOp(retryOpJson, entryPoint, BigInt(config.chainId));
-      const retrySigHex = getWasm().signUserOp(retryHashHex, eoa.private_key);
+      const retrySigHex = signUserOp(retryHashHex, eoa.private_key);
       retryOp.signature = `0x${retrySigHex}`;
 
       userOpHash = await rpc('eth_sendUserOperation', [retryOp, entryPoint]);

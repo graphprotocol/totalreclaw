@@ -28,12 +28,10 @@
  *      Node's built-in `node:crypto`. Used by the relay-brokered QR pair
  *      flow to establish an ephemeral session key with the device.
  *
- * ERC-4337 signing lives in `subgraph-store.ts` today, intertwined with
- * the bundler RPC (sponsor/send). The WASM `signUserOp(hash, privKey)`
- * call itself is pure compute but extracting just that one-liner without
- * the surrounding bundler flow is a no-op refactor — it stays with the
- * network site until Task 1.2 (relay.ts) re-organises the on-chain submit
- * path. Tracked as a follow-up in the plan.
+ * ERC-4337 UserOp signing (`signUserOp`) lives here too — moved in as the
+ * deferred pickup of Task 1.1 once Task 1.2 (`relay.ts`) extracted the
+ * bundler network call it was intertwined with. It is a pure WASM call
+ * (hash + private key → signature) with no env or network dependency.
  *
  * Legacy `crypto.ts` and `pair-crypto.ts` are kept as thin re-exports so
  * the 331KB `index.ts` and other importers are not broken in this pass.
@@ -186,6 +184,34 @@ export function generateBlindIndices(text: string): string[] {
  */
 export function generateContentFingerprint(plaintext: string, dedupKey: Buffer): string {
   return getWasm().generateContentFingerprint(plaintext, dedupKey.toString('hex'));
+}
+
+// ---------------------------------------------------------------------------
+// ERC-4337 UserOp signing
+// ---------------------------------------------------------------------------
+
+/**
+ * Sign an ERC-4337 v0.7 UserOp hash with an EOA private key (EIP-191
+ * prefixed ECDSA).
+ *
+ * Pure compute: takes the hash + private key as parameters, returns the
+ * hex-encoded signature. No environment reads, no network I/O. The hash
+ * itself is produced by the WASM `hashUserOp` call at the call site
+ * (kept in `subgraph-store.ts` because it depends on the chain id +
+ * entryPoint address that are submission-path concerns, not crypto
+ * primitives).
+ *
+ * Moved here from `subgraph-store.ts` as the deferred pickup of Task 1.1
+ * once Task 1.2 (`relay.ts`) extracted the bundler network call that the
+ * signing was intertwined with. `vault-crypto.ts` remains scanner-clean
+ * (env=N, net=N).
+ *
+ * @param hashHex      Hex-encoded ERC-4337 UserOp hash.
+ * @param privateKeyHex Hex-encoded EOA private key.
+ * @returns Hex-encoded ECDSA signature (no `0x` prefix — caller adds it).
+ */
+export function signUserOp(hashHex: string, privateKeyHex: string): string {
+  return getWasm().signUserOp(hashHex, privateKeyHex);
 }
 
 // ===========================================================================
