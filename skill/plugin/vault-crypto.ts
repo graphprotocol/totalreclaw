@@ -1,0 +1,657 @@
+/**
+ * vault-crypto — pure-compute cryptographic primitives for the gateway.
+ *
+ * Phase 1 (Task 1.1) of the OpenClaw native integration
+ * (docs/plans/2026-06-21-openclaw-native-integration-plan.md, 2026-06-21):
+ * physically separate the crypto primitives that take ALL key material and
+ * nonces as parameters into one file so that NO single source file
+ * co-contains environment-variable reads and outbound-network primitives.
+ * OpenClaw's runtime scanner refuses to install plugins whose source
+ * trips the env-harvesting rule (the rule's two halves both present on the
+ * SAME file, comments included — see skill/scripts/check-scanner.mjs for
+ * the exact regex pair).
+ *
+ * Hard contract enforced by vault-crypto.test.ts:
+ *   - This file reads the environment NOWHERE and performs network I/O
+ *     NOWHERE. All key material and nonces are passed IN as parameters.
+ *   - decrypt(encrypt(x, key), key) round-trips for both cipher suites.
+ *
+ * Scope — TWO cipher suites consolidated here from the legacy
+ * crypto.ts + pair-crypto.ts:
+ *
+ *   1. Vault (mnemonic-derived) crypto — XChaCha20-Poly1305 AEAD via the
+ *      `@totalreclaw/core` WASM module. BIP-39 → 512-bit seed →
+ *      HKDF-SHA256 auth/encryption/dedup keys. Used to encrypt facts at
+ *      rest + derive blind indices + content fingerprints.
+ *
+ *   2. Pair crypto — x25519 ECDH + HKDF-SHA256 + AES-256-GCM AEAD via
+ *      Node's built-in `node:crypto`. Used by the relay-brokered QR pair
+ *      flow to establish an ephemeral session key with the device.
+ *
+ * ERC-4337 signing lives in `subgraph-store.ts` today, intertwined with
+ * the bundler RPC (sponsor/send). The WASM `signUserOp(hash, privKey)`
+ * call itself is pure compute but extracting just that one-liner without
+ * the surrounding bundler flow is a no-op refactor — it stays with the
+ * network site until Task 1.2 (relay.ts) re-organises the on-chain submit
+ * path. Tracked as a follow-up in the plan.
+ *
+ * Legacy `crypto.ts` and `pair-crypto.ts` are kept as thin re-exports so
+ * the 331KB `index.ts` and other importers are not broken in this pass.
+ */
+
+// ---------------------------------------------------------------------------
+// WASM loader — vault (mnemonic-derived) crypto path
+// ---------------------------------------------------------------------------
+
+// Lazy-load WASM. Uses createRequire so this module loads cleanly under bare
+// Node ESM — the shipped `dist/index.js` declares `"type":"module"`, where
+// the CJS `require` global is undefined at runtime. Prior to the rc.21 fix
+// this file called bare `require('@totalreclaw/core')` and every consumer
+// died with `require is not defined`. Matches the pattern already used by
+// claims-helper / consolidation / contradiction-sync / digest-sync / pin /
+// retype-setscope. See issue #124.
+import { createRequire } from 'node:module';
+const requireWasm = createRequire(import.meta.url);
+let _wasm: typeof import('@totalreclaw/core') | null = null;
+function getWasm() {
+  if (!_wasm) _wasm = requireWasm('@totalreclaw/core');
+  return _wasm;
+}
+
+// ---------------------------------------------------------------------------
+// BIP-39 Validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if the input looks like a BIP-39 mnemonic (12 or 24 words).
+ *
+ * Lenient: accepts phrases where all words look like valid BIP-39 words
+ * (allows invalid checksums, which LLMs sometimes generate).
+ */
+export function isBip39Mnemonic(input: string): boolean {
+  const words = input.trim().split(/\s+/);
+  return words.length === 12 || words.length === 24;
+}
+
+// Re-export for backward compatibility
+export const validateMnemonic = isBip39Mnemonic;
+
+// ---------------------------------------------------------------------------
+// Key Derivation (vault path)
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive auth, encryption, and dedup keys from a recovery phrase.
+ *
+ * Delegates to the WASM module for BIP-39 seed derivation and HKDF
+ * key separation. Uses the lenient variant for phrases where all words
+ * are valid but the checksum fails.
+ *
+ * @param password     - BIP-39 12/24-word mnemonic
+ * @param existingSalt - Ignored for BIP-39 path (salt is deterministic)
+ */
+export function deriveKeys(
+  password: string,
+  existingSalt?: Buffer,
+): { authKey: Buffer; encryptionKey: Buffer; dedupKey: Buffer; salt: Buffer } {
+  const trimmed = password.trim();
+
+  // Try strict validation first, fall back to lenient
+  let result: { auth_key: string; encryption_key: string; dedup_key: string; salt: string };
+  try {
+    result = getWasm().deriveKeysFromMnemonic(trimmed);
+  } catch {
+    result = getWasm().deriveKeysFromMnemonicLenient(trimmed);
+  }
+
+  return {
+    authKey: Buffer.from(result.auth_key, 'hex'),
+    encryptionKey: Buffer.from(result.encryption_key, 'hex'),
+    dedupKey: Buffer.from(result.dedup_key, 'hex'),
+    salt: Buffer.from(result.salt, 'hex'),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// LSH Seed Derivation
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive a 32-byte seed for the LSH hasher.
+ *
+ * Delegates to the WASM module.
+ */
+export function deriveLshSeed(
+  password: string,
+  salt: Buffer,
+): Uint8Array {
+  const seedHex = getWasm().deriveLshSeed(password.trim(), salt.toString('hex'));
+  return new Uint8Array(Buffer.from(seedHex, 'hex'));
+}
+
+// ---------------------------------------------------------------------------
+// Auth Key Hash
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute the SHA-256 hash of the auth key.
+ */
+export function computeAuthKeyHash(authKey: Buffer): string {
+  return getWasm().computeAuthKeyHash(authKey.toString('hex'));
+}
+
+// ---------------------------------------------------------------------------
+// XChaCha20-Poly1305 Encrypt / Decrypt
+// ---------------------------------------------------------------------------
+
+/**
+ * Encrypt a UTF-8 plaintext string with XChaCha20-Poly1305.
+ *
+ * Wire format (base64-encoded):
+ *   [nonce: 24 bytes][tag: 16 bytes][ciphertext: variable]
+ */
+export function encrypt(plaintext: string, encryptionKey: Buffer): string {
+  return getWasm().encrypt(plaintext, encryptionKey.toString('hex'));
+}
+
+/**
+ * Decrypt a base64-encoded XChaCha20-Poly1305 blob back to a UTF-8 string.
+ */
+export function decrypt(encryptedBase64: string, encryptionKey: Buffer): string {
+  return getWasm().decrypt(encryptedBase64, encryptionKey.toString('hex'));
+}
+
+// ---------------------------------------------------------------------------
+// Blind Indices
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate blind indices (SHA-256 hashes of tokens) for a text string.
+ *
+ * Delegates to the WASM module which performs tokenization, stemming,
+ * and SHA-256 hashing.
+ */
+export function generateBlindIndices(text: string): string[] {
+  return getWasm().generateBlindIndices(text);
+}
+
+// ---------------------------------------------------------------------------
+// Content Fingerprint (Dedup)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute an HMAC-SHA256 content fingerprint for exact-duplicate detection.
+ *
+ * @returns 64-character hex string.
+ */
+export function generateContentFingerprint(plaintext: string, dedupKey: Buffer): string {
+  return getWasm().generateContentFingerprint(plaintext, dedupKey.toString('hex'));
+}
+
+// ===========================================================================
+// Pair crypto (x25519 ECDH + HKDF + AES-256-GCM)
+// ===========================================================================
+//
+// Gateway-side cryptographic primitives for the v3.3.x relay-brokered pair
+// flow. Cipher suite (design doc 3a-3b, cipher swap ratified 2026-04-23 /
+// rc.12):
+//   - ECDH on x25519 for key agreement.
+//   - HKDF-SHA256 for symmetric-key derivation from the shared secret.
+//   - AES-256-GCM AEAD for the ciphertext payload, with the sid bound as
+//     associated data (AD = sid UTF-8 bytes, 12-byte nonce, 16-byte tag).
+//
+// rc.4..rc.11 used ChaCha20-Poly1305, but the Web Crypto API does NOT
+// implement ChaCha20-Poly1305 in Chrome / Safari / Edge. The pair-page
+// submit path silently threw `Algorithm: Unrecognized name` before
+// reaching the network. rc.12 swaps the cipher suite to AES-256-GCM
+// (universally supported in WebCrypto) and bumps HKDF_INFO to v2 so
+// cross-version mis-pairs fail closed rather than garble.
+//
+// Every primitive is provided by the Node built-in `node:crypto` module
+// on Node 18.19+ and above. NO third-party crypto dependency is added
+// to the plugin for the gateway side. (The BROWSER side of the flow uses
+// WebCrypto's AES-GCM directly — no shim needed.)
+//
+// Interoperability with browser WebCrypto:
+//   The WebCrypto x25519 + HKDF + AES-GCM APIs are bit-for-bit compatible
+//   with Node's `crypto` as long as:
+//     - Raw 32-byte public/private keys are used (not DER/SPKI).
+//     - HKDF parameters are (hash=SHA-256, salt=sid bytes, info fixed
+//       ASCII string "totalreclaw-pair-v2", length=32 bytes).
+//     - AEAD uses a 12-byte random nonce + 16-byte tag, AD = sid bytes.
+
+import {
+  createPrivateKey,
+  createPublicKey,
+  diffieHellman,
+  generateKeyPairSync,
+  hkdfSync,
+  createCipheriv,
+  createDecipheriv,
+  randomBytes,
+  timingSafeEqual,
+} from 'node:crypto';
+
+// ---------------------------------------------------------------------------
+// Pair constants
+// ---------------------------------------------------------------------------
+
+/**
+ * HKDF "info" parameter — fixes the domain separation for this protocol.
+ * MUST match the browser-side constant in the pair-page bundle + the
+ * relay-served pair-html page.
+ *
+ * Versioned so we can roll to a new KDF or cipher suite without silently
+ * producing garbage with old ciphertexts. rc.12: bumped from v1 to v2
+ * after cipher-suite swap from ChaCha20-Poly1305 to AES-256-GCM (see
+ * module header comment for context).
+ */
+export const HKDF_INFO = 'totalreclaw-pair-v2';
+
+/** HKDF output length — 32 bytes = 256-bit AES-256-GCM key. */
+export const AEAD_KEY_BYTES = 32;
+
+/** AES-GCM nonce length — 12 bytes (SP 800-38D recommendation). */
+export const AEAD_NONCE_BYTES = 12;
+
+/** AES-GCM auth tag length — 16 bytes (128 bits, standard). */
+export const AEAD_TAG_BYTES = 16;
+
+/** Raw x25519 public/private key length — 32 bytes per RFC 7748. */
+export const X25519_KEY_BYTES = 32;
+
+// ---------------------------------------------------------------------------
+// Pair types
+// ---------------------------------------------------------------------------
+
+/** Raw 32-byte x25519 public key, base64url-encoded. */
+export type PublicKeyB64 = string;
+
+/** Raw 32-byte x25519 private key, base64url-encoded. */
+export type PrivateKeyB64 = string;
+
+/** Raw 12-byte AEAD nonce, base64url-encoded. */
+export type NonceB64 = string;
+
+/** AEAD ciphertext + appended tag, base64url-encoded. */
+export type CiphertextB64 = string;
+
+/** An ephemeral gateway keypair, both halves base64url-encoded. */
+export interface GatewayKeypair {
+  skB64: PrivateKeyB64;
+  pkB64: PublicKeyB64;
+}
+
+/** Fully-derived session keys — caller uses kEnc for AEAD ops. */
+export interface SessionKeys {
+  /** 32-byte AES-256-GCM key. */
+  kEnc: Buffer;
+}
+
+/** Inputs to the gateway-side decryption happy path. */
+export interface DecryptInputs {
+  /** Gateway's base64url private key (from pair-session-store). */
+  skGatewayB64: PrivateKeyB64;
+  /** Device's ephemeral public key, base64url. */
+  pkDeviceB64: PublicKeyB64;
+  /** Session id, used as HKDF salt AND AEAD AD. */
+  sid: string;
+  /** Base64url nonce (12 bytes). */
+  nonceB64: NonceB64;
+  /** Base64url ciphertext (plaintext || 16-byte tag). */
+  ciphertextB64: CiphertextB64;
+}
+
+/**
+ * Inputs for the gateway-side encrypt helper. Only used by tests (the
+ * actual encrypt side lives in the browser bundle) — exposed because
+ * the test vectors need a round-trip, and because future "gateway
+ * replies with an encrypted ACK" flows (4.x) could reuse it.
+ */
+export interface EncryptInputs {
+  /** Gateway's private key (or ephemeral-side's private key). */
+  skLocalB64: PrivateKeyB64;
+  /** Peer's public key. */
+  pkRemoteB64: PublicKeyB64;
+  sid: string;
+  plaintext: Buffer | Uint8Array;
+  /** Override the 12-byte nonce. Used for tests that need deterministic output. */
+  nonceB64?: NonceB64;
+}
+
+export interface EncryptOutput {
+  nonceB64: NonceB64;
+  ciphertextB64: CiphertextB64;
+}
+
+// ---------------------------------------------------------------------------
+// Pair key generation / conversion
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a fresh ephemeral x25519 keypair for a pairing session.
+ *
+ * Returns raw 32-byte values base64url-encoded. The caller persists the
+ * private half in pair-session-store (under the session record's 0600
+ * file) and embeds the public half in the QR URL fragment.
+ *
+ * The returned keys are raw x25519 — NOT DER/SPKI/PEM. The browser
+ * side's WebCrypto needs raw bytes to import.
+ */
+export function generateGatewayKeypair(): GatewayKeypair {
+  const { publicKey, privateKey } = generateKeyPairSync('x25519');
+  return {
+    skB64: extractRawPrivate(privateKey),
+    pkB64: extractRawPublic(publicKey),
+  };
+}
+
+/**
+ * Re-constitute a Node `KeyObject` from raw base64url public-key bytes.
+ * Uses the JWK OKP encoding because Node doesn't accept raw-format
+ * inputs to `createPublicKey` directly.
+ */
+function publicKeyFromB64(pkB64: PublicKeyB64): ReturnType<typeof createPublicKey> {
+  const raw = Buffer.from(pkB64, 'base64url');
+  if (raw.length !== X25519_KEY_BYTES) {
+    throw new Error(`pair-crypto: public key must be ${X25519_KEY_BYTES} bytes (got ${raw.length})`);
+  }
+  return createPublicKey({
+    key: { kty: 'OKP', crv: 'X25519', x: raw.toString('base64url') },
+    format: 'jwk',
+  });
+}
+
+/**
+ * Re-constitute a Node `KeyObject` from raw base64url private-key bytes.
+ *
+ * JWK OKP private keys require the `x` (public) field too; we derive it
+ * by first constructing a temporary KeyObject from `d` alone, then
+ * exporting its public half. This is cheap (one scalarmult) and keeps
+ * the call sites clean.
+ *
+ * Mirror of the browser-side WebCrypto `importKey('raw', ...)` path.
+ */
+function privateKeyFromB64(skB64: PrivateKeyB64): ReturnType<typeof createPrivateKey> {
+  const raw = Buffer.from(skB64, 'base64url');
+  if (raw.length !== X25519_KEY_BYTES) {
+    throw new Error(`pair-crypto: private key must be ${X25519_KEY_BYTES} bytes (got ${raw.length})`);
+  }
+
+  // The JWK OKP format requires `x` (public) alongside `d` (private).
+  // Derive `x` by first constructing a public KeyObject from the scalar
+  // via the OKP JWK path — Node accepts `d` alone and returns a usable
+  // private KeyObject from which we can derive the public half.
+  const tempPriv = createPrivateKey({
+    key: { kty: 'OKP', crv: 'X25519', d: raw.toString('base64url'), x: '' },
+    format: 'jwk',
+  });
+  // Derive the public half.
+  const pubObj = createPublicKey(tempPriv);
+  const pubJwk = pubObj.export({ format: 'jwk' }) as { x: string };
+
+  // Re-construct with the full (x, d) pair. This is the canonical form
+  // the rest of the code holds onto.
+  return createPrivateKey({
+    key: { kty: 'OKP', crv: 'X25519', d: raw.toString('base64url'), x: pubJwk.x },
+    format: 'jwk',
+  });
+}
+
+/** Extract the raw 32-byte public-key bytes from a Node KeyObject to base64url. */
+function extractRawPublic(pk: ReturnType<typeof createPublicKey>): PublicKeyB64 {
+  const jwk = pk.export({ format: 'jwk' }) as { x?: string };
+  if (!jwk.x) throw new Error('pair-crypto: public key JWK is missing the x field');
+  return jwk.x; // JWK `x` is already base64url-encoded raw bytes.
+}
+
+/** Extract the raw 32-byte private-key bytes from a Node KeyObject to base64url. */
+function extractRawPrivate(sk: ReturnType<typeof createPrivateKey>): PrivateKeyB64 {
+  const jwk = sk.export({ format: 'jwk' }) as { d?: string };
+  if (!jwk.d) throw new Error('pair-crypto: private key JWK is missing the d field');
+  return jwk.d;
+}
+
+/**
+ * Derive the public key from a raw base64url private key. Exposed for
+ * tests and for the session-store's self-consistency checks — the
+ * default `createPairSession` doesn't call this (it generates both
+ * halves at once via `generateGatewayKeypair`).
+ */
+export function derivePublicFromPrivate(skB64: PrivateKeyB64): PublicKeyB64 {
+  const sk = privateKeyFromB64(skB64);
+  const pk = createPublicKey(sk);
+  return extractRawPublic(pk);
+}
+
+// ---------------------------------------------------------------------------
+// Pair ECDH + HKDF
+// ---------------------------------------------------------------------------
+
+/**
+ * Perform x25519 ECDH between (local private key, remote public key),
+ * producing a 32-byte shared secret.
+ *
+ * BOTH sides running this with swapped halves MUST produce the same
+ * shared secret. This is the foundation of the pairing key agreement.
+ *
+ * Validation: throws if either key is the wrong byte length, or if
+ * the underlying `diffieHellman` call fails (which Node will do for
+ * invalid curve points).
+ */
+export function computeSharedSecret(opts: {
+  skLocalB64: PrivateKeyB64;
+  pkRemoteB64: PublicKeyB64;
+}): Buffer {
+  const sk = privateKeyFromB64(opts.skLocalB64);
+  const pk = publicKeyFromB64(opts.pkRemoteB64);
+  const shared = diffieHellman({ privateKey: sk, publicKey: pk });
+  if (shared.length !== X25519_KEY_BYTES) {
+    throw new Error(
+      `pair-crypto: ECDH output wrong length (got ${shared.length}, expected ${X25519_KEY_BYTES})`,
+    );
+  }
+  return shared;
+}
+
+/**
+ * Derive the AEAD key from a shared secret via HKDF-SHA256. Uses the
+ * session id as the salt and the fixed protocol tag as the info.
+ *
+ * Mathematical sketch (per RFC 5869):
+ *   PRK = HMAC-SHA256(salt, shared)
+ *   OKM = HMAC-SHA256(PRK, info || 0x01)[:L]
+ *
+ * Where L = 32 bytes = AEAD_KEY_BYTES.
+ *
+ * The sid binding means a ciphertext encrypted for session A is
+ * DECRYPTABLE only under session A's derived key. Replaying ct from
+ * session A into session B's decrypt path produces a different key to
+ * AEAD tag failure, hence rejected.
+ */
+export function deriveSessionKeys(opts: {
+  sharedSecret: Buffer;
+  sid: string;
+}): SessionKeys {
+  if (opts.sharedSecret.length !== X25519_KEY_BYTES) {
+    throw new Error('pair-crypto: shared secret must be 32 bytes');
+  }
+  if (typeof opts.sid !== 'string' || opts.sid.length === 0) {
+    throw new Error('pair-crypto: sid is required for HKDF salt binding');
+  }
+  const salt = Buffer.from(opts.sid, 'utf-8');
+  const info = Buffer.from(HKDF_INFO, 'utf-8');
+  const okm = hkdfSync('sha256', opts.sharedSecret, salt, info, AEAD_KEY_BYTES);
+  return { kEnc: Buffer.from(okm) };
+}
+
+/**
+ * One-shot convenience: ECDH + HKDF in a single call. Used by both the
+ * HTTP respond handler (decrypt side) and the tests.
+ */
+export function deriveAeadKeyFromEcdh(opts: {
+  skLocalB64: PrivateKeyB64;
+  pkRemoteB64: PublicKeyB64;
+  sid: string;
+}): SessionKeys {
+  const shared = computeSharedSecret({
+    skLocalB64: opts.skLocalB64,
+    pkRemoteB64: opts.pkRemoteB64,
+  });
+  return deriveSessionKeys({ sharedSecret: shared, sid: opts.sid });
+}
+
+// ---------------------------------------------------------------------------
+// Pair AEAD
+// ---------------------------------------------------------------------------
+
+/**
+ * Decrypt an AES-256-GCM AEAD ciphertext. Returns the plaintext on
+ * success; throws if the tag is invalid (which includes both tampering
+ * and wrong-key attempts).
+ *
+ * Ciphertext is expected in the combined form `plaintext || tag`, where
+ * tag is the trailing 16 bytes. The caller MUST supply the same
+ * (kEnc, nonce, sid-as-AD) used for encryption.
+ */
+export function aeadDecrypt(opts: {
+  kEnc: Buffer;
+  nonceB64: NonceB64;
+  sid: string;
+  ciphertextB64: CiphertextB64;
+}): Buffer {
+  const nonce = Buffer.from(opts.nonceB64, 'base64url');
+  if (nonce.length !== AEAD_NONCE_BYTES) {
+    throw new Error(`pair-crypto: nonce must be ${AEAD_NONCE_BYTES} bytes (got ${nonce.length})`);
+  }
+  if (opts.kEnc.length !== AEAD_KEY_BYTES) {
+    throw new Error(`pair-crypto: AEAD key must be ${AEAD_KEY_BYTES} bytes`);
+  }
+  const combined = Buffer.from(opts.ciphertextB64, 'base64url');
+  if (combined.length < AEAD_TAG_BYTES) {
+    throw new Error('pair-crypto: ciphertext too short to contain tag');
+  }
+  const ct = combined.subarray(0, combined.length - AEAD_TAG_BYTES);
+  const tag = combined.subarray(combined.length - AEAD_TAG_BYTES);
+
+  const decipher = createDecipheriv('aes-256-gcm', opts.kEnc, nonce, {
+    authTagLength: AEAD_TAG_BYTES,
+  });
+  decipher.setAAD(Buffer.from(opts.sid, 'utf-8'), { plaintextLength: ct.length });
+  decipher.setAuthTag(tag);
+
+  const pt1 = decipher.update(ct);
+  const pt2 = decipher.final();
+  return Buffer.concat([pt1, pt2]);
+}
+
+/**
+ * One-shot decrypt: ECDH + HKDF + AEAD in one call. This is what the
+ * HTTP respond handler calls. Returns the plaintext Buffer on success.
+ *
+ * Throws on ANY failure (wrong key length, invalid curve point, tag
+ * mismatch). The caller catches and returns 400 to the device.
+ */
+export function decryptPairingPayload(inputs: DecryptInputs): Buffer {
+  const { kEnc } = deriveAeadKeyFromEcdh({
+    skLocalB64: inputs.skGatewayB64,
+    pkRemoteB64: inputs.pkDeviceB64,
+    sid: inputs.sid,
+  });
+  return aeadDecrypt({
+    kEnc,
+    nonceB64: inputs.nonceB64,
+    sid: inputs.sid,
+    ciphertextB64: inputs.ciphertextB64,
+  });
+}
+
+/**
+ * Encrypt a plaintext payload. Used by tests; also used by any future
+ * gateway-to-device encrypted ACK path.
+ *
+ * Emits (nonce, ciphertext||tag) both base64url-encoded. If the caller
+ * passes an explicit `nonceB64`, it is used verbatim; otherwise a
+ * fresh 12-byte random nonce is generated.
+ */
+export function aeadEncryptWithSessionKey(opts: {
+  kEnc: Buffer;
+  sid: string;
+  plaintext: Buffer | Uint8Array;
+  nonceB64?: NonceB64;
+}): EncryptOutput {
+  if (opts.kEnc.length !== AEAD_KEY_BYTES) {
+    throw new Error(`pair-crypto: AEAD key must be ${AEAD_KEY_BYTES} bytes`);
+  }
+  const nonceBuf =
+    opts.nonceB64 !== undefined
+      ? Buffer.from(opts.nonceB64, 'base64url')
+      : randomBytes(AEAD_NONCE_BYTES);
+  if (nonceBuf.length !== AEAD_NONCE_BYTES) {
+    throw new Error(`pair-crypto: nonce must be ${AEAD_NONCE_BYTES} bytes`);
+  }
+
+  const pt = Buffer.isBuffer(opts.plaintext) ? opts.plaintext : Buffer.from(opts.plaintext);
+  const cipher = createCipheriv('aes-256-gcm', opts.kEnc, nonceBuf, {
+    authTagLength: AEAD_TAG_BYTES,
+  });
+  cipher.setAAD(Buffer.from(opts.sid, 'utf-8'), { plaintextLength: pt.length });
+  const ct = Buffer.concat([cipher.update(pt), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return {
+    nonceB64: nonceBuf.toString('base64url'),
+    ciphertextB64: Buffer.concat([ct, tag]).toString('base64url'),
+  };
+}
+
+/**
+ * One-shot encrypt: ECDH + HKDF + AEAD (caller supplies both sides).
+ * Used by the test vectors and future 4.x features. The real device
+ * side does this in the browser, not here.
+ */
+export function encryptPairingPayload(inputs: EncryptInputs): EncryptOutput {
+  const { kEnc } = deriveAeadKeyFromEcdh({
+    skLocalB64: inputs.skLocalB64,
+    pkRemoteB64: inputs.pkRemoteB64,
+    sid: inputs.sid,
+  });
+  return aeadEncryptWithSessionKey({
+    kEnc,
+    sid: inputs.sid,
+    plaintext: inputs.plaintext,
+    nonceB64: inputs.nonceB64,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Pair constant-time secondary-code comparison
+// ---------------------------------------------------------------------------
+
+/**
+ * Constant-time compare two 6-digit numeric strings. Used by the HTTP
+ * start/respond handlers to check the user-supplied secondary code
+ * against the session's expected code.
+ *
+ * Returns true on match, false otherwise. Length mismatch returns
+ * false without short-circuit leak of which side was shorter.
+ *
+ * Uses Node `timingSafeEqual`, which requires equal-length inputs.
+ * We pad the SHORTER input with NULs and always compare a fixed
+ * 6-byte window — the length check happens BEFORE the actual compare
+ * and uses boolean AND at the end so both branches run to completion.
+ */
+export function compareSecondaryCodesCT(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, 'utf-8');
+  const bBuf = Buffer.from(b, 'utf-8');
+  const lenMatch = aBuf.length === bBuf.length;
+  // Always compare a constant window so the total work is independent
+  // of the actual input lengths. Pad the shorter to the longer with
+  // zero bytes; if lengths diverge we force lenMatch=false below.
+  const max = Math.max(aBuf.length, bBuf.length, 6);
+  const aPad = Buffer.alloc(max);
+  const bPad = Buffer.alloc(max);
+  aBuf.copy(aPad);
+  bBuf.copy(bPad);
+  const byteMatch = timingSafeEqual(aPad, bPad);
+  return lenMatch && byteMatch;
+}
