@@ -38,12 +38,15 @@
  *   `npm run check-scanner` must remain 0 flags; this docstring itself
  *   avoids the literal trigger tokens for that reason.
  *
- * FUTURE PHASE 2 ADDITIONS (home for them):
- *   - Task 2.3: `createTrMemoryPluginRuntime` — the MemoryPluginRuntime
- *     wrapper that owns the wiring (recall/getById → real pipeline).
- *   - Task 2.4: `promptBuilder` (guidance + quota + pinned).
- *   - Task 2.5: `flushPlanResolver`.
- *   For now this file ships ONLY the TrMemorySearchManager adapter.
+ * PHASE 2 STATUS:
+ *   - Task 2.1: `createTrMemorySearchManager` (shipped).
+ *   - Task 2.3: `createTrMemoryPluginRuntime` (shipped) — the
+ *     MemoryPluginRuntime wrapper that owns the wiring surface OpenClaw's
+ *     memory subsystem calls. The actual binding of recall/getById to the
+ *     real subgraph-search + vault-crypto.decrypt + reranker pipeline
+ *     happens in Task 2.7's `buildRecallDeps` inside register().
+ *   - Task 2.4 (future): `promptBuilder` (guidance + quota + pinned).
+ *   - Task 2.5 (future): `flushPlanResolver`.
  */
 
 // ---------------------------------------------------------------------------
@@ -216,5 +219,78 @@ export function createTrMemorySearchManager(deps: TrMemorySearchManagerDeps) {
     probeEmbeddingAvailability,
     probeVectorAvailability,
     close,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// createTrMemoryPluginRuntime — the MemoryPluginRuntime wrapper (Task 2.3)
+// ---------------------------------------------------------------------------
+//
+// WHY THIS WRAPPER EXISTS:
+//   OpenClaw 2026.6.8's memory subsystem does NOT call search/get directly.
+//   It calls `runtime.getMemorySearchManager(...)` to obtain a
+//   MemorySearchManager, then invokes `.search()` / readFile on it. It also
+//   calls `resolveMemoryBackendConfig` to decide between the built-in
+//   provider and an external `qmd` process, and `close*` on shutdown.
+//
+//   So this wrapper is the seam OpenClaw actually talks to. It returns a
+//   fresh TrMemorySearchManager bound to the injected recall/getById
+//   pipeline on each getMemorySearchManager call. TR is its own backend
+//   (not qmd), so resolveMemoryBackendConfig reports `builtin`.
+//
+//   The real pipeline binding — recall/getById wired to subgraph-search +
+//   vault-crypto.decrypt + reranker, parameterized by the paired account —
+//   is Task 2.7's `buildRecallDeps` in register(). This wrapper just carries
+//   whatever deps it's given.
+//
+// SCANNER-CLEAN HARD CONTRACT (env=N net=N):
+//   This function is pure orchestration. It touches NO environment state and
+//   performs NO outbound network I/O. The injected deps own all I/O. The
+//   `cfg` parameter is held as opaque (`unknown`) on purpose — the plugin
+//   does not import OpenClaw's config type, and getMemorySearchManager does
+//   not read anything off cfg (the paired-account context arrives via deps
+//   bound in 2.7, not via cfg here).
+//
+// ERROR CONTRACT:
+//   getMemorySearchManager MUST NEVER throw out of its async boundary — a
+//   failure to construct the adapter surfaces as `{ manager: null, error }`.
+//   Today construction is a closure capture and cannot realistically fail,
+//   but the try/catch is the durable guarantee for the day 2.7 adds
+//   paired-account resolution at construction time.
+
+export function createTrMemoryPluginRuntime(deps: TrMemorySearchManagerDeps) {
+  return {
+    async getMemorySearchManager(_params: {
+      cfg: unknown;
+      agentId: string;
+      purpose?: string;
+    }): Promise<{ manager: ReturnType<typeof createTrMemorySearchManager> | null; error?: string }> {
+      try {
+        return {
+          manager: createTrMemorySearchManager(deps),
+          error: undefined as string | undefined,
+        };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { manager: null, error: msg };
+      }
+    },
+
+    resolveMemoryBackendConfig(_params: { cfg: unknown; agentId: string }): {
+      backend: 'builtin';
+    } {
+      // TR is its own backend — never the external qmd process path.
+      return { backend: 'builtin' as const };
+    },
+
+    async closeMemorySearchManager(_params: { cfg: unknown; agentId: string }): Promise<void> {
+      // No per-manager resources to release today: the adapter holds only the
+      // injected closures; the closures' lifetimes are owned by register().
+      // Task 2.7 may add connection-pool / embedder teardown here.
+    },
+
+    async closeAllMemorySearchManagers(): Promise<void> {
+      // See closeMemorySearchManager — no-op until 2.7 binds pool resources.
+    },
   };
 }

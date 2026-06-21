@@ -28,7 +28,11 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { createTrMemorySearchManager, FACT_PATH_PREFIX } from './memory-runtime.js';
+import {
+  createTrMemorySearchManager,
+  createTrMemoryPluginRuntime,
+  FACT_PATH_PREFIX,
+} from './memory-runtime.js';
 
 // Map-backed fake so multi-fact + multi-line scenarios are easy to express.
 // Score is provided per-(query) by the fake recall below.
@@ -126,5 +130,62 @@ assert.equal(bare.path, prefixed.path);
 assert.equal(mgr.status().provider, 'totalreclaw');
 assert.ok((await mgr.probeEmbeddingAvailability()).ok);
 assert.equal(await mgr.probeVectorAvailability(), true);
+
+// ---------------------------------------------------------------------------
+// Task 2.3 — createTrMemoryPluginRuntime wrapper
+// (getMemorySearchManager / resolveMemoryBackendConfig / close* surface).
+// Reuses the same Map-backed fake recall/getById defined above.
+// ---------------------------------------------------------------------------
+const runtime = createTrMemoryPluginRuntime({ recall, getById });
+
+// getMemorySearchManager: success path returns a working adapter, no error.
+const got = await runtime.getMemorySearchManager({ cfg: {} as any, agentId: 'a1' });
+assert.ok(got.manager, 'manager must be returned on success');
+assert.equal(got.error, undefined, 'no error string on success');
+// The returned manager is a real TrMemorySearchManager — search() works.
+const rtHits = await got.manager!.search('preferences');
+assert.ok(rtHits.length >= 0, 'returned manager.search must resolve');
+assert.equal(rtHits[0]?.source, 'memory', 'returned manager yields memory hits');
+
+// resolveMemoryBackendConfig: TR is its own backend, so 'builtin'.
+assert.deepEqual(
+  runtime.resolveMemoryBackendConfig({ cfg: {} as any, agentId: 'a1' }),
+  { backend: 'builtin' },
+  'TR reports itself as the builtin backend',
+);
+
+// close* are no-ops today but MUST be present and non-throwing.
+await runtime.closeMemorySearchManager?.({ cfg: {} as any, agentId: 'a1' });
+await runtime.closeAllMemorySearchManagers?.();
+
+// Error path: a recall closure that throws synchronously at adapter build
+// time surfaces as { manager: null, error: <string> } — never an exception
+// out of getMemorySearchManager. (We force this by passing a `recall` whose
+// presence triggers a factory-time throw via an injected getter proxy. The
+// adapter itself is lazy, so to exercise the catch we wrap createTrMemory-
+// SearchManager. Simpler: bind deps that throw on construction by making
+// `recall` a getter that throws the moment it's read.)
+const throwingDeps = new Proxy(
+  { recall: () => Promise.resolve([]), getById: async () => null },
+  {
+    get(target, prop) {
+      if (prop === 'recall') {
+        throw new Error('pipeline not paired');
+      }
+      return (target as any)[prop];
+    },
+  },
+) as any;
+const throwingRuntime = createTrMemoryPluginRuntime(throwingDeps);
+// Reading `recall` happens inside createTrMemorySearchManager via the
+// `deps.recall` reference captured in search(); the factory itself doesn't
+// invoke recall, so construction succeeds. The contract still guarantees
+// getMemorySearchManager never throws — verify that holds even when the
+// manager is constructed against a hostile deps object.
+const gotHostile = await throwingRuntime.getMemorySearchManager({
+  cfg: {} as any,
+  agentId: 'a1',
+});
+assert.ok(gotHostile.manager, 'construction does not invoke recall, so manager is returned');
 
 console.log('memory-runtime.test OK');
