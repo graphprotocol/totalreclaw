@@ -169,7 +169,6 @@ import {
   detectPartialInstall,
   clearPartialInstallMarker,
   patchOpenClawConfig,
-  writePluginManifest,
   writePluginError,
   readPluginLoadedManifest,
   checkCredentialsFileMode,
@@ -3484,65 +3483,10 @@ const plugin = {
   },
 
   register(api: OpenClawPluginApi) {
-    // ---------------------------------------------------------------
-    // 3.3.2-rc.1 (issue #186) — load manifest instrumentation
-    // ---------------------------------------------------------------
-    //
-    // Capture every `api.registerTool({name, ...})` call so we can write
-    // a `.loaded.json` manifest at the end of register(). Wrap the body
-    // in try/catch so a register-time throw produces `.error.json` for
-    // agent-side filesystem verification (the CLI hangs in some Docker
-    // setups — issue #182 — so the manifest is the canonical "did the
-    // plugin load?" probe).
-    //
-    // Implementation: we intercept the api.registerTool method by
-    // wrapping it on the api object passed in. The wrapper inspects the
-    // `name` field (every TR registerTool call sets it) and forwards
-    // verbatim. NO behavior change to the SDK call — the original method
-    // is invoked with original args and `this` binding.
-    //
-    // Synchronous writes ONLY (see writePluginManifest doc): the SDK
-    // freezes plugin registries the moment register() returns; an async
-    // write would race that freeze.
-    const _registeredToolNames: string[] = [];
-    const _originalRegisterTool = api.registerTool.bind(api);
-    // 3.3.8-rc.1 HYBRID MODE (OpenClaw 2026.5.2 issue #223 workaround):
-    // The tool-policy-pipeline in OC 2026.5.2 strips non-bundled plugin tools
-    // before they reach the agent's session toolset. registerTool() calls
-    // succeed and tools are declared in contracts.tools, so the PLUGIN LOADS.
-    // But tool calls never reach execute() — the pipeline discards them before
-    // the agent's toolset is built.
-    //
-    // Strategy: keep all registerTool() calls intact so the plugin loader can
-    // verify the contracts.tools declaration and load the plugin (hooks fire).
-    // The `tr` CLI binary (dist/tr-cli.js) provides the alternative execution
-    // path. Agent runs `tr remember|recall|status|pair` from shell; tool calls
-    // are dead-letter but hooks (before_agent_start, agent_end, message_received,
-    // before_reset) still fire via the unbroken hook code path.
-    //
-    // NOTE: do NOT no-op registerTool here — OC 2026.5.2 validates the
-    // contracts.tools declaration against registered tools at load time and
-    // drops the plugin (unloads it) if no tools match. Confirmed empirically:
-    // no-op'ing registerTool causes the gateway to log "4 plugins" instead of
-    // "5 plugins" after restart (plugin excluded from active set).
-    //
-    // TODO: when OC ships a fix for issue #223, restore tool-call routing
-    // and remove the tr-cli.ts CLI layer. The bin/tr field in package.json
-    // can stay as a convenience CLI regardless.
-    api.registerTool = (tool: unknown, opts?: { name?: string; names?: string[] }) => {
-      try {
-        const t = tool as { name?: unknown } | null | undefined;
-        if (t && typeof t === 'object' && typeof t.name === 'string' && t.name.length > 0) {
-          _registeredToolNames.push(t.name);
-        }
-      } catch {
-        // Manifest is diagnostic; never let bookkeeping break tool registration.
-      }
-      _originalRegisterTool(tool, opts);
-    };
-
-    // Lazily resolved inside the try below — needed by both the manifest
-    // write and the error path. `dist/` after build, package root in tests.
+    // Lazily resolved inside the try below — needed by the error path and
+    // by the `/totalreclaw diag` diagnostic surface (which reads the
+    // `.loaded.json` manifest from a prior boot if present). `dist/` after
+    // build, package root in tests.
     let _pluginDirForManifest: string | null = null;
 
     // NOTE: the body of register() below is intentionally NOT re-indented
@@ -7818,11 +7762,11 @@ const plugin = {
     //   2. api.registerTool(() => createMemorySearchTool(runtime), { names: ['memory_search'] })
     //   3. api.registerTool(() => createMemoryGetTool(runtime),    { names: ['memory_get'] })
     //
-    // Placement: BEFORE the .loaded.json manifest write so the two new
-    // tool names are captured by the monkey-patched registerTool wrapper
-    // (which records `name` / `names` into _registeredToolNames). The
-    // conventional names survive the tool-policy strip in OC 2026.5.x
-    // (issue #223) — they are passed via the `names` opts.
+    // These registerTool calls go through the real host api.registerTool
+    // directly (the 3.3.2-rc.1 monkey-patch + .loaded.json manifest
+    // machinery were removed in Phase 3 — the conventional names survive
+    // the tool-policy strip in OC 2026.5.x, so the declare-and-dead-letter
+    // dance + manifest are obsolete).
     //
     // Deps: buildRecallDeps captures `api.logger` so the closures can call
     // ensureInitialized lazily on first use. The paired-account context
@@ -7852,35 +7796,6 @@ const plugin = {
       );
     }
 
-    // ---------------------------------------------------------------
-    // 3.3.2-rc.1 (issue #186) — write `.loaded.json` manifest
-    // ---------------------------------------------------------------
-    //
-    // Final step of register(): drop the success manifest so the agent
-    // can `cat ~/.openclaw/extensions/totalreclaw/.loaded.json` to
-    // verify which tools bound. Synchronous (see writePluginManifest doc).
-    // Never throws — diagnostic loss only on I/O failure.
-    if (_pluginDirForManifest) {
-      try {
-        const ok = writePluginManifest(_pluginDirForManifest, {
-          loadedAt: Date.now(),
-          tools: _registeredToolNames.slice(),
-          version: pluginVersion ?? 'unknown',
-          // 3.3.8-rc.1 hybrid mode annotation: tools ARE registered with the
-          // SDK (required for plugin loader validation), but tool calls are
-          // dead-letter on OC 2026.5.2 due to issue #223. Use `tr <cmd>` CLI.
-          hybridMode: true,
-          hybridCliTools: ['tr status', 'tr pair', 'tr remember', 'tr recall'],
-        });
-        if (ok) {
-          api.logger.info(
-            `TotalReclaw: wrote .loaded.json manifest (${_registeredToolNames.length} tools + hybridCli=tr, version=${pluginVersion ?? 'unknown'})`,
-          );
-        }
-      } catch {
-        // Best-effort; helper swallows internally too.
-      }
-    }
     } catch (registerErr: unknown) {
       // ---------------------------------------------------------------
       // 3.3.2-rc.1 (issue #186) — write `.error.json` on register() throw
