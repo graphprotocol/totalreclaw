@@ -514,7 +514,10 @@ function _resolveWithCandidatesCore(
       weightsJson,
       thresholdLower,
       thresholdUpper,
-      Math.floor(nowUnixSeconds),
+      // wasm-bindgen declares `now_unix` as i64 → JS BigInt. Node ≥26 rejects
+      // the implicit Number→BigInt coercion that older runtimes tolerated, so
+      // wrap explicitly (same as the legacy path below + loadWeightsFile).
+      BigInt(Math.floor(nowUnixSeconds)),
       TIE_ZONE_SCORE_TOLERANCE,
     );
   } catch (err) {
