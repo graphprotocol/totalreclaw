@@ -27,7 +27,6 @@
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import {
-  relayRequest,
   rpcWithRetry,
 } from './relay.js';
 
@@ -61,7 +60,7 @@ check(NET_RE.test(src), 'relay.ts: owns the outbound-network primitive');
 check(!ENV_RE.test(src), 'relay.ts: no environment-variable read token');
 
 // ---------------------------------------------------------------------------
-// Hard contract 3: behavior — relayRequest parses a 2xx JSON body.
+// Hard contract 3: behavior — rpcWithRetry parses a 2xx JSON-RPC body.
 // ---------------------------------------------------------------------------
 
 // Save the real fetch; restore on a finally at the end.
@@ -79,61 +78,6 @@ function makeJsonFetch(payload: unknown, status = 200, calls: Call[]) {
 }
 
 try {
-  // --- relayRequest: success returns parsed JSON. ---
-  {
-    const calls: Call[] = [];
-    (globalThis as { fetch: typeof fetch }).fetch = makeJsonFetch(
-      { success: true, user_id: 'u-123' },
-      200,
-      calls,
-    );
-    const json = await relayRequest({
-      url: 'https://relay.example/v1/register',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ auth_key_hash: 'deadbeef', salt: 'cafe' }),
-    });
-    check(
-      (json as { user_id?: string }).user_id === 'u-123',
-      'relayRequest: parses 2xx JSON body',
-    );
-    check(
-      calls.length === 1 && calls[0].url === 'https://relay.example/v1/register',
-      'relayRequest: hits the URL passed in (no env-derived URL)',
-    );
-    check(
-      calls.length === 1 &&
-        typeof calls[0].init?.method === 'string' &&
-        /POST/i.test(calls[0].init.method as string),
-      'relayRequest: forwards the method',
-    );
-  }
-
-  // --- relayRequest: non-2xx throws with status + body context. ---
-  {
-    (globalThis as { fetch: typeof fetch }).fetch = makeJsonFetch(
-      { success: false, error_code: 'BAD', error_message: 'nope' },
-      401,
-      [],
-    );
-    let threw: unknown = null;
-    try {
-      await relayRequest({
-        url: 'https://relay.example/v1/store',
-        method: 'POST',
-        headers: {},
-        body: '{}',
-      });
-    } catch (e) {
-      threw = e;
-    }
-    check(threw instanceof Error, 'relayRequest: throws on non-2xx');
-    check(
-      threw instanceof Error && /401/.test(threw.message),
-      'relayRequest: error message carries the HTTP status',
-    );
-  }
-
   // --- rpcWithRetry: success returns the JSON-RPC `result`. ---
   {
     const calls: Call[] = [];

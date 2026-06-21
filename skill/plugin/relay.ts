@@ -20,7 +20,7 @@
  * `subgraph-store.ts`) now call into the helpers below. They remain
  * env-free and network-free, so they are scanner-clean by construction.
  *
- * Three altitudes are exposed, each preserving the behavior of the call
+ * Two altitudes are exposed, each preserving the behavior of the call
  * site it replaced:
  *
  *   1. `relayFetch(opts)`   — lowest level. Performs the request and
@@ -28,12 +28,7 @@
  *      parsing (e.g. `api-client.ts`'s `assertOk` + per-endpoint JSON
  *      shape, `subgraph-search.ts`'s log-and-return-null GraphQL path).
  *
- *   2. `relayRequest(opts)` — one-shot HTTP JSON request. Performs the
- *      request, rejects with `HTTP {status} - {body}` on non-2xx,
- *      otherwise returns the parsed JSON body. Convenience for simple
- *      REST endpoints.
- *
- *   3. `rpcRequest(opts)` / `rpcWithRetry(opts)` — JSON-RPC 2.0 over
+ *   2. `rpcRequest(opts)` / `rpcWithRetry(opts)` — JSON-RPC 2.0 over
  *      HTTP. `rpcRequest` is a single attempt returning the raw envelope
  *      (`{ result?, error? }`) so the caller can apply endpoint-specific
  *      validation (e.g. `eth_call` empty-result checks in
@@ -75,42 +70,6 @@ export async function relayFetch(opts: {
   if (opts.headers !== undefined) init.headers = opts.headers;
   if (opts.body !== undefined) init.body = opts.body;
   return fetch(opts.url, init);
-}
-
-// ---------------------------------------------------------------------------
-// Mid level: one-shot JSON HTTP request
-// ---------------------------------------------------------------------------
-
-/**
- * Perform an HTTP request and return the parsed JSON body.
- *
- * Rejects with `Error("<context>: HTTP <status> - <body>")` on a non-2xx
- * response, where `<context>` is the caller-supplied `context` label and
- * `<body>` is the response body text (best-effort — falls back to a
- * placeholder if the body cannot be read). This mirrors the legacy
- * `assertOk` helper in `api-client.ts` so callers that wrapped fetch +
- * assertOk can drop in this helper without changing error shapes.
- *
- * @param opts.context Short label folded into the non-2xx error message.
- */
-export async function relayRequest(opts: {
-  url: string;
-  method: string;
-  headers?: Record<string, string>;
-  body?: string;
-  context?: string;
-}): Promise<unknown> {
-  const res = await relayFetch(opts);
-  if (!res.ok) {
-    let body: string;
-    try {
-      body = await res.text();
-    } catch {
-      body = '(could not read response body)';
-    }
-    throw new Error(`${opts.context ?? 'relayRequest'}: HTTP ${res.status} - ${body}`);
-  }
-  return (await res.json()) as unknown;
 }
 
 // ---------------------------------------------------------------------------
