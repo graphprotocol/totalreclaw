@@ -403,5 +403,102 @@ assert.ok(
   `relativePath encodes the date or is TR-namespaced (got ${epochPlan!.relativePath})`,
 );
 
+// --- Opt-out + cfg override coverage (2026-06-21) -----------------------
+// buildFlushPlan accepts cfg overrides under
+//   cfg.agents.defaults.compaction.memoryFlush.{softThresholdTokens,
+//   forceFlushTranscriptBytes, prompt, systemPrompt, model, enabled}
+// plus cfg.agents.defaults.compaction.reserveTokensFloor (note: floor is
+// under parent `.compaction`, NOT `.memoryFlush`). This mirrors memory-
+// core's buildMemoryFlushPlan field-for-field. An explicit
+// `memoryFlush.enabled === false` opts out (returns null). These assertions
+// lock both paths so a regression in either is caught.
+
+// (1) Opt-out: explicit enabled:false → null (capture disabled).
+const optedOut = buildFlushPlan({
+  cfg: {
+    agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
+  } as any,
+});
+assert.equal(optedOut, null, 'enabled:false opts out of capture (returns null)');
+
+// enabled:undefined and enabled:true must NOT opt out (only explicit false).
+assert.ok(
+  buildFlushPlan({ cfg: { agents: { defaults: { compaction: { memoryFlush: { enabled: true } } } } } as any }),
+  'enabled:true does not opt out',
+);
+assert.ok(
+  buildFlushPlan({ cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } } as any }),
+  'enabled:undefined does not opt out',
+);
+
+// (2) Overrides: every overridable field takes the cfg sentinel over the
+// memory-core default. Distinct sentinel values prove the override path is
+// wired per-field (a collision would hide a missed wiring).
+const overridePlan = buildFlushPlan({
+  cfg: {
+    agents: {
+      defaults: {
+        compaction: {
+          reserveTokensFloor: 99999, // parent `.compaction`, not `.memoryFlush`
+          memoryFlush: {
+            softThresholdTokens: 7777,
+            forceFlushTranscriptBytes: 123456,
+            prompt: 'SENTINEL_FLUSH_USER_PROMPT',
+            systemPrompt: 'SENTINEL_FLUSH_SYSTEM_PROMPT',
+            model: 'sentinel-flush-model-xyz',
+          },
+        },
+      },
+    },
+  } as any,
+});
+assert.ok(overridePlan, 'override cfg still returns a plan');
+assert.equal(overridePlan!.softThresholdTokens, 7777,
+  'softThresholdTokens overridden from cfg.memoryFlush');
+assert.equal(overridePlan!.forceFlushTranscriptBytes, 123456,
+  'forceFlushTranscriptBytes overridden from cfg.memoryFlush');
+assert.equal(overridePlan!.reserveTokensFloor, 99999,
+  'reserveTokensFloor overridden from cfg.compaction (parent, not memoryFlush)');
+assert.equal(overridePlan!.prompt, 'SENTINEL_FLUSH_USER_PROMPT',
+  'prompt overridden from cfg.memoryFlush');
+assert.equal(overridePlan!.systemPrompt, 'SENTINEL_FLUSH_SYSTEM_PROMPT',
+  'systemPrompt overridden from cfg.memoryFlush');
+assert.equal(overridePlan!.model, 'sentinel-flush-model-xyz',
+  'model overridden from cfg.memoryFlush');
+
+// reserveTokensFloor specifically must NOT be read from under memoryFlush —
+// confirm a value placed there is ignored in favor of the compaction-level
+// (or default) value. This locks the nesting asymmetry.
+const floorUnderMemoryFlushIgnored = buildFlushPlan({
+  cfg: {
+    agents: {
+      defaults: {
+        compaction: {
+          memoryFlush: {
+            // @ts-expect-error — wrong nest on purpose; must be ignored
+            reserveTokensFloor: 555,
+          },
+        },
+      },
+    },
+  } as any,
+});
+assert.notEqual(floorUnderMemoryFlushIgnored!.reserveTokensFloor, 555,
+  'reserveTokensFloor under .memoryFlush is NOT honored (must be under .compaction)');
+
+// (3) Default still works: no cfg at all returns the memory-core defaults
+// (soft=4000, force=2 MiB, reserve=20000). Locks that the override path
+// hasn't broken the default fall-through.
+const defaultPlan = buildFlushPlan({});
+assert.ok(defaultPlan, 'no cfg returns a plan');
+assert.equal(defaultPlan!.softThresholdTokens, 4000,
+  'default softThresholdTokens is 4000 (memory-core default)');
+assert.equal(defaultPlan!.forceFlushTranscriptBytes, 2 * 1024 * 1024,
+  'default forceFlushTranscriptBytes is 2 MiB (memory-core default)');
+assert.equal(defaultPlan!.reserveTokensFloor, 20000,
+  'default reserveTokensFloor is 20000 (memory-core default)');
+assert.equal(defaultPlan!.model, undefined,
+  'default model is undefined (no override, no extraction model pinned)');
+
 console.log('flush-plan.test OK');
 console.log('memory-runtime.test OK');
