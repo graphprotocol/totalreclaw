@@ -172,19 +172,25 @@ let manifest: Record<string, unknown>;
 }
 
 {
-  // 1g. (Task 2.8) SEQUENCING GUARD — the 17 legacy `totalreclaw_*` tool
-  // names MUST still be declared here. They are still registered by the
-  // pre-Phase-3.2 plugin code path (the agent-facing custom tools). Because
-  // the loader enforces registered⊆declared, removing the declarations here
-  // BEFORE the registrations are retired (Phase 3.2) would silently break
-  // every totalreclaw_* tool at load time with a level:"error" diagnostic.
+  // 1g. (Task 3.2 — LOCKSTEP GUARD, flipped from Task 2.8) The 17 legacy
+  // `totalreclaw_*` agent-tool names MUST NO LONGER be declared in
+  // contracts.tools. Phase 3.2 retired them: the `api.registerTool(...)`
+  // calls were removed from index.ts AND their contracts.tools entries were
+  // removed from openclaw.plugin.json IN THE SAME COMMIT (the lockstep).
   //
-  // Phase 3.2 MUST remove the totalreclaw_* registrations (in index.ts) AND
-  // their contracts.tools entries TOGETHER, in the same commit, before the
-  // RC cut. This assertion will flip to "not includes" at that time. Until
-  // then, it guards against a premature half-drop.
+  // Why both sides in one commit: OpenClaw's loader enforces
+  // registered⊆declared (registry.registerTool → findUndeclaredPluginToolNames).
+  //   - manifest entry without registration  → dead declaration (noise, not fatal)
+  //   - registration without manifest entry  → level:"error" diagnostic +
+  //     the registration is silently dropped on every boot
+  //   - test guard flipped to `!includes` in the same commit so a future
+  //     half-revert (re-adding either side alone) fails this test loudly.
+  //
+  // (Task 2.8 originally asserted the opposite — `tools.includes(name)` — as
+  // a sequencing guard to prevent a premature half-drop before 3.2 landed.
+  // This is the flip that 2.8's comment promised would happen at 3.2 time.)
   const tools = ((manifest as { contracts?: { tools?: string[] } }).contracts?.tools) ?? [];
-  const legacyStillDeclared = [
+  const retiredLegacyTools = [
     'totalreclaw_remember',
     'totalreclaw_recall',
     'totalreclaw_forget',
@@ -203,10 +209,10 @@ let manifest: Record<string, unknown>;
     'totalreclaw_pair',
     'totalreclaw_report_qa_bug',
   ];
-  for (const name of legacyStillDeclared) {
+  for (const name of retiredLegacyTools) {
     assert(
-      tools.includes(name),
-      `manifest contracts.tools still includes "${name}" (Phase 3.2 lockstep guard — see comment)`,
+      !tools.includes(name),
+      `manifest contracts.tools does NOT include "${name}" (Phase 3.2 retirement — totalreclaw_* agent tools removed)`,
     );
   }
 }
