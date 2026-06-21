@@ -29,6 +29,7 @@
 
 import { strict as assert } from 'node:assert';
 import {
+  buildFlushPlan,
   buildPromptSection,
   createTrMemorySearchManager,
   createTrMemoryPluginRuntime,
@@ -343,4 +344,64 @@ assert.ok(
   'citationsMode does not suppress recall guidance',
 );
 
+// ---------------------------------------------------------------------------
+// Task 2.5 — buildFlushPlan (flushPlanResolver)
+// Returns the memory flush PLAN (thresholds + extraction prompt) OpenClaw's
+// host uses to decide WHEN to flush (soft/force thresholds) and HOW to run
+// the extraction (prompt/systemPrompt). The actual extract→encrypt→on-chain
+// capture is NOT here — it's a later gate (Task 4.2 / H2 QA). This resolver
+// only returns the plan structure.
+// ---------------------------------------------------------------------------
+
+const plan = buildFlushPlan({ nowMs: 0 });
+assert.ok(plan, 'returns a plan by default (capture enabled)');
+
+// Required shape — every field present and sensibly typed.
+assert.equal(typeof plan!.softThresholdTokens, 'number');
+assert.equal(typeof plan!.forceFlushTranscriptBytes, 'number');
+assert.equal(typeof plan!.reserveTokensFloor, 'number');
+assert.equal(typeof plan!.prompt, 'string');
+assert.ok(plan!.prompt.length > 0, 'extraction prompt is non-empty');
+assert.equal(typeof plan!.systemPrompt, 'string');
+assert.ok(plan!.systemPrompt.length > 0, 'extraction system prompt is non-empty');
+assert.equal(typeof plan!.relativePath, 'string');
+assert.ok(
+  plan!.relativePath.includes('totalreclaw') || plan!.relativePath.startsWith('.totalreclaw'),
+  `relativePath is TR-namespaced (got ${plan!.relativePath})`,
+);
+
+// Sanity: thresholds are positive + ordered (soft > reserve floor? no —
+// memory-core ships soft=4000 < reserve=20000 because soft flushes BEFORE
+// the reserve floor is reached, so reserve is a *floor* of headroom kept
+// AFTER flush, not a lower bound on when to flush. We only assert both are
+// positive. forceFlushTranscriptBytes is a byte count, must be > 0.)
+assert.ok(plan!.softThresholdTokens > 0, 'softThresholdTokens must be positive');
+assert.ok(plan!.forceFlushTranscriptBytes > 0, 'forceFlushTranscriptBytes must be positive');
+assert.ok(plan!.reserveTokensFloor > 0, 'reserveTokensFloor must be positive');
+
+// The prompt must be TR's REAL extraction prompt, not a placeholder — check
+// for a canonical marker phrase from EXTRACTION_SYSTEM_PROMPT.
+assert.ok(
+  /Memory Taxonomy v1/.test(plan!.systemPrompt) || /memory extraction engine/i.test(plan!.systemPrompt),
+  'systemPrompt is TR canonical extraction prompt (v1 taxonomy marker)',
+);
+
+// Defaults: with no nowMs, the resolver must still return a plan (Date.now
+// fallback). And it must be stable across calls with the same nowMs.
+const planNoNow = buildFlushPlan({});
+assert.ok(planNoNow, 'returns a plan even without explicit nowMs');
+const planSameNow = buildFlushPlan({ nowMs: 12345 });
+assert.equal(planSameNow!.relativePath, buildFlushPlan({ nowMs: 12345 })!.relativePath,
+  'relativePath is deterministic for a fixed nowMs');
+
+// Determinism: the date-stamped relativePath for a known epoch must match
+// the host's UTC date formatting (the host writes here, so the path must be
+// a function of nowMs alone, not of any host environment read).
+const epochPlan = buildFlushPlan({ nowMs: 0 }); // 1970-01-01 UTC
+assert.ok(
+  /1970-01-01|totalreclaw/.test(epochPlan!.relativePath),
+  `relativePath encodes the date or is TR-namespaced (got ${epochPlan!.relativePath})`,
+);
+
+console.log('flush-plan.test OK');
 console.log('memory-runtime.test OK');

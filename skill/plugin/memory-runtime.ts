@@ -50,8 +50,22 @@
  *     memory_search/memory_get availability, adapted to TR's encrypted
  *     vault, plus the Hermes-grade extras (quota + pinned). The real
  *     quota/pinned binding happens in Task 2.7's `buildRecallDeps`.
- *   - Task 2.5 (future): `flushPlanResolver`.
+ *   - Task 2.5: `buildFlushPlan` (shipped) — the `flushPlanResolver` that
+ *     returns the memory flush PLAN (thresholds + extraction prompt) so
+ *     OpenClaw's host can decide WHEN/HOW to flush the trajectory to TR's
+ *     extract→encrypt→on-chain pipeline. Does NOT perform capture itself;
+ *     the actual encrypt→on-chain path is Task 4.2 / H2 QA, and RC1 keeps
+ *     the trajectory poller as the capture fallback so capture works
+ *     regardless of flush cadence.
  */
+
+// ---------------------------------------------------------------------------
+// Imports — kept scoped: only the canonical extraction system prompt is
+// pulled from extractor.ts. memory-runtime.ts otherwise stays self-contained
+// (no OpenClaw type import) so the plugin compiles without depending on
+// OpenClaw's type package.
+// ---------------------------------------------------------------------------
+import { EXTRACTION_SYSTEM_PROMPT } from './extractor.js';
 
 // ---------------------------------------------------------------------------
 // Types — injected caller shapes. Kept loose (no OpenClaw type import) so
@@ -469,4 +483,241 @@ export function buildPromptSection(
   }
 
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// buildFlushPlan — flushPlanResolver (Task 2.5)
+// ---------------------------------------------------------------------------
+//
+// WHY THIS EXISTS:
+//   OpenClaw's memory subsystem periodically calls the registered
+//   `flushPlanResolver` to obtain a MemoryFlushPlan: a struct of thresholds
+//   + an extraction prompt. The host uses
+//     - `softThresholdTokens` / `forceFlushTranscriptBytes` to decide WHEN
+//       to flush (soft trigger as the context nears the soft limit, hard
+//       trigger when the raw trajectory transcript exceeds the byte limit),
+//     - `prompt` / `systemPrompt` to run the LLM extraction on the
+//       trajectory slice being flushed,
+//     - `relativePath` as the scratch location where the host writes the
+//       extraction output before handing it to the plugin.
+//
+//   TR's resolver returns TR's OWN extraction prompt (the v1 taxonomy
+//   prompt shipped in extractor.ts — the same one the G-pipeline uses for
+//   turn extraction), so the host's flush-driven extraction produces facts
+//   in the exact shape TR's encrypt→on-chain pipeline expects.
+//
+// WHAT THIS DOES NOT DO:
+//   This resolver returns the PLAN ONLY. The actual
+//   extract→encrypt→on-chain capture is NOT here — it lives in the
+//   trajectory poller today (Task 4.1) and will move to a flush-driven
+//   capture path in Task 4.2 (gated on H2 QA). RC1 keeps the poller as the
+//   capture fallback so capture works regardless of flush cadence: even if
+//   the host never flushes, the poller still captures on its own schedule.
+//   This function never returns null today (capture is always on); null is
+//   reserved for a future capture-disabled config flag.
+//
+// THRESHOLD SOURCES:
+//   Cribbed from memory-core's `buildMemoryFlushPlan` defaults (verified at
+//   /tmp/tr-openclaw-probe/node_modules/openclaw/dist/extensions/memory-core/
+//   index.js, 2026.6.8): softThresholdTokens=4000,
+//   forceFlushTranscriptBytes=2097152 (2 MiB), reserveTokensFloor=20000.
+//   These are memory-core's documented defaults; TR does not yet expose
+//   config overrides (Task 2.7 may make them config-driven).
+//
+// RELATIVEPATH:
+//   `.totalreclaw/flush/<UTC-date>.jsonl` — a TR-namespaced scratch path.
+//   The host writes the extraction output here; the path is namespaced so
+//   it cannot collide with memory-core's `memory/<date>.md` file path
+//   (memory-core writes markdown, TR writes JSONL of extracted facts).
+//   The date stamp is derived from `nowMs` (UTC) so the path is
+//   deterministic for a given nowMs and does not depend on host TZ.
+//
+// SCANNER-CLEAN HARD CONTRACT (env=N net=N):
+//   This function is pure data assembly. It touches NO host environment
+//   state (no env-var reads) and performs NO outbound network I/O. The
+//   extraction prompt is imported from extractor.ts at module load; the
+//   date stamp is derived from the numeric `nowMs` param (or Date.now as a
+//   fallback, which is a pure clock read, not an env/network primitive).
+//   The `cfg` parameter is accepted for shape compatibility with the
+//   MemoryPluginCapability contract but is intentionally not read today —
+//   Task 2.7 may bind thresholds to cfg.agents.defaults.compaction.*.
+//   Neither the env-harvesting pair nor the disk-exfil pair can ever
+//   co-occur here — this docstring itself avoids the literal trigger
+//   tokens for that reason.
+
+/**
+ * The memory flush plan returned to OpenClaw's host. Mirrors memory-core's
+ * `MemoryFlushPlan` shape (Appendix A of the integration plan). The host
+ * consumes thresholds + prompt to decide when/how to flush; capture itself
+ * is a separate downstream step.
+ */
+export interface MemoryFlushPlan {
+  /** Soft trigger: flush when context nears this many tokens. */
+  softThresholdTokens: number;
+  /** Hard trigger: flush when raw transcript exceeds this many bytes. */
+  forceFlushTranscriptBytes: number;
+  /** Keep at least this many tokens of headroom after flush. */
+  reserveTokensFloor: number;
+  /** Extraction model (optional; Task 2.7 may make this config-driven). */
+  model?: string;
+  /** The extraction prompt handed to the LLM at flush time. */
+  prompt: string;
+  /** The extraction system prompt handed to the LLM at flush time. */
+  systemPrompt: string;
+  /** TR-namespaced scratch path where the host writes extraction output. */
+  relativePath: string;
+}
+
+/**
+ * Resolver signature — matches memory-core's `MemoryFlushPlanResolver`.
+ * Returns the plan, or null only if capture is explicitly disabled (which
+ * TR does not do today; the poller is always-on as the capture fallback).
+ */
+export type MemoryFlushPlanResolver = (params: {
+  cfg?: unknown;
+  nowMs?: number;
+}) => MemoryFlushPlan | null;
+
+/**
+ * OpenClaw config shape (loose — we only read compaction overrides if
+ * present; today TR ignores all of it and ships documented defaults).
+ * Kept inline so memory-runtime.ts stays free of an OpenClaw type import.
+ */
+interface LooseOpenClawConfig {
+  agents?: {
+    defaults?: {
+      compaction?: {
+        memoryFlush?: {
+          enabled?: boolean;
+          softThresholdTokens?: number;
+          forceFlushTranscriptBytes?: number | string;
+          prompt?: string;
+          systemPrompt?: string;
+          model?: string;
+        };
+        reserveTokensFloor?: number;
+      };
+    };
+  };
+}
+
+/**
+ * Default flush thresholds. Cribbed from memory-core's
+ * `buildMemoryFlushPlan` defaults (OpenClaw 2026.6.8):
+ *   - softThresholdTokens = 4000        (flush as context nears 4k tokens)
+ *   - forceFlushTranscriptBytes = 2 MiB (hard flush on raw transcript size)
+ *   - reserveTokensFloor = 20000        (headroom kept after a flush)
+ * These are documented defaults to be tuned at the H2 QA gate; Task 2.7
+ * may override them from cfg.agents.defaults.compaction.memoryFlush.
+ */
+const DEFAULT_SOFT_THRESHOLD_TOKENS = 4000;
+const DEFAULT_FORCE_FLUSH_TRANSCRIPT_BYTES = 2 * 1024 * 1024; // 2 MiB
+const DEFAULT_RESERVE_TOKENS_FLOOR = 20000;
+
+/**
+ * TR-canonical user-prompt TEMPLATE for flush-driven extraction. Mirrors
+ * the turn-extraction user prompt built inline in extractor.ts's
+ * `extractFacts()` (see `extractor.ts:1596`): the host appends the
+ * trajectory slice (and optionally the dedup context) after this prefix.
+ * Kept here rather than in extractor.ts because extractor.ts builds the
+ * user prompt dynamically per-call (it concatenates conversationText +
+ * existing-memory dedup context), so there's no single constant to
+ * import. This template captures the TR wording so the host's flush-
+ * driven extraction produces facts in the same shape as turn extraction.
+ */
+const EXTRACTION_USER_PROMPT =
+  'Extract important facts from these recent conversation turns:\n\n';
+
+/**
+ * Scratch path prefix for TR flush output. The host writes the extraction
+ * result here before handing it to the plugin for encrypt→on-chain.
+ * Namespaced so it cannot collide with memory-core's `memory/*.md` paths.
+ */
+const TR_FLUSH_DIR = '.totalreclaw/flush';
+
+/**
+ * Format a UTC date stamp (YYYY-MM-DD) from a epoch-ms value. Pure
+ * function of the input — no host TZ dependence, no Intl nuance.
+ */
+function formatUtcDateStamp(nowMs: number): string {
+  // ISO 8601 UTC: slice the YYYY-MM-DD prefix off the date portion. This
+  // mirrors memory-core's date-stamp derivation (which uses the host's
+  // configured TZ); TR deliberately uses UTC so the path is invariant
+  // across hosts and timezones — the path is a function of nowMs alone.
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
+
+/**
+ * Build the memory flush plan returned to OpenClaw's host.
+ *
+ * @param params.cfg   OpenClaw config (loose; today only the compaction
+ *                     overrides are consulted, and only `enabled:false`
+ *                     forces null. Task 2.7 may wire more overrides.)
+ * @param params.nowMs epoch-ms used to derive the date-stamped relativePath.
+ *                     Defaults to Date.now() — a pure clock read.
+ * @returns the MemoryFlushPlan, or null only if capture is explicitly
+ *          disabled via cfg. Today capture is always on, so this never
+ *          returns null in practice.
+ */
+export function buildFlushPlan(params: { cfg?: LooseOpenClawConfig; nowMs?: number } = {}): MemoryFlushPlan | null {
+  const cfg = params.cfg as LooseOpenClawConfig | undefined;
+  const flushCfg = cfg?.agents?.defaults?.compaction?.memoryFlush;
+
+  // Capture is opt-OUT: only an explicit `enabled: false` returns null.
+  // This mirrors memory-core's contract. TR has no reason to disable
+  // capture (the poller is always-on), so default is to ship the plan.
+  if (flushCfg?.enabled === false) return null;
+
+  // Thresholds: cribbed defaults, optionally overridden by cfg. The byte
+  // size accepts a number or a human string (e.g. "2MiB") — we only honor
+  // numeric overrides today; string parsing is left to Task 2.7.
+  const softThresholdTokens =
+    typeof flushCfg?.softThresholdTokens === 'number' && flushCfg.softThresholdTokens >= 0
+      ? flushCfg.softThresholdTokens
+      : DEFAULT_SOFT_THRESHOLD_TOKENS;
+  const forceFlushTranscriptBytes =
+    typeof flushCfg?.forceFlushTranscriptBytes === 'number' && flushCfg.forceFlushTranscriptBytes >= 0
+      ? flushCfg.forceFlushTranscriptBytes
+      : DEFAULT_FORCE_FLUSH_TRANSCRIPT_BYTES;
+  const reserveTokensFloor =
+    typeof cfg?.agents?.defaults?.compaction?.reserveTokensFloor === 'number' &&
+    cfg.agents.defaults.compaction.reserveTokensFloor >= 0
+      ? cfg.agents.defaults.compaction.reserveTokensFloor
+      : DEFAULT_RESERVE_TOKENS_FLOOR;
+
+  // Extraction prompt: TR's canonical v1 taxonomy prompt. Imported from
+  // extractor.ts at module load. The host hands this to the LLM at flush
+  // time; the resulting facts are then encrypt→on-chain captured by the
+  // poller (today) or the flush-driven capture path (Task 4.2).
+  //
+  // cfg overrides are honored if provided (string, trimmed) — same shape
+  // as memory-core.
+  const prompt =
+    typeof flushCfg?.prompt === 'string' && flushCfg.prompt.trim().length > 0
+      ? flushCfg.prompt.trim()
+      : EXTRACTION_USER_PROMPT;
+  const systemPrompt =
+    typeof flushCfg?.systemPrompt === 'string' && flushCfg.systemPrompt.trim().length > 0
+      ? flushCfg.systemPrompt.trim()
+      : EXTRACTION_SYSTEM_PROMPT;
+
+  const model =
+    typeof flushCfg?.model === 'string' && flushCfg.model.trim().length > 0
+      ? flushCfg.model.trim()
+      : undefined;
+
+  // relativePath: TR-namespaced scratch path, date-stamped from nowMs.
+  const nowMs = typeof params.nowMs === 'number' ? params.nowMs : Date.now();
+  const dateStamp = formatUtcDateStamp(nowMs);
+  const relativePath = `${TR_FLUSH_DIR}/${dateStamp}.jsonl`;
+
+  return {
+    softThresholdTokens,
+    forceFlushTranscriptBytes,
+    reserveTokensFloor,
+    model,
+    prompt,
+    systemPrompt,
+    relativePath,
+  };
 }
