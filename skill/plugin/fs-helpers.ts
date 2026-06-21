@@ -29,6 +29,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { envHomeDir } from './entry.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1206,7 +1207,7 @@ export function patchOpenClawConfig(
   // `plugins.installs.totalreclaw` record so Fix #1 (slot) can fire).
   pluginVersion?: string,
 ): OpenClawConfigPatchResult {
-  const home = process.env.HOME ?? '/home/node';
+  const home = envHomeDir();
   const target = configPath ?? path.join(home, '.openclaw', 'openclaw.json');
 
   // `'skipped'` when the config file is absent — this host may not be
