@@ -468,16 +468,31 @@ jobs:
           node ../scripts/sync-version.mjs
           node ../scripts/check-version-drift.mjs
 
+      - name: Upgrade npm to latest (required for tokenless OIDC publish)
+        if: inputs.dry-run == false
+        # npm 10.x (Node 22) signs provenance with OIDC but still PUTs with a
+        # legacy token → E404 after NPM_TOKEN expired (the 2026-06-07 core run).
+        # Tokenless OIDC (the OIDC token IS the auth) needs npm >= 11.5.1.
+        # Mirrors publish-core / publish-mcp-server (migrated off NPM_TOKEN).
+        run: |
+          npm install -g npm@latest
+          npm --version
+
       - name: Publish
         if: inputs.dry-run == false
+        # OIDC trusted publishing — mirrors publish-core / publish-mcp-server.
+        # Requires a Trusted Publisher config for @totalreclaw/totalreclaw on
+        # npmjs.com pointing at this workflow file. NO `NODE_AUTH_TOKEN` env —
+        # setting it short-circuits OIDC back to the expired secret-token path
+        # (the 2026-06-22 E404 that blocked 3.3.12-rc.13).
         run: |
           cd skill/plugin
           TAG="latest"
           if [ "${{ inputs.release-type }}" = "rc" ]; then
             TAG="rc"
           fi
-          echo "Publishing with dist-tag: $TAG"
-          npm publish --access public --tag "$TAG" 2>&1 || {
+          echo "Publishing with dist-tag: $TAG (OIDC trusted publishing)"
+          npm publish --access public --tag "$TAG" --provenance 2>&1 || {
             # Tolerate "already published" (403/409) — version already exists on registry
             if npm view @totalreclaw/totalreclaw@$(node -e "console.log(require('./package.json').version)") version 2>/dev/null; then
               echo "Version already published, continuing"
@@ -486,10 +501,9 @@ jobs:
             fi
           }
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           # Forwarded to `prepublishOnly` -> check-url-binding.mjs so it
-          # asserts the right invariant for the release type. Defaults to
-          # `rc` (safe — local invocations always assert RC source default).
+          # asserts the right URL invariant for the release type. NOT a publish
+          # auth token — OIDC publish is tokenless (no NODE_AUTH_TOKEN).
           TOTALRECLAW_RELEASE_TYPE: ${{ inputs.release-type }}
 
       - name: Report version
