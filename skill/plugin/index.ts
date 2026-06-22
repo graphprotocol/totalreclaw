@@ -154,13 +154,6 @@ import {
   type PinOpDeps,
 } from './pin.js';
 import {
-  executeRetype,
-  executeSetScope,
-  validateRetypeArgs,
-  validateSetScopeArgs,
-  type RetypeSetScopeDeps,
-} from './retype-setscope.js';
-import {
   runNonInteractiveOnboard,
   type NonInteractiveOnboardResult,
 } from './onboarding-cli.js';
