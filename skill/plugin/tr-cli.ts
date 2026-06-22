@@ -513,6 +513,25 @@ async function main(): Promise<void> {
       await cmdExport(args.slice(1));
       break;
 
+    case 'import':
+    case 'upgrade':
+      // Import + upgrade run inside the gateway process (they need the
+      // plugin runtime — extraction pipeline, smart-import WASM, module-
+      // level auth state). The standalone `tr` binary is a separate Node
+      // script that does NOT load index.ts (would pull in the entire
+      // plugin runtime). Point users at the registerCli surface instead
+      // of silently no-op'ing or falling through to "unknown command".
+      die(
+        `${cmd} is not available on the standalone \`tr\` binary. ` +
+          `Run it on the gateway host via:\n` +
+          `  openclaw totalreclaw ${cmd === 'import' ? 'import from <source>' : 'upgrade'}${cmd === 'import' ? ' [--file <path>] [--dry-run] [--json]' : ' [--json]'}\n` +
+          (cmd === 'import'
+            ? `  openclaw totalreclaw import status [--id <importId>] [--json]\n` +
+              `  openclaw totalreclaw import abort <importId> [--json]\n` +
+              `Sources: mem0 | mcp-memory | chatgpt | claude | gemini`
+            : `Returns a Stripe checkout URL for Pro upgrade.`),
+      );
+
     case undefined:
     case '--help':
     case '-h':
@@ -526,6 +545,13 @@ async function main(): Promise<void> {
         '  tr export [--json] [--format json|markdown] — dump every memory in the vault\n\n' +
         'Recall: NOT a CLI command. The agent recalls via the bundled memory_search tool.\n' +
         '        To dump memories outside the agent, use `tr export`.\n\n' +
+        'Import + Upgrade: NOT on the standalone `tr` binary. They run inside the gateway\n' +
+        '        process via the `openclaw totalreclaw` subcommand chain:\n' +
+        '          openclaw totalreclaw import from <source> [--file <path>] [--dry-run] [--json]\n' +
+        '          openclaw totalreclaw import status [--id <importId>] [--json]\n' +
+        '          openclaw totalreclaw import abort <importId> [--json]\n' +
+        '          openclaw totalreclaw upgrade [--json]\n' +
+        '        Sources: mem0 | mcp-memory | chatgpt | claude | gemini\n\n' +
         'Flags:\n' +
         '  --json    Output machine-parseable JSON (required for agent shell calls)\n\n' +
         'JSON output shapes:\n' +

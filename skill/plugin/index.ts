@@ -24,6 +24,13 @@
  *                            auto-extraction handles implicit writes).
  *   - curation/lifecycle:   CLI `tr forget` / `tr export` + the
  *                            registerCli `openclaw totalreclaw ...` surface.
+ *   - import/upgrade:       registerCli `openclaw totalreclaw import from ...`
+ *                            / `import status` / `import abort` / `upgrade`
+ *                            (3.3.13 — restored as CLI surfaces; the handlers
+ *                            stayed in this file post-3.2 but had no entry
+ *                            point). NOT on the standalone `tr` binary —
+ *                            import needs the full extraction pipeline that
+ *                            only loads inside the gateway runtime.
  *   - onboarding/pair:      CLI `tr pair` + the 4 `/plugin/totalreclaw/pair/*`
  *                            HTTP routes (registerHttpRoute bundle).
  *
@@ -2453,7 +2460,7 @@ async function handlePluginImportFrom(
         estimated_batches: estimatedBatches,
         estimated_minutes: estimatedMinutes,
         estimated_completion_iso: initialState.estimated_completion_iso,
-        message: `Import started in background. ~${estimatedMinutes} min for ${totalChunks} chunks. (The totalreclaw_import_status agent tool was retired in Phase 3.2; progress is tracked in import-state.json and auto-resumes on gateway restart. A CLI status surface will ship in a follow-up.)`,
+        message: `Import started in background. ~${estimatedMinutes} min for ${totalChunks} chunks. Check progress with \`openclaw totalreclaw import status\` on the gateway host (or \`import status --id ${importId} --json\` from an agent shell).`,
         warnings: parseResult.warnings,
       };
     }
@@ -3033,7 +3040,7 @@ async function handleImportStatus(
     if (!state) return { error: `No import found with id: ${importId}` };
   } else {
     state = readMostRecentActiveImport();
-    if (!state) return { status: 'no_active_import', message: 'No active import found. (The totalreclaw_import_from agent tool was retired in Phase 3.2; a CLI import surface will ship in a follow-up. Auto-resume still picks up running imports on gateway restart.)' };
+    if (!state) return { status: 'no_active_import', message: 'No active import found. Start one with `openclaw totalreclaw import from <source>` on the gateway host. (Auto-resume still picks up running imports on gateway restart.)' };
   }
 
   // 1h freshness guard: mark stale imports as failed and prompt user to resume.
@@ -3045,7 +3052,7 @@ async function handleImportStatus(
       status: 'failed',
       stale: true,
       facts_stored: state.facts_stored,
-      message: 'Import appears stale — no progress in 1 hour. Restart the gateway to trigger auto-resume (the totalreclaw_import_from agent tool was retired in Phase 3.2; a CLI resume surface will ship in a follow-up).',
+      message: 'Import appears stale — no progress in 1 hour. Resume it with `openclaw totalreclaw import from <source> --file <path> --resume ' + state.import_id + '` on the gateway host, or restart the gateway to trigger auto-resume.',
       resume_id: state.import_id,
     };
   }
@@ -3912,6 +3919,247 @@ const plugin = {
               });
             },
           });
+
+          // ---------------------------------------------------------------
+          // 3.3.13 — `openclaw totalreclaw import ...` + `upgrade`
+          //
+          // Phase 3.2 retired the totalreclaw_import_from / import_status /
+          // import_abort / upgrade agent tools (recall is native; the rest
+          // became CLI/HTTP surfaces). The handlers stayed in this file
+          // (auto-resume still calls handlePluginImportFrom on gateway
+          // restart) but had NO user-facing entry point — users could not
+          // START a new import, only auto-resume worked. This wiring closes
+          // that gap.
+          //
+          // Why this lives on the `openclaw totalreclaw` subcommand chain
+          // (NOT the standalone `tr` CLI binary): the import handler reaches
+          // module-level state (authKeyHex / encryptionKey / subgraphOwner)
+          // populated by initialize(), plus storeExtractedFacts +
+          // extractFacts + runSmartImportPipeline. The `tr` binary
+          // (tr-cli.ts) is a standalone Node script that does NOT import
+          // the plugin runtime; importing index.ts from it would pull in
+          // the entire gateway runtime. The registerCli subcommand runs
+          // INSIDE the gateway process, so the handlers are directly in
+          // scope — same pattern as `onboard` / `status` / `pair`.
+          //
+          // JSON output: every subcommand accepts --json and emits a single
+          // machine-parseable JSON line on stdout (agent-driven use). Plain
+          // text is for direct user CLI use.
+          // ---------------------------------------------------------------
+          const importCmd = tr.command('import')
+            .description(
+              'Import memories from another tool (Mem0, MCP Memory, ChatGPT, Claude, Gemini). ' +
+              'Subcommands: `import status`, `import abort`.',
+            );
+
+          importCmd
+            .command('from', { isDefault: true })
+            .description(
+              'Start an import from a source tool. Conversation sources (ChatGPT/Claude/Gemini) ' +
+              'run in the background; poll with `import status`. Pre-structured sources (Mem0/MCP) ' +
+              'store synchronously.',
+            )
+            .argument('<source>', 'mem0 | mcp-memory | chatgpt | claude | gemini')
+            .option('--file <path>', 'Path to the source file on disk')
+            .option('--content <text>', 'Inline source content (JSON/JSONL/CSV/text)')
+            .option('--api-key <key>', 'API key for the source (used once, never stored)')
+            .option('--source-user-id <id>', 'User/agent ID in the source system')
+            .option('--api-url <url>', 'API base URL override (self-hosted instances)')
+            .option('--dry-run', 'Parse + report without storing')
+            .option('--resume <importId>', 'Resume a previously-started import by id')
+            .option('--json', 'Emit machine-parseable JSON (required for agent shell calls)')
+            .action(async (source: string, opts: {
+              file?: string;
+              content?: string;
+              apiKey?: string;
+              sourceUserId?: string;
+              apiUrl?: string;
+              dryRun?: boolean;
+              resume?: string;
+              json?: boolean;
+            }) => {
+              try {
+                await requireFullSetup(api.logger);
+                const result = await handlePluginImportFrom({
+                  source,
+                  file_path: opts.file,
+                  content: opts.content,
+                  api_key: opts.apiKey,
+                  source_user_id: opts.sourceUserId,
+                  api_url: opts.apiUrl,
+                  dry_run: opts.dryRun,
+                  resume_id: opts.resume,
+                  disclosure_confirmed: true,
+                }, api.logger);
+
+                if (opts.json) {
+                  process.stdout.write(JSON.stringify(result) + '\n');
+                } else {
+                  // Human-readable summary. The handler already returns a
+                  // `message` for chunked (background) imports; for direct
+                  // stores + dry runs, synthesize a short summary.
+                  if (result.dry_run) {
+                    const chunks = result.total_chunks as number | undefined;
+                    if (chunks !== undefined) {
+                      process.stdout.write(
+                        `Dry run: ~${result.estimated_facts} facts from ${chunks} chunks ` +
+                        `(~${result.estimated_minutes} min). Confirm without --dry-run to start.\n`,
+                      );
+                    } else {
+                      process.stdout.write(
+                        `Dry run: found ${result.total_found} facts. Confirm without --dry-run to import.\n`,
+                      );
+                    }
+                  } else if (result.import_id && result.status === 'running') {
+                    process.stdout.write(
+                      `${result.message}\nImport id: ${result.import_id}\n`,
+                    );
+                  } else {
+                    const stored = result.imported as number | undefined;
+                    const total = result.total_found as number | undefined;
+                    process.stdout.write(
+                      `Imported ${stored ?? 0}/${total ?? stored ?? 0} facts from ${source}.\n`,
+                    );
+                  }
+                }
+              } catch (err: unknown) {
+                const message = err instanceof Error ? err.message : String(err);
+                if (opts.json) {
+                  process.stdout.write(JSON.stringify({ success: false, error: message }) + '\n');
+                } else {
+                  process.stderr.write(`import failed: ${message}\n`);
+                }
+                process.exit(1);
+              }
+            });
+
+          importCmd
+            .command('status')
+            .description('Check progress of a background import. Omit --id for the most recent active import.')
+            .option('--id <importId>', 'Import id (from `import from`). Omit for most-recent active.')
+            .option('--json', 'Emit machine-parseable JSON (required for agent shell calls)')
+            .action(async (opts: { id?: string; json?: boolean }) => {
+              try {
+                await requireFullSetup(api.logger);
+                const result = await handleImportStatus({ import_id: opts.id }, api.logger);
+                if (opts.json) {
+                  process.stdout.write(JSON.stringify(result) + '\n');
+                } else {
+                  const status = result.status as string | undefined;
+                  const stored = result.facts_stored as number | undefined;
+                  const batchDone = result.batch_done as number | undefined;
+                  const batchTotal = result.batch_total as number | undefined;
+                  if (status === 'no_active_import') {
+                    process.stdout.write('No active import. Start one with `openclaw totalreclaw import from <source>`.\n');
+                  } else if (status === 'running') {
+                    process.stdout.write(
+                      `Import ${result.import_id}: running — ${stored} facts stored, ` +
+                      `batch ${batchDone}/${batchTotal}` +
+                      (result.completion_iso ? `, ETA ${result.completion_iso}` : '') + '.\n',
+                    );
+                  } else {
+                    process.stdout.write(
+                      `Import ${result.import_id}: ${status} — ${stored ?? 0} facts stored.\n`,
+                    );
+                  }
+                }
+              } catch (err: unknown) {
+                const message = err instanceof Error ? err.message : String(err);
+                if (opts.json) {
+                  process.stdout.write(JSON.stringify({ error: message }) + '\n');
+                } else {
+                  process.stderr.write(`import status failed: ${message}\n`);
+                }
+                process.exit(1);
+              }
+            });
+
+          importCmd
+            .command('abort')
+            .description('Cancel a running background import. Already-stored facts are kept.')
+            .argument('<importId>', 'Import id to abort (from `import from` or `import status`)')
+            .option('--json', 'Emit machine-parseable JSON (required for agent shell calls)')
+            .action(async (importId: string, opts: { json?: boolean }) => {
+              try {
+                await requireFullSetup(api.logger);
+                const result = await handleImportAbort({ import_id: importId }, api.logger);
+                if (opts.json) {
+                  process.stdout.write(JSON.stringify(result) + '\n');
+                } else {
+                  if (result.aborted) {
+                    process.stdout.write(
+                      `Import ${importId}: abort requested. ${result.facts_already_stored ?? 0} facts already stored (kept).\n`,
+                    );
+                  } else {
+                    process.stdout.write(
+                      `Import ${importId}: ${result.error ?? 'abort failed'}\n`,
+                    );
+                  }
+                }
+              } catch (err: unknown) {
+                const message = err instanceof Error ? err.message : String(err);
+                if (opts.json) {
+                  process.stdout.write(JSON.stringify({ error: message }) + '\n');
+                } else {
+                  process.stderr.write(`import abort failed: ${message}\n`);
+                }
+                process.exit(1);
+              }
+            });
+
+          // `openclaw totalreclaw upgrade` — Stripe checkout URL for Pro.
+          // Restores the retired totalreclaw_upgrade agent tool (cd21176).
+          // Self-contained: POST /v1/billing/checkout → checkout_url.
+          tr.command('upgrade')
+            .description('Get a Stripe checkout URL to upgrade to TotalReclaw Pro (unlimited memories on Gnosis mainnet).')
+            .option('--json', 'Emit machine-parseable JSON (required for agent shell calls)')
+            .action(async (opts: { json?: boolean }) => {
+              try {
+                await requireFullSetup(api.logger);
+
+                if (!authKeyHex) {
+                  throw new Error('Auth credentials are not available. Pair first (`openclaw totalreclaw pair`).');
+                }
+                const walletAddr = subgraphOwner || userId || '';
+                if (!walletAddr) {
+                  throw new Error('Wallet address not available. Ensure the plugin is fully initialized.');
+                }
+
+                const response = await fetch(`${CONFIG.serverUrl}/v1/billing/checkout`, {
+                  method: 'POST',
+                  headers: buildRelayHeaders({
+                    'Authorization': `Bearer ${authKeyHex}`,
+                    'Content-Type': 'application/json',
+                  }),
+                  body: JSON.stringify({ wallet_address: walletAddr, tier: 'pro' }),
+                });
+
+                if (!response.ok) {
+                  const body = await response.text().catch(() => '');
+                  throw new Error(`checkout session failed (HTTP ${response.status}): ${body || response.statusText}`);
+                }
+
+                const data = await response.json() as { checkout_url?: string };
+                if (!data.checkout_url) {
+                  throw new Error('no checkout URL returned by the relay');
+                }
+
+                if (opts.json) {
+                  process.stdout.write(JSON.stringify({ checkout_url: data.checkout_url }) + '\n');
+                } else {
+                  process.stdout.write(`Open this URL to upgrade to Pro: ${data.checkout_url}\n`);
+                }
+              } catch (err: unknown) {
+                const message = err instanceof Error ? err.message : String(err);
+                api.logger.error(`openclaw totalreclaw upgrade failed: ${message}`);
+                if (opts.json) {
+                  process.stdout.write(JSON.stringify({ error: message }) + '\n');
+                } else {
+                  process.stderr.write(`upgrade failed: ${humanizeError(message)}\n`);
+                }
+                process.exit(1);
+              }
+            });
         },
         { commands: ['totalreclaw'] },
       );
@@ -4471,7 +4719,7 @@ const plugin = {
             const tier = cache?.tier || 'free';
             const tierInfo = tier === 'pro'
               ? 'You are on the **Pro** tier — unlimited memories, permanently stored on Gnosis mainnet.'
-              : 'You are on the **Free** tier — memories stored on testnet. (The totalreclaw_upgrade agent tool was retired in Phase 3.2; a CLI upgrade surface will ship in a follow-up.)';
+              : 'You are on the **Free** tier — memories stored on testnet. (Upgrade to Pro: run `openclaw totalreclaw upgrade` on the gateway host for a Stripe checkout URL.)';
             welcomeBack = `\n\nTotalReclaw is active. I will automatically remember important things from our conversations and recall relevant context at the start of each session. ${tierInfo}`;
           }
 
