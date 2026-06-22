@@ -34,8 +34,12 @@ pub const ENTRYPOINT_ADDRESS: &str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032
 /// SimpleAccountFactory address (v0.7, same on all EVM chains).
 pub const SIMPLE_ACCOUNT_FACTORY: &str = "0x91E60e0613810449d098b0b5Ec8b51A0FE8c8985";
 
-/// Max batch size (matches extraction cap).
-pub const MAX_BATCH_SIZE: usize = 15;
+/// Max facts per batched UserOp (`executeBatch`). #392 Part 2 raised this from
+/// 15 → 30 so imports emit fewer UserOps (Pimlico bills per-UserOp). This is
+/// the UserOp batch ceiling — independent of the 15-fact-per-extraction cap.
+/// The relay's `MAX_FACT_COUNT` billing clamp and the python/TS client caps
+/// MUST stay in sync with this (else the relay under-counts quota per UserOp).
+pub const MAX_BATCH_SIZE: usize = 30;
 
 // ABI definitions using alloy sol! macro
 sol! {
@@ -387,9 +391,19 @@ mod tests {
 
     #[test]
     fn test_oversized_batch_rejected() {
-        let payloads: Vec<Vec<u8>> = (0..16).map(|i| vec![i as u8]).collect();
+        // One over MAX_BATCH_SIZE must still reject.
+        let payloads: Vec<Vec<u8>> = (0..(MAX_BATCH_SIZE + 1)).map(|i| vec![i as u8]).collect();
         let result = encode_batch_call(&payloads);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_batch_at_max_size_accepted() {
+        // #392 Part 2: the UserOp batch ceiling is 30 so imports cut UserOp
+        // count. 30 payloads must encode; 31 must still reject.
+        let payloads: Vec<Vec<u8>> = (0..30).map(|i| vec![i as u8]).collect();
+        let encoded = encode_batch_call(&payloads).unwrap();
+        assert_eq!(&encoded[..4], &[0x47, 0xe1, 0xda, 0x2a]); // executeBatch selector
     }
 
     // ---- chain/env-aware DataEdge (#366) ----

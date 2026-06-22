@@ -2,12 +2,12 @@
 
 Acceptance criteria (imp-11 decomposition): the helper must:
 
-* On Gnosis (chain 100), buffer facts into groups of ≤15 and submit each
-  group via ``client.remember_batch`` (one UserOp per group).
+* On Gnosis (chain 100), buffer facts into groups of ≤IMPORT_MAX_BATCH_SIZE
+  (30 since #392 Part 2 — was 15) and submit each group via
+  ``client.remember_batch`` (one UserOp per group).
 * On free-tier / non-Gnosis chains, fall back to per-fact
   ``client.remember`` calls (current behaviour).
-* Cover 14-, 15-, and 30-fact cases (exactly the matrix called out by the
-  decomposition's acceptance criteria).
+* Cover 14-, 30-, and 45-fact cases (sub-cap, at-cap, over-cap → split).
 
 Spec: ``docs/specs/imp/281-gnosis-batching-chain-gate.md`` §5.
 """
@@ -128,7 +128,7 @@ def test_gnosis_14_facts_submits_one_batch() -> None:
 
 
 def test_gnosis_15_facts_submits_one_batch() -> None:
-    """15 facts on Gnosis → exactly 1 remember_batch call of 15."""
+    """15 facts (sub-cap under IMPORT_MAX_BATCH_SIZE=30) → 1 batch of 15."""
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
@@ -138,12 +138,12 @@ def test_gnosis_15_facts_submits_one_batch() -> None:
     assert facts_stored == 15
     assert client.remember_batch.await_count == 1
     submitted = client.remember_batch.await_args_list[0].args[0]
-    assert len(submitted) == IMPORT_MAX_BATCH_SIZE == 15
+    assert len(submitted) == 15
     assert client.remember.await_count == 0
 
 
-def test_gnosis_30_facts_submits_two_batches() -> None:
-    """30 facts on Gnosis → 2 remember_batch calls of 15 each."""
+def test_gnosis_30_facts_submits_one_batch() -> None:
+    """30 facts (= IMPORT_MAX_BATCH_SIZE) → 1 remember_batch call of 30."""
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
@@ -151,14 +151,29 @@ def test_gnosis_30_facts_submits_two_batches() -> None:
 
     assert errors == []
     assert facts_stored == 30
-    assert client.remember_batch.await_count == 2
+    assert client.remember_batch.await_count == 1
     sizes = [len(c.args[0]) for c in client.remember_batch.await_args_list]
-    assert sizes == [15, 15]
+    assert sizes == [30]
     assert client.remember.await_count == 0
 
 
-def test_gnosis_uneven_split_last_chunk_short() -> None:
-    """20 facts on Gnosis → 1 batch of 15 followed by 1 batch of 5."""
+def test_gnosis_45_facts_splits_at_cap() -> None:
+    """45 facts (> IMPORT_MAX_BATCH_SIZE=30) → 2 batches of 30 + 15."""
+    client = _make_pro_client()
+    engine = ImportEngine(client=client, llm_extract=None)
+
+    facts_stored, errors = _run(engine._store_facts_chunked(_make_facts(45)))
+
+    assert errors == []
+    assert facts_stored == 45
+    assert client.remember_batch.await_count == 2
+    sizes = [len(c.args[0]) for c in client.remember_batch.await_args_list]
+    assert sizes == [30, 15]
+    assert client.remember.await_count == 0
+
+
+def test_gnosis_uneven_sub_cap_single_batch() -> None:
+    """20 facts (sub-cap under 30) → 1 batch of 20."""
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
@@ -166,8 +181,9 @@ def test_gnosis_uneven_split_last_chunk_short() -> None:
 
     assert errors == []
     assert facts_stored == 20
+    assert client.remember_batch.await_count == 1
     sizes = [len(c.args[0]) for c in client.remember_batch.await_args_list]
-    assert sizes == [15, 5]
+    assert sizes == [20]
 
 
 # ---------------------------------------------------------------------------
@@ -286,10 +302,10 @@ def test_gnosis_batch_non_dedup_error_surfaced() -> None:
     )
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors = _run(engine._store_facts_chunked(_make_facts(30)))
+    facts_stored, errors = _run(engine._store_facts_chunked(_make_facts(45)))
 
     assert facts_stored == 0
-    # Two chunks attempted; two errors collected.
+    # Two chunks attempted (30 + 15); two errors collected.
     assert len(errors) == 2
     assert all("AA25 nonce zombie" in e for e in errors)
 
