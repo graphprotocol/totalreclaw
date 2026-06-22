@@ -79,7 +79,7 @@ def _import_concurrency() -> int:
 # Maximum facts per batched UserOperation. Mirrors userop.MAX_BATCH_SIZE; kept
 # local to avoid importing from userop here (consistent with lifecycle.py's
 # _LIFECYCLE_MAX_BATCH). If the userop constant changes, update both.
-IMPORT_MAX_BATCH_SIZE = 15
+IMPORT_MAX_BATCH_SIZE = 30
 
 # Gnosis mainnet chain ID — the Pro-tier chain where batched UserOps are
 # economically meaningful. Free-tier (Base Sepolia, 84532) falls back to

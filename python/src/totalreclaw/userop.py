@@ -148,10 +148,11 @@ def encode_execute_calldata_for_data_edge(
     return "0x" + calldata_bytes.hex()
 
 
-# Max batch size mirrors the Rust ``MAX_BATCH_SIZE`` constant and the TS
-# ``skill/plugin/store.ts`` batcher. Going higher risks hitting block gas
-# limits on some chains (e.g. Gnosis) and strains the bundler.
-MAX_BATCH_SIZE: int = 15
+# Max batch size mirrors the Rust ``MAX_BATCH_SIZE`` constant (30 since core
+# 2.5.5, #392 Part 2) and the TS ``skill/plugin/store.ts`` batcher. 30/UserOp
+# validated on Gnosis staging (Pimlico bundler accepts). MUST stay in sync with
+# core MAX_BATCH_SIZE + the relay MAX_FACT_COUNT billing clamp.
+MAX_BATCH_SIZE: int = 30
 
 
 def encode_execute_batch_calldata_for_data_edge(
