@@ -180,15 +180,9 @@ import {
   detectPartialInstall,
   clearPartialInstallMarker,
   patchOpenClawConfig,
-  writePluginError,
-  readPluginLoadedManifest,
   checkCredentialsFileMode,
-  deletePairPendingFile,
-  defaultPairPendingPath,
   type OnboardingState,
 } from './fs-helpers.js';
-import { maybeStartAutoPair } from './auto-pair-on-load.js';
-import { installBeforeAgentStartHook as installPairPendingHook } from './pair-pending-injection.js';
 import { isRcBuild } from './qa-bug-report.js';
 import { decideToolGate, isGatedToolName } from './tool-gating.js';
 import {
@@ -866,13 +860,12 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
 
   if (!masterPassword) {
     needsSetup = true;
-    // 3.3.13 — replaced the stale "run `openclaw totalreclaw onboard` in a
-    // terminal to set up" log line. The auto-pair-on-load flow (kicked off
-    // from register()) now writes ~/.totalreclaw/.pair-pending.json with
-    // the URL + PIN the agent surfaces to the user on the next turn. The
-    // chat agent no longer hallucinates pair URLs — see the Pop-OS QA
-    // 2026-05-10 root-cause note in auto-pair-on-load.ts.
-    logger.info('TotalReclaw: no credentials found; auto-pair-on-load will surface a pair URL.');
+    // No credentials yet — pairing is user-initiated via `tr pair` or the
+    // `/plugin/totalreclaw/pair/*` HTTP route (QR scan flow). The plugin
+    // does not auto-open a pair session on load (the 3.3.13 auto-pair-on-
+    // load state machine was retired in Phase 3.4 — pairing is now
+    // explicitly user-triggered per the native-integration design).
+    logger.info('TotalReclaw: no credentials found. Run `tr pair` (or ask the agent to) to complete setup.');
     return;
   }
 
@@ -3517,13 +3510,7 @@ const plugin = {
   },
 
   register(api: OpenClawPluginApi) {
-    // Lazily resolved inside the try below — needed by the error path and
-    // by the `/totalreclaw diag` diagnostic surface (which reads the
-    // `.loaded.json` manifest from a prior boot if present). `dist/` after
-    // build, package root in tests.
-    let _pluginDirForManifest: string | null = null;
-
-    // NOTE: the body of register() below is intentionally NOT re-indented
+    // NOTE: the body of register() below is intentionally NOT re-indent
     // under this `try` block — re-indenting would touch every line in a
     // 3,500-line function and obscure the actual hotfix diff. The closing
     // `} catch (registerErr: unknown) { ... }` is at the very end of
@@ -3555,7 +3542,6 @@ const plugin = {
       // `require('node:url')` — undefined under bare-ESM Node, broke the
       // before_agent_start hook in the published rc.20 bundle (issue #124).
       const pluginDir = nodePath.dirname(fileURLToPath(import.meta.url));
-      _pluginDirForManifest = pluginDir; // captured for #186 .loaded.json/.error.json
       pluginVersion = readPluginVersion(pluginDir);
       rcMode = isRcBuild(pluginVersion);
       if (rcMode) {
@@ -3784,79 +3770,6 @@ const plugin = {
     }
 
     // ---------------------------------------------------------------
-    // 3.3.13 — auto-pair-on-load (Pop-OS hallucination fix)
-    // ---------------------------------------------------------------
-    //
-    // If credentials.json is missing, open a relay pair session NOW and
-    // write URL + PIN + sid to ~/.totalreclaw/.pair-pending.json. The
-    // before_agent_start hook installed below reads that file and tells
-    // the agent the EXACT values to surface — the agent no longer guesses.
-    //
-    // Fire-and-forget so a relay outage never blocks plugin load. The
-    // sentinel write happens BEFORE the hook is registered, but the WS
-    // listener and credentials.json write run in the background after
-    // register() returns.
-    void (async () => {
-      try {
-        const result = await maybeStartAutoPair({
-          credentialsPath: CREDENTIALS_PATH,
-          pendingPath: defaultPairPendingPath(CREDENTIALS_PATH),
-          onboardingStatePath: CONFIG.onboardingStatePath,
-          relayBaseUrl: CONFIG.pairRelayUrl,
-          pluginVersion: pluginVersion ?? '3.3.0',
-          logger: api.logger,
-        });
-        switch (result.status) {
-          case 'creds_exist':
-            // No-op — happy path; user is already set up.
-            break;
-          case 'pending_reused':
-            api.logger.info(
-              'TotalReclaw: setup pending. Reusing existing pair URL at ~/.totalreclaw/.pair-pending.json — agent will surface URL+PIN to user on next turn.',
-            );
-            break;
-          case 'started':
-            api.logger.info(
-              'TotalReclaw: setup pending. Pair URL written to ~/.totalreclaw/.pair-pending.json — agent will surface URL+PIN to user on next turn.',
-            );
-            break;
-          case 'failed':
-            api.logger.warn(
-              `TotalReclaw: setup pending. Auto-pair failed (${result.error}). User must run \`tr pair --url-pin\` manually (or the agent can shell out to it).`,
-            );
-            break;
-        }
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        api.logger.warn(
-          `TotalReclaw: setup pending. Auto-pair failed (${msg}). User must run \`tr pair --url-pin\` manually (or the agent can shell out to it).`,
-        );
-      }
-    })();
-
-    // Install the before_agent_start hook that reads the sentinel and
-    // injects URL + PIN into the agent's context verbatim. Registered
-    // here so it lives alongside the other hook registrations in
-    // register(); the hook body itself never blocks on plugin load.
-    try {
-      installPairPendingHook(api, {
-        credentialsPath: CREDENTIALS_PATH,
-        pendingPath: defaultPairPendingPath(CREDENTIALS_PATH),
-        autoPairDepsFactory: () => ({
-          credentialsPath: CREDENTIALS_PATH,
-          pendingPath: defaultPairPendingPath(CREDENTIALS_PATH),
-          onboardingStatePath: CONFIG.onboardingStatePath,
-          relayBaseUrl: CONFIG.pairRelayUrl,
-          pluginVersion: pluginVersion ?? '3.3.0',
-          logger: api.logger,
-        }),
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      api.logger.warn(`TotalReclaw: failed to register pair-pending-injection hook: ${msg}`);
-    }
-
-    // ---------------------------------------------------------------
     // LLM client initialization (auto-detect provider from OpenClaw config)
     // ---------------------------------------------------------------
     //
@@ -4081,11 +3994,6 @@ const plugin = {
             credentialsCreatedAt: new Date().toISOString(),
             version: pluginVersion ?? '3.3.0',
           });
-          // 3.3.13 — sentinel cleanup. credentials.json is now the source
-          // of truth; the auto-pair-on-load .pair-pending.json sentinel
-          // must be removed so the before_agent_start hook stops surfacing
-          // the URL + PIN on subsequent turns.
-          deletePairPendingFile(defaultPairPendingPath(CREDENTIALS_PATH));
           return { state: 'active' };
         },
       });
@@ -4189,48 +4097,18 @@ const plugin = {
             };
           }
           if (sub === 'diag') {
-            // 3.3.7-rc.1 (issue #216) — diagnostic surface for the
-            // tool-binding-on-restart bug. Reports whether the
-            // plugin's register() ran in this process (boot count +
-            // pid + version + tool count). Non-secret: only public
-            // package metadata. The actual filesystem read lives in
-            // fs-helpers.readPluginLoadedManifest() so this file
-            // stays scanner-clean (whole-file rule disallows fs.read*
-            // co-located with `fetch` / `post` markers).
-            //
-            // Usage: `/totalreclaw diag` from chat OR `cat
-            // <pluginDir>/.loaded.json` from the host shell. Both
-            // surfaces should agree; if chat says boot=N but the
-            // file says boot=N+1, the chat session is stale and a
-            // /totalreclaw-restart is warranted.
-            try {
-              const m = _pluginDirForManifest
-                ? readPluginLoadedManifest(_pluginDirForManifest)
-                : null;
-              if (!m) {
-                return {
-                  text:
-                    'TotalReclaw diag:\n' +
-                    `  pid=${process.pid}\n` +
-                    `  version=${pluginVersion ?? 'unknown'}\n` +
-                    '  loaded-manifest: NOT FOUND (register() may have failed — check .error.json)',
-                };
-              }
-              const stalePid = typeof m.pid === 'number' && m.pid !== process.pid;
-              return {
-                text:
-                  'TotalReclaw diag:\n' +
-                  `  current pid=${process.pid}\n` +
-                  `  manifest pid=${m.pid ?? '?'}${stalePid ? ' (STALE — file from prior boot, register() did NOT run in this process)' : ''}\n` +
-                  `  version=${m.version ?? 'unknown'}\n` +
-                  `  boot count=${m.bootCount ?? '?'}\n` +
-                  `  boot at=${m.bootAt ?? '?'}\n` +
-                  `  tools registered=${m.tools?.length ?? 0}`,
-              };
-            } catch (err: unknown) {
-              const msg = err instanceof Error ? err.message : String(err);
-              return { text: `TotalReclaw diag: error reading manifest (${msg})` };
-            }
+            // Diagnostic surface. The 3.3.7-rc.1 `.loaded.json` manifest
+            // (boot count + pid + tool count) was retired in Phase 3.4 —
+            // the writer was removed in 3.1 and the reader had nothing
+            // current to read. `/totalreclaw diag` now reports pid + the
+            // in-memory plugin version only. For richer boot history,
+            // consult the gateway logs.
+            return {
+              text:
+                'TotalReclaw diag:\n' +
+                `  pid=${process.pid}\n` +
+                `  version=${pluginVersion ?? 'unknown'}\n`,
+            };
           }
           return {
             text:
@@ -5290,30 +5168,17 @@ const plugin = {
 
     } catch (registerErr: unknown) {
       // ---------------------------------------------------------------
-      // 3.3.2-rc.1 (issue #186) — write `.error.json` on register() throw
+      // register() threw — best-effort log then re-throw so the SDK sees
+      // the original failure. (3.3.2-rc.1 used to write a `.error.json`
+      // marker here; that machinery was retired in Phase 3.4 along with
+      // the `.loaded.json` success manifest. The gateway log is now the
+      // source of truth for register() failures.)
       // ---------------------------------------------------------------
-      //
-      // Some surface threw out of register(). Drop a structured error
-      // marker the agent can grep. Best-effort logging then re-throw so
-      // the SDK sees the original failure.
       const errMsg = registerErr instanceof Error ? registerErr.message : String(registerErr);
-      const errStack = registerErr instanceof Error ? registerErr.stack : undefined;
       try {
         api.logger.error(`TotalReclaw: register() threw: ${errMsg}`);
       } catch {
         // Logger may be unavailable (very early failure path).
-      }
-      if (_pluginDirForManifest) {
-        try {
-          writePluginError(_pluginDirForManifest, {
-            loadedAt: Date.now(),
-            error: errMsg,
-            stack: errStack,
-            version: 'unknown',
-          });
-        } catch {
-          // Best-effort.
-        }
       }
       throw registerErr;
     }

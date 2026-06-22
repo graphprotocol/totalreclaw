@@ -187,8 +187,8 @@ export function registerNativeMemory(
   // (the captured-runtime design — see tools.ts header). The conventional
   // tool names survive the tool-policy strip in OC 2026.5.x (issue #223):
   // they are passed via the `names` opts so the SDK's name bookkeeping sees
-  // them even though the tool object's own `name` field is what the
-  // monkey-patched registerTool in index.ts records into .loaded.json.
+  // them even though the tool object's own `name` field is the visible
+  // registration name.
   api.registerTool(() => createMemorySearchTool(runtime), { names: ['memory_search'] });
   api.registerTool(() => createMemoryGetTool(runtime), { names: ['memory_get'] });
 

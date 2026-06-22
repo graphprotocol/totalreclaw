@@ -35,8 +35,6 @@
  * Usage from container: `docker exec tr-openclaw node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js status --json`
  */
 
-import path from 'node:path';
-import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 import { CONFIG, setRecoveryPhraseOverride } from './config.js';
@@ -210,62 +208,27 @@ async function buildContext(): Promise<CliContext> {
 // ---------------------------------------------------------------------------
 
 async function cmdStatus(jsonMode: boolean): Promise<void> {
-  // Probe plugin manifest for version/hybridMode/toolCount.
-  let pluginVersion: string | undefined;
-  let bootCount: number | undefined;
-  let hybridMode = true; // default true in 3.3.9-rc.1 (hybrid-primary)
-  let toolCount: number | undefined;
-  let loadedAgeSec: number | undefined;
-
-  try {
-    const fs = await import('node:fs');
-    const candidatePaths = [
-      path.join(os.homedir(), '.openclaw', 'extensions', 'totalreclaw', '.loaded.json'),
-      path.join(os.homedir(), '.openclaw', 'npm', 'node_modules', '@totalreclaw', 'totalreclaw', 'dist', '.loaded.json'),
-    ];
-    const resolvedPath = candidatePaths.find((p) => fs.existsSync(p));
-    if (resolvedPath) {
-      const raw = fs.readFileSync(resolvedPath, 'utf-8');
-      const manifest = JSON.parse(raw) as {
-        version?: string;
-        bootCount?: number;
-        loadedAt?: number;
-        hybridMode?: boolean;
-        tools?: string[];
-      };
-      pluginVersion = manifest.version ?? PLUGIN_VERSION;
-      bootCount = manifest.bootCount;
-      hybridMode = manifest.hybridMode !== false; // default true
-      toolCount = manifest.tools?.length;
-      const ageMs = Date.now() - (manifest.loadedAt ?? 0);
-      loadedAgeSec = Math.round(ageMs / 1000);
-    }
-  } catch {
-    // Best-effort
-  }
-
-  // Check onboarding state
+  // Phase 3.4 retired the `.loaded.json` manifest — the writer was removed
+  // in 3.1 and the reader had nothing current to read. `tr status` now
+  // reports the static plugin version (from the CLI binary's own
+  // PLUGIN_VERSION constant) plus onboarding state. For per-boot history,
+  // consult the gateway log.
   const creds = loadCredentialsJson(CREDENTIALS_PATH);
   const onboarded = !!creds;
 
   if (jsonMode) {
     // JSON-first output for agent parsing
     const out: Record<string, unknown> = {
-      version: pluginVersion ?? PLUGIN_VERSION,
+      version: PLUGIN_VERSION,
       onboarded,
       next_step: onboarded ? 'none' : 'pair',
-      tool_count: toolCount ?? 17,
-      hybrid_mode: hybridMode,
     };
-    if (bootCount !== undefined) out.boot_count = bootCount;
-    if (loadedAgeSec !== undefined) out.loaded_age_sec = loadedAgeSec;
     log(JSON.stringify(out));
   } else {
     // Human-readable plain text for direct user CLI use
     printStatus(CREDENTIALS_PATH, STATE_PATH, process.stdout);
     process.stdout.write(
-      `\n  plugin:      ${pluginVersion ? `loaded (version=${pluginVersion}` + (bootCount !== undefined ? ` bootCount=${bootCount}` : '') + (loadedAgeSec !== undefined ? ` loaded=${loadedAgeSec}s ago` : '') + ')' : 'not found in .loaded.json'}\n` +
-      `  hybrid-mode: ${hybridMode ? 'yes (primary — use tr <cmd> --json)' : 'no'}\n` +
+      `\n  plugin:      loaded (version=${PLUGIN_VERSION})\n` +
       `  hooks:       before_agent_start, agent_end, message_received, before_reset\n`,
     );
   }

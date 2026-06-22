@@ -46,8 +46,6 @@ import { generateMnemonic, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
 import {
-  defaultPairPendingPath,
-  deletePairPendingFile,
   writeCredentialsJson,
   loadCredentialsJson,
   type CredentialsFile,
@@ -365,11 +363,6 @@ function writeCredsAndState(
       `Could not write state.json at ${statePath}. Check that the parent directory is writable.`,
     );
   }
-  // 3.3.13 — sentinel cleanup. The CLI wizard finalizes setup independently
-  // of the relay flow, but the user may have triggered auto-pair-on-load
-  // earlier in the same dir; the .pair-pending.json sentinel must not
-  // outlive credentials.json or the agent will keep surfacing a stale URL.
-  deletePairPendingFile(defaultPairPendingPath(credentialsPath));
   return state;
 }
 
