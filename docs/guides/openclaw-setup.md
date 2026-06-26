@@ -4,6 +4,23 @@
 
 TotalReclaw gives your OpenClaw agent encrypted, persistent memory. The fastest path is a single chat message — your agent fetches this guide, you and your agent install the plugin together, and the agent walks you through setting up your TotalReclaw account.
 
+## Versions
+
+The npm registry is the live source of truth — check what's currently published anytime:
+
+```bash
+npm view @totalreclaw/totalreclaw dist-tags
+# → { "latest": "<current stable>", "rc": "<newest release candidate>" }
+```
+
+| Channel | Dist-tag | Install command |
+|---|---|---|
+| Stable (default — real users) | `latest` | `openclaw plugins install @totalreclaw/totalreclaw` |
+| Newest release candidate (QA / beta) | `rc` | `openclaw plugins install @totalreclaw/totalreclaw@rc` |
+| A specific version | — | `openclaw plugins install @totalreclaw/totalreclaw@<version>` |
+
+Bare and `@rc` always resolve to the newest cut on their channel — no need to pin unless you want a specific version. (The Hermes guide's equivalent live source is `pip index versions totalreclaw`.)
+
 ## Install prompts
 
 The user pastes one of these three prompts. The shape is fixed; the agent extracts intent from the shape, not from arbitrary phrasing. (Mirrors `hermes-setup.md`'s prompt section.)
