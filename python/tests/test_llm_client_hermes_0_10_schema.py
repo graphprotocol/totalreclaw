@@ -27,6 +27,7 @@ import pytest
 from totalreclaw.agent.llm_client import (
     LLMConfig,
     ZAI_CODING_BASE_URL,
+    _extract_provider_and_model,
     _pick_credential_from_pool,
     _read_hermes_auth_json,
     _resolve_hermes_model_from_runtime_env,
@@ -423,3 +424,73 @@ class TestValidateLlmConfigAtLoad:
             "model env var" in reason.lower()
             or "config files exist" in reason.lower()
         )
+
+
+# ---------------------------------------------------------------------------
+# internal#395 — Hermes 0.10.0+ inline nested-dict shape (model.default)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractProviderAndModelDefaultKey:
+    """internal#395: ``model: { default: <name>, provider: <p> }``.
+
+    Distinct from internal#97 (blank config.yaml + runtime env). Here the
+    config.yaml carries the active model+provider inline, but under the
+    ``model.default`` key Hermes 0.10.0+ uses — which the nested fallback
+    only read from ``model.model``. Pre-patch this returned ``('', '')``.
+    """
+
+    def test_issue_395_default_key_nested(self):
+        cfg = {"model": {"default": "glm-5-turbo", "provider": "zai",
+                         "base_url": "https://api.z.ai/api/coding/paas/v4"}}
+        assert _extract_provider_and_model(cfg) == ("zai", "glm-5-turbo")
+
+    def test_issue_395_model_key_still_preferred_over_default(self):
+        # Back-compat: when both are present, the explicit ``model`` wins.
+        cfg = {"model": {"model": "glm-4.5", "default": "glm-5-turbo",
+                         "provider": "zai"}}
+        assert _extract_provider_and_model(cfg) == ("zai", "glm-4.5")
+
+    def test_issue_395_top_level_still_wins(self):
+        # Top-level flat shape is unaffected.
+        cfg = {"provider": "zai", "model": "glm-5-turbo"}
+        assert _extract_provider_and_model(cfg) == ("zai", "glm-5-turbo")
+
+    def test_issue_395_default_without_provider_returns_empty(self):
+        # No provider anywhere → still ('', '').
+        cfg = {"model": {"default": "glm-5-turbo"}}
+        assert _extract_provider_and_model(cfg) == ("", "")
+
+    def test_issue_395_non_string_default_ignored(self):
+        cfg = {"model": {"default": {"nested": "x"}, "provider": "zai"}}
+        assert _extract_provider_and_model(cfg) == ("", "")
+
+
+class TestReadHermesLlmConfig395:
+    """End-to-end: inline ``model.default`` config.yaml resolves a full
+    LLMConfig (not None), given an adjacent ``.env`` with the API key."""
+
+    def test_issue_395_inline_default_shape_resolves(self, tmp_path, monkeypatch):
+        hermes = tmp_path / ".hermes"
+        hermes.mkdir()
+        (hermes / "config.yaml").write_text(
+            textwrap.dedent("""\
+                model:
+                  default: glm-5-turbo
+                  provider: zai
+                  base_url: https://api.z.ai/api/coding/paas/v4
+            """)
+        )
+        (hermes / ".env").write_text("ZAI_API_KEY=sk-fake-zai\n")
+        monkeypatch.setenv("HERMES_CONFIG", str(hermes / "config.yaml"))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        for v in ("ZAI_API_KEY", "ZAI_BASE_URL", "HERMES_MODEL", "ZAI_MODEL",
+                  "OPENAI_MODEL", "LLM_MODEL", "XDG_CONFIG_HOME"):
+            monkeypatch.delenv(v, raising=False)
+
+        config = read_hermes_llm_config()
+        assert config is not None, "regression: None on Hermes 0.10.0+ model.default shape"
+        assert isinstance(config, LLMConfig)
+        assert config.model == "glm-5-turbo"
+        assert config.api_key == "sk-fake-zai"
+        assert config.api_format == "openai"

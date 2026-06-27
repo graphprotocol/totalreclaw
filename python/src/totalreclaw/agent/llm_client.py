@@ -600,9 +600,16 @@ def _extract_provider_and_model(cfg: dict) -> tuple[str, str]:
 
     # Fall back to nested ``model: { provider, model }`` (defensive —
     # future-proofs against Hermes reorganizing its schema).
+    #
+    # Hermes 0.10.0+ writes the active model name under ``model.default``
+    # (``model: { default: glm-5-turbo, provider: zai }``) rather than
+    # ``model.model`` — see internal#395. Read ``model`` first for
+    # back-compat, then fall back to ``default``.
     model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
     provider_nested = model_cfg.get("provider", "") if isinstance(model_cfg.get("provider"), str) else ""
     model_nested = model_cfg.get("model", "") if isinstance(model_cfg.get("model"), str) else ""
+    if not model_nested:
+        model_nested = model_cfg.get("default", "") if isinstance(model_cfg.get("default"), str) else ""
     if provider_nested and model_nested:
         return provider_nested, model_nested
 
