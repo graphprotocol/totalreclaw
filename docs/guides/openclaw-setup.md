@@ -105,7 +105,7 @@ These freelancing patterns have broken pair flows. They are FORBIDDEN regardless
 
 2. **Do NOT write to `~/.openclaw/openclaw.json`** after the install. The plugin's `register()` already wrote the keys OpenClaw 2026.5.x looks for (`plugins.slots.memory`, `plugins.entries.totalreclaw.hooks.allowConversationAccess`, `channels.telegram.streaming.mode`, `plugins.bundledDiscovery`, `plugins.allow`, `plugins.installs.totalreclaw`) and auto-fired SIGUSR1 to its own PID. Any further config write triggers a fresh deferred reload that can kill an in-flight pair subprocess. Forbidden tool calls: `openclaw config set …`, any redirect / sed / jq into `openclaw.json`.
 
-3. **Do NOT re-render the QR.** `tr pair --json` returns `qr_ascii` (Unicode) AND the pair page renders a real PNG. Saving the QR to `/tmp/totalreclaw-pair-qr.png` triggers OpenClaw's media-access policy block and Telegram delivery fails with `LocalMediaAccessError`. Just emit the URL + PIN as user-visible line 4 — that is your only QR responsibility.
+3. **Do NOT re-render the QR.** `tr pair --json` returns `qr_ascii` (Unicode) AND the pair page renders a real PNG. Saving the QR to `/tmp/totalreclaw-pair-qr.png` triggers OpenClaw's media-access policy block and Telegram delivery fails with `LocalMediaAccessError`. Just emit the URL + PIN as user-visible line 4 as **plain text on its own line** (the `#pk=` URL fragment breaks if wrapped in markdown/backticks) — that is your only QR responsibility.
 
 4. **Do NOT invoke `tr pair --json` in the foreground.** A foreground pair subprocess is killed when your shell-tool exec returns. The pair WS dies → relay returns 502. Step 4 below uses `setsid -f` for exactly this reason — copy that block VERBATIM. Do not "simplify". Do not drop the `setsid -f`. Do not omit `< /dev/null`.
 
@@ -151,7 +151,7 @@ openclaw skills install totalreclaw
 
 Notes:
 - For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.14`.
-- If install reports `already exists` or non-zero on a re-run (the plugin is already on disk from a previous attempt), add `--force`: `openclaw plugins install @totalreclaw/totalreclaw@rc --force` and `openclaw skills install totalreclaw --force`.
+- **Always run the install — never skip it because a totalreclaw "appears present".** A leftover install from a prior version (e.g. a stale `@totalreclaw/mcp-server`) is NOT the `@totalreclaw/totalreclaw` plugin and must be replaced. If install reports `already exists`, OR you detect an old/different totalreclaw package on disk, force-replace it: `openclaw plugins install @totalreclaw/totalreclaw@rc --force` + `openclaw skills install totalreclaw --force`. Then verify the version in Step 2 — it must match the requested RC.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
 ### Step 2 — Verify the `tr` CLI works — emit user-visible line 2 on success
@@ -184,6 +184,8 @@ cat "$PAIR_OUT"
 ```
 
 Parse the JSON `{"v":1,"sid":"...","url":"...","pin":"...","mode":"...","expires_at_ms":...,"qr_ascii":"..."}`. Emit user-visible line 4 (`Open <url> in your browser. Enter PIN <pin>. Generate or paste a 12-word recovery phrase. Reply done once it's sealed.`) with `<url>` and `<pin>` substituted VERBATIM from the JSON — never invent or modify values. Do not pre-narrate — line 4 itself is the only thing the user needs to see.
+
+**Emit the URL as PLAIN TEXT on its OWN LINE — no markdown, no backticks, no `[text](url)` wrapping, no line-splitting.** The URL contains a `#pk=` fragment that breaks (unclickable link / unscannable QR) if wrapped in markdown or split across lines. Plain text only.
 
 If the cat output is empty after 2s, sleep 2 more seconds and try again (relay handshake can take up to 4s on a cold network). There is no fallback tool — `tr pair --json` is the sole agent-facilitated pair path under the native flow (the legacy `totalreclaw_pair` plugin tool is retired).
 
