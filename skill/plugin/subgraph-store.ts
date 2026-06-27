@@ -244,17 +244,26 @@ export function __resetSenderLocksForTests(): void {
 /**
  * Check if a Smart Account is deployed and return factory/factoryData if not.
  *
- * For ERC-4337 v0.7, undeployed accounts need `factory` and `factoryData`
- * in the UserOp so the EntryPoint can deploy them during the first transaction.
+ * For ERC-4337 v0.7, undeployed (counterfactual) accounts need `factory`
+ * and `factoryData` in the UserOp so the EntryPoint deploys the SA + runs
+ * signature validation in one transaction. Omitting them for a fresh pair
+ * (new mnemonic → not-yet-deployed SA) is the AA24 ship-stopper: the
+ * EntryPoint cannot validate → "signature error" on every submission →
+ * 0 facts stored.
+ *
+ * Returns the deployment decision alongside the fields so callers can
+ * ASSERT the initCode survived sponsorship before signing — the sponsor
+ * response must not be allowed to silently strip `factory`/`factoryData`
+ * from a counterfactual UserOp (that would reintroduce AA24).
  */
 async function getInitCode(
   sender: string,
   eoaAddress: string,
   rpcUrl: string,
-): Promise<{ factory: string | null; factoryData: string | null }> {
+): Promise<{ factory: string | null; factoryData: string | null; undeployed: boolean }> {
   // Session cache: if we already deployed this account, skip the RPC check
   if (deployedAccounts.has(sender.toLowerCase())) {
-    return { factory: null, factoryData: null };
+    return { factory: null, factoryData: null, undeployed: false };
   }
 
   // Check if the Smart Account contract is deployed
@@ -269,7 +278,7 @@ async function getInitCode(
 
   if (isDeployed) {
     deployedAccounts.add(sender.toLowerCase());
-    return { factory: null, factoryData: null };
+    return { factory: null, factoryData: null, undeployed: false };
   }
 
   // Account not deployed — build factory + factoryData for first-time deployment.
@@ -281,7 +290,34 @@ async function getInitCode(
   const selector = '5fbfb9cf';
   const factoryData = `0x${selector}${ownerPadded}${saltPadded}`;
 
-  return { factory, factoryData };
+  return { factory, factoryData, undeployed: true };
+}
+
+/**
+ * Re-assert initCode is on the UserOp after sponsorship for a counterfactual
+ * account, re-adding it if the sponsor response dropped it.
+ *
+ * Why this guard exists: ERC-4337 v0.7 `pm_sponsorUserOperation` is
+ * documented (Pimlico) to return ONLY gas-limit + paymaster fields — it
+ * does NOT echo `factory`/`factoryData` back. The plugin therefore MUST
+ * preserve the initCode it set before sponsorship. Earlier AA24 root
+ * causes traced to exactly this class of bug (the fields being absent
+ * from the bytes that get hashed + signed). Rather than trust the
+ * `Object.assign(unsignedOp, sponsorResult)` to never clobber them, we
+ * explicitly restore the initCode for any UserOp we determined needed it.
+ * A correct sponsor response leaves the UserOp unchanged; a bad one
+ * (relay proxy echoing `factory: null`, etc.) gets corrected here.
+ */
+function restoreInitCodeIfClobbered(
+  op: Record<string, any>,
+  initCode: { factory: string; factoryData: string },
+): void {
+  const factoryOk = typeof op.factory === 'string' &&
+    op.factory.toLowerCase() === initCode.factory.toLowerCase();
+  const factoryDataOk = typeof op.factoryData === 'string' &&
+    op.factoryData.toLowerCase() === initCode.factoryData.toLowerCase();
+  if (!factoryOk) op.factory = initCode.factory;
+  if (!factoryDataOk) op.factoryData = initCode.factoryData;
 }
 
 // ---------------------------------------------------------------------------
@@ -353,8 +389,12 @@ async function submitFactOnChainLocked(
 
   const rpcUrl = config.rpcUrl || CONFIG.rpcUrl || getDefaultRpcUrl(config.chainId);
 
-  // 4. Check if Smart Account is deployed (needed for factory/factoryData)
-  const { factory, factoryData } = await getInitCode(sender, eoa.address, rpcUrl);
+  // 4. Check if Smart Account is deployed (needed for factory/factoryData).
+  //    For a counterfactual SA (fresh pair, not yet on-chain) this returns
+  //    the initCode fields + undeployed=true — they MUST end up on the
+  //    signed UserOp or the EntryPoint rejects with AA24.
+  const initCode = await getInitCode(sender, eoa.address, rpcUrl);
+  const { factory, factoryData, undeployed } = initCode;
 
   // 5. Get nonce from EntryPoint via bundler RPC.
   //    Routing through the bundler lets Pimlico account for pending mempool
@@ -398,11 +438,23 @@ async function submitFactOnChainLocked(
     unsignedOp.factoryData = factoryData;
   }
 
-  // 7. Get paymaster sponsorship (fills gas limits + paymaster fields)
+  // 7. Get paymaster sponsorship (fills gas limits + paymaster fields).
+  //    Sponsor FIRST so the owner signature below covers the paymaster
+  //    fields — signing before sponsorship hashes different bytes and
+  //    produces a signature the EntryPoint rejects as AA24.
   const sponsorResult = await rpc('pm_sponsorUserOperation', [unsignedOp, entryPoint]);
   Object.assign(unsignedOp, sponsorResult);
+  // Sponsor must not strip initCode for a counterfactual account. The
+  // documented Pimlico v0.7 response never echoes factory/factoryData,
+  // but guard anyway so a relay proxy or paymaster change can never
+  // silently reintroduce AA24 by clobbering them.
+  if (undeployed && factory && factoryData) {
+    restoreInitCodeIfClobbered(unsignedOp, { factory, factoryData });
+  }
 
-  // 8. Hash and sign the UserOp via WASM
+  // 8. Hash and sign the UserOp via WASM. Hashing the FINAL object means
+  //    the signature covers initCode (factory + factoryData) AND the
+  //    paymaster fields — the exact bytes the EntryPoint will validate.
   const opJson = JSON.stringify(unsignedOp);
   const hashHex = getWasm().hashUserOp(opJson, entryPoint, BigInt(config.chainId));
   const sigHex = signUserOp(hashHex, eoa.private_key);
@@ -424,7 +476,8 @@ async function submitFactOnChainLocked(
       await new Promise(r => setTimeout(r, 15000));
 
       // Re-fetch initCode and nonce
-      const { factory: retryFactory, factoryData: retryFactoryData } = await getInitCode(sender, eoa.address, rpcUrl);
+      const retryInitCode = await getInitCode(sender, eoa.address, rpcUrl);
+      const { factory: retryFactory, factoryData: retryFactoryData, undeployed: retryUndeployed } = retryInitCode;
       let retryNonce: string;
       try {
         const retryNonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
@@ -459,6 +512,9 @@ async function submitFactOnChainLocked(
       // Re-sponsor and re-sign
       const retrySponsor = await rpc('pm_sponsorUserOperation', [retryOp, entryPoint]);
       Object.assign(retryOp, retrySponsor);
+      if (retryUndeployed && retryFactory && retryFactoryData) {
+        restoreInitCodeIfClobbered(retryOp, { factory: retryFactory, factoryData: retryFactoryData });
+      }
       const retryOpJson = JSON.stringify(retryOp);
       const retryHashHex = getWasm().hashUserOp(retryOpJson, entryPoint, BigInt(config.chainId));
       const retrySigHex = signUserOp(retryHashHex, eoa.private_key);
@@ -565,8 +621,11 @@ async function submitFactBatchOnChainLocked(
 
   const rpcUrl = config.rpcUrl || CONFIG.rpcUrl || getDefaultRpcUrl(config.chainId);
 
-  // Check if Smart Account is deployed (needed for factory/factoryData)
-  const { factory, factoryData } = await getInitCode(sender, eoa.address, rpcUrl);
+  // Check if Smart Account is deployed (needed for factory/factoryData).
+  // Counterfactual SA (fresh pair) → initCode MUST be on the signed UserOp
+  // or the EntryPoint rejects with AA24.
+  const initCode = await getInitCode(sender, eoa.address, rpcUrl);
+  const { factory, factoryData, undeployed } = initCode;
 
   // Get nonce via bundler (accounts for pending mempool UserOps) with public RPC fallback
   const senderPadded = sender.slice(2).toLowerCase().padStart(64, '0');
@@ -618,9 +677,16 @@ async function submitFactBatchOnChainLocked(
     }
   }
 
-  // Paymaster sponsorship (uses gas limits from estimation above for batches)
+  // Paymaster sponsorship (uses gas limits from estimation above for batches).
+  // Sponsor FIRST so the owner signature below covers the paymaster fields;
+  // signing before sponsorship would hash different bytes → AA24.
   const sponsorResult = await rpc('pm_sponsorUserOperation', [unsignedOp, entryPoint]);
   Object.assign(unsignedOp, sponsorResult);
+  // Guard against the sponsor response clobbering initCode for a
+  // counterfactual account (would reintroduce AA24).
+  if (undeployed && factory && factoryData) {
+    restoreInitCodeIfClobbered(unsignedOp, { factory, factoryData });
+  }
 
   // Hash and sign via WASM
   const opJson = JSON.stringify(unsignedOp);
@@ -644,7 +710,8 @@ async function submitFactBatchOnChainLocked(
       await new Promise(r => setTimeout(r, 15000));
 
       // Re-fetch initCode and nonce
-      const { factory: retryFactory, factoryData: retryFactoryData } = await getInitCode(sender, eoa.address, rpcUrl);
+      const retryInitCode = await getInitCode(sender, eoa.address, rpcUrl);
+      const { factory: retryFactory, factoryData: retryFactoryData, undeployed: retryUndeployed } = retryInitCode;
       let retryNonce: string;
       try {
         const retryNonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
@@ -679,6 +746,9 @@ async function submitFactBatchOnChainLocked(
       // Re-sponsor and re-sign
       const retrySponsor = await rpc('pm_sponsorUserOperation', [retryOp, entryPoint]);
       Object.assign(retryOp, retrySponsor);
+      if (retryUndeployed && retryFactory && retryFactoryData) {
+        restoreInitCodeIfClobbered(retryOp, { factory: retryFactory, factoryData: retryFactoryData });
+      }
       const retryOpJson = JSON.stringify(retryOp);
       const retryHashHex = getWasm().hashUserOp(retryOpJson, entryPoint, BigInt(config.chainId));
       const retrySigHex = signUserOp(retryHashHex, eoa.private_key);
