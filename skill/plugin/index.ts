@@ -4192,6 +4192,17 @@ const plugin = {
         sessionsPath: CONFIG.pairSessionsPath,
         apiBase: '/plugin/totalreclaw/pair',
         logger: api.logger,
+        // 3.3.14 — wire the relay URL so buildPairRoutes exposes the
+        // in-process `/pair/init` route. The gateway process opens the
+        // relay WebSocket directly (via openRemotePairSession from
+        // pair-remote-client.ts), eliminating the 30s-subprocess-kill
+        // 502 that the CLI path (tr pair) hit when OpenClaw's shell
+        // tool killed the subprocess mid-pair. relayBaseUrl is sourced
+        // from CONFIG.pairRelayUrl (config.ts reads it from the env
+        // once, centrally) — never read from the environment inside
+        // pair-http.ts (scanner-surface rule).
+        relayBaseUrl: CONFIG.pairRelayUrl,
+        initPairMode: 'either',
         validateMnemonic: (p) => validateMnemonic(p, wordlist),
         completePairing: async ({ mnemonic }) => {
           // Write credentials.json + flip state to 'active' via
@@ -4252,7 +4263,19 @@ const plugin = {
       api.registerHttpRoute!({ path: bundle.startPath, handler: bundle.handlers.start, auth: 'plugin' });
       api.registerHttpRoute!({ path: bundle.respondPath, handler: bundle.handlers.respond, auth: 'plugin' });
       api.registerHttpRoute!({ path: bundle.statusPath, handler: bundle.handlers.status, auth: 'plugin' });
-      api.logger.info('TotalReclaw: registered 4 QR-pairing HTTP routes synchronously');
+      // 3.3.14 — in-process pair trigger. The bundle exposes initPath +
+      // handlers.init ONLY when relayBaseUrl is wired (always true here,
+      // since CONFIG.pairRelayUrl has a built-in default). Registered
+      // with auth: 'plugin' (same as the other pair routes) so the
+      // agent's localhost curl reaches it without a gateway bearer
+      // token. The route opens the relay WS in the gateway process →
+      // survives shell-tool timeouts, retries, SIGUSR1 reloads.
+      if (bundle.initPath && bundle.handlers.init) {
+        api.registerHttpRoute!({ path: bundle.initPath, handler: bundle.handlers.init, auth: 'plugin' });
+        api.logger.info('TotalReclaw: registered 5 QR-pairing HTTP routes synchronously (incl. in-process /pair/init)');
+      } else {
+        api.logger.info('TotalReclaw: registered 4 QR-pairing HTTP routes synchronously (in-process /pair/init not wired — no relay URL)');
+      }
     } else {
       api.logger.warn(
         'api.registerHttpRoute is unavailable on this OpenClaw version — /totalreclaw pair will not work. ' +

@@ -510,15 +510,17 @@ Speak only these lines, in order. Substitute the bracketed placeholders. The use
 
 1. **Check for existing credentials (silent unless found).** Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, emit user-visible line 1 and stop.
 
-2. **Set up the user's TotalReclaw account IMMEDIATELY — no consent gate.** Run:
+2. **Set up the user's TotalReclaw account IMMEDIATELY — no consent gate.** The PRIMARY pair path is the plugin's in-process HTTP route (3.3.14+) — it opens the relay pair WebSocket directly in the gateway process, so it is immune to the 30s shell-tool subprocess timeout that killed the CLI's pair WS mid-pair (relay 502). Run:
    ```
-   node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js pair --json
+   curl -s http://localhost:18789/plugin/totalreclaw/pair/init
    ```
-   Parse the JSON response `{"url": "...", "pin": "...", "expires_at": "..."}`. Emit user-visible line 2 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…") — line 2 itself is the only thing the user needs to see. If `tr pair --json` is unavailable, fall back to the `totalreclaw_pair` tool or `openclaw totalreclaw pair generate --url-pin-only`.
+   Parse the JSON response `{"v":1,"sid":"...","url":"...","pin":"...","mode":"...","expires_at_ms":...}`. The `url` + `pin` are the values you surface to the user. The route returns immediately (the gateway holds the WebSocket open in-process and completes pairing in the background once the browser uploads the encrypted phrase). Emit user-visible line 2 with `<url>` and `<pin>` substituted. Do not pre-narrate ("I'll walk you through…", "Setting up your account now…") — line 2 itself is the only thing the user needs to see.
+
+   FALLBACK (only if the HTTP route is unreachable — older plugin, or the gateway HTTP server isn't bound): run `tr pair --json` via `node ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js pair --json`. The CLI path opens the same relay WS but from a subprocess, so it MUST be detached with `setsid -f` (see the openclaw-setup guide) to survive the post-install SIGUSR1 reload. The HTTP route is preferred because it needs no detachment and survives shell-tool timeouts, retries, and reloads automatically. If `tr pair --json` is also unavailable, fall back to `openclaw totalreclaw pair generate --url-pin-only`.
 
    Render the QR if your transport supports image attachments (if the pair payload includes `qr_png_b64`, decode to bytes and attach), or emit `qr_unicode` inline for terminal-only transports. The QR encodes only the URL — the PIN is a separate dual-channel confirmation, never bake it into the QR.
 
-3. **Verify and confirm (silent until line 3).** After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — re-run `tr pair --json` and resend line 2 once. If present, emit user-visible line 3 and stop.
+3. **Verify and confirm (silent until line 3).** After the user says `done`, re-run `test -s ~/.totalreclaw/credentials.json`. If missing, the PIN expired — re-run the pair path (HTTP `/pair/init` route, or `tr pair --json` fallback) and resend line 2 once. If present, emit user-visible line 3 and stop.
 
 **Never** call `totalreclaw_setup` or any phrase-touching CLI from your shell — those leak the phrase into LLM context.
 
