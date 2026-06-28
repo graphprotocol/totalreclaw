@@ -325,6 +325,28 @@ class RelayClient:
         # ``session_id`` is optional — the relay does not send it.
         return CheckoutResponse(checkout_url=checkout_url, session_id=data.get("session_id"))
 
+    async def create_topup(self, pack: str) -> CheckoutResponse:
+        """Create a one-time top-up Checkout session (#392).
+
+        ``pack`` is the facts count (``"1000"`` | ``"5000"`` | ``"10000"``).
+        Mirrors :meth:`create_checkout` but hits ``/v1/billing/topup``
+        (mode='payment'); the relay credits ``topup_writes_purchased`` via the
+        Stripe webhook on completion.
+        """
+        http = await self._get_http()
+        resp = await http.post(
+            f"{self._relay_url}/v1/billing/topup",
+            headers=self._base_headers(),
+            json={"wallet_address": self._wallet_address, "pack": pack},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        checkout_url = data.get("checkout_url")
+        if not checkout_url:
+            detail = data.get("error_message") or data.get("error_code") or "relay returned no checkout_url"
+            raise RuntimeError(f"relay top-up failed: {detail}")
+        return CheckoutResponse(checkout_url=checkout_url, session_id=data.get("session_id"))
+
     async def close(self):
         """Close any cached httpx clients across all loops we've touched.
 

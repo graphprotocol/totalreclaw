@@ -64,6 +64,7 @@ _INTERNAL_TOOL_NAMES = (
     "totalreclaw_set_scope",
     "totalreclaw_retype",
     "totalreclaw_upgrade",
+    "totalreclaw_top_up",
     "totalreclaw_export",
     "totalreclaw_report_qa_bug",
 )
@@ -579,6 +580,41 @@ async def upgrade(args: dict, state: "PluginState", **kwargs) -> str:
     except Exception as e:
         logger.error("totalreclaw_upgrade failed: %s", e)
         return json.dumps({"error": f"Failed to create checkout session: {e}"})
+
+
+async def top_up(args: dict, state: "PluginState", **kwargs) -> str:
+    """Buy a one-time pack of extra memories (#392).
+
+    For when the monthly quota + grace are exhausted (e.g. mid-import) and the
+    user wants more memories now rather than waiting for the reset. ``pack`` is
+    the facts count: ``"1000"``, ``"5000"``, or ``"10000"``. Returns the
+    checkout URL the agent should read back verbatim.
+    """
+    client = state.get_client()
+    if not client:
+        return json.dumps(
+            {"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."}
+        )
+    pack = str(args.get("pack") or "").strip()
+    if pack not in ("1000", "5000", "10000"):
+        return json.dumps({"error": "Invalid or missing 'pack'. Choose 1000, 5000, or 10000 (memories)."})
+
+    try:
+        ensure_addr = getattr(client, "_ensure_address", None)
+        if callable(ensure_addr):
+            try:
+                await ensure_addr()
+            except Exception:
+                pass
+        checkout = await client._relay.create_topup(pack)
+        return json.dumps({
+            "checkout_url": checkout.checkout_url,
+            "pack": pack,
+            "message": f"Open this URL in your browser to buy +{pack} memories: {checkout.checkout_url}",
+        })
+    except Exception as e:
+        logger.error("totalreclaw_top_up failed: %s", e)
+        return json.dumps({"error": f"Failed to create top-up checkout session: {e}"})
 
 
 # ── Debrief (explicit invocation) ────────────────────────────────────────────

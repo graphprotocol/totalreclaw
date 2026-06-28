@@ -95,6 +95,7 @@ _TOOL_HANDLERS = (
     ("totalreclaw_import_status", "tools", "import_status"),
     ("totalreclaw_import_abort", "tools", "import_abort"),
     ("totalreclaw_upgrade", "tools", "upgrade"),
+    ("totalreclaw_top_up", "tools", "top_up"),
     ("totalreclaw_debrief", "tools", "debrief"),
 )
 
@@ -196,6 +197,7 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
             schemas.IMPORT_STATUS,
             schemas.IMPORT_ABORT,
             schemas.UPGRADE,
+            schemas.TOPUP,
             schemas.DEBRIEF,
         ]
 

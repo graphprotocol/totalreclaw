@@ -348,6 +348,35 @@ UPGRADE = {
     },
 }
 
+TOPUP = {
+    "name": "totalreclaw_top_up",
+    "description": (
+        "Buy a one-time pack of extra memories when the monthly quota + grace "
+        "are exhausted — e.g. to finish a large import. Creates a Stripe "
+        "Checkout session (one-time payment) and returns the URL the user "
+        "opens to pay. The purchased memories persist across monthly resets "
+        "until used.\n\n"
+        "INVOKE WHEN USER SAYS:\n"
+        "- 'I need more memories' / 'I hit my limit mid-import' / 'buy more'\n"
+        "- a write/import returned a quota-exceeded error and the user wants "
+        "to continue now rather than wait for the monthly reset\n\n"
+        "After calling, read the returned ``message`` aloud — it has the "
+        "checkout URL. Only call when the user has explicitly asked to buy "
+        "more memories."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "pack": {
+                "type": "string",
+                "enum": ["1000", "5000", "10000"],
+                "description": "Number of memories to buy: 1000, 5000, or 10000.",
+            },
+        },
+        "required": ["pack"],
+    },
+}
+
 DEBRIEF = {
     "name": "totalreclaw_debrief",
     "description": (
