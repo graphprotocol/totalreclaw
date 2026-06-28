@@ -96,19 +96,56 @@ function buildSyntheticBundle(): {
   tarGz: Buffer;
   manifest: BundleManifest;
 } {
+  // Synthetic @huggingface/transformers that mirrors the REAL v4 shape:
+  //   - `"type": "module"` (ESM-first package).
+  //   - `exports` with separate `import` (ESM `.mjs`) and `require` (CJS
+  //     `.cjs`) conditions.
+  //   - Named exports `AutoTokenizer`, `AutoModel`, `pipeline`.
+  //
+  // The CJS entry deliberately re-exports only a SUBSET of the ESM named
+  // exports — mirroring the Node 24 interop regression where
+  // `require('@huggingface/transformers').AutoModel` is `undefined` even
+  // though the ESM `import()` path resolves it. The pre-fix loader used
+  // `cacheRequire` and so the destructured `AutoModel` was `undefined`
+  // at runtime. The post-fix loader uses `cacheImport` (ESM dynamic
+  // import of the resolved file URL) and `AutoModel` resolves.
   const transformersPkg = Buffer.from(
-    JSON.stringify({ name: '@huggingface/transformers', main: 'index.js' }),
+    JSON.stringify({
+      name: '@huggingface/transformers',
+      type: 'module',
+      main: './dist/transformers.node.cjs',
+      exports: {
+        node: {
+          import: { default: './dist/transformers.node.mjs' },
+          require: { default: './dist/transformers.node.cjs' },
+        },
+        default: { default: './dist/transformers.node.mjs' },
+      },
+    }),
     'utf8',
   );
-  const transformersIdx = Buffer.from(
-    "module.exports = { AutoTokenizer: { from_pretrained: async () => ({}) } };\n",
+  // ESM entry — exposes ALL named exports (this is what production uses).
+  const transformersEsm = Buffer.from(
+    "export const AutoTokenizer = { from_pretrained: async () => ({}) };\n" +
+      "export const AutoModel = { from_pretrained: async () => ({ sentence_embedding: { data: new Float32Array(640) } }) };\n" +
+      "export const pipeline = async () => ({ data: new Float32Array(640) });\n",
+    'utf8',
+  );
+  // CJS entry — simulates the Node 24 interop regression: returns the
+  // namespace object but leaves the named ESM-first exports undefined.
+  // Pre-fix, the loader hit this path and `AutoModel` was undefined.
+  const transformersCjs = Buffer.from(
+    "// CJS entry — Node 24 require() interop leaves named ESM exports undefined.\n" +
+      "module.exports = { AutoTokenizer: { from_pretrained: async () => ({}) } /* AutoModel MISSING */ };\n",
     'utf8',
   );
   const modelCfg = Buffer.from(JSON.stringify({ dim: 640 }), 'utf8');
 
   const entries: Array<{ name: string; content: Buffer }> = [
     { name: 'node_modules/@huggingface/transformers/package.json', content: transformersPkg },
-    { name: 'node_modules/@huggingface/transformers/index.js', content: transformersIdx },
+    { name: 'node_modules/@huggingface/transformers/dist/transformers.node.mjs', content: transformersEsm },
+    { name: 'node_modules/@huggingface/transformers/dist/transformers.node.cjs', content: transformersCjs },
+    { name: 'node_modules/@huggingface/transformers/index.js', content: transformersCjs },
     { name: 'model/config.json', content: modelCfg },
   ];
   const tarGz = makeTarGz(entries);
@@ -200,9 +237,29 @@ function expectedManifestUrl(): string {
     assert(counter.count === 2, 'second call does NOT increment fetch counter');
 
     // The cacheRequire should resolve `@huggingface/transformers` from the bundle.
-    const transformers = second.cacheRequire('@huggingface/transformers') as { AutoTokenizer?: unknown };
-    assert(typeof transformers === 'object', 'cacheRequire resolves the bundled module');
-    assert(transformers.AutoTokenizer !== undefined, 'bundled module exposes its surface');
+    // This is a path-resolution smoke — `cacheRequire` still works for resolving
+    // the entry even though loading dual CJS/ESM via require() is the broken bit
+    // the fix targets.
+    const transformersCjs = second.cacheRequire('@huggingface/transformers') as { AutoTokenizer?: unknown };
+    assert(typeof transformersCjs === 'object', 'cacheRequire resolves the bundled module');
+    assert(transformersCjs.AutoTokenizer !== undefined, 'CJS entry exposes at least its limited surface');
+
+    // REGRESSION (issue: `autoModel is not a function`, Node 24):
+    // `cacheImport` must resolve the ESM entry and surface the named
+    // `AutoModel` export. Pre-fix, the loader used `cacheRequire` which
+    // on Node 24 returns the CJS namespace with `AutoModel` undefined;
+    // the test synthetic bundle mirrors that by omitting `AutoModel`
+    // from the CJS entry while exposing it from the ESM entry. So this
+    // assertion fails on the pre-fix loader and passes on the post-fix
+    // loader regardless of host Node version.
+    const transformersEsm = (await second.cacheImport('@huggingface/transformers')) as {
+      AutoTokenizer?: unknown;
+      AutoModel?: unknown;
+      pipeline?: unknown;
+    };
+    assert(typeof transformersEsm.AutoModel === 'object', 'cacheImport surfaces the ESM-named AutoModel export');
+    assert(typeof transformersEsm.AutoTokenizer === 'object', 'cacheImport surfaces the ESM-named AutoTokenizer export');
+    assert(typeof transformersEsm.pipeline === 'function', 'cacheImport surfaces the ESM-named pipeline export');
   } finally {
     rmrf(root);
   }

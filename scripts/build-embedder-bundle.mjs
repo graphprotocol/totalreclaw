@@ -241,8 +241,12 @@ async function main() {
       fs.mkdirSync(preWarmCachePath, { recursive: true });
       const preWarmScript = `
         process.env.TRANSFORMERS_CACHE = ${JSON.stringify(preWarmCachePath)};
-        const t = require('@huggingface/transformers');
+        // ESM dynamic import — @huggingface/transformers v4 ships dual
+        // CJS/ESM, and the CJS require() interop leaves named exports
+        // (AutoModel, AutoTokenizer) undefined on Node 24+. Same root
+        // cause as the in-plugin loader fix (see embedding.ts).
         (async () => {
+          const t = await import('@huggingface/transformers');
           const tok = await t.AutoTokenizer.from_pretrained('onnx-community/harrier-oss-v1-270m-ONNX');
           const m = await t.AutoModel.from_pretrained('onnx-community/harrier-oss-v1-270m-ONNX', { dtype: 'q4' });
           const inputs = await tok('warmup', { return_tensors: 'pt', padding: true });
