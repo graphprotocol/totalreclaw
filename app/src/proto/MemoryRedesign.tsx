@@ -1,10 +1,12 @@
-import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { clsx } from "clsx";
 import { ProtoHeader } from "./ProtoHeader";
 import { SEED_SESSIONS, relativeDate, type SeedSession } from "./seed";
 import { count } from "./format";
 import { sourceShort } from "./presentation";
 import { TypeBadge } from "../components/TypeBadge";
+import { ExploreGraph } from "./ExploreGraph";
+import { KG_NODES, KG_LINKS } from "./graph-data";
 
 /**
  * Memory redesign A/B chassis (seed data). Mode switcher (List · Timeline · Graph)
@@ -213,15 +215,6 @@ function SidePanel({ session, onClose }: { session: SeedSession | null; onClose:
   );
 }
 
-// ── Placeholder for not-yet-built modes ──────────────────────────────
-function Placeholder({ children }: { children: ReactNode }) {
-  return (
-    <div className="mt-6 rounded-card border border-dashed border-hairline bg-surface/60 p-10 text-center">
-      <p className="text-sm text-ink-muted">{children}</p>
-    </div>
-  );
-}
-
 // ── Timeline: Rail (horizontal date axis) ───────────────────────────
 function parseDate(s: string): Date {
   const [y, m, d] = s.split("-").map(Number);
@@ -363,11 +356,73 @@ function ActivityTimeline({
   );
 }
 
+// ── Graph: node → session mapping + Topics outline ───────────────────
+/** Most-recent session for a graph node (entity → its sessions; topic → sessions
+ *  touching any linked entity). Null if none. */
+function sessionForNode(nodeId: string): SeedSession | null {
+  const node = KG_NODES.find((n) => n.id === nodeId);
+  if (!node) return null;
+  let labels: string[];
+  if (node.kind === "entity") {
+    labels = [node.label];
+  } else {
+    const linkedIds = KG_LINKS.filter((l) => l.source === nodeId || l.target === nodeId).map((l) =>
+      l.source === nodeId ? l.target : l.source,
+    );
+    labels = KG_NODES.filter((n) => linkedIds.includes(n.id)).map((n) => n.label);
+  }
+  const matches = SEED_SESSIONS.filter((s) => s.entities.some((e) => labels.includes(e)));
+  if (!matches.length) return null;
+  return [...matches].sort((a, b) => b.date.localeCompare(a.date))[0];
+}
+
+function TopicsTree({ onOpen }: { onOpen: (s: SeedSession) => void }) {
+  const topics = KG_NODES.filter((n) => n.kind === "topic");
+  return (
+    <div className="mt-6 space-y-3">
+      {topics.map((t) => {
+        const linkedIds = KG_LINKS.filter((l) => l.source === t.id || l.target === t.id).map((l) =>
+          l.source === t.id ? l.target : l.source,
+        );
+        const entities = KG_NODES.filter((n) => linkedIds.includes(n.id) && n.kind === "entity");
+        return (
+          <div key={t.id} className="animate-fade-up rounded-card bg-surface p-4 shadow-soft">
+            <h3 className="font-display text-lg text-ink">{t.label}</h3>
+            <div className="mt-2.5 flex flex-wrap gap-1.5">
+              {entities.map((e) => {
+                const s = [...SEED_SESSIONS]
+                  .filter((x) => x.entities.includes(e.label))
+                  .sort((a, b) => b.date.localeCompare(a.date))[0];
+                return (
+                  <button
+                    key={e.id}
+                    disabled={!s}
+                    onClick={() => s && onOpen(s)}
+                    className={clsx(
+                      "rounded-pill px-2.5 py-1 font-mono text-xs ring-1 transition",
+                      s
+                        ? "bg-warm-white text-ink-muted ring-hairline hover:text-ink hover:ring-clay/40"
+                        : "cursor-default bg-warm-white/50 text-ink-muted/50 ring-hairline",
+                    )}
+                  >
+                    {e.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────────────────────
 export function MemoryRedesign() {
   const [mode, setMode] = useState<Mode>("list");
   const [timelineVariant, setTimelineVariant] = useState<TimelineVariant>("rail");
   const [graphVariant, setGraphVariant] = useState<GraphVariant>("entities");
+  const [graphSel, setGraphSel] = useState<string | null>(null);
   const [selected, setSelected] = useState<SeedSession | null>(null);
   const close = useCallback(() => setSelected(null), []);
 
@@ -429,9 +484,20 @@ export function MemoryRedesign() {
                 { value: "topics", label: "Topics" },
               ]}
             />
-            <Placeholder>
-              {graphVariant === "entities" ? "Force-directed entity graph" : "Tree of topics"} — building next.
-            </Placeholder>
+            {graphVariant === "entities" ? (
+              <div className="mt-6 h-[460px] overflow-hidden rounded-card bg-surface shadow-soft">
+                <ExploreGraph
+                  selectedId={graphSel}
+                  onSelect={(id) => {
+                    setGraphSel(id);
+                    const s = id ? sessionForNode(id) : null;
+                    if (s) setSelected(s);
+                  }}
+                />
+              </div>
+            ) : (
+              <TopicsTree onOpen={setSelected} />
+            )}
           </div>
         )}
       </main>
