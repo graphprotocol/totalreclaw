@@ -6,6 +6,8 @@
 
 ## Decisions (Pedro, 2026-06-11)
 - Memory = a **mode switcher**: **List · Timeline · Graph** (segmented control, Figtree).
+  **List is the locked default mode** (Pedro, 2026-06-19) — Memory lands on List; Timeline/Graph
+  are opt-in toggles. (Code: `useState<Mode>("list")`.)
 - **Side-panel drawer** shared across all modes (Notion-style): tap any card/dot/node →
   drawer with Crystal/summary + atomic facts + entities + outcomes/threads. Full-screen
   sheet on mobile. Deep-linkable. Replaces full-page session drill as the primary path.
