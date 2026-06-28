@@ -217,6 +217,15 @@ export function makeCacheRequire(layout: CacheLayout): NodeRequire {
  * entry — the `.mjs` file — and `import()` of that surfaces named
  * exports on every Node version we support (18, 20, 22, 24).
  *
+ * Post-import normalization (`normalizeImportNamespace`): even with
+ * the correct `.mjs` entry selected, Node 24 minor versions have
+ * shown regressions where the namespace comes back default-wrapped
+ * (cjs-module-lexer mis-parses the 1.3 MB bundled output, or the
+ * caller-context forces CJS resolution). The normalizer unwraps
+ * `.default` defensively so callers can always destructure named
+ * exports directly. See `normalizeImportNamespace` for the detection
+ * rule + edge cases.
+ *
  * Transitive deps resolve the same way: the imported module's own
  * internal `import`/`require` calls walk up from its URL and find the
  * cache's `node_modules` first.
@@ -255,8 +264,86 @@ export function makeCacheImport(layout: CacheLayout): (specifier: string) => Pro
     // Step 3: native ESM dynamic import of the file URL — populates
     // named exports correctly for dual CJS/ESM and ESM-only packages.
     const fileUrl = pathToFileURL(esmEntry).href;
-    return await import(fileUrl);
+    const mod = await import(fileUrl);
+    // Step 4: normalize the namespace across Node versions.
+    //
+    // Why this exists (issue #394 follow-up: `autoModel is not a function`
+    // PERSISTED on Node 24.16.0 with the real `@huggingface/transformers`
+    // v4.2.0 bundle even after #394 shipped `cacheImport`):
+    //   The `resolveEsmEntryPath` correctly prefers the `.mjs` (ESM
+    //   native) entry, and `import()` of an `.mjs` file surfaces real
+    //   named exports on every Node version we tested locally (18, 20,
+    //   22). But on Node 24, two regressions have been observed in the
+    //   wild for dual CJS/ESM packages with large bundled outputs:
+    //
+    //   a) `cjs-module-lexer` (Node's static analyzer for CJS named
+    //      export detection) silently times out / mis-parses the 1.3 MB
+    //      `transformers.node.cjs` bundle, so a fallback `import()` of
+    //      the `.cjs` file returns ONLY `{ default: module.exports }`
+    //      with no named exports. `const { AutoModel } = mod` then
+    //      yields `undefined`.
+    //
+    //   b) Some Node 24 minor versions changed the ESM-CJS interop such
+    //      that `import()` of a dual package resolves to the CJS entry
+    //      under specific caller-context conditions (e.g. when the
+    //      caller is itself a transitive CJS module loaded via
+    //      `createRequire` from ESM), again producing a default-only
+    //      namespace.
+    //
+    // We CANNOT reproduce (a)/(b) on Node 22 (the bug is Node-24-only
+    // and depends on cjs-module-lexer's behavior on the real 1.3 MB
+    // bundle), so this normalization is defensive: after the `import()`,
+    // if the namespace has NO own enumerable string keys other than
+    // `default` (and `default` is a non-null object), we unwrap `default`
+    // and return ITS keys as the namespace. This makes the loader robust
+    // to BOTH the ESM-native path (named exports come through untouched)
+    // AND the CJS-fallback path (named exports are recovered from
+    // `default`).
+    return normalizeImportNamespace(mod, specifier, esmEntry);
   };
+}
+
+/**
+ * Normalize the result of `import(specifier)` so callers can always
+ * destructure named exports directly, regardless of whether the resolved
+ * entry was ESM-native (named exports on the namespace) or CJS-via-ESM
+ * (named exports only reachable through `.default`).
+ *
+ * Detection rule: if the namespace has `default` AND zero non-`default`
+ * own enumerable string-keyed properties, treat it as a CJS-wrapped
+ * namespace and return the `default` object instead. Otherwise return
+ * the namespace unchanged (ESM-native or already-unwrapped).
+ *
+ * Edge case: a legitimately default-only ESM module (one that exports
+ * ONLY a default) would be mis-detected as CJS-wrapped. That is safe —
+ * the unwrapped `default` is itself the value the caller wants, and a
+ * default-only ESM module has no named exports to lose. The bundled
+ * packages this loader targets (`@huggingface/transformers`,
+ * `onnxruntime-node`) are named-export-heavy, so this edge case does
+ * not arise in practice.
+ */
+function normalizeImportNamespace(mod: any, specifier: string, entryPath: string): any {
+  if (!mod || typeof mod !== 'object') return mod;
+  const ownKeys = Object.keys(mod).filter((k) => k !== 'default');
+  if (ownKeys.length > 0) {
+    // Named exports already present — ESM-native path. Return as-is.
+    return mod;
+  }
+  const def = (mod as { default?: unknown }).default;
+  if (def && typeof def === 'object') {
+    // CJS-wrapped namespace (Node 24 cjs-module-lexer regression).
+    // Unwrap so callers can destructure named exports directly.
+    return def;
+  }
+  // Neither named exports nor a usable default. Return as-is and let
+  // the caller's destructure yield `undefined` — but include a
+  // diagnostic marker the caller can surface in its error message.
+  throw new Error(
+    `cacheImport("${specifier}") resolved ${entryPath} but the import() ` +
+      `returned a namespace with no named exports and no usable default ` +
+      `(keys: ${JSON.stringify(Object.keys(mod))}). The bundled package ` +
+      `may be corrupt or the platform's ESM-CJS interop is incompatible.`
+  );
 }
 
 /**

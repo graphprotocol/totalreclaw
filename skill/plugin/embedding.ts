@@ -187,8 +187,39 @@ export async function generateEmbedding(
     // dynamic `import()` of the resolved entry file URL populates the named
     // exports correctly on every Node version we support. See
     // `makeCacheImport` in embedder-loader.ts.
-    const transformers = await loaded.cacheImport('@huggingface/transformers');
-    const { AutoTokenizer, AutoModel, pipeline } = transformers as any;
+    //
+    // Defensive access (#394 follow-up): `cacheImport` normalizes the
+    // namespace so named exports are always top-level, but if the bundle
+    // is corrupt or a future Node version changes interop again, we want
+    // a CLEAR error here ("transformers bundle did not expose AutoModel")
+    // rather than the opaque downstream `autoModel is not a function`.
+    // The previous fix silently returned undefined and let the inference
+    // call site crash with a misleading message; this guard turns that
+    // into an actionable one.
+    const transformers = await loaded.cacheImport('@huggingface/transformers') as {
+      AutoTokenizer?: unknown;
+      AutoModel?: unknown;
+      pipeline?: unknown;
+      default?: { AutoTokenizer?: unknown; AutoModel?: unknown; pipeline?: unknown };
+    };
+    let AutoTokenizer = transformers.AutoTokenizer;
+    let AutoModel = transformers.AutoModel;
+    let pipeline = transformers.pipeline;
+    // Final `.default` fallback — covers any future regression where the
+    // loader's normalizer does not run (e.g. a hand-rolled caller).
+    if ((!AutoModel || !AutoTokenizer || !pipeline) && transformers.default) {
+      AutoTokenizer = AutoTokenizer ?? transformers.default.AutoTokenizer;
+      AutoModel = AutoModel ?? transformers.default.AutoModel;
+      pipeline = pipeline ?? transformers.default.pipeline;
+    }
+    if (typeof AutoModel !== 'function' && typeof AutoModel !== 'object') {
+      throw new Error(
+        `transformers bundle did not expose AutoModel (typeof=${typeof AutoModel}). ` +
+          `Bundle may be corrupt or Node ${process.version} ESM-CJS interop ` +
+          `incompatible with the bundled @huggingface/transformers entry. ` +
+          `Cache at ${cfg.cacheRoot}/v1/.`,
+      );
+    }
 
     if (activeModel.pooling === 'sentence_embedding') {
       autoTokenizer = await AutoTokenizer.from_pretrained(activeModel.hfId);
