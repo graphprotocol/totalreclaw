@@ -118,14 +118,32 @@ function PanelSection({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-function SidePanel({ session, onClose }: { session: SeedSession | null; onClose: () => void }) {
+type PanelView = { kind: "session"; session: SeedSession } | { kind: "entity"; name: string };
+
+function SidePanel({
+  view,
+  onClose,
+  onOpenSession,
+}: {
+  view: PanelView | null;
+  onClose: () => void;
+  onOpenSession: (s: SeedSession) => void;
+}) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const open = !!session;
+  const open = !!view;
+  const session = view?.kind === "session" ? view.session : null;
+  const entity = view?.kind === "entity" ? view.name : null;
+  const entitySessions = entity
+    ? [...SEED_SESSIONS]
+        .filter((s) => s.entities.includes(entity))
+        .sort((a, b) => b.date.localeCompare(a.date))
+    : [];
+
   return (
     <>
       {/* backdrop */}
@@ -141,26 +159,60 @@ function SidePanel({ session, onClose }: { session: SeedSession | null; onClose:
       <aside
         role="dialog"
         aria-modal="true"
-        aria-label={session ? "Session detail" : undefined}
+        aria-label={session ? "Session detail" : entity ? `About ${entity}` : undefined}
         className={clsx(
           "fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col bg-warm-white shadow-overlay transition-transform duration-200 ease-keeper motion-reduce:transition-none",
           open ? "translate-x-0" : "translate-x-full",
         )}
       >
+        {view && (
+          <div className="flex items-center justify-between border-b border-hairline px-5 py-3">
+            <span className="font-mono text-xs text-ink-muted">
+              {session ? relativeDate(session.date) : "Entity"}
+            </span>
+            <button
+              onClick={onClose}
+              aria-label="Close"
+              className="rounded-pill p-1.5 text-ink-muted transition hover:bg-clay-tint hover:text-clay-deep focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
+
+        {/* Entity view — everything about one entity */}
+        {entity && (
+          <div className="flex-1 overflow-y-auto px-5 py-5">
+            <h2 className="font-display text-2xl leading-snug text-ink" style={{ textWrap: "pretty" }}>
+              {entity}
+            </h2>
+            <p className="mt-1 text-sm text-ink-muted">
+              {entitySessions.length > 0
+                ? `${count(entitySessions.length, "session")} ${entitySessions.length === 1 ? "mentions" : "mention"} this.`
+                : "Nothing references this yet."}
+            </p>
+            <div className="mt-5 space-y-3">
+              {entitySessions.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => onOpenSession(s)}
+                  className="block w-full rounded-card bg-surface p-4 text-left shadow-soft transition duration-200 ease-keeper hover:-translate-y-0.5 hover:shadow-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
+                >
+                  <time className="font-mono text-xs text-ink-muted">{relativeDate(s.date)}</time>
+                  <p className="mt-1 font-display text-[0.95rem] leading-snug text-ink" style={{ textWrap: "pretty" }}>
+                    {s.crystal.narrative}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Session view — the crystal + its facts */}
         {session && (
           <>
-            <div className="flex items-center justify-between border-b border-hairline px-5 py-3">
-              <time className="font-mono text-xs text-ink-muted">{relativeDate(session.date)}</time>
-              <button
-                onClick={onClose}
-                aria-label="Close"
-                className="rounded-pill p-1.5 text-ink-muted transition hover:bg-clay-tint hover:text-clay-deep focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                  <path d="M18 6 6 18M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
             <div className="flex-1 overflow-y-auto px-5 py-5">
               {session.importSource && (
                 <span className="mb-3 inline-flex items-center gap-1 rounded-pill bg-clay-tint px-2.5 py-0.5 text-xs font-semibold text-clay-deep">
@@ -356,27 +408,8 @@ function ActivityTimeline({
   );
 }
 
-// ── Graph: node → session mapping + Topics outline ───────────────────
-/** Most-recent session for a graph node (entity → its sessions; topic → sessions
- *  touching any linked entity). Null if none. */
-function sessionForNode(nodeId: string): SeedSession | null {
-  const node = KG_NODES.find((n) => n.id === nodeId);
-  if (!node) return null;
-  let labels: string[];
-  if (node.kind === "entity") {
-    labels = [node.label];
-  } else {
-    const linkedIds = KG_LINKS.filter((l) => l.source === nodeId || l.target === nodeId).map((l) =>
-      l.source === nodeId ? l.target : l.source,
-    );
-    labels = KG_NODES.filter((n) => linkedIds.includes(n.id)).map((n) => n.label);
-  }
-  const matches = SEED_SESSIONS.filter((s) => s.entities.some((e) => labels.includes(e)));
-  if (!matches.length) return null;
-  return [...matches].sort((a, b) => b.date.localeCompare(a.date))[0];
-}
-
-function TopicsTree({ onOpen }: { onOpen: (s: SeedSession) => void }) {
+// ── Graph: Topics outline ────────────────────────────────────────────
+function TopicsTree({ onOpenEntity }: { onOpenEntity: (name: string) => void }) {
   const topics = KG_NODES.filter((n) => n.kind === "topic");
   return (
     <div className="mt-6 space-y-3">
@@ -389,26 +422,15 @@ function TopicsTree({ onOpen }: { onOpen: (s: SeedSession) => void }) {
           <div key={t.id} className="animate-fade-up rounded-card bg-surface p-4 shadow-soft">
             <h3 className="font-display text-lg text-ink">{t.label}</h3>
             <div className="mt-2.5 flex flex-wrap gap-1.5">
-              {entities.map((e) => {
-                const s = [...SEED_SESSIONS]
-                  .filter((x) => x.entities.includes(e.label))
-                  .sort((a, b) => b.date.localeCompare(a.date))[0];
-                return (
-                  <button
-                    key={e.id}
-                    disabled={!s}
-                    onClick={() => s && onOpen(s)}
-                    className={clsx(
-                      "rounded-pill px-2.5 py-1 font-mono text-xs ring-1 transition",
-                      s
-                        ? "bg-warm-white text-ink-muted ring-hairline hover:text-ink hover:ring-clay/40"
-                        : "cursor-default bg-warm-white/50 text-ink-muted/50 ring-hairline",
-                    )}
-                  >
-                    {e.label}
-                  </button>
-                );
-              })}
+              {entities.map((e) => (
+                <button
+                  key={e.id}
+                  onClick={() => onOpenEntity(e.label)}
+                  className="rounded-pill bg-warm-white px-2.5 py-1 font-mono text-xs text-ink-muted ring-1 ring-hairline transition hover:text-ink hover:ring-clay/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
+                >
+                  {e.label}
+                </button>
+              ))}
             </div>
           </div>
         );
@@ -423,8 +445,10 @@ export function MemoryRedesign() {
   const [timelineVariant, setTimelineVariant] = useState<TimelineVariant>("rail");
   const [graphVariant, setGraphVariant] = useState<GraphVariant>("entities");
   const [graphSel, setGraphSel] = useState<string | null>(null);
-  const [selected, setSelected] = useState<SeedSession | null>(null);
-  const close = useCallback(() => setSelected(null), []);
+  const [panel, setPanel] = useState<PanelView | null>(null);
+  const close = useCallback(() => setPanel(null), []);
+  const openSession = useCallback((s: SeedSession) => setPanel({ kind: "session", session: s }), []);
+  const openEntity = useCallback((name: string) => setPanel({ kind: "entity", name }), []);
 
   return (
     <div className="min-h-screen bg-warm-white">
@@ -449,7 +473,7 @@ export function MemoryRedesign() {
         {mode === "list" && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {SEED_SESSIONS.map((s) => (
-              <GalleryCard key={s.id} session={s} onOpen={() => setSelected(s)} />
+              <GalleryCard key={s.id} session={s} onOpen={() => openSession(s)} />
             ))}
           </div>
         )}
@@ -466,9 +490,9 @@ export function MemoryRedesign() {
               ]}
             />
             {timelineVariant === "rail" ? (
-              <RailTimeline sessions={SEED_SESSIONS} onOpen={setSelected} />
+              <RailTimeline sessions={SEED_SESSIONS} onOpen={openSession} />
             ) : (
-              <ActivityTimeline sessions={SEED_SESSIONS} onOpen={setSelected} />
+              <ActivityTimeline sessions={SEED_SESSIONS} onOpen={openSession} />
             )}
           </div>
         )}
@@ -490,19 +514,20 @@ export function MemoryRedesign() {
                   selectedId={graphSel}
                   onSelect={(id) => {
                     setGraphSel(id);
-                    const s = id ? sessionForNode(id) : null;
-                    if (s) setSelected(s);
+                    if (!id) return;
+                    const node = KG_NODES.find((n) => n.id === id);
+                    if (node?.kind === "entity") openEntity(node.label);
                   }}
                 />
               </div>
             ) : (
-              <TopicsTree onOpen={setSelected} />
+              <TopicsTree onOpenEntity={openEntity} />
             )}
           </div>
         )}
       </main>
 
-      <SidePanel session={selected} onClose={close} />
+      <SidePanel view={panel} onClose={close} onOpenSession={openSession} />
     </div>
   );
 }
