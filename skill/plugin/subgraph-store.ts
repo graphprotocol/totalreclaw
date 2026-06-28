@@ -167,17 +167,70 @@ export async function deriveSmartAccountAddress(mnemonic: string, chainId?: numb
 }
 
 // ---------------------------------------------------------------------------
-// Smart Account deployment check (with session cache)
+// Smart Account deployment check
 // ---------------------------------------------------------------------------
+//
+// NOTE on the removed session cache (2026-06-28, AA10 fix):
+//
+// A module-level `Set<string>` of "already deployed" accounts used to skip
+// the `eth_getCode` RPC after the first successful submission. That cache
+// was the single largest source of AA10 "sender already constructed"
+// failures in production:
+//
+//   - A process restart emptied the cache → the next submission relied on
+//     ONE `eth_getCode` read that could return stale `0x` from a lagging
+//     RPC node (the deploy tx was mined but the node hadn't caught up) →
+//     initCode was re-added → the EntryPoint rejected with AA10.
+//   - A receipt poll that timed out (success undetected within the 120s
+//     window) left the cache unpopulated → the next submission hit the
+//     same stale-`eth_getCode` path → AA10.
+//   - The AA25 retry path (`deployedAccounts.delete(...)`) existed ONLY to
+//     paper over the cache; with no cache there is nothing to invalidate.
+//
+// Fix: `getInitCode` calls `eth_getCode` on EVERY invocation. The
+// per-sender submission mutex (`withSenderLock`) already serializes
+// submissions per account, so the extra RPC cannot introduce a nonce
+// race. The cost is one extra RPC read per submission — negligible
+// against a relay round-trip — and the behavior is correct by
+// construction: the plugin asserts on-chain state at submit time rather
+// than trusting an in-memory guess that can be invalidated by anything
+// the plugin doesn't observe (relayer retries, parallel clients, node
+// reorgs, process restarts).
 
 /**
- * Session-level cache for account deployment status.
- * Once an account is deployed (first successful UserOp), we skip the
- * eth_getCode check and omit factory/factoryData for all subsequent calls.
- * This prevents AA10 "duplicate deployment" errors when multiple facts
- * are stored in rapid succession for a first-time user.
+ * Test-only RPC probe counter. Incremented each time `getInitCode` issues
+ * an `eth_getCode` read. The lifecycle test uses this to assert the cache
+ * is truly gone (every call hits the wire). Not part of the public API.
  */
-const deployedAccounts = new Set<string>();
+let _ethGetCodeProbeCount = 0;
+
+/** Test-only seam: drive the private `getInitCode` logic. */
+export async function __getInitCodeForTests(
+  sender: string,
+  eoaAddress: string,
+  rpcUrl: string,
+): Promise<{ factory: string | null; factoryData: string | null }> {
+  return getInitCode(sender, eoaAddress, rpcUrl);
+}
+
+/** Test-only seam: read the RPC probe counter. */
+export function __getRpcProbeCountForTests(): number {
+  return _ethGetCodeProbeCount;
+}
+
+/** Test-only seam: reset the RPC probe counter. */
+export function __resetRpcProbeCountForTests(): void {
+  _ethGetCodeProbeCount = 0;
+}
+
+/**
+ * Test-only seam: previously reset the deployment cache. The cache was
+ * removed in the AA10 fix; this function is retained as a no-op so the
+ * lifecycle test (and any future test that imports it) doesn't break.
+ */
+export function __resetDeployedAccountsForTests(): void {
+  /* no-op: session cache removed; getInitCode always re-checks eth_getCode */
+}
 
 // ---------------------------------------------------------------------------
 // Per-account submission mutex — 3.3.1-rc.3 AA25 serialization
@@ -244,20 +297,28 @@ export function __resetSenderLocksForTests(): void {
 /**
  * Check if a Smart Account is deployed and return factory/factoryData if not.
  *
- * For ERC-4337 v0.7, undeployed accounts need `factory` and `factoryData`
- * in the UserOp so the EntryPoint can deploy them during the first transaction.
+ * For ERC-4337 v0.7, undeployed (counterfactual) accounts need `factory`
+ * and `factoryData` in the UserOp so the EntryPoint deploys the SA + runs
+ * signature validation in one transaction.
+ *
+ * Re-checks `eth_getCode` on EVERY call — no session cache. The previous
+ * in-memory cache was the source of AA10 "sender already constructed"
+ * errors: it could be stale (process restart, missed receipt, lagging RPC
+ * node) and re-add initCode to a UserOp whose sender was already
+ * constructed. Each submission now pays one extra RPC read to assert the
+ * on-chain deployment state at submit time, which is the only source of
+ * truth the EntryPoint will enforce. See the note above on the removed
+ * cache for the full failure taxonomy.
  */
 async function getInitCode(
   sender: string,
   eoaAddress: string,
   rpcUrl: string,
 ): Promise<{ factory: string | null; factoryData: string | null }> {
-  // Session cache: if we already deployed this account, skip the RPC check
-  if (deployedAccounts.has(sender.toLowerCase())) {
-    return { factory: null, factoryData: null };
-  }
-
-  // Check if the Smart Account contract is deployed
+  // Check if the Smart Account contract is deployed. Always re-read — never
+  // cache. The per-sender submission mutex serializes calls for the same
+  // account, so this cannot race a nonce fetch.
+  _ethGetCodeProbeCount++;
   const codeJson = await rpcRequest({
     url: rpcUrl,
     headers: { 'Content-Type': 'application/json' },
@@ -268,7 +329,6 @@ async function getInitCode(
   const isDeployed = codeResult && codeResult !== '0x' && codeResult !== '0x0';
 
   if (isDeployed) {
-    deployedAccounts.add(sender.toLowerCase());
     return { factory: null, factoryData: null };
   }
 
@@ -416,8 +476,8 @@ async function submitFactOnChainLocked(
     const msg = err?.message || '';
     if (/AA25|AA10|invalid account nonce|already being processed/i.test(msg)) {
       console.error('AA25/AA10 nonce conflict detected, rebuilding UserOp with fresh nonce...');
-      // Bust deployment cache so getInitCode re-checks on-chain
-      deployedAccounts.delete(sender.toLowerCase());
+      // getInitCode always re-checks eth_getCode (no session cache to bust),
+      // so the retry below naturally picks up the post-deployment state.
 
       // Wait for previous UserOp to mine before retrying with fresh nonce.
       // Public RPC won't reflect the new nonce until the tx is on-chain.
@@ -482,10 +542,10 @@ async function submitFactOnChainLocked(
 
   const success = receipt?.success ?? false;
 
-  // Mark account as deployed after first successful submission
-  if (success) {
-    deployedAccounts.add(sender.toLowerCase());
-  }
+  // No session-deployment cache to update — getInitCode always re-checks
+  // eth_getCode on the next submission, so a successful receipt needs no
+  // bookkeeping here. (Previous cache removed in the AA10 fix — see note
+  // at the top of this section.)
 
   return {
     txHash: receipt?.receipt?.transactionHash || '',
@@ -636,8 +696,8 @@ async function submitFactBatchOnChainLocked(
     const msg = err?.message || '';
     if (/AA25|AA10|invalid account nonce|already being processed/i.test(msg)) {
       console.error('AA25/AA10 nonce conflict detected (batch), rebuilding UserOp with fresh nonce...');
-      // Bust deployment cache so getInitCode re-checks on-chain
-      deployedAccounts.delete(sender.toLowerCase());
+      // getInitCode always re-checks eth_getCode (no session cache to bust),
+      // so the retry below naturally picks up the post-deployment state.
 
       // Wait for previous UserOp to mine before retrying with fresh nonce.
       // Public RPC won't reflect the new nonce until the tx is on-chain.
@@ -702,10 +762,10 @@ async function submitFactBatchOnChainLocked(
 
   const batchSuccess = receipt?.success ?? false;
 
-  // Mark account as deployed after first successful submission
-  if (batchSuccess) {
-    deployedAccounts.add(sender.toLowerCase());
-  }
+  // No session-deployment cache to update — getInitCode always re-checks
+  // eth_getCode on the next submission, so a successful receipt needs no
+  // bookkeeping here. (Previous cache removed in the AA10 fix — see note
+  // at the top of the Smart Account deployment-check section.)
 
   return {
     txHash: receipt?.receipt?.transactionHash || '',
