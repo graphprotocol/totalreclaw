@@ -60,6 +60,7 @@ The interface must **not** read as any of these:
 3. **Curation is the reward.** Pin, retype, and delete must feel effortless and quietly satisfying. The product earns repeat opens by making grooming feel good, not like chores in a settings panel.
 4. **Warm minimalism.** Inviting and personal without tipping into a SaaS card grid or a raw dev tool. Restraint with a pulse, not sterility.
 5. **Phone-first, glanceable.** The primary device is a phone in spare moments. Scannable at a glance, fast even on a 10k-item vault, thumb-reachable actions.
+6. **Transparent, not synthesized.** The discrete fact is the first-class unit: every memory is individually visible, editable, and deletable — never collapsed into an opaque "model of you." Summaries/Crystals are an additive skim layer on top, never a replacement for the explicit, correctable list. (Locked 2026-06-19, learning from ChatGPT walking back its visible memory list — the transparency users missed is our wedge.)
 
 ## Accessibility & Inclusion
 

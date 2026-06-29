@@ -25,6 +25,26 @@
 - **Review Conflict card fix**: selection-driven, **pin-aware default (keep-pinned)**,
   one clay element, explicit labels. (Still backend-gated #306 — design only.)
 
+## Transparency & fact-first (LOCKED, Pedro 2026-06-19 — from ChatGPT-memory lesson)
+Lesson: users *trust* an explicit, editable list of discrete facts and resent ChatGPT's move
+to opaque synthesis (Dreaming V3). That transparency is **TotalReclaw's wedge** — lean in.
+- **The discrete fact is the first-class unit** — individually viewable / editable / deletable.
+  Never only session-Crystals; a fact must be curatable *as a fact*, not buried under a summary.
+- **Add a flat "everything you remember" lens** (the ChatGPT-style bullet list of all facts)
+  alongside the session-grouped List. Cheap, high-trust, exactly what their users miss.
+- **Synthesis (Crystals / summaries) is an additive skim layer, NEVER a replacement** for the
+  explicit list. Show exactly what's stored; let users correct it. No opaque synthesis.
+- **Entity-nav is the reliable axis; Topics is secondary.** Subgraph is server-blind — it stores
+  only ciphertext + envelope (owner/decay/active/fp/seq/version/timestamps) + SHA-256 blind
+  indices. Entities (per-claim) + topics (`metadata.topics_discussed`, Crystal-only) + session_id
+  live *inside* the encrypted blob → derived **client-side** after full decrypt. Topic↔entity
+  links aren't stored (derived by co-occurrence). So bias entity-nav over topic-grouping; topics
+  are sparse + heuristic.
+- **Cost caveat (under analysis):** all nav/grouping requires decrypting the whole vault
+  client-side. Agent analyzing 3-mo heavy Pro (~4,500 facts) load — candidates: drop
+  `encryptedEmbedding` from the browse query, `sequenceId` delta-sync + IndexedDB cache,
+  progressive disclosure.
+
 ## System (locked, from DESIGN.md / PRODUCT.md)
 Keeper: warm-white `#FBFAF8`, clay `#C16240` ≤10%, Fraunces (memory text) + Figtree (UI)
 + JetBrains Mono (machine), soft warm shadows, `ease-keeper`, 150–250ms, prefers-reduced-
