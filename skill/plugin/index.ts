@@ -199,6 +199,7 @@ import { detectFirstRun, buildWelcomePrepend, type GatewayMode } from './first-r
 import { buildPairRoutes } from './pair-http.js';
 import { detectGatewayHost } from './gateway-url.js';
 import { registerNativeMemory, type TrNativeMemoryDeps } from './native-memory.js';
+import { ensureSkillRegistered } from './skill-register.js';
 import type { TrFact, TrPinnedFact, TrQuotaState } from './memory-runtime.js';
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
@@ -5428,6 +5429,33 @@ const plugin = {
       api.logger.warn(
         `TotalReclaw: native memory capability registration failed — agent memory_search/memory_get UNAVAILABLE until fixed: ${msg}`,
       );
+    }
+
+    // ---------------------------------------------------------------
+    // Skill auto-register (rc.17 QA finding: plugin installs but the
+    // SKILL.md playbook does not — agents skipped the separate
+    // `openclaw skills install totalreclaw` step and ended up without
+    // pairing / recall instructions). Mirror the bundled SKILL.md +
+    // skill.json from the package root into the workspace skills dir so
+    // OpenClaw's workspace skill scanner discovers them on the next
+    // gateway load. A single `openclaw plugins install` is now enough
+    // for both plugin + skill. Idempotent + never throws (see
+    // skill-register.ts). Lives in a scanner-clean helper because
+    // index.ts already pairs env-derived config with network calls, so
+    // the disk I/O must stay out of this file.
+    // ---------------------------------------------------------------
+    try {
+      // Re-resolve the dist dir here: the earlier `pluginDir` const
+      // lives inside its own inner try/catch scope and is not visible
+      // this far down. The call is pure + cheap (URL parse + dirname).
+      ensureSkillRegistered({
+        pluginDir: nodePath.dirname(fileURLToPath(import.meta.url)),
+        skillsDir: nodePath.join(CONFIG.openclawWorkspace, 'skills'),
+        logger: api.logger,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      api.logger.warn(`TotalReclaw: skill auto-register failed (non-fatal): ${msg}`);
     }
 
     } catch (registerErr: unknown) {

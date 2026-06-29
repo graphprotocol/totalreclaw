@@ -62,7 +62,7 @@ The user pasted this URL deliberately, but treat each command as a step you and 
 
 1. `openclaw plugins install @totalreclaw/totalreclaw` — installs the published plugin from npm under the `@totalreclaw` scope owned by `p-diogo`. The plugin runs inside OpenClaw's plugin sandbox. Upstream docs: <https://docs.openclaw.com/cli/plugins>.
 2. `openclaw skills install totalreclaw` — fetches the SKILL.md descriptor from ClawHub. Read-only metadata; no code executes from this step. Upstream docs: <https://docs.openclaw.com/cli/skills>.
-3. When no `~/.totalreclaw/credentials.json` exists, you run `tr pair --json` (via the `TR_CLI` resolver), which mints a one-time URL + PIN. The user opens the URL in their own browser to enter or generate a recovery phrase. The phrase never enters chat or your shell.
+3. When no `~/.totalreclaw/credentials.json` exists, you trigger pairing via the plugin's in-process HTTP route (`curl http://localhost:18789/plugin/totalreclaw/pair/init`), which mints a one-time URL + PIN. The user opens the URL in their own browser to enter or generate a recovery phrase. The phrase never enters chat or your shell.
 
 You are not asked to handle the recovery phrase. You are not asked to bypass auth. Pasting the install prompt IS the consent moment for installing the plugin; the URL + PIN you hand back from `tr pair --json` is the real consent moment for account creation, since the user has to open the page in their browser to continue. There is no separate "yes/no" gate before account setup. If the user pastes a phrase in chat anyway, refuse to proceed — see "Phrase safety" below.
 
@@ -154,17 +154,19 @@ Notes:
 - **Always run the install — never skip it because a totalreclaw "appears present".** A leftover install from a prior version (e.g. a stale `@totalreclaw/mcp-server`) is NOT the `@totalreclaw/totalreclaw` plugin and must be replaced. If install reports `already exists`, OR you detect an old/different totalreclaw package on disk, force-replace it: `openclaw plugins install @totalreclaw/totalreclaw@rc --force` + `openclaw skills install totalreclaw --force`. Then verify the version in Step 2 — it must match the requested RC.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
-### Step 2 — Verify the `tr` CLI works — emit user-visible line 2 on success
+### Step 2 — Verify the plugin loaded — emit user-visible line 2 on success
 
-Resolve the CLI path once and reuse (modern OpenClaw 2026.5.x installs npm-managed plugins under `~/.openclaw/npm/...`, not `~/.openclaw/extensions/...`):
+Run the **registered** `openclaw totalreclaw` subcommand (the plugin registers it via `api.registerCli` during `register()`). This is the canonical verification path — it both confirms the plugin loaded AND that its CLI surface is bound:
+
 ```bash
-TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js 2>/dev/null | head -1)"
-node "$TR_CLI" status --json
+openclaw totalreclaw status
 ```
 
-Parse the JSON. When you receive `{"version": "...", "paired": ..., ...}`, emit user-visible line 2 (`✓ Installed (totalreclaw <version>)`) with the version substituted. Then proceed silently to Step 3.
+A successful run (exit `0`, human-readable status printed) is your verification. Emit user-visible line 2 (`✓ Installed (totalreclaw <version>)`) with the version the `openclaw plugins install` step reported (or read it from `openclaw plugins list | grep totalreclaw`). Then proceed silently to Step 3.
 
-If `tr status` exits non-zero or `$TR_CLI` is empty, wait 5s and retry once (the install may still be completing). If it still fails, tell the user the install didn't land and retry `openclaw plugins install @totalreclaw/totalreclaw@rc`.
+If `openclaw totalreclaw status` exits non-zero or reports `unknown command`, wait 5s and retry once (the install / SIGUSR1 reload may still be completing). If it still fails, tell the user the install didn't land and retry `openclaw plugins install @totalreclaw/totalreclaw@rc`.
+
+> ⛔ **DO NOT use `npx` to run TotalReclaw commands.** `npx` fails inside OpenClaw's sandbox (no network egress for the package fetch, and the resolved binary path is wrong for a plugin that's already installed). Always use the **registered subcommand** `openclaw totalreclaw <command>` (e.g. `openclaw totalreclaw status`, `openclaw totalreclaw onboard --pair-only`) or the **native tool** `memory_search`. The only place a raw `node .../dist/tr-cli.js` invocation is acceptable is the explicit fallback blocks below (the pair CLI fallback and the issue-#184 deadlock workaround), which define the path inline — never invent a resolver of your own and never reach for `npx`.
 
 ### Step 3 — Check for existing credentials (silent unless found)
 
@@ -186,6 +188,8 @@ Parse the JSON `{"v":1,"sid":"...","url":"...","pin":"...","mode":"...","expires
 
 ```bash
 PAIR_OUT="/tmp/tr-pair-out-$(date +%s).json"
+# Resolve the installed plugin's standalone CLI directly (this fallback only).
+TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js 2>/dev/null | head -1)"
 setsid -f node "$TR_CLI" pair --json > "$PAIR_OUT" 2>&1 < /dev/null
 sleep 2
 cat "$PAIR_OUT"
@@ -324,7 +328,7 @@ See [Importing Memories](importing-memories.md).
 ## Billing
 
 - **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
-- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `tr upgrade` CLI (e.g. `node "$TR_CLI" upgrade`) or visit <https://totalreclaw.xyz/pricing>. See `tr status` for current pricing.
+- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `tr upgrade` CLI (e.g. `openclaw totalreclaw status` then follow the upgrade URL it prints, or the standalone `tr upgrade` if exposed) or visit <https://totalreclaw.xyz/pricing>. See `openclaw totalreclaw status` for current pricing.
 
 The plugin warns you automatically when you cross 80% of the monthly free-tier memory limit (injected at conversation start). Check anytime by asking *"what's my TotalReclaw status?"* — that surfaces tier, memories used, memory limit, reset date, and upgrade URL.
 
