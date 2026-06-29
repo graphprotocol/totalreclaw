@@ -52,7 +52,9 @@ logger = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 EXTRACTION_RATIO = 2.5     # Average facts per conversation chunk (empirical)
-SECONDS_PER_BATCH = 45     # Estimated seconds to process one batch
+SECONDS_PER_CHUNK_SEQ = 75  # Sequential wall-clock per LLM extraction (empirical, ~1.25 min)
+SECONDS_PER_USEROP = 0.5   # Estimated seconds per on-chain UserOp write
+SECONDS_PROFILING = 1200   # Estimated seconds for one-time smart-import profiling (~20 min)
 DEFAULT_BATCH_SIZE = 25    # Chunks per batch
 CHUNK_SIZE = 20            # Messages per conversation chunk (matches adapters)
 INTER_CHUNK_DELAY = 2.0    # Seconds between LLM extraction calls (rate-limit mitigation)
@@ -286,7 +288,23 @@ class ImportEngine:
         # How many items need processing in batches
         processable = total_chunks if has_chunks else total_facts
         num_batches = max(1, int(math.ceil(processable / DEFAULT_BATCH_SIZE)))
-        estimated_minutes = round(num_batches * SECONDS_PER_BATCH / 60, 1)
+
+        # Time estimate accounting for concurrent extraction (#378) and
+        # one-time profiling (#373).  Per batch: ceil(chunks / concurrency)
+        # extraction waves × per-chunk wall-clock, plus on-chain UserOp
+        # writes.  Profiling runs once (first batch).
+        conc = _import_concurrency()
+        chunks_per_batch = min(DEFAULT_BATCH_SIZE, processable)
+        extraction_waves = math.ceil(chunks_per_batch / conc)
+        extraction_per_batch = extraction_waves * SECONDS_PER_CHUNK_SEQ
+        userop_per_batch = (
+            math.ceil(estimated_from_chunks / num_batches / IMPORT_MAX_BATCH_SIZE)
+            * SECONDS_PER_USEROP
+        )
+        per_batch_s = extraction_per_batch + userop_per_batch
+        estimated_minutes = round(
+            (SECONDS_PROFILING + num_batches * per_batch_s) / 60, 1
+        )
 
         return {
             "source": source,
