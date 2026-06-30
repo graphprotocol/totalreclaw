@@ -90,10 +90,15 @@ interface SubgraphResponse<T> {
   errors?: Array<{ message: string }>;
 }
 
+// NOTE: encryptedEmbedding is intentionally NOT fetched here. It's the 640-d
+// search vector (~5.2KB hex/fact) used only for semantic rerank, which the SPA
+// doesn't do (keyword filter + "ask your agent"). decryptFacts never reads it,
+// so fetching it was pure wasted bandwidth (~7.7× the browse download). When
+// in-SPA semantic search lands, fetch embeddings via a separate, candidate-pool
+// -scoped query — not the full-vault browse.
 const FACT_FIELDS = `
       id
       encryptedBlob
-      encryptedEmbedding
       decayScore
       timestamp
       createdAt
@@ -194,7 +199,7 @@ function subgraphFactToRawFact(sf: SubgraphFact): RawFact {
     source: "",
     created_at: iso,
     updated_at: iso,
-    encrypted_embedding: sf.encryptedEmbedding?.replace(/^0x/, "") || undefined,
+    // encrypted_embedding intentionally omitted — not fetched on the browse path.
     is_active: sf.isActive,
   };
 }
