@@ -134,6 +134,7 @@ These env vars existed in earlier versions and are now silently ignored. Delete 
 
 These are for deployment operators, not end users. They live in the server or relay environment, not your local shell. See:
 
+- [Self-hosted deployment guide](./self-hosted-deployment.md) for the full self-hosted setup (server + client config + support matrix).
 - [Self-hosted server setup](../specs/totalreclaw/server.md) for PostgreSQL deployment env vars.
 - [Monitoring setup](./monitoring-setup.md) for observability env vars.
 - [Relay configuration](https://github.com/p-diogo/totalreclaw-relay) (private repo) for tier tuning, Pimlico, Stripe.
