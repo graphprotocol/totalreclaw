@@ -22,7 +22,7 @@ The agent installs the stable channel (`@totalreclaw/totalreclaw` from npm `late
 Install TotalReclaw RC <version>. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md
 ```
 
-`<version>` is a semver RC string the user picks (e.g. `3.3.12-rc.14`). When the user omits `<version>` and writes only `Install TotalReclaw RC`, the agent installs the **newest release candidate** via `openclaw plugins install @totalreclaw/totalreclaw@rc` (no pin — always the latest cut).
+`<version>` is a semver RC string the user picks (e.g. `3.3.12-rc.19`). When the user omits `<version>` and writes only `Install TotalReclaw RC`, the agent installs the **newest release candidate** via `openclaw plugins install @totalreclaw/totalreclaw@rc` (no pin — always the latest cut).
 
 ### RC against the staging relay (QA only)
 
@@ -150,7 +150,7 @@ openclaw skills install totalreclaw
 > **Plugin status caveat — OpenClaw 2026.5.7.** On the freshest OpenClaw releases the install path can occasionally land the plugin as `Status: disabled` after restart (upstream config-strip-on-restart). If `openclaw plugins list` shows totalreclaw as disabled, run `openclaw plugins enable totalreclaw` once and continue. The plugin remains on disk; only the registry flag needs flipping.
 
 Notes:
-- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.14`.
+- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.19`.
 - **Always run the install — never skip it because a totalreclaw "appears present".** A leftover install from a prior version (e.g. a stale `@totalreclaw/mcp-server`) is NOT the `@totalreclaw/totalreclaw` plugin and must be replaced. If install reports `already exists`, OR you detect an old/different totalreclaw package on disk, force-replace it: `openclaw plugins install @totalreclaw/totalreclaw@rc --force` + `openclaw skills install totalreclaw --force`. Then verify the version in Step 2 — it must match the requested RC.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
@@ -260,7 +260,7 @@ openclaw plugins install @totalreclaw/totalreclaw            # stable
 
 Then in chat: *"Set up TotalReclaw"* — the agent will run `tr pair --json` and hand you the URL + PIN. Open the URL in your browser to enter or generate your phrase.
 
-> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.14`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
+> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.19`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
 
 <details>
 <summary>From-source install (for plugin development — self-host only)</summary>
