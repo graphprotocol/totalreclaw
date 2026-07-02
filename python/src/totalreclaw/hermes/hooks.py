@@ -226,6 +226,20 @@ _DEBRIEF_NUDGE = (
 )
 
 
+#: #401 — persistent import-completion announcement tuning.
+#: The pre-#401 behavior latched ``announced`` immediately after injecting the
+#: one-shot context block, so if the agent session ended before the next turn
+#: the notification was consumed on an unrelated session start and never
+#: repeated. #401 keeps re-injecting (deduped) until the agent acknowledges.
+#:
+#: Re-inject at most every N turns (dedup so it doesn't spam every turn). The
+#: agent acknowledges by querying ``totalreclaw_import_status`` for the
+#: completed import (``import_status`` latches ``announced`` on that query),
+#: OR the 24h grace auto-latch retires it.
+_IMPORT_ANNOUNCE_TURN_INTERVAL = 3
+_IMPORT_ANNOUNCE_GRACE_HOURS = 24
+
+
 def _get_hermes_llm_config():
     """Get LLM config from Hermes's own config files.
 
@@ -622,26 +636,74 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
         context_parts.append(quota_warning)
         state.clear_quota_warning()
 
-    # Proactive import-completion notice (PRD-IMP OQ-5) — one-shot per
-    # completed import. The background import task only writes
-    # status=completed; this surfaces it on the next turn so the agent tells
-    # the user the import finished WITHOUT being asked (pull -> push).
+    # Proactive import-completion notice (PRD-IMP OQ-5, #401 persistence).
+    # The background import task only writes status=completed; this surfaces
+    # it on the next turn so the agent tells the user the import finished
+    # WITHOUT being asked (pull -> push).
+    #
+    # #401: was fire-and-forget — ``announced`` latched immediately after the
+    # one-shot injection, so a completion that landed between sessions was
+    # consumed on an unrelated session start and never repeated. Now the
+    # notification PERSISTS: it re-injects (deduped to every N turns) until
+    # the agent acknowledges by querying ``totalreclaw_import_status`` (which
+    # latches ``announced``) OR the 24h grace window auto-retires it.
     try:
         from totalreclaw.import_state import (
             read_completed_unannounced_imports,
             mark_import_announced,
         )
+        from datetime import datetime, timezone
+        now_utc = datetime.now(timezone.utc)
+        # Dedup state on the shared plugin state (per-process). We track the
+        # last-injected import id + the turn it was injected on so we re-inject
+        # at most every _IMPORT_ANNOUNCE_TURN_INTERVAL turns, not every turn.
+        last_injected_id = getattr(state, "_import_announce_last_id", None)
+        last_injected_turn = getattr(state, "_import_announce_last_turn", -1)
         for done in read_completed_unannounced_imports():
+            try:
+                completed_at = datetime.fromisoformat(
+                    done.last_updated.replace("Z", "+00:00")
+                )
+                age_hours = (now_utc - completed_at).total_seconds() / 3600
+            except Exception:
+                age_hours = 0.0
+
+            # Auto-retire past the grace window so the notification eventually
+            # stops even if the agent never acknowledges.
+            if age_hours >= _IMPORT_ANNOUNCE_GRACE_HOURS:
+                mark_import_announced(done.import_id)
+                continue
+
+            # Dedup: skip re-injecting the SAME import on consecutive turns.
+            # Re-inject only when the turn interval has elapsed (the agent may
+            # have skipped the earlier nudge; this retries without spamming).
+            if (
+                done.import_id == last_injected_id
+                and (state.turn_count - last_injected_turn)
+                < _IMPORT_ANNOUNCE_TURN_INTERVAL
+            ):
+                continue
+
             dups = (
                 f", {done.dups_skipped} duplicate(s) skipped"
                 if done.dups_skipped else ""
             )
+            # Surface batch progress + duration so the agent can give a useful
+            # "finished after X batches / Y memories" line in one shot.
+            batches = f"{done.batch_done}/{done.batch_total} batches" if done.batch_total else ""
             context_parts.append(
                 f"[totalreclaw] The background import from {done.source} just "
-                f"finished: {done.facts_stored} memories stored{dups}. Proactively "
-                "tell the user the import is done and briefly what was imported."
+                f"finished: {done.facts_stored} memories stored{dups}"
+                f"{(' (' + batches + ')') if batches else ''}. Proactively "
+                "tell the user the import is done and briefly what was imported. "
+                "If the user acknowledges (or you already reported it), you can "
+                "call totalreclaw_import_status with this import's id to stop "
+                "this reminder."
             )
-            mark_import_announced(done.import_id)
+            # Record the injection for the dedup guard. Do NOT latch
+            # ``announced`` here — persistence is the point (#401).
+            state._import_announce_last_id = done.import_id
+            state._import_announce_last_turn = state.turn_count
     except Exception as e:  # never let notification break the turn
         logger.debug("import-completion injection skipped: %s", e)
 

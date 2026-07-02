@@ -199,6 +199,7 @@ import { detectFirstRun, buildWelcomePrepend, type GatewayMode } from './first-r
 import { buildPairRoutes } from './pair-http.js';
 import { detectGatewayHost } from './gateway-url.js';
 import { registerNativeMemory, type TrNativeMemoryDeps } from './native-memory.js';
+import { ensureSkillRegistered } from './skill-register.js';
 import type { TrFact, TrPinnedFact, TrQuotaState } from './memory-runtime.js';
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
@@ -4192,6 +4193,17 @@ const plugin = {
         sessionsPath: CONFIG.pairSessionsPath,
         apiBase: '/plugin/totalreclaw/pair',
         logger: api.logger,
+        // 3.3.14 — wire the relay URL so buildPairRoutes exposes the
+        // in-process `/pair/init` route. The gateway process opens the
+        // relay WebSocket directly (via openRemotePairSession from
+        // pair-remote-client.ts), eliminating the 30s-subprocess-kill
+        // 502 that the CLI path (tr pair) hit when OpenClaw's shell
+        // tool killed the subprocess mid-pair. relayBaseUrl is sourced
+        // from CONFIG.pairRelayUrl (config.ts reads it from the env
+        // once, centrally) — never read from the environment inside
+        // pair-http.ts (scanner-surface rule).
+        relayBaseUrl: CONFIG.pairRelayUrl,
+        initPairMode: 'either',
         validateMnemonic: (p) => validateMnemonic(p, wordlist),
         completePairing: async ({ mnemonic }) => {
           // Write credentials.json + flip state to 'active' via
@@ -4252,7 +4264,19 @@ const plugin = {
       api.registerHttpRoute!({ path: bundle.startPath, handler: bundle.handlers.start, auth: 'plugin' });
       api.registerHttpRoute!({ path: bundle.respondPath, handler: bundle.handlers.respond, auth: 'plugin' });
       api.registerHttpRoute!({ path: bundle.statusPath, handler: bundle.handlers.status, auth: 'plugin' });
-      api.logger.info('TotalReclaw: registered 4 QR-pairing HTTP routes synchronously');
+      // 3.3.14 — in-process pair trigger. The bundle exposes initPath +
+      // handlers.init ONLY when relayBaseUrl is wired (always true here,
+      // since CONFIG.pairRelayUrl has a built-in default). Registered
+      // with auth: 'plugin' (same as the other pair routes) so the
+      // agent's localhost curl reaches it without a gateway bearer
+      // token. The route opens the relay WS in the gateway process →
+      // survives shell-tool timeouts, retries, SIGUSR1 reloads.
+      if (bundle.initPath && bundle.handlers.init) {
+        api.registerHttpRoute!({ path: bundle.initPath, handler: bundle.handlers.init, auth: 'plugin' });
+        api.logger.info('TotalReclaw: registered 5 QR-pairing HTTP routes synchronously (incl. in-process /pair/init)');
+      } else {
+        api.logger.info('TotalReclaw: registered 4 QR-pairing HTTP routes synchronously (in-process /pair/init not wired — no relay URL)');
+      }
     } else {
       api.logger.warn(
         'api.registerHttpRoute is unavailable on this OpenClaw version — /totalreclaw pair will not work. ' +
@@ -5215,6 +5239,21 @@ const plugin = {
 
     startTrajectoryPoller({
       logger: api.logger,
+      // 3.3.12-rc.19: re-assert slots.memory each poll tick. OpenClaw's
+      // config-rewrite-after-restart can strip it after register()'s
+      // self-heal (pop-os reinstall 2026-06-30 → slot reverted to disabled
+      // memory-core → memory_search/memory_get never bound). Cheap fs
+      // read; heals + restarts only if the slot is wrong.
+      recheckSlot: () => {
+        try {
+          if (patchOpenClawConfig(undefined, pluginVersion ?? undefined) === 'patched') {
+            api.logger.warn('TotalReclaw: slots.memory was wrong at poll — re-healed openclaw.json, restarting to apply');
+            try { process.kill(process.pid, 'SIGUSR1'); } catch { /* gateway shutting down */ }
+          }
+        } catch (err) {
+          api.logger.warn(`TotalReclaw: slot recheck failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
       ensureInitialized: () => ensureInitialized(api.logger),
       isPairingPending: () => needsSetup,
       isImportActive: () => _importInProgress,
@@ -5405,6 +5444,33 @@ const plugin = {
       api.logger.warn(
         `TotalReclaw: native memory capability registration failed — agent memory_search/memory_get UNAVAILABLE until fixed: ${msg}`,
       );
+    }
+
+    // ---------------------------------------------------------------
+    // Skill auto-register (rc.17 QA finding: plugin installs but the
+    // SKILL.md playbook does not — agents skipped the separate
+    // `openclaw skills install totalreclaw` step and ended up without
+    // pairing / recall instructions). Mirror the bundled SKILL.md +
+    // skill.json from the package root into the workspace skills dir so
+    // OpenClaw's workspace skill scanner discovers them on the next
+    // gateway load. A single `openclaw plugins install` is now enough
+    // for both plugin + skill. Idempotent + never throws (see
+    // skill-register.ts). Lives in a scanner-clean helper because
+    // index.ts already pairs env-derived config with network calls, so
+    // the disk I/O must stay out of this file.
+    // ---------------------------------------------------------------
+    try {
+      // Re-resolve the dist dir here: the earlier `pluginDir` const
+      // lives inside its own inner try/catch scope and is not visible
+      // this far down. The call is pure + cheap (URL parse + dirname).
+      ensureSkillRegistered({
+        pluginDir: nodePath.dirname(fileURLToPath(import.meta.url)),
+        skillsDir: nodePath.join(CONFIG.openclawWorkspace, 'skills'),
+        logger: api.logger,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      api.logger.warn(`TotalReclaw: skill auto-register failed (non-fatal): ${msg}`);
     }
 
     } catch (registerErr: unknown) {

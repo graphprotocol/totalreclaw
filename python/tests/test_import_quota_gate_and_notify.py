@@ -80,13 +80,28 @@ def _configured_state(monkeypatch):
     return state
 
 
-def test_pre_llm_call_injects_completion_once(tmp_path, monkeypatch):
+def _now_iso():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+def test_pre_llm_call_injects_completion_then_dedupes(tmp_path, monkeypatch):
+    """#401: first turn injects; consecutive turns dedupe (no re-inject).
+
+    Pre-#401 the hook latched ``announced=True`` immediately after the
+    one-shot injection, so the notification was fire-and-forget. #401 keeps
+    the notification PERSISTENT (``announced`` stays False) and instead
+    dedupes re-injection on a turn interval. So after the first inject we
+    expect: no re-inject on the very next turn, AND ``announced`` still
+    False (not latched).
+    """
     _redirect_state_dir(tmp_path, monkeypatch)
     from totalreclaw.hermes import hooks
 
     write_import_state(ImportState(
         import_id="done1", source="gemini", status="completed",
-        started_at="t", last_updated="t", facts_stored=5, dups_skipped=1,
+        started_at=_now_iso(), last_updated=_now_iso(),
+        facts_stored=5, dups_skipped=1, batch_done=4, batch_total=4,
     ))
 
     state = _configured_state(monkeypatch)
@@ -94,12 +109,72 @@ def test_pre_llm_call_injects_completion_once(tmp_path, monkeypatch):
     assert out and "context" in out
     ctx = out["context"]
     assert "finished" in ctx and "5 memories" in ctx and "gemini" in ctx
+    # Persistence: NOT latched on injection (#401).
+    assert read_import_state("done1").announced is False
 
-    # Latched — a second turn must NOT re-announce the same import.
+    # Same turn window — deduped, must NOT re-inject.
     out2 = hooks.pre_llm_call(state, user_message="hello", is_first_turn=False)
     ctx2 = (out2 or {}).get("context", "") if out2 else ""
     assert "finished" not in ctx2
-    assert read_import_state("done1").announced is True
+    # Still not announced — the notification persists across turns.
+    assert read_import_state("done1").announced is False
+
+
+def test_pre_llm_call_re_injects_after_turn_interval(tmp_path, monkeypatch):
+    """#401: after the dedup turn interval elapses, the nudge re-injects.
+
+    The agent may have skipped the first nudge; the persistent notification
+    retries every _IMPORT_ANNOUNCE_TURN_INTERVAL turns without spamming
+    every turn.
+    """
+    _redirect_state_dir(tmp_path, monkeypatch)
+    from totalreclaw.hermes import hooks
+
+    write_import_state(ImportState(
+        import_id="done2", source="chatgpt", status="completed",
+        started_at=_now_iso(), last_updated=_now_iso(), facts_stored=3,
+    ))
+    state = _configured_state(monkeypatch)
+
+    # First turn: inject.
+    hooks.pre_llm_call(state, user_message="hi", is_first_turn=False)
+    # Advance past the dedup interval and re-run: should inject again.
+    interval = hooks._IMPORT_ANNOUNCE_TURN_INTERVAL
+    state._turn_count = interval + 1
+    out = hooks.pre_llm_call(state, user_message="hi", is_first_turn=False)
+    ctx = (out or {}).get("context", "") if out else ""
+    assert "finished" in ctx  # re-injected after the interval
+    assert read_import_state("done2").announced is False
+
+
+def test_pre_llm_call_auto_retires_after_grace(tmp_path, monkeypatch):
+    """#401: past the 24h grace window the notification auto-latches.
+
+    Guarantees the persistent nudge eventually stops even if the agent never
+    acknowledges by querying import_status.
+    """
+    _redirect_state_dir(tmp_path, monkeypatch)
+    from totalreclaw.hermes import hooks
+    from totalreclaw import import_state as ist
+    from datetime import datetime, timezone, timedelta
+    from dataclasses import asdict
+
+    old = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()
+    # write_import_state() overwrites last_updated=now; write raw JSON to
+    # plant a 30h-old timestamp so the 24h grace auto-retire fires.
+    ist.IMPORT_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    raw = asdict(ImportState(
+        import_id="done3", source="gemini", status="completed",
+        started_at=old, last_updated=old, facts_stored=9,
+    ))
+    (ist.IMPORT_STATE_DIR / "done3.json").write_text(json.dumps(raw))
+
+    state = _configured_state(monkeypatch)
+    out = hooks.pre_llm_call(state, user_message="hi", is_first_turn=False)
+    # Past grace → no injection, and latched retired.
+    ctx = (out or {}).get("context", "") if out else ""
+    assert "finished" not in ctx
+    assert read_import_state("done3").announced is True
 
 
 # ---------------------------------------------------------------------------
@@ -180,3 +255,141 @@ async def test_billing_unreachable_fails_open(tmp_path, monkeypatch):
     # Billing down -> do NOT block (self-hosted / offline must still import).
     assert res.get("blocked") is not True
     assert called.await_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# #401 — import_status() fallback + acknowledgment latch
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_import_status_falls_back_to_recent_completed(tmp_path, monkeypatch):
+    """No active import + a recent completed import -> report it (#401).
+
+    Was: returned ``{"status": "no_active_import"}`` after completion, leaving
+    the agent unable to tell "completed" from "never existed".
+    """
+    _redirect_state_dir(tmp_path, monkeypatch)
+    from totalreclaw.hermes import tools
+    from datetime import datetime, timezone
+    from totalreclaw.agent.state import AgentState
+
+    now = datetime.now(timezone.utc).isoformat()
+    # Pre-mark announced so the import_status() acknowledgment latch is a
+    # no-op (it would otherwise rewrite last_updated via write_import_state,
+    # racing the completed_at assertion). The latch is covered by its own
+    # dedicated test below.
+    write_import_state(ImportState(
+        import_id="done-fb", source="gemini", status="completed",
+        started_at=now, last_updated=now, announced=True,
+        total_chunks=100, batch_done=4, batch_total=4,
+        facts_stored=287, facts_extracted=2345,
+    ))
+    stored = read_import_state("done-fb")
+
+    state = AgentState()
+    res = json.loads(await tools.import_status({}, state))
+    assert res["status"] == "completed"
+    assert res["import_id"] == "done-fb"
+    assert res["facts_stored"] == 287
+    # #401 new fields:
+    assert "elapsed_seconds" in res and res["elapsed_seconds"] >= 0
+    # completed_at is derived from the stored last_updated for terminal state.
+    assert res["completed_at"] == stored.last_updated
+
+
+@pytest.mark.asyncio
+async def test_import_status_no_import_found_when_empty(tmp_path, monkeypatch):
+    """No active + no recent -> the new ``no_import_found`` status (#401)."""
+    _redirect_state_dir(tmp_path, monkeypatch)
+    from totalreclaw.hermes import tools
+    from totalreclaw.agent.state import AgentState
+
+    res = json.loads(await tools.import_status({}, AgentState()))
+    assert res["status"] == "no_import_found"
+
+
+@pytest.mark.asyncio
+async def test_import_status_latches_announced_on_query(tmp_path, monkeypatch):
+    """#401: querying a completed import retires the persistent nudge.
+
+    The agent checking on a completed import is the natural acknowledgment
+    signal (no new tool needed): ``import_status`` latches ``announced`` so
+    ``pre_llm_call`` stops re-injecting.
+    """
+    _redirect_state_dir(tmp_path, monkeypatch)
+    from totalreclaw.hermes import tools
+    from totalreclaw.agent.state import AgentState
+
+    now = _now_iso()
+    write_import_state(ImportState(
+        import_id="done-ack", source="gemini", status="completed",
+        started_at=now, last_updated=now, facts_stored=10,
+    ))
+    assert read_import_state("done-ack").announced is False
+
+    state = AgentState()
+    await tools.import_status({}, state)
+    assert read_import_state("done-ack").announced is True
+
+
+# ---------------------------------------------------------------------------
+# #401 — _persist_import_memory (import_id survives context compaction)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_persist_import_memory_noop_when_unconfigured(monkeypatch):
+    """#401: graceful no-op when TotalReclaw is not configured."""
+    from totalreclaw.hermes import tools
+    from totalreclaw.agent.state import AgentState
+
+    state = AgentState()  # not configured
+    # Must not raise, and must not attempt a write.
+    await tools._persist_import_memory(state, text="anything", importance=0.7)
+
+
+@pytest.mark.asyncio
+async def test_persist_import_memory_writes_via_remember_when_configured(monkeypatch):
+    """#401: configured state -> routes through remember(force=True).
+
+    The issue spec proposed ``provider.remember_sync``; that API does not
+    exist, so the closest equivalent is the shared ``tools.remember`` handler.
+    This pins that routing + the force=True bypass (internal bookkeeping
+    write, not a duplicate of a pending user fact).
+    """
+    from totalreclaw.hermes import tools
+    from totalreclaw.agent.state import AgentState
+
+    state = AgentState()
+    monkeypatch.setattr(state, "is_configured", lambda: True)
+
+    seen = {}
+
+    async def _fake_remember(args, st, **kwargs):
+        seen["args"] = args
+        return '{"stored": true}'
+
+    monkeypatch.setattr(tools, "remember", _fake_remember)
+
+    await tools._persist_import_memory(
+        state, text="Active background import: id=abc", importance=0.7,
+    )
+    assert seen["args"]["text"] == "Active background import: id=abc"
+    assert seen["args"]["force"] is True
+    assert seen["args"]["importance"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_persist_import_memory_swallows_remember_failure(monkeypatch):
+    """#401: a failing remember must not propagate (best-effort only)."""
+    from totalreclaw.hermes import tools
+    from totalreclaw.agent.state import AgentState
+
+    state = AgentState()
+    monkeypatch.setattr(state, "is_configured", lambda: True)
+
+    async def _boom(args, st, **kwargs):
+        raise RuntimeError("vault write exploded")
+
+    monkeypatch.setattr(tools, "remember", _boom)
+    # Must not raise.
+    await tools._persist_import_memory(state, text="x", importance=0.7)

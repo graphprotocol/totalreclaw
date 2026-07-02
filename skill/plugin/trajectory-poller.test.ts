@@ -633,6 +633,21 @@ async function runTests(): Promise<void> {
       assertEq(calls.extraction, 1, 'crash-recovery phase B: second poll on now-saved state is a no-op');
     });
   }
+
+  // -------------------------------------------------------------------------
+  // 6. recheckSlot fires once per poll tick (3.3.12-rc.19 slot self-heal)
+  // -------------------------------------------------------------------------
+  {
+    let slotChecks = 0;
+    const home = path.join(TMP, 'slot-recheck-home');
+    fs.mkdirSync(path.join(home, '.totalreclaw'), { recursive: true });
+    await withPoller(home, { recheckSlot: () => { slotChecks++; } }, async (handle) => {
+      await handle.pollOnce();
+      assertEq(slotChecks, 1, 'recheckSlot invoked once per poll tick');
+      await handle.pollOnce();
+      assertEq(slotChecks, 2, 'recheckSlot invoked on every tick (2 polls → 2 calls)');
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------

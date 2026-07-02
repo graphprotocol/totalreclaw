@@ -14,7 +14,11 @@ from pathlib import Path
 from typing import List, Optional
 
 IMPORT_STATE_DIR: Path = Path.home() / ".totalreclaw" / "import-state"
-STALE_THRESHOLD_SECONDS: int = 3600  # 1 hour
+# 2h (#401, was 1h): the 2026-06-29 Gemini run showed individual batches
+# taking 15+ min when nonce retries stacked; 1h produced false-positive
+# stale-flagging on healthy long imports. 2h absorbs retry storms without
+# masking genuinely-hung imports (which the abort flag handles explicitly).
+STALE_THRESHOLD_SECONDS: int = 7200  # 2 hours
 
 
 @dataclass
@@ -93,6 +97,45 @@ def read_most_recent_active_import() -> Optional[ImportState]:
         if not candidates:
             return None
         return max(candidates, key=lambda s: s.started_at)
+    except Exception:
+        return None
+
+
+def read_most_recent_import(max_age_hours: int = 48) -> Optional[ImportState]:
+    """Return the most recent import of any status within the age window.
+
+    Used by ``import_status()`` as a fallback when no active import is running
+    and no explicit ``import_id`` was supplied (#401). Without this, a caller
+    asking "how did the last import go?" after completion would get a blind
+    ``no_active_import`` response because ``read_most_recent_active_import``
+    only matches ``running``/``pending``. This surfaces the most recent
+    completed/failed/aborted import so the agent can report final state.
+
+    ``last_updated`` (not ``started_at``) is the sort key: a long-running
+    import that finished 10 min ago is "more recent" than one that started
+    later but is still mid-flight. Age is measured from ``last_updated`` so
+    a completed import stays reportable for ``max_age_hours`` after it
+    finished, not after it started.
+    """
+    try:
+        from datetime import datetime, timezone, timedelta
+        candidates: List[ImportState] = []
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+        for p in IMPORT_STATE_DIR.glob("*.json"):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                state = _coerce_state(data)
+                try:
+                    updated = datetime.fromisoformat(state.last_updated.replace("Z", "+00:00"))
+                except Exception:
+                    continue
+                if updated > cutoff:
+                    candidates.append(state)
+            except Exception:
+                pass
+        if not candidates:
+            return None
+        return max(candidates, key=lambda s: s.last_updated)
     except Exception:
         return None
 

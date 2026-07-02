@@ -62,7 +62,7 @@ The user pasted this URL deliberately, but treat each command as a step you and 
 
 1. `openclaw plugins install @totalreclaw/totalreclaw` — installs the published plugin from npm under the `@totalreclaw` scope owned by `p-diogo`. The plugin runs inside OpenClaw's plugin sandbox. Upstream docs: <https://docs.openclaw.com/cli/plugins>.
 2. `openclaw skills install totalreclaw` — fetches the SKILL.md descriptor from ClawHub. Read-only metadata; no code executes from this step. Upstream docs: <https://docs.openclaw.com/cli/skills>.
-3. When no `~/.totalreclaw/credentials.json` exists, you run `tr pair --json` (via the `TR_CLI` resolver), which mints a one-time URL + PIN. The user opens the URL in their own browser to enter or generate a recovery phrase. The phrase never enters chat or your shell.
+3. When no `~/.totalreclaw/credentials.json` exists, you trigger pairing via the plugin's in-process HTTP route (`curl http://localhost:18789/plugin/totalreclaw/pair/init`), which mints a one-time URL + PIN. The user opens the URL in their own browser to enter or generate a recovery phrase. The phrase never enters chat or your shell.
 
 You are not asked to handle the recovery phrase. You are not asked to bypass auth. Pasting the install prompt IS the consent moment for installing the plugin; the URL + PIN you hand back from `tr pair --json` is the real consent moment for account creation, since the user has to open the page in their browser to continue. There is no separate "yes/no" gate before account setup. If the user pastes a phrase in chat anyway, refuse to proceed — see "Phrase safety" below.
 
@@ -107,7 +107,7 @@ These freelancing patterns have broken pair flows. They are FORBIDDEN regardless
 
 3. **Do NOT re-render the QR.** `tr pair --json` returns `qr_ascii` (Unicode) AND the pair page renders a real PNG. Saving the QR to `/tmp/totalreclaw-pair-qr.png` triggers OpenClaw's media-access policy block and Telegram delivery fails with `LocalMediaAccessError`. Just emit the URL + PIN as user-visible line 4 as **plain text on its own line** (the `#pk=` URL fragment breaks if wrapped in markdown/backticks) — that is your only QR responsibility.
 
-4. **Do NOT invoke `tr pair --json` in the foreground.** A foreground pair subprocess is killed when your shell-tool exec returns. The pair WS dies → relay returns 502. Step 4 below uses `setsid -f` for exactly this reason — copy that block VERBATIM. Do not "simplify". Do not drop the `setsid -f`. Do not omit `< /dev/null`.
+4. **Do NOT invoke `tr pair --json` in the foreground.** A foreground pair subprocess is killed when your shell-tool exec returns. The pair WS dies → relay returns 502. **Prefer the in-process HTTP route `curl -s http://localhost:18789/plugin/totalreclaw/pair/init` (3.3.14+) instead — it opens the relay WS in the gateway process and needs no detachment.** If you must fall back to the CLI path (older plugin, or HTTP route unreachable), Step 4's `setsid -f` block is mandatory — copy it VERBATIM. Do not "simplify". Do not drop the `setsid -f`. Do not omit `< /dev/null`.
 
 5. **Do NOT narrate.** Examples that have appeared in past QAs and MUST NEVER appear again: "Now let me verify the CLI…" / "Gateway needs a restart, let me restart it" / "Let me find and signal the gateway process" / "The CLI is at the npm path, not the extensions path" / "CLI reports itself as version X (lag)" / "Now let me also add the required post-install config" / "Let me save the QR as a PNG". All silent — these are internal details. Emit only the 4-5 user-visible lines.
 
@@ -143,7 +143,7 @@ openclaw skills install totalreclaw
 
 **No extra config steps needed.** The plugin's `register()` auto-patches `~/.openclaw/openclaw.json` with the keys OpenClaw 2026.5.x looks for (`plugins.slots.memory`, `plugins.entries.totalreclaw.hooks.allowConversationAccess`, `channels.telegram.streaming.mode`, `plugins.bundledDiscovery`, `plugins.allow`, `plugins.installs.totalreclaw`) and auto-fires SIGUSR1 to its own PID after the patch, so the gateway in-process restart picks up the new keys without any manual restart — the native memory hooks register cleanly on the first session post-install.
 
-> **Setup is a user-initiated pair via `tr pair --json` (native memory integration).** The plugin does **not** auto-pair on load. When no `~/.totalreclaw/credentials.json` exists, the agent runs `tr pair --json`, surfaces the returned `url` + `pin` verbatim, and you complete the flow in your browser (generate/import your 12-word recovery phrase browser-side — it is encrypted client-side and never enters the chat or the agent's context). On completion `credentials.json` is written and `memory_search`/`memory_get` work immediately — no manual gateway restart (the plugin self-applies its config + signals `SIGUSR1` to reload; if the memory tools don't bind, the agent issues `/totalreclaw-restart` autonomously). Recall is native (`memory_search`/`memory_get`) and facts are captured automatically in the background — you don't call a remember tool per fact.
+> **Setup is a user-initiated pair (native memory integration).** The plugin does **not** auto-pair on load. When no `~/.totalreclaw/credentials.json` exists, the agent triggers pairing via the plugin's in-process HTTP route (`GET http://localhost:18789/plugin/totalreclaw/pair/init`, 3.3.14+) — which opens the relay pair WebSocket directly in the gateway process (immune to the 30s shell-tool subprocess timeout that killed the CLI path's WS → relay 502) — or falls back to `tr pair --json` via `setsid -f`. Either path surfaces the returned `url` + `pin` verbatim, and you complete the flow in your browser (generate/import your 12-word recovery phrase browser-side — it is encrypted client-side and never enters the chat or the agent's context). On completion `credentials.json` is written and `memory_search`/`memory_get` work immediately — no manual gateway restart (the plugin self-applies its config + signals `SIGUSR1` to reload; if the memory tools don't bind, the agent issues `/totalreclaw-restart` autonomously). Recall is native (`memory_search`/`memory_get`) and facts are captured automatically in the background — you don't call a remember tool per fact.
 
 > **Auto-extraction safety net.** Even when the `agent_end` hook is gated by an upstream policy, the plugin runs a filesystem-polling backup that watches `~/.openclaw/agents/<agent>/sessions/*.trajectory.jsonl` every 60 s and runs the same extraction pipeline (NOT a hook event, so it's never gated). The hook fires alongside the poller; offset-based dedup prevents double-extraction.
 
@@ -154,17 +154,19 @@ Notes:
 - **Always run the install — never skip it because a totalreclaw "appears present".** A leftover install from a prior version (e.g. a stale `@totalreclaw/mcp-server`) is NOT the `@totalreclaw/totalreclaw` plugin and must be replaced. If install reports `already exists`, OR you detect an old/different totalreclaw package on disk, force-replace it: `openclaw plugins install @totalreclaw/totalreclaw@rc --force` + `openclaw skills install totalreclaw --force`. Then verify the version in Step 2 — it must match the requested RC.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
-### Step 2 — Verify the `tr` CLI works — emit user-visible line 2 on success
+### Step 2 — Verify the plugin loaded — emit user-visible line 2 on success
 
-Resolve the CLI path once and reuse (modern OpenClaw 2026.5.x installs npm-managed plugins under `~/.openclaw/npm/...`, not `~/.openclaw/extensions/...`):
+Run the **registered** `openclaw totalreclaw` subcommand (the plugin registers it via `api.registerCli` during `register()`). This is the canonical verification path — it both confirms the plugin loaded AND that its CLI surface is bound:
+
 ```bash
-TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js 2>/dev/null | head -1)"
-node "$TR_CLI" status --json
+openclaw totalreclaw status
 ```
 
-Parse the JSON. When you receive `{"version": "...", "paired": ..., ...}`, emit user-visible line 2 (`✓ Installed (totalreclaw <version>)`) with the version substituted. Then proceed silently to Step 3.
+A successful run (exit `0`, human-readable status printed) is your verification. Emit user-visible line 2 (`✓ Installed (totalreclaw <version>)`) with the version the `openclaw plugins install` step reported (or read it from `openclaw plugins list | grep totalreclaw`). Then proceed silently to Step 3.
 
-If `tr status` exits non-zero or `$TR_CLI` is empty, wait 5s and retry once (the install may still be completing). If it still fails, tell the user the install didn't land and retry `openclaw plugins install @totalreclaw/totalreclaw@rc`.
+If `openclaw totalreclaw status` exits non-zero or reports `unknown command`, wait 5s and retry once (the install / SIGUSR1 reload may still be completing). If it still fails, tell the user the install didn't land and retry `openclaw plugins install @totalreclaw/totalreclaw@rc`.
+
+> ⛔ **DO NOT use `npx` to run TotalReclaw commands.** `npx` fails inside OpenClaw's sandbox (no network egress for the package fetch, and the resolved binary path is wrong for a plugin that's already installed). Always use the **registered subcommand** `openclaw totalreclaw <command>` (e.g. `openclaw totalreclaw status`, `openclaw totalreclaw onboard --pair-only`) or the **native tool** `memory_search`. The only place a raw `node .../dist/tr-cli.js` invocation is acceptable is the explicit fallback blocks below (the pair CLI fallback and the issue-#184 deadlock workaround), which define the path inline — never invent a resolver of your own and never reach for `npx`.
 
 ### Step 3 — Check for existing credentials (silent unless found)
 
@@ -174,22 +176,30 @@ Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, em
 
 Pasting the install prompt was the consent moment for installing the plugin. The URL + PIN you're about to hand the user is the real consent moment for account creation — they have to open the page in their browser to proceed. There is NO separate yes/no gate. Do NOT ask "Would you like to set up an account?" — run pair immediately. Pair is UNCONDITIONAL when no credentials exist; the user installing/requesting setup IS the consent.
 
-CRITICAL: always invoke `tr pair --json` via `setsid -f` so the WS-holding subprocess is in its own session and survives any post-install gateway SIGUSR1 reload. A foreground `node tr-cli pair` is killed mid-flight when the gateway fires its deferred restart, surfacing as `Gateway could not finish pairing (502). The agent timed out or the ciphertext failed to decrypt — ask the agent to retry pairing.` on the user's browser.
+**PRIMARY pair path (3.3.14+) — the in-process HTTP route.** This is the resilient path: the plugin opens the relay pair WebSocket directly in the gateway process via `GET /plugin/totalreclaw/pair/init`, so the WS is immune to the 30s shell-tool subprocess timeout (which killed the CLI's pair WS mid-pair → relay 502 on `/pair/respond`). No `setsid -f`, no subprocess detachment, no foreground-kill risk — the WS lives in the gateway process itself and survives shell-tool timeouts, retries, and SIGUSR1 reloads.
+
+```bash
+curl -s http://localhost:18789/plugin/totalreclaw/pair/init
+```
+
+Parse the JSON `{"v":1,"sid":"...","url":"...","pin":"...","mode":"...","expires_at_ms":...}`. The route returns immediately with the user-facing URL + PIN; the gateway holds the WebSocket open in-process and completes pairing in the background once the browser uploads the encrypted phrase. Emit user-visible line 4 (`Open <url> in your browser. Enter PIN <pin>. Generate or paste a 12-word recovery phrase. Reply done once it's sealed.`) with `<url>` and `<pin>` substituted VERBATIM from the JSON — never invent or modify values. Do not pre-narrate — line 4 itself is the only thing the user needs to see.
+
+**FALLBACK pair path — `tr pair --json` via `setsid -f`.** Use ONLY if the HTTP route is unreachable (older plugin without `/pair/init`, or the gateway HTTP server isn't bound on `localhost:18789`). The CLI path opens the same relay WS but from a subprocess, so it MUST be detached with `setsid -f` to survive the post-install SIGUSR1 reload. A foreground `node tr-cli pair` is killed mid-flight when the gateway fires its deferred restart, surfacing as `Gateway could not finish pairing (502). The agent timed out or the ciphertext failed to decrypt — ask the agent to retry pairing.` on the user's browser.
 
 ```bash
 PAIR_OUT="/tmp/tr-pair-out-$(date +%s).json"
+# Resolve the installed plugin's standalone CLI directly (this fallback only).
+TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js 2>/dev/null | head -1)"
 setsid -f node "$TR_CLI" pair --json > "$PAIR_OUT" 2>&1 < /dev/null
 sleep 2
 cat "$PAIR_OUT"
 ```
 
-Parse the JSON `{"v":1,"sid":"...","url":"...","pin":"...","mode":"...","expires_at_ms":...,"qr_ascii":"..."}`. Emit user-visible line 4 (`Open <url> in your browser. Enter PIN <pin>. Generate or paste a 12-word recovery phrase. Reply done once it's sealed.`) with `<url>` and `<pin>` substituted VERBATIM from the JSON — never invent or modify values. Do not pre-narrate — line 4 itself is the only thing the user needs to see.
+If the HTTP route returns connection-refused AND the CLI fallback also fails, retry once after 5s (the install may still be completing). There is no other agent-facilitated pair path under the native flow (the legacy `totalreclaw_pair` plugin tool is retired).
 
-**Emit the URL as PLAIN TEXT on its OWN LINE — no markdown, no backticks, no `[text](url)` wrapping, no line-splitting.** The URL contains a `#pk=` fragment that breaks (unclickable link / unscannable QR) if wrapped in markdown or split across lines. Plain text only.
+**Emit the URL as PLAIN TEXT on its OWN LINE — no markdown, no backticks, no `[text](url)` wrapping, no line-splitting.** The URL contains a `#pk=` fragment that breaks (unclickable link / unscannable QR) if wrapped in markdown or split across lines. Plain text only. (The HTTP `/pair/init` payload does not include `qr_ascii`; only the CLI payload does. The pair page served at `/pair/finish` renders a real PNG QR in the browser regardless of which path opened the session, so users on a desktop browser see the QR. Do NOT save QR PNGs locally — `LocalMediaAccessError`.)
 
-If the cat output is empty after 2s, sleep 2 more seconds and try again (relay handshake can take up to 4s on a cold network). There is no fallback tool — `tr pair --json` is the sole agent-facilitated pair path under the native flow (the legacy `totalreclaw_pair` plugin tool is retired).
-
-The pair payload includes a `qr_ascii` field (Unicode block-char QR, ~43 lines × 43 cols) that renders correctly in monospace fonts on every modern transport. Emit it inline in a triple-backticked code block right above user-visible line 4 if your transport can render code blocks. The pair page renders a real PNG QR alongside, so users on a desktop browser see both. Do NOT save QR PNGs locally (`LocalMediaAccessError`). The QR encodes only the URL; the PIN is dual-channel — typed separately.
+If the cat output is empty after 2s, sleep 2 more seconds and try again (relay handshake can take up to 4s on a cold network — applies to the CLI fallback; the HTTP route blocks until the relay `opened` frame lands, so its response is never empty).
 
 ### Step 5 — Verify and confirm (silent until line 5)
 
@@ -318,7 +328,7 @@ See [Importing Memories](importing-memories.md).
 ## Billing
 
 - **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
-- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `tr upgrade` CLI (e.g. `node "$TR_CLI" upgrade`) or visit <https://totalreclaw.xyz/pricing>. See `tr status` for current pricing.
+- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `tr upgrade` CLI (e.g. `openclaw totalreclaw status` then follow the upgrade URL it prints, or the standalone `tr upgrade` if exposed) or visit <https://totalreclaw.xyz/pricing>. See `openclaw totalreclaw status` for current pricing.
 
 The plugin warns you automatically when you cross 80% of the monthly free-tier memory limit (injected at conversation start). Check anytime by asking *"what's my TotalReclaw status?"* — that surfaces tier, memories used, memory limit, reset date, and upgrade URL.
 

@@ -52,7 +52,16 @@ logger = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 EXTRACTION_RATIO = 2.5     # Average facts per conversation chunk (empirical)
-SECONDS_PER_BATCH = 45     # Estimated seconds to process one batch
+# Tuned from the 2026-06-29 Gemini run (1,344 chunks / 54 batches / 5h 27m blind
+# extraction): observed ~48.7s per chunk sequential wall-clock (#401). Was 75s
+# (pre-#401), which over-estimated by ~50%.
+SECONDS_PER_CHUNK_SEQ = 50  # Sequential wall-clock per LLM extraction (empirical)
+SECONDS_PER_USEROP = 0.5   # Estimated seconds per on-chain UserOp write
+SECONDS_PROFILING = 1200   # Estimated seconds for one-time smart-import profiling (~20 min)
+# Per-batch UserOp overhead (nonce retries / resubmission). Derived from the
+# 2026-06-29 run: ~12 retry events across 54 batches ≈ 15s amortised per batch
+# (#401). Added to each batch's estimated wall-clock in ``estimate()``.
+USEROP_OVERHEAD_PER_BATCH = 15
 DEFAULT_BATCH_SIZE = 25    # Chunks per batch
 CHUNK_SIZE = 20            # Messages per conversation chunk (matches adapters)
 INTER_CHUNK_DELAY = 2.0    # Seconds between LLM extraction calls (rate-limit mitigation)
@@ -286,7 +295,32 @@ class ImportEngine:
         # How many items need processing in batches
         processable = total_chunks if has_chunks else total_facts
         num_batches = max(1, int(math.ceil(processable / DEFAULT_BATCH_SIZE)))
-        estimated_minutes = round(num_batches * SECONDS_PER_BATCH / 60, 1)
+
+        # Time estimate accounting for concurrent extraction (#378) and
+        # one-time profiling (#373).  Per batch: ceil(chunks / concurrency)
+        # extraction waves × per-chunk wall-clock, plus on-chain UserOp
+        # writes.  Profiling runs once (first batch).
+        conc = _import_concurrency()
+        chunks_per_batch = min(DEFAULT_BATCH_SIZE, processable)
+        extraction_waves = math.ceil(chunks_per_batch / conc)
+        extraction_per_batch = extraction_waves * SECONDS_PER_CHUNK_SEQ
+        userop_per_batch = (
+            math.ceil(estimated_from_chunks / num_batches / IMPORT_MAX_BATCH_SIZE)
+            * SECONDS_PER_USEROP
+        )
+        # Per-batch wall-clock = extraction waves + UserOp writes + amortised
+        # nonce-retry/resubmission overhead (#401). The overhead constant
+        # captures the observed ~12 retry events / 54 batches from the
+        # 2026-06-29 run and is added unconditionally (retries happen on
+        # nearly every batch in practice).
+        per_batch_s = (
+            extraction_per_batch
+            + userop_per_batch
+            + USEROP_OVERHEAD_PER_BATCH
+        )
+        estimated_minutes = round(
+            (SECONDS_PROFILING + num_batches * per_batch_s) / 60, 1
+        )
 
         return {
             "source": source,

@@ -102,10 +102,10 @@ export function getSessionId(): string | null {
 
 /**
  * Runtime override for chain ID, set after the relay billing response is
- * read. Free tier stays on 84532 (Base Sepolia); Pro tier flips to 100
- * (Gnosis mainnet). The relay routes Pro writes to Gnosis, so Pro-tier
- * UserOps MUST be signed against chain 100 — otherwise the bundler rejects
- * the signature with AA23.
+ * read. After the ops-1 single-chain migration (2026-05), ALL tiers (free
+ * + Pro) are on Gnosis mainnet (chain 100). The default below is 100.
+ * The relay routes all writes to Gnosis, so UserOps MUST be signed against
+ * chain 100 — otherwise the bundler rejects the signature with AA24.
  *
  * See index.ts: after the billing lookup completes, call
  * `setChainIdOverride(100)` for Pro users. Free users can leave the
@@ -221,9 +221,8 @@ export const CONFIG = {
       : 'wss://api.totalreclaw.xyz')
   ).replace(/\/+$/, ''),
 
-  // Chain — chainId is no longer user-configurable. It is auto-detected from
-  // the relay billing response (free = Base Sepolia / 84532, Pro = Gnosis /
-  // 100). The default here is used only before the first billing lookup
+  // Chain — chainId is no longer user-configurable. After the ops-1 single-
+  // chain migration, ALL tiers are on Gnosis (100). The default here is 100.
   // completes. Self-hosted users can still point at a custom DataEdge via
   // TOTALRECLAW_DATA_EDGE_ADDRESS / TOTALRECLAW_ENTRYPOINT_ADDRESS /
   // TOTALRECLAW_RPC_URL (undocumented; internal knobs).
@@ -233,7 +232,7 @@ export const CONFIG = {
   // not a literal — a literal would freeze all Pro-tier UserOps to the
   // wrong chainId and AA23 at the bundler.
   get chainId(): number {
-    return _chainIdOverride ?? 84532;
+    return _chainIdOverride ?? 100;
   },
   dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || '',
   entryPointAddress: process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || '',
