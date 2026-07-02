@@ -168,15 +168,12 @@ def encode_execute_batch_calldata_for_data_edge(
     when ``len(protobuf_payloads) == 1`` so a batch-of-1 is byte-identical
     to the single-fact fast path — this preserves gas parity with the TS
     plugin's ``encodeBatchCalls`` helper.
-    The Rust core returns ``execute(...)`` calldata (not ``executeBatch``)
-    when ``len(protobuf_payloads) == 1`` so a batch-of-1 is byte-identical
-    to the single-fact fast path — this preserves gas parity with the TS
-    plugin's ``encodeBatchCalls`` helper.
 
     Parameters
     ----------
     protobuf_payloads : list of bytes
-        One raw protobuf payload per fact. Must contain 1..15 entries.
+        One raw protobuf payload per fact. Must contain
+        1..:data:`MAX_BATCH_SIZE` entries.
 
     Returns
     -------
@@ -198,12 +195,30 @@ def encode_execute_batch_calldata_for_data_edge(
             f"Batch size {len(protobuf_payloads)} exceeds maximum of "
             f"{MAX_BATCH_SIZE}"
         )
-    if data_edge_address is not None:
-        calldata_bytes = totalreclaw_core.encode_batch_call(
-            protobuf_payloads, data_edge_address
-        )
-    else:
-        calldata_bytes = totalreclaw_core.encode_batch_call(protobuf_payloads)
+    try:
+        if data_edge_address is not None:
+            calldata_bytes = totalreclaw_core.encode_batch_call(
+                protobuf_payloads, data_edge_address
+            )
+        else:
+            calldata_bytes = totalreclaw_core.encode_batch_call(
+                protobuf_payloads
+            )
+    except ValueError as exc:
+        # The batch passed our own ceiling check above, so a core-side
+        # "exceeds maximum" means the installed wheel enforces a smaller
+        # ceiling than this client — i.e. a totalreclaw-core older than
+        # the pyproject floor (< 2.5.5 kept the pre-#392 ceiling of 15).
+        if "exceeds maximum" in str(exc):
+            raise ValueError(
+                f"totalreclaw-core rejected a "
+                f"{len(protobuf_payloads)}-fact batch that this client "
+                f"allows (MAX_BATCH_SIZE={MAX_BATCH_SIZE}): {exc}. The "
+                f"installed core wheel is older than the required floor "
+                f"and enforces the pre-#392 ceiling — upgrade with "
+                f"pip install -U 'totalreclaw-core>=2.5.5'."
+            ) from exc
+        raise
     return "0x" + calldata_bytes.hex()
 
 

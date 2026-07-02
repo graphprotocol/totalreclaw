@@ -98,7 +98,8 @@ class TestBatchCalldataFixtureParity:
         assert len(calldata_hex[2:]) // 2 == entry["expected_calldata_bytes"]
 
     def test_fixture_covers_required_sizes(self) -> None:
-        # Spec minimum: N = 1, 3, 5, 10. We also cover 15 (MAX_BATCH_SIZE).
+        # Spec minimum: N = 1, 3, 5, 10. We also cover 15 (the pre-#392
+        # ceiling; MAX_BATCH_SIZE is 30 since core 2.5.5).
         required = {"n1", "n3", "n5", "n10"}
         assert required.issubset(BATCH_FIXTURE.keys())
 
@@ -199,10 +200,37 @@ class TestBatchValidation:
             encode_execute_batch_calldata_for_data_edge(payloads)
 
     def test_exact_max_size_accepted(self) -> None:
-        # 15 must work (not raise)
+        # Exactly MAX_BATCH_SIZE payloads must encode (not raise). Requires
+        # an installed core whose ceiling matches ours (core >= 2.5.5 for
+        # the 30 ceiling, #392 Part 2).
         payloads = [bytes([i]) for i in range(MAX_BATCH_SIZE)]
         calldata_hex = encode_execute_batch_calldata_for_data_edge(payloads)
         assert calldata_hex.startswith("0x47e1da2a")
+
+    def test_stale_core_ceiling_mismatch_gives_actionable_error(self) -> None:
+        # A core wheel older than the pyproject floor (< 2.5.5) enforces a
+        # 15 ceiling, so a batch that passes our MAX_BATCH_SIZE=30 check
+        # dies inside the core with a bare "Batch size 30 exceeds maximum
+        # of 15" — indistinguishable from a caller bug. That exact drift
+        # produced a confusing field failure (#392 Part 2 rollout); the
+        # encoder must translate it into an upgrade hint.
+        def _old_core_reject(*_args, **_kwargs):
+            raise ValueError(
+                "crypto error: Batch size 30 exceeds maximum of 15"
+            )
+
+        payloads = [bytes([i]) for i in range(MAX_BATCH_SIZE)]
+        with patch(
+            "totalreclaw.userop.totalreclaw_core.encode_batch_call",
+            side_effect=_old_core_reject,
+        ):
+            with pytest.raises(
+                ValueError, match="totalreclaw-core.*older"
+            ) as excinfo:
+                encode_execute_batch_calldata_for_data_edge(payloads)
+        # The hint must carry the client ceiling and the upgrade action.
+        assert str(MAX_BATCH_SIZE) in str(excinfo.value)
+        assert "pip install" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------
