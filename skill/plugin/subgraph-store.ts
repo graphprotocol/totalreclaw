@@ -294,6 +294,33 @@ export function __resetSenderLocksForTests(): void {
   _senderSubmissionLocks.clear();
 }
 
+// ---------------------------------------------------------------------------
+// Test-only WASM mock seams (AA10 submit-path retry test)
+// ---------------------------------------------------------------------------
+
+/**
+ * Test-only seam: inject a mock WASM module.
+ *
+ * The AA10 submit-path retry test needs to drive the real submitFactBatchOnChain
+ * while controlling WASM behavior (deriveEoa, encodeBatchCall, hashUserOp,
+ * signUserOp, getEntryPointAddress). This seam swaps the module-level _wasm
+ * reference so the test can provide stubs.
+ *
+ * MUST be followed by __clearWasmForTests() in teardown.
+ */
+export function __setWasmForTests(mock: any): void {
+  _wasm = mock;
+}
+
+/**
+ * Test-only seam: restore the real WASM module.
+ *
+ * Clears a test-injected mock WASM and resets the module to null so the next
+ * getWasm() call reloads the real @totalreclaw/core.
+ */
+export function __clearWasmForTests(): void {
+  _wasm = null;
+}
 
 /**
  * Check if a Smart Account is deployed and return factory/factoryData if not.
