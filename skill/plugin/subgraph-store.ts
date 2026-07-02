@@ -210,7 +210,10 @@ export async function __getInitCodeForTests(
   eoaAddress: string,
   rpcUrl: string,
 ): Promise<{ factory: string | null; factoryData: string | null }> {
-  return getInitCode(sender, eoaAddress, rpcUrl);
+  const result = await getInitCode(sender, eoaAddress, rpcUrl);
+  // Strip undeployed flag from test-only interface (main doesn't have it)
+  const { factory, factoryData } = result;
+  return { factory, factoryData };
 }
 
 /** Test-only seam: read the RPC probe counter. */
