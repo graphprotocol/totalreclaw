@@ -95,6 +95,55 @@ def test_most_recent_active_returns_newest():
     assert result.import_id == "new-1"
 
 
+# ---------------------------------------------------------------------------
+# #401 — read_most_recent_import (any-status fallback for import_status())
+# ---------------------------------------------------------------------------
+
+def test_most_recent_import_none_when_empty():
+    assert m.read_most_recent_import() is None
+
+
+def test_most_recent_import_returns_completed_within_window():
+    """The headline #401 case: a completed import is surfaced post-completion."""
+    now = datetime.now(timezone.utc).isoformat()
+    m.write_import_state(make_state(
+        import_id="c-done", status="completed", started_at=now, last_updated=now,
+        facts_stored=42,
+    ))
+    result = m.read_most_recent_import(max_age_hours=48)
+    assert result is not None
+    assert result.import_id == "c-done"
+    assert result.status == "completed"
+
+
+def test_most_recent_import_skips_older_than_window():
+    # write_import_state() overwrites last_updated=now, so write raw JSON to
+    # plant a timestamp outside the 48h window (#401 age-window behavior).
+    old = (datetime.now(timezone.utc) - timedelta(hours=72)).isoformat()
+    raw = make_state(import_id="c-old", status="completed",
+                     started_at=old, last_updated=old)
+    m.IMPORT_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (m.IMPORT_STATE_DIR / "c-old.json").write_text(json.dumps(__import__("dataclasses").asdict(raw)))
+    assert m.read_most_recent_import(max_age_hours=48) is None
+
+
+def test_most_recent_import_picks_latest_by_last_updated():
+    """When multiple imports exist, the most recently updated one wins."""
+    earlier = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    later = datetime.now(timezone.utc).isoformat()
+    m.IMPORT_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    from dataclasses import asdict
+    raw_a = asdict(make_state(import_id="a", status="completed",
+                              started_at=earlier, last_updated=earlier))
+    raw_b = asdict(make_state(import_id="b", status="failed",
+                              started_at=later, last_updated=later))
+    (m.IMPORT_STATE_DIR / "a.json").write_text(json.dumps(raw_a))
+    (m.IMPORT_STATE_DIR / "b.json").write_text(json.dumps(raw_b))
+    result = m.read_most_recent_import(max_age_hours=48)
+    assert result is not None
+    assert result.import_id == "b"  # later last_updated wins, even though failed
+
+
 def test_state_file_is_valid_json():
     state = make_state(import_id="json-test")
     m.write_import_state(state)

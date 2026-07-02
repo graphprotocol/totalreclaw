@@ -52,9 +52,16 @@ logger = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 EXTRACTION_RATIO = 2.5     # Average facts per conversation chunk (empirical)
-SECONDS_PER_CHUNK_SEQ = 75  # Sequential wall-clock per LLM extraction (empirical, ~1.25 min)
+# Tuned from the 2026-06-29 Gemini run (1,344 chunks / 54 batches / 5h 27m blind
+# extraction): observed ~48.7s per chunk sequential wall-clock (#401). Was 75s
+# (pre-#401), which over-estimated by ~50%.
+SECONDS_PER_CHUNK_SEQ = 50  # Sequential wall-clock per LLM extraction (empirical)
 SECONDS_PER_USEROP = 0.5   # Estimated seconds per on-chain UserOp write
 SECONDS_PROFILING = 1200   # Estimated seconds for one-time smart-import profiling (~20 min)
+# Per-batch UserOp overhead (nonce retries / resubmission). Derived from the
+# 2026-06-29 run: ~12 retry events across 54 batches ≈ 15s amortised per batch
+# (#401). Added to each batch's estimated wall-clock in ``estimate()``.
+USEROP_OVERHEAD_PER_BATCH = 15
 DEFAULT_BATCH_SIZE = 25    # Chunks per batch
 CHUNK_SIZE = 20            # Messages per conversation chunk (matches adapters)
 INTER_CHUNK_DELAY = 2.0    # Seconds between LLM extraction calls (rate-limit mitigation)
@@ -301,7 +308,16 @@ class ImportEngine:
             math.ceil(estimated_from_chunks / num_batches / IMPORT_MAX_BATCH_SIZE)
             * SECONDS_PER_USEROP
         )
-        per_batch_s = extraction_per_batch + userop_per_batch
+        # Per-batch wall-clock = extraction waves + UserOp writes + amortised
+        # nonce-retry/resubmission overhead (#401). The overhead constant
+        # captures the observed ~12 retry events / 54 batches from the
+        # 2026-06-29 run and is added unconditionally (retries happen on
+        # nearly every batch in practice).
+        per_batch_s = (
+            extraction_per_batch
+            + userop_per_batch
+            + USEROP_OVERHEAD_PER_BATCH
+        )
         estimated_minutes = round(
             (SECONDS_PROFILING + num_batches * per_batch_s) / 60, 1
         )

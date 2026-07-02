@@ -833,6 +833,40 @@ def _make_llm_completion(state: "PluginState"):
     return complete
 
 
+async def _persist_import_memory(state: "PluginState", text: str, importance: float = 0.7) -> None:
+    """Best-effort persist an import-tracking note to the TotalReclaw vault.
+
+    #401: long-running imports outlive the conversation window. After Hermes
+    context compaction the agent forgets an import is running / finished and
+    stops monitoring. Writing the import id + status into the vault (via the
+    standard remember path) means ``totalreclaw_recall("active import")`` or
+    the ``pre_llm_call`` auto-recall surfaces it again — the import context
+    flows through the same memory system the user already uses.
+
+    Graceful no-op when TotalReclaw is not configured or the write fails:
+    this is an observability aid, never load-bearing for the import itself.
+
+    The issue spec proposed ``provider.remember_sync(...)``; that method does
+    not exist on the real ``TotalReclawMemoryProvider`` surface (there is no
+    ``get_provider(state)`` + ``remember_sync`` API). The closest equivalent
+    is the shared ``tools.remember`` handler. Must be ``await``ed (not driven
+    via ``run_sync``) because the call sites run inside the Hermes event loop
+    — blocking the loop thread on the persistent sync runner would stall the
+    background import task. ``force=True`` bypasses the dup-of-pending
+    auto-extract suppression (this is an internal bookkeeping write, not a
+    duplicate user fact).
+    """
+    try:
+        if not state.is_configured():
+            return
+        await remember(
+            {"text": text, "importance": importance, "force": True},
+            state,
+        )
+    except Exception as e:  # never block the import over a bookkeeping write
+        logger.info("import-memory persist skipped: %s", e)
+
+
 async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
     """Import memories from other AI tools (Gemini, ChatGPT, Claude, Mem0, etc.)."""
     client = state.get_client()
@@ -964,7 +998,24 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
                 total_stored = 0
                 total_extracted = 0
                 batch_done = 0
+                start_dt = now_dt
                 try:
+                    # #401: persist the import id to memory at start so the agent
+                    # recovers it after context compaction and can poll
+                    # totalreclaw_import_status without the user re-supplying the
+                    # id. Best-effort; never blocks the import. Done inside the
+                    # background task (not the caller) so import_from returns
+                    # immediately with the "started" ack.
+                    await _persist_import_memory(
+                        state,
+                        text=(
+                            f"Active background import: id={import_id}, source={source}, "
+                            f"chunks={total_items}, batches={num_batches}, "
+                            f"started={now_dt.isoformat()}. Check status with "
+                            f"totalreclaw_import_status."
+                        ),
+                        importance=0.7,
+                    )
                     while offset < total_items:
                         # Check abort flag before each batch.
                         current = read_import_state(import_id)
@@ -997,6 +1048,15 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
                                     tz=timezone.utc,
                                 ).isoformat(),
                             }))
+                        # #401: INFO-level batch progress so
+                        # ``journalctl -u hermes-gateway | grep "Import "``
+                        # reconstructs the timeline without polling the state
+                        # file. Was checkpoint-only (silent) pre-#401.
+                        eta_min = f"{eta_ms / 60:.0f}min" if (s and eta_ms) else "?"
+                        logger.info(
+                            "Import %s: batch %d/%d complete (%d facts stored, %d extracted, ETA ~%s)",
+                            import_id, batch_done, num_batches, total_stored, total_extracted, eta_min,
+                        )
                         if result.is_complete:
                             break
                     # Mark complete.
@@ -1006,7 +1066,24 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
                                                           "batch_done": num_batches,
                                                           "facts_stored": total_stored,
                                                           "facts_extracted": total_extracted}))
-                    logger.info("Import %s: background complete (%d facts stored)", import_id, total_stored)
+                    end_dt = datetime.now(timezone.utc)
+                    duration_min = (end_dt - start_dt).total_seconds() / 60
+                    logger.info(
+                        "Import %s: COMPLETED in %.0f minutes — %d facts stored, %d extracted, %d batches",
+                        import_id, duration_min, total_stored, total_extracted, batch_done,
+                    )
+                    # #401: persist completion to the vault so the agent
+                    # recovers the result after context compaction. Best-effort.
+                    await _persist_import_memory(
+                        state,
+                        text=(
+                            f"Import {import_id} completed: {total_stored} memories stored, "
+                            f"{total_extracted} extracted from {total_items} chunks "
+                            f"({batch_done} batches) in {duration_min:.0f} minutes. "
+                            f"Source: {source}."
+                        ),
+                        importance=0.8,
+                    )
                 except Exception as e:
                     s = read_import_state(import_id)
                     if s and s.status == "running":
@@ -1074,7 +1151,8 @@ async def import_batch(args: dict, state: "PluginState", **kwargs) -> str:
 async def import_status(args: dict, state: "PluginState", **kwargs) -> str:
     """Check the progress of a background import."""
     from totalreclaw.import_state import (
-        read_import_state, read_most_recent_active_import, is_import_stale, write_import_state, ImportState,
+        read_import_state, read_most_recent_active_import, read_most_recent_import,
+        is_import_stale, write_import_state, ImportState, mark_import_announced,
     )
     from dataclasses import asdict
 
@@ -1087,18 +1165,34 @@ async def import_status(args: dict, state: "PluginState", **kwargs) -> str:
     else:
         s = read_most_recent_active_import()
         if not s:
-            return json.dumps({"status": "no_active_import", "message": "No active import found. Start one with totalreclaw_import_from."})
+            # #401: fall back to the most recent completed/failed import within
+            # the last 48h so the agent can report final state after a long
+            # import finishes. Without this, a post-completion status call
+            # returned a blind "no_active_import" and the agent could not tell
+            # "completed successfully" from "never existed".
+            s = read_most_recent_import(max_age_hours=48)
+            if not s:
+                return json.dumps({"status": "no_import_found", "message": "No active or recent import found. Start one with totalreclaw_import_from."})
 
-    # 1h freshness guard.
+    # 2h freshness guard (#401: was 1h — see STALE_THRESHOLD_SECONDS).
     if s.status == "running" and is_import_stale(s):
         write_import_state(ImportState(**{**asdict(s), "status": "failed",
-                                          "errors": s.errors + ["Stale: no progress in 1h"]}))
+                                          "errors": s.errors + ["Stale: no progress in 2h"]}))
         return json.dumps({
             "import_id": s.import_id, "status": "failed", "stale": True,
             "facts_stored": s.facts_stored,
-            "message": "Import appears stale — no progress in 1 hour. Resume with totalreclaw_import_from using the same file and resume_id.",
+            "message": "Import appears stale — no progress in 2 hours. Resume with totalreclaw_import_from using the same file and resume_id.",
             "resume_id": s.import_id,
         })
+
+    # #401: the agent explicitly queried a completed import (by id or via the
+    # 48h fallback) — treat that as the acknowledgment signal for the
+    # proactive completion notification and latch ``announced`` so
+    # ``pre_llm_call`` stops re-injecting it. This is the "no new tool" path
+    # to retiring the notification: the agent demonstrably knows about the
+    # import (it just asked), so the nudge has done its job.
+    if s.status == "completed" and not s.announced:
+        mark_import_announced(s.import_id)
 
     now_ts = datetime.now(timezone.utc).timestamp()
     try:
@@ -1110,18 +1204,29 @@ async def import_status(args: dict, state: "PluginState", **kwargs) -> str:
     remaining = max(0, s.batch_total - s.batch_done)
     eta_seconds = int(remaining * sec_per_batch) if s.status == "running" else 0
 
+    # #401: surface elapsed + completion time so the agent can report "the
+    # import finished X min ago, took Y minutes" without extra arithmetic.
+    # ``completed_at`` is derived from ``last_updated`` when the import has
+    # reached a terminal state (the background task writes last_updated on
+    # the final checkpoint).
+    terminal = s.status in ("completed", "failed", "aborted")
+    completed_at = s.last_updated if terminal else None
+
     return json.dumps({
         "import_id": s.import_id,
         "status": s.status,
         "batch_done": s.batch_done,
         "batch_total": s.batch_total,
         "facts_stored": s.facts_stored,
+        "facts_extracted": s.facts_extracted,
         "dups_skipped": s.dups_skipped,
+        "elapsed_seconds": int(elapsed),
         "eta_seconds": eta_seconds,
         "completion_iso": (
             datetime.fromtimestamp(now_ts + eta_seconds, tz=timezone.utc).isoformat()
             if s.status == "running" else s.last_updated
         ),
+        "completed_at": completed_at,
         "source": s.source,
         "started_at": s.started_at,
         "errors": s.errors,
