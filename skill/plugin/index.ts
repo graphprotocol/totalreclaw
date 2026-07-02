@@ -5239,6 +5239,21 @@ const plugin = {
 
     startTrajectoryPoller({
       logger: api.logger,
+      // 3.3.12-rc.19: re-assert slots.memory each poll tick. OpenClaw's
+      // config-rewrite-after-restart can strip it after register()'s
+      // self-heal (pop-os reinstall 2026-06-30 → slot reverted to disabled
+      // memory-core → memory_search/memory_get never bound). Cheap fs
+      // read; heals + restarts only if the slot is wrong.
+      recheckSlot: () => {
+        try {
+          if (patchOpenClawConfig(undefined, pluginVersion ?? undefined) === 'patched') {
+            api.logger.warn('TotalReclaw: slots.memory was wrong at poll — re-healed openclaw.json, restarting to apply');
+            try { process.kill(process.pid, 'SIGUSR1'); } catch { /* gateway shutting down */ }
+          }
+        } catch (err) {
+          api.logger.warn(`TotalReclaw: slot recheck failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
       ensureInitialized: () => ensureInitialized(api.logger),
       isPairingPending: () => needsSetup,
       isImportActive: () => _importInProgress,

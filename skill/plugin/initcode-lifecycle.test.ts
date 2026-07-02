@@ -34,6 +34,8 @@ import {
   __getInitCodeForTests,
   __getRpcProbeCountForTests,
   __resetRpcProbeCountForTests,
+  __setWasmForTests,
+  __clearWasmForTests,
 } from './subgraph-store.js';
 
 let passed = 0;
@@ -68,12 +70,14 @@ function check(cond: boolean, name: string): void {
 interface FetchController {
   codeResponses: string[];   // queued eth_getCode results (consumed in order)
   requests: Array<{ method: string; params: unknown[] }>;
+  // Extended for Scenario 5: map of method → queued responses
+  responseQueue: Map<string, Array<{ result?: any; error?: { message: string } }>>;
 }
 
 let controller: FetchController | null = null;
 
 function installFetchMock(): FetchController {
-  const ctl: FetchController = { codeResponses: [], requests: [] };
+  const ctl: FetchController = { codeResponses: [], requests: [], responseQueue: new Map() };
   controller = ctl;
   const original = globalThis.fetch;
 
@@ -84,14 +88,36 @@ function installFetchMock(): FetchController {
     if (parsed.method) {
       ctl.requests.push({ method: parsed.method, params: parsed.params ?? [] });
     }
-    // Look for an eth_getCode call and drain the next queued response.
+    // Look for an eth_getCode call and drain the next queued response (legacy path for Scenarios 1-4).
     if (parsed.method === 'eth_getCode') {
+      // Check responseQueue first (Scenario 5), fall back to codeResponses (Scenarios 1-4)
+      const methodQueue = ctl.responseQueue.get('eth_getCode');
+      if (methodQueue && methodQueue.length > 0) {
+        const response = methodQueue.shift()!;
+        const responseBody = JSON.stringify({ jsonrpc: '2.0', id: parsed.id ?? 1, result: response.result, error: response.error });
+        return new Response(responseBody, {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }) as any;
+      }
       const code = ctl.codeResponses.shift() ?? '0x';
       const responseBody = JSON.stringify({ jsonrpc: '2.0', id: parsed.id ?? 1, result: code });
       return new Response(responseBody, {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }) as any;
+    }
+    // Check responseQueue for other methods (Scenario 5)
+    if (parsed.method && ctl.responseQueue.has(parsed.method)) {
+      const methodQueue = ctl.responseQueue.get(parsed.method)!;
+      if (methodQueue.length > 0) {
+        const response = methodQueue.shift()!;
+        const responseBody = JSON.stringify({ jsonrpc: '2.0', id: parsed.id ?? 1, result: response.result, error: response.error });
+        return new Response(responseBody, {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }) as any;
+      }
     }
     // Default: empty success envelope for any other method.
     const responseBody = JSON.stringify({ jsonrpc: '2.0', id: parsed.id ?? 1, result: null });
@@ -267,6 +293,129 @@ function restoreFetch(ctl: FetchController): void {
   );
 
   restoreFetch(ctl);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 5: AA10 'sender already constructed' at pm_sponsorUserOperation → retry succeeds
+// ---------------------------------------------------------------------------
+//
+// This test drives the REAL submitFactBatchOnChain through a simulated AA10
+// failure at the pm_sponsorUserOperation RPC call. The root cause being fixed:
+//   - eth_getCode returns stale '0x' (Smart Account already deployed but RPC hasn't caught up)
+//   - getInitCode returns factory + factoryData
+//   - pm_sponsorUserOperation is called WITH initCode on a deployed sender
+//   - Bundler simulation rejects with AA10 "sender already constructed"
+//   - Current code: NO retry (pm_sponsorUserOperation is outside the AA10 try/catch)
+//   - Fixed code: wrap pm_sponsorUserOperation in retry, force-deploy sender, rebuild UserOp without initCode
+//
+// This test:
+//   1. Mocks WASM (deriveEoa, encodeBatchCall, hashUserOp, signUserOp, getEntryPointAddress)
+//   2. Mocks global fetch to record all RPC calls and return staged responses
+//   3. Calls submitFactBatchOnChain with a real mnemonic
+//   4. First pm_sponsorUserOperation returns AA10 error
+//   5. Second pm_sponsorUserOperation succeeds (initCode omitted)
+//   6. Asserts: result.success===true, exactly 2 pm_sponsorUserOperation calls, 2nd UserOp has no factory field
+
+{
+  __resetDeployedAccountsForTests();
+  __resetRpcProbeCountForTests();
+
+  // Install fetch mock to record all RPC requests and return staged responses
+  const ctl = installFetchMock();
+
+  // Mock WASM module with minimal stubs
+  const mockWasm = {
+    deriveEoa: () => ({ private_key: '0x' + 'a'.repeat(64), address: '0xbbbb' + 'b'.repeat(36) }),
+    encodeBatchCall: () => new Uint8Array([1, 2, 3]), // dummy batch calldata
+    getEntryPointAddress: () => '0x5FF137D4b0FD9490299197e9fB6f7936EF32a416',
+    hashUserOp: () => '0x' + 'c'.repeat(64),
+    signUserOp: () => 'd'.repeat(128),
+    getSimpleAccountFactory: () => '0x9406Cc6185a346906296840746125A0E4493a848',
+    getDataEdgeAddress: () => '0x' + 'e'.repeat(40),
+  };
+
+  // Inject mock WASM
+  __setWasmForTests(mockWasm);
+
+  // Helper to stage a response for a specific RPC method
+  function stageResponse(method: string, result: any, error?: { message: string }) {
+    if (!ctl.responseQueue.has(method)) {
+      ctl.responseQueue.set(method, []);
+    }
+    ctl.responseQueue.get(method)!.push({ result, error });
+  }
+
+  // First eth_getCode: stale '0x' (SA deployed but RPC hasn't caught up)
+  stageResponse('eth_getCode', '0x');
+
+  // Gas price
+  stageResponse('pimlico_getUserOperationGasPrice', { fast: { maxFeePerGas: '0x1', maxPriorityFeePerGas: '0x1' } });
+
+  // eth_call for nonce
+  stageResponse('eth_call', '0x0');
+
+  // eth_estimateUserOperationGas (batch estimation)
+  stageResponse('eth_estimateUserOperationGas', { callGasLimit: '0x10000', verificationGasLimit: '0x10000', preVerificationGas: '0x10000' });
+
+  // First pm_sponsorUserOperation: AA10 error (sender already constructed)
+  stageResponse('pm_sponsorUserOperation', null, { message: 'AA10 sender already constructed' });
+
+  // Second eth_getCode (retry path): now returns deployed code
+  stageResponse('eth_getCode', '0x1234');
+
+  // Second pm_sponsorUserOperation: success (no AA10 because initCode is omitted)
+  stageResponse('pm_sponsorUserOperation', { callGasLimit: '0x10000', verificationGasLimit: '0x10000', preVerificationGas: '0x10000', paymaster: '0x' + 'f'.repeat(40), paymasterData: '0x' });
+
+  // eth_call for nonce (retry)
+  stageResponse('eth_call', '0x0');
+
+  // eth_sendUserOperation
+  stageResponse('eth_sendUserOperation', '0x' + 'g'.repeat(64));
+
+  // eth_getUserOperationReceipt
+  stageResponse('eth_getUserOperationReceipt', { success: true, receipt: { transactionHash: '0xabc' } });
+
+  // Import submitFactBatchOnChain and call it
+  const { submitFactBatchOnChain } = await import('./subgraph-store.js');
+
+  const config = {
+    relayUrl: 'http://dummy-relay/v1',
+    mnemonic: 'test test test test test test test test test test test junk',
+    walletAddress: '0xaaaa' + 'a'.repeat(36),
+    chainId: 100,
+    entryPointAddress: '0x5FF137D4b0FD9490299197e9fB6f7936EF32a416',
+    cachePath: '',
+    dataEdgeAddress: '0x' + 'e'.repeat(40),
+  };
+
+  const payloads = [Buffer.from([1]), Buffer.from([2])];
+
+  try {
+    const result = await submitFactBatchOnChain(payloads, config);
+
+    // Assert success
+    check(result.success === true, 'AA10 retry path: batch submission succeeds after retry');
+
+    // Assert exactly 2 pm_sponsorUserOperation calls (first AA10, second success)
+    const sponsorCalls = ctl.requests.filter(r => r.method === 'pm_sponsorUserOperation');
+    check(sponsorCalls.length === 2, `AA10 retry path: 2 pm_sponsorUserOperation calls (got ${sponsorCalls.length})`);
+
+    // Assert second pm_sponsorUserOperation UserOp has NO factory field (initCode omitted)
+    if (sponsorCalls.length >= 2) {
+      const secondUserOp = sponsorCalls[1].params?.[0];
+      const hasFactory = secondUserOp && 'factory' in secondUserOp && secondUserOp.factory !== null;
+      check(!hasFactory, 'AA10 retry path: 2nd pm_sponsorUserOperation UserOp has NO factory field');
+    } else {
+      check(false, 'AA10 retry path: need 2 sponsor calls to check factory field');
+    }
+  } catch (err: any) {
+    // Current code will fail here — expected before fix
+    check(false, `AA10 retry path: should succeed after retry, got error: ${err.message}`);
+  } finally {
+    // Cleanup
+    restoreFetch(ctl);
+    __clearWasmForTests();
+  }
 }
 
 // ---------------------------------------------------------------------------

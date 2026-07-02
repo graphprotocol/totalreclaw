@@ -294,6 +294,34 @@ export function __resetSenderLocksForTests(): void {
   _senderSubmissionLocks.clear();
 }
 
+// ---------------------------------------------------------------------------
+// Test-only WASM mock seams (AA10 submit-path retry test)
+// ---------------------------------------------------------------------------
+
+/**
+ * Test-only seam: inject a mock WASM module.
+ *
+ * The AA10 submit-path retry test needs to drive the real submitFactBatchOnChain
+ * while controlling WASM behavior (deriveEoa, encodeBatchCall, hashUserOp,
+ * signUserOp, getEntryPointAddress). This seam swaps the module-level _wasm
+ * reference so the test can provide stubs.
+ *
+ * MUST be followed by __clearWasmForTests() in teardown.
+ */
+export function __setWasmForTests(mock: any): void {
+  _wasm = mock;
+}
+
+/**
+ * Test-only seam: restore the real WASM module.
+ *
+ * Clears a test-injected mock WASM and resets the module to null so the next
+ * getWasm() call reloads the real @totalreclaw/core.
+ */
+export function __clearWasmForTests(): void {
+  _wasm = null;
+}
+
 /**
  * Check if a Smart Account is deployed and return factory/factoryData if not.
  *
@@ -413,9 +441,6 @@ async function submitFactOnChainLocked(
 
   const rpcUrl = config.rpcUrl || CONFIG.rpcUrl || getDefaultRpcUrl(config.chainId);
 
-  // 4. Check if Smart Account is deployed (needed for factory/factoryData)
-  const { factory, factoryData } = await getInitCode(sender, eoa.address, rpcUrl);
-
   // 5. Get nonce from EntryPoint via bundler RPC.
   //    Routing through the bundler lets Pimlico account for pending mempool
   //    UserOps, preventing AA25 nonce conflicts on rapid submissions.
@@ -426,83 +451,55 @@ async function submitFactOnChainLocked(
   const keyPadded = '0'.repeat(64);
   const nonceCalldata = `0x35567e1a${senderPadded}${keyPadded}`;
 
-  let nonce: string;
-  try {
-    const nonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
-    nonce = nonceResult || '0x0';
-  } catch {
-    // Fallback to public RPC if bundler doesn't support eth_call
-    const nonceJson = await rpcRequest({
-      url: rpcUrl,
-      headers: { 'Content-Type': 'application/json' },
-      method: 'eth_call',
-      params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
-    });
-    nonce = (nonceJson.result as string) || '0x0';
+  // Helper to fetch nonce (with bundler fallback)
+  async function fetchNonce(): Promise<string> {
+    try {
+      const nonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
+      return nonceResult || '0x0';
+    } catch {
+      // Fallback to public RPC if bundler doesn't support eth_call
+      const nonceJson = await rpcRequest({
+        url: rpcUrl,
+        headers: { 'Content-Type': 'application/json' },
+        method: 'eth_call',
+        params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
+      });
+      return (nonceJson.result as string) || '0x0';
+    }
   }
 
-  // 6. Build unsigned UserOp (v0.7 fields, camelCase for Rust JSON serde)
-  const unsignedOp: Record<string, any> = {
-    sender,
-    nonce,
-    callData,
-    callGasLimit: '0x0',
-    verificationGasLimit: '0x0',
-    preVerificationGas: '0x0',
-    maxFeePerGas: fast.maxFeePerGas,
-    maxPriorityFeePerGas: fast.maxPriorityFeePerGas,
-    signature: DUMMY_SIGNATURE,
-  };
-  if (factory) {
-    unsignedOp.factory = factory;
-    unsignedOp.factoryData = factoryData;
-  }
+  // Track force-deployed senders for AA10 retry (local to this submission attempt)
+  const forceDeployed = new Set<string>();
 
-  // 7. Get paymaster sponsorship (fills gas limits + paymaster fields)
-  const sponsorResult = await rpc('pm_sponsorUserOperation', [unsignedOp, entryPoint]);
-  Object.assign(unsignedOp, sponsorResult);
-
-  // 8. Hash and sign the UserOp via WASM
-  const opJson = JSON.stringify(unsignedOp);
-  const hashHex = getWasm().hashUserOp(opJson, entryPoint, BigInt(config.chainId));
-  const sigHex = signUserOp(hashHex, eoa.private_key);
-  unsignedOp.signature = `0x${sigHex}`;
-
-  // 9. Submit the signed UserOp (with AA25 nonce conflict retry)
+  // Single retry loop: getInitCode → build UserOp → sponsor → sign → send
+  // On AA10 "sender already constructed", mark sender as force-deployed and retry.
+  // AA10 can occur at pm_sponsorUserOperation (initCode present on deployed sender)
+  // or eth_sendUserOperation (same root cause). This loop handles both.
   let userOpHash: string;
-  try {
-    userOpHash = await rpc('eth_sendUserOperation', [unsignedOp, entryPoint]);
-  } catch (err: any) {
-    const msg = err?.message || '';
-    if (/AA25|AA10|invalid account nonce|already being processed/i.test(msg)) {
-      console.error('AA25/AA10 nonce conflict detected, rebuilding UserOp with fresh nonce...');
-      // getInitCode always re-checks eth_getCode (no session cache to bust),
-      // so the retry below naturally picks up the post-deployment state.
+  let attempt = 0;
+  const maxAttempts = 2;
 
-      // Wait for previous UserOp to mine before retrying with fresh nonce.
-      // Public RPC won't reflect the new nonce until the tx is on-chain.
-      await new Promise(r => setTimeout(r, 15000));
+  while (attempt < maxAttempts) {
+    attempt++;
 
-      // Re-fetch initCode and nonce
-      const { factory: retryFactory, factoryData: retryFactoryData } = await getInitCode(sender, eoa.address, rpcUrl);
-      let retryNonce: string;
-      try {
-        const retryNonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
-        retryNonce = retryNonceResult || '0x0';
-      } catch {
-        const retryNonceJson = await rpcRequest({
-          url: rpcUrl,
-          headers: { 'Content-Type': 'application/json' },
-          method: 'eth_call',
-          params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
-        });
-        retryNonce = (retryNonceJson.result as string) || '0x0';
+    try {
+      // 4. Check if Smart Account is deployed (needed for factory/factoryData)
+      // If force-deployed, skip eth_getCode and return null initCode.
+      let factory: string | null = null;
+      let factoryData: string | null = null;
+      if (!forceDeployed.has(sender.toLowerCase())) {
+        const initCode = await getInitCode(sender, eoa.address, rpcUrl);
+        factory = initCode.factory;
+        factoryData = initCode.factoryData;
       }
 
-      // Rebuild unsigned UserOp with fresh nonce and initCode
-      const retryOp: Record<string, any> = {
+      // Fetch fresh nonce for each attempt
+      const nonce = await fetchNonce();
+
+      // 6. Build unsigned UserOp (v0.7 fields, camelCase for Rust JSON serde)
+      const unsignedOp: Record<string, any> = {
         sender,
-        nonce: retryNonce,
+        nonce,
         callData,
         callGasLimit: '0x0',
         verificationGasLimit: '0x0',
@@ -511,21 +508,44 @@ async function submitFactOnChainLocked(
         maxPriorityFeePerGas: fast.maxPriorityFeePerGas,
         signature: DUMMY_SIGNATURE,
       };
-      if (retryFactory) {
-        retryOp.factory = retryFactory;
-        retryOp.factoryData = retryFactoryData;
+      if (factory) {
+        unsignedOp.factory = factory;
+        unsignedOp.factoryData = factoryData;
       }
 
-      // Re-sponsor and re-sign
-      const retrySponsor = await rpc('pm_sponsorUserOperation', [retryOp, entryPoint]);
-      Object.assign(retryOp, retrySponsor);
-      const retryOpJson = JSON.stringify(retryOp);
-      const retryHashHex = getWasm().hashUserOp(retryOpJson, entryPoint, BigInt(config.chainId));
-      const retrySigHex = signUserOp(retryHashHex, eoa.private_key);
-      retryOp.signature = `0x${retrySigHex}`;
+      // 7. Get paymaster sponsorship (fills gas limits + paymaster fields)
+      // This is where AA10 "sender already constructed" can occur if initCode
+      // is present but the sender is already deployed.
+      const sponsorResult = await rpc('pm_sponsorUserOperation', [unsignedOp, entryPoint]);
+      Object.assign(unsignedOp, sponsorResult);
 
-      userOpHash = await rpc('eth_sendUserOperation', [retryOp, entryPoint]);
-    } else {
+      // 8. Hash and sign the UserOp via WASM
+      const opJson = JSON.stringify(unsignedOp);
+      const hashHex = getWasm().hashUserOp(opJson, entryPoint, BigInt(config.chainId));
+      const sigHex = signUserOp(hashHex, eoa.private_key);
+      unsignedOp.signature = `0x${sigHex}`;
+
+      // 9. Submit the signed UserOp
+      userOpHash = await rpc('eth_sendUserOperation', [unsignedOp, entryPoint]);
+      // Success — break out of retry loop
+      break;
+    } catch (err: any) {
+      const msg = err?.message || '';
+      // AA10 "sender already constructed" or AA25 invalid nonce → retry
+      if (/AA25|AA10|invalid account nonce|already being processed/i.test(msg)) {
+        console.error(`AA25/AA10 detected (attempt ${attempt}/${maxAttempts}), retrying...`);
+        // On AA10, force-mark sender as deployed so next retry omits initCode
+        if (/AA10/i.test(msg)) {
+          forceDeployed.add(sender.toLowerCase());
+          console.error('AA10: force-marking sender as deployed, retrying without initCode');
+        }
+        // Wait for previous UserOp to mine before retrying with fresh nonce.
+        // Public RPC won't reflect the new nonce until the tx is on-chain.
+        await new Promise(r => setTimeout(r, 15000));
+        // Continue to next iteration of retry loop
+        continue;
+      }
+      // Not a retryable error — re-throw
       throw err;
     }
   }
@@ -625,104 +645,57 @@ async function submitFactBatchOnChainLocked(
 
   const rpcUrl = config.rpcUrl || CONFIG.rpcUrl || getDefaultRpcUrl(config.chainId);
 
-  // Check if Smart Account is deployed (needed for factory/factoryData)
-  const { factory, factoryData } = await getInitCode(sender, eoa.address, rpcUrl);
-
   // Get nonce via bundler (accounts for pending mempool UserOps) with public RPC fallback
   const senderPadded = sender.slice(2).toLowerCase().padStart(64, '0');
   const keyPadded = '0'.repeat(64);
   const nonceCalldata = `0x35567e1a${senderPadded}${keyPadded}`;
 
-  let nonce: string;
-  try {
-    const nonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
-    nonce = nonceResult || '0x0';
-  } catch {
-    const nonceJson = await rpcRequest({
-      url: rpcUrl,
-      headers: { 'Content-Type': 'application/json' },
-      method: 'eth_call',
-      params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
-    });
-    nonce = (nonceJson.result as string) || '0x0';
-  }
-
-  // Build unsigned UserOp
-  const unsignedOp: Record<string, any> = {
-    sender,
-    nonce,
-    callData,
-    callGasLimit: '0x0',
-    verificationGasLimit: '0x0',
-    preVerificationGas: '0x0',
-    maxFeePerGas: fast.maxFeePerGas,
-    maxPriorityFeePerGas: fast.maxPriorityFeePerGas,
-    signature: DUMMY_SIGNATURE,
-  };
-  if (factory) {
-    unsignedOp.factory = factory;
-    unsignedOp.factoryData = factoryData;
-  }
-
-  // Gas estimation for batch operations — get accurate gas limits from Pimlico
-  // before paymaster sponsorship (can't bump after sponsorship as it invalidates
-  // the paymaster's signature, causing AA34).
-  if (protobufPayloads.length > 1) {
+  // Helper to fetch nonce (with bundler fallback)
+  async function fetchNonce(): Promise<string> {
     try {
-      const gasEstimate = await rpc('eth_estimateUserOperationGas', [unsignedOp, entryPoint]);
-      if (gasEstimate.callGasLimit) unsignedOp.callGasLimit = gasEstimate.callGasLimit;
-      if (gasEstimate.verificationGasLimit) unsignedOp.verificationGasLimit = gasEstimate.verificationGasLimit;
-      if (gasEstimate.preVerificationGas) unsignedOp.preVerificationGas = gasEstimate.preVerificationGas;
+      const nonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
+      return nonceResult || '0x0';
     } catch {
-      // If estimation fails, let the paymaster handle it (default behavior)
+      const nonceJson = await rpcRequest({
+        url: rpcUrl,
+        headers: { 'Content-Type': 'application/json' },
+        method: 'eth_call',
+        params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
+      });
+      return (nonceJson.result as string) || '0x0';
     }
   }
 
-  // Paymaster sponsorship (uses gas limits from estimation above for batches)
-  const sponsorResult = await rpc('pm_sponsorUserOperation', [unsignedOp, entryPoint]);
-  Object.assign(unsignedOp, sponsorResult);
+  // Track force-deployed senders for AA10 retry (local to this submission attempt)
+  const forceDeployed = new Set<string>();
 
-  // Hash and sign via WASM
-  const opJson = JSON.stringify(unsignedOp);
-  const hashHex = getWasm().hashUserOp(opJson, entryPoint, BigInt(config.chainId));
-  const sigHex = signUserOp(hashHex, eoa.private_key);
-  unsignedOp.signature = `0x${sigHex}`;
-
-  // Submit (with AA25 nonce conflict retry)
+  // Single retry loop: getInitCode → build UserOp → estimate → sponsor → sign → send
+  // On AA10 "sender already constructed", mark sender as force-deployed and retry.
   let userOpHash: string;
-  try {
-    userOpHash = await rpc('eth_sendUserOperation', [unsignedOp, entryPoint]);
-  } catch (err: any) {
-    const msg = err?.message || '';
-    if (/AA25|AA10|invalid account nonce|already being processed/i.test(msg)) {
-      console.error('AA25/AA10 nonce conflict detected (batch), rebuilding UserOp with fresh nonce...');
-      // getInitCode always re-checks eth_getCode (no session cache to bust),
-      // so the retry below naturally picks up the post-deployment state.
+  let attempt = 0;
+  const maxAttempts = 2;
 
-      // Wait for previous UserOp to mine before retrying with fresh nonce.
-      // Public RPC won't reflect the new nonce until the tx is on-chain.
-      await new Promise(r => setTimeout(r, 15000));
+  while (attempt < maxAttempts) {
+    attempt++;
 
-      // Re-fetch initCode and nonce
-      const { factory: retryFactory, factoryData: retryFactoryData } = await getInitCode(sender, eoa.address, rpcUrl);
-      let retryNonce: string;
-      try {
-        const retryNonceResult = await rpc('eth_call', [{ to: entryPoint, data: nonceCalldata }, 'latest']);
-        retryNonce = retryNonceResult || '0x0';
-      } catch {
-        const retryNonceJson = await rpcRequest({
-          url: rpcUrl,
-          headers: { 'Content-Type': 'application/json' },
-          method: 'eth_call',
-          params: [{ to: entryPoint, data: nonceCalldata }, 'latest'],
-        });
-        retryNonce = (retryNonceJson.result as string) || '0x0';
+    try {
+      // Check if Smart Account is deployed (needed for factory/factoryData)
+      // If force-deployed, skip eth_getCode and return null initCode.
+      let factory: string | null = null;
+      let factoryData: string | null = null;
+      if (!forceDeployed.has(sender.toLowerCase())) {
+        const initCode = await getInitCode(sender, eoa.address, rpcUrl);
+        factory = initCode.factory;
+        factoryData = initCode.factoryData;
       }
 
-      // Rebuild unsigned UserOp with fresh nonce and initCode
-      const retryOp: Record<string, any> = {
+      // Fetch fresh nonce for each attempt
+      const nonce = await fetchNonce();
+
+      // Build unsigned UserOp
+      const unsignedOp: Record<string, any> = {
         sender,
-        nonce: retryNonce,
+        nonce,
         callData,
         callGasLimit: '0x0',
         verificationGasLimit: '0x0',
@@ -731,21 +704,58 @@ async function submitFactBatchOnChainLocked(
         maxPriorityFeePerGas: fast.maxPriorityFeePerGas,
         signature: DUMMY_SIGNATURE,
       };
-      if (retryFactory) {
-        retryOp.factory = retryFactory;
-        retryOp.factoryData = retryFactoryData;
+      if (factory) {
+        unsignedOp.factory = factory;
+        unsignedOp.factoryData = factoryData;
       }
 
-      // Re-sponsor and re-sign
-      const retrySponsor = await rpc('pm_sponsorUserOperation', [retryOp, entryPoint]);
-      Object.assign(retryOp, retrySponsor);
-      const retryOpJson = JSON.stringify(retryOp);
-      const retryHashHex = getWasm().hashUserOp(retryOpJson, entryPoint, BigInt(config.chainId));
-      const retrySigHex = signUserOp(retryHashHex, eoa.private_key);
-      retryOp.signature = `0x${retrySigHex}`;
+      // Gas estimation for batch operations — get accurate gas limits from Pimlico
+      // before paymaster sponsorship (can't bump after sponsorship as it invalidates
+      // the paymaster's signature, causing AA34).
+      if (protobufPayloads.length > 1) {
+        try {
+          const gasEstimate = await rpc('eth_estimateUserOperationGas', [unsignedOp, entryPoint]);
+          if (gasEstimate.callGasLimit) unsignedOp.callGasLimit = gasEstimate.callGasLimit;
+          if (gasEstimate.verificationGasLimit) unsignedOp.verificationGasLimit = gasEstimate.verificationGasLimit;
+          if (gasEstimate.preVerificationGas) unsignedOp.preVerificationGas = gasEstimate.preVerificationGas;
+        } catch {
+          // If estimation fails, let the paymaster handle it (default behavior)
+        }
+      }
 
-      userOpHash = await rpc('eth_sendUserOperation', [retryOp, entryPoint]);
-    } else {
+      // Paymaster sponsorship (uses gas limits from estimation above for batches)
+      // This is where AA10 "sender already constructed" can occur if initCode
+      // is present but the sender is already deployed.
+      const sponsorResult = await rpc('pm_sponsorUserOperation', [unsignedOp, entryPoint]);
+      Object.assign(unsignedOp, sponsorResult);
+
+      // Hash and sign via WASM
+      const opJson = JSON.stringify(unsignedOp);
+      const hashHex = getWasm().hashUserOp(opJson, entryPoint, BigInt(config.chainId));
+      const sigHex = signUserOp(hashHex, eoa.private_key);
+      unsignedOp.signature = `0x${sigHex}`;
+
+      // Submit the signed UserOp
+      userOpHash = await rpc('eth_sendUserOperation', [unsignedOp, entryPoint]);
+      // Success — break out of retry loop
+      break;
+    } catch (err: any) {
+      const msg = err?.message || '';
+      // AA10 "sender already constructed" or AA25 invalid nonce → retry
+      if (/AA25|AA10|invalid account nonce|already being processed/i.test(msg)) {
+        console.error(`AA25/AA10 detected (batch, attempt ${attempt}/${maxAttempts}), retrying...`);
+        // On AA10, force-mark sender as deployed so next retry omits initCode
+        if (/AA10/i.test(msg)) {
+          forceDeployed.add(sender.toLowerCase());
+          console.error('AA10: force-marking sender as deployed, retrying without initCode');
+        }
+        // Wait for previous UserOp to mine before retrying with fresh nonce.
+        // Public RPC won't reflect the new nonce until the tx is on-chain.
+        await new Promise(r => setTimeout(r, 15000));
+        // Continue to next iteration of retry loop
+        continue;
+      }
+      // Not a retryable error — re-throw
       throw err;
     }
   }

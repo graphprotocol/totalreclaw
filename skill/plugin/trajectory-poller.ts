@@ -104,6 +104,18 @@ export interface TrajectoryPollerDeps {
     error: (msg: string) => void;
   };
 
+  /**
+   * 3.3.12-rc.19: optional slot-self-heal hook invoked once per poll
+   * tick. OpenClaw's config-rewrite-after-restart can strip
+   * plugins.slots.memory after register()'s self-heal ran (observed on
+   * pop-os reinstall 2026-06-30 → slot reverted to disabled memory-core
+   * → memory_search/memory_get never bound). The host wires this to
+   * patchOpenClawConfig + a SIGUSR1 restart so the slot is re-asserted
+   * on the next tick if it was clobbered. Runs before the pairing/
+   * import gates so it fires even when extraction is deferred.
+   */
+  recheckSlot?: () => void;
+
   /** Initialization gate — same one the agent_end hook uses. */
   ensureInitialized: () => Promise<void>;
 
@@ -218,6 +230,9 @@ export function startTrajectoryPoller(
 
   const pollAndExtract = async (): Promise<void> => {
     try {
+      // 3.3.12-rc.19: re-assert slots.memory each tick in case OpenClaw's
+      // config-rewrite stripped it after register() (see deps.recheckSlot).
+      deps.recheckSlot?.();
       await deps.ensureInitialized();
       if (deps.isPairingPending()) return;
       if (deps.isImportActive()) return;
