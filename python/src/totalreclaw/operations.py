@@ -42,12 +42,14 @@ from .userop import build_and_send_userop, build_and_send_userop_batch, MAX_BATC
 from .claims_helper import (
     PROTOBUF_VERSION_V4,
     build_canonical_claim_v1,
+    compute_entity_trapdoor,
     compute_entity_trapdoors,
     is_digest_blob,
     is_stub_blob_hex,
     read_blob_unified,
     read_claim_from_blob,
 )
+from .entity_extract import extract_query_entities
 
 # GraphQL queries — matching TypeScript search.ts
 SEARCH_QUERY = """
@@ -533,8 +535,20 @@ async def search_facts(
     if lsh_hasher and query_embedding:
         lsh_trapdoors = lsh_hasher.hash(query_embedding)
 
+    # Entity trapdoors -- orthogonal exact-match signal (#370 read-side).
+    # Same hash fn as the write side (claims_helper.compute_entity_trapdoor)
+    # so query entities match stored entity-trapdoors byte-for-byte. Heuristic
+    # extraction (entity_extract.extract_query_entities); err toward recall --
+    # rerank filters false positives. NOTE: widens all_trapdoors (a few extra
+    # chunks, larger candidate pool); p95 + pool-cap validated in Task 6.
+    entity_trapdoors: list[str] = []
+    for _name in extract_query_entities(query):
+        _td = compute_entity_trapdoor(_name)
+        if _td not in entity_trapdoors:
+            entity_trapdoors.append(_td)
+
     # Combine all trapdoors
-    all_trapdoors = word_trapdoors + lsh_trapdoors
+    all_trapdoors = word_trapdoors + lsh_trapdoors + entity_trapdoors
 
     if not all_trapdoors:
         return []
