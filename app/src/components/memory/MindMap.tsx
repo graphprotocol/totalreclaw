@@ -202,14 +202,16 @@ export function MindMap({ mode, nodes: dataNodes, links: dataLinks, neighborsOf,
       return { x: (sx - w / 2 - cam.x) / cam.scale, y: (sy - h / 2 - cam.y) / cam.scale };
     };
     const nodeAt = (sx: number, sy: number): SimNode | null => {
-      const p = toWorld(sx, sy);
+      const cam = camRef.current;
       let best: SimNode | null = null;
       let bestD = Infinity;
       for (const n of nodes) {
-        const dx = n.x! - p.x;
-        const dy = n.y! - p.y;
+        const px = w / 2 + cam.x + n.x! * cam.scale;
+        const py = h / 2 + cam.y + n.y! * cam.scale;
+        const dx = px - sx;
+        const dy = py - sy;
         const d = dx * dx + dy * dy;
-        const rr = (nodeRadius(n) + 6) ** 2;
+        const rr = (nodeRadius(n) + 6) ** 2; // constant screen-space hit radius
         if (d < rr && d < bestD) {
           bestD = d;
           best = n;
@@ -243,8 +245,12 @@ export function MindMap({ mode, nodes: dataNodes, links: dataLinks, neighborsOf,
       }
       ctx.globalAlpha = 1;
 
-      ctx.translate(w / 2 + cam.x, h / 2 + cam.y);
-      ctx.scale(cam.scale, cam.scale);
+      // world → screen. Positions scale with zoom (the map spreads); node + text
+      // sizes are drawn in constant screen px so stars never balloon.
+      const S = (x: number, y: number): [number, number] => [
+        w / 2 + cam.x + x * cam.scale,
+        h / 2 + cam.y + y * cam.scale,
+      ];
 
       const focus = hoverRef.current ?? selRef.current;
       const near = focus ? neighborsOf(focus) : null;
@@ -254,15 +260,15 @@ export function MindMap({ mode, nodes: dataNodes, links: dataLinks, neighborsOf,
 
       if (modeRef.current === "atlas") {
         for (const [scope, a] of angleRef.current) {
-          const cx = Math.cos(a) * CENTROID_R;
-          const cy = Math.sin(a) * CENTROID_R;
+          const [cx, cy] = S(Math.cos(a) * CENTROID_R, Math.sin(a) * CENTROID_R);
+          const rr = 120 * cam.scale; // halos are regions — they scale with the cluster
           const sc = SCOPE_COLOR[scope as Scope] ?? MISC;
-          const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, 120);
+          const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rr);
           g.addColorStop(0, hexA(sc, 0.22));
           g.addColorStop(1, hexA(sc, 0));
           ctx.fillStyle = g;
           ctx.beginPath();
-          ctx.arc(cx, cy, 120, 0, Math.PI * 2);
+          ctx.arc(cx, cy, rr, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -273,20 +279,21 @@ export function MindMap({ mode, nodes: dataNodes, links: dataLinks, neighborsOf,
         const a = byId.get(l.source);
         const b = byId.get(l.target);
         if (!a || !b) continue;
+        const [ax, ay] = S(a.x!, a.y!);
+        const [bx, by] = S(b.x!, b.y!);
         const on = !!focus && (l.source === focus || l.target === focus);
         const dim = near && !on;
         ctx.strokeStyle = on ? hexA(CLAY, 0.85) : hexA("#8A7A6C", dim ? 0.05 : 0.16);
         ctx.lineWidth = on ? 1.6 : 1;
-        const mx = (a.x! + b.x!) / 2;
-        const my = (a.y! + b.y!) / 2 - 14;
         ctx.beginPath();
-        ctx.moveTo(a.x!, a.y!);
-        ctx.quadraticCurveTo(mx, my, b.x!, b.y!);
+        ctx.moveTo(ax, ay);
+        ctx.quadraticCurveTo((ax + bx) / 2, (ay + by) / 2 - 14, bx, by);
         ctx.stroke();
       }
 
       for (const n of nodes) {
-        const r = nodeRadius(n);
+        const [nx, ny] = S(n.x!, n.y!);
+        const r = nodeRadius(n); // constant screen px
         const active = isActive(n.id);
         const col = colorOf(n);
         const sel = n.id === selRef.current;
@@ -297,7 +304,7 @@ export function MindMap({ mode, nodes: dataNodes, links: dataLinks, neighborsOf,
         ctx.shadowColor = hexA(col, 0.9);
         ctx.beginPath();
         ctx.fillStyle = col;
-        ctx.arc(n.x!, n.y!, r, 0, Math.PI * 2);
+        ctx.arc(nx, ny, r, 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
 
@@ -306,7 +313,7 @@ export function MindMap({ mode, nodes: dataNodes, links: dataLinks, neighborsOf,
           ctx.strokeStyle = hexA(col, 0.9);
           ctx.lineWidth = 1.4;
           ctx.beginPath();
-          ctx.arc(n.x!, n.y!, r + 6 + pulse * 5, 0, Math.PI * 2);
+          ctx.arc(nx, ny, r + 6 + pulse * 5, 0, Math.PI * 2);
           ctx.stroke();
         }
         if (sel) {
@@ -314,11 +321,11 @@ export function MindMap({ mode, nodes: dataNodes, links: dataLinks, neighborsOf,
           ctx.strokeStyle = WARM;
           ctx.lineWidth = 2.5;
           ctx.beginPath();
-          ctx.arc(n.x!, n.y!, r + 4, 0, Math.PI * 2);
+          ctx.arc(nx, ny, r + 4, 0, Math.PI * 2);
           ctx.stroke();
           ctx.strokeStyle = hexA(CLAY, 0.9);
           ctx.beginPath();
-          ctx.arc(n.x!, n.y!, r + 6.5, 0, Math.PI * 2);
+          ctx.arc(nx, ny, r + 6.5, 0, Math.PI * 2);
           ctx.stroke();
         }
 
@@ -330,7 +337,7 @@ export function MindMap({ mode, nodes: dataNodes, links: dataLinks, neighborsOf,
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
           ctx.fillStyle = isYou || isScope ? WARM : hexA(WARM, 0.82);
-          ctx.fillText(n.label, n.x!, n.y! + r + 4);
+          ctx.fillText(n.label, nx, ny + r + 4);
         }
         ctx.globalAlpha = 1;
       }

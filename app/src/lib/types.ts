@@ -32,6 +32,9 @@ export interface MemoryMetadataV1 {
   lessons?: string[];
   topics_discussed?: string[];
   files_affected?: string[];
+  /** Provider when this memory came from an import (e.g. "Gemini", "ChatGPT").
+   *  Written by the import engine (per-fact typed metadata, #356). */
+  import_source?: string;
 }
 
 /** Inner JSON blob stored encrypted in the vault (v1.1 schema — mirrors

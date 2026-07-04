@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { clsx } from "clsx";
-import type { SessionGroup } from "../../lib/vault/timeline";
+import { importSourceOf, sourceBreakdown, type SessionGroup } from "../../lib/vault/timeline";
 import type { VaultItem } from "../../lib/types";
 import { ClaimCard } from "../ClaimCard";
 import { EntityChip } from "../EntityChip";
@@ -12,12 +12,6 @@ export type PanelView =
   | { kind: "session"; group: SessionGroup }
   | { kind: "entity"; name: string };
 
-function membersOf(g: SessionGroup): VaultItem[] {
-  return g.crystal ? [g.crystal, ...g.facts] : g.facts;
-}
-function isImported(g: SessionGroup): boolean {
-  return membersOf(g).some((m) => m.claim.source === "external");
-}
 
 function CrystalList({ title, items }: { title: string; items: string[] }) {
   if (!items.length) return null;
@@ -159,14 +153,21 @@ export function SidePanel({ view, onClose, onOpenSession, onOpenEntity, groups, 
         {/* Session view — the Crystal + its facts. */}
         {group && (
           <div className="flex-1 overflow-y-auto px-5 py-5">
-            {isImported(group) && (
+            {importSourceOf(group) && (
               <span className="mb-3 inline-flex items-center gap-1 rounded-pill bg-clay-tint px-2.5 py-0.5 text-xs font-semibold text-clay-deep">
-                Imported
+                Imported · {importSourceOf(group)}
               </span>
             )}
             <h2 className="font-display text-xl leading-snug text-ink" style={{ textWrap: "pretty" }}>
               {headline}
             </h2>
+            {/* Honest provenance — shows the real source mix, so a session that
+                blends origins is visible rather than silently blanket-labelled. */}
+            <p className="mt-2 text-xs text-ink-muted">
+              {sourceBreakdown(group)
+                .map((s) => `${s.n} ${s.label}`)
+                .join(" · ")}
+            </p>
             {crystalMeta && (
               <>
                 <CrystalList title="Key outcomes" items={crystalMeta.key_outcomes ?? []} />
