@@ -3,40 +3,29 @@ import { clsx } from "clsx";
 import { useCrypto } from "../contexts/CryptoContext";
 import { useVault } from "../hooks/useVault";
 import { buildTimeline, type SessionGroup } from "../lib/vault/timeline";
-import { buildGraph } from "../lib/vault/graph";
+import { buildMindGraph, SCOPES, type Scope } from "../lib/vault/mindmap";
 import { AppHeader } from "../components/AppHeader";
 import { SessionCard } from "../components/SessionCard";
 import { ClaimCard } from "../components/ClaimCard";
 import { Segmented } from "../components/memory/Segmented";
 import { SidePanel, type PanelView } from "../components/memory/SidePanel";
-import { RailTimeline, ActivityTimeline } from "../components/memory/Timeline";
-import { TopicsTree } from "../components/memory/TopicsTree";
 import { sourceShort, cap } from "../lib/presentation";
 import { count } from "../lib/format";
 import type { VaultItem } from "../lib/types";
+import type { MindMode } from "../components/memory/MindMap";
 
-// Keeps @xyflow/react out of the Memory landing bundle — only pulled on Graph mode.
-const EntityGraph = lazy(() =>
-  import("../components/memory/EntityGraph").then((m) => ({ default: m.EntityGraph })),
+// Canvas + d3-force stay out of the Memory landing bundle until the Map opens.
+const MindMap = lazy(() =>
+  import("../components/memory/MindMap").then((m) => ({ default: m.MindMap })),
 );
 
-type Mode = "list" | "facts" | "timeline" | "graph";
-type TimelineVariant = "rail" | "activity";
-type GraphVariant = "entities" | "topics";
+type Mode = "list" | "facts" | "map";
 
 function membersOf(g: SessionGroup): VaultItem[] {
   return g.crystal ? [g.crystal, ...g.facts] : g.facts;
 }
 
-function Chip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
+function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
   return (
     <button
       type="button"
@@ -61,9 +50,7 @@ export function MemoryPage() {
   const fetched = data?.fetched ?? 0;
 
   const [mode, setMode] = useState<Mode>("list");
-  const [timelineVariant, setTimelineVariant] = useState<TimelineVariant>("rail");
-  const [graphVariant, setGraphVariant] = useState<GraphVariant>("entities");
-  const [graphSel, setGraphSel] = useState<string | null>(null);
+  const [mapMode, setMapMode] = useState<MindMode>("atlas");
   const [panel, setPanel] = useState<PanelView | null>(null);
 
   const [q, setQ] = useState("");
@@ -78,12 +65,7 @@ export function MemoryPage() {
   const groups = useMemo(() => buildTimeline(items), [items]);
 
   const scopes = useMemo(
-    () =>
-      [
-        ...new Set(
-          items.map((i) => i.claim.scope).filter((s): s is string => !!s && s !== "unspecified"),
-        ),
-      ].sort(),
+    () => [...new Set(items.map((i) => i.claim.scope).filter((s): s is string => !!s && s !== "unspecified"))].sort(),
     [items],
   );
   const sources = useMemo(
@@ -92,15 +74,12 @@ export function MemoryPage() {
   );
 
   const query = q.trim().toLowerCase();
-
   const matchesItem = useCallback(
     (m: VaultItem) => {
       if (scope && m.claim.scope !== scope) return false;
       if (source && m.claim.source !== source) return false;
       if (query) {
-        const hay = [m.claim.text, ...(m.claim.entities ?? []).map((e) => e.name)]
-          .join(" ")
-          .toLowerCase();
+        const hay = [m.claim.text, ...(m.claim.entities ?? []).map((e) => e.name)].join(" ").toLowerCase();
         if (!hay.includes(query)) return false;
       }
       return true;
@@ -116,12 +95,7 @@ export function MemoryPage() {
         if (scope && !members.some((m) => m.claim.scope === scope)) return false;
         if (source && !members.some((m) => m.claim.source === source)) return false;
         if (query) {
-          const hay = [
-            g.headline,
-            ...g.entityNames,
-            ...members.map((m) => m.claim.text),
-            ...(g.crystal?.claim.metadata?.key_outcomes ?? []),
-          ]
+          const hay = [g.headline, ...g.entityNames, ...members.map((m) => m.claim.text), ...(g.crystal?.claim.metadata?.key_outcomes ?? [])]
             .join(" ")
             .toLowerCase();
           if (!hay.includes(query)) return false;
@@ -136,8 +110,11 @@ export function MemoryPage() {
     [items, matchesItem],
   );
 
-  const graph = useMemo(() => buildGraph(shownGroups), [shownGroups]);
-  const nodeById = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph]);
+  const mind = useMemo(() => buildMindGraph(shownItems), [shownItems]);
+  const scopesPresent = useMemo(() => {
+    const present = new Set(mind.nodes.filter((n) => n.kind === "scope").map((n) => n.scope as Scope));
+    return SCOPES.filter((s) => present.has(s.id));
+  }, [mind]);
 
   const anyFilter = Boolean(scope || source || openOnly || query);
   const clearAll = () => {
@@ -147,17 +124,12 @@ export function MemoryPage() {
     setQ("");
   };
 
-  const subtitle = (() => {
-    if (mode === "facts") return `${shownItems.length} of ${items.length} memories`;
-    if (mode === "graph") {
-      const parts = [
-        count(graph.entityCount, "entity", "entities"),
-        count(graph.topicCount, "topic"),
-      ];
-      return parts.join(" · ");
-    }
-    return `${shownGroups.length} of ${groups.length} sessions`;
-  })();
+  const subtitle =
+    mode === "facts"
+      ? `${shownItems.length} of ${items.length} memories`
+      : mode === "map"
+        ? `${count(mind.entityCount, "entity", "entities")} · ${count(scopesPresent.length, "domain")}`
+        : `${shownGroups.length} of ${groups.length} sessions`;
 
   return (
     <div className="min-h-screen bg-warm-white">
@@ -173,17 +145,14 @@ export function MemoryPage() {
               options={[
                 { value: "list", label: "List" },
                 { value: "facts", label: "Facts" },
-                { value: "timeline", label: "Timeline" },
-                { value: "graph", label: "Graph" },
+                { value: "map", label: "Map" },
               ]}
             />
           )}
         </div>
-        {!isLoading && groups.length > 0 && (
-          <p className="mt-1 text-sm text-ink-muted">{subtitle}. Only you can read this.</p>
-        )}
+        {!isLoading && groups.length > 0 && <p className="mt-1 text-sm text-ink-muted">{subtitle}. Only you can read this.</p>}
 
-        {/* Facets persist across modes. */}
+        {/* Facets persist across List + Facts (the Map derives from the same filtered set). */}
         {!isLoading && groups.length > 0 && (
           <div className="mt-4 space-y-3">
             <div>
@@ -194,11 +163,8 @@ export function MemoryPage() {
                 aria-label="Filter your memory by keyword"
                 className="w-full rounded-control bg-surface px-4 py-2.5 text-ink ring-1 ring-hairline focus:outline-none focus:ring-2 focus:ring-clay"
               />
-              <p className="mt-1.5 px-1 text-xs text-ink-muted">
-                Narrows what’s shown. For a written answer, ask your agent.
-              </p>
+              <p className="mt-1.5 px-1 text-xs text-ink-muted">Narrows what’s shown. For a written answer, ask your agent.</p>
             </div>
-
             <div className="flex flex-wrap items-center gap-1.5">
               <Chip active={openOnly} onClick={() => setOpenOnly(!openOnly)}>
                 Open threads
@@ -210,7 +176,6 @@ export function MemoryPage() {
                 </Chip>
               ))}
             </div>
-
             {sources.length > 0 && (
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="mr-0.5 text-xs font-semibold text-ink-muted">Source</span>
@@ -220,11 +185,7 @@ export function MemoryPage() {
                   </Chip>
                 ))}
                 {anyFilter && (
-                  <button
-                    type="button"
-                    onClick={clearAll}
-                    className="ml-1 rounded-pill px-2.5 py-1 text-xs font-semibold text-clay-deep transition hover:bg-clay-tint"
-                  >
+                  <button type="button" onClick={clearAll} className="ml-1 rounded-pill px-2.5 py-1 text-xs font-semibold text-clay-deep transition hover:bg-clay-tint">
                     Clear all
                   </button>
                 )}
@@ -234,54 +195,39 @@ export function MemoryPage() {
         )}
 
         {isLoading && <p className="mt-8 text-sm text-ink-muted">Decrypting your vault…</p>}
-
         {isError && (
           <p className="mt-8 rounded-control bg-clay-tint px-3 py-2 text-sm text-clay-deep">
             Couldn’t load your vault: {error instanceof Error ? error.message : String(error)}
           </p>
         )}
 
-        {/* Fetched ciphertext but none decrypted → wrong key / older format / wrong chain. */}
         {!isLoading && !isError && groups.length === 0 && fetched > 0 && (
           <div className="mt-10 rounded-card bg-surface p-8 text-center shadow-soft">
             <h2 className="font-display text-xl font-semibold text-ink">Couldn’t read these memories</h2>
             <p className="mx-auto mt-2 max-w-md text-ink-muted">
-              Found {fetched} encrypted {fetched === 1 ? "entry" : "entries"} on-chain, but couldn’t
-              decrypt them with this key. That usually means a different recovery phrase, or memories
-              written in an older format or on another chain than this vault (this app reads Gnosis).
+              Found {fetched} encrypted {fetched === 1 ? "entry" : "entries"} on-chain, but couldn’t decrypt them with this
+              key. That usually means a different recovery phrase, or memories written in an older format or on another chain
+              than this vault (this app reads Gnosis).
             </p>
           </div>
         )}
-
-        {/* Genuinely nothing on-chain for this account. */}
         {!isLoading && !isError && groups.length === 0 && fetched === 0 && (
           <div className="mt-10 rounded-card bg-surface p-8 text-center shadow-soft">
             <h2 className="font-display text-xl font-semibold text-ink">No memories yet</h2>
             <p className="mx-auto mt-2 max-w-md text-ink-muted">
-              Your agent fills this as you chat with it — it extracts and encrypts each memory; only
-              you can read them. You don’t need to pair anything here to browse; your recovery phrase
-              is enough.
-            </p>
-            <p className="mx-auto mt-3 max-w-md text-sm text-ink-muted">
-              Expecting memories? Make sure your agent uses the <em>same recovery phrase</em> and is
-              on <em>Gnosis</em> (chain 100) — older Base Sepolia vaults won’t appear here.
+              Your agent fills this as you chat with it — it extracts and encrypts each memory; only you can read them. You
+              don’t need to pair anything here to browse; your recovery phrase is enough.
             </p>
           </div>
         )}
 
-        {/* ── List: gallery of session cards → panel ── */}
+        {/* List: crystal-headed session cards → panel */}
         {!isLoading && groups.length > 0 && mode === "list" && (
           <>
             {shownGroups.length > 0 ? (
               <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {shownGroups.map((g, i) => (
-                  <SessionCard
-                    key={g.key}
-                    group={g}
-                    onOpen={() => openSession(g)}
-                    onEntityClick={openEntity}
-                    style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}
-                  />
+                  <SessionCard key={g.key} group={g} onOpen={() => openSession(g)} onEntityClick={openEntity} style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }} />
                 ))}
               </div>
             ) : (
@@ -290,7 +236,7 @@ export function MemoryPage() {
           </>
         )}
 
-        {/* ── Facts: flat "everything you remember" lens ── */}
+        {/* Facts: flat lens */}
         {!isLoading && groups.length > 0 && mode === "facts" && (
           <>
             {shownItems.length > 0 ? (
@@ -304,99 +250,80 @@ export function MemoryPage() {
             )}
           </>
         )}
-
-        {/* ── Timeline: Rail · Activity ── */}
-        {!isLoading && groups.length > 0 && mode === "timeline" && (
-          <div className="mt-6">
-            <Segmented
-              size="sm"
-              ariaLabel="Timeline variant"
-              value={timelineVariant}
-              onChange={setTimelineVariant}
-              options={[
-                { value: "rail", label: "Rail" },
-                { value: "activity", label: "Activity" },
-              ]}
-            />
-            {shownGroups.length === 0 ? (
-              <NoMatch onClear={clearAll} />
-            ) : timelineVariant === "rail" ? (
-              <RailTimeline groups={shownGroups} onOpen={openSession} />
-            ) : (
-              <ActivityTimeline groups={shownGroups} onOpen={openSession} />
-            )}
-          </div>
-        )}
-
-        {/* ── Graph: Entities · Topics ── */}
-        {!isLoading && groups.length > 0 && mode === "graph" && (
-          <div className="mt-6">
-            <Segmented
-              size="sm"
-              ariaLabel="Graph variant"
-              value={graphVariant}
-              onChange={setGraphVariant}
-              options={[
-                { value: "entities", label: "Entities" },
-                { value: "topics", label: "Topics" },
-              ]}
-            />
-
-            {graphVariant === "entities" ? (
-              graph.nodes.length > 0 ? (
-                <>
-                  <div className="mt-6 h-[460px] overflow-hidden rounded-card bg-surface shadow-soft">
-                    <Suspense
-                      fallback={
-                        <div className="flex h-full items-center justify-center text-sm text-ink-muted">
-                          Drawing your graph…
-                        </div>
-                      }
-                    >
-                      <EntityGraph
-                        nodes={graph.nodes}
-                        links={graph.links}
-                        neighborsOf={graph.neighborsOf}
-                        selectedId={graphSel}
-                        onSelect={(id) => {
-                          setGraphSel(id);
-                          if (!id) return;
-                          const node = nodeById.get(id);
-                          if (node?.kind === "entity") openEntity(node.label);
-                        }}
-                      />
-                    </Suspense>
-                  </div>
-                  {graph.cappedEntities > 0 && (
-                    <p className="mt-2 text-xs text-ink-muted">
-                      Showing the {graph.entityCount - graph.cappedEntities} most-connected of{" "}
-                      {graph.entityCount} entities. Use Facts or filters to reach the rest.
-                    </p>
-                  )}
-                </>
-              ) : (
-                <EmptyHint>No entities to map yet. They appear once your memories name people, projects, or places.</EmptyHint>
-              )
-            ) : graph.topicCount > 0 ? (
-              <TopicsTree nodes={graph.nodes} links={graph.links} onOpenEntity={openEntity} />
-            ) : (
-              <EmptyHint>
-                No topics yet. Topics come from session Crystals (written by agents like Hermes at
-                session end) — imported memories don’t carry them.
-              </EmptyHint>
-            )}
-          </div>
-        )}
       </main>
 
-      <SidePanel
-        view={panel}
-        onClose={close}
-        onOpenSession={openSession}
-        onOpenEntity={openEntity}
-        groups={groups}
-        items={items}
-      />
+      {/* Map: a full-bleed dark planetarium inset (real derived graph) */}
+      {!isLoading && groups.length > 0 && mode === "map" && (
+        <div className="mx-auto w-full max-w-4xl px-4 pb-24">
+          <p className="mb-4 max-w-2xl text-sm text-ink-muted">
+            Your memory as a map. Entities are points of light; the layout shows the shape of what you talk about.
+          </p>
+          {mind.entityCount === 0 ? (
+            <div className="rounded-card bg-surface p-8 text-center shadow-soft">
+              <p className="mx-auto max-w-md text-sm text-ink-muted">
+                No entities to map yet. They appear once your memories name people, projects, or places.
+              </p>
+            </div>
+          ) : (
+            <div className="relative h-[72vh] min-h-[540px] w-full overflow-hidden rounded-[24px] bg-[#211E1B] shadow-overlay ring-1 ring-black/20">
+              <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-warm-white/60">Drawing your map…</div>}>
+                <MindMap
+                  mode={mapMode}
+                  nodes={mind.nodes}
+                  links={mind.links}
+                  neighborsOf={mind.neighborsOf}
+                  selectedId={null}
+                  onSelect={(n) => {
+                    if (n && n.kind === "entity") openEntity(n.label);
+                  }}
+                />
+              </Suspense>
+
+              <div className="absolute left-4 top-4 flex flex-col gap-2">
+                <div className="inline-flex items-center gap-0.5 rounded-pill bg-white/10 p-0.5 backdrop-blur">
+                  {(["atlas", "radial", "constellation"] as MindMode[]).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setMapMode(m)}
+                      aria-pressed={mapMode === m}
+                      className={clsx(
+                        "rounded-pill px-3.5 py-1.5 text-sm font-semibold capitalize transition duration-150 ease-keeper focus:outline-none",
+                        mapMode === m ? "bg-warm-white text-ink shadow-soft" : "text-warm-white/70 hover:text-warm-white",
+                      )}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+                <p className="max-w-[15rem] pl-1 text-[0.7rem] leading-snug text-warm-white/55">
+                  {mapMode === "atlas" && "Clustered into your life’s domains, sized by how often they come up."}
+                  {mapMode === "radial" && "You at the center; domains, then the people, projects and places under each."}
+                  {mapMode === "constellation" && "A free star-map — everything pulled together by what connects."}
+                </p>
+              </div>
+
+              <div className="pointer-events-none absolute bottom-4 left-4 flex flex-wrap gap-x-3 gap-y-1">
+                {scopesPresent.map((sc) => (
+                  <span key={sc.id} className="flex items-center gap-1.5 text-[0.7rem] font-medium text-warm-white/75">
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: sc.color, boxShadow: `0 0 6px ${sc.color}` }} />
+                    {sc.label}
+                  </span>
+                ))}
+              </div>
+              <div className="pointer-events-none absolute bottom-4 right-4 hidden text-[0.7rem] text-warm-white/45 sm:block">
+                drag · scroll or ± to zoom · tap a star
+              </div>
+              {mind.cappedEntities > 0 && (
+                <div className="pointer-events-none absolute right-4 top-4 max-w-[13rem] text-right text-[0.7rem] text-warm-white/55">
+                  Showing the {mind.entityCount - mind.cappedEntities} most-connected of {mind.entityCount} entities.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <SidePanel view={panel} onClose={close} onOpenSession={openSession} onOpenEntity={openEntity} groups={groups} items={items} />
     </div>
   );
 }
@@ -405,21 +332,9 @@ function NoMatch({ onClear }: { onClear: () => void }) {
   return (
     <div className="mt-8 rounded-card bg-surface p-8 text-center shadow-soft">
       <p className="text-sm text-ink-muted">Nothing matches these filters.</p>
-      <button
-        type="button"
-        onClick={onClear}
-        className="mt-2 text-sm font-semibold text-clay-deep hover:underline"
-      >
+      <button type="button" onClick={onClear} className="mt-2 text-sm font-semibold text-clay-deep hover:underline">
         Clear all filters
       </button>
-    </div>
-  );
-}
-
-function EmptyHint({ children }: { children: ReactNode }) {
-  return (
-    <div className="mt-6 rounded-card bg-surface p-8 text-center shadow-soft">
-      <p className="mx-auto max-w-md text-sm text-ink-muted">{children}</p>
     </div>
   );
 }
