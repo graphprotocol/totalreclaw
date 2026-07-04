@@ -10,7 +10,6 @@ use wasm_bindgen::prelude::*;
 use crate::blind;
 use crate::claims;
 use crate::confirm;
-use crate::pin_intent;
 use crate::contradiction;
 use crate::crypto;
 use crate::debrief;
@@ -18,6 +17,7 @@ use crate::digest;
 use crate::feedback_log;
 use crate::fingerprint;
 use crate::lsh;
+use crate::pin_intent;
 use crate::protobuf;
 use crate::reranker;
 #[cfg(feature = "managed")]
@@ -257,7 +257,9 @@ pub fn wasm_encode_fact_protobuf(json: &str) -> Result<Vec<u8>, JsError> {
         content_fp: payload.content_fp,
         agent_id: payload.agent_id,
         encrypted_embedding: payload.encrypted_embedding,
-        version: payload.version.unwrap_or(protobuf::DEFAULT_PROTOBUF_VERSION),
+        version: payload
+            .version
+            .unwrap_or(protobuf::DEFAULT_PROTOBUF_VERSION),
     };
 
     Ok(protobuf::encode_fact_protobuf(&fact))
@@ -514,8 +516,7 @@ pub fn wasm_pin_boost(tier_json: &str, now_unix: i64, config_json: &str) -> Resu
 /// to retune can pass this verbatim to [`wasm_pin_boost`].
 #[wasm_bindgen(js_name = "defaultPinConfig")]
 pub fn wasm_default_pin_config() -> Result<String, JsError> {
-    serde_json::to_string(&claims::PinConfig::default())
-        .map_err(|e| JsError::new(&e.to_string()))
+    serde_json::to_string(&claims::PinConfig::default()).map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Classify natural-language pin/unpin intent from a user utterance.
@@ -611,7 +612,8 @@ pub fn wasm_encode_batch_call_to(
         .iter()
         .map(|h| hex::decode(h.trim_start_matches("0x")).unwrap_or_default())
         .collect();
-    userop::encode_batch_call_to(&payloads, data_edge_address).map_err(|e| JsError::new(&e.to_string()))
+    userop::encode_batch_call_to(&payloads, data_edge_address)
+        .map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Compute the ERC-4337 v0.7 UserOp hash for signing.
@@ -984,10 +986,7 @@ pub fn wasm_generate_expansion_trapdoors(
 /// Returns a JsValue (merged, deduplicated SubgraphFact array sorted by RRF score).
 #[cfg(feature = "managed")]
 #[wasm_bindgen(js_name = "mergeExpansionResults")]
-pub fn wasm_merge_expansion_results(
-    fact_sets_json: &str,
-    rrf_k: f64,
-) -> Result<JsValue, JsError> {
+pub fn wasm_merge_expansion_results(fact_sets_json: &str, rrf_k: f64) -> Result<JsValue, JsError> {
     let fact_sets: Vec<Vec<search::SubgraphFact>> = serde_json::from_str(fact_sets_json)
         .map_err(|e| JsError::new(&format!("Invalid fact_sets JSON: {}", e)))?;
     let set_refs: Vec<&[search::SubgraphFact]> = fact_sets.iter().map(|v| v.as_slice()).collect();
@@ -1730,6 +1729,45 @@ pub fn wasm_recall_context_header(now_unix: i64) -> String {
 #[wasm_bindgen(js_name = "formatRecallContext")]
 pub fn wasm_format_recall_context(items_json: &str, now_unix: i64) -> String {
     crate::recall_context::format_recall_context(items_json, now_unix)
+}
+
+// ---------------------------------------------------------------------------
+// Session segmentation (import Crystal grouping) — #368 core hoist
+// ---------------------------------------------------------------------------
+
+/// Centroid-walk session segmentation over time-ordered turns.
+///
+/// Mirrors `session_segmentation.py:segment_sessions` byte-for-byte.
+///
+/// # Inputs (JSON strings, per this module's convention)
+/// - `timestamps_json`: JSON array of Unix seconds or `null`, e.g.
+///   `"[0.0, null, 5000.0]"`. `null` = 0-gap to the previous turn.
+/// - `embeddings_json`: JSON array of L2-normalised vectors, e.g.
+///   `"[[1.0,0.0],[0.9,0.1]]"`.
+/// - `gap_seconds`: min time gap (strict `>`) forcing a new session (e.g. 1800).
+/// - `sim_threshold`: cosine threshold (strict `<` splits; e.g. 0.55).
+///
+/// # Returns
+/// A `JsValue` — array of sessions, each an array of turn indices
+/// (`number[][]`), contiguous and ascending. Bad JSON → `JsError`.
+#[wasm_bindgen(js_name = "segmentSessions")]
+pub fn wasm_segment_sessions(
+    timestamps_json: &str,
+    embeddings_json: &str,
+    gap_seconds: f64,
+    sim_threshold: f64,
+) -> Result<JsValue, JsError> {
+    let timestamps: Vec<Option<f64>> =
+        serde_json::from_str(timestamps_json).map_err(|e| JsError::new(&e.to_string()))?;
+    let embeddings: Vec<Vec<f64>> =
+        serde_json::from_str(embeddings_json).map_err(|e| JsError::new(&e.to_string()))?;
+    let sessions = crate::session_segmentation::segment_sessions(
+        &timestamps,
+        &embeddings,
+        gap_seconds,
+        sim_threshold,
+    );
+    serde_wasm_bindgen::to_value(&sessions).map_err(|e| JsError::new(&e.to_string()))
 }
 
 // ---------------------------------------------------------------------------

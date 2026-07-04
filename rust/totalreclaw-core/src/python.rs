@@ -16,7 +16,7 @@ use crate::search;
 use crate::userop;
 use crate::{
     blind, claims, confirm, contradiction, crypto, debrief, digest, feedback_log, fingerprint, lsh,
-    pin_intent, protobuf, recall_context, reranker, store,
+    pin_intent, protobuf, recall_context, reranker, session_segmentation, store,
 };
 
 // ---------------------------------------------------------------------------
@@ -1659,6 +1659,38 @@ fn py_format_recall_context(items_json: &str, now_unix: i64) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Session segmentation (import Crystal grouping) — #368 core hoist
+// ---------------------------------------------------------------------------
+
+/// Centroid-walk session segmentation over time-ordered turns.
+///
+/// Mirrors `session_segmentation.py:segment_sessions` byte-for-byte. Embedding
+/// stays client-side; this is the pure segmentation math only.
+///
+/// # Parameters
+/// - `timestamps`: list of Unix seconds (`float`) or `None`, chronological.
+///   `None` entries are treated as a 0-gap to the previous turn.
+/// - `embeddings`: list of L2-normalised embedding vectors (`list[list[float]]`).
+/// - `gap_seconds`: minimum time gap (strict `>`) that forces a new session
+///   (default 1800 = 30 min).
+/// - `sim_threshold`: cosine threshold (strict `<` splits; default 0.55).
+///
+/// # Returns
+/// `list[list[int]]` — ordered sessions, each a list of turn indices
+/// (contiguous, ascending). Empty input → `[]`.
+#[pyfunction]
+#[pyo3(name = "segment_sessions")]
+#[pyo3(signature = (timestamps, embeddings, gap_seconds=1800.0, sim_threshold=0.55))]
+fn py_segment_sessions(
+    timestamps: Vec<Option<f64>>,
+    embeddings: Vec<Vec<f64>>,
+    gap_seconds: f64,
+    sim_threshold: f64,
+) -> Vec<Vec<usize>> {
+    session_segmentation::segment_sessions(&timestamps, &embeddings, gap_seconds, sim_threshold)
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -1844,6 +1876,9 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_format_memory_date, m)?)?;
     m.add_function(wrap_pyfunction!(py_recall_context_header, m)?)?;
     m.add_function(wrap_pyfunction!(py_format_recall_context, m)?)?;
+
+    // Session segmentation (import Crystal grouping) — #368
+    m.add_function(wrap_pyfunction!(py_segment_sessions, m)?)?;
 
     Ok(())
 }

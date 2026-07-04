@@ -26,6 +26,7 @@
 //! - [`prompts`] — Canonical extraction + compaction system prompts (2.2.0)
 //! - [`confirm`] — Read-after-write primitive for on-chain mutation tools (2.2.x)
 //! - [`secrets`] — API-key vault: detect + redact 14 secret pattern classes (am-6)
+//! - [`session_segmentation`] — Centroid-walk session segmentation for imports (#368)
 
 pub mod blind;
 pub mod claims;
@@ -45,6 +46,7 @@ pub mod pin_intent;
 pub mod prompts;
 pub mod protobuf;
 pub mod recall_context;
+pub mod session_segmentation;
 pub mod import_parsers;
 pub mod reranker;
 pub mod secrets;

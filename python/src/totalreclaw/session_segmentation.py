@@ -1,8 +1,12 @@
 """Centroid-walk session segmentation for conversation imports.
 
-Pure computation — no I/O, no LLM calls, no network. Designed to be hoistable
-to the shared Rust core (totalreclaw-core) in a future pass for cross-client
-parity. For now it lives Python-only and is used by import_engine.py.
+Pure computation — no I/O, no LLM calls, no network. Hoisted to the shared
+Rust core (``totalreclaw_core.segment_sessions``, totalreclaw#368) for
+cross-client parity. The public :func:`segment_sessions` prefers the core
+binding and falls back to the local Python implementation
+(:func:`_segment_sessions_local`) when the installed core wheel predates the
+hoist (i.e. lacks the ``segment_sessions`` symbol). Both implementations are
+byte-identical by construction; see ``tests/test_session_segmentation_parity.py``.
 
 Algorithm (from the validated harrier_prototype.py):
   - Walk turns in chronological order.
@@ -26,11 +30,65 @@ Pedro's real Gemini Takeout (3942 turns):
 """
 from __future__ import annotations
 
+import logging
 import math
 from typing import Optional
 
+logger = logging.getLogger(__name__)
+
+
+def _has_core_segment_sessions() -> bool:
+    """Probe ``totalreclaw_core`` for the ``segment_sessions`` PyO3 binding.
+
+    Older core wheels (pre-#368, e.g. ``totalreclaw-core<=2.5.5``) do not
+    expose this symbol. We return ``False`` so :func:`segment_sessions` can
+    fall back to the local Python implementation without raising.
+    """
+    try:
+        import totalreclaw_core  # noqa: F401  (probe import only)
+    except Exception:
+        return False
+    return hasattr(totalreclaw_core, "segment_sessions")
+
 
 def segment_sessions(
+    timestamps: list[Optional[float]],
+    embeddings: list[list[float]],
+    gap_seconds: int = 1800,
+    sim_threshold: float = 0.55,
+) -> list[list[int]]:
+    """Centroid-walk segmentation over time-ordered turns (core-preferring).
+
+    Prefers the shared Rust core (``totalreclaw_core.segment_sessions``,
+    hoisted in totalreclaw#368) for cross-client parity. Falls back to the
+    local Python implementation (:func:`_segment_sessions_local`) when the
+    installed core wheel lacks the symbol, or if the core call raises for any
+    reason. Both paths produce identical groupings.
+
+    See :func:`_segment_sessions_local` for the full parameter and return-value
+    documentation — the signature and semantics are identical.
+    """
+    if _has_core_segment_sessions():
+        try:
+            import totalreclaw_core
+
+            # Core signature: (timestamps, embeddings, gap_seconds, sim_threshold)
+            # matching this function's positional args. Core returns
+            # ``list[list[int]]`` (contiguous, ascending) — same contract.
+            return totalreclaw_core.segment_sessions(
+                timestamps, embeddings, float(gap_seconds), float(sim_threshold)
+            )
+        except Exception as e:  # pragma: no cover — defensive fallback
+            logger.warning(
+                "totalreclaw_core.segment_sessions failed (%s); "
+                "using local Python implementation",
+                e,
+            )
+
+    return _segment_sessions_local(timestamps, embeddings, gap_seconds, sim_threshold)
+
+
+def _segment_sessions_local(
     timestamps: list[Optional[float]],
     embeddings: list[list[float]],
     gap_seconds: int = 1800,
