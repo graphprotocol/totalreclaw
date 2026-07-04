@@ -34,6 +34,17 @@ This is the regression shield we add as part of 3.3.1-rc.6 / 2.3.1rc6.
 The test is designed to FAIL on rc.4 / rc.5 main (where pin + unpin are
 declared in the manifest + schemas but never wired into ``register``)
 and PASS after the rc.6 fix registers them.
+
+schemas.py ↔ register() (issue #427)
+------------------------------------
+
+``TestSchemasRegisterParity`` (below) closes the vacuous-pass hole in the
+manifest check: a schema absent from BOTH plugin.yaml AND register()
+satisfied the subset check silently. That hole shipped the 2.4.5rc10
+``totalreclaw_top_up`` bug (internal#412) — a schema + handler with no
+registration anywhere. The new class anchors on ``schemas.py``: every
+authored ``totalreclaw_*`` schema must be registered or explicitly
+dormant (``DORMANT_SCHEMAS``, with a per-entry reason).
 """
 from __future__ import annotations
 
@@ -198,4 +209,193 @@ class TestPluginYamlParity:
             "register() never wired totalreclaw_pair — the user's "
             "Hermes chat agent will see no pair tool and pairing flow "
             "dead-ends. This is exactly the rc.4 user-reported bug."
+        )
+
+
+# ---------------------------------------------------------------------------
+# schemas.py ↔ register() parity (issue #427)
+# ---------------------------------------------------------------------------
+#
+# Why this class exists — the manifest parity contract above is
+# necessary but NOT sufficient. It pins ``plugin.yaml::provides_tools``
+# to the ``register()`` call list. But a tool schema that is absent from
+# BOTH plugin.yaml and register() passes it vacuously: there's nothing to
+# be a subset of. That's not hypothetical — this exact bug class shipped
+# to users TWICE:
+#
+#   - 2.3.1 pin/unpin: schemas + manifest present, register() missing.
+#     Caught by TestPluginYamlParity above (manifest ⊄ register).
+#   - 2.4.5rc10 ``totalreclaw_top_up`` (internal#412, fixed in #423):
+#     schema + handler present, but the tool was in NEITHER plugin.yaml
+#     NOR register(). The manifest parity check saw nothing missing (the
+#     manifest didn't advertise it either) and passed while a shipped,
+#     handler-backed tool was silently unreachable by the agent.
+#
+# The fix is to anchor the triangle at ``schemas.py`` — the module where
+# tool schemas are actually authored. Every ``totalreclaw_*`` schema dict
+# declared there MUST be either (a) wired into ``register()`` or (b)
+# explicitly declared dormant in ``DORMANT_SCHEMAS`` below, with a
+# per-entry reason. A new schema that someone forgets to register now
+# fails CI instead of shipping dark.
+
+
+# Schemas that intentionally exist in ``schemas.py`` but are deliberately
+# NOT registered as agent tools. Every entry needs a reason comment; a
+# schema may only live here if it is *by design* unreachable by the LLM.
+#
+# Cross-check when editing: ``memory_provider.get_tool_schemas()`` is the
+# dormant Path-B MemoryProvider surface (the schemas that provider mode
+# exposes). A schema that is registered by ``register()`` OR listed in
+# that provider surface is live and must NOT appear here.
+DORMANT_SCHEMAS: dict[str, str] = {
+    # Phrase-safety: rc.4 removed the ``totalreclaw_setup`` agent tool
+    # because its handler could pipe a recovery phrase through the LLM
+    # tool-call payload (and, phrase-less, GENERATE + RETURN a fresh
+    # mnemonic in the tool response). Both cross the LLM context — a
+    # vault-compromise-class violation of project_phrase_safety_rule.md.
+    # The SETUP schema dict is kept in schemas.py for the CLI/pair-flow
+    # ``state.configure`` code path, but it MUST NEVER be registered as an
+    # agent tool. It is also (correctly) absent from
+    # ``memory_provider.get_tool_schemas()``. Agents route to
+    # ``totalreclaw_pair`` instead.
+    "totalreclaw_setup": "phrase-safety — rc.4 removed the agent tool (see __init__.py); use totalreclaw_pair",
+}
+
+
+def _schema_tool_names() -> dict[str, str]:
+    """Collect every module-level dict in ``schemas.py`` that carries a
+    ``"name"`` key starting with ``totalreclaw_``.
+
+    Returns a mapping of ``tool_name -> module_attribute_name`` so failure
+    messages can point at the exact ``schemas.FOO`` dict that drifted.
+    """
+    from totalreclaw.hermes import schemas
+
+    found: dict[str, str] = {}
+    for attr_name, value in vars(schemas).items():
+        if not isinstance(value, dict):
+            continue
+        name = value.get("name")
+        if isinstance(name, str) and name.startswith("totalreclaw_"):
+            found[name] = attr_name
+    return found
+
+
+def _all_source_schema_names() -> set[str]:
+    """Every ``totalreclaw_*`` tool name that has a source schema.
+
+    The register() body may legitimately wire tools whose schemas live
+    outside schemas.py — ``pair_tool.PAIR_SCHEMA`` and the RC-gated
+    ``qa_bug_report.SCHEMA``. This is the full authored-schema universe
+    used to close the inverse (register ⊆ source-schemas) direction.
+    """
+    from totalreclaw.hermes import pair_tool
+    from totalreclaw.hermes.qa_bug_report import SCHEMA as QA_BUG_SCHEMA
+
+    names = set(_schema_tool_names().keys())
+    names.add(pair_tool.PAIR_SCHEMA["name"])
+    names.add(QA_BUG_SCHEMA["name"])
+    return names
+
+
+class TestSchemasRegisterParity:
+    """schemas.py ↔ register() parity contract (issue #427).
+
+    Closes the vacuous-pass hole in ``TestPluginYamlParity``: a schema
+    absent from both plugin.yaml and register() used to pass silently.
+    Here schemas.py is the anchor — every authored ``totalreclaw_*``
+    schema must be registered or explicitly dormant.
+    """
+
+    def test_every_schema_is_registered_or_dormant(self):
+        """Every ``totalreclaw_*`` schema dict declared in ``schemas.py``
+        must be EITHER registered by ``register()`` (stable or RC path)
+        OR listed in ``DORMANT_SCHEMAS`` with a reason.
+
+        This is the exact shield that would have caught the 2.4.5rc10
+        ``totalreclaw_top_up`` regression (internal#412): the schema +
+        handler shipped, but the tool was registered nowhere, so the
+        agent could not invoke it. As of #423 TOPUP is registered, so it
+        must NOT be in the dormant allow-list.
+        """
+        schema_names = _schema_tool_names()
+        ctx = _register_with_mock_ctx()
+        registered_names = {
+            call.kwargs["name"] for call in ctx.register_tool.call_args_list
+        }
+
+        # A dormant schema that has since been wired is a stale allow-list
+        # entry — force its removal so the list can't rot into a blanket
+        # exemption.
+        stale_dormant = sorted(set(DORMANT_SCHEMAS) & registered_names)
+        assert not stale_dormant, (
+            "These names are in DORMANT_SCHEMAS but ARE registered by "
+            f"register(): {stale_dormant}. Remove them from "
+            "DORMANT_SCHEMAS — the allow-list is only for tools that are "
+            "intentionally unreachable by the agent."
+        )
+
+        unaccounted = sorted(
+            name
+            for name in schema_names
+            if name not in registered_names and name not in DORMANT_SCHEMAS
+        )
+        assert not unaccounted, (
+            "These totalreclaw_* schemas are declared in schemas.py but "
+            "are NEITHER registered by register() NOR listed in "
+            f"DORMANT_SCHEMAS: {unaccounted}. A shipped schema that is "
+            "registered nowhere is invisible to the agent (this is the "
+            "2.4.5rc10 totalreclaw_top_up / internal#412 bug class). "
+            "Either wire it into totalreclaw/hermes/__init__.py::register "
+            "or add it to DORMANT_SCHEMAS with a reason comment. "
+            f"(schemas.py attribute names: "
+            f"{ {n: schema_names[n] for n in unaccounted} })"
+        )
+
+    def test_dormant_setup_is_actually_dormant(self):
+        """Guard the seed allow-list entry: ``totalreclaw_setup`` must
+        genuinely be unregistered on BOTH the stable and RC paths.
+
+        If a future change re-wires setup as an agent tool, the parity
+        test above would pass (it's allow-listed) while a phrase-unsafe
+        tool ships. This asserts the dormant claim directly so the
+        allow-list can't paper over a real regression.
+        """
+        assert "totalreclaw_setup" in DORMANT_SCHEMAS
+        ctx = _register_with_mock_ctx()
+        registered_names = {
+            call.kwargs["name"] for call in ctx.register_tool.call_args_list
+        }
+        assert "totalreclaw_setup" not in registered_names, (
+            "totalreclaw_setup is in DORMANT_SCHEMAS (declared unreachable) "
+            "but register() wired it as an agent tool. This is a "
+            "phrase-safety regression — see project_phrase_safety_rule.md "
+            "and the rc.4 removal note in __init__.py."
+        )
+
+    def test_every_registered_tool_has_a_source_schema(self):
+        """Inverse direction — cheap completeness that keeps the triangle
+        closed: every ``totalreclaw_*`` name passed to ``register_tool``
+        must trace back to an authored schema (schemas.py,
+        ``pair_tool.PAIR_SCHEMA``, or the RC ``qa_bug_report`` schema).
+
+        This catches a register() call that invents a name with no schema
+        behind it — e.g. a copy-paste typo in the ``name=`` kwarg — which
+        would advertise a tool the model can't get a valid schema for.
+        """
+        ctx = _register_with_mock_ctx()
+        registered_names = {
+            call.kwargs["name"]
+            for call in ctx.register_tool.call_args_list
+            if call.kwargs["name"].startswith("totalreclaw_")
+        }
+        source_names = _all_source_schema_names()
+
+        orphan = sorted(registered_names - source_names)
+        assert not orphan, (
+            "register() wires these totalreclaw_* tools but no source "
+            f"schema defines them: {orphan}. Every registered tool needs "
+            "a schema in schemas.py, pair_tool.PAIR_SCHEMA, or "
+            "qa_bug_report.SCHEMA — check for a typo'd name= kwarg in "
+            "totalreclaw/hermes/__init__.py::register."
         )

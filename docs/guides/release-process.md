@@ -85,10 +85,17 @@ four passes unit tests and still leaves the tool invisible or unroutable in real
 This bug class has now shipped **twice**: pin/unpin in 2.3.1 (schemas+manifest, no
 register — caught rc6) and `totalreclaw_top_up` in 2.4.5rc10 (schema+handler, in
 NEITHER manifest nor register — caught only by the S5 re-QA, internal#412). The
-`test_hermes_plugin_manifest_parity.py` shield pins manifest↔register, so a tool
-missing from BOTH still slips through. Until a schemas↔register CI assert exists
-(tracked on the public repo), reviewers must check all four places on any
-tool-adding PR.
+`test_hermes_plugin_manifest_parity.py` shield originally pinned only
+manifest↔register, so a tool missing from BOTH slipped through. That gap is now
+closed: `TestSchemasRegisterParity` in
+`python/tests/test_hermes_plugin_manifest_parity.py` (issue #427) anchors on
+`schemas.py` and asserts every `totalreclaw_*` schema dict is EITHER registered by
+`register()` (stable or RC path) OR listed in the in-test `DORMANT_SCHEMAS`
+allow-list with a per-entry reason — so a schema+handler that is registered nowhere
+(the `totalreclaw_top_up` bug class) now fails CI. It also asserts the inverse
+(every registered `totalreclaw_*` name traces back to an authored schema). Reviewers
+should still eyeball all four places on any tool-adding PR, but a forgotten
+registration is now caught automatically.
 
 ## Cross-registry version scheme
 
