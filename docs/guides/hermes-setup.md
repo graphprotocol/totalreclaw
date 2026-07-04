@@ -265,6 +265,7 @@ These are hard rules. None of them are negotiable.
 | `totalreclaw_forget` | Tombstone a memory. |
 | `totalreclaw_pin` | Pin a memory so it's surfaced in every recall. |
 | `totalreclaw_status` | Report account tier + memory counts. |
+| `totalreclaw_top_up` | Buy a **one-time top-up pack** of extra memories (`1000` / `5000` / `10000`) — returns a Stripe checkout URL. **Route here whenever the user asks to buy extra memories, a top-up pack, or one-time credits (e.g. before a big import, or when over/near quota).** This is DISTINCT from the Pro subscription upgrade — never substitute the upgrade flow when the user asked for a pack; offer the upgrade only as an additional option. |
 | `totalreclaw_export` | Export the full vault. |
 | `totalreclaw_set_scope` | Switch active scope. |
 | `totalreclaw_retype` | Change a memory's taxonomy type. |
