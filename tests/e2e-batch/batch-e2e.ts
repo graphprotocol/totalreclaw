@@ -37,7 +37,7 @@ import { createPimlicoClient } from 'permissionless/clients/pimlico';
 
 const RELAY_URL = process.env.RELAY_URL || 'https://api-staging.totalreclaw.xyz';
 const CHAIN_ID = 84532; // Base Sepolia
-const DATA_EDGE_ADDRESS = '0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca' as const;
+const DEFAULT_DATA_EDGE_ADDRESS = '0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca' as const;
 const ENTRYPOINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032' as const;
 
 // Subgraph polling — Graph Studio has variable indexing latency (5-40+ min)
@@ -284,6 +284,7 @@ async function submitBatch(
   authKeyHex: string,
   walletAddress: string,
   payloads: Buffer[],
+  dataEdgeAddress: string,
 ): Promise<{ txHash: string; userOpHash: string; batchSize: number }> {
   if (payloads.length === 0) throw new Error('Empty batch');
 
@@ -322,7 +323,7 @@ async function submitBatch(
   });
 
   const calls = payloads.map(p => ({
-    to: DATA_EDGE_ADDRESS as `0x${string}`,
+    to: dataEdgeAddress as `0x${string}`,
     value: 0n,
     data: `0x${p.toString('hex')}` as Hex,
   }));
@@ -344,6 +345,9 @@ async function submitBatch(
 // Shared GraphQL queries
 // ---------------------------------------------------------------------------
 
+// NOTE: subgraph schema v3 removed `source` and `agentId` from the Fact type
+// (they are now encrypted inside encryptedBlob). These queries request only
+// fields that exist on the current schema (subgraph/schema.graphql).
 const FACTS_BY_OWNER_QUERY = `
   query FactsByOwner($owner: String!) {
     facts(
@@ -352,7 +356,7 @@ const FACTS_BY_OWNER_QUERY = `
       orderDirection: desc
       first: 20
     ) {
-      id owner encryptedBlob decayScore source isActive contentFp agentId
+      id owner encryptedBlob decayScore isActive contentFp createdAt timestamp
     }
   }
 `;
@@ -365,7 +369,7 @@ const ALL_FACTS_BY_OWNER_QUERY = `
       orderDirection: desc
       first: 20
     ) {
-      id owner encryptedBlob decayScore source isActive contentFp agentId
+      id owner encryptedBlob decayScore isActive contentFp createdAt timestamp
     }
   }
 `;
@@ -378,7 +382,7 @@ const SEARCH_BY_BLIND_INDEX = `
     ) {
       hash
       fact {
-        id owner encryptedBlob decayScore source isActive contentFp agentId
+        id owner encryptedBlob decayScore isActive contentFp createdAt timestamp
       }
     }
   }
@@ -528,7 +532,7 @@ interface SubmissionContext {
   blindIndices?: string[];
 }
 
-async function submitPhaseB(keys: ReturnType<typeof generateTestKeys>): Promise<SubmissionContext | null> {
+async function submitPhaseB(keys: ReturnType<typeof generateTestKeys>, dataEdgeAddress: string): Promise<SubmissionContext | null> {
   console.log('\n--- Phase 1: Submit B (3-fact batch) ---\n');
   const ctx: SubmissionContext = {
     mnemonic: generateMnemonic(wordlist),
@@ -557,7 +561,7 @@ async function submitPhaseB(keys: ReturnType<typeof generateTestKeys>): Promise<
   ctx.payloads = ctx.testFacts!.map(f => encodeFactProtobuf(f));
 
   const ok = await runTest('B-submit: 3-fact batch UserOp', async () => {
-    const result = await submitBatch(ctx.mnemonic, keys.authKeyHex, ctx.smartAccountAddr, ctx.payloads);
+    const result = await submitBatch(ctx.mnemonic, keys.authKeyHex, ctx.smartAccountAddr, ctx.payloads, dataEdgeAddress);
     ctx.txHash = result.txHash;
     assert(result.batchSize === 3, `Expected batchSize=3`);
     console.log(`    txHash: ${result.txHash} (${result.userOpHash.slice(0, 16)}...)`);
@@ -565,7 +569,7 @@ async function submitPhaseB(keys: ReturnType<typeof generateTestKeys>): Promise<
   return ok ? ctx : null;
 }
 
-async function submitPhaseD(keys: ReturnType<typeof generateTestKeys>): Promise<SubmissionContext | null> {
+async function submitPhaseD(keys: ReturnType<typeof generateTestKeys>, dataEdgeAddress: string): Promise<SubmissionContext | null> {
   console.log('\n--- Phase 1: Submit D (tombstone batch) ---\n');
   const ctx: SubmissionContext = {
     mnemonic: generateMnemonic(wordlist),
@@ -590,7 +594,7 @@ async function submitPhaseD(keys: ReturnType<typeof generateTestKeys>): Promise<
 
   // Submit original
   const d1 = await runTest('D-submit-1: Original fact', async () => {
-    const result = await submitBatch(ctx.mnemonic, keys.authKeyHex, ctx.smartAccountAddr, [encodeFactProtobuf(ctx.originalFact!)]);
+    const result = await submitBatch(ctx.mnemonic, keys.authKeyHex, ctx.smartAccountAddr, [encodeFactProtobuf(ctx.originalFact!)], dataEdgeAddress);
     ctx.originalTxHash = result.txHash;
     console.log(`    txHash: ${result.txHash}`);
   });
@@ -626,7 +630,7 @@ async function submitPhaseD(keys: ReturnType<typeof generateTestKeys>): Promise<
 
   const d2 = await runTest('D-submit-2: Tombstone + replacement in 1 UserOp', async () => {
     const payloads = [encodeFactProtobuf(tombstone), encodeFactProtobuf(ctx.replacement!)];
-    const result = await submitBatch(ctx.mnemonic, keys.authKeyHex, ctx.smartAccountAddr, payloads);
+    const result = await submitBatch(ctx.mnemonic, keys.authKeyHex, ctx.smartAccountAddr, payloads, dataEdgeAddress);
     ctx.tombstonePlusReplacementTxHash = result.txHash;
     assert(result.batchSize === 2, `Expected batchSize=2`);
     console.log(`    txHash: ${result.txHash}`);
@@ -634,7 +638,7 @@ async function submitPhaseD(keys: ReturnType<typeof generateTestKeys>): Promise<
   return d2 ? ctx : null;
 }
 
-async function submitPhaseF(keys: ReturnType<typeof generateTestKeys>): Promise<SubmissionContext | null> {
+async function submitPhaseF(keys: ReturnType<typeof generateTestKeys>, dataEdgeAddress: string): Promise<SubmissionContext | null> {
   console.log('\n--- Phase 1: Submit F (search pipeline) ---\n');
   const ctx: SubmissionContext = {
     mnemonic: generateMnemonic(wordlist),
@@ -667,7 +671,7 @@ async function submitPhaseF(keys: ReturnType<typeof generateTestKeys>): Promise<
   };
 
   const ok = await runTest('F-submit: Fact with blind indices', async () => {
-    const result = await submitBatch(ctx.mnemonic, keys.authKeyHex, ctx.smartAccountAddr, [encodeFactProtobuf(ctx.fact!)]);
+    const result = await submitBatch(ctx.mnemonic, keys.authKeyHex, ctx.smartAccountAddr, [encodeFactProtobuf(ctx.fact!)], dataEdgeAddress);
     console.log(`    txHash: ${result.txHash}`);
     console.log(`    Blind indices: ${allIndices.length} (${ctx.blindIndices!.length} word + 1 marker)`);
   });
@@ -691,18 +695,20 @@ async function verifyPhaseB(keys: ReturnType<typeof generateTestKeys>, ctx: Subm
 
   await runTest('B4: Correct metadata on each fact', async () => {
     const result = await querySubgraph(keys.authKeyHex, FACTS_BY_OWNER_QUERY, { owner: ctx.smartAccountAddr });
-    const ours = result.data.facts.filter((f: any) => f.source === `e2e-batch-${ctx.testRunId}`);
+    // source/agentId removed in subgraph schema v3; identify our facts by contentFp.
+    const ourContentFps = new Set(ctx.testFacts!.map(f => f.contentFp));
+    const ours = result.data.facts.filter((f: any) => ourContentFps.has(f.contentFp));
     assert(ours.length === 3, `Expected 3 test facts, got ${ours.length}`);
     for (const f of ours) {
       assert(f.owner === ctx.smartAccountAddr, `Wrong owner`);
-      assert(f.agentId === 'e2e-batch-test', `Wrong agentId`);
       assert(f.isActive === true, `Fact should be active`);
     }
   });
 
   await runTest('B5: Unique subgraph IDs', async () => {
     const result = await querySubgraph(keys.authKeyHex, FACTS_BY_OWNER_QUERY, { owner: ctx.smartAccountAddr });
-    const ours = result.data.facts.filter((f: any) => f.source === `e2e-batch-${ctx.testRunId}`);
+    const ourContentFps = new Set(ctx.testFacts!.map(f => f.contentFp));
+    const ours = result.data.facts.filter((f: any) => ourContentFps.has(f.contentFp));
     const ids = new Set(ours.map((f: any) => f.id));
     assert(ids.size === 3, `Expected 3 unique IDs, got ${ids.size}`);
     console.log(`    IDs: ${[...ids].map(id => (id as string).slice(0, 16) + '...').join(', ')}`);
@@ -717,17 +723,20 @@ async function verifyPhaseD(keys: ReturnType<typeof generateTestKeys>, ctx: Subm
       keys.authKeyHex, ALL_FACTS_BY_OWNER_QUERY, { owner: ctx.smartAccountAddr },
       (data) => {
         const facts = data?.data?.facts || [];
-        // We need at least the replacement to be active
+        // We need at least the replacement to be active. source/agentId removed
+        // in subgraph schema v3; identify our facts by contentFp.
+        const replFp = ctx.replacement!.contentFp;
         const active = facts.filter((f: any) =>
-          f.isActive === true && f.source === `e2e-tombstone-${ctx.testRunId}` && parseFloat(f.decayScore) > 0
+          f.isActive === true && f.contentFp === replFp && parseFloat(f.decayScore) > 0
         );
         return active.length >= 1 && facts.length >= 2;
       },
       'tombstone + replacement',
     );
     const facts = result.data.facts;
+    const replFp = ctx.replacement!.contentFp;
     const active = facts.filter((f: any) =>
-      f.isActive === true && f.source === `e2e-tombstone-${ctx.testRunId}` && parseFloat(f.decayScore) > 0
+      f.isActive === true && f.contentFp === replFp && parseFloat(f.decayScore) > 0
     );
     assert(active.length >= 1, `Expected >= 1 active replacement, got ${active.length}`);
     console.log(`    Total facts: ${facts.length}, active replacements: ${active.length}`);
@@ -752,7 +761,8 @@ async function verifyPhaseF(keys: ReturnType<typeof generateTestKeys>, ctx: Subm
     const entries = result?.data?.blindIndexes || [];
     assert(entries.length >= 1, `Expected >= 1 blind index entry, got ${entries.length}`);
     const fact = entries[0].fact;
-    assert(fact.source === `e2e-search-${ctx.testRunId}`, `Wrong source: ${fact.source}`);
+    // source removed in subgraph schema v3; verify by contentFp instead.
+    assert(fact.contentFp === ctx.fact!.contentFp, `Wrong contentFp: ${fact.contentFp}`);
     console.log(`    Found: ${fact.id.slice(0, 16)}...`);
   });
 
@@ -776,7 +786,6 @@ async function main() {
   console.log(`${'='.repeat(60)}`);
   console.log(`  Relay:     ${RELAY_URL}`);
   console.log(`  Chain:     Base Sepolia (${CHAIN_ID})`);
-  console.log(`  DataEdge:  ${DATA_EDGE_ADDRESS}`);
   console.log(`  Groups:    ${groups.length ? groups.join(', ') : 'ALL'}`);
   console.log(`${'='.repeat(60)}\n`);
 
@@ -789,14 +798,31 @@ async function main() {
     process.exit(1);
   }
 
+  // Resolve the authoritative DataEdge address from the relay billing response.
+  // Staging is on-chain isolated (ops-5/6): its DataEdge (`0xE7a4...`) differs
+  // from production (`0xC445...`). The relay advertises it per-tier as
+  // `data_edge_address`; fall back to the prod default for older relays.
+  // Hardcoding the prod address would write to a DataEdge the staging subgraph
+  // doesn't index, so the round-trip would never validate.
+  const probeWallet = '0x' + randomBytes(20).toString('hex');
+  const probeBilling = await getBillingStatus(keys.authKeyHex, probeWallet);
+  const dataEdgeAddress: string =
+    (typeof probeBilling.data?.data_edge_address === 'string' && probeBilling.data.data_edge_address)
+    || DEFAULT_DATA_EDGE_ADDRESS;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(dataEdgeAddress)) {
+    console.error(`FATAL: invalid data_edge_address from billing: ${dataEdgeAddress}`);
+    process.exit(1);
+  }
+  console.log(`  DataEdge:  ${dataEdgeAddress}${dataEdgeAddress === DEFAULT_DATA_EDGE_ADDRESS ? ' (default fallback)' : ''}\n`);
+
   // ---- PHASE 1: Submit all on-chain transactions ----
   let bCtx: SubmissionContext | null = null;
   let dCtx: SubmissionContext | null = null;
   let fCtx: SubmissionContext | null = null;
 
-  if (shouldRun('B')) bCtx = await submitPhaseB(keys);
-  if (shouldRun('D')) dCtx = await submitPhaseD(keys);
-  if (shouldRun('F')) fCtx = await submitPhaseF(keys);
+  if (shouldRun('B')) bCtx = await submitPhaseB(keys, dataEdgeAddress);
+  if (shouldRun('D')) dCtx = await submitPhaseD(keys, dataEdgeAddress);
+  if (shouldRun('F')) fCtx = await submitPhaseF(keys, dataEdgeAddress);
 
   // ---- PHASE 2: Quick tests (no subgraph dependency) ----
   if (shouldRun('A')) await testGroupA(keys);

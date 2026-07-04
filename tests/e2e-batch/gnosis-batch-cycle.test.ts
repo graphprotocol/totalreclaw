@@ -9,12 +9,13 @@
  *   - Free-tier Sepolia keeps single-fact UserOps.
  *
  * This test covers the Gnosis half: seed a Pro-tier test wallet on staging,
- * submit 15 facts as one batched UserOp, poll the subgraph for indexing,
- * recall one fact, and assert the round-trip fact ID matches what was written.
+ * submit BATCH_SIZE facts (default 15, env-tunable) as one batched UserOp,
+ * poll the subgraph for indexing, recall one fact, and assert the round-trip
+ * fact ID matches what was written.
  *
  * Emits one structured log line on success:
  *
- *     {"submission_path":"batch","fact_count":15,"userop_count":1}
+ *     {"submission_path":"batch","fact_count":<BATCH_SIZE>,"userop_count":1}
  *
  * Acceptance: test passes + structured log emitted (issue #327).
  *
@@ -44,9 +45,9 @@ import { createPimlicoClient } from 'permissionless/clients/pimlico';
 
 const RELAY_URL = process.env.RELAY_URL || 'https://api-staging.totalreclaw.xyz';
 const CHAIN_ID = 100; // Gnosis mainnet (Pro-tier path)
-const DATA_EDGE_ADDRESS = '0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca' as const;
+const DEFAULT_DATA_EDGE_ADDRESS = '0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca' as const;
 const ENTRYPOINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032' as const;
-const BATCH_SIZE = 15;
+const BATCH_SIZE = Number(process.env.BATCH_SIZE) || 15;
 
 // Subgraph polling — Gnosis indexing latency on Graph Studio is variable.
 // _meta.block.number can report ahead of actually queryable data, so we
@@ -266,6 +267,7 @@ async function submitGnosisBatch(
   authKeyHex: string,
   walletAddress: string,
   payloads: Buffer[],
+  dataEdgeAddress: string,
 ): Promise<BatchSubmissionResult> {
   if (payloads.length === 0) throw new Error('Empty batch');
 
@@ -304,7 +306,7 @@ async function submitGnosisBatch(
   });
 
   const calls = payloads.map(p => ({
-    to: DATA_EDGE_ADDRESS as `0x${string}`,
+    to: dataEdgeAddress as `0x${string}`,
     value: 0n,
     data: `0x${p.toString('hex')}` as Hex,
   }));
@@ -329,6 +331,9 @@ async function submitGnosisBatch(
 // GraphQL queries
 // ---------------------------------------------------------------------------
 
+// NOTE: subgraph schema v3 removed `source` and `agentId` from the Fact type
+// (they are now encrypted inside encryptedBlob). The query below requests only
+// fields that exist on the current schema (subgraph/schema.graphql).
 const FACTS_BY_OWNER_QUERY = `
   query FactsByOwner($owner: String!) {
     facts(
@@ -337,7 +342,7 @@ const FACTS_BY_OWNER_QUERY = `
       orderDirection: desc
       first: 50
     ) {
-      id owner encryptedBlob decayScore source isActive contentFp agentId
+      id owner encryptedBlob decayScore isActive contentFp createdAt timestamp
     }
   }
 `;
@@ -350,7 +355,7 @@ const SEARCH_BY_BLIND_INDEX = `
     ) {
       hash
       fact {
-        id owner encryptedBlob decayScore source isActive contentFp agentId
+        id owner encryptedBlob decayScore isActive contentFp createdAt timestamp
       }
     }
   }
@@ -363,6 +368,7 @@ const SEARCH_BY_BLIND_INDEX = `
 interface BuiltFact {
   id: string;
   text: string;
+  contentFp: string; // sha256(text) — used to identify our facts post-index (source/agentId removed from schema v3)
   trapdoor: string; // unique marker word so we can recall this exact fact
   payload: Buffer;
 }
@@ -396,6 +402,7 @@ function buildFactPayloads(
     built.push({
       id: factId,
       text,
+      contentFp,
       trapdoor: generateBlindIndex(marker, dedupKey),
       payload,
     });
@@ -449,7 +456,23 @@ async function main(): Promise<void> {
   );
   console.log(`  Pro tier confirmed (features=${JSON.stringify(billing.data?.features ?? {})})`);
 
-  // 4. Build 15 fact payloads.
+  // 3b. Resolve the authoritative DataEdge address from the relay billing
+  // response. Staging is on-chain isolated (ops-5/6): its DataEdge is
+  // `0xE7a4...`, distinct from production `0xC445...`. The relay advertises
+  // it per-tier as `data_edge_address`; if absent, fall back to the prod
+  // default (back-compat for older relays). Hardcoding `0xC445` here would
+  // write to the PRODUCTION DataEdge while the staging subgraph only indexes
+  // the staging DataEdge — the round-trip would never validate.
+  const dataEdgeAddress: string =
+    (typeof billing.data?.data_edge_address === 'string' && billing.data.data_edge_address)
+    || DEFAULT_DATA_EDGE_ADDRESS;
+  assert(
+    /^0x[0-9a-fA-F]{40}$/.test(dataEdgeAddress),
+    `invalid data_edge_address from billing: ${dataEdgeAddress}`,
+  );
+  console.log(`  DataEdge: ${dataEdgeAddress}${dataEdgeAddress === DEFAULT_DATA_EDGE_ADDRESS ? ' (default fallback)' : ''}`);
+
+  // 4. Build BATCH_SIZE fact payloads.
   const facts = buildFactPayloads(walletAddress, testRunId, keys.encryptionKey, keys.dedupKey);
   assert(facts.length === BATCH_SIZE, `expected ${BATCH_SIZE} payloads, got ${facts.length}`);
 
@@ -461,6 +484,7 @@ async function main(): Promise<void> {
     keys.authKeyHex,
     walletAddress,
     facts.map(f => f.payload),
+    dataEdgeAddress,
   );
   const elapsedMs = Date.now() - t0;
   console.log(`  txHash=${batch.txHash}`);
@@ -500,13 +524,17 @@ async function main(): Promise<void> {
   );
   console.log(`  Subgraph indexed ${indexedFacts.length} facts.`);
 
-  // All indexed facts MUST share our batch source tag (proves they came from us, not noise).
+  // All indexed facts MUST be ours (proves they came from this batch, not noise).
+  // Subgraph schema v3 removed `source`/`agentId` from Fact (now encrypted in the
+  // blob), so we identify our facts by their contentFp (sha256 of the plaintext),
+  // which the subgraph still exposes and which is unique per test run.
+  const ourContentFps = new Set(facts.map(f => f.contentFp));
   const ourFacts = indexedFacts.filter(
-    (f: any) => typeof f.source === 'string' && f.source === `e2e-gnosis-batch-${testRunId}`,
+    (f: any) => typeof f.contentFp === 'string' && ourContentFps.has(f.contentFp),
   );
   assert(
     ourFacts.length === BATCH_SIZE,
-    `expected exactly ${BATCH_SIZE} facts with our source tag, got ${ourFacts.length}`,
+    `expected exactly ${BATCH_SIZE} facts with our contentFp, got ${ourFacts.length}`,
   );
 
   // 8. Recall: pick one fact, look it up by its unique trapdoor, assert id matches.
