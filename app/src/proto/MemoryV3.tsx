@@ -6,7 +6,7 @@ import { count } from "./format";
 import { sourceShort } from "./presentation";
 import { TypeBadge } from "../components/TypeBadge";
 import { MindMap, type MindMode } from "./MindMap";
-import { SCOPES } from "./mindmap-data";
+import { SCOPES, MIND_NODES, MIND_LINKS, mindNeighbors } from "./mindmap-data";
 
 /**
  * Memory, reframed (design A/B, seed data). Three surfaces instead of four equal
@@ -338,7 +338,10 @@ export function MemoryV3() {
           <div className="relative h-[72vh] min-h-[540px] w-full overflow-hidden rounded-[24px] bg-[#211E1B] shadow-overlay ring-1 ring-black/20">
             <MindMap
               mode={mapMode}
-              selectedId={panel?.kind === "entity" ? null : null}
+              nodes={MIND_NODES}
+              links={MIND_LINKS}
+              neighborsOf={mindNeighbors}
+              selectedId={null}
               onSelect={(n) => n && (n.kind === "entity" || n.kind === "scope") && openEntity(n.label)}
             />
 
