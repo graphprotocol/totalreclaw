@@ -75,6 +75,7 @@ Pattern is always **recall first → mutate second**, because the mutation tools
 
 - "status" / "how am I doing on quota" / "what tier am I on" → `totalreclaw_status` (no args). Returns tier, used / limit, and smart-account address.
 - "upgrade" / "go Pro" → `totalreclaw_upgrade` (returns a Stripe checkout URL — paste verbatim, no paraphrase).
+- "buy a top-up pack" / "I need more memories now" / "I'm about to run a big import and might blow past my quota" / "buy 5000 extra memories" → `totalreclaw_top_up` (returns a Stripe checkout URL — paste verbatim). **Offer this, not `_upgrade`, when the user wants *more memories now* — a one-time pack — rather than a monthly plan change.** Don't wait for the quota to be exhausted: a proactive request ("about to", "might blow past") is a valid top-up trigger. Ask which pack size (1000 / 5000 / 10000) if the user didn't say.
 - "import from Mem0 / ChatGPT / Claude / Gemini / mcp-memory-server" → `totalreclaw_import_from` with `dry_run=True` first to surface the count + estimated free-tier impact, then ask the user to confirm before the real run.
 
 ## Tiers + pricing
@@ -93,7 +94,7 @@ Both tiers: encryption, ownership, and on-chain durability are identical. Tier o
 The plugin fetches billing on every `on_session_start` and caches it for 2 hours. It auto-injects warnings into your context at these thresholds — when you see them, surface them to the user:
 
 - **>80% usage** — soft warning. Mention casually: *"You're at `<used>` / `<limit>` of your free-tier quota this month. Upgrade to Pro for 1,500/month — want me to open the upgrade link?"* Wait for confirmation before calling `totalreclaw_upgrade`.
-- **403 quota exceeded** on a write → billing cache invalidated, warning re-injects next turn. Surface the error verbatim + offer `totalreclaw_upgrade` immediately.
+- **403 quota exceeded** on a write → billing cache invalidated, warning re-injects next turn. Surface the error verbatim, then offer the right paid path: `totalreclaw_upgrade` (recurring Pro, higher monthly cap) **or** `totalreclaw_top_up` (a one-time pack to finish *this* task now without a subscription). If the user just wants to get past a single import/burst, prefer top-up.
 - **First successful pair** → the setup-flow confirmation already includes tier + limit. Do not re-emit the same info on subsequent first-message-of-session.
 
 Do NOT compute "you have X left" math yourself — `totalreclaw_status` returns `free_writes_used` and `free_writes_limit` already. Quote them verbatim.
@@ -106,6 +107,7 @@ User intent → action:
 |---|---|
 | "How much does it cost?" / "What's the pricing?" / "Is it free?" | Cite the table above + pricing URL. Don't quote a `$` figure unless the user explicitly asked for the current Pro price AND you just called `totalreclaw_status`. |
 | User asks to upgrade / asks how to get Pro / hits a 403 | Call `totalreclaw_upgrade` → returns a Stripe checkout URL. Emit ONE user-visible line: *"Open `<url>` in your browser to complete the upgrade. Reply `done` once the payment page confirms."* DO NOT paraphrase the URL. |
+| User wants a one-time pack of extra memories now (mid/pre-import, "buy more", "top up", "5000 extra memories"), NOT a monthly plan | Call `totalreclaw_top_up` with the requested `pack` (1000 / 5000 / 10000; ask if unspecified) → returns a Stripe checkout URL. Emit ONE user-visible line: *"Open `<url>` in your browser to buy the pack. Reply `done` once payment confirms."* DO NOT paraphrase the URL. Top-up ≠ upgrade: it adds a fixed batch of memories that persist across monthly resets, without changing the tier. |
 | User reports payment succeeded ("done") | Call `totalreclaw_status` once to refresh the cached tier. Emit a single confirmation: *"✓ You're now on TotalReclaw Pro — 1,500 memories/month."* |
 | User wants to cancel / downgrade | Direct them to <https://totalreclaw.xyz/pricing> — the Stripe customer portal is the only canonical cancel path. The plugin does not expose a downgrade tool. |
 
@@ -126,8 +128,8 @@ These statements are WRONG. Never write any of them — they fabricate a pricing
 - `totalreclaw_*` tools not visible → the gateway wasn't restarted after install. This is an **install** problem — follow the install guide (<https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md>), which owns the `/restart` procedure.
 - User says done but `credentials.json` missing → PIN expired or wrong phrase entered; call `totalreclaw_pair` again.
 - `onboarding required` → credentials missing; redo from the account-setup step in the install guide.
-- `quota exceeded` → `totalreclaw_status`, then offer `totalreclaw_upgrade`.
+- `quota exceeded` → `totalreclaw_status`, then offer `totalreclaw_upgrade` (recurring Pro) or `totalreclaw_top_up` (one-time pack) per the user's intent.
 
 ## Tool surface
 
-`totalreclaw_pair` (ONLY account-setup path) · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_retype` · `_set_scope` · `_export` · `_status` · `_upgrade` · `_import_from` · `_import_batch` · `_debrief` · `_report_qa_bug` (RC only).
+`totalreclaw_pair` (ONLY account-setup path) · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_retype` · `_set_scope` · `_export` · `_status` · `_upgrade` · `_top_up` · `_import_from` · `_import_batch` · `_debrief` · `_report_qa_bug` (RC only).

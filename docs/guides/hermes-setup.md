@@ -268,6 +268,10 @@ These are hard rules. None of them are negotiable.
 | `totalreclaw_export` | Export the full vault. |
 | `totalreclaw_set_scope` | Switch active scope. |
 | `totalreclaw_retype` | Change a memory's taxonomy type. |
+| `totalreclaw_upgrade` | Start the recurring Pro upgrade (higher monthly cap). Returns a Stripe checkout URL. |
+| `totalreclaw_top_up` | Buy a one-time pack of extra memories (1000 / 5000 / 10000) that persists across monthly resets. Returns a Stripe checkout URL. |
+
+**Routing hint — top-up vs upgrade:** when the user is near/over quota (or proactively expects to be, e.g. before a big import) and wants *more memories now*, offer `totalreclaw_top_up` (a one-time pack) — not necessarily a Pro upgrade. Reserve `totalreclaw_upgrade` for users who want the recurring higher monthly cap. A proactive "I might blow past my quota" is a valid top-up trigger; don't wait for the quota to be exhausted.
 
 ---
 

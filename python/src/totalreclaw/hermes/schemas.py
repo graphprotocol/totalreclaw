@@ -340,7 +340,10 @@ UPGRADE = {
         "explicitly asked to upgrade, pay, or hit the quota limit. Pro "
         "removes the free-write cap — 1,500 memories/month vs the free "
         "tier's 250 — and adds LLM-guided dedup; encryption, ownership, "
-        "and on-chain durability are identical across tiers."
+        "and on-chain durability are identical across tiers.\n\n"
+        "If the user instead wants a one-time pack of extra memories now "
+        "(e.g. to finish a single import) rather than a recurring "
+        "subscription, use totalreclaw_top_up, not this tool."
     ),
     "parameters": {
         "type": "object",
@@ -351,15 +354,24 @@ UPGRADE = {
 TOPUP = {
     "name": "totalreclaw_top_up",
     "description": (
-        "Buy a one-time pack of extra memories when the monthly quota + grace "
-        "are exhausted — e.g. to finish a large import. Creates a Stripe "
-        "Checkout session (one-time payment) and returns the URL the user "
-        "opens to pay. The purchased memories persist across monthly resets "
-        "until used.\n\n"
+        "Buy a one-time pack of extra memories — e.g. to finish a large "
+        "import or get past a burst of writes without changing tier. Creates "
+        "a Stripe Checkout session (one-time payment) and returns the URL the "
+        "user opens to pay. The purchased memories persist across monthly "
+        "resets until used.\n\n"
+        "This is the RIGHT tool whenever the user wants MORE MEMORIES NOW as a "
+        "one-off — do NOT wait for the quota to be exhausted, and do NOT route "
+        "these to totalreclaw_upgrade. A proactive request counts.\n\n"
         "INVOKE WHEN USER SAYS:\n"
-        "- 'I need more memories' / 'I hit my limit mid-import' / 'buy more'\n"
+        "- 'buy a top-up pack' / 'buy 5000 extra memories' / 'buy more'\n"
+        "- 'I need more memories' / 'I hit my limit mid-import'\n"
+        "- 'I'm about to run a big import and might blow past my quota' "
+        "(proactive — quota not yet exhausted)\n"
         "- a write/import returned a quota-exceeded error and the user wants "
         "to continue now rather than wait for the monthly reset\n\n"
+        "top_up vs upgrade: use THIS tool for a one-time pack that tops up the "
+        "current tier; use totalreclaw_upgrade only when the user wants the "
+        "recurring Pro subscription (higher monthly cap + LLM-guided dedup).\n\n"
         "After calling, read the returned ``message`` aloud — it has the "
         "checkout URL. Only call when the user has explicitly asked to buy "
         "more memories."
