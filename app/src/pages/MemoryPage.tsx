@@ -2,15 +2,14 @@ import { lazy, Suspense, useCallback, useMemo, useState, type ReactNode } from "
 import { clsx } from "clsx";
 import { useCrypto } from "../contexts/CryptoContext";
 import { useVault } from "../hooks/useVault";
-import { buildTimeline, type SessionGroup } from "../lib/vault/timeline";
+import { buildTimeline, importSourceOf, type SessionGroup } from "../lib/vault/timeline";
 import { buildMindGraph, SCOPES, type Scope } from "../lib/vault/mindmap";
 import { AppHeader } from "../components/AppHeader";
-import { SessionCard } from "../components/SessionCard";
 import { ClaimCard } from "../components/ClaimCard";
 import { Segmented } from "../components/memory/Segmented";
 import { SidePanel, type PanelView } from "../components/memory/SidePanel";
 import { sourceShort, cap } from "../lib/presentation";
-import { count } from "../lib/format";
+import { count, relativeDate } from "../lib/format";
 import type { VaultItem } from "../lib/types";
 import type { MindMode } from "../components/memory/MindMap";
 
@@ -221,14 +220,18 @@ export function MemoryPage() {
           </div>
         )}
 
-        {/* List: crystal-headed session cards → panel */}
+        {/* List: crystals as prominent hero objects; loose facts sit quietly */}
         {!isLoading && groups.length > 0 && mode === "list" && (
           <>
             {shownGroups.length > 0 ? (
-              <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {shownGroups.map((g, i) => (
-                  <SessionCard key={g.key} group={g} onOpen={() => openSession(g)} onEntityClick={openEntity} style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }} />
-                ))}
+              <div className="mt-6 space-y-4">
+                {shownGroups.map((g, i) =>
+                  g.crystal ? (
+                    <CrystalCard key={g.key} group={g} onOpen={() => openSession(g)} onEntity={openEntity} delay={Math.min(i, 8) * 30} />
+                  ) : (
+                    <QuietRow key={g.key} group={g} onOpen={() => openSession(g)} />
+                  ),
+                )}
               </div>
             ) : (
               <NoMatch onClear={clearAll} />
@@ -325,6 +328,94 @@ export function MemoryPage() {
 
       <SidePanel view={panel} onClose={close} onOpenSession={openSession} onOpenEntity={openEntity} groups={groups} items={items} />
     </div>
+  );
+}
+
+/** A Crystal, set as a prominent hero object (distinct from ordinary items). */
+function CrystalCard({
+  group,
+  onOpen,
+  onEntity,
+  delay,
+}: {
+  group: SessionGroup;
+  onOpen: () => void;
+  onEntity: (name: string) => void;
+  delay: number;
+}) {
+  const outcomes = group.crystal?.claim.metadata?.key_outcomes ?? [];
+  const imported = importSourceOf(group);
+  const shown = group.entityNames.slice(0, 3);
+  return (
+    <article
+      className="animate-fade-up relative overflow-hidden rounded-[20px] bg-surface p-6 shadow-soft ring-1 ring-clay/15 transition duration-200 ease-keeper hover:-translate-y-0.5 hover:shadow-raised"
+      style={{ animationDelay: `${delay}ms` }}
+    >
+      <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-clay/[0.07] blur-2xl" aria-hidden />
+      <button onClick={onOpen} className="block w-full text-left focus:outline-none">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <span className="text-[0.66rem] font-bold uppercase tracking-[0.12em] text-clay-deep">Crystal</span>
+          <span className="h-1 w-1 rounded-full bg-hairline" aria-hidden />
+          <time className="font-mono text-xs text-ink-muted">{relativeDate(group.date)}</time>
+          {imported && (
+            <span className="rounded-pill bg-clay-tint px-2 py-0.5 text-[0.62rem] font-bold uppercase tracking-wide text-clay-deep">
+              Imported · {imported}
+            </span>
+          )}
+        </div>
+        <h2 className="mt-2.5 font-display text-[1.5rem] font-medium leading-[1.2] text-ink" style={{ textWrap: "balance" }}>
+          {group.crystal?.claim.text ?? group.headline}
+        </h2>
+        {outcomes.length > 0 && (
+          <ul className="mt-3.5 space-y-2">
+            {outcomes.slice(0, 2).map((o) => (
+              <li key={o} className="flex gap-2.5 text-[0.95rem] leading-snug text-ink-muted">
+                <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rotate-45 bg-clay" aria-hidden />
+                <span>{o}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </button>
+      <footer className="mt-5 flex flex-wrap items-center gap-2">
+        <span className="rounded-pill bg-warm-white px-3 py-1 font-mono text-xs text-ink-muted ring-1 ring-hairline">
+          {count(group.facts.length, "memory", "memories")} · {count(group.openThreads, "thread")}
+        </span>
+        {shown.map((e) => (
+          <button
+            key={e}
+            onClick={() => onEntity(e)}
+            className="rounded-pill bg-warm-white px-2.5 py-1 font-mono text-xs text-ink-muted ring-1 ring-hairline transition hover:text-ink hover:ring-clay/40"
+          >
+            {e}
+          </button>
+        ))}
+      </footer>
+    </article>
+  );
+}
+
+/** A session with no Crystal (loose facts / singletons) — quiet + secondary. */
+function QuietRow({ group, onOpen }: { group: SessionGroup; onOpen: () => void }) {
+  const imported = importSourceOf(group);
+  return (
+    <button
+      onClick={onOpen}
+      className="animate-fade-up block w-full rounded-2xl border border-hairline bg-surface p-4 text-left shadow-soft transition hover:-translate-y-0.5 hover:shadow-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <time className="font-mono text-xs text-ink-muted">{relativeDate(group.date)}</time>
+        {imported && (
+          <span className="rounded-pill bg-clay-tint px-2 py-0.5 text-[0.62rem] font-bold uppercase tracking-wide text-clay-deep">
+            Imported · {imported}
+          </span>
+        )}
+      </div>
+      <p className="mt-1.5 font-display text-[1.05rem] leading-snug text-ink line-clamp-2" style={{ textWrap: "pretty" }}>
+        {group.headline}
+      </p>
+      <span className="mt-2 inline-block font-mono text-[0.7rem] text-ink-muted">{count(group.facts.length, "memory", "memories")}</span>
+    </button>
   );
 }
 

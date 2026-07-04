@@ -98,6 +98,35 @@ export function buildTimeline(items: VaultItem[]): SessionGroup[] {
   return groups;
 }
 
+/** The import provider for a session, if any of its members were imported
+ *  (import engine tags `metadata.import_source`). null → a native/agent session.
+ *  Accurate origin — don't infer "imported" from a single `source: external` fact. */
+export function importSourceOf(group: SessionGroup): string | null {
+  const members = group.crystal ? [group.crystal, ...group.facts] : group.facts;
+  for (const m of members) {
+    const src = m.claim.metadata?.import_source;
+    if (src) return src;
+  }
+  return null;
+}
+
+/** Count session members by provenance source (for the panel's honest breakdown). */
+export function sourceBreakdown(group: SessionGroup): { label: string; n: number }[] {
+  const members = group.crystal ? [group.crystal, ...group.facts] : group.facts;
+  const counts = new Map<string, number>();
+  for (const m of members) counts.set(m.claim.source, (counts.get(m.claim.source) ?? 0) + 1);
+  const LABEL: Record<string, string> = {
+    user: "from you",
+    "user-inferred": "inferred",
+    assistant: "from your agent",
+    external: "imported",
+    derived: "derived",
+  };
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([src, n]) => ({ label: LABEL[src] ?? src, n }));
+}
+
 /** 8-char session-hash (sha256-free quick id) for URL routing. Uses session_id
  *  when present, else the day key. Deterministic + stable per group. */
 export function sessionSlug(group: SessionGroup): string {
