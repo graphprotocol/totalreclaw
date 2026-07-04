@@ -39,7 +39,14 @@ Each planned surface ships as its own PR following the same template as the vaul
 
 ## Vault SPA autopilot (jobs[0])
 
-End-to-end regression harness for the vault SPA at `app/`. Drives a headless browser through the recovery-phrase → `/vault` flow against any deployed URL, captures console + network + visible errors, and opens an issue on the public repo when something regresses.
+End-to-end regression harness for the vault SPA at `app/`. Drives a headless browser to the vault against any deployed URL, captures console + network + visible errors, and opens an issue on the public repo when something regresses.
+
+The driver is **flow-adaptive** — it detects the entry surface at runtime and drives whichever the app presents:
+
+- **Legacy phrase-entry** (current production): paste-and-derive form (`input[placeholder="word 1"]`) → submit → `/vault`.
+- **Passkey "Keeper"** (PR #329, `feat/spa-functional`): the app routes to `/bootstrap`. The driver attaches a CDP WebAuthn virtual authenticator (`ctap2` / `internal` / PRF-capable — mirroring the SPA's own E2E at `app/e2e/bootstrap-unlock.mjs`), then drives the **"I have a recovery phrase" → restore** flow. Restore derives keys from the *same* known QA phrase (so it lands on the real vault with real memories, equivalent to the legacy flow) and enrols a passkey via the virtual authenticator; the SPA then lands on `/memory`.
+
+Both surfaces converge on the vault view (`/vault` legacy, `/memory` passkey), and the report's `reachedVault` is true for either — so the internal workflow's jq gate is surface-agnostic and needs **no change** when #329 merges. The stdout summary adds a `surface` field (`legacy` | `passkey` | `unknown`) for triage; all pre-existing keys (`reachedVault`, `pageErrorCount`, `consoleErrorCount`, `networkFailureCount`, `visibleError`) are preserved. Phrase-safety is unchanged: phrase only from keychain/env, redacted from all output paths.
 
 ## Pieces
 
