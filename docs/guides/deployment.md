@@ -68,6 +68,13 @@ The TypeScript relay returns:
 > This is NOT the old FastAPI shape (`{"status":"healthy","version":"0.3.1","database":"connected"}`).
 > The relay is TypeScript; that shape is retired.
 
+**⚠️ A stale/`dev` SHA does NOT prove "not deployed"** (2026-07-02 incident: prod ran
+relay-main code while `/health` still reported an old SHA — the deployer had skipped the
+Step 2/4 `RAILWAY_GIT_COMMIT_SHA` injection). To verify what code is actually live,
+**probe a route that only exists in the new build** (e.g. `POST /v1/billing/topup` →
+401 auth-gate = route exists; 404 = old build). Conversely, never claim "deployed" from
+the SHA alone after a CLI deploy.
+
 ---
 
 ## 4. Deploy-SHA sentinel (catch silent skips)
@@ -130,19 +137,57 @@ PROD_VER=$(curl -s https://api.totalreclaw.xyz/health | jq -r .version)
 
 ---
 
-## 6. Subgraph
+## 6. Subgraph (post-ops-1 — single-chain Gnosis, isolated staging)
+
+Two deployments, two manifests. The default `subgraph.yaml` is a STALE base-sepolia
+manifest — never deploy from it.
 
 ```bash
 cd ~/Documents/code/totalreclaw/subgraph
-graph deploy --studio totalreclaw---base-sepolia --version-label <v>   # free/Sepolia
-graph deploy --studio total-reclaw-gnosis        --version-label <v>   # pro/Gnosis
+# STAGING (isolated DataEdge 0xE7a4…):
+npm run deploy:staging   # = graph deploy --studio total-reclaw-gnosis-staging subgraph-gnosis-staging.yaml
+# PRODUCTION (DataEdge 0xC445…):
+npm run deploy:prod      # = graph deploy --studio total-reclaw-gnosis subgraph-gnosis-mainnet.yaml
 ```
-**After ANY subgraph deploy, update the relay `SUBGRAPH_ENDPOINT` / `PRO_SUBGRAPH_ENDPOINT`
-env on BOTH services** (stale endpoint = relay queries an old schema):
+Pass `--version-label v<X.Y.Z>` (bump from the currently-served version).
+
+**After ANY subgraph deploy, repoint BOTH endpoint env vars on the matching relay
+service** — each service runs `SUBGRAPH_ENDPOINT` AND `PRO_SUBGRAPH_ENDPOINT` (post-ops-1
+both point at the same subgraph per env):
 ```bash
-railway variables --set "PRO_SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<v>" -s totalreclaw
-railway variables --set "PRO_SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<v>" -s totalreclaw-production
+# staging:
+railway variables --set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis-staging/<v>" \
+                  --set "PRO_SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis-staging/<v>" -s totalreclaw
+# production:
+railway variables --set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<v>" \
+                  --set "PRO_SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<v>" -s totalreclaw-production
 ```
+
+### Dead-shard failure mode (Graph Studio, seen 2026-07-02)
+A Studio deployment can die **server-side**: queries return
+`Store error: shard not found: shard_bb` — including the `_meta` query itself. Diagnostic
+tell: a healthy-but-stalled subgraph still answers `_meta` (with an old block number);
+a dead shard **errors outright**. Our staging v0.6.1 first stalled (~June 6) then died
+this way while prod ran identical mapping code healthily — it is a Studio infra failure,
+NOT a handler bug. **Fix (~10 min): redeploy with a bumped version label + repoint the
+env vars above.** All events re-index from chain; nothing is lost. Do not spend time
+debugging mappings first.
+
+## 6.5 Stripe env pairing (mode invariant)
+
+A Stripe object (price/product/customer) exists in exactly ONE mode. The pairing
+invariant per relay service:
+
+| Service | Key mode | Object IDs must be |
+|---|---|---|
+| `totalreclaw` (staging) | `sk_test_…` | created in **test mode** |
+| `totalreclaw-production` | `rk_live_…` / `sk_live_…` | created in **live mode** |
+
+Copying prod price IDs into staging env vars (or vice versa) yields opaque
+`CHECKOUT_FAILED` responses (2026-07-04 incident: `TOTALRECLAW_TOPUP_PRICE_*` on staging
+held live-mode IDs → every top-up checkout failed until test-mode twins were created).
+When adding any new Stripe-backed feature: create the objects TWICE (test + live) and
+set the mode-matching ID in each service.
 
 ---
 

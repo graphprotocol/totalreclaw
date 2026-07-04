@@ -71,6 +71,25 @@ Stable artifacts land on public registries (latest / default tag)
 Announce (GitHub release, Telegram, website)
 ```
 
+## Client tool-shipping checklist (Hermes)
+
+A Hermes agent tool only works when it exists in **four** places. Shipping fewer than
+four passes unit tests and still leaves the tool invisible or unroutable in real chat:
+
+1. `python/src/totalreclaw/hermes/schemas.py` — the schema (`NAME = {...}`)
+2. `python/src/totalreclaw/hermes/__init__.py` `register()` — the `ctx.register_tool(...)`
+   call (**this is what puts it in the model's function list**)
+3. `python/src/totalreclaw/hermes/plugin.yaml` `provides_tools` — the manifest
+4. `docs/guides/hermes-setup.md` Tools table — routing steering for the agent
+
+This bug class has now shipped **twice**: pin/unpin in 2.3.1 (schemas+manifest, no
+register — caught rc6) and `totalreclaw_top_up` in 2.4.5rc10 (schema+handler, in
+NEITHER manifest nor register — caught only by the S5 re-QA, internal#412). The
+`test_hermes_plugin_manifest_parity.py` shield pins manifest↔register, so a tool
+missing from BOTH still slips through. Until a schemas↔register CI assert exists
+(tracked on the public repo), reviewers must check all four places on any
+tool-adding PR.
+
 ## Cross-registry version scheme
 
 The RC suffix differs between registries because their pre-release formats

@@ -56,6 +56,15 @@ Both surfaces converge on the vault view (`/vault` legacy, `/memory` passkey), a
 | `.github/workflows/deploy-app.yml` | `p-diogo/totalreclaw` (public) | After a successful Cloudflare Pages preview deploy, fires `gh workflow run qa-autopilot.yml` on the internal repo with the preview URL + PR number. Gated behind `INTERNAL_DISPATCH_PAT`; deploys still flow if the secret is missing. |
 | `.github/workflows/qa-autopilot.yml` | `p-diogo/totalreclaw-internal` (private) | Runs the driver, uploads the report + screenshot as a 14-day artifact, opens a public-repo issue on failure. Triggers: `workflow_dispatch`, daily cron 07:30 UTC against prod, and the cross-repo dispatch above. |
 
+## Reading run health (caveat)
+
+The workflow's **run conclusion is `success` even when a regression is detected** —
+regressions surface via the JSON summary + the auto-filed issue, not a non-zero job
+exit. To judge QA health, read the run logs (`reachedVault`, error counts) or the
+issue stream, never the green/red run badge alone. (Found during the 2026-07-02
+backlog triage: 40 days of green badges included both healthy runs and the
+issue-filing failure streak.)
+
 ## Required secrets
 
 Both are GitHub Actions repository secrets (not environment secrets — the workflow declares no `environment:` directive).
