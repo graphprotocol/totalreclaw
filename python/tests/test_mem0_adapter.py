@@ -309,3 +309,38 @@ class TestMem0ImportEngineIntegration:
         assert result.is_complete is True
         # All three stored with the import engine's source tag.
         assert fake_client.remember.await_count == 3
+
+    def test_issue_407_small_mem0_estimate_is_not_profiling_dominated(self) -> None:
+        """Regression for #407: a tiny pre-structured (mem0) import must not
+        advertise ~21 min.
+
+        The estimate formula unconditionally added the one-time smart-import
+        profiling constant (~20 min) plus per-chunk LLM-extraction wall-clock,
+        neither of which applies to pre-structured facts (mem0 stores facts
+        directly via ``client.remember`` with no extraction and no profiling).
+        A 3-fact import therefore read as 21.1 min. The pre-structured path
+        should cost only on-chain UserOp writes — well under a minute for a
+        handful of facts.
+        """
+        from unittest.mock import MagicMock
+
+        from totalreclaw.import_engine import ImportEngine
+
+        fixture = json.dumps({
+            "memories": [
+                {"id": "m1", "memory": "User prefers dark mode always", "categories": ["preference"]},
+                {"id": "m2", "memory": "User works on the TotalReclaw project", "categories": ["fact"]},
+                {"id": "m3", "memory": "Decided to use PostgreSQL for the DB", "categories": ["decision"]},
+            ]
+        })
+
+        engine = ImportEngine(client=MagicMock(), llm_extract=None)
+        est = engine.estimate(source="mem0", content=fixture)
+
+        assert est["total_facts"] == 3
+        assert est["total_chunks"] == 0
+        assert est["has_facts"] is True
+        # Pre-#407 this was 21.1. A 3-fact on-chain write is well under a minute.
+        assert est["estimated_minutes"] < 1.0, (
+            f"3-fact mem0 estimate should be < 1 min, got {est['estimated_minutes']}"
+        )

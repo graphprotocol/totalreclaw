@@ -296,31 +296,50 @@ class ImportEngine:
         processable = total_chunks if has_chunks else total_facts
         num_batches = max(1, int(math.ceil(processable / DEFAULT_BATCH_SIZE)))
 
-        # Time estimate accounting for concurrent extraction (#378) and
-        # one-time profiling (#373).  Per batch: ceil(chunks / concurrency)
-        # extraction waves × per-chunk wall-clock, plus on-chain UserOp
-        # writes.  Profiling runs once (first batch).
-        conc = _import_concurrency()
-        chunks_per_batch = min(DEFAULT_BATCH_SIZE, processable)
-        extraction_waves = math.ceil(chunks_per_batch / conc)
-        extraction_per_batch = extraction_waves * SECONDS_PER_CHUNK_SEQ
-        userop_per_batch = (
-            math.ceil(estimated_from_chunks / num_batches / IMPORT_MAX_BATCH_SIZE)
-            * SECONDS_PER_USEROP
-        )
-        # Per-batch wall-clock = extraction waves + UserOp writes + amortised
-        # nonce-retry/resubmission overhead (#401). The overhead constant
-        # captures the observed ~12 retry events / 54 batches from the
-        # 2026-06-29 run and is added unconditionally (retries happen on
-        # nearly every batch in practice).
-        per_batch_s = (
-            extraction_per_batch
-            + userop_per_batch
-            + USEROP_OVERHEAD_PER_BATCH
-        )
-        estimated_minutes = round(
-            (SECONDS_PROFILING + num_batches * per_batch_s) / 60, 1
-        )
+        # Time estimate. Two regimes with very different cost profiles:
+        #
+        #  • Blind chunk extraction (ChatGPT/Claude/Gemini conversation
+        #    imports): each batch runs ceil(chunks / concurrency) LLM
+        #    extraction waves × per-chunk wall-clock plus on-chain UserOp
+        #    writes, and a one-time profiling pass (#373) calibrates the
+        #    extractor on the first batch.
+        #
+        #  • Pre-structured facts (mem0): facts are already atomic and are
+        #    stored directly via client.remember with NO LLM extraction and
+        #    NO profiling — the only real cost is the on-chain UserOp writes.
+        #    Applying the profiling constant + per-chunk extraction wall-clock
+        #    here made a 3-fact import read as ~21 min (#407); the true cost
+        #    is a handful of seconds of on-chain writes.
+        if has_chunks:
+            conc = _import_concurrency()
+            chunks_per_batch = min(DEFAULT_BATCH_SIZE, processable)
+            extraction_waves = math.ceil(chunks_per_batch / conc)
+            extraction_per_batch = extraction_waves * SECONDS_PER_CHUNK_SEQ
+            userop_per_batch = (
+                math.ceil(estimated_from_chunks / num_batches / IMPORT_MAX_BATCH_SIZE)
+                * SECONDS_PER_USEROP
+            )
+            # Per-batch wall-clock = extraction waves + UserOp writes + amortised
+            # nonce-retry/resubmission overhead (#401). The overhead constant
+            # captures the observed ~12 retry events / 54 batches from the
+            # 2026-06-29 run and is added unconditionally (retries happen on
+            # nearly every batch in practice).
+            per_batch_s = (
+                extraction_per_batch
+                + userop_per_batch
+                + USEROP_OVERHEAD_PER_BATCH
+            )
+            estimated_minutes = round(
+                (SECONDS_PROFILING + num_batches * per_batch_s) / 60, 1
+            )
+        else:
+            # Pre-structured facts: on-chain UserOp writes only (one UserOp per
+            # fact) plus the amortised nonce-retry/resubmission overhead per
+            # processing batch. No profiling, no LLM extraction.
+            userop_s = total_facts * SECONDS_PER_USEROP
+            estimated_minutes = round(
+                (userop_s + num_batches * USEROP_OVERHEAD_PER_BATCH) / 60, 1
+            )
 
         return {
             "source": source,
