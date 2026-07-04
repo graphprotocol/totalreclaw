@@ -38,6 +38,8 @@ Do not describe storage as `"local"`, `"local-only"`, `"stored locally"`, `"on d
 
 The 12-word recovery phrase MUST NEVER enter chat or the agent's LLM context. The plugin's browser-based pair flow handles phrase generation and import. Never echo it, never ask the user to paste it, never pass it to any tool. If the user pastes one anyway, tell them it's compromised and re-pair for a fresh wallet.
 
+**HARD guardrail — install/reinstall/upgrade flows:** During install, reinstall, upgrade, or any verification steps, the agent MUST NOT read, list, cat, show, display, or inspect `credentials.json`, `~/.totalreclaw/credentials.json`, `~/.totalreclaw*/credentials.json`, `~/.openclaw/plugins/totalreclaw/credentials.json`, or ANY credentials/phrase/key/secrets file — for ANY reason, including "verifying the install." These files contain encryption key material and Smart Account addresses that MUST NOT enter the LLM context. Never run `ls`, `find`, `cat`, `show`, or similar commands against plugin directories to "check files."
+
 ## Install
 
 ```
