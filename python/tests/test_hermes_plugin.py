@@ -686,9 +686,12 @@ class TestRegister:
         # test_hermes_plugin_manifest_parity.py + this test must agree.
         # imp-1 — `totalreclaw_import_status` + `totalreclaw_import_abort`
         # added (background import Phase 1). Count → 16 stable, 17 RC.
+        # internal#412 — `totalreclaw_top_up` registered (schema + handler
+        # shipped in 2.4.5rc10 but never wired into register(), so the
+        # agent could not invoke it). Count → 17 stable, 18 RC.
         from totalreclaw import __version__
         from totalreclaw.hermes.qa_bug_report import is_rc_build
-        expected_tools = 17 if is_rc_build(__version__) else 16
+        expected_tools = 18 if is_rc_build(__version__) else 17
         assert ctx.register_tool.call_count == expected_tools, (
             f"expected {expected_tools} tools for version {__version__!r}, "
             f"got {ctx.register_tool.call_count}"
@@ -713,6 +716,10 @@ class TestRegister:
         assert "totalreclaw_import_from" in tool_names
         assert "totalreclaw_import_batch" in tool_names
         assert "totalreclaw_upgrade" in tool_names
+        # internal#412 — top_up must be in the LIVE manifest (rc10 shipped
+        # the handler without registering it; no steering can invoke an
+        # unregistered tool).
+        assert "totalreclaw_top_up" in tool_names
         assert "totalreclaw_debrief" in tool_names
 
         # Check hook names

@@ -201,6 +201,18 @@ def register(ctx):
         is_async=True,
         description=schemas.UPGRADE["description"],
     )
+    # #392 top-up packs — one-time over-quota purchases. Schema + handler
+    # shipped in 2.4.5rc10 but were never registered here (internal#412:
+    # rc10 S5 re-QA found the tool absent from the live manifest, so the
+    # agent could not invoke it regardless of prompt steering).
+    ctx.register_tool(
+        name="totalreclaw_top_up",
+        toolset="totalreclaw",
+        schema=schemas.TOPUP,
+        handler=lambda args, **kw: tools.top_up(args, state, **kw),
+        is_async=True,
+        description=schemas.TOPUP["description"],
+    )
     ctx.register_tool(
         name="totalreclaw_debrief",
         toolset="totalreclaw",

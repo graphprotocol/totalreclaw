@@ -18,6 +18,7 @@ provides_tools:
   - totalreclaw_import_status
   - totalreclaw_import_abort
   - totalreclaw_upgrade
+  - totalreclaw_top_up
   - totalreclaw_debrief
 provides_hooks:
   - on_session_start
