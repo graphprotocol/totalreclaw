@@ -17,36 +17,42 @@ works for any messenger you configure Hermes with.)
 
 ## What changed
 
-Two plugin-side mitigations (no host changes required):
+Three plugin-side mechanisms (no host changes required):
 
-1. **Honor the host's `session_id`.** `on_session_start` now derives the
-   TotalReclaw session key deterministically from the `session_id` Hermes
-   provides. If your host distinguishes conversations (passes a distinct id per
-   chat/topic), TotalReclaw **inherits that boundary** automatically — parallel
-   conversations get separate sessions and separate Crystals.
+1. **Per-conversation session slots (the core fix).** Hermes hands the plugin a
+   per-conversation `session_id` on **every turn** — through its native
+   `MemoryProvider.sync_turn` and the per-turn hooks (its own
+   `self.agent.session_id`, which is distinct per conversation). The plugin now
+   routes each turn to a **slot** keyed by that id: every conversation keeps its
+   **own** message buffer, turn counter, and session id, and finalizes to its
+   **own** Crystal. Even conversations **interleaved in real time** in the same
+   chat no longer mix — each turn lands in the right slot. (Previously the
+   plugin ignored that id and piled every turn into one buffer.)
 
-2. **Idle-timeout rollover.** When TotalReclaw mints its own id (the host does
-   *not* distinguish conversations), a turn that arrives after a long silence
-   **rolls into a fresh session** first: the idle session is flushed +
-   debriefed, then a new `session_id` starts for the incoming turn. A long gap
-   almost always means a new topic, so bursty parallel conversations separated
-   in time stop merging.
+2. **Honor the host's `session_id` at session start.** `on_session_start` also
+   derives its session key from the id Hermes provides, so a host that
+   distinguishes conversations up front inherits that boundary too.
+
+3. **Idle-timeout rollover (fallback).** When TotalReclaw has to mint its own id
+   (a host that supplies no per-conversation id at all), a turn that arrives
+   after a long silence **rolls into a fresh session** first: the idle session
+   is flushed + debriefed, then a new `session_id` starts for the incoming turn.
+   A long gap almost always means a new topic.
 
    - Env: **`TOTALRECLAW_SESSION_IDLE_MINUTES`** (default **60**). Set `0` to
-     disable. Host-derived sessions (case 1) are never idle-rolled — the host
-     owns that boundary.
+     disable. Host-derived / per-conversation sessions are never idle-rolled —
+     the host owns those boundaries.
 
-## What is *not* fixed (host-side)
+## Residual (rare)
 
-If two conversations are **truly interleaved in real time** and Hermes does
-**not** pass a per-conversation id on every turn, the plugin cannot tell the
-turns apart — Hermes' `pre_llm_call` / `post_llm_call` hooks currently carry only
-the message text, no conversation identifier. The complete fix needs the
-**host** to pass its conversation id — whatever the platform uses to identify a
-conversation (a chat id, a thread/topic id, a room id) — into the per-turn hooks;
-the plugin already knows how to scope by it (mechanism 1). This mechanism is
-platform-agnostic: nothing here is specific to any one messenger. Until then,
-the idle rollover covers conversations that are separated in time.
+The per-conversation split relies on the host giving each conversation a
+distinct id per turn — Hermes' native gateway does (it passes its
+per-conversation `self.agent.session_id`). A host that funnels **every**
+conversation through a single **coarse** id (one id reused across unrelated
+conversations in a chat) *and* interleaves them in real time can't be told apart
+from that id alone; those fall back to the idle rollover (time-separated
+conversations still get clean sessions). This is platform-agnostic — nothing
+here is specific to any one messenger.
 
 ## Tips
 

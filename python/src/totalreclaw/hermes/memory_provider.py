@@ -323,7 +323,16 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         try:
             from .hooks import ingest_turn
 
-            ingest_turn(self._state, user_content, assistant_content)
+            # Forward the host's per-conversation ``session_id`` so parallel
+            # conversations route to separate slots (parallel-chat fix). Hermes
+            # passes its per-conversation ``self.agent.session_id`` here every
+            # turn; ignoring it is what collapsed every chat into one Crystal.
+            ingest_turn(
+                self._state,
+                user_content,
+                assistant_content,
+                session_id=session_id,
+            )
         except Exception as exc:  # pragma: no cover — non-fatal per ABC contract
             logger.warning("TotalReclaw MemoryProvider.sync_turn failed: %s", exc)
 

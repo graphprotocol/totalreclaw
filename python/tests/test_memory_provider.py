@@ -837,7 +837,9 @@ class TestNativeAutoMemory:
         provider = TotalReclawMemoryProvider(state)
         with patch("totalreclaw.hermes.hooks.ingest_turn") as it:
             provider.sync_turn("u", "a", session_id="s1")
-        it.assert_called_once_with(state, "u", "a")
+        # sync_turn now forwards the per-conversation session_id to ingest_turn
+        # (the parallel-chat fix) — that forwarding IS the delegation contract.
+        it.assert_called_once_with(state, "u", "a", session_id="s1")
 
     def test_sync_turn_accepts_messages_kwarg(self):
         state = _make_state(configured=True)
@@ -846,7 +848,7 @@ class TestNativeAutoMemory:
             provider.sync_turn(
                 "u", "a", session_id="s1", messages=[{"role": "user", "content": "u"}]
             )
-        it.assert_called_once_with(state, "u", "a")
+        it.assert_called_once_with(state, "u", "a", session_id="s1")
 
     def test_sync_turn_swallows_errors(self):
         state = _make_state(configured=True)

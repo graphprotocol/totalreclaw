@@ -180,6 +180,25 @@ def _extract_mnemonic_from_creds(creds: dict) -> str:
     return alias
 
 
+# Sentinel key for the implicit "default" conversation slot — the live state a
+# host uses when it never supplies a per-conversation id (legacy single-session
+# behavior). A NUL prefix keeps it disjoint from any real host session id.
+_DEFAULT_SLOT_KEY = "\x00default"
+
+# The per-conversation slot = the live AgentState fields that belong to ONE
+# conversation. Everything else (client, billing cache, config, quota) is
+# process-global and shared across conversations.
+_SLOT_FIELDS = (
+    "_messages",
+    "_last_processed_idx",
+    "_turn_count",
+    "_session_id",
+    "_session_id_from_host",
+    "_last_activity",
+    "_pending_extract_buffer",
+)
+
+
 class AgentState:
     """Manages TotalReclaw client lifecycle, turn tracking, and message buffer.
 
@@ -222,6 +241,15 @@ class AgentState:
         self._session_id_from_host: bool = False
         # monotonic() of the last turn — drives idle-timeout session rollover.
         self._last_activity: float = 0.0
+        # Per-conversation session isolation (parallel-chat fix). When the host
+        # supplies a per-conversation id every turn (Hermes
+        # ``MemoryProvider.sync_turn`` / the per-turn hooks), each conversation
+        # gets its OWN slot — message buffer, turn counter, processed index,
+        # session id — so interleaved/parallel conversations no longer collapse
+        # into one session Crystal. Empty ⇒ legacy single-session behavior: the
+        # live attributes above ARE the one and only slot.
+        self._session_slots: dict[str, dict] = {}
+        self._active_conversation_key: Optional[str] = None
         # 2.4.4rc2 (F7) — auto-extract pending-queue tracking. Each
         # post_llm_call appends an entry for the just-completed turn's
         # user message; the totalreclaw_remember tool consults this
@@ -424,6 +452,108 @@ class AgentState:
         """Clear the session id. Idempotent."""
         self._session_id = None
         self._session_id_from_host = False
+
+    # ------------------------------------------------------------------
+    # Per-conversation session slots (parallel-chat fix)
+    #
+    # The live ``_SLOT_FIELDS`` are the *active* conversation. Any other
+    # conversation seen this lifecycle is stashed in ``_session_slots`` keyed
+    # by the host's per-conversation id. ``activate_conversation`` swaps the
+    # active slot; ``stash_active_conversation`` + ``pop_next_conversation``
+    # let a session-finalize sweep crystallize every conversation separately.
+    # When the host never supplies a per-conversation id these stay empty and
+    # every method below is a no-op → byte-identical legacy behavior.
+    # ------------------------------------------------------------------
+    def _ensure_slot_store(self) -> None:
+        """Lazily initialize the slot store. Defensive: legacy ``AgentState``
+        subclasses / test mocks that override ``__init__`` without calling
+        ``super().__init__()`` won't have set these, and every slot method must
+        tolerate that (behave as a fresh single-session state)."""
+        if not hasattr(self, "_session_slots"):
+            self._session_slots = {}
+        if not hasattr(self, "_active_conversation_key"):
+            self._active_conversation_key = None
+
+    def _capture_slot(self) -> dict:
+        return {f: getattr(self, f) for f in _SLOT_FIELDS}
+
+    def _restore_slot(self, slot: dict) -> None:
+        for f in _SLOT_FIELDS:
+            setattr(self, f, slot[f])
+
+    def _blank_live_slot(self) -> None:
+        """Reset the live conversation fields to a fresh, empty slot."""
+        self._messages = []
+        self._last_processed_idx = 0
+        self._turn_count = 0
+        self._pending_extract_buffer = []
+        self._session_id = None
+        self._session_id_from_host = False
+        self._last_activity = 0.0
+
+    def activate_conversation(self, external_id: Optional[str]) -> None:
+        """Route the live per-conversation state to the slot for *external_id*.
+
+        Called once per turn with the host's per-conversation id (Hermes
+        ``sync_turn`` / the per-turn hooks pass it). Each distinct id gets its
+        own message buffer + turn counter + session id, so parallel/interleaved
+        conversations no longer collapse into one session Crystal.
+
+        No-op when *external_id* is falsy (legacy single-session behavior) or
+        already the active conversation.
+        """
+        self._ensure_slot_store()
+        if not external_id or external_id == self._active_conversation_key:
+            return
+        # Stash the currently-live slot so we can come back to it. Skip a still
+        # empty legacy/default slot (the coarse, message-less state that
+        # ``on_session_start`` set up before the first real turn) — it carries
+        # no conversation content worth preserving.
+        if self._active_conversation_key is not None:
+            self._session_slots[self._active_conversation_key] = self._capture_slot()
+        elif self._messages:
+            self._session_slots[_DEFAULT_SLOT_KEY] = self._capture_slot()
+        # Load the target slot if we've seen it, else mint a fresh one whose
+        # session id is derived from the host id (per-conversation, stable).
+        existing = self._session_slots.pop(external_id, None)
+        if existing is not None:
+            self._restore_slot(existing)
+        else:
+            self._blank_live_slot()
+            self._session_id = _session_id_from_host(external_id)
+            self._session_id_from_host = True
+            self._last_activity = time.monotonic()
+        self._active_conversation_key = external_id
+
+    def stash_active_conversation(self) -> None:
+        """Move the live conversation into ``_session_slots`` so a finalize
+        sweep can iterate every conversation (active + previously stashed).
+        Idempotent-ish: leaves the live slot blank afterwards."""
+        self._ensure_slot_store()
+        key = (
+            _DEFAULT_SLOT_KEY
+            if self._active_conversation_key is None
+            else self._active_conversation_key
+        )
+        self._session_slots[key] = self._capture_slot()
+        self._active_conversation_key = None
+        self._blank_live_slot()
+
+    def pop_next_conversation(self) -> bool:
+        """Load one stashed conversation as the live slot. Returns False when
+        none remain. Drives the per-conversation crystallize loop at finalize."""
+        self._ensure_slot_store()
+        if not self._session_slots:
+            return False
+        key, slot = self._session_slots.popitem()
+        self._restore_slot(slot)
+        self._active_conversation_key = None if key == _DEFAULT_SLOT_KEY else key
+        return True
+
+    def reset_conversations(self) -> None:
+        """Drop all stashed conversation slots. Called at session boundaries."""
+        self._session_slots = {}
+        self._active_conversation_key = None
 
     def note_activity(self) -> None:
         """Record that a turn just happened (feeds idle-timeout rollover)."""

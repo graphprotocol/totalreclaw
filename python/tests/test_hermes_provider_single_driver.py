@@ -96,4 +96,5 @@ class TestPostLlmCallGate:
         with patch.object(hooks, "ingest_turn") as it, \
              patch.object(hooks, "_maybe_reconfigure_from_disk", return_value=False):
             hooks.post_llm_call(s, user_message="u", assistant_response="a")
-        it.assert_called_once_with(s, "u", "a")
+        # session_id forwarded (empty here — no per-conversation id supplied).
+        it.assert_called_once_with(s, "u", "a", session_id="")

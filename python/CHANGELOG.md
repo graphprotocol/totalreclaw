@@ -25,6 +25,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (honor the host's conversation id) works for any messenger Hermes is
   configured with (Telegram, WhatsApp, Slack, Matrix, …).
 
+### Fixed
+
+- **Parallel conversations no longer collapse into one mixed session / Crystal.**
+  The Hermes plugin kept a single process-global message buffer + turn counter +
+  session id, so several conversations run in parallel through one Hermes process
+  (e.g. interleaved threads in the same Telegram chat) piled every turn into one
+  buffer and finalized to one **mixed** Crystal — and, because facts were tagged
+  with the coarse id `on_session_start` received, unrelated conversations grouped
+  under one `session_id` in the vault (even across process restarts). The plugin
+  now routes each turn to a **per-conversation slot** keyed by the per-conversation
+  `session_id` Hermes already passes to `MemoryProvider.sync_turn` and the per-turn
+  hooks (its `self.agent.session_id`): each conversation keeps its own buffer, turn
+  counter, and session id, and `on_session_finalize` crystallizes each separately —
+  so even conversations interleaved in real time get clean, separate Crystals.
+  Fully backward-compatible: a host that supplies no per-conversation id keeps the
+  prior single-session behavior. See `docs/guides/hermes-session-hygiene.md`.
+
 ## [2.4.4] — 2026-06-06
 
 Stable line for the `totalreclaw` Python client + `totalreclaw.hermes` plugin, consolidating the 2.4.0 → 2.4.4rc7 cycle. Headline: the client is now **chain-aware** (it reads its chain + DataEdge from the relay, so the managed service's single-chain Gnosis migration needed zero client release), plus a pre-stable QA hardening pass over the install / setup / extraction / delete paths.

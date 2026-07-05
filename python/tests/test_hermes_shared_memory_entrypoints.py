@@ -74,7 +74,8 @@ class TestPostLlmCallDelegates:
              patch.object(hooks, "ingest_turn") as it:
             hooks.post_llm_call(s, user_message="u", assistant_response="a")
         rc.assert_called_once_with(s)
-        it.assert_called_once_with(s, "u", "a")
+        # session_id forwarded (empty here — no per-conversation id supplied).
+        it.assert_called_once_with(s, "u", "a", session_id="")
 
     def test_post_llm_call_eager_register_on_midsession_pair(self):
         s = _state()

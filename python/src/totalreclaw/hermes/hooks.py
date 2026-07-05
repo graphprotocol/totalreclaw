@@ -863,15 +863,28 @@ def _resolve_extraction_llm_config(state: "PluginState"):
 
 
 def ingest_turn(
-    state: "PluginState", user_message: str, assistant_response: str
+    state: "PluginState",
+    user_message: str,
+    assistant_response: str,
+    session_id: str = "",
 ) -> None:
     """Record a completed turn and run interval-gated auto-extraction (hook-free).
 
     The shared core of ``post_llm_call``: bookkeeping always runs (the client
     may be configured mid-session); extraction runs only when configured and on
     the Nth turn. Reused by the Hermes ``MemoryProvider.sync_turn`` (§5.2).
-    Mirrors the previous inline ``post_llm_call`` behavior exactly.
+
+    ``session_id`` is the host's per-conversation id (Hermes passes it to
+    ``sync_turn`` and the per-turn hooks). When supplied, the turn is routed to
+    that conversation's own slot — so parallel/interleaved conversations keep
+    separate buffers, turn counters, and session ids, and never collapse into
+    one mixed Crystal. When absent (or a host that hands one coarse id to the
+    whole chat) the behavior is byte-identical to the prior single buffer.
     """
+    # Route this turn to its conversation's slot BEFORE any bookkeeping, so the
+    # turn counter + message buffer + session id all belong to the right chat.
+    if session_id and hasattr(state, "activate_conversation"):
+        state.activate_conversation(session_id)
     # Always track turns and messages (client may be configured mid-session).
     state.increment_turn()
     state.add_message("user", user_message)
@@ -929,6 +942,7 @@ def post_llm_call(state: "PluginState", **kwargs) -> None:
         state,
         kwargs.get("user_message", ""),
         kwargs.get("assistant_response", ""),
+        session_id=kwargs.get("session_id", ""),
     )
 
 
@@ -947,6 +961,22 @@ def on_session_end(state: "PluginState", **kwargs) -> None:
     return None
 
 
+def _finalize_one_conversation(state: "PluginState") -> None:
+    """Flush any unprocessed messages + run the session debrief (Crystal) for
+    the CURRENTLY-ACTIVE conversation slot. Best-effort — never raises."""
+    stored_fact_texts: list[str] = []
+    if state.has_unprocessed_messages():
+        try:
+            stored_fact_texts = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config())
+        except Exception as e:
+            logger.warning("TotalReclaw on_session_finalize flush failed: %s", e)
+
+    try:
+        _session_debrief(state, stored_fact_texts=stored_fact_texts)
+    except Exception as e:
+        logger.warning("TotalReclaw on_session_finalize debrief failed: %s", e)
+
+
 def on_session_finalize(state: "PluginState", **kwargs) -> None:
     """Comprehensive flush of unprocessed messages + session debrief.
 
@@ -954,31 +984,39 @@ def on_session_finalize(state: "PluginState", **kwargs) -> None:
     finalize). Per-turn auto-extraction runs from ``post_llm_call``; this
     handler catches residual unprocessed messages and runs the session
     debrief while the full conversation buffer is still intact.
+
+    Parallel-chat fix: when the host distinguished conversations for us (per-
+    conversation slots exist), crystallize EACH conversation separately — every
+    chat gets its own clean Crystal instead of one mixed summary. Falls back to
+    a single pass when the host never supplied per-conversation ids.
     """
     if not state.is_configured():
         # memq-3 — still clear the session id we set in on_session_start
         # for unconfigured sessions so the invariant "session_id is None
         # outside an active session" holds in every code path.
         state.end_session()
+        if hasattr(state, "reset_conversations"):
+            state.reset_conversations()
         return
 
     try:
-        stored_fact_texts: list[str] = []
-        if state.has_unprocessed_messages():
-            try:
-                stored_fact_texts = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config())
-            except Exception as e:
-                logger.warning("TotalReclaw on_session_finalize flush failed: %s", e)
-
-        try:
-            _session_debrief(state, stored_fact_texts=stored_fact_texts)
-        except Exception as e:
-            logger.warning("TotalReclaw on_session_finalize debrief failed: %s", e)
+        if hasattr(state, "stash_active_conversation") and hasattr(state, "pop_next_conversation"):
+            # Stash the live conversation, then crystallize each stashed
+            # conversation on its own. Legacy single-session case stashes ONE
+            # slot and loops exactly once → byte-identical to the old behavior.
+            state.stash_active_conversation()
+            while state.pop_next_conversation():
+                _finalize_one_conversation(state)
+        else:
+            # Legacy state subclass / test mock without slot support.
+            _finalize_one_conversation(state)
     finally:
         state.clear_messages()
         # memq-3 — clear session id alongside the message buffer so the
         # next on_session_start gets a fresh id.
         state.end_session()
+        if hasattr(state, "reset_conversations"):
+            state.reset_conversations()
 
 
 def on_session_reset(state: "PluginState", **kwargs) -> None:
@@ -988,6 +1026,10 @@ def on_session_reset(state: "PluginState", **kwargs) -> None:
     """
     state.clear_messages()
     state.reset_turn_counter()
+    # Drop any stashed parallel-conversation slots too — a reset is a clean
+    # slate across every conversation this lifecycle held.
+    if hasattr(state, "reset_conversations"):
+        state.reset_conversations()
 
 
 # Backward-compatible alias used by tests
