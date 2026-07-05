@@ -17,6 +17,10 @@ import type { MindMode } from "../components/memory/MindMap";
 const MindMap = lazy(() =>
   import("../components/memory/MindMap").then((m) => ({ default: m.MindMap })),
 );
+// three.js glow renderer — its own lazy chunk, only fetched on the Glow toggle.
+const MindMapGL = lazy(() =>
+  import("../components/memory/MindMapGL").then((m) => ({ default: m.MindMapGL })),
+);
 
 type Mode = "list" | "facts" | "map";
 
@@ -50,6 +54,7 @@ export function MemoryPage() {
 
   const [mode, setMode] = useState<Mode>("list");
   const [mapMode, setMapMode] = useState<MindMode>("atlas");
+  const [renderer, setRenderer] = useState<"canvas" | "glow">("canvas");
   const [panel, setPanel] = useState<PanelView | null>(null);
 
   const [q, setQ] = useState("");
@@ -270,17 +275,47 @@ export function MemoryPage() {
           ) : (
             <div className="relative h-[72vh] min-h-[540px] w-full overflow-hidden rounded-[24px] bg-[#211E1B] shadow-overlay ring-1 ring-black/20">
               <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-warm-white/60">Drawing your map…</div>}>
-                <MindMap
-                  mode={mapMode}
-                  nodes={mind.nodes}
-                  links={mind.links}
-                  neighborsOf={mind.neighborsOf}
-                  selectedId={null}
-                  onSelect={(n) => {
-                    if (n && n.kind === "entity") openEntity(n.label);
-                  }}
-                />
+                {renderer === "glow" ? (
+                  <MindMapGL
+                    mode={mapMode}
+                    nodes={mind.nodes}
+                    links={mind.links}
+                    neighborsOf={mind.neighborsOf}
+                    selectedId={null}
+                    onSelect={(n) => {
+                      if (n && n.kind === "entity") openEntity(n.label);
+                    }}
+                  />
+                ) : (
+                  <MindMap
+                    mode={mapMode}
+                    nodes={mind.nodes}
+                    links={mind.links}
+                    neighborsOf={mind.neighborsOf}
+                    selectedId={null}
+                    onSelect={(n) => {
+                      if (n && n.kind === "entity") openEntity(n.label);
+                    }}
+                  />
+                )}
               </Suspense>
+
+              {/* renderer toggle — Canvas ⇄ WebGL glow (A/B) */}
+              <div className="absolute right-4 top-4 inline-flex items-center gap-0.5 rounded-pill bg-white/10 p-0.5 backdrop-blur">
+                {(["canvas", "glow"] as const).map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => setRenderer(r)}
+                    aria-pressed={renderer === r}
+                    className={clsx(
+                      "rounded-pill px-3 py-1 text-xs font-semibold transition",
+                      renderer === r ? "bg-warm-white text-ink shadow-soft" : "text-warm-white/70 hover:text-warm-white",
+                    )}
+                  >
+                    {r === "glow" ? "✦ Glow" : "Canvas"}
+                  </button>
+                ))}
+              </div>
 
               <div className="absolute left-4 top-4 flex flex-col gap-2">
                 <div className="inline-flex items-center gap-0.5 rounded-pill bg-white/10 p-0.5 backdrop-blur">
@@ -317,7 +352,7 @@ export function MemoryPage() {
                 drag · scroll or ± to zoom · tap a star
               </div>
               {mind.cappedEntities > 0 && (
-                <div className="pointer-events-none absolute right-4 top-4 max-w-[13rem] text-right text-[0.7rem] text-warm-white/55">
+                <div className="pointer-events-none absolute right-4 top-16 max-w-[13rem] text-right text-[0.7rem] text-warm-white/55">
                   Showing the {mind.entityCount - mind.cappedEntities} most-connected of {mind.entityCount} entities.
                 </div>
               )}
