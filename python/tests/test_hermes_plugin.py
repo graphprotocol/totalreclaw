@@ -761,3 +761,94 @@ class TestRegister:
             )
         # And the approved replacement MUST be present.
         assert "totalreclaw_pair" in tool_names
+
+
+class TestUpdateNoticeHook:
+    """Integration of _maybe_queue_update_notice into the session-start
+    billing-cache flow. Isolates the disk sentinel to a temp dir."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate(self, tmp_path, monkeypatch):
+        from totalreclaw import update_notice as un
+
+        monkeypatch.setattr(un, "_STATE_DIR", tmp_path / ".totalreclaw")
+        monkeypatch.delenv("TOTALRECLAW_DISABLE_UPDATE_NOTICE", raising=False)
+
+    def _billing(self, latest=None, used=0, limit=250, tier="free"):
+        feats = {"recall_top_k": 16}
+        if latest is not None:
+            feats["latest_stable_python"] = latest
+        return {
+            "tier": tier,
+            "free_writes_used": used,
+            "free_writes_limit": limit,
+            "features": feats,
+        }
+
+    def test_queues_notice_when_newer(self, monkeypatch):
+        from totalreclaw.hermes import hooks
+
+        monkeypatch.setattr("totalreclaw.__version__", "2.4.4", raising=False)
+
+        state = _make_state()
+        hooks._maybe_queue_update_notice(state, self._billing(latest="2.4.5"))
+        warn = state.get_quota_warning()
+        assert warn is not None
+        assert "2.4.5 is available" in warn
+        assert "2.4.4" in warn
+
+    def test_no_notice_when_equal(self, monkeypatch):
+        from totalreclaw.hermes import hooks
+
+        monkeypatch.setattr("totalreclaw.__version__", "2.4.5", raising=False)
+        state = _make_state()
+        hooks._maybe_queue_update_notice(state, self._billing(latest="2.4.5"))
+        assert state.get_quota_warning() is None
+
+    def test_no_notice_when_field_absent(self, monkeypatch):
+        from totalreclaw.hermes import hooks
+
+        monkeypatch.setattr("totalreclaw.__version__", "2.4.4", raising=False)
+        state = _make_state()
+        hooks._maybe_queue_update_notice(state, self._billing(latest=None))
+        assert state.get_quota_warning() is None
+
+    def test_kill_switch_suppresses(self, monkeypatch):
+        from totalreclaw.hermes import hooks
+
+        monkeypatch.setenv("TOTALRECLAW_DISABLE_UPDATE_NOTICE", "1")
+        monkeypatch.setattr("totalreclaw.__version__", "2.4.4", raising=False)
+        state = _make_state()
+        hooks._maybe_queue_update_notice(state, self._billing(latest="2.4.5"))
+        assert state.get_quota_warning() is None
+
+    def test_fires_once_within_window(self, monkeypatch):
+        from totalreclaw.hermes import hooks
+
+        monkeypatch.setattr("totalreclaw.__version__", "2.4.4", raising=False)
+
+        state1 = _make_state()
+        hooks._maybe_queue_update_notice(state1, self._billing(latest="2.4.5"))
+        assert state1.get_quota_warning() is not None
+
+        # A second (fresh) session within 24h must NOT re-notify — the disk
+        # sentinel was burned by the first call.
+        state2 = _make_state()
+        hooks._maybe_queue_update_notice(state2, self._billing(latest="2.4.5"))
+        assert state2.get_quota_warning() is None
+
+    def test_rc_user_notified_when_final_ships(self, monkeypatch):
+        from totalreclaw.hermes import hooks
+
+        monkeypatch.setattr("totalreclaw.__version__", "2.4.5rc11", raising=False)
+        state = _make_state()
+        hooks._maybe_queue_update_notice(state, self._billing(latest="2.4.5"))
+        assert state.get_quota_warning() is not None
+
+    def test_newer_rc_user_not_notified(self, monkeypatch):
+        from totalreclaw.hermes import hooks
+
+        monkeypatch.setattr("totalreclaw.__version__", "2.4.6rc1", raising=False)
+        state = _make_state()
+        hooks._maybe_queue_update_notice(state, self._billing(latest="2.4.5"))
+        assert state.get_quota_warning() is None

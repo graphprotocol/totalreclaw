@@ -88,6 +88,18 @@ export TOTALRECLAW_SESSION_ID="qa-rc.22-run-7"
 **When to override:** set during QA runs so log queries can be filtered by session id. Production users do not need to set it.
 **Security:** non-secret. Shows up in relay logs by design. Pick a non-PII tag.
 
+### `TOTALRECLAW_DISABLE_UPDATE_NOTICE`
+
+**Optional.** Kill-switch for the automatic "TotalReclaw X is available" update nudge (Python / Hermes client). When the relay advertises a newer stable than the installed version, the client injects a one-line update reminder at session start (at most once per 24h). Set this to silence it.
+
+```bash
+export TOTALRECLAW_DISABLE_UPDATE_NOTICE=1
+```
+
+**Default:** unset — the notice is enabled. Truthy values (`1`, `true`, `yes`, `on`) disable it.
+**When to override:** you manage updates out-of-band and don't want the reminder, or you're running a pinned build on purpose.
+**Note:** this only suppresses the *notice*. It does not affect installs, and the update itself is always user-initiated (say "update TotalReclaw" — see [hermes-setup.md](hermes-setup.md)).
+
 ### LLM provider keys
 
 **Required if the client needs an LLM** (auto-extraction, LLM-guided dedup, import processing).

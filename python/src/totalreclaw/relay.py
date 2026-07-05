@@ -80,6 +80,27 @@ def _detect_client_id() -> str:
     return "python-client"
 
 
+def _client_version() -> str:
+    """Installed package version, for the observability suffix on the client
+    header. Imported lazily to avoid a circular import
+    (``totalreclaw.__init__`` imports client code that imports this module).
+    Falls back to ``"unknown"`` if the version can't be resolved."""
+    try:
+        from totalreclaw import __version__
+
+        return __version__ or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _client_header_value(client_id: str) -> str:
+    """Build the ``X-TotalReclaw-Client`` value: ``<client_id>/<version>``
+    (e.g. ``python-client/2.4.5``). The relay buckets analytics on the part
+    before the first ``/``, so appending the version is observability-only and
+    does not fragment client-type aggregation."""
+    return f"{client_id}/{_client_version()}"
+
+
 @dataclass
 class BillingFeatures:
     llm_dedup: bool = False
@@ -89,6 +110,11 @@ class BillingFeatures:
     max_facts_per_extraction: Optional[int] = None
     max_candidate_pool: Optional[int] = None
     recall_top_k: Optional[int] = None
+    # Latest published stable Python-client version (e.g. "2.4.5"), when the
+    # relay advertises one. None ⇒ the relay has not opted into update-notices
+    # (or is an older build) ⇒ the client never nudges. See
+    # ``totalreclaw.update_notice`` for the compare + rate-limit logic.
+    latest_stable_python: Optional[str] = None
 
 
 @dataclass
@@ -213,7 +239,7 @@ class RelayClient:
     def _base_headers(self) -> dict[str, str]:
         headers = {
             "Content-Type": "application/json",
-            "X-TotalReclaw-Client": self._client_id,
+            "X-TotalReclaw-Client": _client_header_value(self._client_id),
         }
         if self._is_test:
             headers["X-TotalReclaw-Test"] = "true"
@@ -230,7 +256,7 @@ class RelayClient:
         http = await self._get_http()
         headers: dict[str, str] = {
             "Content-Type": "application/json",
-            "X-TotalReclaw-Client": self._client_id,
+            "X-TotalReclaw-Client": _client_header_value(self._client_id),
         }
         if self._is_test:
             headers["X-TotalReclaw-Test"] = "true"
@@ -296,6 +322,7 @@ class RelayClient:
                 max_facts_per_extraction=f.get("max_facts_per_extraction"),
                 max_candidate_pool=f.get("max_candidate_pool"),
                 recall_top_k=f.get("recall_top_k"),
+                latest_stable_python=f.get("latest_stable_python"),
             )
         return BillingStatus(
             tier=data["tier"],

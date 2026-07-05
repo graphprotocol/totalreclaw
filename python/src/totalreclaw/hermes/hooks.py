@@ -522,6 +522,43 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
                     f"({pct}%). {nudge}"
                 )
                 logger.info("TotalReclaw: Memory usage >80%% — quota warning set")
+
+            # Update-available nudge (relay-driven fleet announcement).
+            # Fires at most once per 24h across sessions and never clobbers a
+            # pending quota warning (which is more urgent). Gated on the relay
+            # advertising `features.latest_stable_python`; dark otherwise.
+            if not state.get_quota_warning():
+                _maybe_queue_update_notice(state, billing)
+    except Exception:
+        pass
+
+
+def _maybe_queue_update_notice(state: "PluginState", billing: dict) -> None:
+    """Queue a one-line "TotalReclaw X is available" notice via the quota-warning
+    channel when the relay advertises a newer stable than the installed version.
+
+    Rate-limited to once per 24h across sessions (disk sentinel) and suppressed
+    entirely by ``TOTALRECLAW_DISABLE_UPDATE_NOTICE=1``. Best-effort — any error
+    is swallowed so a hook never fails on a cosmetic nudge.
+    """
+    try:
+        from totalreclaw import __version__
+        from totalreclaw.update_notice import maybe_build_update_notice, mark_notified
+
+        features = billing.get("features") or {}
+        latest = features.get("latest_stable_python")
+        if not latest:
+            return
+        notice = maybe_build_update_notice(latest, __version__)
+        if notice:
+            state.set_quota_warning(notice)
+            # Burn the 24h window only after the notice is actually queued.
+            mark_notified()
+            logger.info(
+                "TotalReclaw: update notice queued (installed=%s, latest=%s)",
+                __version__,
+                latest,
+            )
     except Exception:
         pass
 

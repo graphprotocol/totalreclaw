@@ -27,7 +27,7 @@ from .crypto import (
     DerivedKeys,
 )
 from .lsh import LSHHasher
-from .relay import RelayClient, BillingStatus, _default_relay_url
+from .relay import RelayClient, BillingStatus, _default_relay_url, _client_header_value
 from .reranker import RerankerResult
 from .operations import (
     store_fact,
@@ -349,7 +349,7 @@ class TotalReclaw:
         billing_url = f"{relay_url}/v1/billing/status"
         headers: dict[str, str] = {
             "Authorization": f"Bearer {self._auth_key_hex}",
-            "X-TotalReclaw-Client": self._relay._client_id,
+            "X-TotalReclaw-Client": _client_header_value(self._relay._client_id),
         }
         session_id = getattr(self._relay, "_session_id", None)
         if session_id:

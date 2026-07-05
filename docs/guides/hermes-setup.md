@@ -50,6 +50,31 @@ The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` a
 
 ---
 
+## Update prompt
+
+TotalReclaw has NO native Hermes update path (`hermes plugins update` is git-clone-only; `hermes update` updates Hermes itself, not a pip plugin). So updates run the same install machinery, re-pointed at the newest **stable**. The user pastes:
+
+```
+Update TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md
+```
+
+The agent updates to the newest **stable** and re-binds — **silently**, exactly like install (same HARD RULE: no `pip` / `venv` / interpreter narration). Reuse the **Install procedure below**:
+
+1. **Step 2 with `PIN="totalreclaw"`** (stable channel — `pip install --upgrade` lands the newest final). Run the same `(a)`/`(b)`/`(c)` install-and-verify block. Emit the one `✓ Installed totalreclaw <version>` line only after `(c)`'s RUNTIME verify confirms the Hermes interpreter now imports the new version (guards the same shadow-install trap as a fresh install).
+2. **Step 4 restart request** — re-emit the surface-matched restart line verbatim (Telegram / docker / systemd / launchd / standalone `hermes chat`) so the freshly-upgraded plugin binds. There is no hot-reload for an updated plugin either.
+
+**Budget: ≤3 user-visible lines** — the `✓ Installed` line, the restart line, and (optionally) a one-line "you're up to date on <version>" confirmation after the user's continuation reply. Account setup / pairing is **skipped** on an update (credentials already exist); do NOT re-run it.
+
+### Automatic update notice
+
+The client also nudges on its own. When the relay advertises a newer stable than the installed build, the next session start injects a single line into the agent's context:
+
+> TotalReclaw X is available (you're running Y). Say 'update TotalReclaw' to upgrade.
+
+It fires at most once per 24h across sessions, and only ever when a newer **final** is out (an rc user is nudged when the matching final ships; a user already on a newer rc line is not). Set `TOTALRECLAW_DISABLE_UPDATE_NOTICE=1` to silence it (see [env-vars-reference.md](env-vars-reference.md)). When the user acts on it, follow the **Update prompt** above.
+
+---
+
 ## Conversational style — HARD RULE for install + setup
 
 **The user must NOT see install mechanics. Narrating shell / `pip` / `venv` / interpreter-detection / "let me verify…" during install or setup is a DEFECT** — it spams the chat with garbage (QA regression, 2026-06). This is not aspirational: run every tool/shell step **silently** and emit ONLY the short verbatim lines each procedure names. **Budget for a full install + setup: ≤6 short user-visible lines, total.** If you wrote more than that, you narrated something that should have been silent — delete it.

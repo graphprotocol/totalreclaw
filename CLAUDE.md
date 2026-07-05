@@ -217,6 +217,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | **Billing** | | | | | | |
 | Quota warnings (>80%) | Yes | -- | Yes | Yes | -- | Yes | Injected via on_session_start hook; ZeroClaw via quota_warning() method |
 | 403 handling + cache invalidation | Yes | Yes | Yes | -- | Yes (via MCP) | Yes | ZeroClaw invalidates billing cache on 403, returns QuotaExceeded error |
+| Update-available notice | -- | -- | -- | Yes | -- | -- | Hermes-only. Relay serves `features.latest_stable_python` (set via `LATEST_STABLE_PYTHON` env — dark until configured); client compares vs installed `__version__` (rc<final aware), nudges once/24h via quota-warning channel. Kill-switch `TOTALRECLAW_DISABLE_UPDATE_NOTICE=1`. Fires fleet-wide on the one env flip at each stable promote. |
 | **Search Optimizations** | | | | | | |
 | Hot cache + two-tier search | Yes (managed) | -- | -- | -- | -- | Yes (30 entries, cosine >= 0.85) | Skips remote query if cached query similar |
 | Dynamic candidate pool sizing | Yes | Yes | Yes (via MCP) | -- | Yes (via MCP) | Yes | Server-configurable via billing features; env overrides `CANDIDATE_POOL_MAX_FREE`/`CANDIDATE_POOL_MAX_PRO` |
@@ -225,7 +226,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | BM25 + Cosine + RRF reranking | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes | Intent-weighted |
 | Entity-trapdoor recall (read-side) | -- | -- | -- | Yes | -- | -- | #370, shipped 2026-07-03 (#377). Query entities (heuristic) → unkeyed `sha256("entity:"+name)` trapdoors appended to search. +2.4pp Hit@16 at ~2700-fact scale (production-config A/B; Sonnet-gated). Write-side (`entities[]` → blind_indices) shipped across plugin/MCP/Hermes since `ac1b872`; read-side is Hermes-only until other clients un-park. |
 | **Admin & Analytics** | | | | | | |
-| X-TotalReclaw-Client header | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (rust-client:zeroclaw) | Sent on every relay request |
+| X-TotalReclaw-Client header | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes (rust-client:zeroclaw) | Sent on every relay request. Python client appends its version (`python-client/<version>`) for observability; the relay buckets analytics on the part before the first `/`, so per-release version suffixes don't fragment client-type aggregation. |
 | Admin dashboard | -- | -- | -- | -- | -- | Admin-only (relay service), not a client feature |
 
 ### Storage Mode Support

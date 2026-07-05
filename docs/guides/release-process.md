@@ -181,11 +181,36 @@ differ. Ship with the table below in front of you.
    # (stable-version auto-derived to 2.1.0)
    ```
 
-6. **Generate the changelog.** Dispatch `changelog.yml` for the stable
+6. **Advertise the new stable to the fleet — set `LATEST_STABLE_PYTHON` on BOTH
+   relay services.** This is the single env flip that makes the automatic update
+   notice fire fleet-wide: the relay serves it in `/v1/billing/status` →
+   `features.latest_stable_python`, and every Hermes client compares it against
+   its installed `__version__` and nudges the user to say "update TotalReclaw"
+   (once per 24h). Set it **only after** the PyPI stable publish above has
+   succeeded — advertising a version that isn't installable yet would nudge
+   users toward a `pip install` that resolves to an older build. Use the STABLE
+   version string (no `rc`), e.g. `2.4.5`:
+
+   ```bash
+   # Staging first (verify), then production. Match to the version you just published.
+   railway variables --set "LATEST_STABLE_PYTHON=2.4.5" -s totalreclaw
+   railway variables --set "LATEST_STABLE_PYTHON=2.4.5" -s totalreclaw-production
+   # `railway variables --set` triggers an automatic redeploy; it may time out on
+   # the response yet still apply — re-read to confirm before retrying:
+   railway variables -s totalreclaw --json | grep -i latest_stable_python
+   railway variables -s totalreclaw-production --json | grep -i latest_stable_python
+   ```
+
+   Leaving it unset (or stale at a prior version) is safe — the feature is dark
+   until configured, so the only cost of forgetting this step is that the
+   announcement never fires. Verify with
+   `curl -s https://api.totalreclaw.xyz/v1/billing/status | grep latest_stable_python`.
+
+7. **Generate the changelog.** Dispatch `changelog.yml` for the stable
    version (see "Changelog automation" below). It opens a reviewable PR
    with the auto-generated section; review and merge it.
 
-7. **Announce.** GitHub release, Telegram notification, website update.
+8. **Announce.** GitHub release, Telegram notification, website update.
 
 ## Changelog automation (git-cliff)
 

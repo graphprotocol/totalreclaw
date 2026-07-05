@@ -39,6 +39,7 @@ from .grant import (
     encode_install_signature,
     sign_digest,
 )
+from .relay import _client_header_value
 
 if TYPE_CHECKING:
     from .relay import RelayClient
@@ -412,7 +413,7 @@ async def build_and_send_userop(
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {auth_key_hex}",
-        "X-TotalReclaw-Client": client_id,
+        "X-TotalReclaw-Client": _client_header_value(client_id),
         "X-Wallet-Address": wallet_address,
     }
     if session_id:
@@ -662,7 +663,7 @@ async def build_and_send_userop_batch(
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {auth_key_hex}",
-        "X-TotalReclaw-Client": client_id,
+        "X-TotalReclaw-Client": _client_header_value(client_id),
         "X-Wallet-Address": wallet_address,
     }
     if session_id:
