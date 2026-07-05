@@ -117,6 +117,17 @@ _TOOL_PRIORITY_NUDGE = (
     "built-in equivalent for the same reason."
 )
 
+# imp-2 (#244) — one-time import-discovery nudge for freshly-paired users.
+_IMPORT_ONBOARDING_NUDGE = (
+    "## TotalReclaw import (mention once)\n"
+    "This user has never imported existing AI memory. Once, naturally, let "
+    "them know: TotalReclaw can import their memory history from ChatGPT, "
+    "Gemini, or Claude — they just drop/attach the export file (ChatGPT: the "
+    "export zip as-is; Gemini: the Takeout `My Activity.html`) or give its "
+    "path, and the import runs in the background while they keep chatting. "
+    "Do not push; one sentence is enough."
+)
+
 #: Keywords that trigger the setup nudge when the user isn't configured.
 #: Kept intentionally broad — a missed nudge on an unrelated question is
 #: a no-op, but a missed nudge on a memory-relevant question means the
@@ -651,6 +662,21 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
         return None
 
     context_parts: list[str] = []
+
+    # imp-2 (#244) — one-time import-discovery nudge. A newly-paired user
+    # doesn't know they can bring their existing AI memory with them; tell
+    # them exactly once, then never again (sentinel file). Suppressed when
+    # any import already exists — that user has found the feature.
+    if is_first_turn:
+        try:
+            from totalreclaw.import_state import (
+                import_nudge_shown, mark_import_nudge_shown, any_import_exists,
+            )
+            if not import_nudge_shown() and not any_import_exists():
+                mark_import_nudge_shown()
+                context_parts.append(_IMPORT_ONBOARDING_NUDGE)
+        except Exception:  # never let onboarding bookkeeping break a turn
+            logger.debug("import onboarding nudge check failed", exc_info=True)
 
     # F4 (issue #167) — configured: bias LLM toward totalreclaw_remember
     # over Hermes's built-in ``memory`` for memory-intent turns. Fires

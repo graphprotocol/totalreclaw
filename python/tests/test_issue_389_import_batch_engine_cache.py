@@ -122,9 +122,9 @@ async def test_import_batch_reuses_engine_across_calls(monkeypatch):
     monkeypatch.setattr(ie.ImportEngine, "process_batch", fake_process_batch)
 
     state = _bare_state()
-    args_b0 = {"source": "gemini", "file_path": "/tmp/big.html",
+    args_b0 = {"source": "gemini", "file_path": "/tmp/big.html", "disclosure_confirmed": True,
                "offset": 0, "batch_size": 25}
-    args_b1 = {"source": "gemini", "file_path": "/tmp/big.html",
+    args_b1 = {"source": "gemini", "file_path": "/tmp/big.html", "disclosure_confirmed": True,
                "offset": 25, "batch_size": 25}
 
     r0 = json.loads(await tools.import_batch(args_b0, state))
@@ -165,7 +165,7 @@ async def test_import_batch_content_only_creates_fresh_engine(monkeypatch):
     monkeypatch.setattr(ie.ImportEngine, "process_batch", fake_process_batch)
 
     state = _bare_state()
-    args = {"source": "gemini", "content": "<html>...</html>",
+    args = {"source": "gemini", "content": "<html>...</html>", "disclosure_confirmed": True,
             "offset": 0, "batch_size": 25}
 
     await tools.import_batch(args, state)

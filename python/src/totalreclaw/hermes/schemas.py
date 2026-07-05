@@ -291,12 +291,17 @@ IMPORT_FROM = {
     "name": "totalreclaw_import_from",
     "description": (
         "Import memories from other AI tools (Gemini, ChatGPT, Claude, Mem0) into "
-        "TotalReclaw's encrypted vault. "
+        "TotalReclaw's encrypted vault. If the user attaches/drops an export file, "
+        "pass its path directly as file_path. "
         "WORKFLOW: (1) ALWAYS call with dry_run=true first to show the user the "
         "estimate (conversations found, estimated facts, estimated time). "
-        "(2) If the user confirms, and the dry-run shows <=50 chunks: call again "
+        "(2) For ChatGPT/Gemini/Claude the tool will return disclosure_required: "
+        "relay the privacy disclosure to the user verbatim (it names the LLM "
+        "provider that will read their conversations), get explicit consent, then "
+        "call again with disclosure_confirmed=true. If they decline, stop. "
+        "(3) If the user confirms, and the dry-run shows <=50 chunks: call again "
         "without dry_run to process everything. "
-        "(3) If >50 chunks: tell the user this is a large import and you'll process "
+        "(4) If >50 chunks: tell the user this is a large import and you'll process "
         "it in batches. Then use totalreclaw_import_batch repeatedly with increasing "
         "offset, reporting progress after each batch."
     ),
@@ -323,6 +328,30 @@ IMPORT_FROM = {
             "dry_run": {
                 "type": "boolean",
                 "description": "Parse and estimate without importing. Shows chunk count and estimated facts. Default: false.",
+            },
+            "disclosure_confirmed": {
+                "type": "boolean",
+                "description": (
+                    "Set true ONLY after the user has seen the privacy "
+                    "disclosure (which LLM provider will read their "
+                    "conversations) and explicitly consented. Required for "
+                    "ChatGPT/Gemini/Claude imports."
+                ),
+            },
+            "url": {
+                "type": "string",
+                "description": (
+                    "HTTPS URL of an export to download server-side (e.g. a "
+                    "ChatGPT export download link). Trusted export hosts fetch "
+                    "directly; other hosts require url_confirmed."
+                ),
+            },
+            "url_confirmed": {
+                "type": "boolean",
+                "description": (
+                    "Set true ONLY after the user explicitly confirmed they "
+                    "trust a non-allowlisted URL host."
+                ),
             },
         },
         "required": ["source"],
@@ -429,6 +458,14 @@ IMPORT_BATCH = {
             "file_path": {
                 "type": "string",
                 "description": "Path to the export file on disk",
+            },
+            "disclosure_confirmed": {
+                "type": "boolean",
+                "description": (
+                    "Set true ONLY after the user consented to the privacy "
+                    "disclosure. Normally unnecessary — consent recorded by "
+                    "the initial import_from call carries over."
+                ),
             },
             "content": {
                 "type": "string",

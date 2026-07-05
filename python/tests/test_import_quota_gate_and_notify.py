@@ -233,7 +233,8 @@ async def test_pro_tier_is_not_blocked(tmp_path, monkeypatch):
     state, _client = _state_with_tier("pro")
 
     res = json.loads(await tools.import_from(
-        {"source": "gemini", "content": "x"}, state,
+        # disclosure_confirmed: extraction imports are disclosure-gated (imp-2)
+        {"source": "gemini", "content": "x", "disclosure_confirmed": True}, state,
     ))
     assert res.get("blocked") is not True
     assert called.await_count >= 1  # import actually proceeded
@@ -250,7 +251,7 @@ async def test_billing_unreachable_fails_open(tmp_path, monkeypatch):
     state, _client = _state_with_tier("free", status_raises=True)
 
     res = json.loads(await tools.import_from(
-        {"source": "gemini", "content": "x"}, state,
+        {"source": "gemini", "content": "x", "disclosure_confirmed": True}, state,
     ))
     # Billing down -> do NOT block (self-hosted / offline must still import).
     assert res.get("blocked") is not True

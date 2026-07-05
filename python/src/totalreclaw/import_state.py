@@ -166,3 +166,30 @@ def mark_import_announced(import_id: str) -> None:
     if state is not None and not state.announced:
         state.announced = True
         write_import_state(state)
+
+
+# ── imp-2 (#244): one-time import-onboarding nudge bookkeeping ────────────
+
+_NUDGE_SENTINEL_NAME = "import-onboarding-nudge-shown"
+
+
+def import_nudge_shown() -> bool:
+    """True once the one-time import-discovery nudge has been emitted."""
+    return (IMPORT_STATE_DIR / _NUDGE_SENTINEL_NAME).exists()
+
+
+def mark_import_nudge_shown() -> None:
+    """Latch the one-time import-discovery nudge (never emitted again)."""
+    try:
+        IMPORT_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        (IMPORT_STATE_DIR / _NUDGE_SENTINEL_NAME).write_text("1")
+    except OSError:
+        pass  # best-effort — a missed latch means one extra nudge, not a failure
+
+
+def any_import_exists() -> bool:
+    """True if any import (running or finished) has ever been recorded."""
+    try:
+        return any(IMPORT_STATE_DIR.glob("*.json"))
+    except OSError:
+        return False
