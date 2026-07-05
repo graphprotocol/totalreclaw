@@ -899,6 +899,33 @@ def _resolve_extraction_llm_config(state: "PluginState"):
     return llm_config
 
 
+def _maybe_crystallize_idle_slots(state: "PluginState") -> None:
+    """Crystallize + retire any per-conversation slot that's gone quiet past the
+    idle timeout, so each topic mints its OWN Crystal without waiting for a
+    gateway restart or Hermes ``session_reset`` (which is frequently disabled).
+
+    Piggybacks on the turn cadence of whatever conversation is currently active:
+    a busy chat B drains the idle Crystal for quiet chat A on one of B's turns.
+    Threshold: ``TOTALRECLAW_SESSION_IDLE_MINUTES`` (default 60; ``0`` disables).
+    The live conversation is saved + restored around the sweep, so the in-flight
+    turn is untouched. Best-effort — never raises into the turn.
+    """
+    try:
+        if not (hasattr(state, "sweep_idle_slots") and state.is_configured()):
+            return
+        swept = state.sweep_idle_slots(
+            _session_idle_seconds(),
+            lambda: _finalize_one_conversation(state),
+        )
+        if swept:
+            logger.info(
+                "TotalReclaw: crystallized %d idle conversation slot(s) "
+                "(idle > %d min)", swept, _session_idle_seconds() // 60,
+            )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("TotalReclaw idle-slot crystallize sweep failed: %s", e)
+
+
 def ingest_turn(
     state: "PluginState",
     user_message: str,
@@ -929,21 +956,26 @@ def ingest_turn(
     # 2.4.4rc2 (F7) — pending-extract buffer so later manual
     # `totalreclaw_remember` calls can suppress duplicates. Idempotent on "".
     state.track_pending_extract(user_message)
+    # Refresh THIS conversation's activity clock every turn, so a sibling slot's
+    # idle time is measured from ITS own last turn (feeds the idle-Crystal sweep
+    # below). hasattr-guarded for legacy state subclasses / mocks.
+    if hasattr(state, "note_activity"):
+        state.note_activity()
 
-    if not state.is_configured():
-        return
+    if state.is_configured() and state.turn_count % state.get_extraction_interval() == 0:
+        llm_config = _resolve_extraction_llm_config(state)
+        # llm_config may be None — ``_auto_extract`` logs the silent-skip path
+        # itself; callers that mock ``extract_facts_llm`` directly still exercise
+        # the wiring.
+        try:
+            _auto_extract(state, mode="turn", llm_config=llm_config)
+        except Exception as e:
+            logger.warning("TotalReclaw post_llm_call extraction failed: %s", e)
 
-    if state.turn_count % state.get_extraction_interval() != 0:
-        return
-
-    llm_config = _resolve_extraction_llm_config(state)
-    # Fall through with llm_config possibly None — ``_auto_extract`` logs the
-    # silent-skip path itself; callers that mock ``extract_facts_llm`` directly
-    # still exercise the wiring.
-    try:
-        _auto_extract(state, mode="turn", llm_config=llm_config)
-    except Exception as e:
-        logger.warning("TotalReclaw post_llm_call extraction failed: %s", e)
+    # Every turn: crystallize any OTHER conversation that's gone quiet, so each
+    # topic mints its own Crystal minutes after it goes silent — without waiting
+    # for a gateway restart / Hermes ``session_reset`` (frequently disabled).
+    _maybe_crystallize_idle_slots(state)
 
 
 def post_llm_call(state: "PluginState", **kwargs) -> None:

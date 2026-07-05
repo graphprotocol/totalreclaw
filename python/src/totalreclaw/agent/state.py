@@ -555,6 +555,57 @@ class AgentState:
         self._session_slots = {}
         self._active_conversation_key = None
 
+    def find_idle_slots(self, idle_seconds: int) -> list[str]:
+        """Keys of STASHED conversation slots idle past *idle_seconds* — the
+        conversations that have gone quiet and are ready to crystallize + retire.
+
+        The live/active slot is never returned (it's the conversation currently
+        being talked to). Returns ``[]`` when *idle_seconds* <= 0 (disabled) or a
+        slot's activity clock was never set. Uses ``time.monotonic()``.
+        """
+        self._ensure_slot_store()
+        if idle_seconds <= 0:
+            return []
+        now = time.monotonic()
+        idle: list[str] = []
+        for key, slot in self._session_slots.items():
+            last = slot.get("_last_activity", 0.0) or 0.0
+            if last > 0 and (now - last) >= idle_seconds:
+                idle.append(key)
+        return idle
+
+    def sweep_idle_slots(self, idle_seconds: int, finalize_one) -> int:
+        """Crystallize + retire every stashed slot idle past *idle_seconds*.
+
+        For each idle slot: load it as the live conversation, call
+        ``finalize_one()`` (the caller's per-conversation flush + Crystal), then
+        drop it. The currently-live conversation is saved first and restored
+        afterward, so the in-progress turn is left exactly as it was. Returns the
+        number of slots crystallized. Never raises from the slot bookkeeping;
+        ``finalize_one`` is the caller's responsibility to keep safe.
+        """
+        self._ensure_slot_store()
+        idle_keys = self.find_idle_slots(idle_seconds)
+        if not idle_keys:
+            return 0
+        saved = self._capture_slot()
+        saved_key = self._active_conversation_key
+        swept = 0
+        try:
+            for key in idle_keys:
+                slot = self._session_slots.pop(key, None)
+                if slot is None:
+                    continue
+                self._restore_slot(slot)
+                self._active_conversation_key = None if key == _DEFAULT_SLOT_KEY else key
+                finalize_one()
+                swept += 1
+        finally:
+            # Always put the live conversation back, even if finalize_one raised.
+            self._restore_slot(saved)
+            self._active_conversation_key = saved_key
+        return swept
+
     def note_activity(self) -> None:
         """Record that a turn just happened (feeds idle-timeout rollover)."""
         self._last_activity = time.monotonic()

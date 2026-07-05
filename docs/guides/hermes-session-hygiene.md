@@ -17,31 +17,41 @@ works for any messenger you configure Hermes with.)
 
 ## What changed
 
-Three plugin-side mechanisms (no host changes required):
+Four plugin-side mechanisms (no host changes required):
 
 1. **Per-conversation session slots (the core fix).** Hermes hands the plugin a
    per-conversation `session_id` on **every turn** — through its native
    `MemoryProvider.sync_turn` and the per-turn hooks (its own
-   `self.agent.session_id`, which is distinct per conversation). The plugin now
-   routes each turn to a **slot** keyed by that id: every conversation keeps its
-   **own** message buffer, turn counter, and session id, and finalizes to its
-   **own** Crystal. Even conversations **interleaved in real time** in the same
-   chat no longer mix — each turn lands in the right slot. (Previously the
+   `self.agent.session_id`, which is distinct per conversation / Telegram topic).
+   The plugin routes each turn to a **slot** keyed by that id: every conversation
+   keeps its **own** message buffer, turn counter, and session id, and finalizes
+   to its **own** Crystal. Even conversations **interleaved in real time** in the
+   same chat no longer mix — each turn lands in the right slot. (Previously the
    plugin ignored that id and piled every turn into one buffer.)
 
-2. **Honor the host's `session_id` at session start.** `on_session_start` also
+2. **Per-conversation idle Crystal sweep (so topics actually mint Crystals).** A
+   Crystal is born at `on_session_finalize` — but in Hermes **gateway** mode that
+   hook can fire rarely or never: if the host's `session_reset` is `none` (a
+   common config), Hermes' own idle-finalize watcher is disarmed, so a topic you
+   simply stop replying to would never crystallize until a restart. The plugin
+   now closes this itself: on each turn it **crystallizes + retires any *other*
+   slot that has gone quiet** past `TOTALRECLAW_SESSION_IDLE_MINUTES`. A busy chat
+   B drains the pending Crystal for quiet chat A on one of B's turns — so each
+   topic mints its own Crystal minutes after it goes silent, independent of the
+   host's `session_reset` config, and without ever touching the live conversation.
+
+3. **Honor the host's `session_id` at session start.** `on_session_start` also
    derives its session key from the id Hermes provides, so a host that
    distinguishes conversations up front inherits that boundary too.
 
-3. **Idle-timeout rollover (fallback).** When TotalReclaw has to mint its own id
-   (a host that supplies no per-conversation id at all), a turn that arrives
-   after a long silence **rolls into a fresh session** first: the idle session
-   is flushed + debriefed, then a new `session_id` starts for the incoming turn.
-   A long gap almost always means a new topic.
+4. **Idle-timeout rollover (fallback for single-session hosts).** When TotalReclaw
+   has to mint its own id (a host that supplies no per-conversation id at all), a
+   turn after a long silence **rolls into a fresh session** first: the idle
+   session is flushed + debriefed, then a new `session_id` starts.
 
-   - Env: **`TOTALRECLAW_SESSION_IDLE_MINUTES`** (default **60**). Set `0` to
-     disable. Host-derived / per-conversation sessions are never idle-rolled —
-     the host owns those boundaries.
+   - Env: **`TOTALRECLAW_SESSION_IDLE_MINUTES`** (default **60**; `0` disables)
+     controls both the idle Crystal sweep (mechanism 2) and this rollover. Lower
+     it if your topics turn over faster than an hour.
 
 ## Residual (rare)
 

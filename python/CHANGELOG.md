@@ -41,6 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so even conversations interleaved in real time get clean, separate Crystals.
   Fully backward-compatible: a host that supplies no per-conversation id keeps the
   prior single-session behavior. See `docs/guides/hermes-session-hygiene.md`.
+- **Per-conversation idle Crystal sweep — topics actually mint Crystals now.**
+  A Crystal is born at `on_session_finalize`, but in Hermes **gateway** mode that
+  hook can fire rarely or never — notably when the host's `session_reset` is
+  `none` (a common config), which disarms Hermes' own idle-finalize watcher, so a
+  topic the user simply stops replying to never crystallizes until a restart. The
+  plugin now closes this itself: on each turn it crystallizes + retires any
+  *other* conversation slot idle past `TOTALRECLAW_SESSION_IDLE_MINUTES` (default
+  60), piggybacking on the active conversation's turn cadence — so each topic
+  mints its own Crystal minutes after it goes quiet, independent of the host's
+  `session_reset` config and without touching the live conversation. New
+  `AgentState.find_idle_slots` / `sweep_idle_slots`; wired into `ingest_turn`.
 
 ## [2.4.4] — 2026-06-06
 
