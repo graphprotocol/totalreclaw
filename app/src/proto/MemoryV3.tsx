@@ -6,6 +6,7 @@ import { count } from "./format";
 import { sourceShort } from "./presentation";
 import { TypeBadge } from "../components/TypeBadge";
 import { MindMap, type MindMode } from "./MindMap";
+import { MindMapGL } from "./MindMapGL";
 import { SCOPES, MIND_NODES, MIND_LINKS, mindNeighbors } from "./mindmap-data";
 
 /**
@@ -269,6 +270,7 @@ function Panel({
 export function MemoryV3() {
   const [surface, setSurface] = useState<Surface>("journal");
   const [mapMode, setMapMode] = useState<MindMode>("atlas");
+  const [renderer, setRenderer] = useState<"canvas" | "glow">("canvas");
   const [panel, setPanel] = useState<PanelView | null>(null);
 
   const openSession = useCallback((s: SeedSession) => setPanel({ kind: "session", s }), []);
@@ -336,14 +338,42 @@ export function MemoryV3() {
             Your memory as a map. Entities are points of light; the layout shows the shape of what you talk about.
           </p>
           <div className="relative h-[72vh] min-h-[540px] w-full overflow-hidden rounded-[24px] bg-[#211E1B] shadow-overlay ring-1 ring-black/20">
-            <MindMap
-              mode={mapMode}
-              nodes={MIND_NODES}
-              links={MIND_LINKS}
-              neighborsOf={mindNeighbors}
-              selectedId={null}
-              onSelect={(n) => n && (n.kind === "entity" || n.kind === "scope") && openEntity(n.label)}
-            />
+            {renderer === "glow" ? (
+              <MindMapGL
+                mode={mapMode}
+                nodes={MIND_NODES}
+                links={MIND_LINKS}
+                neighborsOf={mindNeighbors}
+                selectedId={null}
+                onSelect={(n) => n && (n.kind === "entity" || n.kind === "scope") && openEntity(n.label)}
+              />
+            ) : (
+              <MindMap
+                mode={mapMode}
+                nodes={MIND_NODES}
+                links={MIND_LINKS}
+                neighborsOf={mindNeighbors}
+                selectedId={null}
+                onSelect={(n) => n && (n.kind === "entity" || n.kind === "scope") && openEntity(n.label)}
+              />
+            )}
+
+            {/* renderer toggle — Canvas ⇄ WebGL glow */}
+            <div className="absolute right-4 top-4 inline-flex items-center gap-0.5 rounded-pill bg-white/10 p-0.5 backdrop-blur">
+              {(["canvas", "glow"] as const).map((r) => (
+                <button
+                  key={r}
+                  onClick={() => setRenderer(r)}
+                  aria-pressed={renderer === r}
+                  className={
+                    "rounded-pill px-3 py-1 text-xs font-semibold transition " +
+                    (renderer === r ? "bg-warm-white text-ink shadow-soft" : "text-warm-white/70 hover:text-warm-white")
+                  }
+                >
+                  {r === "glow" ? "✦ Glow" : "Canvas"}
+                </button>
+              ))}
+            </div>
 
             {/* layout switcher */}
             <div className="pointer-events-auto absolute left-4 top-4 flex flex-col gap-2">
