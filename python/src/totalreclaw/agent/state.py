@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -103,6 +104,41 @@ def _uuid7() -> str:
     return f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
 
 
+# Fixed namespace for deriving a STABLE per-conversation session id from a host
+# identifier (e.g. a Hermes session_id / Telegram chat id). Same host id → same
+# UUID for the life of the process, so a conversation's memories share one key.
+_SESSION_NAMESPACE = uuid.UUID("b7f3c2a4-0e5d-4a6b-9c1f-2d3e4f5a6b7c")
+
+
+def _session_id_from_host(external_id: str) -> str:
+    """Derive a deterministic UUIDv5 session id from a host-provided id.
+
+    Used so that when the agent host distinguishes conversations (passes a
+    distinct id per chat/topic), TotalReclaw inherits that boundary instead of
+    minting one global id per process. Deterministic: the same conversation id
+    always maps to the same session key.
+    """
+    return str(uuid.uuid5(_SESSION_NAMESPACE, external_id))
+
+
+def _session_idle_seconds() -> int:
+    """Idle gap (seconds) after which a new turn rolls into a fresh session.
+
+    ``TOTALRECLAW_SESSION_IDLE_MINUTES`` (default 60). ``0`` disables rollover.
+    A long silence almost always means a new conversation/topic — rolling keeps
+    unrelated bursts from interleaving into one session Crystal when the host
+    doesn't distinguish parallel conversations for us.
+    """
+    raw = os.environ.get("TOTALRECLAW_SESSION_IDLE_MINUTES")
+    if raw is None:
+        return 60 * 60
+    try:
+        minutes = int(raw)
+    except (TypeError, ValueError):
+        return 60 * 60
+    return max(0, minutes) * 60
+
+
 def _normalize_for_dedup(text: str) -> str:
     """Normalize a message for substring-comparison dedup.
 
@@ -181,6 +217,11 @@ class AgentState:
         self._quota_warning: Optional[str] = None
         self._server_url = server_url
         self._session_id: Optional[str] = None
+        # True when the current session id was derived from a host-provided id
+        # (the host distinguishes conversations for us → don't idle-roll it).
+        self._session_id_from_host: bool = False
+        # monotonic() of the last turn — drives idle-timeout session rollover.
+        self._last_activity: float = 0.0
         # 2.4.4rc2 (F7) — auto-extract pending-queue tracking. Each
         # post_llm_call appends an entry for the just-completed turn's
         # user message; the totalreclaw_remember tool consults this
@@ -359,19 +400,49 @@ class AgentState:
         """Current session UUIDv7, or ``None`` when no session active."""
         return self._session_id
 
-    def start_session(self) -> str:
-        """Generate + store a fresh UUIDv7 for the current session.
+    def start_session(self, external_id: Optional[str] = None) -> str:
+        """Start a session, returning its id.
 
-        Returns the new id so callers (hooks, tests) can log it.
-        Repeated calls produce fresh, time-ordered ids — each call is
-        treated as the start of a new session.
+        If *external_id* is given (a host-provided conversation/session id, e.g.
+        the ``session_id`` Hermes passes to ``on_session_start``), the session
+        key is derived deterministically from it — so when the host distinguishes
+        conversations (per Telegram chat/topic), TotalReclaw inherits that
+        boundary instead of collapsing every parallel conversation into one id.
+        Otherwise a fresh time-ordered UUIDv7 is minted. Repeated calls start a
+        new session; the last-activity clock is reset either way.
         """
-        self._session_id = _uuid7()
+        if external_id:
+            self._session_id = _session_id_from_host(external_id)
+            self._session_id_from_host = True
+        else:
+            self._session_id = _uuid7()
+            self._session_id_from_host = False
+        self._last_activity = time.monotonic()
         return self._session_id
 
     def end_session(self) -> None:
         """Clear the session id. Idempotent."""
         self._session_id = None
+        self._session_id_from_host = False
+
+    def note_activity(self) -> None:
+        """Record that a turn just happened (feeds idle-timeout rollover)."""
+        self._last_activity = time.monotonic()
+
+    def should_roll_idle_session(self, idle_seconds: int) -> bool:
+        """True when the active session has been idle past *idle_seconds*.
+
+        Only rolls sessions we minted ourselves — a host-derived session id
+        means the host owns the conversation boundary, so we never split it on a
+        timer. Disabled when ``idle_seconds <= 0`` or no session/activity yet.
+        """
+        if idle_seconds <= 0:
+            return False
+        if self._session_id is None or self._session_id_from_host:
+            return False
+        if self._last_activity <= 0:
+            return False
+        return (time.monotonic() - self._last_activity) >= idle_seconds
 
     # Turn tracking
     def reset_turn_counter(self) -> None:

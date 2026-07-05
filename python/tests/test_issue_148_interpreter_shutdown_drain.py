@@ -211,7 +211,7 @@ class _FakeState:
     # memq-3 — ``hooks.on_session_start`` now calls ``state.start_session()``
     # to mint a fresh UUIDv7 per session. The fake just returns a fixed id;
     # tests don't depend on its value.
-    def start_session(self) -> str:
+    def start_session(self, external_id=None) -> str:
         return "fake-session-id"
 
 

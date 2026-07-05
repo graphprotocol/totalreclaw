@@ -25,6 +25,7 @@ from totalreclaw.agent.loop_runner import run_sync
 from totalreclaw.agent.pending_drain import drain_pending, has_pending
 from totalreclaw.agent.recall import auto_recall
 from totalreclaw.agent.extraction import extract_facts_llm, extract_facts_heuristic
+from totalreclaw.agent.state import _session_idle_seconds
 from totalreclaw.relay import _HARDCODED_DEFAULT_URL
 
 logger = logging.getLogger(__name__)
@@ -408,11 +409,13 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
         state._totalreclaw_debrief_nudge_turn = -1
     if hasattr(state, "_totalreclaw_debrief_skip_count"):
         state._totalreclaw_debrief_skip_count = 0
-    # memq-3 — assign a fresh UUIDv7 to AgentState so per-session
-    # artefacts (extraction → Crystal → debrief) can be keyed by it.
-    # Runs before the unconfigured-state early-return so log-only
-    # sessions still get an id.
-    state.start_session()
+    # memq-3 — assign a session id to AgentState so per-session artefacts
+    # (extraction → Crystal → debrief) can be keyed by it. Honor the host's
+    # session_id when present (issue: parallel Telegram conversations otherwise
+    # collapse into one id) — if Hermes distinguishes conversations, we inherit
+    # that boundary; otherwise a fresh UUIDv7 is minted. Runs before the
+    # unconfigured-state early-return so log-only sessions still get an id.
+    state.start_session(external_id=(session_id or None))
 
     # 2.3.7rc3 — reset the setup-nudge latch so each new session gets
     # one proactive nudge. Without this, an unconfigured user who
@@ -550,6 +553,45 @@ def _drain_into_state(state: "PluginState", batches: list[list[dict]]) -> int:
     return total
 
 
+def _maybe_roll_idle_session(state: "PluginState") -> None:
+    """Roll into a fresh session when the previous turn was long ago.
+
+    A long silence almost always means a new conversation/topic. When the host
+    does NOT distinguish parallel conversations for us (Hermes passes no
+    per-turn chat id), this idle-timeout rollover keeps unrelated bursts from
+    interleaving into one session Crystal: flush + debrief the idle session,
+    then start a fresh one for the incoming turn. Only rolls sessions we minted
+    ourselves (see ``AgentState.should_roll_idle_session``); host-derived ids
+    are left alone. Best-effort — never raises into the turn.
+    """
+    try:
+        # Tolerate legacy state subclasses / test mocks without the new API.
+        if not hasattr(state, "should_roll_idle_session"):
+            return
+        if not state.should_roll_idle_session(_session_idle_seconds()):
+            return
+        if not state.is_configured():
+            state.start_session()
+            state.reset_turn_counter()
+            return
+        logger.info("TotalReclaw: rolling idle session before new turn")
+        stored: list[str] = []
+        if state.has_unprocessed_messages():
+            try:
+                stored = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config())
+            except Exception as e:
+                logger.warning("TotalReclaw idle-roll flush failed: %s", e)
+        try:
+            _session_debrief(state, stored_fact_texts=stored)
+        except Exception as e:
+            logger.warning("TotalReclaw idle-roll debrief failed: %s", e)
+        state.clear_messages()
+        state.start_session()  # fresh id for the resumed conversation
+        state.reset_turn_counter()
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("TotalReclaw idle-roll check failed: %s", e)
+
+
 def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
     """Auto-recall on first turn, inject memories, quota warnings, the
     unconfigured-user setup nudge (Bug #6), and the configured-user
@@ -567,6 +609,10 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
     built-in ``memory`` for fact/preference/directive/commitment/episode
     intents.
     """
+    # Before recall: roll into a fresh session if this turn resumes after a
+    # long idle gap (guards against parallel conversations interleaving).
+    _maybe_roll_idle_session(state)
+
     user_message = kwargs.get("user_message", "")
     is_first_turn = kwargs.get("is_first_turn", False)
 
@@ -833,6 +879,12 @@ def post_llm_call(state: "PluginState", **kwargs) -> None:
     the reconfigure ahead of the turn bookkeeping is behavior-equivalent — the
     two touch disjoint state (creds vs turn-count/messages).
     """
+    # Record turn time for idle-timeout session rollover (every turn, either
+    # driver). Kept before the provider gate so activity tracks in both modes.
+    # hasattr-guarded to tolerate legacy state subclasses / test mocks.
+    if hasattr(state, "note_activity"):
+        state.note_activity()
+
     # Fix #191 safety net — pick up a mid-session pair before ingest_turn
     # decides whether the user is configured. Always runs (the provider does
     # not handle mid-session reconfigure), so it stays outside the gate below.
