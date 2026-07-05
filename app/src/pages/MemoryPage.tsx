@@ -11,17 +11,11 @@ import { SidePanel, type PanelView } from "../components/memory/SidePanel";
 import { sourceShort, cap } from "../lib/presentation";
 import { count, relativeDate } from "../lib/format";
 import type { VaultItem } from "../lib/types";
-import type { MindMode } from "../components/memory/MindMap";
 
 // Canvas + d3-force stay out of the Memory landing bundle until the Map opens.
 const MindMap = lazy(() =>
   import("../components/memory/MindMap").then((m) => ({ default: m.MindMap })),
 );
-// three.js glow renderer — its own lazy chunk, only fetched on the Glow toggle.
-const MindMapGL = lazy(() =>
-  import("../components/memory/MindMapGL").then((m) => ({ default: m.MindMapGL })),
-);
-
 type Mode = "list" | "facts" | "map";
 
 function membersOf(g: SessionGroup): VaultItem[] {
@@ -53,8 +47,6 @@ export function MemoryPage() {
   const fetched = data?.fetched ?? 0;
 
   const [mode, setMode] = useState<Mode>("list");
-  const [mapMode, setMapMode] = useState<MindMode>("atlas");
-  const [renderer, setRenderer] = useState<"canvas" | "glow">("canvas");
   const [panel, setPanel] = useState<PanelView | null>(null);
 
   const [q, setQ] = useState("");
@@ -147,7 +139,7 @@ export function MemoryPage() {
               value={mode}
               onChange={setMode}
               options={[
-                { value: "list", label: "List" },
+                { value: "list", label: "Journal" },
                 { value: "facts", label: "Facts" },
                 { value: "map", label: "Map" },
               ]}
@@ -275,68 +267,22 @@ export function MemoryPage() {
           ) : (
             <div className="relative h-[72vh] min-h-[540px] w-full overflow-hidden rounded-[24px] bg-[#211E1B] shadow-overlay ring-1 ring-black/20">
               <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-warm-white/60">Drawing your map…</div>}>
-                {renderer === "glow" ? (
-                  <MindMapGL
-                    mode={mapMode}
-                    nodes={mind.nodes}
-                    links={mind.links}
-                    neighborsOf={mind.neighborsOf}
-                    selectedId={null}
-                    onSelect={(n) => {
-                      if (n && n.kind === "entity") openEntity(n.label);
-                    }}
-                  />
-                ) : (
-                  <MindMap
-                    mode={mapMode}
-                    nodes={mind.nodes}
-                    links={mind.links}
-                    neighborsOf={mind.neighborsOf}
-                    selectedId={null}
-                    onSelect={(n) => {
-                      if (n && n.kind === "entity") openEntity(n.label);
-                    }}
-                  />
-                )}
+                <MindMap
+                  mode="atlas"
+                  nodes={mind.nodes}
+                  links={mind.links}
+                  neighborsOf={mind.neighborsOf}
+                  selectedId={null}
+                  onSelect={(n) => {
+                    if (n && n.kind === "entity") openEntity(n.label);
+                  }}
+                />
               </Suspense>
 
-              {/* renderer toggle — Canvas ⇄ WebGL glow (A/B) */}
-              <div className="absolute right-4 top-4 inline-flex items-center gap-0.5 rounded-pill bg-white/10 p-0.5 backdrop-blur">
-                {(["canvas", "glow"] as const).map((r) => (
-                  <button
-                    key={r}
-                    onClick={() => setRenderer(r)}
-                    aria-pressed={renderer === r}
-                    className={clsx(
-                      "rounded-pill px-3 py-1 text-xs font-semibold transition",
-                      renderer === r ? "bg-warm-white text-ink shadow-soft" : "text-warm-white/70 hover:text-warm-white",
-                    )}
-                  >
-                    {r === "glow" ? "✦ Glow" : "Canvas"}
-                  </button>
-                ))}
-              </div>
-
-              <div className="absolute left-4 top-4 flex flex-col gap-2">
-                <div className="inline-flex items-center gap-0.5 rounded-pill bg-white/10 p-0.5 backdrop-blur">
-                  {(["atlas", "radial", "constellation"] as MindMode[]).map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => setMapMode(m)}
-                      aria-pressed={mapMode === m}
-                      className={clsx(
-                        "rounded-pill px-3.5 py-1.5 text-sm font-semibold capitalize transition duration-150 ease-keeper focus:outline-none",
-                        mapMode === m ? "bg-warm-white text-ink shadow-soft" : "text-warm-white/70 hover:text-warm-white",
-                      )}
-                    >
-                      {m}
-                    </button>
-                  ))}
-                </div>
-                <p className="max-w-[15rem] pl-1 text-[0.7rem] leading-snug text-warm-white/55">
-                  {mapMode === "atlas" && "Clustered into your life’s domains, sized by how often they come up."}
-                  {mapMode === "radial" && "You at the center; domains, then the people, projects and places under each."}
-                  {mapMode === "constellation" && "A free star-map — everything pulled together by what connects."}
+              <div className="pointer-events-none absolute left-4 top-4 max-w-[15rem]">
+                <span className="rounded-pill bg-white/10 px-3 py-1 text-sm font-semibold text-warm-white backdrop-blur">Atlas</span>
+                <p className="mt-2 pl-1 text-[0.7rem] leading-snug text-warm-white/55">
+                  Your entities, clustered into life domains and sized by how often they come up.
                 </p>
               </div>
 
