@@ -14,7 +14,7 @@ This document describes how the agent installs and sets up TotalReclaw on Hermes
 | stable (default) | newest final | `pip install totalreclaw` |
 | latest RC | newest pre-release | `pip install --pre --upgrade totalreclaw` |
 
-<!-- LATEST_RC -->_Most recent RC published: `2.4.5rc11`._<!-- /LATEST_RC --> <sub>(display only — auto-bumped by `publish-python-client.yml` on each RC cut; the install commands above are version-agnostic, so this number never affects an install.)</sub>
+<!-- LATEST_RC -->_Most recent RC published: `2.4.6rc1`._<!-- /LATEST_RC --> <sub>(display only — auto-bumped by `publish-python-client.yml` on each RC cut; the install commands above are version-agnostic, so this number never affects an install.)</sub>
 
 **Both rows are version-agnostic by design — neither pins a number, so this table never goes stale when an RC is cut.** `pip install totalreclaw` always lands the newest *final*; `pip install --pre --upgrade totalreclaw` always lands the newest *pre-release*. To install a SPECIFIC version, pin it: `pip install --pre totalreclaw==<version>`. `pip index versions totalreclaw` shows exactly what's live on PyPI.
 
