@@ -169,6 +169,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Pre-reset flush | Yes | -- | -- | -- | -- | -- | OpenClaw only |
 | Session-end flush | -- | -- | -- | Yes (on_session_end) | -- | -- | Hermes plugin flushes unprocessed messages |
 | Session debrief | Yes (hook) | Yes (tool) | Yes (hook) | Yes (hook) | Yes (via MCP tool) | Yes (debrief method) | Captures broader context at session end; max 5 items |
+| Content-aware Crystal gate | -- | -- | -- | Yes (auto) | -- | -- | #434, shipped 2026-07-05. Auto session-debrief Crystal length gate is content-aware: hard floor `< 4` messages never crystallizes; `4-7` messages (2-3 turns) crystallize only with substance (`>= 2` stored facts); `>= 8` messages always qualify. Enforced in `lifecycle.session_debrief`, defended in depth in `generate_crystal`/`generate_debrief`. The explicit `totalreclaw_debrief` tool keeps the simple 4-turn (`< 8`) floor — no stored-fact context to judge substance. Hermes-only — MCP/NanoClaw/ZeroClaw have no auto-extraction pipeline to wire it into. |
 | CLAUDE.md sync | -- | -- | Yes | -- | -- | -- | NanoClaw syncs high-importance facts |
 | Routine-based extraction | -- | -- | -- | -- | Yes (cron) | -- | IronClaw routines engine; see ironclaw-setup.md |
 | Decay handling | -- | -- | -- | -- | -- | Yes (via ZeroClaw) | ZeroClaw applies 7-day half-life at retrieval time |
