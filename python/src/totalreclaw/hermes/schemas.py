@@ -310,7 +310,11 @@ IMPORT_FROM = {
             },
             "file_path": {
                 "type": "string",
-                "description": "Path to the export file on disk (e.g. Gemini Takeout HTML, ChatGPT conversations.json)",
+                "description": (
+                    "Path to the export on disk. For ChatGPT: the export zip, "
+                    "its unpacked folder, or a single conversations.json — all "
+                    "work as-is. For Gemini: the Takeout HTML."
+                ),
             },
             "content": {
                 "type": "string",

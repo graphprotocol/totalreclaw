@@ -4,12 +4,14 @@ ChatGPT import adapter -- parses conversations.json or plain text memories.
 Ported from skill/plugin/import-adapters/chatgpt-adapter.ts
 """
 
+import glob
 import json
 import math
 import os
 import re
+import zipfile
 from datetime import datetime, timezone
-from typing import Optional, Callable, List, Any
+from typing import Optional, Callable, List, Any, Tuple
 
 import psutil
 
@@ -19,6 +21,13 @@ from .types import AdapterParseResult, ConversationChunk
 
 # Maximum messages per conversation chunk for LLM extraction.
 CHUNK_SIZE = 20
+
+# Real ChatGPT exports split conversations across numbered files inside the
+# export zip (conversations-000.json, conversations-001.json, ...). Older
+# exports ship a single conversations.json.
+_CONVERSATIONS_MEMBER_RE = re.compile(r'(?:^|/)conversations(?:-\d+)?\.json$')
+
+_MAX_TOTAL_MB = 500
 
 
 class ChatGPTAdapter(BaseImportAdapter):
@@ -40,32 +49,27 @@ class ChatGPTAdapter(BaseImportAdapter):
         elif file_path:
             try:
                 resolved = os.path.expanduser(file_path)
-                stat = os.stat(resolved)
-                file_size_mb = stat.st_size / (1024 * 1024)
-                if file_size_mb > 500:
-                    errors.append(
-                        f'File is too large to import: {file_size_mb:.1f}MB exceeds the 500MB cap. '
-                        'Split the file into smaller chunks and import each separately.',
-                    )
+                documents, doc_errors = self._read_export_documents(resolved)
+                if doc_errors:
+                    errors.extend(doc_errors)
                     return AdapterParseResult(
                         facts=[], chunks=[], total_messages=0,
                         warnings=warnings, errors=errors,
                     )
-                free_mem = psutil.virtual_memory().available
-                if free_mem < stat.st_size * 2:
-                    free_mb = free_mem / (1024 * 1024)
-                    need_mb = math.ceil(stat.st_size * 2 / (1024 * 1024))
-                    errors.append(
-                        f'Not enough free memory: {free_mb:.0f}MB available, '
-                        f'~{need_mb}MB needed (2× file size). '
-                        'Close other applications or split the file.',
+                if len(documents) > 1 or os.path.isdir(resolved) or zipfile.is_zipfile(resolved):
+                    # Multi-file export (zip or unpacked directory): parse the
+                    # concatenated conversation list directly.
+                    conversations: List[dict] = []
+                    for doc in documents:
+                        parsed = json.loads(doc)
+                        if isinstance(parsed, list):
+                            conversations.extend(parsed)
+                        elif isinstance(parsed, dict) and 'mapping' in parsed:
+                            conversations.append(parsed)
+                    return self._parse_conversation_list(
+                        conversations, warnings, errors, on_progress,
                     )
-                    return AdapterParseResult(
-                        facts=[], chunks=[], total_messages=0,
-                        warnings=warnings, errors=errors,
-                    )
-                with open(resolved, 'r', encoding='utf-8') as f:
-                    raw = f.read()
+                raw = documents[0]
             except Exception as e:
                 errors.append(f'Failed to read file: {e}')
                 return AdapterParseResult(
@@ -129,6 +133,88 @@ class ChatGPTAdapter(BaseImportAdapter):
                 warnings=warnings, errors=errors,
             )
 
+        return self._parse_conversation_list(conversations, warnings, errors, on_progress)
+
+    def _read_export_documents(self, resolved: str) -> Tuple[List[str], List[str]]:
+        """
+        Read the raw JSON document(s) of an export given a path that may be:
+        a single conversations.json, an export zip, or an unpacked export
+        directory (conversations-000.json, conversations-001.json, ...).
+
+        Returns (documents, errors). File ordering is deterministic (sorted by
+        name) so chunk offsets — and therefore import resume state — are
+        stable across calls.
+        """
+        errors: List[str] = []
+
+        def _check_budget(total_bytes: int, what: str) -> bool:
+            total_mb = total_bytes / (1024 * 1024)
+            if total_mb > _MAX_TOTAL_MB:
+                errors.append(
+                    f'{what} is too large to import: {total_mb:.1f}MB exceeds the '
+                    f'{_MAX_TOTAL_MB}MB cap. Split it and import each part separately.',
+                )
+                return False
+            free_mem = psutil.virtual_memory().available
+            if free_mem < total_bytes * 2:
+                free_mb = free_mem / (1024 * 1024)
+                need_mb = math.ceil(total_bytes * 2 / (1024 * 1024))
+                errors.append(
+                    f'Not enough free memory: {free_mb:.0f}MB available, '
+                    f'~{need_mb}MB needed (2× data size). '
+                    'Close other applications or split the file.',
+                )
+                return False
+            return True
+
+        if os.path.isdir(resolved):
+            paths = sorted(glob.glob(os.path.join(resolved, 'conversations*.json')))
+            if not paths:
+                errors.append(
+                    f'No conversations*.json found in directory {resolved}. '
+                    'Point at the unpacked ChatGPT export folder or the export zip.',
+                )
+                return [], errors
+            total = sum(os.stat(p).st_size for p in paths)
+            if not _check_budget(total, 'Export directory'):
+                return [], errors
+            docs = []
+            for p in paths:
+                with open(p, 'r', encoding='utf-8') as f:
+                    docs.append(f.read())
+            return docs, errors
+
+        if zipfile.is_zipfile(resolved):
+            with zipfile.ZipFile(resolved) as zf:
+                members = sorted(
+                    (m for m in zf.infolist() if _CONVERSATIONS_MEMBER_RE.search(m.filename)),
+                    key=lambda m: m.filename,
+                )
+                if not members:
+                    errors.append(
+                        f'No conversations*.json found inside {resolved}. '
+                        'Is this a ChatGPT data export zip?',
+                    )
+                    return [], errors
+                total = sum(m.file_size for m in members)  # uncompressed
+                if not _check_budget(total, 'Export archive'):
+                    return [], errors
+                return [zf.read(m).decode('utf-8') for m in members], errors
+
+        # Single file
+        stat = os.stat(resolved)
+        if not _check_budget(stat.st_size, 'File'):
+            return [], errors
+        with open(resolved, 'r', encoding='utf-8') as f:
+            return [f.read()], errors
+
+    def _parse_conversation_list(
+        self,
+        conversations: List[dict],
+        warnings: List[str],
+        errors: List[str],
+        on_progress: Optional[Callable] = None,
+    ) -> AdapterParseResult:
         if on_progress:
             on_progress({
                 'current': 0,
@@ -149,23 +235,25 @@ class ChatGPTAdapter(BaseImportAdapter):
                 )
                 continue
 
-            # Extract user + assistant messages in chronological order
-            messages = self._extract_messages(mapping)
+            # Extract user + assistant messages along the canonical branch
+            messages = self._extract_messages(mapping, current_node=conv.get('current_node'))
             if not messages:
                 continue
 
             total_messages += len(messages)
 
-            # Determine timestamp from conversation create_time
+            # Conversation-level timestamp — fallback for messages without
+            # their own create_time.
             create_time = conv.get('create_time')
-            timestamp = None
+            conv_timestamp = None
             if create_time:
                 try:
-                    timestamp = datetime.fromtimestamp(create_time, tz=timezone.utc).isoformat()
+                    conv_timestamp = datetime.fromtimestamp(create_time, tz=timezone.utc).isoformat()
                 except (ValueError, TypeError, OSError):
                     pass
 
             title = conv.get('title') or 'Untitled Conversation'
+            conversation_id = conv.get('conversation_id') or conv.get('id')
 
             # Chunk into batches of CHUNK_SIZE messages
             for i in range(0, len(messages), CHUNK_SIZE):
@@ -178,7 +266,15 @@ class ChatGPTAdapter(BaseImportAdapter):
                     if total_chunks > 1
                     else title
                 )
-                chunks.append(ConversationChunk(title=chunk_title, messages=batch, timestamp=timestamp))
+                # Chunk timestamp = first message's own time, so multi-chunk
+                # conversations don't collapse onto one conversation-level time.
+                chunk_ts = batch[0].get('timestamp') or conv_timestamp
+                chunks.append(ConversationChunk(
+                    title=chunk_title,
+                    messages=batch,
+                    timestamp=chunk_ts,
+                    conversation_id=conversation_id,
+                ))
 
             conv_index += 1
             if on_progress and conv_index % 50 == 0:
@@ -273,72 +369,112 @@ class ChatGPTAdapter(BaseImportAdapter):
     def _extract_messages(
         self,
         mapping: dict,
+        current_node: Optional[str] = None,
     ) -> List[dict]:
         """
-        Traverse the mapping tree and extract user + assistant messages
-        in chronological order.
+        Extract user + assistant messages along the CANONICAL branch of the
+        mapping tree, in chronological order.
+
+        ChatGPT stores edited/regenerated messages as sibling branches; the
+        thread the user actually sees is the ``current_node`` -> parent chain.
+        Walking all branches (the old BFS) imports superseded drafts as
+        near-duplicates. When ``current_node`` is missing or dangling we fall
+        back to the deepest root-to-leaf path.
 
         Both roles are included because the assistant's response often provides
         context that helps the LLM understand what the user meant.
         """
-        # Find the root node (the one with no parent or parent not in mapping)
-        root_id = None
-        for node_id, node in mapping.items():
-            parent = node.get('parent')
-            if not parent or parent not in mapping:
-                root_id = node_id
-                break
+        path = self._canonical_node_path(mapping, current_node)
 
-        if not root_id:
-            return []
-
-        # Walk the tree breadth-first, following children in order (main thread)
         messages: List[dict] = []
-        visited: set = set()
-        queue: List[str] = [root_id]
-
-        while queue:
-            node_id = queue.pop(0)
-            if node_id in visited:
-                continue
-            visited.add(node_id)
-
-            node = mapping.get(node_id)
-            if not node:
-                continue
-
+        for node_id in path:
+            node = mapping.get(node_id) or {}
             message = node.get('message')
-            if message:
-                role = None
-                author = message.get('author')
-                if author:
-                    role = author.get('role')
-
-                # Only collect user and assistant messages (skip system, tool)
-                if role in ('user', 'assistant'):
-                    content = message.get('content')
-                    parts = content.get('parts') if content else None
-                    text_parts = self._extract_text_from_parts(parts)
-                    if text_parts and len(text_parts) >= 3:
-                        messages.append({'role': role, 'text': text_parts})
-
-            # Follow children (add them to queue in order)
-            for child_id in node.get('children', []):
-                queue.append(child_id)
+            if not message:
+                continue
+            role = (message.get('author') or {}).get('role')
+            # Only collect user and assistant messages (skip system, tool)
+            if role not in ('user', 'assistant'):
+                continue
+            text = self._extract_text_from_message(message)
+            if not text or len(text) < 3:
+                continue
+            entry = {'role': role, 'text': text}
+            create_time = message.get('create_time')
+            if create_time:
+                try:
+                    entry['timestamp'] = datetime.fromtimestamp(
+                        create_time, tz=timezone.utc,
+                    ).isoformat()
+                except (ValueError, TypeError, OSError):
+                    pass
+            messages.append(entry)
 
         return messages
 
-    def _extract_text_from_parts(self, parts: Any) -> Optional[str]:
+    def _canonical_node_path(
+        self,
+        mapping: dict,
+        current_node: Optional[str],
+    ) -> List[str]:
+        """Root-to-leaf node ids of the canonical thread."""
+
+        def _chain_up(leaf_id: str) -> List[str]:
+            chain: List[str] = []
+            seen: set = set()
+            nid = leaf_id
+            while nid and nid in mapping and nid not in seen:
+                seen.add(nid)
+                chain.append(nid)
+                nid = mapping[nid].get('parent')
+            chain.reverse()
+            return chain
+
+        if current_node and current_node in mapping:
+            return _chain_up(current_node)
+
+        # Fallback: deepest leaf wins (longest root-to-leaf chain).
+        leaves = [
+            nid for nid, node in mapping.items()
+            if not node.get('children')
+        ]
+        best: List[str] = []
+        for leaf in leaves:
+            chain = _chain_up(leaf)
+            if len(chain) > len(best):
+                best = chain
+        return best
+
+    def _extract_text_from_message(self, message: dict) -> Optional[str]:
         """
-        Extract plain text from message content parts.
-        Parts can be strings, None, or complex objects (images, etc.) -- we only want strings.
+        Extract text from a message's content across the content types that
+        appear in real exports:
+
+        - ``text`` / default: string entries in ``content.parts``
+        - ``multimodal_text``: string parts plus dict parts carrying text —
+          voice messages store their transcript as
+          ``{"content_type": "audio_transcription", "text": ...}``; image
+          pointers have no text and are skipped
+        - ``code``: the source lives in ``content.text``, not ``parts``
         """
-        if not parts or not isinstance(parts, list):
+        content = message.get('content') or {}
+        content_type = content.get('content_type')
+
+        if content_type == 'code':
+            text = content.get('text')
+            return text.strip() if isinstance(text, str) and text.strip() else None
+
+        pieces: List[str] = []
+        parts = content.get('parts')
+        if isinstance(parts, list):
+            for p in parts:
+                if isinstance(p, str) and p.strip():
+                    pieces.append(p.strip())
+                elif isinstance(p, dict):
+                    t = p.get('text') or p.get('transcript')
+                    if isinstance(t, str) and t.strip():
+                        pieces.append(t.strip())
+
+        if not pieces:
             return None
-
-        text_parts = [p for p in parts if isinstance(p, str) and p.strip()]
-
-        if not text_parts:
-            return None
-
-        return ' '.join(text_parts).strip()
+        return ' '.join(pieces).strip()

@@ -29,8 +29,13 @@ class NormalizedFact:
 class ConversationChunk:
     """A chunk of conversation messages for LLM-based fact extraction."""
     title: str
-    messages: List[dict]  # [{"role": "user"|"assistant", "text": "..."}]
+    messages: List[dict]  # [{"role": "user"|"assistant", "text": "...", "timestamp": ISO?}]
     timestamp: Optional[str] = None  # ISO 8601
+    #: Explicit conversation boundary from the source export. ChatGPT/Claude
+    #: conversations have first-class ids; Gemini Takeout does not. When set,
+    #: the import engine groups all chunks sharing an id into one session and
+    #: skips semantic (centroid-walk) segmentation.
+    conversation_id: Optional[str] = None
 
 
 @dataclass

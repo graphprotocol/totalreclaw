@@ -56,16 +56,15 @@ The full data export contains every conversation you have had with ChatGPT. Tota
 3. Go to **Data Controls**
 4. Click **Export data** -> **Confirm export**
 5. ChatGPT sends a download link to your email (may take a few minutes to hours)
-6. Download and unzip the archive
-7. Find `conversations.json` inside the archive
+6. Download the archive — **no need to unzip it**
 
 ### Step 2: Import into TotalReclaw
 
 Tell your agent:
 
-> "Import my ChatGPT conversations from /path/to/conversations.json"
+> "Import my ChatGPT export from /path/to/chatgpt-export.zip"
 
-Or paste the JSON content directly. For large exports, providing the file path is recommended (drag-and-drop is the preferred path on OpenClaw + Hermes).
+The zip works as-is: TotalReclaw reads the conversation files inside it directly (recent exports split them across `conversations-000.json`, `conversations-001.json`, ...). An unpacked export folder or a single `conversations.json` works too. Small exports can also be pasted as JSON content, but for anything sizeable the file path is recommended (drag-and-drop is the preferred path on OpenClaw + Hermes).
 
 The agent calls `totalreclaw_import_from` with `source: "chatgpt"` and the file path or content.
 
@@ -73,7 +72,7 @@ The agent calls `totalreclaw_import_from` with `source: "chatgpt"` and the file 
 
 TotalReclaw uses **LLM extraction** (not pattern matching) to identify facts from your conversation history. The pipeline is:
 
-1. **Parse**: walk the `conversations.json` mapping tree and pull user + assistant messages in chronological order. Both roles are included because the assistant's response often clarifies what the user meant.
+1. **Parse**: walk each conversation's mapping tree along the canonical thread (the messages you actually kept — edited or regenerated drafts are skipped) and pull user + assistant messages with their original timestamps. Both roles are included because the assistant's response often clarifies what the user meant. Each ChatGPT conversation becomes one session in your vault, with its own summary card (Crystal), so imported memory stays organized by conversation instead of arriving as loose facts.
 2. **Chunk**: split each conversation into batches of ~20 messages (`CHUNK_SIZE`). Large conversations become multiple chunks (`part 1/N`, `part 2/N`, ...).
 3. **Extract**: each chunk is run through an LLM (the host's LLM on MCP integrations; your gateway's LLM on OpenClaw; Hermes' configured LLM otherwise). The LLM identifies facts, preferences, decisions, goals, and context.
 4. **Triage + profile**: extracted facts are deduplicated and merged into a coherent profile via the smart-import pipeline (see [`rust/totalreclaw-core/src/smart_import.rs`](https://github.com/p-diogo/totalreclaw/blob/main/rust/totalreclaw-core/src/smart_import.rs) for the schema).

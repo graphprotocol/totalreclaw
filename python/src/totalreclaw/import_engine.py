@@ -996,6 +996,40 @@ class ImportEngine:
             self._session_ids = []
             return self._session_assignments
 
+        # ── Explicit conversation boundaries (ChatGPT / Claude) ─────────────
+        # When every chunk carries a conversation_id from the source export,
+        # the session structure is ground truth: one conversation = one
+        # session. Semantic segmentation exists to INFER boundaries for
+        # sources that lack them (Gemini Takeout); running it here would
+        # lossily re-derive what the export already states — merging distinct
+        # same-topic conversations and splitting long ones.
+        conv_ids = [getattr(c, "conversation_id", None) for c in chunks]
+        if all(conv_ids):
+            by_conv: dict[str, list[int]] = {}
+            for idx, cid in enumerate(conv_ids):
+                by_conv.setdefault(cid, []).append(idx)
+            self._session_assignments = list(by_conv.values())
+            # Turn count = user messages in the conversation (one turn per
+            # user->assistant exchange) — drives the singleton (no-Crystal) rule.
+            self._session_turn_counts = []
+            for chunk_indices in self._session_assignments:
+                n_turns = 0
+                for ci in chunk_indices:
+                    msgs = getattr(chunks[ci], "messages", None) or []
+                    n_user = sum(
+                        1 for m in msgs
+                        if isinstance(m, dict) and (m.get("role") or "user") == "user"
+                    )
+                    n_turns += n_user or (1 if msgs else 0)
+                self._session_turn_counts.append(n_turns)
+            self._session_ids = [_uuid7() for _ in self._session_assignments]
+            logger.debug(
+                "session grouping: %d chunks -> %d sessions via explicit "
+                "conversation boundaries (no semantic segmentation)",
+                len(chunks), len(self._session_assignments),
+            )
+            return self._session_assignments
+
         from totalreclaw.session_segmentation import segment_sessions
         from datetime import datetime
 
