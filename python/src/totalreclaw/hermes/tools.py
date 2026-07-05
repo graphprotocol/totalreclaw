@@ -638,8 +638,11 @@ async def debrief(args: dict, state: "PluginState", **kwargs) -> str:
         )
 
     # Short-circuit guard so the tool returns a clear explanation to the
-    # agent rather than an empty debrief. Mirrors the < 8-message gate in
-    # ``session_debrief`` itself.
+    # agent rather than an empty debrief. The explicit tool holds a stricter
+    # 4-turn floor than the auto path: ``session_debrief``'s content-aware gate
+    # will crystallize a short 2-3 turn session when it produced >= 2 stored
+    # facts, but the explicit tool has no stored-fact context to judge that, so
+    # it keeps the simple length floor and tells the user to keep chatting.
     all_messages = state.get_all_messages() if hasattr(state, "get_all_messages") else []
     if len(all_messages) < 8:
         return json.dumps({

@@ -479,11 +479,19 @@ def session_debrief(
         return []
 
     all_messages = state.get_all_messages()
-    if len(all_messages) < 8:  # Minimum 4 turns
-        return []
 
     if stored_fact_texts is None:
         stored_fact_texts = []
+
+    # Content-aware length gate. Hard floor: < 2 turns (4 messages) is too thin
+    # to summarize. Between 4-7 messages, still crystallize IF the session
+    # produced real content (>= 2 stored facts) — a crisp 2-3 turn topical
+    # exchange (e.g. "book the Lisbon flight, aisle seat, under $400") deserves
+    # its own Crystal, not just loose atomic facts. 4+ turns always qualify.
+    if len(all_messages) < 4:
+        return []
+    if len(all_messages) < 8 and len(stored_fact_texts) < 2:
+        return []
 
     client = state.get_client()
     if not client:

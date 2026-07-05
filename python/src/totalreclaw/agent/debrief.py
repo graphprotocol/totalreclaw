@@ -179,8 +179,13 @@ async def generate_debrief(
     if not config:
         return []
 
-    # Minimum 4 turns (8 messages) to warrant a debrief
-    if len(messages) < 8:
+    # Content-aware length gate. Hard floor: < 2 turns (4 messages) is too thin
+    # to summarize. Between 4-7 messages, still crystallize IF the session was
+    # substantive (>= 2 stored facts) — a crisp 2-3 turn topical exchange
+    # deserves a Crystal, not just its loose atomic facts.
+    if len(messages) < 4:
+        return []
+    if len(messages) < 8 and len(stored_fact_texts) < 2:
         return []
 
     conversation_text = _truncate_messages(messages)
@@ -337,7 +342,12 @@ async def generate_crystal(
     if not config:
         return None
 
-    if len(messages) < 8:
+    # Content-aware length gate (matches session_debrief). Hard floor of 2 turns
+    # (4 messages); between 4-7 messages, crystallize only a substantive session
+    # (>= 2 stored facts) so a crisp short topical exchange still gets a Crystal.
+    if len(messages) < 4:
+        return None
+    if len(messages) < 8 and len(stored_fact_texts) < 2:
         return None
 
     conversation_text = _truncate_messages(messages)

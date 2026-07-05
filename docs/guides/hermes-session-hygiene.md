@@ -9,9 +9,11 @@ quality of the grouping depends entirely on when Hermes starts a new session.
 Hermes runs as **one process**. Before this change, the TotalReclaw plugin
 minted **one `session_id` per process lifecycle** and ignored the `session_id`
 Hermes passes to `on_session_start`. If you talk to your agent through **several
-parallel conversations at once** — e.g. multiple Telegram chats / group chats /
-forum topics on the same bot — their turns all landed under the **same
-`session_id`**, so unrelated memories interleaved into **one Crystal**.
+parallel conversations at once** — e.g. several chats, group chats, or forum
+topics on the same messaging platform (Telegram, WhatsApp, Slack, Matrix, …) —
+their turns all landed under the **same `session_id`**, so unrelated memories
+interleaved into **one Crystal**. (Nothing here is platform-specific; the fix
+works for any messenger you configure Hermes with.)
 
 ## What changed
 
@@ -39,10 +41,12 @@ Two plugin-side mitigations (no host changes required):
 If two conversations are **truly interleaved in real time** and Hermes does
 **not** pass a per-conversation id on every turn, the plugin cannot tell the
 turns apart — Hermes' `pre_llm_call` / `post_llm_call` hooks currently carry only
-the message text, no `chat_id` / `message_thread_id`. The complete fix needs the
-**host** to pass a conversation id (e.g. Telegram `chat_id` + `message_thread_id`)
-into the per-turn hooks; the plugin already knows how to scope by it (mechanism
-1). Until then, use idle rollover, or the explicit "new session" fast-follow.
+the message text, no conversation identifier. The complete fix needs the
+**host** to pass its conversation id — whatever the platform uses to identify a
+conversation (a chat id, a thread/topic id, a room id) — into the per-turn hooks;
+the plugin already knows how to scope by it (mechanism 1). This mechanism is
+platform-agnostic: nothing here is specific to any one messenger. Until then,
+the idle rollover covers conversations that are separated in time.
 
 ## Tips
 

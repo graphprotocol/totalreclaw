@@ -6,6 +6,25 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Content-aware Crystal gate.** A session used to need 4 full turns (8
+  messages) before it earned a Crystal, silently dropping crisp 2-3 turn
+  topical exchanges (e.g. "book the Lisbon flight, aisle seat, under $400")
+  even when they produced real, storable facts. The gate is now content-aware:
+  hard floor of 2 turns (`< 4` messages) never crystallizes; a 2-3 turn session
+  (4-7 messages) crystallizes when it produced substance (`>= 2` stored facts);
+  4+ turns always qualify (unchanged). Enforced on the auto path
+  (`session_debrief`) and defended in depth in `generate_crystal` /
+  `generate_debrief`. The explicit `totalreclaw_debrief` tool keeps its 4-turn
+  floor (it has no stored-fact context to judge substance).
+- **Platform-agnostic session-hygiene docs.** `docs/guides/hermes-session-hygiene.md`
+  no longer frames per-conversation grouping around Telegram — the mechanism
+  (honor the host's conversation id) works for any messenger Hermes is
+  configured with (Telegram, WhatsApp, Slack, Matrix, …).
+
 ## [2.4.4] — 2026-06-06
 
 Stable line for the `totalreclaw` Python client + `totalreclaw.hermes` plugin, consolidating the 2.4.0 → 2.4.4rc7 cycle. Headline: the client is now **chain-aware** (it reads its chain + DataEdge from the relay, so the managed service's single-chain Gnosis migration needed zero client release), plus a pre-stable QA hardening pass over the install / setup / extraction / delete paths.
