@@ -6,6 +6,11 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.6] — unreleased
+
+### Fixed
+- **Per-conversation session hygiene (#429).** Parallel conversations through one Hermes process (e.g. several messaging chats on one bot) collapsed into a single `session_id`, interleaving unrelated memories into one session Crystal. The plugin now **honors the host's `session_id`** — `on_session_start` derives the session key deterministically from the `session_id` Hermes passes, so when the host distinguishes conversations we inherit that boundary (any platform, not just one). Plus an **idle-timeout rollover** (`TOTALRECLAW_SESSION_IDLE_MINUTES`, default 60, `0` disables): a turn after a long gap flushes + debriefs the idle session and starts a fresh one. Host-derived sessions are never idle-rolled. See `docs/guides/hermes-session-hygiene.md`.
+
 ## [2.4.4] — 2026-06-06
 
 Stable line for the `totalreclaw` Python client + `totalreclaw.hermes` plugin, consolidating the 2.4.0 → 2.4.4rc7 cycle. Headline: the client is now **chain-aware** (it reads its chain + DataEdge from the relay, so the managed service's single-chain Gnosis migration needed zero client release), plus a pre-stable QA hardening pass over the install / setup / extraction / delete paths.

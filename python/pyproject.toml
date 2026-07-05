@@ -24,7 +24,7 @@ name = "totalreclaw"
 # now `2.4.5`, so RCs cut as `2.4.5rcN` outrank `2.4.4` and the
 # version-agnostic install path lands them. NEVER leave the base equal to
 # an already-published stable.
-version = "2.4.5"
+version = "2.4.6"
 description = "End-to-end encrypted memory for AI agents — Python client (Memory Taxonomy v1)"
 readme = "README.md"
 license = "MIT"
