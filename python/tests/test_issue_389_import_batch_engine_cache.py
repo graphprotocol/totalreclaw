@@ -103,6 +103,10 @@ async def test_import_batch_reuses_engine_across_calls(monkeypatch):
     monkeypatch.setattr(ie.ImportEngine, "__init__", counting_init)
     monkeypatch.setattr(tools, "_make_extractor", lambda s: AsyncMock())
     monkeypatch.setattr(tools, "_make_llm_completion", lambda s: AsyncMock())
+    # consent + tier gates and state bookkeeping are covered elsewhere;
+    # this test isolates engine-instance caching.
+    monkeypatch.setattr(tools, "_disclosure_consent_ok", lambda *a, **k: True)
+    monkeypatch.setattr(tools, "write_import_state", lambda *a, **k: None, raising=False)
 
     # Stub process_batch so we don't trip on missing adapters / files / LLMs.
     async def fake_process_batch(self, **kwargs):
@@ -154,6 +158,10 @@ async def test_import_batch_content_only_creates_fresh_engine(monkeypatch):
     monkeypatch.setattr(ie.ImportEngine, "__init__", counting_init)
     monkeypatch.setattr(tools, "_make_extractor", lambda s: AsyncMock())
     monkeypatch.setattr(tools, "_make_llm_completion", lambda s: AsyncMock())
+    # consent + tier gates and state bookkeeping are covered elsewhere;
+    # this test isolates engine-instance caching.
+    monkeypatch.setattr(tools, "_disclosure_consent_ok", lambda *a, **k: True)
+    monkeypatch.setattr(tools, "write_import_state", lambda *a, **k: None, raising=False)
 
     async def fake_process_batch(self, **kwargs):
         from totalreclaw.import_adapters.types import BatchImportResult

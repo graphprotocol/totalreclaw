@@ -232,9 +232,14 @@ async def test_pro_tier_is_not_blocked(tmp_path, monkeypatch):
     _patch_engine(monkeypatch, process=lambda self, **k: called(**k))
     state, _client = _state_with_tier("pro")
 
+    # rc13 (#421): consent needs the tool-minted token or persisted state.
+    write_import_state(ImportState(
+        import_id="consent-seed", source="gemini", status="completed",
+        started_at="2026-07-05T00:00:00+00:00", last_updated="x",
+        disclosure_confirmed=True, announced=True,
+    ))
     res = json.loads(await tools.import_from(
-        # disclosure_confirmed: extraction imports are disclosure-gated (imp-2)
-        {"source": "gemini", "content": "x", "disclosure_confirmed": True}, state,
+        {"source": "gemini", "content": "x"}, state,
     ))
     assert res.get("blocked") is not True
     assert called.await_count >= 1  # import actually proceeded
@@ -250,8 +255,13 @@ async def test_billing_unreachable_fails_open(tmp_path, monkeypatch):
     _patch_engine(monkeypatch, process=lambda self, **k: called(**k))
     state, _client = _state_with_tier("free", status_raises=True)
 
+    write_import_state(ImportState(
+        import_id="consent-seed", source="gemini", status="completed",
+        started_at="2026-07-05T00:00:00+00:00", last_updated="x",
+        disclosure_confirmed=True, announced=True,
+    ))
     res = json.loads(await tools.import_from(
-        {"source": "gemini", "content": "x", "disclosure_confirmed": True}, state,
+        {"source": "gemini", "content": "x"}, state,
     ))
     # Billing down -> do NOT block (self-hosted / offline must still import).
     assert res.get("blocked") is not True

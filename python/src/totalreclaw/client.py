@@ -37,6 +37,7 @@ from .operations import (
     export_facts,
     pin_fact,
     unpin_fact,
+    find_existing_content_fps,
 )
 from .retype_setscope import execute_retype, execute_set_scope
 from .userop import MAX_BATCH_SIZE as _USEROP_MAX_BATCH_SIZE
@@ -796,6 +797,27 @@ class TotalReclaw:
         await self._ensure_address()
         await self._ensure_registered()
         return await export_facts(self._keys, self._wallet_address, self._relay)
+
+    async def find_duplicate_texts(self, texts: list[str]) -> list[bool]:
+        """Per-text flags: True where the text's content fingerprint already
+        exists as an active on-chain fact (#422 pre-write dedup).
+
+        HMAC fingerprints only cross the wire — never plaintext. Fails open
+        (all False) if the subgraph is unreachable.
+        """
+        if not texts:
+            return []
+        await self._ensure_address()
+        await self._ensure_registered()
+        from .crypto import generate_content_fingerprint
+        fps = [
+            generate_content_fingerprint(t or "", self._keys.dedup_key)
+            for t in texts
+        ]
+        existing = await find_existing_content_fps(
+            self._keys, self._wallet_address, self._relay, list(set(fps)),
+        )
+        return [fp in existing for fp in fps]
 
     async def status(self) -> BillingStatus:
         """Get billing status."""

@@ -686,6 +686,15 @@ async def search_facts(
             meta = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
             candidate_source: Optional[str] = meta.get("source") if isinstance(meta.get("source"), str) else None
 
+            # #425 — carry a filtered provenance subset through the reranker
+            # so recall output can expose where a memory came from (imports
+            # tag import_source + session_id since #356/#363).
+            extra_meta = {
+                k: meta[k]
+                for k in ("import_source", "session_id", "subtype")
+                if isinstance(meta.get(k), str) and meta.get(k)
+            } or None
+
             candidates.append(
                 RerankerCandidate(
                     id=fact_id,
@@ -695,6 +704,7 @@ async def search_facts(
                     created_at=created_at,
                     category=doc.get("category", "fact"),
                     source=candidate_source,
+                    metadata=extra_meta,
                 )
             )
         except Exception as e:
@@ -1486,14 +1496,22 @@ async def export_facts(
                         except (ValueError, OSError):
                             formatted_ts = str(raw_ts)
 
-                    results.append(
-                        {
-                            "id": fact["id"],
-                            "text": text,
-                            "timestamp": formatted_ts,
-                            "importance": float(fact.get("decayScore", "0.5")),
-                        }
-                    )
+                    entry = {
+                        "id": fact["id"],
+                        "text": text,
+                        "timestamp": formatted_ts,
+                        "importance": float(fact.get("decayScore", "0.5")),
+                        "type": doc.get("category", "fact"),
+                    }
+                    # #425 — export carries provenance: source +
+                    # import_source + session_id (tagged on write since
+                    # #356/#363 but previously dropped here).
+                    doc_meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+                    for key in ("source", "import_source", "session_id"):
+                        val = doc_meta.get(key)
+                        if isinstance(val, str) and val:
+                            entry[key] = val
+                    results.append(entry)
                 except Exception:
                     continue
 
@@ -1504,3 +1522,42 @@ async def export_facts(
             break
 
     return results
+
+
+async def find_existing_content_fps(
+    keys: DerivedKeys,
+    owner: str,
+    relay: RelayClient,
+    fps: list[str],
+) -> set[str]:
+    """Return the subset of *fps* that already exist as ACTIVE facts on-chain.
+
+    #422 — the on-chain pivot silently dropped write-path dedup: the client
+    computes ``content_fp`` and the subgraph stores it, but nothing ever
+    CHECKED it (the old relay-store 409 never happens on the bundler path).
+    This is the read half of client-side pre-write dedup: callers skip facts
+    whose fingerprint is already live, saving the duplicate AND its gas.
+
+    Fails open (empty set) on any query error — dedup is best-effort and
+    must never block a store.
+    """
+    if not fps:
+        return set()
+    owner = owner.lower() if owner else owner
+    query = """
+    query($owner: Bytes!, $fps: [String!]!) {
+      facts(where: {owner: $owner, contentFp_in: $fps, isActive: true}, first: 1000) {
+        contentFp
+      }
+    }
+    """
+    try:
+        data = await relay.query_subgraph(query, {"owner": owner, "fps": fps})
+        return {
+            f["contentFp"]
+            for f in data.get("data", {}).get("facts", [])
+            if f.get("contentFp")
+        }
+    except Exception as e:
+        logger.warning("Pre-write dedup query failed (fail-open): %s", e)
+        return set()

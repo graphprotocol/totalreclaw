@@ -94,8 +94,12 @@ async def test_disclosure_confirmed_proceeds_and_persists(tmp_path, monkeypatch)
     _patch_provider(monkeypatch)
     state = _state_with_tier("pro")
 
+    first = json.loads(await tools.import_from(
+        {"source": "chatgpt", "content": "x"}, state,
+    ))
     res = json.loads(await tools.import_from(
-        {"source": "chatgpt", "content": "x", "disclosure_confirmed": True}, state,
+        {"source": "chatgpt", "content": "x", "disclosure_confirmed": True,
+         "disclosure_token": first["disclosure_token"]}, state,
     ))
     assert res.get("disclosure_required") is not True
     assert process.await_count >= 1
@@ -227,9 +231,14 @@ async def test_allowlisted_url_is_fetched(tmp_path, monkeypatch):
     fetched = _patch_fetch(monkeypatch, tmp_path)
     state = _state_with_tier("pro")
 
+    first = json.loads(await tools.import_from(
+        {"source": "chatgpt", "url": "https://chatgpt.com/backup/e.zip"}, state,
+    ))
+    assert first["disclosure_required"] is True and fetched == []
     res = json.loads(await tools.import_from(
         {"source": "chatgpt", "url": "https://chatgpt.com/backup/e.zip",
-         "disclosure_confirmed": True}, state,
+         "disclosure_confirmed": True,
+         "disclosure_token": first["disclosure_token"]}, state,
     ))
     assert fetched == ["https://chatgpt.com/backup/e.zip"]
     assert res.get("url_confirmation_required") is not True
@@ -263,9 +272,14 @@ async def test_unknown_host_with_confirmation_proceeds(tmp_path, monkeypatch):
     fetched = _patch_fetch(monkeypatch, tmp_path)
     state = _state_with_tier("pro")
 
+    first = json.loads(await tools.import_from(
+        {"source": "chatgpt", "url": "https://evil.example.com/e.zip",
+         "url_confirmed": True}, state,
+    ))
     res = json.loads(await tools.import_from(
         {"source": "chatgpt", "url": "https://evil.example.com/e.zip",
-         "url_confirmed": True, "disclosure_confirmed": True}, state,
+         "url_confirmed": True, "disclosure_confirmed": True,
+         "disclosure_token": first["disclosure_token"]}, state,
     ))
     assert fetched == ["https://evil.example.com/e.zip"]
     assert res.get("url_confirmation_required") is not True

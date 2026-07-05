@@ -117,7 +117,7 @@ def test_gnosis_14_facts_submits_one_batch() -> None:
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors = _run(engine._store_facts_chunked(_make_facts(14)))
+    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(14)))
 
     assert errors == []
     assert facts_stored == 14
@@ -132,7 +132,7 @@ def test_gnosis_15_facts_submits_one_batch() -> None:
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors = _run(engine._store_facts_chunked(_make_facts(15)))
+    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(15)))
 
     assert errors == []
     assert facts_stored == 15
@@ -147,7 +147,7 @@ def test_gnosis_30_facts_submits_one_batch() -> None:
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors = _run(engine._store_facts_chunked(_make_facts(30)))
+    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(30)))
 
     assert errors == []
     assert facts_stored == 30
@@ -162,7 +162,7 @@ def test_gnosis_45_facts_splits_at_cap() -> None:
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors = _run(engine._store_facts_chunked(_make_facts(45)))
+    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(45)))
 
     assert errors == []
     assert facts_stored == 45
@@ -177,7 +177,7 @@ def test_gnosis_uneven_sub_cap_single_batch() -> None:
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors = _run(engine._store_facts_chunked(_make_facts(20)))
+    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(20)))
 
     assert errors == []
     assert facts_stored == 20
@@ -230,7 +230,7 @@ def test_free_tier_falls_back_to_per_fact_remember() -> None:
     client = _make_free_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors = _run(engine._store_facts_chunked(_make_facts(15)))
+    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(15)))
 
     assert errors == []
     assert facts_stored == 15
@@ -250,7 +250,7 @@ def test_unresolvable_chain_falls_back_to_per_fact() -> None:
     client.remember = AsyncMock(side_effect=_remember)
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors = _run(engine._store_facts_chunked(_make_facts(3)))
+    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(3)))
 
     assert errors == []
     assert facts_stored == 3
@@ -271,7 +271,7 @@ def test_gnosis_batch_409_dedup_is_silent() -> None:
     )
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors = _run(engine._store_facts_chunked(_make_facts(15)))
+    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(15)))
 
     assert errors == []
     assert facts_stored == 0
@@ -288,7 +288,7 @@ def test_gnosis_batch_partial_id_list_counts_only_returned_ids() -> None:
     client.remember_batch = AsyncMock(side_effect=_short_batch)
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors = _run(engine._store_facts_chunked(_make_facts(15)))
+    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(15)))
 
     assert errors == []
     assert facts_stored == 13
@@ -302,7 +302,7 @@ def test_gnosis_batch_non_dedup_error_surfaced() -> None:
     )
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors = _run(engine._store_facts_chunked(_make_facts(45)))
+    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(45)))
 
     assert facts_stored == 0
     # Two chunks attempted (30 + 15); two errors collected.
@@ -314,7 +314,7 @@ def test_empty_input_returns_zero_no_calls() -> None:
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors = _run(engine._store_facts_chunked([]))
+    facts_stored, errors, _dups = _run(engine._store_facts_chunked([]))
 
     assert facts_stored == 0
     assert errors == []

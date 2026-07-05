@@ -295,10 +295,13 @@ IMPORT_FROM = {
         "pass its path directly as file_path. "
         "WORKFLOW: (1) ALWAYS call with dry_run=true first to show the user the "
         "estimate (conversations found, estimated facts, estimated time). "
-        "(2) For ChatGPT/Gemini/Claude the tool will return disclosure_required: "
-        "relay the privacy disclosure to the user verbatim (it names the LLM "
-        "provider that will read their conversations), get explicit consent, then "
-        "call again with disclosure_confirmed=true. If they decline, stop. "
+        "(2) For ChatGPT/Gemini/Claude the tool will return disclosure_required "
+        "with a disclosure_token: relay the returned disclosure message to the "
+        "user VERBATIM (it names the LLM provider that will read their "
+        "conversations — never compose your own disclosure), get explicit "
+        "consent, then call again with disclosure_confirmed=true AND the "
+        "disclosure_token. Consent without the token is rejected. If they "
+        "decline, stop. "
         "(3) If the user confirms, and the dry-run shows <=50 chunks: call again "
         "without dry_run to process everything. "
         "(4) If >50 chunks: tell the user this is a large import and you'll process "
@@ -335,7 +338,17 @@ IMPORT_FROM = {
                     "Set true ONLY after the user has seen the privacy "
                     "disclosure (which LLM provider will read their "
                     "conversations) and explicitly consented. Required for "
-                    "ChatGPT/Gemini/Claude imports."
+                    "ChatGPT/Gemini/Claude imports. Must be accompanied by "
+                    "the disclosure_token from the disclosure_required "
+                    "response."
+                ),
+            },
+            "disclosure_token": {
+                "type": "string",
+                "description": (
+                    "One-time token from the disclosure_required response. "
+                    "Proves the tool's disclosure was received before "
+                    "consent; disclosure_confirmed without it is rejected."
                 ),
             },
             "url": {

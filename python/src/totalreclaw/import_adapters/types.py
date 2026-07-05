@@ -69,6 +69,9 @@ class BatchImportResult:
     is_complete: bool
     errors: List[str] = field(default_factory=list)
     duration_ms: int = 0
+    # #422 — duplicates skipped by client-side pre-write dedup (cross-vault
+    # fingerprint lookup + intra-call text dedup). 0 when dedup found nothing.
+    dups_skipped: int = 0
     # Smart-import (imp-4): chunks the triage pass marked SKIP for this
     # batch, plus a snapshot of the profile+triage pipeline that ran for
     # the import (None when smart-import didn't run — no LLM, fact-only

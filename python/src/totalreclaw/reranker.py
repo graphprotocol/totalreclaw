@@ -138,6 +138,10 @@ class RerankerCandidate:
     #: "external", "derived"). When None, the candidate is treated as a
     #: pre-v1 legacy blob and receives ``LEGACY_CLAIM_FALLBACK_WEIGHT``.
     source: Optional[str] = None
+    #: Filtered claim-metadata passthrough (#425) — e.g. import_source /
+    #: session_id / subtype. Never sent to core; rejoined by id after
+    #: ``rerank_with_config`` so read surfaces can expose provenance.
+    metadata: Optional[dict] = None
 
 
 @dataclass
@@ -153,6 +157,7 @@ class RerankerResult:
     cosine_sim: Optional[float] = None
     source: Optional[str] = None
     source_weight: Optional[float] = None
+    metadata: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +233,7 @@ def rerank(
                 source_weight=float(r["source_weight"])
                 if apply_source_weights and "source_weight" in r
                 else (1.0 if apply_source_weights else None),
+                metadata=orig.metadata if orig else None,
             )
         )
 

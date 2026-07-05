@@ -690,7 +690,7 @@ class ImportEngine:
 
         # Store phase: one batched UserOp per ≤15-fact chunk on Gnosis, or
         # per-fact remember() loop on free-tier / unresolvable chain.
-        facts_stored, store_errors = await self._store_facts_chunked(all_extracted)
+        facts_stored, store_errors, dups_skipped = await self._store_facts_chunked(all_extracted)
         if store_errors:
             errors.extend(store_errors)
 
@@ -731,6 +731,7 @@ class ImportEngine:
             is_complete=is_complete,
             errors=errors,
             duration_ms=_now_ms() - start_ms,
+            dups_skipped=dups_skipped,
             chunks_skipped=chunks_skipped,
             smart_import=smart_import_summary,
             chunk_diagnostics=chunk_diagnostics or None,
@@ -790,7 +791,7 @@ class ImportEngine:
             }
             for fact in batch
         ]
-        facts_stored, errors = await self._store_facts_chunked(fact_dicts)
+        facts_stored, errors, dups_skipped = await self._store_facts_chunked(fact_dicts)
 
         return BatchImportResult(
             success=facts_stored > 0 or not errors,
@@ -804,6 +805,7 @@ class ImportEngine:
             is_complete=is_complete,
             errors=errors,
             duration_ms=_now_ms() - start_ms,
+            dups_skipped=dups_skipped,
         )
 
     # ── Internal Helpers ─────────────────────────────────────────────────
@@ -1399,15 +1401,55 @@ class ImportEngine:
         import gate guarantees ``chain_id == 100`` on this code path; the
         explicit check keeps the cost claim self-verifying.
 
-        Returns ``(facts_stored, errors)`` so callers can aggregate into the
-        existing ``BatchImportResult`` shape.
+        Returns ``(facts_stored, errors, dups_skipped)`` so callers can
+        aggregate into the existing ``BatchImportResult`` shape.
 
-        Dedup (HTTP 409 / fingerprint) is logged at DEBUG and not counted as
-        an error. Other failures are surfaced via the returned error list,
-        capped at 20 entries to match the per-fact loop's contract.
+        Dedup (#422): the on-chain pivot removed the relay's 409/fingerprint
+        rejection, so duplicates must be skipped CLIENT-SIDE before the
+        UserOp is built — otherwise a re-import stores every fact twice and
+        pays gas for it. Two passes: (1) subgraph lookup of each fact's
+        content fingerprint against the live vault, (2) intra-call
+        fingerprint dedup (the same fact extracted twice in one import).
+        Both fail open — dedup must never block a store.
         """
         if not facts:
-            return 0, []
+            return 0, [], 0
+
+        dups_skipped = 0
+
+        # (1) cross-vault dedup via content fingerprints (#422)
+        try:
+            find_dups = getattr(self._client, "find_duplicate_texts", None)
+            if callable(find_dups):
+                flags = await find_dups([f.get("text", "") for f in facts])
+                if flags and len(flags) == len(facts):
+                    kept = [f for f, dup in zip(facts, flags) if not dup]
+                    dups_skipped += len(facts) - len(kept)
+                    facts = kept
+        except Exception as e:
+            logger.warning("Pre-write dedup skipped (fail-open): %s", e)
+
+        # (2) intra-call dedup on normalized text. The key includes the
+        # session_id so structurally-distinct claims with coincidentally
+        # identical text survive — e.g. two sessions' Crystals sharing a
+        # fallback title are two real session headers, not duplicates.
+        seen_keys: set = set()
+        unique_facts: list[dict] = []
+        for f in facts:
+            text_norm = " ".join((f.get("text") or "").split()).lower()
+            meta = f.get("extra_metadata") or {}
+            key = (text_norm, str(meta.get("session_id") or ""))
+            if text_norm and key in seen_keys:
+                dups_skipped += 1
+                continue
+            seen_keys.add(key)
+            unique_facts.append(f)
+        facts = unique_facts
+
+        if dups_skipped:
+            logger.info("Import dedup: skipped %d duplicate fact(s)", dups_skipped)
+        if not facts:
+            return 0, [], dups_skipped
 
         chain_id = await self._resolve_chain_id_safely()
         errors: list[str] = []
@@ -1441,7 +1483,7 @@ class ImportEngine:
                                 "Error limit reached (20). Remaining facts in this batch skipped."
                             )
                             break
-            return facts_stored, errors
+            return facts_stored, errors, dups_skipped
 
         # Per-fact fallback: free-tier / non-Gnosis / chain probe failed.
         for fact in facts:
@@ -1460,7 +1502,7 @@ class ImportEngine:
                         )
                         break
 
-        return facts_stored, errors
+        return facts_stored, errors, dups_skipped
 
 
 # ── Per-chunk "0 facts" diagnostics (issue #389 follow-up) ──────────────

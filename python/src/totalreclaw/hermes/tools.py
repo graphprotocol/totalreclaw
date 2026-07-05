@@ -15,8 +15,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Threshold for "small" imports that run synchronously in import_from
-_SMALL_IMPORT_THRESHOLD = 50
+# Threshold for "small" imports that run synchronously in import_from.
+# rc13 (#426): was 50 — a 34-chunk ChatGPT import blocked the agent turn for
+# 7+ minutes and any client timeout aborted it mid-run. ~5 chunks ≈ a couple
+# of minutes worst-case; everything larger backgrounds with an import_id ack.
+_SMALL_IMPORT_THRESHOLD = 5
 
 # Strong references to background import tasks so the event loop cannot GC them.
 _BG_TASKS: set[asyncio.Task] = set()
@@ -231,19 +234,27 @@ async def recall(args: dict, state: "PluginState", **kwargs) -> str:
             top_k=top_k,
             max_candidates=state.get_max_candidate_pool(),
         )
-        return json.dumps({
-            "count": len(results),
-            "memories": [
-                {
-                    "id": r.id,
-                    "text": r.text,
-                    "type": r.category,
-                    "date": _fmt_date(getattr(r, "created_at", None)),
-                    "score": round(r.rrf_score, 4),
-                }
-                for r in results
-            ],
-        })
+        memories = []
+        for r in results:
+            mem = {
+                "id": r.id,
+                "text": r.text,
+                "type": r.category,
+                "date": _fmt_date(getattr(r, "created_at", None)),
+                "score": round(r.rrf_score, 4),
+            }
+            # #425 — surface provenance so the agent can answer "where does
+            # this memory come from?" (imported memories carry
+            # import_source + a per-conversation session_id since #356/#363).
+            if getattr(r, "source", None):
+                mem["source"] = r.source
+            md = getattr(r, "metadata", None) or {}
+            if md.get("import_source"):
+                mem["import_source"] = md["import_source"]
+            if md.get("session_id"):
+                mem["session_id"] = md["session_id"]
+            memories.append(mem)
+        return json.dumps({"count": len(results), "memories": memories})
     except Exception as e:
         logger.error("totalreclaw_recall failed: %s", e)
         return json.dumps({"error": str(e)})
@@ -933,21 +944,82 @@ def _prior_disclosure_consent(source: str, resume_id: Optional[str] = None) -> b
     return False
 
 
+def _mint_disclosure_token(source: str) -> str:
+    """Mint a one-time token proving the disclosure response was received.
+
+    rc13 (#421): rc12 QA showed the agent composing its OWN consent prompt
+    and self-setting disclosure_confirmed=true — the tool's provider-naming
+    disclosure never reached the user. The token forces at least one
+    round-trip through the disclosure_required response before consent can
+    be asserted. Persisted as a sidecar file (NOT ``*.json`` — the import
+    state helpers glob that pattern) so it survives a gateway restart
+    mid-consent.
+    """
+    token = uuid.uuid4().hex[:16]
+    try:
+        from totalreclaw import import_state as ist
+        ist.IMPORT_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        (ist.IMPORT_STATE_DIR / f"disclosure-{token}.pending").write_text(
+            json.dumps({"source": source})
+        )
+    except OSError:
+        pass  # worst case: token can't be redeemed → disclosure re-shown
+    return token
+
+
+def _redeem_disclosure_token(source: str, token) -> bool:
+    """Consume a pending disclosure token for *source*. One-time use."""
+    if not token or not isinstance(token, str) or not token.isalnum():
+        return False
+    try:
+        from totalreclaw import import_state as ist
+        path = ist.IMPORT_STATE_DIR / f"disclosure-{token}.pending"
+        if not path.exists():
+            return False
+        data = json.loads(path.read_text())
+        if data.get("source") != source:
+            return False
+        path.unlink()
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _disclosure_consent_ok(source: str, args: dict, resume_id: Optional[str] = None) -> bool:
+    """True when the user's disclosure consent is established for *source*.
+
+    Consent = a persisted ImportState with disclosure_confirmed (resume /
+    the import_from -> import_batch loop), OR disclosure_confirmed=true
+    accompanied by a valid one-time disclosure_token (proving the tool's
+    disclosure response was received this flow).
+    """
+    if source not in _EXTRACTION_IMPORT_SOURCES:
+        return True
+    if _prior_disclosure_consent(source, resume_id):
+        return True
+    return bool(args.get("disclosure_confirmed", False)) and _redeem_disclosure_token(
+        source, args.get("disclosure_token")
+    )
+
+
 def _disclosure_required_response(source: str, import_id: str, estimate: Optional[dict] = None) -> str:
     """The disclosure_required payload (PRD-IMP G-4) — provider named explicitly."""
     provider_label = _extraction_provider_label()
+    token = _mint_disclosure_token(source)
     payload = {
         "disclosure_required": True,
         "import_id": import_id,
         "llm_provider": provider_label,
+        "disclosure_token": token,
         "message": (
-            "Before importing: extracting memories from this "
-            f"{source} export sends your past conversations in "
-            f"cleartext to {provider_label} for fact extraction. "
+            "PRIVACY DISCLOSURE — relay the next two sentences to the user "
+            "VERBATIM; do not paraphrase or substitute your own wording. "
+            f"Importing this {source} export sends your past conversations "
+            f"in cleartext to {provider_label} for fact extraction. "
             "TotalReclaw itself never sees plaintext — but that LLM "
-            "does. Relay this to the user, ask for explicit "
-            "confirmation, and only then call again with "
-            "disclosure_confirmed=true. If they decline, stop — "
+            "provider does. Ask for explicit consent. Only after the user "
+            "explicitly agrees, call again with disclosure_confirmed=true "
+            f"AND disclosure_token=\"{token}\". If they decline, stop — "
             "nothing has been processed."
         ),
     }
@@ -1074,6 +1146,10 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
 
     import_id = resume_id or str(uuid.uuid4())
 
+    # Consent is evaluated ONCE per call (the disclosure_token is one-time —
+    # a second redemption attempt within the same call would fail).
+    consent_ok = _disclosure_consent_ok(source, args, resume_id)
+
     # ── imp-2: URL input — allowlist gate, then server-side fetch ──────────
     if url and not file_path and not content:
         url_allowlisted = _is_allowlisted_export_host(url)
@@ -1096,12 +1172,7 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
         # PR #431 finding 4): don't spend a multi-hundred-MB fetch on a call
         # that is about to return disclosure_required anyway. No estimate is
         # available at this point — the agent's dry_run already surfaced it.
-        if (
-            not dry_run
-            and source in _EXTRACTION_IMPORT_SOURCES
-            and not disclosure_confirmed
-            and not _prior_disclosure_consent(source, resume_id)
-        ):
+        if not dry_run and not consent_ok:
             return _disclosure_required_response(source, import_id)
         try:
             file_path = _fetch_export_url(url, require_allowlist=url_allowlisted)
@@ -1164,12 +1235,9 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
         # Extraction-based imports send the user's raw past conversations to
         # an LLM in cleartext. The user must consent AFTER being told which
         # provider will read them — before any extraction begins. Consent is
-        # persisted in the import state file so a resume never re-prompts.
-        if (
-            source in _EXTRACTION_IMPORT_SOURCES
-            and not disclosure_confirmed
-            and not _prior_disclosure_consent(source, resume_id)
-        ):
+        # persisted in the import state file so a resume never re-prompts;
+        # a fresh consent requires the one-time disclosure_token (#421).
+        if not consent_ok:
             return _disclosure_required_response(source, import_id, estimate)
 
         if total_items <= _SMALL_IMPORT_THRESHOLD:
@@ -1198,6 +1266,7 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
                        "batch_done": 1,
                        "facts_stored": result.facts_stored,
                        "facts_extracted": result.facts_extracted,
+                       "dups_skipped": getattr(result, "dups_skipped", 0),
                     }
                 ))
                 return json.dumps({**asdict(result), "import_id": import_id})
@@ -1364,17 +1433,47 @@ async def import_batch(args: dict, state: "PluginState", **kwargs) -> str:
     if not source:
         return json.dumps({"error": "No source specified"})
 
-    # ── imp-2: disclosure gate (review of PR #431 finding 1) ───────────────
+    # ── imp-2: disclosure gate (review of PR #431 finding 1; #421 token) ───
     # import_batch runs the same LLM extraction as import_from; without this
     # check it would be a consent bypass. The normal flow satisfies it via
     # the state file import_from wrote (consent persists per source), so the
     # documented import_from -> import_batch loop never re-prompts.
-    if (
-        source in _EXTRACTION_IMPORT_SOURCES
-        and not bool(args.get("disclosure_confirmed", False))
-        and not _prior_disclosure_consent(source)
-    ):
+    if not _disclosure_consent_ok(source, args):
         return _disclosure_required_response(source, args.get("import_id") or "")
+
+    # ── Tier gate (PRD-IMP §6) — same gate as import_from (rc12 QA showed
+    # the batch path running a full import on a Free account with no wall).
+    # Fails OPEN when billing is unreachable (self-hosted / offline).
+    client = state.get_client()
+    if client is not None:
+        try:
+            billing = await client.status()
+            tier = (getattr(billing, "tier", "") or "").strip().lower()
+        except Exception:
+            tier = ""
+        if tier and tier != "pro":
+            return json.dumps({
+                "blocked": True,
+                "reason": "import_is_pro_only",
+                "tier": tier,
+                "message": (
+                    "Importing your AI memory history is a Pro feature. "
+                    "Upgrade to Pro ($3.99/mo) to run it — call "
+                    "totalreclaw_upgrade for a checkout link. Nothing was "
+                    "extracted or stored."
+                ),
+            })
+
+    # ── F4 (#424): batch-driven imports are tracked in ImportState so
+    # totalreclaw_import_status can answer for them — rc12 QA got
+    # "no_import_found" right after a completed batch import.
+    from totalreclaw.import_state import (
+        ImportState, read_import_state, write_import_state,
+    )
+    key_material = f"tr-import-batch:{source}:{file_path or content or ''}"
+    import_id = args.get("import_id") or str(
+        uuid.uuid5(uuid.NAMESPACE_URL, key_material)
+    )
 
     try:
         engine = _get_or_create_import_engine(state, source, file_path)
@@ -1385,7 +1484,34 @@ async def import_batch(args: dict, state: "PluginState", **kwargs) -> str:
             offset=offset,
             batch_size=batch_size,
         )
-        return json.dumps(asdict(result))
+
+        # Persist/refresh the tracking state (best-effort — a bookkeeping
+        # failure must never fail the batch that already stored facts).
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            prior = read_import_state(import_id)
+            total_batches = max(
+                1, -(-result.total_chunks // batch_size) if batch_size else 1,
+            )
+            write_import_state(ImportState(
+                import_id=import_id,
+                source=source,
+                status="completed" if result.is_complete else "running",
+                started_at=prior.started_at if prior else now,
+                last_updated=now,
+                total_chunks=result.total_chunks,
+                batch_total=total_batches,
+                batch_done=(prior.batch_done if prior else 0) + 1,
+                facts_stored=(prior.facts_stored if prior else 0) + result.facts_stored,
+                facts_extracted=(prior.facts_extracted if prior else 0) + result.facts_extracted,
+                dups_skipped=(prior.dups_skipped if prior else 0) + getattr(result, "dups_skipped", 0),
+                file_path=file_path,
+                disclosure_confirmed=True,
+            ))
+        except Exception as state_err:
+            logger.warning("import_batch state bookkeeping failed: %s", state_err)
+
+        return json.dumps({**asdict(result), "import_id": import_id})
 
     except ValueError as e:
         return json.dumps({"error": str(e)})
