@@ -13,10 +13,16 @@ import { useVault, useBatchDelete } from "../hooks/useVault";
 import { useCrypto } from "../contexts/CryptoContext";
 import { TypeBadge } from "../components/TypeBadge";
 import { MEMORY_TYPES_V1, VaultItem } from "../lib/types";
+import {
+  segmentByTimeGap,
+  groupDurationMs,
+  ConversationGroup,
+} from "../lib/vault/segmentation";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 type SortKey = "newest" | "oldest" | "type" | "pinned";
+type ViewMode = "list" | "conversations";
 
 export function VaultPage() {
   const { keys, clearKeys } = useCrypto();
@@ -29,6 +35,7 @@ export function VaultPage() {
   const [olderThanDays, setOlderThanDays] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("newest");
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -67,6 +74,18 @@ export function VaultPage() {
         return copy.sort((a, b) => Number(b.pinned) - Number(a.pinned));
     }
   }, [filtered, sortKey]);
+
+  // Read-side re-segmentation. The Hermes write-side collapses many
+  // conversations into one persistent session_id, so a raw grouping is
+  // misleading. We re-derive coherent conversations from `createdAt` gaps.
+  // The decrypted claim on `main` carries no session_id, so we segment the
+  // whole filtered stream; when session_id lands, pass a `sessionKeyOf`
+  // accessor here to sub-split within each raw session instead.
+  const conversations = useMemo<ConversationGroup<VaultItem>[]>(() => {
+    const groups = segmentByTimeGap(filtered);
+    // Newest conversation first, to match the default "newest" list view.
+    return groups.reverse();
+  }, [filtered]);
 
   const rowVirtualizer = useVirtualizer({
     count: sorted.length,
@@ -208,6 +227,34 @@ export function VaultPage() {
           <option value="pinned">Pinned first</option>
         </select>
 
+        {/* View mode: flat list (raw) vs re-segmented conversations */}
+        <div className="inline-flex rounded-md border border-gray-200 overflow-hidden">
+          <button
+            onClick={() => setViewMode("list")}
+            className={clsx(
+              "text-sm px-2 py-1",
+              viewMode === "list"
+                ? "bg-blue-600 text-white"
+                : "bg-white text-gray-600 hover:bg-gray-50",
+            )}
+            title="Flat list of every claim"
+          >
+            List
+          </button>
+          <button
+            onClick={() => setViewMode("conversations")}
+            className={clsx(
+              "text-sm px-2 py-1 border-l border-gray-200",
+              viewMode === "conversations"
+                ? "bg-blue-600 text-white"
+                : "bg-white text-gray-600 hover:bg-gray-50",
+            )}
+            title="Group claims into conversations by time gap"
+          >
+            Conversations
+          </button>
+        </div>
+
         <span className="flex-1" />
 
         {selected.size > 0 && (
@@ -246,56 +293,150 @@ export function VaultPage() {
           Clear filters
         </button>
         <span className="text-xs text-gray-400 ml-auto">
-          {sorted.length.toLocaleString()} shown
+          {viewMode === "conversations"
+            ? `${conversations.length.toLocaleString()} conversation${
+                conversations.length === 1 ? "" : "s"
+              } · ${sorted.length.toLocaleString()} claims`
+            : `${sorted.length.toLocaleString()} shown`}
         </span>
       </div>
 
-      {/* Virtual list */}
-      <div ref={parentRef} className="flex-1 overflow-auto">
-        {sorted.length === 0 ? (
-          <div className="flex items-center justify-center h-32 text-sm text-gray-400">
-            No claims match the current filters.
-          </div>
-        ) : (
-          <div
-            style={{ height: rowVirtualizer.getTotalSize() }}
-            className="relative"
-          >
-            {/* Select-all row */}
-            <div className="sticky top-0 z-10 bg-gray-50 border-b border-gray-100 px-4 py-1.5 flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={
-                  sorted.length > 0 && selected.size === sorted.length
-                }
-                onChange={toggleSelectAll}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              <span className="text-xs text-gray-500">Select all visible</span>
+      {viewMode === "conversations" ? (
+        /* Re-segmented conversations (read-side mitigation for collapsed sessions) */
+        <div className="flex-1 overflow-auto">
+          {conversations.length === 0 ? (
+            <div className="flex items-center justify-center h-32 text-sm text-gray-400">
+              No claims match the current filters.
             </div>
-
-            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const item = sorted[virtualRow.index]!;
-              return (
-                <VaultRow
-                  key={item.id}
-                  item={item}
-                  selected={selected.has(item.id)}
+          ) : (
+            <div className="pb-8">
+              {conversations.map((group) => (
+                <ConversationSection
+                  key={group.key}
+                  group={group}
+                  selected={selected}
                   onSelect={toggleSelect}
-                  style={{
-                    position: "absolute",
-                    top: virtualRow.start,
-                    left: 0,
-                    right: 0,
-                    height: virtualRow.size,
-                  }}
                 />
-              );
-            })}
-          </div>
-        )}
-      </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Virtual list (flat, raw grouping — the full claim inventory) */
+        <div ref={parentRef} className="flex-1 overflow-auto">
+          {sorted.length === 0 ? (
+            <div className="flex items-center justify-center h-32 text-sm text-gray-400">
+              No claims match the current filters.
+            </div>
+          ) : (
+            <div
+              style={{ height: rowVirtualizer.getTotalSize() }}
+              className="relative"
+            >
+              {/* Select-all row */}
+              <div className="sticky top-0 z-10 bg-gray-50 border-b border-gray-100 px-4 py-1.5 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={
+                    sorted.length > 0 && selected.size === sorted.length
+                  }
+                  onChange={toggleSelectAll}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="text-xs text-gray-500">Select all visible</span>
+              </div>
+
+              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                const item = sorted[virtualRow.index]!;
+                return (
+                  <VaultRow
+                    key={item.id}
+                    item={item}
+                    selected={selected.has(item.id)}
+                    onSelect={toggleSelect}
+                    style={{
+                      position: "absolute",
+                      top: virtualRow.start,
+                      left: 0,
+                      right: 0,
+                      height: virtualRow.size,
+                    }}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+/** Formats a conversation group's header: a human date range + item count. */
+function formatConversationHeader(
+  group: ConversationGroup<VaultItem>,
+): string {
+  const start = group.start;
+  const end = group.end;
+  const dateFmt: Intl.DateTimeFormatOptions = {
+    month: "short",
+    day: "numeric",
+  };
+  const timeFmt: Intl.DateTimeFormatOptions = {
+    hour: "numeric",
+    minute: "2-digit",
+  };
+  const sameDay = start.toDateString() === end.toDateString();
+  if (group.items.length === 1 || groupDurationMs(group) === 0) {
+    return `${start.toLocaleDateString(undefined, dateFmt)}, ${start.toLocaleTimeString(
+      undefined,
+      timeFmt,
+    )}`;
+  }
+  if (sameDay) {
+    return `${start.toLocaleDateString(undefined, dateFmt)} · ${start.toLocaleTimeString(
+      undefined,
+      timeFmt,
+    )}–${end.toLocaleTimeString(undefined, timeFmt)}`;
+  }
+  return `${start.toLocaleDateString(undefined, dateFmt)} – ${end.toLocaleDateString(
+    undefined,
+    dateFmt,
+  )}`;
+}
+
+interface ConversationSectionProps {
+  group: ConversationGroup<VaultItem>;
+  selected: Set<string>;
+  onSelect: (id: string) => void;
+}
+
+function ConversationSection({
+  group,
+  selected,
+  onSelect,
+}: ConversationSectionProps) {
+  // Items within a conversation read best chronologically (oldest → newest).
+  const ordered = group.items;
+  return (
+    <section>
+      <div className="sticky top-0 z-10 bg-gray-100/95 backdrop-blur border-b border-gray-200 px-4 py-1.5 flex items-center gap-2">
+        <span className="text-xs font-medium text-gray-600">
+          {formatConversationHeader(group)}
+        </span>
+        <span className="text-xs text-gray-400">
+          {ordered.length} claim{ordered.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      {ordered.map((item) => (
+        <VaultRow
+          key={item.id}
+          item={item}
+          selected={selected.has(item.id)}
+          onSelect={onSelect}
+        />
+      ))}
+    </section>
   );
 }
 
@@ -303,7 +444,8 @@ interface RowProps {
   item: VaultItem;
   selected: boolean;
   onSelect: (id: string) => void;
-  style: React.CSSProperties;
+  /** Absolute-position style from the virtualizer; omitted in flow (grouped) layout. */
+  style?: React.CSSProperties;
 }
 
 function VaultRow({ item, selected, onSelect, style }: RowProps) {
