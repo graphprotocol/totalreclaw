@@ -246,8 +246,12 @@ async def _resolve_is_deployed(
 # and return the hash ONLY once a receipt reports success — so "stored" means
 # on-chain. The single-fact path keeps accept-time return (auto-extraction
 # latency matters more there and a single dropped fact re-extracts next turn).
-_BATCH_RECEIPT_TIMEOUT_S: float = 60.0
-_BATCH_RECEIPT_POLL_S: float = 3.0
+#
+# rc4 (internal#435): the instrumented staging repro showed >60s inclusion
+# latency for larger (sim-passing) ops on the staging bundler — a 60s wait
+# false-negatived batches that DID eventually mine. Lifted to 240s / 5s poll.
+_BATCH_RECEIPT_TIMEOUT_S: float = 240.0
+_BATCH_RECEIPT_POLL_S: float = 5.0
 
 
 def _receipt_success(result: dict) -> Optional[bool]:

@@ -2,14 +2,19 @@
 
 Acceptance criteria (imp-11 decomposition): the helper must:
 
-* On Gnosis (chain 100), buffer facts into groups of ≤IMPORT_MAX_BATCH_SIZE
-  (30 since #392 Part 2 — was 15) and submit each group via
-  ``client.remember_batch`` (one UserOp per group).
+* On Gnosis (chain 100), buffer facts into groups bounded by BOTH the count
+  ceiling ``IMPORT_MAX_BATCH_SIZE`` (15 — restored from 30 in rc4/internal#435)
+  AND the estimated calldata-byte cap ``_MAX_BATCH_BYTES`` (32KB), submitting
+  each group via ``client.remember_batch`` (one UserOp per group). With
+  realistic embedded payloads the byte cap governs, so these tests assert the
+  dual-cap INVARIANT (every group ≤ both caps, all facts stored) rather than a
+  hardcoded group size. The exact byte-driven split is covered in
+  ``test_batch_sizing_rc4.py``.
 * On free-tier / non-Gnosis chains, fall back to per-fact
   ``client.remember`` calls (current behaviour).
-* Cover 14-, 30-, and 45-fact cases (sub-cap, at-cap, over-cap → split).
 
-Spec: ``docs/specs/imp/281-gnosis-batching-chain-gate.md`` §5.
+Spec: ``docs/specs/imp/281-gnosis-batching-chain-gate.md`` §5;
+rc4 byte cap: internal#435.
 """
 
 from __future__ import annotations
@@ -22,7 +27,26 @@ import pytest
 from totalreclaw.import_engine import (
     ImportEngine,
     IMPORT_MAX_BATCH_SIZE,
+    _MAX_BATCH_BYTES,
+    _estimate_payload_bytes,
 )
+
+
+def _assert_groups_within_caps(client) -> list[int]:
+    """Every submitted group must respect BOTH the count and byte caps.
+    Returns the list of group sizes for callers that want to inspect them."""
+    sizes = []
+    for call in client.remember_batch.await_args_list:
+        group = call.args[0]
+        assert len(group) <= IMPORT_MAX_BATCH_SIZE, (
+            f"group of {len(group)} exceeds count cap {IMPORT_MAX_BATCH_SIZE}"
+        )
+        est = sum(_estimate_payload_bytes(p) for p in group)
+        assert est <= _MAX_BATCH_BYTES, (
+            f"group of {len(group)} facts is ~{est}B > {_MAX_BATCH_BYTES}B cap"
+        )
+        sizes.append(len(group))
+    return sizes
 
 
 @pytest.fixture(autouse=True)
@@ -112,8 +136,9 @@ def _run(coro):
 # ---------------------------------------------------------------------------
 
 
-def test_gnosis_14_facts_submits_one_batch() -> None:
-    """14 facts on Gnosis → 1 remember_batch call of 14, 0 remember calls."""
+def test_gnosis_14_facts_all_stored_within_caps() -> None:
+    """14 facts on Gnosis → all stored, every group within both caps, 0
+    per-fact remember calls."""
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
@@ -121,14 +146,13 @@ def test_gnosis_14_facts_submits_one_batch() -> None:
 
     assert errors == []
     assert facts_stored == 14
-    assert client.remember_batch.await_count == 1
-    submitted = client.remember_batch.await_args_list[0].args[0]
-    assert len(submitted) == 14
+    sizes = _assert_groups_within_caps(client)
+    assert sum(sizes) == 14  # no fact dropped or duplicated
     assert client.remember.await_count == 0
 
 
-def test_gnosis_15_facts_submits_one_batch() -> None:
-    """15 facts (sub-cap under IMPORT_MAX_BATCH_SIZE=30) → 1 batch of 15."""
+def test_gnosis_15_facts_all_stored_within_caps() -> None:
+    """15 facts (= count cap) → all stored, groups within both caps."""
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
@@ -136,14 +160,13 @@ def test_gnosis_15_facts_submits_one_batch() -> None:
 
     assert errors == []
     assert facts_stored == 15
-    assert client.remember_batch.await_count == 1
-    submitted = client.remember_batch.await_args_list[0].args[0]
-    assert len(submitted) == 15
+    sizes = _assert_groups_within_caps(client)
+    assert sum(sizes) == 15
     assert client.remember.await_count == 0
 
 
-def test_gnosis_30_facts_submits_one_batch() -> None:
-    """30 facts (= IMPORT_MAX_BATCH_SIZE) → 1 remember_batch call of 30."""
+def test_gnosis_30_facts_all_stored_within_caps() -> None:
+    """30 facts → all stored, no single group exceeds the count or byte cap."""
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
@@ -151,14 +174,16 @@ def test_gnosis_30_facts_submits_one_batch() -> None:
 
     assert errors == []
     assert facts_stored == 30
-    assert client.remember_batch.await_count == 1
-    sizes = [len(c.args[0]) for c in client.remember_batch.await_args_list]
-    assert sizes == [30]
+    sizes = _assert_groups_within_caps(client)
+    assert sum(sizes) == 30
+    # More than one group: 30 realistic embedded facts cannot fit one ≤32KB op.
+    assert client.remember_batch.await_count >= 2
     assert client.remember.await_count == 0
 
 
-def test_gnosis_45_facts_splits_at_cap() -> None:
-    """45 facts (> IMPORT_MAX_BATCH_SIZE=30) → 2 batches of 30 + 15."""
+def test_gnosis_45_facts_split_within_caps() -> None:
+    """45 facts → split into multiple groups, each within both caps, all
+    stored."""
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
@@ -166,14 +191,17 @@ def test_gnosis_45_facts_splits_at_cap() -> None:
 
     assert errors == []
     assert facts_stored == 45
-    assert client.remember_batch.await_count == 2
-    sizes = [len(c.args[0]) for c in client.remember_batch.await_args_list]
-    assert sizes == [30, 15]
+    sizes = _assert_groups_within_caps(client)
+    assert sum(sizes) == 45
+    assert client.remember_batch.await_count >= 2
     assert client.remember.await_count == 0
 
 
-def test_gnosis_uneven_sub_cap_single_batch() -> None:
-    """20 facts (sub-cap under 30) → 1 batch of 20."""
+def test_gnosis_count_cap_binds_without_embedding(monkeypatch) -> None:
+    """With NO embedding (small payloads) the byte cap is loose, so the count
+    ceiling of 15 governs: 20 tiny facts → groups of 15 + 5."""
+    import totalreclaw.embedding as _emb
+    monkeypatch.setattr(_emb, "get_embedding", lambda _t: None)
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
@@ -181,9 +209,8 @@ def test_gnosis_uneven_sub_cap_single_batch() -> None:
 
     assert errors == []
     assert facts_stored == 20
-    assert client.remember_batch.await_count == 1
-    sizes = [len(c.args[0]) for c in client.remember_batch.await_args_list]
-    assert sizes == [20]
+    sizes = _assert_groups_within_caps(client)
+    assert sizes == [15, 5]
 
 
 # ---------------------------------------------------------------------------
@@ -277,9 +304,16 @@ def test_gnosis_batch_409_dedup_is_silent() -> None:
     assert facts_stored == 0
 
 
-def test_gnosis_batch_partial_id_list_counts_only_returned_ids() -> None:
+def test_gnosis_batch_partial_id_list_counts_only_returned_ids(monkeypatch) -> None:
     """If remember_batch returns fewer ids than facts submitted (likely
-    fingerprint dedup of a subset), only the returned count is credited."""
+    fingerprint dedup of a subset), only the returned count is credited.
+
+    Uses 5 no-embedding facts so they form a single group (well under both
+    caps) and the ``len(ids) - 2`` short return maps to a deterministic stored
+    count. (With embeddings, 5 realistic facts exceed the 32KB byte cap and
+    would split.)"""
+    import totalreclaw.embedding as _emb
+    monkeypatch.setattr(_emb, "get_embedding", lambda _t: None)
     client = _make_pro_client()
 
     async def _short_batch(facts, source="python-client"):
@@ -288,14 +322,16 @@ def test_gnosis_batch_partial_id_list_counts_only_returned_ids() -> None:
     client.remember_batch = AsyncMock(side_effect=_short_batch)
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(15)))
+    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(5)))
 
     assert errors == []
-    assert facts_stored == 13
+    assert client.remember_batch.await_count == 1
+    assert facts_stored == 3
 
 
 def test_gnosis_batch_non_dedup_error_surfaced() -> None:
-    """Non-409 errors propagate to the returned error list (capped at 20)."""
+    """A non-409, non-sim-revert error (e.g. AA25) propagates one error per
+    group with no halving. One error per remember_batch call."""
     client = _make_pro_client()
     client.remember_batch = AsyncMock(
         side_effect=RuntimeError("AA25 nonce zombie")
@@ -305,8 +341,8 @@ def test_gnosis_batch_non_dedup_error_surfaced() -> None:
     facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(45)))
 
     assert facts_stored == 0
-    # Two chunks attempted (30 + 15); two errors collected.
-    assert len(errors) == 2
+    # AA25 is not a sim-size revert → no halving → exactly one error per group.
+    assert len(errors) == client.remember_batch.await_count
     assert all("AA25 nonce zombie" in e for e in errors)
 
 
