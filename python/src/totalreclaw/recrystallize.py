@@ -1,11 +1,11 @@
 """Re-crystallize / re-key backfill for collapsed on-chain sessions.
 
-**SCAFFOLD — not a runnable on-chain writer.** The dry-run planner
-(:func:`plan_recrystallize`) and all *pure* logic (segmentation → session plan,
-cost estimation) are implemented and unit-tested. The on-chain write/tombstone
-path (:func:`execute_recrystallize`) is a **stub that raises
-``NotImplementedError``**. See ``docs/specs/totalreclaw/recrystallize-backfill.md``
-for the full design.
+Both the dry-run planner (:func:`plan_recrystallize`, pure segmentation +
+cost estimation) and the guarded on-chain write/tombstone path
+(:func:`execute_recrystallize`) are implemented + validated against staging
+(#438). See ``docs/specs/totalreclaw/recrystallize-backfill.md`` for the full
+design and §12 for usage. Not yet run against any real user vault (Phase B/C,
+gated on Pedro).
 
 Why this exists
 ---------------
@@ -39,12 +39,14 @@ Safety
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 # Single source of truth for the relay URL (repo forbids duplicate URL literals).
 from .relay import _HARDCODED_DEFAULT_URL as _CANONICAL_PROD_URL
@@ -64,6 +66,18 @@ DEFAULT_SIM_THRESHOLD = 0.55  # validated on real Gemini data (#368)
 #: A session needs >= this many facts to warrant a fresh Crystal. Singletons are
 #: re-keyed without a Crystal (mirrors import singleton semantics).
 MIN_FACTS_FOR_CRYSTAL = 2
+
+#: Crystal importance — anchored "high" per the v1 rubric, mirrored from
+#: import_engine._CRYSTAL_IMPORTANCE so backfilled Crystals score like imports.
+CRYSTAL_IMPORTANCE = 8
+
+#: Provenance for a re-derived Crystal. A Crystal is a summary the tool derived
+#: from the vault's own facts, so ``derived`` is the correct v1 MemorySource
+#: (not ``external``, which imports use for provider-sourced data).
+CRYSTAL_PROVENANCE = "derived"
+
+#: Page size for the paginated subgraph fetch (mirrors operations.export_facts).
+FETCH_PAGE_SIZE = 1000
 
 #: Max inner calls per executeBatch UserOp (core 2.5.5, #392 Part 2). Batching
 #: cuts UserOp count (Pimlico cost) but NOT quota cost (quota is per-fact).
@@ -337,31 +351,181 @@ def build_plan(
     )
 
 
-# ── Fetch + decrypt front-end (STUB — network/crypto path) ────────────────────
+# ── Fetch + decrypt front-end (network/crypto path) ──────────────────────────
+
+
+#: A widened export query — like ``operations.EXPORT_QUERY`` but the fact
+#: fields the backfill additionally needs are ``encryptedEmbedding`` (to reuse
+#: the original vector on rewrite) and ``createdAt`` (the segmenter's ordering
+#: key). All the standard export/recall queries already return these on the
+#: subgraph object; the export path just drops them post-decrypt.
+_FETCH_QUERY = """
+  query RecrystallizeFetch($owner: Bytes!, $first: Int!, $skip: Int!) {
+    facts(
+      where: { owner: $owner, isActive: true }
+      first: $first
+      skip: $skip
+      orderBy: timestamp
+      orderDirection: desc
+    ) {
+      id
+      encryptedBlob
+      encryptedEmbedding
+      decayScore
+      timestamp
+      createdAt
+      isActive
+      contentFp
+    }
+  }
+"""
+
+
+def _subgraph_ts_to_unix(raw: Any) -> float:
+    """Coerce a subgraph ``createdAt``/``timestamp`` BigInt string to Unix secs.
+
+    Both are BigInt strings of Unix seconds. Returns ``0.0`` on any parse
+    failure (a fact with no usable timestamp still segments, just with a
+    degenerate ordering key — the segmenter tolerates ties).
+    """
+    if raw in (None, ""):
+        return 0.0
+    try:
+        return float(int(str(raw)))
+    except (ValueError, TypeError):
+        return 0.0
 
 
 async def fetch_and_decrypt_vault(client: Any) -> list[DecryptedFact]:
     """Fetch all active facts for the owner and decrypt them client-side.
 
-    STUB. The real implementation:
-      1. Paginates ``facts(where: {owner, isActive: true})`` via
-         ``client._relay.query_subgraph`` requesting ``id, encryptedBlob,
-         encryptedEmbedding, createdAt, timestamp, decayScore`` (a query wider
-         than ``EXPORT_QUERY`` — it must include ``encryptedEmbedding``).
-      2. For each fact: ``decrypt(encryptedBlob)`` → ``_decode_raw_blob`` (NOT
-         ``read_blob_unified`` — see design §3.1), ``decrypt_embedding`` for the
-         vector, and ``createdAt`` → Unix seconds.
-      3. Skips digest blobs (``is_digest_blob``) and tombstoned stubs.
+    Paginates ``facts(where: {owner, isActive: true})`` via
+    ``client._relay.query_subgraph`` (widened over ``export`` to include
+    ``encryptedEmbedding`` + ``createdAt``), then for each fact:
+
+      1. ``decrypt(encryptedBlob)`` → the raw v1 JSON blob.
+      2. :func:`_decode_raw_blob` for the stored ``metadata`` dict (NOT
+         ``read_blob_unified``, which whitelists ``metadata`` away — design
+         §3.1), so ``session_id`` / ``subtype`` / ``import_source`` survive.
+      3. ``read_blob_unified`` for the display fields the raw blob doesn't
+         canonicalize (``text`` / ``importance`` / ``category``).
+      4. ``decrypt_embedding`` for the 640d vector (reused on rewrite so LSH
+         trapdoors + search are unchanged).
+
+    Skips digest blobs (``is_digest_blob``) and tombstone stubs
+    (``is_stub_blob_hex``) — neither is a re-keyable atomic fact or Crystal.
 
     Returns a list of :class:`DecryptedFact` (atomic + Crystals; the caller
-    splits them via :func:`split_facts`).
+    splits them via :func:`split_facts`). ``client._ensure_address`` /
+    ``_ensure_registered`` must have run first (``plan_recrystallize`` does).
     """
-    raise NotImplementedError(
-        "fetch_and_decrypt_vault: subgraph fetch + client-side decrypt not "
-        "implemented in the scaffold. TODO: reuse the paginated subgraph query "
-        "+ crypto path from operations.export_facts, widened to include "
-        "encryptedEmbedding and to decode raw metadata via _decode_raw_blob."
+    # Local imports keep the pure planner importable without the crypto stack.
+    from .crypto import decrypt, decrypt_embedding
+    from .claims_helper import (
+        is_digest_blob,
+        is_stub_blob_hex,
+        read_blob_unified,
     )
+
+    keys = client._keys
+    relay = client._relay
+    owner = client.wallet_address.lower()
+
+    out: list[DecryptedFact] = []
+    skip = 0
+    while True:
+        data = await relay.query_subgraph(
+            _FETCH_QUERY,
+            {"owner": owner, "first": FETCH_PAGE_SIZE, "skip": skip},
+        )
+        facts = data.get("data", {}).get("facts", []) if isinstance(data, dict) else []
+        if not facts:
+            break
+
+        for fact in facts:
+            try:
+                encrypted_hex = fact.get("encryptedBlob", "") or ""
+                if is_stub_blob_hex(encrypted_hex):
+                    continue
+                if encrypted_hex.startswith("0x"):
+                    encrypted_hex = encrypted_hex[2:]
+                if not encrypted_hex:
+                    continue
+                encrypted_b64 = base64.b64encode(
+                    bytes.fromhex(encrypted_hex)
+                ).decode("ascii")
+                decrypted_blob = decrypt(encrypted_b64, keys.encryption_key)
+                if is_digest_blob(decrypted_blob):
+                    continue
+
+                # Raw metadata (session_id / subtype / import_source) — design §3.1.
+                metadata = _decode_raw_blob(decrypted_blob)
+                # Canonical display fields the raw blob doesn't normalize.
+                doc = read_blob_unified(decrypted_blob)
+                text = doc.get("text") or ""
+                if not text:
+                    continue
+                importance = float(doc.get("importance", 5))
+                fact_type = doc.get("category", "claim")
+
+                # v1 provenance lives in the blob's whitelisted metadata; the
+                # raw metadata dict (session_id etc.) does not carry ``source``.
+                doc_meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+                provenance = (
+                    doc_meta.get("source")
+                    if isinstance(doc_meta.get("source"), str)
+                    else "user-inferred"
+                )
+
+                # Entities off the raw v1 blob (re-attached verbatim on rewrite).
+                entities = None
+                try:
+                    raw_obj = json.loads(decrypted_blob)
+                    if isinstance(raw_obj, dict) and isinstance(
+                        raw_obj.get("entities"), list
+                    ):
+                        entities = raw_obj["entities"]
+                except (ValueError, TypeError):
+                    pass
+
+                embedding: Optional[list[float]] = None
+                enc_emb = fact.get("encryptedEmbedding")
+                if enc_emb:
+                    try:
+                        embedding = decrypt_embedding(enc_emb, keys.encryption_key)
+                    except Exception:
+                        embedding = None
+
+                created_at = _subgraph_ts_to_unix(
+                    fact.get("createdAt") or fact.get("timestamp")
+                )
+
+                out.append(
+                    DecryptedFact(
+                        fact_id=fact["id"],
+                        text=text,
+                        embedding=embedding,
+                        created_at=created_at,
+                        importance=importance,
+                        fact_type=fact_type,
+                        provenance=provenance,
+                        metadata=metadata,
+                        entities=entities,
+                    )
+                )
+            except Exception as exc:
+                logger.warning(
+                    "recrystallize: skipped undecryptable fact %s: %s",
+                    fact.get("id"),
+                    exc,
+                )
+                continue
+
+        if len(facts) < FETCH_PAGE_SIZE:
+            break
+        skip += FETCH_PAGE_SIZE
+
+    return out
 
 
 def _decode_raw_blob(decrypted_json: str) -> dict[str, Any]:
@@ -382,6 +546,112 @@ def _decode_raw_blob(decrypted_json: str) -> dict[str, Any]:
     return meta if isinstance(meta, dict) else {}
 
 
+# ── Crystal (re)builder + quota detection (write-path helpers) ────────────────
+
+
+def _is_quota_exhausted_error(exc: BaseException) -> bool:
+    """True if ``exc`` is (or wraps) a relay 403 quota-exceeded response.
+
+    The bundler submit path calls ``resp.raise_for_status()``, so a quota
+    rejection surfaces as an ``httpx.HTTPStatusError`` with a 403 status. We
+    also match on a ``"quota"`` substring in the message as a belt-and-braces
+    guard for relays that signal quota differently. Used to convert a mid-run
+    403 into a clean ``paused_quota`` stop (design §6.2) rather than a crash.
+    """
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 403:
+        return True
+    msg = str(exc).lower()
+    return "quota" in msg and ("exceed" in msg or "403" in msg)
+
+
+async def _build_crystal_text(
+    session: "CorrectedSession",
+    llm_completion: Optional[Callable[[str], Any]],
+) -> tuple[str, dict[str, Any]]:
+    """Produce ``(text, extra_metadata)`` for a corrected session's Crystal.
+
+    Unlike the import engine, the backfill has **no conversation transcript**
+    (turns aren't on-chain) — only the re-segmented *facts*. So the summary
+    prompt is fact-only. Behaviour mirrors ``import_engine._make_crystal``:
+
+      * If an ``llm_completion`` is wired, one call returns
+        ``{"title", "summary", ...}``; the title becomes the Crystal text.
+      * On no LLM / bad JSON / empty title, fall back to
+        ``_derive_title_from_facts`` (highest-importance fact, truncated).
+
+    The returned ``extra_metadata`` carries the Crystal marker
+    (``subtype=session_crystal``) + the **fresh** ``session_id`` so backfilled
+    Crystals key exactly like the fixed live write-side path.
+    """
+    facts_for_title = [
+        {"text": f.text, "importance": f.importance, "type": f.fact_type}
+        for f in session.facts
+    ]
+
+    title: Optional[str] = None
+    summary: Optional[str] = None
+    if llm_completion is not None:
+        try:
+            from .import_engine import _extract_json_object
+
+            prompt = _recrystallize_crystal_prompt(facts_for_title)
+            raw = await llm_completion(prompt)
+            data = _extract_json_object(raw) if raw else None
+            if isinstance(data, dict):
+                t = (data.get("title") or "").strip()
+                title = t[:60] if t else None
+                s = (data.get("summary") or "").strip()
+                summary = s or None
+        except Exception as exc:  # never let a Crystal failure abort the run
+            logger.debug("recrystallize: Crystal LLM call failed: %s", exc)
+
+    if not title:
+        from .import_engine import _derive_title_from_facts
+
+        title = _derive_title_from_facts(facts_for_title)
+
+    meta: dict[str, Any] = {
+        "subtype": METADATA_SUBTYPE_SESSION_CRYSTAL,
+        "session_id": session.fresh_session_id,
+        "session_title": title,
+    }
+    if summary:
+        meta["session_summary"] = summary
+    # Preserve the provider provenance if the source facts came from an import.
+    for f in session.facts:
+        src = f.metadata.get("import_source")
+        if isinstance(src, str) and src:
+            meta["import_source"] = src
+            break
+    return title[:512], meta
+
+
+def _recrystallize_crystal_prompt(facts: list[dict[str, Any]]) -> str:
+    """Fact-only Crystal summary prompt (no transcript — see §3 caveat).
+
+    Analogue of ``import_engine._crystal_prompt`` with the transcript half
+    removed: the backfill only has extracted facts to summarize.
+    """
+    sorted_facts = sorted(
+        facts, key=lambda f: f.get("importance", 5), reverse=True
+    )
+    fact_lines = "\n".join(
+        f"- [{f.get('type', 'fact')}] (importance={f.get('importance', 5)}) "
+        f"{f.get('text', '')}"
+        for f in sorted_facts[:20]
+    )[:2000]
+    return (
+        "You are given the EXTRACTED FACTS from a single coherent session "
+        "(the conversation transcript is unavailable). Generate a compact JSON "
+        "object summarizing the session.\n"
+        "Return ONLY JSON, no prose. Schema:\n"
+        '{"title": "<=60-char human headline", '
+        '"summary": "<=200-char one-line gist"}\n\n'
+        f"Extracted facts (primary signal for the title):\n{fact_lines}\n"
+    )
+
+
 # ── Dry-run entry point (front-end: fetch is stubbed, planning is real) ───────
 
 
@@ -393,11 +663,13 @@ async def plan_recrystallize(
 ) -> RecrystallizePlan:
     """DRY-RUN: fetch + decrypt the vault, re-segment, and estimate cost.
 
-    Writes NOTHING on-chain. This is the default, safe entry point. The pure
-    planning half (:func:`build_plan`) is fully implemented and tested; only the
-    fetch/decrypt front-end (:func:`fetch_and_decrypt_vault`) is stubbed.
+    Writes NOTHING on-chain. This is the default, safe entry point; the pure
+    planning half (:func:`build_plan`) is unit-tested and the fetch/decrypt
+    front-end (:func:`fetch_and_decrypt_vault`) reads + decrypts the vault.
     """
     await client._ensure_address()
+    # Subgraph queries need the auth key registered (else the relay 401s).
+    await client._ensure_registered()
     owner = client.wallet_address
     decrypted = await fetch_and_decrypt_vault(client)
     return build_plan(
@@ -408,7 +680,71 @@ async def plan_recrystallize(
     )
 
 
-# ── Execute entry point (STUB — on-chain writer, guarded) ─────────────────────
+# ── Execute entry point (on-chain writer, guarded) ───────────────────────────
+
+
+class QuotaPaused(Exception):
+    """Internal signal: a relay 403 quota-exceeded stopped the run cleanly.
+
+    Not an error — the CLI catches it, reports "resume next month", and exits
+    0. The checkpoint is already persisted as ``paused_quota`` when this is
+    raised (design §6.2).
+    """
+
+
+async def _rewrite_session_facts(
+    client: Any,
+    session: "CorrectedSession",
+) -> list[str]:
+    """Write the re-keyed facts for one session; return their new ids.
+
+    Each old fact is rewritten identically (text / importance / fact_type /
+    provenance / entities / original embedding) with the **fresh**
+    ``session_id`` stamped into ``extra_metadata`` and ``import_source``
+    preserved. Batched ``remember_batch`` up to :data:`MAX_BATCH_SIZE` per
+    ``executeBatch`` UserOp (design §4.1).
+    """
+    new_ids: list[str] = []
+    fact_dicts: list[dict[str, Any]] = []
+    for f in session.facts:
+        extra_metadata: dict[str, Any] = {"session_id": session.fresh_session_id}
+        import_source = f.metadata.get("import_source")
+        if isinstance(import_source, str) and import_source:
+            extra_metadata["import_source"] = import_source
+        fact_dicts.append(
+            {
+                "text": f.text,
+                "importance": f.importance,
+                "embedding": f.embedding,
+                "fact_type": f.fact_type,
+                "entities": f.entities,
+                "provenance": f.provenance,
+                "extra_metadata": extra_metadata,
+            }
+        )
+
+    for start in range(0, len(fact_dicts), MAX_BATCH_SIZE):
+        batch = fact_dicts[start : start + MAX_BATCH_SIZE]
+        ids = await client.remember_batch(batch, source="recrystallize")
+        new_ids.extend(ids)
+    return new_ids
+
+
+async def _write_crystal(
+    client: Any,
+    session: "CorrectedSession",
+    llm_completion: Optional[Callable[[str], Any]],
+) -> Optional[str]:
+    """Build + write one fresh Crystal for a multi-fact session; return its id."""
+    text, meta = await _build_crystal_text(session, llm_completion)
+    return await client.remember(
+        text,
+        importance=CRYSTAL_IMPORTANCE,
+        source="recrystallize",
+        fact_type="summary",
+        provenance=CRYSTAL_PROVENANCE,
+        extra_metadata=meta,
+    )
 
 
 async def execute_recrystallize(
@@ -418,28 +754,61 @@ async def execute_recrystallize(
     write_side_fix_confirmed: bool = False,
     confirm: bool = False,
     checkpoint: Optional["RecrystallizeCheckpoint"] = None,
-) -> None:
+    llm_completion: Optional[Callable[[str], Any]] = None,
+    progress: Optional[Callable[[str], None]] = None,
+) -> "RecrystallizeCheckpoint":
     """EXECUTE the backfill: write corrected data, tombstone old data.
 
-    **STUB — raises ``NotImplementedError``.** The on-chain write path is
-    intentionally not built in this scaffold.
+    Per corrected session, in the safe **write-new → confirm-indexed →
+    tombstone-old** order (design §4.3) so an interruption never loses data —
+    at worst it leaves a duplicate the resume then cleans up:
 
-    When implemented, per corrected session (design §4.3 order):
       1. ``client.remember_batch`` the rewritten facts (fresh ``session_id`` in
          ``extra_metadata``, original embedding reused) in ≤30-fact batches.
-      2. Build + write a fresh Crystal (reuse import_engine ``_make_crystal``)
-         for multi-fact sessions.
-      3. ``confirm_indexed`` the new facts, THEN tombstone the old facts
-         (``client.forget`` per-fact, or a future ``forget_batch``).
-    Then tombstone every old mixed Crystal.
+      2. For a multi-fact session, build + write a fresh Crystal
+         (:func:`_build_crystal_text`).
+      3. ``confirm_indexed`` the last new fact, THEN ``client.forget`` each old
+         fact (per-fact tombstone; design §4.1 — no batch-delete exists).
+
+    Finally, every old mixed Crystal is tombstoned (design §4.2).
+
+    Resumability (design §6): every mutation advances the per-session
+    checkpoint phase (``planned → written → tombstoned → done``) and persists
+    it. On a re-run, a session already ``written`` skips its writes; already
+    ``done`` is skipped entirely. Fresh ``session_id``s are read back from the
+    checkpoint so a resume never double-mints. A relay 403 quota-exceeded marks
+    the checkpoint ``paused_quota``, persists it, and raises :class:`QuotaPaused`
+    (a clean stop, not a failure).
 
     Guards (must ALL pass before any write):
       - ``write_side_fix_confirmed`` — attests the target client runs the
         #429/#434 fix (else new writes re-collapse mid-migration; design §8).
       - ``confirm`` — explicit operator go-ahead after reviewing the dry-run.
-      - ``checkpoint`` — resumability (design §6); phase-gates each session so a
-        re-run never double-writes or double-tombstones.
+      - ``plan`` — an explicit plan artifact from the dry-run planner is
+        REQUIRED; ``plan=None`` refuses (safety rail).
+
+    Parameters
+    ----------
+    checkpoint : RecrystallizeCheckpoint, optional
+        Resume state. If ``None``, a fresh checkpoint is created (and returned)
+        so the caller can persist / inspect it.
+    llm_completion : callable, optional
+        ``async (prompt) -> str`` used to summarize each multi-fact Crystal.
+        When absent, Crystals fall back to a fact-derived title (no LLM call).
+    progress : callable, optional
+        ``(str) -> None`` per-item progress sink (design safety rail: per-item
+        progress logging). Defaults to a module-logger INFO line.
+
+    Returns
+    -------
+    RecrystallizeCheckpoint
+        The final checkpoint (``status=completed`` on a full run).
     """
+    if plan is None:
+        raise RuntimeError(
+            "execute_recrystallize refused: a plan artifact is required. Run "
+            "plan_recrystallize (dry-run) first and pass its result."
+        )
     if not write_side_fix_confirmed:
         raise RuntimeError(
             "execute_recrystallize refused: write_side_fix_confirmed is False. "
@@ -452,30 +821,167 @@ async def execute_recrystallize(
             "execute_recrystallize refused: confirm is False. Review the dry-run "
             "plan (plan_recrystallize) and pass confirm=True to proceed."
         )
-    # TODO(recrystallize): implement the guarded on-chain write/tombstone loop.
-    #   - iterate plan.corrected_sessions, phase-gated by `checkpoint`
-    #   - client.remember_batch(...) rewritten facts (≤30/batch)
-    #   - _make_crystal(...) + write for multi-fact sessions
-    #   - confirm_indexed(...) then client.forget(...) old facts
-    #   - tombstone plan.old_crystals
-    #   - on 403 quota_exceeded: mark checkpoint paused_quota, write, exit clean
-    raise NotImplementedError(
-        "execute_recrystallize: on-chain write/tombstone path is a scaffold "
-        "stub. See docs/specs/totalreclaw/recrystallize-backfill.md §4."
-    )
+
+    def _emit(msg: str) -> None:
+        if progress is not None:
+            progress(msg)
+        else:
+            logger.info("recrystallize: %s", msg)
+
+    if checkpoint is None:
+        checkpoint = RecrystallizeCheckpoint(
+            owner=plan.owner,
+            started_at=_now_iso(),
+            last_updated=_now_iso(),
+            status="running",
+        )
+    else:
+        checkpoint.status = "running"
+        checkpoint.quota_exhausted_at = None
+
+    from .confirm_indexed import confirm_indexed as _confirm_indexed
+
+    # Resume index: map each already-planned session's OLD-fact-id set to its
+    # stored checkpoint. Segmentation is deterministic, so a re-derived plan
+    # produces the SAME old-fact-id groups; matching on that set (not on the
+    # freshly-minted session_id, which differs run-to-run) lets a resume reuse
+    # the prior fresh session_id + progress without double-minting (§6.2).
+    _by_old_ids: dict[frozenset[str], tuple[str, SessionCheckpoint]] = {
+        frozenset(sc.old_fact_ids): (sid, sc)
+        for sid, sc in checkpoint.sessions.items()
+        if sid != _OLD_CRYSTALS_KEY
+    }
+
+    try:
+        total = len(plan.corrected_sessions)
+        for i, session in enumerate(plan.corrected_sessions, start=1):
+            old_id_set = frozenset(f.fact_id for f in session.facts)
+            # Exact session_id hit (same plan object re-passed), else match on
+            # the deterministic old-fact-id set (re-derived plan on resume).
+            sc = checkpoint.sessions.get(session.fresh_session_id)
+            if sc is None and old_id_set in _by_old_ids:
+                prior_sid, sc = _by_old_ids[old_id_set]
+                session.fresh_session_id = prior_sid
+            if sc is None:
+                sc = SessionCheckpoint(
+                    old_fact_ids=[f.fact_id for f in session.facts],
+                )
+                checkpoint.sessions[session.fresh_session_id] = sc
+
+            if sc.phase == "done":
+                _emit(f"[{i}/{total}] session {session.fresh_session_id} already done — skip")
+                continue
+
+            # 1. Write new facts (each sub-step persisted so a resume never
+            #    re-mints work that already landed — mint cost is quota-billed).
+            if sc.phase == "planned":
+                if not sc.facts_written:
+                    _emit(
+                        f"[{i}/{total}] writing {len(session.facts)} facts → "
+                        f"session {session.fresh_session_id}"
+                    )
+                    sc.new_fact_ids = await _rewrite_session_facts(client, session)
+                    sc.facts_written = True
+                    checkpoint.save()  # persist BEFORE the Crystal write
+                if session.needs_crystal and not sc.crystal_written:
+                    crystal_id = await _write_crystal(client, session, llm_completion)
+                    if crystal_id:
+                        sc.new_fact_ids.append(crystal_id)
+                    sc.crystal_written = True
+                    checkpoint.save()
+                sc.phase = "written"
+                checkpoint.save()
+
+            # 2. Confirm the new data is indexed, THEN tombstone the old facts.
+            #    ``tombstoned`` means a prior run crashed mid-tombstone — re-enter
+            #    and finish the remaining (skip-already-tombstoned) forgets.
+            if sc.phase in ("written", "tombstoned"):
+                if sc.phase == "written" and sc.new_fact_ids:
+                    await _confirm_indexed(sc.new_fact_ids[-1], client._relay, expect="active")
+                remaining = [
+                    fid for fid in sc.old_fact_ids if fid not in sc.old_fact_ids_tombstoned
+                ]
+                for old_id in remaining:
+                    await client.forget(old_id)
+                    sc.old_fact_ids_tombstoned.append(old_id)
+                    sc.phase = "tombstoned"
+                    checkpoint.save()
+                sc.phase = "done"
+                checkpoint.save()
+                _emit(f"[{i}/{total}] session {session.fresh_session_id} done")
+
+        # 3. Tombstone every old mixed Crystal (design §4.2). Tracked under a
+        #    synthetic session key so a resume skips already-tombstoned ones.
+        crystal_sc = checkpoint.sessions.get(_OLD_CRYSTALS_KEY)
+        if crystal_sc is None:
+            crystal_sc = SessionCheckpoint(
+                phase="written",
+                old_fact_ids=[c.fact_id for c in plan.old_crystals],
+            )
+            checkpoint.sessions[_OLD_CRYSTALS_KEY] = crystal_sc
+        if crystal_sc.phase != "done":
+            remaining_crystals = [
+                cid
+                for cid in crystal_sc.old_fact_ids
+                if cid not in crystal_sc.old_crystal_ids_tombstoned
+            ]
+            for j, cid in enumerate(remaining_crystals, start=1):
+                _emit(f"tombstoning old Crystal [{j}/{len(remaining_crystals)}] {cid}")
+                await client.forget(cid)
+                crystal_sc.old_crystal_ids_tombstoned.append(cid)
+                checkpoint.save()
+            crystal_sc.phase = "done"
+            checkpoint.save()
+
+        checkpoint.status = "completed"
+        checkpoint.save()
+        _emit("recrystallize complete")
+        return checkpoint
+
+    except Exception as exc:
+        if _is_quota_exhausted_error(exc):
+            checkpoint.status = "paused_quota"
+            checkpoint.quota_exhausted_at = _now_iso()
+            checkpoint.save()
+            _emit(
+                "quota exhausted — checkpoint saved as paused_quota; "
+                "resume after the monthly quota resets"
+            )
+            raise QuotaPaused(str(exc)) from exc
+        checkpoint.status = "failed"
+        checkpoint.save()
+        raise
 
 
-# ── Checkpoint / resumability (STUB persistence; shape is real) ───────────────
+#: Synthetic checkpoint key under which old-Crystal tombstones are tracked
+#: (they don't belong to any corrected session).
+_OLD_CRYSTALS_KEY = "__old_crystals__"
+
+
+# ── Checkpoint / resumability (atomic JSON persistence) ──────────────────────
 
 
 @dataclass
 class SessionCheckpoint:
-    """Per-session progress record. See design §6.1."""
+    """Per-session progress record. See design §6.1.
+
+    ``old_fact_ids_tombstoned`` tracks which of this session's ``old_fact_ids``
+    have already been tombstoned, so a crash mid-tombstone resumes without a
+    double-forget. ``old_crystal_ids_tombstoned`` is used only by the synthetic
+    old-Crystals bucket (:data:`_OLD_CRYSTALS_KEY`) to track old-Crystal
+    tombstones the same way.
+    """
 
     phase: str = "planned"  # planned | written | tombstoned | done
     old_fact_ids: list[str] = field(default_factory=list)
     new_fact_ids: list[str] = field(default_factory=list)
+    #: Set once the atomic-fact ``remember_batch`` writes have all landed for
+    #: this session. Persisted BEFORE the (separate) Crystal write so a crash
+    #: between the two never re-mints the facts on resume (they're expensive +
+    #: quota-billed). ``crystal_written`` guards the Crystal the same way.
+    facts_written: bool = False
     crystal_written: bool = False
+    old_fact_ids_tombstoned: list[str] = field(default_factory=list)
     old_crystal_ids_tombstoned: list[str] = field(default_factory=list)
 
 
@@ -484,8 +990,9 @@ class RecrystallizeCheckpoint:
     """Whole-run checkpoint, persisted to
     ``~/.totalreclaw/recrystallize-state/<vault_fingerprint>.json``.
 
-    Persistence (:meth:`save` / :meth:`load`) is a STUB. The dataclass shape is
-    final; wire it to the same JSON round-trip pattern as ``import_state.py``.
+    Persistence (:meth:`save` / :meth:`load`) mirrors the JSON round-trip
+    pattern in ``import_state.py`` (atomic temp-file + ``os.replace``, tolerant
+    coercion of unknown keys on load).
     """
 
     owner: str
@@ -504,20 +1011,69 @@ class RecrystallizeCheckpoint:
         return RECRYSTALLIZE_STATE_DIR / f"{self.fingerprint(self.owner)}.json"
 
     def save(self) -> None:
-        raise NotImplementedError(
-            "RecrystallizeCheckpoint.save: TODO — mirror import_state.write_import_state "
-            "(mkdir -p RECRYSTALLIZE_STATE_DIR, json.dumps(asdict(self)))."
-        )
+        """Persist the checkpoint atomically. Mirrors ``import_state``.
+
+        Stamps ``last_updated`` and writes ``<fingerprint>.json`` under
+        :data:`RECRYSTALLIZE_STATE_DIR`. Nested :class:`SessionCheckpoint`
+        dataclasses round-trip via :func:`dataclasses.asdict`. The write goes
+        to a temp file then ``os.replace`` so a crash mid-write never leaves a
+        truncated (unparseable) checkpoint — the resume guard depends on it.
+        """
+        import os
+
+        RECRYSTALLIZE_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        self.last_updated = datetime.now(timezone.utc).isoformat()
+        target = self.path()
+        tmp = target.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+        os.replace(tmp, target)
 
     @classmethod
     def load(cls, owner: str) -> Optional["RecrystallizeCheckpoint"]:
-        raise NotImplementedError(
-            "RecrystallizeCheckpoint.load: TODO — mirror import_state.read_import_state "
-            "(read <fingerprint>.json, coerce to dataclass, tolerate legacy keys)."
-        )
+        """Load a checkpoint for ``owner``, or ``None`` if none / unreadable.
+
+        Tolerant to legacy / unknown top-level keys (mirrors
+        ``import_state._coerce_state``) so a schema addition never orphans an
+        in-flight run. Nested ``sessions`` are coerced back into
+        :class:`SessionCheckpoint` instances.
+        """
+        path = RECRYSTALLIZE_STATE_DIR / f"{cls.fingerprint(owner)}.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+
+        allowed = {f.name for f in _dc_fields(cls)}
+        kwargs = {k: v for k, v in data.items() if k in allowed}
+
+        raw_sessions = kwargs.get("sessions") or {}
+        sessions: dict[str, SessionCheckpoint] = {}
+        sc_allowed = {f.name for f in _dc_fields(SessionCheckpoint)}
+        if isinstance(raw_sessions, dict):
+            for sid, sc in raw_sessions.items():
+                if isinstance(sc, dict):
+                    sessions[sid] = SessionCheckpoint(
+                        **{k: v for k, v in sc.items() if k in sc_allowed}
+                    )
+        kwargs["sessions"] = sessions
+        return cls(**kwargs)
 
 
 # ── Small pure helpers ────────────────────────────────────────────────────────
+
+
+def _dc_fields(cls_or_instance: Any):
+    """Return the dataclass fields for a class or instance (thin wrapper)."""
+    from dataclasses import fields as _fields
+
+    return _fields(cls_or_instance)
+
+
+def _now_iso() -> str:
+    """Current UTC time as an ISO 8601 string (checkpoint timestamps)."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _ceil_div(n: int, d: int) -> int:
@@ -592,14 +1148,37 @@ def build_arg_parser() -> Any:
         action="store_true",
         help="Required to target the production relay. Testing must use staging.",
     )
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the interactive confirmation prompt (scripted runs). "
+        "Still requires --execute and --write-side-fix-confirmed.",
+    )
     p.add_argument("--gap-seconds", type=int, default=DEFAULT_GAP_SECONDS)
     p.add_argument("--sim-threshold", type=float, default=DEFAULT_SIM_THRESHOLD)
     return p
 
 
+def _recovery_phrase_from_env(env_var: str) -> Optional[str]:
+    """Read the BIP-39 recovery phrase from ``env_var`` (never a CLI arg)."""
+    import os
+
+    phrase = (os.environ.get(env_var) or "").strip()
+    return phrase or None
+
+
 async def _main_async(args: Any) -> int:
-    """CLI body. Dry-run is implemented end-to-end EXCEPT the stubbed fetch;
-    ``--execute`` is fully stubbed. Kept minimal — this is a scaffold."""
+    """CLI body — dry-run by default, ``--execute`` opts into on-chain writes.
+
+    Flow: construct the client from the recovery-phrase env var → run the
+    dry-run planner → print ``plan.summary_lines()``. If ``--execute`` (and the
+    guards pass), confirm interactively (unless ``--yes``) and run
+    :func:`execute_recrystallize`, resuming from any existing checkpoint.
+
+    The recovery phrase is read ONLY from the env var (never a CLI arg) and is
+    never printed. Returns a process exit code (0 = success / clean quota
+    pause; non-zero on refusal or error).
+    """
     # Guard: prod requires explicit opt-in.
     if (
         args.server_url == PRODUCTION_RELAY_URL
@@ -613,16 +1192,72 @@ async def _main_async(args: Any) -> int:
         )
         return 2
 
-    # TODO(recrystallize): construct the client from the recovery-phrase env var,
-    # run plan_recrystallize (dry-run), print plan.summary_lines(), and — only if
-    # --execute — call execute_recrystallize(... write_side_fix_confirmed=...,
-    # confirm=<interactive prompt>). Left as a stub; the on-chain path is not
-    # built in this scaffold.
-    raise NotImplementedError(
-        "recrystallize CLI is a scaffold. The pure planner (build_plan / "
-        "estimate_quota_cost) is implemented and unit-tested; wire the "
-        "fetch+client front-end before enabling this."
+    phrase = _recovery_phrase_from_env(args.recovery_phrase_env)
+    if not phrase:
+        logger.error(
+            "No recovery phrase in env var %s. Set it (never pass the phrase "
+            "as a CLI arg).",
+            args.recovery_phrase_env,
+        )
+        return 2
+
+    from . import TotalReclaw
+
+    client = TotalReclaw(
+        recovery_phrase=phrase,
+        server_url=args.server_url,
+        is_test=(args.server_url != PRODUCTION_RELAY_URL),
+        suppress_welcome=True,
     )
+    try:
+        plan = await plan_recrystallize(
+            client,
+            gap_seconds=args.gap_seconds,
+            sim_threshold=args.sim_threshold,
+        )
+        for line in plan.summary_lines():
+            print(line)
+
+        if not args.execute:
+            print("\n(dry-run — no writes. Re-run with --execute to apply.)")
+            return 0
+
+        if not args.write_side_fix_confirmed:
+            logger.error(
+                "--execute requires --write-side-fix-confirmed (attest the "
+                "target client runs the #429/#434 write-side fix)."
+            )
+            return 2
+
+        if not args.yes:
+            print(
+                f"\nAbout to rewrite {plan.estimate.atomic_facts} facts + "
+                f"tombstone {plan.estimate.tombstones} on {args.server_url}."
+            )
+            answer = input("Type 'yes' to proceed: ").strip().lower()
+            if answer != "yes":
+                print("Aborted.")
+                return 1
+
+        checkpoint = RecrystallizeCheckpoint.load(plan.owner)
+        try:
+            await execute_recrystallize(
+                client,
+                plan,
+                write_side_fix_confirmed=True,
+                confirm=True,
+                checkpoint=checkpoint,
+                progress=lambda m: print(m, flush=True),
+            )
+        except QuotaPaused:
+            print(
+                "\nPaused on quota. Re-run the same command after the monthly "
+                "quota resets to resume from the checkpoint."
+            )
+            return 0
+        return 0
+    finally:
+        await client.close()
 
 
 def main() -> int:

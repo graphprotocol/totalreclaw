@@ -1,10 +1,10 @@
-"""Unit tests for the re-crystallize backfill *pure* logic.
+"""Unit tests for the re-crystallize backfill.
 
-Covers the dry-run planner / cost estimator only — the on-chain write path is a
-scaffold stub (``execute_recrystallize`` / ``fetch_and_decrypt_vault`` /
-checkpoint persistence all raise ``NotImplementedError``), which we assert. No
-network, no crypto, no core wheel required (the segmenter falls back to the
-local Python impl).
+Covers the dry-run planner / cost estimator (pure) AND the on-chain write path
+(:func:`execute_recrystallize`) with a mocked client — mint ordering,
+tombstone-after-mint, resume-after-interrupt, the plan-required guard, and
+quota-estimator agreement. No network, no crypto, no core wheel required (the
+segmenter falls back to the local Python impl).
 """
 from __future__ import annotations
 
@@ -17,6 +17,9 @@ from totalreclaw.recrystallize import (
     CorrectedSession,
     DecryptedFact,
     QuotaEstimate,
+    RecrystallizeCheckpoint,
+    SessionCheckpoint,
+    QuotaPaused,
     build_corrected_sessions,
     build_plan,
     estimate_quota_cost,
@@ -25,7 +28,7 @@ from totalreclaw.recrystallize import (
     split_facts,
     _ceil_div,
     _decode_raw_blob,
-    RecrystallizeCheckpoint,
+    _is_quota_exhausted_error,
 )
 
 
@@ -283,7 +286,7 @@ def test_decode_raw_blob_bad_input():
     assert _decode_raw_blob('{"text":"x"}') == {}  # no metadata key
 
 
-# ── Guards / stubs (assert the scaffold refuses to write) ─────────────────────
+# ── Execute guards (refuse to write without all three preconditions) ──────────
 
 
 @pytest.mark.asyncio
@@ -305,26 +308,325 @@ async def test_execute_refuses_without_confirm():
 
 
 @pytest.mark.asyncio
-async def test_execute_is_stubbed_even_when_guards_pass():
-    plan = build_plan("0xabc", [], session_id_factory=_counting_id_factory())
-    with pytest.raises(NotImplementedError):
+async def test_execute_refuses_without_plan():
+    with pytest.raises(RuntimeError, match="plan"):
         await execute_recrystallize(
-            client=None, plan=plan, write_side_fix_confirmed=True, confirm=True
+            client=None, plan=None, write_side_fix_confirmed=True, confirm=True
         )
 
 
-@pytest.mark.asyncio
-async def test_fetch_is_stubbed():
-    with pytest.raises(NotImplementedError):
-        await fetch_and_decrypt_vault(client=None)
+# ── Checkpoint persistence (round-trip) ───────────────────────────────────────
 
 
-def test_checkpoint_persistence_is_stubbed():
+def test_checkpoint_fingerprint_is_case_insensitive():
     cp = RecrystallizeCheckpoint(owner="0xABC", started_at="t0", last_updated="t0")
-    # fingerprint is pure + case-insensitive on the owner address.
     assert cp.fingerprint("0xABC") == cp.fingerprint("0xabc")
     assert str(cp.path()).endswith(".json")
-    with pytest.raises(NotImplementedError):
-        cp.save()
-    with pytest.raises(NotImplementedError):
-        RecrystallizeCheckpoint.load("0xabc")
+
+
+def test_checkpoint_save_load_round_trip(monkeypatch, tmp_path):
+    # Redirect the state dir into a tmp path so the test never touches ~.
+    import totalreclaw.recrystallize as rec
+
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+    cp = RecrystallizeCheckpoint(
+        owner="0xABC", started_at="t0", last_updated="t0", status="running"
+    )
+    cp.sessions["sess-1"] = SessionCheckpoint(
+        phase="written",
+        old_fact_ids=["old-a", "old-b"],
+        new_fact_ids=["new-a", "new-b"],
+        crystal_written=True,
+    )
+    cp.save()
+
+    loaded = RecrystallizeCheckpoint.load("0xabc")  # case-insensitive fingerprint
+    assert loaded is not None
+    assert loaded.owner == "0xABC"
+    assert loaded.status == "running"
+    sc = loaded.sessions["sess-1"]
+    assert isinstance(sc, SessionCheckpoint)
+    assert sc.phase == "written"
+    assert sc.old_fact_ids == ["old-a", "old-b"]
+    assert sc.new_fact_ids == ["new-a", "new-b"]
+    assert sc.crystal_written is True
+
+
+def test_checkpoint_load_missing_returns_none(monkeypatch, tmp_path):
+    import totalreclaw.recrystallize as rec
+
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+    assert RecrystallizeCheckpoint.load("0xnever") is None
+
+
+def test_checkpoint_load_tolerates_unknown_keys(monkeypatch, tmp_path):
+    import json
+    import totalreclaw.recrystallize as rec
+
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+    fp = rec.RecrystallizeCheckpoint.fingerprint("0xabc")
+    (tmp_path / f"{fp}.json").write_text(
+        json.dumps(
+            {
+                "owner": "0xabc",
+                "started_at": "t0",
+                "last_updated": "t0",
+                "status": "running",
+                "sessions": {"s": {"phase": "done", "future_field": 42}},
+                "some_future_top_level_key": "ignored",
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = RecrystallizeCheckpoint.load("0xabc")
+    assert loaded is not None
+    assert loaded.sessions["s"].phase == "done"
+
+
+# ── Write-path with a mocked client (mint → confirm → tombstone) ──────────────
+
+
+class _FakeRelay:
+    """Stand-in relay; only used as an opaque handle passed to confirm_indexed
+    (which the tests monkeypatch to a no-op)."""
+
+
+class _FakeClient:
+    """Records every write/tombstone in call order for ordering assertions.
+
+    ``remember_batch`` returns synthetic new-fact ids; ``forget`` records the
+    tombstoned id. ``fail_after`` (if set) makes the Nth mutating call raise —
+    used to simulate a mid-run interrupt for the resume test. ``quota_after``
+    makes the Nth call raise a 403-shaped error for the quota-pause test.
+    """
+
+    def __init__(self, *, fail_after=None, quota_after=None):
+        self.calls: list[tuple[str, object]] = []
+        self._relay = _FakeRelay()
+        self._n = 0
+        self._fail_after = fail_after
+        self._quota_after = quota_after
+        self._new_counter = 0
+
+    def _tick(self):
+        self._n += 1
+        if self._quota_after is not None and self._n >= self._quota_after:
+            err = RuntimeError("quota_exceeded")
+
+            class _Resp:
+                status_code = 403
+
+            err.response = _Resp()  # type: ignore[attr-defined]
+            raise err
+        if self._fail_after is not None and self._n >= self._fail_after:
+            raise RuntimeError("simulated interrupt")
+
+    async def remember_batch(self, facts, source="python-client"):
+        self._tick()
+        ids = []
+        for _ in facts:
+            self._new_counter += 1
+            ids.append(f"new-{self._new_counter}")
+        self.calls.append(("remember_batch", [f["text"] for f in facts]))
+        return ids
+
+    async def remember(self, text, **kwargs):
+        self._tick()
+        self._new_counter += 1
+        nid = f"crystal-{self._new_counter}"
+        self.calls.append(("remember_crystal", text))
+        return nid
+
+    async def forget(self, fact_id):
+        self._tick()
+        self.calls.append(("forget", fact_id))
+        return True
+
+
+@pytest.fixture
+def _no_confirm(monkeypatch):
+    """Patch confirm_indexed to a no-op so the write path never hits the net."""
+    import totalreclaw.confirm_indexed as ci
+
+    async def _fake_confirm(fact_id, relay, **kwargs):
+        return True
+
+    monkeypatch.setattr(ci, "confirm_indexed", _fake_confirm)
+    return _fake_confirm
+
+
+def _sample_plan():
+    # 1 multi-fact session (2 facts) + 1 singleton + 1 old crystal.
+    decrypted = [
+        _fact("a1", embedding=TOPIC_A, created_at=0, metadata={"session_id": "old-giant"}),
+        _fact("a2", embedding=TOPIC_A, created_at=10, metadata={"session_id": "old-giant"}),
+        _fact("b1", embedding=TOPIC_B, created_at=9000, metadata={"session_id": "old-giant"}),
+        _fact("cry", embedding=None, created_at=1,
+              metadata={"subtype": METADATA_SUBTYPE_SESSION_CRYSTAL, "session_id": "old-giant"}),
+    ]
+    return build_plan("0xabc", decrypted, session_id_factory=_counting_id_factory())
+
+
+@pytest.mark.asyncio
+async def test_execute_writes_before_tombstones(monkeypatch, tmp_path, _no_confirm):
+    import totalreclaw.recrystallize as rec
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+
+    client = _FakeClient()
+    plan = _sample_plan()
+    cp = await execute_recrystallize(
+        client, plan, write_side_fix_confirmed=True, confirm=True,
+    )
+    assert cp.status == "completed"
+
+    kinds = [c[0] for c in client.calls]
+    # Every old-fact/crystal tombstone (forget) must come AFTER at least one
+    # write. Concretely: the first call is never a forget.
+    assert kinds[0] in ("remember_batch", "remember_crystal")
+    # For the multi-fact session, its facts are written before they are
+    # tombstoned: index of the a1/a2 remember_batch < index of forget('a1').
+    first_write = kinds.index("remember_batch")
+    forget_a1 = next(i for i, c in enumerate(client.calls) if c == ("forget", "a1"))
+    assert first_write < forget_a1
+
+    # A fresh Crystal is written for the multi-fact session (only).
+    assert kinds.count("remember_crystal") == 1
+    # All 3 atomic facts + the old crystal are tombstoned.
+    tombstoned = {c[1] for c in client.calls if c[0] == "forget"}
+    assert tombstoned == {"a1", "a2", "b1", "cry"}
+
+
+@pytest.mark.asyncio
+async def test_execute_no_crystal_for_singletons(monkeypatch, tmp_path, _no_confirm):
+    import totalreclaw.recrystallize as rec
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+
+    # Two singleton sessions (well-separated in time + topic) → no Crystal.
+    decrypted = [
+        _fact("s1", embedding=TOPIC_A, created_at=0),
+        _fact("s2", embedding=TOPIC_B, created_at=99999),
+    ]
+    plan = build_plan("0xabc", decrypted, session_id_factory=_counting_id_factory())
+    client = _FakeClient()
+    await execute_recrystallize(
+        client, plan, write_side_fix_confirmed=True, confirm=True,
+    )
+    assert [c[0] for c in client.calls].count("remember_crystal") == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_resume_skips_completed(monkeypatch, tmp_path, _no_confirm):
+    import totalreclaw.recrystallize as rec
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+
+    plan = _sample_plan()
+
+    # First run: crash partway (after the 3rd mutating call).
+    client1 = _FakeClient(fail_after=3)
+    with pytest.raises(RuntimeError, match="simulated interrupt"):
+        await execute_recrystallize(
+            client1, plan, write_side_fix_confirmed=True, confirm=True,
+        )
+    cp = RecrystallizeCheckpoint.load("0xabc")
+    assert cp is not None
+    assert cp.status == "failed"
+
+    # Re-derive the SAME plan (deterministic segmentation) and resume.
+    plan2 = _sample_plan()
+    client2 = _FakeClient()
+    cp2 = await execute_recrystallize(
+        client2, plan2, write_side_fix_confirmed=True, confirm=True, checkpoint=cp,
+    )
+    assert cp2.status == "completed"
+
+    # Across BOTH runs, each old id is tombstoned exactly once (no double
+    # tombstone) — the resume skipped already-completed work.
+    all_forgets = [c[1] for c in client1.calls + client2.calls if c[0] == "forget"]
+    assert sorted(all_forgets) == sorted(set(all_forgets))
+    assert set(all_forgets) == {"a1", "a2", "b1", "cry"}
+
+
+@pytest.mark.asyncio
+async def test_execute_resume_never_double_mints(monkeypatch, tmp_path, _no_confirm):
+    import totalreclaw.recrystallize as rec
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+
+    plan = _sample_plan()
+    # Crash right after the first write batch (before its tombstones).
+    client1 = _FakeClient(fail_after=2)
+    with pytest.raises(RuntimeError):
+        await execute_recrystallize(
+            client1, plan, write_side_fix_confirmed=True, confirm=True,
+        )
+    cp = RecrystallizeCheckpoint.load("0xabc")
+
+    plan2 = _sample_plan()
+    client2 = _FakeClient()
+    await execute_recrystallize(
+        client2, plan2, write_side_fix_confirmed=True, confirm=True, checkpoint=cp,
+    )
+    # The multi-fact session's facts are written on run 1 (phase→written) and
+    # NOT re-written on run 2 — so run 2 issues no remember_batch for that
+    # session's already-written facts. Count total writes: 1 batch (run1
+    # multi) + 1 crystal (run1) may or may not have landed depending on where
+    # the crash hit; the resume must not RE-issue a write for a 'written'
+    # session. Assert the multi-fact text isn't written twice.
+    writes_run1 = [c for c in client1.calls if c[0] == "remember_batch"]
+    writes_run2 = [c for c in client2.calls if c[0] == "remember_batch"]
+    multi_texts = {"text-a1", "text-a2"}
+    wrote_multi_run1 = any(multi_texts & set(c[1]) for c in writes_run1)
+    wrote_multi_run2 = any(multi_texts & set(c[1]) for c in writes_run2)
+    assert wrote_multi_run1
+    assert not wrote_multi_run2  # never re-minted
+
+
+@pytest.mark.asyncio
+async def test_execute_quota_pause_is_clean(monkeypatch, tmp_path, _no_confirm):
+    import totalreclaw.recrystallize as rec
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+
+    plan = _sample_plan()
+    client = _FakeClient(quota_after=2)  # 403 on the 2nd mutating call
+    with pytest.raises(QuotaPaused):
+        await execute_recrystallize(
+            client, plan, write_side_fix_confirmed=True, confirm=True,
+        )
+    cp = RecrystallizeCheckpoint.load("0xabc")
+    assert cp is not None
+    assert cp.status == "paused_quota"
+    assert cp.quota_exhausted_at is not None
+
+
+def test_is_quota_exhausted_error_detects_403():
+    class _Resp:
+        status_code = 403
+
+    err = RuntimeError("nope")
+    err.response = _Resp()  # type: ignore[attr-defined]
+    assert _is_quota_exhausted_error(err) is True
+    assert _is_quota_exhausted_error(RuntimeError("quota_exceeded 403")) is True
+    assert _is_quota_exhausted_error(RuntimeError("AA25 nonce")) is False
+
+
+@pytest.mark.asyncio
+async def test_execute_quota_agreement_with_estimator(monkeypatch, tmp_path, _no_confirm):
+    """The number of writes + tombstones the write path actually issues must
+    match the dry-run estimator's writes_new / tombstones (design §5)."""
+    import totalreclaw.recrystallize as rec
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+
+    plan = _sample_plan()
+    client = _FakeClient()
+    await execute_recrystallize(
+        client, plan, write_side_fix_confirmed=True, confirm=True,
+    )
+    # writes_new = F (3) + S_multi (1 crystal) = 4 new memories.
+    # The write path batches the 3 facts into one remember_batch (all in one
+    # session? no — a1/a2 in the multi session, b1 in the singleton) → 2
+    # remember_batch calls + 1 crystal. Count MEMORIES not calls:
+    minted_facts = sum(len(c[1]) for c in client.calls if c[0] == "remember_batch")
+    minted_crystals = sum(1 for c in client.calls if c[0] == "remember_crystal")
+    tombstones = sum(1 for c in client.calls if c[0] == "forget")
+    assert minted_facts == plan.estimate.atomic_facts  # 3
+    assert minted_facts + minted_crystals == plan.estimate.writes_new  # 4
+    assert tombstones == plan.estimate.tombstones  # F + C_old = 3 + 1 = 4

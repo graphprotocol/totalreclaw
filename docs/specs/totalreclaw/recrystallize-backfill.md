@@ -1,6 +1,6 @@
 # Re-crystallize / Re-key Backfill — Design Spec
 
-**Status:** Design complete, not implemented (scaffold only)
+**Status:** Write path IMPLEMENTED + staging-E2E-validated (#438 → `feat/438-recrystallize-write-path`). The dry-run planner, checkpoint persistence, and the guarded on-chain write/tombstone loop all ship in `python/src/totalreclaw/recrystallize.py`. Not yet run against any real user vault (Phase B/C, gated on Pedro).
 **Owner:** Pedro (product) / coordinator (architect)
 **Depends on:** Hermes write-side `session_id` fix (#429 + #434, both merged) shipping in an RC that the target user is running.
 **Scope:** Managed Service (on-chain) vaults only. Self-hosted is out of scope (no session-collapse bug there).
@@ -409,3 +409,89 @@ The checkpoint records, per corrected session:
 - Not a self-hosted concern (no session-collapse bug there).
 - Not a batch-delete (managed service has none; per-fact tombstones only).
 - Does **not** modify the write-side plugin (separate track).
+
+---
+
+## 12. Usage (operator CLI + API)
+
+The backfill ships as `python/src/totalreclaw/recrystallize.py`, driven either
+via the module CLI or the async API.
+
+### 12.1 CLI
+
+The recovery phrase is read **only** from an env var (never a CLI arg) and is
+never printed. Staging is the default relay; production requires an explicit
+`--i-understand-this-is-production`.
+
+```bash
+# 1. DRY-RUN (default — writes nothing). Prints the re-grouping + quota cost.
+export TOTALRECLAW_RECOVERY_PHRASE="…12 words…"
+cd python
+PYTHONPATH=src python -m totalreclaw.recrystallize \
+  --server-url https://api-staging.totalreclaw.xyz
+
+# 2. EXECUTE (writes on-chain). Requires --write-side-fix-confirmed (attesting
+#    the target client runs the #429/#434 fix) + interactive "yes" confirm.
+#    Resumes automatically from ~/.totalreclaw/recrystallize-state/<fp>.json.
+PYTHONPATH=src python -m totalreclaw.recrystallize \
+  --server-url https://api-staging.totalreclaw.xyz \
+  --execute --write-side-fix-confirmed
+```
+
+On a 403 `quota_exceeded` mid-run the tool marks the checkpoint `paused_quota`,
+prints "resume next month", and exits 0. Re-running the **same command** after
+the quota resets continues from the checkpoint (idempotent — already-completed
+sessions are skipped).
+
+### 12.2 API
+
+```python
+from totalreclaw import TotalReclaw
+from totalreclaw.recrystallize import (
+    plan_recrystallize, execute_recrystallize, RecrystallizeCheckpoint,
+)
+
+client = TotalReclaw(recovery_phrase=PHRASE,
+                     server_url="https://api-staging.totalreclaw.xyz")
+
+plan = await plan_recrystallize(client)         # dry-run: fetch + segment + estimate
+print("\n".join(plan.summary_lines()))
+
+checkpoint = RecrystallizeCheckpoint.load(plan.owner)   # resume if a run exists
+await execute_recrystallize(
+    client, plan,
+    write_side_fix_confirmed=True, confirm=True,
+    checkpoint=checkpoint,
+    llm_completion=my_async_llm,                # optional — Crystal summaries
+)
+```
+
+### 12.3 Staging E2E (acceptance gate)
+
+`python/tests/e2e/recrystallize_staging_e2e.py` seeds a fresh **throwaway**
+vault (in-process mnemonic, never printed) with a deliberately mixed Crystal +
+facts collapsed under one bad `session_id`, runs plan → execute against staging,
+and verifies on the subgraph that the old Crystal + facts are tombstoned and
+re-keyed facts + a fresh Crystal exist with new `session_id`s.
+
+```bash
+cd python
+PYTHONPATH=src python tests/e2e/recrystallize_staging_e2e.py             # real run (staging)
+PYTHONPATH=src python tests/e2e/recrystallize_staging_e2e.py --self-test  # redaction check, no network
+```
+
+### 12.4 Spec deviations (implementation notes)
+
+- **§4.1 tombstones are per-fact, not batched.** The spec flags a batched-
+  tombstone helper as an optional TODO (§10.6). The implementation uses the
+  existing per-fact `client.forget` (one UserOp each). This changes the *UserOp*
+  count, **not** the quota cost (quota bills facts, not UserOps — §5), so the
+  dry-run estimate is unaffected. A `forget_batch` remains a future optimization.
+- **Crystal provenance is `derived`, not `external`.** A re-derived Crystal is
+  computed from the vault's own facts, so `derived` is the correct v1
+  MemorySource (the import path uses `external` for provider-sourced data). The
+  fresh `session_id` + `session_crystal` subtype key exactly as the fixed live
+  write-side path.
+- **Crystal summary is fact-only** (no transcript) — turns aren't on-chain, so
+  the backfill prompt summarizes the re-segmented facts. This is the §3 caveat,
+  made concrete.
