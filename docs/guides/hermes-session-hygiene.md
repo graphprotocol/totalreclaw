@@ -64,6 +64,27 @@ from that id alone; those fall back to the idle rollover (time-separated
 conversations still get clean sessions). This is platform-agnostic — nothing
 here is specific to any one messenger.
 
+## Known limitations (architectural)
+
+Two consequences of the current design worth being aware of:
+
+1. **Per-conversation slots are in-memory.** The plugin's per-conversation state
+   lives in the gateway process (`AgentState._session_slots`), not on disk. On a
+   gateway restart (updates, systemd, a crash) the slots are cleared. Hermes
+   *persists the conversation* (so resuming a topic keeps the same `session_id`),
+   but a **short conversation that hasn't hit the per-turn extraction interval
+   (default 3 turns) and is idle across a restart loses its buffered turn** — no
+   facts, no Crystal for it. For a longer conversation this barely matters:
+   per-turn extraction has already written most facts on-chain; only the tail +
+   the Crystal are at risk. (A future hardening would persist slots to disk.)
+
+2. **The idle Crystal sweep is turn-driven.** It piggybacks on *some* turn to
+   fire, so a topic only crystallizes when the bot processes a subsequent turn
+   (another chat's message, a resume, or a cron tick). If the whole bot goes
+   fully silent, idle topics wait until the next message anywhere. In practice
+   crons + resumed conversations keep this ticking; a `threading.Timer`-based
+   sweeper is the follow-up if lull-latency ever matters.
+
 ## Tips
 
 - Chatting about a genuinely new topic after a break? The idle rollover already

@@ -378,10 +378,26 @@ The checkpoint records, per corrected session:
 
 ## 10. Open questions for a human to decide before build
 
-1. **Segment over facts vs. reconstructed turns.** We segment over *extracted facts*, not the
-   original conversation *turns* (turns aren't on-chain). Is fact-level grouping good enough,
-   or should the tool attempt to reconstruct turn boundaries (e.g. from `created_at`
-   clustering) for closer parity with a live write-side run? (§3 caveat.)
+1. **Segment over facts vs. reconstructed turns — the fidelity ceiling.** We segment over
+   *extracted facts*, not the original conversation *turns* (turns aren't on-chain, and old
+   facts carry only the *collapsed* `session_id`). This caps fidelity: the result is coherent
+   semantic groups, **NOT** a faithful replay of the live per-topic write-side grouping —
+   there is no on-chain ground truth to replay from. Options to raise fidelity, in increasing
+   cost:
+   - **(a) fact-level semantic + time-gap** — current build; zero extra input, "good enough"
+     for a coherent vault. Failure modes: two *similar-but-separate* conversations may **merge**
+     into one cluster; a single topic that *drifts* may **over-split**. The `created_at`
+     time-gap mitigates but doesn't eliminate this.
+   - **(b) tighter `created_at` clustering** to better approximate turn boundaries — cheap, a
+     partial improvement.
+   - **(c) align to the host's own conversation boundaries** — e.g. Hermes' local
+     `SessionStore` (on the operator's box) persists the *real* per-conversation time-windows,
+     so on-chain facts could be bucketed by `created_at` against those windows for
+     near-faithful grouping. **Most faithful**, but only covers data still within the host's
+     SessionStore retention, is host-specific, and adds real complexity.
+
+   Ships **(a)**. The dry-run output lets a human eyeball the grouping before any write — the
+   practical guard against a bad approximation. (§3 caveat.)
 2. **Cost ceiling / two-month spans.** A ~2.5k-fact vault costs ~5.2k quota units — >1 Pro
    month. Do we (a) let it span two monthly windows via checkpoint-resume, (b) buy top-up
    packs (#392), or (c) temporarily raise the target user's quota out-of-band for the
