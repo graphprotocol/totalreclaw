@@ -263,6 +263,17 @@ class ImportEngine:
         self._session_facts_accum: dict[str, list[dict]] = {}
         #: session_ids whose Crystal has already been emitted (emit-once guard):
         self._crystallized_session_ids: set[str] = set()
+        #: #436 — conversation_ids this engine run has already recorded into
+        #: the per-source imported-conversation registry. Prevents re-writing
+        #: the registry for a conversation on every subsequent batch once it
+        #: has been marked complete.
+        self._recorded_conversations: set[str] = set()
+        #: #436 review — global chunk indices whose LLM extraction FAILED
+        #: (raised) this run. A conversation touching any of these is excluded
+        #: from the imported-conversation registry so a transient extraction
+        #: failure doesn't mark it imported and block the natural re-import
+        #: recovery. Persists across batches on the instance.
+        self._failed_chunk_indices: set[int] = set()
 
     # ── Estimate ─────────────────────────────────────────────────────────
 
@@ -545,10 +556,30 @@ class ImportEngine:
         #      preserves input order regardless of completion order), so the
         #      #376 diagnostics, session/Crystal tagging, and per-chunk error
         #      reporting behave exactly as the sequential version did.
+        # #436 — re-import guard. Drop chunks whose conversation is already in
+        # the per-source imported-conversation registry BEFORE extraction, so
+        # a re-import never re-calls the LLM or re-writes the same facts. Each
+        # distinct dropped conversation is counted once into
+        # ``conversations_skipped``. Gemini (no conversation_id) is unaffected.
+        from .import_state import (
+            load_imported_conversations,
+            record_imported_conversations,
+        )
+        imported_convs = load_imported_conversations(source) if source else set()
+        skipped_conv_ids: set[str] = set()
+
         enriched = smart_ctx.enriched_system_prompt if smart_ctx else None
         to_extract: list[tuple[int, ConversationChunk]] = []
         for i, chunk in enumerate(batch):
             global_index = offset + i
+            conv_id = getattr(chunk, "conversation_id", None)
+            if conv_id and conv_id in imported_convs:
+                logger.info(
+                    "import: skipping already-imported conversation %s "
+                    "(chunk %d/%d)", conv_id, global_index + 1, total_chunks,
+                )
+                skipped_conv_ids.add(conv_id)
+                continue
             if smart_ctx is not None:
                 skipped, reason = is_chunk_skipped(global_index, smart_ctx.decisions)
                 if skipped:
@@ -559,6 +590,8 @@ class ImportEngine:
                     chunks_skipped += 1
                     continue
             to_extract.append((global_index, chunk))
+
+        conversations_skipped = len(skipped_conv_ids)
 
         concurrency = _import_concurrency()
         sem: Optional[asyncio.Semaphore] = asyncio.Semaphore(concurrency) if concurrency > 1 else None
@@ -588,11 +621,20 @@ class ImportEngine:
         # skipped remaining chunks' LLM calls. Under concurrency all calls have
         # already fired by this point, so the cap now only stops *accumulating*
         # later chunks' results (same stored-facts outcome at the cap).
-        for (global_index, chunk), res in zip(to_extract, raw_results):
+        for pos, ((global_index, chunk), res) in enumerate(zip(to_extract, raw_results)):
             if isinstance(res, BaseException):
                 extraction_failures += 1
+                # #436 review: mark this chunk failed so its conversation is
+                # NOT recorded as imported (a transient failure must stay
+                # re-importable).
+                self._failed_chunk_indices.add(global_index)
                 errors.append(f"Extraction failed for chunk '{chunk.title}': {repr(res)}")
                 if len(errors) >= 20:
+                    # Bailing early leaves the rest of this batch's extractions
+                    # unverified — treat them as failed too so their
+                    # conversations aren't recorded on incomplete evidence.
+                    for gi, _ in to_extract[pos + 1:]:
+                        self._failed_chunk_indices.add(gi)
                     break
                 continue
 
@@ -640,6 +682,32 @@ class ImportEngine:
         # a skipped chunk would never be considered complete and would never get
         # a Crystal. This set persists across batches on the instance.
         self._processed_chunk_indices.update(range(offset, offset + chunks_processed))
+
+        # #436 — record conversations whose EVERY chunk has now been processed
+        # (across all batches so far) into the imported-conversation registry.
+        # A conversation straddling a batch boundary is only recorded once its
+        # final chunk lands, so a partial first import never marks an
+        # incompletely-processed conversation as done. Already-registered
+        # conversations (imported_convs) and ones recorded earlier this run
+        # are skipped.
+        if source:
+            conv_to_indices: dict[str, list[int]] = {}
+            for idx, c in enumerate(parsed.chunks):
+                cid = getattr(c, "conversation_id", None)
+                if cid:
+                    conv_to_indices.setdefault(cid, []).append(idx)
+            newly_complete = [
+                cid for cid, indices in conv_to_indices.items()
+                if cid not in self._recorded_conversations
+                and cid not in imported_convs
+                and all(ix in self._processed_chunk_indices for ix in indices)
+                # #436 review: never record a conversation any of whose chunks
+                # failed extraction — keep it re-importable.
+                and not any(ix in self._failed_chunk_indices for ix in indices)
+            ]
+            if newly_complete:
+                record_imported_conversations(source, newly_complete)
+                self._recorded_conversations.update(newly_complete)
 
         # ── Crystal emission (cross-batch complete) ───────────────────────────
         # Emit ONE Crystal per multi-turn session, exactly once, on whichever
@@ -733,6 +801,7 @@ class ImportEngine:
             duration_ms=_now_ms() - start_ms,
             dups_skipped=dups_skipped,
             chunks_skipped=chunks_skipped,
+            conversations_skipped=conversations_skipped,
             smart_import=smart_import_summary,
             chunk_diagnostics=chunk_diagnostics or None,
         )

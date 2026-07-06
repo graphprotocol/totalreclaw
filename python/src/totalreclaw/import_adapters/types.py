@@ -79,6 +79,11 @@ class BatchImportResult:
     # ``smart_import`` payload shape (extract_count / skip_count /
     # profile_duration_ms).
     chunks_skipped: int = 0
+    # #436 — conversations dropped BEFORE extraction because they are already
+    # in the per-source imported-conversation registry (re-import guard). Each
+    # distinct dropped conversation is counted once. 0 for fresh imports and
+    # for Gemini (which carries no conversation_id).
+    conversations_skipped: int = 0
     smart_import: Optional[dict] = None
     # Per-chunk "0 facts" diagnostics (issue #389 follow-up): one
     # ``{index, title, reason}`` dict per chunk that produced 0 storable facts

@@ -134,6 +134,187 @@ def _reset_nonce_cache_for_tests() -> None:
     _sender_next_nonce.clear()
 
 
+# ---------------------------------------------------------------------------
+# Deployed-account cache — F3 / internal #435
+# ---------------------------------------------------------------------------
+#
+# A Smart Account deploys exactly once (its first UserOp carries the factory /
+# initCode; every op after that must NOT). The old code re-derived "is
+# deployed" every submission from ``eth_getCode`` — but ``_eth_get_code``
+# silently read any RPC error as ``"0x"`` (= not deployed). Under import bursts
+# the public Gnosis RPC rate-limits, so a deployed account read as undeployed,
+# the factory was re-attached, and the paymaster reverted the whole batch with
+# ``-32500 "Sender does not implement validateUserOp or factory is not
+# deployed"`` — dropping every fact in it (rc13 QA: 52/78 lost).
+#
+# Fix: a monotonic per-sender "deployed" latch. Once we have ANY proof the
+# account executed on-chain (code present, chain_nonce > 0, a confirmed send,
+# or a sponsor-stage sender-state error), we never attach the factory again.
+# Keys are lowercased addresses; reads/writes happen under the per-sender
+# submission lock. Mirrors the OpenClaw plugin's PR #407 deploy-state cache.
+_sender_deployed: set[str] = set()
+
+
+def _mark_sender_deployed(sender: str) -> None:
+    """Latch a sender as deployed (monotonic — never cleared in-process)."""
+    _sender_deployed.add(sender.lower())
+
+
+def _is_sender_deployed_cached(sender: str) -> bool:
+    return sender.lower() in _sender_deployed
+
+
+def _reset_deployed_cache_for_tests() -> None:
+    """Clear the deployed cache. Test-only helper."""
+    _sender_deployed.clear()
+
+
+def _is_sender_state_error(err_str: str) -> bool:
+    """True when a sponsor/bundler error indicates the account is ALREADY
+    deployed (so re-attaching the factory is the actual fault).
+
+    Matches ONLY the specific "account already exists" signals:
+      - the paymaster revert \"Sender does not implement validateUserOp or
+        factory is not deployed\" (the #435 root-cause message), and
+      - the EntryPoint ``AA10 sender already constructed`` code / phrasing.
+
+    Deliberately NOT keyed on the bare JSON-RPC code ``-32500``: many
+    UNRELATED failures share it (AA13 initCode-failed, AA21 prefund,
+    AA23 sig, AA31/AA33 paymaster, transient sim errors). Latching those as
+    "deployed" would strip the factory from a FRESH account's first op —
+    whose deploy DEPENDS on the factory — and permanently brick it in-process
+    (the cache is never cleared). AA13 in particular must retry WITH the
+    factory; see the transient-``-32500`` retry branch in the submit loops.
+    Checked only AFTER an ``AA25`` nonce-conflict has been ruled out."""
+    if not err_str:
+        return False
+    return (
+        "already constructed" in err_str          # AA10 / raw phrasing
+        or "AA10" in err_str
+        or "validateUserOp or factory" in err_str  # paymaster -32500 revert
+    )
+
+
+def _is_transient_sim_error(err_str: str) -> bool:
+    """True for a ``-32500`` simulation error that is NOT a redeploy signal.
+
+    A ``-32500`` that :func:`_is_sender_state_error` did not claim (AA13
+    initCode-failed, AA21 prefund, transient sim reverts, …) is treated as
+    transient: rebuild and retry with the deploy state UNCHANGED — the
+    account is NOT latched deployed and a fresh account keeps its factory.
+    Callers must have already ruled out AA25 and the sender-state case."""
+    return bool(err_str) and "-32500" in err_str
+
+
+async def _resolve_is_deployed(
+    http: httpx.AsyncClient, rpc_url: str, sender: str, chain_nonce: int
+) -> bool:
+    """Decide whether ``sender`` is already deployed for THIS submission.
+
+    Resolution order (cheapest, most-authoritative first):
+      1. Deployed cache — once True, always True.
+      2. ``chain_nonce > 0`` — the account has executed ops ⇒ deployed.
+         Skips ``eth_getCode`` entirely (the burst-rate-limited call that
+         caused #435).
+      3. ``eth_getCode`` — non-empty bytecode ⇒ deployed. A hardened
+         ``_eth_get_code`` raises (rather than reading "0x") on an RPC
+         error, so a transient failure propagates into the retry loop
+         instead of being silently misread as undeployed.
+    """
+    key = sender.lower()
+    if key in _sender_deployed:
+        return True
+    if chain_nonce > 0:
+        _sender_deployed.add(key)
+        return True
+    code = await _eth_get_code(http, rpc_url, sender)
+    if code != "0x" and len(code) > 2:
+        _sender_deployed.add(key)
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Batch receipt confirmation — F3 / internal #431
+# ---------------------------------------------------------------------------
+#
+# ``eth_sendUserOperation`` returns as soon as the bundler ACCEPTS the op into
+# its mempool — not when it mines. rc13 QA saw ``facts_stored=26`` while only
+# ~11 landed on-chain, because the batch path returned the hash at accept time
+# and a later on-chain revert (e.g. the #435 factory bug) silently dropped the
+# facts. For the BATCH path only, we now poll ``eth_getUserOperationReceipt``
+# and return the hash ONLY once a receipt reports success — so "stored" means
+# on-chain. The single-fact path keeps accept-time return (auto-extraction
+# latency matters more there and a single dropped fact re-extracts next turn).
+_BATCH_RECEIPT_TIMEOUT_S: float = 60.0
+_BATCH_RECEIPT_POLL_S: float = 3.0
+
+
+def _receipt_success(result: dict) -> Optional[bool]:
+    """Interpret a UserOperation receipt's ``success`` field.
+
+    Returns True/False when the receipt states success, or None when the
+    receipt is absent / doesn't carry a decidable success flag (keep
+    polling). Tolerates both boolean and string ("true"/"false") shapes.
+    """
+    if not isinstance(result, dict):
+        return None
+    success = result.get("success")
+    if isinstance(success, bool):
+        return success
+    if isinstance(success, str):
+        low = success.strip().lower()
+        if low == "true":
+            return True
+        if low == "false":
+            return False
+    return None
+
+
+async def _await_batch_receipt(
+    http: httpx.AsyncClient,
+    relay_url: str,
+    headers: dict,
+    user_op_hash: str,
+    timeout_s: Optional[float] = None,
+    poll_s: Optional[float] = None,
+) -> None:
+    """Poll ``eth_getUserOperationReceipt`` until success, or raise.
+
+    Raises :class:`RuntimeError` on an explicit ``success=false`` receipt or
+    on timeout — the import engine treats either as a FAILED batch (not
+    stored) so ``facts_stored`` reflects on-chain reality.
+    """
+    import time as _time
+    timeout = _BATCH_RECEIPT_TIMEOUT_S if timeout_s is None else timeout_s
+    poll = _BATCH_RECEIPT_POLL_S if poll_s is None else poll_s
+    deadline = _time.monotonic() + timeout
+    while True:
+        try:
+            resp = await _relay_rpc(
+                http, relay_url, headers,
+                "eth_getUserOperationReceipt", [user_op_hash], rpc_id=4,
+            )
+        except Exception as e:
+            logger.debug("receipt poll for %s failed (%s); retrying", user_op_hash, e)
+            resp = {}
+        result = resp.get("result") if isinstance(resp, dict) else None
+        verdict = _receipt_success(result)
+        if verdict is True:
+            return
+        if verdict is False:
+            raise RuntimeError(
+                f"Batch UserOp {user_op_hash} reverted on-chain "
+                f"(receipt.success=false)"
+            )
+        if _time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Batch UserOp {user_op_hash} not confirmed within "
+                f"{timeout:.0f}s (no successful receipt)"
+            )
+        await asyncio.sleep(poll)
+
+
 async def _await_nonce_advance(
     http,
     sender: str,
@@ -334,16 +515,37 @@ async def _eth_call(
 async def _eth_get_code(
     http: httpx.AsyncClient, rpc_url: str, address: str
 ) -> str:
-    resp = await http.post(
-        rpc_url,
-        json={
-            "jsonrpc": "2.0",
-            "method": "eth_getCode",
-            "params": [address, "latest"],
-            "id": 1,
-        },
+    """Return the deployed bytecode at ``address`` (``"0x"`` when none).
+
+    Hardened for #435: an RPC error (or a body with no ``result``) is NOT
+    read as ``"0x"`` — that silent misread let a rate-limited public RPC
+    report a deployed account as undeployed, re-attaching the factory and
+    reverting the whole batch. We retry once, then raise. The caller only
+    reaches this when the deployed cache is cold AND chain_nonce == 0, so a
+    genuine RPC outage propagating into the retry loop is the safe outcome.
+    """
+    last_err: Optional[str] = None
+    for attempt in range(2):
+        resp = await http.post(
+            rpc_url,
+            json={
+                "jsonrpc": "2.0",
+                "method": "eth_getCode",
+                "params": [address, "latest"],
+                "id": 1,
+            },
+        )
+        body = resp.json()
+        if isinstance(body, dict) and "error" not in body and body.get("result") is not None:
+            return body["result"]
+        last_err = str(body.get("error") if isinstance(body, dict) else body)
+        logger.debug(
+            "eth_getCode for %s returned no usable result (attempt %d/2): %s",
+            address, attempt + 1, last_err,
+        )
+    raise RuntimeError(
+        f"eth_getCode failed for {address} after 2 attempts: {last_err}"
     )
-    return resp.json().get("result", "0x")
 
 
 async def get_nonce(
@@ -513,9 +715,14 @@ async def build_and_send_userop(
                 nonce = _resolve_submission_nonce(sender, chain_nonce)
                 logger.debug("Nonce for %s: chain=%d using=%d", sender, chain_nonce, nonce)
 
-                # 3. Check if account is already deployed
-                code = await _eth_get_code(http, rpc_url, sender)
-                is_deployed = code != "0x" and len(code) > 2
+                # 3. Deployed check (#435): the deployed cache and
+                #    chain_nonce > 0 short-circuit eth_getCode; a getCode RPC
+                #    error now raises instead of silently reading as
+                #    undeployed (which re-attached the factory and reverted
+                #    the batch).
+                is_deployed = await _resolve_is_deployed(
+                    http, rpc_url, sender, chain_nonce
+                )
 
                 # 4. Build partial UserOp with stub signature for gas estimation.
                 #    This specific dummy signature passes ecrecover without
@@ -624,28 +831,50 @@ async def build_and_send_userop(
                     )
 
                 _record_submitted_nonce(sender, nonce)
+                _mark_sender_deployed(sender)  # #435: a confirmed send ⇒ deployed
                 return send_data.get("result", "")
 
             except Exception as e:
                 err_str = str(e)
-                if ("AA25" in err_str or "AA10" in err_str) and attempt < _MAX_NONCE_RETRIES - 1:
+                retryable = attempt < _MAX_NONCE_RETRIES - 1
+                if "AA25" in err_str and retryable:
+                    # #423: nonce conflict — drop the pipelined nonce and wait
+                    # for the conflicting op to mine (observable as a nonce
+                    # advance) instead of sleeping blind against ~5s blocks.
                     logger.warning(
-                        "AA25/AA10 nonce or sender conflict (attempt %d/%d), retrying...",
-                        attempt + 1,
-                        _MAX_NONCE_RETRIES,
+                        "AA25 nonce conflict (attempt %d/%d), retrying...",
+                        attempt + 1, _MAX_NONCE_RETRIES,
                     )
-                    if "AA25" in err_str:
-                        # #423: drop the pipelined nonce and wait for the
-                        # conflicting op to actually mine (observable as a
-                        # nonce advance) instead of sleeping blind against
-                        # ~5s blocks.
-                        _reset_sender_nonce(sender)
-                        await _await_nonce_advance(
-                            http, sender, chain_id, min_nonce=nonce + 1,
-                            timeout_s=15.0 if attempt else 6.0,
-                        )
-                    else:
-                        await asyncio.sleep(2 ** attempt)
+                    _reset_sender_nonce(sender)
+                    await _await_nonce_advance(
+                        http, sender, chain_id, min_nonce=nonce + 1,
+                        timeout_s=15.0 if attempt else 6.0,
+                    )
+                    continue
+                if _is_sender_state_error(err_str) and retryable:
+                    # #435: the account is already deployed — re-attaching the
+                    # factory is the fault. Latch deployed and retry WITHOUT
+                    # the factory (next iteration reads the cache). No
+                    # nonce-advance wait — this is not a nonce conflict.
+                    logger.warning(
+                        "sender-state/redeploy error (attempt %d/%d) — marking "
+                        "deployed and retrying without factory: %s",
+                        attempt + 1, _MAX_NONCE_RETRIES, err_str[:200],
+                    )
+                    _mark_sender_deployed(sender)
+                    continue
+                if _is_transient_sim_error(err_str) and retryable:
+                    # #435 review: a -32500 that is NOT a redeploy signal
+                    # (AA13 initCode-failed, AA21 prefund, transient sim) —
+                    # do NOT latch deployed or strip the factory. Rebuild and
+                    # retry with the deploy state unchanged (a fresh account
+                    # keeps its factory, which its deploy depends on).
+                    logger.warning(
+                        "transient -32500 sim error (attempt %d/%d) — retrying "
+                        "with unchanged deploy state: %s",
+                        attempt + 1, _MAX_NONCE_RETRIES, err_str[:200],
+                    )
+                    await asyncio.sleep(min(2 ** attempt, 4))
                     continue
                 raise
 
@@ -783,9 +1012,14 @@ async def build_and_send_userop_batch(
                     sender, chain_nonce, nonce, len(protobuf_payloads),
                 )
 
-                # 3. Check if account is already deployed
-                code = await _eth_get_code(http, rpc_url, sender)
-                is_deployed = code != "0x" and len(code) > 2
+                # 3. Deployed check (#435): the deployed cache and
+                #    chain_nonce > 0 short-circuit eth_getCode; a getCode RPC
+                #    error now raises instead of silently reading as
+                #    undeployed (which re-attached the factory and reverted
+                #    the batch).
+                is_deployed = await _resolve_is_deployed(
+                    http, rpc_url, sender, chain_nonce
+                )
 
                 # 4. Build partial UserOp with stub signature for gas estimation.
                 _STUB_SIGNATURE = (
@@ -894,31 +1128,60 @@ async def build_and_send_userop_batch(
                         f"Batch UserOp submission failed: {send_data['error']}"
                     )
 
+                # Record the accept-time nonce/deploy state, then CONFIRM the
+                # op mined before returning (#431). The nonce advance is
+                # recorded at accept time so a concurrent submission pipelines
+                # correctly; the receipt gate ensures ``facts_stored`` only
+                # counts on-chain-confirmed batches.
                 _record_submitted_nonce(sender, nonce)
-                return send_data.get("result", "")
+                _mark_sender_deployed(sender)  # #435: a confirmed send ⇒ deployed
+                batch_hash = send_data.get("result", "")
+                await _await_batch_receipt(http, relay_url, headers, batch_hash)
+                return batch_hash
 
             except Exception as e:
                 err_str = str(e)
-                if ("AA25" in err_str or "AA10" in err_str) and attempt < _MAX_NONCE_RETRIES - 1:
+                retryable = attempt < _MAX_NONCE_RETRIES - 1
+                if "AA25" in err_str and retryable:
+                    # #423: nonce conflict — drop the pipelined nonce and wait
+                    # for the conflicting op to mine before rebuilding.
                     logger.warning(
-                        "Batch AA25/AA10 nonce or sender conflict "
-                        "(attempt %d/%d, batch size %d), retrying...",
-                        attempt + 1,
-                        _MAX_NONCE_RETRIES,
-                        len(protobuf_payloads),
+                        "Batch AA25 nonce conflict (attempt %d/%d, batch size "
+                        "%d), retrying...",
+                        attempt + 1, _MAX_NONCE_RETRIES, len(protobuf_payloads),
                     )
-                    if "AA25" in err_str:
-                        # #423: drop the pipelined nonce and wait for the
-                        # conflicting op to actually mine (observable as a
-                        # nonce advance) instead of sleeping blind against
-                        # ~5s blocks.
-                        _reset_sender_nonce(sender)
-                        await _await_nonce_advance(
-                            http, sender, chain_id, min_nonce=nonce + 1,
-                            timeout_s=15.0 if attempt else 6.0,
-                        )
-                    else:
-                        await asyncio.sleep(2 ** attempt)
+                    _reset_sender_nonce(sender)
+                    await _await_nonce_advance(
+                        http, sender, chain_id, min_nonce=nonce + 1,
+                        timeout_s=15.0 if attempt else 6.0,
+                    )
+                    continue
+                if _is_sender_state_error(err_str) and retryable:
+                    # #435: account already deployed — latch deployed and
+                    # retry WITHOUT the factory (the sponsor -32500 root
+                    # cause). No nonce-advance wait; this is not a conflict.
+                    logger.warning(
+                        "Batch sender-state/redeploy error (attempt %d/%d, "
+                        "batch size %d) — marking deployed and retrying "
+                        "without factory: %s",
+                        attempt + 1, _MAX_NONCE_RETRIES,
+                        len(protobuf_payloads), err_str[:200],
+                    )
+                    _mark_sender_deployed(sender)
+                    continue
+                if _is_transient_sim_error(err_str) and retryable:
+                    # #435 review: a non-redeploy -32500 (AA13 initCode-failed,
+                    # AA21 prefund, transient sim) — do NOT latch deployed or
+                    # strip the factory. Rebuild and retry with deploy state
+                    # unchanged so a fresh account keeps its (required) factory.
+                    logger.warning(
+                        "Batch transient -32500 sim error (attempt %d/%d, "
+                        "batch size %d) — retrying with unchanged deploy "
+                        "state: %s",
+                        attempt + 1, _MAX_NONCE_RETRIES,
+                        len(protobuf_payloads), err_str[:200],
+                    )
+                    await asyncio.sleep(min(2 ** attempt, 4))
                     continue
                 raise
 

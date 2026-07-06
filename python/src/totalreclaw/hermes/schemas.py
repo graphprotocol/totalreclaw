@@ -306,7 +306,12 @@ IMPORT_FROM = {
         "without dry_run to process everything. "
         "(4) If >50 chunks: tell the user this is a large import and you'll process "
         "it in batches. Then use totalreclaw_import_batch repeatedly with increasing "
-        "offset, reporting progress after each batch."
+        "offset, reporting progress after each batch. "
+        "NOTE: a large import runs in the BACKGROUND and needs a long-lived Hermes "
+        "process (the gateway/daemon) to finish — a one-shot `hermes chat -q` "
+        "invocation exits before the background task completes, so nothing is "
+        "stored. If the user is running one-shot, either keep the session open or "
+        "drive the import synchronously via totalreclaw_import_batch."
     ),
     "parameters": {
         "type": "object",

@@ -372,6 +372,17 @@ class TestBatchSendRetry:
                         "result": "0xbatchsuccess",
                     }
                 )
+            if method == "eth_getUserOperationReceipt":
+                # #431: the batch path now confirms the op mined before
+                # returning. Report a successful receipt so the retry test
+                # exercises only the AA25 path it targets.
+                return _rpc_response(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": body.get("id", 4),
+                        "result": {"success": True},
+                    }
+                )
             pytest.fail(f"Unexpected RPC method: {method}")
 
         transport = httpx.MockTransport(_dispatch)

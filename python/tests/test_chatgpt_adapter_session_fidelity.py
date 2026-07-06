@@ -269,11 +269,17 @@ def test_engine_groups_sessions_by_conversation_id(monkeypatch):
     assert sorted(map(sorted, sessions)) == sorted(map(sorted, by_conv.values()))
 
 
-def test_end_to_end_sessions_equal_conversations(monkeypatch):
+def test_end_to_end_sessions_equal_conversations(monkeypatch, tmp_path):
     """Full process_batch over two conversations -> two sessions, facts of a
     conversation share one session_id, one Crystal per multi-turn conversation."""
     import totalreclaw.embedding as emb
     monkeypatch.setattr(emb, "get_embedding", lambda t: [0.1, 0.2, 0.3])
+    # #436: process_batch(source="chatgpt") writes the imported-conversation
+    # registry. Redirect it to a tmp dir so this test never persists fixture
+    # conversation_ids to the real ~/.totalreclaw (which would make a re-run
+    # skip every conversation → payloads == []).
+    import totalreclaw.import_state as ist
+    monkeypatch.setattr(ist, "IMPORT_STATE_DIR", tmp_path / "import-state")
 
     async def fake_extract(messages, timestamp):
         # engine contract: messages arrive as [{"role", "content"}]

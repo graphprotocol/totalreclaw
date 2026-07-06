@@ -1029,22 +1029,48 @@ def _disclosure_required_response(source: str, import_id: str, estimate: Optiona
     return json.dumps(payload)
 
 
+def _provider_name_from_base_url(base_url: str) -> str:
+    """Map an LLM endpoint host to a human-readable provider name.
+
+    ``LLMConfig`` carries no ``provider`` field (only base_url/model/…), so
+    the disclosure name is derived from the endpoint host. Unknown hosts
+    fall back to the bare hostname so the disclosure still names *something*
+    concrete rather than a generic placeholder.
+    """
+    if not base_url:
+        return "your configured LLM provider"
+    lower = base_url.lower()
+    if "z.ai" in lower or "bigmodel" in lower:
+        return "z.ai (GLM)"
+    if "openai.com" in lower:
+        return "OpenAI"
+    if "anthropic.com" in lower:
+        return "Anthropic"
+    if "groq" in lower:
+        return "Groq"
+    from urllib.parse import urlparse
+    host = urlparse(base_url).hostname or ""
+    return host or "your configured LLM provider"
+
+
 def _extraction_provider_label() -> str:
     """Human-readable name of the LLM that will read conversation text.
 
-    The privacy disclosure must name the provider explicitly (PRD-IMP G-4);
-    this resolves the same config chain ``_make_extractor`` uses.
+    The privacy disclosure must name the provider explicitly (PRD-IMP G-4;
+    internal#437). ``LLMConfig`` has no ``provider`` field, so we derive the
+    provider name from ``base_url`` and pair it with the model. Resolves the
+    same config chain ``_make_extractor`` uses.
     """
     try:
         from totalreclaw.agent.llm_client import read_hermes_llm_config, detect_llm_config
         config = read_hermes_llm_config() or detect_llm_config()
         if config:
-            provider = getattr(config, "provider", None)
-            model = getattr(config, "model", None)
-            if provider and model:
-                return f"{provider} ({model})"
-            if provider:
-                return str(provider)
+            base_url = getattr(config, "base_url", "") or ""
+            model = getattr(config, "model", "") or ""
+            provider_name = _provider_name_from_base_url(base_url)
+            if model:
+                return f"{provider_name} — model {model}"
+            return provider_name
     except Exception:
         pass
     return "your configured LLM provider"
@@ -1407,7 +1433,10 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
                 "estimated_completion_iso": eta_iso,
                 "message": (
                     f"Import started in background. ~{estimated_minutes} min for {total_items} chunks. "
-                    "Ask \"how's the import?\" to check progress with totalreclaw_import_status."
+                    "Ask \"how's the import?\" to check progress with totalreclaw_import_status. "
+                    "NOTE: this runs in a background task that needs a long-lived Hermes process "
+                    "(the gateway/daemon) to finish — a one-shot `hermes chat -q` invocation exits "
+                    "before it completes, so keep the session running until the import reports done."
                 ),
             })
 

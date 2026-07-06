@@ -193,3 +193,57 @@ def any_import_exists() -> bool:
         return any(IMPORT_STATE_DIR.glob("*.json"))
     except OSError:
         return False
+
+
+# ── F2 (#436): per-source imported-conversation registry ──────────────────
+#
+# Re-imports RE-EXTRACT via the LLM, and paraphrase gives every fact a fresh
+# text fingerprint — so text-fingerprint dedup can never catch a re-import.
+# The durable fix records which SOURCE conversations have already been
+# imported (by ``conversation_id``) and drops their chunks before extraction
+# on any later run. Persisted per source so ChatGPT / Claude registries don't
+# collide. Gemini exports carry no conversation_id and are unaffected.
+
+
+def _imported_conversations_path(source: str):
+    # Reference IMPORT_STATE_DIR late (module global) so tests that
+    # monkeypatch it take effect — same pattern as the state helpers.
+    return IMPORT_STATE_DIR / f"imported-conversations-{source}.json"
+
+
+def load_imported_conversations(source: str) -> set:
+    """Return the set of ``conversation_id``s already imported for *source*.
+
+    Tolerates a missing or corrupt registry file (returns an empty set) so a
+    damaged registry degrades to "nothing imported yet" rather than raising.
+    """
+    try:
+        raw = _imported_conversations_path(source).read_text(encoding="utf-8")
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return {str(x) for x in data}
+    except Exception:
+        pass
+    return set()
+
+
+def record_imported_conversations(source: str, ids) -> None:
+    """Add ``ids`` to the imported-conversation registry for *source*.
+
+    Idempotent: merges with the existing registry and de-duplicates. Writes
+    the union back as a JSON list. Best-effort — an IO error is swallowed
+    (a missed record means at worst a future re-import re-processes that
+    conversation, never data loss).
+    """
+    new_ids = {str(x) for x in (ids or [])}
+    if not new_ids:
+        return
+    try:
+        IMPORT_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        existing = load_imported_conversations(source)
+        merged = sorted(existing | new_ids)
+        _imported_conversations_path(source).write_text(
+            json.dumps(merged), encoding="utf-8"
+        )
+    except OSError:
+        pass

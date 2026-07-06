@@ -473,20 +473,30 @@ def read_blob_unified(decrypted: str) -> Dict[str, Any]:
             importance = max(1, min(10, _js_round(float(imp_raw))))
         else:
             importance = 5
+        # F5 (internal#437 follow-up): the write side stores import provenance
+        # (``import_source``, ``session_id``, Crystal fields) in the blob's own
+        # ``metadata`` dict via ``build_canonical_claim_v1(extra_metadata=…)``.
+        # Merge it in FIRST, then let the typed/rebuilt fields win on any key
+        # collision — otherwise recall/export drop import_source + session_id.
+        merged_meta: Dict[str, Any] = {}
+        blob_meta = obj.get("metadata")
+        if isinstance(blob_meta, dict):
+            merged_meta.update(blob_meta)
+        merged_meta.update({
+            "type": obj["type"],
+            "source": obj.get("source", "user-inferred") if isinstance(obj.get("source"), str) else "user-inferred",
+            "scope": obj.get("scope", "unspecified") if isinstance(obj.get("scope"), str) else "unspecified",
+            "volatility": obj.get("volatility", "updatable") if isinstance(obj.get("volatility"), str) else "updatable",
+            "reasoning": obj.get("reasoning") if isinstance(obj.get("reasoning"), str) else None,
+            "importance": importance / 10,
+            "created_at": obj.get("created_at", "") if isinstance(obj.get("created_at"), str) else "",
+            "schema_version": schema_version,
+        })
         return {
             "text": obj["text"],
             "importance": importance,
             "category": map_type_to_category(obj["type"]),
-            "metadata": {
-                "type": obj["type"],
-                "source": obj.get("source", "user-inferred") if isinstance(obj.get("source"), str) else "user-inferred",
-                "scope": obj.get("scope", "unspecified") if isinstance(obj.get("scope"), str) else "unspecified",
-                "volatility": obj.get("volatility", "updatable") if isinstance(obj.get("volatility"), str) else "updatable",
-                "reasoning": obj.get("reasoning") if isinstance(obj.get("reasoning"), str) else None,
-                "importance": importance / 10,
-                "created_at": obj.get("created_at", "") if isinstance(obj.get("created_at"), str) else "",
-                "schema_version": schema_version,
-            },
+            "metadata": merged_meta,
         }
 
     # 2. v0 canonical Claim format: compact short keys {t, c, ...}
