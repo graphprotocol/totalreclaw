@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
+import hashlib
 import json
 import logging
 import os
@@ -944,6 +946,50 @@ def _prior_disclosure_consent(source: str, resume_id: Optional[str] = None) -> b
     return False
 
 
+# Disclosure tokens expire 1h after mint — a stale token can't be redeemed.
+_DISCLOSURE_TOKEN_TTL_S = 3600
+
+
+def _disclosure_token_hash(token: str) -> str:
+    """SHA-256 (first 16 hex chars) of a disclosure token — the at-rest key."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+
+def _disclosure_token_expired(minted_at) -> bool:
+    """True when a token's ``minted_at`` ISO timestamp is older than the TTL
+    (or is missing / unparseable — treat as expired, fail safe)."""
+    if not isinstance(minted_at, str) or not minted_at:
+        return True
+    try:
+        minted = datetime.fromisoformat(minted_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    age = (datetime.now(timezone.utc) - minted).total_seconds()
+    return age > _DISCLOSURE_TOKEN_TTL_S
+
+
+def _cleanup_expired_disclosure_tokens(state_dir) -> None:
+    """Best-effort removal of expired ``disclosure-*.pending`` sidecars."""
+    try:
+        for p in state_dir.glob("disclosure-*.pending"):
+            try:
+                data = json.loads(p.read_text())
+            except (OSError, ValueError):
+                # Unreadable sidecar — remove it opportunistically.
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+                continue
+            if _disclosure_token_expired(data.get("minted_at")):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
 def _mint_disclosure_token(source: str) -> str:
     """Mint a one-time token proving the disclosure response was received.
 
@@ -951,7 +997,18 @@ def _mint_disclosure_token(source: str) -> str:
     and self-setting disclosure_confirmed=true — the tool's provider-naming
     disclosure never reached the user. The token forces at least one
     round-trip through the disclosure_required response before consent can
-    be asserted. Persisted as a sidecar file (NOT ``*.json`` — the import
+    be asserted.
+
+    #437 (rc5): the token is stored HASHED at rest — the sidecar is named
+    ``disclosure-{sha256(token)[:16]}.pending`` and holds only ``{source,
+    minted_at}``, never the raw token. Previously the filename WAS the token,
+    so a shell-capable agent could read it off disk and self-assert consent
+    without ever relaying the disclosure (observed: an rc4 QA attempt gained
+    consent with a token never redeemed through the flow). Hashing raises the
+    bar to "the token only appears in the tool RESPONSE"; it cannot stop a
+    same-trust-domain agent that logs its own tool responses — the enforcement
+    goal is narrowly "the disclosure response was received THIS flow". Tokens
+    also carry a 1h TTL. Persisted as a sidecar (NOT ``*.json`` — the import
     state helpers glob that pattern) so it survives a gateway restart
     mid-consent.
     """
@@ -959,8 +1016,12 @@ def _mint_disclosure_token(source: str) -> str:
     try:
         from totalreclaw import import_state as ist
         ist.IMPORT_STATE_DIR.mkdir(parents=True, exist_ok=True)
-        (ist.IMPORT_STATE_DIR / f"disclosure-{token}.pending").write_text(
-            json.dumps({"source": source})
+        _cleanup_expired_disclosure_tokens(ist.IMPORT_STATE_DIR)
+        (ist.IMPORT_STATE_DIR / f"disclosure-{_disclosure_token_hash(token)}.pending").write_text(
+            json.dumps({
+                "source": source,
+                "minted_at": datetime.now(timezone.utc).isoformat(),
+            })
         )
     except OSError:
         pass  # worst case: token can't be redeemed → disclosure re-shown
@@ -968,16 +1029,27 @@ def _mint_disclosure_token(source: str) -> str:
 
 
 def _redeem_disclosure_token(source: str, token) -> bool:
-    """Consume a pending disclosure token for *source*. One-time use."""
+    """Consume a pending disclosure token for *source*. One-time use.
+
+    The presented token is HASHED to locate its sidecar (#437) — the raw
+    token is never written to disk. An expired (>1h) token is not redeemable
+    and its sidecar is cleaned up.
+    """
     if not token or not isinstance(token, str) or not token.isalnum():
         return False
     try:
         from totalreclaw import import_state as ist
-        path = ist.IMPORT_STATE_DIR / f"disclosure-{token}.pending"
+        path = ist.IMPORT_STATE_DIR / f"disclosure-{_disclosure_token_hash(token)}.pending"
         if not path.exists():
             return False
         data = json.loads(path.read_text())
         if data.get("source") != source:
+            return False
+        if _disclosure_token_expired(data.get("minted_at")):
+            try:
+                path.unlink()
+            except OSError:
+                pass
             return False
         path.unlink()
         return True
@@ -1148,6 +1220,262 @@ def _fetch_export_url(url: str, *, require_allowlist: bool = True) -> str:
     return tmp_path
 
 
+# ── #457a: fail-loud import entry point ────────────────────────────────────
+
+
+def _estimate_failure_errors(estimate: dict) -> Optional[list]:
+    """Return a loud-fail error list when an import estimate is UNUSABLE.
+
+    rc4 QA (#457a): a real ``import_from`` with a typo'd path produced
+    ``status:completed, total_chunks:0, facts_stored:0, errors:[]`` — a silent
+    failure presented as success, which then leaked a false "import finished,
+    0 memories" note into agent context. An import is unusable when the
+    adapter reported parse errors (e.g. file-not-found) OR the parse yielded
+    nothing to import (0 conversations AND 0 facts). Returns None when the
+    estimate is importable.
+    """
+    errs = [str(e) for e in (estimate.get("errors") or [])]
+    if errs:
+        return errs
+    total_chunks = estimate.get("total_chunks") or 0
+    total_facts = estimate.get("total_facts") or 0
+    if total_chunks == 0 and total_facts == 0:
+        return [
+            "No importable content found (0 conversations and 0 facts). "
+            "Check the source path/format is correct and try again."
+        ]
+    return None
+
+
+def _import_failed_response(source: str, import_id: str, errors: list) -> str:
+    """A loud error payload for an unusable import — NEVER a completed-empty
+    success. The adapter errors are surfaced verbatim so the agent can relay
+    the real cause (file-not-found, unparseable export, …)."""
+    return json.dumps({
+        "error": "import_failed",
+        "status": "failed",
+        "source": source,
+        "import_id": import_id,
+        "errors": errors,
+        "message": (
+            "Import failed — nothing was extracted or stored. "
+            + " ".join(errors)
+        ),
+    })
+
+
+# ── #457b: orphaned background-import reaping ──────────────────────────────
+#
+# In a one-shot ``hermes chat -q`` invocation the spawned asyncio task dies
+# with the process, leaving the state file stuck at ``running`` 0/N. We record
+# every import id this process backgrounded and, at interpreter exit, mark any
+# still-``running`` record ``failed`` with a resume hint. Bounded + best-effort.
+_SPAWNED_IMPORT_IDS: set[str] = set()
+_ORPHAN_ATEXIT_REGISTERED = False
+
+
+def _fail_orphaned_imports_on_exit() -> None:
+    """atexit hook: fail this process's still-running background imports."""
+    try:
+        from totalreclaw.import_state import (
+            read_import_state, write_import_state, ImportState,
+        )
+    except Exception:
+        return
+    for iid in list(_SPAWNED_IMPORT_IDS):
+        try:
+            s = read_import_state(iid)
+            if s is not None and s.status == "running":
+                write_import_state(ImportState(**{
+                    **asdict(s),
+                    "status": "failed",
+                    "errors": s.errors + [
+                        "process exited before the import completed — resume "
+                        f"with resume_id {iid}"
+                    ],
+                }))
+        except Exception:
+            pass
+
+
+def _register_spawned_import(import_id: str) -> None:
+    """Track a backgrounded import id + register the atexit reaper once."""
+    global _ORPHAN_ATEXIT_REGISTERED
+    _SPAWNED_IMPORT_IDS.add(import_id)
+    if not _ORPHAN_ATEXIT_REGISTERED:
+        try:
+            atexit.register(_fail_orphaned_imports_on_exit)
+        except Exception:
+            pass
+        _ORPHAN_ATEXIT_REGISTERED = True
+
+
+# ── #457b review Finding 1: heartbeat so a live-but-slow batch isn't reaped ─
+#
+# ``is_import_early_stale`` keys on ``last_updated``, which the background loop
+# only writes at BATCH BOUNDARIES — so it stays frozen at spawn time for the
+# whole of batch 0. A healthy first batch (25 chunks × receipt-confirmed
+# byte-capped groups, each store waiting up to 240s) can exceed the 10-min
+# early-stale window, which would false-reap a LIVE import as an orphan — and
+# then (because the loop only stopped on "aborted" and checkpoints re-inherit
+# the old status) the still-running task would keep writing on-chain while the
+# record reports failed forever. The heartbeat refreshes ``last_updated`` every
+# ~60s WHILE a batch runs: a live process keeps its record fresh; a dead one
+# doesn't; early-stale then reaps only true orphans.
+_HEARTBEAT_INTERVAL_S = 60
+
+
+async def _import_heartbeat(import_id: str, interval: Optional[float] = None) -> None:
+    """Refresh a ``running`` import's ``last_updated`` on a fixed interval.
+
+    Stops itself the moment the record is reaped (status flipped off
+    ``running``) or removed — it never resurrects a reaped import.
+    """
+    from totalreclaw.import_state import read_import_state, write_import_state
+    iv = _HEARTBEAT_INTERVAL_S if interval is None else interval
+    try:
+        while True:
+            await asyncio.sleep(iv)
+            s = read_import_state(import_id)
+            if s is None or s.status != "running":
+                return
+            write_import_state(s)  # write_import_state re-stamps last_updated=now
+    except asyncio.CancelledError:
+        return
+
+
+async def _process_batch_with_heartbeat(engine, import_id: str, **batch_kwargs):
+    """Run one ``engine.process_batch`` with a concurrent heartbeat that keeps
+    the import record fresh for the (possibly multi-minute) duration of the
+    batch. The heartbeat is always cancelled when the batch returns."""
+    beat = asyncio.ensure_future(_import_heartbeat(import_id))
+    try:
+        return await engine.process_batch(**batch_kwargs)
+    finally:
+        beat.cancel()
+        try:
+            await beat
+        except BaseException:
+            pass
+
+
+async def _run_import_background(
+    *, engine, state, import_id, source, file_path, content,
+    estimate, total_items, num_batches, start_dt,
+) -> None:
+    """Background driver for a large import (extracted from ``import_from`` so
+    the stop-signal + checkpoint-preservation invariants are unit-testable).
+
+    #457b review fixes:
+      (b) stop on ANY reap — the loop halts when the record's status is no
+          longer ``running`` (aborted / early-stale-failed / 2h-stale-failed /
+          external), not just on ``aborted``.
+      (c) checkpoints never resurrect a reaped record — after each batch we
+          re-read the state and, if it was reaped mid-batch, stop WITHOUT
+          overwriting (so a heartbeat-less-but-actually-dead orphan stays
+          failed, and a live reap actually halts the on-chain writes).
+    """
+    from totalreclaw.import_state import read_import_state, write_import_state, ImportState
+    offset = 0
+    batch_size = estimate.get("batch_size", 25)
+    total_stored = 0
+    total_extracted = 0
+    total_derived = 0
+    batch_done = 0
+    try:
+        await _persist_import_memory(
+            state,
+            text=(
+                f"Active background import: id={import_id}, source={source}, "
+                f"chunks={total_items}, batches={num_batches}, "
+                f"started={start_dt.isoformat()}. Check status with "
+                f"totalreclaw_import_status."
+            ),
+            importance=0.7,
+        )
+        while offset < total_items:
+            # (b) Any non-running status is a stop signal.
+            current = read_import_state(import_id)
+            if current is None or current.status != "running":
+                logger.info(
+                    "Import %s: no longer running (%s) at offset %d — stopping",
+                    import_id, current.status if current else "missing", offset,
+                )
+                return
+            result = await _process_batch_with_heartbeat(
+                engine, import_id,
+                source=source, file_path=file_path, content=content,
+                offset=offset, batch_size=batch_size,
+            )
+            total_stored += result.facts_stored
+            total_extracted += result.facts_extracted
+            total_derived += getattr(result, "derived_facts", 0)
+            batch_done += 1
+            offset += batch_size
+            # (c) Re-read before checkpointing: a reap DURING the batch must
+            # not be resurrected by an old-status checkpoint write.
+            s = read_import_state(import_id)
+            if s is None or s.status != "running":
+                logger.info(
+                    "Import %s: reaped during batch (%s) — stopping without "
+                    "overwrite", import_id, s.status if s else "missing",
+                )
+                return
+            elapsed = (datetime.now(timezone.utc).timestamp() - datetime.fromisoformat(
+                s.started_at.replace("Z", "+00:00")).timestamp())
+            sec_per_batch = elapsed / batch_done if batch_done else 45
+            remaining = num_batches - batch_done
+            eta_ms = remaining * sec_per_batch
+            write_import_state(ImportState(**{
+                **asdict(s),
+                "batch_done": batch_done,
+                "facts_stored": total_stored,
+                "facts_extracted": total_extracted,
+                "derived_facts": total_derived,
+                "estimated_completion_iso": datetime.fromtimestamp(
+                    datetime.now(timezone.utc).timestamp() + eta_ms,
+                    tz=timezone.utc,
+                ).isoformat(),
+            }))
+            eta_min = f"{eta_ms / 60:.0f}min" if eta_ms else "?"
+            logger.info(
+                "Import %s: batch %d/%d complete (%d facts stored, %d extracted, ETA ~%s)",
+                import_id, batch_done, num_batches, total_stored, total_extracted, eta_min,
+            )
+            if result.is_complete:
+                break
+        # Mark complete — only if still running (a reap wins).
+        s = read_import_state(import_id)
+        if s and s.status == "running":
+            write_import_state(ImportState(**{**asdict(s), "status": "completed",
+                                              "batch_done": num_batches,
+                                              "facts_stored": total_stored,
+                                              "facts_extracted": total_extracted,
+                                              "derived_facts": total_derived}))
+        end_dt = datetime.now(timezone.utc)
+        duration_min = (end_dt - start_dt).total_seconds() / 60
+        logger.info(
+            "Import %s: COMPLETED in %.0f minutes — %d facts stored, %d extracted, %d batches",
+            import_id, duration_min, total_stored, total_extracted, batch_done,
+        )
+        await _persist_import_memory(
+            state,
+            text=(
+                f"Import {import_id} completed: {total_stored} memories stored, "
+                f"{total_extracted} extracted from {total_items} chunks "
+                f"({batch_done} batches) in {duration_min:.0f} minutes. "
+                f"Source: {source}."
+            ),
+            importance=0.8,
+        )
+    except Exception as e:
+        s = read_import_state(import_id)
+        if s and s.status == "running":
+            write_import_state(ImportState(**{**asdict(s), "status": "failed",
+                                              "errors": s.errors + [str(e)]}))
+        logger.error("Import %s: background task failed: %s", import_id, e)
+
+
 async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
     """Import memories from other AI tools (Gemini, ChatGPT, Claude, Mem0, etc.)."""
     client = state.get_client()
@@ -1220,10 +1548,36 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
         if dry_run:
             estimate = engine.estimate(source=source, file_path=file_path, content=content)
             estimate["import_id"] = import_id
+            # #457a: fail loud on a dry-run of an unusable source too, so a
+            # typo'd path / empty export surfaces as an error rather than a
+            # "0 conversations" preview the agent reports as benign.
+            failure = _estimate_failure_errors(estimate)
+            if failure:
+                return _import_failed_response(source, import_id, failure)
             return json.dumps(estimate)
 
         estimate = engine.estimate(source=source, file_path=file_path, content=content)
         total_items = estimate.get("total_chunks") or estimate.get("total_facts") or 0
+
+        # #457a: FAIL LOUD BEFORE any state write / background ack. An
+        # unusable estimate (adapter errors, or a valid-but-empty 0/0 parse)
+        # must NEVER become a completed-empty record — that silent "success"
+        # leaked a phantom "import finished, 0 memories" note in rc4 QA. Write
+        # a FAILED record (so import_status can report it) and return the
+        # adapter errors verbatim.
+        failure = _estimate_failure_errors(estimate)
+        if failure:
+            try:
+                now = datetime.now(timezone.utc).isoformat()
+                write_import_state(ImportState(
+                    import_id=import_id, source=source, status="failed",
+                    started_at=now, last_updated=now,
+                    total_chunks=estimate.get("total_chunks", 0),
+                    file_path=file_path, errors=failure,
+                ))
+            except Exception as _e:
+                logger.warning("import_from: failed to persist failed-state: %s", _e)
+            return _import_failed_response(source, import_id, failure)
 
         # ── Tier gate (PRD-IMP §6: import is a Pro-only feature) ───────────
         # Interim client-side UX gate: a free-tier user hits the upgrade wall
@@ -1292,6 +1646,7 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
                        "batch_done": 1,
                        "facts_stored": result.facts_stored,
                        "facts_extracted": result.facts_extracted,
+                       "derived_facts": getattr(result, "derived_facts", 0),
                        "dups_skipped": getattr(result, "dups_skipped", 0),
                     }
                 ))
@@ -1320,109 +1675,19 @@ async def import_from(args: dict, state: "PluginState", **kwargs) -> str:
             )
             write_import_state(istate)
 
-            async def _run_background() -> None:
-                from totalreclaw.import_state import read_import_state, write_import_state, ImportState
-                offset = 0
-                batch_size = estimate.get("batch_size", 25)
-                total_stored = 0
-                total_extracted = 0
-                batch_done = 0
-                start_dt = now_dt
-                try:
-                    # #401: persist the import id to memory at start so the agent
-                    # recovers it after context compaction and can poll
-                    # totalreclaw_import_status without the user re-supplying the
-                    # id. Best-effort; never blocks the import. Done inside the
-                    # background task (not the caller) so import_from returns
-                    # immediately with the "started" ack.
-                    await _persist_import_memory(
-                        state,
-                        text=(
-                            f"Active background import: id={import_id}, source={source}, "
-                            f"chunks={total_items}, batches={num_batches}, "
-                            f"started={now_dt.isoformat()}. Check status with "
-                            f"totalreclaw_import_status."
-                        ),
-                        importance=0.7,
-                    )
-                    while offset < total_items:
-                        # Check abort flag before each batch.
-                        current = read_import_state(import_id)
-                        if current and current.status == "aborted":
-                            logger.info("Import %s: abort flag detected at offset %d", import_id, offset)
-                            return
-                        result = await engine.process_batch(
-                            source=source, file_path=file_path, content=content,
-                            offset=offset, batch_size=batch_size,
-                        )
-                        total_stored += result.facts_stored
-                        total_extracted += result.facts_extracted
-                        batch_done += 1
-                        offset += batch_size
-                        # Checkpoint state.
-                        s = read_import_state(import_id)
-                        if s:
-                            elapsed = (datetime.now(timezone.utc).timestamp() - datetime.fromisoformat(
-                                s.started_at.replace("Z", "+00:00")).timestamp())
-                            sec_per_batch = elapsed / batch_done if batch_done else 45
-                            remaining = num_batches - batch_done
-                            eta_ms = remaining * sec_per_batch
-                            write_import_state(ImportState(**{
-                                **asdict(s),
-                                "batch_done": batch_done,
-                                "facts_stored": total_stored,
-                                "facts_extracted": total_extracted,
-                                "estimated_completion_iso": datetime.fromtimestamp(
-                                    datetime.now(timezone.utc).timestamp() + eta_ms,
-                                    tz=timezone.utc,
-                                ).isoformat(),
-                            }))
-                        # #401: INFO-level batch progress so
-                        # ``journalctl -u hermes-gateway | grep "Import "``
-                        # reconstructs the timeline without polling the state
-                        # file. Was checkpoint-only (silent) pre-#401.
-                        eta_min = f"{eta_ms / 60:.0f}min" if (s and eta_ms) else "?"
-                        logger.info(
-                            "Import %s: batch %d/%d complete (%d facts stored, %d extracted, ETA ~%s)",
-                            import_id, batch_done, num_batches, total_stored, total_extracted, eta_min,
-                        )
-                        if result.is_complete:
-                            break
-                    # Mark complete.
-                    s = read_import_state(import_id)
-                    if s and s.status == "running":
-                        write_import_state(ImportState(**{**asdict(s), "status": "completed",
-                                                          "batch_done": num_batches,
-                                                          "facts_stored": total_stored,
-                                                          "facts_extracted": total_extracted}))
-                    end_dt = datetime.now(timezone.utc)
-                    duration_min = (end_dt - start_dt).total_seconds() / 60
-                    logger.info(
-                        "Import %s: COMPLETED in %.0f minutes — %d facts stored, %d extracted, %d batches",
-                        import_id, duration_min, total_stored, total_extracted, batch_done,
-                    )
-                    # #401: persist completion to the vault so the agent
-                    # recovers the result after context compaction. Best-effort.
-                    await _persist_import_memory(
-                        state,
-                        text=(
-                            f"Import {import_id} completed: {total_stored} memories stored, "
-                            f"{total_extracted} extracted from {total_items} chunks "
-                            f"({batch_done} batches) in {duration_min:.0f} minutes. "
-                            f"Source: {source}."
-                        ),
-                        importance=0.8,
-                    )
-                except Exception as e:
-                    s = read_import_state(import_id)
-                    if s and s.status == "running":
-                        write_import_state(ImportState(**{**asdict(s), "status": "failed",
-                                                          "errors": s.errors + [str(e)]}))
-                    logger.error("Import %s: background task failed: %s", import_id, e)
-
-            _bg_task = asyncio.ensure_future(_run_background())
+            # #457b: the loop is a module-level coroutine (testable) with a
+            # heartbeat, reap-aware stop signal, and resurrection-safe
+            # checkpoints — see _run_import_background.
+            _bg_task = asyncio.ensure_future(_run_import_background(
+                engine=engine, state=state, import_id=import_id, source=source,
+                file_path=file_path, content=content, estimate=estimate,
+                total_items=total_items, num_batches=num_batches, start_dt=now_dt,
+            ))
             _BG_TASKS.add(_bg_task)
             _bg_task.add_done_callback(_BG_TASKS.discard)
+            # #457b: if this process exits before the task finishes (one-shot
+            # `hermes chat -q`), the atexit reaper marks this record failed.
+            _register_spawned_import(import_id)
             return json.dumps({
                 "import_id": import_id,
                 "status": "running",
@@ -1533,6 +1798,7 @@ async def import_batch(args: dict, state: "PluginState", **kwargs) -> str:
                 batch_done=(prior.batch_done if prior else 0) + 1,
                 facts_stored=(prior.facts_stored if prior else 0) + result.facts_stored,
                 facts_extracted=(prior.facts_extracted if prior else 0) + result.facts_extracted,
+                derived_facts=(prior.derived_facts if prior else 0) + getattr(result, "derived_facts", 0),
                 dups_skipped=(prior.dups_skipped if prior else 0) + getattr(result, "dups_skipped", 0),
                 file_path=file_path,
                 disclosure_confirmed=True,
@@ -1553,7 +1819,8 @@ async def import_status(args: dict, state: "PluginState", **kwargs) -> str:
     """Check the progress of a background import."""
     from totalreclaw.import_state import (
         read_import_state, read_most_recent_active_import, read_most_recent_import,
-        is_import_stale, write_import_state, ImportState, mark_import_announced,
+        is_import_stale, is_import_early_stale, write_import_state, ImportState,
+        mark_import_announced,
     )
     from dataclasses import asdict
 
@@ -1574,6 +1841,32 @@ async def import_status(args: dict, state: "PluginState", **kwargs) -> str:
             s = read_most_recent_import(max_age_hours=48)
             if not s:
                 return json.dumps({"status": "no_import_found", "message": "No active or recent import found. Start one with totalreclaw_import_from."})
+
+    # #457b: orphaned-background-import guard. A running import stuck at 0/N
+    # for >10 min almost certainly had its spawning process exit (one-shot
+    # `hermes chat -q`). Surface it promptly as failed with a resume hint,
+    # instead of waiting out the 2h stale threshold.
+    if s.status == "running" and is_import_early_stale(s):
+        write_import_state(ImportState(**{
+            **asdict(s), "status": "failed",
+            "errors": s.errors + [
+                "Import process appears to have exited before making progress "
+                "(no batches completed in 10+ min) — likely a one-shot session "
+                "that ended before the background import ran. Resume with "
+                "totalreclaw_import_from using the same file and resume_id."
+            ],
+        }))
+        return json.dumps({
+            "import_id": s.import_id, "status": "failed", "stale": True,
+            "orphaned": True, "facts_stored": s.facts_stored,
+            "message": (
+                "The import didn't run — its session likely exited before the "
+                "background task started (no progress in 10+ min). Resume it "
+                "with totalreclaw_import_from using the same file and resume_id, "
+                "or drive totalreclaw_import_batch synchronously."
+            ),
+            "resume_id": s.import_id,
+        })
 
     # 2h freshness guard (#401: was 1h — see STALE_THRESHOLD_SECONDS).
     if s.status == "running" and is_import_stale(s):
@@ -1620,6 +1913,7 @@ async def import_status(args: dict, state: "PluginState", **kwargs) -> str:
         "batch_total": s.batch_total,
         "facts_stored": s.facts_stored,
         "facts_extracted": s.facts_extracted,
+        "derived_facts": s.derived_facts,
         "dups_skipped": s.dups_skipped,
         "elapsed_seconds": int(elapsed),
         "eta_seconds": eta_seconds,

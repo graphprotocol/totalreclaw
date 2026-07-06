@@ -947,6 +947,7 @@ class ImportEngine:
             dups_skipped=dups_skipped,
             chunks_skipped=chunks_skipped,
             conversations_skipped=conversations_skipped,
+            derived_facts=len(crystals_to_emit),
             smart_import=smart_import_summary,
             chunk_diagnostics=chunk_diagnostics or None,
         )

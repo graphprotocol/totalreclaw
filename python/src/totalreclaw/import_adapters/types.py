@@ -125,6 +125,12 @@ class BatchImportResult:
     # distinct dropped conversation is counted once. 0 for fresh imports and
     # for Gemini (which carries no conversation_id).
     conversations_skipped: int = 0
+    # #457 accounting: DERIVED facts stored beyond the LLM-extracted atomic
+    # facts — one session Crystal (type=summary) per multi-turn conversation.
+    # These count in ``facts_stored`` but not ``facts_extracted``, so QA saw
+    # facts_stored (79) > facts_extracted (72). Surfacing this reconciles the
+    # numbers: facts_stored ≈ facts_extracted + derived_facts − dups_skipped.
+    derived_facts: int = 0
     smart_import: Optional[dict] = None
     # Per-chunk "0 facts" diagnostics (issue #389 follow-up): one
     # ``{index, title, reason}`` dict per chunk that produced 0 storable facts

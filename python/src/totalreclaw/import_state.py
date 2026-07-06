@@ -19,6 +19,13 @@ IMPORT_STATE_DIR: Path = Path.home() / ".totalreclaw" / "import-state"
 # stale-flagging on healthy long imports. 2h absorbs retry storms without
 # masking genuinely-hung imports (which the abort flag handles explicitly).
 STALE_THRESHOLD_SECONDS: int = 7200  # 2 hours
+# #457b: a running import that made ZERO progress (batch_done==0) and hasn't
+# updated in >10 min almost certainly had its spawning process exit (one-shot
+# `hermes chat -q`) — the background task died with it. Distinct, shorter
+# threshold than STALE_THRESHOLD_SECONDS (which covers a genuinely-hung import
+# that IS making occasional progress) so we surface the orphan promptly instead
+# of making the user wait 2h.
+EARLY_STALE_THRESHOLD_SECONDS: int = 600  # 10 minutes
 
 
 @dataclass
@@ -34,6 +41,9 @@ class ImportState:
     batch_total: int = 0
     facts_stored: int = 0
     facts_extracted: int = 0
+    #: #457 accounting: session Crystals stored beyond the extracted atomic
+    #: facts, so facts_stored ≈ facts_extracted + derived_facts − dups_skipped.
+    derived_facts: int = 0
     dups_skipped: int = 0
     errors: List[str] = field(default_factory=list)
     file_path: Optional[str] = None
@@ -78,6 +88,25 @@ def is_import_stale(state: ImportState) -> bool:
         last = datetime.fromisoformat(state.last_updated.replace("Z", "+00:00"))
         age = (datetime.now(timezone.utc) - last).total_seconds()
         return age > STALE_THRESHOLD_SECONDS
+    except Exception:
+        return False
+
+
+def is_import_early_stale(state: ImportState) -> bool:
+    """True for a ``running`` import stuck at ZERO progress past the 10-min
+    early threshold — the orphaned-background-task signature (#457b).
+
+    Only fires when ``batch_done == 0``: an import that has completed at least
+    one batch is making progress and is governed by the 2h
+    :data:`STALE_THRESHOLD_SECONDS` instead.
+    """
+    if state.status != "running" or state.batch_done != 0:
+        return False
+    try:
+        from datetime import datetime, timezone
+        last = datetime.fromisoformat(state.last_updated.replace("Z", "+00:00"))
+        age = (datetime.now(timezone.utc) - last).total_seconds()
+        return age > EARLY_STALE_THRESHOLD_SECONDS
     except Exception:
         return False
 
