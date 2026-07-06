@@ -305,6 +305,8 @@ async def test_pair_tool_default_mode_is_either(tmp_path, monkeypatch):
     _pair_tool_mod._SERVER_INSTANCE = None  # type: ignore[attr-defined]
 
     state = MagicMock()
+    # fresh install — F8 guard must not fire (bare MagicMock is truthy)
+    state.is_configured.return_value = False
     # No 'mode' in args.
     result_json = await _pair_tool_mod.pair({}, state)
     payload = json.loads(result_json)
@@ -327,6 +329,8 @@ async def test_pair_tool_accepts_explicit_either(tmp_path, monkeypatch):
     _pair_tool_mod._SERVER_INSTANCE = None  # type: ignore[attr-defined]
 
     state = MagicMock()
+    # fresh install — F8 guard must not fire (bare MagicMock is truthy)
+    state.is_configured.return_value = False
     result_json = await _pair_tool_mod.pair({"mode": "either"}, state)
     payload = json.loads(result_json)
     assert payload["mode"] == "either"
@@ -343,6 +347,8 @@ async def test_pair_tool_generate_or_import_still_honored(tmp_path, monkeypatch)
     from totalreclaw.hermes import pair_tool as _pair_tool_mod
 
     state = MagicMock()
+    # fresh install — F8 guard must not fire (bare MagicMock is truthy)
+    state.is_configured.return_value = False
 
     # generate
     _pair_tool_mod._SERVER_INSTANCE = None  # type: ignore[attr-defined]
@@ -404,6 +410,8 @@ async def test_relay_mode_passes_ui_mode_to_thread_supervisor_when_sidecar_disab
     )
 
     state = MagicMock()
+    # fresh install — F8 guard must not fire (bare MagicMock is truthy)
+    state.is_configured.return_value = False
 
     for mode in ("generate", "import", "either"):
         result_json = await _pair_tool_mod.pair({"mode": mode}, state)
@@ -450,6 +458,8 @@ async def test_relay_mode_passes_ui_mode_via_sidecar_default_path(
     )
 
     state = MagicMock()
+    # fresh install — F8 guard must not fire (bare MagicMock is truthy)
+    state.is_configured.return_value = False
 
     for mode in ("generate", "import", "either"):
         captured.clear()

@@ -51,6 +51,8 @@ async def test_pair_tool_returns_qr_png_and_qr_unicode(tmp_path, monkeypatch):
     _pair_tool_mod._SERVER_INSTANCE = None  # type: ignore[attr-defined]
 
     state = MagicMock()
+    # fresh install — F8 guard must not fire (bare MagicMock is truthy)
+    state.is_configured.return_value = False
     # configure + state.get_client aren't exercised by the pair-tool
     # path under test (only ``_complete_pairing_handler`` closes over
     # state, and that handler is only invoked by the browser POST —
@@ -136,6 +138,8 @@ async def test_pair_tool_payload_never_contains_phrase_material(tmp_path, monkey
     _pair_tool_mod._SERVER_INSTANCE = None  # type: ignore[attr-defined]
 
     state = MagicMock()
+    # fresh install — F8 guard must not fire (bare MagicMock is truthy)
+    state.is_configured.return_value = False
 
     result_json = await _pair_tool_mod.pair({"mode": "generate"}, state)
     payload = json.loads(result_json)

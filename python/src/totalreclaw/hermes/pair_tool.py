@@ -93,6 +93,17 @@ PAIR_SCHEMA: Dict[str, Any] = {
                     "you don't know whether the user is new or returning)."
                 ),
             },
+            "replace_confirmed": {
+                "type": "boolean",
+                "description": (
+                    "Required ONLY when this install is already paired: the "
+                    "tool refuses to start a fresh pair over existing "
+                    "credentials (it would orphan the current vault) unless "
+                    "the user explicitly confirmed they want to REPLACE "
+                    "their account. Never set this without that explicit "
+                    "user confirmation."
+                ),
+            },
         },
     },
 }
@@ -434,6 +445,26 @@ async def pair(args: dict, state: "PluginState", **kwargs) -> str:
         the safest default for agents that don't know whether the user
         has an existing phrase or is creating one fresh.
     """
+    # F8 (#428) — existing-credentials guard. Completing a fresh pair on an
+    # already-configured install mints a NEW phrase / Smart Account and
+    # silently orphans the existing vault. Refuse unless the user explicitly
+    # chose replacement. Message-level guard only — no crypto-path changes.
+    if state.is_configured() and not bool(args.get("replace_confirmed", False)):
+        return json.dumps({
+            "already_configured": True,
+            "message": (
+                "This install is already paired to a TotalReclaw account — "
+                "its credentials are on disk and the vault is reachable. "
+                "Starting a new pair flow would create a DIFFERENT account "
+                "and orphan the existing vault's memories. Tell the user "
+                "their account is already set up. Only if they explicitly "
+                "say they want to REPLACE it with a new/different account, "
+                "call again with replace_confirmed=true. (Restoring this "
+                "same account on another device happens on that device, "
+                "not here.)"
+            ),
+        })
+
     raw_mode = args.get("mode")
     if raw_mode in ("generate", "import", "either"):
         mode = raw_mode
