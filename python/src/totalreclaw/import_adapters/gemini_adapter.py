@@ -19,7 +19,7 @@ from typing import Optional, Callable, List
 import psutil
 
 from .base_adapter import BaseImportAdapter
-from .types import AdapterParseResult, ConversationChunk
+from .types import AdapterParseResult, ConversationChunk, ParsedTurn
 
 
 class GeminiAdapter(BaseImportAdapter):
@@ -138,6 +138,21 @@ class GeminiAdapter(BaseImportAdapter):
             )
             for c in data.get('chunks', [])
         ]
+        # #368 Part 2 — flat per-turn view with real per-turn timestamps. Absent
+        # on older core wheels (pre-Part-2) and for the timestamp-less "Saved
+        # info" paste format; the import engine falls back to the chunk-level
+        # approximation when this list is empty.
+        turns = [
+            ParsedTurn(
+                user_text=t.get('user_text', ''),
+                assistant_text=t.get('assistant_text', ''),
+                text=t.get('text', ''),
+                chunk_index=t.get('chunk_index', 0),
+                ts_iso=t.get('ts_iso'),
+                ts_unix=t.get('ts_unix'),
+            )
+            for t in data.get('turns', [])
+        ]
         meta = {
             'format': data.get('format'),
             'chunks_count': len(chunks),
@@ -154,4 +169,5 @@ class GeminiAdapter(BaseImportAdapter):
             warnings=warnings + list(data.get('warnings', [])),
             errors=errors + list(data.get('errors', [])),
             source_metadata=meta,
+            turns=turns,
         )

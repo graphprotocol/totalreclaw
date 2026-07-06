@@ -49,12 +49,59 @@ pub struct ParsedChunk {
     pub timestamp: Option<String>,
 }
 
+/// A single conversation turn (one prompt→reply exchange) with its *own*
+/// timestamp, in chronological order.
+///
+/// This is the finest granularity the parser recovers — the JSON/HTML formats
+/// carry one timestamp per activity record (prompt+reply pair). Chunks
+/// (`ParsedChunk`) deliberately collapse a whole pseudo-session down to a
+/// single chunk timestamp for LLM extraction; `turns` preserves the per-turn
+/// timestamps so a client can run true turn-granularity semantic session
+/// segmentation (`segment_sessions`, totalreclaw#368) rather than approximating
+/// with the shared chunk timestamp.
+///
+/// `text` is the turn's content joined as `"<user>\n<assistant>"` (either side
+/// may be empty), i.e. exactly what a client would embed for that turn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParsedTurn {
+    /// The user prompt for this turn (may be empty if the export had none).
+    pub user_text: String,
+    /// The model reply for this turn (may be empty).
+    pub assistant_text: String,
+    /// Combined `user_text` + `assistant_text` (newline-joined, non-empty sides
+    /// only) — the canonical string to embed for segmentation. Provided so every
+    /// client embeds identical text without re-deriving the join.
+    pub text: String,
+    /// Turn timestamp as a normalized RFC3339/ISO-8601 UTC string, or `null`
+    /// when the export carried no parseable timestamp for this record (lossless:
+    /// the turn is still emitted).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ts_iso: Option<String>,
+    /// Turn timestamp as Unix seconds, or `null` when unknown. `null` (not `0`)
+    /// signals "no timestamp" so `segment_sessions` treats it as a 0-gap to the
+    /// previous turn rather than a jump to the epoch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ts_unix: Option<i64>,
+    /// Index into `ParseResult::chunks` of the chunk that holds this turn's
+    /// first message. Lets a client map a turn-level segmentation result back to
+    /// chunk-level sessions (chunks are the extraction unit) authoritatively —
+    /// without re-deriving the turn→chunk pairing that this parser already did.
+    pub chunk_index: usize,
+}
+
 /// The result of parsing one export. The client converts this into its own
 /// `AdapterParseResult`. `facts` is omitted here — Gemini is conversation-based
 /// (chunks only); pre-structured sources (Mem0) will add a `facts` vec later.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ParseResult {
     pub chunks: Vec<ParsedChunk>,
+    /// Flat, chronological per-turn view (one entry per prompt→reply exchange),
+    /// each carrying its own timestamp. Enables true turn-granularity semantic
+    /// session segmentation (`segment_sessions`, #368) instead of the chunk-level
+    /// approximation. Empty for the "Saved info" paste format (no per-turn
+    /// timestamps there). See `ParsedTurn`.
+    #[serde(default)]
+    pub turns: Vec<ParsedTurn>,
     pub total_messages: usize,
     pub warnings: Vec<String>,
     pub errors: Vec<String>,
@@ -485,13 +532,37 @@ fn strip_html(html: &str) -> String {
 // Shared: entries -> sessions -> chunks
 // ---------------------------------------------------------------------------
 
+/// Join a turn's two sides into the canonical embed string: non-empty sides
+/// only, newline-separated. Matches `ParsedTurn::text`.
+fn join_turn_text(user_text: &str, assistant_text: &str) -> String {
+    match (user_text.is_empty(), assistant_text.is_empty()) {
+        (false, false) => format!("{user_text}\n{assistant_text}"),
+        (false, true) => user_text.to_string(),
+        (true, false) => assistant_text.to_string(),
+        (true, true) => String::new(),
+    }
+}
+
 fn entries_to_chunks(entries: &[Entry], r: &mut ParseResult) {
+    // Single pass over the pseudo-sessions builds BOTH the flat per-turn view
+    // and the chunks, so each turn's `chunk_index` is authoritative (the same
+    // code decides both) rather than re-derived by the client. A "turn" is one
+    // prompt→reply exchange (one `Entry` with content); it maps to the chunk
+    // holding its FIRST message.
     let sessions = group_sessions(entries);
     let mut total_messages = 0usize;
 
     for session in &sessions {
+        // Materialise this session's messages, remembering which turn each
+        // message came from (so we can find each turn's first-message index).
         let mut messages: Vec<ParsedMessage> = Vec::new();
+        // (turn ref, index into `messages` of this turn's first message).
+        let mut session_turns: Vec<(&Entry, usize)> = Vec::new();
         for e in session {
+            if e.user_prompt.is_empty() && e.ai_response.is_empty() {
+                continue; // no content → not a turn, no messages
+            }
+            let first_msg_idx = messages.len();
             if !e.user_prompt.is_empty() {
                 messages.push(ParsedMessage {
                     role: "user".to_string(),
@@ -504,12 +575,32 @@ fn entries_to_chunks(entries: &[Entry], r: &mut ParseResult) {
                     text: e.ai_response.clone(),
                 });
             }
+            session_turns.push((e, first_msg_idx));
         }
         if messages.is_empty() {
             continue;
         }
         total_messages += messages.len();
         let timestamp = session[0].ts_iso.clone();
+
+        // The global index of this session's FIRST chunk (chunks pushed so far).
+        let session_first_chunk = r.chunks.len();
+
+        // Emit this turn's flat view now that we know the base chunk index.
+        // chunk_index = session_first_chunk + (first_msg_idx / CHUNK_SIZE),
+        // mirroring the 20-message chunk slicing below exactly.
+        for (e, first_msg_idx) in &session_turns {
+            r.turns.push(ParsedTurn {
+                user_text: e.user_prompt.clone(),
+                assistant_text: e.ai_response.clone(),
+                text: join_turn_text(&e.user_prompt, &e.ai_response),
+                ts_iso: e.ts_iso.clone(),
+                // null (not 0) for "no timestamp" — only emit when we parsed an
+                // ISO string, so `segment_sessions` treats it as a 0-gap.
+                ts_unix: e.ts_iso.as_deref().and_then(to_unix),
+                chunk_index: session_first_chunk + first_msg_idx / CHUNK_SIZE,
+            });
+        }
 
         let total_chunks = messages.len().div_ceil(CHUNK_SIZE);
         for (i, batch_start) in (0..messages.len()).step_by(CHUNK_SIZE).enumerate() {
@@ -844,5 +935,141 @@ mod tests {
         let texts = all_texts(&r);
         assert!(texts.contains(&"First thing".to_string()));
         assert!(texts.contains(&"Second thing".to_string()));
+    }
+
+    // ── Part 2 (#368): flat per-turn exposure ───────────────────────────────
+
+    #[test]
+    fn json_exposes_flat_per_turn_with_own_timestamps() {
+        let data = serde_json::json!([
+            record("Prompted Plan a 3-day trip to Lisbon", "2026-05-14T09:21:03Z",
+                   Some("Day 1: Alfama.")),
+            record("Prompted Best pastel de nata?", "2026-05-14T09:25:10Z",
+                   Some("Use puff pastry.")),
+        ]);
+        let r = parse_gemini(&data.to_string());
+        // One turn per prompt→reply exchange (NOT one per message).
+        assert_eq!(r.turns.len(), 2);
+
+        let t0 = &r.turns[0];
+        assert_eq!(t0.user_text, "Plan a 3-day trip to Lisbon");
+        assert_eq!(t0.assistant_text, "Day 1: Alfama.");
+        assert_eq!(t0.text, "Plan a 3-day trip to Lisbon\nDay 1: Alfama.");
+        // Per-turn timestamp preserved (both ISO + unix), and DISTINCT per turn.
+        assert_eq!(t0.ts_iso.as_deref(), Some("2026-05-14T09:21:03+00:00"));
+        assert_eq!(t0.ts_unix, to_unix("2026-05-14T09:21:03+00:00"));
+        assert_ne!(r.turns[0].ts_unix, r.turns[1].ts_unix);
+        // Chronological.
+        assert!(r.turns[0].ts_unix.unwrap() < r.turns[1].ts_unix.unwrap());
+    }
+
+    #[test]
+    fn turns_null_timestamp_stays_null_not_epoch() {
+        // A record with an unparseable time → ts_iso/ts_unix are None, turn kept.
+        let data = serde_json::json!([
+            record("Prompted Remember my dog is called Rex", "not-a-date", Some("Noted.")),
+        ]);
+        let r = parse_gemini(&data.to_string());
+        assert_eq!(r.turns.len(), 1);
+        assert!(r.turns[0].ts_iso.is_none());
+        assert!(
+            r.turns[0].ts_unix.is_none(),
+            "missing timestamp must be null, never epoch-0"
+        );
+        // Content is still exposed losslessly.
+        assert_eq!(r.turns[0].user_text, "Remember my dog is called Rex");
+    }
+
+    #[test]
+    fn turns_span_pseudo_sessions_flat_and_chronological() {
+        // Three records >30 min apart → 3 chunk-sessions, but ONE flat turns list.
+        let data = serde_json::json!([
+            record("Prompted Question one", "2026-05-14T09:00:00Z", Some("Answer one.")),
+            record("Prompted Question two", "2026-05-14T11:00:00Z", Some("Answer two.")),
+            record("Prompted Question three", "2026-05-14T14:00:00Z", Some("Answer three.")),
+        ]);
+        let r = parse_gemini(&data.to_string());
+        assert_eq!(r.turns.len(), 3, "flat across sessions");
+        let unix: Vec<i64> = r.turns.iter().map(|t| t.ts_unix.unwrap()).collect();
+        assert!(unix.windows(2).all(|w| w[0] < w[1]), "chronological");
+    }
+
+    #[test]
+    fn turns_serialize_and_roundtrip_json() {
+        let data = serde_json::json!([
+            record("Prompted Hi", "2026-05-14T09:00:00Z", Some("Hello.")),
+        ]);
+        let r = parse_gemini(&data.to_string());
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains("\"turns\""));
+        let back: ParseResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.turns, r.turns);
+    }
+
+    #[test]
+    fn saved_info_has_no_turns() {
+        // The paste format carries no per-turn timestamps → turns stays empty
+        // (chunks still produced for extraction).
+        let text = "Your saved info\n- I am vegetarian\n- I live in Lisbon";
+        let r = parse_gemini(text);
+        assert!(r.turns.is_empty());
+        assert!(!r.chunks.is_empty());
+    }
+
+    #[test]
+    fn turns_chunk_index_maps_to_holding_chunk() {
+        // 25 same-window turns (user+assistant = 50 messages) → 3 chunks of 20.
+        // Turn k's first message is at index 2*k; chunk = (2*k)/20.
+        let recs: Vec<serde_json::Value> = (0..25)
+            .map(|k| {
+                record(
+                    &format!("Prompted Question number {k}"),
+                    &format!("2026-05-14T09:{:02}:00Z", k % 60),
+                    Some(&format!("Answer number {k}")),
+                )
+            })
+            .collect();
+        let r = parse_gemini(&serde_json::Value::Array(recs).to_string());
+        assert_eq!(r.turns.len(), 25);
+        // All within a 30-min window → one pseudo-session → chunks 0,1,2.
+        assert_eq!(r.chunks.len(), 3);
+        for (k, turn) in r.turns.iter().enumerate() {
+            let expected = (2 * k) / CHUNK_SIZE; // 20-message chunks
+            assert_eq!(
+                turn.chunk_index, expected,
+                "turn {k} first message idx {} → chunk {expected}",
+                2 * k
+            );
+        }
+        // Every chunk_index is a valid index into chunks.
+        assert!(r.turns.iter().all(|t| t.chunk_index < r.chunks.len()));
+    }
+
+    #[test]
+    fn turns_chunk_index_resets_per_session() {
+        // Two records >30 min apart → 2 sessions → 2 chunks. Each turn maps to
+        // its own chunk (0 and 1), proving the base index advances per session.
+        let data = serde_json::json!([
+            record("Prompted First topic here", "2026-05-14T09:00:00Z", Some("Reply one.")),
+            record("Prompted Second topic here", "2026-05-14T13:00:00Z", Some("Reply two.")),
+        ]);
+        let r = parse_gemini(&data.to_string());
+        assert_eq!(r.turns.len(), 2);
+        assert_eq!(r.chunks.len(), 2);
+        assert_eq!(r.turns[0].chunk_index, 0);
+        assert_eq!(r.turns[1].chunk_index, 1);
+    }
+
+    #[test]
+    fn turns_only_side_present_joins_without_blank_line() {
+        // assistant-only record (title too short but response present).
+        let mut rec = record("Hi", "2026-05-14T09:00:00Z", None);
+        rec["description"] = serde_json::json!("A reply with no real prompt.");
+        rec["title"] = serde_json::json!("");
+        let data = serde_json::json!([rec]);
+        let r = parse_gemini(&data.to_string());
+        assert_eq!(r.turns.len(), 1);
+        assert!(r.turns[0].user_text.is_empty());
+        assert_eq!(r.turns[0].text, "A reply with no real prompt.");
     }
 }

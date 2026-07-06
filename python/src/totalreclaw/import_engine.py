@@ -607,16 +607,16 @@ class ImportEngine:
         chunks_skipped = 0
 
         # ── Semantic session grouping ─────────────────────────────────────────
-        # Compute (or reuse cached) session assignments for ALL chunks. Each
-        # "turn" here is one chunk (the adapter's 30-min windows already enforce
-        # coarse boundaries; the semantic step refines within them).
-        # Within a chunk, turns are user→assistant pairs. For segmentation
-        # purposes we treat each CHUNK as a single "turn" (embedding over the
-        # combined messages). This is a conscious simplification: cross-chunk
-        # semantic grouping is the primary value-add; within-chunk turn-level
-        # segmentation would require re-parsing messages and is out of scope
-        # for this pass.
-        session_assignments = await self._get_session_assignments(parsed.chunks)
+        # Compute (or reuse cached) session assignments for ALL chunks.
+        # Segmentation runs at TURN granularity (one user→assistant exchange per
+        # turn), then maps turn-sessions back to chunk-sessions. When the adapter
+        # exposes a flat per-turn view (`parsed.turns`, #368 Part 2) those turns
+        # carry real per-turn timestamps; otherwise `_get_session_assignments`
+        # re-derives turns from the chunk message lists (chunk-timestamp
+        # approximation). See that method for the full contract.
+        session_assignments = await self._get_session_assignments(
+            parsed.chunks, getattr(parsed, "turns", None)
+        )
 
         # Build a map: chunk_global_index -> (session_id, is_singleton).
         # is_singleton is True when the session has < 2 TURNS (not chunks).
@@ -1138,19 +1138,113 @@ class ImportEngine:
         )
         return self._smart_ctx
 
+    @staticmethod
+    def _turns_from_parsed(turns: Optional[list]) -> Optional[list]:
+        """Adapt the adapter's flat ``ParsedTurn`` list to the internal
+        ``(chunk_index, ts_float_or_None, text)`` tuples used for segmentation.
+
+        Returns None when no usable per-turn data is available (``turns`` is
+        None/empty), signalling the caller to fall back to re-deriving turns
+        from chunk message lists (the pre-#368-Part-2 path).
+
+        Uses each turn's REAL ``ts_unix`` (None stays None — a 0-gap to the
+        previous turn, never epoch-0) and its authoritative ``chunk_index``.
+        """
+        if not turns:
+            return None
+        out: list[tuple[int, object, str]] = []
+        for t in turns:
+            ci = getattr(t, "chunk_index", None)
+            if ci is None:  # malformed / older shape — bail to chunk re-derivation
+                return None
+            ts = getattr(t, "ts_unix", None)
+            ts_float = float(ts) if ts is not None else None
+            text = (getattr(t, "text", "") or "").strip()[:1000]
+            out.append((ci, ts_float, text))
+        return out or None
+
+    @staticmethod
+    def _turns_from_chunks(chunks: list) -> list:
+        """Fallback: re-derive ``(chunk_index, ts_float, text)`` turns from the
+        chunk message lists, approximating every turn's timestamp with its
+        chunk's single timestamp.
+
+        This is the pre-#368-Part-2 behaviour, retained for sources/older core
+        wheels that don't expose a flat per-turn view. Pairs messages
+        user->assistant within each chunk; a chunk with no user message becomes
+        one turn from its joined text.
+        """
+        from datetime import datetime
+
+        turns_seq: list[tuple[int, object, str]] = []
+        for chunk_idx, chunk in enumerate(chunks):
+            ts_raw = getattr(chunk, "timestamp", None)
+            ts_float = None
+            if ts_raw:
+                try:
+                    dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                    ts_float = dt.timestamp()
+                except Exception:
+                    pass
+
+            msgs = getattr(chunk, "messages", None) or []
+            produced_for_chunk = False
+            # Pair messages: user -> assistant. Skip unpaired trailing messages.
+            i = 0
+            while i < len(msgs):
+                m = msgs[i]
+                role = (m.get("role") or "user") if isinstance(m, dict) else "user"
+                if role == "user":
+                    text_u = (m.get("text") or m.get("content") or "") if isinstance(m, dict) else str(m)
+                    text_a = ""
+                    if i + 1 < len(msgs):
+                        next_m = msgs[i + 1]
+                        next_role = (next_m.get("role") or "assistant") if isinstance(next_m, dict) else "assistant"
+                        if next_role == "assistant":
+                            text_a = (next_m.get("text") or next_m.get("content") or "") if isinstance(next_m, dict) else str(next_m)
+                            i += 2
+                        else:
+                            i += 1
+                    else:
+                        i += 1
+                    combined = (text_u + " " + text_a).strip()[:1000]
+                    turns_seq.append((chunk_idx, ts_float, combined))
+                    produced_for_chunk = True
+                else:
+                    i += 1
+
+            # If no user messages found, treat the whole chunk as a single turn.
+            if not produced_for_chunk:
+                all_text = " ".join(
+                    (m.get("text") or m.get("content") or "") if isinstance(m, dict) else str(m)
+                    for m in msgs
+                ).strip()[:1000]
+                turns_seq.append((chunk_idx, ts_float, all_text))
+
+        return turns_seq
+
     async def _get_session_assignments(
         self,
         chunks: list,
+        turns: Optional[list] = None,
     ) -> list[list[int]]:
         """Compute (or return cached) semantic session assignments for all chunks.
 
-        TURN-BASED SEGMENTATION: We flatten all chunks into individual turns
-        (user->assistant pairs) and run segment_sessions over turns. A "turn"
-        here is defined as one user->assistant exchange. Within a chunk, pairs
-        are formed from the messages list. The turn-level approach means:
-          - A Gemini chunk with 4 messages (2 user+2 assistant) = 2 turns
+        TURN-BASED SEGMENTATION: We flatten the conversation into individual
+        turns (one user->assistant exchange each) and run ``segment_sessions``
+        over turns, then map turn-level sessions back to CHUNK-level sessions
+        (chunks are the extraction unit). The turn-level approach means:
           - Two 2-turn chunks close in time = 4 turns in potentially 1 session
-          - A single-message chunk = 1 turn = singleton session (no Crystal)
+          - A single-turn chunk = 1 turn = singleton session (no Crystal)
+
+        Turn source (#368 Part 2): when the adapter supplies a flat ``turns``
+        list (Gemini, via ``totalreclaw_core.parse_gemini``), we use it directly
+        — each turn carries its OWN timestamp and its ``chunk_index`` (the chunk
+        holding its first message), so segmentation runs at true turn granularity.
+        When ``turns`` is absent (older core wheel, or a source that doesn't
+        expose per-turn data), we fall back to re-deriving turns from the chunk
+        message lists, approximating every turn's time with its chunk timestamp
+        (the pre-Part-2 behaviour).
 
         Returns: list of sessions, each session is a list of CHUNK indices
         (into the ``chunks`` parameter). Sessions that contain turns from
@@ -1203,60 +1297,17 @@ class ImportEngine:
             return self._session_assignments
 
         from totalreclaw.session_segmentation import segment_sessions
-        from datetime import datetime
 
-        # ── Flatten chunks -> turns ─────────────────────────────────────────
-        # Each turn = (chunk_index, timestamp, prompt_text, reply_text).
-        # For segmentation the "turn text" = prompt + " " + reply.
-        # For timestamp we use the chunk timestamp (all messages in a chunk
-        # share the same 30-min window boundary — the adapter already broke
-        # on time gaps; within a chunk turns are contiguous and we use the
-        # chunk timestamp for all of them since per-message timestamps are
-        # not available).
-        turns: list[tuple[int, object, str]] = []  # (chunk_idx, ts, text)
-        for chunk_idx, chunk in enumerate(chunks):
-            ts_raw = getattr(chunk, "timestamp", None)
-            ts_float = None
-            if ts_raw:
-                try:
-                    dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
-                    ts_float = dt.timestamp()
-                except Exception:
-                    pass
+        # ── Flatten conversation -> turns ───────────────────────────────────
+        # Each turn = (chunk_index, timestamp_float_or_None, text). Prefer the
+        # adapter's flat per-turn view (#368 Part 2) — real per-turn timestamps
+        # and an authoritative chunk_index — and only re-derive from chunks when
+        # it's unavailable.
+        turns_seq: list[tuple[int, object, str]] = self._turns_from_parsed(turns)
+        if turns_seq is None:
+            turns_seq = self._turns_from_chunks(chunks)
 
-            msgs = getattr(chunk, "messages", None) or []
-            # Pair messages: user -> assistant. Skip unpaired trailing messages.
-            i = 0
-            while i < len(msgs):
-                m = msgs[i]
-                role = (m.get("role") or "user") if isinstance(m, dict) else "user"
-                if role == "user":
-                    text_u = (m.get("text") or m.get("content") or "") if isinstance(m, dict) else str(m)
-                    text_a = ""
-                    if i + 1 < len(msgs):
-                        next_m = msgs[i + 1]
-                        next_role = (next_m.get("role") or "assistant") if isinstance(next_m, dict) else "assistant"
-                        if next_role == "assistant":
-                            text_a = (next_m.get("text") or next_m.get("content") or "") if isinstance(next_m, dict) else str(next_m)
-                            i += 2
-                        else:
-                            i += 1
-                    else:
-                        i += 1
-                    combined = (text_u + " " + text_a).strip()[:1000]
-                    turns.append((chunk_idx, ts_float, combined))
-                else:
-                    i += 1
-
-            # If no user messages found, treat the whole chunk as a single turn
-            if not any(t[0] == chunk_idx for t in turns):
-                all_text = " ".join(
-                    (m.get("text") or m.get("content") or "") if isinstance(m, dict) else str(m)
-                    for m in msgs
-                ).strip()[:1000]
-                turns.append((chunk_idx, ts_float, all_text))
-
-        if not turns:
+        if not turns_seq:
             # All chunks are empty — one-chunk-per-session fallback.
             self._session_assignments = [[i] for i in range(len(chunks))]
             self._session_turn_counts = [1 for _ in range(len(chunks))]
@@ -1264,9 +1315,9 @@ class ImportEngine:
             return self._session_assignments
 
         # ── Embed turns ─────────────────────────────────────────────────────
-        timestamps = [t[1] for t in turns]
+        timestamps = [t[1] for t in turns_seq]
         embeddings = []
-        for _, _, text in turns:
+        for _, _, text in turns_seq:
             try:
                 from totalreclaw.embedding import get_embedding
                 emb = get_embedding(text) if text else [0.0] * 640
@@ -1297,7 +1348,7 @@ class ImportEngine:
         for sess_idx, turn_indices in enumerate(turn_sessions):
             session_turn_counts.append(len(turn_indices))
             for tidx in turn_indices:
-                chunk_idx = turns[tidx][0]
+                chunk_idx = turns_seq[tidx][0]
                 if chunk_idx not in chunk_to_session:
                     chunk_to_session[chunk_idx] = sess_idx
 
@@ -1325,7 +1376,7 @@ class ImportEngine:
             total_turns = sum(
                 session_turn_counts[sess_idx]
                 for sess_idx, tc in enumerate(turn_sessions)
-                if any(turns[tidx][0] in s for tidx in tc)
+                if any(turns_seq[tidx][0] in s for tidx in tc)
             )
             self._session_turn_counts.append(total_turns)
 

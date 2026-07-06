@@ -39,6 +39,33 @@ class ConversationChunk:
 
 
 @dataclass
+class ParsedTurn:
+    """A single conversation turn (one prompt→reply exchange) with its OWN
+    timestamp, in chronological order.
+
+    Mirrors ``totalreclaw_core``'s ``ParsedTurn`` (import_parsers.rs, #368 Part
+    2). Exposed by conversation adapters (Gemini) so the import engine can run
+    true turn-granularity semantic session segmentation (``segment_sessions``)
+    over real per-turn timestamps + text, instead of re-deriving turns from
+    chunks and approximating every turn's time with its chunk's timestamp.
+
+    ``chunk_index`` maps the turn back to the chunk that holds its first message
+    (chunks are the extraction unit), computed authoritatively by core.
+    """
+    user_text: str
+    assistant_text: str
+    #: Combined ``user_text`` + ``assistant_text`` (newline-joined, non-empty
+    #: sides only) — the canonical string to embed for segmentation.
+    text: str
+    chunk_index: int
+    #: RFC3339/ISO-8601 UTC timestamp, or None when the export carried none.
+    ts_iso: Optional[str] = None
+    #: Unix seconds, or None when unknown (None ≠ epoch-0 — segmentation treats
+    #: None as a 0-gap to the previous turn).
+    ts_unix: Optional[float] = None
+
+
+@dataclass
 class AdapterParseResult:
     """
     Adapter parse result -- returned by each adapter's parse method.
@@ -53,6 +80,12 @@ class AdapterParseResult:
     warnings: List[str]
     errors: List[str]
     source_metadata: Optional[dict] = None
+    #: Flat, chronological per-turn view with real per-turn timestamps (#368
+    #: Part 2). Populated by conversation adapters that recover per-turn times
+    #: (Gemini MyActivity/HTML); empty for pre-structured (Mem0) or timestamp-less
+    #: (Gemini "Saved info" paste) sources. When present, the import engine uses
+    #: it for turn-granularity segmentation instead of the chunk approximation.
+    turns: List[ParsedTurn] = field(default_factory=list)
 
 
 @dataclass
