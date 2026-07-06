@@ -11,7 +11,7 @@ import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 IMPORT_STATE_DIR: Path = Path.home() / ".totalreclaw" / "import-state"
 # 2h (#401, was 1h): the 2026-06-29 Gemini run showed individual batches
@@ -111,18 +111,67 @@ def is_import_early_stale(state: ImportState) -> bool:
         return False
 
 
+# ── #460: state-dir file discrimination ───────────────────────────────────
+#
+# IMPORT_STATE_DIR holds import-state RECORDS ({import_id}.json, JSON objects)
+# alongside non-record sidecars — notably the #436 conversation registry
+# ``imported-conversations-<source>.json`` (a JSON LIST) and the disclosure /
+# nudge sentinels. A consumer that globs ``*.json`` and treats every hit as a
+# state dict crashes on the list payload (``list.get`` → AttributeError, which
+# an ``except (OSError, ValueError)`` misses) — it deterministically bricked
+# import batch 2 and every re-import once the registry existed. ALL record
+# scans now go through these guards so a registry file in the same directory
+# can never be parsed as a state record.
+_NON_STATE_JSON_PREFIXES = ("imported-conversations-",)
+
+
+def _is_state_record_file(path: Path) -> bool:
+    """True only for a genuine ``{import_id}.json`` state record — excludes the
+    #436 conversation-registry ledgers (and any future prefixed sidecar)."""
+    name = path.name
+    return name.endswith(".json") and not any(
+        name.startswith(pfx) for pfx in _NON_STATE_JSON_PREFIXES
+    )
+
+
+def _iter_state_files() -> Iterator[Path]:
+    """Yield Paths of genuine state-record files (registry ledgers excluded)."""
+    try:
+        for p in IMPORT_STATE_DIR.glob("*.json"):
+            if _is_state_record_file(p):
+                yield p
+    except OSError:
+        return
+
+
+def iter_import_state_records() -> Iterator[ImportState]:
+    """Yield an :class:`ImportState` for every parseable DICT record in the
+    state dir, skipping registry ledgers and any non-dict / unreadable payload.
+
+    This is the single safe entry point for "scan all import records" — every
+    glob-based consumer routes through it so a non-record JSON file sharing the
+    directory can never crash a scan (#460).
+    """
+    for p in _iter_state_files():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        try:
+            yield _coerce_state(data)
+        except Exception:
+            continue
+
+
 def read_most_recent_active_import() -> Optional[ImportState]:
     """Return the most recently started running/pending import, or None."""
     try:
-        candidates: List[ImportState] = []
-        for p in IMPORT_STATE_DIR.glob("*.json"):
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-                state = _coerce_state(data)
-                if state.status in ("running", "pending"):
-                    candidates.append(state)
-            except Exception:
-                pass
+        candidates = [
+            s for s in iter_import_state_records()
+            if s.status in ("running", "pending")
+        ]
         if not candidates:
             return None
         return max(candidates, key=lambda s: s.started_at)
@@ -150,18 +199,13 @@ def read_most_recent_import(max_age_hours: int = 48) -> Optional[ImportState]:
         from datetime import datetime, timezone, timedelta
         candidates: List[ImportState] = []
         cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
-        for p in IMPORT_STATE_DIR.glob("*.json"):
+        for state in iter_import_state_records():
             try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-                state = _coerce_state(data)
-                try:
-                    updated = datetime.fromisoformat(state.last_updated.replace("Z", "+00:00"))
-                except Exception:
-                    continue
-                if updated > cutoff:
-                    candidates.append(state)
+                updated = datetime.fromisoformat(state.last_updated.replace("Z", "+00:00"))
             except Exception:
-                pass
+                continue
+            if updated > cutoff:
+                candidates.append(state)
         if not candidates:
             return None
         return max(candidates, key=lambda s: s.last_updated)
@@ -177,13 +221,9 @@ def read_completed_unannounced_imports() -> List[ImportState]:
     """
     out: List[ImportState] = []
     try:
-        for p in IMPORT_STATE_DIR.glob("*.json"):
-            try:
-                state = _coerce_state(json.loads(p.read_text(encoding="utf-8")))
-                if state.status == "completed" and not state.announced:
-                    out.append(state)
-            except Exception:
-                pass
+        for state in iter_import_state_records():
+            if state.status == "completed" and not state.announced:
+                out.append(state)
     except Exception:
         pass
     return sorted(out, key=lambda s: s.last_updated)
@@ -217,11 +257,13 @@ def mark_import_nudge_shown() -> None:
 
 
 def any_import_exists() -> bool:
-    """True if any import (running or finished) has ever been recorded."""
-    try:
-        return any(IMPORT_STATE_DIR.glob("*.json"))
-    except OSError:
-        return False
+    """True if any import (running or finished) has ever been recorded.
+
+    Counts only genuine state records — a #436 conversation-registry ledger in
+    the same dir must NOT read as "an import exists" (it would make the
+    onboarding nudge think the user already imported). (#460)
+    """
+    return any(True for _ in _iter_state_files())
 
 
 # ── F2 (#436): per-source imported-conversation registry ──────────────────

@@ -934,14 +934,18 @@ def _prior_disclosure_consent(source: str, resume_id: Optional[str] = None) -> b
             prior = ist.read_import_state(resume_id)
             if prior is not None:
                 return bool(prior.disclosure_confirmed)
-        for path in ist.IMPORT_STATE_DIR.glob("*.json"):
-            try:
-                data = json.loads(path.read_text())
-            except (OSError, ValueError):
-                continue
-            if data.get("source") == source and data.get("disclosure_confirmed"):
+        # #460: scan genuine state records ONLY. The previous inline glob of
+        # ``*.json`` + ``data.get(...)`` crashed on the #436 conversation
+        # registry ledger (``imported-conversations-<source>.json``, a JSON
+        # LIST) — ``list.get`` raised AttributeError, which the narrow
+        # ``except (OSError, ValueError)`` missed, bricking import batch 2 and
+        # every re-import. ``iter_import_state_records`` excludes the ledgers
+        # and yields only dict records (belt: exclude by name; braces: skip
+        # non-dict payloads).
+        for st in ist.iter_import_state_records():
+            if st.source == source and st.disclosure_confirmed:
                 return True
-    except OSError:
+    except Exception:
         pass
     return False
 
