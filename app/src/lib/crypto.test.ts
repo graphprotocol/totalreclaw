@@ -4,7 +4,11 @@ import {
   encryptBlob,
   decryptBlob,
   isMnemonicValid,
+  generateRecoveryPhrase,
+  deriveEoaPrivateKey,
 } from "./crypto";
+import { secp256k1 } from "@noble/curves/secp256k1";
+import { keccak_256 } from "@noble/hashes/sha3";
 
 // BIP-39 test mnemonic (all-zeros entropy, BIP-39 spec vector)
 const TEST_MNEMONIC =
@@ -163,5 +167,35 @@ describe("isMnemonicValid", () => {
 
   it("rejects invalid phrase", () => {
     expect(isMnemonicValid("not a valid mnemonic phrase")).toBe(false);
+  });
+});
+
+describe("generateRecoveryPhrase", () => {
+  it("produces a valid 12-word BIP-39 phrase", () => {
+    const phrase = generateRecoveryPhrase();
+    expect(phrase.trim().split(/\s+/)).toHaveLength(12);
+    expect(isMnemonicValid(phrase)).toBe(true);
+  });
+
+  it("produces a different phrase each call", () => {
+    expect(generateRecoveryPhrase()).not.toBe(generateRecoveryPhrase());
+  });
+});
+
+describe("deriveEoaPrivateKey (L3)", () => {
+  it("derives a 32-byte private key whose address matches the golden EOA", async () => {
+    const priv = await deriveEoaPrivateKey(TEST_MNEMONIC);
+    expect(priv).toHaveLength(32);
+    // Derive the address from the private key and confirm it matches GOLDEN_EOA.
+    // (We assert via the derived address, never by hardcoding the private key.)
+    const pub = secp256k1.getPublicKey(priv, false); // 65 bytes, uncompressed
+    const addr = "0x" + Array.from(keccak_256(pub.slice(1)).slice(-20))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    expect(addr).toBe(GOLDEN_EOA);
+  });
+
+  it("rejects an invalid mnemonic", async () => {
+    await expect(deriveEoaPrivateKey("not valid")).rejects.toThrow("Invalid recovery phrase");
   });
 });

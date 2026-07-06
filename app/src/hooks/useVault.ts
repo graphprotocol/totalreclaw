@@ -9,13 +9,37 @@ import {
 } from "../lib/api";
 
 export const VAULT_QUERY_KEY = ["vault"] as const;
+export const VAULT_HISTORY_QUERY_KEY = ["vault", "history"] as const;
+
+/** Decrypted vault + how many ciphertext rows the subgraph returned. `fetched`
+ *  lets the UI tell "0 on chain" apart from "fetched N but couldn't decrypt"
+ *  (wrong key / older format / wrong chain) — so "empty" never lies. */
+export interface VaultData {
+  items: VaultItem[];
+  fetched: number;
+}
 
 export function useVault(keys: SessionKeys | null) {
   return useQuery({
     queryKey: VAULT_QUERY_KEY,
+    queryFn: async (): Promise<VaultData> => {
+      if (!keys) return { items: [], fetched: 0 };
+      const raw = await exportAllFacts(keys);
+      return { items: decryptFacts(raw, keys), fetched: raw.length };
+    },
+    enabled: !!keys,
+    staleTime: 30_000,
+  });
+}
+
+/** Full history incl. tombstoned/superseded facts — for Lineage + the Review
+ *  "changed" feed (the active view filters superseded versions out). */
+export function useVaultHistory(keys: SessionKeys | null) {
+  return useQuery({
+    queryKey: VAULT_HISTORY_QUERY_KEY,
     queryFn: async () => {
       if (!keys) return [];
-      const raw = await exportAllFacts(keys);
+      const raw = await exportAllFacts(keys, undefined, { includeInactive: true });
       return decryptFacts(raw, keys);
     },
     enabled: !!keys,
