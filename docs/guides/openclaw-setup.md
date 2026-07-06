@@ -151,6 +151,7 @@ openclaw skills install totalreclaw
 
 Notes:
 - For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.19`.
+- **OpenClaw exec-surface compatibility (2026.6.11+).** OpenClaw **2026.6.11 and later** moved shell exec off the gateway and onto **paired node hosts**, so the agent can only run `openclaw plugins install` (and the other setup commands) when it has an **exec-capable surface** (a paired node host). Agent-driven install over chat works out of the box on **≤ 2026.6.8** gateway-exec setups; on 2026.6.11+ without a paired exec host, the agent cannot shell out — install through the service's **Plugins** UI instead (see "Managed OpenClaw service" below) and then paste an **Install prompt** so the agent picks up the already-loaded plugin.
 - **Always run the install — never skip it because a totalreclaw "appears present".** A leftover install from a prior version (e.g. a stale `@totalreclaw/mcp-server`) is NOT the `@totalreclaw/totalreclaw` plugin and must be replaced. If install reports `already exists`, OR you detect an old/different totalreclaw package on disk, force-replace it: `openclaw plugins install @totalreclaw/totalreclaw@rc --force` + `openclaw skills install totalreclaw --force`. Then verify the version in Step 2 — it must match the requested RC.
 - If either command fails with `command not found` / ENOENT / "not authorized" (managed-service or shell-restricted environment), STOP and tell the user verbatim: *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
@@ -216,7 +217,16 @@ NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER 
 1. `openclaw skills install totalreclaw` — fetches TotalReclaw's SKILL.md from ClawHub and registers it under `~/.openclaw/workspace/skills/totalreclaw/`. The agent picks it up on next config reload.
 2. `openclaw plugins install @totalreclaw/totalreclaw` — installs the plugin from npm (the `latest` dist-tag is always current stable; use `@rc` for the latest release candidate).
 3. The plugin's `register()` patches `~/.openclaw/openclaw.json` with the memory slot + hook keys OpenClaw looks for, then signals `SIGUSR1` to its own PID so the gateway picks up the new keys in-process — no manual restart.
-4. When no credentials exist, the agent runs `tr pair --json`, which generates an ephemeral x25519 keypair on the gateway and a 6-digit PIN. You get a URL + PIN.
+4. When no credentials exist, the plugin does **not** auto-open a pair session — pairing is user-triggered. On load with no `~/.totalreclaw/credentials.json`, the plugin logs a single hint and waits:
+   ```
+   TotalReclaw: no credentials found. Run `tr pair` (or ask the agent to) to complete setup.
+   ```
+   The agent then completes setup via one of the registered `openclaw totalreclaw` subcommands (bound during `register()` via `api.registerCli`) or the standalone `tr` binary — all equivalent:
+   - `openclaw totalreclaw pair` (remote/browser QR + PIN flow — the agent-facing path) or the in-process HTTP route `GET /plugin/totalreclaw/pair/init` above.
+   - `openclaw totalreclaw onboard` (local, at your own terminal — never driven by the agent; see "Phrase safety").
+   - `openclaw totalreclaw status` to verify.
+
+   Whichever pair path runs generates an ephemeral x25519 keypair on the gateway and a 6-digit PIN. You get a URL + PIN.
 5. You open the URL. The account-setup page has two tabs: **Generate new** (the browser creates a fresh BIP-39 12-word phrase locally using `crypto.getRandomValues`) and **Import existing** (paste a phrase you already have). Pick one, confirm the 6-digit PIN, click seal.
 6. The browser performs x25519 ECDH against the gateway's ephemeral pubkey, derives an AES-256-GCM key via HKDF-SHA256, encrypts the phrase locally, and POSTs ciphertext + nonce + its pubkey back. The gateway decrypts server-side and writes `~/.totalreclaw/credentials.json` (mode `0600`).
 7. From the next session onward, recall runs natively through `memory_search` / `memory_get` (the conventional memory contract), and facts are captured automatically in the background — you don't call a remember tool per fact.

@@ -3943,7 +3943,27 @@ const plugin = {
           // JSON output: every subcommand accepts --json and emits a single
           // machine-parseable JSON line on stdout (agent-driven use). Plain
           // text is for direct user CLI use.
-          // ---------------------------------------------------------------
+          //
+          // rc.20 (#402): the import/upgrade wiring below referenced a bare
+          // `tr` that was never declared in THIS callback scope —
+          // registerOnboardingCli and registerPairCli each declare their own
+          // LOCAL `tr`, invisible here. That undeclared reference threw
+          // `ReferenceError: tr is not defined` the moment OpenClaw ran the
+          // callback, killing EVERY `openclaw totalreclaw <sub>` command
+          // (dead since the 3.3.13 import/upgrade restoration; shipped in
+          // rc.19 + rc.20). The build is `tsc --noCheck`, so the type checker
+          // never caught it. Resolve the command group the same way
+          // registerPairCli does — registerOnboardingCli always created it, so
+          // this find() succeeds; the guard is belt-and-braces.
+          const tr = program.commands.find((c: any) => c.name() === 'totalreclaw');
+          if (!tr) {
+            api.logger.warn(
+              'TotalReclaw: `totalreclaw` CLI group not found after onboarding/pair registration — ' +
+                'skipping import/upgrade wiring. `openclaw totalreclaw import`/`upgrade` will be unavailable.',
+            );
+            return;
+          }
+
           const importCmd = tr.command('import')
             .description(
               'Import memories from another tool (Mem0, MCP Memory, ChatGPT, Claude, Gemini). ' +
