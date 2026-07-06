@@ -91,6 +91,76 @@ async def _get_sender_lock(sender: str) -> asyncio.Lock:
 def _reset_sender_locks_for_tests() -> None:
     """Clear the per-account lock map. Test-only helper."""
     _sender_submission_locks.clear()
+
+
+# ---------------------------------------------------------------------------
+# Local monotonic nonce cache — F3 / internal #423
+# ---------------------------------------------------------------------------
+#
+# The EntryPoint nonce only advances at ON-CHAIN EXECUTION, but this client
+# returns as soon as the bundler accepts an op into its mempool. Sequential
+# submissions (import batches fire back-to-back) therefore re-fetched the
+# SAME nonce while the previous op was unmined -> AA25 -> blind 1+2+4s retry
+# lost the race against ~5s Gnosis blocks -> whole batches dropped (rc12 QA:
+# 15/44 facts stored = only the first batch landed).
+#
+# Fix: remember the next expected nonce per sender and submit with
+# max(chain_nonce, cached). Bundlers accept queued sequential-nonce ops from
+# one sender, so pipelining is preserved. The cache is process-local and
+# self-healing: max() with the chain nonce means external activity or a
+# restart can only correct it upward from reality; an AA25 resets it.
+# Reads/writes happen under the per-sender submission lock.
+_sender_next_nonce: dict[str, int] = {}
+
+
+def _resolve_submission_nonce(sender: str, chain_nonce: int) -> int:
+    """Nonce to submit with: the chain nonce or our pipelined next, whichever is higher."""
+    return max(chain_nonce, _sender_next_nonce.get(sender.lower(), 0))
+
+
+def _record_submitted_nonce(sender: str, nonce: int) -> None:
+    """Record a bundler-accepted submission; never decreases."""
+    key = sender.lower()
+    _sender_next_nonce[key] = max(_sender_next_nonce.get(key, 0), nonce + 1)
+
+
+def _reset_sender_nonce(sender: str) -> None:
+    """Drop the cached nonce (AA25 path) — fall back to chain truth."""
+    _sender_next_nonce.pop(sender.lower(), None)
+
+
+def _reset_nonce_cache_for_tests() -> None:
+    """Clear the nonce cache. Test-only helper."""
+    _sender_next_nonce.clear()
+
+
+async def _await_nonce_advance(
+    http,
+    sender: str,
+    chain_id: int,
+    min_nonce: int,
+    timeout_s: float = 15.0,
+    poll_s: float = 1.5,
+) -> int:
+    """Poll the EntryPoint nonce until it reaches ``min_nonce`` or timeout.
+
+    Used by the AA25 retry path: instead of sleeping blind while the
+    conflicting op mines, wait for the observable signal (nonce advance).
+    RPC errors are tolerated (retry on next poll). Returns the last nonce
+    seen (may be < min_nonce on timeout).
+    """
+    import time as _time
+    deadline = _time.monotonic() + timeout_s
+    last = -1
+    while _time.monotonic() < deadline:
+        try:
+            last = await get_nonce(http, sender, chain_id)
+            if last >= min_nonce:
+                return last
+        except Exception:
+            pass
+        await asyncio.sleep(poll_s)
+    return last
 DATA_EDGE_ADDRESS = "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca"
 
 # Chain-specific public RPCs
@@ -437,9 +507,11 @@ async def build_and_send_userop(
         # the nonce and rebuilding the UserOp resolves it.
         for attempt in range(_MAX_NONCE_RETRIES):
             try:
-                # 2. Get nonce from EntryPoint
-                nonce = await get_nonce(http, sender, chain_id)
-                logger.debug("Nonce for %s: %d", sender, nonce)
+                # 2. Get nonce from EntryPoint, pipelined past any of our own
+                #    unmined submissions via the local cache (#423).
+                chain_nonce = await get_nonce(http, sender, chain_id)
+                nonce = _resolve_submission_nonce(sender, chain_nonce)
+                logger.debug("Nonce for %s: chain=%d using=%d", sender, chain_nonce, nonce)
 
                 # 3. Check if account is already deployed
                 code = await _eth_get_code(http, rpc_url, sender)
@@ -551,6 +623,7 @@ async def build_and_send_userop(
                         f"UserOp submission failed: {send_data['error']}"
                     )
 
+                _record_submitted_nonce(sender, nonce)
                 return send_data.get("result", "")
 
             except Exception as e:
@@ -561,7 +634,18 @@ async def build_and_send_userop(
                         attempt + 1,
                         _MAX_NONCE_RETRIES,
                     )
-                    await asyncio.sleep(2 ** attempt)
+                    if "AA25" in err_str:
+                        # #423: drop the pipelined nonce and wait for the
+                        # conflicting op to actually mine (observable as a
+                        # nonce advance) instead of sleeping blind against
+                        # ~5s blocks.
+                        _reset_sender_nonce(sender)
+                        await _await_nonce_advance(
+                            http, sender, chain_id, min_nonce=nonce + 1,
+                            timeout_s=15.0 if attempt else 6.0,
+                        )
+                    else:
+                        await asyncio.sleep(2 ** attempt)
                     continue
                 raise
 
@@ -690,11 +774,13 @@ async def build_and_send_userop_batch(
         # O(1) retries for the batch path vs O(n) for sequential sends.
         for attempt in range(_MAX_NONCE_RETRIES):
             try:
-                # 2. Get nonce from EntryPoint
-                nonce = await get_nonce(http, sender, chain_id)
+                # 2. Get nonce from EntryPoint, pipelined past our own unmined
+                #    submissions via the local cache (#423).
+                chain_nonce = await get_nonce(http, sender, chain_id)
+                nonce = _resolve_submission_nonce(sender, chain_nonce)
                 logger.debug(
-                    "Batch nonce for %s: %d (batch size %d)",
-                    sender, nonce, len(protobuf_payloads),
+                    "Batch nonce for %s: chain=%d using=%d (batch size %d)",
+                    sender, chain_nonce, nonce, len(protobuf_payloads),
                 )
 
                 # 3. Check if account is already deployed
@@ -808,6 +894,7 @@ async def build_and_send_userop_batch(
                         f"Batch UserOp submission failed: {send_data['error']}"
                     )
 
+                _record_submitted_nonce(sender, nonce)
                 return send_data.get("result", "")
 
             except Exception as e:
@@ -820,7 +907,18 @@ async def build_and_send_userop_batch(
                         _MAX_NONCE_RETRIES,
                         len(protobuf_payloads),
                     )
-                    await asyncio.sleep(2 ** attempt)
+                    if "AA25" in err_str:
+                        # #423: drop the pipelined nonce and wait for the
+                        # conflicting op to actually mine (observable as a
+                        # nonce advance) instead of sleeping blind against
+                        # ~5s blocks.
+                        _reset_sender_nonce(sender)
+                        await _await_nonce_advance(
+                            http, sender, chain_id, min_nonce=nonce + 1,
+                            timeout_s=15.0 if attempt else 6.0,
+                        )
+                    else:
+                        await asyncio.sleep(2 ** attempt)
                     continue
                 raise
 
