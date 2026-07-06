@@ -11,6 +11,41 @@ export type MemoryTypeV1 = (typeof MEMORY_TYPES_V1)[number];
 
 export type PinStatus = "pinned" | "unpinned";
 
+/**
+ * Typed ancillary metadata carried inside the encrypted v1.1 blob under the
+ * `metadata` key. Mirrors the core `MemoryMetadataV1` struct
+ * (`rust/totalreclaw-core/src/claims.rs`). Every field is optional and
+ * encrypted-blob-only — never on-chain / in the subgraph. Pre-v1.1 blobs omit
+ * the object entirely, so readers MUST tolerate `metadata === undefined` and
+ * every field absent.
+ */
+export interface MemoryMetadataV1 {
+  /** Discriminator, e.g. `"session_crystal"` for a Hermes session Crystal. */
+  subtype?: string;
+  /**
+   * Client-local id tying a Crystal + its atomic facts to one conversation.
+   * The SPA groups by this to reconstruct conversations (see
+   * `lib/vault/segmentation.ts`). Populated by the Hermes write-side; older
+   * facts and non-Hermes clients may omit it, in which case the vault falls
+   * back to time-gap grouping.
+   */
+  session_id?: string;
+  /** Atomic-fact: short "why this matters" note. */
+  context?: string;
+  /** Crystal: decisions / results from the session. */
+  key_outcomes?: string[];
+  /** Crystal: unresolved questions / follow-on work. */
+  open_threads?: string[];
+  /** Crystal: generalisable lessons. */
+  lessons?: string[];
+  /** Crystal: topic tags. */
+  topics_discussed?: string[];
+  /** Crystal: file paths touched (coding-agent sessions). */
+  files_affected?: string[];
+  /** Provenance of an imported memory, e.g. `"gemini"` / `"chatgpt"`. */
+  import_source?: string;
+}
+
 /** Inner JSON blob stored encrypted in the vault (v1.1 schema) */
 export interface MemoryClaimV1 {
   id: string;
@@ -26,6 +61,8 @@ export interface MemoryClaimV1 {
   pin_status?: PinStatus;
   supersedes?: string[];
   superseded_by?: string;
+  /** Ancillary typed metadata (session_id, Crystal shape, import provenance). */
+  metadata?: MemoryMetadataV1;
 }
 
 /** Decrypted vault item ready for UI consumption */
@@ -36,6 +73,13 @@ export interface VaultItem {
   type: MemoryTypeV1 | string;
   pinned: boolean;
   createdAt: Date;
+  /**
+   * Per-conversation id from `claim.metadata.session_id`, surfaced for
+   * conversation grouping in the vault view. `null` when the blob carries no
+   * session id (pre-v1.1 facts, non-Hermes clients) — the view then falls
+   * back to time-gap grouping.
+   */
+  sessionId: string | null;
   /** Original hex-encoded encrypted blob from the server (for re-store) */
   rawBlob: string;
   /** Blind indices from the server (reused when re-storing) */

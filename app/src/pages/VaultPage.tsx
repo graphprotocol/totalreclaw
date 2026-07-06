@@ -75,14 +75,18 @@ export function VaultPage() {
     }
   }, [filtered, sortKey]);
 
-  // Read-side re-segmentation. The Hermes write-side collapses many
-  // conversations into one persistent session_id, so a raw grouping is
-  // misleading. We re-derive coherent conversations from `createdAt` gaps.
-  // The decrypted claim on `main` carries no session_id, so we segment the
-  // whole filtered stream; when session_id lands, pass a `sessionKeyOf`
-  // accessor here to sub-split within each raw session instead.
+  // Read-side conversation grouping. Facts written by the Hermes session-aware
+  // write-side carry a per-conversation `session_id` (surfaced as
+  // `item.sessionId`); we partition by it so each real conversation is its own
+  // group even when two conversations overlap in time, then time-gap sub-split
+  // within a session to break up very long sittings. Facts with no session id
+  // (pre-v1.1 facts, non-Hermes clients) land in a single null partition and
+  // are grouped purely by `createdAt` gaps — the graceful fallback for
+  // collapsed / legacy vaults.
   const conversations = useMemo<ConversationGroup<VaultItem>[]>(() => {
-    const groups = segmentByTimeGap(filtered);
+    const groups = segmentByTimeGap(filtered, {
+      sessionKeyOf: (it) => it.sessionId,
+    });
     // Newest conversation first, to match the default "newest" list view.
     return groups.reverse();
   }, [filtered]);

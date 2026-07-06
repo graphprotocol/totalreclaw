@@ -204,6 +204,7 @@ export function decryptFacts(
         type: resolveType(claim, tags),
         pinned: claim.pin_status === "pinned",
         createdAt: new Date(fact.created_at),
+        sessionId: claim.metadata?.session_id ?? null,
         rawBlob: fact.encrypted_blob,
         blindIndices: fact.blind_indices,
         decayScore: fact.decay_score,
