@@ -322,6 +322,13 @@ def _auto_extract_inner(
     # pending_store: list of (fact, embedding, fact_dict) for batch submission
     pending_store: list[tuple[ExtractedFact, Optional[list[float]], dict]] = []
 
+    # Session-aware grouping: tag every atomic fact from this extraction with
+    # the active conversation's session_id (the same id the session-end Crystal
+    # carries), so a vault reader (SPA) can group a conversation's facts + its
+    # Crystal together. Encrypted-blob-only via ``metadata.session_id``; absent
+    # when there's no active conversation (unconfigured / pre-session).
+    active_session_id = state.session_id
+
     for fact in facts:
         try:
             if fact.action == "NOOP":
@@ -367,6 +374,8 @@ def _auto_extract_inner(
                 "reasoning": fact.reasoning,
                 "volatility": fact.volatility,
             }
+            if active_session_id:
+                fact_dict["extra_metadata"] = {"session_id": active_session_id}
             pending_store.append((fact, embedding, fact_dict))
 
         except InterpreterShutdownError:
@@ -501,6 +510,12 @@ def session_debrief(
     try:
         crystal = run_sync(generate_crystal(all_messages, stored_fact_texts, host_type=host_type))
         if crystal:
+            # Tag the Crystal with the active conversation's session_id so it
+            # groups with the same conversation's atomic facts in a vault reader
+            # (SPA). ``to_metadata()`` only emits session_id when non-empty, so
+            # this is a no-op when there's no active session.
+            if not crystal.session_id and state.session_id:
+                crystal.session_id = state.session_id
             try:
                 fact_id = run_sync(
                     client.remember(

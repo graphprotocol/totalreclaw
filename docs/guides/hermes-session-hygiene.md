@@ -4,6 +4,22 @@ TotalReclaw ties a session's **Crystal** (summary) and its atomic memories
 together with a `session_id`. The web vault groups memories by that id. So the
 quality of the grouping depends entirely on when Hermes starts a new session.
 
+## Where the id lives, and how the vault reads it
+
+The `session_id` is written into each memory's **encrypted blob metadata**
+(`metadata.session_id`) — client-local, never on-chain or in the subgraph. The
+Hermes write-side stamps it on **both** the session's atomic facts (as they're
+extracted, tagged with the active conversation's id) **and** the session-end
+Crystal, so a conversation's facts and its summary all share one id.
+
+The web vault (SPA) surfaces that id and, in its **Conversations** view,
+partitions memories by it — one group per real conversation, even when two
+conversations overlapped in time. Memories written **without** a `session_id`
+(pre-v1.1 facts, non-Hermes clients, or facts written before this wiring
+shipped) fall back to **time-gap grouping** (a new group after a ~40-minute
+idle gap), so older/collapsed vaults still read coherently — just by time
+rather than by true conversation boundary.
+
 ## The problem this fixes
 
 Hermes runs as **one process**. Before this change, the TotalReclaw plugin
