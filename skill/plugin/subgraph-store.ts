@@ -447,8 +447,17 @@ async function submitFactOnChainLocked(
 
   const entryPoint = config.entryPointAddress || getWasm().getEntryPointAddress();
 
-  // 2. Encode calldata (SimpleAccount.execute → DataEdge fallback)
-  const calldataBytes = getWasm().encodeSingleCall(protobufPayload);
+  // 2. Encode calldata (SimpleAccount.execute → DataEdge).
+  // Target the resolved DataEdge address (env → relay billing → WASM default,
+  // per getSubgraphConfig / #462) so writes land on the SAME contract the
+  // relay reads from. The legacy `encodeSingleCall` bakes the PROD DataEdge,
+  // which stranded staging writes on prod (#460). Guard: an empty address
+  // (config built without getSubgraphConfig) falls back to the legacy encoder
+  // — behavior-identical to before, and avoids `encodeSingleCallTo` throwing
+  // on a bad address.
+  const calldataBytes = config.dataEdgeAddress
+    ? getWasm().encodeSingleCallTo(protobufPayload, config.dataEdgeAddress)
+    : getWasm().encodeSingleCall(protobufPayload);
   const callData = `0x${Buffer.from(calldataBytes).toString('hex')}`;
 
   // 3. Get gas prices from Pimlico
@@ -659,10 +668,18 @@ async function submitFactBatchOnChainLocked(
   }
   const entryPoint = config.entryPointAddress || getWasm().getEntryPointAddress();
 
-  // Encode batch calldata (SimpleAccount.executeBatch)
-  // encodeBatchCall expects a JSON array of hex-encoded payload strings
+  // Encode batch calldata (SimpleAccount.executeBatch).
+  // encodeBatchCall{,To} expect a JSON array of hex-encoded payload strings.
+  // Target the resolved DataEdge address (env → relay billing → WASM default,
+  // per getSubgraphConfig / #462) so writes land on the SAME contract the
+  // relay reads from — the legacy `encodeBatchCall` bakes the PROD DataEdge and
+  // stranded staging writes on prod (#460). Guard: empty address → legacy
+  // encoder (behavior-identical; avoids `encodeBatchCallTo` throwing).
   const payloadsHex = protobufPayloads.map(p => p.toString('hex'));
-  const calldataBytes = getWasm().encodeBatchCall(JSON.stringify(payloadsHex));
+  const payloadsJson = JSON.stringify(payloadsHex);
+  const calldataBytes = config.dataEdgeAddress
+    ? getWasm().encodeBatchCallTo(payloadsJson, config.dataEdgeAddress)
+    : getWasm().encodeBatchCall(payloadsJson);
   const callData = `0x${Buffer.from(calldataBytes).toString('hex')}`;
 
   // Get gas prices

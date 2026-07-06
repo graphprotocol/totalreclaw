@@ -327,6 +327,10 @@ function restoreFetch(ctl: FetchController): void {
   const mockWasm = {
     deriveEoa: () => ({ private_key: '0x' + 'a'.repeat(64), address: '0xbbbb' + 'b'.repeat(36) }),
     encodeBatchCall: () => new Uint8Array([1, 2, 3]), // dummy batch calldata
+    // #460: submit path now targets the resolved DataEdge via the `*To` encoder
+    // when config.dataEdgeAddress is set (it is, below). Dummy calldata — these
+    // scenarios assert on retry/initCode behavior, not the target address.
+    encodeBatchCallTo: () => new Uint8Array([1, 2, 3]),
     getEntryPointAddress: () => '0x5FF137D4b0FD9490299197e9fB6f7936EF32a416',
     hashUserOp: () => '0x' + 'c'.repeat(64),
     signUserOp: () => 'd'.repeat(128),
@@ -521,6 +525,7 @@ function restoreFetch(ctl: FetchController): void {
   const mockWasm = {
     deriveEoa: () => ({ private_key: '0x' + 'a'.repeat(64), address: '0xbbbb' + 'b'.repeat(36) }),
     encodeBatchCall: () => new Uint8Array([1, 2, 3]),
+    encodeBatchCallTo: () => new Uint8Array([1, 2, 3]), // #460: `*To` path (dataEdgeAddress set below)
     getEntryPointAddress: () => '0x5FF137D4b0FD9490299197e9fB6f7936EF32a416',
     hashUserOp: () => '0x' + 'c'.repeat(64),
     signUserOp: () => 'd'.repeat(128),
