@@ -21,7 +21,7 @@ function getWasm() {
   if (!_wasm) _wasm = requireWasm('@totalreclaw/core');
   return _wasm;
 }
-import { CONFIG } from './config.js';
+import { CONFIG, getDataEdgeAddressOverride } from './config.js';
 import { buildRelayHeaders } from './relay-headers.js';
 import { rpcRequest, rpcWithRetry } from './relay.js';
 import { signUserOp } from './vault-crypto.js';
@@ -844,7 +844,10 @@ export function isSubgraphMode(): boolean {
  *   - TOTALRECLAW_SELF_HOSTED -- set "true" to use self-hosted server (default: managed service)
  *
  * Chain ID is no longer configurable via env — it is auto-detected from the
- * relay billing response (free = Base Sepolia, Pro = Gnosis mainnet).
+ * relay billing response (post-ops-1 both tiers are on Gnosis mainnet, chain
+ * 100). The DataEdge contract address is likewise consumed from the relay's
+ * authoritative `data_edge_address` (env override still wins, WASM default is
+ * the final fallback — see the `dataEdgeAddress` resolution below, #460).
  */
 export function getSubgraphConfig(): SubgraphStoreConfig {
   return {
@@ -853,7 +856,12 @@ export function getSubgraphConfig(): SubgraphStoreConfig {
     mnemonic: CONFIG.recoveryPhrase,
     cachePath: CONFIG.cachePath,
     chainId: CONFIG.chainId,
-    dataEdgeAddress: CONFIG.dataEdgeAddress || getWasm().getDataEdgeAddress(),
+    // Resolution order (#460): explicit operator env override → relay billing
+    // `data_edge_address` (verbatim) → WASM-baked default. The relay routes
+    // each environment to its own DataEdge (staging is on-chain isolated), so
+    // consuming its value keeps writes + reads on the same contract; without
+    // the middle term staging writes mined on the prod default → empty recall.
+    dataEdgeAddress: CONFIG.dataEdgeAddress || getDataEdgeAddressOverride() || getWasm().getDataEdgeAddress(),
     entryPointAddress: CONFIG.entryPointAddress || getWasm().getEntryPointAddress(),
     rpcUrl: CONFIG.rpcUrl || undefined,
   };

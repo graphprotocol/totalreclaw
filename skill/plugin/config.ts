@@ -122,6 +122,39 @@ export function __resetChainIdOverrideForTests(): void {
   _chainIdOverride = null;
 }
 
+/**
+ * Runtime override for the DataEdge contract address, set after the relay
+ * billing response is read. The relay returns an authoritative
+ * `data_edge_address` in `/v1/billing/status` (staging routes to the isolated
+ * staging DataEdge, production to the prod DataEdge). Chain-aware clients MUST
+ * consume it verbatim — otherwise writes mine on the WASM-baked prod DataEdge
+ * while reads hit the relay's subgraph, so recall silently returns empty
+ * against staging (#460). Mirrors `_chainIdOverride`.
+ *
+ * `null` means "no billing override" → fall through to the WASM default. The
+ * explicit operator env override (`TOTALRECLAW_DATA_EDGE_ADDRESS`, exposed as
+ * `CONFIG.dataEdgeAddress`) always wins over this.
+ */
+let _dataEdgeAddressOverride: string | null = null;
+
+export function setDataEdgeAddressOverride(address: string | null): void {
+  _dataEdgeAddressOverride = address;
+}
+
+/**
+ * Read the billing-sourced DataEdge override (or `''` when unset). Used by
+ * `getSubgraphConfig` as the middle term of the env → billing → WASM-default
+ * resolution order (#460).
+ */
+export function getDataEdgeAddressOverride(): string {
+  return _dataEdgeAddressOverride ?? '';
+}
+
+/** Reset the DataEdge override — used by tests. */
+export function __resetDataEdgeAddressOverrideForTests(): void {
+  _dataEdgeAddressOverride = null;
+}
+
 export const CONFIG = {
   // Core — recoveryPhrase reads from override first, then env var.
   // Use getRecoveryPhrase() for dynamic access; this property is for
@@ -235,7 +268,14 @@ export const CONFIG = {
   get chainId(): number {
     return _chainIdOverride ?? 100;
   },
-  dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || '',
+  // Explicit operator env override for the DataEdge contract. Stays env-only:
+  // it is the FIRST term of `getSubgraphConfig`'s env → billing → WASM-default
+  // resolution order, so it wins over the relay's authoritative
+  // `data_edge_address` (see `getDataEdgeAddressOverride` / #460). Getter, not
+  // a literal, so it reflects the live env rather than freezing at module load.
+  get dataEdgeAddress(): string {
+    return process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || '';
+  },
   entryPointAddress: process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || '',
   rpcUrl: process.env.TOTALRECLAW_RPC_URL || '',
 

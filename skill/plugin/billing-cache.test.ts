@@ -2,8 +2,9 @@
  * Tests for billing-cache.ts (3.0.7 extraction).
  *
  * Covers round-trip read/write, TTL expiry, corrupt-cache fallback, and
- * missing-file fallback. Also verifies the chain-id sync side-effect on both
- * read and write paths.
+ * missing-file fallback. Also verifies the chain-id sync side-effect (#402)
+ * and the DataEdge-address sync + env → billing → WASM-default resolution
+ * order via getSubgraphConfig (#460), on both read and write paths.
  *
  * Run with: npx tsx billing-cache.test.ts
  *
@@ -25,8 +26,21 @@ process.env.HOME = TEST_HOME;
 // the test location. Node ESM caches by URL; these are the first imports.
 const { readBillingCache, writeBillingCache, BILLING_CACHE_PATH, BILLING_CACHE_TTL } =
   await import('./billing-cache.js');
-const { CONFIG, __resetChainIdOverrideForTests } = await import('./config.js');
+const { CONFIG, __resetChainIdOverrideForTests, __resetDataEdgeAddressOverrideForTests } =
+  await import('./config.js');
+// getSubgraphConfig exercises the full env → billing → WASM-default DataEdge
+// resolution order (#460). Imported after the HOME override above.
+const { getSubgraphConfig } = await import('./subgraph-store.js');
 import type { BillingCache } from './billing-cache.js';
+
+// WASM-baked default DataEdge (the PRODUCTION contract). Captured with no env
+// override + no billing override so the DataEdge tests below can assert the
+// "fall through to WASM default" branch without hardcoding the address.
+delete process.env.TOTALRECLAW_DATA_EDGE_ADDRESS;
+__resetDataEdgeAddressOverrideForTests();
+const WASM_DEFAULT_DATA_EDGE = getSubgraphConfig().dataEdgeAddress;
+// Staging DataEdge — what the staging relay returns in `data_edge_address`.
+const STAGING_DATA_EDGE = '0xE7a4D2677B686e13775Ba9092631089e35F0BB91';
 
 let passed = 0;
 let failed = 0;
@@ -115,6 +129,11 @@ function resetCache(): void {
   );
   assertEq(read?.chain_id, 100, 'readBillingCache: chain_id round-trips');
   assertEq(read?.checked_at, now, 'readBillingCache: checked_at round-trips');
+  assertEq(
+    read?.data_edge_address,
+    undefined,
+    'readBillingCache: data_edge_address absent round-trips as undefined',
+  );
 
   // Side-effect (#402): Free tier no longer flips to 84532 — the relay's
   // authoritative chain_id (100) is applied verbatim.
@@ -174,6 +193,147 @@ function resetCache(): void {
   const read = readBillingCache();
   assertEq(read?.chain_id, 84532, 'readBillingCache: chain_id persists + round-trips');
   assertEq(CONFIG.chainId, 84532, 'readBillingCache: re-syncs chain_id verbatim on cold load');
+}
+
+// ---------------------------------------------------------------------------
+// data_edge_address is authoritative and consumed verbatim (#460)
+//
+// The relay routes each environment to its own DataEdge (staging is on-chain
+// isolated). Before this fix getSubgraphConfig resolved the contract as
+// `CONFIG.dataEdgeAddress || WASM-default` — so against the staging relay,
+// writes mined on the PROD DataEdge (WASM default) while reads came from the
+// staging subgraph → empty recall + phantom "stored=N". Fix: billing's
+// `data_edge_address` is the middle term of env → billing → WASM-default.
+// ---------------------------------------------------------------------------
+
+{
+  // Sanity: with no env + no billing override, getSubgraphConfig falls through
+  // to the WASM-baked (PROD) default.
+  resetCache();
+  delete process.env.TOTALRECLAW_DATA_EDGE_ADDRESS;
+  __resetDataEdgeAddressOverrideForTests();
+  assertEq(
+    getSubgraphConfig().dataEdgeAddress,
+    WASM_DEFAULT_DATA_EDGE,
+    'getSubgraphConfig: no env + no billing → WASM default (prod DataEdge)',
+  );
+}
+
+{
+  // RED under the old code: billing supplies the staging DataEdge, but
+  // getSubgraphConfig ignored it and returned the WASM prod default. After the
+  // fix the relay value is consumed verbatim.
+  resetCache();
+  delete process.env.TOTALRECLAW_DATA_EDGE_ADDRESS;
+  __resetChainIdOverrideForTests();
+  __resetDataEdgeAddressOverrideForTests();
+  writeBillingCache({
+    tier: 'free',
+    free_writes_used: 0,
+    free_writes_limit: 250,
+    chain_id: 100,
+    data_edge_address: STAGING_DATA_EDGE,
+    checked_at: Date.now(),
+  });
+  assertEq(
+    getSubgraphConfig().dataEdgeAddress,
+    STAGING_DATA_EDGE,
+    'getSubgraphConfig: billing data_edge_address consumed verbatim (staging, not prod default)',
+  );
+}
+
+{
+  // Missing data_edge_address (older relay / partial payload) → fall through to
+  // the WASM default (unchanged behavior — never a stale value).
+  resetCache();
+  delete process.env.TOTALRECLAW_DATA_EDGE_ADDRESS;
+  __resetDataEdgeAddressOverrideForTests();
+  writeBillingCache({
+    tier: 'free',
+    free_writes_used: 0,
+    free_writes_limit: 250,
+    chain_id: 100,
+    checked_at: Date.now(),
+  });
+  assertEq(
+    getSubgraphConfig().dataEdgeAddress,
+    WASM_DEFAULT_DATA_EDGE,
+    'getSubgraphConfig: missing data_edge_address → WASM default (no override)',
+  );
+}
+
+{
+  // Malformed data_edge_address (not an 0x-address) is ignored → WASM default,
+  // and the override is CLEARED (does not leak a prior valid value).
+  resetCache();
+  delete process.env.TOTALRECLAW_DATA_EDGE_ADDRESS;
+  __resetDataEdgeAddressOverrideForTests();
+  writeBillingCache({
+    tier: 'free',
+    free_writes_used: 0,
+    free_writes_limit: 250,
+    chain_id: 100,
+    data_edge_address: 'not-an-address',
+    checked_at: Date.now(),
+  });
+  assertEq(
+    getSubgraphConfig().dataEdgeAddress,
+    WASM_DEFAULT_DATA_EDGE,
+    'getSubgraphConfig: malformed data_edge_address ignored → WASM default',
+  );
+}
+
+{
+  // Explicit operator env override wins over billing (#460 item 4).
+  resetCache();
+  __resetDataEdgeAddressOverrideForTests();
+  const ENV_DATA_EDGE = '0x1111111111111111111111111111111111111111';
+  process.env.TOTALRECLAW_DATA_EDGE_ADDRESS = ENV_DATA_EDGE;
+  writeBillingCache({
+    tier: 'free',
+    free_writes_used: 0,
+    free_writes_limit: 250,
+    chain_id: 100,
+    data_edge_address: STAGING_DATA_EDGE,
+    checked_at: Date.now(),
+  });
+  assertEq(
+    getSubgraphConfig().dataEdgeAddress,
+    ENV_DATA_EDGE,
+    'getSubgraphConfig: env override wins over billing data_edge_address',
+  );
+  delete process.env.TOTALRECLAW_DATA_EDGE_ADDRESS;
+}
+
+{
+  // Cold-load restart: a persisted data_edge_address re-syncs the override on
+  // readBillingCache (fresh process, override reset).
+  resetCache();
+  delete process.env.TOTALRECLAW_DATA_EDGE_ADDRESS;
+  __resetDataEdgeAddressOverrideForTests();
+  writeBillingCache({
+    tier: 'free',
+    free_writes_used: 0,
+    free_writes_limit: 250,
+    chain_id: 100,
+    data_edge_address: STAGING_DATA_EDGE,
+    checked_at: Date.now(),
+  });
+  // Simulate a cold process: clear the in-memory override, then read from disk.
+  __resetDataEdgeAddressOverrideForTests();
+  assertEq(
+    getSubgraphConfig().dataEdgeAddress,
+    WASM_DEFAULT_DATA_EDGE,
+    'pre-read: DataEdge override reset → WASM default',
+  );
+  const read = readBillingCache();
+  assertEq(read?.data_edge_address, STAGING_DATA_EDGE, 'readBillingCache: data_edge_address persists + round-trips');
+  assertEq(
+    getSubgraphConfig().dataEdgeAddress,
+    STAGING_DATA_EDGE,
+    'readBillingCache: re-syncs data_edge_address verbatim on cold load',
+  );
+  __resetDataEdgeAddressOverrideForTests();
 }
 
 // ---------------------------------------------------------------------------
