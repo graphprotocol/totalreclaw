@@ -150,6 +150,11 @@ class GeminiAdapter(BaseImportAdapter):
                 chunk_index=t.get('chunk_index', 0),
                 ts_iso=t.get('ts_iso'),
                 ts_unix=t.get('ts_unix'),
+                # Range fields present only on core wheels with #368 Part 2
+                # straddle fidelity; None on older wheels (engine then assigns
+                # whole chunks without straddle-splitting).
+                chunk_msg_start=t.get('chunk_msg_start'),
+                chunk_msg_end=t.get('chunk_msg_end'),
             )
             for t in data.get('turns', [])
         ]

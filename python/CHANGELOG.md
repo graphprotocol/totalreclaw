@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Import session segmentation: per-turn straddle-splitting (#368 Part 2,
+  fact-attribution fidelity).** Building on the flat per-turn view (#466), each
+  `ParsedTurn` now also carries its message-index range within its chunk
+  (`chunk_msg_start`/`chunk_msg_end`, from the shared Rust core, flowing through
+  PyO3/WASM). When a chunk's turns straddle a session boundary (a mid-chunk
+  topic or time shift), `import_engine` splits it into per-session sub-chunks
+  for extraction, so each fact lands in the session its turn actually belongs to
+  — closing the last chunk-level approximation (a straddling chunk was assigned
+  wholesale to its first turn's session). Non-straddling chunks extract wholesale
+  (behaviour-preserving); the `_turns_from_chunks` fallback derives the same
+  ranges so it also works without the core range fields. Crystal id is resolved
+  by session index so a shared straddling chunk no longer collapses two sessions'
+  Crystals into one. Embedding stays local (Harrier ONNX) and embed cost is
+  unchanged (one embed per turn). The TS plugin/MCP import-path rewire remains
+  parked (parked clients).
 - **Content-aware Crystal gate.** A session used to need 4 full turns (8
   messages) before it earned a Crystal, silently dropping crisp 2-3 turn
   topical exchanges (e.g. "book the Lisbon flight, aisle seat, under $400")

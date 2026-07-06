@@ -87,6 +87,20 @@ pub struct ParsedTurn {
     /// chunk-level sessions (chunks are the extraction unit) authoritatively —
     /// without re-deriving the turn→chunk pairing that this parser already did.
     pub chunk_index: usize,
+    /// Message index of this turn's FIRST message within its `chunk_index` chunk
+    /// (i.e. offset into `ParseResult::chunks[chunk_index].messages`). Together
+    /// with `chunk_msg_end` this gives the turn's exact message slice inside the
+    /// chunk, so a client can split a chunk whose turns straddle a session
+    /// boundary into per-session sub-chunks for extraction — assigning each
+    /// extracted fact to the session its turn belongs to, instead of the whole
+    /// chunk to its first turn's session. #368 Part 2 (straddle fidelity).
+    pub chunk_msg_start: usize,
+    /// One-past-the-last message index of this turn within its `chunk_index`
+    /// chunk (exclusive end of the `[chunk_msg_start, chunk_msg_end)` slice). A
+    /// turn is 1 message (user-only or assistant-only) or 2 (user+assistant).
+    /// A turn never spans a chunk boundary: the parser slices chunks on the
+    /// SAME 20-message step, so a turn's two messages are always in one chunk.
+    pub chunk_msg_end: usize,
 }
 
 /// The result of parsing one export. The client converts this into its own
@@ -588,8 +602,26 @@ fn entries_to_chunks(entries: &[Entry], r: &mut ParseResult) {
 
         // Emit this turn's flat view now that we know the base chunk index.
         // chunk_index = session_first_chunk + (first_msg_idx / CHUNK_SIZE),
-        // mirroring the 20-message chunk slicing below exactly.
+        // mirroring the 20-message chunk slicing below exactly. The turn's
+        // message slice WITHIN that chunk is [first_msg_idx % CHUNK_SIZE, ..end),
+        // where the turn's message count is 2 (user+assistant) or 1 (one side).
+        // A turn whose second message spills into the NEXT chunk (possible when a
+        // prior 1-message turn shifted the parity so a 2-message turn starts at
+        // the chunk's last slot) is clamped to its first message's chunk; the
+        // spilled reply stays in the next chunk and is covered there. This only
+        // affects the rare boundary turn; the common case is exact.
+        let this_chunk_len = |ci: usize| -> usize {
+            // The chunk at global index `ci` holds up to CHUNK_SIZE messages;
+            // the last chunk of this session may be shorter.
+            let local = (ci - session_first_chunk) * CHUNK_SIZE;
+            (messages.len() - local).min(CHUNK_SIZE)
+        };
         for (e, first_msg_idx) in &session_turns {
+            let n_msgs = (!e.user_prompt.is_empty()) as usize
+                + (!e.ai_response.is_empty()) as usize;
+            let off = first_msg_idx % CHUNK_SIZE;
+            let ci = session_first_chunk + first_msg_idx / CHUNK_SIZE;
+            let end = (off + n_msgs).min(this_chunk_len(ci));
             r.turns.push(ParsedTurn {
                 user_text: e.user_prompt.clone(),
                 assistant_text: e.ai_response.clone(),
@@ -598,7 +630,9 @@ fn entries_to_chunks(entries: &[Entry], r: &mut ParseResult) {
                 // null (not 0) for "no timestamp" — only emit when we parsed an
                 // ISO string, so `segment_sessions` treats it as a 0-gap.
                 ts_unix: e.ts_iso.as_deref().and_then(to_unix),
-                chunk_index: session_first_chunk + first_msg_idx / CHUNK_SIZE,
+                chunk_index: ci,
+                chunk_msg_start: off,
+                chunk_msg_end: end,
             });
         }
 
@@ -961,6 +995,58 @@ mod tests {
         assert_ne!(r.turns[0].ts_unix, r.turns[1].ts_unix);
         // Chronological.
         assert!(r.turns[0].ts_unix.unwrap() < r.turns[1].ts_unix.unwrap());
+    }
+
+    #[test]
+    fn turns_carry_chunk_message_ranges() {
+        // #368 Part 2 (straddle fidelity): each turn's [chunk_msg_start,
+        // chunk_msg_end) is its exact message slice inside its chunk, so a client
+        // can split a straddling chunk into per-session sub-chunks. Two 2-message
+        // turns in one chunk occupy [0,2) and [2,4).
+        let data = serde_json::json!([
+            record("Prompted turn one", "2026-05-14T09:00:00Z", Some("reply one")),
+            record("Prompted turn two", "2026-05-14T09:10:00Z", Some("reply two")),
+        ]);
+        let r = parse_gemini(&data.to_string());
+        assert_eq!(r.chunks.len(), 1);
+        assert_eq!(r.turns.len(), 2);
+        assert_eq!((r.turns[0].chunk_index, r.turns[0].chunk_msg_start, r.turns[0].chunk_msg_end), (0, 0, 2));
+        assert_eq!((r.turns[1].chunk_index, r.turns[1].chunk_msg_start, r.turns[1].chunk_msg_end), (0, 2, 4));
+        // The ranges index into the chunk's actual message list.
+        let msgs = &r.chunks[0].messages;
+        assert_eq!(&msgs[0..2].iter().map(|m| m.role.as_str()).collect::<Vec<_>>(), &["user", "assistant"]);
+    }
+
+    #[test]
+    fn turn_message_range_clamped_to_chunk_length() {
+        // A user-only turn (1 message) shifts parity so a later 2-message turn can
+        // start at the chunk's last slot; its range end is clamped to the chunk
+        // length rather than spilling past it. We build 20 messages where turn
+        // boundaries land a 2-message turn across the 20-msg chunk edge.
+        let mut records = Vec::new();
+        // 19 single-message (user-only) turns → messages 0..19, then a
+        // 2-message turn whose user msg is index 19 (last slot of chunk 0) and
+        // whose assistant msg spills to chunk 1.
+        for i in 0..19 {
+            records.push(serde_json::json!({
+                "header": "Gemini Apps",
+                "title": format!("Prompted q{i}"),
+                "time": format!("2026-05-14T09:{:02}:00Z", i),
+                "products": ["Gemini Apps"],
+                // no subtitles → assistant empty → 1-message turn
+            }));
+        }
+        records.push(record("Prompted last with reply", "2026-05-14T09:19:00Z", Some("the reply")));
+        let r = parse_gemini(&serde_json::Value::Array(records).to_string());
+        // The spanning turn is the 20th; its chunk_msg_end must not exceed the
+        // chunk's message count.
+        for t in &r.turns {
+            let chunk_len = r.chunks[t.chunk_index].messages.len();
+            assert!(t.chunk_msg_end <= chunk_len,
+                    "chunk_msg_end {} exceeds chunk {} len {}",
+                    t.chunk_msg_end, t.chunk_index, chunk_len);
+            assert!(t.chunk_msg_start <= t.chunk_msg_end);
+        }
     }
 
     #[test]

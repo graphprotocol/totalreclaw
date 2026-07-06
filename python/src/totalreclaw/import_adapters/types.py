@@ -63,6 +63,14 @@ class ParsedTurn:
     #: Unix seconds, or None when unknown (None ≠ epoch-0 — segmentation treats
     #: None as a 0-gap to the previous turn).
     ts_unix: Optional[float] = None
+    #: Message index range ``[chunk_msg_start, chunk_msg_end)`` of this turn
+    #: WITHIN its ``chunk_index`` chunk (#368 Part 2, straddle fidelity). Lets the
+    #: engine split a chunk whose turns straddle a session boundary into
+    #: per-session sub-chunks so each fact lands in the right session. Both None
+    #: on older core wheels that predate the range fields — the engine then falls
+    #: back to whole-chunk assignment (no straddle-splitting).
+    chunk_msg_start: Optional[int] = None
+    chunk_msg_end: Optional[int] = None
 
 
 @dataclass

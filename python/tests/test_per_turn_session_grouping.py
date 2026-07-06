@@ -88,9 +88,11 @@ def test_turns_from_parsed_preserves_real_per_turn_timestamps():
                    ts_unix=1778756400.0),
     ]
     out = ImportEngine._turns_from_parsed(turns)
+    # 4-tuple shape (#368 Part 2 straddle fidelity adds a message-range element;
+    # None here because these ParsedTurns carry no chunk_msg_start/end).
     assert out == [
-        (0, 1778749200.0, "q1\na1"),
-        (0, 1778756400.0, "q2\na2"),
+        (0, 1778749200.0, "q1\na1", None),
+        (0, 1778756400.0, "q2\na2", None),
     ]
     # Distinct per-turn timestamps preserved (the whole point of Part 2).
     assert out[0][1] != out[1][1]
@@ -100,8 +102,23 @@ def test_turns_from_parsed_none_timestamp_stays_none():
     turns = [ParsedTurn(user_text="q", assistant_text="", text="q",
                         chunk_index=3, ts_iso=None, ts_unix=None)]
     out = ImportEngine._turns_from_parsed(turns)
-    assert out == [(3, None, "q")]
+    assert out == [(3, None, "q", None)]
     assert out[0][1] is None  # never coerced to epoch-0
+
+
+def test_turns_from_parsed_carries_message_ranges():
+    # When core exposes chunk_msg_start/end, they surface as the 4th element.
+    turns = [
+        ParsedTurn(user_text="q1", assistant_text="a1", text="q1\na1",
+                   chunk_index=0, ts_iso=None, ts_unix=None,
+                   chunk_msg_start=0, chunk_msg_end=2),
+        ParsedTurn(user_text="q2", assistant_text="a2", text="q2\na2",
+                   chunk_index=0, ts_iso=None, ts_unix=None,
+                   chunk_msg_start=2, chunk_msg_end=4),
+    ]
+    out = ImportEngine._turns_from_parsed(turns)
+    assert out[0][3] == (0, 2)
+    assert out[1][3] == (2, 4)
 
 
 @pytest.mark.parametrize("turns", [None, []])
@@ -134,10 +151,13 @@ def test_turns_from_chunks_fallback_uses_chunk_timestamp():
     ]
     out = ImportEngine._turns_from_chunks(chunks)
     assert len(out) == 1
-    chunk_idx, ts, text = out[0]
+    # 4-tuple: (chunk_idx, ts, text, (msg_start, msg_end)) — #368 Part 2 adds the
+    # message range so straddle-splitting works on the fallback path too.
+    chunk_idx, ts, text, msg_range = out[0]
     assert chunk_idx == 0
     assert text == "hello hi there"
     assert ts == pytest.approx(1778749200.0)
+    assert msg_range == (0, 2)
 
 
 # ── End-to-end: real per-turn times split a single chunk's turns ─────────────

@@ -62,9 +62,10 @@ TotalReclaw uses **LLM extraction** to identify facts from your Gemini conversat
    - **Saved-info paste**: each non-empty line (bullet markers stripped) becomes one memory item directly.
 2. **Sessionise**: group consecutive turns into pseudo-sessions, splitting whenever the gap between turns exceeds 30 minutes. This recovers a conversation structure Takeout doesn't preserve directly.
 3. **Chunk**: split each session into batches of ~20 messages (`CHUNK_SIZE`).
-4. **Extract**: each chunk is run through an LLM (the host's LLM on MCP integrations; your gateway's LLM on OpenClaw; Hermes' configured LLM otherwise). The LLM identifies facts, preferences, decisions, goals, and context. Generic Q&A turns (recipe lookups, product searches, weather) typically produce zero facts — only personal, long-term-valuable information is extracted.
-5. **Triage + profile**: extracted facts are deduplicated and merged into a coherent profile via the smart-import pipeline.
-6. **Encrypt + store**: each surviving fact is encrypted with your TotalReclaw key (XChaCha20-Poly1305), fingerprinted for dedup, and stored.
+4. **Semantic session grouping (per-turn)**: chunks are re-grouped into semantic sessions by a centroid-walk segmenter that runs over **individual turns** — each carrying its own timestamp — using a 30-minute time gap plus a 0.55 cosine topic-shift threshold (embedding is local, never an LLM). One Crystal (session summary) is minted per multi-turn session. A chunk whose turns straddle a topic or time boundary mid-chunk is split so each fact lands in the session it belongs to, rather than being assigned wholesale to the chunk's first turn (the per-turn fidelity improvement in #368).
+5. **Extract**: each chunk (or per-session slice of a straddling chunk) is run through an LLM (the host's LLM on MCP integrations; your gateway's LLM on OpenClaw; Hermes' configured LLM otherwise). The LLM identifies facts, preferences, decisions, goals, and context. Generic Q&A turns (recipe lookups, product searches, weather) typically produce zero facts — only personal, long-term-valuable information is extracted.
+6. **Triage + profile**: extracted facts are deduplicated and merged into a coherent profile via the smart-import pipeline.
+7. **Encrypt + store**: each surviving fact is encrypted with your TotalReclaw key (XChaCha20-Poly1305), fingerprinted for dedup, and stored.
 
 ---
 

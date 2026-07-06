@@ -350,6 +350,13 @@ class ImportEngine:
         #: Cached turn counts per session (parallel to _session_assignments).
         #: Used to detect singleton sessions (< 2 turns = no Crystal).
         self._session_turn_counts: Optional[list[int]] = None
+        #: #368 Part 2 (straddle fidelity) — per-turn straddle map. chunk_idx ->
+        #: ordered list of (session_idx, [message indices]) for chunks whose turns
+        #: span more than one session. Chunks NOT in this dict do not straddle and
+        #: extract as a whole (behaviour-preserving). session_idx indexes into
+        #: _session_assignments / _session_ids. Empty unless core exposes per-turn
+        #: message ranges (`ParsedTurn.chunk_msg_start/end`).
+        self._chunk_straddle_slices: dict[int, list[tuple[int, list[int]]]] = {}
         #: Cached STABLE session_id per session (parallel to
         #: _session_assignments). Minted ONCE in _get_session_assignments and
         #: reused across every batch — so a session whose chunks straddle a
@@ -635,9 +642,23 @@ class ImportEngine:
             turn_count = turn_counts[sess_i] if sess_i < len(turn_counts) else len(sess_chunk_indices)
             singleton = turn_count < 2
             for idx in sess_chunk_indices:
-                session_is_singleton[idx] = singleton
-                session_id_map[idx] = sid
-                chunk_to_session_idx[idx] = sess_i
+                # #368 Part 2 — a straddling chunk appears under multiple
+                # sessions; its per-chunk map entry is only a fallback and is
+                # never consulted for straddling chunks (they route through
+                # _chunk_straddle_slices, keyed by session index below).
+                session_is_singleton.setdefault(idx, singleton)
+                session_id_map.setdefault(idx, sid)
+                chunk_to_session_idx.setdefault(idx, sess_i)
+
+        # #368 Part 2 — resolve sid + singleton BY SESSION INDEX for the straddle
+        # path (a straddling chunk's slices each belong to a distinct session).
+        straddle_slices = self._chunk_straddle_slices or {}
+
+        def _sid_for_session(sess_i: int) -> Optional[str]:
+            return session_ids[sess_i] if sess_i < len(session_ids) else None
+
+        def _singleton_for_session(sess_i: int) -> bool:
+            return (turn_counts[sess_i] if sess_i < len(turn_counts) else 2) < 2
 
         facts_extracted = 0
         errors: list[str] = []
@@ -670,7 +691,10 @@ class ImportEngine:
         skipped_conv_ids: set[str] = set()
 
         enriched = smart_ctx.enriched_system_prompt if smart_ctx else None
-        to_extract: list[tuple[int, ConversationChunk]] = []
+        # Extraction UNIT = (global_index, chunk_to_extract, session_id,
+        # is_singleton). A non-straddling chunk yields one unit (whole chunk); a
+        # straddling chunk (#368 Part 2) yields one unit per session-slice.
+        to_extract: list[tuple[int, ConversationChunk, Optional[str], bool]] = []
         for i, chunk in enumerate(batch):
             global_index = offset + i
             conv_id = getattr(chunk, "conversation_id", None)
@@ -690,7 +714,25 @@ class ImportEngine:
                     )
                     chunks_skipped += 1
                     continue
-            to_extract.append((global_index, chunk))
+
+            slices = straddle_slices.get(global_index)
+            if slices:
+                # Straddling chunk: one sub-chunk per session-slice.
+                for sess_i, msg_indices in slices:
+                    sub = self._subchunk(chunk, msg_indices)
+                    if sub is None:
+                        continue
+                    to_extract.append((
+                        global_index, sub,
+                        _sid_for_session(sess_i),
+                        _singleton_for_session(sess_i),
+                    ))
+            else:
+                to_extract.append((
+                    global_index, chunk,
+                    session_id_map.get(global_index),
+                    session_is_singleton.get(global_index, True),
+                ))
 
         conversations_skipped = len(skipped_conv_ids)
 
@@ -714,7 +756,7 @@ class ImportEngine:
 
         # return_exceptions so one chunk's failure doesn't cancel the batch.
         raw_results = await asyncio.gather(
-            *[_extract_one(chunk) for _, chunk in to_extract],
+            *[_extract_one(chunk) for _, chunk, _, _ in to_extract],
             return_exceptions=True,
         )
 
@@ -722,7 +764,7 @@ class ImportEngine:
         # skipped remaining chunks' LLM calls. Under concurrency all calls have
         # already fired by this point, so the cap now only stops *accumulating*
         # later chunks' results (same stored-facts outcome at the cap).
-        for pos, ((global_index, chunk), res) in enumerate(zip(to_extract, raw_results)):
+        for pos, ((global_index, chunk, session_id, is_singleton), res) in enumerate(zip(to_extract, raw_results)):
             if isinstance(res, BaseException):
                 extraction_failures += 1
                 # #436 review: mark this chunk failed so its conversation is
@@ -734,7 +776,7 @@ class ImportEngine:
                     # Bailing early leaves the rest of this batch's extractions
                     # unverified — treat them as failed too so their
                     # conversations aren't recorded on incomplete evidence.
-                    for gi, _ in to_extract[pos + 1:]:
+                    for gi, _, _, _ in to_extract[pos + 1:]:
                         self._failed_chunk_indices.add(gi)
                     break
                 continue
@@ -749,9 +791,6 @@ class ImportEngine:
                 })
                 reason_counts[zero_reason] = reason_counts.get(zero_reason, 0) + 1
             facts_extracted += len(extracted)
-
-            is_singleton = session_is_singleton.get(global_index, True)
-            session_id = session_id_map.get(global_index)
 
             if is_singleton:
                 # Singleton: external provenance + import_source, NO session_id,
@@ -825,7 +864,12 @@ class ImportEngine:
             if sess_turn_count < 2:
                 continue  # singleton — no Crystal
 
-            sid = session_id_map.get(sess_chunk_indices[0]) if sess_chunk_indices else None
+            # Use the session's OWN stable id (by session index), NOT
+            # session_id_map[first_chunk] — a straddling chunk appears under
+            # multiple sessions, so the chunk->sid map would return the same
+            # (first) session's id for every session sharing that chunk and
+            # collapse their Crystals into one (#368 Part 2).
+            sid = session_ids[sess_i] if sess_i < len(session_ids) else None
             if sid is None or sid in self._crystallized_session_ids:
                 continue  # no id, or already crystallized on an earlier batch
 
@@ -979,6 +1023,25 @@ class ImportEngine:
         )
 
     # ── Internal Helpers ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _subchunk(chunk: ConversationChunk, msg_indices: list[int]) -> Optional[ConversationChunk]:
+        """Build a sub-chunk containing only ``msg_indices`` of ``chunk`` (#368 Part 2).
+
+        Used to split a chunk that straddles a session boundary into per-session
+        slices for extraction. Preserves title, timestamp, and conversation_id.
+        Returns None if the slice is empty.
+        """
+        msgs = getattr(chunk, "messages", None) or []
+        picked = [msgs[i] for i in msg_indices if 0 <= i < len(msgs)]
+        if not picked:
+            return None
+        return ConversationChunk(
+            title=getattr(chunk, "title", "") or "",
+            messages=picked,
+            timestamp=getattr(chunk, "timestamp", None),
+            conversation_id=getattr(chunk, "conversation_id", None),
+        )
 
     async def _extract_from_chunk(
         self,
@@ -1141,7 +1204,8 @@ class ImportEngine:
     @staticmethod
     def _turns_from_parsed(turns: Optional[list]) -> Optional[list]:
         """Adapt the adapter's flat ``ParsedTurn`` list to the internal
-        ``(chunk_index, ts_float_or_None, text)`` tuples used for segmentation.
+        ``(chunk_index, ts_float_or_None, text, msg_range_or_None)`` tuples used
+        for segmentation.
 
         Returns None when no usable per-turn data is available (``turns`` is
         None/empty), signalling the caller to fall back to re-deriving turns
@@ -1149,10 +1213,13 @@ class ImportEngine:
 
         Uses each turn's REAL ``ts_unix`` (None stays None — a 0-gap to the
         previous turn, never epoch-0) and its authoritative ``chunk_index``.
+        ``msg_range`` is ``(chunk_msg_start, chunk_msg_end)`` when core exposes
+        the #368 Part 2 range fields, else None (whole-chunk assignment, no
+        straddle-splitting).
         """
         if not turns:
             return None
-        out: list[tuple[int, object, str]] = []
+        out: list[tuple[int, object, str, Optional[tuple[int, int]]]] = []
         for t in turns:
             ci = getattr(t, "chunk_index", None)
             if ci is None:  # malformed / older shape — bail to chunk re-derivation
@@ -1160,32 +1227,37 @@ class ImportEngine:
             ts = getattr(t, "ts_unix", None)
             ts_float = float(ts) if ts is not None else None
             text = (getattr(t, "text", "") or "").strip()[:1000]
-            out.append((ci, ts_float, text))
+            ms = getattr(t, "chunk_msg_start", None)
+            me = getattr(t, "chunk_msg_end", None)
+            msg_range = (ms, me) if ms is not None and me is not None else None
+            out.append((ci, ts_float, text, msg_range))
         return out or None
 
     @staticmethod
     def _turns_from_chunks(chunks: list) -> list:
-        """Fallback: re-derive ``(chunk_index, ts_float, text)`` turns from the
-        chunk message lists, approximating every turn's timestamp with its
-        chunk's single timestamp.
+        """Fallback: re-derive ``(chunk_index, ts_float, text, (msg_start,
+        msg_end))`` turns from the chunk message lists.
 
-        This is the pre-#368-Part-2 behaviour, retained for sources/older core
-        wheels that don't expose a flat per-turn view. Pairs messages
-        user->assistant within each chunk; a chunk with no user message becomes
-        one turn from its joined text.
+        Retained for sources/older core wheels that don't expose a flat per-turn
+        view. Pairs messages user->assistant within each chunk; a chunk with no
+        user message becomes one turn spanning all its messages. Each turn also
+        records its message-index range within the chunk so straddle-splitting
+        works on this path too. Prefers a per-message ``timestamp`` when present
+        (some adapters carry it), else the chunk timestamp.
         """
         from datetime import datetime
 
-        turns_seq: list[tuple[int, object, str]] = []
+        def _parse_ts(raw):
+            if not raw:
+                return None
+            try:
+                return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp()
+            except Exception:
+                return None
+
+        turns_seq: list[tuple[int, object, str, tuple[int, int]]] = []
         for chunk_idx, chunk in enumerate(chunks):
-            ts_raw = getattr(chunk, "timestamp", None)
-            ts_float = None
-            if ts_raw:
-                try:
-                    dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
-                    ts_float = dt.timestamp()
-                except Exception:
-                    pass
+            chunk_ts = _parse_ts(getattr(chunk, "timestamp", None))
 
             msgs = getattr(chunk, "messages", None) or []
             produced_for_chunk = False
@@ -1195,7 +1267,9 @@ class ImportEngine:
                 m = msgs[i]
                 role = (m.get("role") or "user") if isinstance(m, dict) else "user"
                 if role == "user":
+                    msg_start = i
                     text_u = (m.get("text") or m.get("content") or "") if isinstance(m, dict) else str(m)
+                    turn_ts = _parse_ts(m.get("timestamp")) if isinstance(m, dict) else None
                     text_a = ""
                     if i + 1 < len(msgs):
                         next_m = msgs[i + 1]
@@ -1208,7 +1282,8 @@ class ImportEngine:
                     else:
                         i += 1
                     combined = (text_u + " " + text_a).strip()[:1000]
-                    turns_seq.append((chunk_idx, ts_float, combined))
+                    turns_seq.append((chunk_idx, turn_ts if turn_ts is not None else chunk_ts,
+                                      combined, (msg_start, i)))
                     produced_for_chunk = True
                 else:
                     i += 1
@@ -1219,7 +1294,7 @@ class ImportEngine:
                     (m.get("text") or m.get("content") or "") if isinstance(m, dict) else str(m)
                     for m in msgs
                 ).strip()[:1000]
-                turns_seq.append((chunk_idx, ts_float, all_text))
+                turns_seq.append((chunk_idx, chunk_ts, all_text, (0, len(msgs))))
 
         return turns_seq
 
@@ -1299,11 +1374,12 @@ class ImportEngine:
         from totalreclaw.session_segmentation import segment_sessions
 
         # ── Flatten conversation -> turns ───────────────────────────────────
-        # Each turn = (chunk_index, timestamp_float_or_None, text). Prefer the
-        # adapter's flat per-turn view (#368 Part 2) — real per-turn timestamps
-        # and an authoritative chunk_index — and only re-derive from chunks when
-        # it's unavailable.
-        turns_seq: list[tuple[int, object, str]] = self._turns_from_parsed(turns)
+        # Each turn = (chunk_index, timestamp_float_or_None, text,
+        # msg_range_or_None). Prefer the adapter's flat per-turn view (#368 Part
+        # 2) — real per-turn timestamps, authoritative chunk_index, and (when
+        # core exposes them) per-turn message ranges for straddle-splitting — and
+        # only re-derive from chunks when it's unavailable.
+        turns_seq: list[tuple[int, object, str, Optional[tuple[int, int]]]] = self._turns_from_parsed(turns)
         if turns_seq is None:
             turns_seq = self._turns_from_chunks(chunks)
 
@@ -1315,15 +1391,23 @@ class ImportEngine:
             return self._session_assignments
 
         # ── Embed turns ─────────────────────────────────────────────────────
+        # segment_sessions expects L2-normalised inputs (Harrier output already
+        # is); normalise defensively so a non-unit vector's self-dot can't fall
+        # below sim_threshold and spuriously split identical turns.
+        def _l2norm(v: list) -> list:
+            s = math.sqrt(sum(x * x for x in v))
+            return [x / s for x in v] if s > 1e-9 else list(v)
+
         timestamps = [t[1] for t in turns_seq]
         embeddings = []
-        for _, _, text in turns_seq:
+        for t in turns_seq:
+            text = t[2]
             try:
                 from totalreclaw.embedding import get_embedding
                 emb = get_embedding(text) if text else [0.0] * 640
             except Exception:
                 emb = [1.0] + [0.0] * 639
-            embeddings.append(emb)
+            embeddings.append(_l2norm(emb))
 
         # ── Segment turns -> sessions of turns ──────────────────────────────
         try:
@@ -1337,61 +1421,99 @@ class ImportEngine:
             self._session_assignments = [[i] for i in range(len(chunks))]
             self._session_turn_counts = [1 for _ in range(len(chunks))]
             self._session_ids = [_uuid7() for _ in self._session_assignments]
+            self._chunk_straddle_slices = {}
             return self._session_assignments
 
-        # ── Map turn-level sessions to chunk-level sessions ──────────────────
-        # A chunk belongs to the session that contains its FIRST turn.
-        # We also track the TOTAL number of turns per session for the
-        # singleton check (< 2 turns = singleton, no Crystal).
-        chunk_to_session: dict[int, int] = {}
-        session_turn_counts: list[int] = []
+        # ── Map turn-level sessions to sessions (TRUE per-turn, #368 Part 2) ──
+        # Each turn_session is one final session; the turn is the atomic unit.
+        # A chunk maps to EVERY session it has turns in. A chunk whose turns span
+        # >1 session (mid-chunk topic/time boundary) is recorded in
+        # ``_chunk_straddle_slices`` — an ordered list of (session_idx, [message
+        # indices]) — so _process_chunk_batch extracts each session-slice
+        # separately and tags its facts with the right session_id. Straddle
+        # slicing requires per-turn message ranges (turns_seq[t][3]); when those
+        # are absent (older core wheel / no range data) we fall back to
+        # whole-chunk assignment by the chunk's FIRST turn's session
+        # (behaviour-preserving with #466).
+        turn_index_to_session: dict[int, int] = {}
         for sess_idx, turn_indices in enumerate(turn_sessions):
-            session_turn_counts.append(len(turn_indices))
             for tidx in turn_indices:
-                chunk_idx = turns_seq[tidx][0]
-                if chunk_idx not in chunk_to_session:
-                    chunk_to_session[chunk_idx] = sess_idx
+                turn_index_to_session[tidx] = sess_idx
 
-        # Rebuild as list of chunk-index lists (one per turn-level session).
-        # Sessions are ordered by first-appearing chunk.
         session_chunks: list[list[int]] = [[] for _ in turn_sessions]
+        # chunk_idx -> ordered list of (session_idx, msg_range_or_None) per turn.
+        chunk_turn_spans: dict[int, list[tuple[int, Optional[tuple[int, int]]]]] = {}
+        have_ranges = all(
+            (len(t) > 3 and t[3] is not None) for t in turns_seq
+        )
+        for tidx, t in enumerate(turns_seq):
+            chunk_idx = t[0]
+            msg_range = t[3] if len(t) > 3 else None
+            sess_idx = turn_index_to_session[tidx]
+            if chunk_idx not in session_chunks[sess_idx]:
+                session_chunks[sess_idx].append(chunk_idx)
+            chunk_turn_spans.setdefault(chunk_idx, []).append((sess_idx, msg_range))
+
+        self._session_turn_counts = [len(ts) for ts in turn_sessions]
+
+        # Build straddle slices (only when we have message ranges for every turn).
+        straddle_slices: dict[int, list[tuple[int, list[int]]]] = {}
+        if have_ranges:
+            for chunk_idx, spans in chunk_turn_spans.items():
+                distinct = {s for s, _ in spans}
+                if len(distinct) <= 1:
+                    continue  # not a straddle
+                per_session_msgs: dict[int, list[int]] = {}
+                for sess_idx, rng in spans:
+                    if rng is None:
+                        continue
+                    per_session_msgs.setdefault(sess_idx, []).extend(range(rng[0], rng[1]))
+                ordered: list[tuple[int, list[int]]] = []
+                seen: set[int] = set()
+                for sess_idx, _ in spans:
+                    if sess_idx not in seen and sess_idx in per_session_msgs:
+                        seen.add(sess_idx)
+                        ordered.append((sess_idx, sorted(set(per_session_msgs[sess_idx]))))
+                if len(ordered) > 1:
+                    straddle_slices[chunk_idx] = ordered
+        else:
+            # No ranges: collapse each straddling chunk to its FIRST turn's
+            # session so session_chunks matches the pre-straddle #466 mapping.
+            for chunk_idx, spans in chunk_turn_spans.items():
+                first_sess = spans[0][0]
+                for sess_idx in {s for s, _ in spans}:
+                    if sess_idx != first_sess and chunk_idx in session_chunks[sess_idx]:
+                        session_chunks[sess_idx].remove(chunk_idx)
+
+        self._chunk_straddle_slices = straddle_slices
+
+        # Chunks that produced no turns at all (empty) become their own session.
         for chunk_idx in range(len(chunks)):
-            sess_idx = chunk_to_session.get(chunk_idx)
-            if sess_idx is None:
-                # Chunk had no turns at all — append as own session.
+            if chunk_idx not in chunk_turn_spans:
                 session_chunks.append([chunk_idx])
-                session_turn_counts.append(0)
-            else:
-                if chunk_idx not in session_chunks[sess_idx]:
-                    session_chunks[sess_idx].append(chunk_idx)
+                self._session_turn_counts.append(0)
 
-        # Remove empty sessions (can happen if a turn-session mapped to 0 chunks).
-        self._session_assignments = [s for s in session_chunks if s]
-
-        # Attach turn counts to each session for the singleton check in
-        # _process_chunk_batch. We store it separately on the instance.
-        self._session_turn_counts: list[int] = []
-        for s in self._session_assignments:
-            # Sum turns from all turn_sessions that contain chunks of this session.
-            total_turns = sum(
-                session_turn_counts[sess_idx]
-                for sess_idx, tc in enumerate(turn_sessions)
-                if any(turns_seq[tidx][0] in s for tidx in tc)
-            )
-            self._session_turn_counts.append(total_turns)
+        # Drop empty sessions, keeping assignments and turn counts index-aligned.
+        assignments: list[list[int]] = []
+        turn_counts: list[int] = []
+        for s, tc in zip(session_chunks, self._session_turn_counts):
+            if s:
+                assignments.append(s)
+                turn_counts.append(tc)
+        self._session_assignments = assignments
+        self._session_turn_counts = turn_counts
 
         # Mint a STABLE session_id per session ONCE here. Reused across every
         # batch so cross-batch sessions keep one id (and one Crystal).
         self._session_ids = [_uuid7() for _ in self._session_assignments]
 
         logger.debug(
-            "session_segmentation: %d chunks -> %d turn-sessions -> %d sessions "
-            "(%d singletons)",
+            "session_segmentation: %d chunks -> %d turn-sessions "
+            "(%d straddling chunks split, %d singletons)",
             len(chunks),
             len(turn_sessions),
-            len(self._session_assignments),
-            sum(1 for s in self._session_assignments
-                if self._session_turn_counts[self._session_assignments.index(s)] < 2),
+            len(straddle_slices),
+            sum(1 for tc in self._session_turn_counts if tc < 2),
         )
         return self._session_assignments
 

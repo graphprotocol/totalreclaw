@@ -312,6 +312,17 @@ def _fake_client() -> MagicMock:
 
 
 class TestImportEngineSmartImportIntegration:
+    @pytest.fixture(autouse=True)
+    def _stub_embedding(self, monkeypatch):
+        """These tests exercise smart-import plumbing (skip decisions, prompt
+        forwarding, blind fallback), NOT per-turn segmentation. Stub the
+        embedding to a constant so #368 Part 2 per-turn segmentation keeps each
+        chunk's turns in one session (cosine == 1.0 ⇒ no intra-chunk straddle
+        split), making extraction-count assertions deterministic and independent
+        of the real Harrier model's topic geometry."""
+        import totalreclaw.embedding as emb_mod
+        monkeypatch.setattr(emb_mod, "get_embedding", lambda t: [0.1, 0.2, 0.3])
+
     def test_skipped_chunks_never_reach_extractor(self) -> None:
         """Chunks marked SKIP by triage must not hit ``llm_extract``."""
         chunks = _make_chunks(3)
