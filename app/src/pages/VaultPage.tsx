@@ -409,6 +409,76 @@ function formatConversationHeader(
   )}`;
 }
 
+/** A Crystal is a session-summary memory: v1 `summary` type carrying
+ *  `metadata.subtype === "session_crystal"`. It summarises its whole
+ *  conversation, so the vault renders it as the group's header card. */
+function isCrystal(item: VaultItem): boolean {
+  return item.claim.metadata?.subtype === "session_crystal";
+}
+
+/** Renders one Crystal's narrative + its structured fields (outcomes, open
+ *  threads, lessons, topics). Fields are optional and only shown when present. */
+function CrystalCard({ item }: { item: VaultItem }) {
+  const m = item.claim.metadata ?? {};
+  const lists: Array<{ label: string; icon: string; items?: string[] }> = [
+    { label: "Outcomes", icon: "✓", items: m.key_outcomes },
+    { label: "Open threads", icon: "○", items: m.open_threads },
+    { label: "Lessons", icon: "💡", items: m.lessons },
+  ];
+  return (
+    <div className="mx-4 my-3 rounded-lg border border-indigo-200 bg-indigo-50/60 px-4 py-3">
+      <Link to={`/claim/${item.id}`} className="block group">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-700 bg-indigo-100 rounded-full px-2 py-0.5">
+            🔮 Crystal
+          </span>
+          {item.pinned && <span className="text-xs text-amber-600">📌</span>}
+          <span className="text-xs text-indigo-400 ml-auto shrink-0">
+            {item.createdAt.toLocaleString(undefined, {
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            })}
+          </span>
+        </div>
+        <p className="text-sm text-gray-800 group-hover:text-gray-900 mb-2">
+          {item.claim.text}
+        </p>
+      </Link>
+      {lists.map(({ label, icon, items }) =>
+        items && items.length > 0 ? (
+          <div key={label} className="mb-1.5 last:mb-0">
+            <div className="text-[11px] font-medium uppercase tracking-wide text-indigo-500 mb-0.5">
+              {label}
+            </div>
+            <ul className="space-y-0.5">
+              {items.map((t, i) => (
+                <li key={i} className="text-sm text-gray-700 flex gap-1.5">
+                  <span className="text-indigo-400 shrink-0">{icon}</span>
+                  <span>{t}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null,
+      )}
+      {m.topics_discussed && m.topics_discussed.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-2">
+          {m.topics_discussed.map((t, i) => (
+            <span
+              key={i}
+              className="text-[11px] text-indigo-600 bg-indigo-100/70 rounded px-1.5 py-0.5"
+            >
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface ConversationSectionProps {
   group: ConversationGroup<VaultItem>;
   selected: Set<string>;
@@ -420,8 +490,10 @@ function ConversationSection({
   selected,
   onSelect,
 }: ConversationSectionProps) {
-  // Items within a conversation read best chronologically (oldest → newest).
-  const ordered = group.items;
+  // A conversation's Crystal(s) summarise the whole group, so they head the
+  // section as cards; the atomic facts follow chronologically below.
+  const crystals = group.items.filter(isCrystal);
+  const facts = group.items.filter((it) => !isCrystal(it));
   return (
     <section>
       <div className="sticky top-0 z-10 bg-gray-100/95 backdrop-blur border-b border-gray-200 px-4 py-1.5 flex items-center gap-2">
@@ -429,10 +501,18 @@ function ConversationSection({
           {formatConversationHeader(group)}
         </span>
         <span className="text-xs text-gray-400">
-          {ordered.length} claim{ordered.length === 1 ? "" : "s"}
+          {facts.length} claim{facts.length === 1 ? "" : "s"}
         </span>
+        {crystals.length > 0 && (
+          <span className="text-xs text-indigo-500">
+            · 🔮 {crystals.length} crystal{crystals.length === 1 ? "" : "s"}
+          </span>
+        )}
       </div>
-      {ordered.map((item) => (
+      {crystals.map((item) => (
+        <CrystalCard key={item.id} item={item} />
+      ))}
+      {facts.map((item) => (
         <VaultRow
           key={item.id}
           item={item}
@@ -473,7 +553,13 @@ function VaultRow({ item, selected, onSelect, style }: RowProps) {
         className="flex-1 min-w-0 group"
       >
         <div className="flex items-center gap-2 mb-0.5">
-          <TypeBadge type={String(item.type)} />
+          {isCrystal(item) ? (
+            <span className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-700 bg-indigo-100 rounded-full px-2 py-0.5">
+              🔮 Crystal
+            </span>
+          ) : (
+            <TypeBadge type={String(item.type)} />
+          )}
           {item.pinned && (
             <span className="text-xs text-amber-600">📌 pinned</span>
           )}
