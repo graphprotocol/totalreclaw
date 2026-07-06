@@ -407,22 +407,24 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
 }
 
 {
-  // 'patched' on empty config — hooks written, but slot NOT touched
-  // (no `plugins.installs.totalreclaw` → slot patch is gated off, see
-  // 3.3.9-rc.4 defensive gate).
+  // 'patched' on empty config — hooks written, but slot NEVER touched.
+  // patchOpenClawConfig does not write plugins.slots.memory at all (rc.20,
+  // #402) — OpenClaw 2026.6.8 sets it natively on install/enable.
   const cfgPath = path.join(TMP, 'openclaw-empty.json');
   fs.writeFileSync(cfgPath, JSON.stringify({}));
   assertEq(patchOpenClawConfig(cfgPath), 'patched', 'patchOpenClawConfig: patches empty config (hooks only)');
   const written = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
   const plugins = written.plugins as Record<string, unknown>;
-  assertEq((plugins.slots as Record<string, unknown>)?.memory, undefined, 'patchOpenClawConfig: slot NOT written without installs.totalreclaw (rc.4 gate)');
+  assertEq((plugins.slots as Record<string, unknown>)?.memory, undefined, 'patchOpenClawConfig: slot NEVER written (#402)');
   const tr = (plugins.entries as Record<string, Record<string, unknown>>)?.totalreclaw;
   assertEq((tr?.hooks as Record<string, unknown>)?.allowConversationAccess, true, 'patchOpenClawConfig: allowConversationAccess set to true (no install gate)');
 }
 
 {
-  // 'patched' on empty config WITH installs.totalreclaw present —
-  // slot AND hooks both written.
+  // 'patched' on config WITH installs.totalreclaw present — hooks written,
+  // but slot is NEVER written by patchOpenClawConfig (rc.20, #402). OpenClaw
+  // 2026.6.8 sets plugins.slots.memory natively during install/enable, so the
+  // hand-written slot write was retired.
   const cfgPath = path.join(TMP, 'openclaw-empty-with-installs.json');
   const initial = {
     plugins: {
@@ -430,10 +432,10 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
     },
   };
   fs.writeFileSync(cfgPath, JSON.stringify(initial));
-  assertEq(patchOpenClawConfig(cfgPath), 'patched', 'patchOpenClawConfig: patches when installs.totalreclaw present');
+  assertEq(patchOpenClawConfig(cfgPath), 'patched', 'patchOpenClawConfig: patches (hooks) when installs.totalreclaw present');
   const written = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
   const plugins = written.plugins as Record<string, unknown>;
-  assertEq((plugins.slots as Record<string, unknown>)?.memory, 'totalreclaw', 'patchOpenClawConfig: slot WRITTEN with installs.totalreclaw');
+  assertEq((plugins.slots as Record<string, unknown>)?.memory, undefined, 'patchOpenClawConfig: slot NOT written even with installs.totalreclaw (#402)');
   const tr = (plugins.entries as Record<string, Record<string, unknown>>)?.totalreclaw;
   assertEq((tr?.hooks as Record<string, unknown>)?.allowConversationAccess, true, 'patchOpenClawConfig: hooks written with installs');
 }
@@ -457,7 +459,9 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
 }
 
 {
-  // 'patched' when only slot is missing (allowConversationAccess + installs present)
+  // Slot missing + hooks already set + installs present → NOTHING to patch
+  // now that the slot write is retired (rc.20, #402). Returns 'unchanged'
+  // and the slot stays absent (OpenClaw sets it natively on install/enable).
   const cfgPath = path.join(TMP, 'openclaw-missing-slot.json');
   const initial = {
     plugins: {
@@ -466,10 +470,10 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
     },
   };
   fs.writeFileSync(cfgPath, JSON.stringify(initial));
-  assertEq(patchOpenClawConfig(cfgPath), 'patched', 'patchOpenClawConfig: patches when only slot missing');
+  assertEq(patchOpenClawConfig(cfgPath), 'unchanged', 'patchOpenClawConfig: unchanged when only slot missing (slot write retired, #402)');
   const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
   const afterPlugins = after.plugins as Record<string, unknown>;
-  assertEq((afterPlugins.slots as Record<string, unknown>)?.memory, 'totalreclaw', 'patchOpenClawConfig: slot written when installs + entries present');
+  assertEq((afterPlugins.slots as Record<string, unknown>)?.memory, undefined, 'patchOpenClawConfig: slot NOT written when missing (#402)');
 }
 
 {
@@ -488,15 +492,18 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
   assertEq((tr?.hooks as Record<string, unknown>)?.allowConversationAccess, true, 'patchOpenClawConfig: hooks written when only hooks missing');
 }
 
-// --- Fix #1 install-gate regression tests (3.3.9-rc.4) ---
+// --- Slot-never-written regression tests (rc.20, #402) ---
+//
+// patchOpenClawConfig retired its hand-written `plugins.slots.memory` write
+// (formerly Fix #1, install-gated to dodge a crash loop). OpenClaw 2026.6.8
+// sets the memory slot natively during install/enable, so the plugin never
+// touches it. These tests lock in "slot is never written" across the same
+// disk states the old install-gate cared about.
 
 {
   // REGRESSION: empty config WITHOUT installs.totalreclaw must NOT
-  // write `plugins.slots.memory = "totalreclaw"`. This is the
-  // 2026-05-05 pop-os crash-loop scenario — writing the slot without
-  // an install record produces "plugin not found: totalreclaw" at
-  // gateway startup and the container restart-loops indefinitely
-  // until `openclaw plugins install` repopulates installs.totalreclaw.
+  // write `plugins.slots.memory`. (The old install-gate existed to avoid
+  // the 2026-05-05 pop-os crash loop; the write is now gone entirely.)
   const cfgPath = path.join(TMP, 'openclaw-no-installs.json');
   fs.writeFileSync(cfgPath, JSON.stringify({ plugins: {} }));
   assertEq(
@@ -506,11 +513,11 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
   );
   const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
   const plugins = after.plugins as Record<string, unknown>;
-  // The crash-loop test: slot must NOT be set when installs missing
+  // Slot must NOT be set — patchOpenClawConfig never writes it (#402).
   assertEq(
     (plugins.slots as Record<string, unknown> | undefined)?.memory,
     undefined,
-    'patchOpenClawConfig: slot NOT set when installs.totalreclaw missing (crash-loop guard)',
+    'patchOpenClawConfig: slot NOT set when installs.totalreclaw missing (#402)',
   );
   // But hooks ARE set — they're inert without an install record so safe
   const tr = (plugins.entries as Record<string, Record<string, unknown>>)?.totalreclaw;
@@ -522,9 +529,9 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
 }
 
 {
-  // REGRESSION: installs.totalreclaw with empty/non-string version → slot still gated.
-  // The version field is what the install pipeline writes; an empty
-  // installs.totalreclaw object is not authoritative enough to gate on.
+  // REGRESSION: installs.totalreclaw with empty/non-string version → slot
+  // still absent. (Under the old contract this was the install-gate; now the
+  // slot is simply never written regardless of install-record shape.)
   const cfgPath = path.join(TMP, 'openclaw-installs-no-version.json');
   fs.writeFileSync(cfgPath, JSON.stringify({
     plugins: { installs: { totalreclaw: {} } },
@@ -539,7 +546,7 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
   assertEq(
     (plugins.slots as Record<string, unknown> | undefined)?.memory,
     undefined,
-    'patchOpenClawConfig: slot still gated when installs.totalreclaw lacks version',
+    'patchOpenClawConfig: slot NOT written when installs.totalreclaw lacks version (#402)',
   );
 }
 
@@ -570,6 +577,42 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
     'totalreclaw',
     'patchOpenClawConfig: pre-existing stale slot preserved (we do not auto-clean)',
   );
+}
+
+// --- Installs-never-written regression (rc.20, #402) ---
+//
+// Fix #6 (installs self-heal) retired: patchOpenClawConfig must NEVER
+// fabricate a plugins.installs.totalreclaw record, even when a plugin version
+// is passed. OpenClaw 2026.6.8 validates the whole installs map against a
+// schema (each record's source must be a valid PluginInstallSource value); a
+// fabricated source:"self-heal" record made safeParse discard the ENTIRE
+// installs map at load, and the native installer commits records to its SQLite
+// index while stripping config-level records — so the self-heal was inert at
+// best and harmful at worst.
+
+{
+  // Empty installs + version passed → still no installs record written.
+  const cfgPath = path.join(TMP, 'openclaw-installs-never-written.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({ plugins: {} }));
+  patchOpenClawConfig(cfgPath, '9.9.9-rc.1');
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const plugins = after.plugins as Record<string, unknown>;
+  assertEq(
+    plugins.installs,
+    undefined,
+    'patchOpenClawConfig: plugins.installs NEVER written even when version passed (#402)',
+  );
+}
+
+{
+  // A pre-existing installs record is left byte-identical (never overwritten).
+  const cfgPath = path.join(TMP, 'openclaw-installs-preserved.json');
+  const initial = { plugins: { installs: { totalreclaw: { version: '1.2.3', source: 'npm' } } } };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  patchOpenClawConfig(cfgPath, '9.9.9-rc.1');
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as typeof initial;
+  assertEq(after.plugins.installs.totalreclaw.version, '1.2.3', 'patchOpenClawConfig: existing installs.version preserved (#402)');
+  assertEq(after.plugins.installs.totalreclaw.source, 'npm', 'patchOpenClawConfig: existing installs.source preserved (#402)');
 }
 
 {
@@ -695,11 +738,55 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
   );
 }
 
-// --- Fix #4: plugins.bundledDiscovery = "compat" when plugins.allow populated (3.3.11-rc.4) ---
+// --- allow self-append + bundledDiscovery both RETIRED (rc.20, #402) ---
+//
+// patchOpenClawConfig no longer appends "totalreclaw" to plugins.allow, nor
+// writes plugins.bundledDiscovery="compat". Native persistPluginInstall
+// already manages the allowlist (empty/absent = allow-all), and TR growing an
+// allowlist was the only thing that forced hosts into strict mode — which was
+// the sole reason the bundledDiscovery compat workaround existed. Existing
+// on-disk values of either key are left byte-identical.
 
 {
-  // Sets bundledDiscovery=compat when allow is populated and the field is absent
-  const cfgPath = path.join(TMP, 'openclaw-allow-populated-no-bd.json');
+  // allow populated WITHOUT totalreclaw + hooks unset → hooks patched, but
+  // "totalreclaw" is NOT appended and bundledDiscovery is NOT written.
+  const cfgPath = path.join(TMP, 'openclaw-allow-no-append.json');
+  const initial = {
+    plugins: {
+      installs: { totalreclaw: { version: '3.3.11-rc.4' } },
+      allow: ['device-pair', 'telegram', 'zai'],
+      slots: { memory: 'totalreclaw' },
+      entries: { totalreclaw: { enabled: true } },
+    },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(initial));
+  assertEq(
+    patchOpenClawConfig(cfgPath),
+    'patched',
+    'patchOpenClawConfig: patches (hooks) but does not touch allow/bundledDiscovery',
+  );
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+  const plugins = after.plugins as Record<string, unknown>;
+  assertEq(
+    (plugins.allow as string[]).includes('totalreclaw'),
+    false,
+    'patchOpenClawConfig: "totalreclaw" NOT appended to plugins.allow (#402)',
+  );
+  assertEq(
+    (plugins.allow as string[]).length,
+    3,
+    'patchOpenClawConfig: plugins.allow length unchanged (#402)',
+  );
+  assertEq(
+    plugins.bundledDiscovery,
+    undefined,
+    'patchOpenClawConfig: bundledDiscovery NOT written even with populated allow (#402)',
+  );
+}
+
+{
+  // allow populated WITH totalreclaw + hooks already true → nothing to do.
+  const cfgPath = path.join(TMP, 'openclaw-allow-populated-nochange.json');
   const initial = {
     plugins: {
       installs: { totalreclaw: { version: '3.3.11-rc.4' } },
@@ -711,70 +798,26 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
   fs.writeFileSync(cfgPath, JSON.stringify(initial));
   assertEq(
     patchOpenClawConfig(cfgPath),
-    'patched',
-    'patchOpenClawConfig: patches when allow populated + bundledDiscovery absent',
-  );
-  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
-  const plugins = after.plugins as Record<string, unknown>;
-  assertEq(
-    plugins.bundledDiscovery,
-    'compat',
-    'patchOpenClawConfig: bundledDiscovery set to "compat" when allow is populated',
-  );
-  // Other keys preserved
-  assertEq(
-    (plugins.allow as string[]).includes('totalreclaw'),
-    true,
-    'patchOpenClawConfig: existing allow array preserved',
-  );
-}
-
-{
-  // Does NOT set bundledDiscovery when allow is empty / absent (auto-discover mode)
-  const cfgPath = path.join(TMP, 'openclaw-allow-empty.json');
-  const initial = {
-    plugins: {
-      installs: { totalreclaw: { version: '3.3.11-rc.4' } },
-      slots: { memory: 'totalreclaw' },
-      entries: { totalreclaw: { enabled: true, hooks: { allowConversationAccess: true } } },
-    },
-  };
-  fs.writeFileSync(cfgPath, JSON.stringify(initial));
-  assertEq(
-    patchOpenClawConfig(cfgPath),
     'unchanged',
-    'patchOpenClawConfig: no bundledDiscovery patch when allow is absent (auto-discover mode)',
+    'patchOpenClawConfig: unchanged when populated allow + hooks already set (#402)',
   );
   const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
   const plugins = after.plugins as Record<string, unknown>;
   assertEq(
     plugins.bundledDiscovery,
     undefined,
-    'patchOpenClawConfig: bundledDiscovery NOT set when allow absent',
+    'patchOpenClawConfig: bundledDiscovery still not written (#402)',
   );
-}
-
-{
-  // Does NOT set bundledDiscovery when allow is empty array
-  const cfgPath = path.join(TMP, 'openclaw-allow-empty-array.json');
-  const initial = {
-    plugins: {
-      installs: { totalreclaw: { version: '3.3.11-rc.4' } },
-      allow: [],
-      slots: { memory: 'totalreclaw' },
-      entries: { totalreclaw: { enabled: true, hooks: { allowConversationAccess: true } } },
-    },
-  };
-  fs.writeFileSync(cfgPath, JSON.stringify(initial));
   assertEq(
-    patchOpenClawConfig(cfgPath),
-    'unchanged',
-    'patchOpenClawConfig: no bundledDiscovery patch when allow is empty array',
+    (plugins.allow as string[]).length,
+    4,
+    'patchOpenClawConfig: existing allow array left byte-identical (#402)',
   );
 }
 
 {
-  // Does NOT overwrite an explicit bundledDiscovery="allowlist" (power-user choice preserved)
+  // A pre-existing explicit bundledDiscovery is left untouched (never written
+  // or overwritten by the plugin now).
   const cfgPath = path.join(TMP, 'openclaw-bd-explicit-allowlist.json');
   const initial = {
     plugins: {
@@ -789,7 +832,7 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
   assertEq(
     patchOpenClawConfig(cfgPath),
     'unchanged',
-    'patchOpenClawConfig: does not overwrite explicit bundledDiscovery=allowlist',
+    'patchOpenClawConfig: does not touch explicit bundledDiscovery=allowlist',
   );
   const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
   const plugins = after.plugins as Record<string, unknown>;
@@ -801,8 +844,9 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
 }
 
 {
-  // Pop-os scenario: populated allow with totalreclaw, no bundledDiscovery, no streaming —
-  // exercises the exact missing-cure path that broke pop-os install on 2026-05-07.
+  // Pop-os scenario: populated allow, no bundledDiscovery, telegram streaming
+  // unset. Now ONLY the telegram streaming default is patched — no allow
+  // append, no bundledDiscovery write.
   const cfgPath = path.join(TMP, 'openclaw-popos-style.json');
   const initial = {
     plugins: {
@@ -817,21 +861,26 @@ const TEST_HEADER = '# Memory\n\n> TotalReclaw is active. Test header.\n\n';
   assertEq(
     patchOpenClawConfig(cfgPath),
     'patched',
-    'patchOpenClawConfig: pop-os-style config gets patched (bundledDiscovery + telegram streaming)',
+    'patchOpenClawConfig: pop-os-style config patched via telegram streaming only',
   );
   const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
   const plugins = after.plugins as Record<string, unknown>;
   const channels = after.channels as Record<string, Record<string, unknown>>;
   assertEq(
     plugins.bundledDiscovery,
-    'compat',
-    'patchOpenClawConfig: pop-os scenario sets bundledDiscovery=compat',
+    undefined,
+    'patchOpenClawConfig: pop-os scenario does NOT write bundledDiscovery (#402)',
+  );
+  assertEq(
+    (plugins.allow as string[]).length,
+    5,
+    'patchOpenClawConfig: pop-os scenario leaves allow unchanged (#402)',
   );
   const tg = channels.telegram as Record<string, Record<string, unknown>>;
   assertEq(
     (tg.streaming as Record<string, unknown>)?.mode,
     'off',
-    'patchOpenClawConfig: pop-os scenario also sets telegram streaming.mode=off',
+    'patchOpenClawConfig: pop-os scenario still sets telegram streaming.mode=off',
   );
 }
 

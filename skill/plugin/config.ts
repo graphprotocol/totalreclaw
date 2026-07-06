@@ -227,10 +227,11 @@ export const CONFIG = {
   // TOTALRECLAW_DATA_EDGE_ADDRESS / TOTALRECLAW_ENTRYPOINT_ADDRESS /
   // TOTALRECLAW_RPC_URL (undocumented; internal knobs).
   //
-  // Reads the runtime override set by the billing auto-detect in index.ts.
-  // Falls back to 84532 (free tier / pre-billing-lookup). Must be a getter,
-  // not a literal — a literal would freeze all Pro-tier UserOps to the
-  // wrong chainId and AA23 at the bundler.
+  // Reads the runtime override set from the relay's authoritative chain_id
+  // (syncChainIdFromBilling). Falls back to 100 (Gnosis) pre-billing-lookup —
+  // after ops-1 both tiers are on Gnosis, so 84532 is never the default (#402).
+  // Must be a getter, not a literal — a literal would freeze UserOps to the
+  // wrong chainId and fail signature validation at the bundler.
   get chainId(): number {
     return _chainIdOverride ?? 100;
   },

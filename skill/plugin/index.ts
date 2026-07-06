@@ -1006,12 +1006,15 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
           const billingData = await resp.json() as Record<string, unknown>;
           const tier = billingData.tier as string;
           const expiresAt = billingData.expires_at as string | undefined;
-          // Populate billing cache for future use.
+          // Populate billing cache for future use. Copy the relay's
+          // authoritative chain_id so it lands on disk and drives the runtime
+          // chain override verbatim (#402).
           writeBillingCache({
             tier: tier || 'free',
             free_writes_used: (billingData.free_writes_used as number) ?? 0,
             free_writes_limit: (billingData.free_writes_limit as number) ?? 0,
             features: billingData.features as BillingCache['features'] | undefined,
+            chain_id: billingData.chain_id as number | undefined,
             checked_at: Date.now(),
           });
           if (tier === 'pro' && expiresAt) {
@@ -3657,14 +3660,16 @@ const plugin = {
       }
 
       // 3.3.9-rc.2 (issues #225 + #226): auto-patch openclaw.json for
-      // OpenClaw 2026.5.x. Two required config keys were not auto-applied
-      // by `openclaw plugins install` in 2026.5.x:
+      // OpenClaw 2026.5.x. Required config keys not auto-applied by
+      // `openclaw plugins install` in 2026.5.x:
       //
-      //   1. plugins.slots.memory = "totalreclaw"
-      //      OpenClaw 2026.5.x introduced memory-slot exclusivity — a
-      //      memory-kind plugin MUST explicitly claim the slot or it is
-      //      silently disabled (no error shown; `openclaw plugins inspect`
-      //      shows "memory slot set to memory-core"). #225.
+      //   NOTE (rc.20, #402): patchOpenClawConfig now applies only the two
+      //   keys below. Retired: the memory slot (plugins.slots.memory — OpenClaw
+      //   2026.6.8 claims it natively on install/enable), the installs
+      //   self-heal (plugins.installs — native install owns it; a fabricated
+      //   record fails the host's schema validation), and the plugins.allow
+      //   self-append + plugins.bundledDiscovery="compat" pair (native install
+      //   manages the allowlist).
       //
       //   2. plugins.entries.totalreclaw.hooks.allowConversationAccess = true
       //      Non-bundled plugins in 2026.5.x require this flag to receive
@@ -3683,9 +3688,9 @@ const plugin = {
       // openclaw.json at startup, not dynamically). We emit a warn so
       // the user and ops scripts know to trigger a restart.
       try {
-        // 3.3.12-rc.3: pass pluginVersion so Fix #6 can self-heal a
-        // stripped `plugins.installs.totalreclaw` record (and unblock
-        // Fix #1 which gates on installs being present).
+        // pluginVersion is still passed for signature stability; as of rc.20
+        // (#402) patchOpenClawConfig no longer consumes it (the Fix #6 installs
+        // self-heal it fed was retired).
         const patchResult = patchOpenClawConfig(undefined, pluginVersion ?? undefined);
         if (patchResult === 'patched') {
           // 3.3.12-rc.6 (auto-QA finding 2026-05-09): previously we only
@@ -3720,9 +3725,7 @@ const plugin = {
           // pattern.
           api.logger.warn(
             'TotalReclaw: updated openclaw.json with required 2026.5.x keys ' +
-              '(plugins.slots.memory + hooks.allowConversationAccess + ' +
-              'channels.telegram.streaming.mode + plugins.bundledDiscovery + ' +
-              'plugins.allow + plugins.installs.totalreclaw self-heal). ' +
+              '(hooks.allowConversationAccess + channels.telegram.streaming.mode). ' +
               'Auto-restarting gateway via SIGUSR1 to apply.',
           );
           setTimeout(() => {
@@ -3740,9 +3743,10 @@ const plugin = {
         } else if (patchResult === 'error') {
           api.logger.warn(
             'TotalReclaw: failed to auto-patch openclaw.json for OpenClaw 2026.5.x ' +
-              'compatibility. If memory hooks are silently disabled, add these keys ' +
-              'manually: plugins.slots.memory="totalreclaw" and ' +
-              'plugins.entries.totalreclaw.hooks.allowConversationAccess=true.',
+              'compatibility. If memory hooks are silently disabled, add this key ' +
+              'manually: plugins.entries.totalreclaw.hooks.allowConversationAccess=true. ' +
+              '(The memory slot is set by OpenClaw itself on plugin install/enable; ' +
+              'if the slot is wrong, run: openclaw plugins enable totalreclaw)',
           );
         }
         // 'unchanged' and 'skipped' are silent — no log needed.
@@ -4759,6 +4763,8 @@ const plugin = {
                   free_writes_used: (billingData.free_writes_used as number) ?? 0,
                   free_writes_limit: (billingData.free_writes_limit as number) ?? 0,
                   features: billingData.features as BillingCache['features'] | undefined,
+                  // Relay's authoritative chain_id → drives the chain override verbatim (#402).
+                  chain_id: billingData.chain_id as number | undefined,
                   checked_at: Date.now(),
                 };
                 writeBillingCache(cache);
@@ -5235,25 +5241,18 @@ const plugin = {
     // surface (scanner constraint: a single file may not contain both
     // fs.read* AND outbound-request trigger words). Deps are passed in
     // here with neutral aliases for the same reason.
+    //
+    // Lifecycle (rc.20, #402): register() can run more than once per process
+    // (OpenClaw's SIGUSR1 restarts are IN-PROCESS, so the module cache and any
+    // running poller survive). No guard is needed here — startTrajectoryPoller
+    // holds a module-global singleton and stops the previous poller before
+    // starting a new one, and each tick self-terminates if the plugin's own
+    // module file is gone (uninstalled/replaced). This prevents the poller
+    // accumulation + zombie-old-version submitters seen on pop-os.
     // ---------------------------------------------------------------
 
     startTrajectoryPoller({
       logger: api.logger,
-      // 3.3.12-rc.19: re-assert slots.memory each poll tick. OpenClaw's
-      // config-rewrite-after-restart can strip it after register()'s
-      // self-heal (pop-os reinstall 2026-06-30 → slot reverted to disabled
-      // memory-core → memory_search/memory_get never bound). Cheap fs
-      // read; heals + restarts only if the slot is wrong.
-      recheckSlot: () => {
-        try {
-          if (patchOpenClawConfig(undefined, pluginVersion ?? undefined) === 'patched') {
-            api.logger.warn('TotalReclaw: slots.memory was wrong at poll — re-healed openclaw.json, restarting to apply');
-            try { process.kill(process.pid, 'SIGUSR1'); } catch { /* gateway shutting down */ }
-          }
-        } catch (err) {
-          api.logger.warn(`TotalReclaw: slot recheck failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      },
       ensureInitialized: () => ensureInitialized(api.logger),
       isPairingPending: () => needsSetup,
       isImportActive: () => _importInProgress,

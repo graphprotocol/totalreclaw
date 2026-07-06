@@ -11,8 +11,9 @@
  * This module:
  *   - reads/writes `~/.totalreclaw/billing-cache.json` (path from CONFIG)
  *   - exports `BillingCache`, `BILLING_CACHE_PATH`, `BILLING_CACHE_TTL`
- *   - keeps the chain-id override in sync with the cached tier so Pro-tier
- *     UserOps sign against chain 100 and Free-tier stays on 84532
+ *   - keeps the chain-id override in sync with the relay's authoritative
+ *     `chain_id` (after ops-1 both tiers are on Gnosis 100; the client consumes
+ *     the relay value verbatim — see `syncChainIdFromBilling`)
  *   - does NOT import anything that performs outbound I/O
  *
  * Do NOT add any outbound-request call to this file — a single match for
@@ -50,6 +51,12 @@ export interface BillingCache {
     max_facts_per_extraction?: number;
     max_candidate_pool?: number;
   };
+  /**
+   * Authoritative chain id from the relay `/v1/billing/status` response.
+   * After ops-1 (2026-06-05) both tiers are on Gnosis (100); the relay is the
+   * source of truth, so the client consumes this verbatim (#402).
+   */
+  chain_id?: number;
   checked_at: number;
 }
 
@@ -58,24 +65,21 @@ export interface BillingCache {
 // ---------------------------------------------------------------------------
 
 /**
- * Apply the billing tier to the runtime chain override.
+ * Apply the relay's authoritative `chain_id` to the runtime chain override.
  *
- * Pro tier → chain 100 (Gnosis mainnet). Free tier (or unknown) stays on
- * 84532 (Base Sepolia). The relay routes Pro UserOps to Gnosis, so the
- * client MUST sign them against chain 100 — otherwise the bundler returns
- * AA23 (invalid signature). See MCP's equivalent path in mcp/src/index.ts.
+ * After ops-1 (2026-06-05) both tiers run on Gnosis (chain 100) and the relay
+ * returns an authoritative `chain_id` in `/v1/billing/status`. The client MUST
+ * consume that verbatim — the old tier→chain derivation (Free ⇒ 84532 Base
+ * Sepolia) was retired two-tier logic that mis-signed FREE-tier UserOps
+ * against the wrong chain and queried a Base-Sepolia RPC for a Gnosis-deployed
+ * sender, producing deterministic AA10 (#402).
  *
- * Called from `readBillingCache` and `writeBillingCache` so that every cache
- * read or write keeps the chain override in sync with the cached tier.
- * Idempotent — calling with the same tier is a no-op.
+ * A missing / non-finite `chain_id` (older relay, partial payload) defaults to
+ * 100 — never 84532. Called from `readBillingCache` and `writeBillingCache` so
+ * every cache read or write keeps the override in sync. Idempotent.
  */
-export function syncChainIdFromTier(tier: string | undefined): void {
-  if (tier === 'pro') {
-    setChainIdOverride(100);
-  } else {
-    // Free or unknown → reset to the default free-tier chain.
-    setChainIdOverride(84532);
-  }
+export function syncChainIdFromBilling(chainId: number | undefined): void {
+  setChainIdOverride(typeof chainId === 'number' && Number.isFinite(chainId) ? chainId : 100);
 }
 
 // ---------------------------------------------------------------------------
@@ -95,8 +99,9 @@ export function readBillingCache(): BillingCache | null {
     if (!fs.existsSync(BILLING_CACHE_PATH)) return null;
     const raw = JSON.parse(fs.readFileSync(BILLING_CACHE_PATH, 'utf-8')) as BillingCache;
     if (!raw.checked_at || Date.now() - raw.checked_at > BILLING_CACHE_TTL) return null;
-    // Keep chain override in sync with persisted tier across process restarts.
-    syncChainIdFromTier(raw.tier);
+    // Keep chain override in sync with the persisted authoritative chain_id
+    // across process restarts.
+    syncChainIdFromBilling(raw.chain_id);
     return raw;
   } catch {
     return null;
@@ -118,5 +123,5 @@ export function writeBillingCache(cache: BillingCache): void {
   }
   // Sync chain override AFTER the write so in-process UserOp signing picks
   // up the correct chain immediately, even if the disk write failed.
-  syncChainIdFromTier(cache.tier);
+  syncChainIdFromBilling(cache.chain_id);
 }

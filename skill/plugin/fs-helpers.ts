@@ -943,17 +943,18 @@ export function resolveOnboardingState(
 // on-load + .pair-pending.json + SIGUSR1-for-pair dance was retired because
 // pairing is now user-initiated QR. `patchOpenClawConfig` itself was NEVER
 // part of the auto-pair state machine — it applies OpenClaw 2026.5.x
-// compatibility keys (memory slot, hook access, telegram streaming,
-// bundledDiscovery, installs self-heal) and is idempotent (returns
-// `'unchanged'` when all keys are already correct). Its only caller is
-// register() in index.ts; the SIGUSR1 emitted on `'patched'` is the
+// compatibility keys (hook access, telegram streaming) and is idempotent
+// (returns `'unchanged'` when all keys are already correct). Its only caller
+// is register() in index.ts; the SIGUSR1 emitted on `'patched'` is the
 // "restart-so-the-new-keys-take-effect-this-boot" signal, NOT a pair signal.
 //
-// Whether this remains necessary depends on Task 0.1 (Step-0 config-strip
-// check on OpenClaw 2026.6.8): if a plain `openclaw plugins install`
-// persists the slot/activation across a gateway reload on 2026.6.8, a
-// follow-up removes this entirely. If 2026.6.8 still strips config (the
-// standalone-installer case), this minimal version stays. Deferred to 0.1.
+// Retired in rc.20 (#402): the memory-slot write (formerly Fix #1), the
+// install-record self-heal (formerly Fix #6), and the plugins.allow self-append
+// + bundledDiscovery="compat" pair (formerly Fix #5 + Fix #4). OpenClaw 2026.6.8
+// claims the memory slot natively on `plugins install`/`enable`, manages the
+// allowlist itself, and discards the whole installs map if any entry fails
+// schema validation — so this helper no longer touches `plugins.slots.memory`,
+// `plugins.installs`, `plugins.allow`, or `plugins.bundledDiscovery`.
 
 /**
  * Outcome of `patchOpenClawConfig`.
@@ -973,14 +974,11 @@ export type OpenClawConfigPatchResult = 'patched' | 'unchanged' | 'skipped' | 'e
  * Auto-patch `~/.openclaw/openclaw.json` with the entries required by
  * OpenClaw 2026.5.x for clean operation (issues #225 + #226 + verbosity):
  *
- *   1. `plugins.slots.memory = "totalreclaw"` (gated on install record)
- *      Claim the memory slot so the plugin loads instead of deferring to
- *      the built-in `memory-core` tenant. As of 3.3.9-rc.4 this fix is
- *      gated on `plugins.installs.totalreclaw.version` being present —
- *      writing the slot without an install record produces a startup
- *      crash loop ("plugins.slots.memory: plugin not found: totalreclaw")
- *      that survives container restarts until `openclaw plugins install`
- *      repopulates the install record.
+ *   NOTE (rc.20, #402): this helper no longer writes `plugins.slots.memory`
+ *   (OpenClaw 2026.6.8 claims the memory slot natively on install/enable) nor
+ *   `plugins.installs` (the former Fix #6 self-heal — its record reader
+ *   discards the whole installs map if any entry fails schema validation).
+ *   Pre-existing values of both are left untouched. The remaining fixes are:
  *
  *   2. `plugins.entries.totalreclaw.hooks.allowConversationAccess = true`
  *      Grant the plugin access to `agent_end` and `before_agent_start`
@@ -994,15 +992,11 @@ export type OpenClawConfigPatchResult = 'patched' | 'unchanged' | 'skipped' | 'e
  *      this to "off" on first run for a clean UX. Existing explicit values
  *      ("partial", "block", "progress") are preserved.
  *
- *   4. `plugins.bundledDiscovery = "compat"` (only if unset, and only when
- *      `plugins.allow` is populated). When `plugins.allow` is a non-empty
- *      array, OpenClaw 2026.5.x switches the loader into strict-allowlist
- *      mode and silently rejects non-bundled plugins like totalreclaw —
- *      EVEN IF they are listed in the allow array. Setting
- *      `bundledDiscovery: "compat"` restores the looser behavior so allow-
- *      listed non-bundled plugins load. Without this fix, users with
- *      telegram or any model provider configured before TR install (which
- *      populates allow) get a silent plugin-skip on every gateway boot.
+ *   Fix #4 (`plugins.bundledDiscovery="compat"`) and Fix #5 (appending
+ *   "totalreclaw" to `plugins.allow`) were RETIRED together in rc.20 (#402):
+ *   native install manages the allowlist, and TR growing it was the only
+ *   thing that forced strict-allowlist mode (the sole reason the compat
+ *   workaround existed). Pre-existing values of both keys are left untouched.
  *
  * Design constraints
  * ------------------
@@ -1026,8 +1020,8 @@ export type OpenClawConfigPatchResult = 'patched' | 'unchanged' | 'skipped' | 'e
  */
 export function patchOpenClawConfig(
   configPath?: string,
-  // 3.3.12-rc.3 — plugin version (used by Fix #6 to self-heal a stripped
-  // `plugins.installs.totalreclaw` record so Fix #1 (slot) can fire).
+  // Retained on the signature (register() passes it) but no longer consumed:
+  // the Fix #6 install-record self-heal it fed was retired in rc.20 (#402).
   pluginVersion?: string,
 ): OpenClawConfigPatchResult {
   const home = envHomeDir();
@@ -1049,112 +1043,46 @@ export function patchOpenClawConfig(
 
     let mutated = false;
 
-    // --- Fix #6 (3.3.12-rc.3): self-heal `plugins.installs.totalreclaw` ---
+    // --- Fix #6 (installs self-heal) RETIRED in rc.20 (#402) ---
     //
-    // OpenClaw 2026.5.6 has a config-rewrite-after-restart behaviour
-    // observed on Pedro's pop-os QA host (2026-05-08): `openclaw plugins
-    // install` writes the install record, gateway restart fires, but
-    // after the restart something STRIPS `plugins.installs.totalreclaw` (and
-    // sometimes `plugins.allow`, `plugins.entries.totalreclaw`,
-    // `plugins.slots.memory`) from openclaw.json. The plugin's binary
-    // remains in `~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/`,
-    // but `openclaw plugins list` shows it as `disabled` because no
-    // install record + no allow entry.
-    //
-    // Defensive self-heal: when this register() runs (which means the
-    // plugin IS physically loaded by the gateway), if the install record
-    // is missing or has no version, write a minimal record. This unlocks
-    // Fix #1 (slot) and avoids the user-visible "plugin disabled"
-    // condition without requiring `openclaw plugins install --force`.
-    //
-    // Phrase-safety: writes only metadata (version, spec, source,
-    // installedAt). No mnemonic / userId / SA leakage.
-    if (pluginVersion) {
-      if (typeof cfg.plugins.installs !== 'object' || cfg.plugins.installs === null) {
-        cfg.plugins.installs = {};
-      }
-      const existing = cfg.plugins.installs.totalreclaw;
-      const existingVersion = (typeof existing === 'object' && existing !== null && typeof existing.version === 'string')
-        ? existing.version
-        : null;
-      if (!existingVersion) {
-        cfg.plugins.installs.totalreclaw = {
-          ...(typeof existing === 'object' && existing !== null ? existing : {}),
-          version: pluginVersion,
-          spec: '@totalreclaw/totalreclaw',
-          source: 'self-heal',
-          installedAt: new Date().toISOString(),
-        };
-        mutated = true;
-      }
-    }
+    // patchOpenClawConfig used to fabricate a `plugins.installs.totalreclaw`
+    // record (version/spec/source:"self-heal"/installedAt) whenever a version
+    // was passed and no record existed. Removed because it was inert at best
+    // and harmful at worst on OpenClaw 2026.6.8:
+    //   (a) the record reader validates the WHOLE installs map against a
+    //       schema where `source` must be a valid PluginInstallSource — the
+    //       fabricated `source:"self-heal"` (and any source-less record) fails
+    //       safeParse, discarding the ENTIRE installs map at load; and
+    //   (b) the native installer never persists install records into
+    //       openclaw.json (it strips them via withoutPluginInstallRecords and
+    //       commits to the SQLite index, which always wins on merge).
+    // So the plugin no longer writes `plugins.installs` at all; a pre-existing
+    // record is left byte-identical. `pluginVersion` is retained on the
+    // signature (register() passes it) but is no longer consumed here.
+    void pluginVersion;
 
-    // --- Fix #5 (3.3.12-rc.3): plugins.allow includes "totalreclaw" ---
+    // --- Fix #5 (plugins.allow self-append) RETIRED in rc.20 (#402) ---
     //
-    // OpenClaw 2026.5.x: when `plugins.allow` is a non-empty array, the
-    // gateway switches into strict-allowlist mode. Plugins NOT in the
-    // allow list are silently rejected at load time — even bundled ones
-    // are gated. Pedro's pop-os 2026-05-08 QA had `plugins.allow` =
-    // ['device-pair', 'google', 'telegram', 'zai'] AFTER `openclaw
-    // plugins install @totalreclaw/totalreclaw@rc` ran. The install
-    // command did NOT add 'totalreclaw' to the allow list. Plugin
-    // shipped as `disabled`. Setup never proceeded.
-    //
-    // Defensive: when allow is a non-empty array and 'totalreclaw' is
-    // not in it, append. Don't touch null/undefined allow (means
-    // auto-discover mode — plugin is reachable without explicit allow).
-    if (Array.isArray(cfg.plugins.allow) && cfg.plugins.allow.length > 0) {
-      if (!cfg.plugins.allow.includes('totalreclaw')) {
-        cfg.plugins.allow.push('totalreclaw');
-        mutated = true;
-      }
-    }
+    // patchOpenClawConfig used to append "totalreclaw" to a non-empty
+    // `plugins.allow`. Removed as a pair with Fix #4 (below): OpenClaw's native
+    // `persistPluginInstall` already calls `addInstalledPluginToAllowlist`, and
+    // an empty/absent allowlist means allow-all (no write needed). TR
+    // unconditionally growing an allowlist was the very thing that flipped
+    // hosts into strict-allowlist enforcement — which then required the Fix #4
+    // `bundledDiscovery:"compat"` workaround. Dropping both lets native install
+    // own the allowlist; existing hosts keep whatever is already on disk.
 
-    // --- Fix #1: plugins.slots.memory = "totalreclaw" (gated on install) ---
+    // --- Fix #1 (memory-slot write) RETIRED in rc.20 (#402) ---
     //
-    // DEFENSIVE GATE (3.3.9-rc.4 — 2026-05-05): only write the slot when
-    // the plugin is genuinely INSTALLED (`plugins.installs.totalreclaw`
-    // present with a `version`). Writing the slot unconditionally
-    // produced a startup crash loop on Pedro's pop-os QA host on
-    // 2026-05-05 — after a config reset, `plugins.installs.totalreclaw`
-    // was missing but a previously-written `slots.memory = "totalreclaw"`
-    // had survived. OpenClaw's startup validator refuses to start with
-    //
-    //   Gateway failed to start: Error: Invalid config at openclaw.json.
-    //   plugins.slots.memory: plugin not found: totalreclaw
-    //   Run "openclaw doctor --fix" to repair, then retry.
-    //
-    // The container restart-loop drained ~13 attempts (12:10-12:23 UTC)
-    // until `openclaw plugins install` was re-run and re-populated
-    // `plugins.installs.totalreclaw`. With this gate, future installs
-    // that wipe `plugins.installs` (config reset, `doctor --fix`,
-    // migration tools) cannot regress into the same boot loop — slot is
-    // only ever written when the install record exists, and the install
-    // record is the install pipeline's authoritative signal that the
-    // plugin is on disk and registered with the gateway.
-    //
-    // The hooks patch (Fix #2) and Telegram streaming patch (Fix #3) are
-    // not gated this way — they write under `plugins.entries` and
-    // `channels` which are inert without an install record, so they can
-    // never trip the validator.
-    const installsRoot = cfg.plugins.installs;
-    const installEntry = typeof installsRoot === 'object' && installsRoot !== null
-      ? installsRoot.totalreclaw
-      : undefined;
-    const pluginIsInstalled = typeof installEntry === 'object'
-      && installEntry !== null
-      && typeof installEntry.version === 'string'
-      && installEntry.version.length > 0;
-
-    if (pluginIsInstalled) {
-      if (typeof cfg.plugins.slots !== 'object' || cfg.plugins.slots === null) {
-        cfg.plugins.slots = {};
-      }
-      if (cfg.plugins.slots.memory !== 'totalreclaw') {
-        cfg.plugins.slots.memory = 'totalreclaw';
-        mutated = true;
-      }
-    }
+    // patchOpenClawConfig used to write `plugins.slots.memory = "totalreclaw"`
+    // (install-gated, to dodge a startup crash loop). OpenClaw 2026.6.8 now
+    // claims the memory slot NATIVELY during `plugins install`/`enable` (its
+    // persistPluginInstall "slot selection" phase), so the hand-written write
+    // was redundant on the good path and twice failed in production. The
+    // plugin no longer touches the memory slot — a pre-existing value is left
+    // byte-identical. Fix numbering below is preserved for continuity with the
+    // #225/#226 history. The Fix #6 install-record self-heal was retired
+    // above too (rc.20, #402).
 
     // --- Fix #2: plugins.entries.totalreclaw.hooks.allowConversationAccess = true ---
     if (typeof cfg.plugins.entries !== 'object' || cfg.plugins.entries === null) {
@@ -1199,36 +1127,15 @@ export function patchOpenClawConfig(
       }
     }
 
-    // --- Fix #4: plugins.bundledDiscovery = "compat" (3.3.11-rc.4) ---
+    // --- Fix #4 (plugins.bundledDiscovery="compat") RETIRED in rc.20 (#402) ---
     //
-    // OpenClaw 2026.5.x: when `plugins.allow` is populated (any non-empty
-    // array), the gateway's plugin loader switches into strict-allowlist
-    // mode. In strict mode, NON-BUNDLED plugins like totalreclaw are
-    // silently rejected even when listed in `plugins.allow`, unless
-    // `plugins.bundledDiscovery = "compat"` is explicitly set. Pedro's
-    // 2026-05-07 QA on pop-os surfaced this — the gateway booted with only
-    // the bundled providers (telegram, device-pair) and skipped totalreclaw
-    // despite it being in the allow list. `openclaw doctor --fix` cures it
-    // by setting `bundledDiscovery: "compat"`, but users shouldn't need
-    // to run doctor manually for the plugin to load.
-    //
-    // Fix: when `plugins.allow` is a non-empty array AND
-    // `plugins.bundledDiscovery` is unset, set it to "compat". If the user
-    // explicitly chose "allowlist" (the stricter mode), preserve their
-    // choice — only first-run defaults are touched.
-    //
-    // This bug was missed by the auto-QA harness because the harness ran
-    // on a fresh canonical container with `plugins.allow=null`, hitting
-    // the auto-discover code path. Real users with telegram + a model
-    // provider configured before TR install have a populated allow list,
-    // hitting the strict-mode path. The auto-QA harness in 3.3.11-rc.4
-    // adds a populated-allow scenario to catch future regressions.
-    if (Array.isArray(cfg.plugins.allow) && cfg.plugins.allow.length > 0) {
-      if (cfg.plugins.bundledDiscovery === undefined) {
-        cfg.plugins.bundledDiscovery = 'compat';
-        mutated = true;
-      }
-    }
+    // patchOpenClawConfig used to set `plugins.bundledDiscovery = "compat"`
+    // whenever `plugins.allow` was populated, to keep non-bundled totalreclaw
+    // loadable under strict-allowlist mode. Retired as a pair with Fix #5: the
+    // ONLY reason a host was in strict-allowlist mode was that TR itself grew
+    // the allowlist (Fix #5). With Fix #5 gone, native install manages the
+    // allowlist and this compat workaround is unnecessary. An existing
+    // `bundledDiscovery` value on disk is left untouched.
 
     if (!mutated) return 'unchanged';
 

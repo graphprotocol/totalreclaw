@@ -635,18 +635,163 @@ async function runTests(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 6. recheckSlot fires once per poll tick (3.3.12-rc.19 slot self-heal)
+  // 6. No slot re-check on poll ticks (rc.20, #402)
   // -------------------------------------------------------------------------
+  // OpenClaw 2026.6.8 natively sets `plugins.slots.memory=<pluginId>` during
+  // `plugins install`/`enable` (its persistPluginInstall "slot selection"
+  // phase), so TR's hand-written per-tick slot self-heal (rc.18/rc.19) was
+  // retired. `recheckSlot` is no longer a field on TrajectoryPollerDeps and a
+  // poll tick performs no slot-related side effect. A recheckSlot-shaped
+  // callback (cast through unknown, since the field no longer exists on the
+  // deps type) must NEVER be invoked.
   {
     let slotChecks = 0;
     const home = path.join(TMP, 'slot-recheck-home');
     fs.mkdirSync(path.join(home, '.totalreclaw'), { recursive: true });
-    await withPoller(home, { recheckSlot: () => { slotChecks++; } }, async (handle) => {
+    const stray = { recheckSlot: () => { slotChecks++; } } as unknown as Partial<TrajectoryPollerDeps>;
+    await withPoller(home, stray, async (handle) => {
       await handle.pollOnce();
-      assertEq(slotChecks, 1, 'recheckSlot invoked once per poll tick');
       await handle.pollOnce();
-      assertEq(slotChecks, 2, 'recheckSlot invoked on every tick (2 polls → 2 calls)');
+      assertEq(slotChecks, 0, 'poller performs NO slot re-check (native OpenClaw slot-selection, #402)');
     });
+  }
+
+  // Regression (rc.20, #402): startTrajectoryPoller runs with NO slot-related
+  // dep at all — the deps object built by withPoller has no recheckSlot, and
+  // a poll tick still extracts + persists normally.
+  {
+    const home = path.join(TMP, 'no-slot-dep-home');
+    writeTrajectoryFile(home, 'sess-noslot', [['user 1', 'assistant 1'], ['user 2', 'assistant 2']]);
+    await withPoller(home, {}, async (h, calls) => {
+      await h.pollOnce();
+      assertEq(calls.extraction, 1, 'poller extracts without any slot dep (#402)');
+      assert(calls.persisted > 0, 'poller persists without any slot dep (#402)');
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // 7. Lifecycle guards (rc.20, #402)
+  // -------------------------------------------------------------------------
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  // Minimal tick-counting deps. `tick` fires from ensureInitialized, which runs
+  // AFTER the per-tick sentinel check — so a self-terminated tick does not
+  // increment. An empty ~/.openclaw/agents dir makes findTrajectoryFiles() → [].
+  function tickDeps(tick: () => void, logMsgs: string[]): TrajectoryPollerDeps {
+    return {
+      logger: {
+        info: (m: string) => logMsgs.push(m),
+        warn: (m: string) => logMsgs.push(m),
+        error: (m: string) => logMsgs.push(m),
+      },
+      ensureInitialized: async () => { tick(); },
+      isPairingPending: () => false,
+      isImportActive: () => false,
+      getExtractInterval: () => 2,
+      getMaxFactsPerExtraction: () => 10,
+      isDedupEnabled: () => false,
+      getDedupCandidates: async () => [],
+      runExtraction: async () => [],
+      filterByImportance: (f) => ({ kept: f, dropped: 0 }),
+      persistFacts: async () => 0,
+    };
+  }
+
+  // 7a. Singleton — a second start stops the first (only one live tick stream).
+  {
+    const home = path.join(TMP, 'singleton-home');
+    fs.mkdirSync(path.join(home, '.openclaw', 'agents'), { recursive: true });
+    const origHome = process.env.HOME;
+    process.env.HOME = home;
+    const sentinel = path.join(home, 'sentinel-a.js');
+    fs.writeFileSync(sentinel, '// sentinel');
+    const stateFile = path.join(home, '.totalreclaw', 'state.json');
+
+    let ticksA = 0;
+    let ticksB = 0;
+    const msgsB: string[] = [];
+    const a = startTrajectoryPoller(tickDeps(() => { ticksA++; }, []), { pollIntervalMs: 20, stateFile, sentinelPath: sentinel });
+    const b = startTrajectoryPoller(tickDeps(() => { ticksB++; }, msgsB), { pollIntervalMs: 20, stateFile, sentinelPath: sentinel });
+    await sleep(120);
+    a.stop();
+    b.stop();
+    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
+
+    assert(
+      msgsB.some((m) => /previous poller stopped \(re-register\)/.test(m)),
+      'singleton: second start stops the first and logs re-register',
+    );
+    assertEq(ticksA, 0, 'singleton: first poller stopped before its interval fired (no A ticks)');
+    assert(ticksB >= 1, 'singleton: second poller is the only live tick stream');
+  }
+
+  // 7b. Self-termination — removing the sentinel file stops ticks.
+  {
+    const home = path.join(TMP, 'selfterm-home');
+    fs.mkdirSync(path.join(home, '.openclaw', 'agents'), { recursive: true });
+    const origHome = process.env.HOME;
+    process.env.HOME = home;
+    const sentinel = path.join(home, 'sentinel-b.js');
+    fs.writeFileSync(sentinel, '// sentinel');
+    const stateFile = path.join(home, '.totalreclaw', 'state.json');
+
+    let ticks = 0;
+    const msgs: string[] = [];
+    const h = startTrajectoryPoller(tickDeps(() => { ticks++; }, msgs), { pollIntervalMs: 20, stateFile, sentinelPath: sentinel });
+    await sleep(80);
+    const ticksBeforeRemoval = ticks;
+    assert(ticksBeforeRemoval >= 1, 'self-term: poller ticks while sentinel present');
+    fs.rmSync(sentinel);
+    await sleep(120);
+    h.stop();
+    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
+
+    assert(
+      msgs.some((m) => /poller self-terminated \(plugin dir removed\)/.test(m)),
+      'self-term: logs self-terminated when sentinel gone',
+    );
+    assertEq(ticks, ticksBeforeRemoval, 'self-term: ticks freeze after sentinel removed (interval cleared)');
+  }
+
+  // 7c. Same-path replacement — replacing the sentinel file in place (new
+  // mtime/inode at the SAME path) stops ticks, even though the file EXISTS
+  // the entire time. Guards the uninstall→reinstall zombie-poller hole
+  // (#402, review LOW-2, observed live on the QA host): OpenClaw recreates
+  // dist at the same path within ~45s, so an existence check alone never
+  // trips and an old-version poller keeps running alongside the new one.
+  {
+    const home = path.join(TMP, 'replace-home');
+    fs.mkdirSync(path.join(home, '.openclaw', 'agents'), { recursive: true });
+    const origHome = process.env.HOME;
+    process.env.HOME = home;
+    const sentinel = path.join(home, 'sentinel-c.js');
+    fs.writeFileSync(sentinel, '// sentinel v1');
+    const stateFile = path.join(home, '.totalreclaw', 'state.json');
+
+    let ticks = 0;
+    const msgs: string[] = [];
+    const h = startTrajectoryPoller(tickDeps(() => { ticks++; }, msgs), { pollIntervalMs: 20, stateFile, sentinelPath: sentinel });
+    await sleep(80);
+    const ticksBeforeReplace = ticks;
+    assert(ticksBeforeReplace >= 1, 'replace: poller ticks while sentinel unchanged');
+    // Replace at the SAME path via rm+recreate — the same operation a real
+    // uninstall→reinstall performs. This changes the INODE (deterministic on
+    // every filesystem, independent of mtime granularity), which is the
+    // identity clause that fires in production. existsSync is true again by
+    // the next tick — that is the whole point: the old existence guard would
+    // never notice this, the identity guard must.
+    fs.rmSync(sentinel);
+    fs.writeFileSync(sentinel, '// sentinel v2 (reinstalled)');
+    assert(fs.existsSync(sentinel), 'replace: sentinel still exists at same path after replacement');
+    await sleep(120);
+    h.stop();
+    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
+
+    assert(
+      msgs.some((m) => /poller self-terminated \(plugin file replaced/.test(m)),
+      'replace: logs self-terminated when sentinel replaced at same path',
+    );
+    assertEq(ticks, ticksBeforeReplace, 'replace: ticks freeze after sentinel replaced (identity check tripped)');
   }
 }
 

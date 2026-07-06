@@ -91,6 +91,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ---------------------------------------------------------------------------
 // Public surface
@@ -103,18 +104,6 @@ export interface TrajectoryPollerDeps {
     warn: (msg: string) => void;
     error: (msg: string) => void;
   };
-
-  /**
-   * 3.3.12-rc.19: optional slot-self-heal hook invoked once per poll
-   * tick. OpenClaw's config-rewrite-after-restart can strip
-   * plugins.slots.memory after register()'s self-heal ran (observed on
-   * pop-os reinstall 2026-06-30 → slot reverted to disabled memory-core
-   * → memory_search/memory_get never bound). The host wires this to
-   * patchOpenClawConfig + a SIGUSR1 restart so the slot is re-asserted
-   * on the next tick if it was clobbered. Runs before the pairing/
-   * import gates so it fires even when extraction is deferred.
-   */
-  recheckSlot?: () => void;
 
   /** Initialization gate — same one the agent_end hook uses. */
   ensureInitialized: () => Promise<void>;
@@ -217,22 +206,104 @@ const STATE_FILE = path.join(os.homedir(), '.totalreclaw', 'extract-state.json')
 const STALE_TRAJECTORY_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /**
+ * Module-global handle to the currently-running poller (rc.20, #402).
+ *
+ * OpenClaw's SIGUSR1 restarts are IN-PROCESS — the module cache survives, so a
+ * same-version re-register hits THIS module instance again. Without a guard,
+ * each re-register started a fresh setInterval on top of the previous one and
+ * live pollers accumulated (a fresh container boot was observed with 2 from
+ * boot double-register). `startTrajectoryPoller` stops the previous poller
+ * from this module instance before starting a new one.
+ */
+let activePoller: TrajectoryPollerHandle | null = null;
+
+/**
+ * Path to THIS module's own file, captured once at load. Each poll tick
+ * verifies it still exists AND is the same file (same inode + mtime); if the
+ * plugin dir was removed, or the file at this path was swapped for a different
+ * one (an old version uninstalled then a new version reinstalled at the SAME
+ * path within seconds — the gateway restart is an in-process signal, so the
+ * stale module instance survives), the poller self-terminates so a zombie
+ * module instance from a stale version can't keep submitting UserOps (rc.20,
+ * #402). An existence-only check missed the same-path reinstall case (review
+ * LOW-2, observed live: OpenClaw recreates dist at the same path in ~45s, so
+ * `existsSync` stayed true and the old-version poller ran on). Tests override
+ * this path via `opts.sentinelPath`.
+ */
+const MODULE_SENTINEL = fileURLToPath(import.meta.url);
+
+/** File-identity fingerprint used to detect a same-path replacement. */
+type SentinelIdentity = { ino: number; mtimeMs: number };
+
+/**
  * Start the trajectory poller. Runs an initial poll after 5 s, then
  * every `pollIntervalMs` (default 60 s). Returns a handle the caller
  * can use to stop polling and run one-shot polls in tests.
+ *
+ * Lifecycle guards (rc.20, #402): a previously-started poller from this module
+ * instance is stopped first (singleton), and each tick self-terminates if this
+ * module's file is gone.
  */
 export function startTrajectoryPoller(
   deps: TrajectoryPollerDeps,
-  opts: { pollIntervalMs?: number; stateFile?: string } = {},
+  opts: { pollIntervalMs?: number; stateFile?: string; sentinelPath?: string } = {},
 ): TrajectoryPollerHandle {
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const stateFile = opts.stateFile ?? STATE_FILE;
+  const sentinelPath = opts.sentinelPath ?? MODULE_SENTINEL;
+
+  // Capture the sentinel's file identity (inode + mtime) once at start so each
+  // tick can tell "same file still there" from "different file swapped in at
+  // the same path" (reinstall/upgrade). If the initial stat throws, fall back
+  // to existence-only semantics rather than crashing startup.
+  let sentinelIdentity: SentinelIdentity | null = null;
+  try {
+    const st = fs.statSync(sentinelPath);
+    sentinelIdentity = { ino: st.ino, mtimeMs: st.mtimeMs };
+  } catch {
+    sentinelIdentity = null;
+  }
+
+  // Singleton guard: stop any poller this module instance started earlier so a
+  // same-version re-register (in-process SIGUSR1 restart) does not stack a
+  // second live setInterval on top of the first.
+  if (activePoller) {
+    activePoller.stop();
+    deps.logger.info('extractd: previous poller stopped (re-register)');
+  }
+
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let initialTimeout: ReturnType<typeof setTimeout> | undefined;
+
+  const stop = (): void => {
+    if (timer) clearInterval(timer);
+    if (initialTimeout) clearTimeout(initialTimeout);
+    if (activePoller === handle) activePoller = null;
+  };
 
   const pollAndExtract = async (): Promise<void> => {
     try {
-      // 3.3.12-rc.19: re-assert slots.memory each tick in case OpenClaw's
-      // config-rewrite stripped it after register() (see deps.recheckSlot).
-      deps.recheckSlot?.();
+      // Cross-version self-termination: if this module's own file is gone, or a
+      // DIFFERENT file was swapped in at the same path (uninstall→reinstall of a
+      // newer version), stop — a zombie poller from a stale module instance must
+      // not keep capturing.
+      let sentinelStat: fs.Stats | null = null;
+      try {
+        sentinelStat = fs.statSync(sentinelPath);
+      } catch {
+        // File gone (plugin dir removed).
+        deps.logger.warn('extractd: poller self-terminated (plugin dir removed)');
+        stop();
+        return;
+      }
+      if (
+        sentinelIdentity !== null &&
+        (sentinelStat.ino !== sentinelIdentity.ino || sentinelStat.mtimeMs !== sentinelIdentity.mtimeMs)
+      ) {
+        deps.logger.warn('extractd: poller self-terminated (plugin file replaced — reinstall/upgrade detected)');
+        stop();
+        return;
+      }
       await deps.ensureInitialized();
       if (deps.isPairingPending()) return;
       if (deps.isImportActive()) return;
@@ -326,25 +397,24 @@ export function startTrajectoryPoller(
     }
   };
 
-  const timer = setInterval(() => {
+  timer = setInterval(() => {
     void pollAndExtract();
   }, pollIntervalMs);
   if (typeof timer.unref === 'function') timer.unref();
 
-  const initialTimeout = setTimeout(() => {
+  initialTimeout = setTimeout(() => {
     void pollAndExtract();
   }, 5_000);
   if (typeof initialTimeout.unref === 'function') initialTimeout.unref();
 
   deps.logger.info(`extractd: trajectory poller started (interval=${Math.round(pollIntervalMs / 1000)}s)`);
 
-  return {
-    stop: () => {
-      clearInterval(timer);
-      clearTimeout(initialTimeout);
-    },
+  const handle: TrajectoryPollerHandle = {
+    stop,
     pollOnce: pollAndExtract,
   };
+  activePoller = handle;
+  return handle;
 }
 
 // ---------------------------------------------------------------------------

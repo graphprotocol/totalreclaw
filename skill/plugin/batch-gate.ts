@@ -2,12 +2,15 @@
  * Boot-time chain-gate predicate for client-side `executeBatch` UserOp
  * submission. Spec #281 §9 Phase 1 (item imp-16).
  *
- * The default behaviour is chain-aware: Pro tier (Gnosis, chain 100) batches
- * via `executeBatch`; Free tier (Base Sepolia, chain 84532) submits one
- * UserOp per fact. The `TOTALRECLAW_GNOSIS_BATCH_ENABLED` env var is a
- * hard kill-switch — setting it to `false` disables batching on every chain
- * regardless of tier, so ops can revert to single-fact submission without a
- * client redeploy if T-7 surfaces a billing regression.
+ * The gate batches via `executeBatch` on Gnosis (chain 100). After ops-1
+ * (2026-06-05) BOTH tiers run on Gnosis, so both now batch — the chain==100
+ * check is retained as a safety guard (a non-100 chain, which shouldn't occur
+ * after ops-1, falls back to single-fact). The legacy Free ⇒ Base Sepolia
+ * (84532) single-fact path is gone with the retired two-tier routing (#402).
+ * The `TOTALRECLAW_GNOSIS_BATCH_ENABLED` env var is a hard kill-switch —
+ * setting it to `false` disables batching regardless of chain, so ops can
+ * revert to single-fact submission without a client redeploy. Behaviour of
+ * `shouldBatchOnChain` is unchanged by #402.
  *
  * Read at boot only (module-load time). Per-write reads would re-parse the
  * env on every submission — too expensive for the auto-extraction hot path

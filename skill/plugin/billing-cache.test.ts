@@ -97,6 +97,7 @@ function resetCache(): void {
     free_writes_used: 3,
     free_writes_limit: 10,
     features: { llm_dedup: true, extraction_interval: 5 },
+    chain_id: 100,
     checked_at: now,
   };
   writeBillingCache(cache);
@@ -112,35 +113,67 @@ function resetCache(): void {
     5,
     'readBillingCache: features.extraction_interval round-trips',
   );
+  assertEq(read?.chain_id, 100, 'readBillingCache: chain_id round-trips');
   assertEq(read?.checked_at, now, 'readBillingCache: checked_at round-trips');
 
-  // Side-effect: Free tier should set chain to 84532.
-  assertEq(CONFIG.chainId, 84532, 'writeBillingCache: Free tier syncs chain to 84532');
+  // Side-effect (#402): Free tier no longer flips to 84532 — the relay's
+  // authoritative chain_id (100) is applied verbatim.
+  assertEq(CONFIG.chainId, 100, 'writeBillingCache: Free tier + chain_id 100 syncs to 100 (no tier flip)');
 }
 
 // ---------------------------------------------------------------------------
-// Pro tier → chain 100
+// chain_id is authoritative and applied verbatim (#402)
 // ---------------------------------------------------------------------------
 
 {
+  // After ops-1 both tiers are on Gnosis; the relay returns chain_id and the
+  // client MUST consume it verbatim. Free + chain_id 100 → 100.
   resetCache();
   __resetChainIdOverrideForTests();
-  const cache: BillingCache = {
+  writeBillingCache({
+    tier: 'free',
+    free_writes_used: 0,
+    free_writes_limit: 250,
+    chain_id: 100,
+    checked_at: Date.now(),
+  });
+  assertEq(CONFIG.chainId, 100, 'writeBillingCache: free + chain_id 100 → 100 (root-cause fix)');
+}
+
+{
+  // Missing chain_id (older relay / partial payload) → default to 100, NOT
+  // the retired free-tier 84532.
+  resetCache();
+  __resetChainIdOverrideForTests();
+  writeBillingCache({
+    tier: 'free',
+    free_writes_used: 0,
+    free_writes_limit: 250,
+    checked_at: Date.now(),
+  });
+  assertEq(CONFIG.chainId, 100, 'writeBillingCache: missing chain_id defaults to 100 (no 84532 flip)');
+}
+
+{
+  // Relay is authoritative: chain_id wins over tier. Pro tier + chain_id
+  // 84532 → 84532 (NOT the tier-derived 100). Locks the "verbatim" contract,
+  // and read path re-syncs the persisted chain_id on a cold process.
+  resetCache();
+  __resetChainIdOverrideForTests();
+  writeBillingCache({
     tier: 'pro',
     free_writes_used: 0,
     free_writes_limit: 0,
+    chain_id: 84532,
     checked_at: Date.now(),
-  };
-  writeBillingCache(cache);
-  assertEq(CONFIG.chainId, 100, 'writeBillingCache: Pro tier syncs chain to 100 (Gnosis)');
+  });
+  assertEq(CONFIG.chainId, 84532, 'writeBillingCache: chain_id honored verbatim over tier (pro + 84532 → 84532)');
 
-  // readBillingCache should also sync chain when loading persisted Pro tier
-  // in a cold process (simulate by resetting override then reading).
   __resetChainIdOverrideForTests();
-  assertEq(CONFIG.chainId, 84532, 'pre-read: chain override reset to 84532 default');
+  assertEq(CONFIG.chainId, 100, 'pre-read: chain override reset → default 100');
   const read = readBillingCache();
-  assertEq(read?.tier, 'pro', 'readBillingCache: reads persisted Pro tier');
-  assertEq(CONFIG.chainId, 100, 'readBillingCache: Pro tier syncs chain to 100 on load');
+  assertEq(read?.chain_id, 84532, 'readBillingCache: chain_id persists + round-trips');
+  assertEq(CONFIG.chainId, 84532, 'readBillingCache: re-syncs chain_id verbatim on cold load');
 }
 
 // ---------------------------------------------------------------------------
@@ -163,11 +196,12 @@ function resetCache(): void {
 
   const read = readBillingCache();
   assertEq(read, null, 'readBillingCache: returns null when checked_at > TTL');
-  // Should NOT have synced to Pro — the stale entry must not leak its tier.
+  // Should NOT have synced — the stale entry must not leak its chain_id. With
+  // the override reset, CONFIG.chainId is the default 100.
   assertEq(
     CONFIG.chainId,
-    84532,
-    'readBillingCache: stale entry does not sync chain override',
+    100,
+    'readBillingCache: stale entry does not sync chain override (stays default 100)',
   );
 }
 

@@ -34,7 +34,7 @@ export interface SubgraphStoreConfig {
   relayUrl: string;           // TotalReclaw relay server URL (proxies bundler + subgraph)
   mnemonic: string;           // BIP-39 mnemonic for key derivation
   cachePath: string;          // Hot cache file path
-  chainId: number;            // 100 for Gnosis mainnet, 84532 for Base Sepolia
+  chainId: number;            // Gnosis mainnet (100) after ops-1; from relay chain_id (#402)
   dataEdgeAddress: string;    // EventfulDataEdge contract address
   entryPointAddress: string;  // ERC-4337 EntryPoint v0.7
   authKeyHex?: string;        // HKDF auth key for relay server Authorization header
@@ -121,9 +121,12 @@ function getDefaultRpcUrl(chainId: number): string {
     case 100:
       return 'https://rpc.gnosischain.com';
     case 84532:
+      // Retained for the legacy Base Sepolia chain id, but after ops-1 nothing
+      // should resolve here — the relay's authoritative chain_id is 100 (#402).
       return 'https://sepolia.base.org';
     default:
-      return 'https://sepolia.base.org';
+      // Unknown chain id → Gnosis mainnet (after ops-1 default), NOT Base Sepolia.
+      return 'https://rpc.gnosischain.com';
   }
 }
 
@@ -139,7 +142,9 @@ function getDefaultRpcUrl(chainId: number): string {
  */
 export async function deriveSmartAccountAddress(mnemonic: string, chainId?: number): Promise<string> {
   const eoa = getWasm().deriveEoa(mnemonic) as { private_key: string; address: string };
-  const resolvedChainId = chainId ?? 84532;
+  // Default to Gnosis mainnet (100) after ops-1 — the SA address is CREATE2 and
+  // byte-equal across chains, but the RPC we query must be the live one (#402).
+  const resolvedChainId = chainId ?? 100;
 
   // SimpleAccountFactory.getAddress(address owner, uint256 salt) — view function
   // Selector: 0x8cb84e18 = keccak256("getAddress(address,uint256)")[0:4]
@@ -353,8 +358,19 @@ async function getInitCode(
     method: 'eth_getCode',
     params: [sender, 'latest'],
   });
-  const codeResult = codeJson.result as string | undefined;
-  const isDeployed = codeResult && codeResult !== '0x' && codeResult !== '0x0';
+  // A JSON-RPC error envelope (e.g. a rate-limited public RPC) or a
+  // non-string result is NOT evidence the account is undeployed. Treat it as
+  // a hard failure and throw — otherwise we would attach initCode to a
+  // possibly-deployed sender, guaranteeing AA10 "sender already constructed"
+  // at the paymaster. The thrown error propagates to the submit retry-loop
+  // catch; it does not match the AA25/AA10 regex, so it fails fast with an
+  // accurate message rather than poisoning a UserOp. Only a literal '0x' /
+  // '0x0' result means "not deployed" (#402).
+  const codeResult = codeJson.result;
+  if (codeJson.error || typeof codeResult !== 'string') {
+    throw new Error('eth_getCode failed: ' + (codeJson.error?.message || 'no result'));
+  }
+  const isDeployed = codeResult !== '0x' && codeResult !== '0x0';
 
   if (isDeployed) {
     return { factory: null, factoryData: null };
@@ -475,7 +491,8 @@ async function submitFactOnChainLocked(
   // On AA10 "sender already constructed", mark sender as force-deployed and retry.
   // AA10 can occur at pm_sponsorUserOperation (initCode present on deployed sender)
   // or eth_sendUserOperation (same root cause). This loop handles both.
-  let userOpHash: string;
+  let userOpHash: string | undefined;
+  let lastErr: any;
   let attempt = 0;
   const maxAttempts = 2;
 
@@ -533,6 +550,7 @@ async function submitFactOnChainLocked(
       const msg = err?.message || '';
       // AA10 "sender already constructed" or AA25 invalid nonce → retry
       if (/AA25|AA10|invalid account nonce|already being processed/i.test(msg)) {
+        lastErr = err;
         console.error(`AA25/AA10 detected (attempt ${attempt}/${maxAttempts}), retrying...`);
         // On AA10, force-mark sender as deployed so next retry omits initCode
         if (/AA10/i.test(msg)) {
@@ -548,6 +566,14 @@ async function submitFactOnChainLocked(
       // Not a retryable error — re-throw
       throw err;
     }
+  }
+
+  // Retry budget exhausted with no successful submission — throw the last
+  // retryable error instead of falling through to a receipt poll against an
+  // undefined userOpHash (which used to burn 120s and surface a misleading
+  // 'submission failed (tx=…)'). See #402.
+  if (userOpHash == null) {
+    throw lastErr ?? new Error('eth_sendUserOperation returned no result');
   }
 
   // 10. Wait for receipt (poll up to 120s)
@@ -671,7 +697,8 @@ async function submitFactBatchOnChainLocked(
 
   // Single retry loop: getInitCode → build UserOp → estimate → sponsor → sign → send
   // On AA10 "sender already constructed", mark sender as force-deployed and retry.
-  let userOpHash: string;
+  let userOpHash: string | undefined;
+  let lastErr: any;
   let attempt = 0;
   const maxAttempts = 2;
 
@@ -743,6 +770,7 @@ async function submitFactBatchOnChainLocked(
       const msg = err?.message || '';
       // AA10 "sender already constructed" or AA25 invalid nonce → retry
       if (/AA25|AA10|invalid account nonce|already being processed/i.test(msg)) {
+        lastErr = err;
         console.error(`AA25/AA10 detected (batch, attempt ${attempt}/${maxAttempts}), retrying...`);
         // On AA10, force-mark sender as deployed so next retry omits initCode
         if (/AA10/i.test(msg)) {
@@ -758,6 +786,14 @@ async function submitFactBatchOnChainLocked(
       // Not a retryable error — re-throw
       throw err;
     }
+  }
+
+  // Retry budget exhausted with no successful submission — throw the last
+  // retryable error instead of polling for a receipt against an undefined
+  // userOpHash (which used to burn 120s and surface a misleading
+  // 'submission failed (tx=…)'). See #402.
+  if (userOpHash == null) {
+    throw lastErr ?? new Error('eth_sendUserOperation returned no result');
   }
 
   // Wait for receipt (poll up to 120s)

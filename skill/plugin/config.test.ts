@@ -180,11 +180,11 @@ function assertEq<T>(actual: T, expected: T, name: string): void {
 // ---------------------------------------------------------------------------
 // Chain ID auto-detect override
 //
-// Regression test for the P0 latent bug where Pro-tier users would sign
-// UserOps against chain 100 (Base Sepolia) while the relay routed their
-// writes to chain 100 (Gnosis mainnet). The bundler would reject the sig
-// with AA23. Fix: CONFIG.chainId is a getter that reads a runtime override
-// set from the billing response. See syncChainIdFromTier in index.ts.
+// Regression test for the P0 latent bug where clients signed UserOps against
+// the wrong chain relative to where the relay routed their writes, causing the
+// bundler to reject the signature. Fix: CONFIG.chainId is a getter that reads a
+// runtime override set from the relay's authoritative chain_id. After ops-1 both
+// tiers are Gnosis (100). See syncChainIdFromBilling in billing-cache.ts (#402).
 // ---------------------------------------------------------------------------
 
 {
@@ -192,16 +192,7 @@ function assertEq<T>(actual: T, expected: T, name: string): void {
   assertEq(CONFIG.chainId, 100, 'chainId: defaults to 100 with no override');
 
   setChainIdOverride(100);
-  assertEq(CONFIG.chainId, 100, 'chainId: reflects Pro tier override (Gnosis)');
-
-  setChainIdOverride(100);
-  assertEq(CONFIG.chainId, 100, 'chainId: reflects Free tier override (Base Sepolia)');
-
-  // Pro → Free downgrade flow: override flips back correctly.
-  setChainIdOverride(100);
-  assertEq(CONFIG.chainId, 100, 'chainId: Pro override set');
-  setChainIdOverride(100);
-  assertEq(CONFIG.chainId, 100, 'chainId: downgrade to Free flips override back');
+  assertEq(CONFIG.chainId, 100, 'chainId: reflects the relay chain_id override (Gnosis 100)');
 
   __resetChainIdOverrideForTests();
   assertEq(CONFIG.chainId, 100, 'chainId: reset returns to 100 default');
