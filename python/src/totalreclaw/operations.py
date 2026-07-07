@@ -183,6 +183,7 @@ async def store_fact(
     reasoning: Optional[str] = None,
     volatility: Optional[str] = None,
     extra_metadata: Optional[dict] = None,
+    agent_name: Optional[str] = None,
     data_edge_address: Optional[str] = None,
 ) -> str:
     """Encrypt and store a fact on-chain via relay.
@@ -206,6 +207,13 @@ async def store_fact(
         "because Y" clause for decision-style claims (v1 claim type).
     volatility : str, optional
         Post-extraction rescored volatility; omitted on explicit tool writes.
+    agent_name : str, optional
+        Issue #317 — user-given name of *this agent instance* (e.g. "John").
+        Persisted in the encrypted blob as additive provenance so a memory
+        can render "John (Hermes)". When ``None`` (the default) the store
+        path resolves it from ``TOTALRECLAW_AGENT_NAME``; if that is also
+        unset the ``agent_name`` key is omitted entirely and the write is
+        byte-identical to pre-#317 behaviour.
 
     Returns
     -------
@@ -241,6 +249,9 @@ async def store_fact(
         created_at=extracted_at or timestamp,
         claim_id=fact_id,
         extra_metadata=extra_metadata,
+        # Issue #317 — resolved (explicit arg > TOTALRECLAW_AGENT_NAME > None)
+        # inside build_canonical_claim_v1; None omits the key entirely.
+        agent_name=agent_name,
     )
 
     encrypted_blob = encrypt(blob_plaintext, keys.encryption_key)
@@ -342,6 +353,7 @@ async def store_fact_batch(
             "reasoning": str,                 # optional
             "volatility": str,                # optional
             "extracted_at": str,              # optional ISO timestamp
+            "agent_name": str,                # optional (#317); None→env
         }
 
     Parameters
@@ -437,6 +449,9 @@ async def store_fact_batch(
         # canonical claim's ``metadata`` exactly like the single-fact
         # ``store_fact`` path; absent for normal writes.
         extra_metadata = raw.get("extra_metadata")
+        # Issue #317 — per-fact agent-instance name; None falls back to
+        # TOTALRECLAW_AGENT_NAME inside build_canonical_claim_v1.
+        agent_name = raw.get("agent_name")
 
         # v1 canonical claim — identical shape to ``store_fact``.
         fact_stub = {
@@ -455,6 +470,7 @@ async def store_fact_batch(
             created_at=extracted_at or shared_timestamp,
             claim_id=fact_id,
             extra_metadata=extra_metadata,
+            agent_name=agent_name,
         )
 
         encrypted_blob = encrypt(blob_plaintext, keys.encryption_key)
@@ -689,9 +705,11 @@ async def search_facts(
             # #425 — carry a filtered provenance subset through the reranker
             # so recall output can expose where a memory came from (imports
             # tag import_source + session_id since #356/#363).
+            # #317 — ``agent_name`` rides the same passthrough so recall can
+            # render "John (Hermes)".
             extra_meta = {
                 k: meta[k]
-                for k in ("import_source", "session_id", "subtype")
+                for k in ("import_source", "session_id", "subtype", "agent_name")
                 if isinstance(meta.get(k), str) and meta.get(k)
             } or None
 
@@ -1506,8 +1524,9 @@ async def export_facts(
                     # #425 — export carries provenance: source +
                     # import_source + session_id (tagged on write since
                     # #356/#363 but previously dropped here).
+                    # #317 — agent_name rides the same provenance passthrough.
                     doc_meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
-                    for key in ("source", "import_source", "session_id"):
+                    for key in ("source", "import_source", "session_id", "agent_name"):
                         val = doc_meta.get(key)
                         if isinstance(val, str) and val:
                             entry[key] = val

@@ -100,6 +100,19 @@ export TOTALRECLAW_DISABLE_UPDATE_NOTICE=1
 **When to override:** you manage updates out-of-band and don't want the reminder, or you're running a pinned build on purpose.
 **Note:** this only suppresses the *notice*. It does not affect installs, and the update itself is always user-initiated (say "update TotalReclaw" — see [hermes-setup.md](hermes-setup.md)).
 
+### `TOTALRECLAW_AGENT_NAME`
+
+**Optional.** User-given name of *this agent instance* (issue #317). When set, the name is persisted **inside the encrypted memory blob** (per-memory, client-side), so a memory's provenance can be rendered as e.g. `John (Hermes)` instead of the bare client type `hermes`. It survives decrypt on any client and the vault SPA.
+
+```bash
+export TOTALRECLAW_AGENT_NAME="John"
+```
+
+**Default:** unset — memories carry no `agent_name` and render exactly as before (client type only). Backward-compatible: old memories and new memories written without this set are unchanged.
+**How it is stored:** additive metadata on a different axis from the v1 `source` field (`source` stays `user`/`assistant`/`external`/…). It rides the encrypted inner blob, **not** the on-chain protobuf/subgraph schema — so no schema change and no migration.
+**Precedence:** an explicit `agent_name=` argument to `client.remember()` (or a per-fact `agent_name` key in `remember_batch()`) wins; otherwise this env var; otherwise unset. Names are trimmed and truncated to 64 chars.
+**Security:** the name IS encrypted at rest (it lives in the E2EE blob). Still, treat it as content — don't put secrets in an agent name.
+
 ### LLM provider keys
 
 **Required if the client needs an LLM** (auto-extraction, LLM-guided dedup, import processing).

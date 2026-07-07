@@ -158,6 +158,64 @@ def _now_iso() -> str:
 VALID_PIN_STATUSES: tuple[str, ...] = ("pinned", "unpinned")
 
 
+#: Env var carrying the user-given name of *this agent instance* (issue #317).
+#: When set, the name is persisted in the encrypted memory blob so a memory's
+#: provenance can read e.g. "John (Hermes)" instead of the bare client type.
+#: Resolved at store time; unset → behaves exactly as before (no ``agent_name``
+#: key on the blob). This mirrors how ``X-TotalReclaw-Client`` / session_id are
+#: resolved (env-first). See ``docs/guides/env-vars-reference.md``.
+AGENT_NAME_ENV_VAR: str = "TOTALRECLAW_AGENT_NAME"
+
+#: Hard cap on the persisted agent-instance name — bounds blob growth and
+#: avoids a pathological name blowing past the 512-char text budget. Names
+#: longer than this are truncated at store time.
+AGENT_NAME_MAX_LEN: int = 64
+
+
+def resolve_agent_name(explicit: Optional[str] = None) -> Optional[str]:
+    """Resolve the agent-instance name for a memory write (issue #317).
+
+    Precedence (mirrors ``X-TotalReclaw-Client`` / session_id resolution):
+
+      1. Explicit ``explicit`` argument (an API/tool caller passed a name).
+      2. ``TOTALRECLAW_AGENT_NAME`` env var.
+      3. ``None`` — unset → the write behaves exactly as before (client type
+         only; no ``agent_name`` key is written to the blob).
+
+    NOTE (capture source, #317 STOP-fork): the Hermes runtime does **not**
+    hand its own instance/agent name to the plugin — the ``ctx`` object passed
+    to ``register()`` exposes only ``register_tool`` / ``register_hook`` and no
+    agent-name attribute. Reading the host's instance name would require new
+    host coupling, which is deliberately out of scope. The env var is the sole
+    capture surface until a product decision is made.
+
+    A blank / whitespace-only value resolves to ``None`` (treated as unset).
+    The resolved name is stripped and truncated to :data:`AGENT_NAME_MAX_LEN`.
+    """
+    raw = explicit if explicit is not None else os.environ.get(AGENT_NAME_ENV_VAR)
+    if raw is None:
+        return None
+    name = raw.strip()
+    if not name:
+        return None
+    return name[:AGENT_NAME_MAX_LEN]
+
+
+def compose_provenance_label(client: str, agent_name: Optional[str]) -> str:
+    """Render a human-facing provenance label from a client type + agent name.
+
+    ``compose_provenance_label("Hermes", "John") == "John (Hermes)"``;
+    ``compose_provenance_label("Hermes", None) == "Hermes"`` (backward-compat —
+    a memory with no ``agent_name`` reads exactly as today, client type only).
+
+    Shared helper so every surface (recall output, export, SPA) renders
+    provenance identically. Issue #317.
+    """
+    if agent_name:
+        return f"{agent_name} ({client})"
+    return client
+
+
 def build_canonical_claim_v1(
     fact: Any,
     importance: int,
@@ -167,6 +225,7 @@ def build_canonical_claim_v1(
     claim_id: Optional[str] = None,
     pin_status: Optional[str] = None,
     extra_metadata: Optional[Dict[str, Any]] = None,
+    agent_name: Optional[str] = None,
 ) -> str:
     """Build a v1 ``MemoryClaimV1`` JSON blob.
 
@@ -295,6 +354,21 @@ def build_canonical_claim_v1(
     canonical["schema_version"] = V1_SCHEMA_VERSION
     if volatility and volatility in VALID_MEMORY_VOLATILITIES:
         canonical["volatility"] = volatility
+    # Issue #317 — agent-instance provenance. ``agent_name`` is ADDITIVE
+    # metadata (a different axis from the v1 ``source`` field, which stays
+    # user/assistant/external/…). Carried as a top-level blob key, re-attached
+    # here for the same reason as ``volatility``/``schema_version``: the core
+    # validator uses a strict typed struct and strips keys it doesn't model.
+    # It rides the *encrypted inner blob* (not the outer protobuf), so it
+    # persists per-memory and survives decrypt on any client + the SPA, with
+    # zero on-chain/subgraph schema change. The architecturally-correct long-
+    # term home is a typed field on the core claim struct; this Python-only
+    # re-attach is forward-compatible (a future core that models the field
+    # would simply preserve it through validation). Absent → key omitted →
+    # byte-identical to the pre-#317 blob (backward-compat).
+    resolved_agent_name = resolve_agent_name(agent_name)
+    if resolved_agent_name:
+        canonical["agent_name"] = resolved_agent_name
     # am-1: Crystal-shaped debrief — re-attach structured metadata dict.
     # Same pattern as schema_version/volatility: passed through unchanged
     # since the core validator doesn't know about it.
@@ -492,6 +566,20 @@ def read_blob_unified(decrypted: str) -> Dict[str, Any]:
             "created_at": obj.get("created_at", "") if isinstance(obj.get("created_at"), str) else "",
             "schema_version": schema_version,
         })
+        # Issue #317 — surface agent-instance provenance so recall / export /
+        # SPA can render "John (Hermes)". Whitelisted here because this
+        # rebuilds a fresh metadata dict from named keys; an unlisted top-level
+        # blob key would be silently dropped on read even though it survives on
+        # the encrypted blob. The canonical location is the TOP-LEVEL blob key;
+        # only set from it when present so we don't clobber a value that a
+        # blob-level ``metadata`` dict (extra_metadata) may already carry.
+        # Absent everywhere → key defaults to None → renders exactly as today
+        # (client type only).
+        top_agent_name = obj.get("agent_name")
+        if isinstance(top_agent_name, str) and top_agent_name:
+            merged_meta["agent_name"] = top_agent_name
+        else:
+            merged_meta.setdefault("agent_name", None)
         return {
             "text": obj["text"],
             "importance": importance,

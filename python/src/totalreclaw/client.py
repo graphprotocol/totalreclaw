@@ -482,6 +482,7 @@ class TotalReclaw:
         reasoning: Optional[str] = None,
         volatility: Optional[str] = None,
         extra_metadata: Optional[dict] = None,
+        agent_name: Optional[str] = None,
     ) -> str:
         """Store a fact. Returns the fact ID.
 
@@ -520,6 +521,12 @@ class TotalReclaw:
         volatility : str, optional
             Post-extraction rescored volatility; usually left blank on
             explicit remember calls (the store path picks a default).
+        agent_name : str, optional
+            Issue #317 — user-given name of this agent instance ("John").
+            Persisted in the encrypted blob so provenance reads "John
+            (Hermes)". ``None`` (default) → resolved from
+            ``TOTALRECLAW_AGENT_NAME``; unset there too → key omitted
+            (behaves exactly as before).
         """
         await self._ensure_address()
         await self._ensure_registered()
@@ -542,6 +549,7 @@ class TotalReclaw:
             reasoning=reasoning,
             volatility=volatility,
             extra_metadata=extra_metadata,
+            agent_name=agent_name,
             eoa_private_key=self._eoa_private_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
@@ -582,6 +590,7 @@ class TotalReclaw:
                 "scope": str,                  # default "unspecified"
                 "reasoning": str,              # optional
                 "volatility": str,             # optional
+                "agent_name": str,             # optional (#317); None→env
             }
 
         Parameters

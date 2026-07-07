@@ -138,6 +138,18 @@ class TestRerank:
         results = rerank("only", [], cands, top_k=10)
         assert len(results) == 1
 
+    def test_agent_name_metadata_passthrough(self) -> None:
+        # Issue #317 — agent_name rides the #425 metadata passthrough (never
+        # sent to core; rejoined by id) so recall can render "John (Hermes)".
+        cands = [
+            RerankerCandidate(id="1", text="John set this", metadata={"agent_name": "John"}),
+            RerankerCandidate(id="2", text="no name here"),
+        ]
+        results = rerank("John", [], cands, top_k=2)
+        by_id = {r.id: r for r in results}
+        assert (by_id["1"].metadata or {}).get("agent_name") == "John"
+        assert by_id["2"].metadata is None
+
     def test_bm25_only_path_ranks_matching_doc_first(self) -> None:
         # No embeddings -> core falls back to BM25-only signal.
         cands = [

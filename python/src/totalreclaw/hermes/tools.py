@@ -211,6 +211,7 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
 async def recall(args: dict, state: "PluginState", **kwargs) -> str:
     """Search memories in TotalReclaw."""
     from totalreclaw.agent.recall import _fmt_date
+    from totalreclaw.claims_helper import compose_provenance_label  # #317
 
     client = state.get_client()
     if not client:
@@ -255,6 +256,13 @@ async def recall(args: dict, state: "PluginState", **kwargs) -> str:
                 mem["import_source"] = md["import_source"]
             if md.get("session_id"):
                 mem["session_id"] = md["session_id"]
+            # #317 — agent-instance provenance. Surface both the raw name and
+            # a composed "John (Hermes)" label so the agent/SPA can render it
+            # directly. Only present when the memory carries a name → output
+            # for pre-#317 memories is unchanged.
+            if md.get("agent_name"):
+                mem["agent_name"] = md["agent_name"]
+                mem["provenance"] = compose_provenance_label("Hermes", md["agent_name"])
             memories.append(mem)
         return json.dumps({"count": len(results), "memories": memories})
     except Exception as e:
