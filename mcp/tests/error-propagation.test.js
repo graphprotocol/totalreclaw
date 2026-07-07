@@ -31,7 +31,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         remember: jest.fn().mockRejectedValue(new Error('ECONNREFUSED: connection refused')),
       });
-      const result = await handleRemember(mockClient, { fact: 'Test fact' }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 'Test fact' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
       expect(parsed.error).toContain('ECONNREFUSED');
@@ -41,7 +41,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         remember: jest.fn().mockRejectedValue(new Error('Request timed out after 30000ms')),
       });
-      const result = await handleRemember(mockClient, { fact: 'Test fact' }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 'Test fact' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
       expect(parsed.error).toContain('timed out');
@@ -51,7 +51,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         remember: jest.fn().mockRejectedValue('string error'),
       });
-      const result = await handleRemember(mockClient, { fact: 'Test fact' }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 'Test fact' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
       expect(parsed.error).toContain('Unknown error');
@@ -61,7 +61,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         remember: jest.fn().mockRejectedValue(new Error('DB crash')),
       });
-      const result = await handleRemember(mockClient, { fact: 'Test' }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 'Test' }, 'default');
       expect(result.content).toHaveLength(1);
       expect(result.content[0].type).toBe('text');
       // Ensure it is valid JSON
@@ -80,7 +80,7 @@ describe('Error Propagation', () => {
         }),
       });
 
-      const result = await handleRemember(mockClient, {
+      const result = await handleRemember({ client: mockClient }, {
         facts: [
           { text: 'Fact A' },
           { text: 'Fact B' },
@@ -103,7 +103,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         recall: jest.fn().mockRejectedValue(new Error('ECONNREFUSED: connection refused')),
       });
-      const result = await handleRecall(mockClient, { query: 'test' }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: 'test' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.memories).toEqual([]);
       expect(parsed.error).toContain('ECONNREFUSED');
@@ -113,7 +113,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         recall: jest.fn().mockRejectedValue(new Error('Request timed out')),
       });
-      const result = await handleRecall(mockClient, { query: 'test' }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: 'test' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.memories).toEqual([]);
       expect(parsed.error).toContain('timed out');
@@ -123,7 +123,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         recall: jest.fn().mockRejectedValue(42),
       });
-      const result = await handleRecall(mockClient, { query: 'test' }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: 'test' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.memories).toEqual([]);
       expect(parsed.error).toContain('Unknown error');
@@ -133,7 +133,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         recall: jest.fn().mockRejectedValue(new Error('fail')),
       });
-      const result = await handleRecall(mockClient, { query: 'test' }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: 'test' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(typeof parsed.latency_ms).toBe('number');
       expect(parsed.latency_ms).toBeGreaterThanOrEqual(0);
@@ -147,7 +147,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         forget: jest.fn().mockRejectedValue(new Error('Storage error')),
       });
-      const result = await handleForget(mockClient, { fact_id: 'fact-123' }, 'default');
+      const result = await handleForget({ client: mockClient }, { fact_id: 'fact-123' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.error).toContain('Failed to forget');
       expect(parsed.deleted_count).toBe(0);
@@ -157,7 +157,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         recall: jest.fn().mockRejectedValue(new Error('Recall failed during forget')),
       });
-      const result = await handleForget(mockClient, { query: 'old stuff' }, 'default');
+      const result = await handleForget({ client: mockClient }, { query: 'old stuff' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.error).toContain('Failed to forget');
       expect(parsed.deleted_count).toBe(0);
@@ -189,7 +189,7 @@ describe('Error Propagation', () => {
         }),
       });
 
-      const result = await handleForget(mockClient, { query: 'test' }, 'default');
+      const result = await handleForget({ client: mockClient }, { query: 'test' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       // fact-1 succeeds, fact-2 fails silently
       expect(parsed.deleted_count).toBe(1);
@@ -205,7 +205,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         recall: jest.fn().mockRejectedValue(new Error('DB unavailable')),
       });
-      const result = await handleExport(mockClient, { format: 'json' }, 'default');
+      const result = await handleExport({ client: mockClient }, { format: 'json' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.error).toContain('Failed to export');
       expect(parsed.fact_count).toBe(0);
@@ -216,7 +216,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         recall: jest.fn().mockRejectedValue(new Error('fail')),
       });
-      const result = await handleExport(mockClient, { format: 'markdown' }, 'default');
+      const result = await handleExport({ client: mockClient }, { format: 'markdown' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.format).toBe('markdown');
       expect(typeof parsed.exported_at).toBe('string');
@@ -228,7 +228,7 @@ describe('Error Propagation', () => {
 
     it('catches JSON parse error in content', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, {
+      const result = await handleImport({ client: mockClient }, {
         content: '{invalid json!!!}',
         format: 'json',
       }, 'default');
@@ -243,7 +243,7 @@ describe('Error Propagation', () => {
         recall: jest.fn().mockResolvedValue([]),
         remember: jest.fn().mockRejectedValue(new Error('Storage full')),
       });
-      const result = await handleImport(mockClient, {
+      const result = await handleImport({ client: mockClient }, {
         content: '{"facts":[{"text":"Test fact"}]}',
         format: 'json',
       }, 'default');
@@ -261,7 +261,7 @@ describe('Error Propagation', () => {
       // handleImport calls client.recall('*', 1000) for duplicate detection;
       // if that throws, the whole import should fail
       await expect(async () => {
-        await handleImport(mockClient, {
+        await handleImport({ client: mockClient }, {
           content: '{"facts":[{"text":"Test"}]}',
           format: 'json',
         }, 'default');
@@ -283,7 +283,7 @@ describe('Error Propagation', () => {
         remember: jest.fn().mockResolvedValue('new-id'),
       });
 
-      const result = await handleImport(mockClient, {
+      const result = await handleImport({ client: mockClient }, {
         content: '{"facts":[{"text":"Existing fact"}]}',
         format: 'json',
         merge_strategy: 'overwrite',
@@ -307,7 +307,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         remember: jest.fn().mockRejectedValue(new Error('broken')),
       });
-      const result = await handleRemember(mockClient, { fact: 'test' }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 'test' }, 'default');
       expect(result.content).toBeDefined();
       expect(result.content[0].type).toBe('text');
       const parsed = JSON.parse(result.content[0].text);
@@ -318,7 +318,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         recall: jest.fn().mockRejectedValue(new Error('broken')),
       });
-      const result = await handleRecall(mockClient, { query: 'test' }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: 'test' }, 'default');
       expect(result.content).toBeDefined();
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.error).toBeDefined();
@@ -328,7 +328,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         forget: jest.fn().mockRejectedValue(new Error('broken')),
       });
-      const result = await handleForget(mockClient, { fact_id: 'x' }, 'default');
+      const result = await handleForget({ client: mockClient }, { fact_id: 'x' }, 'default');
       expect(result.content).toBeDefined();
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.error).toBeDefined();
@@ -338,7 +338,7 @@ describe('Error Propagation', () => {
       const mockClient = createMockClient({
         recall: jest.fn().mockRejectedValue(new Error('broken')),
       });
-      const result = await handleExport(mockClient, {}, 'default');
+      const result = await handleExport({ client: mockClient }, {}, 'default');
       expect(result.content).toBeDefined();
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.error).toBeDefined();

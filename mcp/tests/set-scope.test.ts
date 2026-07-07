@@ -34,8 +34,11 @@ describe('setScopeToolDefinition', () => {
     expect(enumValues.length).toBe(8);
   });
 
-  test('requires memory_id + scope', () => {
-    expect(setScopeToolDefinition.inputSchema.required).toContain('memory_id');
+  test('accepts memory_id (+ fact_id alias); requires scope', () => {
+    expect(setScopeToolDefinition.inputSchema.properties).toHaveProperty('memory_id');
+    expect(setScopeToolDefinition.inputSchema.properties).toHaveProperty('fact_id');
+    // memory_id accepts a fact_id alias, so only scope is strictly required.
+    expect(setScopeToolDefinition.inputSchema.required).not.toContain('memory_id');
     expect(setScopeToolDefinition.inputSchema.required).toContain('scope');
   });
 });
@@ -195,7 +198,7 @@ describe('executeSetScope', () => {
 
 describe('handleSetScope (HTTP mode)', () => {
   test('returns managed-service-only error', async () => {
-    const out = await handleSetScope({ memory_id: 'a', scope: 'work' });
+    const out = await handleSetScope({}, { memory_id: 'a', scope: 'work' });
     const body = JSON.parse(out.content[0].text);
     expect(body.success).toBe(false);
     expect(body.error).toMatch(/managed service/i);

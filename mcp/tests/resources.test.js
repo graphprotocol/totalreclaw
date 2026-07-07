@@ -202,7 +202,7 @@ describe('Cache behavior', () => {
     // Note: store-time dedup calls recall() once before storing to check for
     // near-duplicates, so handleRemember adds +1 recall call.
     const { handleRemember } = require('../dist/tools/remember.js');
-    await handleRemember(mockClient, { fact: 'New fact' });
+    await handleRemember({ client: mockClient }, { fact: 'New fact' });
 
     expect(cacheInvalidated).toBe(true);
 

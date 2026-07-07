@@ -25,8 +25,11 @@ describe('retypeToolDefinition', () => {
     expect(retypeToolDefinition.description.length).toBeGreaterThan(20);
   });
 
-  test('requires memory_id + new_type', () => {
-    expect(retypeToolDefinition.inputSchema.required).toContain('memory_id');
+  test('accepts memory_id (+ fact_id alias); requires new_type', () => {
+    expect(retypeToolDefinition.inputSchema.properties).toHaveProperty('memory_id');
+    expect(retypeToolDefinition.inputSchema.properties).toHaveProperty('fact_id');
+    // memory_id accepts a fact_id alias, so only new_type is strictly required.
+    expect(retypeToolDefinition.inputSchema.required).not.toContain('memory_id');
     expect(retypeToolDefinition.inputSchema.required).toContain('new_type');
   });
 
@@ -326,14 +329,14 @@ describe('executeRetype', () => {
 
 describe('handleRetype (HTTP mode)', () => {
   test('returns a not-supported error for self-hosted', async () => {
-    const out = await handleRetype({ memory_id: 'abc', new_type: 'claim' });
+    const out = await handleRetype({}, { memory_id: 'abc', new_type: 'claim' });
     const body = JSON.parse(out.content[0].text);
     expect(body.success).toBe(false);
     expect(body.error).toMatch(/managed service/i);
   });
 
   test('validates args before dispatching', async () => {
-    const out = await handleRetype({ memory_id: 'abc', new_type: 'fact' }); // invalid
+    const out = await handleRetype({}, { memory_id: 'abc', new_type: 'fact' }); // invalid
     const body = JSON.parse(out.content[0].text);
     expect(body.success).toBe(false);
     expect(body.error).toMatch(/new_type/);

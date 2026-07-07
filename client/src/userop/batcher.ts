@@ -35,6 +35,7 @@ import {
   encodeFactAsCalldata,
   ENTRYPOINT_V07_ADDRESS,
 } from "./builder";
+import { TotalReclawError, TotalReclawErrorCode } from "../types";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -141,7 +142,8 @@ async function resolveChain(chainId: number): Promise<Chain> {
     case 84532:
       return baseSepolia;
     default:
-      throw new Error(
+      throw new TotalReclawError(
+        TotalReclawErrorCode.INVALID_INPUT,
         `Unsupported chain ID ${chainId}. Supported: 100 (Gnosis), 10200 (Chiado), 84532 (Base Sepolia)`
       );
   }
@@ -181,10 +183,14 @@ export function validateBatchConfig(
   encryptedPayloads: Buffer[]
 ): void {
   if (!encryptedPayloads || encryptedPayloads.length === 0) {
-    throw new Error("Batch must contain at least 1 encrypted payload");
+    throw new TotalReclawError(
+      TotalReclawErrorCode.INVALID_INPUT,
+      "Batch must contain at least 1 encrypted payload"
+    );
   }
   if (encryptedPayloads.length > MAX_BATCH_SIZE) {
-    throw new Error(
+    throw new TotalReclawError(
+      TotalReclawErrorCode.INVALID_INPUT,
       `Batch size ${encryptedPayloads.length} exceeds maximum of ${MAX_BATCH_SIZE}. ` +
       `Split into multiple batches.`
     );
@@ -192,7 +198,10 @@ export function validateBatchConfig(
   // Validate each payload is non-empty
   for (let i = 0; i < encryptedPayloads.length; i++) {
     if (encryptedPayloads[i].length === 0) {
-      throw new Error(`Payload at index ${i} is empty`);
+      throw new TotalReclawError(
+        TotalReclawErrorCode.INVALID_INPUT,
+        `Payload at index ${i} is empty`
+      );
     }
   }
 }

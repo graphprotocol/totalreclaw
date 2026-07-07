@@ -131,7 +131,7 @@ async fn test_native_store_and_recall() {
         totalreclaw_memory::blind::generate_blind_indices("native userop test fact");
 
     let candidates =
-        search::search_candidates(&relay, &smart_account, &trapdoors, 100)
+        search::search_candidates(&relay, &trapdoors, 100)
             .await
             .unwrap_or_default();
 
@@ -261,7 +261,7 @@ async fn test_batch_store_and_recall() {
         totalreclaw_memory::blind::generate_blind_indices("batch test fact");
 
     let candidates =
-        search::search_candidates(&relay, &smart_account, &trapdoors, 100)
+        search::search_candidates(&relay, &trapdoors, 100)
             .await
             .unwrap_or_default();
 

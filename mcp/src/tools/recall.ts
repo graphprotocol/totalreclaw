@@ -1,6 +1,7 @@
 import { TotalReclaw, RerankedResult } from '@totalreclaw/client';
+import type { ToolContext } from './types.js';
 import { RECALL_TOOL_DESCRIPTION } from '../prompts.js';
-import { MEMORY_CLAIM_V1_SCHEMA_VERSION } from '../v1-types.js';
+import { readBlobUnified } from '../claims-helper.js';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 let _wasm: typeof import('@totalreclaw/core') | null = null;
@@ -65,9 +66,10 @@ export const recallToolDefinition = {
 };
 
 export async function handleRecall(
-  client: TotalReclaw,
+  ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const client = ctx.client as TotalReclaw;
   const input = args as RecallInput;
   const startTime = Date.now();
 
@@ -99,44 +101,19 @@ export async function handleRecall(
       );
     }
 
-    // Best-effort category + source extraction. v1 blobs carry `type` +
-    // `source` directly; v0 canonical blobs use `c` (short-key); plugin-legacy
-    // blobs have `metadata.type`. We surface whatever we find so callers can
-    // filter or display it.
+    // Category + source + scope via the canonical `readBlobUnified` decoder,
+    // the same one the managed (subgraph) read path uses in
+    // `handleRecallSubgraph`. Keeping both paths on one decoder means a v1
+    // claim gets an identical short-key `type` label ('pref', 'rule', ...) and
+    // provenance regardless of storage mode.
     const parsedMap = filtered.map((r: RerankedResult) => {
-      let category = 'fact';
-      let source: string | undefined;
-      let scope: string | undefined;
-      try {
-        const parsed = JSON.parse(r.fact.text) as Record<string, unknown>;
-        const v1Types = new Set<string>([
-          'claim',
-          'preference',
-          'directive',
-          'commitment',
-          'episode',
-          'summary',
-        ]);
-        const isV1 =
-          typeof parsed.text === 'string' &&
-          typeof parsed.type === 'string' &&
-          v1Types.has(String(parsed.type)) &&
-          (typeof parsed.schema_version !== 'string' ||
-            parsed.schema_version === MEMORY_CLAIM_V1_SCHEMA_VERSION);
-        if (isV1) {
-          category = String(parsed.type);
-          if (typeof parsed.source === 'string') source = parsed.source;
-          if (typeof parsed.scope === 'string') scope = parsed.scope;
-        } else if (typeof parsed.c === 'string') {
-          category = parsed.c;
-        } else if (typeof parsed.metadata === 'object' && parsed.metadata !== null) {
-          const meta = parsed.metadata as Record<string, unknown>;
-          if (typeof meta.type === 'string') category = meta.type;
-        }
-      } catch {
-        // Not a JSON blob — default to 'fact'
-      }
-      return { r, category, source, scope };
+      const doc = readBlobUnified(r.fact.text);
+      return {
+        r,
+        category: doc.category ?? 'fact',
+        source: doc.v1?.source,
+        scope: doc.v1?.scope,
+      };
     });
 
     // Source-weights off (recall alignment 2026-06-08; tie-or-worse on shipped path).

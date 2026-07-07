@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 import uuid
 
-from ..auth import verify_auth_key, hash_auth_key, AuthError
 from ..db import get_db, Database
 from ..dependencies import get_current_user
 from ..search_telemetry import telemetry_store, SearchSample
@@ -25,7 +24,11 @@ router = APIRouter(tags=["search"])
 
 class SearchRequestJSON(BaseModel):
     """JSON search request."""
-    user_id: str = Field(..., description="User's UUID", max_length=100)
+    # Legacy, optional. Ownership is enforced by the authenticated identity
+    # (``get_current_user``); a body ``user_id`` is only used as a
+    # defense-in-depth mismatch guard when the client bothers to send it.
+    # Sibling endpoints (batch-delete, export) already dropped it entirely.
+    user_id: Optional[str] = Field(None, description="User's UUID (legacy, optional)", max_length=100)
     trapdoors: List[str] = Field(..., description="Blind trapdoors (SHA-256 hashes)", max_length=1000)
     max_candidates: int = Field(3000, description="Maximum candidates to return", ge=1, le=10000)
     min_decay_score: float = Field(0.0, description="Minimum decay score filter", ge=0.0)
@@ -73,22 +76,31 @@ async def search(
     Search for facts using blind indices.
 
     The client sends:
-    - user_id: User's UUID (must match authenticated user)
+    - user_id: User's UUID (legacy, OPTIONAL — validated only if present)
     - trapdoors: List of blind trapdoors (SHA-256 hashes of LSH buckets + keywords)
     - max_candidates: Maximum number of candidates to return
     - min_decay_score: Filter by minimum decay score
 
     The server:
-    1. Validates user_id matches authenticated user
+    1. Scopes the query to the authenticated user (from get_current_user)
     2. Queries facts where blind_indices overlap with trapdoors
     3. Returns encrypted blobs for client-side re-ranking
+
+    Ownership is enforced by the data access itself: the query below is keyed
+    on the authenticated ``user_id``, never on the body-supplied value. The
+    body ``user_id`` compare is a defense-in-depth guard that rejects
+    contradictory requests; it is not the ownership boundary.
 
     The server NEVER sees the plaintext or knows what the search terms are.
     The blind indices are one-way SHA-256 hashes.
     """
     try:
-        # Validate user_id matches authenticated user
-        if request_obj.user_id != user_id:
+        # Defense-in-depth: reject requests whose body user_id contradicts the
+        # authenticated identity. The search below is scoped to the
+        # authenticated user_id regardless, so this only preserves the
+        # historical AUTH_FAILED response for mismatched requests. The guard
+        # applies ONLY when the client sends a user_id — it is now optional.
+        if request_obj.user_id is not None and request_obj.user_id != user_id:
             return SearchResponseJSON(
                 success=False,
                 error_code=ErrorCode.AUTH_FAILED,

@@ -42,17 +42,19 @@ describe('pinToolDefinition', () => {
     expect(pinToolDefinition.description.length).toBeGreaterThan(0);
   });
 
-  test('input schema is object with fact_id required', () => {
+  test('input schema accepts memory_id (canonical) + fact_id alias', () => {
     expect(pinToolDefinition.inputSchema.type).toBe('object');
+    expect(pinToolDefinition.inputSchema.properties).toHaveProperty('memory_id');
+    expect(pinToolDefinition.inputSchema.properties.memory_id.type).toBe('string');
     expect(pinToolDefinition.inputSchema.properties).toHaveProperty('fact_id');
     expect(pinToolDefinition.inputSchema.properties.fact_id.type).toBe('string');
-    expect(pinToolDefinition.inputSchema.required).toContain('fact_id');
+    // No `required`: either id works, the handler validates presence.
+    expect((pinToolDefinition.inputSchema as { required?: string[] }).required).toBeUndefined();
   });
 
   test('input schema accepts optional reason', () => {
     expect(pinToolDefinition.inputSchema.properties).toHaveProperty('reason');
     expect(pinToolDefinition.inputSchema.properties.reason.type).toBe('string');
-    expect(pinToolDefinition.inputSchema.required).not.toContain('reason');
   });
 
   test('annotations mark it as idempotent non-destructive', () => {
@@ -68,10 +70,12 @@ describe('unpinToolDefinition', () => {
     expect(unpinToolDefinition.name).toBe('totalreclaw_unpin');
   });
 
-  test('input schema has required fact_id', () => {
+  test('input schema accepts memory_id (canonical) + fact_id alias', () => {
     expect(unpinToolDefinition.inputSchema.type).toBe('object');
+    expect(unpinToolDefinition.inputSchema.properties).toHaveProperty('memory_id');
     expect(unpinToolDefinition.inputSchema.properties).toHaveProperty('fact_id');
-    expect(unpinToolDefinition.inputSchema.required).toContain('fact_id');
+    // No `required`: either id works, the handler validates presence.
+    expect((unpinToolDefinition.inputSchema as { required?: string[] }).required).toBeUndefined();
   });
 
   test('annotations', () => {
@@ -347,28 +351,28 @@ describe('executePinOperation — unpin', () => {
 
 describe('handlePin — input validation (HTTP mode, not supported)', () => {
   test('rejects missing fact_id', async () => {
-    const result = await handlePin({});
+    const result = await handlePin({}, {});
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/fact_id/i);
   });
 
   test('rejects empty string fact_id', async () => {
-    const result = await handlePin({ fact_id: '' });
+    const result = await handlePin({}, { fact_id: '' });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/fact_id/i);
   });
 
   test('rejects non-string fact_id', async () => {
-    const result = await handlePin({ fact_id: 42 });
+    const result = await handlePin({}, { fact_id: 42 });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/fact_id/i);
   });
 
   test('returns managed-service-only error for valid input in HTTP mode', async () => {
-    const result = await handlePin({ fact_id: 'some-id' });
+    const result = await handlePin({}, { fact_id: 'some-id' });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/managed service|self-hosted/i);

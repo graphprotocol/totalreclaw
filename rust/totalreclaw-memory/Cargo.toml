@@ -22,9 +22,9 @@ totalreclaw-core = { path = "../totalreclaw-core", version = "^2.1.0" }
 bip39 = "2"
 rand = "0.8"
 
-# Ethereum / ERC-4337 (signing key for submit_userop, keccak for EOA derivation)
+# Ethereum / ERC-4337 (signing key for submit_userop; keccak256 is re-used
+# from totalreclaw-core::userop rather than depending on tiny-keccak directly)
 k256 = { version = "0.13", features = ["ecdsa"] }
-tiny-keccak = { version = "2", features = ["keccak"] }
 
 # Encoding (still needed by wallet, userop, store, search)
 base64 = "0.22"
@@ -46,6 +46,10 @@ uuid = { version = "1", features = ["v7"] }
 
 # Error handling
 thiserror = "2"
+
+# Logging facade (consumer wires the concrete logger; graceful-degrade paths
+# emit diagnostics without swallowing failures silently)
+log = "0.4"
 
 # Local embeddings (feature-gated)
 ort = { version = "2.0.0-rc.12", optional = true }

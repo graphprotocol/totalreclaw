@@ -29,6 +29,7 @@
  */
 
 import type { Chain, Hex } from "viem";
+import { TotalReclawError, TotalReclawErrorCode } from "../types";
 
 // ---------------------------------------------------------------------------
 // Well-known ERC-4337 v0.7 addresses (deployed on all supported chains)
@@ -130,7 +131,8 @@ async function resolveChain(chainId: number): Promise<Chain> {
     case 84532:
       return baseSepolia;
     default:
-      throw new Error(
+      throw new TotalReclawError(
+        TotalReclawErrorCode.INVALID_INPUT,
         `Unsupported chain ID ${chainId}. Supported: 100 (Gnosis), 10200 (Chiado), 84532 (Base Sepolia)`
       );
   }

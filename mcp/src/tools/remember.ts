@@ -1,4 +1,6 @@
 import { TotalReclaw, FactMetadata, RerankedResult } from '@totalreclaw/client';
+import type { ToolContext } from './types.js';
+import { toolError } from './helpers.js';
 import {
   REMEMBER_TOOL_DESCRIPTION,
 } from '../prompts.js';
@@ -285,16 +287,36 @@ async function searchForNearDuplicatesHTTP(
 
 // ── Internal: store a single fact with dedup ──────────────────────────────────
 
+/**
+ * Options for {@link storeSingleFact}. Replaces the prior boolean/positional
+ * argument list — `isExplicitRemember` in particular read ambiguously at the
+ * call site as a bare `true`/`false`.
+ */
+interface StoreSingleFactOptions {
+  text: string;
+  importance: number;
+  /** Memory type token (v1 or legacy v0); normalized downstream. */
+  type?: string;
+  /** True for single-fact explicit remember (always supersede on dedup). */
+  isExplicitRemember: boolean;
+  expiresAt?: string;
+  scope?: string;
+  reasoning?: string;
+}
+
 async function storeSingleFact(
   client: TotalReclaw,
-  text: string,
-  importance: number,
-  factType: string | undefined,
-  isExplicitRemember: boolean,
-  expiresAt?: string,
-  scope?: string,
-  reasoning?: string,
+  opts: StoreSingleFactOptions,
 ): Promise<RememberOutput> {
+  const {
+    text,
+    importance,
+    type: factType,
+    isExplicitRemember,
+    expiresAt,
+    scope,
+    reasoning,
+  } = opts;
   // Store-time dedup check (HTTP mode)
   let supersededId: string | undefined;
   let effectiveImportance = importance;
@@ -372,9 +394,10 @@ async function storeSingleFact(
 // ── Handler ──────────────────────────────────────────────────────────────────
 
 export async function handleRemember(
-  client: TotalReclaw,
+  ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const client = ctx.client as TotalReclaw;
   const input = args as Record<string, unknown>;
 
   // Determine if this is batch or single mode
@@ -382,15 +405,7 @@ export async function handleRemember(
   const isSingle = typeof input?.fact === 'string';
 
   if (!isBatch && !isSingle) {
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          success: false,
-          error: 'Invalid input: provide either a "fact" string or a "facts" array',
-        }),
-      }],
-    };
+    return toolError('Invalid input: provide either a "fact" string or a "facts" array');
   }
 
   // ── Batch mode ─────────────────────────────────────────────────────────────
@@ -427,28 +442,26 @@ export async function handleRemember(
       }
 
       try {
-        const result = await storeSingleFact(
-          client,
-          f.text,
-          imp,
-          f.type,
-          false, // batch mode: not explicit remember
-          undefined, // expiresAt (not in batch item)
-          f.scope,
-          f.reasoning,
-        );
+        const storeResult = await storeSingleFact(client, {
+          text: f.text,
+          importance: imp,
+          type: f.type,
+          isExplicitRemember: false, // batch mode: not explicit remember
+          scope: f.scope,
+          reasoning: f.reasoning,
+        });
 
-        if (result.action === 'skipped' && result.was_duplicate) {
+        if (storeResult.action === 'skipped' && storeResult.was_duplicate) {
           dedupSkipped++;
           skipped++;
-        } else if (result.action === 'updated') {
+        } else if (storeResult.action === 'updated') {
           dedupSuperseded++;
           created++;
         } else {
           created++;
         }
 
-        results.push(result);
+        results.push(storeResult);
       } catch (error) {
         results.push({
           success: false,
@@ -486,28 +499,12 @@ export async function handleRemember(
   const singleInput = input as unknown as RememberInputSingle;
 
   if (!singleInput.fact || typeof singleInput.fact !== 'string' || singleInput.fact.trim().length === 0) {
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          success: false,
-          error: 'Invalid input: fact is required and must be a non-empty string',
-        }),
-      }],
-    };
+    return toolError('Invalid input: fact is required and must be a non-empty string');
   }
 
   if (singleInput.importance !== undefined) {
     if (typeof singleInput.importance !== 'number' || singleInput.importance < 1 || singleInput.importance > 10) {
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            success: false,
-            error: 'Invalid input: importance must be a number between 1 and 10',
-          }),
-        }],
-      };
+      return toolError('Invalid input: importance must be a number between 1 and 10');
     }
   }
 
@@ -526,16 +523,15 @@ export async function handleRemember(
       ? ((singleInput.metadata as Record<string, unknown>).reasoning as string)
       : undefined;
 
-    const result = await storeSingleFact(
-      client,
-      singleInput.fact,
-      singleInput.importance ?? 5,
-      singleInput.metadata?.type,
-      true, // single-fact mode: explicit remember, always supersede
-      singleInput.metadata?.expires_at,
-      topLevelScope ?? metaScope,
-      topLevelReasoning ?? metaReasoning,
-    );
+    const storeResult = await storeSingleFact(client, {
+      text: singleInput.fact,
+      importance: singleInput.importance ?? 5,
+      type: singleInput.metadata?.type,
+      isExplicitRemember: true, // single-fact mode: explicit remember, always supersede
+      expiresAt: singleInput.metadata?.expires_at,
+      scope: topLevelScope ?? metaScope,
+      reasoning: topLevelReasoning ?? metaReasoning,
+    });
 
     if (_onRememberCallback) {
       _onRememberCallback();
@@ -544,19 +540,11 @@ export async function handleRemember(
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(result),
+        text: JSON.stringify(storeResult),
       }],
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error occurred';
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          success: false,
-          error: `Failed to store memory: ${message}`,
-        }),
-      }],
-    };
+    return toolError(`Failed to store memory: ${message}`);
   }
 }

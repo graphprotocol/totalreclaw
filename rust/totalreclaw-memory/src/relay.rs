@@ -7,6 +7,53 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
+/// Client identifier sent on every relay request (`X-TotalReclaw-Client`).
+///
+/// Per the CLAUDE.md feature matrix, the ZeroClaw Rust client reports as
+/// `rust-client:zeroclaw`. This constant is the single source of truth for
+/// both the GraphQL/HTTP client and the native UserOp bundler submitter.
+pub(crate) const RELAY_CLIENT_ID: &str = "rust-client:zeroclaw";
+
+/// Build the standard relay request headers shared by the HTTP/GraphQL client
+/// and the native UserOp submitter in [`crate::userop`].
+///
+/// `Authorization` and `X-Wallet-Address` are only inserted when non-empty;
+/// `is_test` adds the `X-TotalReclaw-Test` marker.
+pub(crate) fn build_relay_headers(
+    auth_key_hex: &str,
+    wallet_address: &str,
+    is_test: bool,
+) -> reqwest::header::HeaderMap {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("X-TotalReclaw-Client", RELAY_CLIENT_ID.parse().unwrap());
+    if !auth_key_hex.is_empty() {
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", auth_key_hex).parse().unwrap(),
+        );
+    }
+    if !wallet_address.is_empty() {
+        headers.insert("X-Wallet-Address", wallet_address.parse().unwrap());
+    }
+    if is_test {
+        headers.insert("X-TotalReclaw-Test", "true".parse().unwrap());
+    }
+    headers
+}
+
+/// Invalidate the billing cache and build the canonical quota-exceeded error.
+///
+/// Call from any relay path that observes an HTTP 403 so cache invalidation is
+/// applied consistently across read (GraphQL), write (bundler), billing, and
+/// checkout requests.
+pub(crate) fn quota_exceeded(server_text: &str) -> Error {
+    crate::billing::invalidate_cache();
+    Error::QuotaExceeded(format!(
+        "Quota exceeded (403). Billing cache invalidated. Upgrade to Pro for unlimited storage. Server: {}",
+        server_text
+    ))
+}
+
 /// Relay client for TotalReclaw managed service.
 #[derive(Clone)]
 pub struct RelayClient {
@@ -92,27 +139,7 @@ impl RelayClient {
 
     /// Common headers for all relay requests.
     fn headers(&self) -> reqwest::header::HeaderMap {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            "X-TotalReclaw-Client",
-            "rust-client:zeroclaw".parse().unwrap(),
-        );
-        if !self.auth_key_hex.is_empty() {
-            headers.insert(
-                "Authorization",
-                format!("Bearer {}", self.auth_key_hex).parse().unwrap(),
-            );
-        }
-        if !self.wallet_address.is_empty() {
-            headers.insert(
-                "X-Wallet-Address",
-                self.wallet_address.parse().unwrap(),
-            );
-        }
-        if self.is_test {
-            headers.insert("X-TotalReclaw-Test", "true".parse().unwrap());
-        }
-        headers
+        build_relay_headers(&self.auth_key_hex, &self.wallet_address, self.is_test)
     }
 
     /// Register with the relay server. Idempotent.
@@ -197,12 +224,8 @@ impl RelayClient {
 
         if resp.status().as_u16() == 403 {
             // Quota exceeded — invalidate billing cache and return specific error
-            crate::billing::invalidate_cache();
             let text = resp.text().await.unwrap_or_default();
-            return Err(Error::QuotaExceeded(format!(
-                "Quota exceeded (403). Billing cache invalidated. Upgrade to Pro for unlimited storage. Server: {}",
-                text
-            )));
+            return Err(quota_exceeded(&text));
         }
 
         if !resp.status().is_success() {
@@ -278,6 +301,11 @@ impl RelayClient {
             .await
             .map_err(|e| Error::Http(e.to_string()))?;
 
+        if resp.status().as_u16() == 403 {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(quota_exceeded(&text));
+        }
+
         let body: serde_json::Value = resp
             .json()
             .await
@@ -321,6 +349,11 @@ impl RelayClient {
             .await
             .map_err(|e| Error::Http(e.to_string()))?;
 
+        if resp.status().as_u16() == 403 {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(quota_exceeded(&text));
+        }
+
         resp.json()
             .await
             .map_err(|e| Error::Http(e.to_string()))
@@ -339,6 +372,11 @@ impl RelayClient {
             .send()
             .await
             .map_err(|e| Error::Http(e.to_string()))?;
+
+        if resp.status().as_u16() == 403 {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(quota_exceeded(&text));
+        }
 
         let body: serde_json::Value = resp
             .json()

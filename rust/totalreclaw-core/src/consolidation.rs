@@ -212,7 +212,7 @@ fn pick_representative_from_refs(candidates: &[&ConsolidationCandidate]) -> Opti
 /// # Deprecation
 ///
 /// Use [`find_best_near_duplicate`] instead, which returns the highest-similarity
-/// match rather than the first match found.
+/// match rather than the first match found. Scheduled for removal in core 3.0.
 ///
 /// # Arguments
 /// - `new_embedding` — Embedding vector of the new fact.
@@ -221,7 +221,7 @@ fn pick_representative_from_refs(candidates: &[&ConsolidationCandidate]) -> Opti
 ///
 /// # Returns
 /// `Some(fact_id)` if a near-duplicate is found, `None` otherwise.
-#[deprecated(since = "1.5.0", note = "Use find_best_near_duplicate instead, which returns the highest-similarity match")]
+#[deprecated(since = "1.5.0", note = "Use find_best_near_duplicate instead; scheduled for removal in core 3.0")]
 pub fn find_near_duplicate(
     new_embedding: &[f32],
     existing: &[(String, Vec<f32>)],
@@ -265,6 +265,10 @@ struct ExistingFactEntry {
 }
 
 /// WASM binding for `find_near_duplicate` (deprecated — use `findBestNearDuplicate`).
+///
+/// **Deprecated since core 1.5.0; scheduled for removal in core 3.0.** Returns
+/// the *first* match above `threshold`, not the highest-similarity one. Migrate
+/// npm consumers to `findBestNearDuplicate`.
 ///
 /// `new_embedding`: Float32Array of the new fact's embedding.
 /// `existing_json`: JSON array of `{ id: string, embedding: number[] }` objects.
@@ -382,6 +386,10 @@ pub fn wasm_should_supersede(new_importance: f64, existing_importance: f64) -> b
 // ---------------------------------------------------------------------------
 
 /// PyO3 binding for `find_near_duplicate` (deprecated — use `find_best_near_duplicate`).
+///
+/// **Deprecated since core 1.5.0; scheduled for removal in core 3.0.** Returns
+/// the *first* match above `threshold`, not the highest-similarity one. Migrate
+/// PyPI consumers to `find_best_near_duplicate`.
 ///
 /// Args:
 ///     new_embedding: List of floats (embedding vector of the new fact).

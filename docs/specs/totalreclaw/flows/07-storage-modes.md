@@ -109,7 +109,6 @@ The authoritative feature matrix lives in `CLAUDE.md` §"Storage Mode Support." 
 | Store-time supersede dedup | yes (via tombstone) | yes (via delete) |
 | Client UserOp batching (executeBatch) | yes | — (not applicable) |
 | Billing / quotas | yes | — (unlimited) |
-| Testnet-to-mainnet migration | yes (`totalreclaw_migrate`) | — (not applicable) |
 | Hot cache | yes | — (local backend is already fast) |
 | Digest injection | yes | yes |
 | KG contradiction detection | yes | yes |

@@ -12,8 +12,6 @@ The server NEVER sees the recovery phrase or encryption key.
 import hashlib
 import hmac
 import secrets
-from typing import Optional, Tuple
-from dataclasses import dataclass
 
 from hkdf import Hkdf as HKDF
 
@@ -22,14 +20,6 @@ from hkdf import Hkdf as HKDF
 AUTH_KEY_INFO = b"totalreclaw-auth-key-v1"
 HKDF_LENGTH = 32  # 256 bits
 SALT_LENGTH = 32  # 256 bits
-
-
-@dataclass
-class AuthCredentials:
-    """Authentication credentials for a user."""
-    user_id: str
-    auth_key_hash: bytes
-    salt: bytes
 
 
 def generate_salt() -> bytes:
@@ -111,61 +101,3 @@ class AuthError(Exception):
         self.message = message
         self.code = code
         super().__init__(message)
-
-
-class AuthMiddleware:
-    """
-    Authentication middleware for FastAPI.
-
-    Validates Authorization header and extracts user_id for request handlers.
-    """
-
-    def __init__(self, db_session):
-        """
-        Initialize auth middleware.
-
-        Args:
-            db_session: Database session for user lookup
-        """
-        self.db = db_session
-
-    async def authenticate(self, authorization: Optional[str]) -> AuthCredentials:
-        """
-        Authenticate a request using Authorization header.
-
-        Args:
-            authorization: The Authorization header value (e.g., "Bearer <auth_key>")
-
-        Returns:
-            AuthCredentials if authentication succeeds
-
-        Raises:
-            AuthError: If authentication fails
-        """
-        if not authorization:
-            raise AuthError("Missing Authorization header", "UNAUTHORIZED")
-
-        # Parse Bearer token
-        parts = authorization.split()
-        if len(parts) != 2 or parts[0].lower() != "bearer":
-            raise AuthError("Invalid Authorization header format", "UNAUTHORIZED")
-
-        try:
-            # Decode hex-encoded auth key
-            auth_key = bytes.fromhex(parts[1])
-        except ValueError:
-            raise AuthError("Invalid auth key format", "UNAUTHORIZED")
-
-        # Hash the auth key and look up user
-        auth_key_hash = hash_auth_key(auth_key)
-
-        # Look up user by auth_key_hash
-        user = await self.db.get_user_by_auth_hash(auth_key_hash)
-        if not user:
-            raise AuthError("Invalid credentials", "UNAUTHORIZED")
-
-        return AuthCredentials(
-            user_id=user.user_id,
-            auth_key_hash=user.auth_key_hash,
-            salt=user.salt
-        )

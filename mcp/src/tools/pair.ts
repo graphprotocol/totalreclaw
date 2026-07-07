@@ -48,6 +48,7 @@ import * as os from 'node:os';
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
+import type { ToolContext } from './types.js';
 import { PAIR_TOOL_DESCRIPTION } from '../prompts.js';
 import {
   openRemotePairSession,
@@ -190,11 +191,11 @@ async function registerUser(
     }
     throw new Error(`register failed (HTTP ${response.status}): ${body || response.statusText}`);
   }
-  const data = (await response.json()) as { user_id?: string };
-  if (!data.user_id) {
+  const pairJson = (await response.json()) as { user_id?: string };
+  if (!pairJson.user_id) {
     throw new Error('register: response missing user_id');
   }
-  return data.user_id;
+  return pairJson.user_id;
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +340,7 @@ export interface HandlePairOptions {
  * as a background task.
  */
 export async function handlePair(
+  _ctx: ToolContext,
   args: Record<string, unknown> | undefined,
   opts: HandlePairOptions = {},
 ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {

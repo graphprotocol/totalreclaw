@@ -12,6 +12,7 @@
  */
 
 import { resolve } from 'node:path';
+import type { ToolContext } from './types.js';
 import type { ImportSource, AdapterParseResult, ConversationChunk } from './import-from.js';
 
 // ---------------------------------------------------------------------------
@@ -101,6 +102,7 @@ async function loadAdapter(source: string): Promise<ImportAdapter> {
 // ---------------------------------------------------------------------------
 
 export async function handleImportBatch(
+  _ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const input = args as {

@@ -221,7 +221,8 @@ pub fn get_extraction_interval(cache: Option<&BillingCache>) -> u32 {
 
 /// Get the max facts per extraction.
 ///
-/// Priority: server-side config > default (15).
+/// Priority: server-side config (from billing cache) >
+/// `TOTALRECLAW_MAX_FACTS_PER_EXTRACTION` env var > default (15).
 pub fn get_max_facts_per_extraction(cache: Option<&BillingCache>) -> u32 {
     if let Some(c) = cache {
         if let Some(max) = c.features.max_facts_per_extraction {

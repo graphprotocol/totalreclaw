@@ -1,25 +1,8 @@
 #!/usr/bin/env node
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  GetPromptRequestSchema,
-  ListPromptsRequestSchema,
-  ListResourcesRequestSchema,
-  ReadResourceRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
 
 import { TotalReclaw } from '@totalreclaw/client';
 import {
-  rememberToolDefinition,
-  recallToolDefinition,
-  forgetToolDefinition,
-  exportToolDefinition,
-  importToolDefinition,
-  importFromToolDefinition,
-  importBatchToolDefinition,
-  consolidateToolDefinition,
   handleRemember,
   handleRecall,
   handleForget,
@@ -28,29 +11,16 @@ import {
   handleImportFrom,
   handleImportBatch,
   handleConsolidate,
-  statusToolDefinition,
-  upgradeToolDefinition,
-  migrateToolDefinition,
   handleStatus,
   handleUpgrade,
-  fetchAllFactsFromSubgraph,
-  fetchMainnetContentFps,
-  fetchBlindIndicesForFacts,
-  checkBillingTier,
-  type SubgraphFactFull,
-  type MigrationResult,
-  debriefToolDefinition,
   handleDebrief,
   parseDebriefResponse,
-  supportToolDefinition,
   handleSupport,
-  accountToolDefinition,
   handleAccount,
-  pairToolDefinition,
   handlePair,
 } from './tools/index.js';
 import { getLastBillingResponse } from './tools/status.js';
-import { setOnRememberCallback } from './tools/remember.js';
+import type { ToolContext, ToolResponse } from './tools/types.js';
 import {
   findNearDuplicate,
   shouldSupersede,
@@ -61,15 +31,15 @@ import {
   type DecryptedCandidate,
 } from './consolidation.js';
 import {
-  SERVER_INSTRUCTIONS,
-  PROMPT_DEFINITIONS,
-  getPromptMessages,
-} from './prompts.js';
-import {
   memoryContextResource,
-  readMemoryContext,
   invalidateMemoryContextCache,
 } from './resources/index.js';
+import { createTotalReclawServer } from './server-setup.js';
+import {
+  createCallToolHandler,
+  type HandlerBundle,
+  type ServerMode,
+} from './dispatch.js';
 
 // Subgraph imports (lazy usage -- only when managed service is active)
 import {
@@ -104,8 +74,6 @@ import {
   type ResolutionDecision,
 } from './contradiction-sync.js';
 import {
-  pinToolDefinition,
-  unpinToolDefinition,
   handlePin,
   handleUnpin,
   handlePinSubgraphWithDeps,
@@ -113,13 +81,11 @@ import {
   type PinOpDeps,
 } from './tools/pin.js';
 import {
-  retypeToolDefinition,
   handleRetype,
   handleRetypeWithDeps,
   type MetadataOpDeps,
 } from './tools/retype.js';
 import {
-  setScopeToolDefinition,
   handleSetScope,
   handleSetScopeWithDeps,
 } from './tools/set-scope.js';
@@ -222,8 +188,8 @@ function resolveMnemonic(): string | undefined {
 
   // Priority 2: credentials.json mnemonic field
   try {
-    const data = fs.readFileSync(CREDENTIALS_PATH, 'utf-8');
-    const parsed = JSON.parse(data) as { mnemonic?: string };
+    const credentialsRaw = fs.readFileSync(CREDENTIALS_PATH, 'utf-8');
+    const parsed = JSON.parse(credentialsRaw) as { mnemonic?: string };
     if (parsed.mnemonic && typeof parsed.mnemonic === 'string') {
       const trimmed = parsed.mnemonic.trim();
       const words = trimmed.split(/\s+/);
@@ -304,8 +270,7 @@ function getMaxCandidatePool(k: number): number {
 }
 
 // ── Server mode detection ───────────────────────────────────────────────────
-
-type ServerMode = 'http' | 'subgraph' | 'unconfigured';
+// `ServerMode` is defined alongside the dispatch table in `./dispatch.js`.
 
 interface SubgraphState {
   mode: 'subgraph';
@@ -493,8 +458,8 @@ interface StoredCredentials {
 
 async function loadCredentials(path: string): Promise<{ userId: string; salt: Buffer }> {
   const fs = await import('fs/promises');
-  const data = await fs.readFile(path, 'utf-8');
-  const parsed = JSON.parse(data) as StoredCredentials;
+  const fileContents = await fs.readFile(path, 'utf-8');
+  const parsed = JSON.parse(fileContents) as StoredCredentials;
   return {
     userId: parsed.userId,
     salt: Buffer.from(parsed.salt, 'hex'),
@@ -505,11 +470,11 @@ async function saveCredentials(path: string, credentials: { userId: string; salt
   const fs = await import('fs/promises');
   const dir = path.substring(0, path.lastIndexOf('/'));
   await fs.mkdir(dir, { recursive: true }).catch(() => {});
-  const data: StoredCredentials = {
+  const storedCredentials: StoredCredentials = {
     userId: credentials.userId,
     salt: credentials.salt.toString('hex'),
   };
-  await fs.writeFile(path, JSON.stringify(data, null, 2), 'utf-8');
+  await fs.writeFile(path, JSON.stringify(storedCredentials, null, 2), 'utf-8');
 }
 
 // ── Subgraph handlers ───────────────────────────────────────────────────────
@@ -1474,8 +1439,8 @@ function buildPinDepsFromState(state: SubgraphState): PinOpDeps {
         authKeyHex: Buffer.from(state.authKey).toString('hex'),
         walletAddress: state.smartAccountAddress,
       });
-      const result = await submitFactBatchOnChain(payloads, config);
-      return { txHash: result.txHash, success: result.success };
+      const batchResult = await submitFactBatchOnChain(payloads, config);
+      return { txHash: batchResult.txHash, success: batchResult.success };
     },
     generateIndices: async (text: string, entityNames: string[]) => {
       if (!text) return { blindIndices: [] };
@@ -1497,12 +1462,12 @@ function buildPinDepsFromState(state: SubgraphState): PinOpDeps {
     },
     confirmIndexed: async (factId: string, expect?: 'active' | 'inactive') => {
       const subgraphUrl = process.env.TOTALRECLAW_SUBGRAPH_URL || `${state.serverUrl}/v1/subgraph`;
-      const result = await confirmIndexed(factId, {
+      const confirmation = await confirmIndexed(factId, {
         subgraphUrl,
         authKeyHex: Buffer.from(state.authKey).toString('hex'),
         expect,
       });
-      return result.indexed;
+      return confirmation.indexed;
     },
   };
 }
@@ -1540,277 +1505,6 @@ async function handleUnpinSubgraph(
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const deps = buildPinDepsFromState(state);
   return await handleUnpinSubgraphWithDeps(args, deps);
-}
-
-// ── Migration handler ─────────────────────────────────────────────────────────
-
-/** Maximum facts per UserOp batch during migration */
-const MIGRATION_BATCH_SIZE = 15;
-
-/**
- * Handle the testnet-to-mainnet migration tool call.
- *
- * This function:
- *   1. Validates the user is on subgraph mode with Pro tier
- *   2. Fetches all active facts from the testnet (Base Sepolia) subgraph
- *   3. Fetches existing mainnet content fingerprints for idempotency
- *   4. In dry-run mode: returns a preview of what would be migrated
- *   5. In confirm mode: re-encodes and batch-submits facts to mainnet
- */
-async function handleMigrateFromIndex(
-  args: unknown,
-): Promise<{ content: Array<{ type: string; text: string }> }> {
-  const input = args as Record<string, unknown>;
-  const confirm = input?.confirm === true;
-
-  // Must be in subgraph mode
-  if (!subgraphState) {
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          success: false,
-          error: 'Migration is only available with the managed service (subgraph mode). Self-hosted mode does not use chain-based storage.',
-        }),
-      }],
-    };
-  }
-
-  const authKeyHex = Buffer.from(subgraphState.authKey).toString('hex');
-
-  // 1. Check billing tier — must be Pro
-  const billing = await checkBillingTier(SERVER_URL, subgraphState.smartAccountAddress, authKeyHex);
-  if (billing.error) {
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          success: false,
-          error: `Failed to verify billing tier: ${billing.error}`,
-        }),
-      }],
-    };
-  }
-  if (billing.tier !== 'pro') {
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          success: false,
-          error: 'Migration requires Pro tier. Use totalreclaw_upgrade to upgrade first, then run migration.',
-          current_tier: billing.tier,
-        }),
-      }],
-    };
-  }
-
-  // 2. Fetch all active facts from the TESTNET subgraph
-  //    The relay routes Pro users to the mainnet subgraph, so we need to
-  //    explicitly request the testnet subgraph via the ?chain=testnet query param.
-  const testnetSubgraphUrl = `${SERVER_URL.replace(/\/+$/, '')}/v1/subgraph?chain=testnet`;
-  const mainnetSubgraphUrl = `${SERVER_URL.replace(/\/+$/, '')}/v1/subgraph`;
-
-  console.error(`[migrate] Fetching testnet facts for owner ${subgraphState.smartAccountAddress}...`);
-  const testnetFacts = await fetchAllFactsFromSubgraph(
-    testnetSubgraphUrl,
-    subgraphState.smartAccountAddress,
-    authKeyHex,
-  );
-
-  if (testnetFacts.length === 0) {
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          success: true,
-          mode: 'dry_run',
-          testnet_facts: 0,
-          already_on_mainnet: 0,
-          to_migrate: 0,
-          migrated: 0,
-          failed_batches: 0,
-          batch_results: [],
-          message: 'No facts found on testnet. Nothing to migrate.',
-        } satisfies MigrationResult),
-      }],
-    };
-  }
-
-  // 3. Check which facts already exist on mainnet (by contentFp)
-  console.error(`[migrate] Checking mainnet for existing facts...`);
-  const mainnetFps = await fetchMainnetContentFps(
-    mainnetSubgraphUrl,
-    subgraphState.smartAccountAddress,
-    authKeyHex,
-  );
-
-  // Filter to facts that need migration
-  const factsToMigrate = testnetFacts.filter(f => {
-    if (!f.contentFp) return true; // No fingerprint — migrate it
-    return !mainnetFps.has(f.contentFp);
-  });
-
-  const alreadyOnMainnet = testnetFacts.length - factsToMigrate.length;
-
-  console.error(`[migrate] Testnet: ${testnetFacts.length} facts, already on mainnet: ${alreadyOnMainnet}, to migrate: ${factsToMigrate.length}`);
-
-  // 4. Dry-run mode: just report
-  if (!confirm) {
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          success: true,
-          mode: 'dry_run',
-          testnet_facts: testnetFacts.length,
-          already_on_mainnet: alreadyOnMainnet,
-          to_migrate: factsToMigrate.length,
-          migrated: 0,
-          failed_batches: 0,
-          batch_results: [],
-          message: factsToMigrate.length === 0
-            ? `All ${testnetFacts.length} testnet facts already exist on mainnet. Nothing to migrate.`
-            : `Found ${factsToMigrate.length} facts to migrate from testnet to Gnosis mainnet (${alreadyOnMainnet} already on mainnet). Call with confirm=true to proceed.`,
-        } satisfies MigrationResult),
-      }],
-    };
-  }
-
-  // 5. Execute migration: re-encode and batch-submit
-  if (factsToMigrate.length === 0) {
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          success: true,
-          mode: 'executed',
-          testnet_facts: testnetFacts.length,
-          already_on_mainnet: alreadyOnMainnet,
-          to_migrate: 0,
-          migrated: 0,
-          failed_batches: 0,
-          batch_results: [],
-          message: `All ${testnetFacts.length} testnet facts already exist on mainnet. Nothing to migrate.`,
-        } satisfies MigrationResult),
-      }],
-    };
-  }
-
-  // Fetch blind indices from testnet for all facts to migrate.
-  // The protobuf payload must include blind indices for the subgraph to create
-  // BlindIndex entities on mainnet (required for search to work).
-  console.error(`[migrate] Fetching blind indices for ${factsToMigrate.length} facts...`);
-  const factIdsToMigrate = factsToMigrate.map(f => f.id);
-  const blindIndicesMap = await fetchBlindIndicesForFacts(
-    testnetSubgraphUrl,
-    factIdsToMigrate,
-    authKeyHex,
-  );
-
-  // Build protobuf payloads with blind indices
-  const finalPayloads: Buffer[] = [];
-  for (const fact of factsToMigrate) {
-    const blobHex = fact.encryptedBlob.startsWith('0x')
-      ? fact.encryptedBlob.slice(2)
-      : fact.encryptedBlob;
-
-    const indices = blindIndicesMap.get(fact.id) || [];
-
-    const factPayload: FactPayload = {
-      id: fact.id,
-      timestamp: new Date().toISOString(),
-      owner: subgraphState.smartAccountAddress,
-      encryptedBlob: blobHex,
-      blindIndices: indices,
-      decayScore: parseFloat(fact.decayScore) || 0.5,
-      source: fact.source || 'migration',
-      contentFp: fact.contentFp || '',
-      agentId: fact.agentId || 'mcp-server',
-      encryptedEmbedding: fact.encryptedEmbedding || undefined,
-    };
-
-    finalPayloads.push(encodeFactProtobuf(factPayload));
-  }
-
-  // Batch into groups of MIGRATION_BATCH_SIZE
-  const batches: Buffer[][] = [];
-  for (let i = 0; i < finalPayloads.length; i += MIGRATION_BATCH_SIZE) {
-    batches.push(finalPayloads.slice(i, i + MIGRATION_BATCH_SIZE));
-  }
-
-  console.error(`[migrate] Submitting ${finalPayloads.length} facts in ${batches.length} batch(es)...`);
-
-  const batchConfig = getSubgraphConfig({
-    relayUrl: subgraphState.serverUrl,
-    mnemonic: subgraphState.mnemonic,
-    authKeyHex,
-    walletAddress: subgraphState.smartAccountAddress,
-  });
-
-  let migrated = 0;
-  let failedBatches = 0;
-  const batchResults: MigrationResult['batch_results'] = [];
-
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
-    const batchNum = i + 1;
-    console.error(`[migrate] Batch ${batchNum}/${batches.length} (${batch.length} facts)...`);
-
-    try {
-      const result = await submitFactBatchOnChain(batch, batchConfig);
-      if (result.success) {
-        migrated += batch.length;
-        batchResults.push({
-          batch_number: batchNum,
-          size: batch.length,
-          success: true,
-          tx_hash: result.txHash,
-        });
-        console.error(`[migrate] Batch ${batchNum} succeeded (tx=${result.txHash.slice(0, 10)}...)`);
-      } else {
-        failedBatches++;
-        batchResults.push({
-          batch_number: batchNum,
-          size: batch.length,
-          success: false,
-          tx_hash: result.txHash,
-          error: 'UserOp included but marked as failed',
-        });
-        console.error(`[migrate] Batch ${batchNum} included but failed (tx=${result.txHash.slice(0, 10)}...)`);
-      }
-    } catch (err) {
-      failedBatches++;
-      const errMsg = err instanceof Error ? err.message : String(err);
-      batchResults.push({
-        batch_number: batchNum,
-        size: batch.length,
-        success: false,
-        error: errMsg,
-      });
-      console.error(`[migrate] Batch ${batchNum} error: ${errMsg}`);
-    }
-  }
-
-  const resultMessage = failedBatches === 0
-    ? `Successfully migrated ${migrated} memories from testnet to Gnosis mainnet in ${batches.length} batch(es).`
-    : `Migrated ${migrated}/${factsToMigrate.length} memories. ${failedBatches} batch(es) failed — re-run to retry (idempotent).`;
-
-  return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify({
-        success: failedBatches === 0,
-        mode: 'executed',
-        testnet_facts: testnetFacts.length,
-        already_on_mainnet: alreadyOnMainnet,
-        to_migrate: factsToMigrate.length,
-        migrated,
-        failed_batches: failedBatches,
-        batch_results: batchResults,
-        message: resultMessage,
-      } satisfies MigrationResult),
-    }],
-  };
 }
 
 // ── Auth error helper ────────────────────────────────────────────────────────
@@ -1873,34 +1567,19 @@ function quotaExceededResponse(): { content: Array<{ type: string; text: string 
 // generator) and paste it into the MCP host config themselves. No tool path
 // exists for the agent to ever see the phrase.
 
-// ── Layer 1: Server with instructions ────────────────────────────────────────
+// ── Server wiring ─────────────────────────────────────────────────────────
+// The MCP `Server` is constructed in `main()` via `createTotalReclawServer`
+// (see `./server-setup.js`) and its request routing is delegated to the single
+// dispatch table in `./dispatch.js`. This section builds the mode-appropriate
+// handler bundles + cross-cutting deps the dispatcher needs.
 
-const server = new Server(
-  { name: 'totalreclaw', version: '1.0.0' },
-  {
-    capabilities: {
-      tools: {},
-      prompts: {},
-      resources: { subscribe: true, listChanged: true },
-    },
-    instructions: SERVER_INSTRUCTIONS,
-  }
-);
-
-// ── Wire up cache invalidation ───────────────────────────────────────────────
-// When facts are stored, invalidate the memory context resource cache
-
-setOnRememberCallback(() => {
-  invalidateMemoryContextCache();
-  // Notify subscribed clients that the resource has been updated
-  server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
-});
+let server: ReturnType<typeof createTotalReclawServer> | undefined;
 
 // ── Client identification (resolved after initialize handshake) ──────────────
 
 function getClientIdentifier(): string {
   if (!clientIdentifierResolved) {
-    const clientInfo = server.getClientVersion();
+    const clientInfo = server?.getClientVersion();
     if (clientInfo?.name) {
       const name = clientInfo.name.toLowerCase().replace(/\s+/g, '-');
       setClientId(`mcp-server:${name}`);
@@ -1911,499 +1590,179 @@ function getClientIdentifier(): string {
   return getClientId();
 }
 
-// ── Layer 2 + 3: Tool handlers ───────────────────────────────────────────────
+// ── Cross-cutting dispatch deps ──────────────────────────────────────────────
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    rememberToolDefinition,
-    recallToolDefinition,
-    forgetToolDefinition,
-    exportToolDefinition,
-    importToolDefinition,
-    importFromToolDefinition,
-    importBatchToolDefinition,
-    consolidateToolDefinition,
-    statusToolDefinition,
-    upgradeToolDefinition,
-    migrateToolDefinition,
-    debriefToolDefinition,
-    supportToolDefinition,
-    accountToolDefinition,
-    pinToolDefinition,
-    unpinToolDefinition,
-    retypeToolDefinition,
-    setScopeToolDefinition,
-    pairToolDefinition,
-  ],
-}));
+/** Invalidate the memory-context resource cache + notify subscribed clients. */
+function onMutate(): void {
+  invalidateMemoryContextCache();
+  server
+    ?.sendResourceUpdated({ uri: memoryContextResource.uri })
+    .catch((err) => console.error('Failed to send resource update:', err));
+}
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+/** Standard authentication-failure envelope (shared quota → auth funnel). */
+function authHintResponse(): ToolResponse {
+  return {
+    content: [{ type: 'text', text: JSON.stringify({ error: AUTH_HINT_MESSAGE }) }],
+    isError: true,
+  };
+}
 
-  // `totalreclaw_setup` was removed in 3.2.1 (security: phrase-safety).
-  // Onboarding now follows the URL-driven flow at
-  // `docs/guides/claude-code-setup.md`. If a stale agent / host catalog
-  // still calls the old tool name, return a structured error pointing at
-  // the canonical install guide — without surfacing any phrase in payload.
-  if (name === 'totalreclaw_setup') {
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          error: 'tool_removed',
-          message:
-            'The totalreclaw_setup tool was removed in @totalreclaw/mcp-server@3.2.1 ' +
-            'for phrase-safety. Follow the URL-driven install flow at ' +
-            'https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/claude-code-setup.md. ' +
-            'The user sources their recovery phrase out-of-band (OpenClaw or Hermes ' +
-            'browser pair flow, or an offline BIP-39 generator) and pastes it directly ' +
-            'into TOTALRECLAW_RECOVERY_PHRASE in the MCP host config — never into chat.',
-        }),
-      }],
-      isError: true,
-    };
-  }
+// ── Mode-independent tool handlers (status / upgrade / account) ───────────────
+// These talk to the relay directly and behave identically in both storage
+// modes. `subgraphState` supplies the auth key + wallet when present.
 
-  // Handle support tool (available in all modes, including unconfigured)
-  if (name === 'totalreclaw_support') {
-    const walletAddress = subgraphState?.smartAccountAddress ?? null;
-    return handleSupport(walletAddress);
-  }
+async function statusHandler(args: unknown): Promise<ToolResponse> {
+  const authKeyHex = subgraphState
+    ? Buffer.from(subgraphState.authKey).toString('hex')
+    : '';
+  const enrichedArgs = {
+    ...(args as Record<string, unknown>),
+    wallet_address:
+      (args as Record<string, unknown>)?.wallet_address ||
+      subgraphState?.smartAccountAddress,
+  };
+  const statusResult = await handleStatus({ serverUrl: SERVER_URL, authKeyHex }, enrichedArgs);
 
-  // Handle pair tool (available in all modes — primary unconfigured-mode entry
-  // point so a user with no credentials can run an MCP-only install end-to-end:
-  // host adds MCP server → agent calls totalreclaw_pair → tool returns URL+PIN
-  // → user pairs in browser → server writes ~/.totalreclaw/credentials.json
-  // → user restarts host → server boots in subgraph mode).
-  if (name === 'totalreclaw_pair') {
-    return await handlePair(args as Record<string, unknown> | undefined);
-  }
-
-  // In unconfigured mode, all other tools return setup guidance pointing at
-  // the URL-driven install flow (NOT the deleted totalreclaw_setup tool).
-  if (currentMode === 'unconfigured') {
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          error: 'not_configured',
-          message:
-            'TotalReclaw is not configured yet. Follow the URL-driven install flow ' +
-            'at https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/claude-code-setup.md — ' +
-            'the user pastes their recovery phrase directly into the MCP host config (TOTALRECLAW_RECOVERY_PHRASE), ' +
-            'never into chat.',
-        }),
-      }],
-      isError: true,
-    };
-  }
-
-  const mode = subgraphState ? 'subgraph' : 'http';
-
+  // Cache billing features for candidate-pool sizing. handleStatus stores the
+  // raw response; extract max_candidate_pool from it.
   try {
-    // ── Billing tools (mode-independent, always use HTTP relay) ────────────
-    if (name === 'totalreclaw_status') {
-      const authKeyHex = subgraphState
-        ? Buffer.from(subgraphState.authKey).toString('hex')
-        : '';
-      const enrichedArgs = {
-        ...(args as Record<string, unknown>),
-        wallet_address:
-          (args as Record<string, unknown>)?.wallet_address ||
-          subgraphState?.smartAccountAddress,
-      };
-      const statusResult = await handleStatus(SERVER_URL, authKeyHex, enrichedArgs);
-
-      // Cache billing features for candidate pool sizing.
-      // handleStatus stores the raw response; extract max_candidate_pool from it.
-      try {
-        const raw = getLastBillingResponse();
-        if (raw?.features) {
-          billingCache = {
-            max_candidate_pool: raw.features.max_candidate_pool,
-            checked_at: Date.now(),
-          };
-        }
-      } catch {
-        // Best-effort cache — don't fail the status call
-      }
-
-      return statusResult;
-    }
-
-    if (name === 'totalreclaw_upgrade') {
-      const authKeyHex = subgraphState
-        ? Buffer.from(subgraphState.authKey).toString('hex')
-        : '';
-      return await handleUpgrade(SERVER_URL, authKeyHex, args);
-    }
-
-    if (name === 'totalreclaw_account') {
-      if (!subgraphState) {
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              error: 'Account details require managed service mode (subgraph). Self-hosted mode does not track billing.',
-            }),
-          }],
-          isError: true,
-        };
-      }
-      const authKeyHex = Buffer.from(subgraphState.authKey).toString('hex');
-      const words = subgraphState.mnemonic.split(/\s+/);
-      const mnemonicHint = `${words[0]} ... ${words[words.length - 1]}`;
-      const getFactCount = () => getOwnerFactCount(
-        subgraphState!.smartAccountAddress,
-        subgraphState!.serverUrl,
-        authKeyHex,
-      );
-      return await handleAccount(
-        SERVER_URL,
-        authKeyHex,
-        subgraphState.smartAccountAddress,
-        mnemonicHint,
-        getFactCount,
-      );
-    }
-
-    if (name === 'totalreclaw_migrate') {
-      return await handleMigrateFromIndex(args);
-    }
-
-    // ── Subgraph mode ─────────────────────────────────────────────────────
-    if (subgraphState) {
-      switch (name) {
-        case 'totalreclaw_remember': {
-          try {
-            const result = await handleRememberSubgraph(subgraphState, args);
-            // Invalidate cache after successful store
-            invalidateMemoryContextCache();
-            server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
-            return result;
-          } catch (error) {
-            if (isQuotaExceededError(error)) {
-              return quotaExceededResponse();
-            }
-            throw error;
-          }
-        }
-
-        case 'totalreclaw_recall':
-          return await handleRecallSubgraph(subgraphState, args);
-
-        case 'totalreclaw_forget': {
-          const result = await handleForgetSubgraph(subgraphState, args);
-          invalidateMemoryContextCache();
-          server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
-          return result;
-        }
-
-        case 'totalreclaw_export':
-          // Export not yet implemented for the managed service -- fall through to error
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({
-                error: 'Export is not yet supported with the managed service. Use self-hosted mode for export.',
-              }),
-            }],
-            isError: true,
-          };
-
-        case 'totalreclaw_import':
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({
-                error: 'Import is not yet supported with the managed service. Use self-hosted mode for import.',
-              }),
-            }],
-            isError: true,
-          };
-
-        case 'totalreclaw_import_from':
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({
-                error: 'Import from external sources is not yet supported with the managed service. Use self-hosted mode for import.',
-              }),
-            }],
-            isError: true,
-          };
-
-        case 'totalreclaw_consolidate':
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({
-                error: 'Consolidation is not supported with the managed service. On-chain facts require tombstone-based dedup which is handled automatically at store time.',
-              }),
-            }],
-            isError: true,
-          };
-
-        case 'totalreclaw_debrief': {
-          try {
-            const result = await handleDebriefSubgraph(subgraphState, args);
-            invalidateMemoryContextCache();
-            server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
-            return result;
-          } catch (error) {
-            if (isQuotaExceededError(error)) {
-              return quotaExceededResponse();
-            }
-            throw error;
-          }
-        }
-
-        case 'totalreclaw_pin': {
-          try {
-            const result = await handlePinSubgraph(subgraphState, args);
-            invalidateMemoryContextCache();
-            server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
-            return result;
-          } catch (error) {
-            if (isQuotaExceededError(error)) {
-              return quotaExceededResponse();
-            }
-            throw error;
-          }
-        }
-
-        case 'totalreclaw_unpin': {
-          try {
-            const result = await handleUnpinSubgraph(subgraphState, args);
-            invalidateMemoryContextCache();
-            server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
-            return result;
-          } catch (error) {
-            if (isQuotaExceededError(error)) {
-              return quotaExceededResponse();
-            }
-            throw error;
-          }
-        }
-
-        case 'totalreclaw_retype': {
-          try {
-            const deps = buildMetadataOpDepsFromState(subgraphState);
-            const result = await handleRetypeWithDeps(args, deps);
-            invalidateMemoryContextCache();
-            server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
-            return result;
-          } catch (error) {
-            if (isQuotaExceededError(error)) {
-              return quotaExceededResponse();
-            }
-            throw error;
-          }
-        }
-
-        case 'totalreclaw_set_scope': {
-          try {
-            const deps = buildMetadataOpDepsFromState(subgraphState);
-            const result = await handleSetScopeWithDeps(args, deps);
-            invalidateMemoryContextCache();
-            server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
-            return result;
-          } catch (error) {
-            if (isQuotaExceededError(error)) {
-              return quotaExceededResponse();
-            }
-            throw error;
-          }
-        }
-
-        default:
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({ error: `Unknown tool: ${name}` }),
-            }],
-            isError: true,
-          };
-      }
-    }
-
-    // ── HTTP mode (existing behavior) ─────────────────────────────────────
-    const client = await getClient();
-
-    switch (name) {
-      case 'totalreclaw_remember': {
-        try {
-          const result = await handleRemember(client, args);
-          return result;
-        } catch (error) {
-          if (isQuotaExceededError(error)) {
-            return quotaExceededResponse();
-          }
-          throw error;
-        }
-      }
-
-      case 'totalreclaw_recall':
-        return await handleRecall(client, args);
-
-      case 'totalreclaw_forget': {
-        const result = await handleForget(client, args);
-        // Invalidate cache on forget too
-        invalidateMemoryContextCache();
-        server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
-        return result;
-      }
-
-      case 'totalreclaw_export':
-        return await handleExport(client, args);
-
-      case 'totalreclaw_import':
-        return await handleImport(client, args);
-
-      case 'totalreclaw_import_from':
-        return await handleImportFrom(client, args);
-
-      case 'totalreclaw_import_batch':
-        return await handleImportBatch(args);
-
-      case 'totalreclaw_consolidate': {
-        const result = await handleConsolidate(client, args);
-        // Invalidate cache after consolidation (facts may have been deleted)
-        invalidateMemoryContextCache();
-        server.sendResourceUpdated({ uri: memoryContextResource.uri }).catch((err) => console.error('Failed to send resource update:', err));
-        return result;
-      }
-
-      case 'totalreclaw_debrief': {
-        try {
-          const result = await handleDebrief(client, args);
-          return result;
-        } catch (error) {
-          if (isQuotaExceededError(error)) {
-            return quotaExceededResponse();
-          }
-          throw error;
-        }
-      }
-
-      case 'totalreclaw_pin':
-        return await handlePin(args);
-
-      case 'totalreclaw_unpin':
-        return await handleUnpin(args);
-
-      case 'totalreclaw_retype':
-        return await handleRetype(args);
-
-      case 'totalreclaw_set_scope':
-        return await handleSetScope(args);
-
-      default:
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({ error: `Unknown tool: ${name}` }),
-          }],
-          isError: true,
-        };
-    }
-  } catch (error) {
-    // Final catch-all: check for quota error at the top level too
-    if (isQuotaExceededError(error)) {
-      return quotaExceededResponse();
-    }
-
-    // Provide a helpful hint for authentication failures
-    if (isAuthError(error)) {
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            error: AUTH_HINT_MESSAGE,
-          }),
-        }],
-        isError: true,
+    const raw = getLastBillingResponse();
+    if (raw?.features) {
+      billingCache = {
+        max_candidate_pool: raw.features.max_candidate_pool,
+        checked_at: Date.now(),
       };
     }
+  } catch {
+    // Best-effort cache — don't fail the status call.
+  }
 
+  return statusResult;
+}
+
+async function upgradeHandler(args: unknown): Promise<ToolResponse> {
+  const authKeyHex = subgraphState
+    ? Buffer.from(subgraphState.authKey).toString('hex')
+    : '';
+  return handleUpgrade({ serverUrl: SERVER_URL, authKeyHex }, args);
+}
+
+async function accountHandler(args: unknown): Promise<ToolResponse> {
+  if (!subgraphState) {
     return {
       content: [{
         type: 'text',
         text: JSON.stringify({
-          error: error instanceof Error ? error.message : 'Unknown error',
+          error: 'Account details require managed service mode (subgraph). Self-hosted mode does not track billing.',
         }),
       }],
       isError: true,
     };
   }
-});
+  const authKeyHex = Buffer.from(subgraphState.authKey).toString('hex');
+  const words = subgraphState.mnemonic.split(/\s+/);
+  const mnemonicHint = `${words[0]} ... ${words[words.length - 1]}`;
+  const getFactCount = () => getOwnerFactCount(
+    subgraphState!.smartAccountAddress,
+    subgraphState!.serverUrl,
+    authKeyHex,
+  );
+  return handleAccount({
+    serverUrl: SERVER_URL,
+    authKeyHex,
+    walletAddress: subgraphState.smartAccountAddress,
+    mnemonicHint,
+    getFactCount,
+  }, args);
+}
 
-// ── Layer 4: Resources ───────────────────────────────────────────────────────
+const commonHandlers: HandlerBundle = {
+  totalreclaw_status: statusHandler,
+  totalreclaw_upgrade: upgradeHandler,
+  totalreclaw_account: accountHandler,
+};
 
-server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-  resources: [memoryContextResource],
-}));
+// ── Managed-service (subgraph) tool bundle ───────────────────────────────────
+// Tools with no managed-service equivalent return an explicit "use self-hosted
+// mode" envelope; `totalreclaw_import_batch` is intentionally absent so it
+// falls through to the standard unknown-tool error, matching pre-refactor
+// behaviour.
 
-server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-  const { uri } = request.params;
+function unsupportedInSubgraph(message: string): ToolResponse {
+  return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }], isError: true };
+}
 
-  if (uri === memoryContextResource.uri) {
-    // With the managed service, resource reading is not supported yet
-    if (subgraphState) {
-      return {
-        contents: [
-          {
-            uri: memoryContextResource.uri,
-            mimeType: 'text/markdown',
-            text: '*Memory context resource is not available with the managed service. Use totalreclaw_recall to search memories.*',
-          },
-        ],
-      };
-    }
+function subgraphBundle(state: SubgraphState): HandlerBundle {
+  return {
+    totalreclaw_remember: (args) => handleRememberSubgraph(state, args),
+    totalreclaw_recall: (args) => handleRecallSubgraph(state, args),
+    totalreclaw_forget: (args) => handleForgetSubgraph(state, args),
+    totalreclaw_debrief: (args) => handleDebriefSubgraph(state, args),
+    totalreclaw_pin: (args) => handlePinSubgraph(state, args),
+    totalreclaw_unpin: (args) => handleUnpinSubgraph(state, args),
+    totalreclaw_retype: (args) => handleRetypeWithDeps(args, buildMetadataOpDepsFromState(state)),
+    totalreclaw_set_scope: (args) => handleSetScopeWithDeps(args, buildMetadataOpDepsFromState(state)),
+    totalreclaw_export: async () =>
+      unsupportedInSubgraph('Export is not yet supported with the managed service. Use self-hosted mode for export.'),
+    totalreclaw_import: async () =>
+      unsupportedInSubgraph('Import is not yet supported with the managed service. Use self-hosted mode for import.'),
+    totalreclaw_import_from: async () =>
+      unsupportedInSubgraph('Import from external sources is not yet supported with the managed service. Use self-hosted mode for import.'),
+    totalreclaw_consolidate: async () =>
+      unsupportedInSubgraph('Consolidation is not supported with the managed service. On-chain facts require tombstone-based dedup which is handled automatically at store time.'),
+  };
+}
 
-    const client = await getClient();
-    const content = await readMemoryContext(client);
+// ── Self-hosted (HTTP) tool bundle ───────────────────────────────────────────
 
-    return {
-      contents: [
-        {
-          uri: memoryContextResource.uri,
-          mimeType: 'text/markdown',
-          text: content,
-        },
-      ],
-    };
-  }
+function httpBundle(ctx: ToolContext): HandlerBundle {
+  return {
+    totalreclaw_remember: (args) => handleRemember(ctx, args),
+    totalreclaw_recall: (args) => handleRecall(ctx, args),
+    totalreclaw_forget: (args) => handleForget(ctx, args),
+    totalreclaw_export: (args) => handleExport(ctx, args),
+    totalreclaw_import: (args) => handleImport(ctx, args),
+    totalreclaw_import_from: (args) => handleImportFrom(ctx, args),
+    totalreclaw_import_batch: (args) => handleImportBatch(ctx, args),
+    totalreclaw_consolidate: (args) => handleConsolidate(ctx, args),
+    totalreclaw_debrief: (args) => handleDebrief(ctx, args),
+    totalreclaw_pin: (args) => handlePin(ctx, args),
+    totalreclaw_unpin: (args) => handleUnpin(ctx, args),
+    totalreclaw_retype: (args) => handleRetype(ctx, args),
+    totalreclaw_set_scope: (args) => handleSetScope(ctx, args),
+  };
+}
 
-  throw new Error(`Unknown resource: ${uri}`);
-});
+/** Resolve the handler bundle for the current storage mode. */
+async function resolveBundle(mode: 'http' | 'subgraph'): Promise<HandlerBundle> {
+  if (mode === 'subgraph') return subgraphBundle(subgraphState!);
+  const client = await getClient();
+  return httpBundle({ client });
+}
 
-// ── Layer 5: Prompts ─────────────────────────────────────────────────────────
+// ── The single CallTool router ───────────────────────────────────────────────
 
-server.setRequestHandler(ListPromptsRequestSchema, async () => ({
-  prompts: [
-    // Legacy instructions prompt (backward compat)
-    {
-      name: 'totalreclaw_instructions',
-      description: 'Instructions for using TotalReclaw tools',
-    },
-    // New auto-memory prompt fallbacks
-    ...PROMPT_DEFINITIONS,
-  ],
-}));
-
-server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-  const messages = getPromptMessages(name, args as Record<string, string> | undefined);
-  return { messages };
+const callToolHandler = createCallToolHandler({
+  getMode: () => currentMode,
+  handleSupport: (args) =>
+    handleSupport({ walletAddress: subgraphState?.smartAccountAddress ?? null }, args),
+  handlePair: (args) => handlePair({}, args as Record<string, unknown> | undefined),
+  common: commonHandlers,
+  resolveBundle,
+  isQuotaExceededError,
+  quotaExceededResponse,
+  isAuthError,
+  authHintResponse,
+  onMutate,
 });
 
 // ── Show-phrase CLI subcommand ────────────────────────────────────────────────
 
 async function showPhrase(): Promise<void> {
   try {
-    const data = fs.readFileSync(CREDENTIALS_PATH, 'utf-8');
-    const parsed = JSON.parse(data) as { mnemonic?: string };
+    const credentialsRaw = fs.readFileSync(CREDENTIALS_PATH, 'utf-8');
+    const parsed = JSON.parse(credentialsRaw) as { mnemonic?: string };
     if (parsed.mnemonic) {
       console.log(parsed.mnemonic);
     } else {
@@ -2460,6 +1819,15 @@ async function main(): Promise<void> {
   // recovery phrase never crosses into the extraction LLM — see the
   // top-of-file rationale in `extraction/extractor.ts`.
   startPollerSafely();
+
+  // Construct the MCP server and wire its request handlers to the single
+  // dispatch router. Created here (not at module load) so importing this file
+  // in tests does not stand up a server or connect a transport.
+  server = createTotalReclawServer({
+    callTool: callToolHandler,
+    isManagedMode: () => !!subgraphState,
+    getClient,
+  });
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

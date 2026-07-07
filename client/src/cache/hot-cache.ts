@@ -154,12 +154,12 @@ export class HotCache {
     if (!fs.existsSync(this.cachePath)) return;
 
     try {
-      const data = fs.readFileSync(this.cachePath);
-      if (data.length < IV_LENGTH + TAG_LENGTH) return;
+      const cacheBytes = fs.readFileSync(this.cachePath);
+      if (cacheBytes.length < IV_LENGTH + TAG_LENGTH) return;
 
-      const iv = data.subarray(0, IV_LENGTH);
-      const tag = data.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
-      const ciphertext = data.subarray(IV_LENGTH + TAG_LENGTH);
+      const iv = cacheBytes.subarray(0, IV_LENGTH);
+      const tag = cacheBytes.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
+      const ciphertext = cacheBytes.subarray(IV_LENGTH + TAG_LENGTH);
 
       const decipher = crypto.createDecipheriv("aes-256-gcm", this.key, iv);
       decipher.setAuthTag(tag);

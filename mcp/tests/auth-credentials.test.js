@@ -50,7 +50,7 @@ describe('Auth & Credentials Edge Cases', () => {
         remember: jest.fn().mockResolvedValue('fact-env-test'),
       });
       const { handleRemember } = require('../dist/tools/remember.js');
-      const result = await handleRemember(mockClient, { fact: 'test' }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 'test' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(true);
       expect(parsed.fact_id).toBe('fact-env-test');
@@ -59,7 +59,7 @@ describe('Auth & Credentials Edge Cases', () => {
     it('recall handler works without env-level auth (client injected)', async () => {
       const mockClient = createMockClient();
       const { handleRecall } = require('../dist/tools/recall.js');
-      const result = await handleRecall(mockClient, { query: 'test' }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: 'test' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.memories).toEqual([]);
     });
@@ -72,7 +72,7 @@ describe('Auth & Credentials Edge Cases', () => {
         remember: jest.fn().mockResolvedValue('fact-corrupt-test'),
       });
       const { handleRemember } = require('../dist/tools/remember.js');
-      const result = await handleRemember(mockClient, { fact: 'survive corruption' }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 'survive corruption' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(true);
     });
@@ -144,8 +144,8 @@ describe('Auth & Credentials Edge Cases', () => {
         remember: jest.fn().mockResolvedValue('client2-fact'),
       });
 
-      const result1 = await handleRemember(client1, { fact: 'A' }, 'default');
-      const result2 = await handleRemember(client2, { fact: 'B' }, 'default');
+      const result1 = await handleRemember({ client: client1 }, { fact: 'A' }, 'default');
+      const result2 = await handleRemember({ client: client2 }, { fact: 'B' }, 'default');
 
       const parsed1 = JSON.parse(result1.content[0].text);
       const parsed2 = JSON.parse(result2.content[0].text);

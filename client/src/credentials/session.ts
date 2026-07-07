@@ -14,6 +14,7 @@
 
 import { deriveKeys } from '../crypto/kdf';
 import type { KeyDerivationParams } from '../crypto/kdf';
+import { TotalReclawError, TotalReclawErrorCode } from '../types';
 
 /**
  * Derived key pair for a user session.
@@ -73,7 +74,10 @@ export class SessionManager {
     this.kdfParams = config.kdfParams ?? {};
 
     if (this.timeoutMs <= 0) {
-      throw new Error('Session timeout must be a positive number of milliseconds');
+      throw new TotalReclawError(
+        TotalReclawErrorCode.INVALID_INPUT,
+        'Session timeout must be a positive number of milliseconds'
+      );
     }
   }
 
@@ -102,7 +106,8 @@ export class SessionManager {
 
     // Cache miss or expired — need the recovery phrase
     if (!masterPassword) {
-      throw new Error(
+      throw new TotalReclawError(
+        TotalReclawErrorCode.INVALID_INPUT,
         'Session expired or not yet established. Recovery phrase is required to derive keys.'
       );
     }

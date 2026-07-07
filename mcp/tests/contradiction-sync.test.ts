@@ -214,7 +214,7 @@ describe('appendDecisionLog', () => {
       loser_score: 0.55,
       mode: 'active',
     };
-    await appendDecisionLog(entry);
+    appendDecisionLog(entry);
     const content = fs.readFileSync(decisionsLogPath(), 'utf-8');
     const lines = content.split('\n').filter((l: string) => l.length > 0);
     expect(lines.length).toBe(1);
@@ -236,8 +236,8 @@ describe('appendDecisionLog', () => {
       reason: 'existing_wins',
       mode: 'active',
     };
-    await appendDecisionLog(entry);
-    await appendDecisionLog({ ...entry, existing_claim_id: 'e2' });
+    appendDecisionLog(entry);
+    appendDecisionLog({ ...entry, existing_claim_id: 'e2' });
     const content = fs.readFileSync(decisionsLogPath(), 'utf-8');
     const lines = content.split('\n').filter((l: string) => l.length > 0);
     expect(lines.length).toBe(2);

@@ -49,7 +49,7 @@ pub fn load_credentials() -> Result<Option<Credentials>> {
     }
     let data = std::fs::read_to_string(&path)?;
     let creds: Credentials =
-        serde_json::from_str(&data).map_err(|e| crate::Error::Crypto(e.to_string()))?;
+        serde_json::from_str(&data).map_err(|e| crate::Error::Serialization(e.to_string()))?;
     Ok(Some(creds))
 }
 
@@ -59,7 +59,7 @@ pub fn save_credentials(creds: &Credentials) -> Result<()> {
     std::fs::create_dir_all(&dir)?;
     let path = credentials_path();
     let data = serde_json::to_string_pretty(creds)
-        .map_err(|e| crate::Error::Crypto(e.to_string()))?;
+        .map_err(|e| crate::Error::Serialization(e.to_string()))?;
     std::fs::write(&path, data)?;
 
     // Restrict permissions on Unix

@@ -28,7 +28,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('rejects whitespace-only fact text', async () => {
       const mockClient = createMockClient();
-      const result = await handleRemember(mockClient, { fact: '   ' }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: '   ' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
       expect(parsed.error).toContain('non-empty string');
@@ -39,7 +39,7 @@ describe('Input Validation Edge Cases', () => {
       const mockClient = createMockClient({
         remember: jest.fn().mockResolvedValue('long-fact-id'),
       });
-      const result = await handleRemember(mockClient, { fact: longText }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: longText }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(true);
       expect(parsed.fact_id).toBe('long-fact-id');
@@ -53,7 +53,7 @@ describe('Input Validation Edge Cases', () => {
       const mockClient = createMockClient({
         remember: jest.fn().mockResolvedValue('trimmed-fact-id'),
       });
-      const result = await handleRemember(mockClient, { fact: '  Hello world  ' }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: '  Hello world  ' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(true);
       expect(mockClient.remember).toHaveBeenCalledWith(
@@ -64,7 +64,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('rejects importance of 0 (below minimum)', async () => {
       const mockClient = createMockClient();
-      const result = await handleRemember(mockClient, { fact: 'test', importance: 0 }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 'test', importance: 0 }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
       expect(parsed.error).toContain('between 1 and 10');
@@ -72,7 +72,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('rejects importance of 11 (above maximum)', async () => {
       const mockClient = createMockClient();
-      const result = await handleRemember(mockClient, { fact: 'test', importance: 11 }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 'test', importance: 11 }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
       expect(parsed.error).toContain('between 1 and 10');
@@ -80,7 +80,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('rejects negative importance', async () => {
       const mockClient = createMockClient();
-      const result = await handleRemember(mockClient, { fact: 'test', importance: -5 }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 'test', importance: -5 }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
       expect(parsed.error).toContain('between 1 and 10');
@@ -88,7 +88,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('accepts importance at boundary (1)', async () => {
       const mockClient = createMockClient({ remember: jest.fn().mockResolvedValue('min-imp') });
-      const result = await handleRemember(mockClient, { fact: 'test', importance: 1 }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 'test', importance: 1 }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(true);
       expect(mockClient.remember).toHaveBeenCalledWith('test', expect.objectContaining({ importance: 0.1 }));
@@ -96,7 +96,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('accepts importance at boundary (10)', async () => {
       const mockClient = createMockClient({ remember: jest.fn().mockResolvedValue('max-imp') });
-      const result = await handleRemember(mockClient, { fact: 'test', importance: 10 }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 'test', importance: 10 }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(true);
       expect(mockClient.remember).toHaveBeenCalledWith('test', expect.objectContaining({ importance: 1.0 }));
@@ -104,14 +104,14 @@ describe('Input Validation Edge Cases', () => {
 
     it('rejects non-numeric importance (string)', async () => {
       const mockClient = createMockClient();
-      const result = await handleRemember(mockClient, { fact: 'test', importance: 'high' }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 'test', importance: 'high' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
     });
 
     it('batch with 0 facts returns invalid input error', async () => {
       const mockClient = createMockClient();
-      const result = await handleRemember(mockClient, { facts: [] }, 'default');
+      const result = await handleRemember({ client: mockClient }, { facts: [] }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       // Empty array is not considered a valid batch (isBatch checks length > 0)
       expect(parsed.success).toBe(false);
@@ -122,7 +122,7 @@ describe('Input Validation Edge Cases', () => {
       const mockClient = createMockClient({
         remember: jest.fn().mockResolvedValue('batch-fact-id'),
       });
-      const result = await handleRemember(mockClient, {
+      const result = await handleRemember({ client: mockClient }, {
         facts: [
           { text: 'Valid fact one' },
           { text: '' },  // invalid - empty text
@@ -139,21 +139,21 @@ describe('Input Validation Edge Cases', () => {
 
     it('rejects undefined args', async () => {
       const mockClient = createMockClient();
-      const result = await handleRemember(mockClient, undefined, 'default');
+      const result = await handleRemember({ client: mockClient }, undefined, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
     });
 
     it('rejects null args', async () => {
       const mockClient = createMockClient();
-      const result = await handleRemember(mockClient, null, 'default');
+      const result = await handleRemember({ client: mockClient }, null, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
     });
 
     it('rejects numeric fact (not a string)', async () => {
       const mockClient = createMockClient();
-      const result = await handleRemember(mockClient, { fact: 12345 }, 'default');
+      const result = await handleRemember({ client: mockClient }, { fact: 12345 }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
     });
@@ -164,7 +164,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('rejects whitespace-only query', async () => {
       const mockClient = createMockClient();
-      const result = await handleRecall(mockClient, { query: '   ' }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: '   ' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.memories).toEqual([]);
       expect(parsed.error).toContain('non-empty string');
@@ -173,7 +173,7 @@ describe('Input Validation Edge Cases', () => {
     it('accepts very long query string', async () => {
       const longQuery = 'test '.repeat(2000);
       const mockClient = createMockClient();
-      const result = await handleRecall(mockClient, { query: longQuery }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: longQuery }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       // Should not error -- handler trims and passes to client
       expect(parsed.memories).toEqual([]);
@@ -182,45 +182,45 @@ describe('Input Validation Edge Cases', () => {
 
     it('clamps k=0 to default (8)', async () => {
       const mockClient = createMockClient();
-      const result = await handleRecall(mockClient, { query: 'test', k: 0 }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: 'test', k: 0 }, 'default');
       // k < 1 is reset to 8
       expect(mockClient.recall).toHaveBeenCalledWith('test', 8);
     });
 
     it('clamps negative k to default (8)', async () => {
       const mockClient = createMockClient();
-      const result = await handleRecall(mockClient, { query: 'test', k: -5 }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: 'test', k: -5 }, 'default');
       expect(mockClient.recall).toHaveBeenCalledWith('test', 8);
     });
 
     it('clamps k=100 to maximum (50)', async () => {
       const mockClient = createMockClient();
-      const result = await handleRecall(mockClient, { query: 'test', k: 100 }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: 'test', k: 100 }, 'default');
       expect(mockClient.recall).toHaveBeenCalledWith('test', 50);
     });
 
     it('accepts k=1 (minimum valid)', async () => {
       const mockClient = createMockClient();
-      await handleRecall(mockClient, { query: 'test', k: 1 }, 'default');
+      await handleRecall({ client: mockClient }, { query: 'test', k: 1 }, 'default');
       expect(mockClient.recall).toHaveBeenCalledWith('test', 1);
     });
 
     it('accepts k=50 (maximum valid)', async () => {
       const mockClient = createMockClient();
-      await handleRecall(mockClient, { query: 'test', k: 50 }, 'default');
+      await handleRecall({ client: mockClient }, { query: 'test', k: 50 }, 'default');
       expect(mockClient.recall).toHaveBeenCalledWith('test', 50);
     });
 
     it('rejects undefined query', async () => {
       const mockClient = createMockClient();
-      const result = await handleRecall(mockClient, { query: undefined }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: undefined }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.memories).toEqual([]);
     });
 
     it('rejects numeric query', async () => {
       const mockClient = createMockClient();
-      const result = await handleRecall(mockClient, { query: 12345 }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: 12345 }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.memories).toEqual([]);
     });
@@ -247,7 +247,7 @@ describe('Input Validation Edge Cases', () => {
         ]),
       });
 
-      const result = await handleRecall(mockClient, { query: 'test', min_importance: 5 }, 'default');
+      const result = await handleRecall({ client: mockClient }, { query: 'test', min_importance: 5 }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.memories).toHaveLength(1);
       expect(parsed.memories[0].fact_text).toBe('High importance');
@@ -259,7 +259,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('rejects empty fact_id string', async () => {
       const mockClient = createMockClient();
-      const result = await handleForget(mockClient, { fact_id: '' }, 'default');
+      const result = await handleForget({ client: mockClient }, { fact_id: '' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       // Empty string is falsy, so falls through to "requires fact_id or query"
       expect(parsed.error).toContain('fact_id or query');
@@ -268,7 +268,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('rejects empty object (no fact_id, no query)', async () => {
       const mockClient = createMockClient();
-      const result = await handleForget(mockClient, {}, 'default');
+      const result = await handleForget({ client: mockClient }, {}, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.error).toContain('fact_id or query');
     });
@@ -279,7 +279,7 @@ describe('Input Validation Edge Cases', () => {
       // This documents the current behavior -- a defensive fix would add an input guard.
       const mockClient = createMockClient();
       await expect(
-        handleForget(mockClient, undefined, 'default')
+        handleForget({ client: mockClient }, undefined, 'default')
       ).rejects.toThrow(TypeError);
     });
 
@@ -287,7 +287,7 @@ describe('Input Validation Edge Cases', () => {
       const mockClient = createMockClient({
         recall: jest.fn().mockResolvedValue([]),
       });
-      const result = await handleForget(mockClient, { query: '   ' }, 'default');
+      const result = await handleForget({ client: mockClient }, { query: '   ' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       // Whitespace query is truthy, so it proceeds to recall
       expect(parsed.deleted_count).toBe(0);
@@ -307,7 +307,7 @@ describe('Input Validation Edge Cases', () => {
           },
         ]),
       });
-      const result = await handleForget(mockClient, { query: 'test' }, 'default');
+      const result = await handleForget({ client: mockClient }, { query: 'test' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       // namespace=default means no filtering
       expect(parsed.deleted_count).toBe(1);
@@ -319,7 +319,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('rejects empty content string', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, { content: '' }, 'default');
+      const result = await handleImport({ client: mockClient }, { content: '' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
       expect(parsed.errors[0].error).toContain('required');
@@ -327,7 +327,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('rejects content with only whitespace', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, { content: '   ' }, 'default');
+      const result = await handleImport({ client: mockClient }, { content: '   ' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       // Whitespace-only content is truthy but will fail to parse
       // It will be treated as markdown (does not start with { or [)
@@ -337,7 +337,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('rejects null content', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, { content: null }, 'default');
+      const result = await handleImport({ client: mockClient }, { content: null }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
       expect(parsed.errors[0].error).toContain('required');
@@ -345,7 +345,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('rejects undefined content', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, {}, 'default');
+      const result = await handleImport({ client: mockClient }, {}, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
       expect(parsed.errors[0].error).toContain('required');
@@ -353,7 +353,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('handles JSON with empty facts array', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, {
+      const result = await handleImport({ client: mockClient }, {
         content: '{"facts":[]}',
         format: 'json',
       }, 'default');
@@ -364,7 +364,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('handles bare JSON array (no wrapping object)', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, {
+      const result = await handleImport({ client: mockClient }, {
         content: '[{"text":"Bare array fact"}]',
         format: 'json',
       }, 'default');
@@ -375,7 +375,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('warns about out-of-range importance in imported facts', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, {
+      const result = await handleImport({ client: mockClient }, {
         content: '{"facts":[{"text":"Out-of-range fact","importance":15}]}',
         format: 'json',
       }, 'default');
@@ -386,7 +386,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('handles markdown with no ## headings (no parseable facts)', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, {
+      const result = await handleImport({ client: mockClient }, {
         content: '# Title\nSome text without any fact headings.\n---\nMore text.',
         format: 'markdown',
       }, 'default');
@@ -396,7 +396,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('auto-detects JSON format from { prefix', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, {
+      const result = await handleImport({ client: mockClient }, {
         content: '{"facts":[{"text":"Auto-detected JSON"}]}',
         // no format specified -- should auto-detect
       }, 'default');
@@ -407,7 +407,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('auto-detects JSON format from [ prefix', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, {
+      const result = await handleImport({ client: mockClient }, {
         content: '[{"text":"Auto-detected array"}]',
       }, 'default');
       const parsed = JSON.parse(result.content[0].text);
@@ -417,7 +417,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('auto-detects markdown format (non-JSON prefix)', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, {
+      const result = await handleImport({ client: mockClient }, {
         content: '# Export\n---\n## Some fact\n**Importance:** 5\n---',
       }, 'default');
       const parsed = JSON.parse(result.content[0].text);
@@ -427,7 +427,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('skips facts with empty text in JSON', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, {
+      const result = await handleImport({ client: mockClient }, {
         content: '{"facts":[{"text":""},{"text":"Valid fact"}]}',
         format: 'json',
       }, 'default');
@@ -439,7 +439,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('handles JSON missing the text field', async () => {
       const mockClient = createMockClient();
-      const result = await handleImport(mockClient, {
+      const result = await handleImport({ client: mockClient }, {
         content: '{"facts":[{"importance":5}]}',
         format: 'json',
       }, 'default');
@@ -454,14 +454,14 @@ describe('Input Validation Edge Cases', () => {
 
     it('defaults to markdown format when format is not specified', async () => {
       const mockClient = createMockClient();
-      const result = await handleExport(mockClient, {}, 'default');
+      const result = await handleExport({ client: mockClient }, {}, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.format).toBe('markdown');
     });
 
     it('exports empty vault as JSON with 0 facts', async () => {
       const mockClient = createMockClient();
-      const result = await handleExport(mockClient, { format: 'json' }, 'default');
+      const result = await handleExport({ client: mockClient }, { format: 'json' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.fact_count).toBe(0);
       const content = JSON.parse(parsed.content);
@@ -470,7 +470,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('exports empty vault as markdown with 0 facts', async () => {
       const mockClient = createMockClient();
-      const result = await handleExport(mockClient, { format: 'markdown' }, 'default');
+      const result = await handleExport({ client: mockClient }, { format: 'markdown' }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.fact_count).toBe(0);
       expect(parsed.content).toContain('Total Facts:** 0');
@@ -478,7 +478,7 @@ describe('Input Validation Edge Cases', () => {
 
     it('handles null args (defaults applied)', async () => {
       const mockClient = createMockClient();
-      const result = await handleExport(mockClient, null, 'default');
+      const result = await handleExport({ client: mockClient }, null, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.format).toBe('markdown');
     });
@@ -496,7 +496,7 @@ describe('Input Validation Edge Cases', () => {
           },
         ]),
       });
-      const result = await handleExport(mockClient, { format: 'markdown', include_metadata: false }, 'default');
+      const result = await handleExport({ client: mockClient }, { format: 'markdown', include_metadata: false }, 'default');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.content).not.toContain('**Importance:**');
       expect(parsed.content).not.toContain('**Tags:**');

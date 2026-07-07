@@ -5,6 +5,7 @@
  * No server calls needed -- works in all modes including unconfigured.
  */
 
+import type { ToolContext } from './types.js';
 import { SUPPORT_TOOL_DESCRIPTION } from '../prompts.js';
 
 export const supportToolDefinition = {
@@ -41,15 +42,14 @@ const TROUBLESHOOTING = [
     issue: 'Quota exceeded / cannot store more memories',
     solution:
       'Free tier has a monthly write limit. Use totalreclaw_status to check your remaining quota. ' +
-      'Upgrade to Pro via totalreclaw_upgrade for unlimited permanent storage on Gnosis mainnet. ' +
-      'After upgrading, use totalreclaw_migrate to move existing memories from testnet to mainnet.',
+      'Upgrade to Pro via totalreclaw_upgrade for a higher monthly limit on Gnosis mainnet.',
   },
   {
-    issue: 'Memories not appearing after Pro upgrade',
+    issue: 'Pro tier not recognized after upgrade',
     solution:
-      'After upgrading to Pro, run totalreclaw_migrate to copy memories from the testnet (Base Sepolia) ' +
-      'to mainnet (Gnosis). The billing cache refreshes every 2 hours -- restart the MCP server to ' +
-      'force a refresh if your Pro tier is not yet recognized.',
+      'All memories are stored on Gnosis mainnet regardless of tier, so nothing needs to move after ' +
+      'upgrading. The billing cache refreshes every 2 hours -- restart the MCP server to force a ' +
+      'refresh if your Pro tier is not yet recognized.',
   },
   {
     issue: 'Import failed or memories not importing',
@@ -63,11 +63,14 @@ const TROUBLESHOOTING = [
 /**
  * Handle a totalreclaw_support tool call.
  *
- * Returns static support information. No server calls needed.
+ * Returns static support information. No server calls needed — `async` only
+ * for signature uniformity with the rest of the tool surface.
  */
-export function handleSupport(
-  walletAddress: string | null,
-): { content: Array<{ type: string; text: string }> } {
+export async function handleSupport(
+  ctx: ToolContext,
+  _args?: unknown,
+): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const walletAddress = ctx.walletAddress ?? null;
   const subject = walletAddress
     ? `TotalReclaw Support (wallet: ${walletAddress})`
     : 'TotalReclaw Support';

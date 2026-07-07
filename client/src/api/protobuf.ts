@@ -14,6 +14,8 @@ import {
   SearchResponse,
   EncryptedFact,
   EncryptedSearchResult,
+  TotalReclawError,
+  TotalReclawErrorCode,
 } from '../types';
 
 /**
@@ -111,8 +113,10 @@ export class ProtobufSerializer {
       this.root = protobuf.parse(PROTO_SCHEMA).root;
       this.initialized = true;
     } catch (error) {
-      throw new Error(
-        `Failed to parse protobuf schema: ${error instanceof Error ? error.message : 'Unknown error'}`
+      throw new TotalReclawError(
+        TotalReclawErrorCode.INVALID_INPUT,
+        `Failed to parse protobuf schema: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error instanceof Error ? error : undefined
       );
     }
   }
@@ -122,7 +126,10 @@ export class ProtobufSerializer {
    */
   private ensureInitialized(): void {
     if (!this.initialized || !this.root) {
-      throw new Error('ProtobufSerializer not initialized. Call init() first.');
+      throw new TotalReclawError(
+        TotalReclawErrorCode.INVALID_INPUT,
+        'ProtobufSerializer not initialized. Call init() first.'
+      );
     }
   }
 
@@ -151,12 +158,12 @@ export class ProtobufSerializer {
     const MessageType = this.root!.lookupType('totalreclaw.RegisterResponse');
 
     const message = MessageType.decode(data);
-    const obj = MessageType.toObject(message, { bytes: Buffer });
+    const decoded = MessageType.toObject(message, { bytes: Buffer });
 
     return {
-      success: obj.success,
-      errorCode: obj.error_code || undefined,
-      errorMessage: obj.error_message || undefined,
+      success: decoded.success,
+      errorCode: decoded.error_code || undefined,
+      errorMessage: decoded.error_message || undefined,
     };
   }
 
@@ -194,12 +201,12 @@ export class ProtobufSerializer {
     const MessageType = this.root!.lookupType('totalreclaw.StoreResponse');
 
     const message = MessageType.decode(data);
-    const obj = MessageType.toObject(message, { bytes: Buffer });
+    const decoded = MessageType.toObject(message, { bytes: Buffer });
 
     return {
-      success: obj.success,
-      errorCode: obj.error_code || undefined,
-      version: obj.version || undefined,
+      success: decoded.success,
+      errorCode: decoded.error_code || undefined,
+      version: decoded.version || undefined,
     };
   }
 
@@ -229,12 +236,12 @@ export class ProtobufSerializer {
     const MessageType = this.root!.lookupType('totalreclaw.SearchResponse');
 
     const message = MessageType.decode(data);
-    const obj = MessageType.toObject(message, { bytes: Buffer });
+    const decoded = MessageType.toObject(message, { bytes: Buffer });
 
     return {
-      success: obj.success,
-      errorCode: obj.error_code || undefined,
-      results: (obj.results || []).map((r: any) => ({
+      success: decoded.success,
+      errorCode: decoded.error_code || undefined,
+      results: (decoded.results || []).map((r: any) => ({
         factId: r.fact_id,
         encryptedDoc: Buffer.from(r.encrypted_doc),
         encryptedEmbedding: Buffer.from(r.encrypted_embedding),
@@ -245,7 +252,7 @@ export class ProtobufSerializer {
         embIv: Buffer.from(r.emb_iv),
         embTag: Buffer.from(r.emb_tag),
       })),
-      totalCandidates: obj.total_candidates,
+      totalCandidates: decoded.total_candidates,
     };
   }
 
@@ -257,12 +264,12 @@ export class ProtobufSerializer {
     const MessageType = this.root!.lookupType('totalreclaw.HealthResponse');
 
     const message = MessageType.decode(data);
-    const obj = MessageType.toObject(message);
+    const decoded = MessageType.toObject(message);
 
     return {
-      status: obj.status,
-      version: obj.version,
-      database: obj.database,
+      status: decoded.status,
+      version: decoded.version,
+      database: decoded.database,
     };
   }
 }

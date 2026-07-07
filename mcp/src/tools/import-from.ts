@@ -1,4 +1,5 @@
 import { TotalReclaw, FactMetadata } from '@totalreclaw/client';
+import type { ToolContext } from './types.js';
 import { resolve } from 'node:path';
 import { IMPORT_FROM_TOOL_DESCRIPTION } from '../prompts.js';
 import { type MemoryType } from '../memory-types.js';
@@ -166,9 +167,10 @@ async function loadAdapter(source: ImportSource): Promise<ImportAdapter> {
  *    use totalreclaw_remember for each important fact.
  */
 export async function handleImportFrom(
-  client: TotalReclaw,
+  ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const client = ctx.client as TotalReclaw;
   const input = args as ImportFromInput;
   const startTime = Date.now();
 

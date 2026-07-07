@@ -12,6 +12,8 @@ import {
   VALID_MEMORY_SCOPES,
   type MemoryScope,
 } from '../v1-types.js';
+import type { ToolContext } from './types.js';
+import { resolveMemoryId } from './helpers.js';
 import {
   executeMetadataOp,
   type MetadataOpDeps,
@@ -39,6 +41,10 @@ export const setScopeToolDefinition = {
         type: 'string',
         description: 'The ID of the memory to retag (from a prior totalreclaw_recall result).',
       },
+      fact_id: {
+        type: 'string',
+        description: 'Back-compat alias for `memory_id`. Prefer `memory_id`.',
+      },
       scope: {
         type: 'string',
         enum: [...VALID_MEMORY_SCOPES],
@@ -46,7 +52,9 @@ export const setScopeToolDefinition = {
           'New scope value. One of: work, personal, health, family, creative, finance, misc, unspecified.',
       },
     },
-    required: ['memory_id', 'scope'],
+    // `memory_id` accepts a `fact_id` alias, so only `scope` is strictly
+    // required here; the handler validates the id presence.
+    required: ['scope'],
   },
   annotations: {
     readOnlyHint: false,
@@ -72,15 +80,12 @@ export function validateSetScopeArgs(args: unknown): ValidatedArgs {
     };
   }
   const record = args as Record<string, unknown>;
-  const memoryId = record.memory_id;
-  if (typeof memoryId !== 'string' || memoryId.trim().length === 0) {
-    return {
-      ok: false,
-      memoryId: '',
-      scope: 'unspecified',
-      error: 'Invalid input: memory_id must be a non-empty string',
-    };
+  // Canonical `memory_id`, `fact_id` accepted as alias (see tools/helpers.ts).
+  const resolved = resolveMemoryId(record);
+  if (!resolved.ok) {
+    return { ok: false, memoryId: '', scope: 'unspecified', error: resolved.error };
   }
+  const memoryId = resolved.memoryId;
   const scope = record.scope;
   if (typeof scope !== 'string' || !(VALID_MEMORY_SCOPES as readonly string[]).includes(scope)) {
     return {
@@ -126,6 +131,7 @@ export async function executeSetScope(
 }
 
 export async function handleSetScope(
+  _ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const validation = validateSetScopeArgs(args);

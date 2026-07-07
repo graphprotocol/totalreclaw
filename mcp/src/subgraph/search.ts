@@ -184,13 +184,13 @@ export async function searchSubgraph(
   // Phase 1: Parallel initial queries (one per chunk).
   const initialResults = await Promise.all(
     chunks.map(async (chunk) => {
-      const data = await gqlQuery<SearchResponse>(
+      const searchJson = await gqlQuery<SearchResponse>(
         subgraphUrl,
         SEARCH_QUERY,
         { trapdoors: chunk, owner, first: pageSize },
         authKeyHex,
       );
-      return { chunk, entries: data?.blindIndexes ?? [] };
+      return { chunk, entries: searchJson?.blindIndexes ?? [] };
     }),
   );
 
@@ -219,14 +219,14 @@ export async function searchSubgraph(
     let lastId = '';
 
     while (allResults.size < maxCandidates) {
-      const data = await gqlQuery<SearchResponse>(
+      const pageJson = await gqlQuery<SearchResponse>(
         subgraphUrl,
         PAGINATE_QUERY,
         { trapdoors: chunk, owner, first: pageSize, lastId },
         authKeyHex,
       );
 
-      const entries = data?.blindIndexes ?? [];
+      const entries = pageJson?.blindIndexes ?? [];
       if (entries.length === 0) break;
 
       for (const entry of entries) {
@@ -283,14 +283,14 @@ export async function searchSubgraphBroadened(
     }
   `;
 
-  const data = await gqlQuery<{ facts?: SubgraphSearchFact[] }>(
+  const factsJson = await gqlQuery<{ facts?: SubgraphSearchFact[] }>(
     subgraphUrl,
     query,
     { owner, first: Math.min(maxCandidates, 1000) },
     authKeyHex,
   );
 
-  return (data?.facts ?? []).filter(f => f.isActive !== false);
+  return (factsJson?.facts ?? []).filter(f => f.isActive !== false);
 }
 
 /**
@@ -321,15 +321,15 @@ export async function getSubgraphFactCount(
     }
   `;
 
-  const data = await gqlQuery<{ globalStates?: Array<{ totalFacts: string }> }>(
+  const countJson = await gqlQuery<{ globalStates?: Array<{ totalFacts: string }> }>(
     subgraphUrl,
     query,
     {},
     authKeyHex,
   );
 
-  if (data?.globalStates && data.globalStates.length > 0) {
-    const count = parseInt(data.globalStates[0].totalFacts, 10);
+  if (countJson?.globalStates && countJson.globalStates.length > 0) {
+    const count = parseInt(countJson.globalStates[0].totalFacts, 10);
     return isNaN(count) ? 0 : count;
   }
 
@@ -370,14 +370,14 @@ export async function getOwnerFactCount(
     const variables: Record<string, unknown> = { owner, first: pageSize };
     if (lastId) variables.lastId = lastId;
 
-    const data = await gqlQuery<{ facts?: Array<{ id: string }> }>(
+    const factsPageJson = await gqlQuery<{ facts?: Array<{ id: string }> }>(
       subgraphUrl,
       query,
       variables,
       authKeyHex,
     );
 
-    const facts = data?.facts ?? [];
+    const facts = factsPageJson?.facts ?? [];
     total += facts.length;
 
     if (facts.length < pageSize) {
@@ -418,14 +418,14 @@ export async function fetchFactById(
     }
   `;
 
-  const data = await gqlQuery<{ fact?: (SubgraphSearchFact & { owner: string }) | null }>(
+  const factByIdJson = await gqlQuery<{ fact?: (SubgraphSearchFact & { owner: string }) | null }>(
     subgraphUrl,
     query,
     { id: factId },
     authKeyHex,
   );
 
-  const fact = data?.fact;
+  const fact = factByIdJson?.fact;
   if (!fact) return null;
   if (fact.isActive === false) return null;
   // Owner check (lowercase compare — subgraph stores bytes lowercase)

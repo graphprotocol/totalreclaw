@@ -1,4 +1,5 @@
 import { TotalReclaw, RerankedResult } from '@totalreclaw/client';
+import type { ToolContext } from './types.js';
 import {
   clusterFacts,
   getConsolidationThreshold,
@@ -50,9 +51,10 @@ PARAMS: dry_run (def false).`,
  *   4. Batch-delete duplicates (unless dry_run)
  */
 export async function handleConsolidate(
-  client: TotalReclaw,
+  ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const client = ctx.client as TotalReclaw;
   const input = (args || {}) as ConsolidateInput;
   const dryRun = input.dry_run ?? false;
 

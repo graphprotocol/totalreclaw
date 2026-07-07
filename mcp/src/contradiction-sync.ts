@@ -194,7 +194,7 @@ export const TIE_ZONE_SCORE_TOLERANCE = 0.01;
  * Append one entry to the decision log, rotating if it grows past the cap.
  * Never throws — logging is best-effort.
  */
-export async function appendDecisionLog(entry: DecisionLogEntry): Promise<void> {
+export function appendDecisionLog(entry: DecisionLogEntry): void {
   try {
     const dir = ensureStateDir();
     const p = path.join(dir, 'decisions.jsonl');
@@ -224,7 +224,7 @@ export async function appendDecisionLog(entry: DecisionLogEntry): Promise<void> 
  * Load the per-user weights file, falling back to defaults when the file
  * does not exist or is malformed. Never throws.
  */
-export async function loadWeightsFile(nowUnixSeconds: number): Promise<WeightsFile> {
+export function loadWeightsFile(nowUnixSeconds: number): WeightsFile {
   const core = getWasm();
   const p = weightsFilePath();
   try {
@@ -281,15 +281,15 @@ export interface CandidateClaim {
  */
 export function parseCandidateClaim(decryptedJson: string): CanonicalClaim | null {
   if (isDigestBlob(decryptedJson)) return null;
-  let obj: Record<string, unknown>;
+  let parsedClaim: Record<string, unknown>;
   try {
-    obj = JSON.parse(decryptedJson) as Record<string, unknown>;
+    parsedClaim = JSON.parse(decryptedJson) as Record<string, unknown>;
   } catch {
     return null;
   }
-  if (typeof obj.t !== 'string' || typeof obj.c !== 'string') return null;
-  if (obj.c === 'dig' || obj.c === 'ent') return null;
-  return obj as CanonicalClaim;
+  if (typeof parsedClaim.t !== 'string' || typeof parsedClaim.c !== 'string') return null;
+  if (parsedClaim.c === 'dig' || parsedClaim.c === 'ent') return null;
+  return parsedClaim as CanonicalClaim;
 }
 
 /** Is this candidate claim pinned (status `p`)? Delegates to WASM core. */
@@ -610,7 +610,7 @@ export async function detectAndResolveContradictions(
       ? deps.nowUnixSeconds
       : Math.floor(Date.now() / 1000);
 
-  const weightsFile = await loadWeightsFile(nowUnixSeconds);
+  const weightsFile = loadWeightsFile(nowUnixSeconds);
   const weightsJson = JSON.stringify(weightsFile.weights ?? {});
   const thresholdLower =
     typeof weightsFile.threshold_lower === 'number' ? weightsFile.threshold_lower : 0.3;
@@ -695,7 +695,7 @@ export async function detectAndResolveContradictions(
       );
       const entries: DecisionLogEntry[] = JSON.parse(entriesJson);
       for (const entry of entries) {
-        await appendDecisionLog(entry);
+        appendDecisionLog(entry);
         if (entry.action === 'tie_leave_both') {
           logger.info(
             `Contradiction: tie (gap=${Math.abs((entry.winner_score ?? 0) - (entry.loser_score ?? 0)).toFixed(6)} < ${TIE_ZONE_SCORE_TOLERANCE}, sim=${entry.similarity.toFixed(3)}, entity=${entry.entity_id}) — leaving both active`,
@@ -784,7 +784,7 @@ async function _appendDecisionLogInline(
     if (d.action === 'supersede_existing') {
       let loserClaimJson: string | undefined;
       try { loserClaimJson = JSON.stringify(d.existingClaim); } catch { loserClaimJson = undefined; }
-      await appendDecisionLog({
+      appendDecisionLog({
         ts: nowUnixSeconds, entity_id: d.entityId,
         new_claim_id: newClaimId, existing_claim_id: d.existingFactId,
         similarity: d.similarity,
@@ -795,7 +795,7 @@ async function _appendDecisionLogInline(
         loser_claim_json: loserClaimJson, mode,
       });
     } else if (d.action === 'skip_new') {
-      await appendDecisionLog({
+      appendDecisionLog({
         ts: nowUnixSeconds, entity_id: d.entityId,
         new_claim_id: newClaimId, existing_claim_id: d.existingFactId,
         similarity: d.similarity,
@@ -806,7 +806,7 @@ async function _appendDecisionLogInline(
         mode,
       });
     } else if (d.action === 'tie_leave_both') {
-      await appendDecisionLog({
+      appendDecisionLog({
         ts: nowUnixSeconds, entity_id: d.entityId,
         new_claim_id: newClaimId, existing_claim_id: d.existingFactId,
         similarity: d.similarity,

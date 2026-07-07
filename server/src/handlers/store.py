@@ -12,7 +12,6 @@ from typing import Optional, List
 import uuid
 from datetime import datetime
 
-from ..auth import verify_auth_key, hash_auth_key, AuthError
 from ..db import get_db, Database
 from ..dependencies import get_current_user
 
@@ -44,7 +43,11 @@ class FactJSON(BaseModel):
 
 class StoreRequestJSON(BaseModel):
     """JSON store request."""
-    user_id: str = Field(..., description="User's UUID", max_length=100)
+    # Legacy, optional. Ownership is enforced by the authenticated identity
+    # (``get_current_user``); a body ``user_id`` is only used as a
+    # defense-in-depth mismatch guard when the client bothers to send it.
+    # Sibling endpoints (batch-delete, export) already dropped it entirely.
+    user_id: Optional[str] = Field(None, description="User's UUID (legacy, optional)", max_length=100)
     facts: List[FactJSON] = Field(..., description="Facts to store", max_length=500)
 
 
@@ -82,19 +85,28 @@ async def store(
     Store encrypted facts.
 
     The client sends:
-    - user_id: User's UUID (must match authenticated user)
+    - user_id: User's UUID (legacy, OPTIONAL — validated only if present)
     - facts: List of encrypted facts with blind indices
 
     The server:
-    1. Validates user_id matches authenticated user
+    1. Scopes every write to the authenticated user (from get_current_user)
     2. Stores facts with encrypted_blob and blind_indices
     3. Returns list of stored fact IDs
+
+    Ownership is enforced by the data access itself: every DB call below is
+    keyed on the authenticated ``user_id``, never on the body-supplied value.
+    The body ``user_id`` compare is a defense-in-depth guard that rejects
+    contradictory requests; it is not the ownership boundary.
 
     The server NEVER decrypts the blob - it's stored as-is.
     """
     try:
-        # Validate user_id matches authenticated user
-        if request_obj.user_id != user_id:
+        # Defense-in-depth: reject requests whose body user_id contradicts the
+        # authenticated identity. Storage is scoped to the authenticated
+        # user_id regardless, so this only preserves the historical
+        # AUTH_FAILED response for mismatched requests. The guard applies
+        # ONLY when the client sends a user_id — it is now optional.
+        if request_obj.user_id is not None and request_obj.user_id != user_id:
             return StoreResponseJSON(
                 success=False,
                 error_code=ErrorCode.AUTH_FAILED,

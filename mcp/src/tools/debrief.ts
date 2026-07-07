@@ -10,6 +10,7 @@
  */
 
 import { TotalReclaw, FactMetadata } from '@totalreclaw/client';
+import type { ToolContext } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -223,9 +224,10 @@ export const debriefToolDefinition = {
  * Accepts Crystal-shaped input (preferred) or legacy facts array (backward compat).
  */
 export async function handleDebrief(
-  client: TotalReclaw,
+  ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const client = ctx.client as TotalReclaw;
   const input = args as Record<string, unknown>;
 
   // Crystal path (preferred)

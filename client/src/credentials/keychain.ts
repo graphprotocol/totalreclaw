@@ -12,6 +12,8 @@
  * - No passwords are logged or written to disk outside the OS keychain
  */
 
+import { TotalReclawError, TotalReclawErrorCode } from '../types';
+
 /**
  * Minimal interface for keytar's API surface that we consume.
  * Defined here so we do not need keytar's type declarations at compile time.
@@ -75,12 +77,16 @@ export async function storeCredentials(
   masterPassword: string
 ): Promise<void> {
   if (!userId || !masterPassword) {
-    throw new Error('userId and masterPassword are required');
+    throw new TotalReclawError(
+      TotalReclawErrorCode.INVALID_INPUT,
+      'userId and masterPassword are required'
+    );
   }
 
   const kt = getKeytar();
   if (!kt) {
-    throw new Error(
+    throw new TotalReclawError(
+      TotalReclawErrorCode.CREDENTIAL_STORE_UNAVAILABLE,
       'Keychain is not available in this environment. ' +
         'Install the "keytar" package for OS keychain support.'
     );
@@ -100,12 +106,16 @@ export async function getCredentials(
   userId: string
 ): Promise<string | null> {
   if (!userId) {
-    throw new Error('userId is required');
+    throw new TotalReclawError(
+      TotalReclawErrorCode.INVALID_INPUT,
+      'userId is required'
+    );
   }
 
   const kt = getKeytar();
   if (!kt) {
-    throw new Error(
+    throw new TotalReclawError(
+      TotalReclawErrorCode.CREDENTIAL_STORE_UNAVAILABLE,
       'Keychain is not available in this environment. ' +
         'Install the "keytar" package for OS keychain support.'
     );
@@ -125,12 +135,16 @@ export async function deleteCredentials(
   userId: string
 ): Promise<boolean> {
   if (!userId) {
-    throw new Error('userId is required');
+    throw new TotalReclawError(
+      TotalReclawErrorCode.INVALID_INPUT,
+      'userId is required'
+    );
   }
 
   const kt = getKeytar();
   if (!kt) {
-    throw new Error(
+    throw new TotalReclawError(
+      TotalReclawErrorCode.CREDENTIAL_STORE_UNAVAILABLE,
       'Keychain is not available in this environment. ' +
         'Install the "keytar" package for OS keychain support.'
     );

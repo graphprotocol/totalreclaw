@@ -12,6 +12,7 @@
  */
 
 import * as wasm from "@totalreclaw/core";
+import { TotalReclawError, TotalReclawErrorCode } from "../types";
 
 /**
  * Compute cosine similarity between two vectors
@@ -24,7 +25,10 @@ import * as wasm from "@totalreclaw/core";
  */
 export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) {
-    throw new Error(`Vector length mismatch: ${a.length} vs ${b.length}`);
+    throw new TotalReclawError(
+      TotalReclawErrorCode.INVALID_INPUT,
+      `Vector length mismatch: ${a.length} vs ${b.length}`
+    );
   }
 
   if (a.length === 0) return 0;
@@ -272,12 +276,18 @@ export function combineSignals(
   weights: number[]
 ): Array<{ id: string; score: number }> {
   if (signals.length !== weights.length) {
-    throw new Error('Number of signals must match number of weights');
+    throw new TotalReclawError(
+      TotalReclawErrorCode.INVALID_INPUT,
+      'Number of signals must match number of weights'
+    );
   }
 
   const weightSum = weights.reduce((a, b) => a + b, 0);
   if (Math.abs(weightSum - 1) > 0.001) {
-    throw new Error(`Weights must sum to 1, got ${weightSum}`);
+    throw new TotalReclawError(
+      TotalReclawErrorCode.INVALID_INPUT,
+      `Weights must sum to 1, got ${weightSum}`
+    );
   }
 
   // Get all unique IDs
@@ -293,11 +303,11 @@ export function combineSignals(
     const values = Array.from(signal.values());
     const normalized = normalizeScores(values);
     const idArray = Array.from(signal.keys());
-    const result = new Map<string, number>();
+    const normalizedMap = new Map<string, number>();
     for (let i = 0; i < idArray.length; i++) {
-      result.set(idArray[i], normalized[i]);
+      normalizedMap.set(idArray[i], normalized[i]);
     }
-    return result;
+    return normalizedMap;
   });
 
   // Combine with weights

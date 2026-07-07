@@ -4,6 +4,7 @@
  * Creates a Stripe checkout session for upgrading to Pro tier.
  */
 
+import type { ToolContext } from './types.js';
 import { UPGRADE_TOOL_DESCRIPTION } from '../prompts.js';
 import { getClientId } from '../client-id.js';
 
@@ -39,10 +40,11 @@ export interface CheckoutResponse {
  * the checkout URL for the user to complete payment.
  */
 export async function handleUpgrade(
-  serverUrl: string,
-  authKey: string,
+  ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const serverUrl = ctx.serverUrl ?? '';
+  const authKey = ctx.authKeyHex ?? '';
   const input = args as Record<string, unknown>;
   const walletAddress = input?.wallet_address as string;
 
@@ -87,14 +89,14 @@ export async function handleUpgrade(
       };
     }
 
-    const data = (await response.json()) as CheckoutResponse;
+    const checkoutJson = (await response.json()) as CheckoutResponse;
 
     return {
       content: [{
         type: 'text',
         text: JSON.stringify({
-          checkout_url: data.checkout_url,
-          message: `Open this URL to complete your upgrade to Pro: ${data.checkout_url}`,
+          checkout_url: checkoutJson.checkout_url,
+          message: `Open this URL to complete your upgrade to Pro: ${checkoutJson.checkout_url}`,
         }),
       }],
     };

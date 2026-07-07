@@ -70,7 +70,7 @@ pub fn encode_single_call(protobuf_payload: &[u8]) -> Vec<u8> {
 pub fn encode_single_call_to(protobuf_payload: &[u8], data_edge: &str) -> Result<Vec<u8>> {
     let dest: Address = data_edge
         .parse()
-        .map_err(|_| Error::Crypto(format!("invalid DataEdge address: {data_edge}")))?;
+        .map_err(|_| Error::InvalidInput(format!("invalid DataEdge address: {data_edge}")))?;
     let value = U256::ZERO;
     let data = Bytes::copy_from_slice(protobuf_payload);
 
@@ -94,10 +94,10 @@ pub fn encode_batch_call(protobuf_payloads: &[Vec<u8>]) -> Result<Vec<u8>> {
 /// [`encode_single_call_to`] with the same address.
 pub fn encode_batch_call_to(protobuf_payloads: &[Vec<u8>], data_edge: &str) -> Result<Vec<u8>> {
     if protobuf_payloads.is_empty() {
-        return Err(Error::Crypto("Batch must contain at least 1 payload".into()));
+        return Err(Error::InvalidInput("Batch must contain at least 1 payload".into()));
     }
     if protobuf_payloads.len() > MAX_BATCH_SIZE {
-        return Err(Error::Crypto(format!(
+        return Err(Error::InvalidInput(format!(
             "Batch size {} exceeds maximum of {}",
             protobuf_payloads.len(),
             MAX_BATCH_SIZE
@@ -111,7 +111,7 @@ pub fn encode_batch_call_to(protobuf_payloads: &[Vec<u8>], data_edge: &str) -> R
 
     let dest: Address = data_edge
         .parse()
-        .map_err(|_| Error::Crypto(format!("invalid DataEdge address: {data_edge}")))?;
+        .map_err(|_| Error::InvalidInput(format!("invalid DataEdge address: {data_edge}")))?;
     let dests: Vec<Address> = vec![dest; protobuf_payloads.len()];
     let values: Vec<U256> = vec![U256::ZERO; protobuf_payloads.len()];
     let datas: Vec<Bytes> = protobuf_payloads
@@ -337,7 +337,11 @@ fn parse_hex_u128(hex_str: &str) -> u128 {
     u128::from_str_radix(hex_str.trim_start_matches("0x"), 16).unwrap_or(0)
 }
 
-fn keccak256_hash(data: &[u8]) -> [u8; 32] {
+/// keccak256 over `data` (Ethereum's `Keccak::v256`, not SHA3-256).
+///
+/// Canonical definition shared across the workspace: `totalreclaw-memory`
+/// re-exports this rather than hand-rolling its own copy.
+pub fn keccak256_hash(data: &[u8]) -> [u8; 32] {
     use tiny_keccak::{Hasher, Keccak};
     let mut keccak = Keccak::v256();
     let mut hash = [0u8; 32];

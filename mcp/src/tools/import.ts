@@ -1,4 +1,5 @@
 import { TotalReclaw, FactMetadata } from '@totalreclaw/client';
+import type { ToolContext } from './types.js';
 import { IMPORT_TOOL_DESCRIPTION } from '../prompts.js';
 
 export interface ImportInput {
@@ -80,9 +81,9 @@ function parseJsonContent(content: string): { facts: ParsedFact[]; errors: strin
   const facts: ParsedFact[] = [];
 
   try {
-    const data = JSON.parse(content);
+    const parsedJson = JSON.parse(content);
 
-    const factArray = Array.isArray(data) ? data : data.facts;
+    const factArray = Array.isArray(parsedJson) ? parsedJson : parsedJson.facts;
     if (!Array.isArray(factArray)) {
       errors.push('JSON must contain a facts array');
       return { facts, errors };
@@ -157,9 +158,10 @@ function generateImportId(): string {
 }
 
 export async function handleImport(
-  client: TotalReclaw,
+  ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const client = ctx.client as TotalReclaw;
   const input = args as ImportInput;
   const errors: ImportOutput['errors'] = [];
   const warnings: string[] = [];

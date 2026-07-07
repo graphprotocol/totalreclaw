@@ -34,6 +34,24 @@ use crate::relay::RelayClient;
 use crate::search;
 use crate::Result;
 
+/// Submit a prepared protobuf payload to the relay.
+///
+/// Chooses the native ERC-4337 UserOp path when a signing key is available and
+/// falls back to the legacy bundler proxy otherwise. Shared by every store /
+/// tombstone function so the native-vs-legacy branch lives in one place.
+async fn submit_payload(
+    relay: &RelayClient,
+    payload: &[u8],
+    private_key: Option<&[u8; 32]>,
+) -> Result<()> {
+    if let Some(pk) = private_key {
+        relay.submit_fact_native(payload, pk).await?;
+    } else {
+        relay.submit_protobuf(payload).await?;
+    }
+    Ok(())
+}
+
 /// Store a fact on-chain via native UserOp submission.
 ///
 /// Full pipeline:
@@ -57,12 +75,16 @@ pub async fn store_fact(
 
     // 2. Check for exact duplicate: search by content fingerprint
     //    If an existing fact has the same fingerprint, tombstone it (supersede).
-    if let Ok(existing) =
-        search::search_by_fingerprint(relay, relay.wallet_address(), &content_fp).await
-    {
-        if let Some(dup) = existing {
+    match search::search_by_fingerprint(relay, &content_fp).await {
+        Ok(Some(dup)) => {
             // Exact duplicate found -- supersede it with a tombstone
             let _ = store_tombstone(&dup.id, relay, private_key).await;
+        }
+        Ok(None) => {}
+        Err(e) => {
+            // Graceful degrade: proceed with the store, but don't swallow the
+            // failure silently — a missed dedup may leave a duplicate on-chain.
+            log::warn!("store: fingerprint dedup lookup failed, skipping exact dedup: {e}");
         }
     }
 
@@ -86,17 +108,10 @@ pub async fn store_fact(
         source,
         relay.wallet_address(),
         "zeroclaw",
-    )
-    .map_err(|e| crate::Error::Crypto(e.to_string()))?;
+    )?;
 
     // 6. Submit
-    if let Some(pk) = private_key {
-        relay
-            .submit_fact_native(&prepared.protobuf_bytes, pk)
-            .await?;
-    } else {
-        relay.submit_protobuf(&prepared.protobuf_bytes).await?;
-    }
+    submit_payload(relay, &prepared.protobuf_bytes, private_key).await?;
 
     Ok(prepared.fact_id)
 }
@@ -119,11 +134,13 @@ pub async fn store_fact_with_importance(
     let content_fp = fingerprint::generate_content_fingerprint(content, &keys.dedup_key);
 
     // Exact dedup check
-    if let Ok(existing) =
-        search::search_by_fingerprint(relay, relay.wallet_address(), &content_fp).await
-    {
-        if let Some(dup) = existing {
+    match search::search_by_fingerprint(relay, &content_fp).await {
+        Ok(Some(dup)) => {
             let _ = store_tombstone(&dup.id, relay, private_key).await;
+        }
+        Ok(None) => {}
+        Err(e) => {
+            log::warn!("store: fingerprint dedup lookup failed, skipping exact dedup: {e}");
         }
     }
 
@@ -146,17 +163,10 @@ pub async fn store_fact_with_importance(
         source,
         relay.wallet_address(),
         "zeroclaw",
-    )
-    .map_err(|e| crate::Error::Crypto(e.to_string()))?;
+    )?;
 
     // Submit
-    if let Some(pk) = private_key {
-        relay
-            .submit_fact_native(&prepared.protobuf_bytes, pk)
-            .await?;
-    } else {
-        relay.submit_protobuf(&prepared.protobuf_bytes).await?;
-    }
+    submit_payload(relay, &prepared.protobuf_bytes, private_key).await?;
 
     Ok(prepared.fact_id)
 }
@@ -190,8 +200,7 @@ pub async fn store_fact_batch(
             source,
             relay.wallet_address(),
             "zeroclaw",
-        )
-        .map_err(|e| crate::Error::Crypto(e.to_string()))?;
+        )?;
 
         prepared_facts.push(prepared);
     }
@@ -221,13 +230,7 @@ pub async fn store_tombstone(
     private_key: Option<&[u8; 32]>,
 ) -> Result<()> {
     let protobuf = core_store::prepare_tombstone(fact_id, relay.wallet_address());
-
-    if let Some(pk) = private_key {
-        relay.submit_fact_native(&protobuf, pk).await?;
-    } else {
-        relay.submit_protobuf(&protobuf).await?;
-    }
-    Ok(())
+    submit_payload(relay, &protobuf, private_key).await
 }
 
 /// Store a Memory Taxonomy v1 tombstone on-chain.
@@ -241,13 +244,7 @@ pub async fn store_tombstone_v1(
     private_key: Option<&[u8; 32]>,
 ) -> Result<()> {
     let protobuf = core_store::prepare_tombstone_v1(fact_id, relay.wallet_address());
-
-    if let Some(pk) = private_key {
-        relay.submit_fact_native(&protobuf, pk).await?;
-    } else {
-        relay.submit_protobuf(&protobuf).await?;
-    }
-    Ok(())
+    submit_payload(relay, &protobuf, private_key).await
 }
 
 // ---------------------------------------------------------------------------
@@ -350,15 +347,19 @@ pub async fn store_fact_v1(
 
     // 2. Serialize envelope
     let envelope_json = serde_json::to_string(&claim)
-        .map_err(|e| crate::Error::Crypto(format!("v1 envelope serialize: {e}")))?;
+        .map_err(|e| crate::Error::Serialization(format!("v1 envelope serialize: {e}")))?;
 
     // 3. Exact-dedup via content fingerprint
     let content_fp = fingerprint::generate_content_fingerprint(&claim.text, &keys.dedup_key);
-    if let Ok(Some(dup)) =
-        search::search_by_fingerprint(relay, relay.wallet_address(), &content_fp).await
-    {
-        // v1 vaults emit v4 tombstones
-        let _ = store_tombstone_v1(&dup.id, relay, private_key).await;
+    match search::search_by_fingerprint(relay, &content_fp).await {
+        Ok(Some(dup)) => {
+            // v1 vaults emit v4 tombstones
+            let _ = store_tombstone_v1(&dup.id, relay, private_key).await;
+        }
+        Ok(None) => {}
+        Err(e) => {
+            log::warn!("store_v1: fingerprint dedup lookup failed, skipping exact dedup: {e}");
+        }
     }
 
     // 4. Generate embedding
@@ -384,15 +385,10 @@ pub async fn store_fact_v1(
         &source_tag,
         relay.wallet_address(),
         "zeroclaw",
-    )
-    .map_err(|e| crate::Error::Crypto(e.to_string()))?;
+    )?;
 
     // 7. Submit
-    if let Some(pk) = private_key {
-        relay.submit_fact_native(&prepared.protobuf_bytes, pk).await?;
-    } else {
-        relay.submit_protobuf(&prepared.protobuf_bytes).await?;
-    }
+    submit_payload(relay, &prepared.protobuf_bytes, private_key).await?;
 
     Ok(prepared.fact_id)
 }
@@ -434,14 +430,21 @@ async fn find_best_duplicate(
     }
 
     // Fetch existing candidates (up to core's STORE_DEDUP_MAX_CANDIDATES)
-    let candidates = search::search_candidates(
+    let candidates = match search::search_candidates(
         relay,
-        relay.wallet_address(),
         &trapdoors,
         consolidation::STORE_DEDUP_MAX_CANDIDATES,
     )
     .await
-    .ok()?;
+    {
+        Ok(c) => c,
+        Err(e) => {
+            // Graceful degrade: no candidates means no near-dup supersede this
+            // store — surface the relay failure instead of swallowing it.
+            log::warn!("store: near-duplicate candidate fetch failed, skipping semantic dedup: {e}");
+            return None;
+        }
+    };
 
     // Decrypt embeddings into (id, embedding) pairs for the core function
     let mut existing: Vec<(String, Vec<f32>)> = Vec::with_capacity(candidates.len());
@@ -517,10 +520,16 @@ pub async fn store_claim_with_contradiction_check(
 
     // 1. Content fingerprint exact-dedup
     let content_fp = fingerprint::generate_content_fingerprint(content, &keys.dedup_key);
-    if let Ok(Some(dup)) =
-        search::search_by_fingerprint(relay, relay.wallet_address(), &content_fp).await
-    {
-        let _ = store_tombstone(&dup.id, relay, private_key).await;
+    match search::search_by_fingerprint(relay, &content_fp).await {
+        Ok(Some(dup)) => {
+            let _ = store_tombstone(&dup.id, relay, private_key).await;
+        }
+        Ok(None) => {}
+        Err(e) => {
+            log::warn!(
+                "store_claim: fingerprint dedup lookup failed, skipping exact dedup: {e}"
+            );
+        }
     }
 
     // 2. Generate embedding
@@ -602,16 +611,9 @@ pub async fn store_claim_with_contradiction_check(
         source,
         relay.wallet_address(),
         "zeroclaw",
-    )
-    .map_err(|e| crate::Error::Crypto(e.to_string()))?;
+    )?;
 
-    if let Some(pk) = private_key {
-        relay
-            .submit_fact_native(&prepared.protobuf_bytes, pk)
-            .await?;
-    } else {
-        relay.submit_protobuf(&prepared.protobuf_bytes).await?;
-    }
+    submit_payload(relay, &prepared.protobuf_bytes, private_key).await?;
 
     Ok(ContradictionStoreResult {
         fact_id: prepared.fact_id,
@@ -647,14 +649,18 @@ async fn fetch_contradiction_candidates(
     // Fetch candidates from subgraph
     let facts = match search::search_candidates(
         relay,
-        relay.wallet_address(),
         &trapdoors,
         decision_log::CONTRADICTION_CANDIDATE_CAP,
     )
     .await
     {
         Ok(f) => f,
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            log::warn!(
+                "store_claim: contradiction candidate fetch failed, skipping detection: {e}"
+            );
+            return Vec::new();
+        }
     };
 
     // Decrypt and parse each candidate into (Claim, id, embedding)

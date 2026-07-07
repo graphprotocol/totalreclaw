@@ -56,10 +56,37 @@ use crate::search;
 use crate::store;
 use crate::wallet;
 use crate::Result;
-use totalreclaw_core::claims::MemorySource;
+use totalreclaw_core::claims::{MemorySource, MemoryTypeV1};
 
 /// Default relay URL.
 const DEFAULT_RELAY_URL: &str = "https://api.totalreclaw.xyz";
+
+/// Gnosis mainnet chain id (Pro tier).
+const CHAIN_GNOSIS: u64 = 100;
+/// Base Sepolia chain id (free-tier default).
+const CHAIN_BASE_SEPOLIA: u64 = 84532;
+
+/// Resolve the chain id to use before the relay handshake, from the on-disk
+/// billing cache alone (no network). This is the FIRST of two resolution
+/// steps in [`TotalReclawMemory::new`]:
+///
+///   1. **cache (offline, here):** Pro → Gnosis mainnet ([`CHAIN_GNOSIS`]),
+///      otherwise the free-tier Base Sepolia default ([`CHAIN_BASE_SEPOLIA`]).
+///      A cold/absent cache also yields the free-tier default so the very
+///      first handshake still targets a valid chain.
+///   2. **network (authoritative, in `new`):** after registering, a live
+///      `billing_status()` call can still promote a Pro account to
+///      [`CHAIN_GNOSIS`] if the cache was cold or stale.
+///
+/// Precedence is therefore cache-then-network, with the network check only
+/// ever *upgrading* to Gnosis — never downgrading. There is no env override on
+/// this path (the `TOTALRECLAW_CHAIN_ID` var was removed in v1).
+fn initial_chain_id_from_cache() -> u64 {
+    match billing::read_cache() {
+        Some(cache) if cache.is_pro() => CHAIN_GNOSIS,
+        _ => CHAIN_BASE_SEPOLIA,
+    }
+}
 
 /// Result of parsing the decrypted fact envelope.
 ///
@@ -93,11 +120,12 @@ fn parse_decrypted_envelope(decrypted: &str) -> DecryptedEnvelope {
                 .and_then(|v| v.as_str())
                 .unwrap_or(decrypted)
                 .to_string();
-            // v1 source field: literal enum string
+            // v1 source field: parse present strings via the core enum
+            // (absent → None so the reranker falls back to the legacy weight).
             let v1_source = obj
                 .get("source")
                 .and_then(|v| v.as_str())
-                .and_then(parse_v1_source);
+                .map(MemorySource::from_str_lossy);
             // v1 "type" → ZeroClaw category mapping
             let v1_type = obj
                 .get("type")
@@ -133,32 +161,22 @@ fn parse_decrypted_envelope(decrypted: &str) -> DecryptedEnvelope {
     }
 }
 
-/// Parse a v1 memory source literal to the core `MemorySource` enum.
-fn parse_v1_source(raw: &str) -> Option<MemorySource> {
-    match raw {
-        "user" => Some(MemorySource::User),
-        "user-inferred" => Some(MemorySource::UserInferred),
-        "assistant" => Some(MemorySource::Assistant),
-        "external" => Some(MemorySource::External),
-        "derived" => Some(MemorySource::Derived),
-        _ => None,
-    }
-}
-
 /// Map a v1 memory type to a ZeroClaw memory category.
 ///
-/// Category rules:
-///  * claim, preference, directive, commitment → Core (durable)
+/// Parses the raw type token through the core [`MemoryTypeV1`] enum (rather
+/// than re-matching taxonomy strings here) so the type vocabulary stays in
+/// one place. Category rules:
 ///  * episode → Conversation (7-day decay)
-///  * summary → Core (synthesis is high-value)
-///  * anything else → Core (safe default)
+///  * claim / preference / directive / commitment / summary → Core (durable)
+///  * unknown → Core (via the enum's lossy fallback to `Claim`)
 fn v1_type_to_category(v1_type: &str) -> MemoryCategory {
-    match v1_type {
-        "episode" => MemoryCategory::Conversation,
-        "claim" | "preference" | "directive" | "commitment" | "summary" => {
-            MemoryCategory::Core
-        }
-        _ => MemoryCategory::Core,
+    match MemoryTypeV1::from_str_lossy(v1_type) {
+        MemoryTypeV1::Episode => MemoryCategory::Conversation,
+        MemoryTypeV1::Claim
+        | MemoryTypeV1::Preference
+        | MemoryTypeV1::Directive
+        | MemoryTypeV1::Commitment
+        | MemoryTypeV1::Summary => MemoryCategory::Core,
     }
 }
 
@@ -200,6 +218,19 @@ impl std::fmt::Display for MemoryCategory {
             MemoryCategory::Custom(s) => write!(f, "{}", s),
         }
     }
+}
+
+/// A single item in a batched store.
+///
+/// Mirrors the typed shape of the single-item [`TotalReclawMemory::store`]
+/// path — plaintext content plus a typed [`MemoryCategory`] — rather than
+/// positional `(content, source)` strings. The category is mapped to the
+/// on-chain `zeroclaw_{category}` source tag internally, exactly as the
+/// single-item path does.
+#[derive(Debug, Clone)]
+pub struct BatchStoreItem {
+    pub content: String,
+    pub category: MemoryCategory,
 }
 
 /// A memory entry (matches ZeroClaw's `MemoryEntry`).
@@ -255,6 +286,92 @@ impl Default for TotalReclawConfig {
     }
 }
 
+/// Merge broadened-search facts into the trapdoor-search hits, deduplicating
+/// by fact id. Trapdoor hits keep their order and priority; a broadened fact is
+/// appended only if its id was not already present.
+///
+/// Extracted from [`TotalReclawMemory::recall`] so the dedup rule is unit-
+/// testable without a live relay.
+fn merge_candidates_dedup(
+    mut candidates: Vec<search::SubgraphFact>,
+    broadened: Vec<search::SubgraphFact>,
+) -> Vec<search::SubgraphFact> {
+    let mut seen: std::collections::HashSet<String> =
+        candidates.iter().map(|c| c.id.clone()).collect();
+    for fact in broadened {
+        if !seen.contains(&fact.id) {
+            seen.insert(fact.id.clone());
+            candidates.push(fact);
+        }
+    }
+    candidates
+}
+
+/// Decrypt each candidate fact and build the reranker input. Facts whose blob
+/// fails to decode or decrypt are skipped. A stored embedding whose dimension
+/// no longer matches the current model is re-embedded from the decrypted text
+/// (and dropped to empty if re-embedding fails).
+///
+/// Extracted from [`TotalReclawMemory::recall`] so the decrypt/dedup/re-embed
+/// paths are unit-testable with a stub [`EmbeddingProvider`] and hand-built
+/// facts — no live relay required.
+async fn decrypt_and_prepare_candidates(
+    candidates: &[search::SubgraphFact],
+    keys: &DerivedKeys,
+    embedding_provider: &dyn EmbeddingProvider,
+) -> Vec<Candidate> {
+    let mut rerank_candidates = Vec::new();
+    for fact in candidates {
+        // Decrypt content
+        let blob_b64 = match search::hex_blob_to_base64(&fact.encrypted_blob) {
+            Some(b) => b,
+            None => continue,
+        };
+        let decrypted = match crypto::decrypt(&blob_b64, &keys.encryption_key) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        // Parse the envelope to extract the display text + v1 source.
+        // v1 blobs carry `source` (Retrieval v2 Tier 1 weighting signal);
+        // v0 blobs don't — reranker falls back to the legacy claim weight.
+        let envelope = parse_decrypted_envelope(&decrypted);
+        let text = envelope.text;
+
+        // Decrypt embedding (if available)
+        let mut emb = fact
+            .encrypted_embedding
+            .as_deref()
+            .and_then(|e| crypto::decrypt(e, &keys.encryption_key).ok())
+            .and_then(|b64| base64::engine::general_purpose::STANDARD.decode(&b64).ok())
+            .map(|bytes| {
+                bytes
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect::<Vec<f32>>()
+            })
+            .unwrap_or_default();
+
+        // Re-embed if stored dimension differs from current model
+        let expected_dims = embedding_provider.dimensions();
+        if !emb.is_empty() && emb.len() != expected_dims {
+            match embedding_provider.embed(&text).await {
+                Ok(fresh) => emb = fresh,
+                Err(_) => emb = Vec::new(),
+            }
+        }
+
+        rerank_candidates.push(Candidate {
+            id: fact.id.clone(),
+            text: text.clone(),
+            embedding: emb,
+            timestamp: fact.timestamp.clone().unwrap_or_default(),
+            source: envelope.v1_source,
+        });
+    }
+    rerank_candidates
+}
+
 impl TotalReclawMemory {
     /// Create a new TotalReclaw memory backend.
     ///
@@ -284,13 +401,10 @@ impl TotalReclawMemory {
         let auth_key_hash = crypto::compute_auth_key_hash(&keys.auth_key);
         let salt_hex = hex::encode(keys.salt);
 
-        // Auto-detect Pro tier from billing cache for chain routing
-        // Free tier = Base Sepolia (84532), Pro tier = Gnosis mainnet (100)
-        let chain_id = if let Some(cache) = billing::read_cache() {
-            if cache.is_pro() { 100 } else { 84532 }
-        } else {
-            84532
-        };
+        // Chain resolution step 1 (offline): guess from the billing cache so the
+        // first handshake targets the right chain without a round-trip.
+        // See `initial_chain_id_from_cache` for the full cache→network precedence.
+        let chain_id = initial_chain_id_from_cache();
 
         // Create relay client with wallet address
         let relay_config = RelayConfig {
@@ -308,10 +422,12 @@ impl TotalReclawMemory {
             .await
             .ok(); // Non-fatal if registration fails (may already be registered)
 
-        // Re-check billing to potentially update chain_id for Pro users
+        // Chain resolution step 2 (network, authoritative): a live billing check
+        // can promote a Pro account to Gnosis mainnet when the cache was cold or
+        // stale. This only ever upgrades to `CHAIN_GNOSIS`, never downgrades.
         if let Ok(status) = relay.billing_status().await {
             if status.tier.as_deref() == Some("pro") {
-                relay.set_chain_id(100);
+                relay.set_chain_id(CHAIN_GNOSIS);
             }
         }
 
@@ -404,13 +520,26 @@ impl TotalReclawMemory {
 
     /// Store multiple memory entries as a single batched UserOp.
     ///
+    /// Each item carries a typed [`MemoryCategory`], matching the single-item
+    /// `store` path; the category is mapped to the `zeroclaw_{category}` source
+    /// tag before submission.
+    ///
     /// Gas savings: ~64% vs individual submissions for batch of 5.
-    pub async fn store_batch(
-        &self,
-        facts: &[(&str, &str)], // (content, source) pairs
-    ) -> Result<Vec<String>> {
+    pub async fn store_batch(&self, items: &[BatchStoreItem]) -> Result<Vec<String>> {
+        // Map each typed category to its on-chain source tag (same rule as the
+        // single-item path), then hand (content, source) pairs to the pipeline.
+        let sources: Vec<String> = items
+            .iter()
+            .map(|it| format!("zeroclaw_{}", it.category))
+            .collect();
+        let facts: Vec<(&str, &str)> = items
+            .iter()
+            .zip(sources.iter())
+            .map(|(it, src)| (it.content.as_str(), src.as_str()))
+            .collect();
+
         let result = store::store_fact_batch(
-            facts,
+            &facts,
             &self.keys,
             &self.lsh_hasher,
             self.embedding_provider.as_ref(),
@@ -462,9 +591,8 @@ impl TotalReclawMemory {
         let max_candidates = billing::get_max_candidate_pool(billing_cache.as_ref());
 
         // 7. Search subgraph
-        let mut candidates = search::search_candidates(
+        let candidates = search::search_candidates(
             &self.relay,
-            self.relay.wallet_address(),
             &all_trapdoors,
             max_candidates,
         )
@@ -473,78 +601,22 @@ impl TotalReclawMemory {
         // Always run broadened search and merge — ensures vocabulary mismatches
         // (e.g., "preferences" vs "prefer") don't cause recall failures.
         // The reranker handles scoring; extra cost is ~1 GraphQL query per recall.
-        let broadened = search::search_broadened(
-            &self.relay,
-            self.relay.wallet_address(),
-            max_candidates,
+        let broadened = search::search_broadened(&self.relay, max_candidates)
+            .await
+            .unwrap_or_default();
+
+        // Merge broadened results into the trapdoor hits (deduplicate by ID).
+        let candidates = merge_candidates_dedup(candidates, broadened);
+
+        // 8. Decrypt candidates and build reranker input (with v1 provenance),
+        // re-embedding any fact whose stored embedding dimension no longer
+        // matches the current model.
+        let rerank_candidates = decrypt_and_prepare_candidates(
+            &candidates,
+            &self.keys,
+            self.embedding_provider.as_ref(),
         )
-        .await
-        .unwrap_or_default();
-
-        // Merge broadened results with existing candidates (deduplicate by ID)
-        let mut seen: std::collections::HashSet<String> =
-            candidates.iter().map(|c| c.id.clone()).collect();
-        for fact in broadened {
-            if !seen.contains(&fact.id) {
-                seen.insert(fact.id.clone());
-                candidates.push(fact);
-            }
-        }
-
-        // 8. Decrypt candidates and build reranker input (with v1 provenance)
-        let mut rerank_candidates = Vec::new();
-        for fact in &candidates {
-            // Decrypt content
-            let blob_b64 = match search::hex_blob_to_base64(&fact.encrypted_blob) {
-                Some(b) => b,
-                None => continue,
-            };
-            let decrypted = match crypto::decrypt(&blob_b64, &self.keys.encryption_key) {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-
-            // Parse the envelope to extract the display text + v1 source.
-            // v1 blobs carry `source` (Retrieval v2 Tier 1 weighting signal);
-            // v0 blobs don't — reranker falls back to the legacy claim weight.
-            let envelope = parse_decrypted_envelope(&decrypted);
-            let text = envelope.text;
-
-            // Decrypt embedding (if available)
-            let mut emb = fact
-                .encrypted_embedding
-                .as_deref()
-                .and_then(|e| crypto::decrypt(e, &self.keys.encryption_key).ok())
-                .and_then(|b64| {
-                    base64::engine::general_purpose::STANDARD
-                        .decode(&b64)
-                        .ok()
-                })
-                .map(|bytes| {
-                    bytes
-                        .chunks_exact(4)
-                        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                        .collect::<Vec<f32>>()
-                })
-                .unwrap_or_default();
-
-            // Re-embed if stored dimension differs from current model
-            let expected_dims = self.embedding_provider.dimensions();
-            if !emb.is_empty() && emb.len() != expected_dims {
-                match self.embedding_provider.embed(&text).await {
-                    Ok(fresh) => emb = fresh,
-                    Err(_) => emb = Vec::new(),
-                }
-            }
-
-            rerank_candidates.push(Candidate {
-                id: fact.id.clone(),
-                text: text.clone(),
-                embedding: emb,
-                timestamp: fact.timestamp.clone().unwrap_or_default(),
-                source: envelope.v1_source,
-            });
-        }
+        .await;
 
         // 9. Rerank with Retrieval v2 Tier 1 source weights enabled.
         // v1 blobs carry a MemorySource; v0 blobs fall through to the legacy
@@ -606,7 +678,7 @@ impl TotalReclawMemory {
         _category: Option<&MemoryCategory>,
         _session_id: Option<&str>,
     ) -> Result<Vec<MemoryEntry>> {
-        let facts = search::fetch_all_facts(&self.relay, self.relay.wallet_address()).await?;
+        let facts = search::fetch_all_facts(&self.relay).await?;
 
         let mut entries = Vec::new();
         for fact in facts {
@@ -689,7 +761,7 @@ impl TotalReclawMemory {
     /// caller to run the MCP server's `totalreclaw_pin` tool instead.
     /// See ZeroClaw 2.0 Known Gaps in CLAUDE.md.
     pub async fn pin(&self, _memory_id: &str) -> Result<()> {
-        Err(crate::Error::Crypto(
+        Err(crate::Error::NotImplemented(
             "pin: not yet implemented in ZeroClaw — use the MCP totalreclaw_pin tool \
              from your agent. See CLAUDE.md Known Gaps."
                 .into(),
@@ -704,9 +776,9 @@ impl TotalReclawMemory {
     pub async fn retype(
         &self,
         _memory_id: &str,
-        _new_type: MemorySource,
+        _new_type: MemoryTypeV1,
     ) -> Result<()> {
-        Err(crate::Error::Crypto(
+        Err(crate::Error::NotImplemented(
             "retype: not yet implemented in ZeroClaw — use the MCP \
              totalreclaw_retype tool. See CLAUDE.md Known Gaps."
                 .into(),
@@ -722,7 +794,7 @@ impl TotalReclawMemory {
         _memory_id: &str,
         _new_scope: totalreclaw_core::claims::MemoryScope,
     ) -> Result<()> {
-        Err(crate::Error::Crypto(
+        Err(crate::Error::NotImplemented(
             "set_scope: not yet implemented in ZeroClaw — use the MCP \
              totalreclaw_set_scope tool. See CLAUDE.md Known Gaps."
                 .into(),
@@ -731,7 +803,7 @@ impl TotalReclawMemory {
 
     /// Count active memories.
     pub async fn count(&self) -> Result<usize> {
-        search::count_facts(&self.relay, self.relay.wallet_address()).await
+        search::count_facts(&self.relay).await
     }
 
     /// Health check.
@@ -800,5 +872,162 @@ impl TotalReclawMemory {
     /// Upgrade to Pro tier -- returns Stripe checkout URL.
     pub async fn upgrade(&self) -> Result<String> {
         self.relay.create_checkout().await
+    }
+}
+
+#[cfg(test)]
+mod recall_tests {
+    use super::*;
+    use std::future::Future;
+    use std::pin::Pin;
+
+    /// Deterministic key material — no mnemonic derivation needed for the
+    /// pure decrypt/re-embed paths under test.
+    fn test_keys() -> DerivedKeys {
+        DerivedKeys {
+            auth_key: [1u8; 32],
+            encryption_key: [7u8; 32],
+            dedup_key: [3u8; 32],
+            salt: [2u8; 32],
+        }
+    }
+
+    /// Build an `encrypted_blob` the way the store path does: encrypt → base64
+    /// → decode → hex (recall reverses this via `hex_blob_to_base64`).
+    fn encrypt_blob(keys: &DerivedKeys, plaintext: &str) -> String {
+        let b64 = crypto::encrypt(plaintext, &keys.encryption_key).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&b64).unwrap();
+        hex::encode(bytes)
+    }
+
+    /// Build an `encrypted_embedding`: little-endian f32 bytes → base64 → encrypt
+    /// (recall decrypts then base64-decodes then reads f32 chunks).
+    fn encrypt_embedding(keys: &DerivedKeys, emb: &[f32]) -> String {
+        let mut bytes = Vec::with_capacity(emb.len() * 4);
+        for f in emb {
+            bytes.extend_from_slice(&f.to_le_bytes());
+        }
+        let inner_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        crypto::encrypt(&inner_b64, &keys.encryption_key).unwrap()
+    }
+
+    fn fact(id: &str, encrypted_blob: &str, encrypted_embedding: Option<String>) -> search::SubgraphFact {
+        search::SubgraphFact {
+            id: id.to_string(),
+            encrypted_blob: encrypted_blob.to_string(),
+            encrypted_embedding,
+            decay_score: None,
+            timestamp: Some("2026-01-01T00:00:00Z".to_string()),
+            created_at: None,
+            is_active: Some(true),
+            content_fp: None,
+        }
+    }
+
+    /// Stub embedding provider: reports a fixed dimensionality and returns a
+    /// fixed vector on `embed`. Used to drive the re-embed branch offline.
+    struct StubEmbedder {
+        dims: usize,
+        out: Vec<f32>,
+    }
+
+    impl EmbeddingProvider for StubEmbedder {
+        fn embed(&self, _text: &str) -> Pin<Box<dyn Future<Output = Result<Vec<f32>>> + Send + '_>> {
+            let out = self.out.clone();
+            Box::pin(async move { Ok(out) })
+        }
+        fn dimensions(&self) -> usize {
+            self.dims
+        }
+    }
+
+    const V1_ENVELOPE: &str = r#"{"text":"cats are great","type":"claim","source":"user"}"#;
+
+    #[test]
+    fn merge_candidates_dedup_appends_only_unseen() {
+        let trapdoor = vec![fact("a", "", None), fact("b", "", None)];
+        let broadened = vec![fact("b", "", None), fact("c", "", None)];
+        let out = merge_candidates_dedup(trapdoor, broadened);
+        let ids: Vec<_> = out.iter().map(|f| f.id.clone()).collect();
+        // Trapdoor hits keep their order; only the unseen broadened id is added.
+        assert_eq!(ids, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn merge_candidates_dedup_preserves_all_when_disjoint() {
+        let trapdoor = vec![fact("a", "", None)];
+        let broadened = vec![fact("b", "", None)];
+        let out = merge_candidates_dedup(trapdoor, broadened);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn recall_reembeds_on_dimension_mismatch() {
+        let keys = test_keys();
+        let blob = encrypt_blob(&keys, V1_ENVELOPE);
+        // Stored embedding is 3-dim; current model expects 4-dim.
+        let emb_blob = encrypt_embedding(&keys, &[0.1, 0.2, 0.3]);
+        let stub = StubEmbedder { dims: 4, out: vec![9.0, 9.0, 9.0, 9.0] };
+
+        let out =
+            decrypt_and_prepare_candidates(&[fact("x", &blob, Some(emb_blob))], &keys, &stub).await;
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].text, "cats are great");
+        // Dimension mismatch triggers a fresh embed from the decrypted text.
+        assert_eq!(out[0].embedding, vec![9.0, 9.0, 9.0, 9.0]);
+    }
+
+    #[tokio::test]
+    async fn recall_keeps_embedding_when_dimension_matches() {
+        let keys = test_keys();
+        let blob = encrypt_blob(&keys, V1_ENVELOPE);
+        let stored = vec![0.5f32, 0.6, 0.7, 0.8];
+        let emb_blob = encrypt_embedding(&keys, &stored);
+        // Provider would return a different vector; it must NOT be consulted.
+        let stub = StubEmbedder { dims: 4, out: vec![9.0, 9.0, 9.0, 9.0] };
+
+        let out =
+            decrypt_and_prepare_candidates(&[fact("y", &blob, Some(emb_blob))], &keys, &stub).await;
+
+        assert_eq!(out[0].embedding, stored);
+    }
+
+    #[tokio::test]
+    async fn recall_leaves_missing_embedding_empty() {
+        let keys = test_keys();
+        let blob = encrypt_blob(&keys, V1_ENVELOPE);
+        let stub = StubEmbedder { dims: 4, out: vec![9.0, 9.0, 9.0, 9.0] };
+
+        let out = decrypt_and_prepare_candidates(&[fact("z", &blob, None)], &keys, &stub).await;
+
+        // No stored embedding: the re-embed guard (`!emb.is_empty()`) skips, so
+        // the candidate carries an empty vector (reranker falls back to BM25).
+        assert!(out[0].embedding.is_empty());
+    }
+
+    #[tokio::test]
+    async fn recall_skips_undecryptable_and_wrong_key_blobs() {
+        let keys = test_keys();
+        let good = encrypt_blob(&keys, V1_ENVELOPE);
+        // "nothex" fails hex decode; a blob encrypted under a different key
+        // decodes as hex/base64 but fails authenticated decryption.
+        let wrong_key = DerivedKeys { encryption_key: [42u8; 32], ..test_keys() };
+        let wrong = encrypt_blob(&wrong_key, V1_ENVELOPE);
+        let stub = StubEmbedder { dims: 4, out: vec![] };
+
+        let out = decrypt_and_prepare_candidates(
+            &[
+                fact("nothex", "nothex", None),
+                fact("wrongkey", &wrong, None),
+                fact("good", &good, None),
+            ],
+            &keys,
+            &stub,
+        )
+        .await;
+
+        let ids: Vec<_> = out.iter().map(|c| c.id.clone()).collect();
+        assert_eq!(ids, vec!["good"]);
     }
 }

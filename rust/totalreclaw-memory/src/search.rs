@@ -53,10 +53,10 @@ struct ExportData {
 /// deduplicate results by fact ID.
 pub async fn search_candidates(
     relay: &RelayClient,
-    owner: &str,
     trapdoors: &[String],
     max_candidates: usize,
 ) -> Result<Vec<SubgraphFact>> {
+    let owner = relay.wallet_address();
     let mut all_results: HashMap<String, SubgraphFact> = HashMap::new();
 
     // Split trapdoors into batches
@@ -97,12 +97,11 @@ pub async fn search_candidates(
 /// Used as a fallback when trapdoor search returns 0 candidates (vague queries).
 pub async fn search_broadened(
     relay: &RelayClient,
-    owner: &str,
     max_candidates: usize,
 ) -> Result<Vec<SubgraphFact>> {
     let first = max_candidates.min(PAGE_SIZE);
     let variables = serde_json::json!({
-        "owner": owner,
+        "owner": relay.wallet_address(),
         "first": first,
     });
 
@@ -116,10 +115,8 @@ pub async fn search_broadened(
 }
 
 /// Fetch all facts for an owner (paginated export).
-pub async fn fetch_all_facts(
-    relay: &RelayClient,
-    owner: &str,
-) -> Result<Vec<SubgraphFact>> {
+pub async fn fetch_all_facts(relay: &RelayClient) -> Result<Vec<SubgraphFact>> {
+    let owner = relay.wallet_address();
     let mut all_facts = Vec::new();
     let mut skip = 0;
 
@@ -146,8 +143,8 @@ pub async fn fetch_all_facts(
 }
 
 /// Count active facts for an owner.
-pub async fn count_facts(relay: &RelayClient, owner: &str) -> Result<usize> {
-    let variables = serde_json::json!({ "owner": owner });
+pub async fn count_facts(relay: &RelayClient) -> Result<usize> {
+    let variables = serde_json::json!({ "owner": relay.wallet_address() });
 
     #[derive(Deserialize)]
     struct CountData {
@@ -161,7 +158,6 @@ pub async fn count_facts(relay: &RelayClient, owner: &str) -> Result<usize> {
 /// Search for a fact by content fingerprint (exact dedup check).
 pub async fn search_by_fingerprint(
     relay: &RelayClient,
-    owner: &str,
     content_fp: &str,
 ) -> Result<Option<SubgraphFact>> {
     const FP_QUERY: &str = r#"
@@ -178,7 +174,7 @@ pub async fn search_by_fingerprint(
     "#;
 
     let variables = serde_json::json!({
-        "owner": owner,
+        "owner": relay.wallet_address(),
         "contentFp": content_fp,
     });
 

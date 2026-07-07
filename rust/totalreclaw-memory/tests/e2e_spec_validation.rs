@@ -188,7 +188,6 @@ async fn test_e2e_store_recall_with_dedup() {
 
     let candidates = totalreclaw_memory::search::search_candidates(
         &relay,
-        &smart_account,
         &trapdoors,
         max_candidates,
     )

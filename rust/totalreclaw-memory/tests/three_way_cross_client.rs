@@ -370,7 +370,7 @@ async fn recall_via_rust(mnemonic: &str, wallet: &str, auth_key_hex: &str) -> Ve
     let trapdoors =
         totalreclaw_memory::blind::generate_blind_indices("three-way test stored fact");
 
-    let candidates = search::search_candidates(&relay, wallet, &trapdoors, 100)
+    let candidates = search::search_candidates(&relay, &trapdoors, 100)
         .await
         .unwrap_or_default();
 

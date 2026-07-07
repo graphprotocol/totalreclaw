@@ -30,6 +30,7 @@
 import { mnemonicToSeedSync, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
 import * as wasm from "@totalreclaw/core";
+import { TotalReclawError, TotalReclawErrorCode } from "../types";
 
 /**
  * Standard Ethereum BIP-44 derivation path.
@@ -150,7 +151,10 @@ export async function mnemonicToKeys(
   chainId: number = DEFAULT_CHAIN_ID,
 ): Promise<SeedDerivedKeys> {
   if (!isMnemonicValid(mnemonic)) {
-    throw new Error("Invalid BIP-39 mnemonic");
+    throw new TotalReclawError(
+      TotalReclawErrorCode.INVALID_INPUT,
+      "Invalid BIP-39 mnemonic"
+    );
   }
 
   // Step 1: Derive encryption/auth/dedup keys from BIP-39 seed via HKDF
@@ -163,7 +167,10 @@ export async function mnemonicToKeys(
   const derived = hdKey.derive(DERIVATION_PATH);
 
   if (!derived.privateKey) {
-    throw new Error("Failed to derive private key from seed");
+    throw new TotalReclawError(
+      TotalReclawErrorCode.KEY_DERIVATION_FAILED,
+      "Failed to derive private key from seed"
+    );
   }
 
   const privateKey = Buffer.from(derived.privateKey);
@@ -209,7 +216,10 @@ export async function mnemonicToSmartAccountAddress(
   chainId: number = DEFAULT_CHAIN_ID,
 ): Promise<string> {
   if (!isMnemonicValid(mnemonic)) {
-    throw new Error("Invalid BIP-39 mnemonic");
+    throw new TotalReclawError(
+      TotalReclawErrorCode.INVALID_INPUT,
+      "Invalid BIP-39 mnemonic"
+    );
   }
 
   const seed = mnemonicToSeedSync(mnemonic.trim());
@@ -218,7 +228,10 @@ export async function mnemonicToSmartAccountAddress(
   const derived = hdKey.derive(DERIVATION_PATH);
 
   if (!derived.privateKey) {
-    throw new Error("Failed to derive private key from seed");
+    throw new TotalReclawError(
+      TotalReclawErrorCode.KEY_DERIVATION_FAILED,
+      "Failed to derive private key from seed"
+    );
   }
 
   const privateKey = Buffer.from(derived.privateKey);

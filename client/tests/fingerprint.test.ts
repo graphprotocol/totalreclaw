@@ -14,6 +14,16 @@ import {
 describe('Content Fingerprint (v0.3.1b)', () => {
   const testSalt = Buffer.alloc(32, 0xab); // deterministic for testing
 
+  // Fingerprinting is HKDF+HMAC over an already-derived key — the Argon2id
+  // KDF itself is covered in crypto.test.ts. Derive shared fixtures once
+  // with cheap parameters so this suite stays fast.
+  const FAST_KDF = { memoryCost: 1024, timeCost: 1 };
+  let keys: Awaited<ReturnType<typeof deriveKeys>>;
+
+  beforeAll(async () => {
+    keys = await deriveKeys('test-password', testSalt, FAST_KDF);
+  });
+
   describe('normalizeText', () => {
     test('lowercases text', () => {
       expect(normalizeText('Hello World')).toBe('hello world');
@@ -49,34 +59,30 @@ describe('Content Fingerprint (v0.3.1b)', () => {
 
   describe('deriveDedupKey', () => {
     test('derives a 32-byte key', async () => {
-      const keys = await deriveKeys('test-password', testSalt);
       const dedupKey = deriveDedupKey(keys.encryptionKey, testSalt);
       expect(dedupKey.length).toBe(32);
     });
 
     test('is deterministic for same inputs', async () => {
-      const keys = await deriveKeys('test-password', testSalt);
       const key1 = deriveDedupKey(keys.encryptionKey, testSalt);
       const key2 = deriveDedupKey(keys.encryptionKey, testSalt);
       expect(key1).toEqual(key2);
     });
 
     test('differs from encryption key', async () => {
-      const keys = await deriveKeys('test-password', testSalt);
       const dedupKey = deriveDedupKey(keys.encryptionKey, testSalt);
       expect(dedupKey).not.toEqual(keys.encryptionKey);
     });
 
     test('differs from auth key', async () => {
-      const keys = await deriveKeys('test-password', testSalt);
       const dedupKey = deriveDedupKey(keys.encryptionKey, testSalt);
       expect(dedupKey).not.toEqual(keys.authKey);
     });
 
     test('differs for different salts', async () => {
-      const keys1 = await deriveKeys('test-password', testSalt);
+      const keys1 = keys;
       const salt2 = Buffer.alloc(32, 0xcd);
-      const keys2 = await deriveKeys('test-password', salt2);
+      const keys2 = await deriveKeys('test-password', salt2, FAST_KDF);
       const dedup1 = deriveDedupKey(keys1.encryptionKey, testSalt);
       const dedup2 = deriveDedupKey(keys2.encryptionKey, salt2);
       expect(dedup1).not.toEqual(dedup2);
@@ -85,7 +91,6 @@ describe('Content Fingerprint (v0.3.1b)', () => {
 
   describe('computeContentFingerprint', () => {
     test('returns hex-encoded HMAC-SHA256', async () => {
-      const keys = await deriveKeys('test-password', testSalt);
       const dedupKey = deriveDedupKey(keys.encryptionKey, testSalt);
       const fp = computeContentFingerprint(dedupKey, 'User prefers Python');
       // HMAC-SHA256 produces 64-char hex string (32 bytes)
@@ -93,7 +98,6 @@ describe('Content Fingerprint (v0.3.1b)', () => {
     });
 
     test('is deterministic for same content', async () => {
-      const keys = await deriveKeys('test-password', testSalt);
       const dedupKey = deriveDedupKey(keys.encryptionKey, testSalt);
       const fp1 = computeContentFingerprint(dedupKey, 'User prefers Python');
       const fp2 = computeContentFingerprint(dedupKey, 'User prefers Python');
@@ -101,7 +105,6 @@ describe('Content Fingerprint (v0.3.1b)', () => {
     });
 
     test('normalizes before hashing (case insensitive)', async () => {
-      const keys = await deriveKeys('test-password', testSalt);
       const dedupKey = deriveDedupKey(keys.encryptionKey, testSalt);
       const fp1 = computeContentFingerprint(dedupKey, 'User Prefers Python');
       const fp2 = computeContentFingerprint(dedupKey, 'user prefers python');
@@ -109,7 +112,6 @@ describe('Content Fingerprint (v0.3.1b)', () => {
     });
 
     test('normalizes whitespace before hashing', async () => {
-      const keys = await deriveKeys('test-password', testSalt);
       const dedupKey = deriveDedupKey(keys.encryptionKey, testSalt);
       const fp1 = computeContentFingerprint(dedupKey, 'User prefers Python');
       const fp2 = computeContentFingerprint(dedupKey, '  User   prefers  Python  ');
@@ -117,7 +119,6 @@ describe('Content Fingerprint (v0.3.1b)', () => {
     });
 
     test('differs for different content', async () => {
-      const keys = await deriveKeys('test-password', testSalt);
       const dedupKey = deriveDedupKey(keys.encryptionKey, testSalt);
       const fp1 = computeContentFingerprint(dedupKey, 'User prefers Python');
       const fp2 = computeContentFingerprint(dedupKey, 'User prefers JavaScript');
@@ -125,8 +126,8 @@ describe('Content Fingerprint (v0.3.1b)', () => {
     });
 
     test('differs for different dedup keys', async () => {
-      const keys1 = await deriveKeys('password-1', testSalt);
-      const keys2 = await deriveKeys('password-2', testSalt);
+      const keys1 = await deriveKeys('password-1', testSalt, FAST_KDF);
+      const keys2 = await deriveKeys('password-2', testSalt, FAST_KDF);
       const dedup1 = deriveDedupKey(keys1.encryptionKey, testSalt);
       const dedup2 = deriveDedupKey(keys2.encryptionKey, testSalt);
       const fp1 = computeContentFingerprint(dedup1, 'same content');

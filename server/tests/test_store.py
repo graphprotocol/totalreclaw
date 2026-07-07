@@ -118,6 +118,19 @@ class TestStoreEndpoint:
         assert data["success"] is False
         assert data["error_code"] == "AUTH_FAILED"
 
+    def test_store_without_user_id(self, client, auth_headers, sample_fact):
+        """Omitting the legacy body user_id succeeds — it is now optional,
+        with ownership scoped to the authenticated identity."""
+        response = client.post(
+            "/v1/store",
+            json={"facts": [sample_fact]},
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["ids"][0] == sample_fact["id"]
+
     def test_store_invalid_hex_blob(self, client, auth_headers, sample_fact):
         """Test storing with invalid hex blob."""
         sample_fact["encrypted_blob"] = "not_valid_hex!"

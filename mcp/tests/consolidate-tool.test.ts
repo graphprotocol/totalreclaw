@@ -58,7 +58,7 @@ describe('handleConsolidate', () => {
     const client = createMockClient();
     const { handleConsolidate } = require('../src/tools/consolidate');
 
-    const result = await handleConsolidate(client, {});
+    const result = await handleConsolidate({ client: client }, {});
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
@@ -76,7 +76,7 @@ describe('handleConsolidate', () => {
     const client = createMockClient();
     const { handleConsolidate } = require('../src/tools/consolidate');
 
-    const result = await handleConsolidate(client, {});
+    const result = await handleConsolidate({ client: client }, {});
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
@@ -96,7 +96,7 @@ describe('handleConsolidate', () => {
     const client = createMockClient();
     const { handleConsolidate } = require('../src/tools/consolidate');
 
-    const result = await handleConsolidate(client, { dry_run: false });
+    const result = await handleConsolidate({ client: client }, { dry_run: false });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
@@ -116,7 +116,7 @@ describe('handleConsolidate', () => {
     const client = createMockClient();
     const { handleConsolidate } = require('../src/tools/consolidate');
 
-    const result = await handleConsolidate(client, { dry_run: true });
+    const result = await handleConsolidate({ client: client }, { dry_run: true });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
@@ -136,7 +136,7 @@ describe('handleConsolidate', () => {
     const client = createMockClient();
     const { handleConsolidate } = require('../src/tools/consolidate');
 
-    const result = await handleConsolidate(client, { dry_run: false });
+    const result = await handleConsolidate({ client: client }, { dry_run: false });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.deleted).toBe(1);
@@ -158,7 +158,7 @@ describe('handleConsolidate', () => {
     const client = createMockClient();
     const { handleConsolidate } = require('../src/tools/consolidate');
 
-    const result = await handleConsolidate(client, { dry_run: false });
+    const result = await handleConsolidate({ client: client }, { dry_run: false });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
@@ -170,7 +170,7 @@ describe('handleConsolidate', () => {
     const client = createMockClient();
     const { handleConsolidate } = require('../src/tools/consolidate');
 
-    const result = await handleConsolidate(client, {});
+    const result = await handleConsolidate({ client: client }, {});
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(false);

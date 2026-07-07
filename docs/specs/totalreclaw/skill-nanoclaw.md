@@ -332,7 +332,7 @@ adds:
 
 - **Generic MCP Server**: [TS: TotalReclaw MCP Server](../mcp/TS: TotalReclaw MCP Server.md)
 - **Client Library**: `/client/`
-- **Extraction Prompts**: `/skill/src/extraction/prompts.ts`
+- **Extraction Prompts**: `/skill/plugin/extractor.ts`
 
 | Component | Path | Reusability | Notes |
 |-----------|------|-------------|-------|
@@ -356,15 +356,15 @@ adds:
 
 | Component | Path | Reusability | Notes |
 |-----------|------|-------------|-------|
-| Extraction prompts | `/skill/src/extraction/prompts.ts` | **Direct** | None |
-| JSON schemas | `/skill/src/extraction/prompts.ts` | **Direct** | None |
-| Type definitions | `/skill/src/types.ts` | **Partial** | Need NanoClawContext |
-| Hook patterns | `/skill/src/` | **Adapt** | Different hook system |
+| Extraction prompts | `/skill/plugin/extractor.ts` | **Direct** | None |
+| JSON schemas | `/skill/plugin/extractor.ts` | **Direct** | None |
+| Type definitions | `/skill/plugin/extractor.ts` | **Partial** | Need NanoClawContext |
+| Hook patterns | `/skill/plugin/` | **Adapt** | Different hook system |
 
 #### Extraction Prompts (Reusable As-Is)
 
 ```typescript
-// From /skill/src/extraction/prompts.ts
+// From /skill/plugin/extractor.ts
 export const PRE_COMPACTION_PROMPT;      // Comprehensive 20-turn extraction
 export const POST_TURN_PROMPT;           // Lightweight 3-turn extraction
 export const EXPLICIT_COMMAND_PROMPT;    // "remember that..." handling
@@ -406,11 +406,11 @@ export interface NanoClawContext {
 | Embedding generation | `/client/src/embedding/` | Direct | None |
 | Search reranking | `/client/src/search/` | Direct | None |
 | Protobuf client | `/client/src/api/` | Direct | Config change |
-| Extraction prompts | `/skill/src/extraction/prompts.ts` | Direct | None |
-| JSON schemas | `/skill/src/extraction/prompts.ts` | Direct | None |
-| Type definitions | `/skill/src/types.ts` | Partial | Low |
-| Hook implementations | `/skill/src/` | Rewrite | Medium |
-| Tool definitions | `/skill/src/` | Adapt | Low |
+| Extraction prompts | `/skill/plugin/extractor.ts` | Direct | None |
+| JSON schemas | `/skill/plugin/extractor.ts` | Direct | None |
+| Type definitions | `/skill/plugin/extractor.ts` | Partial | Low |
+| Hook implementations | `/skill/plugin/` | Rewrite | Medium |
+| Tool definitions | `/skill/plugin/` | Adapt | Low |
 
 ---
 

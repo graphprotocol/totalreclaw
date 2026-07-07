@@ -29,7 +29,6 @@ import { importBatchToolDefinition } from '../src/tools/import-batch';
 import { consolidateToolDefinition } from '../src/tools/consolidate';
 import { statusToolDefinition } from '../src/tools/status';
 import { upgradeToolDefinition } from '../src/tools/upgrade';
-import { migrateToolDefinition } from '../src/tools/migrate';
 import { debriefToolDefinition } from '../src/tools/debrief';
 import { supportToolDefinition } from '../src/tools/support';
 import { accountToolDefinition } from '../src/tools/account';
@@ -75,7 +74,6 @@ describe('Tool descriptions — LLM-autonomy triggers', () => {
     { name: 'totalreclaw_consolidate', desc: consolidateToolDefinition.description, minTriggers: 3 },
     { name: 'totalreclaw_status', desc: statusToolDefinition.description, minTriggers: 3 },
     { name: 'totalreclaw_upgrade', desc: upgradeToolDefinition.description, minTriggers: 3 },
-    { name: 'totalreclaw_migrate', desc: migrateToolDefinition.description, minTriggers: 0 /* workflow-style, fewer quoted triggers */ },
     { name: 'totalreclaw_debrief', desc: debriefToolDefinition.description, minTriggers: 3 },
     { name: 'totalreclaw_support', desc: supportToolDefinition.description, minTriggers: 3 },
     { name: 'totalreclaw_account', desc: accountToolDefinition.description, minTriggers: 3 },

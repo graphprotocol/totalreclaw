@@ -112,12 +112,12 @@ export async function registerWithServer(
     );
   }
 
-  const data = (await response.json()) as RegisterResponse;
-  if (!data.user_id) {
+  const registerJson = (await response.json()) as RegisterResponse;
+  if (!registerJson.user_id) {
     throw new Error('Registration response missing user_id');
   }
 
-  return data.user_id;
+  return registerJson.user_id;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,8 +147,8 @@ export function saveCredentials(credentials: SavedCredentials, filePath?: string
 
 export function loadCredentials(filePath?: string): SavedCredentials {
   const targetPath = filePath || CREDENTIALS_PATH;
-  const data = fs.readFileSync(targetPath, 'utf-8');
-  return JSON.parse(data) as SavedCredentials;
+  const credentialsRaw = fs.readFileSync(targetPath, 'utf-8');
+  return JSON.parse(credentialsRaw) as SavedCredentials;
 }
 
 // ---------------------------------------------------------------------------

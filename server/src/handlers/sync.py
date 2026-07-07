@@ -11,7 +11,6 @@ from fastapi import APIRouter, Depends, HTTPException, status, Header, Query
 from pydantic import BaseModel, Field
 from typing import Optional, List
 
-from ..auth import hash_auth_key
 from ..db import get_db, Database
 from ..dependencies import get_current_user
 

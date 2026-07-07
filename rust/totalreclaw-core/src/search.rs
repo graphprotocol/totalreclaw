@@ -244,7 +244,7 @@ pub fn generate_expansion_trapdoors(
     lsh_hasher: &LshHasher,
 ) -> Result<Vec<Vec<String>>> {
     if queries.len() != query_embeddings.len() {
-        return Err(crate::Error::Crypto(format!(
+        return Err(crate::Error::InvalidInput(format!(
             "queries.len() ({}) != query_embeddings.len() ({})",
             queries.len(),
             query_embeddings.len()
@@ -317,7 +317,7 @@ pub fn merge_expansion_results(
 /// Deduplicates by fact ID and filters out inactive facts.
 pub fn parse_search_response(response_json: &str) -> Result<Vec<SubgraphFact>> {
     let data: SearchData = serde_json::from_str(response_json)
-        .map_err(|e| crate::Error::Crypto(format!("failed to parse search response: {}", e)))?;
+        .map_err(|e| crate::Error::Parse(format!("failed to parse search response: {}", e)))?;
 
     let mut seen: HashMap<String, ()> = HashMap::new();
     let mut results = Vec::new();
@@ -342,7 +342,7 @@ pub fn parse_search_response(response_json: &str) -> Result<Vec<SubgraphFact>> {
 /// Filters out inactive facts.
 pub fn parse_broadened_response(response_json: &str) -> Result<Vec<SubgraphFact>> {
     let data: ExportData = serde_json::from_str(response_json)
-        .map_err(|e| crate::Error::Crypto(format!("failed to parse broadened response: {}", e)))?;
+        .map_err(|e| crate::Error::Parse(format!("failed to parse broadened response: {}", e)))?;
 
     Ok(data
         .facts
@@ -412,9 +412,9 @@ pub fn decrypt_and_rerank(
 
     // Parse encryption key
     let key_bytes = hex::decode(encryption_key_hex)
-        .map_err(|e| crate::Error::Crypto(format!("invalid encryption key hex: {}", e)))?;
+        .map_err(|e| crate::Error::InvalidInput(format!("invalid encryption key hex: {}", e)))?;
     if key_bytes.len() != 32 {
-        return Err(crate::Error::Crypto(format!(
+        return Err(crate::Error::InvalidInput(format!(
             "encryption key must be 32 bytes, got {}",
             key_bytes.len()
         )));

@@ -11,16 +11,12 @@
  *   3. Bulk consolidation — cluster all facts in the vault and identify
  *      groups of near-duplicates for cleanup (clusterFacts).
  *
- * Delegates core computation to `@totalreclaw/core` Rust WASM module where
- * bindings are available. `shouldSupersede` uses the core directly.
- * `findNearDuplicate` and `clusterFacts` use the core's `findBestNearDuplicate`
- * and `clusterFacts` WASM functions when available, falling back to local
- * implementations that use WASM-backed `cosineSimilarity`.
+ * Delegates core computation to `@totalreclaw/core` Rust WASM module:
+ * `findNearDuplicate`, `shouldSupersede`, and `clusterFacts` all call the
+ * corresponding core functions directly.
  *
  * Threshold helpers remain local (they read process.env).
  */
-
-import { cosineSimilarity } from './subgraph/reranker.js';
 
 // ---------------------------------------------------------------------------
 // Lazy-load WASM core (same pattern as claims-helper.ts)
@@ -124,46 +120,27 @@ export function findNearDuplicate(
 ): NearDuplicateMatch | null {
   const wasm = getWasm();
 
-  // Use core's findBestNearDuplicate if available (added in core >=1.5.0).
-  if (typeof (wasm as any).findBestNearDuplicate === 'function') {
-    const existing = candidates
-      .filter((c) => c.embedding && c.embedding.length > 0)
-      .map((c) => ({ id: c.id, embedding: c.embedding! }));
+  const existing = candidates
+    .filter((c) => c.embedding && c.embedding.length > 0)
+    .map((c) => ({ id: c.id, embedding: c.embedding! }));
 
-    if (existing.length === 0) return null;
+  if (existing.length === 0) return null;
 
-    const resultJs = (wasm as any).findBestNearDuplicate(
-      JSON.stringify(newFactEmbedding),
-      JSON.stringify(existing),
-      threshold,
-    );
+  const bestMatchJs = (wasm as any).findBestNearDuplicate(
+    JSON.stringify(newFactEmbedding),
+    JSON.stringify(existing),
+    threshold,
+  );
 
-    if (resultJs == null) return null;
+  if (bestMatchJs == null) return null;
 
-    const result: { fact_id: string; similarity: number } =
-      typeof resultJs === 'string' ? JSON.parse(resultJs) : resultJs;
+  const bestMatch: { fact_id: string; similarity: number } =
+    typeof bestMatchJs === 'string' ? JSON.parse(bestMatchJs) : bestMatchJs;
 
-    const matched = candidates.find((c) => c.id === result.fact_id);
-    if (!matched) return null;
+  const matched = candidates.find((c) => c.id === bestMatch.fact_id);
+  if (!matched) return null;
 
-    return { existingFact: matched, similarity: result.similarity };
-  }
-
-  // Fallback: local loop using WASM-backed cosineSimilarity.
-  let bestMatch: NearDuplicateMatch | null = null;
-
-  for (const candidate of candidates) {
-    if (!candidate.embedding || candidate.embedding.length === 0) continue;
-
-    const similarity = cosineSimilarity(newFactEmbedding, candidate.embedding);
-    if (similarity >= threshold) {
-      if (!bestMatch || similarity > bestMatch.similarity) {
-        bestMatch = { existingFact: candidate, similarity };
-      }
-    }
-  }
-
-  return bestMatch;
+  return { existingFact: matched, similarity: bestMatch.similarity };
 }
 
 // ---------------------------------------------------------------------------
@@ -213,113 +190,48 @@ export function clusterFacts(
 ): ConsolidationCluster[] {
   const wasm = getWasm();
 
-  // Use core's clusterFacts if available (added in core >=1.5.0).
-  if (typeof (wasm as any).clusterFacts === 'function') {
-    // Build ConsolidationCandidate JSON for WASM (snake_case fields).
-    const wasmCandidates = facts
-      .filter((f) => f.embedding && f.embedding.length > 0)
-      .map((f) => ({
-        id: f.id,
-        text: f.text,
-        embedding: f.embedding!,
-        importance: f.importance,
-        decay_score: f.decayScore,
-        created_at: f.createdAt,
-        version: f.version,
-      }));
+  // Build ConsolidationCandidate JSON for WASM (snake_case fields).
+  const wasmCandidates = facts
+    .filter((f) => f.embedding && f.embedding.length > 0)
+    .map((f) => ({
+      id: f.id,
+      text: f.text,
+      embedding: f.embedding!,
+      importance: f.importance,
+      decay_score: f.decayScore,
+      created_at: f.createdAt,
+      version: f.version,
+    }));
 
-    if (wasmCandidates.length === 0) return [];
+  if (wasmCandidates.length === 0) return [];
 
-    const resultJs = (wasm as any).clusterFacts(
-      JSON.stringify(wasmCandidates),
-      threshold,
-    );
+  const clustersJs = (wasm as any).clusterFacts(
+    JSON.stringify(wasmCandidates),
+    threshold,
+  );
 
-    // WASM returns a JSON string: [{ representative: string, duplicates: string[] }]
-    const wasmClusters: { representative: string; duplicates: string[] }[] =
-      typeof resultJs === 'string' ? JSON.parse(resultJs) : resultJs;
+  // WASM returns a JSON string: [{ representative: string, duplicates: string[] }]
+  const wasmClusters: { representative: string; duplicates: string[] }[] =
+    typeof clustersJs === 'string' ? JSON.parse(clustersJs) : clustersJs;
 
-    // Build a lookup map for fast ID -> DecryptedCandidate resolution.
-    const byId = new Map<string, DecryptedCandidate>();
-    for (const f of facts) byId.set(f.id, f);
+  // Build a lookup map for fast ID -> DecryptedCandidate resolution.
+  const byId = new Map<string, DecryptedCandidate>();
+  for (const f of facts) byId.set(f.id, f);
 
-    // Map ID-only clusters back to full DecryptedCandidate objects.
-    const result: ConsolidationCluster[] = [];
-    for (const wc of wasmClusters) {
-      const rep = byId.get(wc.representative);
-      if (!rep) continue;
+  // Map ID-only clusters back to full DecryptedCandidate objects.
+  const clusters: ConsolidationCluster[] = [];
+  for (const wc of wasmClusters) {
+    const rep = byId.get(wc.representative);
+    if (!rep) continue;
 
-      const dups = wc.duplicates
-        .map((id) => byId.get(id))
-        .filter((d): d is DecryptedCandidate => d !== undefined);
+    const dups = wc.duplicates
+      .map((id) => byId.get(id))
+      .filter((d): d is DecryptedCandidate => d !== undefined);
 
-      if (dups.length > 0) {
-        result.push({ representative: rep, duplicates: dups });
-      }
-    }
-
-    return result;
-  }
-
-  // Fallback: local greedy single-pass clustering using WASM-backed cosineSimilarity.
-  const clusters: { members: DecryptedCandidate[] }[] = [];
-
-  for (const fact of facts) {
-    if (!fact.embedding || fact.embedding.length === 0) continue;
-
-    let assigned = false;
-    for (const cluster of clusters) {
-      const seed = cluster.members[0];
-      if (!seed.embedding) continue;
-
-      const similarity = cosineSimilarity(fact.embedding, seed.embedding);
-      if (similarity >= threshold) {
-        cluster.members.push(fact);
-        assigned = true;
-        break;
-      }
-    }
-
-    if (!assigned) {
-      clusters.push({ members: [fact] });
+    if (dups.length > 0) {
+      clusters.push({ representative: rep, duplicates: dups });
     }
   }
 
-  const result: ConsolidationCluster[] = [];
-  for (const cluster of clusters) {
-    if (cluster.members.length < 2) continue;
-
-    const representative = pickRepresentative(cluster.members);
-    const duplicates = cluster.members.filter((m) => m !== representative);
-    result.push({ representative, duplicates });
-  }
-
-  return result;
-}
-
-// ---------------------------------------------------------------------------
-// Local helpers (used only in fallback paths)
-// ---------------------------------------------------------------------------
-
-/**
- * Pick the best representative from a group of near-duplicate facts.
- *
- * Tiebreak order:
- *   1. Highest decayScore
- *   2. Most recent (highest createdAt)
- *   3. Longest text
- */
-function pickRepresentative(facts: DecryptedCandidate[]): DecryptedCandidate {
-  let best = facts[0];
-  for (let i = 1; i < facts.length; i++) {
-    const f = facts[i];
-    if (
-      f.decayScore > best.decayScore ||
-      (f.decayScore === best.decayScore && f.createdAt > best.createdAt) ||
-      (f.decayScore === best.decayScore && f.createdAt === best.createdAt && f.text.length > best.text.length)
-    ) {
-      best = f;
-    }
-  }
-  return best;
+  return clusters;
 }

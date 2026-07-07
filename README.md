@@ -127,6 +127,7 @@ totalreclaw/
 ├── skill/           OpenClaw plugin (automatic memory via lifecycle hooks)
 ├── skill-nanoclaw/  NanoClaw skill package + MCP bridge
 ├── mcp/             MCP server for Claude Desktop and other MCP clients
+├── app/             Vault SPA (Vite + React) — managed-mode read UI
 ├── server/          Self-hosted server (FastAPI + PostgreSQL)
 ├── contracts/       Smart contracts (Gnosis Chain)
 ├── subgraph/        The Graph subgraph (AssemblyScript indexer)

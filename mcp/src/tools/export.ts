@@ -1,4 +1,5 @@
 import { TotalReclaw, RerankedResult } from '@totalreclaw/client';
+import type { ToolContext } from './types.js';
 import { EXPORT_TOOL_DESCRIPTION } from '../prompts.js';
 import { readBlobUnified } from '../claims-helper.js';
 
@@ -41,9 +42,10 @@ export const exportToolDefinition = {
 };
 
 export async function handleExport(
-  client: TotalReclaw,
+  ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const client = ctx.client as TotalReclaw;
   const input = (args || {}) as ExportInput;
   const format = input.format || 'markdown';
   const includeMetadata = input.include_metadata !== false;

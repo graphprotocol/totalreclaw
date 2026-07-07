@@ -13,6 +13,7 @@
 
 import * as crypto from 'crypto';
 import { argon2id } from '@noble/hashes/argon2.js';
+import { TotalReclawError, TotalReclawErrorCode } from '../types';
 
 /**
  * Key derivation parameters
@@ -85,8 +86,10 @@ export async function deriveAuthKey(
 
     return authKey;
   } catch (error) {
-    throw new Error(
-      `Failed to derive auth key: ${error instanceof Error ? error.message : 'Unknown error'}`
+    throw new TotalReclawError(
+      TotalReclawErrorCode.KEY_DERIVATION_FAILED,
+      `Failed to derive auth key: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      error instanceof Error ? error : undefined
     );
   }
 }
@@ -132,8 +135,10 @@ export async function deriveEncryptionKey(
 
     return encryptionKey;
   } catch (error) {
-    throw new Error(
-      `Failed to derive encryption key: ${error instanceof Error ? error.message : 'Unknown error'}`
+    throw new TotalReclawError(
+      TotalReclawErrorCode.KEY_DERIVATION_FAILED,
+      `Failed to derive encryption key: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      error instanceof Error ? error : undefined
     );
   }
 }
@@ -187,8 +192,10 @@ export async function deriveKeys(
 
     return { authKey, encryptionKey };
   } catch (error) {
-    throw new Error(
-      `Failed to derive keys: ${error instanceof Error ? error.message : 'Unknown error'}`
+    throw new TotalReclawError(
+      TotalReclawErrorCode.KEY_DERIVATION_FAILED,
+      `Failed to derive keys: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      error instanceof Error ? error : undefined
     );
   }
 }

@@ -13,6 +13,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { ToolContext } from './types.js';
+import { resolveMemoryId } from './helpers.js';
 import { buildV1ClaimBlob, readBlobUnified, type PinStatus } from '../claims-helper.js';
 import { findLoserClaimInDecisionLog } from '../decision-log-reader.js';
 import type {
@@ -153,7 +155,7 @@ export function buildFeedbackFromDecision(
 }
 
 /** Append a feedback entry via the WASM core helpers. Best-effort; never throws. */
-export async function appendFeedbackLog(entry: FeedbackEntry): Promise<void> {
+export function appendFeedbackLog(entry: FeedbackEntry): void {
   try {
     const core = getWasm();
     const dir = ensureStateDir();
@@ -194,7 +196,7 @@ export async function maybeWriteFeedbackForPin(
   const action = targetStatus === 'pinned' ? 'pin_loser' : 'unpin_winner';
   const entry = buildFeedbackFromDecision(decision, action, nowUnixSeconds);
   if (!entry) return null;
-  await appendFeedbackLog(entry);
+  appendFeedbackLog(entry);
   return entry;
 }
 
@@ -229,15 +231,14 @@ export const pinToolDefinition = {
   inputSchema: {
     type: 'object',
     properties: {
-      fact_id: {
-        type: 'string',
-        description: 'The ID of the fact to pin (from a totalreclaw_recall result).',
-      },
-      // Accept `memory_id` as an alias for `fact_id` to match the v1 taxonomy
-      // spec wording (`memory_id` is used by the new retype / set_scope tools).
       memory_id: {
         type: 'string',
-        description: 'Alias for fact_id. Prefer fact_id for backward compatibility.',
+        description: 'The ID of the memory to pin (from a totalreclaw_recall result).',
+      },
+      // `fact_id` is the pre-v1 name, accepted everywhere as a back-compat alias.
+      fact_id: {
+        type: 'string',
+        description: 'Back-compat alias for `memory_id`. Prefer `memory_id`.',
       },
       reason: {
         type: 'string',
@@ -250,7 +251,8 @@ export const pinToolDefinition = {
           'Recorded on the new claim; enforcement (auto-unpin after expiry) lives in a future revision.',
       },
     },
-    required: ['fact_id'],
+    // No `required`: the handler accepts either `memory_id` or its `fact_id`
+    // alias and validates presence itself (mirrors totalreclaw_forget).
   },
   annotations: {
     readOnlyHint: false,
@@ -265,12 +267,16 @@ export const unpinToolDefinition = {
   inputSchema: {
     type: 'object',
     properties: {
+      memory_id: {
+        type: 'string',
+        description: 'The ID of the memory to unpin (from a totalreclaw_recall result).',
+      },
       fact_id: {
         type: 'string',
-        description: 'The ID of the fact to unpin (from a totalreclaw_recall result).',
+        description: 'Back-compat alias for `memory_id`. Prefer `memory_id`.',
       },
     },
-    required: ['fact_id'],
+    // No `required`: handler accepts `memory_id` or its `fact_id` alias.
   },
   annotations: {
     readOnlyHint: false,
@@ -307,9 +313,9 @@ interface ParsedBlob {
 }
 
 export function parseBlobForPin(decrypted: string): ParsedBlob {
-  let obj: Record<string, unknown>;
+  let decodedClaim: Record<string, unknown>;
   try {
-    obj = JSON.parse(decrypted) as Record<string, unknown>;
+    decodedClaim = JSON.parse(decrypted) as Record<string, unknown>;
   } catch {
     // Raw text — treat as a legacy fact with default metadata
     return {
@@ -327,17 +333,17 @@ export function parseBlobForPin(decrypted: string): ParsedBlob {
   // in executePinOperation uses `plaintext` directly (re-parsed via
   // projectToV1) so no data loss.
   if (
-    typeof obj.text === 'string' &&
-    typeof obj.type === 'string' &&
-    typeof obj.schema_version === 'string' &&
-    obj.schema_version.startsWith('1.')
+    typeof decodedClaim.text === 'string' &&
+    typeof decodedClaim.type === 'string' &&
+    typeof decodedClaim.schema_version === 'string' &&
+    decodedClaim.schema_version.startsWith('1.')
   ) {
-    const rawPin = typeof obj.pin_status === 'string' ? obj.pin_status : undefined;
+    const rawPin = typeof decodedClaim.pin_status === 'string' ? decodedClaim.pin_status : undefined;
     const human: HumanStatus = rawPin === 'pinned' ? 'pinned' : 'active';
     // Build a v0-shape projection for legacy callers (tests, etc) that inspect
     // `parsed.claim.t` / `parsed.claim.c`. Pin/unpin's rewrite path does NOT
     // use this projection — it re-parses the plaintext via projectToV1().
-    const v1Type = String(obj.type);
+    const v1Type = String(decodedClaim.type);
     const shortCategory = ((): string => {
       const map: Record<string, string> = {
         claim: 'claim', preference: 'pref', directive: 'rule',
@@ -346,31 +352,31 @@ export function parseBlobForPin(decrypted: string): ParsedBlob {
       return map[v1Type] ?? 'claim';
     })();
     const claimProjection: Record<string, unknown> = {
-      t: obj.text,
+      t: decodedClaim.text,
       c: shortCategory,
-      cf: typeof obj.confidence === 'number' ? obj.confidence : 0.85,
-      i: typeof obj.importance === 'number' ? obj.importance : 5,
-      sa: typeof obj.source === 'string' ? obj.source : 'mcp-server',
-      ea: typeof obj.created_at === 'string' ? obj.created_at : new Date().toISOString(),
+      cf: typeof decodedClaim.confidence === 'number' ? decodedClaim.confidence : 0.85,
+      i: typeof decodedClaim.importance === 'number' ? decodedClaim.importance : 5,
+      sa: typeof decodedClaim.source === 'string' ? decodedClaim.source : 'mcp-server',
+      ea: typeof decodedClaim.created_at === 'string' ? decodedClaim.created_at : new Date().toISOString(),
     };
     if (rawPin === 'pinned') claimProjection.st = 'p';
     return { claim: claimProjection, currentStatus: human, isLegacy: false };
   }
 
   // v0 canonical Claim — short keys present.
-  if (typeof obj.t === 'string' && typeof obj.c === 'string') {
-    const st = typeof obj.st === 'string' ? obj.st : 'a';
+  if (typeof decodedClaim.t === 'string' && typeof decodedClaim.c === 'string') {
+    const st = typeof decodedClaim.st === 'string' ? decodedClaim.st : 'a';
     const human = SHORT_TO_HUMAN[st] ?? 'active';
     // Deep clone so callers can mutate without touching caller copy
-    const cloned = JSON.parse(JSON.stringify(obj)) as Record<string, unknown>;
+    const cloned = JSON.parse(JSON.stringify(decodedClaim)) as Record<string, unknown>;
     return { claim: cloned, currentStatus: human, isLegacy: false };
   }
 
   // Legacy {text, metadata: {importance: 0-1}} shape
-  if (typeof obj.text === 'string') {
-    const meta = (obj.metadata as Record<string, unknown>) ?? {};
+  if (typeof decodedClaim.text === 'string') {
+    const meta = (decodedClaim.metadata as Record<string, unknown>) ?? {};
     return {
-      claim: buildCanonicalObjectFromLegacy(obj.text, meta),
+      claim: buildCanonicalObjectFromLegacy(decodedClaim.text, meta),
       currentStatus: 'active',
       isLegacy: true,
     };
@@ -842,6 +848,7 @@ interface FactPayloadMinimal {
 
 /** HTTP (self-hosted) mode handler — not supported in Slice 2e-mcp. */
 export async function handlePin(
+  _ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const validation = validatePinArgs(args);
@@ -855,6 +862,7 @@ export async function handlePin(
 
 /** HTTP (self-hosted) mode handler — not supported in Slice 2e-mcp. */
 export async function handleUnpin(
+  _ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const validation = validatePinArgs(args);
@@ -874,27 +882,15 @@ interface ValidArgs {
 }
 
 function validatePinArgs(args: unknown): ValidArgs {
-  if (!args || typeof args !== 'object') {
-    return { ok: false, factId: '', error: 'Invalid input: fact_id is required' };
+  // Canonical `memory_id`, with `fact_id` accepted as a back-compat alias, via
+  // the shared resolver (see tools/helpers.ts).
+  const resolved = resolveMemoryId(args);
+  if (!resolved.ok) {
+    return { ok: false, factId: '', error: resolved.error };
   }
   const record = args as Record<string, unknown>;
-  // Accept either `fact_id` (v0) or `memory_id` (v1 spec wording). `fact_id`
-  // wins if both are present so existing MCP consumers keep working.
-  const rawId =
-    typeof record.fact_id === 'string' && record.fact_id.trim().length > 0
-      ? record.fact_id
-      : typeof record.memory_id === 'string'
-        ? record.memory_id
-        : undefined;
-  if (typeof rawId !== 'string' || rawId.trim().length === 0) {
-    return {
-      ok: false,
-      factId: '',
-      error: 'Invalid input: fact_id (or memory_id) must be a non-empty string',
-    };
-  }
   const reason = typeof record.reason === 'string' ? record.reason : undefined;
-  return { ok: true, factId: rawId.trim(), reason, error: '' };
+  return { ok: true, factId: resolved.memoryId, reason, error: '' };
 }
 
 /** Dispatch helper for callers that already hold PinOpDeps (used by index.ts subgraph path). */

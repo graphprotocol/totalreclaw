@@ -77,14 +77,14 @@ pub fn serialize_weights_file(file: &WeightsFile) -> String {
 }
 
 /// Parse a weights file from JSON; rejects unknown versions and malformed input.
-pub fn parse_weights_file(json: &str) -> Result<WeightsFile, String> {
+pub fn parse_weights_file(json: &str) -> crate::Result<WeightsFile> {
     let file: WeightsFile = serde_json::from_str(json)
-        .map_err(|e| format!("failed to parse weights file: {}", e))?;
+        .map_err(|e| crate::Error::Parse(format!("failed to parse weights file: {}", e)))?;
     if file.version != WEIGHTS_FILE_VERSION {
-        return Err(format!(
+        return Err(crate::Error::Parse(format!(
             "unsupported weights file version: {} (expected {})",
             file.version, WEIGHTS_FILE_VERSION
-        ));
+        )));
     }
     Ok(file)
 }
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_parse_weights_file_rejects_malformed() {
-        let err = parse_weights_file("not-json-at-all").unwrap_err();
+        let err = parse_weights_file("not-json-at-all").unwrap_err().to_string();
         assert!(err.contains("failed to parse"), "err: {}", err);
     }
 
@@ -274,20 +274,20 @@ mod tests {
         let mut f = default_weights_file(1_776_384_000);
         f.version = 2;
         let json = serialize_weights_file(&f);
-        let err = parse_weights_file(&json).unwrap_err();
+        let err = parse_weights_file(&json).unwrap_err().to_string();
         assert!(err.contains("unsupported weights file version"), "err: {}", err);
         assert!(err.contains('2'), "err must mention actual version: {}", err);
     }
 
     #[test]
     fn test_parse_weights_file_rejects_missing_fields() {
-        let err = parse_weights_file(r#"{"version":1}"#).unwrap_err();
+        let err = parse_weights_file(r#"{"version":1}"#).unwrap_err().to_string();
         assert!(err.contains("failed to parse"), "err: {}", err);
     }
 
     #[test]
     fn test_parse_weights_file_rejects_empty_object() {
-        let err = parse_weights_file("{}").unwrap_err();
+        let err = parse_weights_file("{}").unwrap_err().to_string();
         assert!(err.contains("failed to parse"), "err: {}", err);
     }
 

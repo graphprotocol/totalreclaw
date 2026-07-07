@@ -86,7 +86,12 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.client == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
+    strategy:
+      # The crypto/fingerprint golden-vector suites run production KDF params
+      # (~11 min locally, slower on CI runners) — shard so each job fits.
+      matrix:
+        shard: ["1/2", "2/2"]
     # Skip the onnxruntime-node CUDA/GPU binary fetch from api.nuget.org — it
     # hung CI 25-30 min repeatedly (ETIMEDOUT) and blocked auto-merge on PRs
     # that didn't even touch client/. CPU inference is all CI needs.
@@ -102,7 +107,7 @@ jobs:
           node-version: '22'
 
       - name: Install and test
-        run: cd client && rm -f package-lock.json && npm install --legacy-peer-deps && npm test -- --forceExit
+        run: cd client && rm -f package-lock.json && npm install --legacy-peer-deps && npm test -- --forceExit --shard=${{ matrix.shard }}
 
   app-tests:
     name: Web App Tests (Vitest)

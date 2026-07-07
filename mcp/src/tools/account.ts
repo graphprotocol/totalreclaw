@@ -5,6 +5,7 @@
  * and a recovery phrase hint (first + last word only).
  */
 
+import type { ToolContext } from './types.js';
 import { ACCOUNT_TOOL_DESCRIPTION } from '../prompts.js';
 import { getClientId } from '../client-id.js';
 
@@ -34,15 +35,20 @@ interface BillingStatusResponse {
  * Handle a totalreclaw_account tool call.
  *
  * Fetches billing status and fact count, then returns a comprehensive
- * account overview including a recovery phrase hint.
+ * account overview including a recovery phrase hint. The `account` tool takes
+ * no user args — everything it needs is dependency-injected via {@link
+ * ToolContext}.
  */
 export async function handleAccount(
-  serverUrl: string,
-  authKeyHex: string,
-  walletAddress: string,
-  mnemonicHint: string,
-  getFactCount: () => Promise<number>,
+  ctx: ToolContext,
+  _args?: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const serverUrl = ctx.serverUrl ?? '';
+  const authKeyHex = ctx.authKeyHex ?? '';
+  const walletAddress = ctx.walletAddress ?? '';
+  const mnemonicHint = ctx.mnemonicHint ?? '';
+  const getFactCount = ctx.getFactCount ?? (async () => null as unknown as number);
+
   // Fetch billing status and fact count in parallel
   const [billingResult, factCount] = await Promise.all([
     fetchBillingStatus(serverUrl, authKeyHex, walletAddress),
@@ -112,8 +118,8 @@ async function fetchBillingStatus(
       };
     }
 
-    const data = (await response.json()) as BillingStatusResponse;
-    return { data };
+    const billingJson = (await response.json()) as BillingStatusResponse;
+    return { data: billingJson };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return { error: `Failed to fetch billing status: ${message}` };

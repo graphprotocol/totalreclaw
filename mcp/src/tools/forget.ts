@@ -1,8 +1,12 @@
 import { TotalReclaw } from '@totalreclaw/client';
+import type { ToolContext } from './types.js';
+import { pickMemoryId } from './helpers.js';
 import { FORGET_TOOL_DESCRIPTION } from '../prompts.js';
 import { VALID_MEMORY_SCOPES } from '../v1-types.js';
 
 export interface ForgetIntput {
+  /** Canonical memory identifier. `fact_id` accepted as a back-compat alias. */
+  memory_id?: string;
   fact_id?: string;
   query?: string;
   /**
@@ -26,10 +30,14 @@ export const forgetToolDefinition = {
   inputSchema: {
     type: 'object',
     properties: {
-      fact_id: {
+      memory_id: {
         type: 'string',
         description:
           'The ID of a specific memory to forget (from a prior totalreclaw_recall result). Preferred over `query` — avoids over-deletion.',
+      },
+      fact_id: {
+        type: 'string',
+        description: 'Back-compat alias for `memory_id`. Prefer `memory_id`.',
       },
       query: {
         type: 'string',
@@ -52,19 +60,21 @@ export const forgetToolDefinition = {
 };
 
 export async function handleForget(
-  client: TotalReclaw,
+  ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const client = ctx.client as TotalReclaw;
   const input = args as ForgetIntput;
+  const memoryId = pickMemoryId(input);
 
-  if (!input.fact_id && !input.query) {
+  if (!memoryId && !input.query) {
     return {
       content: [{
         type: 'text',
         text: JSON.stringify({
           deleted_count: 0,
           fact_ids: [],
-          error: 'Either fact_id or query must be provided',
+          error: 'Either memory_id/fact_id or query must be provided',
         }),
       }],
     };
@@ -73,9 +83,9 @@ export async function handleForget(
   try {
     const deletedIds: string[] = [];
 
-    if (input.fact_id) {
-      await client.forget(input.fact_id);
-      deletedIds.push(input.fact_id);
+    if (memoryId) {
+      await client.forget(memoryId);
+      deletedIds.push(memoryId);
     } else if (input.query) {
       const results = await client.recall(input.query, 50);
 

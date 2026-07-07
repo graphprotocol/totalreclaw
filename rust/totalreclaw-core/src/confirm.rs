@@ -67,16 +67,16 @@ pub fn confirm_indexed_query() -> &'static str {
 /// - `Ok(false)` — fact not present, OR present but `isActive == false`
 ///   (still propagating). Caller should poll again.
 /// - `Err(...)` — response was not valid JSON or did not match either shape.
-pub fn parse_indexed_response(response_json: &str) -> Result<bool, String> {
+pub fn parse_indexed_response(response_json: &str) -> crate::Result<bool> {
     // Both shapes deserialize through serde_json::Value first so we don't
     // double-decode and so `serde(rename_all = "camelCase")` propagates
     // consistently regardless of which wrapper landed at the top.
     let value: serde_json::Value = serde_json::from_str(response_json).map_err(|e| {
-        format!(
+        crate::Error::Parse(format!(
             "confirm_indexed: response is not valid JSON ({}). Body: {}",
             e,
             response_json.chars().take(200).collect::<String>()
-        )
+        ))
     })?;
 
     // Wrapped: `{"data":{"fact":...}}`
@@ -87,9 +87,9 @@ pub fn parse_indexed_response(response_json: &str) -> Result<bool, String> {
         if let Some(fact_field) = data.get("fact") {
             return Ok(parse_fact_value(fact_field));
         }
-        return Err(
+        return Err(crate::Error::Parse(
             "confirm_indexed: wrapped response missing `fact` field under `data`".to_string(),
-        );
+        ));
     }
 
     // Unwrapped: `{"fact":...}`
@@ -97,10 +97,10 @@ pub fn parse_indexed_response(response_json: &str) -> Result<bool, String> {
         return Ok(parse_fact_value(fact_field));
     }
 
-    Err(format!(
+    Err(crate::Error::Parse(format!(
         "confirm_indexed: response did not match either {{data:{{fact}}}} or {{fact}} shape: {}",
         response_json.chars().take(200).collect::<String>()
-    ))
+    )))
 }
 
 /// Helper: read a JSON value at the `fact` slot and return whether it

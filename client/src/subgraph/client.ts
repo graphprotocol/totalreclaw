@@ -13,6 +13,7 @@ import {
   DELTA_SYNC_FACTS,
   COUNT_FACTS,
 } from "./queries";
+import { TotalReclawError, TotalReclawErrorCode } from "../types";
 
 export interface SubgraphFact {
   id: string;
@@ -25,6 +26,10 @@ export interface SubgraphFact {
   blockNumber?: string;
   timestamp?: string;
   version?: number;
+}
+
+interface SubgraphBlindIndex {
+  fact?: SubgraphFact;
 }
 
 /**
@@ -45,7 +50,10 @@ export class SubgraphClient {
 
     for (let i = 0; i < trapdoors.length; i += TRAPDOOR_BATCH_SIZE) {
       const batch = trapdoors.slice(i, i + TRAPDOOR_BATCH_SIZE);
-      const data = await this.query(SEARCH_BY_BLIND_INDEX, {
+      const blindIndexJson = await this.query<{
+        blindIndexes?: SubgraphBlindIndex[];
+        blindIndices?: SubgraphBlindIndex[];
+      }>(SEARCH_BY_BLIND_INDEX, {
         trapdoors: batch,
         owner,
         first: PAGE_SIZE,
@@ -54,9 +62,9 @@ export class SubgraphClient {
       // Parse blind index entries from response.
       // The Graph Node pluralizes BlindIndex as `blindIndexes`, but some
       // legacy subgraphs may return `blindIndices`. Handle both.
-      const entries: any[] =
-        (data as any)?.blindIndexes ||
-        (data as any)?.blindIndices ||
+      const entries: SubgraphBlindIndex[] =
+        blindIndexJson?.blindIndexes ||
+        blindIndexJson?.blindIndices ||
         [];
 
       for (const entry of entries) {
@@ -74,12 +82,12 @@ export class SubgraphClient {
    * Used as a fallback when trapdoor search returns 0 candidates.
    */
   async searchBroadened(owner: string, maxCandidates: number = 200): Promise<SubgraphFact[]> {
-    const data = await this.query(BROADENED_SEARCH, {
+    const subgraphResponse = await this.query<{ facts?: SubgraphFact[] }>(BROADENED_SEARCH, {
       owner,
       first: Math.min(maxCandidates, PAGE_SIZE),
     });
 
-    return ((data as any)?.facts ?? []).filter(
+    return (subgraphResponse?.facts ?? []).filter(
       (f: SubgraphFact) => f.isActive !== false
     );
   }
@@ -89,13 +97,13 @@ export class SubgraphClient {
     let skip = 0;
 
     while (true) {
-      const data = await this.query(FETCH_ALL_FACTS, {
+      const pageJson = await this.query<{ facts?: SubgraphFact[] }>(FETCH_ALL_FACTS, {
         owner,
         first: PAGE_SIZE,
         skip,
       });
 
-      const facts = data?.facts || [];
+      const facts = pageJson?.facts || [];
       allFacts.push(...facts);
 
       if (facts.length < PAGE_SIZE) break;
@@ -110,14 +118,14 @@ export class SubgraphClient {
     let skip = 0;
 
     while (true) {
-      const data = await this.query(DELTA_SYNC_FACTS, {
+      const pageJson = await this.query<{ facts?: SubgraphFact[] }>(DELTA_SYNC_FACTS, {
         owner,
         sinceBlock: sinceBlock.toString(),
         first: PAGE_SIZE,
         skip,
       });
 
-      const facts = data?.facts || [];
+      const facts = pageJson?.facts || [];
       allFacts.push(...facts);
 
       if (facts.length < PAGE_SIZE) break;
@@ -128,11 +136,14 @@ export class SubgraphClient {
   }
 
   async getFactCount(owner: string): Promise<number> {
-    const data = await this.query(COUNT_FACTS, { owner });
-    return data?.facts?.length || 0;
+    const subgraphResponse = await this.query<{ facts?: SubgraphFact[] }>(COUNT_FACTS, { owner });
+    return subgraphResponse?.facts?.length || 0;
   }
 
-  private async query(query: string, variables: Record<string, unknown>): Promise<any> {
+  private async query<T>(
+    query: string,
+    variables: Record<string, unknown>
+  ): Promise<T> {
     const response = await fetch(this.endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -140,14 +151,20 @@ export class SubgraphClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Subgraph query failed: ${response.status} ${response.statusText}`);
+      throw new TotalReclawError(
+        TotalReclawErrorCode.NETWORK_ERROR,
+        `Subgraph query failed: ${response.status} ${response.statusText}`
+      );
     }
 
-    const json = (await response.json()) as { data?: any; errors?: Array<{ message: string }> };
+    const json = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
     if (json.errors) {
-      throw new Error(`Subgraph query error: ${json.errors[0].message}`);
+      throw new TotalReclawError(
+        TotalReclawErrorCode.NETWORK_ERROR,
+        `Subgraph query error: ${json.errors[0].message}`
+      );
     }
 
-    return json.data;
+    return json.data as T;
   }
 }

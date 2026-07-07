@@ -65,7 +65,7 @@ export interface ExtractedEntity {
 export interface ClaimInput {
   /** Human-readable fact text. */
   text: string;
-  /** One of the 8 memory types. Defaults to `fact` when absent. */
+  /** One of the legacy v0 memory types in `memory-types.ts` (v1 writes go through `v1-types.ts`). Defaults to `fact` when absent. */
   type?: MemoryType;
   /** LLM-assessed confidence (0.0-1.0). Defaults to 0.85. */
   confidence?: number;
@@ -180,30 +180,30 @@ export interface BlobReadResult {
 
 export function readClaimFromBlob(decryptedJson: string): BlobReadResult {
   try {
-    const obj = JSON.parse(decryptedJson) as Record<string, unknown>;
+    const decodedBlob = JSON.parse(decryptedJson) as Record<string, unknown>;
     // New canonical Claim format: short keys
-    if (typeof obj.t === 'string' && typeof obj.c === 'string') {
+    if (typeof decodedBlob.t === 'string' && typeof decodedBlob.c === 'string') {
       const importance =
-        typeof obj.i === 'number' ? Math.max(1, Math.min(10, Math.round(obj.i))) : 5;
+        typeof decodedBlob.i === 'number' ? Math.max(1, Math.min(10, Math.round(decodedBlob.i))) : 5;
       return {
-        text: obj.t,
+        text: decodedBlob.t,
         importance,
-        category: obj.c,
+        category: decodedBlob.c,
         metadata: {
-          type: obj.c,
+          type: decodedBlob.c,
           importance: importance / 10,
-          source: typeof obj.sa === 'string' ? obj.sa : 'mcp_remember',
-          created_at: typeof obj.ea === 'string' ? obj.ea : '',
+          source: typeof decodedBlob.sa === 'string' ? decodedBlob.sa : 'mcp_remember',
+          created_at: typeof decodedBlob.ea === 'string' ? decodedBlob.ea : '',
         },
       };
     }
     // Legacy plugin {text, metadata: {importance: 0-1}} format
-    if (typeof obj.text === 'string') {
-      const meta = (obj.metadata as Record<string, unknown>) ?? {};
+    if (typeof decodedBlob.text === 'string') {
+      const meta = (decodedBlob.metadata as Record<string, unknown>) ?? {};
       const impFloat = typeof meta.importance === 'number' ? meta.importance : 0.5;
       const importance = Math.max(1, Math.min(10, Math.round(impFloat * 10)));
       return {
-        text: obj.text,
+        text: decodedBlob.text,
         importance,
         category: typeof meta.type === 'string' ? meta.type : 'fact',
         metadata: meta,
@@ -468,7 +468,7 @@ export interface V1BlobReadResult {
  */
 export function readBlobUnified(decryptedJson: string): V1BlobReadResult {
   try {
-    const obj = JSON.parse(decryptedJson) as Record<string, unknown>;
+    const decodedBlob = JSON.parse(decryptedJson) as Record<string, unknown>;
 
     // v1 path: presence of top-level `text` + `type` (closed 6-value enum)
     // is the v1 signature. `schema_version` is omitted when it equals the
@@ -483,17 +483,17 @@ export function readBlobUnified(decryptedJson: string): V1BlobReadResult {
       'summary',
     ]);
     if (
-      typeof obj.text === 'string' &&
-      typeof obj.type === 'string' &&
-      v1Types.has(String(obj.type)) &&
+      typeof decodedBlob.text === 'string' &&
+      typeof decodedBlob.type === 'string' &&
+      v1Types.has(String(decodedBlob.type)) &&
       // Optional `schema_version`: when present must be the v1 constant.
-      (typeof obj.schema_version !== 'string' ||
-        obj.schema_version === MEMORY_CLAIM_V1_SCHEMA_VERSION)
+      (typeof decodedBlob.schema_version !== 'string' ||
+        decodedBlob.schema_version === MEMORY_CLAIM_V1_SCHEMA_VERSION)
     ) {
       const importance =
-        typeof obj.importance === 'number' ? Math.max(1, Math.min(10, Math.round(obj.importance))) : 5;
-      const typeStr = String(obj.type);
-      const sourceStr = typeof obj.source === 'string' ? obj.source : 'user-inferred';
+        typeof decodedBlob.importance === 'number' ? Math.max(1, Math.min(10, Math.round(decodedBlob.importance))) : 5;
+      const typeStr = String(decodedBlob.type);
+      const sourceStr = typeof decodedBlob.source === 'string' ? decodedBlob.source : 'user-inferred';
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const wasm = require('@totalreclaw/core') as typeof import('@totalreclaw/core');
       // `parseMemoryTypeV1` returns the enum string unwrapped (e.g. "directive"),
@@ -516,30 +516,30 @@ export function readBlobUnified(decryptedJson: string): V1BlobReadResult {
       // v1.1 pin_status (additive). Accept either canonical value; reject
       // anything else so garbage on the wire doesn't propagate.
       const rawPinStatus =
-        typeof obj.pin_status === 'string' ? obj.pin_status : undefined;
+        typeof decodedBlob.pin_status === 'string' ? decodedBlob.pin_status : undefined;
       const pinStatus: PinStatus | undefined =
         rawPinStatus === 'pinned' || rawPinStatus === 'unpinned' ? rawPinStatus : undefined;
 
       return {
-        text: obj.text,
+        text: decodedBlob.text,
         importance,
         category: short,
         v1: {
           type: v1Type,
           source: v1Source,
-          scope: typeof obj.scope === 'string' ? (obj.scope as MemoryScope) : undefined,
+          scope: typeof decodedBlob.scope === 'string' ? (decodedBlob.scope as MemoryScope) : undefined,
           volatility:
-            typeof obj.volatility === 'string' ? (obj.volatility as MemoryVolatility) : undefined,
-          reasoning: typeof obj.reasoning === 'string' ? obj.reasoning : undefined,
-          expires_at: typeof obj.expires_at === 'string' ? obj.expires_at : undefined,
-          confidence: typeof obj.confidence === 'number' ? obj.confidence : undefined,
+            typeof decodedBlob.volatility === 'string' ? (decodedBlob.volatility as MemoryVolatility) : undefined,
+          reasoning: typeof decodedBlob.reasoning === 'string' ? decodedBlob.reasoning : undefined,
+          expires_at: typeof decodedBlob.expires_at === 'string' ? decodedBlob.expires_at : undefined,
+          confidence: typeof decodedBlob.confidence === 'number' ? decodedBlob.confidence : undefined,
           superseded_by:
-            typeof obj.superseded_by === 'string' ? obj.superseded_by : undefined,
-          entities: Array.isArray(obj.entities) ? (obj.entities as MemoryEntityV1[]) : undefined,
-          created_at: typeof obj.created_at === 'string' ? obj.created_at : '',
+            typeof decodedBlob.superseded_by === 'string' ? decodedBlob.superseded_by : undefined,
+          entities: Array.isArray(decodedBlob.entities) ? (decodedBlob.entities as MemoryEntityV1[]) : undefined,
+          created_at: typeof decodedBlob.created_at === 'string' ? decodedBlob.created_at : '',
           pin_status: pinStatus,
         },
-        metadata: obj as Record<string, unknown>,
+        metadata: decodedBlob as Record<string, unknown>,
       };
     }
   } catch {

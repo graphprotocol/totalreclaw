@@ -204,24 +204,9 @@ Return a JSON object (no markdown fences, no commentary):
 pub fn parse_profile_batch_response(llm_output: &str) -> PartialProfile {
     let cleaned = strip_code_fences(llm_output.trim());
 
-    match serde_json::from_str::<serde_json::Value>(&cleaned) {
-        Ok(serde_json::Value::Object(obj)) => parse_partial_profile_from_object(&obj),
-        _ => {
-            // Try to find a JSON object in the response
-            if let Some(start) = cleaned.find('{') {
-                if let Some(end) = cleaned.rfind('}') {
-                    if start < end {
-                        let slice = &cleaned[start..=end];
-                        if let Ok(serde_json::Value::Object(obj)) =
-                            serde_json::from_str::<serde_json::Value>(slice)
-                        {
-                            return parse_partial_profile_from_object(&obj);
-                        }
-                    }
-                }
-            }
-            PartialProfile::default()
-        }
+    match salvage_json_container(&cleaned, '{') {
+        Some(serde_json::Value::Object(obj)) => parse_partial_profile_from_object(&obj),
+        _ => PartialProfile::default(),
     }
 }
 
@@ -271,31 +256,9 @@ Return a single merged JSON profile (no markdown fences, no commentary):
 pub fn parse_profile_response(llm_output: &str) -> UserProfile {
     let cleaned = strip_code_fences(llm_output.trim());
 
-    let obj = match serde_json::from_str::<serde_json::Value>(&cleaned) {
-        Ok(serde_json::Value::Object(obj)) => obj,
-        _ => {
-            // Try to find a JSON object in the response
-            if let Some(start) = cleaned.find('{') {
-                if let Some(end) = cleaned.rfind('}') {
-                    if start < end {
-                        let slice = &cleaned[start..=end];
-                        if let Ok(serde_json::Value::Object(obj)) =
-                            serde_json::from_str::<serde_json::Value>(slice)
-                        {
-                            obj
-                        } else {
-                            return UserProfile::default();
-                        }
-                    } else {
-                        return UserProfile::default();
-                    }
-                } else {
-                    return UserProfile::default();
-                }
-            } else {
-                return UserProfile::default();
-            }
-        }
+    let obj = match salvage_json_container(&cleaned, '{') {
+        Some(serde_json::Value::Object(obj)) => obj,
+        _ => return UserProfile::default(),
     };
 
     UserProfile {
@@ -368,31 +331,9 @@ Use 0-based indices matching the conversation numbers minus 1 (conversation 1 = 
 pub fn parse_triage_response(llm_output: &str) -> Vec<ChunkDecision> {
     let cleaned = strip_code_fences(llm_output.trim());
 
-    let arr = match serde_json::from_str::<serde_json::Value>(&cleaned) {
-        Ok(serde_json::Value::Array(arr)) => arr,
-        _ => {
-            // Try to find a JSON array in the response
-            if let Some(start) = cleaned.find('[') {
-                if let Some(end) = cleaned.rfind(']') {
-                    if start < end {
-                        let slice = &cleaned[start..=end];
-                        if let Ok(serde_json::Value::Array(arr)) =
-                            serde_json::from_str::<serde_json::Value>(slice)
-                        {
-                            arr
-                        } else {
-                            return Vec::new();
-                        }
-                    } else {
-                        return Vec::new();
-                    }
-                } else {
-                    return Vec::new();
-                }
-            } else {
-                return Vec::new();
-            }
-        }
+    let arr = match salvage_json_container(&cleaned, '[') {
+        Some(serde_json::Value::Array(arr)) => arr,
+        _ => return Vec::new(),
     };
 
     let mut decisions = Vec::new();
@@ -483,6 +424,50 @@ fn strip_code_fences(s: &str) -> String {
         }
     }
     result
+}
+
+/// Best-effort extraction of a JSON container from a possibly-noisy LLM
+/// response. `open` selects the container: `'{'` for an object, `'['` for an
+/// array. Two-step salvage, mirroring what the profile / merge / triage
+/// parsers each used to inline:
+///
+///  1. Try to parse the whole (fence-stripped) string. If it parses AND is the
+///     requested container, use it.
+///  2. Otherwise slice from the first `open` delimiter to the last matching
+///     close delimiter and parse that — this rescues a container wrapped in
+///     prose or trailing commentary.
+///
+/// Returns `None` if neither step yields the requested container. The caller
+/// still owns the final match on the concrete `Value` variant.
+fn salvage_json_container(cleaned: &str, open: char) -> Option<serde_json::Value> {
+    let close = match open {
+        '{' => '}',
+        '[' => ']',
+        _ => return None,
+    };
+    let is_wanted = |v: &serde_json::Value| match open {
+        '{' => v.is_object(),
+        _ => v.is_array(),
+    };
+
+    // Step 1: whole-string parse, gated on the container type.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(cleaned) {
+        if is_wanted(&v) {
+            return Some(v);
+        }
+    }
+
+    // Step 2: widest open..=close slice.
+    let start = cleaned.find(open)?;
+    let end = cleaned.rfind(close)?;
+    if start < end {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&cleaned[start..=end]) {
+            if is_wanted(&v) {
+                return Some(v);
+            }
+        }
+    }
+    None
 }
 
 /// Truncate a message to a maximum byte length, appending "..." if truncated.
@@ -874,6 +859,53 @@ pub fn register_python_functions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- salvage_json_container: the shared LLM-JSON fallback helper --
+
+    #[test]
+    fn salvage_object_direct_parse() {
+        let v = salvage_json_container(r#"{"a":1}"#, '{').unwrap();
+        assert_eq!(v["a"], 1);
+    }
+
+    #[test]
+    fn salvage_object_wrapped_in_prose() {
+        // Whole-string parse fails; the first `{` .. last `}` slice rescues it.
+        let raw = "Sure, here you go:\n{\"a\":1}\nHope that helps!";
+        let v = salvage_json_container(raw, '{').unwrap();
+        assert_eq!(v["a"], 1);
+    }
+
+    #[test]
+    fn salvage_object_ignores_wrong_container_direct() {
+        // A whole-string array is not the requested object, so the helper
+        // falls through to brace-slicing and recovers the embedded object.
+        let raw = r#"[{"a":1}]"#;
+        let v = salvage_json_container(raw, '{').unwrap();
+        assert_eq!(v["a"], 1);
+    }
+
+    #[test]
+    fn salvage_array_direct_and_wrapped() {
+        let direct = salvage_json_container(r#"[1,2,3]"#, '[').unwrap();
+        assert_eq!(direct.as_array().unwrap().len(), 3);
+
+        let wrapped = salvage_json_container("Decisions: [1,2,3] done", '[').unwrap();
+        assert_eq!(wrapped.as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn salvage_returns_none_when_no_container() {
+        assert!(salvage_json_container("no json here at all", '{').is_none());
+        assert!(salvage_json_container("", '[').is_none());
+        // Malformed slice that never parses.
+        assert!(salvage_json_container("{ not json", '{').is_none());
+    }
+
+    #[test]
+    fn salvage_rejects_unsupported_delimiter() {
+        assert!(salvage_json_container(r#"{"a":1}"#, '<').is_none());
+    }
 
     // -- Test data helpers --
 

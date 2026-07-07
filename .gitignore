@@ -132,3 +132,4 @@ mcp/package-lock.json
 # Foundry vendored libraries — install via 'forge install foundry-rs/forge-std' from contracts/
 contracts/lib/forge-std/
 contracts/out/
+.desloppify/

@@ -343,6 +343,7 @@ export function normalizeConfidence(raw: unknown): number {
 export interface ExtractorLogger {
   info?: (msg: string) => void;
   warn?: (msg: string) => void;
+  debug?: (msg: string) => void;
 }
 
 
@@ -612,7 +613,7 @@ export function parseFactsResponseForCompaction(
     }
   }
   if (recoveryUsed === 'bracket-scan') {
-    logger?.info?.(
+    logger?.debug?.(
       `parseFactsResponseForCompaction: recovered JSON via bracket-scan fallback`,
     );
   }
@@ -624,8 +625,8 @@ export function parseFactsResponseForCompaction(
     return [];
   }
 
-  const obj = parsed as Record<string, unknown>;
-  const rawFacts = Array.isArray(obj.facts) ? (obj.facts as unknown[]) : null;
+  const parsedObj = parsed as Record<string, unknown>;
+  const rawFacts = Array.isArray(parsedObj.facts) ? (parsedObj.facts as unknown[]) : null;
 
   // Legacy v0 compaction output (bare JSON array) — best-effort parse.
   const rawArray = rawFacts ?? (Array.isArray(parsed) ? (parsed as unknown[]) : null);
@@ -784,7 +785,7 @@ export async function extractFactsForCompaction(
     return [];
   }
 
-  logger?.info?.(
+  logger?.debug?.(
     `extractFactsForCompaction: LLM returned ${response.length} chars; handing to parseFactsResponseForCompaction`,
   );
   let facts = parseFactsResponseForCompaction(response, logger);
@@ -805,7 +806,7 @@ export async function extractFactsForCompaction(
       const oldImportance = f.importance;
       const effectiveBump = f.importance >= 8 ? Math.min(bump, 1) : bump;
       f.importance = Math.min(10, f.importance + effectiveBump);
-      logger?.info?.(
+      logger?.debug?.(
         `extractFactsForCompaction: lexical bump +${bump} for "${f.text.slice(0, 60)}..." (${oldImportance} → ${f.importance})`,
       );
     }
@@ -1097,7 +1098,7 @@ export function parseMergedResponseV1(
     }
   }
   if (recoveryUsed === 'bracket-scan') {
-    logger?.info?.(
+    logger?.debug?.(
       `parseFactsResponse: recovered JSON via bracket-scan fallback`,
     );
   }
@@ -1113,27 +1114,27 @@ export function parseMergedResponseV1(
   // a bare JSON array of fact objects (legacy / test fixture shape). The
   // bare array is wrapped as { topics: [], facts: [...] } so the downstream
   // logic stays uniform. A single fact object (no wrapper) is also wrapped.
-  let obj: Record<string, unknown>;
+  let parsedObj: Record<string, unknown>;
   if (Array.isArray(parsed)) {
-    obj = { topics: [], facts: parsed };
+    parsedObj = { topics: [], facts: parsed };
   } else if (
     typeof (parsed as Record<string, unknown>).facts === 'undefined' &&
     typeof (parsed as Record<string, unknown>).text === 'string'
   ) {
     // Single fact object, not a merged wrapper.
-    obj = { topics: [], facts: [parsed] };
+    parsedObj = { topics: [], facts: [parsed] };
   } else {
-    obj = parsed as Record<string, unknown>;
+    parsedObj = parsed as Record<string, unknown>;
   }
 
-  const rawTopics = obj.topics;
+  const rawTopics = parsedObj.topics;
   const topics = Array.isArray(rawTopics)
     ? (rawTopics as unknown[])
         .filter((t): t is string => typeof t === 'string' && t.length > 0)
         .slice(0, 3)
     : [];
 
-  const rawFacts = obj.facts;
+  const rawFacts = parsedObj.facts;
   if (!Array.isArray(rawFacts)) return { topics, facts: [] };
 
   const validActions: ExtractionAction[] = ['ADD', 'UPDATE', 'DELETE', 'NOOP'];
@@ -1471,12 +1472,12 @@ export async function extractFacts(
     return [];
   }
 
-  logger?.info?.(
+  logger?.debug?.(
     `extractFacts: LLM returned ${response.length} chars; parsing merged response`,
   );
   const { topics, facts: rawFacts } = parseMergedResponseV1(response, logger);
   if (topics.length > 0) {
-    logger?.info?.(`extractFacts: topics = ${JSON.stringify(topics)}`);
+    logger?.debug?.(`extractFacts: topics = ${JSON.stringify(topics)}`);
   }
 
   // Provenance filter (tag-don't-drop)
@@ -1495,7 +1496,7 @@ export async function extractFacts(
       const oldImportance = f.importance;
       const effectiveBump = f.importance >= 8 ? Math.min(bump, 1) : bump;
       f.importance = Math.min(10, f.importance + effectiveBump);
-      logger?.info?.(
+      logger?.debug?.(
         `extractFacts: lexical bump +${bump} for "${f.text.slice(0, 60)}..." (${oldImportance} → ${f.importance})`,
       );
     }

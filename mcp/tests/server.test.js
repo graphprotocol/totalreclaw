@@ -69,7 +69,7 @@ describe('handleRemember', () => {
   it('should reject empty fact text', async () => {
     const mockClient = createMockClient();
     const { handleRemember } = require('../dist/tools/remember.js');
-    const result = await handleRemember(mockClient, { fact: '' });
+    const result = await handleRemember({ client: mockClient }, { fact: '' });
 
     expect(result.content[0].type).toBe('text');
     const parsed = JSON.parse(result.content[0].text);
@@ -80,7 +80,7 @@ describe('handleRemember', () => {
   it('should reject invalid importance', async () => {
     const mockClient = createMockClient();
     const { handleRemember } = require('../dist/tools/remember.js');
-    const result = await handleRemember(mockClient, { fact: 'test', importance: 15 });
+    const result = await handleRemember({ client: mockClient }, { fact: 'test', importance: 15 });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.success).toBe(false);
@@ -90,7 +90,7 @@ describe('handleRemember', () => {
   it('should store fact with default namespace', async () => {
     const mockClient = createMockClient({ remember: jest.fn().mockResolvedValue('fact-123') });
     const { handleRemember } = require('../dist/tools/remember.js');
-    const result = await handleRemember(mockClient, { fact: 'User likes coffee' });
+    const result = await handleRemember({ client: mockClient }, { fact: 'User likes coffee' });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.success).toBe(true);
@@ -103,7 +103,7 @@ describe('handleRecall', () => {
   it('should reject empty query', async () => {
     const mockClient = createMockClient();
     const { handleRecall } = require('../dist/tools/recall.js');
-    const result = await handleRecall(mockClient, { query: '' });
+    const result = await handleRecall({ client: mockClient }, { query: '' });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.memories).toEqual([]);
@@ -129,7 +129,7 @@ describe('handleRecall', () => {
       ]),
     });
     const { handleRecall } = require('../dist/tools/recall.js');
-    const result = await handleRecall(mockClient, { query: 'coffee preferences' });
+    const result = await handleRecall({ client: mockClient }, { query: 'coffee preferences' });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.memories).toHaveLength(1);
@@ -160,7 +160,7 @@ describe('handleExport', () => {
       ]),
     });
     const { handleExport } = require('../dist/tools/export.js');
-    const result = await handleExport(mockClient, { format: 'json' });
+    const result = await handleExport({ client: mockClient }, { format: 'json' });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.format).toBe('json');
@@ -189,7 +189,7 @@ describe('handleExport', () => {
       ]),
     });
     const { handleExport } = require('../dist/tools/export.js');
-    const result = await handleExport(mockClient, { format: 'markdown' });
+    const result = await handleExport({ client: mockClient }, { format: 'markdown' });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.format).toBe('markdown');
@@ -202,7 +202,7 @@ describe('handleImport', () => {
   it('should validate only when validate_only is true', async () => {
     const mockClient = createMockClient();
     const { handleImport } = require('../dist/tools/import.js');
-    const result = await handleImport(mockClient, {
+    const result = await handleImport({ client: mockClient }, {
       content: '{"facts":[{"text":"Test fact","type":"fact","importance":5,"confidence":0.9,"action":"ADD","entities":[],"relations":[]}]}',
       format: 'json',
       validate_only: true,
@@ -217,7 +217,7 @@ describe('handleImport', () => {
   it('should import facts from JSON', async () => {
     const mockClient = createMockClient();
     const { handleImport } = require('../dist/tools/import.js');
-    const result = await handleImport(mockClient, {
+    const result = await handleImport({ client: mockClient }, {
       content: '{"facts":[{"text":"Test fact","type":"fact","importance":5,"confidence":0.9,"action":"ADD","entities":[],"relations":[]}]}',
       format: 'json',
     });
@@ -231,7 +231,7 @@ describe('handleImport', () => {
   it('should detect format automatically', async () => {
     const mockClient = createMockClient();
     const { handleImport } = require('../dist/tools/import.js');
-    const result = await handleImport(mockClient, {
+    const result = await handleImport({ client: mockClient }, {
       content: '[]',
     });
 
@@ -256,7 +256,7 @@ ID: \`fact-123\`
 **Type:** decision
 **Importance:** 8
 `;
-    const result = await handleImport(mockClient, {
+    const result = await handleImport({ client: mockClient }, {
       content: markdownContent,
       format: 'markdown',
     });
@@ -286,7 +286,7 @@ ID: \`fact-123\`
       ]),
     });
     const { handleImport } = require('../dist/tools/import.js');
-    const result = await handleImport(mockClient, {
+    const result = await handleImport({ client: mockClient }, {
       content: '{"facts":[{"text":"Existing fact","type":"fact","importance":5}]}',
       format: 'json',
       merge_strategy: 'skip_existing',
@@ -318,7 +318,7 @@ ID: \`fact-123\`
       ]),
     });
     const { handleImport } = require('../dist/tools/import.js');
-    const result = await handleImport(mockClient, {
+    const result = await handleImport({ client: mockClient }, {
       content: '{"facts":[{"text":"Existing fact","type":"fact","importance":8}]}',
       format: 'json',
       merge_strategy: 'overwrite',
@@ -332,7 +332,7 @@ ID: \`fact-123\`
   it('should reject empty content', async () => {
     const mockClient = createMockClient();
     const { handleImport } = require('../dist/tools/import.js');
-    const result = await handleImport(mockClient, {
+    const result = await handleImport({ client: mockClient }, {
       content: '',
     });
 
@@ -346,7 +346,7 @@ describe('handleForget', () => {
   it('should forget by fact_id', async () => {
     const mockClient = createMockClient();
     const { handleForget } = require('../dist/tools/forget.js');
-    const result = await handleForget(mockClient, { fact_id: 'fact-123' });
+    const result = await handleForget({ client: mockClient }, { fact_id: 'fact-123' });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.deleted_count).toBe(1);
@@ -388,7 +388,7 @@ describe('handleForget', () => {
       ]),
     });
     const { handleForget } = require('../dist/tools/forget.js');
-    const result = await handleForget(mockClient, { query: 'coffee' });
+    const result = await handleForget({ client: mockClient }, { query: 'coffee' });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.deleted_count).toBe(2);
@@ -397,7 +397,7 @@ describe('handleForget', () => {
   it('should require fact_id or query', async () => {
     const mockClient = createMockClient();
     const { handleForget } = require('../dist/tools/forget.js');
-    const result = await handleForget(mockClient, {});
+    const result = await handleForget({ client: mockClient }, {});
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.deleted_count).toBe(0);
@@ -409,7 +409,7 @@ describe('handleForget', () => {
       forget: jest.fn().mockRejectedValue(new Error('Storage error')),
     });
     const { handleForget } = require('../dist/tools/forget.js');
-    const result = await handleForget(mockClient, { fact_id: 'fact-123' });
+    const result = await handleForget({ client: mockClient }, { fact_id: 'fact-123' });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.error).toContain('Failed to forget');
@@ -420,7 +420,7 @@ describe('handleRemember extended', () => {
   it('should store fact with type metadata', async () => {
     const mockClient = createMockClient({ remember: jest.fn().mockResolvedValue('fact-789') });
     const { handleRemember } = require('../dist/tools/remember.js');
-    const result = await handleRemember(mockClient, {
+    const result = await handleRemember({ client: mockClient }, {
       fact: 'Important decision',
       importance: 9,
       metadata: { type: 'decision' },
@@ -442,7 +442,7 @@ describe('handleRemember extended', () => {
       remember: jest.fn().mockRejectedValue(new Error('DB connection failed')),
     });
     const { handleRemember } = require('../dist/tools/remember.js');
-    const result = await handleRemember(mockClient, { fact: 'Test fact' });
+    const result = await handleRemember({ client: mockClient }, { fact: 'Test fact' });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.success).toBe(false);
@@ -482,10 +482,10 @@ describe('End-to-End Flows', () => {
     const { handleRemember } = require('../dist/tools/remember.js');
     const { handleRecall } = require('../dist/tools/recall.js');
 
-    await handleRemember(mockClient, { fact: 'User likes TypeScript' });
-    await handleRemember(mockClient, { fact: 'User prefers dark mode' });
+    await handleRemember({ client: mockClient }, { fact: 'User likes TypeScript' });
+    await handleRemember({ client: mockClient }, { fact: 'User prefers dark mode' });
 
-    const recallResult = await handleRecall(mockClient, { query: 'preferences' });
+    const recallResult = await handleRecall({ client: mockClient }, { query: 'preferences' });
     const parsed = JSON.parse(recallResult.content[0].text);
 
     expect(parsed.memories.length).toBe(2);
@@ -512,7 +512,7 @@ describe('End-to-End Flows', () => {
     };
 
     const { handleExport } = require('../dist/tools/export.js');
-    const exportResult = await handleExport(exportClient, { format: 'json' });
+    const exportResult = await handleExport({ client: exportClient }, { format: 'json' });
     const exportParsed = JSON.parse(exportResult.content[0].text);
 
     expect(exportParsed.fact_count).toBe(1);
@@ -525,7 +525,7 @@ describe('End-to-End Flows', () => {
     };
 
     const { handleImport } = require('../dist/tools/import.js');
-    const importResult = await handleImport(importClient, {
+    const importResult = await handleImport({ client: importClient }, {
       content: exportParsed.content,
       format: 'json',
     });

@@ -161,13 +161,6 @@ WHEN NOT TO USE:
 - user already Pro (check totalreclaw_status)
 - unrelated — don't volunteer upgrades`;
 
-// DEPRECATED 2026-05-18 — single-chain Gnosis means no cross-chain migration.
-// Kept temporarily so existing migrate.ts tool registration doesn't break the
-// TypeScript build. To be removed when ops-3 lands (deprecates totalreclaw_migrate).
-export const MIGRATE_TOOL_DESCRIPTION = `[DEPRECATED] Cross-chain migration is no longer needed — all tiers store on Gnosis mainnet. This tool will be removed in the next release (see ops-3 / PR #240).
-INVOKE WHEN: never. Single-chain Gnosis means there is nothing to migrate from.
-WHEN NOT TO USE: always. Tell the user this is a legacy tool kept temporarily for build stability; their memories are already on Gnosis.`;
-
 export const IMPORT_FROM_TOOL_DESCRIPTION = `Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, MemoClaw, JSON/CSV.
 INVOKE WHEN USER SAYS:
 - "migrate memory from [Mem0/ChatGPT/Claude]"

@@ -5,6 +5,7 @@
  * Queries the relay server's billing endpoint.
  */
 
+import type { ToolContext } from './types.js';
 import { STATUS_TOOL_DESCRIPTION } from '../prompts.js';
 import { getClientId } from '../client-id.js';
 import { getSessionId } from '../session-id.js';
@@ -60,10 +61,11 @@ export function getLastBillingResponse(): BillingStatusResponse | null {
  * Fetches billing status from the relay server and formats it for the LLM.
  */
 export async function handleStatus(
-  serverUrl: string,
-  authKey: string,
+  ctx: ToolContext,
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const serverUrl = ctx.serverUrl ?? '';
+  const authKey = ctx.authKeyHex ?? '';
   const input = args as Record<string, unknown>;
   const walletAddress = input?.wallet_address as string;
 
@@ -107,22 +109,22 @@ export async function handleStatus(
       };
     }
 
-    const data = (await response.json()) as BillingStatusResponse;
+    const billingJson = (await response.json()) as BillingStatusResponse;
 
     // Cache the raw response for candidate pool sizing
-    lastBillingResponse = data;
+    lastBillingResponse = billingJson;
 
     // Format nicely for the LLM to present
-    const tierLabel = data.tier === 'pro' ? 'Pro' : 'Free';
-    const usage = `${data.free_writes_used}/${data.free_writes_limit}`;
-    const remaining = data.free_writes_limit - data.free_writes_used;
+    const tierLabel = billingJson.tier === 'pro' ? 'Pro' : 'Free';
+    const usage = `${billingJson.free_writes_used}/${billingJson.free_writes_limit}`;
+    const remaining = billingJson.free_writes_limit - billingJson.free_writes_used;
     // Both tiers have a MONTHLY quota cap (Free 250, Pro 1500). The counter
     // resets on the 1st of each calendar month. Surface this so the agent
     // doesn't have to guess between "monthly" vs "lifetime" when answering
     // user questions about their cap.
     const quotaPeriod: 'monthly' = 'monthly';
-    const expiresLabel = data.expires_at
-      ? `Subscription renews: ${new Date(data.expires_at).toLocaleDateString()}`
+    const expiresLabel = billingJson.expires_at
+      ? `Subscription renews: ${new Date(billingJson.expires_at).toLocaleDateString()}`
       : 'No subscription expiry';
 
     // 3.3.1 (internal#130) — echo the SA / scope address back to the
@@ -144,12 +146,12 @@ export async function handleStatus(
       content: [{
         type: 'text',
         text: JSON.stringify({
-          tier: data.tier,
-          free_writes_used: data.free_writes_used,
-          free_writes_limit: data.free_writes_limit,
+          tier: billingJson.tier,
+          free_writes_used: billingJson.free_writes_used,
+          free_writes_limit: billingJson.free_writes_limit,
           remaining_writes: remaining,
           quota_period: quotaPeriod,
-          expires_at: data.expires_at,
+          expires_at: billingJson.expires_at,
           scope_address: walletAddress,
           formatted,
         }),

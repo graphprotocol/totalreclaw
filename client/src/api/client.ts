@@ -211,12 +211,12 @@ export class TotalReclawClient {
 
     const body = this.serializer.serializeRegisterRequest(request);
     const response = await this.request('POST', '/v1/register', body);
-    const result = this.serializer.deserializeRegisterResponse(response);
+    const registerResult = this.serializer.deserializeRegisterResponse(response);
 
-    if (!result.success) {
+    if (!registerResult.success) {
       throw new TotalReclawError(
         TotalReclawErrorCode.AUTH_FAILED,
-        `Registration failed: ${result.errorCode} - ${result.errorMessage}`
+        `Registration failed: ${registerResult.errorCode} - ${registerResult.errorMessage}`
       );
     }
 
@@ -249,16 +249,16 @@ export class TotalReclawClient {
 
     const body = this.serializer.serializeStoreRequest(request);
     const response = await this.request('POST', '/v1/store', body);
-    const result = this.serializer.deserializeStoreResponse(response);
+    const storeResult = this.serializer.deserializeStoreResponse(response);
 
-    if (!result.success) {
+    if (!storeResult.success) {
       throw new TotalReclawError(
         TotalReclawErrorCode.NETWORK_ERROR,
-        `Store failed: ${result.errorCode}`
+        `Store failed: ${storeResult.errorCode}`
       );
     }
 
-    return result.version || 0;
+    return storeResult.version || 0;
   }
 
   /**
@@ -293,16 +293,16 @@ export class TotalReclawClient {
 
     const body = this.serializer.serializeSearchRequest(request);
     const response = await this.request('POST', '/v1/search', body);
-    const result = this.serializer.deserializeSearchResponse(response);
+    const searchResult = this.serializer.deserializeSearchResponse(response);
 
-    if (!result.success) {
+    if (!searchResult.success) {
       throw new TotalReclawError(
         TotalReclawErrorCode.NETWORK_ERROR,
-        `Search failed: ${result.errorCode}`
+        `Search failed: ${searchResult.errorCode}`
       );
     }
 
-    return result.results;
+    return searchResult.results;
   }
 
   /**

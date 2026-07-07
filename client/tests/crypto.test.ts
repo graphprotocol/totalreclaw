@@ -21,6 +21,12 @@ import {
   computeIndexOverlap,
 } from '../src/crypto/blind';
 
+// Argon2id at production cost (64MB, t=3) is pure-JS and takes seconds per
+// call. One sentinel test below keeps production-parameter coverage; all
+// other tests exercise KDF *behavior* (determinism, input sensitivity,
+// shapes) which is cost-independent, so they run with cheap parameters.
+const FAST_KDF = { memoryCost: 1024, timeCost: 1 };
+
 describe('Crypto Module', () => {
   describe('Key Derivation', () => {
     test('should generate random salt', () => {
@@ -37,6 +43,8 @@ describe('Crypto Module', () => {
       expect(salt.length).toBe(16);
     });
 
+    // PRODUCTION-COST SENTINEL: the one test that runs the real Argon2id
+    // parameters end-to-end (do not add FAST_KDF here).
     test('should derive consistent keys from same password and salt', async () => {
       const password = 'test-password-123';
       const salt = generateSalt();
@@ -51,8 +59,8 @@ describe('Crypto Module', () => {
     test('should derive different keys from different passwords', async () => {
       const salt = generateSalt();
 
-      const keys1 = await deriveKeys('password1', salt);
-      const keys2 = await deriveKeys('password2', salt);
+      const keys1 = await deriveKeys('password1', salt, FAST_KDF);
+      const keys2 = await deriveKeys('password2', salt, FAST_KDF);
 
       expect(keys1.authKey).not.toEqual(keys2.authKey);
       expect(keys1.encryptionKey).not.toEqual(keys2.encryptionKey);
@@ -61,15 +69,15 @@ describe('Crypto Module', () => {
     test('should derive different keys from different salts', async () => {
       const password = 'test-password';
 
-      const keys1 = await deriveKeys(password, generateSalt());
-      const keys2 = await deriveKeys(password, generateSalt());
+      const keys1 = await deriveKeys(password, generateSalt(), FAST_KDF);
+      const keys2 = await deriveKeys(password, generateSalt(), FAST_KDF);
 
       expect(keys1.authKey).not.toEqual(keys2.authKey);
       expect(keys1.encryptionKey).not.toEqual(keys2.encryptionKey);
     });
 
     test('should derive 32-byte keys', async () => {
-      const keys = await deriveKeys('test-password', generateSalt());
+      const keys = await deriveKeys('test-password', generateSalt(), FAST_KDF);
 
       expect(keys.authKey.length).toBe(32);
       expect(keys.encryptionKey.length).toBe(32);
@@ -77,10 +85,18 @@ describe('Crypto Module', () => {
   });
 
   describe('Authentication', () => {
-    test('should create and verify auth proof', async () => {
-      const password = 'test-password';
+    // Proof create/verify is HMAC over already-derived keys — derive the
+    // fixtures once (cheap params; the KDF itself is covered above).
+    let authKey: Buffer;
+    let wrongKey: Buffer;
+
+    beforeAll(async () => {
       const salt = generateSalt();
-      const { authKey } = await deriveKeys(password, salt);
+      ({ authKey } = await deriveKeys('test-password', salt, FAST_KDF));
+      ({ authKey: wrongKey } = await deriveKeys('wrong-password', salt, FAST_KDF));
+    });
+
+    test('should create and verify auth proof', () => {
       const data = Buffer.from('test-data', 'utf-8');
 
       const proof = createAuthProof(authKey, data);
@@ -89,11 +105,7 @@ describe('Crypto Module', () => {
       expect(verified).toBe(true);
     });
 
-    test('should fail verification with wrong key', async () => {
-      const password = 'test-password';
-      const salt = generateSalt();
-      const { authKey } = await deriveKeys(password, salt);
-      const { authKey: wrongKey } = await deriveKeys('wrong-password', salt);
+    test('should fail verification with wrong key', () => {
       const data = Buffer.from('test-data', 'utf-8');
 
       const proof = createAuthProof(authKey, data);
@@ -102,11 +114,7 @@ describe('Crypto Module', () => {
       expect(verified).toBe(false);
     });
 
-    test('should fail verification with wrong data', async () => {
-      const password = 'test-password';
-      const salt = generateSalt();
-      const { authKey } = await deriveKeys(password, salt);
-
+    test('should fail verification with wrong data', () => {
       const proof = createAuthProof(authKey, Buffer.from('correct-data', 'utf-8'));
       const verified = verifyAuthProof(authKey, Buffer.from('wrong-data', 'utf-8'), proof);
 
@@ -115,8 +123,14 @@ describe('Crypto Module', () => {
   });
 
   describe('XChaCha20-Poly1305 Encryption (base64 wire format)', () => {
+    // Cipher tests need *a* key, not the production KDF path — share one.
+    let encryptionKey: Buffer;
+
+    beforeAll(async () => {
+      ({ encryptionKey } = await deriveKeys('test-password', generateSalt(), FAST_KDF));
+    });
+
     test('should encrypt and decrypt strings correctly', async () => {
-      const { encryptionKey } = await deriveKeys('test-password', generateSalt());
       const text = 'Hello, World!';
 
       const encrypted = encrypt(text, encryptionKey);
@@ -126,7 +140,6 @@ describe('Crypto Module', () => {
     });
 
     test('should return base64-encoded string from encrypt', async () => {
-      const { encryptionKey } = await deriveKeys('test-password', generateSalt());
       const encrypted = encrypt('test', encryptionKey);
 
       // Should be a valid base64 string
@@ -137,7 +150,6 @@ describe('Crypto Module', () => {
     });
 
     test('should produce different ciphertexts for same plaintext (random nonce)', async () => {
-      const { encryptionKey } = await deriveKeys('test-password', generateSalt());
 
       const encrypted1 = encrypt('Hello, World!', encryptionKey);
       const encrypted2 = encrypt('Hello, World!', encryptionKey);
@@ -148,8 +160,8 @@ describe('Crypto Module', () => {
 
     test('should fail decryption with wrong key', async () => {
       const salt = generateSalt();
-      const { encryptionKey: key1 } = await deriveKeys('password1', salt);
-      const { encryptionKey: key2 } = await deriveKeys('password2', salt);
+      const { encryptionKey: key1 } = await deriveKeys('password1', salt, FAST_KDF);
+      const { encryptionKey: key2 } = await deriveKeys('password2', salt, FAST_KDF);
 
       const encrypted = encrypt('Secret message', key1);
 
@@ -159,7 +171,6 @@ describe('Crypto Module', () => {
     });
 
     test('should fail decryption with tampered ciphertext', async () => {
-      const { encryptionKey } = await deriveKeys('test-password', generateSalt());
       const encrypted = encrypt('Secret message', encryptionKey);
 
       // Tamper with the base64-encoded data
@@ -173,7 +184,6 @@ describe('Crypto Module', () => {
     });
 
     test('should handle empty string encryption', async () => {
-      const { encryptionKey } = await deriveKeys('test-password', generateSalt());
       const encrypted = encrypt('', encryptionKey);
       const decrypted = decrypt(encrypted, encryptionKey);
 
@@ -181,7 +191,6 @@ describe('Crypto Module', () => {
     });
 
     test('should handle unicode text', async () => {
-      const { encryptionKey } = await deriveKeys('test-password', generateSalt());
       const text = 'Olá mundo! 你好世界 🌍';
 
       const encrypted = encrypt(text, encryptionKey);
@@ -191,7 +200,6 @@ describe('Crypto Module', () => {
     });
 
     test('wire format should be nonce(24) || tag(16) || ciphertext', async () => {
-      const { encryptionKey } = await deriveKeys('test-password', generateSalt());
       const encrypted = encrypt('test data', encryptionKey);
 
       const combined = Buffer.from(encrypted, 'base64');

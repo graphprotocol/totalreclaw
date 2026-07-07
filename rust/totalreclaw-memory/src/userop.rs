@@ -8,8 +8,8 @@
 
 // Re-export pure functions and types from core.
 pub use totalreclaw_core::userop::{
-    encode_batch_call, encode_single_call, hash_userop, sign_userop, UserOperationV7,
-    DATA_EDGE_ADDRESS, ENTRYPOINT_ADDRESS, MAX_BATCH_SIZE, SIMPLE_ACCOUNT_FACTORY,
+    encode_batch_call, encode_single_call, hash_userop, keccak256_hash, sign_userop,
+    UserOperationV7, DATA_EDGE_ADDRESS, ENTRYPOINT_ADDRESS, MAX_BATCH_SIZE, SIMPLE_ACCOUNT_FACTORY,
 };
 
 use crate::{Error, Result};
@@ -49,7 +49,7 @@ pub async fn submit_userop(
         .map_err(|e| Error::Http(e.to_string()))?;
     let calldata_hex = format!("0x{}", hex::encode(calldata));
 
-    let headers = build_headers(auth_key_hex, sender, is_test);
+    let headers = crate::relay::build_relay_headers(auth_key_hex, sender, is_test);
 
     // 1. Get gas prices FIRST (matches viem/permissionless flow)
     let gas_price_resp = jsonrpc_call(
@@ -222,20 +222,6 @@ pub async fn submit_userop(
 // I/O helpers (stay in this crate — they need reqwest)
 // ---------------------------------------------------------------------------
 
-fn build_headers(auth_key_hex: &str, wallet: &str, is_test: bool) -> reqwest::header::HeaderMap {
-    let mut h = reqwest::header::HeaderMap::new();
-    h.insert("X-TotalReclaw-Client", "zeroclaw-memory".parse().unwrap());
-    h.insert(
-        "Authorization",
-        format!("Bearer {}", auth_key_hex).parse().unwrap(),
-    );
-    h.insert("X-Wallet-Address", wallet.parse().unwrap());
-    if is_test {
-        h.insert("X-TotalReclaw-Test", "true".parse().unwrap());
-    }
-    h
-}
-
 async fn jsonrpc_call(
     client: &reqwest::Client,
     url: &str,
@@ -255,6 +241,13 @@ async fn jsonrpc_call(
         .send()
         .await
         .map_err(|e| Error::Http(e.to_string()))?;
+
+    // Mirror the read path: a 403 on the write (bundler) path means quota
+    // exceeded — invalidate the billing cache and surface a QuotaExceeded error.
+    if resp.status().as_u16() == 403 {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(crate::relay::quota_exceeded(&text));
+    }
 
     resp.json().await.map_err(|e| Error::Http(e.to_string()))
 }
@@ -332,18 +325,6 @@ async fn get_nonce(client: &reqwest::Client, sender: &str, chain_id: u64) -> Res
     } else {
         Ok(format!("0x{}", trimmed))
     }
-}
-
-/// Local keccak256 for submit_userop's EOA derivation.
-/// (The core crate's keccak256 is private; this is only used for the
-/// factory initCode computation in submit_userop.)
-fn keccak256_hash(data: &[u8]) -> [u8; 32] {
-    use tiny_keccak::{Hasher, Keccak};
-    let mut keccak = Keccak::v256();
-    let mut hash = [0u8; 32];
-    keccak.update(data);
-    keccak.finalize(&mut hash);
-    hash
 }
 
 async fn poll_receipt(
@@ -451,6 +432,6 @@ mod tests {
         assert_eq!(DATA_EDGE_ADDRESS, "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca");
         assert_eq!(ENTRYPOINT_ADDRESS, "0x0000000071727De22E5E9d8BAf0edAc6f37da032");
         assert_eq!(SIMPLE_ACCOUNT_FACTORY, "0x91E60e0613810449d098b0b5Ec8b51A0FE8c8985");
-        assert_eq!(MAX_BATCH_SIZE, 15);
+        assert_eq!(MAX_BATCH_SIZE, 30);
     }
 }

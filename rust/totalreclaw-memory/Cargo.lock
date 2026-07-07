@@ -3199,7 +3199,7 @@ dependencies = [
 
 [[package]]
 name = "totalreclaw-core"
-version = "2.5.2"
+version = "2.5.5"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -3233,13 +3233,13 @@ dependencies = [
  "chrono",
  "hex",
  "k256",
+ "log",
  "ort",
  "rand 0.8.5",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "tiny-keccak",
  "tokenizers",
  "tokio",
  "totalreclaw-core",

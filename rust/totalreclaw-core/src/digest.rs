@@ -385,26 +385,32 @@ fn parse_string_array(
 }
 
 /// Parse the LLM digest response into a `ParsedDigestResponse`.
-pub fn parse_digest_response(raw: &str) -> Result<ParsedDigestResponse, String> {
+pub fn parse_digest_response(raw: &str) -> crate::Result<ParsedDigestResponse> {
     let cleaned = strip_code_fences(raw);
     let value: serde_json::Value = serde_json::from_str(&cleaned)
-        .map_err(|e| format!("digest response is not valid JSON: {}", e))?;
+        .map_err(|e| crate::Error::Parse(format!("digest response is not valid JSON: {}", e)))?;
     let obj = value
         .as_object()
-        .ok_or_else(|| "digest response must be a JSON object".to_string())?;
+        .ok_or_else(|| crate::Error::Parse("digest response must be a JSON object".to_string()))?;
 
     let identity = obj
         .get("identity")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "digest response missing `identity` string field".to_string())?
+        .ok_or_else(|| {
+            crate::Error::Parse("digest response missing `identity` string field".to_string())
+        })?
         .to_string();
     if identity.is_empty() {
-        return Err("digest response `identity` must be non-empty".to_string());
+        return Err(crate::Error::Parse(
+            "digest response `identity` must be non-empty".to_string(),
+        ));
     }
 
-    let top_claim_indices = parse_index_array(obj, "top_claim_indices")?;
-    let recent_decision_indices = parse_index_array(obj, "recent_decision_indices")?;
-    let active_project_names = parse_string_array(obj, "active_project_names")?;
+    let top_claim_indices = parse_index_array(obj, "top_claim_indices").map_err(crate::Error::Parse)?;
+    let recent_decision_indices =
+        parse_index_array(obj, "recent_decision_indices").map_err(crate::Error::Parse)?;
+    let active_project_names =
+        parse_string_array(obj, "active_project_names").map_err(crate::Error::Parse)?;
 
     Ok(ParsedDigestResponse {
         identity,
@@ -450,14 +456,14 @@ pub fn assemble_digest_from_llm(
     parsed: &ParsedDigestResponse,
     active_claims: &[Claim],
     now_unix_seconds: i64,
-) -> Result<Digest, String> {
+) -> crate::Result<Digest> {
     let n = active_claims.len();
-    let check = |idx: usize, label: &str| -> Result<(), String> {
+    let check = |idx: usize, label: &str| -> crate::Result<()> {
         if idx == 0 || idx > n {
-            Err(format!(
+            Err(crate::Error::Parse(format!(
                 "{} index {} out of range (1..={})",
                 label, idx, n
-            ))
+            )))
         } else {
             Ok(())
         }
@@ -1032,14 +1038,14 @@ Active projects: skynet-lite";
     #[test]
     fn test_parse_missing_identity_err() {
         let raw = r#"{"top_claim_indices":[1],"recent_decision_indices":[],"active_project_names":[]}"#;
-        let err = parse_digest_response(raw).unwrap_err();
+        let err = parse_digest_response(raw).unwrap_err().to_string();
         assert!(err.contains("identity"));
     }
 
     #[test]
     fn test_parse_empty_identity_err() {
         let raw = r#"{"identity":"","top_claim_indices":[1],"recent_decision_indices":[],"active_project_names":[]}"#;
-        let err = parse_digest_response(raw).unwrap_err();
+        let err = parse_digest_response(raw).unwrap_err().to_string();
         assert!(err.contains("non-empty"));
     }
 
@@ -1054,28 +1060,28 @@ Active projects: skynet-lite";
     #[test]
     fn test_parse_malformed_json_err() {
         let raw = "{not valid";
-        let err = parse_digest_response(raw).unwrap_err();
+        let err = parse_digest_response(raw).unwrap_err().to_string();
         assert!(err.contains("valid JSON"));
     }
 
     #[test]
     fn test_parse_non_integer_index_err() {
         let raw = r#"{"identity":"You are X.","top_claim_indices":["one"],"recent_decision_indices":[],"active_project_names":[]}"#;
-        let err = parse_digest_response(raw).unwrap_err();
+        let err = parse_digest_response(raw).unwrap_err().to_string();
         assert!(err.contains("positive integers"));
     }
 
     #[test]
     fn test_parse_zero_index_err() {
         let raw = r#"{"identity":"You are X.","top_claim_indices":[0],"recent_decision_indices":[],"active_project_names":[]}"#;
-        let err = parse_digest_response(raw).unwrap_err();
+        let err = parse_digest_response(raw).unwrap_err().to_string();
         assert!(err.contains("1-based"));
     }
 
     #[test]
     fn test_parse_non_object_err() {
         let raw = "[1,2,3]";
-        let err = parse_digest_response(raw).unwrap_err();
+        let err = parse_digest_response(raw).unwrap_err().to_string();
         assert!(err.contains("object"));
     }
 
@@ -1141,7 +1147,7 @@ Active projects: skynet-lite";
             recent_decision_indices: vec![],
             active_project_names: vec![],
         };
-        let err = assemble_digest_from_llm(&parsed, &claims, NOW).unwrap_err();
+        let err = assemble_digest_from_llm(&parsed, &claims, NOW).unwrap_err().to_string();
         assert!(err.contains("out of range"));
     }
 
@@ -1154,7 +1160,7 @@ Active projects: skynet-lite";
             recent_decision_indices: vec![],
             active_project_names: vec![],
         };
-        let err = assemble_digest_from_llm(&parsed, &claims, NOW).unwrap_err();
+        let err = assemble_digest_from_llm(&parsed, &claims, NOW).unwrap_err().to_string();
         assert!(err.contains("out of range"));
     }
 
