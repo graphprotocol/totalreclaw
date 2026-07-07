@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { buildMindGraph, YOU_ID } from "./mindmap";
-import type { VaultItem } from "../types";
+import type { VaultItem, MemoryScope } from "../types";
 
 let seq = 0;
-function item(scope: string, entities: string[], sessionId?: string): VaultItem {
+function item(scope: MemoryScope, entities: string[], sessionId?: string): VaultItem {
   return {
     id: `i${seq++}`,
     claim: {

@@ -4,7 +4,11 @@ import {
   VaultItem,
   MemoryClaimV1,
   MemoryTypeV1,
+  MemorySource,
+  MemoryScope,
   MEMORY_TYPES_V1,
+  MEMORY_SOURCES,
+  MEMORY_SCOPES,
   SubgraphFact,
 } from "./types";
 import { decryptBlob } from "./crypto";
@@ -33,18 +37,18 @@ async function apiFetch<T>(
   keys: SessionKeys,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(`${SERVER_URL}${path}`, {
+  const response = await fetch(`${SERVER_URL}${path}`, {
     ...init,
     headers: {
       ...authHeaders(keys),
       ...(init?.headers ?? {}),
     },
   });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`API ${path} → ${res.status}: ${body}`);
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`API ${path} → ${response.status}: ${body}`);
   }
-  return res.json() as Promise<T>;
+  return response.json() as Promise<T>;
 }
 
 /**
@@ -63,7 +67,7 @@ export async function registerSession(keys: SessionKeys): Promise<void> {
   const saltHex = await sha256Hex(
     concat(new TextEncoder().encode("totalreclaw-spa-salt-v1"), keys.authKey),
   );
-  const res = await fetch(`${SERVER_URL}/v1/register`, {
+  const response = await fetch(`${SERVER_URL}/v1/register`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -74,9 +78,9 @@ export async function registerSession(keys: SessionKeys): Promise<void> {
       salt: saltHex,
     }),
   });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`register → ${res.status}: ${body}`);
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`register → ${response.status}: ${body}`);
   }
 }
 
@@ -149,7 +153,7 @@ export async function exportAllFacts(
   const query = opts?.includeInactive ? PAGE_QUERY_ALL : PAGE_QUERY;
 
   for (;;) {
-    const res = await apiFetch<SubgraphResponse<{ facts: SubgraphFact[] }>>(
+    const subgraphResponse = await apiFetch<SubgraphResponse<{ facts: SubgraphFact[] }>>(
       "/v1/subgraph",
       keys,
       {
@@ -165,11 +169,11 @@ export async function exportAllFacts(
       },
     );
 
-    if (res.errors?.length) {
-      throw new Error(`subgraph: ${res.errors.map((e) => e.message).join("; ")}`);
+    if (subgraphResponse.errors?.length) {
+      throw new Error(`subgraph: ${subgraphResponse.errors.map((e) => e.message).join("; ")}`);
     }
 
-    const page = res.data?.facts ?? [];
+    const page = subgraphResponse.data?.facts ?? [];
     for (const fact of page) {
       all.push(subgraphFactToRawFact(fact));
     }
@@ -212,6 +216,25 @@ function resolveType(claim: MemoryClaimV1, tags: string[]): MemoryTypeV1 | strin
   return fromTags ?? "claim";
 }
 
+/**
+ * Coerce the decrypted JSON into a well-typed MemoryClaimV1. On-chain blobs
+ * may carry source/scope strings outside the v1 closed enums (malformed or
+ * future values); we clamp them to safe taxonomy members here so the narrow
+ * types downstream are honest rather than casting blindly.
+ */
+function normalizeClaim(raw: MemoryClaimV1): MemoryClaimV1 {
+  const source: MemorySource = MEMORY_SOURCES.includes(raw.source)
+    ? raw.source
+    : "external";
+  const scope: MemoryScope | undefined =
+    raw.scope === undefined
+      ? undefined
+      : MEMORY_SCOPES.includes(raw.scope)
+        ? raw.scope
+        : "unspecified";
+  return { ...raw, source, scope };
+}
+
 /** Decrypt all raw facts into VaultItems. Skips items that fail decryption. */
 export function decryptFacts(
   facts: RawFact[],
@@ -221,7 +244,7 @@ export function decryptFacts(
   for (const fact of facts) {
     try {
       const plaintext = decryptBlob(fact.encrypted_blob, keys.encryptionKey);
-      const claim = JSON.parse(plaintext) as MemoryClaimV1;
+      const claim = normalizeClaim(JSON.parse(plaintext) as MemoryClaimV1);
       const tags: string[] = claim.tags ?? [];
       items.push({
         id: fact.id,

@@ -9,6 +9,31 @@ export const MEMORY_TYPES_V1 = [
 
 export type MemoryTypeV1 = (typeof MEMORY_TYPES_V1)[number];
 
+/** Provenance axis — closed enum per docs/specs/totalreclaw/memory-taxonomy-v1.md */
+export const MEMORY_SOURCES = [
+  "user",
+  "user-inferred",
+  "assistant",
+  "external",
+  "derived",
+] as const;
+
+export type MemorySource = (typeof MEMORY_SOURCES)[number];
+
+/** Life-domain axis — closed enum per docs/specs/totalreclaw/memory-taxonomy-v1.md */
+export const MEMORY_SCOPES = [
+  "work",
+  "personal",
+  "health",
+  "family",
+  "creative",
+  "finance",
+  "misc",
+  "unspecified",
+] as const;
+
+export type MemoryScope = (typeof MEMORY_SCOPES)[number];
+
 export type PinStatus = "pinned" | "unpinned";
 
 /** Structured entity reference inside a v1 claim (core MemoryEntityV1). */
@@ -43,10 +68,10 @@ export interface MemoryClaimV1 {
   id: string;
   text: string;
   type: MemoryTypeV1;
-  source: string;
+  source: MemorySource;
   created_at: string;
   schema_version: "1.0";
-  scope?: string;
+  scope?: MemoryScope;
   volatility?: string;
   entities?: MemoryEntityV1[];
   reasoning?: string;
@@ -65,7 +90,9 @@ export interface MemoryClaimV1 {
 export interface VaultItem {
   id: string;
   claim: MemoryClaimV1;
-  /** Derived from tags[0] if claim.type is missing (legacy fallback) */
+  /** Derived from tags[0] if claim.type is missing (legacy fallback).
+   *  `| string` retained for legacy v0 on-chain type tokens (fact, context,
+   *  decision, episodic, goal, rule) that predate the v1 closed enum. */
   type: MemoryTypeV1 | string;
   pinned: boolean;
   createdAt: Date;

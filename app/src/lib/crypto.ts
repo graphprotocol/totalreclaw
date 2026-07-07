@@ -7,7 +7,7 @@
  */
 
 import { validateMnemonic, mnemonicToSeed, generateMnemonic } from "@scure/bip39";
-import { wordlist } from "@scure/bip39/wordlists/english";
+import { wordlist } from "@scure/bip39/wordlists/english.js";
 import { HDKey } from "@scure/bip32";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3";
@@ -137,12 +137,12 @@ async function fetchSmartAccountAddress(
   chainId: number,
 ): Promise<string> {
   const url = `${serverUrl.replace(/\/$/, "")}/v1/smart-account?eoa=${eoa}&chain=${chainId}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`smart-account derivation failed (${res.status}): ${body}`);
+  const response = await fetch(url);
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`smart-account derivation failed (${response.status}): ${body}`);
   }
-  const json = (await res.json()) as { smart_account?: string };
+  const json = (await response.json()) as { smart_account?: string };
   if (!json.smart_account || !/^0x[0-9a-fA-F]{40}$/.test(json.smart_account)) {
     throw new Error("smart-account response missing valid address");
   }

@@ -10,7 +10,7 @@ import { Segmented } from "../components/memory/Segmented";
 import { SidePanel, type PanelView } from "../components/memory/SidePanel";
 import { sourceShort, cap } from "../lib/presentation";
 import { count, relativeDate } from "../lib/format";
-import type { VaultItem } from "../lib/types";
+import type { VaultItem, MemoryScope, MemorySource } from "../lib/types";
 
 // Canvas + d3-force stay out of the Memory landing bundle until the Map opens.
 const MindMap = lazy(() =>
@@ -50,8 +50,8 @@ export function MemoryPage() {
   const [panel, setPanel] = useState<PanelView | null>(null);
 
   const [q, setQ] = useState("");
-  const [scope, setScope] = useState<string | null>(null);
-  const [source, setSource] = useState<string | null>(null);
+  const [scope, setScope] = useState<MemoryScope | null>(null);
+  const [source, setSource] = useState<MemorySource | null>(null);
   const [openOnly, setOpenOnly] = useState(false);
 
   const close = useCallback(() => setPanel(null), []);
@@ -61,11 +61,11 @@ export function MemoryPage() {
   const groups = useMemo(() => buildTimeline(items), [items]);
 
   const scopes = useMemo(
-    () => [...new Set(items.map((i) => i.claim.scope).filter((s): s is string => !!s && s !== "unspecified"))].sort(),
+    () => [...new Set(items.map((i) => i.claim.scope).filter((s): s is MemoryScope => !!s && s !== "unspecified"))].sort(),
     [items],
   );
   const sources = useMemo(
-    () => [...new Set(items.map((i) => i.claim.source).filter((s): s is string => !!s))].sort(),
+    () => [...new Set(items.map((i) => i.claim.source).filter((s): s is MemorySource => !!s))].sort(),
     [items],
   );
 
