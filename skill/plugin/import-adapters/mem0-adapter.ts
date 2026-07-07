@@ -118,21 +118,21 @@ export class Mem0Adapter extends BaseImportAdapter {
    */
   private parseExportContent(content: string, errors: string[]): Mem0Memory[] {
     try {
-      const data = JSON.parse(content.trim());
+      const parsed = JSON.parse(content.trim());
 
       // Handle export file format: { memories: [...] }
-      if (data.memories && Array.isArray(data.memories)) {
-        return data.memories;
+      if (parsed.memories && Array.isArray(parsed.memories)) {
+        return parsed.memories;
       }
 
       // Handle API response format: { results: [...] }
-      if (data.results && Array.isArray(data.results)) {
-        return data.results;
+      if (parsed.results && Array.isArray(parsed.results)) {
+        return parsed.results;
       }
 
       // Handle bare array
-      if (Array.isArray(data)) {
-        return data;
+      if (Array.isArray(parsed)) {
+        return parsed;
       }
 
       errors.push('Unrecognized Mem0 format. Expected { memories: [...] }, { results: [...] }, or bare array.');
@@ -181,14 +181,14 @@ export class Mem0Adapter extends BaseImportAdapter {
           break;
         }
 
-        const data: Mem0ApiResponse = await response.json();
-        const memories = data.results || [];
+        const apiResponse: Mem0ApiResponse = await response.json();
+        const memories = apiResponse.results || [];
         allMemories.push(...memories);
 
         if (onProgress) {
           onProgress({
             current: allMemories.length,
-            total: data.total || allMemories.length,
+            total: apiResponse.total || allMemories.length,
             phase: 'fetching',
             message: `Fetched ${allMemories.length} memories from Mem0...`,
           });

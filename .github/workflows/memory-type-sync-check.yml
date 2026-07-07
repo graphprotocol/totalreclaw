@@ -12,8 +12,8 @@ on:
   pull_request:
     paths:
       - 'scripts/check-memory-type-sync.py'
-      - 'skill/plugin/extractor.ts'
-      - 'skill/plugin/claims-helper.ts'
+      - 'skill/plugin/extraction/extractor.ts'
+      - 'skill/plugin/extraction/claims-helper.ts'
       - 'mcp/src/v1-types.ts'
       - 'python/src/totalreclaw/agent/extraction.py'
       - 'python/src/totalreclaw/claims_helper.py'

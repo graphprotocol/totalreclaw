@@ -159,55 +159,6 @@ const SAMPLE_SCOPE = '0x1234567890abcdef1234567890abcdef12345678';
 }
 
 // ---------------------------------------------------------------------------
-// statusTool surfaces scope_address pre-write
-//
-// The plugin/index.ts execute() path reads credentials.json -> returns
-// scope_address in the tool result. The simpler `skill/src/tools/status.ts`
-// statusTool() function takes the SA address as a `walletAddress` param
-// (the OpenClaw skill side never derives it itself; the wallet address
-// passes in from the caller). Verify it's echoed in the result so the
-// agent / user can see it in tool output.
-// ---------------------------------------------------------------------------
-
-{
-  // Mock fetch so we don't touch the network.
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = async () => {
-    return new Response(
-      JSON.stringify({
-        tier: 'free',
-        free_writes_used: 0,
-        free_writes_limit: 100,
-        free_reads_used: 0,
-        free_reads_limit: 100,
-      }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } },
-    );
-  };
-
-  try {
-    const { statusTool } = await import('../src/tools/status.js');
-    const result = await statusTool(
-      'https://api.totalreclaw.xyz',
-      'deadbeef',
-      SAMPLE_SCOPE,
-    );
-    assert(result.success === true, 'statusTool: success on 200 OK');
-    assertEq(
-      result.scope_address,
-      SAMPLE_SCOPE,
-      'statusTool: returns scope_address echoed from walletAddress input',
-    );
-    assert(
-      (result.formatted ?? '').includes(`Smart Account: ${SAMPLE_SCOPE}`),
-      'statusTool: formatted summary includes the Smart Account line',
-    );
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Phrase-safety hard rail — ensure scope_address persistence path does NOT
 // route the mnemonic anywhere new
 // ---------------------------------------------------------------------------

@@ -20,8 +20,7 @@
     "types": ["node"]
   },
   "include": [
-    "*.ts",
-    "import-adapters/**/*.ts"
+    "**/*.ts"
   ],
   "exclude": [
     "node_modules",

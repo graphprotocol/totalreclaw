@@ -1,7 +1,8 @@
 /**
  * skill-md-native.test.ts (3.3.12-rc.13 — native memory integration, PR #385)
  *
- * Asserts the content of skill/plugin/SKILL.md AND skill/SKILL.md.
+ * Asserts the content of skill/plugin/SKILL.md (the canonical, and now only,
+ * SKILL.md — the legacy top-level skill/SKILL.md was deleted).
  *
  * HISTORY — this file was renamed from `skill-md-hybrid-primary.test.ts` when
  * PR #383 retired the hybrid-primary flow and PR #385 rewrote SKILL.md for the
@@ -59,11 +60,13 @@ function assert(cond: boolean, name: string): void {
 // File paths
 // ---------------------------------------------------------------------------
 
+// The canonical (and only) SKILL.md now lives in skill/plugin/. The legacy
+// top-level skill/SKILL.md was deleted; sync-version.mjs targets the plugin
+// copy. Assertions that used to cross-check the top-level file are gone with
+// the file — the plugin SKILL.md invariants below are the real contract.
 const pluginSkillMdPath = path.join(__dirname, 'SKILL.md');
-const topLevelSkillMdPath = path.resolve(__dirname, '..', '..', 'skill', 'SKILL.md');
 
 const pluginSkillMd = fs.readFileSync(pluginSkillMdPath, 'utf8');
-const topLevelSkillMd = fs.readFileSync(topLevelSkillMdPath, 'utf8');
 
 // ---------------------------------------------------------------------------
 // 1. Architecture truth (decentralized network / relay-based) — both files
@@ -82,16 +85,6 @@ assert(
   'skill/plugin/SKILL.md: contains architecture truth (RELAY-BASED or DECENTRALIZED NETWORK)',
 );
 
-const HAS_ARCHITECTURE_TRUTH_TOPLEVEL =
-  topLevelSkillMd.includes('TotalReclaw is RELAY-BASED') ||
-  topLevelSkillMd.includes('DECENTRALIZED NETWORK') ||
-  topLevelSkillMd.includes('decentralized network');
-
-assert(
-  HAS_ARCHITECTURE_TRUTH_TOPLEVEL,
-  'skill/SKILL.md: contains architecture truth (RELAY-BASED or DECENTRALIZED NETWORK)',
-);
-
 // Anti-centralized-custody ban (local-only OR single-company-server direction).
 const HAS_NO_LOCAL_OR_NO_SERVER_PLUGIN =
   pluginSkillMd.includes('NO local-only mode') ||
@@ -103,26 +96,13 @@ assert(
   'skill/plugin/SKILL.md: anti-centralized-custody / no-local-only assertion present',
 );
 
-const HAS_NO_LOCAL_OR_NO_SERVER_TOPLEVEL =
-  topLevelSkillMd.includes('NO local-only mode') ||
-  topLevelSkillMd.includes('not on a single company server') ||
-  topLevelSkillMd.includes('not on any single company');
-
-assert(
-  HAS_NO_LOCAL_OR_NO_SERVER_TOPLEVEL,
-  'skill/SKILL.md: anti-centralized-custody / no-local-only assertion present',
-);
-
 // ---------------------------------------------------------------------------
-// 2. Hallucination-guard forbidden vocab denylist — both files
+// 2. Hallucination-guard forbidden vocab denylist — plugin file
 // ---------------------------------------------------------------------------
 
-// Common denylist that MUST appear in BOTH files. Note: PR #385's rewritten
-// plugin SKILL.md dropped "local memory" and "local storage" from the explicit
-// list (the remaining entries "local" and "local-only" already subsume them,
-// and the new copy is much tighter). The top-level SKILL.md still carries the
-// full legacy list. Assert the intersection here; assert the legacy extras
-// against the top-level file only (below).
+// PR #385's rewritten plugin SKILL.md dropped "local memory" and "local
+// storage" from the explicit list (the remaining entries "local" and
+// "local-only" already subsume them, and the new copy is much tighter).
 const COMMON_DENYLIST = [
   '"local"',
   '"local-only"',
@@ -135,20 +115,6 @@ for (const entry of COMMON_DENYLIST) {
   assert(
     pluginSkillMd.includes(entry),
     `skill/plugin/SKILL.md: forbidden vocabulary denylist contains ${entry}`,
-  );
-  assert(
-    topLevelSkillMd.includes(entry),
-    `skill/SKILL.md: forbidden vocabulary denylist contains ${entry}`,
-  );
-}
-
-// Legacy denylist entries still present in the longer top-level SKILL.md.
-// (Plugin SKILL.md no longer lists these explicitly — see comment above.)
-const TOPLEVEL_ONLY_DENYLIST = ['"local memory"', '"local storage"'];
-for (const entry of TOPLEVEL_ONLY_DENYLIST) {
-  assert(
-    topLevelSkillMd.includes(entry),
-    `skill/SKILL.md: forbidden vocabulary denylist contains ${entry}`,
   );
 }
 

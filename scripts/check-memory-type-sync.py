@@ -43,8 +43,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # suppress).
 LOCATIONS: list[tuple[str, str, str]] = [
     (
-        "skill/plugin/extractor.ts (VALID_MEMORY_TYPES)",
-        "skill/plugin/extractor.ts",
+        "skill/plugin/extraction/extractor.ts (VALID_MEMORY_TYPES)",
+        "skill/plugin/extraction/extractor.ts",
         "parse_ts_const_array_VALID_MEMORY_TYPES",
     ),
     (
@@ -63,8 +63,8 @@ LOCATIONS: list[tuple[str, str, str]] = [
         "parse_rust_enum_MemoryTypeV1",
     ),
     (
-        "skill/plugin/claims-helper.ts (TYPE_TO_CATEGORY_V1)",
-        "skill/plugin/claims-helper.ts",
+        "skill/plugin/extraction/claims-helper.ts (TYPE_TO_CATEGORY_V1)",
+        "skill/plugin/extraction/claims-helper.ts",
         "parse_ts_record_TYPE_TO_CATEGORY_V1",
     ),
     (

@@ -53,23 +53,31 @@ function assert(cond: boolean, name: string): void {
 const indexTsPath = path.join(__dirname, 'index.ts');
 const indexSrc = fs.readFileSync(indexTsPath, 'utf8');
 
+// The import handlers were extracted from index.ts into the import/ domain
+// module (import/import-runtime.ts); index.ts stays the composing entry that
+// imports + wires them into the registerCli surface.
+const importRuntimeSrc = fs.readFileSync(
+  path.join(__dirname, 'import', 'import-runtime.ts'),
+  'utf8',
+);
+
 // ---------------------------------------------------------------------------
 // 1. The handlers still exist (3.2 retired the agent tools, not the logic)
 // ---------------------------------------------------------------------------
 
 assert(
-  /async function handlePluginImportFrom\(/.test(indexSrc),
-  'index.ts: handlePluginImportFrom handler defined (logic kept after 3.2)',
+  /export async function handlePluginImportFrom\(/.test(importRuntimeSrc),
+  'import-runtime.ts: handlePluginImportFrom handler defined (logic kept after 3.2)',
 );
 
 assert(
-  /async function handleImportStatus\(/.test(indexSrc),
-  'index.ts: handleImportStatus handler defined',
+  /export async function handleImportStatus\(/.test(importRuntimeSrc),
+  'import-runtime.ts: handleImportStatus handler defined',
 );
 
 assert(
-  /async function handleImportAbort\(/.test(indexSrc),
-  'index.ts: handleImportAbort handler defined',
+  /export async function handleImportAbort\(/.test(importRuntimeSrc),
+  'import-runtime.ts: handleImportAbort handler defined',
 );
 
 // ---------------------------------------------------------------------------
@@ -197,8 +205,8 @@ assert(
 
 // JSON branch emits a single JSON.stringify line on stdout (agent-parseable)
 assert(
-  /opts\.json[\s\S]{0,200}JSON\.stringify\(result\)/.test(registerCliBody),
-  'index.ts: import subcommands emit JSON.stringify(result) on --json',
+  /opts\.json[\s\S]{0,200}JSON\.stringify\(\w*[Rr]esult\)/.test(registerCliBody),
+  'index.ts: import subcommands emit JSON.stringify(<result>) on --json',
 );
 
 // ---------------------------------------------------------------------------
@@ -268,7 +276,7 @@ assert(
 // 7. Standalone `tr` CLI binary points users at the gateway subcommand
 // ---------------------------------------------------------------------------
 
-const trCliPath = path.join(__dirname, 'tr-cli.ts');
+const trCliPath = path.join(__dirname, 'cli', 'tr-cli.ts');
 const trCliSrc = fs.readFileSync(trCliPath, 'utf8');
 
 // `tr import` and `tr upgrade` must NOT silently no-op; they must die() with

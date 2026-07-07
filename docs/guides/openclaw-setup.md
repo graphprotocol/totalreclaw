@@ -167,7 +167,7 @@ A successful run (exit `0`, human-readable status printed) is your verification.
 
 If `openclaw totalreclaw status` exits non-zero or reports `unknown command`, wait 5s and retry once (the install / SIGUSR1 reload may still be completing). If it still fails, tell the user the install didn't land and retry `openclaw plugins install @totalreclaw/totalreclaw@rc`.
 
-> ⛔ **DO NOT use `npx` to run TotalReclaw commands.** `npx` fails inside OpenClaw's sandbox (no network egress for the package fetch, and the resolved binary path is wrong for a plugin that's already installed). Always use the **registered subcommand** `openclaw totalreclaw <command>` (e.g. `openclaw totalreclaw status`, `openclaw totalreclaw onboard --pair-only`) or the **native tool** `memory_search`. The only place a raw `node .../dist/tr-cli.js` invocation is acceptable is the explicit fallback blocks below (the pair CLI fallback and the issue-#184 deadlock workaround), which define the path inline — never invent a resolver of your own and never reach for `npx`.
+> ⛔ **DO NOT use `npx` to run TotalReclaw commands.** `npx` fails inside OpenClaw's sandbox (no network egress for the package fetch, and the resolved binary path is wrong for a plugin that's already installed). Always use the **registered subcommand** `openclaw totalreclaw <command>` (e.g. `openclaw totalreclaw status`, `openclaw totalreclaw onboard --pair-only`) or the **native tool** `memory_search`. The only place a raw `node .../dist/cli/tr-cli.js` invocation is acceptable is the explicit fallback blocks below (the pair CLI fallback and the issue-#184 deadlock workaround), which define the path inline — never invent a resolver of your own and never reach for `npx`.
 
 ### Step 3 — Check for existing credentials (silent unless found)
 
@@ -190,7 +190,7 @@ Parse the JSON `{"v":1,"sid":"...","url":"...","pin":"...","mode":"...","expires
 ```bash
 PAIR_OUT="/tmp/tr-pair-out-$(date +%s).json"
 # Resolve the installed plugin's standalone CLI directly (this fallback only).
-TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js 2>/dev/null | head -1)"
+TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/cli/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/cli/tr-cli.js 2>/dev/null | head -1)"
 setsid -f node "$TR_CLI" pair --json > "$PAIR_OUT" 2>&1 < /dev/null
 sleep 2
 cat "$PAIR_OUT"
@@ -361,7 +361,7 @@ Upgrade: *"Upgrade my TotalReclaw subscription."*
 - **Agent says "Should I /totalreclaw-restart?" or stalls instead of restarting**: the agent missed the restart-imperative rule in §"Restart is agent-driven, never user-manual". Reply *"Issue /totalreclaw-restart yourself — don't ask"* and the next session should act autonomously. If it persists across sessions, the published RC's SKILL.md is stale — file an issue.
 - **`openclaw` CLI hangs / exits 124 inside the gateway agent shell** (issue [#184](https://github.com/p-diogo/totalreclaw-internal/issues/184)): on some Docker setups the agent's shell-execution of `openclaw plugins list` / `openclaw plugins install` etc. deadlocks (every subcommand exits 124). The `tr` CLI pair path is independent of the `openclaw` wrapper — the agent resolves the installed path directly and invokes it via `node`, so `tr pair --json` / `tr status --json` keep working even when the `openclaw` CLI itself deadlocks:
   ```bash
-  TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js 2>/dev/null | head -1)"
+  TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/cli/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/cli/tr-cli.js 2>/dev/null | head -1)"
   node "$TR_CLI" pair --json
   node "$TR_CLI" status --json
   ```

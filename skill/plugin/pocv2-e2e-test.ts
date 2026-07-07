@@ -26,8 +26,8 @@ import { argon2id } from '@noble/hashes/argon2.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { hmac } from '@noble/hashes/hmac.js';
-import { LSHHasher } from './lsh.js';
-import { rerank, type RerankerCandidate } from './reranker.js';
+import { LSHHasher } from './embedding/lsh.js';
+import { rerank, type RerankerCandidate } from './embedding/reranker.js';
 import crypto from 'node:crypto';
 
 // ---------------------------------------------------------------------------

@@ -87,29 +87,29 @@ export class GeminiAdapter extends BaseImportAdapter {
     }
 
     // Delegate ALL format parsing to the shared core.
-    const result = getWasm().parseGemini(content) as CoreParseResult;
+    const parseResult = getWasm().parseGemini(content) as CoreParseResult;
 
     if (onProgress) {
       onProgress({
-        current: result.chunks.length,
-        total: result.chunks.length,
+        current: parseResult.chunks.length,
+        total: parseResult.chunks.length,
         phase: 'parsing',
-        message: `Parsed ${result.total_messages} messages into ${result.chunks.length} chunks`,
+        message: `Parsed ${parseResult.total_messages} messages into ${parseResult.chunks.length} chunks`,
       });
     }
 
     return {
       facts: [],
-      chunks: result.chunks,
-      totalMessages: result.total_messages,
-      warnings: [...warnings, ...result.warnings],
-      errors: [...errors, ...result.errors],
+      chunks: parseResult.chunks,
+      totalMessages: parseResult.total_messages,
+      warnings: [...warnings, ...parseResult.warnings],
+      errors: [...errors, ...parseResult.errors],
       source_metadata: {
-        format: result.format,
-        chunks_count: result.chunks.length,
-        total_messages: result.total_messages,
-        ...(result.records_count ? { records_count: result.records_count } : {}),
-        ...(result.skipped ? { skipped_non_gemini: result.skipped } : {}),
+        format: parseResult.format,
+        chunks_count: parseResult.chunks.length,
+        total_messages: parseResult.total_messages,
+        ...(parseResult.records_count ? { records_count: parseResult.records_count } : {}),
+        ...(parseResult.skipped ? { skipped_non_gemini: parseResult.skipped } : {}),
       },
     };
   }

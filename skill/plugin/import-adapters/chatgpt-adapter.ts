@@ -116,15 +116,15 @@ export class ChatGPTAdapter extends BaseImportAdapter {
     let conversations: ChatGPTConversation[];
 
     try {
-      const data = JSON.parse(content);
+      const parsed = JSON.parse(content);
 
-      if (Array.isArray(data)) {
-        conversations = data;
-      } else if (data.conversations && Array.isArray(data.conversations)) {
-        conversations = data.conversations;
-      } else if (data.mapping) {
+      if (Array.isArray(parsed)) {
+        conversations = parsed;
+      } else if (parsed.conversations && Array.isArray(parsed.conversations)) {
+        conversations = parsed.conversations;
+      } else if (parsed.mapping) {
         // Single conversation object
-        conversations = [data];
+        conversations = [parsed];
       } else {
         errors.push(
           'Unrecognized ChatGPT format. Expected an array of conversation objects (conversations.json) ' +

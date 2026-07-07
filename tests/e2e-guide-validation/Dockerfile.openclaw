@@ -25,7 +25,9 @@ COPY --from=builder /openclaw /app
 
 # Copy TotalReclaw skill plugin and install its deps
 COPY skill/plugin/ /opt/totalreclaw/plugin/
-COPY skill/SKILL.md /opt/totalreclaw/SKILL.md
+# SKILL.md moved into skill/plugin/ by the domain restructure; keep the
+# parent-level copy (/opt/totalreclaw/SKILL.md) the image has always shipped.
+COPY skill/plugin/SKILL.md /opt/totalreclaw/SKILL.md
 WORKDIR /opt/totalreclaw/plugin
 RUN npm install && npm install tslib
 

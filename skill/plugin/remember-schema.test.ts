@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 import {
   VALID_MEMORY_TYPES,
   LEGACY_V0_MEMORY_TYPES,
-} from './extractor.js';
+} from './extraction/extractor.js';
 
 let passed = 0;
 let failed = 0;
@@ -99,9 +99,15 @@ function assert(condition: boolean, name: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Source-level regression guard — index.ts must not contain the naive
-//    spread merge pattern. If someone reverts to the bug pattern, this
-//    lights up red.
+// 3. Source-level regression guard — index.ts must not contain a BARE (un-
+//    deduped) `[...VALID_MEMORY_TYPES, ...LEGACY_V0_MEMORY_TYPES]` merge.
+//
+//    History: the `totalreclaw_remember` agent tool that built this enum was
+//    RETIRED in Task 3.2 (index.ts now drives writes through the native memory
+//    contract + CLI, using canonical v1 MemoryType names — no legacy-token
+//    enum). So the merge site is legitimately GONE. This guard is now purely
+//    negative: it fails only if a future edit REINTRODUCES the deprecated
+//    v0-alias merge in its buggy un-Set-wrapped form.
 // ---------------------------------------------------------------------------
 {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -111,8 +117,6 @@ function assert(condition: boolean, name: string): void {
   //   enum: [...VALID_MEMORY_TYPES, ...LEGACY_V0_MEMORY_TYPES],
   // Anything that matches that shape — raw spread of both constants
   // with no new Set() wrapper — is a regression.
-  const bugPattern = /\.\.\.VALID_MEMORY_TYPES\s*,\s*\.\.\.LEGACY_V0_MEMORY_TYPES/;
-
   // Ensure the bug pattern is used ONLY inside a `new Set(...)` (or
   // equivalent dedup). Find every match and check each.
   const matches = [...indexSrc.matchAll(/\[\s*\.\.\.VALID_MEMORY_TYPES\s*,\s*\.\.\.LEGACY_V0_MEMORY_TYPES\s*\]/g)];
@@ -125,15 +129,13 @@ function assert(condition: boolean, name: string): void {
     if (!wrappedBySet) bareMerges++;
   }
 
+  // Canonical-only invariant: after the tool retirement, index.ts should carry
+  // NO bare merge. If a merge reappears, it MUST be Set-wrapped (the historical
+  // dedup fix) — a bare reintroduction of the deprecated-alias merge fails here.
   assert(
     matches.length > 0 ? bareMerges === 0 : true,
     `index.ts: every [...VALID_MEMORY_TYPES, ...LEGACY_V0_MEMORY_TYPES] spread is wrapped in new Set() (${bareMerges} bare)`,
   );
-
-  // At least one dedup site must exist (positive assertion — catches the
-  // case where someone deletes the merge entirely and leaves the v1-only
-  // enum, which would regress behaviour for legacy-token-emitting agents).
-  assert(bugPattern.test(indexSrc), 'index.ts: still references both type constants together somewhere');
 }
 
 // ---------------------------------------------------------------------------

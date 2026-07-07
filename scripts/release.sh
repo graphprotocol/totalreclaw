@@ -20,8 +20,8 @@ cd skill/plugin && npm version "$VERSION" --no-git-tag-version && cd ../..
 
 # 2. Update skill metadata
 echo "Updating skill metadata..."
-sed -i '' "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" skill/skill.json
-sed -i '' "s/^version: .*/version: $VERSION/" skill/SKILL.md
+sed -i '' "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" skill/plugin/skill.json
+sed -i '' "s/^version: .*/version: $VERSION/" skill/plugin/SKILL.md
 
 # 3. Build
 echo "Building client..."

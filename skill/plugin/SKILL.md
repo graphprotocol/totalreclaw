@@ -61,7 +61,7 @@ Pairing is a deliberate, user-initiated QR flow (the plugin does **not** auto-pa
 Pair is UNCONDITIONAL when no credentials — the user installing/requesting setup IS the consent; do not add a second consent gate. `tr --help` lists every subcommand.
 
 ```bash
-TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/tr-cli.js 2>/dev/null | head -1)"
+TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/cli/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/cli/tr-cli.js 2>/dev/null | head -1)"
 node "$TR_CLI" pair --json        # start/re-pair
 node "$TR_CLI" status --json      # {"version":"…","paired":true,…}
 ```

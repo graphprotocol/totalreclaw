@@ -74,8 +74,8 @@ import {
   decrypt,
   generateBlindIndices,
   generateContentFingerprint,
-} from './crypto.js';
-import { createApiClient, type StoreFactPayload } from './api-client.js';
+} from './crypto/crypto.js';
+import { createApiClient, type StoreFactPayload } from './billing/api-client.js';
 import {
   extractFacts,
   extractCrystal,
@@ -92,7 +92,7 @@ import {
   type MemoryType,
   type MemorySource,
   type MemoryScope,
-} from './extractor.js';
+} from './extraction/extractor.js';
 import {
   initLLMClient,
   resolveLLMConfig,
@@ -102,16 +102,16 @@ import {
   getEmbeddingModelId,
   configureEmbedder,
   prefetchEmbedderBundle,
-} from './llm-client.js';
+} from './llm/llm-client.js';
 import {
   defaultAuthProfilesRoot,
   readAllProfileKeys,
   dedupeByProvider,
-} from './llm-profile-reader.js';
-import { LSHHasher } from './lsh.js';
-import { rerank, cosineSimilarity, detectQueryIntent, INTENT_WEIGHTS, type RerankerCandidate } from './reranker.js';
-import { deduplicateBatch } from './semantic-dedup.js';
-import { startTrajectoryPoller, type ExtractedFactLike } from './trajectory-poller.js';
+} from './llm/llm-profile-reader.js';
+import { LSHHasher } from './embedding/lsh.js';
+import { rerank, cosineSimilarity, detectQueryIntent, INTENT_WEIGHTS, type RerankerCandidate } from './embedding/reranker.js';
+import { deduplicateBatch } from './extraction/semantic-dedup.js';
+import { startTrajectoryPoller, type ExtractedFactLike } from './subgraph/trajectory-poller.js';
 import {
   findNearDuplicate,
   shouldSupersede,
@@ -120,9 +120,9 @@ import {
   getConsolidationThreshold,
   STORE_DEDUP_MAX_CANDIDATES,
   type DecryptedCandidate,
-} from './consolidation.js';
-import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, submitFactBatchOnChain, deriveSmartAccountAddress, PROTOBUF_VERSION_V4, type FactPayload } from './subgraph-store.js';
-import { confirmIndexed } from './confirm-indexed.js';
+} from './extraction/consolidation.js';
+import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, submitFactBatchOnChain, deriveSmartAccountAddress, PROTOBUF_VERSION_V4, type FactPayload } from './subgraph/subgraph-store.js';
+import { confirmIndexed } from './subgraph/confirm-indexed.js';
 import {
   DIGEST_TRAPDOOR,
   buildCanonicalClaim,
@@ -133,7 +133,7 @@ import {
   readClaimFromBlob,
   resolveDigestMode,
   type DigestMode,
-} from './claims-helper.js';
+} from './extraction/claims-helper.js';
 import {
   maybeInjectDigest,
   recompileDigest,
@@ -141,31 +141,31 @@ import {
   isRecompileInProgress,
   tryBeginRecompile,
   endRecompile,
-} from './digest-sync.js';
+} from './digest/digest-sync.js';
 import {
   detectAndResolveContradictions,
   runWeightTuningLoop,
   type ResolutionDecision as ContradictionDecision,
-} from './contradiction-sync.js';
-import { searchSubgraph, searchSubgraphBroadened, getSubgraphFactCount, fetchFactById } from './subgraph-search.js';
+} from './contradiction/contradiction-sync.js';
+import { searchSubgraph, searchSubgraphBroadened, getSubgraphFactCount, fetchFactById } from './subgraph/subgraph-search.js';
 import {
   executePinOperation,
   validatePinArgs,
   type PinOpDeps,
-} from './pin.js';
+} from './memory/pin.js';
 import {
   runNonInteractiveOnboard,
   type NonInteractiveOnboardResult,
-} from './onboarding-cli.js';
-import { PluginHotCache, type HotFact } from './hot-cache-wrapper.js';
+} from './pairing/onboarding-cli.js';
+import { PluginHotCache, type HotFact } from './memory/hot-cache-wrapper.js';
 import { CONFIG, setRecoveryPhraseOverride } from './config.js';
-import { buildRelayHeaders } from './relay-headers.js';
+import { buildRelayHeaders } from './billing/relay-headers.js';
 import {
   readBillingCache,
   writeBillingCache,
   BILLING_CACHE_PATH,
   type BillingCache,
-} from './billing-cache.js';
+} from './billing/billing-cache.js';
 import {
   ensureMemoryHeaderFile,
   loadCredentialsJson,
@@ -183,24 +183,45 @@ import {
   checkCredentialsFileMode,
   type OnboardingState,
 } from './fs-helpers.js';
-import { isRcBuild } from './qa-bug-report.js';
-import { decideToolGate, isGatedToolName } from './tool-gating.js';
+import { isRcBuild } from './setup/qa-bug-report.js';
+import { decideToolGate, isGatedToolName } from './memory/tool-gating.js';
 import {
   resolveRestartAuth,
   rejectMessageFor,
   type RestartAuthConfig,
-} from './restart-auth.js';
+} from './pairing/restart-auth.js';
 import {
   recordInboundUser,
   getDistinctInboundUserCount,
   resolveTrackerPath,
-} from './inbound-user-tracker.js';
-import { detectFirstRun, buildWelcomePrepend, type GatewayMode } from './first-run.js';
-import { buildPairRoutes } from './pair-http.js';
-import { detectGatewayHost } from './gateway-url.js';
-import { registerNativeMemory, type TrNativeMemoryDeps } from './native-memory.js';
-import { ensureSkillRegistered } from './skill-register.js';
-import type { TrFact, TrPinnedFact, TrQuotaState } from './memory-runtime.js';
+} from './billing/inbound-user-tracker.js';
+import { detectFirstRun, buildWelcomePrepend, type GatewayMode } from './pairing/first-run.js';
+import { buildPairRoutes } from './pairing/pair-http.js';
+import { detectGatewayHost } from './billing/gateway-url.js';
+import { registerNativeMemory, type TrNativeMemoryDeps } from './memory/native-memory.js';
+import { ensureSkillRegistered } from './setup/skill-register.js';
+import type { OpenClawPluginApi, MigrationFact, SmartImportContext } from './runtime/types.js';
+import {
+  humanizeError,
+  buildPairingUrl,
+  resolveGatewayMode,
+  computeCandidatePool,
+  encryptToHex,
+  decryptFromHex,
+  textScore,
+  relativeTime,
+} from './runtime/format-helpers.js';
+import { CONFIG_SCHEMA } from './runtime/config-schema.js';
+import { filterByImportance } from './extraction/importance-filter.js';
+import {
+  handlePluginImportFrom,
+  handleImportStatus,
+  handleImportAbort,
+  configureImportRuntime,
+  isImportInProgress,
+  setImportInProgress,
+} from './import/import-runtime.js';
+import type { TrFact, TrPinnedFact, TrQuotaState } from './memory/memory-runtime.js';
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import crypto from 'node:crypto';
@@ -213,7 +234,7 @@ import {
   isImportStale,
   readMostRecentActiveImport,
   type ImportState,
-} from './import-state-manager.js';
+} from './import/import-state-manager.js';
 
 // CJS-style require for the @totalreclaw/core WASM module. We keep this
 // load path lazy (only inside getSmartImportWasm() below) so a partial
@@ -226,116 +247,8 @@ import {
 const __cjsRequire = createRequire(import.meta.url);
 
 // ---------------------------------------------------------------------------
-// OpenClaw Plugin API type (defined locally to avoid SDK dependency)
+// OpenClaw Plugin API type — extracted to ./runtime/types.ts (imported above).
 // ---------------------------------------------------------------------------
-
-interface OpenClawPluginApi {
-  logger: {
-    info(...args: unknown[]): void;
-    warn(...args: unknown[]): void;
-    error(...args: unknown[]): void;
-  };
-  config?: {
-    agents?: {
-      defaults?: {
-        model?: {
-          primary?: string;
-        };
-      };
-    };
-    models?: {
-      providers?: Record<string, {
-        baseUrl: string;
-        apiKey?: string;
-        api?: string;
-        models?: Array<{ id: string; [k: string]: unknown }>;
-        [k: string]: unknown;
-      }>;
-      [k: string]: unknown;
-    };
-    [key: string]: unknown;
-  };
-  pluginConfig?: Record<string, unknown>;
-  registerTool(tool: unknown, opts?: { name?: string; names?: string[] }): void;
-  registerService(service: { id: string; start(): void; stop?(): void }): void;
-  on(hookName: string, handler: (...args: unknown[]) => unknown, opts?: { priority?: number }): void;
-  /**
-   * 3.2.0 — register a top-level `openclaw <cmd>` subcommand. The handler
-   * receives a commander `Command` to attach subcommands to. Output goes
-   * straight to the user's TTY; nothing touches the LLM or the transcript.
-   * We deliberately type `program` as `unknown` at this boundary because
-   * we don't import the SDK's full types; the runtime shape is commander's
-   * `Command` which we cast at the call site.
-   */
-  registerCli?(
-    registrar: (ctx: { program: unknown; config?: unknown; workspaceDir?: string; logger?: unknown }) => void | Promise<void>,
-    opts?: { commands?: string[] },
-  ): void;
-  /**
-   * 3.2.0 — register a slash command (e.g. `/totalreclaw`). The handler
-   * runs before the agent; its reply is delivered via the channel adapter.
-   * Reply text IS appended to the session transcript (see gateway-cli
-   * L9300-9312), so we only emit non-secret pointers.
-   */
-  registerCommand?(command: {
-    name: string;
-    description: string;
-    acceptsArgs?: boolean;
-    requireAuth?: boolean;
-    handler: (ctx: {
-      senderId?: string;
-      channel?: string;
-      args?: string;
-      commandBody?: string;
-      isAuthorizedSender?: boolean;
-      config?: unknown;
-    }) => { text: string } | Promise<{ text: string }>;
-  }): void;
-  /**
-   * 3.3.0 — register an HTTP route on the gateway's HTTP server.
-   * Used by the QR-pairing flow to serve the pairing page + the
-   * encrypted-payload respond endpoint. Path is exact-match against
-   * `new URL(req.url, ...).pathname`; no params supported.
-   */
-  registerHttpRoute?(params: {
-    path: string;
-    handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => Promise<void> | void;
-    /** OpenClaw 2026.4.2+ — required; loader silently drops the route if absent. */
-    auth: 'gateway' | 'plugin';
-  }): void;
-}
-
-// ---------------------------------------------------------------------------
-// Human-friendly error messages
-// ---------------------------------------------------------------------------
-
-/**
- * Translate technical error messages from the on-chain submission pipeline
- * into user-friendly messages. The original technical details are still
- * logged via api.logger — this only affects what the agent sees.
- */
-function humanizeError(rawMessage: string): string {
-  if (rawMessage.includes('AA23')) {
-    return 'Memory storage temporarily unavailable. Will retry next time.';
-  }
-  if (rawMessage.includes('AA10')) {
-    return 'Please wait a moment before storing more memories.';
-  }
-  if (rawMessage.includes('AA25')) {
-    return 'Memory storage busy. Will retry.';
-  }
-  if (rawMessage.includes('pm_sponsorUserOperation')) {
-    return 'Memory storage service temporarily unavailable.';
-  }
-  if (/Relay returned HTTP\s*404/.test(rawMessage)) {
-    return 'Memory service is temporarily offline.';
-  }
-  if (/Relay returned HTTP\s*5\d\d/.test(rawMessage)) {
-    return 'Memory service encountered a temporary error. Will retry next time.';
-  }
-  // Pass through non-technical messages as-is.
-  return rawMessage;
-}
 
 // ---------------------------------------------------------------------------
 // Persistent credential storage
@@ -348,177 +261,7 @@ const CREDENTIALS_PATH = CONFIG.credentialsPath;
 // 3.3.0 — pairing URL resolution
 // ---------------------------------------------------------------------------
 
-/**
- * Build the full pairing URL (including `#pk=` fragment) for a fresh
- * pairing session. Pulls gateway config from `api.config.gateway`.
- *
- * Resolution order (3.3.1 — six-layer cascade):
- *   1. `plugins.entries.totalreclaw.config.publicUrl` — explicit override
- *   2. `gateway.remote.url` — OpenClaw's own remote-gateway URL
- *   3. `gateway.bind === 'custom'` + `gateway.customBindHost` + port
- *   4. Tailscale auto-detect — `tailscale status --json` → `https://<MagicDNS>`
- *      (assumes `tailscale serve` proxies to the gateway port on 443)
- *   5. LAN auto-detect — first non-loopback, non-virtual IPv4 interface.
- *      Emits a warning: "only works on the same network".
- *   6. Fallback `http://localhost:<port>` — warns with a pointer to
- *      configure `plugins.entries.totalreclaw.config.publicUrl`.
- *
- * Always returns a working URL string; never throws. The caller (CLI or
- * JSON output) prints whatever we give it.
- */
-function buildPairingUrl(
-  api: Pick<OpenClawPluginApi, 'config' | 'pluginConfig' | 'logger'>,
-  session: { sid: string; pkGatewayB64: string },
-): string {
-  const cfg = api.config as {
-    gateway?: {
-      port?: number;
-      bind?: string;
-      customBindHost?: string;
-      tls?: { enabled?: boolean };
-      remote?: { url?: string };
-    };
-  } | undefined;
-  const pluginCfg = (api.pluginConfig ?? {}) as { publicUrl?: string };
-
-  const tlsEnabled = cfg?.gateway?.tls?.enabled === true;
-  const scheme = tlsEnabled ? 'https' : 'http';
-  const port = cfg?.gateway?.port ?? 18789;
-
-  let base: string;
-
-  // Layer 1 — explicit user override
-  if (typeof pluginCfg.publicUrl === 'string' && pluginCfg.publicUrl.trim()) {
-    base = pluginCfg.publicUrl.replace(/\/+$/, '');
-    base = base.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
-  }
-  // Layer 2 — OpenClaw gateway remote URL
-  else if (typeof cfg?.gateway?.remote?.url === 'string' && cfg.gateway.remote.url.trim()) {
-    base = cfg.gateway.remote.url.trim().replace(/\/+$/, '');
-    base = base.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
-  }
-  // Layer 3 — gateway.bind = custom + explicit customBindHost
-  else if (cfg?.gateway?.bind === 'custom' && cfg.gateway.customBindHost) {
-    base = `${scheme}://${cfg.gateway.customBindHost}:${port}`;
-  }
-  // Layers 4 + 5 — auto-detect via gateway-url helper (Tailscale CGNAT, then LAN)
-  else {
-    let detected: ReturnType<typeof detectGatewayHost> = null;
-    // issue #110 fix 4 — pass `isDocker` so LAN detection skips
-    // 172.16/12 bridge IPs that no external browser can reach.
-    let isDocker = false;
-    try {
-      isDocker = isRunningInDocker();
-    } catch {
-      // Defensive: never block URL building on Docker sniff errors.
-      isDocker = false;
-    }
-    try {
-      detected = detectGatewayHost({ isDocker });
-    } catch (err) {
-      api.logger.warn(
-        `TotalReclaw: host autodetect crashed: ${err instanceof Error ? err.message : String(err)} — falling back to localhost`,
-      );
-    }
-    if (detected?.kind === 'tailscale') {
-      // 3.3.1-rc.2: we surface the raw Tailscale CGNAT IP because passive
-      // NIC detection (no subprocess) cannot resolve the MagicDNS name.
-      // Caller can override via `publicUrl` for a proper https://<magicdns>.
-      // The IP + port URL still works inside the tailnet (peers can reach
-      // each other by CGNAT IP directly). TLS defaults to the gateway's
-      // own config because we no longer assume `tailscale serve`.
-      base = `${scheme}://${detected.host}:${port}`;
-      api.logger.warn(
-        `TotalReclaw: pairing URL using Tailscale CGNAT IP ${detected.host}:${port} — ` +
-          detected.note,
-      );
-    } else if (detected?.kind === 'lan') {
-      base = `${scheme}://${detected.host}:${port}`;
-      api.logger.warn(
-        `TotalReclaw: pairing URL using LAN host ${detected.host}:${port} — ` +
-          `this URL only works from the same network. ` +
-          `Set plugins.entries.totalreclaw.config.publicUrl for remote access.`,
-      );
-    } else {
-      // Layer 6 — localhost fallback (or Docker-aware relay-pointer warning)
-      const bind = cfg?.gateway?.bind;
-      if (isDocker) {
-        // issue #110 fix 4: inside Docker the LAN IP is container-internal
-        // and useless. Loopback localhost only works for `docker exec`
-        // tests. The CORRECT pair URL for Docker is the relay-brokered
-        // path served by `tr pair` / the `/plugin/totalreclaw/pair/*` HTTP
-        // routes (CONFIG.pairMode === 'relay' since rc.11). The CLI-only
-        // path here cannot mint a relay session synchronously (the relay
-        // handshake needs a WS round-trip), so we emit the loopback URL
-        // with a LOUD warning pointing the operator at the pair CLI /
-        // publicUrl override.
-        api.logger.warn(
-          `TotalReclaw: Docker container detected — pairing URL falling back to ` +
-            `http://localhost:${port}, which is unreachable from the host browser. ` +
-            `Run \`tr pair --url-pin\` (or \`openclaw totalreclaw pair generate --url-pin-only\`) ` +
-            `on the gateway host to mint a relay-brokered pair URL that reaches the host browser, ` +
-            `OR set plugins.entries.totalreclaw.config.publicUrl ` +
-            `to your gateway's host-reachable URL (e.g. http://<host-ip>:${port} when the ` +
-            `Docker port is published). Setting TOTALRECLAW_PAIR_MODE=relay is the default; ` +
-            `air-gapped operators on TOTALRECLAW_PAIR_MODE=local must publish a port + set publicUrl.`,
-        );
-      } else if (bind === 'lan' || bind === 'tailnet') {
-        api.logger.warn(
-          `TotalReclaw: pairing URL falling back to localhost because gateway.bind=${bind} could not be autodetected. ` +
-            'Set plugins.entries.totalreclaw.config.publicUrl to override.',
-        );
-      } else {
-        api.logger.warn(
-          `TotalReclaw: pairing URL fell back to http://localhost:${port} — this URL only works on this machine. ` +
-            `Configure plugins.entries.totalreclaw.config.publicUrl for remote access.`,
-        );
-      }
-      base = `${scheme}://localhost:${port}`;
-    }
-  }
-
-  return `${base}/plugin/totalreclaw/pair/finish?sid=${encodeURIComponent(session.sid)}#pk=${encodeURIComponent(session.pkGatewayB64)}`;
-}
-
-/**
- * Resolve whether this plugin is running on a `local` or `remote` gateway.
- *
- * Follows the same config surface `buildPairingUrl` uses:
- *   - `pluginConfig.publicUrl` set + non-localhost     → remote
- *   - `gateway.remote.url` set + non-localhost         → remote
- *   - `gateway.bind === 'lan' | 'tailnet' | 'custom'`  → remote
- *   - anything else                                    → local
- *
- * We treat a `publicUrl` or `remote.url` that points at `localhost` /
- * `127.*` as local because that is what a dev-loopback override looks like;
- * no one publishes a remote QR pairing for localhost.
- */
-function resolveGatewayMode(
-  api: Pick<OpenClawPluginApi, 'config' | 'pluginConfig'>,
-): GatewayMode {
-  const cfg = api.config as
-    | { gateway?: { bind?: string; remote?: { url?: string } } }
-    | undefined;
-  const pluginCfg = (api.pluginConfig ?? {}) as { publicUrl?: string };
-  const looksLocal = (url: string | undefined): boolean => {
-    if (!url) return true;
-    const u = url.trim().toLowerCase();
-    if (u === '') return true;
-    return /^(?:wss?:\/\/|https?:\/\/)?(?:localhost|127\.|0\.0\.0\.0)/.test(u);
-  };
-  if (typeof pluginCfg.publicUrl === 'string' && !looksLocal(pluginCfg.publicUrl)) {
-    return 'remote';
-  }
-  const remoteUrl = cfg?.gateway?.remote?.url;
-  if (typeof remoteUrl === 'string' && !looksLocal(remoteUrl)) {
-    return 'remote';
-  }
-  const bind = cfg?.gateway?.bind;
-  if (bind === 'lan' || bind === 'tailnet' || bind === 'custom') {
-    return 'remote';
-  }
-  return 'local';
-}
+// buildPairingUrl / resolveGatewayMode extracted to ./runtime/format-helpers.ts.
 
 // ---------------------------------------------------------------------------
 // Cosine similarity threshold — skip injection when top result is below this
@@ -564,9 +307,6 @@ const SEMANTIC_SKIP_THRESHOLD = CONFIG.semanticSkipThreshold;
 // Auto-extract throttle (C3): only extract every N turns in agent_end hook
 let turnsSinceLastExtraction = 0;
 
-// BUG-2 fix: Skip agent_end extraction during import operations.
-// Import failures previously triggered agent_end → re-extraction → re-import loops.
-let _importInProgress = false;
 const AUTO_EXTRACT_EVERY_TURNS_ENV = CONFIG.extractInterval;
 
 // Hard cap on facts per extraction to prevent LLM over-extraction from dense conversations
@@ -720,23 +460,7 @@ let lastFactCountFetch: number = 0;
 /** Cache TTL for fact count: 5 minutes. */
 const FACT_COUNT_CACHE_TTL = 5 * 60 * 1000;
 
-/**
- * Compute the candidate pool size from a fact count.
- *
- * Server-side config takes priority (from billing cache), then local fallback.
- * The server computes the optimal pool based on vault size and tier caps.
- *
- * Local fallback formula: pool = min(max(factCount * 3, 400), 5000)
- *   - At least 400 candidates (even for tiny vaults)
- *   - At most 5000 candidates (to bound decryption + reranking cost)
- *   - 3x fact count in between
- */
-function computeCandidatePool(factCount: number): number {
-  const cache = readBillingCache();
-  if (cache?.features?.max_candidate_pool != null) return cache.features.max_candidate_pool;
-  // Fallback to local formula if no server config
-  return Math.min(Math.max(factCount * 3, 400), 5000);
-}
+// computeCandidatePool extracted to ./runtime/format-helpers.ts.
 
 /**
  * Fetch the user's fact count from the server, with caching.
@@ -1051,10 +775,6 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
   }
 }
 
-function isDocker(): boolean {
-  return isRunningInDocker();
-}
-
 function buildSetupErrorMsg(): string {
   // NOTE: the legacy `totalreclaw_setup` agent tool was retired in 3.2.0
   // (phrase-safety: the agent must never accept or relay a recovery phrase).
@@ -1066,33 +786,6 @@ function buildSetupErrorMsg(): string {
     'Run `tr pair --url-pin` on the gateway host (or `openclaw totalreclaw pair generate --url-pin-only`) ' +
     'and hand the user the returned `url` and `pin`. The user opens the URL in a browser to complete pairing. ' +
     'Do NOT ask the user for a recovery phrase and do NOT attempt to generate or relay one yourself.';
-}
-
-function buildSetupErrorMsgLegacy(): string {
-  const base =
-    'TotalReclaw setup required:\n' +
-    '1. Set TOTALRECLAW_RECOVERY_PHRASE — ask the user if they have an existing recovery phrase or generate a new 12-word recovery phrase.\n' +
-    '2. Restart the gateway to apply changes.\n' +
-    '   (Optional: set TOTALRECLAW_SELF_HOSTED=true if using your own server instead of the managed service.)\n\n';
-
-  if (isDocker()) {
-    return base +
-      'Running in Docker — pass env vars via `-e` flags or your compose file:\n' +
-      '  -e TOTALRECLAW_RECOVERY_PHRASE="word1 word2 ..."';
-  }
-
-  if (process.platform === 'darwin') {
-    return base +
-      'Running on macOS — add env vars to the LaunchAgent plist at\n' +
-      '~/Library/LaunchAgents/ai.openclaw.gateway.plist under <key>EnvironmentVariables</key>:\n' +
-      '  <key>TOTALRECLAW_RECOVERY_PHRASE</key><string>word1 word2 ...</string>\n' +
-      'Then run: openclaw gateway restart';
-  }
-
-  return base +
-    'Running on Linux — add env vars to the systemd unit override or your shell profile:\n' +
-    '  export TOTALRECLAW_RECOVERY_PHRASE="word1 word2 ..."\n' +
-    'Then run: openclaw gateway restart';
 }
 
 const SETUP_ERROR_MSG = buildSetupErrorMsg();
@@ -1374,10 +1067,10 @@ async function searchForNearDuplicates(
 
     if (decryptedCandidates.length === 0) return null;
 
-    const result = findNearDuplicate(factEmbedding, decryptedCandidates, getStoreDedupThreshold());
-    if (!result) return null;
+    const nearDup = findNearDuplicate(factEmbedding, decryptedCandidates, getStoreDedupThreshold());
+    if (!nearDup) return null;
 
-    return { match: result.existingFact, similarity: result.similarity };
+    return { match: nearDup.existingFact, similarity: nearDup.similarity };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn(`Store-time dedup search failed (proceeding with store): ${msg}`);
@@ -1389,16 +1082,7 @@ async function searchForNearDuplicates(
 // Utility helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Encrypt a plaintext document string and return its hex-encoded ciphertext.
- *
- * The server stores blobs as hex (not base64), so we convert the base64
- * output of `encrypt()` into hex.
- */
-function encryptToHex(plaintext: string, key: Buffer): string {
-  const b64 = encrypt(plaintext, key);
-  return Buffer.from(b64, 'base64').toString('hex');
-}
+// encryptToHex extracted to ./runtime/format-helpers.ts.
 
 // Plugin v3.0.0 removed the legacy claim-format fallback. Write path
 // always emits Memory Taxonomy v1 JSON blobs. The logClaimFormatOnce
@@ -1512,8 +1196,8 @@ function scheduleDigestRecompile(
       version: PROTOBUF_VERSION_V4,
     });
     const config = { ...getSubgraphConfig(), authKeyHex: authKey, walletAddress: ownerForBatch };
-    const result = await submitFactBatchOnChain([protobuf], config);
-    if (!result.success) {
+    const batchResult = await submitFactBatchOnChain([protobuf], config);
+    if (!batchResult.success) {
       throw new Error('Digest store UserOp did not succeed on-chain');
     }
   };
@@ -1539,8 +1223,8 @@ function scheduleDigestRecompile(
     };
     const protobuf = encodeFactProtobuf(tombstone);
     const config = { ...getSubgraphConfig(), authKeyHex: authKey, walletAddress: ownerForBatch };
-    const result = await submitFactBatchOnChain([protobuf], config);
-    if (!result.success) {
+    const batchResult = await submitFactBatchOnChain([protobuf], config);
+    if (!batchResult.success) {
       throw new Error('Digest tombstone UserOp did not succeed on-chain');
     }
   };
@@ -1576,32 +1260,13 @@ function scheduleDigestRecompile(
     });
 }
 
-/**
- * Decrypt a hex-encoded ciphertext blob into a UTF-8 string.
- */
-function decryptFromHex(hexBlob: string, key: Buffer): string {
-  const hex = hexBlob.startsWith('0x') ? hexBlob.slice(2) : hexBlob;
-  const b64 = Buffer.from(hex, 'hex').toString('base64');
-  return decrypt(b64, key);
-}
+// decryptFromHex extracted to ./runtime/format-helpers.ts.
 
 // ---------------------------------------------------------------------------
 // Migration GraphQL helpers
 // ---------------------------------------------------------------------------
 
-interface MigrationFact {
-  id: string;
-  owner: string;
-  encryptedBlob: string;
-  encryptedEmbedding: string | null;
-  decayScore: string;
-  isActive: boolean;
-  contentFp: string;
-  source: string;
-  agentId: string;
-  version: number;
-  timestamp: string;
-}
+// MigrationFact — extracted to ./runtime/types.ts (imported above).
 
 const MIGRATION_PAGE_SIZE = 1000;
 
@@ -1649,8 +1314,8 @@ async function fetchAllFactsByOwner(
       ? { owner, first: MIGRATION_PAGE_SIZE, lastId }
       : { owner, first: MIGRATION_PAGE_SIZE };
 
-    const data = await migrationGqlQuery<{ facts?: MigrationFact[] }>(subgraphUrl, query, vars, authKey);
-    const facts = data?.facts ?? [];
+    const subgraphResponse = await migrationGqlQuery<{ facts?: MigrationFact[] }>(subgraphUrl, query, vars, authKey);
+    const facts = subgraphResponse?.facts ?? [];
     if (facts.length === 0) break;
     allFacts.push(...facts);
     if (facts.length < MIGRATION_PAGE_SIZE) break;
@@ -1678,8 +1343,8 @@ async function fetchContentFingerprintsByOwner(
       ? { owner, first: MIGRATION_PAGE_SIZE, lastId }
       : { owner, first: MIGRATION_PAGE_SIZE };
 
-    const data = await migrationGqlQuery<{ facts?: Array<{ id: string; contentFp: string }> }>(subgraphUrl, query, vars, authKey);
-    const facts = data?.facts ?? [];
+    const subgraphResponse = await migrationGqlQuery<{ facts?: Array<{ id: string; contentFp: string }> }>(subgraphUrl, query, vars, authKey);
+    const facts = subgraphResponse?.facts ?? [];
     if (facts.length === 0) break;
     for (const f of facts) {
       if (f.contentFp) fps.add(f.contentFp);
@@ -1697,24 +1362,24 @@ async function fetchBlindIndicesByFactIds(
   factIds: string[],
   authKey: string,
 ): Promise<Map<string, string[]>> {
-  const result = new Map<string, string[]>();
+  const hashesByFactId = new Map<string, string[]>();
   const CHUNK = 50;
 
   for (let i = 0; i < factIds.length; i += CHUNK) {
     const chunk = factIds.slice(i, i + CHUNK);
     const query = `query($factIds:[String!]!,$first:Int!){blindIndexes(where:{fact_in:$factIds},first:$first){hash fact{id}}}`;
-    const data = await migrationGqlQuery<{
+    const subgraphResponse = await migrationGqlQuery<{
       blindIndexes?: Array<{ hash: string; fact: { id: string } }>;
     }>(subgraphUrl, query, { factIds: chunk, first: 1000 }, authKey);
 
-    for (const entry of data?.blindIndexes ?? []) {
-      const existing = result.get(entry.fact.id) || [];
+    for (const entry of subgraphResponse?.blindIndexes ?? []) {
+      const existing = hashesByFactId.get(entry.fact.id) || [];
       existing.push(entry.hash);
-      result.set(entry.fact.id, existing);
+      hashesByFactId.set(entry.fact.id, existing);
     }
   }
 
-  return result;
+  return hashesByFactId;
 }
 
 /**
@@ -1793,33 +1458,12 @@ async function fetchExistingMemoriesForExtraction(
  * Simple text-overlap scoring between a query and a candidate document.
  * Returns the number of overlapping lowercase words.
  */
-function textScore(query: string, docText: string): number {
-  const queryWords = new Set(
-    query.toLowerCase().split(/\s+/).filter((w) => w.length >= 2),
-  );
-  const docWords = docText.toLowerCase().split(/\s+/);
-  let score = 0;
-  for (const word of docWords) {
-    if (queryWords.has(word)) score++;
-  }
-  return score;
-}
+// textScore extracted to ./runtime/format-helpers.ts.
 
 /**
  * Format a relative time string (e.g. "2 hours ago").
  */
-function relativeTime(isoOrMs: string | number): string {
-  const ms = typeof isoOrMs === 'number' ? isoOrMs : new Date(isoOrMs).getTime();
-  const diffMs = Date.now() - ms;
-  const seconds = Math.floor(diffMs / 1000);
-  if (seconds < 60) return 'just now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
+// relativeTime extracted to ./runtime/format-helpers.ts.
 
 // ---------------------------------------------------------------------------
 // Importance filter for auto-extraction
@@ -1833,47 +1477,7 @@ function relativeTime(isoOrMs: string | number): string {
  * NOTE: This filter is ONLY applied to auto-extraction (hooks).
  * The explicit `tr remember` CLI always stores regardless of importance.
  */
-const MIN_IMPORTANCE_THRESHOLD = CONFIG.minImportance;
-
-/**
- * Filter extracted facts by importance threshold.
- * Facts with importance < MIN_IMPORTANCE_THRESHOLD are dropped.
- * Facts with missing/undefined importance are treated as importance=5 (kept).
- */
-function filterByImportance(
-  facts: ExtractedFact[],
-  logger: OpenClawPluginApi['logger'],
-): { kept: ExtractedFact[]; dropped: number } {
-  const kept: ExtractedFact[] = [];
-  let dropped = 0;
-
-  for (const fact of facts) {
-    const importance = fact.importance ?? 5;
-    if (importance >= MIN_IMPORTANCE_THRESHOLD) {
-      kept.push(fact);
-    } else {
-      dropped++;
-    }
-  }
-
-  // Phase 2.2.5: always log the filter outcome so the agent_end path can
-  // distinguish "LLM returned 0 facts" from "LLM returned N facts all dropped
-  // below threshold" from "LLM returned N facts, all kept". Prior to 2.2.5
-  // this only logged on drops, which made empty-input invisible.
-  if (facts.length === 0) {
-    logger.info('Importance filter: input=0 (nothing to filter)');
-  } else if (dropped > 0) {
-    logger.info(
-      `Importance filter: dropped ${dropped}/${facts.length} facts below threshold ${MIN_IMPORTANCE_THRESHOLD}`,
-    );
-  } else {
-    logger.info(
-      `Importance filter: kept all ${facts.length} facts (threshold ${MIN_IMPORTANCE_THRESHOLD})`,
-    );
-  }
-
-  return { kept, dropped };
-}
+// filterByImportance + MIN_IMPORTANCE_THRESHOLD extracted to ./extraction/importance-filter.ts.
 
 // ---------------------------------------------------------------------------
 // Auto-extraction helper
@@ -1904,10 +1508,10 @@ async function storeExtractedFacts(
 
   for (const fact of facts) {
     try {
-      const result = await generateEmbeddingAndLSH(fact.text, logger);
-      if (result) {
-        embeddingMap.set(fact.text, result.embedding);
-        embeddingResultMap.set(fact.text, result);
+      const embeddingResult = await generateEmbeddingAndLSH(fact.text, logger);
+      if (embeddingResult) {
+        embeddingMap.set(fact.text, embeddingResult.embedding);
+        embeddingResultMap.set(fact.text, embeddingResult);
       }
     } catch {
       // Embedding generation failed for this fact -- proceed without it.
@@ -2261,12 +1865,12 @@ async function storeExtractedFacts(
     for (let i = 0; i < pendingPayloads.length; i++) {
       const slice = [pendingPayloads[i]]; // Single fact per UserOp
       try {
-        const result = await submitFactBatchOnChain(slice, batchConfig);
-        if (result.success) {
+        const submitResult = await submitFactBatchOnChain(slice, batchConfig);
+        if (submitResult.success) {
           stored += slice.length;
-          logger.info(`Fact ${i + 1}/${pendingPayloads.length}: submitted on-chain (tx=${result.txHash.slice(0, 10)}…)`);
+          logger.info(`Fact ${i + 1}/${pendingPayloads.length}: submitted on-chain (tx=${submitResult.txHash.slice(0, 10)}…)`);
         } else {
-          batchError = `On-chain batch submission failed (tx=${result.txHash.slice(0, 10)}…)`;
+          batchError = `On-chain batch submission failed (tx=${submitResult.txHash.slice(0, 10)}…)`;
           logger.warn(batchError);
           break; // Stop submitting remaining batches
         }
@@ -2305,806 +1909,12 @@ async function storeExtractedFacts(
   return stored;
 }
 
-// ---------------------------------------------------------------------------
-// Import handler (for the registerCli `openclaw totalreclaw import-from` surface)
-// ---------------------------------------------------------------------------
-
-/**
- * Handle import_from calls (CLI subcommand path; was the totalreclaw_import_from
- * agent tool before Phase 3.2 retired the agent tools).
- *
- * Two paths:
- * 1. Pre-structured sources (Mem0, MCP Memory) — adapter returns facts directly,
- *    stored via storeExtractedFacts().
- * 2. Conversation-based sources (ChatGPT, Claude) — adapter returns conversation
- *    chunks, each chunk is passed through extractFacts() (the same LLM extraction
- *    pipeline used for auto-extraction), then stored via storeExtractedFacts().
- */
-async function handlePluginImportFrom(
-  params: Record<string, unknown>,
-  logger: OpenClawPluginApi['logger'],
-): Promise<Record<string, unknown>> {
-  _importInProgress = true;
-  const startTime = Date.now();
-
-  const source = params.source as string;
-  const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini'];
-
-  if (!source || !validSources.includes(source)) {
-    return { success: false, error: `Invalid source. Must be one of: ${validSources.join(', ')}` };
-  }
-
-  // Generate import_id up front so dry-run responses and background tasks share it.
-  const importId = (params.resume_id as string | undefined) ?? crypto.randomUUID();
-
-  try {
-    const { getAdapter } = await import('./import-adapters/index.js');
-    const adapter = getAdapter(source as import('./import-adapters/types.js').ImportSource);
-
-    const parseResult = await adapter.parse({
-      content: params.content as string | undefined,
-      api_key: params.api_key as string | undefined,
-      source_user_id: params.source_user_id as string | undefined,
-      api_url: params.api_url as string | undefined,
-      file_path: params.file_path as string | undefined,
-    });
-
-    const hasChunks = parseResult.chunks && parseResult.chunks.length > 0;
-    const hasFacts = parseResult.facts && parseResult.facts.length > 0;
-
-    if (parseResult.errors.length > 0 && !hasFacts && !hasChunks) {
-      return {
-        success: false,
-        error: `Failed to parse ${adapter.displayName} data`,
-        details: parseResult.errors,
-      };
-    }
-
-    // Dry run: report what was parsed (chunks or facts)
-    if (params.dry_run) {
-      if (hasChunks) {
-        const totalChunks = parseResult.chunks.length;
-        const EXTRACTION_RATIO = 2.5; // avg facts per chunk, from empirical data
-        const BATCH_SIZE = 25;
-        const SECONDS_PER_BATCH = 45; // ~30s extraction + ~15s embed+store
-        const estimatedFacts = Math.round(totalChunks * EXTRACTION_RATIO);
-        const estimatedBatches = Math.ceil(totalChunks / BATCH_SIZE);
-        const estimatedMinutes = Math.ceil(estimatedBatches * SECONDS_PER_BATCH / 60);
-
-        return {
-          success: true,
-          dry_run: true,
-          import_id: importId,
-          source,
-          total_chunks: totalChunks,
-          total_messages: parseResult.totalMessages,
-          estimated_facts: estimatedFacts,
-          estimated_batches: estimatedBatches,
-          estimated_minutes: estimatedMinutes,
-          batch_size: BATCH_SIZE,
-          preview: parseResult.chunks.slice(0, 5).map((c) => ({
-            title: c.title,
-            messages: c.messages.length,
-            first_message: c.messages[0]?.text.slice(0, 100),
-          })),
-          note: `Estimated ${estimatedFacts} facts from ${totalChunks} chunks (~${estimatedMinutes} min). Confirm to start background import.`,
-          warnings: parseResult.warnings,
-        };
-      }
-      return {
-        success: true,
-        dry_run: true,
-        import_id: importId,
-        source,
-        total_found: parseResult.facts.length,
-        preview: parseResult.facts.slice(0, 10).map((f) => ({
-          type: f.type,
-          text: f.text.slice(0, 100),
-          importance: f.importance,
-        })),
-        warnings: parseResult.warnings,
-      };
-    }
-
-    // ── Path 1: Conversation chunks (ChatGPT, Claude, Gemini) — background execution ──
-    if (hasChunks) {
-      const totalChunks = parseResult.chunks.length;
-      const BATCH_SIZE = 25;
-      const SECONDS_PER_BATCH = 45;
-      const estimatedBatches = Math.ceil(totalChunks / BATCH_SIZE);
-      const estimatedMinutes = Math.ceil(estimatedBatches * SECONDS_PER_BATCH / 60);
-      const estimatedTotalFacts = Math.round(totalChunks * 2.5);
-      const now = new Date();
-
-      const initialState: ImportState = {
-        import_id: importId,
-        source,
-        status: 'running',
-        started_at: now.toISOString(),
-        last_updated: now.toISOString(),
-        total_chunks: totalChunks,
-        total_messages: parseResult.totalMessages,
-        batch_done: 0,
-        batch_total: estimatedBatches,
-        facts_stored: 0,
-        facts_extracted: 0,
-        dups_skipped: 0,
-        errors: [],
-        file_path: params.file_path as string | undefined,
-        estimated_total_facts: estimatedTotalFacts,
-        estimated_minutes: estimatedMinutes,
-        estimated_completion_iso: new Date(now.getTime() + estimatedBatches * SECONDS_PER_BATCH * 1000).toISOString(),
-        disclosure_confirmed: !!(params.disclosure_confirmed),
-      };
-      writeImportState(initialState);
-      logger.info(`Import ${importId}: background task started (${totalChunks} chunks, ~${estimatedMinutes}min)`);
-
-      void handleChunkImport(
-        parseResult.chunks, parseResult.totalMessages, source, logger, startTime, parseResult.warnings, importId,
-      ).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn(`Import ${importId}: background task failed: ${msg}`);
-        const failedState = readImportState(importId);
-        if (failedState && failedState.status === 'running') {
-          writeImportState({ ...failedState, status: 'failed', errors: [...failedState.errors, msg] });
-        }
-      });
-
-      return {
-        import_id: importId,
-        status: 'running',
-        source,
-        total_chunks: totalChunks,
-        estimated_batches: estimatedBatches,
-        estimated_minutes: estimatedMinutes,
-        estimated_completion_iso: initialState.estimated_completion_iso,
-        message: `Import started in background. ~${estimatedMinutes} min for ${totalChunks} chunks. Check progress with \`openclaw totalreclaw import status\` on the gateway host (or \`import status --id ${importId} --json\` from an agent shell).`,
-        warnings: parseResult.warnings,
-      };
-    }
-
-    // ── Path 2: Pre-structured facts (Mem0, MCP Memory) — direct store ──
-    const extractedFacts: ExtractedFact[] = parseResult.facts.map((f) => ({
-      text: f.text,
-      type: f.type,
-      importance: f.importance,
-      action: 'ADD' as const,
-    }));
-
-    // Store in batches of 50. Stop on any batch failure to prevent
-    // nonce zombies from blocking subsequent UserOps (AA25).
-    let totalStored = 0;
-    let storeError: string | undefined;
-    const batchSize = 50;
-
-    for (let i = 0; i < extractedFacts.length; i += batchSize) {
-      const batch = extractedFacts.slice(i, i + batchSize);
-      try {
-        const stored = await storeExtractedFacts(batch, logger);
-        totalStored += stored;
-
-        logger.info(
-          `Import progress: ${Math.min(i + batchSize, extractedFacts.length)}/${extractedFacts.length} processed, ${totalStored} stored`,
-        );
-      } catch (err: unknown) {
-        storeError = err instanceof Error ? err.message : String(err);
-        logger.warn(`Import stopped at batch ${Math.floor(i / batchSize) + 1}: ${storeError}`);
-        break; // Stop processing further batches
-      }
-    }
-
-    const importWarnings = [...parseResult.warnings];
-    if (storeError) {
-      importWarnings.push(`Import stopped early: ${storeError}`);
-    }
-
-    return {
-      success: totalStored > 0,
-      source,
-      import_id: importId,
-      total_found: parseResult.facts.length,
-      imported: totalStored,
-      skipped: parseResult.facts.length - totalStored,
-      stopped_early: !!storeError,
-      warnings: importWarnings,
-      duration_ms: Date.now() - startTime,
-    };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Unknown error';
-    logger.error(`Import failed: ${msg}`);
-    return { success: false, error: `Import failed: ${msg}` };
-  }
-}
 
 // ---------------------------------------------------------------------------
-// Smart Import — Two-Pass Pipeline (Profile + Triage)
+// Import subsystem extracted to ./import/import-runtime.ts.
+// storeExtractedFacts is injected below (it closes over plugin session state).
 // ---------------------------------------------------------------------------
-
-// Lazy-load WASM for smart import functions (same pattern as crypto.ts /
-// subgraph-store.ts). Goes through __cjsRequire (createRequire(import.meta.url))
-// declared at the top of the file — bare `require()` is undefined under
-// pure-ESM Node, see issue #124.
-let _smartImportWasm: typeof import('@totalreclaw/core') | null = null;
-function getSmartImportWasm() {
-  if (!_smartImportWasm) _smartImportWasm = __cjsRequire('@totalreclaw/core');
-  return _smartImportWasm;
-}
-
-/**
- * Check whether the @totalreclaw/core WASM module exposes smart import functions.
- * Returns false if the module is an older version without smart import support.
- */
-function hasSmartImportSupport(): boolean {
-  try {
-    const wasm = getSmartImportWasm();
-    return typeof wasm.chunksToSummaries === 'function' &&
-      typeof wasm.buildProfileBatchPrompt === 'function' &&
-      typeof wasm.parseProfileBatchResponse === 'function' &&
-      typeof wasm.buildTriagePrompt === 'function' &&
-      typeof wasm.parseTriageResponse === 'function' &&
-      typeof wasm.enrichExtractionPrompt === 'function';
-  } catch {
-    return false;
-  }
-}
-
-/** Smart import result containing profile, triage decisions, and enriched system prompt. */
-interface SmartImportContext {
-  /** JSON-serialized UserProfile (for WASM calls that require profile_json) */
-  profileJson: string;
-  /** Triage decisions indexed by chunk_index */
-  decisions: Array<{ chunk_index: number; decision: string; reason: string }>;
-  /** Enriched system prompt for extraction (profile context injected) */
-  enrichedSystemPrompt: string;
-  /** Number of chunks marked for extraction */
-  extractCount: number;
-  /** Number of chunks marked for skipping */
-  skipCount: number;
-  /** Duration of the profiling + triage pipeline in ms */
-  durationMs: number;
-}
-
-/**
- * Run the smart import two-pass pipeline: profile the user from conversation
- * summaries, then triage chunks as EXTRACT or SKIP.
- *
- * All prompt construction and response parsing happens in @totalreclaw/core WASM.
- * LLM calls use the plugin's existing chatCompletion() function.
- *
- * Returns null if smart import is unavailable (old WASM, no LLM config, etc.)
- * so the caller can fall back to blind extraction.
- */
-async function runSmartImportPipeline(
-  chunks: import('./import-adapters/types.js').ConversationChunk[],
-  logger: { info: (msg: string) => void; warn: (msg: string) => void },
-): Promise<SmartImportContext | null> {
-  // Guard: WASM must have smart import functions
-  if (!hasSmartImportSupport()) {
-    logger.info('Smart import: WASM module does not support smart import, falling back to blind extraction');
-    return null;
-  }
-
-  // Guard: LLM must be available
-  const llmConfig = resolveLLMConfig();
-  if (!llmConfig) {
-    logger.info('Smart import: no LLM available, falling back to blind extraction');
-    return null;
-  }
-
-  const pipelineStart = Date.now();
-  const wasm = getSmartImportWasm();
-
-  try {
-    // Step 0: Convert chunks to compact summaries (first + last message)
-    const wasmChunks = chunks.map((c, i) => ({
-      index: i,
-      title: c.title || 'Untitled',
-      messages: c.messages.map((m) => ({ role: m.role, content: m.text })),
-      timestamp: c.timestamp || null,
-    }));
-    const summaries = wasm.chunksToSummaries(JSON.stringify(wasmChunks));
-    const summariesJson = JSON.stringify(summaries);
-
-    // Step 1: Build user profile (batch summarize -> merge)
-    const PROFILE_BATCH_SIZE = 50;
-    const profileStart = Date.now();
-    const partials: unknown[] = [];
-
-    for (let i = 0; i < summaries.length; i += PROFILE_BATCH_SIZE) {
-      const batch = summaries.slice(i, i + PROFILE_BATCH_SIZE);
-      const prompt = wasm.buildProfileBatchPrompt(JSON.stringify(batch));
-      const response = await chatCompletion(llmConfig, [
-        { role: 'user', content: prompt },
-      ], { maxTokens: 2048, temperature: 0 });
-
-      if (!response) {
-        logger.warn(`Smart import: LLM returned empty response for profile batch ${Math.floor(i / PROFILE_BATCH_SIZE) + 1}`);
-        continue;
-      }
-
-      const partial = wasm.parseProfileBatchResponse(response);
-      partials.push(partial);
-    }
-
-    if (partials.length === 0) {
-      logger.warn('Smart import: no profile batches produced, falling back to blind extraction');
-      return null;
-    }
-
-    let profile: unknown;
-    if (partials.length === 1) {
-      // Single batch — skip merge, promote partial to full profile
-      // parseProfileBatchResponse returns a PartialProfile; convert to UserProfile shape
-      const p = partials[0] as Record<string, unknown>;
-      profile = {
-        identity: p.identity ?? null,
-        themes: p.themes ?? [],
-        projects: p.projects ?? [],
-        stack: p.stack ?? [],
-        decisions: p.decisions ?? [],
-        interests: p.interests ?? [],
-        skip_patterns: p.skip_patterns ?? [],
-      };
-    } else {
-      const mergePrompt = wasm.buildProfileMergePrompt(JSON.stringify(partials));
-      const mergeResponse = await chatCompletion(llmConfig, [
-        { role: 'user', content: mergePrompt },
-      ], { maxTokens: 2048, temperature: 0 });
-
-      if (!mergeResponse) {
-        logger.warn('Smart import: LLM returned empty response for profile merge, falling back to blind extraction');
-        return null;
-      }
-
-      profile = wasm.parseProfileResponse(mergeResponse);
-    }
-
-    const profileJson = JSON.stringify(profile);
-    const profileDuration = Date.now() - profileStart;
-
-    const p = profile as Record<string, unknown>;
-    const themeCount = Array.isArray(p.themes) ? p.themes.length : 0;
-    const skipPatternCount = Array.isArray(p.skip_patterns) ? p.skip_patterns.length : 0;
-    logger.info(
-      `Smart import: profile built in ${profileDuration}ms (themes=${themeCount}, skip_patterns=${skipPatternCount})`,
-    );
-
-    // Step 1.5: Chunk triage (EXTRACT or SKIP)
-    const triageStart = Date.now();
-    const allDecisions: Array<{ chunk_index: number; decision: string; reason: string }> = [];
-    const TRIAGE_BATCH_SIZE = 50;
-
-    for (let i = 0; i < summaries.length; i += TRIAGE_BATCH_SIZE) {
-      const batch = summaries.slice(i, i + TRIAGE_BATCH_SIZE);
-      const triagePrompt = wasm.buildTriagePrompt(profileJson, JSON.stringify(batch));
-      const triageResponse = await chatCompletion(llmConfig, [
-        { role: 'user', content: triagePrompt },
-      ], { maxTokens: 4096, temperature: 0 });
-
-      if (!triageResponse) {
-        logger.warn(`Smart import: LLM returned empty response for triage batch ${Math.floor(i / TRIAGE_BATCH_SIZE) + 1}, defaulting to EXTRACT`);
-        // Default all chunks in this batch to EXTRACT
-        for (let j = i; j < Math.min(i + TRIAGE_BATCH_SIZE, summaries.length); j++) {
-          allDecisions.push({ chunk_index: j, decision: 'EXTRACT', reason: 'triage LLM unavailable' });
-        }
-        continue;
-      }
-
-      const batchDecisions = wasm.parseTriageResponse(triageResponse) as Array<{
-        chunk_index: number;
-        decision: string;
-        reason: string;
-      }>;
-      allDecisions.push(...batchDecisions);
-    }
-
-    const triageDuration = Date.now() - triageStart;
-
-    const extractCount = allDecisions.filter((d) => d.decision !== 'SKIP').length;
-    const skipCount = allDecisions.filter((d) => d.decision === 'SKIP').length;
-    logger.info(
-      `Smart import: triage complete in ${triageDuration}ms (extract=${extractCount}, skip=${skipCount}, total=${chunks.length})`,
-    );
-
-    // Step 2: Build enriched system prompt for extraction
-    const enrichedSystemPrompt = wasm.enrichExtractionPrompt(profileJson, EXTRACTION_SYSTEM_PROMPT);
-
-    const totalDuration = Date.now() - pipelineStart;
-    logger.info(`Smart import: pipeline complete in ${totalDuration}ms`);
-
-    return {
-      profileJson,
-      decisions: allDecisions,
-      enrichedSystemPrompt,
-      extractCount,
-      skipCount,
-      durationMs: totalDuration,
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`Smart import: pipeline failed (${msg}), falling back to blind extraction`);
-    return null;
-  }
-}
-
-/**
- * Check if a chunk should be skipped based on triage decisions.
- * If no decision exists for the chunk index, defaults to EXTRACT (safe default).
- */
-function isChunkSkipped(
-  chunkIndex: number,
-  decisions: Array<{ chunk_index: number; decision: string }>,
-): { skipped: boolean; reason: string } {
-  const decision = decisions.find((d) => d.chunk_index === chunkIndex);
-  if (decision && decision.decision === 'SKIP') {
-    return { skipped: true, reason: (decision as { reason?: string }).reason || 'triage: skip' };
-  }
-  return { skipped: false, reason: '' };
-}
-
-/**
- * Process a batch (slice) of conversation chunks from a file.
- * Called repeatedly by the agent for large imports.
- */
-async function handleBatchImport(
-  params: Record<string, unknown>,
-  logger: OpenClawPluginApi['logger'],
-): Promise<Record<string, unknown>> {
-  _importInProgress = true;
-  const source = params.source as string;
-  const filePath = params.file_path as string | undefined;
-  const content = params.content as string | undefined;
-  const offset = (params.offset as number) ?? 0;
-  const batchSize = (params.batch_size as number) ?? 25;
-
-  const validSources = ['mem0', 'mcp-memory', 'chatgpt', 'claude', 'gemini'];
-  if (!source || !validSources.includes(source)) {
-    return { success: false, error: `Invalid source. Must be one of: ${validSources.join(', ')}` };
-  }
-
-  const startTime = Date.now();
-
-  const { getAdapter } = await import('./import-adapters/index.js');
-  const adapter = getAdapter(source as import('./import-adapters/types.js').ImportSource);
-
-  const parseResult = await adapter.parse({ content, file_path: filePath });
-
-  if (parseResult.errors.length > 0 && parseResult.chunks.length === 0) {
-    return { success: false, error: parseResult.errors.join('; ') };
-  }
-
-  const totalChunks = parseResult.chunks.length;
-  const slice = parseResult.chunks.slice(offset, offset + batchSize);
-  const remaining = Math.max(0, totalChunks - offset - slice.length);
-
-  // --- Smart Import: Profile + Triage ---
-  // Build profile from ALL chunks (not just the slice) for full context,
-  // then triage only the current slice. For simplicity, we rebuild on every
-  // batch call — optimization (caching) can come later.
-  const smartCtx = await runSmartImportPipeline(parseResult.chunks, logger);
-  let chunksSkipped = 0;
-
-  // Process the slice through the normal extraction + storage pipeline.
-  // If a batch fails (nonce zombie, quota exceeded, etc.), stop immediately
-  // to prevent subsequent UserOps from hitting AA25 nonce conflicts.
-  let factsExtracted = 0;
-  let factsStored = 0;
-  let chunksProcessed = 0;
-  let storeError: string | undefined;
-
-  for (let i = 0; i < slice.length; i++) {
-    const chunk = slice[i];
-    const globalIndex = offset + i; // Index in the full chunks array
-
-    // Smart import: skip chunks triaged as SKIP
-    if (smartCtx) {
-      const { skipped, reason } = isChunkSkipped(globalIndex, smartCtx.decisions);
-      if (skipped) {
-        logger.info(`Import: skipping chunk ${globalIndex + 1}/${totalChunks}: "${chunk.title}" (${reason})`);
-        chunksSkipped++;
-        chunksProcessed++;
-        continue;
-      }
-    }
-
-    logger.info(`Import: extracting facts from chunk ${globalIndex + 1}/${totalChunks}: "${chunk.title}"`);
-
-    const messages = chunk.messages.map((m) => ({ role: m.role, content: m.text }));
-    const facts = await extractFacts(
-      messages,
-      'full',
-      undefined, // no existing memories for dedup during import
-      smartCtx?.enrichedSystemPrompt, // profile-enriched extraction prompt
-    );
-    chunksProcessed++;
-
-    if (facts.length > 0) {
-      factsExtracted += facts.length;
-      try {
-        const stored = await storeExtractedFacts(facts, logger);
-        factsStored += stored;
-      } catch (err: unknown) {
-        storeError = err instanceof Error ? err.message : String(err);
-        logger.warn(`Import batch stopped at chunk ${globalIndex + 1}/${totalChunks}: ${storeError}`);
-        break; // Stop processing further chunks — a zombie UserOp may block writes
-      }
-    }
-  }
-
-  return {
-    success: factsStored > 0 || (!storeError && factsExtracted === 0),
-    batch_offset: offset,
-    batch_size: chunksProcessed,
-    total_chunks: totalChunks,
-    facts_extracted: factsExtracted,
-    facts_stored: factsStored,
-    chunks_skipped: chunksSkipped,
-    remaining_chunks: remaining,
-    is_complete: remaining === 0 && !storeError,
-    stopped_early: !!storeError,
-    error: storeError,
-    smart_import: smartCtx ? {
-      profile_duration_ms: smartCtx.durationMs,
-      extract_count: smartCtx.extractCount,
-      skip_count: smartCtx.skipCount,
-    } : null,
-    // Estimation for the full import
-    estimated_total_facts: Math.round(totalChunks * 2.5),
-    estimated_total_userops: Math.ceil(totalChunks * 2.5 / 15),
-    estimated_minutes: Math.ceil(Math.ceil(totalChunks / batchSize) * 45 / 60),
-    duration_ms: Date.now() - startTime,
-  };
-}
-
-/**
- * Process conversation chunks through LLM extraction and store results.
- *
- * Each chunk is passed to extractFacts() — the same extraction pipeline used
- * for auto-extraction during live conversations. This ensures import quality
- * matches conversation extraction quality.
- */
-async function handleChunkImport(
-  chunks: import('./import-adapters/types.js').ConversationChunk[],
-  totalMessages: number,
-  source: string,
-  logger: OpenClawPluginApi['logger'],
-  startTime: number,
-  warnings: string[],
-  importId?: string,
-): Promise<Record<string, unknown>> {
-  let totalExtracted = 0;
-  let totalStored = 0;
-  let chunksProcessed = 0;
-  let chunksSkipped = 0;
-  const resolvedImportId = importId ?? crypto.randomUUID();
-
-  let storeError: string | undefined;
-
-  // --- Smart Import: Profile + Triage ---
-  const smartCtx = await runSmartImportPipeline(chunks, logger);
-
-  const CHECKPOINT_EVERY = 25; // write state file every N chunks
-
-  for (let i = 0; i < chunks.length; i++) {
-    // Check abort flag from state file before each chunk (background task may be cancelled).
-    if (importId) {
-      const currentState = readImportState(importId);
-      if (currentState?.status === 'aborted') {
-        logger.info(`Import ${importId}: abort flag detected at chunk ${i + 1}/${chunks.length}, stopping`);
-        break;
-      }
-    }
-
-    const chunk = chunks[i];
-    chunksProcessed++;
-
-    // Smart import: skip chunks triaged as SKIP
-    if (smartCtx) {
-      const { skipped, reason } = isChunkSkipped(i, smartCtx.decisions);
-      if (skipped) {
-        logger.info(
-          `Import: skipping chunk ${chunksProcessed}/${chunks.length}: "${chunk.title}" (${reason})`,
-        );
-        chunksSkipped++;
-        continue;
-      }
-    }
-
-    logger.info(
-      `Import: extracting facts from chunk ${chunksProcessed}/${chunks.length}: "${chunk.title}"`,
-    );
-
-    // Convert chunk messages to the format extractFacts() expects.
-    // extractFacts() takes an array of message-like objects with { role, content }.
-    const messages = chunk.messages.map((m) => ({
-      role: m.role,
-      content: m.text,
-    }));
-
-    // Use 'full' mode to extract ALL valuable memories from the chunk
-    // (not just the last few messages like 'turn' mode does).
-    // Smart import: pass enriched system prompt with user profile context.
-    const facts = await extractFacts(
-      messages,
-      'full',
-      undefined, // no existing memories for dedup during import
-      smartCtx?.enrichedSystemPrompt, // profile-enriched extraction prompt
-    );
-
-    if (facts.length > 0) {
-      totalExtracted += facts.length;
-
-      try {
-        // Store through the normal pipeline (dedup, encrypt, store).
-        // storeExtractedFacts throws on batch failure to prevent nonce zombies.
-        const stored = await storeExtractedFacts(facts, logger);
-        totalStored += stored;
-
-        logger.info(
-          `Import chunk ${chunksProcessed}/${chunks.length}: extracted ${facts.length} facts, stored ${stored}`,
-        );
-      } catch (err: unknown) {
-        storeError = err instanceof Error ? err.message : String(err);
-        logger.warn(`Import stopped at chunk ${chunksProcessed}/${chunks.length}: ${storeError}`);
-        break; // Stop processing further chunks — a zombie UserOp may block writes
-      }
-    }
-
-    // Checkpoint state file periodically so _import_status reflects live progress.
-    if (importId && chunksProcessed % CHECKPOINT_EVERY === 0) {
-      const liveState = readImportState(importId);
-      if (liveState) {
-        const estimatedBatches = liveState.batch_total || 1;
-        const doneBatches = Math.floor(chunksProcessed / CHECKPOINT_EVERY);
-        const elapsed = Date.now() - new Date(liveState.started_at).getTime();
-        const secPerBatch = doneBatches > 0 ? elapsed / 1000 / doneBatches : 45;
-        const remaining = estimatedBatches - doneBatches;
-        const etaMs = remaining * secPerBatch * 1000;
-        writeImportState({
-          ...liveState,
-          batch_done: doneBatches,
-          facts_stored: totalStored,
-          facts_extracted: totalExtracted,
-          estimated_completion_iso: new Date(Date.now() + etaMs).toISOString(),
-        });
-      }
-    }
-  }
-
-  if (totalExtracted === 0 && chunks.length > 0 && !storeError && chunksSkipped < chunks.length) {
-    warnings.push(
-      `Processed ${chunks.length} conversation chunks (${totalMessages} messages) but the LLM ` +
-      `did not extract any facts worth storing. This can happen if the conversations are mostly ` +
-      `generic/ephemeral content without personal facts, preferences, or decisions.`,
-    );
-  }
-
-  if (storeError) {
-    warnings.push(`Import stopped early: ${storeError}. ${chunks.length - chunksProcessed} chunk(s) not processed.`);
-  }
-
-  // Final state file write for background imports.
-  if (importId) {
-    const finalState = readImportState(importId);
-    if (finalState) {
-      const finalStatus = storeError ? 'failed' : (finalState.status === 'aborted' ? 'aborted' : 'completed');
-      writeImportState({
-        ...finalState,
-        status: finalStatus,
-        batch_done: finalState.batch_total,
-        facts_stored: totalStored,
-        facts_extracted: totalExtracted,
-        errors: storeError ? [...finalState.errors, storeError] : finalState.errors,
-      });
-    }
-    _importInProgress = false;
-  }
-
-  return {
-    success: totalStored > 0 || totalExtracted > 0,
-    source,
-    import_id: resolvedImportId,
-    total_chunks: chunks.length,
-    chunks_processed: chunksProcessed,
-    chunks_skipped: chunksSkipped,
-    total_messages: totalMessages,
-    facts_extracted: totalExtracted,
-    imported: totalStored,
-    skipped: totalExtracted - totalStored,
-    stopped_early: !!storeError,
-    smart_import: smartCtx ? {
-      profile_duration_ms: smartCtx.durationMs,
-      extract_count: smartCtx.extractCount,
-      skip_count: smartCtx.skipCount,
-    } : null,
-    warnings,
-    duration_ms: Date.now() - startTime,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Import status + abort handlers
-// ---------------------------------------------------------------------------
-
-async function handleImportStatus(
-  params: Record<string, unknown>,
-  logger: OpenClawPluginApi['logger'],
-): Promise<Record<string, unknown>> {
-  const importId = params.import_id as string | undefined;
-
-  let state: ImportState | null;
-  if (importId) {
-    state = readImportState(importId);
-    if (!state) return { error: `No import found with id: ${importId}` };
-  } else {
-    state = readMostRecentActiveImport();
-    if (!state) return { status: 'no_active_import', message: 'No active import found. Start one with `openclaw totalreclaw import from <source>` on the gateway host. (Auto-resume still picks up running imports on gateway restart.)' };
-  }
-
-  // 1h freshness guard: mark stale imports as failed and prompt user to resume.
-  if (state.status === 'running' && isImportStale(state)) {
-    writeImportState({ ...state, status: 'failed', errors: [...state.errors, 'Stale: no progress in 1h'] });
-    logger.info(`Import ${state.import_id}: marked stale (no progress in 1h)`);
-    return {
-      import_id: state.import_id,
-      status: 'failed',
-      stale: true,
-      facts_stored: state.facts_stored,
-      message: 'Import appears stale — no progress in 1 hour. Resume it with `openclaw totalreclaw import from <source> --file <path> --resume ' + state.import_id + '` on the gateway host, or restart the gateway to trigger auto-resume.',
-      resume_id: state.import_id,
-    };
-  }
-
-  const now = Date.now();
-  const elapsedMs = now - new Date(state.started_at).getTime();
-  const secPerBatch = state.batch_done > 0 ? elapsedMs / 1000 / state.batch_done : 45;
-  const remaining = Math.max(0, state.batch_total - state.batch_done);
-  const etaSeconds = state.status === 'running' ? Math.round(remaining * secPerBatch) : 0;
-
-  return {
-    import_id: state.import_id,
-    status: state.status,
-    batch_done: state.batch_done,
-    batch_total: state.batch_total,
-    facts_stored: state.facts_stored,
-    dups_skipped: state.dups_skipped,
-    eta_seconds: etaSeconds,
-    completion_iso: state.status === 'running'
-      ? new Date(now + etaSeconds * 1000).toISOString()
-      : state.last_updated,
-    source: state.source,
-    started_at: state.started_at,
-    errors: state.errors,
-  };
-}
-
-async function handleImportAbort(
-  params: Record<string, unknown>,
-  logger: OpenClawPluginApi['logger'],
-): Promise<Record<string, unknown>> {
-  const importId = params.import_id as string | undefined;
-  if (!importId) return { error: 'import_id is required' };
-
-  const state = readImportState(importId);
-  if (!state) return { error: `No import found with id: ${importId}` };
-
-  if (state.status === 'aborted') {
-    return { aborted: true, idempotent: true, import_id: importId, facts_already_stored: state.facts_stored };
-  }
-  if (state.status === 'completed') {
-    return { error: 'Import already completed — nothing to abort', import_id: importId, facts_stored: state.facts_stored };
-  }
-
-  writeImportState({ ...state, status: 'aborted' });
-  logger.info(`Import ${importId}: abort requested (${state.facts_stored} facts already stored)`);
-
-  return {
-    aborted: true,
-    import_id: importId,
-    facts_already_stored: state.facts_stored,
-    message: 'Import abort requested. The background task will stop at the next chunk boundary. Already-stored facts are kept.',
-  };
-}
+configureImportRuntime({ storeExtractedFacts });
 
 // ---------------------------------------------------------------------------
 // buildRecallDeps — bind the real recall pipeline into the closures the
@@ -3379,9 +2189,9 @@ function buildRecallDeps(logger: OpenClawPluginApi['logger']): TrNativeMemoryDep
     if (isSubgraphMode()) {
       if (!subgraphOwner) return null;
       try {
-        const result = await fetchFactById(subgraphOwner, id, authKeyHex);
-        if (!result) return null;
-        const docJson = decryptFromHex(result.encryptedBlob, encryptionKey);
+        const fetchedFact = await fetchFactById(subgraphOwner, id, authKeyHex);
+        if (!fetchedFact) return null;
+        const docJson = decryptFromHex(fetchedFact.encryptedBlob, encryptionKey);
         if (isDigestBlob(docJson)) return null;
         const doc = readClaimFromBlob(docJson);
         return { id, plaintext: doc.text };
@@ -3454,65 +2264,7 @@ const plugin = {
   // `invalid config: must NOT have additional properties`, which blocked
   // the documented remote-pairing setup (publicUrl) and made it impossible
   // for a user to hand-pick an extraction model (extraction.llm.*).
-  configSchema: {
-    type: 'object',
-    additionalProperties: false,
-    properties: {
-      publicUrl: {
-        type: 'string',
-        description:
-          "Public gateway URL for QR pairing (e.g. 'https://gateway.example.com:18789'). Overrides the auto-resolution cascade in buildPairingUrl.",
-      },
-      extraction: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          enabled: {
-            type: 'boolean',
-            description: 'Enable/disable auto-extraction (default: true)',
-          },
-          model: {
-            type: 'string',
-            description:
-              "Shorthand: override just the extraction model (e.g., 'glm-4.5-flash', 'gpt-4.1-mini'). For a full provider override use extraction.llm.",
-          },
-          interval: {
-            type: 'number',
-            description: 'Number of turns between automatic extractions (default: 3)',
-          },
-          maxFactsPerExtraction: {
-            type: 'number',
-            description: 'Hard cap on facts extracted per turn (default: 15)',
-          },
-          llm: {
-            type: 'object',
-            additionalProperties: false,
-            description:
-              'Explicit LLM override block. Highest-priority tier in the extraction-provider cascade. Any subset of provider+apiKey is enough to pin a provider.',
-            properties: {
-              provider: {
-                type: 'string',
-                description:
-                  "Provider name: zai | openai | anthropic | gemini | google | mistral | groq | deepseek | openrouter | xai | together | cerebras.",
-              },
-              model: {
-                type: 'string',
-                description: 'Explicit model id. If omitted, deriveCheapModel(provider) picks a sensible default.',
-              },
-              apiKey: {
-                type: 'string',
-                description: 'API key for the selected provider. Required for the override to take effect.',
-              },
-              baseUrl: {
-                type: 'string',
-                description: 'Override the provider base URL (self-hosted / custom gateway setups).',
-              },
-            },
-          },
-        },
-      },
-    },
-  },
+  configSchema: CONFIG_SCHEMA,
 
   register(api: OpenClawPluginApi) {
     // NOTE: the body of register() below is intentionally NOT re-indent
@@ -3851,7 +2603,7 @@ const plugin = {
     if (typeof api.registerCli === 'function') {
       api.registerCli(
         async ({ program }) => {
-          const { registerOnboardingCli } = await import('./onboarding-cli.js');
+          const { registerOnboardingCli } = await import('./pairing/onboarding-cli.js');
           registerOnboardingCli(program as import('commander').Command, {
             credentialsPath: CREDENTIALS_PATH,
             statePath: CONFIG.onboardingStatePath,
@@ -3889,13 +2641,13 @@ const plugin = {
           // same relay-brokered URL surface the agent tool uses. The local
           // (gateway-loopback) flow is still available via `--local`. See
           // pair-cli.ts header for the rationale.
-          const { registerPairCli } = await import('./pair-cli.js');
+          const { registerPairCli } = await import('./pairing/pair-cli.js');
           registerPairCli(program as import('commander').Command, {
             sessionsPath: CONFIG.pairSessionsPath,
             renderPairingUrl: (session) => buildPairingUrl(api, session),
             logger: api.logger,
             runRelayPairCli: async (cliMode, runOpts) => {
-              const { runRelayPairCli } = await import('./pair-cli-relay.js');
+              const { runRelayPairCli } = await import('./pairing/pair-cli-relay.js');
               return runRelayPairCli(cliMode, {
                 relayBaseUrl: CONFIG.pairRelayUrl,
                 credentialsPath: CREDENTIALS_PATH,
@@ -3999,7 +2751,7 @@ const plugin = {
             }) => {
               try {
                 await requireFullSetup(api.logger);
-                const result = await handlePluginImportFrom({
+                const importResult = await handlePluginImportFrom({
                   source,
                   file_path: opts.file,
                   content: opts.content,
@@ -4012,30 +2764,30 @@ const plugin = {
                 }, api.logger);
 
                 if (opts.json) {
-                  process.stdout.write(JSON.stringify(result) + '\n');
+                  process.stdout.write(JSON.stringify(importResult) + '\n');
                 } else {
                   // Human-readable summary. The handler already returns a
                   // `message` for chunked (background) imports; for direct
                   // stores + dry runs, synthesize a short summary.
-                  if (result.dry_run) {
-                    const chunks = result.total_chunks as number | undefined;
+                  if (importResult.dry_run) {
+                    const chunks = importResult.total_chunks as number | undefined;
                     if (chunks !== undefined) {
                       process.stdout.write(
-                        `Dry run: ~${result.estimated_facts} facts from ${chunks} chunks ` +
-                        `(~${result.estimated_minutes} min). Confirm without --dry-run to start.\n`,
+                        `Dry run: ~${importResult.estimated_facts} facts from ${chunks} chunks ` +
+                        `(~${importResult.estimated_minutes} min). Confirm without --dry-run to start.\n`,
                       );
                     } else {
                       process.stdout.write(
-                        `Dry run: found ${result.total_found} facts. Confirm without --dry-run to import.\n`,
+                        `Dry run: found ${importResult.total_found} facts. Confirm without --dry-run to import.\n`,
                       );
                     }
-                  } else if (result.import_id && result.status === 'running') {
+                  } else if (importResult.import_id && importResult.status === 'running') {
                     process.stdout.write(
-                      `${result.message}\nImport id: ${result.import_id}\n`,
+                      `${importResult.message}\nImport id: ${importResult.import_id}\n`,
                     );
                   } else {
-                    const stored = result.imported as number | undefined;
-                    const total = result.total_found as number | undefined;
+                    const stored = importResult.imported as number | undefined;
+                    const total = importResult.total_found as number | undefined;
                     process.stdout.write(
                       `Imported ${stored ?? 0}/${total ?? stored ?? 0} facts from ${source}.\n`,
                     );
@@ -4060,25 +2812,25 @@ const plugin = {
             .action(async (opts: { id?: string; json?: boolean }) => {
               try {
                 await requireFullSetup(api.logger);
-                const result = await handleImportStatus({ import_id: opts.id }, api.logger);
+                const statusResult = await handleImportStatus({ import_id: opts.id }, api.logger);
                 if (opts.json) {
-                  process.stdout.write(JSON.stringify(result) + '\n');
+                  process.stdout.write(JSON.stringify(statusResult) + '\n');
                 } else {
-                  const status = result.status as string | undefined;
-                  const stored = result.facts_stored as number | undefined;
-                  const batchDone = result.batch_done as number | undefined;
-                  const batchTotal = result.batch_total as number | undefined;
+                  const status = statusResult.status as string | undefined;
+                  const stored = statusResult.facts_stored as number | undefined;
+                  const batchDone = statusResult.batch_done as number | undefined;
+                  const batchTotal = statusResult.batch_total as number | undefined;
                   if (status === 'no_active_import') {
                     process.stdout.write('No active import. Start one with `openclaw totalreclaw import from <source>`.\n');
                   } else if (status === 'running') {
                     process.stdout.write(
-                      `Import ${result.import_id}: running — ${stored} facts stored, ` +
+                      `Import ${statusResult.import_id}: running — ${stored} facts stored, ` +
                       `batch ${batchDone}/${batchTotal}` +
-                      (result.completion_iso ? `, ETA ${result.completion_iso}` : '') + '.\n',
+                      (statusResult.completion_iso ? `, ETA ${statusResult.completion_iso}` : '') + '.\n',
                     );
                   } else {
                     process.stdout.write(
-                      `Import ${result.import_id}: ${status} — ${stored ?? 0} facts stored.\n`,
+                      `Import ${statusResult.import_id}: ${status} — ${stored ?? 0} facts stored.\n`,
                     );
                   }
                 }
@@ -4101,17 +2853,17 @@ const plugin = {
             .action(async (importId: string, opts: { json?: boolean }) => {
               try {
                 await requireFullSetup(api.logger);
-                const result = await handleImportAbort({ import_id: importId }, api.logger);
+                const abortResult = await handleImportAbort({ import_id: importId }, api.logger);
                 if (opts.json) {
-                  process.stdout.write(JSON.stringify(result) + '\n');
+                  process.stdout.write(JSON.stringify(abortResult) + '\n');
                 } else {
-                  if (result.aborted) {
+                  if (abortResult.aborted) {
                     process.stdout.write(
-                      `Import ${importId}: abort requested. ${result.facts_already_stored ?? 0} facts already stored (kept).\n`,
+                      `Import ${importId}: abort requested. ${abortResult.facts_already_stored ?? 0} facts already stored (kept).\n`,
                     );
                   } else {
                     process.stdout.write(
-                      `Import ${importId}: ${result.error ?? 'abort failed'}\n`,
+                      `Import ${importId}: ${abortResult.error ?? 'abort failed'}\n`,
                     );
                   }
                 }
@@ -4158,15 +2910,15 @@ const plugin = {
                   throw new Error(`checkout session failed (HTTP ${response.status}): ${body || response.statusText}`);
                 }
 
-                const data = await response.json() as { checkout_url?: string };
-                if (!data.checkout_url) {
+                const checkoutJson = await response.json() as { checkout_url?: string };
+                if (!checkoutJson.checkout_url) {
                   throw new Error('no checkout URL returned by the relay');
                 }
 
                 if (opts.json) {
-                  process.stdout.write(JSON.stringify({ checkout_url: data.checkout_url }) + '\n');
+                  process.stdout.write(JSON.stringify({ checkout_url: checkoutJson.checkout_url }) + '\n');
                 } else {
-                  process.stdout.write(`Open this URL to upgrade to Pro: ${data.checkout_url}\n`);
+                  process.stdout.write(`Open this URL to upgrade to Pro: ${checkoutJson.checkout_url}\n`);
                 }
               } catch (err: unknown) {
                 const message = err instanceof Error ? err.message : String(err);
@@ -5169,8 +3921,8 @@ const plugin = {
 
           // BUG-2 fix: skip extraction if an import was in progress this turn.
           // Import failures were retriggering agent_end → extraction → import loops.
-          if (_importInProgress) {
-            _importInProgress = false; // auto-reset for next turn
+          if (isImportInProgress()) {
+            setImportInProgress(false); // auto-reset for next turn
             api.logger.info('agent_end: skipping extraction (import was in progress)');
             return { memoryHandled: true };
           }
@@ -5278,7 +4030,7 @@ const plugin = {
       logger: api.logger,
       ensureInitialized: () => ensureInitialized(api.logger),
       isPairingPending: () => needsSetup,
-      isImportActive: () => _importInProgress,
+      isImportActive: () => isImportInProgress(),
       getExtractInterval,
       getMaxFactsPerExtraction,
       isDedupEnabled: isLlmDedupEnabled,
