@@ -163,9 +163,20 @@ def test_empty_owner_set_is_safe(pending_path):
 class _FakeClient:
     def __init__(self, *, eoa: str, sa: Optional[str] = None):
         self._eoa_address = eoa
-        # The latent F6 scenario: ``_sa_address`` is set BEFORE
+        # The latent F6 scenario: the Smart Account address is set BEFORE
         # on_session_start runs (e.g. eager-resolution in state.configure).
         self._sa_address = sa
+
+    # Public accessors mirroring the real ``TotalReclaw`` interface the
+    # lifecycle helpers read. ``resolved_wallet_address`` is the non-raising
+    # SA accessor; ``eoa_address`` is always available.
+    @property
+    def eoa_address(self) -> str:
+        return self._eoa_address
+
+    @property
+    def resolved_wallet_address(self) -> Optional[str]:
+        return self._sa_address
 
     async def recall(self, *_a, **_kw):
         return []

@@ -526,7 +526,7 @@ class TestStoreFactBatch:
             )
 
         from totalreclaw.crypto import derive_keys_from_mnemonic
-        from totalreclaw.operations import store_fact_batch
+        from totalreclaw.operations import WalletContext, store_fact_batch
         from totalreclaw.relay import RelayClient
 
         mock_send.return_value = "0xbatchhash"
@@ -547,14 +547,17 @@ class TestStoreFactBatch:
             {"text": "fact three", "importance": 0.9},
         ]
 
-        fact_ids = await store_fact_batch(
-            facts=facts,
+        wallet = WalletContext(
             keys=keys,
             owner="0x1234",
-            relay=relay,
             eoa_private_key=bytes(32),
             eoa_address="0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
             sender="0x1234",
+        )
+        fact_ids = await store_fact_batch(
+            facts=facts,
+            wallet=wallet,
+            relay=relay,
         )
         assert len(fact_ids) == 3
         assert all(len(fid) == 36 for fid in fact_ids)  # UUID format
@@ -566,7 +569,7 @@ class TestStoreFactBatch:
     @pytest.mark.asyncio
     async def test_empty_list_raises(self) -> None:
         from totalreclaw.crypto import derive_keys_from_mnemonic
-        from totalreclaw.operations import store_fact_batch
+        from totalreclaw.operations import WalletContext, store_fact_batch
         from totalreclaw.relay import RelayClient
 
         mnemonic = (
@@ -575,20 +578,23 @@ class TestStoreFactBatch:
         )
         keys = derive_keys_from_mnemonic(mnemonic)
         relay = AsyncMock(spec=RelayClient)
+        wallet = WalletContext(
+            keys=keys,
+            owner="0x1234",
+            eoa_private_key=_TEST_EOA_PRIVATE_KEY,
+            eoa_address="0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+        )
         with pytest.raises(ValueError, match="at least one fact"):
             await store_fact_batch(
                 facts=[],
-                keys=keys,
-                owner="0x1234",
+                wallet=wallet,
                 relay=relay,
-                eoa_private_key=_TEST_EOA_PRIVATE_KEY,
-                eoa_address="0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
             )
 
     @pytest.mark.asyncio
     async def test_oversize_raises(self) -> None:
         from totalreclaw.crypto import derive_keys_from_mnemonic
-        from totalreclaw.operations import store_fact_batch
+        from totalreclaw.operations import WalletContext, store_fact_batch
         from totalreclaw.relay import RelayClient
 
         mnemonic = (
@@ -598,20 +604,23 @@ class TestStoreFactBatch:
         keys = derive_keys_from_mnemonic(mnemonic)
         relay = AsyncMock(spec=RelayClient)
         facts = [{"text": f"f{i}"} for i in range(MAX_BATCH_SIZE + 1)]
+        wallet = WalletContext(
+            keys=keys,
+            owner="0x1234",
+            eoa_private_key=_TEST_EOA_PRIVATE_KEY,
+            eoa_address="0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+        )
         with pytest.raises(ValueError, match="exceeds maximum"):
             await store_fact_batch(
                 facts=facts,
-                keys=keys,
-                owner="0x1234",
+                wallet=wallet,
                 relay=relay,
-                eoa_private_key=_TEST_EOA_PRIVATE_KEY,
-                eoa_address="0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
             )
 
     @pytest.mark.asyncio
     async def test_empty_text_raises(self) -> None:
         from totalreclaw.crypto import derive_keys_from_mnemonic
-        from totalreclaw.operations import store_fact_batch
+        from totalreclaw.operations import WalletContext, store_fact_batch
         from totalreclaw.relay import RelayClient
 
         mnemonic = (
@@ -620,20 +629,23 @@ class TestStoreFactBatch:
         )
         keys = derive_keys_from_mnemonic(mnemonic)
         relay = AsyncMock(spec=RelayClient)
+        wallet = WalletContext(
+            keys=keys,
+            owner="0x1234",
+            eoa_private_key=_TEST_EOA_PRIVATE_KEY,
+            eoa_address="0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+        )
         with pytest.raises(ValueError, match="empty/missing text"):
             await store_fact_batch(
                 facts=[{"text": "", "importance": 0.5}],
-                keys=keys,
-                owner="0x1234",
+                wallet=wallet,
                 relay=relay,
-                eoa_private_key=_TEST_EOA_PRIVATE_KEY,
-                eoa_address="0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
             )
 
     @pytest.mark.asyncio
     async def test_missing_eoa_raises(self) -> None:
         from totalreclaw.crypto import derive_keys_from_mnemonic
-        from totalreclaw.operations import store_fact_batch
+        from totalreclaw.operations import WalletContext, store_fact_batch
         from totalreclaw.relay import RelayClient
 
         mnemonic = (
@@ -642,11 +654,11 @@ class TestStoreFactBatch:
         )
         keys = derive_keys_from_mnemonic(mnemonic)
         relay = AsyncMock(spec=RelayClient)
+        wallet = WalletContext(keys=keys, owner="0x1234")
         with pytest.raises(ValueError, match="eoa_private_key"):
             await store_fact_batch(
                 facts=[{"text": "hello"}],
-                keys=keys,
-                owner="0x1234",
+                wallet=wallet,
                 relay=relay,
             )
 

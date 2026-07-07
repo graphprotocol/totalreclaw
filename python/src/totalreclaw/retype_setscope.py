@@ -52,9 +52,9 @@ import json as _json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, TypedDict
 
-from .agent.extraction import (
+from .memory_types import (
     V0_TO_V1_TYPE,
     VALID_MEMORY_SCOPES,
     VALID_MEMORY_SOURCES,
@@ -107,7 +107,26 @@ _FACT_BY_ID_QUERY = """
 # ---------------------------------------------------------------------------
 
 
-def _project_from_decrypted(decrypted: str) -> Optional[dict]:
+class ProjectedFact(TypedDict):
+    """Normalized v1-shape projection of a decrypted claim blob.
+
+    Fixed 10-key shape returned by :func:`_project_from_decrypted` and fed
+    into :func:`build_canonical_claim_v1` (via :class:`_ProjectedFact`).
+    """
+
+    text: str
+    type: str
+    source: str
+    scope: Optional[str]
+    volatility: Optional[str]
+    reasoning: Optional[str]
+    entities: Optional[list[dict]]
+    importance: int
+    confidence: float
+    pin_status: Optional[str]
+
+
+def _project_from_decrypted(decrypted: str) -> Optional[ProjectedFact]:
     """Project a decrypted blob (v1 long-form OR v0 short-key) into a v1 dict.
 
     Returns the normalized v1 fields ready to feed into

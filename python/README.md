@@ -24,11 +24,6 @@ As of **2.0.0**, the client uses **Memory Taxonomy v1** (6 canonical types: `cla
 pip install totalreclaw
 ```
 
-> **Docker users:** On slim images (e.g., `python:3.12-slim`), install a C compiler first for PyStemmer:
-> ```bash
-> apt-get update && apt-get install -y gcc g++
-> ```
-
 ```python
 import asyncio
 from totalreclaw import TotalReclaw

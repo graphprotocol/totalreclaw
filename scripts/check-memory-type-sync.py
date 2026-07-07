@@ -53,8 +53,8 @@ LOCATIONS: list[tuple[str, str, str]] = [
         "parse_ts_const_array_VALID_MEMORY_TYPES_V1",
     ),
     (
-        "python/src/totalreclaw/agent/extraction.py (VALID_MEMORY_TYPES)",
-        "python/src/totalreclaw/agent/extraction.py",
+        "python/src/totalreclaw/memory_types.py (VALID_MEMORY_TYPES)",
+        "python/src/totalreclaw/memory_types.py",
         "parse_py_tuple_VALID_MEMORY_TYPES",
     ),
     (

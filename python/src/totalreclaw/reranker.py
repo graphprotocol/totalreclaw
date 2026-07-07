@@ -13,21 +13,23 @@ RRF + source-weighted final score is the canonical Pipeline G + Tier 1 mix
 that benchmark E13 calibrated. The extra Python-side passes were not part
 of the validated baseline and were a source of cross-client divergence.
 
-Public surface kept for callers (operations.py, client.py, agent/lifecycle.py,
-agent/contradiction.py):
-  - ``rerank(query, query_embedding, candidates, top_k, weights, apply_source_weights)``
-  - ``cosine_similarity(a, b)``
-  - ``source_weight(source)``
-  - ``detect_query_intent(query)``, ``INTENT_WEIGHTS``, ``RankingWeights``,
-    ``DEFAULT_WEIGHTS`` (compat shim -- core handles intent-weighting itself)
-  - Dataclasses: ``RerankerCandidate``, ``RerankerResult``
+Public surface kept for callers:
+  - ``rerank(query, query_embedding, candidates, top_k, apply_source_weights)``
+    -- called by ``operations.py``
+  - ``cosine_similarity(a, b)`` -- called by ``agent/lifecycle.py``
+  - ``source_weight(source)`` / ``LEGACY_CLAIM_FALLBACK_WEIGHT``
+  - Dataclasses: ``RerankerCandidate``, ``RerankerResult`` -- ``RerankerResult``
+    is re-exported by ``client.py`` and read by ``agent/contradiction.py``
+
+Core owns intent-weighting now (per-candidate BM25/cosine ratio), so the old
+client-side ``detect_query_intent`` / ``INTENT_WEIGHTS`` / ``RankingWeights``
+compat surface has been removed -- no internal caller used it.
 """
 
 from __future__ import annotations
 
 import json
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import totalreclaw_core
@@ -69,57 +71,6 @@ def source_weight(source: Optional[str]) -> float:
     if not source:
         return LEGACY_CLAIM_FALLBACK_WEIGHT
     return float(totalreclaw_core.source_weight(source))
-
-
-# ---------------------------------------------------------------------------
-# Query Intent (compat shim -- core does its own intent-weighting now)
-# ---------------------------------------------------------------------------
-
-QueryIntent = str  # Literal["factual", "temporal", "semantic"]
-
-
-@dataclass
-class RankingWeights:
-    bm25: float = 0.25
-    cosine: float = 0.25
-    importance: float = 0.25
-    recency: float = 0.25
-
-
-DEFAULT_WEIGHTS = RankingWeights()
-
-INTENT_WEIGHTS: dict[str, RankingWeights] = {
-    "factual": RankingWeights(bm25=0.40, cosine=0.20, importance=0.25, recency=0.15),
-    "temporal": RankingWeights(bm25=0.15, cosine=0.20, importance=0.20, recency=0.45),
-    "semantic": RankingWeights(bm25=0.20, cosine=0.35, importance=0.25, recency=0.20),
-}
-
-_TEMPORAL_KEYWORDS = re.compile(
-    r"\b(yesterday|today|last\s+week|last\s+month|recently|recent|latest|ago|"
-    r"when|this\s+week|this\s+month|earlier|before|after|since|during|tonight|"
-    r"morning|afternoon)\b",
-    re.IGNORECASE,
-)
-_FACTUAL_PATTERNS = re.compile(
-    r"^(what|who|where|which|how\s+many|how\s+much|is\s+|are\s+|does\s+|do\s+|"
-    r"did\s+|was\s+|were\s+)\b",
-    re.IGNORECASE,
-)
-
-
-def detect_query_intent(query: str) -> QueryIntent:
-    """Classify a query as ``factual``, ``temporal``, or ``semantic``.
-
-    Kept for callers that still pass ``INTENT_WEIGHTS[intent]`` into ``rerank``;
-    core does its own per-candidate intent-weighting (BM25 vs cosine ratio
-    based on the candidate cosine score) so the legacy ``weights`` argument
-    is now ignored.
-    """
-    if _TEMPORAL_KEYWORDS.search(query):
-        return "temporal"
-    if _FACTUAL_PATTERNS.search(query) and len(query) < 80:
-        return "factual"
-    return "semantic"
 
 
 # ---------------------------------------------------------------------------
@@ -169,16 +120,13 @@ def rerank(
     query_embedding: Optional[list[float]],
     candidates: list[RerankerCandidate],
     top_k: int = 8,
-    weights: Optional[RankingWeights] = None,  # noqa: ARG001  -- compat shim
     apply_source_weights: bool = False,
 ) -> list[RerankerResult]:
     """Re-rank candidates by routing through ``totalreclaw_core.rerank_with_config``.
 
-    The legacy ``weights`` argument is ignored (kept for API stability so
-    existing callers compile). Core handles intent-weighting itself based on
-    the per-candidate cosine score. Importance / recency / MMR signals are
-    no longer applied client-side; if you need those, contribute them to
-    core::reranker first.
+    Core handles intent-weighting itself based on the per-candidate cosine
+    score. Importance / recency / MMR signals are no longer applied
+    client-side; if you need those, contribute them to core::reranker first.
     """
     if not candidates:
         return []

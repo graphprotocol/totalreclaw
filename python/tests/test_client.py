@@ -86,7 +86,11 @@ class TestTotalReclawClient:
     async def test_forget(self, mock_send, client):
         mock_send.return_value = "0xabc123"
         result = await client.forget("fact-123")
-        assert result is True
+        # forget() now returns a ForgetResult mapping (sibling-aligned shape)
+        # that is still truthy-compatible with the historic bool return.
+        assert bool(result) is True
+        assert result["success"] is True
+        assert result["fact_id"] == "fact-123"
         mock_send.assert_called_once()
 
     @pytest.mark.asyncio

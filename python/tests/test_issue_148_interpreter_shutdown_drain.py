@@ -166,6 +166,16 @@ class _FakeClient:
         self._sa_address = None
         self._raise_on = raise_on
 
+    # Public accessors mirroring the real ``TotalReclaw`` interface the
+    # lifecycle helpers read (``eoa_address`` / ``resolved_wallet_address``).
+    @property
+    def eoa_address(self) -> str:
+        return self._eoa_address
+
+    @property
+    def resolved_wallet_address(self):
+        return self._sa_address
+
     async def recall(self, *_a, **_kw):
         if self._raise_on == "recall":
             raise InterpreterShutdownError("simulated")

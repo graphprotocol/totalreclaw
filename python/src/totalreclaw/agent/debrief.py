@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from .llm_client import detect_llm_config, chat_completion
+from ._text import truncate_messages as _truncate_messages
 
 logger = logging.getLogger(__name__)
 
@@ -95,19 +96,6 @@ Return a JSON array (no markdown, no code fences):
 - Each item should be 1-3 sentences, self-contained
 
 If the conversation was too short or trivial to warrant a debrief, return: []"""
-
-
-def _truncate_messages(messages: list[dict], max_chars: int = 12000) -> str:
-    """Format and truncate messages to fit token budget."""
-    lines = []
-    total = 0
-    for msg in messages:
-        line = f"[{msg.get('role', 'unknown')}]: {msg.get('content', '')}"
-        if total + len(line) > max_chars:
-            break
-        lines.append(line)
-        total += len(line)
-    return "\n\n".join(lines)
 
 
 def parse_debrief_response(response: str) -> list[DebriefItem]:

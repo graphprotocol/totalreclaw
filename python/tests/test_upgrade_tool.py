@@ -74,9 +74,11 @@ class TestUpgradeTool:
 
         state = _make_state()
         mock_client = MagicMock()
-        # The handler reaches into the client to call the relay.
-        mock_client._relay = MagicMock()
-        mock_client._relay.create_checkout = AsyncMock(
+        # The handler reaches the relay through the public ``relay`` accessor
+        # and resolves the address via the public ``ensure_address``.
+        mock_client.ensure_address = AsyncMock()
+        mock_client.relay = MagicMock()
+        mock_client.relay.create_checkout = AsyncMock(
             return_value=CheckoutResponse(
                 checkout_url="https://checkout.stripe.com/c/pay/cs_test_abc123",
                 session_id="cs_test_abc123",
@@ -89,7 +91,7 @@ class TestUpgradeTool:
         assert "session_id" in result
         # User-visible message includes the URL (so the LLM reads it back).
         assert "https://checkout.stripe.com/c/pay/cs_test_abc123" in result.get("message", "")
-        assert mock_client._relay.create_checkout.await_count == 1
+        assert mock_client.relay.create_checkout.await_count == 1
 
     @pytest.mark.asyncio
     async def test_relay_error_surfaces_as_error_field(self) -> None:
@@ -98,8 +100,9 @@ class TestUpgradeTool:
 
         state = _make_state()
         mock_client = MagicMock()
-        mock_client._relay = MagicMock()
-        mock_client._relay.create_checkout = AsyncMock(
+        mock_client.ensure_address = AsyncMock()
+        mock_client.relay = MagicMock()
+        mock_client.relay.create_checkout = AsyncMock(
             side_effect=RuntimeError("relay down")
         )
         state._client = mock_client
@@ -180,8 +183,8 @@ class TestCreateCheckoutContract:
 
         state = _make_state()
         mock_client = MagicMock()
-        mock_client._ensure_address = AsyncMock()
-        mock_client._relay = _relay_returning(
+        mock_client.ensure_address = AsyncMock()
+        mock_client.relay = _relay_returning(
             {"success": True, "checkout_url": "https://checkout.stripe.com/c/pay/cs_live_q"}
         )
         state._client = mock_client

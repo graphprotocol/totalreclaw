@@ -8,7 +8,6 @@ covers the wrapper's public surface only:
 
   - ``cosine_similarity`` -- delegates to core
   - ``source_weight`` / ``LEGACY_CLAIM_FALLBACK_WEIGHT``
-  - ``detect_query_intent`` -- TS-parity heuristic
   - ``rerank`` -- routes candidates through ``rerank_with_config``
 
 Cross-runtime parity assertions live in ``test_v1_taxonomy.py`` (mirror of
@@ -19,14 +18,9 @@ from __future__ import annotations
 import pytest
 
 from totalreclaw.reranker import (
-    INTENT_WEIGHTS,
     LEGACY_CLAIM_FALLBACK_WEIGHT,
-    DEFAULT_WEIGHTS,
-    RankingWeights,
     RerankerCandidate,
-    RerankerResult,
     cosine_similarity,
-    detect_query_intent,
     rerank,
     source_weight,
 )
@@ -82,46 +76,6 @@ class TestSourceWeight:
 
     def test_legacy_fallback_value(self) -> None:
         assert LEGACY_CLAIM_FALLBACK_WEIGHT == pytest.approx(0.85, abs=1e-3)
-
-
-# ---------------------------------------------------------------------------
-# detect_query_intent (TS heuristic, kept for callers)
-# ---------------------------------------------------------------------------
-
-
-class TestDetectQueryIntent:
-    @pytest.mark.parametrize(
-        "query",
-        [
-            "What did we discuss yesterday?",
-            "What happened last week?",
-            "Any recent updates?",
-            "What was mentioned earlier today?",
-        ],
-    )
-    def test_temporal_queries(self, query: str) -> None:
-        assert detect_query_intent(query) == "temporal"
-
-    @pytest.mark.parametrize(
-        "query",
-        [
-            "What's Alex's email?",
-            "Who is the project lead?",
-            "Where does Sarah live?",
-        ],
-    )
-    def test_factual_queries(self, query: str) -> None:
-        assert detect_query_intent(query) == "factual"
-
-    def test_long_factual_pattern_falls_to_semantic(self) -> None:
-        long_q = (
-            "What are all the different design patterns and architectural decisions "
-            "that were discussed in the project?"
-        )
-        assert detect_query_intent(long_q) == "semantic"
-
-    def test_temporal_beats_factual(self) -> None:
-        assert detect_query_intent("What did we discuss yesterday?") == "temporal"
 
 
 # ---------------------------------------------------------------------------
@@ -229,26 +183,3 @@ class TestRerank:
         assert results[0].created_at == 1700000000.0
         assert results[0].category == "preference"
         assert results[0].source == "user"
-
-
-# ---------------------------------------------------------------------------
-# Compat shim (legacy ranking-weights argument is accepted but ignored)
-# ---------------------------------------------------------------------------
-
-
-class TestLegacyWeightsCompat:
-    def test_intent_weights_dict_present(self) -> None:
-        assert "factual" in INTENT_WEIGHTS
-        assert "temporal" in INTENT_WEIGHTS
-        assert "semantic" in INTENT_WEIGHTS
-
-    def test_default_weights_is_RankingWeights_instance(self) -> None:
-        assert isinstance(DEFAULT_WEIGHTS, RankingWeights)
-
-    def test_passing_weights_does_not_break_rerank(self) -> None:
-        cands = [RerankerCandidate(id="1", text="fact text here")]
-        # Pass a non-default weights object -- core ignores it but the
-        # wrapper must accept it for backwards compat.
-        weights = RankingWeights(bm25=0.4, cosine=0.2, importance=0.25, recency=0.15)
-        results = rerank("fact", [], cands, top_k=1, weights=weights)
-        assert len(results) == 1

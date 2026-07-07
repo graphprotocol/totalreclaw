@@ -4,7 +4,14 @@ import base64
 from unittest.mock import AsyncMock, patch
 
 from totalreclaw.crypto import derive_keys_from_mnemonic, encrypt
-from totalreclaw.operations import store_fact, search_facts, forget_fact, export_facts, APPLY_SOURCE_WEIGHTS_DEFAULT
+from totalreclaw.operations import (
+    WalletContext,
+    store_fact,
+    search_facts,
+    forget_fact,
+    export_facts,
+    APPLY_SOURCE_WEIGHTS_DEFAULT,
+)
 from totalreclaw.relay import RelayClient
 
 TEST_MNEMONIC = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
@@ -30,14 +37,17 @@ class TestStoreFact:
         relay._relay_url = "https://api.totalreclaw.xyz"
         relay._auth_key_hex = "deadbeef"
         relay._client_id = "test"
-        fact_id = await store_fact(
-            text="Test fact",
+        wallet = WalletContext(
             keys=keys,
             owner="0x1234",
-            relay=relay,
             eoa_private_key=EOA_PRIVATE_KEY,
             eoa_address=EOA_ADDRESS,
             sender="0x1234",
+        )
+        fact_id = await store_fact(
+            text="Test fact",
+            wallet=wallet,
+            relay=relay,
         )
         assert len(fact_id) == 36  # UUID format
         mock_send.assert_called_once()
@@ -57,27 +67,30 @@ class TestStoreFact:
         lsh = LSHHasher(lsh_seed, 4)  # Small dims for test
         embedding = [0.5, 0.5, 0.5, 0.5]
 
-        fact_id = await store_fact(
-            text="Test fact",
+        wallet = WalletContext(
             keys=keys,
             owner="0x1234",
-            relay=relay,
-            lsh_hasher=lsh,
-            embedding=embedding,
             eoa_private_key=EOA_PRIVATE_KEY,
             eoa_address=EOA_ADDRESS,
             sender="0x1234",
+        )
+        fact_id = await store_fact(
+            text="Test fact",
+            wallet=wallet,
+            relay=relay,
+            lsh_hasher=lsh,
+            embedding=embedding,
         )
         assert len(fact_id) == 36
 
     @pytest.mark.asyncio
     async def test_store_requires_eoa_key(self, keys):
         relay = AsyncMock(spec=RelayClient)
+        wallet = WalletContext(keys=keys, owner="0x1234")
         with pytest.raises(ValueError, match="eoa_private_key"):
             await store_fact(
                 text="Test fact",
-                keys=keys,
-                owner="0x1234",
+                wallet=wallet,
                 relay=relay,
             )
 

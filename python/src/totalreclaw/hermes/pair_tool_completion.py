@@ -79,7 +79,7 @@ def complete_pairing(
     try:
         state.configure(phrase)
         client = state.get_client()
-        eoa = getattr(client, "_eoa_address", None)
+        eoa = client.eoa_address if client else None
         logger.info(
             "pair-tool: credentials configured for EOA %s (session %s…)",
             eoa or "unknown",

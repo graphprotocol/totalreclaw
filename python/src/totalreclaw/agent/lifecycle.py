@@ -52,10 +52,10 @@ def _owner_address(state: "AgentState") -> str:
     client = state.get_client()
     if not client:
         return ""
-    sa = getattr(client, "_sa_address", None) or getattr(client, "smart_account_address", None)
+    sa = client.resolved_wallet_address
     if sa:
         return str(sa).lower()
-    eoa = getattr(client, "_eoa_address", None) or getattr(client, "wallet_address", None)
+    eoa = client.eoa_address
     return str(eoa).lower() if eoa else ""
 
 
@@ -75,13 +75,13 @@ def _owner_addresses(state: "AgentState") -> list[str]:
         return []
     seen: set[str] = set()
     out: list[str] = []
-    eoa = getattr(client, "_eoa_address", None) or getattr(client, "wallet_address", None)
+    eoa = client.eoa_address
     if eoa:
         addr = str(eoa).lower()
         if addr not in seen:
             seen.add(addr)
             out.append(addr)
-    sa = getattr(client, "_sa_address", None) or getattr(client, "smart_account_address", None)
+    sa = client.resolved_wallet_address
     if sa:
         addr = str(sa).lower()
         if addr not in seen:
@@ -350,8 +350,9 @@ def _auto_extract_inner(
             try:
                 from totalreclaw.embedding import get_embedding
                 embedding = get_embedding(fact.text)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("embed failed for fact %r: %s", fact.text[:40], e)
+                # degrade: store without embedding, skip near-dup detection below
 
             # Store-time near-duplicate detection (skip if cosine sim >= threshold)
             # UPDATE actions always store (they supersede the old fact)
@@ -403,10 +404,7 @@ def _auto_extract_inner(
             # chain-gate (Pro batch / free single) lands in a sister work-leaf;
             # until then lifecycle.py always batches → submission_path="batch",
             # userop_count=1 per chunk.
-            try:
-                _chain_id = client.chain_id
-            except Exception:
-                _chain_id = getattr(client, "_chain_id", None)
+            _chain_id = client.resolved_chain_id
             logger.info(
                 "submission_telemetry submission_path=%s fact_count=%d userop_count=%d chain_id=%s",
                 "batch", len(chunk_dicts), 1, _chain_id,

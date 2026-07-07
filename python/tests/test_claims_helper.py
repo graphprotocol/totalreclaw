@@ -32,7 +32,6 @@ from totalreclaw.claims_helper import (
     build_canonical_claim,
     build_canonical_claim_v1,
     build_digest_claim,
-    build_legacy_doc,
     compute_entity_trapdoor,
     compute_entity_trapdoors,
     extract_digest_from_claim,
@@ -44,7 +43,6 @@ from totalreclaw.claims_helper import (
     map_type_to_category,
     read_blob_unified,
     read_claim_from_blob,
-    resolve_digest_mode,
     should_recompile,
 )
 
@@ -256,26 +254,6 @@ def test_protobuf_version_v4_constant_is_4() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Legacy doc builder — kept for back-compat, not on the default write path
-# ---------------------------------------------------------------------------
-
-
-def test_build_legacy_doc_still_works_for_back_compat() -> None:
-    fact = _Fact(text="Hello world.", type="fact", importance=7)
-    doc = build_legacy_doc(
-        fact,
-        importance=7,
-        source="auto-extraction",
-        created_at="2026-04-12T10:00:00Z",
-    )
-    expected = (
-        '{"text":"Hello world.","metadata":{"type":"fact","importance":0.7,'
-        '"source":"auto-extraction","created_at":"2026-04-12T10:00:00Z"}}'
-    )
-    assert doc == expected
-
-
-# ---------------------------------------------------------------------------
 # Entity trapdoors — byte-exact cross-client parity anchors
 # ---------------------------------------------------------------------------
 
@@ -347,29 +325,6 @@ def test_compute_entity_trapdoors_skips_bad_names() -> None:
         ]
     )
     assert any(t == compute_entity_trapdoor("Real") for t in td)
-
-
-# ---------------------------------------------------------------------------
-# Digest mode flag — v1 env cleanup: TOTALRECLAW_DIGEST_MODE was removed.
-# resolve_digest_mode() always returns "on" regardless of env var.
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_digest_mode_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TOTALRECLAW_DIGEST_MODE", raising=False)
-    assert resolve_digest_mode() == "on"
-
-
-@pytest.mark.parametrize(
-    "value",
-    ["on", "off", "OFF", "template", "TEMPLATE", "nonsense", ""],
-)
-def test_resolve_digest_mode_env_has_no_effect(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
-    """TOTALRECLAW_DIGEST_MODE was removed in v1 env cleanup — env var has no effect."""
-    monkeypatch.setenv("TOTALRECLAW_DIGEST_MODE", value)
-    assert resolve_digest_mode() == "on"
 
 
 # ---------------------------------------------------------------------------

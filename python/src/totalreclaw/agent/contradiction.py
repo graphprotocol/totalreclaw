@@ -121,7 +121,6 @@ async def detect_and_resolve_contradictions(
         log.debug("Failed to load default weights: %s", exc)
         return list(new_facts)
 
-    # Get tie-zone tolerance
     try:
         tie_tolerance = totalreclaw_core.tie_zone_score_tolerance()
     except Exception:
@@ -137,7 +136,6 @@ async def detect_and_resolve_contradictions(
             continue
 
         try:
-            # Get embedding for the new fact
             embedding = get_embedding(fact.text)
             if not embedding:
                 kept.append(fact)

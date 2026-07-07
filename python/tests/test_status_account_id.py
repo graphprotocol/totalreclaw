@@ -25,15 +25,15 @@ async def test_status_includes_account_id_and_addresses():
         tier="pro", free_writes_used=3, free_writes_limit=1500,
         expires_at="2027-06-10",
     ))
-    client._wallet_address = "0xa1db0bdbacf82b65dbd464f25b07432fd2f9c47e"
-    client._eoa_address = "0x05651cf715043fcae41620f158f835fa73eff917"
+    client.resolved_wallet_address = "0xa1db0bdbacf82b65dbd464f25b07432fd2f9c47e"
+    client.eoa_address = "0x05651cf715043fcae41620f158f835fa73eff917"
     state._client = client
 
     res = json.loads(await tools.status({}, state))
     assert res["tier"] == "pro"
-    assert res["account_id"] == client._wallet_address
-    assert res["wallet_address"] == client._wallet_address
-    assert res["eoa_address"] == client._eoa_address
+    assert res["account_id"] == client.resolved_wallet_address
+    assert res["wallet_address"] == client.resolved_wallet_address
+    assert res["eoa_address"] == client.eoa_address
 
 
 @pytest.mark.asyncio
@@ -46,14 +46,16 @@ async def test_status_resolves_address_lazily_if_unset():
     client.status = AsyncMock(return_value=MagicMock(
         tier="free", free_writes_used=0, free_writes_limit=250, expires_at=None,
     ))
-    client._wallet_address = None
-    client._eoa_address = "0x05651cf715043fcae41620f158f835fa73eff917"
+    client.resolved_wallet_address = None
+    client.eoa_address = "0x05651cf715043fcae41620f158f835fa73eff917"
 
-    async def _ensure():
-        client._wallet_address = "0xa1db0bdbacf82b65dbd464f25b07432fd2f9c47e"
-    client._ensure_address = AsyncMock(side_effect=_ensure)
+    # status() falls back to the public ``get_wallet_address`` resolver when
+    # the Smart Account address isn't yet resolved.
+    client.get_wallet_address = AsyncMock(
+        return_value="0xa1db0bdbacf82b65dbd464f25b07432fd2f9c47e"
+    )
     state._client = client
 
     res = json.loads(await tools.status({}, state))
-    client._ensure_address.assert_awaited()  # resolved on demand
+    client.get_wallet_address.assert_awaited()  # resolved on demand
     assert res["account_id"] == "0xa1db0bdbacf82b65dbd464f25b07432fd2f9c47e"

@@ -66,14 +66,6 @@ def _default_relay_url() -> str:
     return os.environ.get("TOTALRECLAW_SERVER_URL") or _HARDCODED_DEFAULT_URL
 
 
-# Backward-compat: preserve the old module attribute as a property-like
-# access via __getattr__ at import would complicate consumers, so we keep
-# it as a constant for direct reads but the client should prefer
-# _default_relay_url(). The constant resolves to whichever default the
-# build-time rewrite landed on.
-DEFAULT_RELAY_URL = _default_relay_url()
-
-
 def _detect_client_id() -> str:
     if os.environ.get("HERMES_HOME"):
         return "python-client:hermes-agent"
@@ -141,13 +133,17 @@ class CheckoutResponse:
 class RelayClient:
     def __init__(
         self,
-        relay_url: str = DEFAULT_RELAY_URL,
+        relay_url: Optional[str] = None,
         auth_key_hex: Optional[str] = None,
         wallet_address: Optional[str] = None,
         is_test: bool = False,
         session_id: Optional[str] = None,
     ):
-        self._relay_url = relay_url.rstrip("/")
+        # Resolve the default at construction (not import) so a runtime change
+        # to ``TOTALRECLAW_SERVER_URL`` after this module is imported takes
+        # effect. An import-time snapshot as a default param would silently pin
+        # a stale URL.
+        self._relay_url = (relay_url or _default_relay_url()).rstrip("/")
         self._auth_key_hex = auth_key_hex
         self._wallet_address = wallet_address
         self._client_id = _detect_client_id()
@@ -235,6 +231,50 @@ class RelayClient:
             self._http_per_loop.pop(id(loop), None)
         else:
             self._http_per_loop[id(loop)] = value
+
+    # ------------------------------------------------------------------
+    # Public seam for the high-level client.
+    #
+    # ``TotalReclaw`` used to reach into these private attributes directly
+    # (reading ``_relay_url`` / ``_client_id`` / ``_session_id`` and
+    # *mutating* ``_wallet_address`` after lazy SA resolution). Exposing a
+    # small read API + an explicit ``set_wallet_address`` keeps that state
+    # transition inside ``RelayClient`` rather than smeared across the seam.
+    # ------------------------------------------------------------------
+    @property
+    def relay_url(self) -> str:
+        """The resolved relay base URL (trailing slash stripped)."""
+        return self._relay_url
+
+    @property
+    def client_id(self) -> str:
+        """The ``X-TotalReclaw-Client`` identity for this client."""
+        return self._client_id
+
+    @property
+    def session_id(self) -> Optional[str]:
+        """The optional Axiom session tag, or ``None`` if unset."""
+        return self._session_id
+
+    @property
+    def auth_key_hex(self) -> Optional[str]:
+        """The hex-encoded auth key used for the ``Authorization`` header."""
+        return self._auth_key_hex
+
+    @property
+    def wallet_address(self) -> Optional[str]:
+        """The Smart Account address the relay tags outgoing writes with."""
+        return self._wallet_address
+
+    def set_wallet_address(self, wallet_address: Optional[str]) -> None:
+        """Update the Smart Account address forwarded on writes.
+
+        Called by :class:`~totalreclaw.client.TotalReclaw` once the CREATE2
+        Smart Account address is resolved lazily (it is unknown at relay
+        construction time). Kept as an explicit method so the client does
+        not mutate ``self._relay._wallet_address`` across the seam.
+        """
+        self._wallet_address = wallet_address
 
     def _base_headers(self) -> dict[str, str]:
         headers = {

@@ -480,7 +480,7 @@ async def _drive_full_pair_session(
         try:
             state.configure(phrase)
             client = state.get_client()
-            eoa = getattr(client, "_eoa_address", None)
+            eoa = client.eoa_address if client else None
             logger.info(
                 "pair.sidecar: state.configure ok token=%s… eoa=%s",
                 token_tag,

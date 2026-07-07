@@ -30,6 +30,8 @@ from .lsh import LSHHasher
 from .relay import RelayClient, BillingStatus, _default_relay_url, _client_header_value
 from .reranker import RerankerResult
 from .operations import (
+    ForgetResult,
+    WalletContext,
     store_fact,
     store_fact_batch,
     search_facts,
@@ -289,8 +291,9 @@ class TotalReclaw:
 
         self._wallet_address = await _derive_smart_account_address(self._mnemonic)
         self._address_resolved = True
-        # Update relay client with resolved address
-        self._relay._wallet_address = self._wallet_address
+        # Hand the resolved address to the relay through its explicit setter
+        # rather than mutating its private ``_wallet_address`` across the seam.
+        self._relay.set_wallet_address(self._wallet_address)
         return self._wallet_address
 
     async def _ensure_address(self) -> None:
@@ -346,13 +349,13 @@ class TotalReclaw:
 
         # Use a short-lived httpx client — don't touch the RelayClient's
         # per-loop cache since this runs very early (before register).
-        relay_url = self._relay._relay_url.rstrip("/")
+        relay_url = self._relay.relay_url.rstrip("/")
         billing_url = f"{relay_url}/v1/billing/status"
         headers: dict[str, str] = {
             "Authorization": f"Bearer {self._auth_key_hex}",
-            "X-TotalReclaw-Client": _client_header_value(self._relay._client_id),
+            "X-TotalReclaw-Client": _client_header_value(self._relay.client_id),
         }
-        session_id = getattr(self._relay, "_session_id", None)
+        session_id = self._relay.session_id
         if session_id:
             headers["X-TotalReclaw-Session"] = session_id
 
@@ -460,6 +463,77 @@ class TotalReclaw:
     def keys(self) -> DerivedKeys:
         return self._keys
 
+    # ------------------------------------------------------------------
+    # Explicit read accessors for the adapter layer (Hermes tools, the
+    # agent lifecycle). These used to reach in via
+    # ``getattr(client, "_eoa_address", ...)`` / ``getattr(client,
+    # "_wallet_address", ...)`` etc. — brittle string probes across the
+    # seam, some of which (``_sa_address``, ``smart_account_address``)
+    # never existed and silently returned ``None``. Expose the real state
+    # as named, non-raising properties instead.
+    # ------------------------------------------------------------------
+    @property
+    def eoa_address(self) -> str:
+        """The externally-owned account (EOA) address.
+
+        Always available — derived from the recovery phrase at
+        construction time, independent of Smart Account resolution.
+        """
+        return self._eoa_address
+
+    @property
+    def resolved_wallet_address(self) -> Optional[str]:
+        """The Smart Account address if resolved, else ``None``.
+
+        Non-raising counterpart to :attr:`wallet_address`. Use this in
+        best-effort contexts (queue keying, telemetry) that must tolerate
+        an as-yet-unresolved address rather than raising.
+        """
+        return self._wallet_address if self._address_resolved else None
+
+    @property
+    def resolved_chain_id(self) -> Optional[int]:
+        """The resolved chain id, or ``None`` if not yet resolved.
+
+        Non-raising counterpart to :attr:`chain_id` for telemetry paths.
+        """
+        return self._chain_id if self._chain_id_resolved else None
+
+    @property
+    def relay(self) -> RelayClient:
+        """The underlying relay client.
+
+        Exposed so adapters can reach relay-only endpoints (e.g.
+        ``create_checkout`` / ``create_topup``) without probing the
+        client's private ``_relay`` attribute.
+        """
+        return self._relay
+
+    async def ensure_address(self) -> None:
+        """Public, best-effort Smart Account resolution.
+
+        Idempotent wrapper over the lazy resolver so adapters that need
+        the relay to know the Smart Account (e.g. before a checkout POST)
+        can trigger it without calling the private ``_ensure_address``.
+        """
+        await self._ensure_address()
+
+    def _wallet_context(self, chain_id: int) -> WalletContext:
+        """Assemble the :class:`WalletContext` for a store call.
+
+        Must be called after ``_ensure_address`` — the Smart Account is
+        both the ``owner`` and the ``sender`` for the write.
+        """
+        assert self._wallet_address is not None  # guaranteed by _ensure_address
+        return WalletContext(
+            keys=self._keys,
+            owner=self._wallet_address,
+            eoa_private_key=self._eoa_private_key,
+            eoa_address=self._eoa_address,
+            sender=self._wallet_address,
+            chain_id=chain_id,
+        )
+
     async def register(self) -> str:
         """Register with the relay. Returns user_id."""
         auth_hash = compute_auth_key_hash(self._keys.auth_key)
@@ -534,8 +608,7 @@ class TotalReclaw:
         lsh = self._get_lsh_hasher() if embedding else None
         return await store_fact(
             text=text,
-            keys=self._keys,
-            owner=self._wallet_address,
+            wallet=self._wallet_context(chain_id),
             relay=self._relay,
             lsh_hasher=lsh,
             embedding=embedding,
@@ -550,10 +623,6 @@ class TotalReclaw:
             volatility=volatility,
             extra_metadata=extra_metadata,
             agent_name=agent_name,
-            eoa_private_key=self._eoa_private_key,
-            eoa_address=self._eoa_address,
-            sender=self._wallet_address,
-            chain_id=chain_id,
             data_edge_address=self._data_edge_address,
         )
 
@@ -648,14 +717,9 @@ class TotalReclaw:
         lsh = self._get_lsh_hasher() if needs_lsh else None
         return await store_fact_batch(
             facts=facts,
-            keys=self._keys,
-            owner=self._wallet_address,
+            wallet=self._wallet_context(chain_id),
             relay=self._relay,
             lsh_hasher=lsh,
-            eoa_private_key=self._eoa_private_key,
-            eoa_address=self._eoa_address,
-            sender=self._wallet_address,
-            chain_id=chain_id,
             data_edge_address=self._data_edge_address,
             source=source,
         )
@@ -682,12 +746,20 @@ class TotalReclaw:
             top_k=top_k,
         )
 
-    async def forget(self, fact_id: str) -> bool:
-        """Soft-delete a fact by writing a tombstone."""
+    async def forget(self, fact_id: str) -> ForgetResult:
+        """Soft-delete a fact by writing a tombstone.
+
+        Returns a :class:`~totalreclaw.operations.ForgetResult` — a mapping
+        of ``{"success": bool, "fact_id": str}`` that mirrors the shape of
+        the sibling mutations (:meth:`pin_fact`, :meth:`unpin_fact`,
+        :meth:`retype`, :meth:`set_scope`). It stays backward-compatible
+        with the historic ``bool`` return: ``bool(result)`` is the success
+        flag, so ``if await client.forget(id): ...`` keeps working.
+        """
         await self._ensure_address()
         await self._ensure_registered()
         chain_id = await self._ensure_chain_id()
-        return await forget_fact(
+        success = await forget_fact(
             fact_id,
             self._wallet_address,
             self._relay,
@@ -697,6 +769,7 @@ class TotalReclaw:
             chain_id=chain_id,
             data_edge_address=self._data_edge_address,
         )
+        return ForgetResult(success=success, fact_id=fact_id)
 
     async def pin_fact(self, fact_id: str) -> dict:
         """Pin a claim so auto-resolution cannot supersede it.

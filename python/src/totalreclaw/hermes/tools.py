@@ -183,8 +183,9 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
         try:
             from totalreclaw.embedding import get_embedding
             embedding = get_embedding(text)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("embed failed for remember %r: %s", text[:40], e)
+            # degrade: store without embedding (search falls back to blind indices)
 
         fact_id = await client.remember(
             text,
@@ -228,8 +229,9 @@ async def recall(args: dict, state: "PluginState", **kwargs) -> str:
         try:
             from totalreclaw.embedding import get_embedding
             query_embedding = get_embedding(query)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("embed failed for recall query %r: %s", query[:40], e)
+            # degrade: query on blind indices only (no cosine signal)
 
         results = await client.recall(
             query,
@@ -281,8 +283,8 @@ async def forget(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": "No fact_id provided"})
 
     try:
-        success = await client.forget(fact_id)
-        return json.dumps({"deleted": success, "fact_id": fact_id})
+        result = await client.forget(fact_id)
+        return json.dumps({"deleted": result["success"], "fact_id": fact_id})
     except Exception as e:
         logger.error("totalreclaw_forget failed: %s", e)
         return json.dumps({"error": str(e)})
@@ -473,13 +475,10 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
         # had nothing to report. The Smart Account address IS the account ID;
         # it is a public on-chain address (NOT the recovery phrase) and safe to
         # show. Resolve it if status() didn't already.
-        sa = getattr(client, "_wallet_address", None)
+        sa = client.resolved_wallet_address
         if not sa:
             try:
-                ensure = getattr(client, "_ensure_address", None)
-                if callable(ensure):
-                    await ensure()
-                sa = getattr(client, "_wallet_address", None)
+                sa = await client.get_wallet_address()
             except Exception:
                 sa = None
         return json.dumps({
@@ -489,7 +488,7 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
             "expires_at": billing.expires_at,
             "account_id": sa,
             "wallet_address": sa,
-            "eoa_address": getattr(client, "_eoa_address", None),
+            "eoa_address": client.eoa_address,
         })
     except Exception as e:
         logger.error("totalreclaw_status failed: %s", e)
@@ -534,7 +533,7 @@ def setup(args: dict, state: "PluginState", **kwargs) -> str:
         # pending so callers don't confuse the two. See DIAG-PYTHON-V2.
         result = {
             "configured": True,
-            "eoa_address": client._eoa_address,
+            "eoa_address": client.eoa_address,
             "wallet_address_pending": True,
             "note": (
                 "Smart Account address will be resolved on the first "
@@ -576,16 +575,14 @@ async def upgrade(args: dict, state: "PluginState", **kwargs) -> str:
         # ``_ensure_address()`` internally; create_checkout is one of the
         # few that doesn't need a fact write so we thread the address
         # resolution explicitly.
-        ensure_addr = getattr(client, "_ensure_address", None)
-        if callable(ensure_addr):
-            try:
-                await ensure_addr()
-            except Exception:
-                # Non-fatal — the relay may still accept the checkout if
-                # ``self._wallet_address`` was populated elsewhere.
-                pass
+        try:
+            await client.ensure_address()
+        except Exception:
+            # Non-fatal — the relay may still accept the checkout if
+            # the Smart Account address was populated elsewhere.
+            pass
 
-        checkout = await client._relay.create_checkout()
+        checkout = await client.relay.create_checkout()
         payload = {
             "checkout_url": checkout.checkout_url,
             "message": (
@@ -621,13 +618,11 @@ async def top_up(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": "Invalid or missing 'pack'. Choose 1000, 5000, or 10000 (memories)."})
 
     try:
-        ensure_addr = getattr(client, "_ensure_address", None)
-        if callable(ensure_addr):
-            try:
-                await ensure_addr()
-            except Exception:
-                pass
-        checkout = await client._relay.create_topup(pack)
+        try:
+            await client.ensure_address()
+        except Exception:
+            pass
+        checkout = await client.relay.create_topup(pack)
         return json.dumps({
             "checkout_url": checkout.checkout_url,
             "pack": pack,

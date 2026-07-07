@@ -29,11 +29,11 @@ import math
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import totalreclaw_core as _core
 
-from .agent.extraction import (
+from .memory_types import (
     LEGACY_V0_MEMORY_TYPES,
     V0_TO_V1_TYPE,
     VALID_MEMORY_SCOPES,
@@ -43,6 +43,7 @@ from .agent.extraction import (
     is_valid_memory_type,
     normalize_to_v1_type,
 )
+from .protobuf import DEFAULT_PROTOBUF_VERSION  # noqa: F401  re-exported below
 
 
 # ---------------------------------------------------------------------------
@@ -55,10 +56,10 @@ V1_SCHEMA_VERSION: str = "1.0"
 #: Outer protobuf wrapper version tags.
 #:
 #: * ``DEFAULT_PROTOBUF_VERSION`` (3) — legacy callers; inner blob is the
-#:   pre-v1 short-key binary envelope.
+#:   pre-v1 short-key binary envelope. Owned by :mod:`totalreclaw.protobuf`
+#:   and re-exported here (imported above) so both modules agree on the value.
 #: * ``PROTOBUF_VERSION_V4`` (4) — Memory Taxonomy v1; inner blob is a JSON
 #:   payload with ``schema_version: "1.0"``.
-DEFAULT_PROTOBUF_VERSION: int = 3
 PROTOBUF_VERSION_V4: int = 4
 
 
@@ -70,27 +71,6 @@ def _js_round(x: float) -> int:
     Python rounds to 8 but JS rounds to 9. Plugin parity requires matching JS.
     """
     return math.floor(x + 0.5)
-
-
-# ---------------------------------------------------------------------------
-# Feature flags (deprecated — all gates removed as of v1 env cleanup)
-# ---------------------------------------------------------------------------
-
-DigestMode = Literal["on", "off", "template"]
-
-
-def resolve_digest_mode() -> DigestMode:
-    """Digest injection is always ON in v1.
-
-    The ``TOTALRECLAW_DIGEST_MODE`` env var was removed in the v1 env
-    cleanup — digest compilation is part of the G pipeline and not a
-    user-configurable knob. Kept as a function returning ``"on"`` so any
-    legacy Python call-site continues to compile.
-
-    .. deprecated:: 2.1
-        Env var has no effect; function always returns ``"on"``.
-    """
-    return "on"
 
 
 # ---------------------------------------------------------------------------
@@ -431,41 +411,6 @@ def _fact_to_dict(fact: Any) -> Dict[str, Any]:
         if hasattr(fact, key):
             out[key] = getattr(fact, key)
     return out
-
-
-# ---------------------------------------------------------------------------
-# Legacy ``{text, metadata}`` doc shape — retained for fixture decoding ONLY.
-#
-# Python 2.0.0 does not produce legacy docs; they exist only so pre-v1
-# vault entries remain decodable. Kept here so existing external tests
-# that reference ``build_legacy_doc`` still compile, but tagged deprecated.
-# ---------------------------------------------------------------------------
-
-
-def build_legacy_doc(
-    fact: Any,
-    importance: int,
-    source: str,
-    created_at: Optional[str] = None,
-) -> str:
-    """Build a legacy ``{text, metadata}`` doc.
-
-    .. deprecated:: 2.0.0
-        No Python caller produces legacy docs; v1 is the default write path.
-        This helper is retained only for back-compat decoding tests.
-    """
-    text = _attr(fact, "text")
-    fact_type = _attr(fact, "type")
-    doc: Dict[str, Any] = {
-        "text": text,
-        "metadata": {
-            "type": fact_type,
-            "importance": importance / 10,
-            "source": source,
-            "created_at": created_at if created_at is not None else _now_iso(),
-        },
-    }
-    return json.dumps(doc, ensure_ascii=False, separators=(",", ":"))
 
 
 # ---------------------------------------------------------------------------

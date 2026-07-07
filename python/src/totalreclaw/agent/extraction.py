@@ -35,6 +35,9 @@ from .llm_client import (
     derive_extraction_config,
     detect_llm_config,
 )
+# Re-exported under its historical private name so existing callers
+# (hermes/extractor.py, hermes/tools.py, tests) keep importing it from here.
+from ._text import truncate_messages as _truncate_messages
 
 logger = logging.getLogger(__name__)
 
@@ -56,71 +59,22 @@ logger = logging.getLogger(__name__)
 #   * The EXTRACTION_SYSTEM_PROMPT "TYPE" section
 # ---------------------------------------------------------------------------
 
-#: The 6 canonical v1 memory types.
-VALID_MEMORY_TYPES: tuple[str, ...] = (
-    "claim",
-    "preference",
-    "directive",
-    "commitment",
-    "episode",
-    "summary",
+# The v1 memory-taxonomy vocabulary lives in the dependency-free leaf module
+# ``totalreclaw.memory_types`` so root modules can share it without an
+# import cycle. Re-exported here so existing
+# ``from totalreclaw.agent.extraction import VALID_MEMORY_TYPES`` (and the other
+# taxonomy names) callers keep working unchanged.
+from ..memory_types import (  # noqa: E402,F401
+    VALID_MEMORY_TYPES,
+    VALID_TYPES,
+    VALID_MEMORY_SOURCES,
+    VALID_MEMORY_SCOPES,
+    VALID_MEMORY_VOLATILITIES,
+    LEGACY_V0_MEMORY_TYPES,
+    V0_TO_V1_TYPE,
+    is_valid_memory_type,
+    normalize_to_v1_type,
 )
-
-#: Backward-compat alias — prefer ``VALID_MEMORY_TYPES`` in new code.
-VALID_TYPES: frozenset[str] = frozenset(VALID_MEMORY_TYPES)
-
-#: The 5 v1 provenance sources.
-VALID_MEMORY_SOURCES: tuple[str, ...] = (
-    "user",
-    "user-inferred",
-    "assistant",
-    "external",
-    "derived",
-)
-
-#: The 8 v1 life-domain scopes.
-VALID_MEMORY_SCOPES: tuple[str, ...] = (
-    "work",
-    "personal",
-    "health",
-    "family",
-    "creative",
-    "finance",
-    "misc",
-    "unspecified",
-)
-
-#: The 3 v1 volatility classes.
-VALID_MEMORY_VOLATILITIES: tuple[str, ...] = (
-    "stable",
-    "updatable",
-    "ephemeral",
-)
-
-#: Legacy v0 memory types — retained so ``read_claim_from_blob`` / legacy
-#: fixtures can still decode pre-v1 vault entries. Do NOT emit on the write path.
-LEGACY_V0_MEMORY_TYPES: tuple[str, ...] = (
-    "fact",
-    "preference",
-    "decision",
-    "episodic",
-    "goal",
-    "context",
-    "summary",
-    "rule",
-)
-
-#: Legacy v0 → v1 type mapping used on the read path.
-V0_TO_V1_TYPE: dict[str, str] = {
-    "fact": "claim",
-    "preference": "preference",
-    "decision": "claim",
-    "episodic": "episode",
-    "goal": "commitment",
-    "context": "claim",
-    "summary": "summary",
-    "rule": "directive",
-}
 
 VALID_ACTIONS = {"ADD", "UPDATE", "DELETE", "NOOP"}
 
@@ -130,23 +84,6 @@ VALID_ENTITY_TYPES = {"person", "project", "tool", "company", "concept", "place"
 #: Default confidence score when the LLM response omits ``confidence``.
 #: Must match the plugin's ``DEFAULT_EXTRACTION_CONFIDENCE``.
 DEFAULT_EXTRACTION_CONFIDENCE: float = 0.85
-
-
-def is_valid_memory_type(value: Any) -> bool:
-    """v1 type guard — returns True iff ``value`` is one of the 6 v1 types."""
-    return isinstance(value, str) and value in VALID_MEMORY_TYPES
-
-
-def normalize_to_v1_type(raw: Any) -> str:
-    """Normalize any type token (v1 or legacy v0) to a v1 type.
-
-    v1 tokens pass through. Legacy v0 tokens are mapped via
-    ``V0_TO_V1_TYPE``. Unknown input falls back to ``"claim"``.
-    """
-    token = str(raw or "").lower()
-    if token in VALID_MEMORY_TYPES:
-        return token
-    return V0_TO_V1_TYPE.get(token, "claim")
 
 
 @dataclass
@@ -277,19 +214,6 @@ TotalReclaw clients by construction.
 # ---------------------------------------------------------------------------
 # Helpers — message formatting + response parsing
 # ---------------------------------------------------------------------------
-
-
-def _truncate_messages(messages: list[dict], max_chars: int = 12000) -> str:
-    """Format and truncate messages to fit token budget."""
-    lines = []
-    total = 0
-    for msg in messages:
-        line = f"[{msg.get('role', 'unknown')}]: {msg.get('content', '')}"
-        if total + len(line) > max_chars:
-            break
-        lines.append(line)
-        total += len(line)
-    return "\n\n".join(lines)
 
 
 def _build_fact(

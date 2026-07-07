@@ -31,8 +31,10 @@ def _make_state_and_client(chain_id: int = 100):
         return [f"id-{i}" for i in range(len(facts))]
 
     fake_client.remember_batch = AsyncMock(side_effect=_batch_side_effect)
-    # MagicMock would auto-vivify `chain_id` to a MagicMock; pin it to a real int
-    # so the telemetry line interpolates a stable, parseable value.
+    # MagicMock would auto-vivify `resolved_chain_id` to a MagicMock; pin it
+    # to a real int so the telemetry line interpolates a stable, parseable
+    # value. (The lifecycle reads the non-raising ``resolved_chain_id``.)
+    fake_client.resolved_chain_id = chain_id
     fake_client.chain_id = chain_id
     state._client = fake_client
     return state, fake_client

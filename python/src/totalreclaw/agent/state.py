@@ -406,7 +406,7 @@ class AgentState:
         # `resolve_address()` has run, and `configure()` is synchronous. The
         # EOA is what we have at this point; the Smart Account address is
         # resolved lazily on the first remember/recall call.
-        logger.info("TotalReclaw configured: eoa=%s", self._client._eoa_address)
+        logger.info("TotalReclaw configured: eoa=%s", self._client.eoa_address)
 
     def is_configured(self) -> bool:
         """Return True if the client is configured and ready."""

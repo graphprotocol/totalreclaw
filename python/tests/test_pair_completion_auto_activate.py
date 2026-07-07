@@ -22,7 +22,7 @@ def _session() -> MagicMock:
 def _state_configured() -> MagicMock:
     state = MagicMock()
     client = MagicMock()
-    client._eoa_address = "0xEOA"
+    client.eoa_address = "0xEOA"
     state.get_client.return_value = client
     return state
 

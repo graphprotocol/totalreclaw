@@ -213,7 +213,7 @@ def _atexit_shutdown() -> None:  # pragma: no cover — exit path
     if _singleton is not None:
         try:
             _singleton.shutdown(timeout=1.0)
-        except Exception:
+        except Exception:  # pragma: no cover — best-effort exit-time shutdown
             pass
         _singleton = None
 

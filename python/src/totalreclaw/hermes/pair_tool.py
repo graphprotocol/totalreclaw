@@ -289,7 +289,7 @@ def _run_relay_pair_on_thread(
         try:
             state.configure(phrase)
             client = state.get_client()
-            eoa = getattr(client, "_eoa_address", None)
+            eoa = client.eoa_address if client else None
             logger.info(
                 "pair.relay_decrypt_ok token=%s… eoa=%s",
                 token_tag,
