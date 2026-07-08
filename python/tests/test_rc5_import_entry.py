@@ -363,9 +363,9 @@ def test_token_stored_hashed_not_plaintext(tmp_path, monkeypatch):
     # The raw token must NOT appear in the filename.
     assert token not in files[0].name
     assert files[0].name == f"disclosure-{tools._disclosure_token_hash(token)}.pending"
-    # The file holds only source + minted_at — never the raw token.
+    # The file holds only kind + subject + minted_at — never the raw token.
     data = json.loads(files[0].read_text())
-    assert data == {"source": "chatgpt", "minted_at": data["minted_at"]}
+    assert data == {"kind": "disclosure", "subject": "chatgpt", "minted_at": data["minted_at"]}
     assert token not in files[0].read_text()
 
 

@@ -382,6 +382,14 @@ class ImportEngine:
         #: failure doesn't mark it imported and block the natural re-import
         #: recovery. Persists across batches on the instance.
         self._failed_chunk_indices: set[int] = set()
+        #: #466 — conversation_ids that produced ≥1 extracted (→ stored) fact
+        #: this run. Enforces the stored-implies-recorded invariant: a
+        #: multi-chunk conversation whose one sibling 429-failed but whose other
+        #: sibling stored facts MUST still be recorded, else the re-import
+        #: re-extracts it → duplicates (rc7 pre-stable QA shipped 10 dups). Only
+        #: a conversation that stored NOTHING and had a failed chunk stays
+        #: unrecorded (Finding-2 retry). Persists across batches on the instance.
+        self._conv_with_stored_facts: set[str] = set()
 
     # ── Estimate ─────────────────────────────────────────────────────────
 
@@ -790,6 +798,15 @@ class ImportEngine:
                     "reason": zero_reason,
                 })
                 reason_counts[zero_reason] = reason_counts.get(zero_reason, 0) + 1
+            else:
+                # #466: this chunk produced facts → its conversation stored
+                # facts and MUST be recorded, even if a sibling chunk failed.
+                cid = (
+                    getattr(parsed.chunks[global_index], "conversation_id", None)
+                    if global_index < len(parsed.chunks) else None
+                )
+                if cid:
+                    self._conv_with_stored_facts.add(cid)
             facts_extracted += len(extracted)
 
             if is_singleton:
@@ -841,9 +858,17 @@ class ImportEngine:
                 if cid not in self._recorded_conversations
                 and cid not in imported_convs
                 and all(ix in self._processed_chunk_indices for ix in indices)
-                # #436 review: never record a conversation any of whose chunks
-                # failed extraction — keep it re-importable.
-                and not any(ix in self._failed_chunk_indices for ix in indices)
+                # #466: stored-implies-recorded. Record when the conversation
+                # produced stored facts OR had no failed chunk. Withhold ONLY
+                # when it stored NOTHING and a chunk failed — that lone case is
+                # a genuine transient failure worth retrying on re-import
+                # (#436-review Finding-2). The old rule ("exclude if ANY chunk
+                # failed") withheld conversations that DID store facts via a
+                # surviving sibling → re-import re-extracted them → dups.
+                and (
+                    cid in self._conv_with_stored_facts
+                    or not any(ix in self._failed_chunk_indices for ix in indices)
+                )
             ]
             if newly_complete:
                 record_imported_conversations(source, newly_complete)

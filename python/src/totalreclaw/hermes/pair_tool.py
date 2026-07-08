@@ -27,10 +27,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from . import consent_tokens
+
 if TYPE_CHECKING:
     from .state import PluginState
 
 logger = logging.getLogger(__name__)
+
+#: Subject key for the pair-replace consent token. One account per install, so
+#: a constant subject is sufficient (unlike the disclosure token, keyed by the
+#: import source).
+_PAIR_REPLACE_SUBJECT = "pair"
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +107,19 @@ PAIR_SCHEMA: Dict[str, Any] = {
                     "tool refuses to start a fresh pair over existing "
                     "credentials (it would orphan the current vault) unless "
                     "the user explicitly confirmed they want to REPLACE "
-                    "their account. Never set this without that explicit "
-                    "user confirmation."
+                    "their account. Must be accompanied by the replace_token "
+                    "from the already_configured response — confirmation "
+                    "without the token is rejected, so you cannot self-assert "
+                    "replacement. Never set this without explicit user "
+                    "confirmation."
+                ),
+            },
+            "replace_token": {
+                "type": "string",
+                "description": (
+                    "One-time token from the already_configured response. "
+                    "Proves the tool's replace warning was surfaced this flow; "
+                    "replace_confirmed without it is rejected."
                 ),
             },
         },
@@ -449,21 +467,37 @@ async def pair(args: dict, state: "PluginState", **kwargs) -> str:
     # already-configured install mints a NEW phrase / Smart Account and
     # silently orphans the existing vault. Refuse unless the user explicitly
     # chose replacement. Message-level guard only — no crypto-path changes.
-    if state.is_configured() and not bool(args.get("replace_confirmed", False)):
-        return json.dumps({
-            "already_configured": True,
-            "message": (
-                "This install is already paired to a TotalReclaw account — "
-                "its credentials are on disk and the vault is reachable. "
-                "Starting a new pair flow would create a DIFFERENT account "
-                "and orphan the existing vault's memories. Tell the user "
-                "their account is already set up. Only if they explicitly "
-                "say they want to REPLACE it with a new/different account, "
-                "call again with replace_confirmed=true. (Restoring this "
-                "same account on another device happens on that device, "
-                "not here.)"
-            ),
-        })
+    #
+    # #466 Finding-2: rc7 QA showed the agent self-asserting replace_confirmed
+    # on an explicit "generate a new phrase" request WITHOUT ever surfacing the
+    # replace warning to the user. Apply the disclosure-token pattern — the
+    # already_configured response mints a one-time replace_token (hashed at
+    # rest, 1h TTL) and replacement now requires BOTH replace_confirmed=true
+    # AND that token, so the agent cannot pre-confirm a replacement it never
+    # showed the user.
+    if state.is_configured():
+        replace_ok = bool(args.get("replace_confirmed", False)) and consent_tokens.redeem(
+            "pair-replace", _PAIR_REPLACE_SUBJECT, args.get("replace_token")
+        )
+        if not replace_ok:
+            token = consent_tokens.mint("pair-replace", _PAIR_REPLACE_SUBJECT)
+            return json.dumps({
+                "already_configured": True,
+                "replace_token": token,
+                "message": (
+                    "This install is already paired to a TotalReclaw account — "
+                    "its credentials are on disk and the vault is reachable. "
+                    "Starting a new pair flow would create a DIFFERENT account "
+                    "and orphan the existing vault's memories. Tell the user "
+                    "their account is already set up. Only if they explicitly "
+                    "say they want to REPLACE it with a new/different account, "
+                    "call again with replace_confirmed=true AND "
+                    f"replace_token=\"{token}\". Confirmation without the token "
+                    "is rejected — you cannot pre-confirm replacement on the "
+                    "user's behalf. (Restoring this same account on another "
+                    "device happens on that device, not here.)"
+                ),
+            })
 
     raw_mode = args.get("mode")
     if raw_mode in ("generate", "import", "either"):

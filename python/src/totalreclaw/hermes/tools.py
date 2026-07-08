@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import atexit
-import hashlib
 import json
 import logging
 import os
 import uuid
+
+from . import consent_tokens
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
@@ -953,115 +954,34 @@ def _prior_disclosure_consent(source: str, resume_id: Optional[str] = None) -> b
     return False
 
 
-# Disclosure tokens expire 1h after mint — a stale token can't be redeemed.
-_DISCLOSURE_TOKEN_TTL_S = 3600
+# Disclosure tokens are one-time, hash-at-rest consent tokens (#437). The
+# generic mint/redeem now live in ``hermes.consent_tokens`` (shared with the
+# pair-replace guard, #466); these thin wrappers pin the ``"disclosure"`` kind
+# and the token subject = the import ``source``.
+_DISCLOSURE_TOKEN_TTL_S = consent_tokens.TOKEN_TTL_S
 
 
 def _disclosure_token_hash(token: str) -> str:
     """SHA-256 (first 16 hex chars) of a disclosure token — the at-rest key."""
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
-
-
-def _disclosure_token_expired(minted_at) -> bool:
-    """True when a token's ``minted_at`` ISO timestamp is older than the TTL
-    (or is missing / unparseable — treat as expired, fail safe)."""
-    if not isinstance(minted_at, str) or not minted_at:
-        return True
-    try:
-        minted = datetime.fromisoformat(minted_at.replace("Z", "+00:00"))
-    except ValueError:
-        return True
-    age = (datetime.now(timezone.utc) - minted).total_seconds()
-    return age > _DISCLOSURE_TOKEN_TTL_S
-
-
-def _cleanup_expired_disclosure_tokens(state_dir) -> None:
-    """Best-effort removal of expired ``disclosure-*.pending`` sidecars."""
-    try:
-        for p in state_dir.glob("disclosure-*.pending"):
-            try:
-                data = json.loads(p.read_text())
-            except (OSError, ValueError):
-                # Unreadable sidecar — remove it opportunistically.
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
-                continue
-            if _disclosure_token_expired(data.get("minted_at")):
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
-    except OSError:
-        pass
+    return consent_tokens.token_hash(token)
 
 
 def _mint_disclosure_token(source: str) -> str:
     """Mint a one-time token proving the disclosure response was received.
 
-    rc13 (#421): rc12 QA showed the agent composing its OWN consent prompt
-    and self-setting disclosure_confirmed=true — the tool's provider-naming
-    disclosure never reached the user. The token forces at least one
-    round-trip through the disclosure_required response before consent can
-    be asserted.
-
-    #437 (rc5): the token is stored HASHED at rest — the sidecar is named
-    ``disclosure-{sha256(token)[:16]}.pending`` and holds only ``{source,
-    minted_at}``, never the raw token. Previously the filename WAS the token,
-    so a shell-capable agent could read it off disk and self-assert consent
-    without ever relaying the disclosure (observed: an rc4 QA attempt gained
-    consent with a token never redeemed through the flow). Hashing raises the
-    bar to "the token only appears in the tool RESPONSE"; it cannot stop a
-    same-trust-domain agent that logs its own tool responses — the enforcement
-    goal is narrowly "the disclosure response was received THIS flow". Tokens
-    also carry a 1h TTL. Persisted as a sidecar (NOT ``*.json`` — the import
-    state helpers glob that pattern) so it survives a gateway restart
-    mid-consent.
+    rc13 (#421): rc12 QA showed the agent composing its OWN consent prompt and
+    self-setting disclosure_confirmed=true — the tool's provider-naming
+    disclosure never reached the user. The token forces at least one round-trip
+    through the disclosure_required response before consent can be asserted.
+    #437 (rc5): stored HASHED at rest (see :mod:`hermes.consent_tokens`).
     """
-    token = uuid.uuid4().hex[:16]
-    try:
-        from totalreclaw import import_state as ist
-        ist.IMPORT_STATE_DIR.mkdir(parents=True, exist_ok=True)
-        _cleanup_expired_disclosure_tokens(ist.IMPORT_STATE_DIR)
-        (ist.IMPORT_STATE_DIR / f"disclosure-{_disclosure_token_hash(token)}.pending").write_text(
-            json.dumps({
-                "source": source,
-                "minted_at": datetime.now(timezone.utc).isoformat(),
-            })
-        )
-    except OSError:
-        pass  # worst case: token can't be redeemed → disclosure re-shown
-    return token
+    return consent_tokens.mint("disclosure", source)
 
 
 def _redeem_disclosure_token(source: str, token) -> bool:
-    """Consume a pending disclosure token for *source*. One-time use.
-
-    The presented token is HASHED to locate its sidecar (#437) — the raw
-    token is never written to disk. An expired (>1h) token is not redeemable
-    and its sidecar is cleaned up.
-    """
-    if not token or not isinstance(token, str) or not token.isalnum():
-        return False
-    try:
-        from totalreclaw import import_state as ist
-        path = ist.IMPORT_STATE_DIR / f"disclosure-{_disclosure_token_hash(token)}.pending"
-        if not path.exists():
-            return False
-        data = json.loads(path.read_text())
-        if data.get("source") != source:
-            return False
-        if _disclosure_token_expired(data.get("minted_at")):
-            try:
-                path.unlink()
-            except OSError:
-                pass
-            return False
-        path.unlink()
-        return True
-    except (OSError, ValueError):
-        return False
+    """Consume a pending disclosure token for *source*. One-time use; hashed
+    lookup, 1h TTL (see :mod:`hermes.consent_tokens`)."""
+    return consent_tokens.redeem("disclosure", source, token)
 
 
 def _disclosure_consent_ok(source: str, args: dict, resume_id: Optional[str] = None) -> bool:
