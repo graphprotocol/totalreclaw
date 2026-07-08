@@ -32,7 +32,7 @@ import math
 import pytest
 
 from totalreclaw.import_engine import ImportEngine
-from totalreclaw.import_adapters.types import ConversationChunk, AdapterParseResult
+from totalreclaw.imports.adapters.types import ConversationChunk, AdapterParseResult
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

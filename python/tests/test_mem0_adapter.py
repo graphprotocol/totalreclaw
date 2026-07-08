@@ -25,7 +25,7 @@ import pytest
 
 class TestMem0ParseShapes:
     def test_api_response_format_results_key(self) -> None:
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         content = json.dumps({
             "results": [
@@ -38,13 +38,14 @@ class TestMem0ParseShapes:
         assert result.facts[0].text == "User prefers dark mode"
         assert result.facts[0].type == "preference"
         assert result.facts[0].source == "mem0"
-        assert result.facts[1].type == "fact"
+        # v0 "fact" category coerces to v1 "claim" at the adapter boundary.
+        assert result.facts[1].type == "claim"
         assert result.facts[1].source_id == "mem-2"
         # Pre-structured source → no chunks.
         assert len(result.chunks) == 0
 
     def test_export_file_format_memories_key(self) -> None:
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         content = json.dumps({
             "export_date": "2026-03-10",
@@ -55,7 +56,7 @@ class TestMem0ParseShapes:
         assert result.facts[0].text == "User likes TypeScript"
 
     def test_bare_array_format(self) -> None:
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         content = json.dumps([
             {"id": "mem-1", "memory": "User prefers Python"},
@@ -73,7 +74,7 @@ class TestMem0ParseShapes:
 
 class TestMem0Validation:
     def test_skips_empty_and_short_memories(self) -> None:
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         content = json.dumps({
             "results": [
@@ -89,7 +90,7 @@ class TestMem0Validation:
         assert any("2 memories had invalid" in w for w in result.warnings)
 
     def test_invalid_json_returns_error_not_raises(self) -> None:
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         result = Mem0Adapter().parse(content="not json {{{")
         assert len(result.facts) == 0
@@ -97,7 +98,7 @@ class TestMem0Validation:
         assert "Failed to parse Mem0 JSON" in result.errors[0]
 
     def test_missing_content_returns_error(self) -> None:
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         result = Mem0Adapter().parse()
         assert len(result.facts) == 0
@@ -105,7 +106,7 @@ class TestMem0Validation:
         assert "content" in result.errors[0].lower()
 
     def test_unrecognized_shape_returns_error(self) -> None:
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         content = json.dumps({"some_key": "some_value"})
         result = Mem0Adapter().parse(content=content)
@@ -120,7 +121,7 @@ class TestMem0Validation:
 
 class TestMem0CategoryMapping:
     def test_category_mapping_matches_ts(self) -> None:
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         content = json.dumps({
             "results": [
@@ -134,19 +135,21 @@ class TestMem0CategoryMapping:
             ]
         })
         result = Mem0Adapter().parse(content=content)
-        assert result.facts[0].type == "preference"   # like
-        assert result.facts[1].type == "preference"   # dislike
-        assert result.facts[2].type == "fact"         # biographical
-        assert result.facts[3].type == "goal"         # objective
-        assert result.facts[4].type == "episodic"     # event
-        assert result.facts[5].type == "decision"     # decision
-        assert result.facts[6].type == "fact"         # unknown → default
+        # Adapters emit the v1 taxonomy at the boundary: mem0 category → v0
+        # token → v1 via ``normalize_to_v1_type``.
+        assert result.facts[0].type == "preference"   # like → preference
+        assert result.facts[1].type == "preference"   # dislike → preference
+        assert result.facts[2].type == "claim"        # biographical → fact → claim
+        assert result.facts[3].type == "commitment"   # objective → goal → commitment
+        assert result.facts[4].type == "episode"      # event → episodic → episode
+        assert result.facts[5].type == "claim"        # decision → claim
+        assert result.facts[6].type == "claim"        # unknown → default fact → claim
 
     def test_metadata_category_fallback(self) -> None:
         """Older Mem0 exports use ``metadata.category`` (singular) instead of
         the top-level ``categories`` array; the adapter must honor both.
         """
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         content = json.dumps({
             "results": [
@@ -171,14 +174,14 @@ class TestMem0FieldDefaults:
         """Mem0 has no importance field → adapter must default to 6 so the
         fact clears the ImportEngine's importance >= 6 filter.
         """
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         content = json.dumps({"results": [{"id": "m1", "memory": "User prefers dark mode everywhere"}]})
         result = Mem0Adapter().parse(content=content)
         assert result.facts[0].importance == 6
 
     def test_source_timestamp_preserved(self) -> None:
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         content = json.dumps({
             "results": [{
@@ -191,7 +194,7 @@ class TestMem0FieldDefaults:
         assert result.facts[0].source_timestamp == "2026-03-01T10:00:00Z"
 
     def test_tags_from_categories(self) -> None:
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         content = json.dumps({
             "results": [
@@ -210,7 +213,7 @@ class TestMem0FieldDefaults:
 
 class TestMem0FileInput:
     def test_file_path_reads_disk(self) -> None:
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         content = json.dumps({"memories": [{"id": "m1", "memory": "User likes mountain hiking"}]})
         with tempfile.NamedTemporaryFile(
@@ -226,7 +229,7 @@ class TestMem0FileInput:
             os.unlink(tmp_path)
 
     def test_missing_file_returns_error(self) -> None:
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         result = Mem0Adapter().parse(file_path="/nonexistent/path/to/mem0.json")
         assert len(result.facts) == 0
@@ -241,7 +244,7 @@ class TestMem0FileInput:
 class TestMem0RegistryWiring:
     def test_get_adapter_mem0_returns_mem0_adapter(self) -> None:
         from totalreclaw.import_adapters import get_adapter
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         adapter = get_adapter("mem0")
         assert isinstance(adapter, Mem0Adapter)

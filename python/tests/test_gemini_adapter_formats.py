@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 
-from totalreclaw.import_adapters.gemini_adapter import GeminiAdapter
+from totalreclaw.imports.adapters.gemini_adapter import GeminiAdapter
 
 
 # ---------------------------------------------------------------------------

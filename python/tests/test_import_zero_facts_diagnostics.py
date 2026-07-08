@@ -38,7 +38,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totalreclaw.import_adapters.types import AdapterParseResult, ConversationChunk
+from totalreclaw.imports.adapters.types import AdapterParseResult, ConversationChunk
 from totalreclaw.import_engine import ImportEngine
 
 

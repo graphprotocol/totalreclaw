@@ -26,7 +26,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from totalreclaw.import_engine import ImportEngine
-from totalreclaw.import_adapters.types import ConversationChunk
+from totalreclaw.imports.adapters.types import ConversationChunk
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -258,7 +258,7 @@ def test_multi_topic_window_multiple_crystals(monkeypatch):
 
     # Inject chunks directly via a mock adapter
     with patch("totalreclaw.import_engine.get_adapter") as mock_adapter:
-        from totalreclaw.import_adapters.types import AdapterParseResult
+        from totalreclaw.imports.adapters.types import AdapterParseResult
         mock_result = AdapterParseResult(
             facts=[], chunks=chunks,
             total_messages=8,
@@ -311,7 +311,7 @@ def test_singleton_no_crystal_no_session_id(monkeypatch):
     ]
 
     with patch("totalreclaw.import_engine.get_adapter") as mock_adapter:
-        from totalreclaw.import_adapters.types import AdapterParseResult
+        from totalreclaw.imports.adapters.types import AdapterParseResult
         mock_result = AdapterParseResult(
             facts=[], chunks=chunks,
             total_messages=2,
@@ -386,7 +386,7 @@ def test_crystal_title_from_llm(monkeypatch):
     ]
 
     with patch("totalreclaw.import_engine.get_adapter") as mock_adapter:
-        from totalreclaw.import_adapters.types import AdapterParseResult
+        from totalreclaw.imports.adapters.types import AdapterParseResult
         mock_result = AdapterParseResult(
             facts=[], chunks=chunks,
             total_messages=6,
@@ -455,7 +455,7 @@ def test_crystal_title_fallback_from_highest_importance_fact(monkeypatch):
     ]
 
     with patch("totalreclaw.import_engine.get_adapter") as mock_adapter:
-        from totalreclaw.import_adapters.types import AdapterParseResult
+        from totalreclaw.imports.adapters.types import AdapterParseResult
         mock_result = AdapterParseResult(
             facts=[], chunks=chunks,
             total_messages=4,
@@ -516,7 +516,7 @@ def test_crystal_title_fallback_from_top_fact_on_bad_llm(monkeypatch):
     ]
 
     with patch("totalreclaw.import_engine.get_adapter") as mock_adapter:
-        from totalreclaw.import_adapters.types import AdapterParseResult
+        from totalreclaw.imports.adapters.types import AdapterParseResult
         mock_result = AdapterParseResult(
             facts=[], chunks=chunks,
             total_messages=4,
@@ -633,7 +633,7 @@ def test_session_straddling_batch_boundary_one_id_one_crystal(monkeypatch):
     parsed_result = None
 
     def _build_parsed():
-        from totalreclaw.import_adapters.types import AdapterParseResult
+        from totalreclaw.imports.adapters.types import AdapterParseResult
         return AdapterParseResult(
             facts=[], chunks=chunks, total_messages=6, warnings=[], errors=[],
         )

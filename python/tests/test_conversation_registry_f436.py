@@ -21,7 +21,7 @@ import pytest
 import totalreclaw.import_state as ist
 import totalreclaw.import_engine as ie
 from totalreclaw.import_engine import ImportEngine
-from totalreclaw.import_adapters.types import (
+from totalreclaw.imports.adapters.types import (
     AdapterParseResult,
     ConversationChunk,
 )

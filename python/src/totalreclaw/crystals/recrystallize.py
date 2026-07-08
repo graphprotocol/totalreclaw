@@ -593,7 +593,7 @@ async def _build_crystal_text(
     summary: Optional[str] = None
     if llm_completion is not None:
         try:
-            from totalreclaw.import_engine import _extract_json_object
+            from totalreclaw.imports.engine import _extract_json_object
 
             prompt = _recrystallize_crystal_prompt(facts_for_title)
             raw = await llm_completion(prompt)
@@ -607,7 +607,7 @@ async def _build_crystal_text(
             logger.debug("recrystallize: Crystal LLM call failed: %s", exc)
 
     if not title:
-        from totalreclaw.import_engine import _derive_title_from_facts
+        from totalreclaw.imports.engine import _derive_title_from_facts
 
         title = _derive_title_from_facts(facts_for_title)
 
@@ -1094,7 +1094,7 @@ def _first_embedding_dim(embeddings: list[list[float]]) -> int:
 def _default_session_id() -> str:
     """Mint a fresh session id (UUIDv7 in production; uuid4 fallback here)."""
     try:  # reuse the import engine's UUIDv7 minter when available
-        from totalreclaw.import_engine import _uuid7  # type: ignore
+        from totalreclaw.imports.engine import _uuid7  # type: ignore
 
         return _uuid7()
     except Exception:

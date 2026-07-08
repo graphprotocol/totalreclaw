@@ -17,7 +17,11 @@ ImportSource = Literal[
 class NormalizedFact:
     """Normalized fact -- the common format all adapters produce."""
     text: str
-    type: Literal['fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary']
+    # v1 memory taxonomy — MUST match ``totalreclaw.memory_types.VALID_MEMORY_TYPES``.
+    # Adapters coerce any legacy v0 token to v1 at the boundary
+    # (``BaseImportAdapter.validate_fact`` via ``normalize_to_v1_type``) so this
+    # public surface never leaks v0 vocabulary to ``client.remember``.
+    type: Literal['claim', 'preference', 'directive', 'commitment', 'episode', 'summary']
     importance: int  # 1-10
     source: ImportSource
     source_id: Optional[str] = None

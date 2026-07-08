@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from totalreclaw.import_adapters.chatgpt_adapter import ChatGPTAdapter
+from totalreclaw.imports.adapters.chatgpt_adapter import ChatGPTAdapter
 from totalreclaw.import_engine import ImportEngine
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"

@@ -61,32 +61,32 @@ class TestFileSizeCap:
         assert len(result.chunks) == 0
 
     def test_claude_adapter_rejects_oversized_file(self, monkeypatch) -> None:
-        from totalreclaw.import_adapters.claude_adapter import ClaudeAdapter
+        from totalreclaw.imports.adapters.claude_adapter import ClaudeAdapter
         monkeypatch.setattr(os, 'stat', _patched_stat(501 * 1024 * 1024))
         result = ClaudeAdapter().parse(file_path=_fake_path('claude.txt'))
         self._assert_size_error(result, 'Claude')
         assert '501' in result.errors[0]
 
     def test_chatgpt_adapter_rejects_oversized_file(self, monkeypatch) -> None:
-        from totalreclaw.import_adapters.chatgpt_adapter import ChatGPTAdapter
+        from totalreclaw.imports.adapters.chatgpt_adapter import ChatGPTAdapter
         monkeypatch.setattr(os, 'stat', _patched_stat(600 * 1024 * 1024))
         result = ChatGPTAdapter().parse(file_path=_fake_path('chatgpt.json'))
         self._assert_size_error(result, 'ChatGPT')
 
     def test_gemini_adapter_rejects_oversized_file(self, monkeypatch) -> None:
-        from totalreclaw.import_adapters.gemini_adapter import GeminiAdapter
+        from totalreclaw.imports.adapters.gemini_adapter import GeminiAdapter
         monkeypatch.setattr(os, 'stat', _patched_stat(510 * 1024 * 1024))
         result = GeminiAdapter().parse(file_path=_fake_path('gemini.html'))
         self._assert_size_error(result, 'Gemini')
 
     def test_mem0_adapter_rejects_oversized_file(self, monkeypatch) -> None:
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
         monkeypatch.setattr(os, 'stat', _patched_stat(520 * 1024 * 1024))
         result = Mem0Adapter().parse(file_path=_fake_path('mem0.json'))
         self._assert_size_error(result, 'Mem0')
 
     def test_error_message_names_actual_size(self, monkeypatch) -> None:
-        from totalreclaw.import_adapters.claude_adapter import ClaudeAdapter
+        from totalreclaw.imports.adapters.claude_adapter import ClaudeAdapter
         monkeypatch.setattr(os, 'stat', _patched_stat(501 * 1024 * 1024))
         result = ClaudeAdapter().parse(file_path=_fake_path('claude-size.txt'))
         assert '501' in result.errors[0], (
@@ -101,7 +101,7 @@ class TestFileSizeCap:
 class TestRamPreflight:
     def test_claude_adapter_rejects_on_low_ram(self, monkeypatch) -> None:
         import psutil
-        from totalreclaw.import_adapters.claude_adapter import ClaudeAdapter
+        from totalreclaw.imports.adapters.claude_adapter import ClaudeAdapter
 
         # 10MB file, only 1MB free (< 2x = 20MB needed)
         monkeypatch.setattr(os, 'stat', _patched_stat(10 * 1024 * 1024))
@@ -116,7 +116,7 @@ class TestRamPreflight:
 
     def test_ram_error_names_available_and_needed(self, monkeypatch) -> None:
         import psutil
-        from totalreclaw.import_adapters.chatgpt_adapter import ChatGPTAdapter
+        from totalreclaw.imports.adapters.chatgpt_adapter import ChatGPTAdapter
 
         # 100MB file, 50MB free → needs 200MB
         monkeypatch.setattr(os, 'stat', _patched_stat(100 * 1024 * 1024))
@@ -136,7 +136,7 @@ class TestRamPreflight:
 
 class TestPreflightPassthrough:
     def test_claude_normal_file_passes_preflight(self) -> None:
-        from totalreclaw.import_adapters.claude_adapter import ClaudeAdapter
+        from totalreclaw.imports.adapters.claude_adapter import ClaudeAdapter
 
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
             f.write('User prefers dark mode\nUser works remotely\n')
@@ -151,7 +151,7 @@ class TestPreflightPassthrough:
 
     def test_mem0_normal_file_passes_preflight(self) -> None:
         import json
-        from totalreclaw.import_adapters.mem0_adapter import Mem0Adapter
+        from totalreclaw.imports.adapters.mem0_adapter import Mem0Adapter
 
         data = {'results': [{'id': '1', 'memory': 'User prefers TypeScript', 'categories': ['preference']}]}
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:

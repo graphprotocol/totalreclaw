@@ -25,7 +25,7 @@ from unittest.mock import patch
 import pytest
 
 from totalreclaw.import_engine import ImportEngine
-from totalreclaw.import_adapters.types import (
+from totalreclaw.imports.adapters.types import (
     AdapterParseResult,
     ConversationChunk,
     ParsedTurn,

@@ -110,7 +110,7 @@ async def test_import_batch_reuses_engine_across_calls(monkeypatch):
 
     # Stub process_batch so we don't trip on missing adapters / files / LLMs.
     async def fake_process_batch(self, **kwargs):
-        from totalreclaw.import_adapters.types import BatchImportResult
+        from totalreclaw.imports.adapters.types import BatchImportResult
         return BatchImportResult(
             success=True,
             batch_offset=kwargs.get("offset", 0),
@@ -164,7 +164,7 @@ async def test_import_batch_content_only_creates_fresh_engine(monkeypatch):
     monkeypatch.setattr(tools, "write_import_state", lambda *a, **k: None, raising=False)
 
     async def fake_process_batch(self, **kwargs):
-        from totalreclaw.import_adapters.types import BatchImportResult
+        from totalreclaw.imports.adapters.types import BatchImportResult
         return BatchImportResult(
             success=True, batch_offset=0, batch_size=25,
             chunks_processed=0, total_chunks=0, facts_extracted=0,

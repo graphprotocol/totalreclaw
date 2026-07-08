@@ -29,9 +29,11 @@ from .base_adapter import BaseImportAdapter
 from .types import AdapterParseResult
 
 
-# Map Mem0 category strings to TotalReclaw v0 fact types (the BaseImportAdapter
-# v0 → v1 coercion happens downstream in client.remember). Parity with the TS
-# ``CATEGORY_MAP`` constant in mem0-adapter.ts.
+# Map Mem0 category strings to intermediate v0 fact-type tokens. These are
+# coerced to the v1 taxonomy at the adapter boundary
+# (``BaseImportAdapter.validate_fact`` via ``normalize_to_v1_type``), so
+# ``NormalizedFact.type`` is always v1 by the time it leaves the adapter.
+# Parity with the TS ``CATEGORY_MAP`` constant in mem0-adapter.ts.
 CATEGORY_MAP: Dict[str, str] = {
     'preference': 'preference',
     'preferences': 'preference',

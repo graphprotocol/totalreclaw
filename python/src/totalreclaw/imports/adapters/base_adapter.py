@@ -13,6 +13,7 @@ Ported from skill/plugin/import-adapters/base-adapter.ts
 from abc import ABC, abstractmethod
 from typing import Optional, Callable, List
 
+from ...memory_types import normalize_to_v1_type
 from .types import AdapterParseResult, NormalizedFact
 
 
@@ -49,11 +50,14 @@ class BaseImportAdapter(ABC):
         # Truncate to 512 chars
         text = text[:512]
 
-        # Normalize type
-        valid_types = ('fact', 'preference', 'decision', 'episodic', 'goal', 'context', 'summary')
-        fact_type = fact.get('type', 'fact')
-        if fact_type not in valid_types:
-            fact_type = 'fact'
+        # Normalize type to the v1 taxonomy at the adapter boundary. Adapters
+        # (and their source exports) may present legacy v0 tokens like "fact"
+        # or "episodic"; ``normalize_to_v1_type`` maps those to v1
+        # ("claim"/"episode"/…), passing v1 tokens through and falling back to
+        # "claim" for anything unrecognized. This keeps the public
+        # ``NormalizedFact.type`` in the same vocabulary ``client.remember``
+        # uses, rather than leaking v0 tokens across the import boundary.
+        fact_type = normalize_to_v1_type(fact.get('type', 'claim'))
 
         # Normalize importance to 1-10
         importance = fact.get('importance', 5)
