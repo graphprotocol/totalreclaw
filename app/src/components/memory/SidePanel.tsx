@@ -1,6 +1,11 @@
 import { useEffect } from "react";
 import { clsx } from "clsx";
-import { importSourceOf, sourceBreakdown, type SessionGroup } from "../../lib/vault/timeline";
+import {
+  agentBreakdown,
+  importSourceOf,
+  sourceBreakdown,
+  type SessionGroup,
+} from "../../lib/vault/timeline";
 import type { VaultItem } from "../../lib/types";
 import { ClaimCard } from "../ClaimCard";
 import { EntityChip } from "../EntityChip";
@@ -168,6 +173,16 @@ export function SidePanel({ view, onClose, onOpenSession, onOpenEntity, groups, 
                 .map((s) => `${s.n} ${s.label}`)
                 .join(" · ")}
             </p>
+            {/* #317 — agent-instance provenance. Only rendered when a member
+                carries an agent_name; otherwise this block is absent and the
+                panel looks exactly as before. */}
+            {agentBreakdown(group).length > 0 && (
+              <p className="mt-1 text-xs text-ink-muted">
+                {agentBreakdown(group)
+                  .map((a) => `${a.n} via ${a.label}`)
+                  .join(" · ")}
+              </p>
+            )}
             {crystalMeta && (
               <>
                 <CrystalList title="Key outcomes" items={crystalMeta.key_outcomes ?? []} />

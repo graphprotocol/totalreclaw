@@ -60,6 +60,11 @@ export interface MemoryMetadataV1 {
   /** Provider when this memory came from an import (e.g. "Gemini", "ChatGPT").
    *  Written by the import engine (per-fact typed metadata, #356). */
   import_source?: string;
+  /** Agent-instance provenance (#317). Free text, ≤64 chars at write, untrusted
+   *  display string. On the encrypted wire it rides as a TOP-LEVEL blob key
+   *  (see MemoryClaimV1.agent_name); the Python recall path also re-nests it
+   *  here. Read it via `agentNameOf()` which checks both locations. */
+  agent_name?: string;
 }
 
 /** Inner JSON blob stored encrypted in the vault (v1.1 schema — mirrors
@@ -81,6 +86,10 @@ export interface MemoryClaimV1 {
   pin_status?: PinStatus;
   superseded_by?: string;
   metadata?: MemoryMetadataV1;
+  /** Agent-instance provenance (#317). Canonical wire location: Hermes writes
+   *  this as a top-level blob key (`canonical["agent_name"]`). Untrusted free
+   *  text (≤64 chars at write); render via normal JSX auto-escaping only. */
+  agent_name?: string;
   /** legacy/extra fields tolerated for back-compat */
   tags?: string[];
   supersedes?: string[];

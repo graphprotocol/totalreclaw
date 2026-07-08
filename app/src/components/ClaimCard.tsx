@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import type { VaultItem, MemoryTypeV1 } from "../lib/types";
 import { relativeDate } from "../lib/format";
+import { agentProvenanceLabel } from "../lib/provenance";
 
 const TYPE_TONE: Record<string, string> = {
   claim: "bg-type-claim text-type-claim-ink",
@@ -34,6 +35,9 @@ export function ClaimCard({ item, style }: { item: VaultItem; style?: CSSPropert
   const { claim } = item;
   const type = (claim.type as MemoryTypeV1) ?? "claim";
   const tone = TYPE_TONE[type] ?? TYPE_TONE.claim;
+  // #317 — agent-instance provenance ("John (Hermes)"). Absent → undefined,
+  // so the source/scope/date line below renders unchanged for most memories.
+  const provenance = agentProvenanceLabel(claim);
 
   return (
     <article
@@ -62,6 +66,11 @@ export function ClaimCard({ item, style }: { item: VaultItem; style?: CSSPropert
           {claim.scope && claim.scope !== "unspecified" ? ` · ${claim.scope}` : ""} ·{" "}
           {relativeDate(item.createdAt)}
         </span>
+        {provenance && (
+          <span className="text-xs text-ink-muted" title="Which agent instance recorded this">
+            · via {provenance}
+          </span>
+        )}
       </div>
       {claim.reasoning && (
         <p className="mt-2 border-l-2 border-hairline pl-3 text-sm text-ink-muted">

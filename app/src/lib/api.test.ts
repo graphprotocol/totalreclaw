@@ -200,6 +200,9 @@ describe("decryptFacts → metadata round-trip → buildTimeline", () => {
     id: "crystal-1",
     type: "summary",
     text: "Shipped the entity-trapdoor read side and closed #370.",
+    // #317 — agent_name rides the encrypted blob as a TOP-LEVEL key (Hermes
+    // write path). normalizeClaim spreads unmodeled keys, so it must survive.
+    agent_name: "John",
     metadata: {
       subtype: "session_crystal",
       session_id: SESSION_ID,
@@ -221,6 +224,8 @@ describe("decryptFacts → metadata round-trip → buildTimeline", () => {
     expect(meta?.topics_discussed).toEqual(["retrieval", "trapdoors"]);
     // clamp still ran on the sibling axes
     expect(items[0].claim.source).toBe("user");
+    // #317 — top-level agent_name survives decrypt + normalize (spread preserves it)
+    expect(items[0].claim.agent_name).toBe("John");
   });
 
   it("buckets the Crystal under s:<session_id> with .crystal set", () => {

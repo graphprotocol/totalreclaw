@@ -7,6 +7,7 @@
  * (sparse / pre-batching entries) fall back to day-grouping so nothing is lost.
  */
 import type { VaultItem } from "../types";
+import { agentProvenanceLabel } from "../provenance";
 
 const SESSION_CRYSTAL = "session_crystal";
 
@@ -125,6 +126,22 @@ export function sourceBreakdown(group: SessionGroup): { label: string; n: number
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1])
     .map(([src, n]) => ({ label: LABEL[src] ?? src, n }));
+}
+
+/** Count session members by agent-instance provenance (#317). Only members
+ *  that carry an `agent_name` are counted, so a session with no agent provenance
+ *  yields an empty list and the panel renders exactly as before. Labels are the
+ *  humanized "John (Hermes)" form. */
+export function agentBreakdown(group: SessionGroup): { label: string; n: number }[] {
+  const members = group.crystal ? [group.crystal, ...group.facts] : group.facts;
+  const counts = new Map<string, number>();
+  for (const m of members) {
+    const label = agentProvenanceLabel(m.claim);
+    if (label) counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, n]) => ({ label, n }));
 }
 
 /** 8-char session-hash (sha256-free quick id) for URL routing. Uses session_id
