@@ -97,6 +97,23 @@ jobs:
           console.log('RC version:', p.version);
           "
 
+      - name: Guard — refuse to republish an existing version
+        if: inputs.dry-run == false
+        # #456: an omitted `rc-number` silently defaulted to 1, republished
+        # an already-existing rc.1, and the "tolerate already published"
+        # catch in the Publish step below let the job conclude success. Fail
+        # BEFORE we ever attempt the publish so a stale/duplicate version is
+        # loud, not a silent no-op.
+        run: |
+          cd rust/totalreclaw-core/pkg
+          NAME=$(node -e "console.log(require('./package.json').name)")
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "ERROR: $NAME@$VERSION already published — refusing to republish (bump the version or rc-number)."
+            exit 1
+          fi
+          echo "OK: $NAME@$VERSION not yet published, proceeding"
+
       - name: Upgrade npm to latest (required for tokenless OIDC publish)
         if: inputs.dry-run == false
         # npm 10.x (Node 22) signs provenance with OIDC but still PUTs with a
@@ -177,6 +194,22 @@ jobs:
           console.log('RC version:', p.version);
           "
 
+      - name: Guard — refuse to republish an existing version
+        if: inputs.dry-run == false
+        # #456: an omitted `rc-number` silently defaulted to 1, republished
+        # an already-existing rc.1, and the job still concluded success.
+        # Fail BEFORE we ever attempt the publish so a stale/duplicate
+        # version is loud, not a silent no-op.
+        run: |
+          cd client
+          NAME=$(node -e "console.log(require('./package.json').name)")
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "ERROR: $NAME@$VERSION already published — refusing to republish (bump the version or rc-number)."
+            exit 1
+          fi
+          echo "OK: $NAME@$VERSION not yet published, proceeding"
+
       - name: Publish
         if: inputs.dry-run == false
         run: |
@@ -238,6 +271,22 @@ jobs:
           fs.writeFileSync('./package.json', JSON.stringify(p, null, 2) + '\n');
           console.log('RC version:', p.version);
           "
+
+      - name: Guard — refuse to republish an existing version
+        if: inputs.dry-run == false
+        # #456: an omitted `rc-number` silently defaulted to 1, republished
+        # an already-existing rc.1, and the job still concluded success.
+        # Fail BEFORE we ever attempt the publish so a stale/duplicate
+        # version is loud, not a silent no-op.
+        run: |
+          cd mcp
+          NAME=$(node -e "console.log(require('./package.json').name)")
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "ERROR: $NAME@$VERSION already published — refusing to republish (bump the version or rc-number)."
+            exit 1
+          fi
+          echo "OK: $NAME@$VERSION not yet published, proceeding"
 
       - name: Upgrade npm to latest (required for tokenless OIDC publish)
         if: inputs.dry-run == false
@@ -316,6 +365,23 @@ jobs:
           fs.writeFileSync('./package.json', JSON.stringify(p, null, 2) + '\n');
           console.log('RC version:', p.version);
           "
+
+      - name: Guard — refuse to republish an existing version
+        if: inputs.dry-run == false
+        # #456: an omitted `rc-number` silently defaulted to 1, republished
+        # an already-existing rc.1, and the "tolerate already published"
+        # catch in the Publish step below let the job conclude success. Fail
+        # BEFORE we ever attempt the publish so a stale/duplicate version is
+        # loud, not a silent no-op.
+        run: |
+          cd skill-nanoclaw
+          NAME=$(node -e "console.log(require('./package.json').name)")
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "ERROR: $NAME@$VERSION already published — refusing to republish (bump the version or rc-number)."
+            exit 1
+          fi
+          echo "OK: $NAME@$VERSION not yet published, proceeding"
 
       - name: Publish
         if: inputs.dry-run == false
@@ -455,6 +521,23 @@ jobs:
           cd skill/plugin
           node ../scripts/sync-version.mjs
           node ../scripts/check-version-drift.mjs
+
+      - name: Guard — refuse to republish an existing version
+        if: inputs.dry-run == false
+        # #456: an omitted `rc-number` silently defaulted to 1, republished
+        # an already-existing rc.1, and the "tolerate already published"
+        # catch in the Publish step below let the job conclude success. Fail
+        # BEFORE we ever attempt the publish so a stale/duplicate version is
+        # loud, not a silent no-op.
+        run: |
+          cd skill/plugin
+          NAME=$(node -e "console.log(require('./package.json').name)")
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "ERROR: $NAME@$VERSION already published — refusing to republish (bump the version or rc-number)."
+            exit 1
+          fi
+          echo "OK: $NAME@$VERSION not yet published, proceeding"
 
       - name: Upgrade npm to latest (required for tokenless OIDC publish)
         if: inputs.dry-run == false
