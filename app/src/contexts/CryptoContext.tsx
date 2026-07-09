@@ -30,6 +30,7 @@ import { isPasskeyPrfAvailable } from "../lib/auth/prf-support";
 import { enrolPasskey, getPrfSecret, PrfUnsupportedError } from "../lib/auth/passkey";
 import { wrapKey, unwrapKey, deriveMasterWrapSecret } from "../lib/auth/wrap";
 import { saveVaultRecord, loadVaultRecord, hasAnyVault, clearVault } from "../lib/vault/idb";
+import { saveSessionKeys, loadSessionKeys, clearSessionKeys } from "../lib/vault/session-storage";
 import { registerSession } from "../lib/api";
 
 const SERVER_URL =
@@ -110,9 +111,28 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
   const credIdRef = useRef<Uint8Array | null>(null);
   const queryClient = useQueryClient();
 
+  const enterUnlocked = useCallback(
+    (sk: SessionKeys, sa: string, cid: number) => {
+      setKeysState(sk);
+      setSmartAccount(sa);
+      setChainId(cid);
+      setStatus("unlocked");
+      saveSessionKeys(sk);
+    },
+    [],
+  );
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // Stage A (#440): a same-tab refresh restores straight from
+      // sessionStorage — no passkey re-prompt. Falls through to the normal
+      // locked/no-vault check when absent or malformed.
+      const restored = loadSessionKeys();
+      if (restored) {
+        if (!cancelled) enterUnlocked(restored, restored.walletAddress, restored.chainId);
+        return;
+      }
       const present = await hasAnyVault();
       if (cancelled) return;
       setStatus(present ? "locked" : "no-vault");
@@ -120,17 +140,7 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  const enterUnlocked = useCallback(
-    (sk: SessionKeys, sa: string, cid: number) => {
-      setKeysState(sk);
-      setSmartAccount(sa);
-      setChainId(cid);
-      setStatus("unlocked");
-    },
-    [],
-  );
+  }, [enterUnlocked]);
 
   const generatePhrase = useCallback(() => generateRecoveryPhrase(), []);
 
@@ -253,6 +263,7 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
     credIdRef.current?.fill(0);
     credIdRef.current = null;
     setKeysState(null);
+    clearSessionKeys();
     // Drop decrypted plaintext (VaultItem[]) from the react-query cache.
     queryClient.clear();
     setStatus("locked");
