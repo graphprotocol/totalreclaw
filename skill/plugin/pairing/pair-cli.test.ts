@@ -99,6 +99,43 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * Deterministic ordering primitives.
+ *
+ * The pair-cli poll loop runs on real timers (interval clamped to 500ms
+ * inside runPairCli) and its side effects — writing the session file,
+ * emitting a status line — land asynchronously. Sleeping a fixed number of
+ * ms and then asserting the side effect happened races the loop: under a
+ * busy CI runner the loop's first tick can slip past the window, so the
+ * intermediate `device_connected` state is overwritten before any tick
+ * observes it (the #479 flake). These helpers wait for the ACTUAL event
+ * instead of guessing a duration; the deadline is only a loud-failure
+ * safety net, never the correctness mechanism.
+ */
+async function waitForSession(sessionsPath: string, deadlineMs = 5000): Promise<PairSession> {
+  const start = Date.now();
+  for (;;) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(sessionsPath, 'utf-8')) as { sessions: PairSession[] };
+      if (raw.sessions && raw.sessions.length > 0) return raw.sessions[0];
+    } catch { /* file not written yet — keep waiting */ }
+    if (Date.now() - start > deadlineMs) {
+      throw new Error(`waitForSession: no session at ${sessionsPath} within ${deadlineMs}ms`);
+    }
+    await sleep(10);
+  }
+}
+
+async function waitForOutput(stream: CaptureStream, needle: string, deadlineMs = 5000): Promise<void> {
+  const start = Date.now();
+  while (!stream.text().includes(needle)) {
+    if (Date.now() - start > deadlineMs) {
+      throw new Error(`waitForOutput: ${JSON.stringify(needle)} not emitted within ${deadlineMs}ms`);
+    }
+    await sleep(10);
+  }
+}
+
 async function main(): Promise<void> {
   // =====================================================================
   // 1-3. Intro copy + QR renderer
@@ -165,8 +202,14 @@ async function main(): Promise<void> {
 
   // =====================================================================
   // 5. Transition: device_connected shows "Browser connected"
-  //    (We use longer delays to guarantee the poll loop observes the
-  //    intermediate state before the terminal flip.)
+  //    Deterministic ordering — no fixed sleeps. We flip to
+  //    `device_connected` and hold there until the poll loop has actually
+  //    emitted "Browser connected", THEN flip to `completed`. Because the
+  //    terminal flip is gated on the observed intermediate output rather
+  //    than a guessed duration, the loop can never race past the
+  //    intermediate state, however slow its first tick is under CI load
+  //    (the #479 flake). The waiter deadline only fails the test loudly if
+  //    the loop never emits at all.
   // =====================================================================
   {
     const tmp = mkTmp();
@@ -179,11 +222,10 @@ async function main(): Promise<void> {
       pollIntervalMs: 30,
       io: io.io,
     });
-    await sleep(200);
-    const raw = JSON.parse(fs.readFileSync(sp, 'utf-8')) as { sessions: PairSession[] };
-    await transitionPairSession(sp, raw.sessions[0].sid, 'device_connected');
-    await sleep(300); // plenty of polls at 30ms each
-    await transitionPairSession(sp, raw.sessions[0].sid, 'completed');
+    const sess = await waitForSession(sp);
+    await transitionPairSession(sp, sess.sid, 'device_connected');
+    await waitForOutput(io.stdout, 'Browser connected');
+    await transitionPairSession(sp, sess.sid, 'completed');
     await p;
     const text = io.stdout.text();
     assert(text.includes('Browser connected'), 'transitions: Browser connected emitted');
