@@ -302,13 +302,32 @@ def _prior_disclosure_consent(source: str, resume_id: Optional[str] = None) -> b
     Checked by resume paths and by ``totalreclaw_import_batch`` (which the
     agent calls repeatedly after ``import_from`` recorded consent) so the
     user is never re-prompted mid-import.
+
+    internal#418: a persisted consent is honored ONLY when the provider it was
+    disclosed for (``ImportState.disclosure_provider``) still equals the
+    CURRENT resolved provider label. The disclosure exists so the user knows
+    which LLM reads their conversations in cleartext — a silent provider swap
+    must re-fire it. An absent/None ``disclosure_provider`` (a pre-#418 record)
+    is a mismatch → re-prompt once (safe direction: never silently authorize).
     """
     try:
+        # Resolve through the tools module so the test suite's
+        # ``setattr(tools, "_extraction_provider_label", …)`` is authoritative
+        # (see the module docstring's patchability contract).
+        current_provider = _dispatch_module()._extraction_provider_label()
+
+        def _valid(st) -> bool:
+            return bool(
+                st.disclosure_confirmed
+                and st.disclosure_provider is not None
+                and st.disclosure_provider == current_provider
+            )
+
         from totalreclaw import import_state as ist
         if resume_id:
             prior = ist.read_import_state(resume_id)
             if prior is not None:
-                return bool(prior.disclosure_confirmed)
+                return _valid(prior)
         # #460: scan genuine state records ONLY. The previous inline glob of
         # ``*.json`` + ``data.get(...)`` crashed on the #436 conversation
         # registry ledger (``imported-conversations-<source>.json``, a JSON
@@ -318,11 +337,23 @@ def _prior_disclosure_consent(source: str, resume_id: Optional[str] = None) -> b
         # and yields only dict records (belt: exclude by name; braces: skip
         # non-dict payloads).
         for st in ist.iter_import_state_records():
-            if st.source == source and st.disclosure_confirmed:
+            if st.source == source and _valid(st):
                 return True
     except Exception:
         pass
     return False
+
+
+def _current_disclosure_provider() -> str:
+    """The LLM provider label the user would be (or was) shown right now.
+
+    Routed through the ``tools`` module (the monkeypatch surface — see the
+    module docstring) so the test suite's ``setattr(tools,
+    "_extraction_provider_label", …)`` is authoritative. Used both by the
+    disclosure message and to stamp ``ImportState.disclosure_provider`` when
+    consent is recorded (internal#418).
+    """
+    return _dispatch_module()._extraction_provider_label()
 
 
 # Disclosure tokens are one-time, hash-at-rest consent tokens (#437). The
@@ -773,6 +804,7 @@ async def _run_small_import(engine, source, file_path, content, import_id, estim
         estimated_total_facts=estimate.get("estimated_facts", 0),
         estimated_minutes=estimate.get("estimated_minutes", 0),
         disclosure_confirmed=True,
+        disclosure_provider=_current_disclosure_provider(),
     )
     write_import_state(istate)
     try:
@@ -965,6 +997,7 @@ def _spawn_background_import(state, engine, source, file_path, content, import_i
         estimated_minutes=estimated_minutes,
         estimated_completion_iso=eta_iso,
         disclosure_confirmed=True,
+        disclosure_provider=_current_disclosure_provider(),
     )
     write_import_state(istate)
 
@@ -1193,6 +1226,7 @@ async def import_batch(args: dict, state: "PluginState", **kwargs) -> str:
                 dups_skipped=(prior.dups_skipped if prior else 0) + getattr(result, "dups_skipped", 0),
                 file_path=file_path,
                 disclosure_confirmed=True,
+                disclosure_provider=_current_disclosure_provider(),
             ))
         except Exception as state_err:
             logger.warning("import_batch state bookkeeping failed: %s", state_err)

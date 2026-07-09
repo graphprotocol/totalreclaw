@@ -51,6 +51,13 @@ class ImportState:
     estimated_minutes: int = 0
     estimated_completion_iso: str = ""
     disclosure_confirmed: bool = False
+    #: internal#418 — the LLM provider label the user was SHOWN when they
+    #: consented to the disclosure. A persisted consent only authorizes
+    #: extraction while the SAME provider is still configured; a later provider
+    #: switch re-fires the disclosure instead of silently authorizing the new
+    #: provider. None on pre-#418 records → treated as a mismatch → re-prompt
+    #: once (never silently authorize).
+    disclosure_provider: Optional[str] = None
     #: Set True once the agent has proactively told the user this import
     #: finished (the completion-notification one-shot). Prevents re-announcing
     #: the same completed import on every subsequent turn.

@@ -204,11 +204,14 @@ class TestDisclosureConsentOk:
             {"disclosure_confirmed": True, "disclosure_token": "notarealtoken12"},
         ) is False
 
-    def test_prior_persisted_consent_short_circuits(self, state_dir):
+    def test_prior_persisted_consent_short_circuits(self, state_dir, monkeypatch):
         # A persisted ImportState with disclosure_confirmed makes the
         # import_from -> import_batch loop skip the re-prompt.
+        # internal#418: the persisted consent must carry the SAME provider
+        # label as the current one to be honored.
         from totalreclaw.imports import state as ist
 
+        monkeypatch.setattr(tools, "_extraction_provider_label", lambda: "z.ai (GLM)")
         st = ist.ImportState(
             import_id="imp-1",
             source="chatgpt",
@@ -216,6 +219,7 @@ class TestDisclosureConsentOk:
             started_at="2026-07-07T00:00:00Z",
             last_updated="2026-07-07T00:00:00Z",
             disclosure_confirmed=True,
+            disclosure_provider="z.ai (GLM)",
         )
         ist.write_import_state(st)
         assert tools._disclosure_consent_ok("chatgpt", {}, resume_id="imp-1") is True

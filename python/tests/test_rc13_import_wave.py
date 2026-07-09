@@ -153,7 +153,7 @@ async def test_persisted_consent_still_skips_disclosure(tmp_path, monkeypatch):
     write_import_state(ImportState(
         import_id="resume-1", source="chatgpt", status="failed",
         started_at="2026-07-05T00:00:00+00:00", last_updated="x",
-        disclosure_confirmed=True,
+        disclosure_confirmed=True, disclosure_provider="zai (glm-4.6)",
     ))
     res = json.loads(await tools.import_from(
         {"source": "chatgpt", "content": "x", "resume_id": "resume-1"}, state,
@@ -207,12 +207,13 @@ async def test_import_batch_writes_state_for_import_status(tmp_path, monkeypatch
     _redirect_state_dir(tmp_path, monkeypatch)
     from totalreclaw.hermes import tools
     _patch_engine(monkeypatch)
+    _patch_provider(monkeypatch)
     state = _state_with_tier("pro")
 
     write_import_state(ImportState(
         import_id="consented", source="chatgpt", status="running",
         started_at="2026-07-05T00:00:00+00:00", last_updated="x",
-        disclosure_confirmed=True,
+        disclosure_confirmed=True, disclosure_provider="zai (glm-4.6)",
     ))
     await tools.import_batch(
         {"source": "chatgpt", "file_path": "/tmp/e.zip", "offset": 0}, state,
@@ -227,12 +228,13 @@ async def test_import_batch_enforces_pro_gate(tmp_path, monkeypatch):
     _redirect_state_dir(tmp_path, monkeypatch)
     from totalreclaw.hermes import tools
     process = _patch_engine(monkeypatch)
+    _patch_provider(monkeypatch)
     state = _state_with_tier("free")
 
     write_import_state(ImportState(
         import_id="consented", source="chatgpt", status="running",
         started_at="2026-07-05T00:00:00+00:00", last_updated="x",
-        disclosure_confirmed=True,
+        disclosure_confirmed=True, disclosure_provider="zai (glm-4.6)",
     ))
     res = json.loads(await tools.import_batch(
         {"source": "chatgpt", "content": "x", "offset": 0}, state,
@@ -246,6 +248,7 @@ async def test_import_batch_fails_open_when_billing_unreachable(tmp_path, monkey
     _redirect_state_dir(tmp_path, monkeypatch)
     from totalreclaw.hermes import tools
     process = _patch_engine(monkeypatch)
+    _patch_provider(monkeypatch)
     from totalreclaw.hermes.state import PluginState
     state = PluginState()
     client = MagicMock()
@@ -255,7 +258,7 @@ async def test_import_batch_fails_open_when_billing_unreachable(tmp_path, monkey
     write_import_state(ImportState(
         import_id="consented", source="chatgpt", status="running",
         started_at="2026-07-05T00:00:00+00:00", last_updated="x",
-        disclosure_confirmed=True,
+        disclosure_confirmed=True, disclosure_provider="zai (glm-4.6)",
     ))
     res = json.loads(await tools.import_batch(
         {"source": "chatgpt", "content": "x", "offset": 0}, state,

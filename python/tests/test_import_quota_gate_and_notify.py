@@ -225,6 +225,7 @@ async def test_free_tier_is_blocked_with_upgrade_message(monkeypatch):
 async def test_pro_tier_is_not_blocked(tmp_path, monkeypatch):
     _redirect_state_dir(tmp_path, monkeypatch)
     from totalreclaw.hermes import tools
+    monkeypatch.setattr(tools, "_extraction_provider_label", lambda: "z.ai (GLM)")
     called = AsyncMock(return_value=MagicMock(
         facts_stored=3, facts_extracted=3, is_complete=True,
     ))
@@ -233,10 +234,11 @@ async def test_pro_tier_is_not_blocked(tmp_path, monkeypatch):
     state, _client = _state_with_tier("pro")
 
     # rc13 (#421): consent needs the tool-minted token or persisted state.
+    # internal#418: persisted consent must carry the matching provider label.
     write_import_state(ImportState(
         import_id="consent-seed", source="gemini", status="completed",
         started_at="2026-07-05T00:00:00+00:00", last_updated="x",
-        disclosure_confirmed=True, announced=True,
+        disclosure_confirmed=True, announced=True, disclosure_provider="z.ai (GLM)",
     ))
     res = json.loads(await tools.import_from(
         {"source": "gemini", "content": "x"}, state,
@@ -249,6 +251,7 @@ async def test_pro_tier_is_not_blocked(tmp_path, monkeypatch):
 async def test_billing_unreachable_fails_open(tmp_path, monkeypatch):
     _redirect_state_dir(tmp_path, monkeypatch)
     from totalreclaw.hermes import tools
+    monkeypatch.setattr(tools, "_extraction_provider_label", lambda: "z.ai (GLM)")
     called = AsyncMock(return_value=MagicMock(
         facts_stored=1, facts_extracted=1, is_complete=True,
     ))
@@ -258,7 +261,7 @@ async def test_billing_unreachable_fails_open(tmp_path, monkeypatch):
     write_import_state(ImportState(
         import_id="consent-seed", source="gemini", status="completed",
         started_at="2026-07-05T00:00:00+00:00", last_updated="x",
-        disclosure_confirmed=True, announced=True,
+        disclosure_confirmed=True, announced=True, disclosure_provider="z.ai (GLM)",
     ))
     res = json.loads(await tools.import_from(
         {"source": "gemini", "content": "x"}, state,

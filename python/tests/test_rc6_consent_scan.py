@@ -38,6 +38,13 @@ def _write_registry(source="chatgpt", ids=("c1", "c2")):
     record_imported_conversations(source, list(ids))
 
 
+def _pin_provider(monkeypatch, label="z.ai (GLM)"):
+    # internal#418: persisted consent is honored only when disclosure_provider
+    # matches the current label — pin both in tests that write consent.
+    monkeypatch.setattr(tools, "_extraction_provider_label", lambda: label)
+    return label
+
+
 def _state_with_tier(tier="pro"):
     from totalreclaw.hermes.state import PluginState
     state = PluginState()
@@ -57,20 +64,22 @@ def test_prior_consent_with_registry_present_does_not_crash(tmp_path, monkeypatc
 
 def test_prior_consent_finds_real_record_despite_registry(tmp_path, monkeypatch):
     _redirect(tmp_path, monkeypatch)
+    label = _pin_provider(monkeypatch)
     write_import_state(ImportState(
         import_id="s1", source="chatgpt", status="failed",
         started_at="2026-07-06T00:00:00+00:00", last_updated="x",
-        disclosure_confirmed=True))
+        disclosure_confirmed=True, disclosure_provider=label))
     _write_registry("chatgpt")
     assert tools._prior_disclosure_consent("chatgpt") is True
 
 
 def test_disclosure_consent_ok_with_registry_present(tmp_path, monkeypatch):
     _redirect(tmp_path, monkeypatch)
+    label = _pin_provider(monkeypatch)
     write_import_state(ImportState(
         import_id="s2", source="chatgpt", status="running",
         started_at="2026-07-06T00:00:00+00:00", last_updated="x",
-        disclosure_confirmed=True))
+        disclosure_confirmed=True, disclosure_provider=label))
     _write_registry("chatgpt")
     assert tools._disclosure_consent_ok("chatgpt", {}) is True
 
@@ -131,10 +140,11 @@ async def test_two_batch_import_proceeds_after_registry_written(tmp_path, monkey
     import totalreclaw.import_engine as ie
 
     # Prior consent so import_batch's disclosure gate is satisfied.
+    label = _pin_provider(monkeypatch)
     write_import_state(ImportState(
         import_id="batch-src", source="chatgpt", status="running",
         started_at="2026-07-06T00:00:00+00:00", last_updated="x",
-        disclosure_confirmed=True))
+        disclosure_confirmed=True, disclosure_provider=label))
 
     calls = {"n": 0}
 

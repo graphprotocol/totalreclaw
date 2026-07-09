@@ -131,10 +131,12 @@ async def test_resume_with_prior_consent_skips_disclosure(tmp_path, monkeypatch)
     _patch_provider(monkeypatch)
     state = _state_with_tier("pro")
 
+    # internal#418: consent is honored only when disclosure_provider matches
+    # the CURRENT provider label (here "zai (glm-4.6)" via _patch_provider).
     write_import_state(ImportState(
         import_id="resume-1", source="chatgpt", status="failed",
         started_at="2026-07-05T00:00:00+00:00", last_updated="x",
-        disclosure_confirmed=True,
+        disclosure_confirmed=True, disclosure_provider="zai (glm-4.6)",
     ))
     res = json.loads(await tools.import_from(
         {"source": "chatgpt", "content": "x", "resume_id": "resume-1"}, state,
@@ -330,12 +332,15 @@ async def test_import_batch_honors_persisted_consent(tmp_path, monkeypatch):
     _redirect_state_dir(tmp_path, monkeypatch)
     from totalreclaw.hermes import tools
     process = _patch_engine(monkeypatch)
+    # internal#418: consent is honored only when disclosure_provider matches
+    # the current label, so pin both to the same value here.
+    _patch_provider(monkeypatch)
     state = _state_with_tier("pro")
 
     write_import_state(ImportState(
         import_id="consented", source="chatgpt", status="running",
         started_at="2026-07-05T00:00:00+00:00", last_updated="x",
-        disclosure_confirmed=True,
+        disclosure_confirmed=True, disclosure_provider="zai (glm-4.6)",
     ))
     res = json.loads(await tools.import_batch(
         {"source": "chatgpt", "content": "x", "offset": 0}, state,
