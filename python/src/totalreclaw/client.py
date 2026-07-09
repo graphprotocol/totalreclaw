@@ -40,9 +40,13 @@ from .operations import (
     pin_fact,
     unpin_fact,
     find_existing_content_fps,
+    # internal#448 — byte-capped batching + halve-on-simfail hoisted into the
+    # shared write path so EVERY remember_batch caller inherits it.
+    group_and_store_adaptive,
+    MAX_BATCH_BYTES,
+    MAX_BATCH_GROUP_COUNT,
 )
 from .retype_setscope import execute_retype, execute_set_scope
-from .userop import MAX_BATCH_SIZE as _USEROP_MAX_BATCH_SIZE
 
 # Smart Account address derivation constants
 # These match the CREATE2 deterministic address generation used by
@@ -631,19 +635,22 @@ class TotalReclaw:
         facts: list[dict],
         source: str = "python-client",
     ) -> list[str]:
-        """Store N facts in a single batched on-chain UserOperation.
+        """Store N facts via byte-capped, adaptive batched UserOperations.
 
-        The batch analogue of :meth:`remember`. Mirrors the TS plugin's
-        ``storeFactsBatch`` path: one paymaster call, one signature,
-        one bundler submission, N ``Log(bytes)`` events — indexed by
-        the subgraph as N independent facts.
+        The batch analogue of :meth:`remember`. Accepts ANY number of facts
+        and internally groups them into one or more ``executeBatch`` UserOps
+        (internal#448): each group respects BOTH a count ceiling
+        (:data:`~totalreclaw.operations.MAX_BATCH_GROUP_COUNT`, 15) and an
+        estimated calldata-byte cap
+        (:data:`~totalreclaw.operations.MAX_BATCH_BYTES`, 32KB), then is stored
+        with adaptive halve-on-simfail. This hoist means every caller —
+        auto-extraction, recrystallize, bulk imports — inherits the same
+        Pimlico executeBatch size protection that the import path was hardened
+        with across 8 RCs (rc4 / internal#435).
 
-        Use this when you have 2..15 facts to store at once (e.g.
-        auto-extraction output, bulk imports). For a single fact the
-        round-trip cost is identical to :meth:`remember` (the Rust core
-        folds a batch of 1 back to ``execute`` rather than
-        ``executeBatch``) — but for N=15 this drops extraction latency
-        from ~60s to ~8s.
+        Behavior-preserving for the common case: a batch of <=15 light facts
+        that fits under 32KB produces exactly ONE group and ONE store call,
+        identical to before — byte-capping only splits OVERSIZED batches.
 
         Each element of ``facts`` is a dict with the same keys as
         :meth:`remember`'s parameters::
@@ -665,11 +672,9 @@ class TotalReclaw:
         Parameters
         ----------
         facts : list[dict]
-            1..15 fact dicts. An empty list raises ``ValueError``; the
-            upper bound matches
-            :data:`totalreclaw.userop.MAX_BATCH_SIZE`. Auto-extraction
-            already caps per-cycle output at 15, so this limit rarely
-            binds in practice.
+            One or more fact dicts (any count). An empty list raises
+            ``ValueError``. Oversized batches are split internally — callers
+            no longer need to pre-chunk.
         source : str, default "python-client"
             Shared ``source`` tag written to every protobuf's outer
             wrapper. Per-fact provenance (user vs assistant) still
@@ -678,18 +683,21 @@ class TotalReclaw:
         Returns
         -------
         list[str]
-            Pre-assigned UUID fact IDs, in the same order as ``facts``.
+            Pre-assigned UUID fact IDs of the STORED facts, in input order.
             Subsequent ``forget`` / ``pin_fact`` / ``unpin_fact`` calls
-            work against these IDs immediately.
+            work against these IDs immediately. (A group rejected as a
+            duplicate contributes no ids and no error — it is silently
+            skipped, matching the import path's contract.)
 
         Raises
         ------
         ValueError
-            If ``facts`` is empty or larger than 15, or if any entry is
-            missing ``text``.
+            If ``facts`` is empty, or if any entry is missing ``text``.
         RuntimeError
-            Propagated from the bundler / paymaster (AA25/AA10 are
-            retried up to 3 times before surfacing).
+            If one or more groups fail to store for a non-duplicate reason
+            (the bundler / paymaster error is aggregated). AA25/AA10 are
+            retried up to 3 times inside the userop layer before surfacing;
+            a -32500 simulation-size revert triggers adaptive halving first.
 
         Examples
         --------
@@ -702,27 +710,41 @@ class TotalReclaw:
         """
         if not facts:
             raise ValueError("remember_batch requires at least one fact")
-        if len(facts) > _USEROP_MAX_BATCH_SIZE:
-            raise ValueError(
-                f"remember_batch: {len(facts)} facts exceeds batch limit "
-                f"of {_USEROP_MAX_BATCH_SIZE}. Split into multiple calls."
-            )
         await self._ensure_address()
         await self._ensure_registered()
         chain_id = await self._ensure_chain_id()
-        # LSH is needed iff at least one fact carries an embedding.
+        # LSH is needed iff at least one fact carries an embedding. One hasher
+        # is shared across every group (store_fact_batch only uses it for the
+        # facts in a group that actually carry an embedding).
         needs_lsh = any(
             isinstance(f, dict) and f.get("embedding") for f in facts
         )
         lsh = self._get_lsh_hasher() if needs_lsh else None
-        return await store_fact_batch(
-            facts=facts,
-            wallet=self._wallet_context(chain_id),
-            relay=self._relay,
-            lsh_hasher=lsh,
-            data_edge_address=self._data_edge_address,
-            source=source,
+        wallet = self._wallet_context(chain_id)
+
+        async def _store_group(group: list[dict]) -> list[str]:
+            return await store_fact_batch(
+                facts=group,
+                wallet=wallet,
+                relay=self._relay,
+                lsh_hasher=lsh,
+                data_edge_address=self._data_edge_address,
+                source=source,
+            )
+
+        # internal#448: dual-cap group + adaptive halve-on-simfail. A floor-1
+        # group that still fails surfaces here as a non-empty error list → we
+        # raise so the failure is never silently dropped (duplicate rejections
+        # are swallowed inside the helper).
+        ids, errors = await group_and_store_adaptive(
+            _store_group, facts, MAX_BATCH_GROUP_COUNT, MAX_BATCH_BYTES
         )
+        if errors:
+            raise RuntimeError(
+                f"remember_batch: {len(errors)} store group(s) failed: "
+                + " | ".join(errors)
+            )
+        return ids
 
     async def recall(
         self,

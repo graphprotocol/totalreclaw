@@ -372,6 +372,202 @@ async def store_fact(
 # ---------------------------------------------------------------------------
 
 
+# ── internal#448: shared byte-capped batching + halve-on-simfail ────────────
+# Hoisted VERBATIM from imports/engine.py (rc4 / internal#435) so EVERY
+# on-chain write caller — client.remember_batch (auto-extraction,
+# recrystallize, import) — inherits the same Pimlico executeBatch
+# calldata-size protection. The import engine re-exports the legacy
+# underscored names (_estimate_payload_bytes / _group_payloads_by_size /
+# _MAX_BATCH_BYTES / IMPORT_MAX_BATCH_SIZE) for back-compat with its tests.
+
+#: Per-blind-index wire cost: a 64-hex-char SHA-256 string field (key + len +
+#: 64 bytes ≈ 66; 68 for margin). Blind indices DOMINATE a fact's calldata and
+#: scale with the UNIQUE (stemmed) token count, not the char count — the review
+#: of PR #461 measured real ``encode_fact_protobuf`` output at ~2× a char-linear
+#: estimate for representative prose (~88 indices for a 300-char fact once stems
+#: are counted), so we bound the real term by COMPUTING the index count.
+_BYTES_PER_BLIND_INDEX = 68
+#: Encrypted 640-dim f32 embedding: 2560B packed → base64 (~3416) → XChaCha20
+#: ciphertext → base64 string ≈ 4608B on the wire (field 13). Plus 20 LSH
+#: bucket indices (one per table). Measured 4611 + 20×66 = 5931; 6060 for margin.
+_BYTES_PER_EMBEDDING = 4700 + 20 * _BYTES_PER_BLIND_INDEX
+#: Scalar-field + cipher overhead floor (id, timestamp, owner, content_fp,
+#: version, decay/is_active, XChaCha20 nonce+tag on the claim blob, ABI slop).
+_BYTES_FIXED_OVERHEAD = 620
+
+#: rc4 (internal#435): estimated on-chain calldata-byte ceiling per batched
+#: UserOp. Kept comfortably under the observed ~85KB sim-revert cliff (a
+#: sim-passing ~67KB op at 15 facts still didn't reliably get INCLUDED on the
+#: staging bundler either, so 32KB buys inclusion headroom too). Groups flush
+#: when adding the next fact would exceed EITHER this or the count ceiling.
+MAX_BATCH_BYTES: int = 32_000
+
+#: Belt-and-braces count ceiling alongside :data:`MAX_BATCH_BYTES`. The byte
+#: cap is the real governor; 15 is the conservative upper bound
+#: (``userop.MAX_BATCH_SIZE`` stays 30 — 15 ≤ 30, so the core still accepts
+#: every group). Hoisted from the import-only ``IMPORT_MAX_BATCH_SIZE`` so all
+#: callers share it.
+MAX_BATCH_GROUP_COUNT: int = 15
+
+
+def estimate_payload_bytes(payload: dict) -> int:
+    """Estimate a single fact's on-chain executeBatch calldata contribution.
+
+    Bounds the REAL ``encode_fact_protobuf`` output (verified measured-safe,
+    ``est ≥ real``, in ``test_batch_sizing_rc4.py``). Terms:
+
+      * fixed overhead (scalar fields + cipher nonce/tag) — ``_BYTES_FIXED_OVERHEAD``;
+      * the encrypted claim blob ≈ ciphertext of ``text`` + ``extra_metadata``;
+      * the blind indices — the dominant, entropy-dependent term — bounded by
+        the ACTUAL ``generate_blind_indices(text)`` count × per-index wire cost
+        (a char-linear estimate cannot bound this, hence the PR #461 review
+        NO-GO);
+      * the encrypted embedding + its LSH indices when an embedding is present.
+
+    ``generate_blind_indices`` is a fast pure Rust call and import is not a
+    latency-critical path (the same call happens again during the real store),
+    so recomputing it here is cheap. Falls back to a conservative char-based
+    index count if the core module is unavailable.
+    """
+    text = payload.get("text") or ""
+    # The encrypted claim blob stores the canonical-claim JSON as UTF-8 BYTES
+    # (build_canonical_claim_v1 uses ensure_ascii=False), so the blob term must
+    # count UTF-8 bytes, not code points — CJK ≈3B/char, emoji ≈4B/cp (PR #461
+    # re-review Finding A). ASCII is unaffected (len == utf-8 length).
+    est = _BYTES_FIXED_OVERHEAD + len(text.encode("utf-8"))
+
+    meta = payload.get("extra_metadata")
+    if isinstance(meta, dict) and meta:
+        # Crystal facts carry key_outcomes / open_threads / topics in the
+        # encrypted blob — count them (1.5× for JSON + cipher slack).
+        est += int(len(_json.dumps(meta)) * 1.5)
+
+    try:
+        n_indices = len(generate_blind_indices(text))
+    except Exception:
+        # Conservative fallback: ~2 stemmed indices per ~6-char word.
+        n_indices = int(len(text) / 3)
+    est += n_indices * _BYTES_PER_BLIND_INDEX
+
+    if payload.get("embedding"):
+        est += _BYTES_PER_EMBEDDING
+    return est
+
+
+def group_payloads_by_size(payloads: list, max_count: int, max_bytes: int):
+    """Yield successive batch groups respecting BOTH a count and a byte cap.
+
+    A group is flushed before appending a fact whose addition would exceed
+    either cap. A single fact larger than ``max_bytes`` still forms its own
+    group (never dropped) — the adaptive halving in the store loop is the
+    backstop if such a lone op still sim-reverts.
+    """
+    group: list = []
+    group_bytes = 0
+    for p in payloads:
+        est = estimate_payload_bytes(p)
+        if group and (len(group) >= max_count or group_bytes + est > max_bytes):
+            yield group
+            group = []
+            group_bytes = 0
+        group.append(p)
+        group_bytes += est
+    if group:
+        yield group
+
+
+async def _store_group_adaptive(store_fn, group: list) -> tuple[list[str], list[str]]:
+    """Store one payload group via ``store_fn``; halve-and-retry on a
+    simulation-size revert.
+
+    rc4 (internal#435): Pimlico surfaces an oversized-``executeBatch``
+    simulation failure as the catch-all ``-32500 "... reverted during
+    simulation ..."``. When a group of >1 fact hits it, split in half and
+    retry each half recursively (floor 1). This makes the writer adaptive to
+    wherever a given bundler's calldata-size cliff actually sits, on top of
+    the static byte cap. A duplicate rejection is swallowed (no ids, no
+    error); any other error — or a size revert at the single-fact floor — is
+    surfaced into the returned error list so the batch is counted FAILED, not
+    stored.
+
+    ``store_fn`` is an ``async (group: list[dict]) -> list[str]`` (the caller's
+    single-group store — e.g. a closure over :func:`store_fact_batch`, or the
+    client's ``remember_batch``). Returns ``(stored_ids, errors)``.
+
+    A ``-32500`` that is an AA25 (exhausted the userop-layer retry) is NOT a
+    size revert — halving it would be pointless, so any AA25-tagged error is
+    excluded from the size path (PR #461 review Finding 2).
+    """
+    try:
+        ids = await store_fn(group)
+        return list(ids), []
+    except Exception as e:
+        msg = str(e)
+        if '409' in msg or 'duplicate' in msg or 'fingerprint' in msg:
+            logger.debug("Batch of %d facts rejected as duplicate", len(group))
+            return [], []
+        msg_l = msg.lower()
+        is_sim_revert = (
+            "reverted during simulation" in msg_l
+            or ("-32500" in msg and "AA25" not in msg)
+        )
+        if is_sim_revert and len(group) > 1:
+            mid = len(group) // 2
+            logger.warning(
+                "Batch sim revert on %d facts (%s) — splitting %d/%d and "
+                "retrying each half",
+                len(group), msg[:120], mid, len(group) - mid,
+            )
+            ids1, errs1 = await _store_group_adaptive(store_fn, group[:mid])
+            ids2, errs2 = await _store_group_adaptive(store_fn, group[mid:])
+            return ids1 + ids2, errs1 + errs2
+        # Single-fact floor (can't split further) or a non-size error —
+        # surface it so the fact is counted failed rather than silently dropped.
+        return [], [f"Batch store failed ({len(group)} facts): {msg}"]
+
+
+async def group_and_store_adaptive(
+    store_fn,
+    payloads: list,
+    max_count: int,
+    max_bytes: int,
+    *,
+    max_errors: Optional[int] = None,
+    error_limit_msg: Optional[str] = None,
+) -> tuple[list[str], list[str]]:
+    """Single source of truth for byte-capped batching + halve-on-simfail.
+
+    Groups ``payloads`` by BOTH ``max_count`` and ``max_bytes`` (via
+    :func:`group_payloads_by_size`), then stores each group through
+    ``store_fn`` with adaptive halve-on-sim-revert (via
+    :func:`_store_group_adaptive`). Returns ``(stored_ids, errors)`` — the ids
+    of every successfully stored fact (in input order) and a list of
+    per-group error strings (empty on full success).
+
+    Used by :meth:`totalreclaw.TotalReclaw.remember_batch` (so auto-extraction,
+    recrystallize, and ad-hoc callers all inherit the protection) and by the
+    import engine (which passes ``client.remember_batch`` as ``store_fn`` so
+    its existing per-group mock contract — and the rc4 invariant tests — are
+    preserved unchanged).
+
+    ``max_errors`` / ``error_limit_msg`` optional cap the collected error
+    list (the import engine's 20-error safety valve); when reached, the
+    remaining groups are skipped after appending ``error_limit_msg``.
+    """
+    all_ids: list[str] = []
+    all_errors: list[str] = []
+    for group in group_payloads_by_size(payloads, max_count, max_bytes):
+        ids, errs = await _store_group_adaptive(store_fn, group)
+        all_ids.extend(ids)
+        if errs:
+            all_errors.extend(errs)
+            if max_errors is not None and len(all_errors) >= max_errors:
+                if error_limit_msg:
+                    all_errors.append(error_limit_msg)
+                break
+    return all_ids, all_errors
+
+
 async def store_fact_batch(
     facts: list[dict],
     wallet: WalletContext,

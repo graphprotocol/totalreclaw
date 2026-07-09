@@ -685,8 +685,18 @@ class TestClientRememberBatch:
             await client.close()
 
     @pytest.mark.asyncio
-    async def test_oversize_raises(self) -> None:
+    @patch("totalreclaw.client.store_fact_batch", new_callable=AsyncMock)
+    async def test_oversize_is_grouped_not_rejected(self, mock_store) -> None:
+        """internal#448: ``remember_batch`` accepts ANY count and groups
+        internally — an oversize batch is split into <=15-fact groups rather
+        than rejected. (Pre-#448 this raised ``ValueError``; the cap moved down
+        into the shared grouping path so all callers inherit it.)"""
         from totalreclaw import TotalReclaw
+
+        async def _store(facts, *a, **kw):
+            return [f"id-{i}" for i in range(len(facts))]
+
+        mock_store.side_effect = _store
 
         client = TotalReclaw(
             recovery_phrase=(
@@ -697,9 +707,17 @@ class TestClientRememberBatch:
             wallet_address="0x2c0cf74b2b76110708ca431796367779e3738250",
         )
         try:
-            facts = [{"text": f"f{i}"} for i in range(MAX_BATCH_SIZE + 1)]
-            with pytest.raises(ValueError, match="exceeds batch limit"):
-                await client.remember_batch(facts)
+            facts = [{"text": f"f{i}"} for i in range(MAX_BATCH_SIZE + 1)]  # 31
+            ids = await client.remember_batch(facts)
+            # Nothing dropped; every fact stored.
+            assert len(ids) == MAX_BATCH_SIZE + 1
+            # 31 light facts -> the count cap (15) binds -> 15 + 15 + 1.
+            sizes = [
+                len(c.kwargs.get("facts") or c.args[0])
+                for c in mock_store.await_args_list
+            ]
+            assert sizes == [15, 15, 1]
+            assert all(s <= 15 for s in sizes)
         finally:
             await client.close()
 

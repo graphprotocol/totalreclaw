@@ -32,12 +32,16 @@ from totalreclaw.import_engine import (
 )
 
 
-def _assert_groups_within_caps(client) -> list[int]:
+def _assert_groups_within_caps(store_mock) -> list[int]:
     """Every submitted group must respect BOTH the count and byte caps.
-    Returns the list of group sizes for callers that want to inspect them."""
+    Returns the list of group sizes for callers that want to inspect them.
+
+    ``store_mock`` is the patched ``store_fact_batch`` (the single store layer
+    the engine's Gnosis path now calls directly — one adaptive pass, not
+    wrapped in client.remember_batch)."""
     sizes = []
-    for call in client.remember_batch.await_args_list:
-        group = call.args[0]
+    for call in store_mock.await_args_list:
+        group = call.kwargs.get("facts") or call.args[0]
         assert len(group) <= IMPORT_MAX_BATCH_SIZE, (
             f"group of {len(group)} exceeds count cap {IMPORT_MAX_BATCH_SIZE}"
         )
@@ -84,27 +88,43 @@ def _make_facts(n: int) -> list[dict]:
     ]
 
 
+@pytest.fixture(autouse=True)
+def store_mock(monkeypatch):
+    """Patch the engine's ``store_fact_batch`` — the single store layer the
+    Gnosis path now calls directly through one ``group_and_store_adaptive``
+    pass (it no longer wraps ``client.remember_batch``, which would nest two
+    halving cascades). Default side effect returns one id per fact so the
+    engine's ``len(ids)`` accounting reflects ``len(input)``; tests override
+    ``.side_effect`` for failure / short-return scenarios. Returns the mock so
+    tests can assert call counts / args."""
+    async def _default(facts, *a, **kw):
+        return [f"fact-id-{i}" for i in range(len(facts))]
+
+    mock = AsyncMock(side_effect=_default)
+    monkeypatch.setattr("totalreclaw.import_engine.store_fact_batch", mock)
+    return mock
+
+
 def _make_pro_client() -> MagicMock:
     """Build a fake TotalReclaw client resolved on Gnosis (chain 100).
 
-    ``remember_batch`` returns one UUID-shaped string per fact so the
-    engine's ``len(ids)`` accounting reflects ``len(input)``.
-    ``remember`` is wired but should not be invoked on the batched path.
+    The engine's Gnosis store path assembles its WalletContext from the
+    client's store-setup privates and calls ``store_fact_batch`` directly — so
+    the fake stubs those privates (no crypto / relay). ``remember`` is wired
+    but must never be invoked on the batched path.
     """
     client = MagicMock()
-
-    async def _ensure_chain_id():
-        return 100
-
-    async def _remember_batch(facts, source="python-client"):
-        return [f"fact-id-{i}" for i in range(len(facts))]
-
-    async def _remember(text, **kwargs):
-        return f"single-{text[:20]}"
-
-    client._ensure_chain_id = AsyncMock(side_effect=_ensure_chain_id)
-    client.remember_batch = AsyncMock(side_effect=_remember_batch)
-    client.remember = AsyncMock(side_effect=_remember)
+    client._ensure_chain_id = AsyncMock(return_value=100)
+    client._ensure_address = AsyncMock()
+    client._ensure_registered = AsyncMock()
+    client._wallet_context = MagicMock(return_value=MagicMock(name="wallet"))
+    client._relay = MagicMock(name="relay")
+    client._data_edge_address = None
+    client._get_lsh_hasher = MagicMock(return_value=None)
+    # Pre-write dedup fails open (nothing is a duplicate) so all facts reach
+    # the store.
+    client.find_duplicate_texts = AsyncMock(return_value=None)
+    client.remember = AsyncMock(side_effect=lambda text, **k: f"single-{text[:20]}")
     return client
 
 
@@ -136,7 +156,7 @@ def _run(coro):
 # ---------------------------------------------------------------------------
 
 
-def test_gnosis_14_facts_all_stored_within_caps() -> None:
+def test_gnosis_14_facts_all_stored_within_caps(store_mock) -> None:
     """14 facts on Gnosis → all stored, every group within both caps, 0
     per-fact remember calls."""
     client = _make_pro_client()
@@ -146,12 +166,12 @@ def test_gnosis_14_facts_all_stored_within_caps() -> None:
 
     assert errors == []
     assert facts_stored == 14
-    sizes = _assert_groups_within_caps(client)
+    sizes = _assert_groups_within_caps(store_mock)
     assert sum(sizes) == 14  # no fact dropped or duplicated
     assert client.remember.await_count == 0
 
 
-def test_gnosis_15_facts_all_stored_within_caps() -> None:
+def test_gnosis_15_facts_all_stored_within_caps(store_mock) -> None:
     """15 facts (= count cap) → all stored, groups within both caps."""
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
@@ -160,12 +180,12 @@ def test_gnosis_15_facts_all_stored_within_caps() -> None:
 
     assert errors == []
     assert facts_stored == 15
-    sizes = _assert_groups_within_caps(client)
+    sizes = _assert_groups_within_caps(store_mock)
     assert sum(sizes) == 15
     assert client.remember.await_count == 0
 
 
-def test_gnosis_30_facts_all_stored_within_caps() -> None:
+def test_gnosis_30_facts_all_stored_within_caps(store_mock) -> None:
     """30 facts → all stored, no single group exceeds the count or byte cap."""
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
@@ -174,14 +194,14 @@ def test_gnosis_30_facts_all_stored_within_caps() -> None:
 
     assert errors == []
     assert facts_stored == 30
-    sizes = _assert_groups_within_caps(client)
+    sizes = _assert_groups_within_caps(store_mock)
     assert sum(sizes) == 30
     # More than one group: 30 realistic embedded facts cannot fit one ≤32KB op.
-    assert client.remember_batch.await_count >= 2
+    assert store_mock.await_count >= 2
     assert client.remember.await_count == 0
 
 
-def test_gnosis_45_facts_split_within_caps() -> None:
+def test_gnosis_45_facts_split_within_caps(store_mock) -> None:
     """45 facts → split into multiple groups, each within both caps, all
     stored."""
     client = _make_pro_client()
@@ -191,13 +211,13 @@ def test_gnosis_45_facts_split_within_caps() -> None:
 
     assert errors == []
     assert facts_stored == 45
-    sizes = _assert_groups_within_caps(client)
+    sizes = _assert_groups_within_caps(store_mock)
     assert sum(sizes) == 45
-    assert client.remember_batch.await_count >= 2
+    assert store_mock.await_count >= 2
     assert client.remember.await_count == 0
 
 
-def test_gnosis_count_cap_binds_without_embedding(monkeypatch) -> None:
+def test_gnosis_count_cap_binds_without_embedding(monkeypatch, store_mock) -> None:
     """With NO embedding (small payloads) the byte cap is loose, so the count
     ceiling of 15 governs: 20 tiny facts → groups of 15 + 5."""
     import totalreclaw.embedding as _emb
@@ -209,7 +229,7 @@ def test_gnosis_count_cap_binds_without_embedding(monkeypatch) -> None:
 
     assert errors == []
     assert facts_stored == 20
-    sizes = _assert_groups_within_caps(client)
+    sizes = _assert_groups_within_caps(store_mock)
     assert sizes == [15, 5]
 
 
@@ -218,19 +238,19 @@ def test_gnosis_count_cap_binds_without_embedding(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_gnosis_batch_uses_import_source_tag() -> None:
-    """remember_batch must be called with source="import" to match the
+def test_gnosis_batch_uses_import_source_tag(store_mock) -> None:
+    """store_fact_batch must be called with source="import" to match the
     pre-batching per-fact behaviour."""
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
     _run(engine._store_facts_chunked(_make_facts(3)))
 
-    call = client.remember_batch.await_args_list[0]
+    call = store_mock.await_args_list[0]
     assert call.kwargs.get("source") == "import"
 
 
-def test_gnosis_batch_normalises_importance_to_unit_range() -> None:
+def test_gnosis_batch_normalises_importance_to_unit_range(store_mock) -> None:
     """The 1-10 importance scale must be normalised to 0.0-1.0 before
     submission, matching the existing _store_fact contract."""
     client = _make_pro_client()
@@ -241,7 +261,7 @@ def test_gnosis_batch_normalises_importance_to_unit_range() -> None:
         {"text": "mid importance fact", "type": "fact", "importance": 5},
     ]))
 
-    submitted = client.remember_batch.await_args_list[0].args[0]
+    submitted = store_mock.await_args_list[0].kwargs.get("facts")
     assert submitted[0]["importance"] == pytest.approx(1.0)
     assert submitted[1]["importance"] == pytest.approx(0.5)
 
@@ -289,13 +309,11 @@ def test_unresolvable_chain_falls_back_to_per_fact() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_gnosis_batch_409_dedup_is_silent() -> None:
-    """A 409/duplicate failure from remember_batch must not surface as an
-    error — matches the per-fact loop's contract."""
+def test_gnosis_batch_409_dedup_is_silent(store_mock) -> None:
+    """A 409/duplicate failure from the store must not surface as an error —
+    matches the per-fact loop's contract."""
     client = _make_pro_client()
-    client.remember_batch = AsyncMock(
-        side_effect=RuntimeError("409 fingerprint duplicate")
-    )
+    store_mock.side_effect = RuntimeError("409 fingerprint duplicate")
     engine = ImportEngine(client=client, llm_extract=None)
 
     facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(15)))
@@ -304,9 +322,9 @@ def test_gnosis_batch_409_dedup_is_silent() -> None:
     assert facts_stored == 0
 
 
-def test_gnosis_batch_partial_id_list_counts_only_returned_ids(monkeypatch) -> None:
-    """If remember_batch returns fewer ids than facts submitted (likely
-    fingerprint dedup of a subset), only the returned count is credited.
+def test_gnosis_batch_partial_id_list_counts_only_returned_ids(monkeypatch, store_mock) -> None:
+    """If the store returns fewer ids than facts submitted (likely fingerprint
+    dedup of a subset), only the returned count is credited.
 
     Uses 5 no-embedding facts so they form a single group (well under both
     caps) and the ``len(ids) - 2`` short return maps to a deterministic stored
@@ -316,37 +334,35 @@ def test_gnosis_batch_partial_id_list_counts_only_returned_ids(monkeypatch) -> N
     monkeypatch.setattr(_emb, "get_embedding", lambda _t: None)
     client = _make_pro_client()
 
-    async def _short_batch(facts, source="python-client"):
+    async def _short_batch(facts, *a, **kw):
         return [f"id-{i}" for i in range(len(facts) - 2)]
 
-    client.remember_batch = AsyncMock(side_effect=_short_batch)
+    store_mock.side_effect = _short_batch
     engine = ImportEngine(client=client, llm_extract=None)
 
     facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(5)))
 
     assert errors == []
-    assert client.remember_batch.await_count == 1
+    assert store_mock.await_count == 1
     assert facts_stored == 3
 
 
-def test_gnosis_batch_non_dedup_error_surfaced() -> None:
+def test_gnosis_batch_non_dedup_error_surfaced(store_mock) -> None:
     """A non-409, non-sim-revert error (e.g. AA25) propagates one error per
-    group with no halving. One error per remember_batch call."""
+    group with no halving. One error per store call."""
     client = _make_pro_client()
-    client.remember_batch = AsyncMock(
-        side_effect=RuntimeError("AA25 nonce zombie")
-    )
+    store_mock.side_effect = RuntimeError("AA25 nonce zombie")
     engine = ImportEngine(client=client, llm_extract=None)
 
     facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(45)))
 
     assert facts_stored == 0
     # AA25 is not a sim-size revert → no halving → exactly one error per group.
-    assert len(errors) == client.remember_batch.await_count
+    assert len(errors) == store_mock.await_count
     assert all("AA25 nonce zombie" in e for e in errors)
 
 
-def test_empty_input_returns_zero_no_calls() -> None:
+def test_empty_input_returns_zero_no_calls(store_mock) -> None:
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
@@ -354,5 +370,5 @@ def test_empty_input_returns_zero_no_calls() -> None:
 
     assert facts_stored == 0
     assert errors == []
-    assert client.remember_batch.await_count == 0
+    assert store_mock.await_count == 0
     assert client.remember.await_count == 0

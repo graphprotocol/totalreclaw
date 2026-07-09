@@ -18,6 +18,7 @@ Fixes exercised here:
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -78,25 +79,49 @@ def test_single_oversize_fact_still_forms_a_group():
 
 
 # ── (c)+(d) adaptive halving via _store_facts_chunked ─────────────────────
-class _SimClient:
-    """Gnosis client that fails remember_batch when a predicate on the group
-    size says so; records every group size it was called with."""
+# internal#448 single-pass: the import engine calls the REAL store
+# (store_fact_batch) directly through ONE group_and_store_adaptive pass — it no
+# longer wraps client.remember_batch (wrapping it would nest two halving
+# cascades: remember_batch's inner pass re-raises a RuntimeError wrapping the
+# inner floor-1 -32500, which the OUTER pass mis-detects as a fresh sim-revert
+# → re-halves → re-stores already-stored facts). So these cascade assertions
+# now observe store_fact_batch — the single layer that owns the halving —
+# reached via a fake client whose store-setup privates are stubbed. The
+# [10,5,5] / [4,2,2] / [4] expectations are UNCHANGED: the grouping + halving
+# logic is identical, just observed at the layer that now runs it.
+def _gnosis_client() -> MagicMock:
+    """Fake client resolved on Gnosis (chain 100) with the store-setup privates
+    the engine assembles its WalletContext from stubbed (no crypto / relay)."""
+    client = MagicMock()
+    client._ensure_chain_id = AsyncMock(return_value=100)
+    client._ensure_address = AsyncMock()
+    client._ensure_registered = AsyncMock()
+    client._wallet_context = MagicMock(return_value=MagicMock(name="wallet"))
+    client._relay = MagicMock(name="relay")
+    client._data_edge_address = None
+    client._get_lsh_hasher = MagicMock(return_value=None)
+    # Pre-write dedup fails open / no-op so all facts reach the store.
+    client.find_duplicate_texts = AsyncMock(return_value=None)
+    return client
 
-    def __init__(self, fail_pred):
-        self.calls: list[int] = []
-        self._fail = fail_pred
 
-    async def _ensure_chain_id(self):
-        return 100
+def _wire_store(monkeypatch, fail_pred=lambda n: False) -> list[int]:
+    """Patch the engine's ``store_fact_batch`` with a recorder that raises a
+    sim-revert when ``fail_pred(group_size)`` is true. Returns the list of
+    observed group sizes (in call order) so a test can assert the cascade."""
+    calls: list[int] = []
 
-    async def remember_batch(self, payloads, source=None):
-        self.calls.append(len(payloads))
-        if self._fail(len(payloads)):
+    async def _store(facts, *a, **kw):
+        calls.append(len(facts))
+        if fail_pred(len(facts)):
             raise RuntimeError(
                 "UserOperation reverted during simulation with reason: -32500 "
                 "Sender does not implement validateUserOp or factory is not deployed"
             )
-        return [f"id{i}" for i in range(len(payloads))]
+        return [f"id{i}" for i in range(len(facts))]
+
+    monkeypatch.setattr("totalreclaw.import_engine.store_fact_batch", _store)
+    return calls
 
 
 @pytest.fixture(autouse=True)
@@ -115,78 +140,77 @@ def _facts(n):
     ]
 
 
-def test_sim_revert_halves_and_stores_all():
+def test_sim_revert_halves_and_stores_all(monkeypatch):
     # A 10-fact group sim-reverts; halves (5+5) succeed → all 10 stored, no
-    # errors. Client sees group sizes [10, 5, 5].
-    client = _SimClient(fail_pred=lambda n: n > 5)
-    engine = ImportEngine(client=client, llm_extract=None)
+    # errors. Store sees group sizes [10, 5, 5].
+    calls = _wire_store(monkeypatch, fail_pred=lambda n: n > 5)
+    engine = ImportEngine(client=_gnosis_client(), llm_extract=None)
     stored, errors, dups = asyncio.run(engine._store_facts_chunked(_facts(10)))
     assert stored == 10
     assert errors == []
-    assert client.calls == [10, 5, 5]
+    assert calls == [10, 5, 5]
 
 
-def test_sim_revert_at_single_fact_floor_surfaces_error():
+def test_sim_revert_at_single_fact_floor_surfaces_error(monkeypatch):
     # Every group (down to 1 fact) sim-reverts → the single-fact floor surfaces
     # an error rather than silently dropping the fact.
-    client = _SimClient(fail_pred=lambda n: True)
-    engine = ImportEngine(client=client, llm_extract=None)
+    calls = _wire_store(monkeypatch, fail_pred=lambda n: True)
+    engine = ImportEngine(client=_gnosis_client(), llm_extract=None)
     stored, errors, dups = asyncio.run(engine._store_facts_chunked(_facts(1)))
     assert stored == 0
     assert errors
     assert "Batch store failed" in errors[0]
 
 
-def test_sim_revert_partial_floor_failure_stores_the_rest():
+def test_sim_revert_partial_floor_failure_stores_the_rest(monkeypatch):
     # 4 facts: the full group reverts, halves to 2+2; one 2-group succeeds,
     # the other reverts and halves to 1+1 which both fail at the floor.
     # Deterministic on group SIZE: fail any group of size != 2. So [4]→halve,
     # [2],[2] succeed → actually stores all. Use a size-based fail that still
     # exercises a floor error: fail sizes 4 and 1.
-    client = _SimClient(fail_pred=lambda n: n in (4, 1))
-    engine = ImportEngine(client=client, llm_extract=None)
+    calls = _wire_store(monkeypatch, fail_pred=lambda n: n in (4, 1))
+    engine = ImportEngine(client=_gnosis_client(), llm_extract=None)
     stored, errors, dups = asyncio.run(engine._store_facts_chunked(_facts(4)))
     # [4] reverts → [2],[2] both succeed (size 2 not in fail set).
     assert stored == 4
     assert errors == []
-    assert client.calls == [4, 2, 2]
+    assert calls == [4, 2, 2]
 
 
-def test_aa25_with_32500_code_does_not_halve():
+def test_aa25_with_32500_code_does_not_halve(monkeypatch):
     """Review Finding 2: an AA25 that exhausted the userop-layer retry
     propagates carrying a ``-32500`` code. That is NOT a size revert — it must
-    surface immediately (one remember_batch call, no halving)."""
-    client = _SimClient(fail_pred=lambda n: True)
+    surface immediately (one store call, no halving)."""
+    calls: list[int] = []
 
-    async def _raise_aa25(payloads, source=None):
-        client.calls.append(len(payloads))
+    async def _raise_aa25(facts, *a, **kw):
+        calls.append(len(facts))
         raise RuntimeError(
             "UserOperation reverted during validation: AA25 invalid account "
             "nonce (code -32500)"
         )
 
-    client.remember_batch = _raise_aa25
-    engine = ImportEngine(client=client, llm_extract=None)
+    monkeypatch.setattr("totalreclaw.import_engine.store_fact_batch", _raise_aa25)
+    engine = ImportEngine(client=_gnosis_client(), llm_extract=None)
     stored, errors, _ = asyncio.run(engine._store_facts_chunked(_facts(4)))
     assert stored == 0
     assert errors  # surfaced
-    assert client.calls == [4]  # exactly one attempt — NOT halved
+    assert calls == [4]  # exactly one attempt — NOT halved
 
 
-def test_sim_revert_without_code_still_halves():
+def test_sim_revert_without_code_still_halves(monkeypatch):
     """A "reverted during simulation" message with no -32500 code still
     triggers halving (the phrase is sufficient)."""
-    calls = []
+    calls: list[int] = []
 
-    async def _rb(payloads, source=None):
-        calls.append(len(payloads))
-        if len(payloads) > 2:
+    async def _store(facts, *a, **kw):
+        calls.append(len(facts))
+        if len(facts) > 2:
             raise RuntimeError("UserOperation reverted during simulation with reason: out of gas")
-        return [f"id{i}" for i in range(len(payloads))]
+        return [f"id{i}" for i in range(len(facts))]
 
-    client = _SimClient(fail_pred=lambda n: False)
-    client.remember_batch = _rb
-    engine = ImportEngine(client=client, llm_extract=None)
+    monkeypatch.setattr("totalreclaw.import_engine.store_fact_batch", _store)
+    engine = ImportEngine(client=_gnosis_client(), llm_extract=None)
     stored, errors, _ = asyncio.run(engine._store_facts_chunked(_facts(4)))
     assert stored == 4
     assert errors == []
