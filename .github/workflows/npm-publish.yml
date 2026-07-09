@@ -103,7 +103,9 @@ jobs:
         # legacy token → E404 after NPM_TOKEN expired (the 2026-06-07 core run).
         # Tokenless OIDC (the OIDC token IS the auth) needs npm >= 11.5.1.
         run: |
-          npm install -g npm@latest
+          # Pinned to npm@11 — npm 12.0.0 (latest as of 2026-07-09) ships a broken
+          # --provenance path (Cannot find module 'sigstore'). 11.x publishes fine.
+          npm install -g npm@11
           npm --version
 
       - name: Publish
@@ -246,7 +248,9 @@ jobs:
         # signed sigstore provenance successfully but the PUT 404'd
         # (2026-05-24 run 26374302750).
         run: |
-          npm install -g npm@latest
+          # Pinned to npm@11 — npm 12.0.0 (latest as of 2026-07-09) ships a broken
+          # --provenance path (Cannot find module 'sigstore'). 11.x publishes fine.
+          npm install -g npm@11
           npm --version
 
       - name: Publish
@@ -459,7 +463,9 @@ jobs:
         # Tokenless OIDC (the OIDC token IS the auth) needs npm >= 11.5.1.
         # Mirrors publish-core / publish-mcp-server (migrated off NPM_TOKEN).
         run: |
-          npm install -g npm@latest
+          # Pinned to npm@11 — npm 12.0.0 (latest as of 2026-07-09) ships a broken
+          # --provenance path (Cannot find module 'sigstore'). 11.x publishes fine.
+          npm install -g npm@11
           npm --version
 
       - name: Publish
