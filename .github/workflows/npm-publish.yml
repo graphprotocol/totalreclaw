@@ -207,25 +207,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: 'v0.14.0'  # pinned to stop `latest`-tag flake; v0.9.1 lacks --features
-
-      # NOTE: `mcp/package.json` used to depend on `@totalreclaw/core` via a
-      # `file:` dep, which required building the WASM pkg locally. It now
-      # depends on `@totalreclaw/core@^2.0.0` from npm, which the
-      # `publish-core` job above already published. This step is therefore
-      # dead code and can be removed in a cleanup PR once no branch carries
-      # the old `file:` dep.
-      - name: "Build @totalreclaw/core (WASM) [transitional — safe to drop]"
-        run: |
-          cd rust/totalreclaw-core
-          wasm-pack build --target nodejs --out-dir pkg --features wasm
-          # wasm-pack emits package name "totalreclaw-core"; historically mcp consumed it as "@totalreclaw/core" via file: dep
-          node -e "const p=require('./pkg/package.json'); p.name='@totalreclaw/core'; require('fs').writeFileSync('./pkg/package.json', JSON.stringify(p,null,2)+'\n')"
-
+      # `mcp/package.json` depends on `@totalreclaw/core@^2.5.x` from npm,
+      # which the `publish-core` job above already published. `npm install`
+      # resolves it from the registry — no local WASM build is needed.
       - uses: actions/setup-node@v5
         with:
           node-version: '22'

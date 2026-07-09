@@ -60,15 +60,6 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: 'v0.14.0'
-      - name: Build @totalreclaw/core (WASM) [transitional]
-        run: |
-          cd rust/totalreclaw-core
-          wasm-pack build --target nodejs --out-dir pkg --features wasm
-          node -e "const p=require('./pkg/package.json'); p.name='@totalreclaw/core'; require('fs').writeFileSync('./pkg/package.json', JSON.stringify(p,null,2)+'\n')"
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
@@ -199,25 +190,8 @@ jobs:
       ONNXRUNTIME_NODE_INSTALL_CUDA: skip
     steps:
       - uses: actions/checkout@v5
-      # NOTE: The `mcp` package now depends on `@totalreclaw/core@^2.0.0` from
-      # npm (previously a `file:` dep against the local wasm-pack output). The
-      # local WASM build below is now dead code — `npm install` resolves core
-      # from the registry, never from the local `pkg/` directory. It is kept
-      # transitionally so this job continues to green out on branches that
-      # still carry the old `file:` dep. Once `@totalreclaw/core@2.x` is live
-      # on npm AND no branch references the `file:` dep, the
-      # `dtolnay/rust-toolchain`, `wasm-pack-action`, and
-      # `Build @totalreclaw/core (WASM)` steps can be removed in a cleanup PR.
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: 'v0.14.0'  # pinned to stop `latest`-tag flake; v0.9.1 lacks --features
-      - name: Build @totalreclaw/core (WASM) [transitional — safe to drop once core@2.x is on npm]
-        run: |
-          cd rust/totalreclaw-core
-          wasm-pack build --target nodejs --out-dir pkg --features wasm
-          # wasm-pack emits package name "totalreclaw-core"; consumers expect "@totalreclaw/core"
-          node -e "const p=require('./pkg/package.json'); p.name='@totalreclaw/core'; require('fs').writeFileSync('./pkg/package.json', JSON.stringify(p,null,2)+'\n')"
+      # `mcp` depends on `@totalreclaw/core@^2.5.x` from npm — `npm install`
+      # resolves it from the registry, so no local WASM build is needed here.
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
