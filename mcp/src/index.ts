@@ -67,6 +67,7 @@ import {
   type FactPayload,
   type SubgraphStoreConfig,
 } from './subgraph/store.js';
+import { resolveChainConfig, buildSubgraphOverrides } from './subgraph/chain-config.js';
 import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, fetchFactById } from './subgraph/search.js';
 import { confirmIndexed } from './subgraph/confirm-indexed.js';
 import {
@@ -282,6 +283,25 @@ interface SubgraphState {
   lshHasher: LSHHasher;
   serverUrl: string;
   smartAccountAddress: string;
+  /** Chain to write to — resolved verbatim from billing chain_id (#439). */
+  chainId: number;
+  /** DataEdge contract — resolved verbatim from billing data_edge_address (#439). Undefined ⇒ env/default. */
+  dataEdgeAddress?: string;
+}
+
+/**
+ * Build the getSubgraphConfig override for a managed-service write, threading
+ * the billing-resolved chain + DataEdge onto every on-chain write site (#439).
+ */
+function stateWriteOverrides(state: SubgraphState): Partial<SubgraphStoreConfig> {
+  return buildSubgraphOverrides({
+    relayUrl: state.serverUrl,
+    mnemonic: state.mnemonic,
+    authKeyHex: Buffer.from(state.authKey).toString('hex'),
+    walletAddress: state.smartAccountAddress,
+    chainId: state.chainId,
+    dataEdgeAddress: state.dataEdgeAddress,
+  });
 }
 
 let subgraphState: SubgraphState | null = null;
@@ -343,13 +363,14 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
 
   const smartAccountAddress = smartAccount.address.toLowerCase();
 
-  // Determine chain ID: always auto-detect from billing tier.
-  // Free tier → Base Sepolia (84532, testnet — Pimlico sponsors gas for free).
-  // Pro tier  → Gnosis mainnet (100, permanent on-chain storage).
-  // TOTALRECLAW_CHAIN_ID user-facing override was removed in v1.
-  let chainId = 84532; // default free tier
-
-  // Auto-detect Pro tier from billing endpoint.
+  // Resolve chain + DataEdge from the relay's billing response, verbatim (#439).
+  // The relay is authoritative: it returns `chain_id` + `data_edge_address` in
+  // GET /v1/billing/status. After ops-1 both tiers run on Gnosis (chain 100);
+  // the legacy Free → Base Sepolia (84532) mapping was retired. Consuming the
+  // relay's values verbatim means a future chain move needs zero client release.
+  // (The client `TOTALRECLAW_CHAIN_ID` override was removed in v1.)
+  let chainId = 100; // Gnosis default when billing is unreachable
+  let dataEdgeAddress: string | undefined; // undefined ⇒ env/store default
   {
     try {
       const billingUrl = `${SERVER_URL.replace(/\/+$/, '')}/v1/billing/status?wallet_address=${encodeURIComponent(smartAccountAddress)}`;
@@ -362,13 +383,16 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
       });
       if (resp.ok) {
         const billing = (await resp.json()) as Record<string, unknown>;
-        if (billing.tier === 'pro') {
-          chainId = 100;
-          console.error('TotalReclaw: Pro tier detected — using Gnosis mainnet (chain 100).');
-        }
+        const resolved = resolveChainConfig(billing);
+        chainId = resolved.chainId;
+        dataEdgeAddress = resolved.dataEdgeAddress;
+        console.error(
+          `TotalReclaw: tier=${billing.tier ?? 'unknown'}, chain=${chainId}` +
+            (dataEdgeAddress ? `, dataEdge=${dataEdgeAddress}` : '') + '.',
+        );
       }
     } catch {
-      // Best-effort — default to free tier chain if billing is unreachable.
+      // Best-effort — fall back to the Gnosis default if billing is unreachable.
     }
   }
 
@@ -395,6 +419,8 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
     lshHasher,
     serverUrl: SERVER_URL,
     smartAccountAddress,
+    chainId,
+    dataEdgeAddress,
   };
 }
 
@@ -888,12 +914,7 @@ async function handleRememberSubgraph(
   // Batch-submit all payloads (tombstones + facts) in a single UserOp
   if (pendingPayloads.length > 0) {
     try {
-      const batchConfig = getSubgraphConfig({
-        relayUrl: state.serverUrl,
-        mnemonic: state.mnemonic,
-        authKeyHex: Buffer.from(state.authKey).toString('hex'),
-        walletAddress: state.smartAccountAddress,
-      });
+      const batchConfig = getSubgraphConfig(stateWriteOverrides(state));
       const batchResult = await submitFactBatchOnChain(pendingPayloads, batchConfig);
       for (const meta of pendingFactMeta) {
         results.push({
@@ -1001,12 +1022,7 @@ async function handleDebriefSubgraph(
         encryptedEmbedding: encryptedEmb,
       };
 
-      const batchConfig = getSubgraphConfig({
-        relayUrl: state.serverUrl,
-        mnemonic: state.mnemonic,
-        authKeyHex: Buffer.from(state.authKey).toString('hex'),
-        walletAddress: state.smartAccountAddress,
-      });
+      const batchConfig = getSubgraphConfig(stateWriteOverrides(state));
       const batchResult = await submitFactBatchOnChain([encodeFactProtobuf(factPayload)], batchConfig);
       console.error(`Crystal debrief stored (tx=${batchResult.txHash.slice(0, 10)}...)`);
       return {
@@ -1081,12 +1097,7 @@ async function handleDebriefSubgraph(
 
   if (pendingPayloads.length > 0) {
     try {
-      const batchConfig = getSubgraphConfig({
-        relayUrl: state.serverUrl,
-        mnemonic: state.mnemonic,
-        authKeyHex: Buffer.from(state.authKey).toString('hex'),
-        walletAddress: state.smartAccountAddress,
-      });
+      const batchConfig = getSubgraphConfig(stateWriteOverrides(state));
       const batchResult = await submitFactBatchOnChain(pendingPayloads, batchConfig);
       for (const meta of pendingFactMeta) {
         results.push({ success: batchResult.success, fact_id: meta.factId, tx_hash: batchResult.txHash });
@@ -1357,12 +1368,7 @@ async function handleForgetSubgraph(
     };
 
     const protobuf = encodeFactProtobuf(tombstonePayload);
-    const config = getSubgraphConfig({
-      relayUrl: state.serverUrl,
-      mnemonic: state.mnemonic,
-      authKeyHex: Buffer.from(state.authKey).toString('hex'),
-      walletAddress: state.smartAccountAddress,
-    });
+    const config = getSubgraphConfig(stateWriteOverrides(state));
 
     const { txHash, success } = await submitFactOnChain(protobuf, config);
 
@@ -1433,12 +1439,7 @@ function buildPinDepsFromState(state: SubgraphState): PinOpDeps {
       return Buffer.from(base64, 'base64').toString('hex');
     },
     submitBatch: async (payloads: Buffer[]) => {
-      const config = getSubgraphConfig({
-        relayUrl: state.serverUrl,
-        mnemonic: state.mnemonic,
-        authKeyHex: Buffer.from(state.authKey).toString('hex'),
-        walletAddress: state.smartAccountAddress,
-      });
+      const config = getSubgraphConfig(stateWriteOverrides(state));
       const batchResult = await submitFactBatchOnChain(payloads, config);
       return { txHash: batchResult.txHash, success: batchResult.success };
     },

@@ -510,7 +510,10 @@ export function getSubgraphConfig(overrides?: Partial<SubgraphStoreConfig>): Sub
     relayUrl: process.env.TOTALRECLAW_SERVER_URL || 'https://api.totalreclaw.xyz',
     mnemonic: process.env.TOTALRECLAW_RECOVERY_PHRASE || '',
     cachePath: process.env.TOTALRECLAW_CACHE_PATH || `${process.env.HOME}/.totalreclaw/cache.enc`,
-    chainId: 84532,
+    // Single-chain Gnosis (chain 100) after ops-1 — both tiers. The relay's
+    // billing chain_id (threaded via overrides) is authoritative; 84532
+    // (Base Sepolia) was retired. See chain-config.ts / #439.
+    chainId: 100,
     dataEdgeAddress: process.env.TOTALRECLAW_DATA_EDGE_ADDRESS || DEFAULT_DATA_EDGE_ADDRESS,
     entryPointAddress: process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || DEFAULT_ENTRYPOINT_ADDRESS,
   };
