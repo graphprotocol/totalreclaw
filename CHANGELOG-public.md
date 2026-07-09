@@ -2,6 +2,10 @@
 
 > **Note:** This file lists releases promoted to the public registries' stable tags. Active release-candidate work (`@rc` dist-tag on npm, `rcN` on PyPI, etc.) is tracked in the internal release-pipeline tracker, not here.
 
+## @totalreclaw/mcp-server 3.4.0 — Stable release (2026-07-09)
+
+MCP server minor. **Fix:** managed-service writes now consume the relay's billing `chain_id` + `data_edge_address` verbatim (#439) — previously every managed write fell through to a retired default chain + the production DataEdge, breaking staging testability and client-consistency; staging write→read E2E validated. **Restructure:** unified data-driven tool-dispatch table + shared `ToolContext`; `memory_id` is now the canonical id param (`fact_id` kept as alias). **Removed:** the long-deprecated, non-functional `totalreclaw_migrate` tool (minor, not major — no working call site lost it). See `mcp/CHANGELOG.md` for detail.
+
 ## totalreclaw 2.4.4 — Stable promote (2026-06-06)
 
 Hermes client stable line (Python `totalreclaw` 2.3.1 → 2.4.4). This cycle focused on the Hermes integration and the managed service's move to a single chain. (OpenClaw plugin + MCP server are unchanged this cycle.)

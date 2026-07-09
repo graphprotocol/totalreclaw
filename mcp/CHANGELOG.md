@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.4.0] - 2026-07-09
+
+Minor release. Bundles the code-health restructure (from the repo-wide desloppify sweep) with the #439 managed-service chain/DataEdge correctness fix. Minor, not major, despite a tool removal — the removed tool was already deprecated + non-functional (see Removed).
+
+### Fixed
+- **[#439] Managed-service writes now consume the relay's billing `chain_id` + `data_edge_address` verbatim.** Previously EVERY managed-mode write (free **and** pro) fell through to the `getSubgraphConfig` default of chain `84532` (Base Sepolia, retired at ops-1) and the **production** DataEdge `0xC445…` — the tier→`chainId=100` flip was dead code, never threaded into the write config. On the staging relay this meant writes landed on the prod DataEdge and were invisible on the staging subgraph; more broadly it was a client-consistency violation vs the Python client + OpenClaw plugin. New `src/subgraph/chain-config.ts` (`resolveChainConfig` / `buildSubgraphOverrides`) resolves both fields from `/v1/billing/status`, carries them on `SubgraphState`, and threads them into all 5 managed-write sites via `stateWriteOverrides`. Default chain flipped `84532 → 100`. The `TOTALRECLAW_DATA_EDGE_ADDRESS` env override still wins over billing. Validated by a staging write→read E2E: a fresh account's write hit the **staging** DataEdge `0xE7a4D2…` (on-chain receipt), indexed on the staging subgraph, recalled back. Sibling of plugin `#402` (chain_id) + `#460` (data_edge_address).
+
+### Changed
+- **Tool dispatch unified into a single data-driven table** (`src/dispatch.ts` + `src/server-setup.ts`). The two parallel self-hosted/managed `switch` statements + per-tool glue are replaced by one router: `TOOL_MANIFEST` (mode-independent tool list), `SUBGRAPH_POLICY` / `HTTP_POLICY` (per-(tool, mode) cross-cutting behaviour as data), and `createCallToolHandler` with handlers injected as pre-bound bundles. Routing order preserved verbatim; behaviour-preserving.
+- **`memory_id` is the canonical id parameter** for pin/unpin/retype/set-scope; `fact_id` is kept as a back-compat alias so existing callers don't break.
+- Handlers take a shared `ToolContext` (dependency-injection bundle) instead of per-handler positional/options variance.
+- Domain restructure: crypto/subgraph/extraction/tools split into subdirectories; several helpers de-async'd where they never awaited.
+
+### Removed
+- **`totalreclaw_migrate` tool deleted.** It was already marked `[DEPRECATED] INVOKE WHEN: never` and was non-functional (the legacy cross-chain migration path it wrapped was retired with single-chain ops-1). No working call site loses functionality — hence a **minor**, not a major, bump. Stale catalogs that still reference it get the standard tool-removed error envelope.
+
 ## [3.2.1] - 2026-04-26
 
 ### Security
