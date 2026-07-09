@@ -134,9 +134,30 @@ export function endRecompile(): void {
   _recompileInProgress = false;
 }
 
+/**
+ * Signature of the claim set that drove the last *scheduled* recompile —
+ * the recency probe's `maxCreatedAt` at the moment we called `recompileFn`.
+ * `null` means "no attempt yet", which is distinct from any real timestamp
+ * (including 0 for an empty vault), so the very first attempt is never
+ * mistaken for a repeat.
+ *
+ * Issue #455: a recompile's on-chain write (digest store + previous-digest
+ * tombstone) isn't visible to `loadLatestDigest` until the subgraph indexes
+ * it (can take ~20s). Every `before_agent_start` call in that window still
+ * sees the OLD digest against the SAME unchanged set of active claims, so
+ * `evaluateDigestState` keeps reporting stale+recompile and would fire a
+ * second (third, fourth…) UserOp for content that produces an identical
+ * digest. Tracking the signature we already acted on lets us skip those
+ * repeats while still recompiling the instant a genuinely newer claim
+ * (or a tombstone/supersession, which also bumps the recency probe's
+ * `maxCreatedAt`) shows up.
+ */
+let _lastRecompileSignature: number | null = null;
+
 /** Test-only helper to reset module state between cases. */
 export function __resetDigestSyncState(): void {
   _recompileInProgress = false;
+  _lastRecompileSignature = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -562,7 +583,16 @@ export async function maybeInjectDigest(
   });
 
   if (state.stale && state.recompile && !isRecompileInProgress()) {
-    recompileFn(loaded.claimId);
+    // Coalesce: only fire if the claim set feeding the digest has actually
+    // moved since the last recompile we scheduled. Otherwise we're re-firing
+    // for the same content while the previous write is still propagating
+    // through subgraph indexing — see `_lastRecompileSignature` above.
+    if (probe.maxCreatedAt !== _lastRecompileSignature) {
+      _lastRecompileSignature = probe.maxCreatedAt;
+      recompileFn(loaded.claimId);
+    } else {
+      logger.info('Digest: skip recompile — claim set unchanged');
+    }
   }
 
   const promptText = typeof loaded.digest.prompt_text === 'string' ? loaded.digest.prompt_text : null;

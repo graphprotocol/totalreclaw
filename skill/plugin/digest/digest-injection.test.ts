@@ -880,6 +880,144 @@ function fakeDigestBlob(digestVersion: number, compiledAt: string): string {
   digestSync.endRecompile();
 }
 
+// ---------------------------------------------------------------------------
+// Recompile coalescing (#455) — skip repeat recompiles for an unchanged
+// claim set, but never skip a genuinely newer one.
+// ---------------------------------------------------------------------------
+
+// Two calls back-to-back with the SAME recency-probe signal (i.e. the
+// on-chain write from the first recompile hasn't been indexed yet, so the
+// digest still looks stale against the identical set of active claims) →
+// only the first call should fire recompileFn.
+{
+  const { maybeInjectDigest, __resetDigestSyncState } = await import('./digest-sync.js');
+  __resetDigestSyncState();
+
+  const compiledAt = '2026-04-10T00:00:00Z';
+  const nowMs = Date.parse('2026-04-12T00:00:00Z');
+  const digestVersion = 1776000000;
+  const newerMax = digestVersion + 1000;
+  const blob = fakeDigestBlob(digestVersion, compiledAt);
+
+  const call = () =>
+    maybeInjectDigest({
+      owner: '0xabc',
+      authKeyHex: 'ff',
+      encryptionKey: Buffer.alloc(32),
+      mode: 'on',
+      nowMs,
+      loadDeps: {
+        searchSubgraph: async () => [
+          { id: 'digest-claim-id', encryptedBlob: 'dummy', createdAt: String(digestVersion) },
+        ],
+        decryptFromHex: () => blob,
+      },
+      probeDeps: {
+        // Identical recency signal on every call — no new on-chain claim.
+        searchSubgraphBroadened: async () => [{ createdAt: String(newerMax) }],
+      },
+      recompileFn: (prev) => { recompileCalls.push(prev); },
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+  const recompileCalls: Array<string | null> = [];
+  const first = await call();
+  const second = await call();
+
+  assert(first.state === 'stale', 'coalesce: first call → stale state');
+  assert(second.state === 'stale', 'coalesce: second call (unchanged claim set) → still reports stale');
+  assertEq(
+    recompileCalls,
+    ['digest-claim-id'],
+    'coalesce: unchanged claim set → recompile fires once, not twice',
+  );
+}
+
+// A genuinely newer claim set (recency probe advances) after the first
+// recompile MUST still trigger a fresh recompile — the skip is content-aware,
+// not a blanket cooldown.
+{
+  const { maybeInjectDigest, __resetDigestSyncState } = await import('./digest-sync.js');
+  __resetDigestSyncState();
+
+  const compiledAt = '2026-04-10T00:00:00Z';
+  const nowMs = Date.parse('2026-04-12T00:00:00Z');
+  const digestVersion = 1776000000;
+  const blob = fakeDigestBlob(digestVersion, compiledAt);
+  const recompileCalls: Array<string | null> = [];
+
+  const callWithMax = (maxCreatedAt: number) =>
+    maybeInjectDigest({
+      owner: '0xabc',
+      authKeyHex: 'ff',
+      encryptionKey: Buffer.alloc(32),
+      mode: 'on',
+      nowMs,
+      loadDeps: {
+        searchSubgraph: async () => [
+          { id: 'digest-claim-id', encryptedBlob: 'dummy', createdAt: String(digestVersion) },
+        ],
+        decryptFromHex: () => blob,
+      },
+      probeDeps: {
+        searchSubgraphBroadened: async () => [{ createdAt: String(maxCreatedAt) }],
+      },
+      recompileFn: (prev) => { recompileCalls.push(prev); },
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+  await callWithMax(digestVersion + 1000); // first batch's new claims
+  await callWithMax(digestVersion + 1000); // subgraph indexing lag — same set, should skip
+  await callWithMax(digestVersion + 2000); // second batch's new claims — must fire again
+
+  assertEq(
+    recompileCalls,
+    ['digest-claim-id', 'digest-claim-id'],
+    'coalesce: a genuinely newer claim set still fires its own recompile',
+  );
+}
+
+// A fresh __resetDigestSyncState() clears the signature, so a brand-new
+// process (or explicit reset) doesn't inherit a stale skip decision.
+{
+  const { maybeInjectDigest, __resetDigestSyncState } = await import('./digest-sync.js');
+
+  const compiledAt = '2026-04-10T00:00:00Z';
+  const nowMs = Date.parse('2026-04-12T00:00:00Z');
+  const digestVersion = 1776000000;
+  const newerMax = digestVersion + 1000;
+  const blob = fakeDigestBlob(digestVersion, compiledAt);
+  let recompileCalls = 0;
+
+  const call = () =>
+    maybeInjectDigest({
+      owner: '0xabc',
+      authKeyHex: 'ff',
+      encryptionKey: Buffer.alloc(32),
+      mode: 'on',
+      nowMs,
+      loadDeps: {
+        searchSubgraph: async () => [
+          { id: 'digest-claim-id', encryptedBlob: 'dummy', createdAt: String(digestVersion) },
+        ],
+        decryptFromHex: () => blob,
+      },
+      probeDeps: {
+        searchSubgraphBroadened: async () => [{ createdAt: String(newerMax) }],
+      },
+      recompileFn: () => { recompileCalls++; },
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+  __resetDigestSyncState();
+  await call(); // fires — signature was null
+  assert(recompileCalls === 1, 'coalesce: reset → first call after reset always fires');
+
+  __resetDigestSyncState();
+  await call(); // fires again — reset cleared the remembered signature
+  assert(recompileCalls === 2, 'coalesce: __resetDigestSyncState clears the remembered signature');
+}
+
 // Subgraph query failure in loadLatestDigest → treated as "no digest" → first-compile.
 {
   const { maybeInjectDigest, __resetDigestSyncState } = await import('./digest-sync.js');
