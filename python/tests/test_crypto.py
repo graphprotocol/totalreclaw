@@ -1,5 +1,6 @@
 """Parity tests for TotalReclaw Python crypto against TypeScript fixtures."""
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,16 @@ from totalreclaw.crypto import (
     encrypt_embedding,
     decrypt_embedding,
 )
+from totalreclaw.embedding import EMBEDDING_DIMS
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
 
 FIXTURES = json.loads(
     (Path(__file__).parent / "fixtures" / "crypto_vectors.json").read_text()
@@ -74,13 +85,26 @@ class TestEncryption:
             decrypt("dGVzdA==", b"short")
 
     def test_embedding_roundtrip(self):
+        """f16 packing is lossy — assert fidelity, not exact f32 equality.
+
+        Uses a realistic 640-dim unit-normalized vector (the production
+        embedding shape). encrypt_embedding writes half-precision; the
+        round-trip must preserve cosine >= 0.9999 and each element within
+        2e-3.
+        """
         keys = derive_keys_from_mnemonic(FIXTURES["mnemonic"])
-        emb = [0.1, 0.2, 0.3, -0.5, 1.0]
+        # Deterministic 640-dim unit-normalized vector (no pytest-randomly
+        # dependence; values in ~[-1, 1] like a real Harrier embedding).
+        raw = [math.sin(i * 0.0137) * math.cos(i * 0.0079) for i in range(EMBEDDING_DIMS)]
+        norm = math.sqrt(sum(x * x for x in raw)) or 1.0
+        emb = [x / norm for x in raw]
         decrypted = decrypt_embedding(
             encrypt_embedding(emb, keys.encryption_key), keys.encryption_key
         )
+        assert len(decrypted) == EMBEDDING_DIMS
+        assert _cosine(emb, decrypted) >= 0.9999
         for a, b in zip(emb, decrypted):
-            assert abs(a - b) < 1e-6
+            assert abs(a - b) <= 2e-3
 
 
 class TestBlindIndices:

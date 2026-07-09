@@ -12,6 +12,11 @@ from dataclasses import dataclass
 
 import totalreclaw_core
 
+# Fixed production embedding dim — used to infer dtype on read (see
+# decrypt_embedding). Imported here rather than re-declared so there is a
+# single source of truth.
+from totalreclaw.embedding import EMBEDDING_DIMS
+
 # ---------------------------------------------------------------------------
 # Key Derivation
 # ---------------------------------------------------------------------------
@@ -107,16 +112,40 @@ def generate_content_fingerprint(plaintext: str, dedup_key: bytes) -> str:
 
 
 def encrypt_embedding(embedding: list[float], encryption_key: bytes) -> str:
-    """Encrypt embedding: pack as LE float32 array -> base64 -> encrypt."""
-    buf = struct.pack(f"<{len(embedding)}f", *embedding)
+    """Encrypt embedding: pack as LE half-precision (f16) array -> base64 -> encrypt.
+
+    Production embeddings are unit-normalized floats in ~[-1, 1] (Harrier
+    640-dim), all representable in IEEE-754 half precision. struct's ``'e'``
+    format code packs IEEE-754 half, halving the embedding portion of the
+    stored blob (2560B -> 1280B for a 640-dim vector) at no retrieval-quality
+    cost (round-trip cosine p99 = 1.0; see research/2026-07-06-f16-...-poc.md).
+    """
+    buf = struct.pack(f"<{len(embedding)}e", *embedding)
     return encrypt(base64.b64encode(buf).decode("ascii"), encryption_key)
 
 
 def decrypt_embedding(
     encrypted_embedding: str, encryption_key: bytes
 ) -> list[float]:
-    """Decrypt embedding back to float array."""
+    """Decrypt embedding back to float array, inferring dtype from byte length.
+
+    The dtype is keyed on the fixed production dim rather than a wire marker
+    (a header byte would break legacy f32 decode):
+
+      - ``len(buf) == EMBEDDING_DIMS * 2`` -> f16 (new 640-dim writes, 1280B).
+        Production embeddings are ALWAYS 640-dim, so a 1280B buffer can only be
+        a new f16 write — the length alone is unambiguous here.
+      - otherwise -> f32 (legacy 640-dim blobs written before this change at
+        2560B, AND any non-640-dim vector such as the 1024-dim test fixture).
+
+    This guarantees every pre-existing f32 embedding on-chain still decodes
+    (2560B -> f32) while new 640-dim writes are f16 (1280B).
+    """
     decrypted_base64 = decrypt(encrypted_embedding, encryption_key)
     buf = base64.b64decode(decrypted_base64)
+    if len(buf) == EMBEDDING_DIMS * 2:
+        # New f16 write (640-dim). Upcast half -> Python float.
+        return list(struct.unpack(f"<{len(buf) // 2}e", buf))
+    # Legacy f32 blob (any dim, incl. pre-change 640-dim + non-production dims).
     count = len(buf) // 4
     return list(struct.unpack(f"<{count}f", buf))
