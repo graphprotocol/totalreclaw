@@ -41,7 +41,7 @@ const pluginDir = resolve(here, '..', 'plugin');
 const pkgPath = resolve(pluginDir, 'package.json');
 const skillMdPath = resolve(pluginDir, 'SKILL.md');
 const skillJsonPath = resolve(pluginDir, 'skill.json');
-const trCliPath = resolve(pluginDir, 'tr-cli.ts');
+const trCliPath = resolve(pluginDir, 'cli', 'tr-cli.ts'); // moved to cli/ in the domain restructure (#476)
 
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 const canonical = pkg.version;
