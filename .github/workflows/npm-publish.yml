@@ -65,19 +65,81 @@ jobs:
         with:
           version: 'v0.14.0'  # pinned to stop `latest`-tag flake; v0.9.1 lacks --features
 
-      - name: Build WASM
-        run: cd rust/totalreclaw-core && wasm-pack build --target nodejs --out-dir pkg --features wasm
+      - name: Build WASM (nodejs target — bare `@totalreclaw/core` specifier)
+        run: cd rust/totalreclaw-core && wasm-pack build --target nodejs --out-dir pkg/nodejs --features wasm
+
+      - name: Build WASM (web target — `@totalreclaw/core/web` subpath, #500)
+        # Same crate, same version, built a second time with a different
+        # wasm-bindgen glue target. The compiled .wasm is byte-identical to
+        # the nodejs build (verified locally: only the JS wrapper differs;
+        # `wasm-pack --target` does not affect the wasm-opt output). This
+        # gives the vault SPA a browser-safe entry (no `require`/`fs`) with
+        # structural byte-parity to the published nodejs artifact plugin/
+        # mcp/python already depend on — not a separately-built, unverifiable
+        # binary (see totalreclaw#500).
+        run: cd rust/totalreclaw-core && wasm-pack build --target web --out-dir pkg/web --features wasm
 
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Patch package name for npm scope
+      - name: Compose pkg/package.json (nodejs + web subpath export)
+        # wasm-pack emits a separate package.json per --out-dir, each named
+        # the unscoped "totalreclaw-core". Compose ONE root manifest with an
+        # `exports` map: `.` stays the nodejs build (byte-for-byte unchanged
+        # for existing plugin/mcp/nanoclaw consumers — no breaking change),
+        # `./web` is the new browser-safe build for the vault SPA.
         run: |
           cd rust/totalreclaw-core/pkg
-          # wasm-pack generates "totalreclaw-core" but npm package is "@totalreclaw/core"
-          node -e "const p=require('./package.json'); p.name='@totalreclaw/core'; require('fs').writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n')"
+          node -e "
+          const fs = require('fs');
+          const nodejsPkg = JSON.parse(fs.readFileSync('./nodejs/package.json', 'utf8'));
+
+          const composed = {
+            name: '@totalreclaw/core',
+            description: nodejsPkg.description,
+            version: nodejsPkg.version,
+            license: nodejsPkg.license,
+            repository: nodejsPkg.repository,
+            homepage: nodejsPkg.homepage,
+            keywords: nodejsPkg.keywords,
+            files: ['nodejs/**', 'web/**'],
+            main: './nodejs/totalreclaw_core.js',
+            types: './nodejs/totalreclaw_core.d.ts',
+            exports: {
+              '.': {
+                types: './nodejs/totalreclaw_core.d.ts',
+                default: './nodejs/totalreclaw_core.js'
+              },
+              './web': {
+                types: './web/totalreclaw_core.d.ts',
+                default: './web/totalreclaw_core.js'
+              }
+            }
+          };
+
+          fs.writeFileSync('./package.json', JSON.stringify(composed, null, 2) + '\n');
+          // Only the composed root manifest above governs resolution + npm
+          // packing — drop the per-target manifest wasm-pack generated.
+          fs.rmSync('./nodejs/package.json');
+          // The web build's glue file uses ESM 'export' syntax. Without a
+          // 'type' field on the nearest package.json, Node has to sniff the
+          // file (MODULE_TYPELESS_PACKAGE_JSON perf-overhead warning). Give
+          // it a minimal directory-scoped marker instead of a full manifest
+          // (the root manifest can't declare 'type: module' itself — the
+          // nodejs build's glue file is CommonJS and must stay the default
+          // type for the existing '.' export to resolve correctly).
+          fs.writeFileSync('./web/package.json', JSON.stringify({ type: 'module' }, null, 2) + '\n');
+          // wasm-pack also drops a per-target '.gitignore' containing a bare
+          // '*'. npm's packer respects nested .gitignore/.npmignore files
+          // even with an explicit root 'files' field, so left in place these
+          // silently exclude both target dirs from the published tarball
+          // (verified locally: a 'files'-only compose with the .gitignores
+          // still present produced a 1-file tarball — package.json alone).
+          fs.rmSync('./nodejs/.gitignore', { force: true });
+          fs.rmSync('./web/.gitignore', { force: true });
+          "
           echo "Package name: $(node -e "console.log(require('./package.json').name)")"
           echo "Version: $(node -e "console.log(require('./package.json').version)")"
 
