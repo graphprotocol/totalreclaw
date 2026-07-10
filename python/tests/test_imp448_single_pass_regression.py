@@ -146,7 +146,7 @@ def test_single_pass_no_duplicate_on_unstorable_floor1_fact(monkeypatch):
     client = _real_client_with_stubbed_store()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    stored, errors, _dups = asyncio.run(engine._store_facts_chunked(_facts(15)))
+    stored, errors, _dups, _conv = asyncio.run(engine._store_facts_chunked(_facts(15)))
 
     # (1) NO duplicate on-chain writes: every distinct STORABLE fact appears in
     # the success log AT MOST ONCE. This is the core regression — the nested

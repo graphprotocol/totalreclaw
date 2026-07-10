@@ -225,7 +225,7 @@ def test_engine_delegation_reconciles_counts(monkeypatch):
         {"text": f"distinct fact number {i} about something", "type": "fact", "importance": 8}
         for i in range(10)
     ]
-    stored, errors, dups = asyncio.run(engine._store_facts_chunked(facts))
+    stored, errors, dups, _conv = asyncio.run(engine._store_facts_chunked(facts))
     # 10 facts -> one group of 10 -> sim-revert -> halves 5+5 -> all stored.
     assert stored == 10
     assert errors == []

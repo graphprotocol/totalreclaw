@@ -409,7 +409,7 @@ async def test_store_skips_crossvault_and_intracall_duplicates():
         {"text": "User visited  bergen", "type": "episode", "importance": 7}, # intra-call dup (normalized)
         {"text": "User is vegetarian", "type": "preference", "importance": 8},
     ]
-    stored, errors, dups = await engine._store_facts_chunked(facts)
+    stored, errors, dups, _conv = await engine._store_facts_chunked(facts)
     assert not errors
     assert dups == 2
     assert stored == 2
@@ -427,7 +427,7 @@ async def test_dedup_fails_open_when_lookup_errors():
 
     client = _Brittle(known_texts=set())
     engine = ImportEngine(client=client, llm_extract=None)
-    stored, errors, dups = await engine._store_facts_chunked(
+    stored, errors, dups, _conv = await engine._store_facts_chunked(
         [{"text": "unique fact", "type": "claim", "importance": 8}],
     )
     assert stored == 1 and dups == 0 and not errors

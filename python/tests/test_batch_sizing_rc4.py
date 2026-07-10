@@ -145,7 +145,7 @@ def test_sim_revert_halves_and_stores_all(monkeypatch):
     # errors. Store sees group sizes [10, 5, 5].
     calls = _wire_store(monkeypatch, fail_pred=lambda n: n > 5)
     engine = ImportEngine(client=_gnosis_client(), llm_extract=None)
-    stored, errors, dups = asyncio.run(engine._store_facts_chunked(_facts(10)))
+    stored, errors, dups, _conv = asyncio.run(engine._store_facts_chunked(_facts(10)))
     assert stored == 10
     assert errors == []
     assert calls == [10, 5, 5]
@@ -156,7 +156,7 @@ def test_sim_revert_at_single_fact_floor_surfaces_error(monkeypatch):
     # an error rather than silently dropping the fact.
     calls = _wire_store(monkeypatch, fail_pred=lambda n: True)
     engine = ImportEngine(client=_gnosis_client(), llm_extract=None)
-    stored, errors, dups = asyncio.run(engine._store_facts_chunked(_facts(1)))
+    stored, errors, dups, _conv = asyncio.run(engine._store_facts_chunked(_facts(1)))
     assert stored == 0
     assert errors
     assert "Batch store failed" in errors[0]
@@ -170,7 +170,7 @@ def test_sim_revert_partial_floor_failure_stores_the_rest(monkeypatch):
     # exercises a floor error: fail sizes 4 and 1.
     calls = _wire_store(monkeypatch, fail_pred=lambda n: n in (4, 1))
     engine = ImportEngine(client=_gnosis_client(), llm_extract=None)
-    stored, errors, dups = asyncio.run(engine._store_facts_chunked(_facts(4)))
+    stored, errors, dups, _conv = asyncio.run(engine._store_facts_chunked(_facts(4)))
     # [4] reverts → [2],[2] both succeed (size 2 not in fail set).
     assert stored == 4
     assert errors == []
@@ -192,7 +192,7 @@ def test_aa25_with_32500_code_does_not_halve(monkeypatch):
 
     monkeypatch.setattr("totalreclaw.import_engine.store_fact_batch", _raise_aa25)
     engine = ImportEngine(client=_gnosis_client(), llm_extract=None)
-    stored, errors, _ = asyncio.run(engine._store_facts_chunked(_facts(4)))
+    stored, errors, _, _conv = asyncio.run(engine._store_facts_chunked(_facts(4)))
     assert stored == 0
     assert errors  # surfaced
     assert calls == [4]  # exactly one attempt — NOT halved
@@ -211,7 +211,7 @@ def test_sim_revert_without_code_still_halves(monkeypatch):
 
     monkeypatch.setattr("totalreclaw.import_engine.store_fact_batch", _store)
     engine = ImportEngine(client=_gnosis_client(), llm_extract=None)
-    stored, errors, _ = asyncio.run(engine._store_facts_chunked(_facts(4)))
+    stored, errors, _, _conv = asyncio.run(engine._store_facts_chunked(_facts(4)))
     assert stored == 4
     assert errors == []
     assert calls == [4, 2, 2]

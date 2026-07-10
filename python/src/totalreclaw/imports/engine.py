@@ -117,6 +117,14 @@ _METADATA_SUBTYPE_SESSION_CRYSTAL = "session_crystal"
 # Valid v1 MemorySource for imported memories (the old "import" was not a valid
 # MemorySource — see #356 Problem 2).
 _IMPORT_PROVENANCE = "external"
+# internal#473 — private per-fact marker stamping the conversation_id a fact was
+# extracted from, threaded through to the store so the store phase can report
+# which conversations ACTUALLY durably stored (extraction success no longer
+# implies a store — the on-chain submit can still raise/revert). Carried on the
+# fact dict and the prepared payload; the real store reads only known keys, so a
+# stray private key is harmless. Crystals (session summaries) carry no single
+# conversation_id and are left unmarked — recording tracks per-conversation facts.
+_IMPORT_CONV_KEY = "__import_conv_id__"
 
 
 def _uuid7() -> str:
@@ -292,14 +300,28 @@ class ImportEngine:
         #: failure doesn't mark it imported and block the natural re-import
         #: recovery. Persists across batches on the instance.
         self._failed_chunk_indices: set[int] = set()
-        #: #466 — conversation_ids that produced ≥1 extracted (→ stored) fact
-        #: this run. Enforces the stored-implies-recorded invariant: a
-        #: multi-chunk conversation whose one sibling 429-failed but whose other
-        #: sibling stored facts MUST still be recorded, else the re-import
-        #: re-extracts it → duplicates (rc7 pre-stable QA shipped 10 dups). Only
-        #: a conversation that stored NOTHING and had a failed chunk stays
-        #: unrecorded (Finding-2 retry). Persists across batches on the instance.
+        #: internal#473 — conversation_ids that ACTUALLY durably stored ≥1 fact
+        #: this run (store-result-aware). Populated AFTER the on-chain store
+        #: completes, from the per-conversation stored map `_store_facts_chunked`
+        #: returns — a fact extracting cleanly no longer counts: the store can
+        #: still raise/revert/drop it. A duplicate skipped client-side also
+        #: counts (those facts already exist on-chain; withholding them would
+        #: make a fully-duplicate conversation re-import forever). This drives
+        #: the store-result-implies-recorded invariant: a conversation that
+        #: stored ≥1 fact is recorded even if a sibling chunk's store failed,
+        #: while a conversation that extracted facts but stored NONE (store
+        #: raised/reverted) stays unrecorded → re-importable (#473). Persists
+        #: across batches on the instance so a straddling conversation records
+        #: once its final batch's store lands.
         self._conv_with_stored_facts: set[str] = set()
+        #: internal#473 — conversation_ids that extracted ≥1 fact this run
+        #: (extraction-derived). Lets the recording filter tell apart the two
+        #: "stored nothing" outcomes: a conversation that extracted facts but
+        #: whose store FAILED must stay unrecorded (re-import retries the
+        #: store), whereas a conversation that extracted NOTHING and had no
+        #: failed chunk is genuinely empty → recorded so re-import doesn't
+        #: churn re-extracting it. Persists across batches on the instance.
+        self._conv_with_extracted_facts: set[str] = set()
 
     # ── Estimate ─────────────────────────────────────────────────────────
 
@@ -709,14 +731,21 @@ class ImportEngine:
                 })
                 reason_counts[zero_reason] = reason_counts.get(zero_reason, 0) + 1
             else:
-                # #466: this chunk produced facts → its conversation stored
-                # facts and MUST be recorded, even if a sibling chunk failed.
+                # internal#473: stamp this chunk's conversation_id onto each
+                # extracted fact so the STORE phase can report which
+                # conversations actually durably stored. Producing facts at
+                # EXTRACTION time no longer implies the conversation stored —
+                # `record_imported_conversations` now runs after the store and
+                # keys on the store result, so a chunk whose facts later
+                # raise/revert on store is NOT recorded (stays re-importable).
                 cid = (
                     getattr(parsed.chunks[global_index], "conversation_id", None)
                     if global_index < len(parsed.chunks) else None
                 )
                 if cid:
-                    self._conv_with_stored_facts.add(cid)
+                    self._conv_with_extracted_facts.add(cid)
+                    for f in extracted:
+                        f[_IMPORT_CONV_KEY] = cid
             facts_extracted += len(extracted)
 
             if is_singleton:
@@ -749,40 +778,6 @@ class ImportEngine:
         # a skipped chunk would never be considered complete and would never get
         # a Crystal. This set persists across batches on the instance.
         self._processed_chunk_indices.update(range(offset, offset + chunks_processed))
-
-        # #436 — record conversations whose EVERY chunk has now been processed
-        # (across all batches so far) into the imported-conversation registry.
-        # A conversation straddling a batch boundary is only recorded once its
-        # final chunk lands, so a partial first import never marks an
-        # incompletely-processed conversation as done. Already-registered
-        # conversations (imported_convs) and ones recorded earlier this run
-        # are skipped.
-        if source:
-            conv_to_indices: dict[str, list[int]] = {}
-            for idx, c in enumerate(parsed.chunks):
-                cid = getattr(c, "conversation_id", None)
-                if cid:
-                    conv_to_indices.setdefault(cid, []).append(idx)
-            newly_complete = [
-                cid for cid, indices in conv_to_indices.items()
-                if cid not in self._recorded_conversations
-                and cid not in imported_convs
-                and all(ix in self._processed_chunk_indices for ix in indices)
-                # #466: stored-implies-recorded. Record when the conversation
-                # produced stored facts OR had no failed chunk. Withhold ONLY
-                # when it stored NOTHING and a chunk failed — that lone case is
-                # a genuine transient failure worth retrying on re-import
-                # (#436-review Finding-2). The old rule ("exclude if ANY chunk
-                # failed") withheld conversations that DID store facts via a
-                # surviving sibling → re-import re-extracted them → dups.
-                and (
-                    cid in self._conv_with_stored_facts
-                    or not any(ix in self._failed_chunk_indices for ix in indices)
-                )
-            ]
-            if newly_complete:
-                record_imported_conversations(source, newly_complete)
-                self._recorded_conversations.update(newly_complete)
 
         # ── Crystal emission (cross-batch complete) ───────────────────────────
         # Emit ONE Crystal per multi-turn session, exactly once, on whichever
@@ -838,9 +833,57 @@ class ImportEngine:
 
         # Store phase: one batched UserOp per ≤15-fact chunk on Gnosis, or
         # per-fact remember() loop on free-tier / unresolvable chain.
-        facts_stored, store_errors, dups_skipped = await self._store_facts_chunked(all_extracted)
+        # internal#473: `_store_facts_chunked` also returns the set of
+        # conversation_ids whose facts were ACTUALLY durably stored (or skipped
+        # as on-chain duplicates) — recording keys on THAT, not on extraction.
+        facts_stored, store_errors, dups_skipped, stored_conv_ids = await self._store_facts_chunked(all_extracted)
         if store_errors:
             errors.extend(store_errors)
+        # Accumulate across batches so a conversation straddling a batch
+        # boundary records once its final batch's store lands.
+        self._conv_with_stored_facts |= stored_conv_ids
+
+        # internal#473 — record conversations whose EVERY chunk has now been
+        # processed (across all batches so far) into the imported-conversation
+        # registry. This runs AFTER the store so the filter keys on what
+        # actually durably stored, not on extraction success. A conversation
+        # straddling a batch boundary is recorded only once its final chunk
+        # lands, so a partial first import never marks an incompletely-
+        # processed conversation as done. Already-registered conversations
+        # (imported_convs) and ones recorded earlier this run are skipped.
+        if source:
+            conv_to_indices: dict[str, list[int]] = {}
+            for idx, c in enumerate(parsed.chunks):
+                cid = getattr(c, "conversation_id", None)
+                if cid:
+                    conv_to_indices.setdefault(cid, []).append(idx)
+            newly_complete = [
+                cid for cid, indices in conv_to_indices.items()
+                if cid not in self._recorded_conversations
+                and cid not in imported_convs
+                and all(ix in self._processed_chunk_indices for ix in indices)
+                # internal#473: store-result-implies-recorded. Record when the
+                # conversation durably stored ≥1 fact, OR when it extracted
+                # NOTHING and had no failed chunk (genuinely empty — recorded so
+                # re-import doesn't churn re-extracting it). Withhold when it
+                # extracted facts but stored NONE — either because the store
+                # raised/reverted (the #473 bug: stays re-importable so the
+                # store is retried) or because a chunk failed extraction
+                # (#436-review Finding-2: a genuine transient failure worth
+                # retrying). A surviving sibling that DID store still records
+                # the whole conversation via the first clause (#466 dup guard,
+                # preserved).
+                and (
+                    cid in self._conv_with_stored_facts
+                    or (
+                        cid not in self._conv_with_extracted_facts
+                        and not any(ix in self._failed_chunk_indices for ix in indices)
+                    )
+                )
+            ]
+            if newly_complete:
+                record_imported_conversations(source, newly_complete)
+                self._recorded_conversations.update(newly_complete)
 
         attempted = chunks_processed - chunks_skipped
         if extraction_failures > 0:
@@ -941,7 +984,10 @@ class ImportEngine:
             }
             for fact in batch
         ]
-        facts_stored, errors, dups_skipped = await self._store_facts_chunked(fact_dicts)
+        # Pre-structured facts carry no conversation_id, so the store-result
+        # conversation set (internal#473 4th return) is intentionally ignored
+        # here — there is no per-conversation ledger to record for flat sources.
+        facts_stored, errors, dups_skipped, _stored_conv_ids = await self._store_facts_chunked(fact_dicts)
 
         return BatchImportResult(
             success=facts_stored > 0 or not errors,
@@ -1491,6 +1537,12 @@ class ImportEngine:
             payload["fact_type"] = fact["fact_type"]
         if fact.get("extra_metadata"):
             payload["extra_metadata"] = fact["extra_metadata"]
+        # internal#473 — thread the per-fact conversation_id marker onto the
+        # payload so the store phase can report which conversations durably
+        # stored. The real store reads only known keys, so this private key is
+        # carried through untouched.
+        if fact.get(_IMPORT_CONV_KEY) is not None:
+            payload[_IMPORT_CONV_KEY] = fact[_IMPORT_CONV_KEY]
         return payload
 
     @staticmethod
@@ -1673,7 +1725,7 @@ class ImportEngine:
     async def _store_facts_chunked(
         self,
         facts: list[dict],
-    ) -> tuple[int, list[str]]:
+    ) -> tuple[int, list[str], int, set[str]]:
         """Store ``facts`` via chunked batched UserOps when the client is on
         Gnosis (chain 100); otherwise via per-fact ``client.remember`` calls.
 
@@ -1683,8 +1735,15 @@ class ImportEngine:
         import gate guarantees ``chain_id == 100`` on this code path; the
         explicit check keeps the cost claim self-verifying.
 
-        Returns ``(facts_stored, errors, dups_skipped)`` so callers can
-        aggregate into the existing ``BatchImportResult`` shape.
+        Returns ``(facts_stored, errors, dups_skipped, stored_conv_ids)`` so
+        callers can aggregate into the existing ``BatchImportResult`` shape.
+        ``stored_conv_ids`` (internal#473) is the set of conversation_ids whose
+        facts were ACTUALLY durably stored this call — the per-conversation
+        stored map the ledger recording now keys on (extraction success no
+        longer implies a store). A fact skipped as an on-chain duplicate also
+        contributes its conversation_id: those facts already exist on-chain,
+        so the conversation is durably stored and must record (else a fully-
+        duplicate conversation re-imports forever).
 
         Dedup (#422): the on-chain pivot removed the relay's 409/fingerprint
         rejection, so duplicates must be skipped CLIENT-SIDE before the
@@ -1694,8 +1753,10 @@ class ImportEngine:
         fingerprint dedup (the same fact extracted twice in one import).
         Both fail open — dedup must never block a store.
         """
+        stored_conv_ids: set[str] = set()
+
         if not facts:
-            return 0, [], 0
+            return 0, [], 0, stored_conv_ids
 
         dups_skipped = 0
 
@@ -1706,6 +1767,12 @@ class ImportEngine:
                 flags = await find_dups([f.get("text", "") for f in facts])
                 if flags and len(flags) == len(facts):
                     kept = [f for f, dup in zip(facts, flags) if not dup]
+                    for f, dup in zip(facts, flags):
+                        # internal#473: a duplicate already exists on-chain →
+                        # its conversation is durably stored; count it so a
+                        # fully-duplicate conversation records.
+                        if dup:
+                            _record_stored_conv(stored_conv_ids, f)
                     dups_skipped += len(facts) - len(kept)
                     facts = kept
         except Exception as e:
@@ -1722,6 +1789,10 @@ class ImportEngine:
             meta = f.get("extra_metadata") or {}
             key = (text_norm, str(meta.get("session_id") or ""))
             if text_norm and key in seen_keys:
+                # internal#473: dropped as an in-batch duplicate of one we're
+                # keeping — the kept sibling stores, so the conversation is
+                # durably stored either way; record it now.
+                _record_stored_conv(stored_conv_ids, f)
                 dups_skipped += 1
                 continue
             seen_keys.add(key)
@@ -1731,7 +1802,7 @@ class ImportEngine:
         if dups_skipped:
             logger.info("Import dedup: skipped %d duplicate fact(s)", dups_skipped)
         if not facts:
-            return 0, [], dups_skipped
+            return 0, [], dups_skipped, stored_conv_ids
 
         chain_id = await self._resolve_chain_id_safely()
         errors: list[str] = []
@@ -1769,7 +1840,7 @@ class ImportEngine:
             wallet = client._wallet_context(chain_id)
 
             async def _store_group(group: list) -> list[str]:
-                return await store_fact_batch(
+                ids = await store_fact_batch(
                     facts=group,
                     wallet=wallet,
                     relay=client._relay,
@@ -1777,6 +1848,17 @@ class ImportEngine:
                     source="import",
                     data_edge_address=client._data_edge_address,
                 )
+                # internal#473: store_fact_batch returns (one id per input
+                # fact, in order) only on full success — a raise propagates
+                # out of this closure before we reach here, so reaching this
+                # point means EVERY fact in the group durably stored. On a
+                # sim-revert halving cascade _store_group_adaptive calls this
+                # closure once per (sub)group that ultimately succeeds, so
+                # recording per-success-group is correct even under partial
+                # failure (failed sub-groups raise and never record).
+                for p in group:
+                    _record_stored_conv(stored_conv_ids, p)
+                return ids
 
             ids, errors = await group_and_store_adaptive(
                 _store_group,
@@ -1788,17 +1870,21 @@ class ImportEngine:
                     "Error limit reached (20). Remaining facts in this batch skipped."
                 ),
             )
-            return len(ids), errors, dups_skipped
+            return len(ids), errors, dups_skipped, stored_conv_ids
 
         # Per-fact fallback: free-tier / non-Gnosis / chain probe failed.
         for fact in facts:
             try:
                 await self._store_fact(fact)
                 facts_stored += 1
+                # internal#473: this fact durably stored → its conversation too.
+                _record_stored_conv(stored_conv_ids, fact)
             except Exception as e:
                 msg = str(e)
                 if '409' in msg or 'duplicate' in msg or 'fingerprint' in msg:
                     logger.debug("Skipped duplicate: %s", fact.get('text', '')[:60])
+                    # Counted as on-chain duplicate → conversation durably stored.
+                    _record_stored_conv(stored_conv_ids, fact)
                 else:
                     errors.append(f"Store failed: {msg}")
                     if len(errors) >= 20:
@@ -1807,7 +1893,7 @@ class ImportEngine:
                         )
                         break
 
-        return facts_stored, errors, dups_skipped
+        return facts_stored, errors, dups_skipped, stored_conv_ids
 
 
 # ── Per-chunk "0 facts" diagnostics (issue #389 follow-up) ──────────────
@@ -1871,3 +1957,15 @@ def _summarize_zero_fact_reasons(reason_counts: dict) -> str:
 def _now_ms() -> int:
     """Current time in milliseconds."""
     return int(time.time() * 1000)
+
+
+def _record_stored_conv(store: set, fact_or_payload) -> None:
+    """internal#473 — record the conversation_id a stored/duplicate fact was
+    extracted from into the per-conversation stored map. Accepts either a raw
+    extracted fact dict or a prepared payload (both carry ``_IMPORT_CONV_KEY``
+    when set); facts with no marker (Crystals, pre-structured facts) are a no-op.
+    """
+    cid = (fact_or_payload or {}).get(_IMPORT_CONV_KEY) if isinstance(
+        fact_or_payload, dict) else None
+    if cid:
+        store.add(cid)

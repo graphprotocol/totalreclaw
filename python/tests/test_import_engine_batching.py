@@ -162,7 +162,7 @@ def test_gnosis_14_facts_all_stored_within_caps(store_mock) -> None:
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(14)))
+    facts_stored, errors, _dups, _conv = _run(engine._store_facts_chunked(_make_facts(14)))
 
     assert errors == []
     assert facts_stored == 14
@@ -176,7 +176,7 @@ def test_gnosis_15_facts_all_stored_within_caps(store_mock) -> None:
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(15)))
+    facts_stored, errors, _dups, _conv = _run(engine._store_facts_chunked(_make_facts(15)))
 
     assert errors == []
     assert facts_stored == 15
@@ -190,7 +190,7 @@ def test_gnosis_30_facts_all_stored_within_caps(store_mock) -> None:
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(30)))
+    facts_stored, errors, _dups, _conv = _run(engine._store_facts_chunked(_make_facts(30)))
 
     assert errors == []
     assert facts_stored == 30
@@ -207,7 +207,7 @@ def test_gnosis_45_facts_split_within_caps(store_mock) -> None:
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(45)))
+    facts_stored, errors, _dups, _conv = _run(engine._store_facts_chunked(_make_facts(45)))
 
     assert errors == []
     assert facts_stored == 45
@@ -225,7 +225,7 @@ def test_gnosis_count_cap_binds_without_embedding(monkeypatch, store_mock) -> No
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(20)))
+    facts_stored, errors, _dups, _conv = _run(engine._store_facts_chunked(_make_facts(20)))
 
     assert errors == []
     assert facts_stored == 20
@@ -277,7 +277,7 @@ def test_free_tier_falls_back_to_per_fact_remember() -> None:
     client = _make_free_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(15)))
+    facts_stored, errors, _dups, _conv = _run(engine._store_facts_chunked(_make_facts(15)))
 
     assert errors == []
     assert facts_stored == 15
@@ -297,7 +297,7 @@ def test_unresolvable_chain_falls_back_to_per_fact() -> None:
     client.remember = AsyncMock(side_effect=_remember)
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(3)))
+    facts_stored, errors, _dups, _conv = _run(engine._store_facts_chunked(_make_facts(3)))
 
     assert errors == []
     assert facts_stored == 3
@@ -316,7 +316,7 @@ def test_gnosis_batch_409_dedup_is_silent(store_mock) -> None:
     store_mock.side_effect = RuntimeError("409 fingerprint duplicate")
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(15)))
+    facts_stored, errors, _dups, _conv = _run(engine._store_facts_chunked(_make_facts(15)))
 
     assert errors == []
     assert facts_stored == 0
@@ -340,7 +340,7 @@ def test_gnosis_batch_partial_id_list_counts_only_returned_ids(monkeypatch, stor
     store_mock.side_effect = _short_batch
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(5)))
+    facts_stored, errors, _dups, _conv = _run(engine._store_facts_chunked(_make_facts(5)))
 
     assert errors == []
     assert store_mock.await_count == 1
@@ -354,7 +354,7 @@ def test_gnosis_batch_non_dedup_error_surfaced(store_mock) -> None:
     store_mock.side_effect = RuntimeError("AA25 nonce zombie")
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors, _dups = _run(engine._store_facts_chunked(_make_facts(45)))
+    facts_stored, errors, _dups, _conv = _run(engine._store_facts_chunked(_make_facts(45)))
 
     assert facts_stored == 0
     # AA25 is not a sim-size revert → no halving → exactly one error per group.
@@ -366,7 +366,7 @@ def test_empty_input_returns_zero_no_calls(store_mock) -> None:
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
-    facts_stored, errors, _dups = _run(engine._store_facts_chunked([]))
+    facts_stored, errors, _dups, _conv = _run(engine._store_facts_chunked([]))
 
     assert facts_stored == 0
     assert errors == []
