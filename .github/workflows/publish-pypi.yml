@@ -140,9 +140,74 @@ jobs:
           name: sdist
           path: rust/totalreclaw-core/dist/*.tar.gz
 
+  wheel-surface-check:
+    # Runtime backstop for issue #503: the source-level parity check in CI
+    # (scripts/check-pyfunction-parity.py) guards decl<->registration at the
+    # source level, but the thing that actually ships is the BUILT wheel. So
+    # before publishing we install the freshly-built linux x86_64 wheel into a
+    # clean venv and diff its real exported surface (dir(totalreclaw_core))
+    # against the names derived from the source #[pyo3(name=...)] attrs +
+    # #[pyclass] names. A registration that slipped through would drop a
+    # function from the wheel -> this diff fails -> publish aborts. Sibling of
+    # the Hermes rc10 incident (#427), one layer down. Runs on dry-run too so a
+    # build-only dispatch still validates the surface. NOT in PR CI -- wheel
+    # building belongs on the publish path (see #489/#491).
+    name: Built-wheel surface check
+    needs: build-wheels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download built wheel (linux x86_64)
+        uses: actions/download-artifact@v7
+        with:
+          name: wheels-ubuntu-latest-x86_64
+          path: wheel-artifact
+
+      - name: Install wheel into scratch venv
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install --upgrade pip
+          /tmp/venv/bin/pip install wheel-artifact/totalreclaw_core-*.whl
+
+      - name: Diff built-wheel surface vs source-derived expected exports
+        run: |
+          set -e
+          # Expected surface: derived from source declarations (pyo3 name attrs
+          # + pyclass names). A dropped registration does NOT shrink this list
+          # (it is decl-derived), but it DOES shrink the built wheel -- which is
+          # exactly the discrepancy this diff catches.
+          python scripts/check-pyfunction-parity.py --expected-exports | sort > /tmp/expected.txt
+          /tmp/venv/bin/python - <<'PY' | sort > /tmp/actual.txt
+          import totalreclaw_core as m
+          for n in sorted(n for n in dir(m) if not n.startswith('_')):
+              print(n)
+          PY
+          echo "expected exports: $(wc -l < /tmp/expected.txt) | actual wheel surface: $(wc -l < /tmp/actual.txt)"
+          /tmp/venv/bin/python - <<'PY'
+          expected = sorted(l.strip() for l in open('/tmp/expected.txt') if l.strip())
+          actual   = sorted(l.strip() for l in open('/tmp/actual.txt')   if l.strip())
+          es, aset = set(expected), set(actual)
+          missing = sorted(es - aset)   # declared but NOT in the built wheel
+          extra   = sorted(aset - es)   # in the wheel but NOT declared (surprise)
+          if missing:
+              print('MISSING from built wheel (declared in source but not exported):')
+              for n in missing: print('  - ' + n)
+          if extra:
+              print('UNEXPECTED exports in built wheel (not in source scan):')
+              for n in extra: print('  - ' + n)
+          if missing or extra:
+              raise SystemExit(1)
+          print('OK: built-wheel surface matches source-derived expected exports')
+          PY
+
   publish:
     name: Publish to PyPI
-    needs: [build-wheels, build-sdist]
+    needs: [build-wheels, build-sdist, wheel-surface-check]
     runs-on: ubuntu-latest
     if: inputs.dry-run == false
     permissions:

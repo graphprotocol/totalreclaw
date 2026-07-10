@@ -208,6 +208,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # Source-level guard (issue #503): a #[pyfunction] split into
+      # src/python/bind_*.rs is invisible at runtime unless it is also
+      # wrap_pyfunction!-registered in python.rs's #[pymodule] (or a module's
+      # register_python_functions). A missed registration silently drops the
+      # function from the PyPI wheel -- same failure class as the Hermes rc10
+      # incident (#427: tool shipped with schema+handler but never
+      # register()-ed). Cheap source scan over the python that's already
+      # installed for cargo's pyo3 build -- no extra toolchain download
+      # (see #489/#491: no flaky toolchain fetches in test jobs).
+      - name: PyO3 pyfunction <-> registration parity
+        run: python scripts/check-pyfunction-parity.py
       - name: Run tests
         run: cd rust/totalreclaw-core && cargo test
 
