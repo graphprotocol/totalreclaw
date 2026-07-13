@@ -37,7 +37,6 @@ on:
           - mcp-server
           - client
           - nanoclaw
-          - plugin
           - core-pypi
           - python-client
           - crate-core
@@ -121,7 +120,7 @@ jobs:
         if: >
           inputs.package == 'core' || inputs.package == 'client' ||
           inputs.package == 'mcp-server' || inputs.package == 'nanoclaw' ||
-          inputs.package == 'plugin' || inputs.package == 'all'
+          inputs.package == 'all'
         run: |
           set -e
           RC="${{ needs.derive-versions.outputs.rc-version }}"
@@ -132,8 +131,7 @@ jobs:
             client) PKGS=("@totalreclaw/client") ;;
             mcp-server) PKGS=("@totalreclaw/mcp-server") ;;
             nanoclaw) PKGS=("@totalreclaw/skill-nanoclaw") ;;
-            plugin) PKGS=("@totalreclaw/totalreclaw") ;;
-            all) PKGS=("@totalreclaw/core" "@totalreclaw/client" "@totalreclaw/mcp-server" "@totalreclaw/skill-nanoclaw" "@totalreclaw/totalreclaw") ;;
+            all) PKGS=("@totalreclaw/core" "@totalreclaw/client" "@totalreclaw/mcp-server" "@totalreclaw/skill-nanoclaw") ;;  # plugin excluded — it publishes via npm-publish.yml only
           esac
           for p in "${PKGS[@]}"; do
             if ! npm view "$p@$RC" version >/dev/null 2>&1; then
@@ -201,7 +199,7 @@ jobs:
     if: >
       (inputs.package == 'core' || inputs.package == 'client' ||
        inputs.package == 'mcp-server' || inputs.package == 'nanoclaw' ||
-       inputs.package == 'plugin' || inputs.package == 'all') &&
+       inputs.package == 'all') &&
       inputs.dry-run == false
     permissions:
       contents: read
@@ -228,8 +226,7 @@ jobs:
             client) PKGS=("@totalreclaw/client") ;;
             mcp-server) PKGS=("@totalreclaw/mcp-server") ;;
             nanoclaw) PKGS=("@totalreclaw/skill-nanoclaw") ;;
-            plugin) PKGS=("@totalreclaw/totalreclaw") ;;
-            all) PKGS=("@totalreclaw/core" "@totalreclaw/client" "@totalreclaw/mcp-server" "@totalreclaw/skill-nanoclaw" "@totalreclaw/totalreclaw") ;;
+            all) PKGS=("@totalreclaw/core" "@totalreclaw/client" "@totalreclaw/mcp-server" "@totalreclaw/skill-nanoclaw") ;;  # plugin excluded — it publishes via npm-publish.yml only
           esac
 
           mkdir -p /tmp/promote

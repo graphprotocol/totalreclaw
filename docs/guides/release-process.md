@@ -181,6 +181,22 @@ differ. Ship with the table below in front of you.
    # (stable-version auto-derived to 2.1.0)
    ```
 
+   > **⚠️ The OpenClaw plugin (`@totalreclaw/totalreclaw`) is npm-published ONLY
+   > via `npm-publish.yml` — never `promote-rc.yml`.** npm allows exactly one
+   > Trusted Publisher per package, and the plugin's is `npm-publish.yml` (which
+   > does both `rc` and `stable` via `release-type`). `promote-rc.yml` no longer
+   > lists `plugin` for npm (removed 2026-07-13, consolidation). To promote the
+   > plugin to npm stable, bump `skill/plugin/package.json` to the clean version
+   > (drop the `-rc.N` suffix) and dispatch:
+   > ```bash
+   > gh workflow run npm-publish.yml -f package=plugin -f release-type=stable
+   > ```
+   > This rebuilds from source at the stable version (vs `promote-rc.yml`'s
+   > re-pack of the exact RC tarball — the accepted tradeoff for a single, clean
+   > publisher). The plugin's **ClawHub** promote is unaffected — still
+   > `promote-rc.yml -f package=clawhub` (ClawHub has no Trusted-Publisher
+   > constraint).
+
 6. **Advertise the new stable to the fleet — set `LATEST_STABLE_PYTHON` on BOTH
    relay services.** This is the single env flip that makes the automatic update
    notice fire fleet-wide: the relay serves it in `/v1/billing/status` →
