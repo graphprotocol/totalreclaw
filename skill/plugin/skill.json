@@ -1,6 +1,6 @@
 {
   "name": "totalreclaw",
-  "version": "3.3.12-rc.10",
+  "version": "3.3.13-rc.1",
   "description": "End-to-end encrypted memory for AI agents — portable, yours forever. XChaCha20-Poly1305 E2EE: server never sees plaintext.",
   "author": "TotalReclaw Team",
   "license": "MIT",
@@ -24,7 +24,10 @@
         "mode": {
           "type": "string",
           "required": false,
-          "enum": ["generate", "import"],
+          "enum": [
+            "generate",
+            "import"
+          ],
           "default": "generate",
           "description": "\"generate\" = browser will create a NEW recovery phrase. \"import\" = browser will accept an EXISTING phrase pasted by the user in their browser (never through chat)."
         }
@@ -43,7 +46,13 @@
         "type": {
           "type": "string",
           "required": false,
-          "enum": ["fact", "preference", "decision", "episodic", "goal"],
+          "enum": [
+            "fact",
+            "preference",
+            "decision",
+            "episodic",
+            "goal"
+          ],
           "default": "fact",
           "description": "Type of memory"
         },
@@ -95,7 +104,10 @@
         "format": {
           "type": "string",
           "required": false,
-          "enum": ["json", "markdown"],
+          "enum": [
+            "json",
+            "markdown"
+          ],
           "default": "json",
           "description": "Export format"
         }
@@ -121,7 +133,10 @@
         "source": {
           "type": "string",
           "required": true,
-          "enum": ["mem0", "mcp-memory"],
+          "enum": [
+            "mem0",
+            "mcp-memory"
+          ],
           "description": "Source system to import from"
         }
       }
@@ -149,7 +164,11 @@
       "bins": []
     },
     "emoji": "🧠",
-    "os": ["macos", "linux", "windows"],
+    "os": [
+      "macos",
+      "linux",
+      "windows"
+    ],
     "hooks": {
       "before_agent_start": {
         "priority": 10,
@@ -181,7 +200,13 @@
           "type": {
             "type": "string",
             "required": false,
-            "enum": ["fact", "preference", "decision", "episodic", "goal"],
+            "enum": [
+              "fact",
+              "preference",
+              "decision",
+              "episodic",
+              "goal"
+            ],
             "default": "fact",
             "description": "Type of memory"
           },
@@ -230,7 +255,10 @@
           "format": {
             "type": "string",
             "required": false,
-            "enum": ["json", "markdown"],
+            "enum": [
+              "json",
+              "markdown"
+            ],
             "default": "json",
             "description": "Export format"
           }
@@ -253,7 +281,10 @@
           "source": {
             "type": "string",
             "required": true,
-            "enum": ["mem0", "mcp-memory"],
+            "enum": [
+              "mem0",
+              "mcp-memory"
+            ],
             "description": "Source system to import from"
           },
           "api_key": {
@@ -309,7 +340,10 @@
           "mode": {
             "type": "string",
             "required": false,
-            "enum": ["generate", "import"],
+            "enum": [
+              "generate",
+              "import"
+            ],
             "default": "generate",
             "description": "\"generate\" = browser will create a NEW recovery phrase. \"import\" = browser will accept an EXISTING phrase pasted by the user in their browser (never through chat)."
           }
