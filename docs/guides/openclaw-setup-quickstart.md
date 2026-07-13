@@ -53,12 +53,18 @@ TotalReclaw is end-to-end encrypted. The TotalReclaw relay only forwards encrypt
 
 ## Troubleshooting
 
-If the install command reports `already exists` on a re-run, add `--force`:
+**After installing, always run `openclaw plugins enable totalreclaw`.** It binds the memory slot. On a clean install it's a harmless no-op; on a reinstall over a previous version it's what stops the plugin from landing disabled (memory slot stuck at `memory-core` → memory tools and pairing don't work).
+
+**If the install reports `already exists` / `delete it first` on a re-run, do NOT use `--force`** (it produces a broken, disabled install). Instead clean the leftover package dir and reinstall:
 
 ```bash
-openclaw plugins install @totalreclaw/totalreclaw --force
-openclaw skills install totalreclaw --force
+openclaw plugins uninstall totalreclaw
+rm -rf ~/.openclaw/npm/projects/*totalreclaw-totalreclaw*
+openclaw plugins install @totalreclaw/totalreclaw
+openclaw plugins enable totalreclaw
 ```
+
+The `rm -rf` only removes the plugin's npm package folder — it does not touch your recovery-phrase credentials (those live under `~/.totalreclaw/`).
 
 If your environment doesn't expose the OpenClaw CLI to the agent (managed-service or sandboxed shell), install `totalreclaw` from your service's plugins / skills UI and then ask your agent to set you up.
 

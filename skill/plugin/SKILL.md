@@ -45,24 +45,41 @@ The 12-word recovery phrase MUST NEVER enter chat or the agent's LLM context. Th
 ```
 openclaw plugins install @totalreclaw/totalreclaw
 openclaw skills install totalreclaw
+openclaw plugins enable totalreclaw
 ```
 
-Published on npm + ClawHub (`p-diogo`, GitHub-verified). For a release candidate, pin with `@rc`; stable resolves from `latest`. The plugin self-applies any gateway config it needs on load and auto-reloads (see Restart below) — no manual gateway restart.
+Published on npm + ClawHub (`p-diogo`, GitHub-verified). For a release candidate, pin with `@rc`; stable resolves from `latest`. Run `openclaw plugins enable totalreclaw` right after install, always — it binds the memory slot. On a clean install that's a no-op; on a **reinstall over a previous version** it's what stops the plugin from landing `Status: disabled` with the slot stuck at `memory-core` (a disabled plugin never registers its memory tools or pair routes, so pairing later fails with a 502). The plugin self-applies the rest of the gateway config it needs on load and auto-reloads (see Restart below) — no manual gateway restart.
+
+**Reinstall recovery.** If install reports `already exists` / `delete it first`, do **not** add `--force` (it writes a broken `version=None` record). Clean the leftover package dir and reinstall — this never touches your credentials, which live under `~/.totalreclaw/`:
+
+```
+openclaw plugins uninstall totalreclaw
+rm -rf ~/.openclaw/npm/projects/*totalreclaw-totalreclaw*
+openclaw plugins install @totalreclaw/totalreclaw
+openclaw plugins enable totalreclaw
+```
 
 ## Setup (pair — user-initiated QR)
 
-Pairing is a deliberate, user-initiated QR flow (the plugin does **not** auto-pair on load). When credentials don't exist:
+Pairing is a deliberate, user-initiated flow (the plugin does **not** auto-pair on load). When credentials don't exist:
 
-1. Run `tr pair --json` → returns `{"url":"https://…/pair/p/<id>#pk=…","pin":"123456","expires_at_ms":…}`.
-2. Surface the **url** and **pin** to the user verbatim (read from the JSON; never invent values): "Open `<url>` in your browser, enter PIN `<pin>`, and generate or paste your 12-word recovery phrase. Reply done once it's sealed."
-3. The user completes in the browser (phrase is generated/imported browser-side, encrypted, posted to the relay — never touches this chat). On completion `~/.totalreclaw/credentials.json` is written.
+1. Mint a pair session via the plugin's **in-process HTTP route** — the gateway process owns the relay pair WebSocket, so it survives until the user completes:
+
+   ```bash
+   curl -s http://localhost:18789/plugin/totalreclaw/pair/init
+   ```
+
+   → returns `{"url":"https://…/pair/p/<id>#pk=…","pin":"123456","expires_at_ms":…}`.
+
+   **Do NOT use `tr pair --json` for this.** The CLI holds the pair WebSocket in a subprocess that OpenClaw's ~30s shell-tool timeout kills — the WS then drops, and when the user submits their phrase the relay returns a **502** (`gateway_disconnected`). The in-process route above avoids that entirely. Only fall back to the CLI if the route is unreachable (no `curl`, or a pre-3.3.14 plugin), and then it MUST be detached so the WS outlives the shell exec: `setsid -f node "$TR_CLI" pair --json < /dev/null` — never run `tr pair` in the foreground.
+2. Surface the **url** and **pin** to the user verbatim (read from the JSON; never invent values): "Open `<url>` in your browser, enter PIN `<pin>`, and generate or paste your 12-word recovery phrase. Reply done once it's sealed." Emit the URL as plain text on its own line — the `#pk=` fragment breaks if wrapped in backticks/markdown.
+3. The user completes in the browser (phrase is generated/imported browser-side, encrypted, uploaded to the relay — never touches this chat). On completion `~/.totalreclaw/credentials.json` is written.
 4. Confirm: `✓ TotalReclaw set up.` (If credentials already exist when first asked: `✓ TotalReclaw is already set up.`)
 
 Pair is UNCONDITIONAL when no credentials — the user installing/requesting setup IS the consent; do not add a second consent gate. `tr --help` lists every subcommand.
 
 ```bash
 TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/cli/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/cli/tr-cli.js 2>/dev/null | head -1)"
-node "$TR_CLI" pair --json        # start/re-pair
 node "$TR_CLI" status --json      # {"version":"…","paired":true,…}
 ```
 
