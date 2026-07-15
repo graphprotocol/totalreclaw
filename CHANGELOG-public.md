@@ -14,6 +14,7 @@ The `rc.20 → rc.23` stabilization arc that restored a working fresh-user onboa
 
 ### 3.3.13 — stable promote (2026-07-15)
 
+- **Fresh-user pairing fixed (the 502).** The bundled SKILL.md had the agent mint pair sessions via the `tr pair` CLI, whose subprocess OpenClaw kills after ~30s — the pair WebSocket dropped and the browser's phrase submit failed with a 502 (`gateway_disconnected`). Pairing now goes through the plugin's in-process `/pair/init` HTTP route (the WebSocket lives in the gateway process and survives the full pairing window). Validated live on a fresh install and guarded going forward by the mandatory S-PAIR-FRESH fresh-user pairing E2E on every plugin RC. (#507)
 - **npm stable-promote unblocked.** 3.3.12 had reached ClawHub but the npm promote was blocked on Trusted Publisher registration; publishing is consolidated behind a single Trusted Publisher (#509) with the `sync-version` + npm@11 fixes (#497), so the stable line now publishes to npm.
 - **Digest-recompile coalescing.** Digest recompiles are skipped when the claim set is unchanged — a perf/quota fix on the hot write path. (#499; closes #455)
 - **Reinstall-robust install flow** documented (enable-slot bind + orphan-package cleanup; `--force` is never the fix). (#507)
