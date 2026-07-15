@@ -2,6 +2,8 @@
 
 TotalReclaw gives any MCP-compatible agent (Claude Code, Claude Desktop, Cursor, Windsurf, IronClaw) encrypted, persistent memory. The fastest setup is a single chat message — the agent fetches this guide, runs the MCP install for you, and walks you through wiring your recovery phrase. **You do nothing in the terminal.**
 
+> **Wrong runtime?** This guide is for **MCP-compatible hosts** (Claude Code, Claude Desktop, Cursor, Windsurf, IronClaw). If you are an **OpenClaw** agent, follow [`openclaw-setup.md`](./openclaw-setup.md); if you are a **Hermes** agent, follow [`hermes-setup.md`](./hermes-setup.md); if you are unsure which runtime you are, follow the universal dispatcher [`install.md`](./install.md) instead.
+
 If you already have Claude Code (or Claude Desktop / Cursor / Windsurf) running, paste this into your chat:
 
 > **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/claude-code-setup.md>**

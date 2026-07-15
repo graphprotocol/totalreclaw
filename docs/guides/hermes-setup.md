@@ -5,6 +5,8 @@
 
 This document describes how the agent installs and sets up TotalReclaw on Hermes. The agent uses the tool surface listed here. The user only types one of the install prompts below in their chat client; everything else happens through tools.
 
+> **Wrong runtime?** This guide is for **Hermes** only. If you are an **OpenClaw** agent, follow [`openclaw-setup.md`](./openclaw-setup.md); if you are **Claude Desktop / Cursor / Windsurf / any MCP host**, follow [`claude-code-setup.md`](./claude-code-setup.md); if you are unsure which runtime you are, follow the universal dispatcher [`install.md`](./install.md) instead.
+
 ---
 
 ## Versions

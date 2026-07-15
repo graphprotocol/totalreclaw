@@ -40,6 +40,8 @@ Other AI memory tools ([Mem0](https://mem0.ai), [Zep](https://getzep.com)) store
 
 One command per client. v1 is the default — no env toggles, no feature flags.
 
+> Prefer the chat-driven install? One host-agnostic paste line works for any agent (OpenClaw, Hermes, Claude Desktop / Cursor / Windsurf) — see [`install.md`](docs/guides/install.md).
+
 | Client | Install |
 |---|---|
 | **OpenClaw** | `openclaw plugins install @totalreclaw/totalreclaw` |
@@ -139,6 +141,7 @@ totalreclaw/
 
 ### Start here
 
+- [Universal install prompt](docs/guides/install.md) — one host-agnostic paste line; routes any agent to its runtime's setup guide.
 - [Client setup — v1](docs/guides/client-setup-v1.md) — one install command per client.
 - [Memory types guide](docs/guides/memory-types-guide.md) — what gets stored and how to override it via natural language.
 - [v1 migration guide](docs/guides/v1-migration.md) — if you're upgrading from v0.
