@@ -5,6 +5,20 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.6] - 2026-07-10
+
+Browser-bundle WASM + publishing hardening. (Note: the intervening `2.3.x`–`2.5.5` core releases were not individually logged in this file; this entry catches up the current stable surface.)
+
+### Added
+
+- **[#501] `./web` browser WASM subpath export (closes #500).** A `--target web` WASM build is published under a `./web` subpath so browser-bundle consumers (the vault SPA, other pure-browser integrations) can import core's WASM without a Node polyfill. Previously the published WASM targeted Node and required `Buffer`/`fs` shims in a browser bundle.
+- **[#466] Additive import-segmentation WASM exports (from the #368 hoist).** `segmentSessions` and the flat per-turn `parseGemini` view are exported from the bundler/web builds. Additive — no behavior change for existing importers.
+
+### Changed
+
+- **[#494] Publish CI pinned to npm@11.** npm 12.0.0 breaks `npm publish --provenance` (`Cannot find module 'sigstore'`) and the tokenless-OIDC PUT, so every core/npm publish step is pinned to npm@11.
+- **[#504] Built-wheel surface check for pyfunction↔registration parity (closes #503).** A CI check compares the PyO3 `#[pyfunction]` set against the `pymodule!` registration table on the built wheel, so a binding that's defined but never registered (or vice-versa) fails CI instead of silently disappearing from the PyPI surface.
+
 ## [2.2.0] - 2026-04-19
 
 ### Added

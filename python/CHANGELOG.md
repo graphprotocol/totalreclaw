@@ -6,6 +6,22 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.6] — 2026-07-08
+
+Hermes client stable (2.4.5 → 2.4.6): session-isolation + import-fidelity + provenance cycle. (Note: 2.4.5 was likewise promoted without a dated header in this file; items that shipped between 2.4.4 and this entry accumulated under `[Unreleased]` below.)
+
+### Added
+
+- **[#441] Per-conversation session isolation.** Parallel conversations / messenger topics each get their own buffer + turn counter + session id (keyed by the per-conversation `session_id` Hermes passes to `sync_turn` / per-turn hooks), so each mints its own Crystal instead of one mixed blob. Backward-compatible (empty slot store ⇒ legacy single-session).
+- **[#443] Idle Crystal sweep.** A topic idle past `TOTALRECLAW_SESSION_IDLE_MINUTES` (default 60) crystallizes on another topic's turn (`AgentState.find_idle_slots` / `sweep_idle_slots`), so Crystals mint even when Hermes `session_reset: none` disarms the host's finalize watcher.
+- **[#463] Write-side `session_id` stamp.** The active conversation's `session_id` is stamped into `metadata.session_id` on both atomic facts and the session-end Crystal (encrypted-blob only). Enables the SPA to group memories by real conversation; degrades to time-gap grouping where absent.
+- **[#473] Agent-instance provenance (`agent_name`, #317).** `agent_name` (env `TOTALRECLAW_AGENT_NAME` or explicit `remember(agent_name=…)`) rides the encrypted inner blob as a top-level key so recall/export render "John (Hermes)". Additive metadata; no on-chain/subgraph schema change.
+- **[#442] Update-available notice + versioned client header.** The relay serves `features.latest_stable_python`; the client compares against installed `__version__` (rc-aware) and nudges once/24h via the quota-warning channel. Kill-switch `TOTALRECLAW_DISABLE_UPDATE_NOTICE=1`.
+
+### Changed
+
+- **ChatGPT import line.** Conversations become import sessions (#430) with byte-capped batching + halve-on-sim-revert + 240s receipt wait (#461), hashed disclosure tokens + orphan reaping + accounting (#468), an import fix wave — deploy-state/receipt, re-import registry, provider label (#454) — and ledger hardening (#470, #480).
+
 ## [Unreleased]
 
 ### Changed

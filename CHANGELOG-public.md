@@ -2,9 +2,59 @@
 
 > **Note:** This file lists releases promoted to the public registries' stable tags. Active release-candidate work (`@rc` dist-tag on npm, `rcN` on PyPI, etc.) is tracked in the internal release-pipeline tracker, not here.
 
+## @totalreclaw/totalreclaw (OpenClaw plugin) 3.3.12 / 3.3.13 — Stable promote (2026-07-06 / 2026-07-15)
+
+The `rc.20 → rc.23` stabilization arc that restored a working fresh-user onboarding path, plus the publish-pipeline fix that finally landed the stable line on npm.
+
+### 3.3.12 — stabilization arc (2026-07-06)
+
+- **Onboarding CLI restored.** `openclaw totalreclaw <sub>` had thrown `ReferenceError: tr is not defined` on every RC since the native rewrite — fresh users had no onboarding path. The `registerCli` `tr`-scope is now wired correctly. (#452)
+- **Native install slot-selection + chain verbatim.** The plugin no longer writes `plugins.slots.memory` (OpenClaw's native install owns the slot; `openclaw plugins enable totalreclaw` is the idempotent bind), `chain_id` is consumed verbatim from billing, and the trajectory poller lifecycle is hardened. (#446)
+- **DataEdge → calldata.** The relay-reported DataEdge address is threaded into the WASM calldata encoders so managed writes hit the correct (staging vs production) contract — sibling of MCP #439 and the chain_id fix. (#462, #465; closes #460)
+
+### 3.3.13 — stable promote (2026-07-15)
+
+- **npm stable-promote unblocked.** 3.3.12 had reached ClawHub but the npm promote was blocked on Trusted Publisher registration; publishing is consolidated behind a single Trusted Publisher (#509) with the `sync-version` + npm@11 fixes (#497), so the stable line now publishes to npm.
+- **Digest-recompile coalescing.** Digest recompiles are skipped when the claim set is unchanged — a perf/quota fix on the hot write path. (#499; closes #455)
+- **Reinstall-robust install flow** documented (enable-slot bind + orphan-package cleanup; `--force` is never the fix). (#507)
+
+See `skill/plugin/CHANGELOG.md` for detail.
+
+## @totalreclaw/core / totalreclaw-core 2.5.6 — Stable release (2026-07-10)
+
+- **`./web` browser WASM subpath export.** Core now publishes a `--target web` WASM build under a `./web` subpath, so browser-bundle consumers (the vault SPA and other pure-browser integrations) import core's WASM without a Node polyfill. (#501; closes #500)
+- **Publishing hardened.** Publish CI is pinned to npm@11 (npm 12.0.0 breaks `--provenance` / tokenless-OIDC PUT) (#494), and a built-wheel surface check enforces pyfunction↔registration parity so the PyO3 binding surface can't silently drift. (#504; closes #503)
+- **Additive import-segmentation exports.** Also carries the additive WASM exports from the #368 import-segmentation hoist (`segmentSessions`, the flat per-turn `parseGemini` view) — non-breaking for existing importers. (#466)
+
+See `rust/totalreclaw-core/CHANGELOG.md` for detail.
+
 ## @totalreclaw/mcp-server 3.4.0 — Stable release (2026-07-09)
 
 MCP server minor. **Fix:** managed-service writes now consume the relay's billing `chain_id` + `data_edge_address` verbatim (#439) — previously every managed write fell through to a retired default chain + the production DataEdge, breaking staging testability and client-consistency; staging write→read E2E validated. **Restructure:** unified data-driven tool-dispatch table + shared `ToolContext`; `memory_id` is now the canonical id param (`fact_id` kept as alias). **Removed:** the long-deprecated, non-functional `totalreclaw_migrate` tool (minor, not major — no working call site lost it). See `mcp/CHANGELOG.md` for detail.
+
+## totalreclaw 2.4.6 — Stable promote (2026-07-08)
+
+Hermes client stable (Python `totalreclaw` 2.4.5 → 2.4.6): session-isolation + import-fidelity + provenance cycle.
+
+- **Per-conversation session isolation.** Parallel conversations / messenger topics each get their own buffer + turn counter + session id, so each mints its own Crystal instead of one mixed blob. (#441)
+- **Idle Crystal sweep.** A topic idle past `TOTALRECLAW_SESSION_IDLE_MINUTES` (default 60) crystallizes on another topic's turn — Crystals mint even when the host's session-reset watcher is disarmed. (#443)
+- **Write-side `session_id` stamp.** The active conversation's `session_id` is stamped into `metadata.session_id` on both atomic facts and the session-end Crystal, enabling the SPA to group memories by real conversation. (#463)
+- **Agent-instance provenance.** `agent_name` (env `TOTALRECLAW_AGENT_NAME`) rides the encrypted inner blob so recall/export render "John (Hermes)". (#473, #317)
+- **ChatGPT import line.** Conversations become import sessions (#430) with byte-capped batching + halve-on-sim-revert + 240s receipt wait (#461), hashed disclosure tokens + orphan reaping + accounting (#468), an import fix wave (deploy-state/receipt, re-import registry, provider label) (#454), and ledger hardening (#470, #480).
+- **Update-available notice.** The relay serves `features.latest_stable_python`; the client nudges once/24h when a newer stable exists (kill-switch `TOTALRECLAW_DISABLE_UPDATE_NOTICE=1`). (#442)
+
+Full client detail: `python/CHANGELOG.md` → `[2.4.6]`.
+
+## Code-health consolidation — desloppify arc (2026-07-07 / 2026-07-08)
+
+Repo-wide code-health sweep that landed alongside the 2.4.6 / mcp 3.4.0 / 3.3.12 releases — dead-code removal, restructure behind stable adapters, and test activation across every surface. No user-facing behavior change by design.
+
+- **rust / mcp / client / server** — dead-code removal and ~33 never-running tests activated across the shared crates and self-hosted surfaces; the mcp dispatch-table restructure is detailed in the mcp 3.4.0 entry above. (#475)
+- **skill/plugin** — `index.ts` carved into 15 domain modules (env reads centralized in `config.ts`/`entry.ts`; `tr-cli` moved to `cli/`). (#476)
+- **app (Keeper)** — type-safety hardening + decrypt-path tests for the vault SPA. (#477)
+- **python** — behavior fixes (ledger/accounting, consent-token handling) and the `imports/` package split (import tools separated from `tools.py`; old paths shim-aliased). (#478, #482)
+
+Net: dead code removed, surfaces restructured behind stable adapters, and the test suite grew by ~200 tests.
 
 ## totalreclaw 2.4.4 — Stable promote (2026-06-06)
 

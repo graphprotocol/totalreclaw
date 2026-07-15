@@ -4,6 +4,29 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.13] — 2026-07-15
+
+Stable promote of `3.3.13-rc.1`. Bundles a write-path perf fix and lands the consolidated npm publishing path that finally moved the stable line onto npm (3.3.12 had reached ClawHub but the npm promote was blocked on Trusted Publisher registration).
+
+### Fixed
+
+- **[#499] Digest-recompile coalescing — skip on unchanged claim set.** Digests were recompiled once per on-chain UserOp store batch, burning quota on writes whose underlying claim set hadn't changed. Recompiles are now coalesced/skipped when the claim set is unchanged — a perf/quota fix on the hot write path. Closes #455.
+
+### Changed
+
+- **npm stable-promote unblocked.** Plugin npm publishing is consolidated onto `npm-publish.yml` behind a single registered Trusted Publisher (#509), with the `sync-version` tr-cli path + npm@11 fixes (#497). The stable promote now publishes to npm; 3.3.12 had reached ClawHub only.
+- **Reinstall-robust install flow** documented — the install always runs `openclaw plugins enable totalreclaw` (idempotent slot-bind) and recovers a reinstall over leftover config via uninstall + orphan-package cleanup (`rm -rf ~/.openclaw/npm/projects/*totalreclaw-totalreclaw*`); `--force` is explicitly never the fix. (#507)
+
+## [3.3.12] — 2026-07-06
+
+Stable promote concluding the `rc.1 → rc.23` arc. The headline is restoring a working fresh-user onboarding path (`openclaw totalreclaw <sub>` had thrown `ReferenceError: tr is not defined` on every published RC since the native rewrite) plus managed-write correctness fixes that are siblings of MCP #439.
+
+### Fixed
+
+- **[#452] Onboarding CLI restored.** `registerCli` import/upgrade wiring referenced an undeclared `tr`, dead-ing the entire `openclaw totalreclaw <sub>` CLI since the native rewrite. The `tr`-scope is wired correctly; fresh users have an onboarding path again.
+- **[#446] Native install slot-selection + chain verbatim + poller lifecycle.** The plugin no longer writes `plugins.slots.memory` — OpenClaw's native install owns the memory slot (with `openclaw plugins enable totalreclaw` as the idempotent bind), so a reinstall over leftover config can't silently leave the plugin `Status: disabled`. `chain_id` is consumed verbatim from the relay billing response, and the trajectory poller lifecycle is hardened.
+- **[#462], [#465] DataEdge → calldata.** The relay-reported `data_edge_address` is threaded from `/v1/billing/status` into the WASM calldata encoders, so managed writes hit the correct (staging vs production) contract instead of falling through to the production default. Sibling of MCP #439 and the chain_id fix. Closes #460.
+
 ## [3.3.12-rc.5] — 2026-05-09
 
 Final RC for the 3.3.12 stable promote. Behavioral fix: Pedro's Pop-OS Telegram QA (zai/glm-5-turbo) on rc.4 found the agent storing user statements in `MEMORY.md` / `USER.md` via `write` tool calls instead of calling `totalreclaw_remember`. 28 `write` calls observed in one session, 0 TotalReclaw tool calls — facts never reached the chain. Root cause: SKILL.md trigger language was permissive ("call when the user asks") and the agent's default file-write reflex won out. rc.5 makes the memory-storage rule the TOP RULE of SKILL.md with an explicit prohibition on `write`/`edit` against `MEMORY.md`/`USER.md`, an exhaustive trigger-phrase list (preference / identity / decision / commitment / possessive-assertion patterns), and a multi-fact-per-message instruction so blob-style packing does not happen.
