@@ -240,8 +240,8 @@ for (const pattern of FORBIDDEN_TOOLBIND_WAIT) {
 // ---------------------------------------------------------------------------
 
 assert(
-  /^version: 3\.3\.(9|1\d)-rc\./m.test(pluginSkillMd),
-  'skill/plugin/SKILL.md: frontmatter version is 3.3.9-rc.N or 3.3.1[0-9]-rc.N',
+  /^version: 3\.3\.(9|1\d)(-rc\.\d+)?$/m.test(pluginSkillMd),
+  'skill/plugin/SKILL.md: frontmatter version is 3.3.9+/3.3.1[0-9] with optional -rc.N (clean stable versions valid in-repo since the #509 publish consolidation)',
 );
 
 // ---------------------------------------------------------------------------

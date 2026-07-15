@@ -273,9 +273,13 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.jso
 const skillJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'skill.json'), 'utf8'));
 
 // Accept 3.3.7-rc.3+ OR 3.3.8-rc.N+ OR 3.3.9-rc.N+ OR 3.3.10-rc.N+ OR
-// 3.3.<11+>-rc.N (versions bump with each patch wave; 3.3.10 series
-// ships the shell-side `setsid -f` pair detach for the persistent 502).
-const validVersionPattern = /^3\.3\.(7-rc\.[3-9]\d*|8-rc\.\d+|9-rc\.\d+|10-rc\.\d+|1[1-9]-rc\.\d+|[2-9]\d-rc\.\d+|[1-9]\d*\.\d+|[1-9]\d{2,}.*)$/;
+// 3.3.<11+> with an OPTIONAL -rc.N suffix (versions bump with each patch
+// wave; 3.3.10 series ships the shell-side `setsid -f` pair detach for the
+// persistent 502). Clean (suffix-less) versions became valid in-repo when
+// stable publishing consolidated onto npm-publish.yml (#509): the stable
+// publish now carries the clean version in package.json instead of
+// promote-rc.yml re-tagging an rc in-workflow.
+const validVersionPattern = /^3\.3\.(7-rc\.[3-9]\d*|8-rc\.\d+|9-rc\.\d+|10-rc\.\d+|1[1-9](-rc\.\d+)?|[2-9]\d(-rc\.\d+)?|[1-9]\d*\.\d+|[1-9]\d{2,}.*)$/;
 
 assert(
   validVersionPattern.test(packageJson.version),
