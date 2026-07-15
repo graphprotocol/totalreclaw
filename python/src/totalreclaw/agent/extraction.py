@@ -884,6 +884,75 @@ def _filter_product_meta_facts(facts: List[ExtractedFact]) -> List[ExtractedFact
     return kept
 
 
+#: Instructions ABOUT the vault's own surfacing / pin behaviour. These are
+#: meta-directives to the memory system ("surface it every time", "pin this",
+#: "keep it at the top"), not durable user facts. Extraction occasionally
+#: mis-classifies such an imperative as a `[preference]` and stores an
+#: orphaned fragment ("it surfaced every time") — Finding #6, issue #471.
+#:
+#: DELIBERATELY narrow. The v1 taxonomy has a legitimate ``directive`` type
+#: (e.g. "always call me by my first name"), so this must NOT catch general
+#: imperatives — only self-referential recall/surfacing/pin behaviour. The
+#: anchor verbs ``surface`` and ``pin`` are the memory-behaviour vocabulary;
+#: generic verbs ("show", "remind") are excluded to keep false positives near
+#: zero ("I show up on time every day" is a genuine self-description).
+_MEMORY_SURFACING_META_PATTERNS = (
+    # "(I want it) surfaced every time" / "surface it each time" / "always surface"
+    r"\bsurfac(?:e|ed|es|ing)\b.*\b(?:every\s+time|each\s+time|always|whenever|again)\b",
+    r"\b(?:every\s+time|each\s+time|always|whenever)\b.*\bsurfac(?:e|ed|es|ing)\b",
+    # pin / keep-at-top surfacing directives about a memory item
+    r"\bpin(?:ned|ning)?\s+(?:it|this|that|these|those)\b",
+    r"\bkeep\b.*\b(?:surfac|pinned|at\s+the\s+top|top\s+of|always\s+visible)\b",
+    # explicit "surface it every time" imperative to the memory system
+    r"\bsurface\s+(?:it|this|that|them)\s+(?:every\s+time|each\s+time|always)\b",
+)
+
+
+def is_memory_surfacing_instruction(text: str) -> bool:
+    """Return True if ``text`` is a meta-instruction about the vault's own
+    surfacing / pin behaviour rather than a durable user fact.
+
+    Finding #6 (issue #471): a pin request ("I want it surfaced every time")
+    was mis-extracted and stored as an orphaned ``[preference]`` fragment
+    ("it surfaced every time"). Such utterances instruct the *memory system*
+    how to present items; they are not preferences/claims worth storing.
+
+    High precision by design — anchored on the memory-behaviour verbs
+    ``surface`` / ``pin`` so genuine directives and self-descriptions
+    ("always call me by my first name", "I show up on time every day")
+    flow through untouched. Companion to :func:`is_product_meta_request`.
+    """
+    if not isinstance(text, str) or not text:
+        return False
+    lower = text.lower().strip()
+    for pat in _MEMORY_SURFACING_META_PATTERNS:
+        if re.search(pat, lower, flags=re.IGNORECASE):
+            return True
+    return False
+
+
+def _filter_instruction_fragment_facts(
+    facts: List[ExtractedFact],
+) -> List[ExtractedFact]:
+    """Drop facts that read as vault-surfacing / pin meta-instructions.
+
+    Finding #6 (issue #471). Runs as a final pass alongside the Bug #9
+    product-meta filter. Dropped facts are logged at INFO so operators can
+    confirm the filter is not over-aggressive.
+    """
+    kept: List[ExtractedFact] = []
+    for f in facts:
+        if is_memory_surfacing_instruction(f.text):
+            logger.info(
+                "_filter_instruction_fragment_facts: dropping surfacing-instruction "
+                "fact: %r",
+                f.text[:80],
+            )
+            continue
+        kept.append(f)
+    return kept
+
+
 # ---------------------------------------------------------------------------
 # Main extraction entry points
 # ---------------------------------------------------------------------------
@@ -1057,6 +1126,10 @@ async def extract_facts_llm(
     # Bug #9: drop product-meta / setup requests before they hit the vault.
     facts = _filter_product_meta_facts(facts)
 
+    # Finding #6 (#471): drop vault-surfacing / pin meta-instructions that get
+    # mis-extracted as orphaned preference fragments.
+    facts = _filter_instruction_fragment_facts(facts)
+
     # Bug #8: collapse near-identical facts within the batch, and against
     # existing vault entries with embeddings. Runs last so importance
     # bumps are already applied (the surviving fact wins with its final
@@ -1177,6 +1250,9 @@ async def extract_facts_compaction(
 
     # Bug #9: filter product-meta requests.
     facts = _filter_product_meta_facts(facts)
+
+    # Finding #6 (#471): filter vault-surfacing / pin meta-instructions.
+    facts = _filter_instruction_fragment_facts(facts)
 
     # Bug #8: in-batch + cross-existing cosine dedup.
     facts = deduplicate_facts_by_embedding(
