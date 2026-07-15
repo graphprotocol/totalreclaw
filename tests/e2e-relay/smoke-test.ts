@@ -120,7 +120,7 @@ async function main() {
   }
 
   // ============================================================
-  // Test 4: Billing status returns free tier
+  // Test 4: Billing status returns expected tier
   // ============================================================
   try {
     const res = await request(
@@ -131,13 +131,21 @@ async function main() {
     );
     await assert(res.status === 200, `Expected 200, got ${res.status}`);
     await assert(res.data.success === true, `Expected success=true`);
-    await assert(res.data.tier === 'free', `Expected tier=free, got ${res.data.tier}`);
+    // The staging relay auto-provisions any caller registered with the
+    // X-TotalReclaw-Test header as tier=pro (lazy staging_test_fixture
+    // provisioning in relay billing.ts ensureStagingTestProSubscription).
+    // A relay running without that fixture returns tier=free, so accept
+    // either — the contract under test is "a valid tier came back".
+    await assert(
+      res.data.tier === 'free' || res.data.tier === 'pro',
+      `Expected tier in [free, pro], got ${res.data.tier}`,
+    );
     await assert(res.data.free_writes_used === 0, `Expected 0 writes used`);
     await assert(
       typeof res.data.free_writes_limit === 'number' && res.data.free_writes_limit > 0,
       `Expected positive free_writes_limit, got ${res.data.free_writes_limit}`,
     );
-    console.log('  [PASS] T4: Billing status (free tier)');
+    console.log(`  [PASS] T4: Billing status (tier=${res.data.tier})`);
     passed++;
   } catch (err: any) {
     console.log(`  [FAIL] T4: Billing status - ${err.message}`);
@@ -145,7 +153,7 @@ async function main() {
   }
 
   // ============================================================
-  // Test 5: Features dict is correct for free tier
+  // Test 5: Features dict is correct for returned tier
   // ============================================================
   try {
     const res = await request(
@@ -156,9 +164,24 @@ async function main() {
     );
     await assert(res.data.features !== undefined, 'Expected features dict');
     await assert(res.data.features.llm_dedup === true, 'Expected llm_dedup=true (enabled for all tiers)');
-    await assert(res.data.features.custom_extract_interval === false, 'Expected custom_extract_interval=false');
-    await assert(res.data.features.min_extract_interval === 5, `Expected min_extract_interval=5, got ${res.data.features.min_extract_interval}`);
-    console.log('  [PASS] T5: Feature flags (free tier)');
+    // Extraction feature flags are tier-coupled, not free-hardcoded. The
+    // staging lazy-Pro fixture (see T4) hands test callers tier=pro: pro can
+    // customize its interval (custom_extract_interval=true) and uses a shorter
+    // floor (min_extract_interval=2); free cannot (false) and uses 5. Derive
+    // the expectations from the returned tier so the test holds with OR
+    // without the staging fixture.
+    const isPro = res.data.tier === 'pro';
+    const expectedCEI = isPro;
+    const expectedMEI = isPro ? 2 : 5;
+    await assert(
+      res.data.features.custom_extract_interval === expectedCEI,
+      `Expected custom_extract_interval=${expectedCEI} for tier=${res.data.tier}, got ${res.data.features.custom_extract_interval}`,
+    );
+    await assert(
+      res.data.features.min_extract_interval === expectedMEI,
+      `Expected min_extract_interval=${expectedMEI} for tier=${res.data.tier}, got ${res.data.features.min_extract_interval}`,
+    );
+    console.log(`  [PASS] T5: Feature flags (tier=${res.data.tier} consistent)`);
     passed++;
   } catch (err: any) {
     console.log(`  [FAIL] T5: Feature flags - ${err.message}`);
