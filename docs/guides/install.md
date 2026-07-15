@@ -14,6 +14,8 @@ This is the **only** line a user ever needs to paste — the same string works n
 Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/install.md
 ```
 
+> Short form (same destination): `Install TotalReclaw. See https://totalreclaw.xyz/install` — `totalreclaw.xyz/install` redirects here. Either form works; agents that can't follow redirects should use the GitHub URL above. The GitHub URL is canonical and stays primary in these docs (they must not depend on the website being up).
+
 ### RC (user may specify a version)
 
 ```

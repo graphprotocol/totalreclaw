@@ -40,7 +40,7 @@ Other AI memory tools ([Mem0](https://mem0.ai), [Zep](https://getzep.com)) store
 
 One command per client. v1 is the default — no env toggles, no feature flags.
 
-> Prefer the chat-driven install? One host-agnostic paste line works for any agent (OpenClaw, Hermes, Claude Desktop / Cursor / Windsurf) — see [`install.md`](docs/guides/install.md).
+> Prefer the chat-driven install? Paste one host-agnostic line into any agent (OpenClaw, Hermes, Claude Desktop / Cursor / Windsurf): `Install TotalReclaw. See https://totalreclaw.xyz/install` — a short alias for the universal dispatcher ([`install.md`](docs/guides/install.md)).
 
 | Client | Install |
 |---|---|
