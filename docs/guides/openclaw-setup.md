@@ -16,13 +16,15 @@ Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/g
 
 The agent installs the stable channel (`@totalreclaw/totalreclaw` from npm `latest`) and proceeds to setup.
 
+To see what the channels currently resolve to: `npm view @totalreclaw/totalreclaw dist-tags` (e.g. `latest: 3.3.13`, `rc: 3.3.13-rc.1` as of 2026-07-15).
+
 ### RC (user specifies a version)
 
 ```
 Install TotalReclaw RC <version>. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md
 ```
 
-`<version>` is a semver RC string the user picks (e.g. `3.3.12-rc.19`). When the user omits `<version>` and writes only `Install TotalReclaw RC`, the agent installs the **newest release candidate** via `openclaw plugins install @totalreclaw/totalreclaw@rc` (no pin — always the latest cut).
+`<version>` is a semver RC string the user picks (e.g. `3.3.13-rc.1`). When the user omits `<version>` and writes only `Install TotalReclaw RC`, the agent installs the **newest release candidate** via `openclaw plugins install @totalreclaw/totalreclaw@rc` (no pin — always the latest cut).
 
 ### RC against the staging relay (QA only)
 
@@ -107,7 +109,7 @@ These freelancing patterns have broken pair flows. They are FORBIDDEN regardless
 
 3. **Do NOT re-render the QR.** `tr pair --json` returns `qr_ascii` (Unicode) AND the pair page renders a real PNG. Saving the QR to `/tmp/totalreclaw-pair-qr.png` triggers OpenClaw's media-access policy block and Telegram delivery fails with `LocalMediaAccessError`. Just emit the URL + PIN as user-visible line 4 as **plain text on its own line** (the `#pk=` URL fragment breaks if wrapped in markdown/backticks) — that is your only QR responsibility.
 
-4. **Do NOT invoke `tr pair --json` in the foreground.** A foreground pair subprocess is killed when your shell-tool exec returns. The pair WS dies → relay returns 502. **Prefer the in-process HTTP route `curl -s http://localhost:18789/plugin/totalreclaw/pair/init` (3.3.14+) instead — it opens the relay WS in the gateway process and needs no detachment.** If you must fall back to the CLI path (older plugin, or HTTP route unreachable), Step 4's `setsid -f` block is mandatory — copy it VERBATIM. Do not "simplify". Do not drop the `setsid -f`. Do not omit `< /dev/null`.
+4. **Do NOT invoke `tr pair --json` in the foreground.** A foreground pair subprocess is killed when your shell-tool exec returns. The pair WS dies → relay returns 502. **Prefer the in-process HTTP route `curl -s http://localhost:18789/plugin/totalreclaw/pair/init` (3.3.12+) instead — it opens the relay WS in the gateway process and needs no detachment.** If you must fall back to the CLI path (older plugin, or HTTP route unreachable), Step 4's `setsid -f` block is mandatory — copy it VERBATIM. Do not "simplify". Do not drop the `setsid -f`. Do not omit `< /dev/null`.
 
 5. **Do NOT narrate.** Examples that have appeared in past QAs and MUST NEVER appear again: "Now let me verify the CLI…" / "Gateway needs a restart, let me restart it" / "Let me find and signal the gateway process" / "The CLI is at the npm path, not the extensions path" / "CLI reports itself as version X (lag)" / "Now let me also add the required post-install config" / "Let me save the QR as a PNG". All silent — these are internal details. Emit only the 4-5 user-visible lines.
 
@@ -151,14 +153,14 @@ Run this right after the install commands, always. On a **clean** install OpenCl
 
 **What the plugin patches for you (and what it does NOT).** On load the plugin's `register()` writes only the two host keys it owns — `plugins.entries.totalreclaw.hooks.allowConversationAccess = true` (Fix #2) and `channels.telegram.streaming.mode = "off"` if unset (Fix #3) — then fires `SIGUSR1` to its own PID so the gateway in-process restart picks them up without any manual restart. As of the native-memory line (rc.20, #402) it no longer writes `plugins.slots.memory`, `plugins.allow`, `plugins.bundledDiscovery`, or `plugins.installs` — OpenClaw's native install owns the slot + allowlist + discovery. That is why the `openclaw plugins enable totalreclaw` step above exists: the slot is the host's job now, and the one time it doesn't bind on its own is a reinstall over stale config.
 
-> **Setup is a user-initiated pair (native memory integration).** The plugin does **not** auto-pair on load. When no `~/.totalreclaw/credentials.json` exists, the agent triggers pairing via the plugin's in-process HTTP route (`GET http://localhost:18789/plugin/totalreclaw/pair/init`, 3.3.14+) — which opens the relay pair WebSocket directly in the gateway process (immune to the 30s shell-tool subprocess timeout that killed the CLI path's WS → relay 502) — or falls back to `tr pair --json` via `setsid -f`. Either path surfaces the returned `url` + `pin` verbatim, and you complete the flow in your browser (generate/import your 12-word recovery phrase browser-side — it is encrypted client-side and never enters the chat or the agent's context). On completion `credentials.json` is written and `memory_search`/`memory_get` work immediately — no manual gateway restart (the plugin self-applies its config + signals `SIGUSR1` to reload; if the memory tools don't bind, the agent issues `/totalreclaw-restart` autonomously). Recall is native (`memory_search`/`memory_get`) and facts are captured automatically in the background — you don't call a remember tool per fact.
+> **Setup is a user-initiated pair (native memory integration).** The plugin does **not** auto-pair on load. When no `~/.totalreclaw/credentials.json` exists, the agent triggers pairing via the plugin's in-process HTTP route (`GET http://localhost:18789/plugin/totalreclaw/pair/init`, 3.3.12+) — which opens the relay pair WebSocket directly in the gateway process (immune to the 30s shell-tool subprocess timeout that killed the CLI path's WS → relay 502) — or falls back to `tr pair --json` via `setsid -f`. Either path surfaces the returned `url` + `pin` verbatim, and you complete the flow in your browser (generate/import your 12-word recovery phrase browser-side — it is encrypted client-side and never enters the chat or the agent's context). On completion `credentials.json` is written and `memory_search`/`memory_get` work immediately — no manual gateway restart (the plugin self-applies its config + signals `SIGUSR1` to reload; if the memory tools don't bind, the agent issues `/totalreclaw-restart` autonomously). Recall is native (`memory_search`/`memory_get`) and facts are captured automatically in the background — you don't call a remember tool per fact.
 
 > **Auto-extraction safety net.** Even when the `agent_end` hook is gated by an upstream policy, the plugin runs a filesystem-polling backup that watches `~/.openclaw/agents/<agent>/sessions/*.trajectory.jsonl` every 60 s and runs the same extraction pipeline (NOT a hook event, so it's never gated). The hook fires alongside the poller; offset-based dedup prevents double-extraction.
 
 > **If the plugin lands `Status: disabled` (memory slot stuck at `memory-core`).** This is the reinstall failure mode the Step 1 `openclaw plugins enable totalreclaw` step prevents. If you skipped it, or `openclaw plugins inspect totalreclaw` shows `Status: disabled` / `Error: memory slot set to "memory-core"`, run `openclaw plugins enable totalreclaw` once — it re-runs OpenClaw's exclusive slot-selection and flips the slot to `totalreclaw`. The plugin is already on disk; only the slot binding needs fixing. Symptom if left unfixed: `openclaw totalreclaw status` reports `unknown command`, the boot log shows only 2 plugins (no totalreclaw), and pairing fails with a 502 because the plugin's pair HTTP routes never registered.
 
 Notes:
-- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.19`.
+- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.3.13-rc.1`.
 - **OpenClaw exec-surface compatibility (2026.6.11+).** OpenClaw **2026.6.11 and later** moved shell exec off the gateway and onto **paired node hosts**, so the agent can only run `openclaw plugins install` (and the other setup commands) when it has an **exec-capable surface** (a paired node host). Agent-driven install over chat works out of the box on **≤ 2026.6.8** gateway-exec setups; on 2026.6.11+ without a paired exec host, the agent cannot shell out — install through the service's **Plugins** UI instead (see "Managed OpenClaw service" below) and then paste an **Install prompt** so the agent picks up the already-loaded plugin.
 - **Always run the install — never skip it because a totalreclaw "appears present".** A leftover install from a prior version (e.g. a stale `@totalreclaw/mcp-server`) is NOT the `@totalreclaw/totalreclaw` plugin and must be replaced.
 - **If install reports `already exists` / `delete it first` (reinstall over a prior install), do NOT use `--force`.** `--force` writes an install record with `version=None`, which OpenClaw's installs-map schema rejects — the plugin lands broken and disabled. The reason for the block is that `openclaw plugins uninstall` removes the config/slot/record but leaves the package files behind in `~/.openclaw/npm/projects/<hash>/`, and the new install refuses to overwrite them. Clean it and reinstall:
@@ -183,7 +185,7 @@ openclaw totalreclaw status
 
 A successful run (exit `0`, human-readable status printed) is your verification. Emit user-visible line 2 (`✓ Installed (totalreclaw <version>)`) with the version the `openclaw plugins install` step reported (or read it from `openclaw plugins list | grep totalreclaw`). Then proceed silently to Step 3.
 
-If `openclaw totalreclaw status` exits non-zero or reports `unknown command`, wait 5s and retry once (the install / SIGUSR1 reload may still be completing). If it still fails, tell the user the install didn't land and retry `openclaw plugins install @totalreclaw/totalreclaw@rc`.
+If `openclaw totalreclaw status` exits non-zero or reports `unknown command`, wait 5s and retry once (the install / SIGUSR1 reload may still be completing). If it still fails, tell the user the install didn't land and retry the install command you originally ran (stable: `openclaw plugins install @totalreclaw/totalreclaw`; RC: append `@rc`).
 
 > ⛔ **DO NOT use `npx` to run TotalReclaw commands.** `npx` fails inside OpenClaw's sandbox (no network egress for the package fetch, and the resolved binary path is wrong for a plugin that's already installed). Always use the **registered subcommand** `openclaw totalreclaw <command>` (e.g. `openclaw totalreclaw status`, `openclaw totalreclaw onboard --pair-only`) or the **native tool** `memory_search`. The only place a raw `node .../dist/cli/tr-cli.js` invocation is acceptable is the explicit fallback blocks below (the pair CLI fallback and the issue-#184 deadlock workaround), which define the path inline — never invent a resolver of your own and never reach for `npx`.
 
@@ -195,7 +197,7 @@ Run `test -s ~/.totalreclaw/credentials.json`. If it exists and is non-empty, em
 
 Pasting the install prompt was the consent moment for installing the plugin. The URL + PIN you're about to hand the user is the real consent moment for account creation — they have to open the page in their browser to proceed. There is NO separate yes/no gate. Do NOT ask "Would you like to set up an account?" — run pair immediately. Pair is UNCONDITIONAL when no credentials exist; the user installing/requesting setup IS the consent.
 
-**PRIMARY pair path (3.3.14+) — the in-process HTTP route.** This is the resilient path: the plugin opens the relay pair WebSocket directly in the gateway process via `GET /plugin/totalreclaw/pair/init`, so the WS is immune to the 30s shell-tool subprocess timeout (which killed the CLI's pair WS mid-pair → relay 502 on `/pair/respond`). No `setsid -f`, no subprocess detachment, no foreground-kill risk — the WS lives in the gateway process itself and survives shell-tool timeouts, retries, and SIGUSR1 reloads.
+**PRIMARY pair path (3.3.12+) — the in-process HTTP route.** This is the resilient path: the plugin opens the relay pair WebSocket directly in the gateway process via `GET /plugin/totalreclaw/pair/init`, so the WS is immune to the 30s shell-tool subprocess timeout (which killed the CLI's pair WS mid-pair → relay 502 on `/pair/respond`). No `setsid -f`, no subprocess detachment, no foreground-kill risk — the WS lives in the gateway process itself and survives shell-tool timeouts, retries, and SIGUSR1 reloads.
 
 ```bash
 curl -s http://localhost:18789/plugin/totalreclaw/pair/init
@@ -288,7 +290,7 @@ openclaw plugins install @totalreclaw/totalreclaw            # stable
 
 Then in chat: *"Set up TotalReclaw"* — the agent will run `tr pair --json` and hand you the URL + PIN. Open the URL in your browser to enter or generate your phrase.
 
-> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.12-rc.19`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
+> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.13-rc.1`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
 
 <details>
 <summary>From-source install (for plugin development — self-host only)</summary>
