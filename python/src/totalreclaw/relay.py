@@ -317,9 +317,20 @@ class RelayClient:
         params = {}
         if chain:
             params["chain"] = chain
+        # The relay routes /v1/subgraph to the correct chain by looking up
+        # this wallet's tier (Pro → Gnosis, Free → Base Sepolia). It reads the
+        # wallet from the ``X-Wallet-Address`` header and *fails open to free*
+        # when the header is absent. Without it, Pro-tier reads land on the
+        # Base Sepolia subgraph and return 0 rows even though the facts live
+        # on Gnosis — the recall-returns-nothing bug (issue #486). Mirror the
+        # write path (``submit_userop``) and always send the wallet so reads
+        # track the same chain as writes.
+        headers = self._base_headers()
+        if self._wallet_address:
+            headers["X-Wallet-Address"] = self._wallet_address
         resp = await http.post(
             f"{self._relay_url}/v1/subgraph",
-            headers=self._base_headers(),
+            headers=headers,
             json={"query": query, "variables": variables},
             params=params,
         )

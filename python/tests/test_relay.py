@@ -143,3 +143,51 @@ class TestBillingStatusParsing:
         status = await rc.get_billing_status()
         assert status.features is not None
         assert status.features.latest_stable_python is None
+
+
+class TestSubgraphWalletHeader:
+    """issue #486 — recall returned 0 results for Pro vaults.
+
+    The relay routes ``/v1/subgraph`` to the correct chain by reading the
+    ``X-Wallet-Address`` header and looking up the wallet's tier (Pro →
+    Gnosis, Free → Base Sepolia), failing open to *free* when the header is
+    absent. ``query_subgraph`` used to send only ``_base_headers()`` (no
+    wallet), so Pro-tier reads landed on the Base Sepolia subgraph and
+    returned nothing while writes/status/web-app all used Gnosis. Recall,
+    export, and confirm-indexed all go through ``query_subgraph``, so the
+    wallet header must ride along on every subgraph read.
+    """
+
+    def _capturing_relay(self, captured: dict, wallet_address):
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured["headers"] = request.headers
+            return httpx.Response(200, json={"data": {"facts": []}})
+
+        transport = httpx.MockTransport(_handler)
+        rc = RelayClient(
+            relay_url="https://api-staging.totalreclaw.xyz",
+            auth_key_hex="00" * 32,
+            wallet_address=wallet_address,
+        )
+
+        async def _mock_get_http() -> httpx.AsyncClient:
+            return httpx.AsyncClient(transport=transport, timeout=10.0)
+
+        rc._get_http = _mock_get_http  # type: ignore[assignment]
+        return rc
+
+    @pytest.mark.asyncio
+    async def test_issue_486_query_subgraph_sends_wallet_header(self):
+        wallet = "0x" + "ab" * 20
+        captured: dict = {}
+        rc = self._capturing_relay(captured, wallet)
+        await rc.query_subgraph("query { facts { id } }", {"owner": wallet})
+        # Pre-patch this header was absent → relay fell open to Base Sepolia.
+        assert captured["headers"].get("x-wallet-address") == wallet
+
+    @pytest.mark.asyncio
+    async def test_issue_486_no_wallet_omits_header(self):
+        captured: dict = {}
+        rc = self._capturing_relay(captured, None)
+        await rc.query_subgraph("query { facts { id } }", {})
+        assert "x-wallet-address" not in captured["headers"]
