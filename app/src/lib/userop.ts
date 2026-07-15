@@ -176,3 +176,58 @@ export async function submitTombstones(
   );
   return submitUserOp(payloads, ctx);
 }
+
+/** The re-encrypted superseding claim, ready for the on-chain protobuf. */
+export interface SupersedingFact {
+  /** Fresh claim UUID (protobuf field 1 / subgraph Fact.id). */
+  id: string;
+  /** Hex wire-format blob (nonce||tag||ct) from `encryptBlob`. */
+  encryptedBlobHex: string;
+  /** Blind indices copied forward from the old on-chain fact (text unchanged). */
+  blindIndices: string[];
+  /** Encrypted embedding copied forward from the old on-chain fact. */
+  encryptedEmbedding?: string;
+  /** Provenance tag for the write (e.g. "spa_pin" / "spa_unpin"). */
+  source: string;
+}
+
+/**
+ * Pin/unpin (A.2 Phase 2): atomic 2-call `executeBatch` supersession —
+ * `[tombstone(oldFactId, v4), newClaim(v4)]` in ONE UserOp (one nonce, one
+ * submission), mirroring `mcp/src/tools/pin.ts` / Python `_change_claim_status`.
+ * Batching is what makes the status flip atomic on-chain: sequential ops raced
+ * a Pimlico mempool quirk that could tombstone the old fact and drop the new.
+ *
+ * decay_score = 1.0 on the new fact (pins are top-priority; unpins revert to
+ * active at full decay). Embedding + blind indices are copied forward — the
+ * text never changes on a pin, so the old search vectors stay exact (no 344 MB
+ * embedding model in the browser, zero search degradation).
+ */
+export async function submitSupersession(
+  oldFactId: string,
+  newFact: SupersedingFact,
+  ctx: WriteContext,
+): Promise<SubmitResult> {
+  const core = await loadCore();
+  const owner = ctx.keys.walletAddress.toLowerCase();
+  const tombstone = core.encodeTombstoneProtobuf(oldFactId, owner, PROTOBUF_VERSION_V4);
+  const claim = core.encodeFactProtobuf(
+    JSON.stringify({
+      id: newFact.id,
+      timestamp: new Date().toISOString(),
+      owner,
+      encrypted_blob_hex: newFact.encryptedBlobHex,
+      blind_indices: newFact.blindIndices,
+      decay_score: 1.0,
+      source: newFact.source,
+      // Empty like the MCP pin path — the relay's per-fact billing doesn't
+      // key on it, and re-sending the old fingerprint could trip server-side
+      // dedup against the fact we're superseding.
+      content_fp: "",
+      agent_id: "ts-spa-vault",
+      encrypted_embedding: newFact.encryptedEmbedding ?? null,
+      version: PROTOBUF_VERSION_V4,
+    }),
+  );
+  return submitUserOp([tombstone, claim], ctx);
+}

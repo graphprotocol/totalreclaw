@@ -32,13 +32,17 @@ function sourceLabel(source: string): string {
 /** A single memory, set to read. (Ported from the Keeper prototype ClaimCard.)
  *
  *  A.2 curation: when `onForget` is supplied, a subtle "Forget" affordance
- *  appears with an inline confirm. Pin/retype/set_scope land in A.2 Phase 2/3.
- *  With no `onForget`, the card is byte-for-byte the read-only card it was. */
+ *  appears with an inline confirm; when `onTogglePin` is supplied, a "Pin"/
+ *  "Unpin" affordance sits beside it (no confirm — pinning is reversible).
+ *  Retype/set_scope land in A.2 Phase 3. With neither handler, the card is
+ *  byte-for-byte the read-only card it was. */
 export function ClaimCard({
   item,
   style,
   onForget,
   forgetPending = false,
+  onTogglePin,
+  pinPending = false,
 }: {
   item: VaultItem;
   style?: CSSProperties;
@@ -46,6 +50,10 @@ export function ClaimCard({
   onForget?: () => void;
   /** True while the on-chain tombstone is in flight (awaiting the receipt). */
   forgetPending?: boolean;
+  /** Opt-in pin/unpin: 2-call supersession on-chain. Absent → no affordance. */
+  onTogglePin?: () => void;
+  /** True while the pin/unpin supersession batch awaits its receipt. */
+  pinPending?: boolean;
 }) {
   const { claim } = item;
   const type = (claim.type as MemoryTypeV1) ?? "claim";
@@ -93,9 +101,26 @@ export function ClaimCard({
           {claim.reasoning}
         </p>
       )}
-      {onForget && (
+      {(onForget || onTogglePin) && (
         <div className="mt-3 flex items-center justify-end gap-2 text-xs">
-          {forgetPending ? (
+          {onTogglePin &&
+            (pinPending ? (
+              <span className="text-ink-muted" aria-live="polite">
+                {item.pinned ? "Unpinning…" : "Pinning…"}
+              </span>
+            ) : (
+              !confirming &&
+              !forgetPending && (
+                <button
+                  type="button"
+                  onClick={onTogglePin}
+                  className="rounded-pill px-2.5 py-0.5 font-semibold text-ink-muted transition hover:bg-clay-tint hover:text-clay-deep focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
+                >
+                  {item.pinned ? "Unpin" : "Pin"}
+                </button>
+              )
+            ))}
+          {onForget && (forgetPending ? (
             <span className="text-ink-muted" aria-live="polite">
               Forgetting…
             </span>
@@ -128,7 +153,7 @@ export function ClaimCard({
             >
               Forget
             </button>
-          )}
+          ))}
         </div>
       )}
     </article>

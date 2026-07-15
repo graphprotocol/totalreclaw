@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { decryptFacts } from "./api";
+import { decryptFacts, setPinStatus } from "./api";
 import { buildTimeline } from "./vault/timeline";
 import { encryptBlob } from "./crypto";
 import { RawFact, SessionKeys } from "./types";
@@ -257,5 +257,54 @@ describe("decryptFacts → metadata round-trip → buildTimeline", () => {
     expect(g.key).toBe(`s:${SESSION_ID}`);
     expect(g.crystal?.id).toBe("crystal-1");
     expect(g.facts.map((f) => f.id)).toEqual(["atom-1"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A.2 Phase 2 — pin/unpin idempotency guard (mirrors mcp/src/tools/pin.ts:667)
+// ---------------------------------------------------------------------------
+
+describe("setPinStatus idempotency (no UserOp on a no-op)", () => {
+  // A sign callback that must never run: an idempotent no-op sends nothing.
+  const mustNotSign = () => {
+    throw new Error("sign() called on an idempotent pin no-op");
+  };
+
+  function vaultItem(pin_status?: "pinned" | "unpinned") {
+    const claim = {
+      id: "f-pin",
+      text: "Prefers dark mode",
+      type: "preference" as const,
+      source: "user" as const,
+      created_at: "2026-07-01T00:00:00.000Z",
+      schema_version: "1.0" as const,
+      ...(pin_status ? { pin_status } : {}),
+    };
+    return {
+      id: "f-pin",
+      claim,
+      type: claim.type,
+      pinned: pin_status === "pinned",
+      createdAt: new Date(claim.created_at),
+      rawBlob: "",
+      blindIndices: [],
+      decayScore: 1,
+      isActive: true,
+    };
+  }
+
+  it("pin on an already-pinned item resolves idempotent with no write", async () => {
+    const res = await setPinStatus(vaultItem("pinned"), "pinned", KEYS, mustNotSign);
+    expect(res).toEqual({ idempotent: true });
+  });
+
+  it("unpin on an explicitly-unpinned item is a no-op", async () => {
+    const res = await setPinStatus(vaultItem("unpinned"), "unpinned", KEYS, mustNotSign);
+    expect(res).toEqual({ idempotent: true });
+  });
+
+  it("unpin when pin_status is ABSENT is a no-op (absence == unpinned)", async () => {
+    const res = await setPinStatus(vaultItem(undefined), "unpinned", KEYS, mustNotSign);
+    expect(res).toEqual({ idempotent: true });
   });
 });

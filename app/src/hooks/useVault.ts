@@ -1,10 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { SessionKeys, VaultItem, MemoryClaimV1 } from "../lib/types";
+import { PinStatus, SessionKeys, VaultItem, MemoryClaimV1 } from "../lib/types";
 import {
   exportAllFacts,
   decryptFacts,
   deleteFact,
   batchDeleteFacts,
+  setPinStatus,
   updateClaim,
 } from "../lib/api";
 import { useCrypto } from "../contexts/CryptoContext";
@@ -74,8 +75,11 @@ export function useDeleteFact(keys: SessionKeys | null) {
       return deleteFact(factId, keys, sign);
     },
     onSuccess: (_data, factId) => {
-      qc.setQueryData<VaultItem[]>(VAULT_QUERY_KEY, (prev) =>
-        prev?.filter((it) => it.id !== factId) ?? [],
+      // The vault cache holds VaultData ({items, fetched}), not VaultItem[].
+      qc.setQueryData<VaultData>(VAULT_QUERY_KEY, (prev) =>
+        prev
+          ? { ...prev, items: prev.items.filter((it) => it.id !== factId) }
+          : prev,
       );
     },
   });
@@ -91,8 +95,49 @@ export function useBatchDelete(keys: SessionKeys | null) {
     },
     onSuccess: (_data, ids) => {
       const idSet = new Set(ids);
-      qc.setQueryData<VaultItem[]>(VAULT_QUERY_KEY, (prev) =>
-        prev?.filter((it) => !idSet.has(it.id)) ?? [],
+      qc.setQueryData<VaultData>(VAULT_QUERY_KEY, (prev) =>
+        prev
+          ? { ...prev, items: prev.items.filter((it) => !idSet.has(it.id)) }
+          : prev,
+      );
+    },
+  });
+}
+
+/**
+ * Pin/unpin a memory on-chain (A.2 Phase 2 — 2-call supersession batch).
+ * On receipt, the cached item is reconciled in place: new fact id, new claim
+ * (pin_status + superseded_by), new rawBlob — so an immediate follow-up toggle
+ * rebuilds from the CURRENT on-chain blob without a refetch. Idempotent no-ops
+ * (already in the target state) resolve without touching the cache.
+ */
+export function usePinFact(keys: SessionKeys | null) {
+  const qc = useQueryClient();
+  const sign = useUserOpSigner();
+  return useMutation({
+    mutationFn: ({ item, target }: { item: VaultItem; target: PinStatus }) => {
+      if (!keys) throw new Error("Vault is locked.");
+      return setPinStatus(item, target, keys, sign);
+    },
+    onSuccess: (result, { item, target }) => {
+      if (result.idempotent) return;
+      qc.setQueryData<VaultData>(VAULT_QUERY_KEY, (prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.map((it) =>
+                it.id === item.id
+                  ? {
+                      ...it,
+                      id: result.newFactId ?? it.id,
+                      claim: result.newClaim ?? it.claim,
+                      pinned: target === "pinned",
+                      rawBlob: result.newBlobHex ?? it.rawBlob,
+                    }
+                  : it,
+              ),
+            }
+          : prev,
       );
     },
   });
@@ -109,17 +154,22 @@ export function useUpdateClaim(keys: SessionKeys) {
       updatedClaim: MemoryClaimV1;
     }) => updateClaim(item, updatedClaim, keys),
     onSuccess: (_data, { item, updatedClaim }) => {
-      qc.setQueryData<VaultItem[]>(VAULT_QUERY_KEY, (prev) =>
-        prev?.map((it) =>
-          it.id === item.id
-            ? {
-                ...it,
-                claim: updatedClaim,
-                type: updatedClaim.type ?? it.type,
-                pinned: updatedClaim.pin_status === "pinned",
-              }
-            : it,
-        ) ?? [],
+      qc.setQueryData<VaultData>(VAULT_QUERY_KEY, (prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.map((it) =>
+                it.id === item.id
+                  ? {
+                      ...it,
+                      claim: updatedClaim,
+                      type: updatedClaim.type ?? it.type,
+                      pinned: updatedClaim.pin_status === "pinned",
+                    }
+                  : it,
+              ),
+            }
+          : prev,
       );
     },
   });

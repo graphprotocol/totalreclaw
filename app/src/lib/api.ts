@@ -11,7 +11,8 @@ import {
   MEMORY_SCOPES,
   SubgraphFact,
 } from "./types";
-import { decryptBlob } from "./crypto";
+import { decryptBlob, encryptBlob } from "./crypto";
+import type { PinStatus } from "./types";
 import { SessionKeys } from "./types";
 // Type-only: erased at compile time, so it does NOT pull the userop/wasm write
 // chunk into the read bundle. The runtime import is dynamic (see deleteFact).
@@ -271,11 +272,12 @@ export function decryptFacts(
 // ---------------------------------------------------------------------------
 // Write path — Keeper A.2 curation writes.
 //
-// Phase 1 (delete/tombstone) is implemented. The @totalreclaw/core WASM +
-// UserOp assembler are lazy-loaded on the FIRST write only (dynamic import) so
-// the 2.3 MB WASM never lands in the read chunk (see wasm.ts / userop.ts).
+// Phase 1 (delete/tombstone) + Phase 2 (pin/unpin via 2-call supersession) are
+// implemented. The @totalreclaw/core WASM + UserOp assembler + claim rebuilder
+// are lazy-loaded on the FIRST write only (dynamic import) so the 2.3 MB WASM
+// never lands in the read chunk (see wasm.ts / userop.ts / claim.ts).
 //
-// Phase 2/3 (pin/unpin/retype/set_scope via 2-call supersession) remain stubs.
+// Phase 3 (retype/set_scope — same supersession engine) remains a stub.
 // ---------------------------------------------------------------------------
 
 const WRITES_NOT_IMPLEMENTED =
@@ -331,7 +333,126 @@ export async function batchDeleteFacts(
   }
 }
 
-// Phase 2/3: pin/unpin/retype/set_scope (2-call supersession) — not yet wired.
+/**
+ * Fetch the on-chain wire fields of a single fact that the browse query
+ * deliberately skips (`encryptedEmbedding` is ~5.2KB/fact) plus its blind
+ * indices (derived `blindIndexEntries`). A supersession write copies both
+ * forward — the text never changes on pin/unpin, so the old search vectors
+ * stay exact. Missing fact → empty fields (the write still proceeds; trapdoor
+ * search simply won't cover the superseding row, same as a Hermes pin).
+ */
+async function fetchFactWireFields(
+  keys: SessionKeys,
+  factId: string,
+): Promise<{ encryptedEmbedding?: string; blindIndices: string[] }> {
+  const query = `
+    query FactWireFields($id: ID!) {
+      fact(id: $id) {
+        encryptedEmbedding
+        blindIndexEntries { hash }
+      }
+    }
+  `;
+  const resp = await apiFetch<
+    SubgraphResponse<{
+      fact: {
+        encryptedEmbedding?: string | null;
+        blindIndexEntries?: Array<{ hash: string }>;
+      } | null;
+    }>
+  >("/v1/subgraph", keys, {
+    method: "POST",
+    body: JSON.stringify({ query, variables: { id: factId } }),
+  });
+  if (resp.errors?.length) {
+    throw new Error(`subgraph: ${resp.errors.map((e) => e.message).join("; ")}`);
+  }
+  const fact = resp.data?.fact;
+  return {
+    encryptedEmbedding: fact?.encryptedEmbedding ?? undefined,
+    blindIndices: (fact?.blindIndexEntries ?? []).map((e) => e.hash),
+  };
+}
+
+/** Result of a pin/unpin write. `idempotent: true` → no UserOp was sent. */
+export interface PinWriteResult {
+  idempotent: boolean;
+  /** The superseding fact's fresh UUID (absent on idempotent no-op). */
+  newFactId?: string;
+  /** The superseding claim (decrypted shape) for optimistic cache updates. */
+  newClaim?: MemoryClaimV1;
+  /** Hex wire blob of the superseding claim (becomes the item's rawBlob). */
+  newBlobHex?: string;
+}
+
+/**
+ * Pin or unpin a memory (A.2 Phase 2) — atomic 2-call `executeBatch`
+ * supersession `[tombstone(old), newClaim(superseded_by=old, pin_status)]`,
+ * mirroring `mcp/src/tools/pin.ts:executePinOperation`.
+ *
+ * Idempotent (pin.ts:667): pinning an already-pinned memory (or unpinning an
+ * unpinned one — absence of `pin_status` counts as unpinned) sends NO UserOp.
+ */
+export async function setPinStatus(
+  item: VaultItem,
+  target: PinStatus,
+  keys: SessionKeys,
+  sign: SignUserOpHash,
+): Promise<PinWriteResult> {
+  const current: PinStatus =
+    item.claim.pin_status === "pinned" ? "pinned" : "unpinned";
+  if (current === target) {
+    return { idempotent: true };
+  }
+
+  const targetChain = await resolveWriteTarget(keys);
+  const [{ loadCore }, { rebuildClaimJson }, { submitSupersession }] =
+    await Promise.all([import("./wasm"), import("./claim"), import("./userop")]);
+  const core = await loadCore();
+
+  // Rebuild from the RAW decrypted blob (not the normalized VaultItem.claim —
+  // normalization clamps enums, which must not leak into the re-encrypted
+  // wire). Full field carry-forward + metadata preservation live in claim.ts.
+  const plaintext = decryptBlob(item.rawBlob, keys.encryptionKey);
+  const newFactId = crypto.randomUUID();
+  const canonicalJson = rebuildClaimJson(core, plaintext, {
+    newId: newFactId,
+    supersededBy: item.id,
+    pinStatus: target,
+  });
+  const newBlobHex = encryptBlob(canonicalJson, keys.encryptionKey);
+
+  // Copy embedding + blind indices forward from the old on-chain fact.
+  const wire = await fetchFactWireFields(keys, item.id);
+  const blindIndices =
+    item.blindIndices.length > 0 ? item.blindIndices : wire.blindIndices;
+
+  const res = await submitSupersession(
+    item.id,
+    {
+      id: newFactId,
+      encryptedBlobHex: newBlobHex,
+      blindIndices,
+      encryptedEmbedding: wire.encryptedEmbedding,
+      source: target === "pinned" ? "spa_pin" : "spa_unpin",
+    },
+    { keys, sign, ...targetChain },
+  );
+  if (!res.success) {
+    throw new Error(
+      "The pin update was submitted but not confirmed on-chain. Try again.",
+    );
+  }
+  return {
+    idempotent: false,
+    newFactId,
+    newClaim: normalizeClaim(JSON.parse(canonicalJson) as MemoryClaimV1),
+    newBlobHex,
+  };
+}
+
+// Phase 3: retype/set_scope (same 2-call supersession engine — claim.ts /
+// submitSupersession are ready for it) — not yet wired.
 export async function updateClaim(
   _item: VaultItem,
   _updatedClaim: MemoryClaimV1,
