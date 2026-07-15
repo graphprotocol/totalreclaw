@@ -1,3 +1,6 @@
 
 # E2E screenshot artifacts
 e2e/*.png
+
+# E2E throwaway-account secret (PHRASE-SAFETY: never commit)
+.e2e-secret

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useMemo, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { useCrypto } from "../contexts/CryptoContext";
-import { useVault } from "../hooks/useVault";
+import { useVault, useDeleteFact } from "../hooks/useVault";
 import { buildTimeline, importSourceOf, type SessionGroup } from "../lib/vault/timeline";
 import { buildMindGraph, SCOPES, type Scope } from "../lib/vault/mindmap";
 import { AppHeader } from "../components/AppHeader";
@@ -48,6 +48,8 @@ export function MemoryPage() {
 
   const [mode, setMode] = useState<Mode>("list");
   const [panel, setPanel] = useState<PanelView | null>(null);
+  // A.2 curation: on-chain tombstone. Wired into the Facts lens (keys present).
+  const del = useDeleteFact(keys);
 
   const [q, setQ] = useState("");
   const [scope, setScope] = useState<MemoryScope | null>(null);
@@ -239,10 +241,21 @@ export function MemoryPage() {
         {/* Facts: flat lens */}
         {!isLoading && groups.length > 0 && mode === "facts" && (
           <>
+            {del.isError && (
+              <p className="mt-4 rounded-control bg-clay-tint px-3 py-2 text-sm text-clay-deep">
+                Couldn’t forget that memory: {del.error instanceof Error ? del.error.message : String(del.error)}
+              </p>
+            )}
             {shownItems.length > 0 ? (
               <div className="mt-6 space-y-3">
                 {shownItems.map((it, i) => (
-                  <ClaimCard key={it.id} item={it} style={{ animationDelay: `${Math.min(i, 8) * 20}ms` }} />
+                  <ClaimCard
+                    key={it.id}
+                    item={it}
+                    style={{ animationDelay: `${Math.min(i, 8) * 20}ms` }}
+                    onForget={() => del.mutate(it.id)}
+                    forgetPending={del.isPending && del.variables === it.id}
+                  />
                 ))}
               </div>
             ) : (

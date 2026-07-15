@@ -13,6 +13,10 @@ import {
 } from "./types";
 import { decryptBlob } from "./crypto";
 import { SessionKeys } from "./types";
+// Type-only: erased at compile time, so it does NOT pull the userop/wasm write
+// chunk into the read bundle. The runtime import is dynamic (see deleteFact).
+import type { SignUserOpHash } from "./userop";
+export type { SignUserOpHash } from "./userop";
 
 const SERVER_URL =
   import.meta.env.VITE_SERVER_URL?.replace(/\/$/, "") ??
@@ -265,32 +269,74 @@ export function decryptFacts(
 }
 
 // ---------------------------------------------------------------------------
-// Write path — Phase 2 (managed-mode UserOp construction not yet implemented).
-// These stubs preserve the hook surface so the UI compiles + renders. Calls
-// that hit the write path will surface a clear error to the user.
+// Write path — Keeper A.2 curation writes.
+//
+// Phase 1 (delete/tombstone) is implemented. The @totalreclaw/core WASM +
+// UserOp assembler are lazy-loaded on the FIRST write only (dynamic import) so
+// the 2.3 MB WASM never lands in the read chunk (see wasm.ts / userop.ts).
+//
+// Phase 2/3 (pin/unpin/retype/set_scope via 2-call supersession) remain stubs.
 // ---------------------------------------------------------------------------
 
 const WRITES_NOT_IMPLEMENTED =
-  "Vault writes are not yet available in the web app. Use a TotalReclaw agent (Claude Desktop, OpenClaw, etc.) to modify your vault.";
+  "This edit isn’t available in the web app yet. Use a TotalReclaw agent (Claude Desktop, OpenClaw, etc.) to modify your vault.";
 
+/**
+ * Resolve the authoritative chain + DataEdge for the wallet from the relay's
+ * billing status. Writing to the wrong DataEdge silently strands the fact
+ * outside the indexing subgraph, so `data_edge_address` must be present.
+ */
+async function resolveWriteTarget(
+  keys: SessionKeys,
+): Promise<{ dataEdgeAddress: string; chainId: number }> {
+  const billing = await getAccount(keys);
+  const dataEdgeAddress = billing.data_edge_address;
+  if (!dataEdgeAddress || !/^0x[0-9a-fA-F]{40}$/.test(dataEdgeAddress)) {
+    throw new Error(
+      "The relay did not report a DataEdge address for this wallet; cannot safely write.",
+    );
+  }
+  return { dataEdgeAddress, chainId: billing.chain_id ?? keys.chainId };
+}
+
+/**
+ * Soft-delete (tombstone) a single fact on-chain. `sign` is the caller's
+ * master-key signer (CryptoContext.withMasterKey → WASM signUserOp).
+ */
 export async function deleteFact(
-  _factId: string,
-  _keys: SessionKeys,
+  factId: string,
+  keys: SessionKeys,
+  sign: SignUserOpHash,
 ): Promise<void> {
-  throw new Error(WRITES_NOT_IMPLEMENTED);
+  const target = await resolveWriteTarget(keys);
+  const { submitTombstones } = await import("./userop");
+  const res = await submitTombstones([factId], { keys, sign, ...target });
+  if (!res.success) {
+    throw new Error("The delete was submitted but not confirmed on-chain. Try again.");
+  }
 }
 
+/** Soft-delete N facts in a single batched UserOp (`executeBatch`). */
 export async function batchDeleteFacts(
-  _factIds: string[],
-  _keys: SessionKeys,
+  factIds: string[],
+  keys: SessionKeys,
+  sign: SignUserOpHash,
 ): Promise<void> {
-  throw new Error(WRITES_NOT_IMPLEMENTED);
+  if (factIds.length === 0) return;
+  const target = await resolveWriteTarget(keys);
+  const { submitTombstones } = await import("./userop");
+  const res = await submitTombstones(factIds, { keys, sign, ...target });
+  if (!res.success) {
+    throw new Error("The delete was submitted but not confirmed on-chain. Try again.");
+  }
 }
 
+// Phase 2/3: pin/unpin/retype/set_scope (2-call supersession) — not yet wired.
 export async function updateClaim(
   _item: VaultItem,
   _updatedClaim: MemoryClaimV1,
   _keys: SessionKeys,
+  _sign?: SignUserOpHash,
 ): Promise<void> {
   throw new Error(WRITES_NOT_IMPLEMENTED);
 }

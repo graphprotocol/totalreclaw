@@ -163,6 +163,14 @@ export interface BillingStatus {
   extraction_interval?: number;
   max_facts_per_extraction?: number;
   max_candidate_pool?: number;
+  /** Authoritative chain id for this wallet's tier (relay chain-router, #283/#362). */
+  chain_id?: number;
+  /** Authoritative DataEdge contract for this tier's chain (#460). Curation
+   *  writes MUST target this address — staging Gnosis (0xE7a4…) is on-chain
+   *  isolated from prod (0xC445…); writing to the wrong one strands the fact. */
+  data_edge_address?: string;
+  /** Relay environment the billing row was served from. */
+  environment?: "production" | "staging";
 }
 
 /** Subgraph GraphQL response — `facts` entity per docs/specs/subgraph/seed-to-subgraph.md.

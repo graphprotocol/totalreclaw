@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import type { VaultItem, MemoryTypeV1 } from "../lib/types";
 import { relativeDate } from "../lib/format";
 import { agentProvenanceLabel } from "../lib/provenance";
@@ -29,15 +29,31 @@ function sourceLabel(source: string): string {
   }
 }
 
-/** A single memory, set to read. (Ported from the Keeper prototype ClaimCard;
- *  curation — pin/retype/delete — lands in A.2.) */
-export function ClaimCard({ item, style }: { item: VaultItem; style?: CSSProperties }) {
+/** A single memory, set to read. (Ported from the Keeper prototype ClaimCard.)
+ *
+ *  A.2 curation: when `onForget` is supplied, a subtle "Forget" affordance
+ *  appears with an inline confirm. Pin/retype/set_scope land in A.2 Phase 2/3.
+ *  With no `onForget`, the card is byte-for-byte the read-only card it was. */
+export function ClaimCard({
+  item,
+  style,
+  onForget,
+  forgetPending = false,
+}: {
+  item: VaultItem;
+  style?: CSSProperties;
+  /** Opt-in delete: tombstone this memory on-chain. Absent → read-only card. */
+  onForget?: () => void;
+  /** True while the on-chain tombstone is in flight (awaiting the receipt). */
+  forgetPending?: boolean;
+}) {
   const { claim } = item;
   const type = (claim.type as MemoryTypeV1) ?? "claim";
   const tone = TYPE_TONE[type] ?? TYPE_TONE.claim;
   // #317 — agent-instance provenance ("John (Hermes)"). Absent → undefined,
   // so the source/scope/date line below renders unchanged for most memories.
   const provenance = agentProvenanceLabel(claim);
+  const [confirming, setConfirming] = useState(false);
 
   return (
     <article
@@ -76,6 +92,44 @@ export function ClaimCard({ item, style }: { item: VaultItem; style?: CSSPropert
         <p className="mt-2 border-l-2 border-hairline pl-3 text-sm text-ink-muted">
           {claim.reasoning}
         </p>
+      )}
+      {onForget && (
+        <div className="mt-3 flex items-center justify-end gap-2 text-xs">
+          {forgetPending ? (
+            <span className="text-ink-muted" aria-live="polite">
+              Forgetting…
+            </span>
+          ) : confirming ? (
+            <>
+              <span className="text-ink-muted">Forget this memory?</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirming(false);
+                  onForget();
+                }}
+                className="rounded-pill bg-clay px-2.5 py-0.5 font-semibold text-warm-white transition hover:bg-clay-deep focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
+              >
+                Forget
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                className="rounded-pill px-2.5 py-0.5 font-semibold text-ink-muted transition hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirming(true)}
+              className="rounded-pill px-2.5 py-0.5 font-semibold text-ink-muted transition hover:bg-clay-tint hover:text-clay-deep focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
+            >
+              Forget
+            </button>
+          )}
+        </div>
       )}
     </article>
   );

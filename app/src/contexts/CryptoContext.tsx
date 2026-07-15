@@ -29,6 +29,7 @@ import {
 import { isPasskeyPrfAvailable } from "../lib/auth/prf-support";
 import { enrolPasskey, getPrfSecret, PrfUnsupportedError } from "../lib/auth/passkey";
 import { wrapKey, unwrapKey, deriveMasterWrapSecret } from "../lib/auth/wrap";
+import { runWithMasterKey } from "../lib/auth/master";
 import { saveVaultRecord, loadVaultRecord, hasAnyVault, clearVault } from "../lib/vault/idb";
 import { saveSessionKeys, loadSessionKeys, clearSessionKeys } from "../lib/vault/session-storage";
 import { registerSession } from "../lib/api";
@@ -249,10 +250,24 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
     [enterUnlocked],
   );
 
-  const withMasterKey = useCallback<CryptoContextValue["withMasterKey"]>(async () => {
-    // A.2: unwrap rec.wrapped_master_key via a fresh prf assertion (credIdRef),
-    // run the signer, then zero. Reads (A.1) never need the master key.
-    throw new Error("Curation writes arrive in the next phase (A.2).");
+  const withMasterKey = useCallback<CryptoContextValue["withMasterKey"]>(async (fn) => {
+    // A.2: transiently unwrap the master wallet key to sign one UserOp, then
+    // zero. Reuses the exact primitives unlock() uses — a fresh PRF assertion
+    // (biometric/PIN) per call, unwrap `wrapped_master_key`, run the signer,
+    // zero the key + PRF secret. The mnemonic is never involved (A.1 preserved);
+    // the master key is NEVER derived from the seed here.
+    const rec = await loadVaultRecord();
+    if (!rec) {
+      throw new Error("No vault on this device. Restore with your recovery phrase.");
+    }
+    const credId = credIdRef.current ?? b64urlDecode(rec.credential_id);
+    const { prfSecret } = await getPrfSecret({ credentialId: credId });
+    try {
+      credIdRef.current = credId;
+      return await runWithMasterKey(rec.wrapped_master_key, prfSecret, fn);
+    } finally {
+      prfSecret.fill(0);
+    }
   }, []);
 
   const lock = useCallback(() => {

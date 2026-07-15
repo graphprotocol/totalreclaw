@@ -7,6 +7,24 @@ import {
   batchDeleteFacts,
   updateClaim,
 } from "../lib/api";
+import { useCrypto } from "../contexts/CryptoContext";
+import { bytesToHex } from "../lib/crypto";
+
+/**
+ * Build the master-key signer for a write. Returns a `(userOpHashHex) =>
+ * Promise<sigHex>` that runs a fresh passkey assertion, transiently unwraps the
+ * master key, WASM-signs the hash, and zeroes the key — all inside
+ * `withMasterKey`. The WASM is lazy-loaded here (write path only).
+ */
+function useUserOpSigner(): (userOpHashHex: string) => Promise<string> {
+  const { withMasterKey } = useCrypto();
+  return (userOpHashHex: string) =>
+    withMasterKey(async (masterPriv) => {
+      const { loadCore } = await import("../lib/wasm");
+      const core = await loadCore();
+      return core.signUserOp(userOpHashHex, bytesToHex(masterPriv));
+    });
+}
 
 export const VAULT_QUERY_KEY = ["vault"] as const;
 export const VAULT_HISTORY_QUERY_KEY = ["vault", "history"] as const;
@@ -47,10 +65,14 @@ export function useVaultHistory(keys: SessionKeys | null) {
   });
 }
 
-export function useDeleteFact(keys: SessionKeys) {
+export function useDeleteFact(keys: SessionKeys | null) {
   const qc = useQueryClient();
+  const sign = useUserOpSigner();
   return useMutation({
-    mutationFn: (factId: string) => deleteFact(factId, keys),
+    mutationFn: (factId: string) => {
+      if (!keys) throw new Error("Vault is locked.");
+      return deleteFact(factId, keys, sign);
+    },
     onSuccess: (_data, factId) => {
       qc.setQueryData<VaultItem[]>(VAULT_QUERY_KEY, (prev) =>
         prev?.filter((it) => it.id !== factId) ?? [],
@@ -59,10 +81,14 @@ export function useDeleteFact(keys: SessionKeys) {
   });
 }
 
-export function useBatchDelete(keys: SessionKeys) {
+export function useBatchDelete(keys: SessionKeys | null) {
   const qc = useQueryClient();
+  const sign = useUserOpSigner();
   return useMutation({
-    mutationFn: (ids: string[]) => batchDeleteFacts(ids, keys),
+    mutationFn: (ids: string[]) => {
+      if (!keys) throw new Error("Vault is locked.");
+      return batchDeleteFacts(ids, keys, sign);
+    },
     onSuccess: (_data, ids) => {
       const idSet = new Set(ids);
       qc.setQueryData<VaultItem[]>(VAULT_QUERY_KEY, (prev) =>
