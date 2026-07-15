@@ -158,6 +158,103 @@ describe("rebuildClaimJson — full carry-forward + overrides", () => {
 });
 
 // ---------------------------------------------------------------------------
+// A.2 Phase 3 — retype / set_scope mutations through the same rebuilder.
+// ---------------------------------------------------------------------------
+
+describe("rebuildClaimJson — Phase 3 retype/set_scope mutations", () => {
+  const BASE_OVERRIDES = {
+    newId: "22222222-3333-4444-8555-666666666666",
+    supersededBy: FULL_SOURCE_CLAIM.id,
+  };
+
+  it("retype mutates ONLY type; every other field (incl. metadata) survives", () => {
+    const out = JSON.parse(
+      rebuildClaimJson(core, JSON.stringify(FULL_SOURCE_CLAIM), {
+        ...BASE_OVERRIDES,
+        newType: "preference",
+      }),
+    ) as Record<string, unknown>;
+    expect(out.type).toBe("preference");
+    expect(out.id).toBe(BASE_OVERRIDES.newId);
+    expect(out.superseded_by).toBe(FULL_SOURCE_CLAIM.id);
+    expect(out.text).toBe(FULL_SOURCE_CLAIM.text);
+    expect(out.scope).toBe("work");
+    expect(out.created_at).toBe(FULL_SOURCE_CLAIM.created_at);
+    expect(out.metadata).toEqual(FULL_SOURCE_CLAIM.metadata);
+    expect(out.agent_name).toBe("John");
+    expect(out.custom_future_top_level).toEqual({ keep: true });
+  });
+
+  it("#117 pin-survival: retype of a PINNED claim carries pin_status forward", () => {
+    const pinnedSource = { ...FULL_SOURCE_CLAIM, pin_status: "pinned" };
+    const out = JSON.parse(
+      rebuildClaimJson(core, JSON.stringify(pinnedSource), {
+        ...BASE_OVERRIDES,
+        newType: "commitment",
+      }),
+    ) as Record<string, unknown>;
+    expect(out.type).toBe("commitment");
+    expect(out.pin_status).toBe("pinned");
+  });
+
+  it("#117 pin-survival: set_scope of a PINNED claim carries pin_status forward", () => {
+    const pinnedSource = { ...FULL_SOURCE_CLAIM, pin_status: "pinned" };
+    const out = JSON.parse(
+      rebuildClaimJson(core, JSON.stringify(pinnedSource), {
+        ...BASE_OVERRIDES,
+        newScope: "health",
+      }),
+    ) as Record<string, unknown>;
+    expect(out.scope).toBe("health");
+    expect(out.pin_status).toBe("pinned");
+  });
+
+  it("retype of an unpinned claim does not invent a pin_status", () => {
+    const out = JSON.parse(
+      rebuildClaimJson(core, JSON.stringify(FULL_SOURCE_CLAIM), {
+        ...BASE_OVERRIDES,
+        newType: "episode",
+      }),
+    ) as Record<string, unknown>;
+    expect("pin_status" in out).toBe(false);
+  });
+
+  it("set_scope mutates ONLY scope; type + metadata survive", () => {
+    const out = JSON.parse(
+      rebuildClaimJson(core, JSON.stringify(FULL_SOURCE_CLAIM), {
+        ...BASE_OVERRIDES,
+        newScope: "finance",
+      }),
+    ) as Record<string, unknown>;
+    expect(out.scope).toBe("finance");
+    expect(out.type).toBe(FULL_SOURCE_CLAIM.type);
+    expect(out.metadata).toEqual(FULL_SOURCE_CLAIM.metadata);
+  });
+
+  it('set_scope to "unspecified" OMITS the field on the wire (canonical rule)', () => {
+    const out = JSON.parse(
+      rebuildClaimJson(core, JSON.stringify(FULL_SOURCE_CLAIM), {
+        ...BASE_OVERRIDES,
+        newScope: "unspecified",
+      }),
+    ) as Record<string, unknown>;
+    expect("scope" in out).toBe(false);
+    // The rest of the claim is untouched.
+    expect(out.type).toBe(FULL_SOURCE_CLAIM.type);
+    expect(out.metadata).toEqual(FULL_SOURCE_CLAIM.metadata);
+  });
+
+  it("core validation rejects an invalid mutated type (backstop, not bypassed)", () => {
+    expect(() =>
+      rebuildClaimJson(core, JSON.stringify(FULL_SOURCE_CLAIM), {
+        ...BASE_OVERRIDES,
+        newType: "goal" as never, // legacy v0 token — invalid in v1
+      }),
+    ).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Crystal round-trip — the metadata-preservation proof from the plan.
 // ---------------------------------------------------------------------------
 
@@ -239,6 +336,52 @@ describe("Crystal pin round-trip (decrypt → rebuild → re-encrypt → timelin
     expect(groups[0].key).toBe(`s:${sessionId}`);
     expect(groups[0].crystal).not.toBeNull();
     expect(groups[0].crystal!.pinned).toBe(true);
+    expect(groups[0].openThreads).toBe(1);
+  });
+
+  it("Phase 3: retyping a Crystal keeps the session bucket + crystal flag with the NEW type visible", () => {
+    const sessionId = "0197f111-bbbb-7111-8111-abcdefabcdef";
+    const crystalClaim = {
+      id: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+      text: "Session crystal: shipped A.2 Phase 3 retype/set_scope",
+      type: "summary",
+      source: "derived",
+      created_at: "2026-07-10T00:00:00.000Z",
+      schema_version: "1.0",
+      importance: 9,
+      pin_status: "pinned", // proves #117 end-to-end through the read path too
+      metadata: {
+        subtype: "session_crystal",
+        session_id: sessionId,
+        key_outcomes: ["retype shipped"],
+        open_threads: ["A.2 wrap-up"],
+        topics_discussed: ["curation"],
+      },
+    };
+
+    // Retype summary → episode via the same engine retypeFact drives.
+    const newId = "33333333-4444-4555-8666-777777777777";
+    const rebuilt = rebuildClaimJson(core, JSON.stringify(crystalClaim), {
+      newId,
+      supersededBy: crystalClaim.id,
+      newType: "episode",
+    });
+    const newBlobHex = encryptBlob(rebuilt, ENC_KEY);
+    const [retypedItem] = decryptFacts([rawFact(newId, newBlobHex)], KEYS);
+
+    // The NEW type is visible, the pin survived, metadata rode verbatim.
+    expect(retypedItem.type).toBe("episode");
+    expect(retypedItem.claim.type).toBe("episode");
+    expect(retypedItem.pinned).toBe(true);
+    expect(retypedItem.claim.metadata).toEqual(crystalClaim.metadata);
+
+    // buildTimeline still buckets it under s:<session_id> with .crystal set
+    // (Crystal identity = metadata.subtype, not the type field).
+    const groups = buildTimeline([retypedItem]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].key).toBe(`s:${sessionId}`);
+    expect(groups[0].crystal).not.toBeNull();
+    expect(groups[0].crystal!.claim.type).toBe("episode");
     expect(groups[0].openThreads).toBe(1);
   });
 });

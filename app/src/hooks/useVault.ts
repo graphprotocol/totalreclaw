@@ -1,12 +1,20 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { PinStatus, SessionKeys, VaultItem, MemoryClaimV1 } from "../lib/types";
+import {
+  MemoryScope,
+  MemoryTypeV1,
+  PinStatus,
+  SessionKeys,
+  VaultItem,
+} from "../lib/types";
 import {
   exportAllFacts,
   decryptFacts,
   deleteFact,
   batchDeleteFacts,
   setPinStatus,
-  updateClaim,
+  retypeFact,
+  setFactScope,
+  type CurationWriteResult,
 } from "../lib/api";
 import { useCrypto } from "../contexts/CryptoContext";
 import { bytesToHex } from "../lib/crypto";
@@ -119,58 +127,78 @@ export function usePinFact(keys: SessionKeys | null) {
       if (!keys) throw new Error("Vault is locked.");
       return setPinStatus(item, target, keys, sign);
     },
-    onSuccess: (result, { item, target }) => {
+    onSuccess: (result, { item }) => {
       if (result.idempotent) return;
-      qc.setQueryData<VaultData>(VAULT_QUERY_KEY, (prev) =>
-        prev
-          ? {
-              ...prev,
-              items: prev.items.map((it) =>
-                it.id === item.id
-                  ? {
-                      ...it,
-                      id: result.newFactId ?? it.id,
-                      claim: result.newClaim ?? it.claim,
-                      pinned: target === "pinned",
-                      rawBlob: result.newBlobHex ?? it.rawBlob,
-                    }
-                  : it,
-              ),
-            }
-          : prev,
-      );
+      reconcileSupersession(qc, item.id, result);
     },
   });
 }
 
-export function useUpdateClaim(keys: SessionKeys) {
+/** Shared cache reconcile for a supersession write: swap the item in place to
+ *  its superseding identity (new fact id, new claim, new rawBlob) so an
+ *  immediate follow-up edit rebuilds from the CURRENT on-chain blob without a
+ *  refetch. Idempotent no-ops never reach this. */
+function reconcileSupersession(
+  qc: ReturnType<typeof useQueryClient>,
+  oldId: string,
+  result: CurationWriteResult,
+) {
+  qc.setQueryData<VaultData>(VAULT_QUERY_KEY, (prev) =>
+    prev
+      ? {
+          ...prev,
+          items: prev.items.map((it) =>
+            it.id === oldId
+              ? {
+                  ...it,
+                  id: result.newFactId ?? it.id,
+                  claim: result.newClaim ?? it.claim,
+                  type: result.newClaim?.type ?? it.type,
+                  pinned: result.newClaim?.pin_status === "pinned",
+                  rawBlob: result.newBlobHex ?? it.rawBlob,
+                }
+              : it,
+          ),
+        }
+      : prev,
+  );
+}
+
+/**
+ * Retype a memory on-chain (A.2 Phase 3 — same 2-call supersession batch as
+ * pin). The card's type tag reflects the new type immediately via the in-place
+ * cache reconcile. Same-type retypes resolve idempotent without a write.
+ */
+export function useRetypeFact(keys: SessionKeys | null) {
   const qc = useQueryClient();
+  const sign = useUserOpSigner();
   return useMutation({
-    mutationFn: ({
-      item,
-      updatedClaim,
-    }: {
-      item: VaultItem;
-      updatedClaim: MemoryClaimV1;
-    }) => updateClaim(item, updatedClaim, keys),
-    onSuccess: (_data, { item, updatedClaim }) => {
-      qc.setQueryData<VaultData>(VAULT_QUERY_KEY, (prev) =>
-        prev
-          ? {
-              ...prev,
-              items: prev.items.map((it) =>
-                it.id === item.id
-                  ? {
-                      ...it,
-                      claim: updatedClaim,
-                      type: updatedClaim.type ?? it.type,
-                      pinned: updatedClaim.pin_status === "pinned",
-                    }
-                  : it,
-              ),
-            }
-          : prev,
-      );
+    mutationFn: ({ item, newType }: { item: VaultItem; newType: MemoryTypeV1 }) => {
+      if (!keys) throw new Error("Vault is locked.");
+      return retypeFact(item, newType, keys, sign);
+    },
+    onSuccess: (result, { item }) => {
+      if (result.idempotent) return;
+      reconcileSupersession(qc, item.id, result);
+    },
+  });
+}
+
+/**
+ * Re-scope a memory on-chain (A.2 Phase 3). "unspecified" clears the scope
+ * (the field is omitted on the wire). Same-scope sets resolve idempotent.
+ */
+export function useSetFactScope(keys: SessionKeys | null) {
+  const qc = useQueryClient();
+  const sign = useUserOpSigner();
+  return useMutation({
+    mutationFn: ({ item, newScope }: { item: VaultItem; newScope: MemoryScope }) => {
+      if (!keys) throw new Error("Vault is locked.");
+      return setFactScope(item, newScope, keys, sign);
+    },
+    onSuccess: (result, { item }) => {
+      if (result.idempotent) return;
+      reconcileSupersession(qc, item.id, result);
     },
   });
 }

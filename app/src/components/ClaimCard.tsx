@@ -1,5 +1,6 @@
 import { useState, type CSSProperties } from "react";
-import type { VaultItem, MemoryTypeV1 } from "../lib/types";
+import { MEMORY_TYPES_V1, MEMORY_SCOPES } from "../lib/types";
+import type { VaultItem, MemoryTypeV1, MemoryScope } from "../lib/types";
 import { relativeDate } from "../lib/format";
 import { agentProvenanceLabel } from "../lib/provenance";
 
@@ -29,13 +30,67 @@ function sourceLabel(source: string): string {
   }
 }
 
+const ACTION_BUTTON =
+  "rounded-pill px-2.5 py-0.5 font-semibold text-ink-muted transition hover:bg-clay-tint hover:text-clay-deep focus:outline-none focus-visible:ring-2 focus-visible:ring-clay";
+
+/** Inline pill picker for retype / set-scope — the same quiet affordance
+ *  language as Pin/Forget. The current value is highlighted; choosing it just
+ *  closes the menu (the SPA shows current state, so same-value = no-op). */
+function InlinePicker<T extends string>({
+  label,
+  options,
+  current,
+  onPick,
+  onClose,
+  optionLabel,
+}: {
+  label: string;
+  options: readonly T[];
+  current: T;
+  onPick: (value: T) => void;
+  onClose: () => void;
+  optionLabel?: (value: T) => string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-1.5" role="group" aria-label={label}>
+      <span className="text-ink-muted">{label}</span>
+      {options.map((opt) => (
+        <button
+          key={opt}
+          type="button"
+          aria-pressed={opt === current}
+          onClick={() => {
+            onClose();
+            if (opt !== current) onPick(opt);
+          }}
+          className={`rounded-pill px-2.5 py-0.5 font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-clay ${
+            opt === current
+              ? "bg-clay-tint text-clay-deep ring-1 ring-clay/40"
+              : "text-ink-muted hover:bg-clay-tint hover:text-clay-deep"
+          }`}
+        >
+          {optionLabel ? optionLabel(opt) : opt}
+        </button>
+      ))}
+      <button
+        type="button"
+        onClick={onClose}
+        className="rounded-pill px-2.5 py-0.5 font-semibold text-ink-muted transition hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 /** A single memory, set to read. (Ported from the Keeper prototype ClaimCard.)
  *
  *  A.2 curation: when `onForget` is supplied, a subtle "Forget" affordance
  *  appears with an inline confirm; when `onTogglePin` is supplied, a "Pin"/
  *  "Unpin" affordance sits beside it (no confirm — pinning is reversible).
- *  Retype/set_scope land in A.2 Phase 3. With neither handler, the card is
- *  byte-for-byte the read-only card it was. */
+ *  `onRetype` / `onSetScope` (Phase 3) add "Retype" and "Scope" affordances
+ *  that expand into small inline pickers over the v1 closed enums. With no
+ *  handlers, the card is byte-for-byte the read-only card it was. */
 export function ClaimCard({
   item,
   style,
@@ -43,6 +98,10 @@ export function ClaimCard({
   forgetPending = false,
   onTogglePin,
   pinPending = false,
+  onRetype,
+  retypePending = false,
+  onSetScope,
+  scopePending = false,
 }: {
   item: VaultItem;
   style?: CSSProperties;
@@ -54,6 +113,14 @@ export function ClaimCard({
   onTogglePin?: () => void;
   /** True while the pin/unpin supersession batch awaits its receipt. */
   pinPending?: boolean;
+  /** Opt-in retype: supersession with `type` mutated. Absent → no affordance. */
+  onRetype?: (newType: MemoryTypeV1) => void;
+  /** True while the retype supersession batch awaits its receipt. */
+  retypePending?: boolean;
+  /** Opt-in set-scope: supersession with `scope` mutated ("unspecified" clears). */
+  onSetScope?: (newScope: MemoryScope) => void;
+  /** True while the set-scope supersession batch awaits its receipt. */
+  scopePending?: boolean;
 }) {
   const { claim } = item;
   const type = (claim.type as MemoryTypeV1) ?? "claim";
@@ -62,6 +129,11 @@ export function ClaimCard({
   // so the source/scope/date line below renders unchanged for most memories.
   const provenance = agentProvenanceLabel(claim);
   const [confirming, setConfirming] = useState(false);
+  const [picker, setPicker] = useState<"type" | "scope" | null>(null);
+
+  const hasActions = Boolean(onForget || onTogglePin || onRetype || onSetScope);
+  const anyPending = forgetPending || pinPending || retypePending || scopePending;
+  const currentScope: MemoryScope = claim.scope ?? "unspecified";
 
   return (
     <article
@@ -101,59 +173,102 @@ export function ClaimCard({
           {claim.reasoning}
         </p>
       )}
-      {(onForget || onTogglePin) && (
-        <div className="mt-3 flex items-center justify-end gap-2 text-xs">
-          {onTogglePin &&
-            (pinPending ? (
-              <span className="text-ink-muted" aria-live="polite">
-                {item.pinned ? "Unpinning…" : "Pinning…"}
-              </span>
-            ) : (
-              !confirming &&
-              !forgetPending && (
-                <button
-                  type="button"
-                  onClick={onTogglePin}
-                  className="rounded-pill px-2.5 py-0.5 font-semibold text-ink-muted transition hover:bg-clay-tint hover:text-clay-deep focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
-                >
-                  {item.pinned ? "Unpin" : "Pin"}
-                </button>
-              )
-            ))}
-          {onForget && (forgetPending ? (
-            <span className="text-ink-muted" aria-live="polite">
-              Forgetting…
-            </span>
-          ) : confirming ? (
-            <>
-              <span className="text-ink-muted">Forget this memory?</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setConfirming(false);
-                  onForget();
-                }}
-                className="rounded-pill bg-clay px-2.5 py-0.5 font-semibold text-warm-white transition hover:bg-clay-deep focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
-              >
-                Forget
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirming(false)}
-                className="rounded-pill px-2.5 py-0.5 font-semibold text-ink-muted transition hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
-              >
-                Cancel
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setConfirming(true)}
-              className="rounded-pill px-2.5 py-0.5 font-semibold text-ink-muted transition hover:bg-clay-tint hover:text-clay-deep focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
-            >
-              Forget
-            </button>
-          ))}
+      {hasActions && (
+        <div className="mt-3 space-y-2 text-xs">
+          {picker === "type" && onRetype && !anyPending && (
+            <InlinePicker
+              label="Type:"
+              options={MEMORY_TYPES_V1}
+              current={type}
+              onPick={onRetype}
+              onClose={() => setPicker(null)}
+            />
+          )}
+          {picker === "scope" && onSetScope && !anyPending && (
+            <InlinePicker
+              label="Scope:"
+              options={MEMORY_SCOPES}
+              current={currentScope}
+              onPick={onSetScope}
+              onClose={() => setPicker(null)}
+              optionLabel={(s) => (s === "unspecified" ? "none" : s)}
+            />
+          )}
+          {picker === null && (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {onRetype &&
+                (retypePending ? (
+                  <span className="text-ink-muted" aria-live="polite">
+                    Retyping…
+                  </span>
+                ) : (
+                  !confirming &&
+                  !anyPending && (
+                    <button type="button" onClick={() => setPicker("type")} className={ACTION_BUTTON}>
+                      Retype
+                    </button>
+                  )
+                ))}
+              {onSetScope &&
+                (scopePending ? (
+                  <span className="text-ink-muted" aria-live="polite">
+                    Rescoping…
+                  </span>
+                ) : (
+                  !confirming &&
+                  !anyPending && (
+                    <button type="button" onClick={() => setPicker("scope")} className={ACTION_BUTTON}>
+                      Scope
+                    </button>
+                  )
+                ))}
+              {onTogglePin &&
+                (pinPending ? (
+                  <span className="text-ink-muted" aria-live="polite">
+                    {item.pinned ? "Unpinning…" : "Pinning…"}
+                  </span>
+                ) : (
+                  !confirming &&
+                  !anyPending && (
+                    <button type="button" onClick={onTogglePin} className={ACTION_BUTTON}>
+                      {item.pinned ? "Unpin" : "Pin"}
+                    </button>
+                  )
+                ))}
+              {onForget && (forgetPending ? (
+                <span className="text-ink-muted" aria-live="polite">
+                  Forgetting…
+                </span>
+              ) : confirming ? (
+                <>
+                  <span className="text-ink-muted">Forget this memory?</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirming(false);
+                      onForget();
+                    }}
+                    className="rounded-pill bg-clay px-2.5 py-0.5 font-semibold text-warm-white transition hover:bg-clay-deep focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
+                  >
+                    Forget
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirming(false)}
+                    className="rounded-pill px-2.5 py-0.5 font-semibold text-ink-muted transition hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-clay"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                !anyPending && (
+                  <button type="button" onClick={() => setConfirming(true)} className={ACTION_BUTTON}>
+                    Forget
+                  </button>
+                )
+              ))}
+            </div>
+          )}
         </div>
       )}
     </article>

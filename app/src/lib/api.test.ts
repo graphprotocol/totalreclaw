@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { decryptFacts, setPinStatus } from "./api";
+import { decryptFacts, setPinStatus, retypeFact, setFactScope } from "./api";
 import { buildTimeline } from "./vault/timeline";
 import { encryptBlob } from "./crypto";
 import { RawFact, SessionKeys } from "./types";
@@ -305,6 +305,87 @@ describe("setPinStatus idempotency (no UserOp on a no-op)", () => {
 
   it("unpin when pin_status is ABSENT is a no-op (absence == unpinned)", async () => {
     const res = await setPinStatus(vaultItem(undefined), "unpinned", KEYS, mustNotSign);
+    expect(res).toEqual({ idempotent: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A.2 Phase 3 — retype/set_scope enum validation (BEFORE any network call) +
+// idempotency. Deliberate divergence from the plugin's retype-setscope.ts:
+// the plugin never short-circuits (agents may confirm auto-labels); the SPA
+// shows current state, so same-value = no-op with NO UserOp.
+// ---------------------------------------------------------------------------
+
+const mustNotSign = () => {
+  throw new Error("sign() called on a validation failure or idempotent no-op");
+};
+
+function curationItem(extra: Record<string, unknown> = {}) {
+  const claim = {
+    id: "f-cur",
+    text: "Chose Gnosis over Base",
+    type: "claim" as const,
+    source: "user" as const,
+    created_at: "2026-07-01T00:00:00.000Z",
+    schema_version: "1.0" as const,
+    ...extra,
+  };
+  return {
+    id: "f-cur",
+    claim,
+    type: claim.type as string,
+    pinned: (claim as Record<string, unknown>).pin_status === "pinned",
+    createdAt: new Date(claim.created_at),
+    rawBlob: "",
+    blindIndices: [],
+    decayScore: 1,
+    isActive: true,
+  } as unknown as import("./types").VaultItem;
+}
+
+describe("retypeFact validation + idempotency (no network, no UserOp)", () => {
+  it("rejects a made-up type, naming the v1 enum, before any network call", async () => {
+    await expect(
+      retypeFact(curationItem(), "vibe", KEYS, mustNotSign),
+    ).rejects.toThrow(/claim, preference, directive, commitment, episode, summary/);
+  });
+
+  it.each([
+    ["fact", /claim/],
+    ["context", /claim/],
+    ["decision", /reasoning/],
+    ["episodic", /episode/],
+    ["goal", /commitment/],
+    ["rule", /directive/],
+  ])("rejects legacy v0 token '%s' naming its v1 equivalent", async (v0, v1Hint) => {
+    await expect(
+      retypeFact(curationItem(), v0, KEYS, mustNotSign),
+    ).rejects.toThrow(v1Hint);
+    await expect(
+      retypeFact(curationItem(), v0, KEYS, mustNotSign),
+    ).rejects.toThrow(/legacy v0 type/);
+  });
+
+  it("retype to the SAME type resolves idempotent with no write", async () => {
+    const res = await retypeFact(curationItem(), "claim", KEYS, mustNotSign);
+    expect(res).toEqual({ idempotent: true });
+  });
+});
+
+describe("setFactScope validation + idempotency (no network, no UserOp)", () => {
+  it("rejects an out-of-enum scope before any network call", async () => {
+    await expect(
+      setFactScope(curationItem(), "outer-space", KEYS, mustNotSign),
+    ).rejects.toThrow(/work, personal, health, family, creative, finance, misc, unspecified/);
+  });
+
+  it("setting the scope the item already has is a no-op", async () => {
+    const res = await setFactScope(curationItem({ scope: "health" }), "health", KEYS, mustNotSign);
+    expect(res).toEqual({ idempotent: true });
+  });
+
+  it('setting "unspecified" when scope is ABSENT is a no-op (absence == unspecified)', async () => {
+    const res = await setFactScope(curationItem(), "unspecified", KEYS, mustNotSign);
     expect(res).toEqual({ idempotent: true });
   });
 });

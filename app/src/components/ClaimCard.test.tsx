@@ -53,3 +53,31 @@ describe("ClaimCard agent provenance (#317)", () => {
     expect(html).toContain("from you");
   });
 });
+
+describe("ClaimCard curation affordances (A.2 Phase 3)", () => {
+  it("stays read-only (no action row) with no handlers", () => {
+    const html = renderToStaticMarkup(<ClaimCard item={item()} />);
+    expect(html).not.toContain("Retype");
+    expect(html).not.toContain("Scope");
+    expect(html).not.toContain("Forget");
+  });
+
+  it("shows Retype and Scope affordances when handlers are supplied", () => {
+    const html = renderToStaticMarkup(
+      <ClaimCard item={item()} onRetype={() => {}} onSetScope={() => {}} />,
+    );
+    expect(html).toContain("Retype");
+    expect(html).toContain("Scope");
+  });
+
+  it("shows pending copy while a retype / rescope is in flight", () => {
+    const retyping = renderToStaticMarkup(
+      <ClaimCard item={item()} onRetype={() => {}} retypePending />,
+    );
+    expect(retyping).toContain("Retyping…");
+    const rescoping = renderToStaticMarkup(
+      <ClaimCard item={item()} onSetScope={() => {}} scopePending />,
+    );
+    expect(rescoping).toContain("Rescoping…");
+  });
+});

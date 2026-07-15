@@ -272,16 +272,14 @@ export function decryptFacts(
 // ---------------------------------------------------------------------------
 // Write path — Keeper A.2 curation writes.
 //
-// Phase 1 (delete/tombstone) + Phase 2 (pin/unpin via 2-call supersession) are
-// implemented. The @totalreclaw/core WASM + UserOp assembler + claim rebuilder
-// are lazy-loaded on the FIRST write only (dynamic import) so the 2.3 MB WASM
-// never lands in the read chunk (see wasm.ts / userop.ts / claim.ts).
-//
-// Phase 3 (retype/set_scope — same supersession engine) remains a stub.
+// Phase 1 (delete/tombstone), Phase 2 (pin/unpin), and Phase 3 (retype/
+// set_scope) are implemented — the A.2 curation-writes scope is complete.
+// Pin/retype/set_scope all ride the SAME 2-call supersession engine
+// (supersedeClaim below). The @totalreclaw/core WASM + UserOp assembler +
+// claim rebuilder are lazy-loaded on the FIRST write only (dynamic import) so
+// the 2.3 MB WASM never lands in the read chunk (see wasm.ts / userop.ts /
+// claim.ts).
 // ---------------------------------------------------------------------------
-
-const WRITES_NOT_IMPLEMENTED =
-  "This edit isn’t available in the web app yet. Use a TotalReclaw agent (Claude Desktop, OpenClaw, etc.) to modify your vault.";
 
 /**
  * Resolve the authoritative chain + DataEdge for the wallet from the relay's
@@ -374,8 +372,9 @@ async function fetchFactWireFields(
   };
 }
 
-/** Result of a pin/unpin write. `idempotent: true` → no UserOp was sent. */
-export interface PinWriteResult {
+/** Result of a curation write (pin/unpin/retype/set_scope). `idempotent:
+ *  true` → no UserOp was sent. */
+export interface CurationWriteResult {
   idempotent: boolean;
   /** The superseding fact's fresh UUID (absent on idempotent no-op). */
   newFactId?: string;
@@ -385,26 +384,32 @@ export interface PinWriteResult {
   newBlobHex?: string;
 }
 
+/** Back-compat alias (Phase 2 name). */
+export type PinWriteResult = CurationWriteResult;
+
+/** The single-field mutation a curation write applies (see claim.ts). */
+interface ClaimMutation {
+  pinStatus?: PinStatus;
+  newType?: MemoryTypeV1;
+  newScope?: MemoryScope;
+}
+
 /**
- * Pin or unpin a memory (A.2 Phase 2) — atomic 2-call `executeBatch`
- * supersession `[tombstone(old), newClaim(superseded_by=old, pin_status)]`,
- * mirroring `mcp/src/tools/pin.ts:executePinOperation`.
+ * Shared supersession engine (A.2 Phase 2+3) — atomic 2-call `executeBatch`
+ * `[tombstone(old), newClaim(superseded_by=old, one field mutated)]`,
+ * mirroring `mcp/src/tools/pin.ts:executePinOperation` and
+ * `skill/plugin/memory/retype-setscope.ts:rewriteWithMutation`.
  *
- * Idempotent (pin.ts:667): pinning an already-pinned memory (or unpinning an
- * unpinned one — absence of `pin_status` counts as unpinned) sends NO UserOp.
+ * `pin_status` is carried forward verbatim unless the mutation overrides it
+ * explicitly (#117: retype/set_scope must not silently un-pin).
  */
-export async function setPinStatus(
+async function supersedeClaim(
   item: VaultItem,
-  target: PinStatus,
+  mutation: ClaimMutation,
+  sourceTag: string,
   keys: SessionKeys,
   sign: SignUserOpHash,
-): Promise<PinWriteResult> {
-  const current: PinStatus =
-    item.claim.pin_status === "pinned" ? "pinned" : "unpinned";
-  if (current === target) {
-    return { idempotent: true };
-  }
-
+): Promise<CurationWriteResult> {
   const targetChain = await resolveWriteTarget(keys);
   const [{ loadCore }, { rebuildClaimJson }, { submitSupersession }] =
     await Promise.all([import("./wasm"), import("./claim"), import("./userop")]);
@@ -418,7 +423,7 @@ export async function setPinStatus(
   const canonicalJson = rebuildClaimJson(core, plaintext, {
     newId: newFactId,
     supersededBy: item.id,
-    pinStatus: target,
+    ...mutation,
   });
   const newBlobHex = encryptBlob(canonicalJson, keys.encryptionKey);
 
@@ -434,13 +439,13 @@ export async function setPinStatus(
       encryptedBlobHex: newBlobHex,
       blindIndices,
       encryptedEmbedding: wire.encryptedEmbedding,
-      source: target === "pinned" ? "spa_pin" : "spa_unpin",
+      source: sourceTag,
     },
     { keys, sign, ...targetChain },
   );
   if (!res.success) {
     throw new Error(
-      "The pin update was submitted but not confirmed on-chain. Try again.",
+      "The update was submitted but not confirmed on-chain. Try again.",
     );
   }
   return {
@@ -451,15 +456,109 @@ export async function setPinStatus(
   };
 }
 
-// Phase 3: retype/set_scope (same 2-call supersession engine — claim.ts /
-// submitSupersession are ready for it) — not yet wired.
-export async function updateClaim(
-  _item: VaultItem,
-  _updatedClaim: MemoryClaimV1,
-  _keys: SessionKeys,
-  _sign?: SignUserOpHash,
-): Promise<void> {
-  throw new Error(WRITES_NOT_IMPLEMENTED);
+/**
+ * Pin or unpin a memory (A.2 Phase 2).
+ *
+ * Idempotent (pin.ts:667): pinning an already-pinned memory (or unpinning an
+ * unpinned one — absence of `pin_status` counts as unpinned) sends NO UserOp.
+ */
+export async function setPinStatus(
+  item: VaultItem,
+  target: PinStatus,
+  keys: SessionKeys,
+  sign: SignUserOpHash,
+): Promise<CurationWriteResult> {
+  const current: PinStatus =
+    item.claim.pin_status === "pinned" ? "pinned" : "unpinned";
+  if (current === target) {
+    return { idempotent: true };
+  }
+  return supersedeClaim(
+    item,
+    { pinStatus: target },
+    target === "pinned" ? "spa_pin" : "spa_unpin",
+    keys,
+    sign,
+  );
+}
+
+/** Legacy v0 type tokens → the v1 replacement to name in the rejection. */
+const V0_TYPE_EQUIVALENTS: Record<string, string> = {
+  fact: "claim",
+  context: "claim",
+  decision: "claim (put the rationale in the reasoning field)",
+  episodic: "episode",
+  goal: "commitment",
+  rule: "directive",
+};
+
+/**
+ * Re-type a memory (A.2 Phase 3) — supersession with `type` mutated.
+ * `pin_status` is carried forward verbatim (#117: never silently un-pin).
+ *
+ * Validation happens BEFORE any network call: `newType` must be a member of
+ * the v1 closed enum; legacy v0 tokens are rejected with the v1 equivalent.
+ *
+ * Idempotency — deliberate divergence from the plugin: `retype-setscope.ts`
+ * never short-circuits (agent users may be CONFIRMING an auto-extracted
+ * label), but the SPA UI always shows the current type, so retyping to the
+ * same value is a pure no-op → NO UserOp.
+ */
+export async function retypeFact(
+  item: VaultItem,
+  newType: string,
+  keys: SessionKeys,
+  sign: SignUserOpHash,
+): Promise<CurationWriteResult> {
+  if (!MEMORY_TYPES_V1.includes(newType as MemoryTypeV1)) {
+    const v1Equivalent = V0_TYPE_EQUIVALENTS[newType];
+    throw new Error(
+      v1Equivalent
+        ? `"${newType}" is a legacy v0 type that can no longer be written. Use its v1 equivalent instead: ${v1Equivalent}.`
+        : `Invalid memory type "${newType}". Must be one of: ${MEMORY_TYPES_V1.join(", ")}.`,
+    );
+  }
+  if (item.claim.type === newType) {
+    return { idempotent: true };
+  }
+  return supersedeClaim(
+    item,
+    { newType: newType as MemoryTypeV1 },
+    "spa_retype",
+    keys,
+    sign,
+  );
+}
+
+/**
+ * Re-scope a memory (A.2 Phase 3) — supersession with `scope` mutated.
+ * `"unspecified"` is expressed by OMITTING the field in the rebuilt claim
+ * (canonical omission rule — claim.ts). `pin_status` is carried forward
+ * verbatim (#117). Setting the scope the card already shows is a no-op
+ * (same deliberate divergence from the plugin as retypeFact).
+ */
+export async function setFactScope(
+  item: VaultItem,
+  newScope: string,
+  keys: SessionKeys,
+  sign: SignUserOpHash,
+): Promise<CurationWriteResult> {
+  if (!MEMORY_SCOPES.includes(newScope as MemoryScope)) {
+    throw new Error(
+      `Invalid scope "${newScope}". Must be one of: ${MEMORY_SCOPES.join(", ")}.`,
+    );
+  }
+  const current: MemoryScope = item.claim.scope ?? "unspecified";
+  if (current === newScope) {
+    return { idempotent: true };
+  }
+  return supersedeClaim(
+    item,
+    { newScope: newScope as MemoryScope },
+    "spa_set_scope",
+    keys,
+    sign,
+  );
 }
 
 // ---------------------------------------------------------------------------

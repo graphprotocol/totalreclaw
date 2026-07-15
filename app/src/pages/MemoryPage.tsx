@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useMemo, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { useCrypto } from "../contexts/CryptoContext";
-import { useVault, useDeleteFact, usePinFact } from "../hooks/useVault";
+import { useVault, useDeleteFact, usePinFact, useRetypeFact, useSetFactScope } from "../hooks/useVault";
 import { buildTimeline, importSourceOf, type SessionGroup } from "../lib/vault/timeline";
 import { buildMindGraph, SCOPES, type Scope } from "../lib/vault/mindmap";
 import { AppHeader } from "../components/AppHeader";
@@ -48,9 +48,12 @@ export function MemoryPage() {
 
   const [mode, setMode] = useState<Mode>("list");
   const [panel, setPanel] = useState<PanelView | null>(null);
-  // A.2 curation: on-chain tombstone + pin/unpin. Wired into the Facts lens.
+  // A.2 curation: on-chain tombstone + pin/unpin + retype/set_scope. Wired
+  // into the Facts lens.
   const del = useDeleteFact(keys);
   const pin = usePinFact(keys);
+  const retype = useRetypeFact(keys);
+  const rescope = useSetFactScope(keys);
 
   const [q, setQ] = useState("");
   const [scope, setScope] = useState<MemoryScope | null>(null);
@@ -252,6 +255,16 @@ export function MemoryPage() {
                 Couldn’t update that pin: {pin.error instanceof Error ? pin.error.message : String(pin.error)}
               </p>
             )}
+            {retype.isError && (
+              <p className="mt-4 rounded-control bg-clay-tint px-3 py-2 text-sm text-clay-deep">
+                Couldn’t retype that memory: {retype.error instanceof Error ? retype.error.message : String(retype.error)}
+              </p>
+            )}
+            {rescope.isError && (
+              <p className="mt-4 rounded-control bg-clay-tint px-3 py-2 text-sm text-clay-deep">
+                Couldn’t change that scope: {rescope.error instanceof Error ? rescope.error.message : String(rescope.error)}
+              </p>
+            )}
             {shownItems.length > 0 ? (
               <div className="mt-6 space-y-3">
                 {shownItems.map((it, i) => (
@@ -265,6 +278,10 @@ export function MemoryPage() {
                       pin.mutate({ item: it, target: it.pinned ? "unpinned" : "pinned" })
                     }
                     pinPending={pin.isPending && pin.variables?.item.id === it.id}
+                    onRetype={(newType) => retype.mutate({ item: it, newType })}
+                    retypePending={retype.isPending && retype.variables?.item.id === it.id}
+                    onSetScope={(newScope) => rescope.mutate({ item: it, newScope })}
+                    scopePending={rescope.isPending && rescope.variables?.item.id === it.id}
                   />
                 ))}
               </div>

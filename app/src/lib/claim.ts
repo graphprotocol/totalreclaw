@@ -1,9 +1,11 @@
 /**
- * Claim rebuilder for 2-call supersession writes (A.2 Phase 2 — pin/unpin).
+ * Claim rebuilder for 2-call supersession writes (A.2 Phase 2 pin/unpin +
+ * Phase 3 retype/set_scope).
  *
  * Mirrors `mcp/src/claims-helper.ts:buildV1ClaimBlob` byte-compatibly: the new
- * claim is the old decrypted claim with ONLY `id` / `pin_status` /
- * `superseded_by` overridden, canonical omission rules applied (omit `scope`
+ * claim is the old decrypted claim with ONLY `id` / `superseded_by` and the
+ * requested mutation (`pin_status`, `type`, or `scope`) overridden, canonical
+ * omission rules applied (omit `scope`
  * when `unspecified`, `volatility` when `updatable`), validated through core
  * `validateMemoryClaimV1`, then `schema_version` + `metadata` re-attached after
  * validation (core's serde drops default schema_version and round-trips
@@ -20,7 +22,7 @@
  * core WASM instance is injected (see `wasm.ts:loadCore`) so node-side tests
  * can pass an `initSync`-loaded core.
  */
-import type { PinStatus } from "./types";
+import type { MemoryScope, MemoryTypeV1, PinStatus } from "./types";
 
 /** The single core export this module needs (injected for testability). */
 export interface ClaimValidator {
@@ -32,8 +34,18 @@ export interface SupersessionOverrides {
   newId: string;
   /** The old fact id being tombstoned — becomes `superseded_by`. */
   supersededBy: string;
-  /** 'pinned' (pin) or 'unpinned' (unpin) — always emitted explicitly. */
-  pinStatus: PinStatus;
+  /**
+   * 'pinned' (pin) or 'unpinned' (unpin). When ABSENT the source claim's
+   * `pin_status` is carried forward verbatim — the #117 contract: a retype or
+   * set_scope of a pinned memory must NOT silently un-pin it.
+   */
+  pinStatus?: PinStatus;
+  /** Phase 3 retype: replace `type`. Callers validate ∈ MEMORY_TYPES_V1 before
+   *  any network call; core `validateMemoryClaimV1` is the backstop here. */
+  newType?: MemoryTypeV1;
+  /** Phase 3 set_scope: replace `scope`. `"unspecified"` is expressed by
+   *  OMITTING the field on the wire (canonical omission rule below). */
+  newScope?: MemoryScope;
 }
 
 /**
@@ -44,7 +56,7 @@ export interface SupersessionOverrides {
  * what we re-encrypt). Returns canonical JSON ready for `encryptBlob`.
  *
  * Throws when the source is not a v1-shaped claim (pre-v1 vault entries are
- * not pin-supported from the web app — same as they aren't readable here).
+ * not curation-supported from the web app — same as they aren't readable here).
  */
 export function rebuildClaimJson(
   core: ClaimValidator,
@@ -68,17 +80,21 @@ export function rebuildClaimJson(
   ) {
     throw new Error(
       "This memory was written in a pre-v1 format the web app can't rewrite. " +
-        "Use a TotalReclaw agent to pin it.",
+        "Use a TotalReclaw agent to edit it.",
     );
   }
 
-  // Full carry-forward: spread the decrypted source, override only the three
-  // supersession fields. `created_at` is preserved (the memory's original
-  // creation time — keeps timeline ordering stable through a pin).
+  // Full carry-forward: spread the decrypted source, override only the
+  // supersession fields + the requested mutation. `created_at` is preserved
+  // (the memory's original creation time — keeps timeline ordering stable
+  // through a curation edit). `pin_status` rides the spread when no explicit
+  // pinStatus override is given (#117 pin-survival contract).
   const input: Record<string, unknown> = { ...source };
   input.id = overrides.newId;
   input.superseded_by = overrides.supersededBy;
-  input.pin_status = overrides.pinStatus;
+  if (overrides.pinStatus !== undefined) input.pin_status = overrides.pinStatus;
+  if (overrides.newType !== undefined) input.type = overrides.newType;
+  if (overrides.newScope !== undefined) input.scope = overrides.newScope;
   input.schema_version = "1.0";
   if (typeof input.created_at !== "string" || input.created_at === "") {
     input.created_at = new Date().toISOString();
