@@ -73,6 +73,7 @@ def _build_v1_blob(
     pin_status: str | None = None,
     importance: int = 7,
     confidence: float = 0.9,
+    extra_metadata: dict | None = None,
 ) -> str:
     """Produce a v1.1 ``MemoryClaimV1`` JSON blob matching the production builder."""
 
@@ -94,6 +95,7 @@ def _build_v1_blob(
         created_at="2026-04-25T10:00:00.000Z",
         claim_id=fact_id,
         pin_status=pin_status,
+        extra_metadata=extra_metadata,
     )
 
 
@@ -455,6 +457,67 @@ class TestExecuteRetype:
         )
         assert parsed["type"] == "preference"
         assert parsed["superseded_by"] == "pinned-fact"
+
+    @pytest.mark.asyncio
+    @patch("totalreclaw.retype_setscope.build_and_send_userop_batch", new_callable=AsyncMock)
+    async def test_retype_preserves_session_id_metadata(self, mock_send, keys):
+        """Regression shield for internal#470 / Finding #7.
+
+        The rewrite MUST carry the source blob's ``metadata`` dict (the
+        core #463 ``session_id`` stamp + import provenance) onto the
+        superseding fact. Before this fix ``_project_from_decrypted``
+        dropped ``metadata`` entirely, so a retype returned an active fact
+        with ``session_id: null`` — breaking SPA session grouping.
+        """
+        mock_send.return_value = "0xabc"
+        existing_blob = _build_v1_blob(
+            fact_id="stamped-fact",
+            text="Halibut is my favorite fish",
+            fact_type="claim",
+            extra_metadata={
+                "session_id": "9a49ff69-sess",
+                "import_source": "chatgpt",
+            },
+        )
+        # Sanity-check the fixture carries the stamp.
+        assert json.loads(existing_blob)["metadata"]["session_id"] == "9a49ff69-sess"
+
+        relay = _build_relay_mock(keys, fact_id="stamped-fact", blob=existing_blob)
+
+        captured: list[list[bytes]] = []
+
+        async def capture(**kwargs):
+            captured.append(kwargs["protobuf_payloads"])
+            return "0xok"
+
+        mock_send.side_effect = capture
+
+        await execute_retype(
+            fact_id="stamped-fact",
+            new_type="preference",
+            keys=keys,
+            owner=OWNER,
+            relay=relay,
+            eoa_private_key=EOA_PRIVATE_KEY,
+            eoa_address=EOA_ADDRESS,
+            sender=OWNER,
+        )
+
+        encrypted_blob_bytes = _extract_protobuf_bytes_field(
+            captured[0][1], field_number=4
+        )
+        plaintext = decrypt(
+            base64.b64encode(encrypted_blob_bytes).decode("ascii"),
+            keys.encryption_key,
+        )
+        parsed = json.loads(plaintext)
+        assert parsed.get("metadata", {}).get("session_id") == "9a49ff69-sess", (
+            "retype must preserve metadata.session_id — internal#470 regression"
+        )
+        # Full provenance dict rides through, not just session_id.
+        assert parsed["metadata"]["import_source"] == "chatgpt"
+        assert parsed["type"] == "preference"
+        assert parsed["superseded_by"] == "stamped-fact"
 
 
 class TestExecuteSetScope:

@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import totalreclaw_core
+from totalreclaw.claims_helper import build_canonical_claim_v1
 from totalreclaw.crypto import derive_keys_from_mnemonic, encrypt, decrypt
 from totalreclaw.operations import pin_fact, unpin_fact
 from totalreclaw.relay import RelayClient
@@ -275,6 +276,96 @@ class TestPinFact:
         assert "c" not in parsed
         assert "st" not in parsed
         assert "sup" not in parsed
+
+    @pytest.mark.asyncio
+    @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
+    async def test_pin_preserves_session_id_metadata(self, mock_send, keys):
+        """Regression shield for internal#470 / Finding #7.
+
+        Pinning a v1 fact that carries the core #463 ``session_id`` stamp
+        MUST re-attach ``metadata`` onto the superseding pinned fact.
+        Before the fix ``_project_source_to_v1`` returned only provenance
+        fields, so the pin rewrite dropped ``metadata`` and the active
+        pinned fact came back with ``session_id: null``.
+        """
+        # v1 source blob carrying the session_id / import provenance stamp.
+        class _Fact:
+            pass
+
+        src = _Fact()
+        src.text = "Porto is on the coast"
+        src.type = "claim"
+        src.source = "user"
+        src.scope = None
+        src.reasoning = None
+        src.entities = None
+        src.confidence = 0.9
+        src.volatility = None
+        v1_blob = build_canonical_claim_v1(
+            src,
+            importance=7,
+            created_at="2026-07-08T10:00:00.000Z",
+            claim_id="stamped-fact",
+            extra_metadata={"session_id": "9a49ff69-sess", "import_source": "chatgpt"},
+        )
+        assert json.loads(v1_blob)["metadata"]["session_id"] == "9a49ff69-sess"
+
+        relay = AsyncMock(spec=RelayClient)
+        relay._relay_url = "https://api.totalreclaw.xyz"
+        relay._auth_key_hex = "deadbeef"
+        relay._client_id = "test"
+
+        async def query(query_str, variables, chain=None):
+            if "fact(id" in query_str or "id: $id" in query_str:
+                return {
+                    "data": {
+                        "fact": {
+                            "id": "stamped-fact",
+                            "owner": OWNER.lower(),
+                            "encryptedBlob": _encrypted_hex(v1_blob, keys.encryption_key),
+                            "encryptedEmbedding": None,
+                            "decayScore": "0.7",
+                            "timestamp": "1760000000",
+                            "createdAt": "1760000000",
+                            "isActive": True,
+                            "contentFp": "abc123",
+                        }
+                    }
+                }
+            return {"data": {}}
+
+        relay.query_subgraph = AsyncMock(side_effect=query)
+
+        captured: list[list[bytes]] = []
+
+        async def capture(**kwargs):
+            captured.append(kwargs["protobuf_payloads"])
+            return "0xok"
+
+        mock_send.side_effect = capture
+
+        await pin_fact(
+            fact_id="stamped-fact",
+            keys=keys,
+            owner=OWNER,
+            relay=relay,
+            eoa_private_key=EOA_PRIVATE_KEY,
+            eoa_address=EOA_ADDRESS,
+            sender=OWNER,
+        )
+
+        new_payload = captured[0][1]
+        encrypted_blob_bytes = _extract_protobuf_bytes_field(new_payload, field_number=4)
+        plaintext = decrypt(
+            base64.b64encode(encrypted_blob_bytes).decode("ascii"), keys.encryption_key
+        )
+        parsed = json.loads(plaintext)
+        assert parsed.get("metadata", {}).get("session_id") == "9a49ff69-sess", (
+            "pin must preserve metadata.session_id — internal#470 regression"
+        )
+        assert parsed["metadata"]["import_source"] == "chatgpt"
+        assert parsed["pin_status"] == "pinned"
+        assert parsed["superseded_by"] == "stamped-fact"
 
 
 # ---------------------------------------------------------------------------

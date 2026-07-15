@@ -1451,6 +1451,18 @@ async def _change_claim_status(
         default_source_agent="python-client",
     )
 
+    # Preserve the source blob's ``metadata`` dict across the pin/unpin
+    # rewrite (internal#470 / Finding #7). ``_project_source_to_v1`` returns
+    # only the v1 provenance fields, so without re-attaching ``metadata``
+    # the session_id / import_source stamp (core #463) is dropped and the
+    # superseding active fact comes back with ``session_id: null``. Only v1
+    # sources carry the field; v0 short-key blobs predate it.
+    carried_metadata = (
+        raw_claim_obj.get("metadata")
+        if is_v1_source and isinstance(raw_claim_obj.get("metadata"), dict)
+        else None
+    )
+
     new_fact_id = str(uuid.uuid4())
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     pin_status_wire = "pinned" if target_status == "p" else "unpinned"
@@ -1474,6 +1486,7 @@ async def _change_claim_status(
         superseded_by=fact_id,
         claim_id=new_fact_id,
         pin_status=pin_status_wire,
+        extra_metadata=carried_metadata,
     )
 
     # 5. Encrypt + build FactPayload at protobuf v=4.

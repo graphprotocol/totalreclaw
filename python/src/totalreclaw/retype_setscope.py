@@ -393,6 +393,26 @@ async def _rewrite_with_mutation(
             ),
         }
 
+    # Preserve the source blob's ``metadata`` dict across the rewrite
+    # (internal#470 / Finding #7). ``_project_from_decrypted`` returns a
+    # fixed 10-key v1 shape that intentionally omits ``metadata``, so the
+    # session_id / import_source / Crystal provenance stamped by
+    # ``build_canonical_claim_v1(extra_metadata=…)`` (core #463) would
+    # otherwise be dropped on every retype/set_scope — the superseding
+    # active fact would come back with ``session_id: null``. Carry the
+    # whole dict verbatim; v0 short-key blobs predate the field, so
+    # ``carried_metadata`` stays ``None`` and the blob is byte-identical.
+    try:
+        _src_obj = _json.loads(plaintext)
+        carried_metadata = (
+            _src_obj.get("metadata")
+            if isinstance(_src_obj, dict)
+            and isinstance(_src_obj.get("metadata"), dict)
+            else None
+        )
+    except (ValueError, TypeError):
+        carried_metadata = None
+
     # 3. Apply mutation. previous_X is captured before the mutation so the
     # response matches the TS RetypeSetScopeResult shape.
     previous_type = current["type"]
@@ -423,6 +443,7 @@ async def _rewrite_with_mutation(
             superseded_by=fact_id,
             claim_id=new_fact_id,
             pin_status=next_state.get("pin_status"),
+            extra_metadata=carried_metadata,
         )
     except Exception as exc:
         return {
