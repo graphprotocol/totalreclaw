@@ -1,5 +1,7 @@
 # 01 — Identity & Setup
 
+> ⚠️ **Historical design doc** (predates the 2026-06 single-chain migration). All tiers now run on Gnosis mainnet (chain 100) and free-tier storage is permanent; `TOTALRECLAW_CHAIN_ID` no longer exists. See [docs/architecture.md](../../../architecture.md) for current architecture.
+
 **Previous:** [README](./README.md) · **Next:** [02 — Write Path](./02-write-path.md)
 
 ---

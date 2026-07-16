@@ -28,9 +28,9 @@ TotalReclaw is split across three trust layers. This split is the single load-be
 ```
    Client (device)               Relay Service                     Open Network
  ┌──────────────────┐         ┌──────────────────┐             ┌──────────────────┐
- │ Mnemonic-rooted   │         │ Encrypted blobs   │             │ Gnosis (Pro)     │
- │ key derivation    │ cipher  │ + LSH trapdoors   │   anchor    │ Base Sepolia     │
- │ Embedding model   │ + LSH   │ GIN-indexed       │  (sponsored │ (Free testnet)   │
+ │ Mnemonic-rooted   │         │ Encrypted blobs   │             │ Gnosis mainnet   │
+ │ key derivation    │ cipher  │ + LSH trapdoors   │   anchor    │ (chain 100)      │
+ │ Embedding model   │ + LSH   │ GIN-indexed       │  (sponsored │ all tiers        │
  │ Extraction LLM    │ ─────▸  │ candidate retrieval│ ERC-4337) ▸ │ EventfulDataEdge │
  │ Reranker (core)   │ ◂─────  │ AA bundler shim   │  ◂────────  │ Subgraph indexer │
  │ Smart Account sig │ results │ Pair-flow relay   │   indexed   └──────────────────┘
@@ -168,10 +168,10 @@ On-chain writes are visible only after the subgraph indexes them. Empirically: *
 
 | Tier | Anchor | Cost | Persistence |
 |---|---|---|---|
-| **Free** | Base Sepolia testnet | $0 | May reset (testnet) — fine for evaluation, not for irreplaceable data |
-| **Pro** | Gnosis mainnet | $3.99 / mo | Permanent, permissionless |
+| **Free** | Gnosis mainnet (chain 100) | $0 | Permanent, permissionless — 250 memories/month |
+| **Pro** | Gnosis mainnet (chain 100) | subscription | Permanent, permissionless — 1,500 memories/month + LLM-guided dedup |
 
-Both tiers use the same `EventfulDataEdge` contract pattern (single `fallback()` emitting `Log(msg.data)`), the same ERC-4337 Smart Account derivation, and the same paymaster-sponsored UserOps. Tier choice is at write time and recorded per claim.
+Both tiers use the same `EventfulDataEdge` contract pattern (single `fallback()` emitting `Log(msg.data)`), the same ERC-4337 Smart Account derivation, and the same paymaster-sponsored UserOps. Tier (free vs pro) is a quota + feature flag the relay enforces; it is not a chain choice — both tiers write to the same Gnosis contract, so a free→pro upgrade needs zero data migration.
 
 ---
 
@@ -236,7 +236,7 @@ Every client speaks to the relay and the chain through the same Rust core (`tota
 | NanoClaw skill | bundled | Lightweight overlay skill |
 | MCP server | `@totalreclaw/mcp-server` | Model Context Protocol server — any MCP host (Claude Desktop, Cursor, etc.) |
 
-Stable versions are tracked in [`docs/release-pipeline.md`](../../release-pipeline.md) (in the internal repo) and in the public-facing release pages. Don't pin them in this doc — they drift.
+Stable versions are tracked in [`release-process.md`](../../guides/release-process.md) and in the public-facing release pages. Don't pin them in this doc — they drift.
 
 **Architectural consequence:** to add a new client (e.g. a new IDE), you bind to `totalreclaw-core` and implement the agent-glue. You don't reimplement crypto, retrieval, or dedup. This is what keeps cross-client behavior consistent as the surface area grows.
 

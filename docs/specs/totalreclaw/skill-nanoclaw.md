@@ -1472,7 +1472,7 @@ totalreclaw/
 
 - [NanoClaw Repository](https://github.com/qwibitai/nanoclaw)
 - [NanoClaw Security Model](https://github.com/qwibitai/nanoclaw/blob/main/docs/SECURITY.md)
-- [TotalReclaw Client README](/client/README.md)
-- [TotalReclaw Skill Package](/skill/)
+- [TotalReclaw Client README](../../../client/README.md)
+- [TotalReclaw Skill Package](../../../skill/)
 - [MCP Protocol Specification](https://modelcontextprotocol.io)
 - [Claude Agent SDK Documentation](https://docs.anthropic.com)

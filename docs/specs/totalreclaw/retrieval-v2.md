@@ -1,7 +1,7 @@
 # Retrieval v2 — source + scope + volatility aware ranking
 
-**Version:** 2.0.0-draft (gated on Memory Taxonomy v1 lock)
-**Status:** DRAFT. Dependencies: Pipeline F or G wins validation (extraction benchmark + retrieval benchmark). Target: `@totalreclaw/core@2.0.0`.
+**Version:** 2.0.0
+**Status:** **Shipped** — Tier 1 (source-weighted rerank) shipped in `@totalreclaw/core` 2.0.0 (2026-04-18); Tiers 2–4 designed, not implemented.
 **Created:** 2026-04-17
 **Supersedes:** retrieval logic in `@totalreclaw/core@1.5.0` (source-blind + scope-blind ranking)
 
@@ -70,7 +70,7 @@ top N (default 8)
 
 Add a multiplier to the final RRF score based on source. The values below
 (v2-lenient) shipped in `@totalreclaw/core@2.4.0` per the kg-1 promote
-([`docs/plans/2026-04-28-v2-lenient-promotion-proposal.md`](../../plans/2026-04-28-v2-lenient-promotion-proposal.md)).
+(tracked internally).
 For the historical v1 weight matrix that shipped 2.0.0–2.2.0, see
 [Tier 1 v1 (deprecated)](#tier-1-v1-deprecated) below.
 

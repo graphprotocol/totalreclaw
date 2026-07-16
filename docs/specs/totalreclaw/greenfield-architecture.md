@@ -1,5 +1,7 @@
 # Greenfield Architecture Assessment
 
+> ⚠️ **Historical design doc** (predates the 2026-06 single-chain migration). All tiers now run on Gnosis mainnet (chain 100) and free-tier storage is permanent; `TOTALRECLAW_CHAIN_ID` no longer exists. See [docs/architecture.md](../../architecture.md) for current architecture.
+
 > **Purpose:** If we were rebuilding TotalReclaw from scratch today, what would we keep, what would we change, and why? This document captures the architectural trade-offs of the current system and proposes a simplified alternative that preserves all value propositions.
 
 ## What We'd Keep Exactly As-Is

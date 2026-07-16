@@ -468,5 +468,5 @@ See: `TS: TotalReclaw Skill for NanoClaw.md` for NanoClaw-specific integration u
 ## References
 
 - [MCP Specification](https://modelcontextprotocol.io/)
-- [TotalReclaw Client Library](/client/)
+- [TotalReclaw Client Library](../../../client/)
 - [NanoClaw Integration Spec](../nanoclaw/TS: TotalReclaw Skill for NanoClaw.md)

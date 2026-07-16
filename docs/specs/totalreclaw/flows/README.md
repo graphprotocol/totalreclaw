@@ -1,5 +1,7 @@
 # TotalReclaw — System Flow Reference
 
+> ⚠️ **Historical design doc** (predates the 2026-06 single-chain migration). All tiers now run on Gnosis mainnet (chain 100) and free-tier storage is permanent; `TOTALRECLAW_CHAIN_ID` no longer exists. See [docs/architecture.md](../../../architecture.md) for current architecture.
+
 **Audience:** developers, contributors, and curious users who want a visual mental model of how TotalReclaw's moving parts connect.
 
 **Scope:** this folder is the visual onboarding for the whole system. Seven files walk through identity, write, read, per-client hook wiring, the Phase 2 knowledge-graph primitives, the Wiki bridge, and the two storage modes. Every flow is backed by Mermaid diagrams (~19 total) and references the source files where the logic actually lives.

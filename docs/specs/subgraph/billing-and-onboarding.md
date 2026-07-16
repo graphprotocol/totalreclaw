@@ -86,10 +86,10 @@ Query fees alone are small ($1-$298/mo). Indexers are primarily incentivized by 
 
 | Tier | Cost | Limits | Authorization |
 |------|------|--------|---------------|
-| **Free** | $0 | 500 memories/month, rate-limited reads | Relay checks quota by wallet address |
-| **Pro** | $5/month | Unlimited memories, priority reads | Relay checks active subscription |
+| **Free** | $0 | 250 memories/month, rate-limited reads | Relay checks quota by wallet address |
+| **Pro** | subscription | 1,500 memories/month, LLM-guided dedup, custom extraction interval | Relay checks active subscription |
 
-Free tier: 500 memories/month on Base Sepolia (testnet, trial). Pro tier: unlimited memories on Gnosis mainnet (permanent on-chain storage).
+Free tier: 250 memories/month on Gnosis mainnet (chain 100) — permanent, E2E encrypted, no credit card. Pro tier: 1,500 memories/month on Gnosis mainnet (permanent on-chain storage) plus LLM-guided dedup and a custom extraction interval.
 
 ---
 

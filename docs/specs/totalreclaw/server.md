@@ -6,6 +6,8 @@ Last updated: 2026-04-26
 
 # TotalReclaw Relay — Architecture (v1)
 
+> ⚠️ **Historical design doc** (predates the 2026-06 single-chain migration). All tiers now run on Gnosis mainnet (chain 100) and free-tier storage is permanent; `TOTALRECLAW_CHAIN_ID` no longer exists. See [docs/architecture.md](../../architecture.md) for current architecture.
+
 **Title:** TotalReclaw v1.0 — Relay (server-blind intermediary, AA bundler shim, pair-flow broker)
 **Audience:** anyone reading, auditing, or operating the relay; integrators who need to understand what the relay can and cannot do for them.
 **Scope:** the relay's architectural responsibilities, surface, and invariants. Concrete schemas (memory claim, reranker, retrieval) live in sibling specs. The relay codebase lives in a separate repo (`totalreclaw-relay`); details specific to deployment, ops runbooks, and CI live there.

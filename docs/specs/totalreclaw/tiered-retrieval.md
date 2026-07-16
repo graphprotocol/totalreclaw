@@ -214,8 +214,6 @@ No randomness. No per-client config that diverges.
 
 ## Observable impact
 
-Phase 2 benchmark data (placeholder — will fill in once 500-conv benchmark run completes on 2026-04-18):
-
 - **Baseline (pre-v1):** TBD — clustering ratio, recall@8, precision@1 on Gemini + WildChat corpora.
 - **v1 + Tier 1:** TBD — same metrics with source-weighted reranker.
 - **v1 Bangkok test:** TBD — user-authored vs assistant-extracted specific-entity claims.

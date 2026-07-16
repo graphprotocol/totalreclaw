@@ -49,7 +49,7 @@ This is a deliberate tradeoff. The plugin's daemon-mode auto-extraction needs th
 
 ## Roadmap — better at-rest defense
 
-The plaintext-at-rest tradeoff is documented and being addressed in phases. See [totalreclaw-internal#229](https://github.com/p-diogo/totalreclaw-internal/issues/229) for the full UX matrix and phasing.
+The plaintext-at-rest tradeoff is documented and being addressed in phases. The full UX matrix and phasing is tracked in the private ops tracker (issue #229).
 
 - **Phase 1 (cred-1 — shipped)** — Document the threat model (this file) and enforce chmod 600 at plugin startup. The plugin now **refuses to load** if `credentials.json` is found with permissions broader than `0600`. Fix: `chmod 600 ~/.totalreclaw/credentials.json` then restart the gateway. The plugin also warns if the file is detected on a tmpfs or shared-volume mount (`/tmp/`, `/dev/shm/`, `/run/`, `/var/run/`).
 - **Phase 2 (3.4.0)** — Desktop OS-keychain wrap (macOS Keychain, Linux libsecret, Windows Credential Manager). Container deployments fall back to status quo.

@@ -1,7 +1,7 @@
 # MCP Memory Taxonomy v1
 
-**Version:** 1.2.0-draft (adds canonical-prompt location + NanoClaw ADD-only alignment; 1.1 pin_status extension carried forward)
-**Status:** DRAFT. 1.0 validated on Gemini corpus (Pipeline C). WildChat cross-validation in progress (2026-04-17). 1.1 adds `pin_status` without breaking 1.0 readers. 1.2 documents the canonical extraction/compaction prompt location hoisted into `totalreclaw-core 2.2.0` — no on-wire changes. Lock after WildChat results confirm.
+**Version:** 1.2.0 (adds canonical-prompt location + NanoClaw ADD-only alignment; 1.1 pin_status extension carried forward)
+**Status:** **Shipped 2026-04-18** across all 5 clients (core 2.0.0).
 **Owner:** TotalReclaw (pedro@thegraph.foundation)
 **Intended publication:** `totalreclaw.xyz/spec/memory-v1` + PR to MCP spec repo as optional `@modelcontextprotocol/memory-taxonomy/v1` extension.
 
@@ -295,7 +295,7 @@ Consumer clients inherit the new prompt by bumping their
 
 Reference implementations: TotalReclaw 5 clients target Level 2 at v1 launch.
 
-## Migration from v0 (TotalReclaw-internal only)
+## Migration from v0 (internal only)
 
 No backwards compat at v1 lock. Pre-v1 records in test vaults are purged. v0 type names (`fact`, `context`, `decision`, `goal`, `rule`, `episodic`) are rejected at the validate stage.
 
@@ -387,4 +387,4 @@ together. `retype` / `set_scope` already emitted v1 blobs and are unaffected.
 - [Tiago Forte PARA method](https://fortelabs.com/blog/para/) — scope-axis user mental model
 - [Mastra observational memory](https://mastra.ai/research/observational-memory) — zero-typing counter-argument
 - [Supermemory ASMR (99% LongMemEval)](https://supermemory.ai/blog/we-broke-the-frontier-in-agent-memory-introducing-99-sota-memory-system/) — 6-vector precedent, "Assistant Info" as first-class bucket
-- Internal: `totalreclaw-internal/docs/plans/2026-04-16-kg-roadmap-and-active-phases.md` §3.0
+- Internal: KG roadmap and active phases (§3.0, tracked internally)
