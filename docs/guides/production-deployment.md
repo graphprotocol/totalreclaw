@@ -212,7 +212,7 @@ On systemd, tmpfs is auto-wiped at host reboot; on K8s, the initContainer patter
 
 ### What this does NOT cover (yet)
 
-Stage 1 of cred-3 (this guide + plugin TS provider) ships the abstraction; subsequent stages wire the same abstraction through the Hermes Python client and the MCP server. Until then, deployments that run Hermes alongside the plugin will still need to manage Hermes credentials by file. Track in [cred-3](https://github.com/p-diogo/totalreclaw-internal/issues/263).
+Stage 1 of cred-3 (this guide + plugin TS provider) ships the abstraction; subsequent stages wire the same abstraction through the Hermes Python client and the MCP server. Until then, deployments that run Hermes alongside the plugin will still need to manage Hermes credentials by file (tracked in the private ops tracker).
 
 ---
 
@@ -247,4 +247,4 @@ Reversing the migration is symmetric — set `TOTALRECLAW_CREDENTIALS_PROVIDER=f
 - [SECURITY.md](../SECURITY.md) — threat model, chmod 600 enforcement, the full four-phase credentials-at-rest roadmap
 - [env-vars-reference.md](env-vars-reference.md) — full list of `TOTALRECLAW_*` env vars
 - [openclaw-setup.md](openclaw-setup.md) — basic single-host install
-- [`totalreclaw-internal#263`](https://github.com/p-diogo/totalreclaw-internal/issues/263) — cred-3 tracking issue (covers staging into Hermes + MCP after this stage)
+- cred-3 tracking issue — staging into Hermes + MCP after this stage (tracked in the private ops tracker)

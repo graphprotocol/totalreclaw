@@ -119,11 +119,11 @@ This provides memory isolation between different NanoClaw groups. Memories store
 | `TOTALRECLAW_NAMESPACE` | Default namespace | Group folder name |
 | `TOTALRECLAW_AUTO_EXTRACT` | Enable automatic fact extraction | `true` |
 
-> **v3.0.0 env cleanup:** `TOTALRECLAW_CHAIN_ID` and `TOTALRECLAW_EXTRACT_INTERVAL` were removed. Chain is auto-detected from billing tier; extraction interval is server-tuned via the relay billing response. See the [env vars reference](../docs/guides/env-vars-reference.md).
+> **v3.0.0 env cleanup:** `TOTALRECLAW_CHAIN_ID` and `TOTALRECLAW_EXTRACT_INTERVAL` were removed. All tiers run on a single chain (Gnosis mainnet, chain 100) surfaced via the relay billing response; extraction interval is server-tuned by the relay. See the [env vars reference](../docs/guides/env-vars-reference.md).
 
 ## Available Tools
 
-The MCP server provides 19 tools to the NanoClaw agent (v3.0.0 adds v1 taxonomy tools):
+The NanoClaw agent-runner spawns `@totalreclaw/mcp-server`, so it inherits **all 18 tools** the MCP server exposes. The main ones you'll drive from natural language (full list in the [MCP server README](../mcp/README.md#available-tools)):
 
 | Tool | Description |
 |------|-------------|

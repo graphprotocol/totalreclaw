@@ -193,15 +193,22 @@ totalreclaw-memory = "2.0.1"
 ### Use
 
 ```rust
-use totalreclaw_memory::{Memory, TotalReclawMemory, V1StoreInput};
+use totalreclaw_memory::{
+    TotalReclawMemory, TotalReclawConfig,
+    MemoryScope, MemorySource, MemoryTypeV1, MemoryVolatility,
+    store::V1StoreInput,
+};
 
-let memory = TotalReclawMemory::new(recovery_phrase).await?;
-memory.store_v1(V1StoreInput {
+let memory = TotalReclawMemory::new(TotalReclawConfig {
+    mnemonic: recovery_phrase,
+    ..Default::default()
+}).await?;
+memory.store_v1(&V1StoreInput {
     text: "Pedro prefers dark mode for all editors".into(),
-    type_: "preference".into(),
-    source: "user".into(),
-    scope: Some("personal".into()),
-    volatility: Some("stable".into()),
+    memory_type: MemoryTypeV1::Preference,
+    source: MemorySource::User,
+    scope: MemoryScope::Personal,
+    volatility: MemoryVolatility::Stable,
     importance: 8,  // 1–10 (u8; normalized to 0.0–1.0 on-chain)
     reasoning: None,
 }).await?;
