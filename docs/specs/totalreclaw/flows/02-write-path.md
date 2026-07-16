@@ -382,4 +382,4 @@ flowchart TB
 - `docs/specs/totalreclaw/architecture.md` — architectural background
 - `docs/specs/totalreclaw/lsh-tuning.md` — why 20 × 32 bits hit 98.1% recall@8
 - `docs/specs/totalreclaw/memory-taxonomy-v1.md` — the canonical v1 Claim schema (`MemoryClaimV1`), type enum, scope + volatility axes, and provenance filter requirements
-- `docs/plans/2026-04-13-phase-2-design.md` — historical record of the v0 short-key schema (§15.7) and entity normalization (§15.8); preserved for legacy-blob read-path reference only
+- `2026-04-13-phase-2-design.md` (internal plan) — historical record of the v0 short-key schema (§15.7) and entity normalization (§15.8); preserved for legacy-blob read-path reference only

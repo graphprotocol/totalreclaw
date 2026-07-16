@@ -197,10 +197,10 @@ Nineteen diagrams, with the main thing each one clarifies:
 ## Deeper material
 
 - **Data model** (`Claim`, `Entity`, `Digest`, `ClaimStatus`): `rust/totalreclaw-core/src/claims.rs`
-- **Contradiction formula + weight tuning**: `rust/totalreclaw-core/src/contradiction.rs` + `docs/plans/2026-04-13-phase-2-design.md` §P2-3
-- **Pin/unpin semantics**: `docs/plans/2026-04-13-phase-2-design.md` §P2-4
+- **Contradiction formula + weight tuning**: `rust/totalreclaw-core/src/contradiction.rs` + `2026-04-13-phase-2-design.md` (internal plan) §P2-3
+- **Pin/unpin semantics**: `2026-04-13-phase-2-design.md` (internal plan) §P2-4
 - **Digest compilation**: `rust/totalreclaw-core/src/digest.rs` + `docs/specs/totalreclaw/architecture.md` §4.4
-- **Corpus supplement + Wiki bridge**: `docs/plans/2026-04-13-phase-2-design.md` §P2-10
+- **Corpus supplement + Wiki bridge**: `2026-04-13-phase-2-design.md` (internal plan) §P2-10
 - **Encryption, trapdoors, blind indices**: `docs/specs/totalreclaw/architecture.md`
 - **Cross-client consistency requirements**: `docs/specs/totalreclaw/client-consistency.md`
 - **Per-client feature matrix**: `CLAUDE.md` "Feature Compatibility Matrix"

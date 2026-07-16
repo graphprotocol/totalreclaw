@@ -144,7 +144,7 @@ Browser-bundle WASM + publishing hardening. (Note: the intervening `2.3.x`–`2.
 
 ### References
 
-- Backlog: [Tier 2 items #5, #6, #8](../../docs/plans/core-hoist-backlog.md)
+- Backlog: Tier 2 items #5, #6, #8 (core-hoist backlog, tracked internally)
 - Audit: `docs/notes/ROADMAP-AUDIT-20260419.md` (internal) §7.1 Agent A
 
 ## [2.0.0] - 2026-04-17

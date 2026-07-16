@@ -25,7 +25,7 @@ Source of truth:
 - `skill/plugin/contradiction-sync.ts` — plugin-side contradiction orchestration
 - `skill/plugin/pin.ts` — pin / unpin tool implementation
 - `skill/plugin/digest-sync.ts` — recompile scheduler
-- `docs/plans/2026-04-13-phase-2-design.md` — the authoritative Phase 2 spec
+- `2026-04-13-phase-2-design.md` (internal plan) — the authoritative Phase 2 spec
 
 ---
 
@@ -311,6 +311,6 @@ Contradiction detection and pinning are write-side additions; digest injection i
 - [02 — Write Path](./02-write-path.md) — the underlying encrypt + trapdoor + UserOp pipeline
 - [03 — Read Path](./03-read-path.md) — the fallback individual-fact recall that digest injection replaces
 - [06 — Wiki Bridge](./06-wiki-bridge.md) — how Wiki-curated pages feed back into the same contradiction/supersession path
-- `docs/plans/2026-04-13-phase-2-design.md` — the authoritative Phase 2 spec (§P2-3 contradiction formula, §P2-4 pin semantics, §15.10 recompile guard)
+- `2026-04-13-phase-2-design.md` (internal plan) — the authoritative Phase 2 spec (§P2-3 contradiction formula, §P2-4 pin semantics, §15.10 recompile guard)
 - `rust/totalreclaw-core/src/contradiction.rs` — the weighted formula implementation
 - `rust/totalreclaw-core/src/digest.rs` — digest struct and compilation

@@ -1,0 +1,58 @@
+name: Bug report
+description: Something broke — a tool call failed, memories didn't store or recall, setup didn't work.
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: client
+    attributes:
+      label: Client
+      description: Which TotalReclaw client were you using?
+      options:
+        - OpenClaw plugin (@totalreclaw/totalreclaw)
+        - MCP server (Claude Desktop / Claude Code / Cursor / Windsurf)
+        - Python / Hermes (totalreclaw on PyPI)
+        - ZeroClaw / Rust (totalreclaw-memory)
+        - NanoClaw (@totalreclaw/skill-nanoclaw)
+        - Vault web app
+        - Other / not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Client version
+      description: "e.g. `npm view @totalreclaw/mcp-server version` output, `pip show totalreclaw`, or the version from `totalreclaw_status`."
+      placeholder: "3.4.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Storage mode
+      options:
+        - Managed service (default)
+        - Self-hosted
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead? Paste error output if you have it.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: |
+        Any relevant tool output or logs. **Never paste your 12-word recovery phrase or any part of it** — if a log line contains it, redact before posting.
+      render: shell
+  - type: checkboxes
+    id: phrase-check
+    attributes:
+      label: Recovery-phrase safety
+      options:
+        - label: I confirm nothing in this report contains my recovery phrase (or any part of it).
+          required: true

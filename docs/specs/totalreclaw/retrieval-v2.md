@@ -312,7 +312,7 @@ All 5 clients share `@totalreclaw/core` reranker. Change once, ships everywhere.
 ## References
 
 - `docs/specs/totalreclaw/memory-taxonomy-v1.md` — taxonomy spec this ranker implements against
-- `docs/plans/2026-04-17-extraction-efficiency-experiments.md` §E13 — retrieval benchmark proposal
-- `docs/plans/2026-04-16-kg-roadmap-and-active-phases.md` §3.0 — MCP Memory Taxonomy v1 phase tracker
+- `2026-04-17-extraction-efficiency-experiments.md` (internal plan) §E13 — retrieval benchmark proposal
+- `2026-04-16-kg-roadmap-and-active-phases.md` (internal plan) §3.0 — MCP Memory Taxonomy v1 phase tracker
 - `rust/totalreclaw-core/src/reranker.rs` — current reranker implementation
 - [Mem0 junk audit (motivates Tier 1)](https://github.com/mem0ai/mem0/issues/4573)

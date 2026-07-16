@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Setup help
+    url: https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/client-setup-v1.md
+    about: Per-client install + setup guide — check here first for install issues.
+  - name: Security policy
+    url: https://github.com/p-diogo/totalreclaw/blob/main/docs/SECURITY.md
+    about: How to report a vulnerability (please don't open a public issue for security reports).

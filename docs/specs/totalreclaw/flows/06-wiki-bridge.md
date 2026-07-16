@@ -12,7 +12,7 @@ The two flows are symmetric at the architectural level — both cross the bounda
 
 Source of truth:
 
-- `docs/plans/2026-04-13-phase-2-design.md` §P2-10 — Corpus supplement + Wiki bridge design
+- `2026-04-13-phase-2-design.md` (internal plan) §P2-10 — Corpus supplement + Wiki bridge design
 - OpenClaw `memory-wiki` package — Wiki's own source (not in this repo)
 - OpenClaw SDK `MemoryCorpusSupplement` interface — public API we implement
 - `skill/plugin/index.ts` — the `after_tool_call` hook registration for `wiki_compile`
@@ -134,4 +134,4 @@ The fourth step is the one that took spec discussion. Without it, recompiling Wi
 - [02 — Write Path](./02-write-path.md) — the underlying store pipeline Wiki compile reuses
 - [03 — Read Path](./03-read-path.md) — the underlying recall pipeline Wiki's corpus supplement reuses
 - [05 — Knowledge Graph](./05-knowledge-graph.md) — how Wiki-curated claims interact with contradiction detection and digest injection
-- `docs/plans/2026-04-13-phase-2-design.md` §P2-10 — canonical spec for the Wiki bridge (provenance, timestamp preservation, confidence levels)
+- `2026-04-13-phase-2-design.md` (internal plan) §P2-10 — canonical spec for the Wiki bridge (provenance, timestamp preservation, confidence levels)
