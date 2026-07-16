@@ -121,7 +121,7 @@
     },
     {
       "name": "totalreclaw_upgrade",
-      "description": "Get a checkout URL to upgrade to TotalReclaw Pro (unlimited memories on Gnosis mainnet)",
+      "description": "Get a checkout URL to upgrade to TotalReclaw Pro (1,500 memories/month on Gnosis mainnet)",
       "handler": "./dist/index.js",
       "parameters": {}
     },
@@ -271,7 +271,7 @@
       },
       {
         "name": "totalreclaw_upgrade",
-        "description": "Get a checkout URL to upgrade to TotalReclaw Pro (unlimited memories on Gnosis mainnet)",
+        "description": "Get a checkout URL to upgrade to TotalReclaw Pro (1,500 memories/month on Gnosis mainnet)",
         "parameters": {}
       },
       {

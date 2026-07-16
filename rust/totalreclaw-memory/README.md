@@ -14,7 +14,7 @@ End-to-end encrypted memory backend for Rust. Native `Memory` trait implementati
 - **Contradiction detection + pin semantics** — via shared core.
 - **Hot cache** — 30-entry local query cache with cosine similarity matching.
 - **Billing cache** — 2-hour TTL with quota warnings (>80%) and 403 invalidation.
-- **Chain ID auto-detect** — free tier on Base Sepolia, Pro on Gnosis. No env var.
+- **Chain ID auto-detect** — Gnosis mainnet (chain 100), all tiers (single-chain since 2026-06-05). No env var.
 - **Protobuf v4 outer wrapper** — inner blob is v1 JSON.
 
 ## Quick Start

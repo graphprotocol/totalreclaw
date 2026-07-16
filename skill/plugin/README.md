@@ -6,7 +6,7 @@
 
 TotalReclaw gives any [OpenClaw](https://github.com/openclaw/openclaw) agent persistent, encrypted long-term memory. Preferences, decisions, commitments, rules, and context carry across every conversation -- fully end-to-end encrypted so the server **never** sees plaintext.
 
-**v3.0.0 ships Memory Taxonomy v1**: every memory is typed (`claim` / `preference` / `directive` / `commitment` / `episode` / `summary`) and tagged with source, scope, and volatility. Recall uses source-weighted reranking so user-authored claims consistently rank above assistant-regurgitated noise. See [`docs/guides/memory-types-guide.md`](../../docs/guides/memory-types-guide.md).
+**Memory Taxonomy v1**: every memory is typed (`claim` / `preference` / `directive` / `commitment` / `episode` / `summary`) and tagged with source, scope, and volatility. Recall uses source-weighted reranking so user-authored claims consistently rank above assistant-regurgitated noise. See [`docs/guides/memory-types-guide.md`](../../docs/guides/memory-types-guide.md).
 
 ## Installation
 
@@ -67,8 +67,8 @@ Most AI memory solutions force a tradeoff: **good recall OR privacy**. TotalRecl
 - **Intelligent Extraction**: G-pipeline — single merged-topic LLM call, provenance filter, comparative rescoring, volatility heuristic. v1 is the only write path.
 - **Semantic Search**: LSH blind indices with client-side BM25 + cosine + RRF fusion reranking
 - **Retrieval v2 Tier 1**: Source-weighted reranking — user=1.0, user-inferred=0.9, derived/external=0.7, assistant=0.55
-- **Lifecycle Hooks**: Seamlessly integrates with OpenClaw's agent lifecycle (before_agent_start, agent_end, pre_compaction, before_reset)
-- **Natural-language overrides**: "pin that", "that was actually a rule, not a preference", "file that under work" — agent calls the right tool automatically
+- **Lifecycle Hooks**: Seamlessly integrates with OpenClaw's agent lifecycle (before_agent_start, agent_end, before_compaction, before_reset)
+- **Natural-language overrides**: "pin that", "that was actually a rule, not a preference", "file that under work" — the agent runs the matching `tr` curation command automatically
 - **Portable Export**: One-click plaintext export -- no vendor lock-in
 - **Decay Management**: Automatic memory decay with configurable thresholds
 
@@ -147,7 +147,7 @@ Once installed, TotalReclaw hooks into your agent lifecycle automatically. No co
 Your agent will:
 - **Load relevant memories** before processing each message (`before_agent_start`)
 - **Extract and store facts** after each turn (`agent_end`)
-- **Flush all memories** before context compaction (`pre_compaction`)
+- **Flush all memories** before context compaction (`before_compaction`)
 
 You can also use the tools directly in conversation:
 
@@ -160,114 +160,17 @@ You can also use the tools directly in conversation:
 
 ---
 
-## Tools
+## How it works
 
-The plugin exposes these tools to your OpenClaw agent. Most invocations happen via natural language -- the agent picks the right tool from context.
+TotalReclaw is OpenClaw's **native `kind:"memory"` provider** — it does not expose a bespoke `totalreclaw_remember` / `totalreclaw_recall` / … agent-tool surface. The shipped surface is:
 
-### totalreclaw_remember
+- **Recall is native.** Use OpenClaw's standard `memory_search` / `memory_get` tools (the same surface the `active-memory` sub-agent uses). Relevant memories are surfaced automatically before the agent processes each message.
+- **Capture is automatic.** The plugin extracts facts from the conversation in the background — you do not call a tool on every preference the user states.
+- **Explicit capture + curation run through the `tr` CLI**, e.g. `tr remember "…"`, `tr pin` / `tr unpin`, `tr retype`, `tr set_scope`, `tr export`, `tr status`. The legacy `totalreclaw_*` agent tools and `tr recall` are retired — recall is `memory_search`, explicit capture is `tr remember`.
 
-Explicitly store a memory. Accepts v1 taxonomy fields.
+The plugin wires into the OpenClaw lifecycle automatically (`before_agent_start` → auto-recall, `agent_end` → auto-extract, `before_compaction` / `before_reset` → flush). No code changes are needed.
 
-```typescript
-const result = await skill.remember({
-  text: 'User prefers dark mode',
-  type: 'preference',  // v1 types: claim, preference, directive, commitment, episode, summary
-  source: 'user',      // v1 sources: user, user-inferred, assistant, external, derived
-  scope: 'personal',   // v1 scopes: work, personal, health, family, creative, finance, misc, unspecified
-  importance: 7,       // 1-10 (see importance rubric)
-});
-
-console.log(result); // "Memory stored successfully with ID: fact-123"
-```
-
-### totalreclaw_recall
-
-Search for relevant memories.
-
-```typescript
-const memories = await skill.recall({
-  query: 'programming language preferences',
-  k: 5,  // optional: number of results (default: 8, max: 20)
-});
-
-// Each memory has:
-// - fact: The fact object with text, metadata, etc.
-// - score: Combined relevance score
-// - vectorScore: Vector similarity score
-// - textScore: BM25 text score
-// - decayAdjustedScore: Score adjusted for decay
-```
-
-### totalreclaw_forget
-
-Delete a specific memory.
-
-```typescript
-await skill.forget({
-  factId: 'fact-123',
-});
-```
-
-### totalreclaw_export
-
-Export all memories for portability.
-
-```typescript
-const jsonExport = await skill.export({
-  format: 'json',  // or 'markdown'
-});
-
-console.log(jsonExport);
-```
-
----
-
-## Lifecycle Hooks
-
-TotalReclaw integrates with OpenClaw through three lifecycle hooks:
-
-| Hook | Priority | Description |
-|------|----------|-------------|
-| `before_agent_start` | 10 | Retrieve relevant memories before agent processes message |
-| `agent_end` | 90 | Extract and store facts after agent completes turn |
-| `pre_compaction` | 5 | Full memory flush before context compaction |
-
-### before_agent_start
-
-Runs before the agent processes a user message. Retrieves relevant memories and formats them for context injection.
-
-```typescript
-const result = await skill.onBeforeAgentStart(context);
-
-// result.memories - Array of retrieved memories
-// result.contextString - Formatted string for injection
-// result.latencyMs - Search latency in milliseconds
-```
-
-### agent_end
-
-Runs after the agent completes its turn. Extracts facts from the conversation and stores them.
-
-```typescript
-const result = await skill.onAgentEnd(context);
-
-// result.factsExtracted - Number of facts extracted
-// result.factsStored - Number of facts stored
-// result.processingTimeMs - Processing time
-```
-
-### pre_compaction
-
-Runs before conversation history is compacted. Performs comprehensive extraction of the full history.
-
-```typescript
-const result = await skill.onPreCompaction(context);
-
-// result.factsExtracted - Number of facts extracted
-// result.factsStored - Number of facts stored
-// result.duplicatesSkipped - Duplicates skipped
-// result.processingTimeMs - Processing time
-```
+For the full, authoritative agent surface — install, QR pairing, the `tr` CLI, and the autonomous restart flow — see [`SKILL.md`](./SKILL.md) and the [setup guide](../../docs/guides/openclaw-setup.md).
 
 ---
 
@@ -324,15 +227,18 @@ Add to your OpenClaw configuration file:
 
 ## Memory Types
 
-TotalReclaw categorizes memories into five types:
+Memory Taxonomy v1 — every memory is one of six speech-act types, plus `source` (provenance), `scope` (life domain), and `volatility` axes:
 
 | Type | Description | Example |
 |------|-------------|---------|
-| `fact` | Objective information | "User works at Acme Corp" |
-| `preference` | User likes/dislikes | "User prefers dark mode" |
-| `decision` | Choices made | "User decided to use PostgreSQL" |
-| `episodic` | Events and experiences | "User attended PyCon 2024" |
-| `goal` | Objectives and targets | "User wants to learn Rust" |
+| `claim` | Stated-as-true information | "User works at Acme Corp" |
+| `preference` | Likes / dislikes | "User prefers dark mode" |
+| `directive` | Instruction or rule | "Always run tests before commit" |
+| `commitment` | Promise or obligation | "User will send the report Friday" |
+| `episode` | Event or experience | "User attended PyCon 2024" |
+| `summary` | Condensed context | "Project migrated onto Gnosis mainnet" |
+
+Legacy v0 entries (`fact` / `preference` / `decision` / `episodic` / `goal`) are read-compatible and normalized to v1 on recall; v1 is the only write path. See the [memory types guide](../../docs/guides/memory-types-guide.md).
 
 ## Importance Scoring
 
@@ -381,7 +287,7 @@ The server is cryptographically unable to read your memories, embeddings, or sea
 |   OpenClaw Agent  |     |  TotalReclaw Skill |     | TotalReclaw Server |
 +-------------------+     +-------------------+     +-------------------+
         |                         |                         |
-        | onBeforeAgentStart()    |                         |
+        | before_agent_start      |                         |
         |------------------------>| recall()                |
         |                         |------------------------>|
         |                         |<------------------------|
@@ -389,7 +295,7 @@ The server is cryptographically unable to read your memories, embeddings, or sea
         |                         |                         |
         | [Agent processes]       |                         |
         |                         |                         |
-        | onAgentEnd()            |                         |
+        | agent_end               |                         |
         |------------------------>| extract + store()       |
         |                         |------------------------>|
         |<------------------------|                         |
@@ -465,7 +371,7 @@ npm run lint
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT — see the repository LICENSE file.
 
 ## Links
 
