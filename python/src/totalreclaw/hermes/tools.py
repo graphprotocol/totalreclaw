@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -440,18 +443,204 @@ async def set_scope(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": str(e)})
 
 
+# Provenance keys the export path stamps on each fact (see
+# ``operations.export_facts``). Used to derive the compact summary so the
+# agent never has to read the full payload to report provenance.
+_EXPORT_PROVENANCE_KEYS = ("source", "import_source", "session_id", "agent_name")
+
+# When the serialized FACTS ARRAY exceeds this size, the dump is written to a
+# file instead of returned inline (the returned envelope adds a small bounded
+# summary on top). ~20 KiB keeps the result comfortably under agent
+# context/output budgets; a 472-fact vault is ~119 KB and previously truncated
+# silently (internal#468). Tuned for "small vaults still inline, large vaults
+# go to disk" — explicit so the threshold is reviewable.
+EXPORT_INLINE_MAX_BYTES = 20_000
+
+
+def _resolve_state_dir() -> Path:
+    """TotalReclaw state dir — honours ``TOTALRECLAW_STATE_DIR`` for tests.
+
+    Mirrors ``tuning_loop.resolve_state_dir`` so the export tool writes under
+    the same ``~/.totalreclaw`` home (and the same test override) as every
+    other disk-touching helper.
+    """
+    override = os.environ.get("TOTALRECLAW_STATE_DIR")
+    if override:
+        return Path(override)
+    return Path.home() / ".totalreclaw"
+
+
+def _exports_dir() -> Path:
+    """``<state_dir>/exports`` — destination for large-vault dumps."""
+    return _resolve_state_dir() / "exports"
+
+
+def _export_filename() -> str:
+    """Sortable, filesystem-safe UTC stamp — ``totalreclaw-export-<UTC>.json``."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"totalreclaw-export-{stamp}.json"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _summarize_export(facts: list[dict]) -> dict:
+    """Derive an accurate, compact summary from the real export data.
+
+    Counts are computed from the fact dicts — never from LLM prose — so the
+    agent can report provenance without reading the (potentially truncated)
+    full payload. This is the direct fix for the ``PROVENANCE: Not present``
+    misreport in internal#468: the data was always correct, the agent just
+    never got to see it once the inline dump was truncated.
+    """
+    by_type: dict[str, int] = {}
+    by_source: dict[str, int] = {}
+    by_import_source: dict[str, int] = {}
+    by_agent_name: dict[str, int] = {}
+    sessions: set[str] = set()
+    present = {key: 0 for key in _EXPORT_PROVENANCE_KEYS}
+
+    for fact in facts:
+        # ``type`` defaults to ``fact`` on the export path when a claim has no
+        # category (mirrors ``operations.export_facts``).
+        fact_type = fact.get("type") or "fact"
+        by_type[fact_type] = by_type.get(fact_type, 0) + 1
+
+        # One pass builds both the per-value breakdowns and the presence
+        # counts (a field is "present" when it's a non-empty string, exactly
+        # the condition ``operations.export_facts`` stamps it under).
+        for key in _EXPORT_PROVENANCE_KEYS:
+            val = fact.get(key)
+            if not (isinstance(val, str) and val):
+                continue
+            present[key] += 1
+            if key == "source":
+                by_source[val] = by_source.get(val, 0) + 1
+            elif key == "import_source":
+                by_import_source[val] = by_import_source.get(val, 0) + 1
+            elif key == "agent_name":
+                by_agent_name[val] = by_agent_name.get(val, 0) + 1
+            elif key == "session_id":
+                sessions.add(val)
+
+    with_source = present["source"]
+    with_import_source = present["import_source"]
+    with_session_id = present["session_id"]
+    with_agent_name = present["agent_name"]
+    provenance_present = bool(
+        with_source or with_import_source or with_session_id or with_agent_name
+    )
+    return {
+        "total_facts": len(facts),
+        "by_type": by_type,
+        "provenance_present": provenance_present,
+        "provenance": {
+            "with_source": with_source,
+            "with_import_source": with_import_source,
+            "with_session_id": with_session_id,
+            "with_agent_name": with_agent_name,
+            "distinct_sessions": len(sessions),
+            "by_source": by_source,
+            "by_import_source": by_import_source,
+            "by_agent_name": by_agent_name,
+        },
+    }
+
+
+def _write_export_file(path: Path, payload: dict) -> None:
+    """Atomically write the export payload as JSON.
+
+    Raises ``OSError`` on any disk failure so ``export_all`` can surface it
+    instead of silently degrading. ``tmp.replace`` is atomic on the same
+    filesystem, so a crash mid-write never leaves a partial dump.
+
+    The dump is the ENTIRE DECRYPTED VAULT in cleartext, so it follows the
+    repo's sensitive-file convention (credentials.json, pending queue,
+    session store): directory 0700, file created 0600 via ``os.open`` so
+    there is never a world-readable window — mirrors
+    ``pair/session_store.py``.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload))
+    tmp.replace(path)
+
+
 async def export_all(args: dict, state: "PluginState", **kwargs) -> str:
-    """Export all memories from TotalReclaw."""
+    """Export all memories from TotalReclaw.
+
+    Returns an accurate summary (counts + provenance) derived from the real
+    data. Small exports are inlined (backward-compatible ``count`` + ``facts``
+    shape); large exports are written to a file under the state dir and the
+    path is returned, because dumping a large vault inline truncates the agent
+    context and caused provenance to be misreported as absent (internal#468).
+    """
     client = state.get_client()
     if not client:
         return json.dumps({"error": "TotalReclaw not configured. Call totalreclaw_pair to set up — browser-side crypto keeps the phrase out of this chat."})
 
     try:
         facts = await client.export_all()
-        return json.dumps({"count": len(facts), "facts": facts})
     except Exception as e:
         logger.error("totalreclaw_export failed: %s", e)
         return json.dumps({"error": str(e)})
+
+    summary = _summarize_export(facts)
+    facts_json = json.dumps(facts)
+
+    if len(facts_json.encode("utf-8")) <= EXPORT_INLINE_MAX_BYTES:
+        # Small enough to return inline — preserve the legacy count + facts
+        # shape and add the summary so provenance is always visible.
+        return json.dumps({
+            "count": len(facts),
+            "facts": facts,
+            "summary": summary,
+            "inline": True,
+        })
+
+    # Large vault: write the full dump to disk and return path + summary.
+    # Never inline the oversized payload — that is the truncation bug.
+    try:
+        path = _exports_dir() / _export_filename()
+        _write_export_file(
+            path,
+            {
+                "count": len(facts),
+                "facts": facts,
+                "summary": summary,
+                "exported_at": _utc_now_iso(),
+            },
+        )
+    except OSError as e:
+        logger.error("totalreclaw_export file write failed: %s", e)
+        # Do NOT fall back to inlining the full payload — that reintroduces
+        # truncation. Surface the error alongside the accurate summary.
+        return json.dumps({
+            "count": len(facts),
+            "summary": summary,
+            "inline": False,
+            "error": (
+                "Export is too large to return inline and could not be saved "
+                f"to disk ({e}). Accurate summary shown above; check exports "
+                "dir permissions or free space and retry."
+            ),
+        })
+
+    return json.dumps({
+        "count": len(facts),
+        "summary": summary,
+        "inline": False,
+        "export_path": str(path),
+        "format": "json",
+        "note": (
+            "Full export saved to export_path — do NOT paste it into chat. "
+            "Provenance IS present (see summary); tell the user the path and "
+            "offer to summarize or filter by type/source/agent."
+        ),
+    })
 
 
 async def status(args: dict, state: "PluginState", **kwargs) -> str:

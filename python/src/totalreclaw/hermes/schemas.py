@@ -142,7 +142,16 @@ FORGET = {
 
 EXPORT = {
     "name": "totalreclaw_export",
-    "description": "Export all memories from TotalReclaw as decrypted plaintext.",
+    "description": (
+        "Export all TotalReclaw memories as decrypted plaintext. Always "
+        "returns an accurate summary: total fact count, per-type breakdown, "
+        "and provenance (import_source / session_id / agent_name presence "
+        "counts plus per-client and per-agent breakdowns derived from the "
+        "real data). For large vaults the full dump is written to a file and "
+        "the path is returned instead of inlining it, to avoid chat "
+        "truncation; provenance is always summarized so it is never reported "
+        "as absent. Small exports inline the facts."
+    ),
     "parameters": {
         "type": "object",
         "properties": {},
