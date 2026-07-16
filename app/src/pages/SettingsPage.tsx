@@ -5,7 +5,7 @@ import { useCrypto } from "../contexts/CryptoContext";
 import { useVault } from "../hooks/useVault";
 import { getAccount } from "../lib/api";
 import { AppHeader } from "../components/AppHeader";
-import { relativeDate } from "../lib/format";
+import { toExportJson, toExportMarkdown, exportFilename } from "../lib/export";
 import type { VaultItem } from "../lib/types";
 
 function download(filename: string, content: string, mime: string) {
@@ -18,22 +18,20 @@ function download(filename: string, content: string, mime: string) {
   URL.revokeObjectURL(url);
 }
 
-function toJson(items: VaultItem[]): string {
-  return JSON.stringify(
-    items.map((i) => i.claim),
-    null,
-    2,
-  );
-}
-
-function toMarkdown(items: VaultItem[]): string {
-  const lines = ["# TotalReclaw vault export", ""];
-  for (const i of items) {
-    lines.push(`- **[${i.claim.type}]** ${i.claim.text}`);
-    const meta = [i.claim.source, i.claim.scope, relativeDate(i.createdAt)].filter(Boolean);
-    lines.push(`  - _${meta.join(" · ")}_`);
+/** Sensitive-action gate (#323): the file is unencrypted plaintext. */
+function confirmThenExport(items: VaultItem[], format: "json" | "md") {
+  if (
+    !confirm(
+      `Export ${items.length} memories as ${format === "json" ? ".json" : ".md"}? The file is UNENCRYPTED — anyone who opens it can read your memories. Keep it somewhere safe.`,
+    )
+  ) {
+    return;
   }
-  return lines.join("\n");
+  if (format === "json") {
+    download(exportFilename("json"), toExportJson(items), "application/json");
+  } else {
+    download(exportFilename("md"), toExportMarkdown(items), "text/markdown");
+  }
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -113,14 +111,14 @@ export function SettingsPage() {
           </p>
           <div className="mt-3 flex gap-2">
             <button
-              onClick={() => download("totalreclaw-vault.json", toJson(items), "application/json")}
+              onClick={() => confirmThenExport(items, "json")}
               disabled={items.length === 0}
               className="rounded-control bg-clay px-4 py-2 text-sm font-semibold text-warm-white hover:bg-clay-deep disabled:opacity-40"
             >
               Export .json
             </button>
             <button
-              onClick={() => download("totalreclaw-vault.md", toMarkdown(items), "text/markdown")}
+              onClick={() => confirmThenExport(items, "md")}
               disabled={items.length === 0}
               className="rounded-control bg-surface px-4 py-2 text-sm font-semibold text-ink ring-1 ring-hairline hover:ring-clay disabled:opacity-40"
             >
