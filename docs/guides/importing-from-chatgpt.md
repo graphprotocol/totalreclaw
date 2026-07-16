@@ -117,7 +117,7 @@ This parses your data and shows an estimate: `total_chunks`, `est_facts`, `est_m
 ## Tier gating
 
 - **Free tier**: one import lifetime (across all sources). Subsequent attempts are blocked with an upgrade prompt.
-- **Pro tier** ($3.99/mo): unlimited imports. The pre-flight projects the LLM cost vs your subscription; soft warning if the projection exceeds $1.00, hard block above $5.00 (you can override with a flag).
+- **Pro tier**: up to 1,500 memories/month (see [totalreclaw.xyz/pricing](https://totalreclaw.xyz/pricing)). The pre-flight projects the LLM cost vs your subscription; soft warning if the projection exceeds $1.00, hard block above $5.00 (you can override with a flag).
 
 ---
 

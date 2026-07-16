@@ -1,6 +1,6 @@
 # TotalReclaw — Beta Tester Deep-Dive
 
-**Version:** 3.3.1 (RC line; promotes to 3.3.1 stable)
+**Version:** 3.3.13 (current stable plugin line)
 **Date:** April 2026
 **Audience:** Power users and beta testers who want to tune extraction, understand the encryption pipeline, run E2E validation, or self-host.
 **Time to read:** ~15 minutes.
@@ -70,7 +70,7 @@ When a fact is stored:
 1. Plain text + metadata are encrypted with XChaCha20-Poly1305 (24-byte nonce).
 2. A SHA-256 content fingerprint over the canonical text dedupes duplicates client-side.
 3. Blind search trapdoors are generated for keyword tokens (HMAC-SHA256 with a per-user index secret).
-4. A 384-dim embedding (`Xenova/all-MiniLM-L6-v2`, INT8 quantized) is computed locally for semantic search.
+4. A 640-dim embedding (`onnx-community/harrier-oss-v1-270m-ONNX`, q4, pre-pooled) is computed locally for semantic search.
 5. The encrypted blob, blind indices, content fingerprint, and (for v1) the protobuf-packed taxonomy fields are wrapped in a v=4 outer envelope and submitted via ERC-4337 UserOp to the EventfulDataEdge contract.
 6. The Pimlico paymaster sponsors gas. All writes (free and Pro) go to Gnosis mainnet.
 7. The Graph indexes the on-chain event so it's queryable seconds later.
@@ -79,7 +79,7 @@ When a fact is stored:
 
 When you query:
 
-1. Your query is embedded locally (same MiniLM model).
+1. Your query is embedded locally (same Harrier model).
 2. Blind trapdoors for query tokens are generated.
 3. The relay returns up to several thousand encrypted candidates matching the trapdoors.
 4. The plugin / MCP server / Hermes client decrypts every candidate locally.
@@ -243,7 +243,7 @@ These vars were removed in the v1 env cleanup and are silently ignored:
 
 `TOTALRECLAW_CHAIN_ID`, `TOTALRECLAW_EMBEDDING_MODEL`, `TOTALRECLAW_STORE_DEDUP`, `TOTALRECLAW_LLM_MODEL`, `TOTALRECLAW_SESSION_ID`, `TOTALRECLAW_TAXONOMY_VERSION`, `TOTALRECLAW_CLAIM_FORMAT`, `TOTALRECLAW_DIGEST_MODE`.
 
-All tiers run on Gnosis mainnet; chain selection is no longer user-configurable. Embedding model is fixed (`Xenova/all-MiniLM-L6-v2`). Extraction model is auto-derived from the provider key. v1 taxonomy is always on.
+All tiers run on Gnosis mainnet; chain selection is no longer user-configurable. Embedding model is fixed (`onnx-community/harrier-oss-v1-270m-ONNX`, 640-dim). Extraction model is auto-derived from the provider key. v1 taxonomy is always on.
 
 ---
 
@@ -412,4 +412,4 @@ For implementation depth:
 
 ---
 
-*This guide tracks plugin 3.3.1 / Hermes 2.3.1 / mcp-server 3.2.x / nanoclaw 3.1.x. Stable line: plugin 3.2.3, mcp-server 3.2.0, nanoclaw 3.0.0, Hermes 2.3.0.*
+*This guide tracks plugin 3.3.13 / Hermes 2.4.6 / mcp-server 3.4.0 / nanoclaw 3.0.0 (current stable line).*

@@ -1,6 +1,6 @@
 # Client Setup — v1
 
-**Applies to:** TotalReclaw v1, all clients. Current stable versions: core 2.2.0, plugin 3.2.3, mcp-server 3.2.0, nanoclaw 3.0.0, python 2.3.0.
+**Applies to:** TotalReclaw v1, all clients. Current stable versions: core 2.5.6 (npm; 2.5.5 on PyPI/crates.io), plugin 3.3.13, mcp-server 3.4.0, nanoclaw 3.0.0, python 2.4.6.
 
 One setup page per client. v1 is the default on every client — no env toggles, no feature flags to flip. Pick your platform.
 
@@ -57,7 +57,7 @@ That's it. v1 taxonomy, source-weighted reranking, and the new pin / retype / se
 ## MCP server
 
 **Package:** `@totalreclaw/mcp-server@^3.0.0` (npm).
-**Features:** 19 MCP tools (including 4 new v1 tools: pin, unpin, retype, set_scope). No lifecycle hooks — the host agent invokes tools from context.
+**Features:** 18 MCP tools (including 4 v1 tools: pin, unpin, retype, set_scope). No lifecycle hooks — the host agent invokes tools from context.
 
 ### Install + setup
 
@@ -95,7 +95,7 @@ The IronClaw agent config references the MCP server via the same JSON shape. See
 
 ### Verify
 
-Ask the agent: *"What TotalReclaw tools do you have?"* — you should see 19 tools including `totalreclaw_pin`, `totalreclaw_retype`, `totalreclaw_set_scope`.
+Ask the agent: *"What TotalReclaw tools do you have?"* — you should see 18 tools including `totalreclaw_pin`, `totalreclaw_retype`, `totalreclaw_set_scope`.
 
 **Full guide:** [claude-code-setup.md](./claude-code-setup.md)
 
@@ -122,7 +122,7 @@ If you need to generate a recovery phrase first, run `npx @totalreclaw/mcp-serve
 
 ## Python client
 
-**Package:** `totalreclaw>=2.3.0` (PyPI).
+**Package:** `totalreclaw>=2.4.6` (PyPI).
 **Features:** Hermes Agent plugin with pre_llm_call auto-recall + post_llm_call auto-extract + on_session_finalize debrief. Full tool parity with the OpenClaw plugin: remember / recall / forget / export / status / account-setup (`totalreclaw_pair`) / pin / unpin / retype / set_scope / import_from / upgrade.
 
 ### Install
@@ -180,14 +180,14 @@ The plugin registers automatically with Hermes Agent v0.5.0+.
 
 ## ZeroClaw (Rust crate)
 
-**Crate:** `totalreclaw-memory = "2.0.0"` (crates.io). The `totalreclaw-core` Rust crate (canonical claim proto + crypto + pin state machine) is at 2.2.0.
+**Crate:** `totalreclaw-memory = "2.0.1"` (crates.io). The `totalreclaw-core` Rust crate (canonical claim proto + crypto + pin state machine) is at 2.5.5 on crates.io.
 **Features:** native Rust Memory trait with v1 write path (`store_v1`), cosine + fingerprint dedup, v4 outer protobuf. Designed for ZeroClaw (NEAR AI agent framework) but usable in any Rust app.
 
 ### Add dependency
 
 ```toml
 [dependencies]
-totalreclaw-memory = "2.0.0"
+totalreclaw-memory = "2.0.1"
 ```
 
 ### Use

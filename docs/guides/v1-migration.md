@@ -67,13 +67,14 @@ All clients do the v0 → v1 mapping automatically when reading existing memorie
 
 ### 3. New MCP tools
 
-Three new tools (on `@totalreclaw/mcp-server@3.0.0` + inherited by NanoClaw + IronClaw):
+Four new tools (on `@totalreclaw/mcp-server@3.0.0` + inherited by NanoClaw + IronClaw):
 
 - `totalreclaw_pin` — lock a memory against auto-supersession.
+- `totalreclaw_unpin` — release a pin so a memory can be superseded again.
 - `totalreclaw_retype` — change a memory's type (e.g. "that is actually a directive, not a preference").
 - `totalreclaw_set_scope` — assign a memory to a scope (work, personal, health, ...).
 
-These are invoked via natural language: "pin that", "that was actually a rule, not a preference", "file that under work". The host LLM picks the right tool.
+These are invoked via natural language: "pin that", "unpin that", "that was actually a rule, not a preference", "file that under work". The host LLM picks the right tool.
 
 See the [memory types guide](./memory-types-guide.md) for examples.
 

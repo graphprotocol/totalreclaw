@@ -2,6 +2,8 @@
 
 Set up TotalReclaw as the encrypted memory layer for your IronClaw agent. Your memories are encrypted on-device before they leave -- IronClaw's TEE protects the runtime, TotalReclaw protects the data at rest.
 
+> **Status (paused 2026-04-18): first-class IronClaw integration is on hold.** There is no `ironclaw mcp add` / `nearai mcp add` CLI and no IronClaw lifecycle hooks. The path below uses the **generic TotalReclaw MCP server** (`@totalreclaw/mcp-server`), which works with any MCP-compatible host, IronClaw included. Because the MCP server has no IronClaw hooks, auto-extraction has to be driven by a cron-style routine (see §5); recall happens when the agent decides to call a tool.
+
 > **Note:** TotalReclaw requires a local IronClaw installation (not NEAR AI hosted). The hosted environment does not include Node.js, which is needed to run the MCP server. Installing TotalReclaw as a "Skill" from ClawHub only injects instructions -- it does not register the tools.
 
 ## Prerequisites
@@ -33,18 +35,22 @@ Verify the connection:
 ironclaw mcp test totalreclaw
 ```
 
-You should see 14 tools including `totalreclaw_setup`.
+You should see 18 tools. Account setup uses `totalreclaw_pair`, which is browser-mediated (see §3).
 
-## 3. Start chatting
+## 3. Pair your account (browser-mediated — recovery phrase never enters chat)
 
-Restart IronClaw and start a conversation. The first time you mention anything worth remembering (e.g. "remember that my name is Pedro"), the agent will:
+Restart IronClaw and start a conversation. The first time you mention anything worth remembering (e.g. "remember that my name is Pedro"), the agent will detect that TotalReclaw is not configured yet and offer to set it up with the `totalreclaw_pair` tool.
 
-1. Detect that TotalReclaw is not configured yet
-2. Ask: "Do you have an existing recovery phrase, or should I generate a new one?"
-3. Generate or import your phrase via the `totalreclaw_setup` tool
-4. Register with the relay, download the embedding model, and activate -- all automatically
+`totalreclaw_pair` opens a short relay session and returns a **URL + 6-digit PIN**. The 12-word recovery phrase is generated (or imported) **in your browser** — never typed into chat:
 
-Your recovery phrase and credentials are saved to `~/.totalreclaw/credentials.json` (owner-only permissions). On subsequent restarts, the MCP server loads them automatically.
+1. The agent calls `totalreclaw_pair` (`mode: "generate"` for a new phrase, or `mode: "import"` to reuse one you already have) and hands you the URL + PIN.
+2. Open the URL on your phone or another browser and enter the PIN.
+3. The browser generates a new 12-word BIP-39 phrase (and asks you to write it down + retype 3 words) — or, in `import` mode, accepts a phrase you paste in the browser.
+4. The browser encrypts the phrase (x25519 ECDH + AES-256-GCM) and uploads ciphertext to the MCP server. The phrase never touches the LLM context, the chat transcript, stdout, or logs.
+5. The MCP server decrypts the phrase in-memory, derives your keys, registers with the relay, and writes `~/.totalreclaw/credentials.json` (mode 0600, owner-only).
+6. **Restart IronClaw** so the MCP server re-reads `credentials.json` and switches out of unconfigured mode. The pairing session expires in ~5 minutes.
+
+On subsequent restarts the MCP server loads `~/.totalreclaw/credentials.json` automatically — no pairing needed.
 
 > **Save your recovery phrase somewhere safe.** It is the only key to your memories. There is no password reset, no recovery, no support ticket that can help. Write it down and store it securely.
 
@@ -103,21 +109,28 @@ If your IronClaw version supports event-triggered routines (e.g., `on_thread_idl
 
 ## Available tools
 
+The MCP server exposes 18 tools. Descriptions are summarized from the tool definitions in `mcp/src/tools/`.
+
 | Tool | Description |
 |------|-------------|
-| `totalreclaw_setup` | Set up TotalReclaw (generate or import recovery phrase) |
-| `totalreclaw_remember` | Store facts in encrypted memory |
-| `totalreclaw_recall` | Search memories by natural language query |
-| `totalreclaw_forget` | Delete a specific memory by ID |
-| `totalreclaw_export` | Export all memories as Markdown or JSON |
-| `totalreclaw_status` | Check billing status and usage |
-| `totalreclaw_import` | Re-import previously exported memories |
-| `totalreclaw_import_from` | Import from Mem0, ChatGPT, Claude, or MCP Memory Server |
-| `totalreclaw_consolidate` | Merge duplicate memories (self-hosted only) |
-| `totalreclaw_upgrade` | Get a Stripe checkout link for Pro |
-| `totalreclaw_debrief` | Summarize and store key takeaways from a session |
-| `totalreclaw_support` | Get help and troubleshooting information |
-| `totalreclaw_account` | View account details and wallet address |
+| `totalreclaw_pair` | Set up the account: browser-mediated recovery-phrase generation or import. Returns a URL + PIN; the phrase is created in the browser and never enters LLM context. |
+| `totalreclaw_remember` | Store an atomic fact proactively (with v1 type, scope, importance). Dedup is automatic. |
+| `totalreclaw_recall` | Search the encrypted vault by natural-language query; top 8 reranked by provenance + semantic + recency. |
+| `totalreclaw_forget` | Permanently remove a memory by `memory_id`, or by query (tombstones up to 50 matches). |
+| `totalreclaw_export` | Export the decrypted vault as Markdown or JSON (one-click portable backup). |
+| `totalreclaw_import` | Restore memories from a prior TotalReclaw export backup (JSON/Markdown). |
+| `totalreclaw_import_from` | Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, MemoClaw, or JSON/CSV. Dry-run first. |
+| `totalreclaw_import_batch` | Internal chunked-polling helper for large imports (50+ conversations); not meant to be called by name. |
+| `totalreclaw_consolidate` | Cluster near-duplicates and merge each to the best match. **Self-hosted only** (no batch delete on the managed service). |
+| `totalreclaw_status` | Check tier, usage, and quota against the relay billing endpoint. |
+| `totalreclaw_upgrade` | Get a one-time Stripe checkout URL for Pro. |
+| `totalreclaw_debrief` | Store a structured Crystal session summary at the end of a substantive conversation. |
+| `totalreclaw_support` | Get support contact, docs links, and a troubleshooting bundle. Works even when unconfigured. |
+| `totalreclaw_account` | Account overview: wallet, tier, usage, feature flags, and a safe (first + last words only) recovery hint. |
+| `totalreclaw_pin` | Lock a memory against auto-supersession. |
+| `totalreclaw_unpin` | Remove a pin so a memory can be superseded again. |
+| `totalreclaw_retype` | Change a memory's v1 type (e.g. preference → directive). |
+| `totalreclaw_set_scope` | Assign a memory to a scope (work, personal, health, ...). |
 
 ## Pricing
 
@@ -165,7 +178,7 @@ which totalreclaw-mcp
 
 ### "Registration failed"
 
-Check your internet connection. The setup tool needs to reach `api.totalreclaw.xyz` to register.
+Check your internet connection. The pairing flow needs to reach `api.totalreclaw.xyz` to register.
 
 ### "No memories found" on first recall
 
