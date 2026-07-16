@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **[internal#449 / #457] executeBatch revived — byte-capped adaptive batch sizing.** `agent_end` auto-extraction now submits all pending facts through one `submitFactBatchOnChain` call instead of one sponsored UserOp per fact: payloads are grouped by BOTH the installed core's live count cap (`getMaxBatchSize`, conservative 15 fallback) and a 32KB byte cap over real encoded lengths, one `executeBatch` UserOp per group, with halve-on-simfail (`-32500`, AA25 token-excluded) down to a single-fact floor. Cuts UserOp cost up to ~30× on extraction bursts. New `subgraph/batch-sizing.ts` (est≥real estimator calibrated against the plugin's real `encodeFactProtobuf` + dual-cap grouping + adaptive store), 65 unit + 10 integration checks, and a staging E2E (35 facts → groups [14,14,7] → 3 UserOps, 35/35 indexed).
+
 ### Fixed
 
 - **[#391] AA24 guard — initCode re-asserted after sponsorship.** `pm_sponsorUserOperation` responses are merged into the UserOp with a bare `Object.assign`; a relay proxy or paymaster change echoing `factory: null` would silently strip the initCode from a counterfactual (first-write-after-pair) UserOp and reproduce the AA24 signature-error ship-stopper. Both submit paths (single + batch) now re-apply the deployment decision `getInitCode` made for the attempt after sponsorship: undeployed senders get their computed `factory`/`factoryData` restored; deployed (or AA10 force-deployed) senders get any sponsor-added factory fields removed. Hand-integration of PR #391 onto the post-AA10 (#395/#407) write path, with its counterfactual regression test ported (17 checks: initCode presence, `createAccount(owner, salt=0)` encoding, sign-after-sponsor hash coverage, clobber restore).

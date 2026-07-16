@@ -1854,38 +1854,45 @@ async function storeExtractedFacts(
     }
   }
 
-  // Submit subgraph payloads one fact at a time (sequential single-call UserOps).
-  // Batch executeBatch UserOps have persistent gas estimation issues on Base Sepolia
-  // that cause on-chain reverts. Single-fact UserOps use the simpler submitFactOnChain
-  // path which works reliably (same path the `tr remember` CLI uses). Each submission
-  // polls for receipt (120s) before proceeding, so nonce is consumed before the next.
+  // Submit subgraph payloads through the byte-capped adaptive batch path
+  // (internal#449, revives executeBatch per #457): ONE call groups the
+  // payloads by the installed core's count cap AND the 32KB byte cap,
+  // submits one executeBatch UserOp per group through the AA10/AA25-hardened
+  // locked path, and halves any group that sim-reverts. The previous
+  // one-fact-per-UserOp loop was a Base Sepolia gas-estimation workaround —
+  // moot since single-chain Gnosis (ops-1) — and cost one sponsored UserOp
+  // per fact. `stored` counts submitFactBatchOnChain's ACTUAL per-group
+  // stored total (never the input length), so a partially failed batch
+  // reports only what landed on-chain.
   let batchError: string | undefined;
   if (pendingPayloads.length > 0 && isSubgraphMode()) {
     const batchConfig = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: subgraphOwner ?? undefined };
-    for (let i = 0; i < pendingPayloads.length; i++) {
-      const slice = [pendingPayloads[i]]; // Single fact per UserOp
-      try {
-        const submitResult = await submitFactBatchOnChain(slice, batchConfig);
-        if (submitResult.success) {
-          stored += slice.length;
-          logger.info(`Fact ${i + 1}/${pendingPayloads.length}: submitted on-chain (tx=${submitResult.txHash.slice(0, 10)}…)`);
-        } else {
-          batchError = `On-chain batch submission failed (tx=${submitResult.txHash.slice(0, 10)}…)`;
-          logger.warn(batchError);
-          break; // Stop submitting remaining batches
-        }
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('403') || errMsg.toLowerCase().includes('quota')) {
+    try {
+      const submitResult = await submitFactBatchOnChain(pendingPayloads, batchConfig);
+      stored += submitResult.batchSize;
+      for (const g of submitResult.groupResults) {
+        logger.info(`Batch group of ${g.batchSize}: submitted on-chain (tx=${g.txHash.slice(0, 10)}…)`);
+      }
+      if (!submitResult.success) {
+        batchError = `On-chain batch submission partially failed (${submitResult.batchSize}/${pendingPayloads.length} stored): ${submitResult.errors.join('; ')}`;
+        logger.warn(batchError);
+        // A mid-batch 403/quota (earlier groups landed, a later one hit the
+        // cap) surfaces via `errors`, not a throw — invalidate the billing
+        // cache here too so the next session re-fetches and warns, matching
+        // the old per-fact loop's behavior (#531 review follow-up).
+        if (submitResult.errors.some((e) => e.includes('403') || e.toLowerCase().includes('quota'))) {
           deleteFileIfExists(BILLING_CACHE_PATH);
-          batchError = `Quota exceeded — billing cache invalidated. ${errMsg}`;
-          logger.warn(batchError);
-          break;
-        } else {
-          batchError = `Batch submission failed: ${errMsg}`;
-          logger.warn(batchError);
-          break;
         }
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('403') || errMsg.toLowerCase().includes('quota')) {
+        deleteFileIfExists(BILLING_CACHE_PATH);
+        batchError = `Quota exceeded — billing cache invalidated. ${errMsg}`;
+        logger.warn(batchError);
+      } else {
+        batchError = `Batch submission failed: ${errMsg}`;
+        logger.warn(batchError);
       }
     }
   }
