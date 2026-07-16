@@ -45,11 +45,11 @@ One command per client. v1 is the default — no env toggles, no feature flags.
 | Client | Install |
 |---|---|
 | **OpenClaw** | `openclaw plugins install @totalreclaw/totalreclaw` |
-| **Claude Desktop / Cursor / Windsurf** | `npx @totalreclaw/mcp-server setup` |
+| **Claude Desktop / Cursor / Windsurf** | `npx @totalreclaw/mcp-server setup` — run it yourself in a terminal, never via your AI agent (the wizard prints your recovery phrase, which must not enter the agent's context) |
 | **NanoClaw** | add `TOTALRECLAW_RECOVERY_PHRASE` to deployment env |
 | **Python / Hermes** | `pip install totalreclaw` |
 | **Rust / ZeroClaw** | `cargo add totalreclaw-memory` |
-| **IronClaw** | via MCP server — see [IronClaw setup](docs/guides/ironclaw-setup.md) |
+| **IronClaw** | via the generic MCP server (first-class integration paused) — see [IronClaw setup](docs/guides/ironclaw-setup.md) |
 
 Then set one env var on your host:
 
@@ -78,7 +78,7 @@ v1 shipped across every client in April 2026. Highlights:
 - **Source-weighted reranking** — user-authored claims consistently rank above assistant-regurgitated noise. Structurally fixes the [97.8% junk problem](https://github.com/mem0ai/mem0/issues/4573) documented in other memory systems.
 - **3 new MCP tools** — `totalreclaw_pin`, `totalreclaw_retype`, `totalreclaw_set_scope`. Invoked by natural language ("pin that", "file that under work").
 - **Protobuf v4 wire format** — outer wrapper bump; subgraph schema unchanged.
-- **Env var cleanup** — 6 experimental env vars removed. 5 user-facing env vars remain. See the [env vars reference](docs/guides/env-vars-reference.md).
+- **Env var cleanup** — several experimental env vars removed; a small set of user-facing env vars remain. See the [env vars reference](docs/guides/env-vars-reference.md).
 
 > Benchmark headline: *(placeholder — filled in once phase 2 500-conv run lands 2026-04-18)* — v1's source-weighted reranker preserves recall quality while breaking the importance-clustering pathology.
 
@@ -93,6 +93,8 @@ Already using another AI assistant with memory? Tell your agent:
 - *"Import my Gemini history into TotalReclaw"*
 
 Supported sources: **ChatGPT** (memories or conversations.json), **Claude** (memory export), **Gemini** (Google Takeout), **Mem0** (API or file), **MCP Memory Server** (JSONL). All imports are encrypted client-side before storage. See the [import guide](docs/guides/importing-memories.md).
+
+On the managed service, the free tier includes one lifetime import; re-importing from additional sources is a Pro feature. See [pricing](https://totalreclaw.xyz/pricing).
 
 ## Packages
 
@@ -145,7 +147,7 @@ totalreclaw/
 - [Client setup — v1](docs/guides/client-setup-v1.md) — one install command per client.
 - [Memory types guide](docs/guides/memory-types-guide.md) — what gets stored and how to override it via natural language.
 - [v1 migration guide](docs/guides/v1-migration.md) — if you're upgrading from v0.
-- [Environment variables](docs/guides/env-vars-reference.md) — the 5 env vars that matter.
+- [Environment variables](docs/guides/env-vars-reference.md) — the user-facing env vars that matter.
 - [Feature comparison](docs/guides/feature-comparison.md) — which features work on which client.
 
 ### Per-client setup
@@ -154,7 +156,7 @@ totalreclaw/
 - [Claude Desktop / Cursor / Windsurf](docs/guides/claude-code-setup.md)
 - [NanoClaw](docs/guides/nanoclaw-getting-started.md)
 - [Hermes (Python)](docs/guides/hermes-setup.md)
-- [IronClaw (NEAR AI)](docs/guides/ironclaw-setup.md)
+- [IronClaw (NEAR AI)](docs/guides/ironclaw-setup.md) (first-class integration paused — works via the generic MCP server)
 - [ZeroClaw (Rust)](docs/guides/zeroclaw-setup.md)
 
 ### Specs + architecture

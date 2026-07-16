@@ -1,7 +1,7 @@
 # TotalReclaw on Hermes — agent setup reference
 
 > **Audience: the AI agent installing TotalReclaw inside a Hermes runtime.**
-> Not for human readers. (A separate user guide will be linked here when it exists.)
+> This is the operational / agent reference — the procedure the agent follows end-to-end. For a human-friendly quick start, see [client-setup-v1.md](./client-setup-v1.md) §Python client.
 
 This document describes how the agent installs and sets up TotalReclaw on Hermes. The agent uses the tool surface listed here. The user only types one of the install prompts below in their chat client; everything else happens through tools.
 

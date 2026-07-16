@@ -68,7 +68,7 @@ Then follow the matching guide above.
 
 ## Current channels
 
-The install commands in each guide are version-agnostic and never go stale. Stable always lands the newest final release; RC always lands the newest pre-release.
+The install commands in each guide are version-agnostic and never go stale. Stable always lands the newest final release; RC always lands the newest pre-release. Note that `rc` can lag `latest`: the `rc` dist-tag points at the newest release-candidate line, which is not necessarily newer than the newest final on `latest` — so prefer `@latest` unless you are deliberately testing a specific RC.
 
 | Runtime | Package | Stable | RC (newest pre-release) |
 |---|---|---|---|

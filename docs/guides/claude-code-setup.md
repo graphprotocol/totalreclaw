@@ -8,7 +8,7 @@ If you already have Claude Code (or Claude Desktop / Cursor / Windsurf) running,
 
 > **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/claude-code-setup.md>**
 
-Your agent will fetch this page, run the MCP install command, and walk you through getting a recovery phrase into the config without ever printing it in chat. The phrase comes from your browser (via the OpenClaw or Hermes account-setup flow) or from a phrase you already have on file.
+Your agent will fetch this page, run the MCP install command, and walk you through getting a recovery phrase into the config without ever printing it in chat. The phrase comes from a browser-side account-setup flow (the MCP server's own `totalreclaw_pair`, or the OpenClaw / Hermes equivalent), or from a phrase you already have on file.
 
 ---
 
@@ -37,7 +37,7 @@ claude mcp add -s user totalreclaw -- npx -y @totalreclaw/mcp-server
 
 This registers `totalreclaw` at user scope (available across all Claude Code sessions). Do NOT pass `-e TOTALRECLAW_RECOVERY_PHRASE=...` here — the user will add the phrase themselves in Step 3 so it never enters your context.
 
-To pin a release candidate: `claude mcp add -s user totalreclaw -- npx -y @totalreclaw/mcp-server@rc` (latest RC) or `@totalreclaw/mcp-server@latest` (current stable).
+To pin a release candidate: `claude mcp add -s user totalreclaw -- npx -y @totalreclaw/mcp-server@rc` (newest RC line) or `@totalreclaw/mcp-server@latest` (current stable). Prefer `@latest` — the `rc` dist-tag tracks the newest release-candidate and can lag `latest`, so `@rc` is not necessarily newer than stable; use it only to test a specific RC.
 
 If the CLI exits cleanly, continue to Step 3. If it fails with `command not found` / ENOENT, fall back to Step 2B.
 
@@ -89,7 +89,7 @@ Once the user replies `done`, ask the agent's own internal toolset (yourself): *
 
 ### Phrase safety (HARD — never break)
 
-NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `npx @totalreclaw/mcp-server setup`, `npx @totalreclaw/totalreclaw generate-mnemonic`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The MCP server has NO browser account-setup flow (it's stateless JSON-RPC); the user MUST source their phrase from another TotalReclaw client's account-setup flow (OpenClaw / Hermes browser flow), reuse `~/.totalreclaw/credentials.json` from a prior install, or paste a phrase they generated offline directly into the config file. If the user pastes a phrase in chat anyway: tell them it is compromised and they need to generate a fresh wallet via the OpenClaw or Hermes browser account-setup flow.
+NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `npx @totalreclaw/mcp-server setup`, `npx @totalreclaw/totalreclaw generate-mnemonic`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The MCP server is stateless JSON-RPC (no HTTP server of its own), but it DOES expose a browser-mediated account-setup flow via the `totalreclaw_pair` tool — the phrase is generated/imported in the browser, uploaded as ciphertext, decrypted in-memory, and written to `~/.totalreclaw/credentials.json`, so it never enters your context. Prefer `totalreclaw_pair`; otherwise the user can reuse `~/.totalreclaw/credentials.json` from a prior install, run the OpenClaw / Hermes browser account-setup flow, or paste a phrase they generated offline directly into the config file. If the user pastes a phrase in chat anyway: tell them it is compromised and they need to generate a fresh wallet via a browser account-setup flow (`totalreclaw_pair`, or OpenClaw / Hermes).
 
 ---
 
@@ -149,7 +149,7 @@ claude mcp add -s user totalreclaw -- npx -y @totalreclaw/mcp-server
 
 Restart the host. Verify by asking *"Do you have access to TotalReclaw memory tools?"*.
 
-> **Pin a specific RC** with `args: ["-y", "@totalreclaw/mcp-server@rc"]` (latest RC) or `@totalreclaw/mcp-server@3.3.1-rc.22` (pinned). Stable is `3.4.0` on the `latest` dist-tag. Check what each tag resolves to: `npm view @totalreclaw/mcp-server dist-tags`.
+> **Pin a specific version** with `args: ["-y", "@totalreclaw/mcp-server@latest"]` (stable — recommended) or `@totalreclaw/mcp-server@<specific-rc>` (e.g. `3.4.1-rc.3`) to test a particular RC. Prefer `@latest` in production: the `rc` dist-tag (`@totalreclaw/mcp-server@rc`) tracks the newest release-candidate line and can lag `latest`, so `@rc` is not necessarily newer than stable. Check what each tag resolves to: `npm view @totalreclaw/mcp-server dist-tags`.
 
 ---
 
@@ -161,7 +161,7 @@ Restart the host. Verify by asking *"Do you have access to TotalReclaw memory to
 | Auto-extract every N turns | yes (lifecycle hook) | no — host invokes `totalreclaw_remember` when its prompt tells it to |
 | Pre-compaction flush | yes | no |
 | Session debrief | yes | no (use `totalreclaw_debrief` explicitly) |
-| Browser account-setup flow | yes (`totalreclaw_pair` account-setup tool) | **no** — MCP is stateless JSON-RPC; phrase must come from another client or offline tool |
+| Browser account-setup flow | yes (`totalreclaw_pair` account-setup tool) | yes (`totalreclaw_pair` browser pairing — phrase generated/imported in the browser, never in chat) |
 | First-run welcome | yes (host prepends context on session start) | no — MCP doesn't expose session lifecycle to the server |
 
 MCP is the lowest-overhead integration but the most explicit. You'll talk naturally and the host will still recall / store via tool calls when its context gates fire — you just won't get the every-turn automatic behavior that OpenClaw and Hermes provide.
@@ -237,8 +237,12 @@ Upgrade: *"Upgrade my TotalReclaw subscription."*
 ## MCP-specific notes
 
 - **MCP is stateless.** There's no first-run welcome, no lifecycle hooks, and no auto-restart on config change. You restart the host explicitly to pick up new config.
-- **No browser account-setup flow.** The MCP server has no HTTP routes — phrase entry is the user's responsibility (config file, env var, or copying from another client's `credentials.json`). This is by design: keeping crypto secrets out of LLM context is more important than convenience parity with OpenClaw / Hermes.
-- **Account setup uses `totalreclaw_pair`.** It opens a browser-mediated pairing flow: the agent calls `totalreclaw_pair`, which returns a URL + 6-digit PIN. The user opens the URL in any browser, the browser generates (or imports) the recovery phrase, encrypts it, and uploads ciphertext to the MCP server, which decrypts it in-memory and writes `~/.totalreclaw/credentials.json`. The phrase never enters LLM context, chat, stdout, or logs. After pairing, the user restarts the host so the server re-reads the credentials file and switches out of unconfigured mode.
+- **Three ways to get a recovery phrase in.** The MCP server is stateless JSON-RPC — it has no HTTP server or lifecycle hooks of its own — but it still offers three setup paths:
+  1. **`totalreclaw_pair` (browser flow, agent-safe).** The agent calls `totalreclaw_pair`, which returns a URL + 6-digit PIN. The user opens the URL in any browser, the browser generates (or imports) the recovery phrase, encrypts it, and uploads ciphertext to the MCP server, which decrypts it in-memory and writes `~/.totalreclaw/credentials.json`. The phrase never enters LLM context, chat, stdout, or logs. After pairing, the user restarts the host so the server re-reads the credentials file and switches out of unconfigured mode.
+  2. **`npx @totalreclaw/mcp-server setup` (terminal wizard, human-run only).** The wizard generates a phrase, registers with the relay, and prints a config snippet — including the phrase — to stdout. Because that stdout would enter an agent's context, this is for the **human** to run in their own terminal; an agent must never invoke it via a shell tool.
+  3. **Manual.** The user sources a phrase elsewhere — another client's `~/.totalreclaw/credentials.json`, or a phrase generated offline — and pastes it into the host config env (`TOTALRECLAW_RECOVERY_PHRASE`).
+
+  Keeping crypto secrets out of LLM context is the through-line: `totalreclaw_pair` and the manual path never expose the phrase to the agent, and the terminal wizard is human-only for the same reason.
 
 ---
 

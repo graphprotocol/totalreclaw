@@ -15,7 +15,7 @@ One setup page per client. v1 is the default on every client — no env toggles,
 | NanoClaw (OpenClaw's lightweight variant) | [NanoClaw skill](#nanoclaw-skill) |
 | Python / Hermes Agent | [Python client](#python-client) |
 | Native Rust app / ZeroClaw (NEAR AI) | [ZeroClaw](#zeroclaw-rust-crate) |
-| IronClaw (NEAR AI) | [MCP server via IronClaw](#mcp-server) |
+| IronClaw (NEAR AI) | [MCP server via IronClaw](#mcp-server) (integration paused) |
 
 All clients write to the same vault. If you use multiple clients, use the same 12-word recovery phrase everywhere.
 
@@ -65,7 +65,7 @@ That's it. v1 taxonomy, source-weighted reranking, and the new pin / retype / se
 npx @totalreclaw/mcp-server setup
 ```
 
-The wizard generates a 12-word recovery phrase, registers you with the relay, and prints a config snippet.
+The wizard generates a 12-word recovery phrase, registers you with the relay, and prints a config snippet. Run it yourself in a terminal — never ask your AI agent to run it (the wizard prints your recovery phrase, which must not enter the agent's context).
 
 ### Claude Desktop
 
@@ -154,7 +154,7 @@ async def main():
     await client.remember(
         "Pedro prefers dark mode for all editors",
         fact_type="preference",
-        importance=0.8,
+        importance=0.8,  # 0.0–1.0
     )
 
     results = await client.recall("What does Pedro prefer?")
@@ -169,7 +169,7 @@ asyncio.run(main())
 ### Hermes Agent
 
 ```bash
-pip install totalreclaw[hermes]
+pip install totalreclaw
 ```
 
 The plugin registers automatically with Hermes Agent v0.5.0+.
@@ -202,7 +202,7 @@ memory.store_v1(V1StoreInput {
     source: "user".into(),
     scope: Some("personal".into()),
     volatility: Some("stable".into()),
-    importance: 0.8,
+    importance: 8,  // 1–10 (u8; normalized to 0.0–1.0 on-chain)
     reasoning: None,
 }).await?;
 ```

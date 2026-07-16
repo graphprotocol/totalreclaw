@@ -8,7 +8,7 @@ All clients ship v1 by default. Stable production versions: core 2.5.6 (npm; 2.5
 
 ## Platform Feature Matrix
 
-| Feature | OpenClaw | MCP (Claude Desktop, Cursor, Windsurf) | NanoClaw | Hermes (Python) | IronClaw (NEAR AI) | ZeroClaw (Rust) |
+| Feature | OpenClaw | MCP (Claude Desktop, Cursor, Windsurf) | NanoClaw | Hermes (Python) | IronClaw (NEAR AI) — paused | ZeroClaw (Rust) |
 |---------|:-:|:-:|:-:|:-:|:-:|:-:|
 | **Memory Taxonomy v1** | | | | | | |
 | 6-type taxonomy (claim/preference/directive/commitment/episode/summary) | Yes (default) | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes |
@@ -40,19 +40,21 @@ All clients ship v1 by default. Stable production versions: core 2.5.6 (npm; 2.5
 | Broadened search fallback | Yes | Yes | Yes | Yes | Yes | Yes |
 | Hot cache (skip remote on repeat) | Yes | -- | -- | -- | -- | Yes |
 
+> **Import is Pro-only on the managed service.** Importing from Mem0 / ChatGPT / Claude / Gemini is a Pro feature on the managed service (the free tier includes one lifetime import). Self-hosted deployments have no such limit.
+
 ---
 
 ## Platform Notes
 
 **OpenClaw** -- Fully automatic. Memory extraction and recall happen via lifecycle hooks with no user intervention. Best experience for users who want set-and-forget memory.
 
-**MCP (Claude Desktop, Cursor, Windsurf)** -- Tools only. The host agent (Claude, Cursor, etc.) decides when to call memory tools based on context. No automatic extraction -- the agent uses tools when contextually appropriate. Setup via `npx @totalreclaw/mcp-server setup`.
+**MCP (Claude Desktop, Cursor, Windsurf)** -- Tools only. The host agent (Claude, Cursor, etc.) decides when to call memory tools based on context. No automatic extraction -- the agent uses tools when contextually appropriate. Setup via `npx @totalreclaw/mcp-server setup` (run it yourself in a terminal, never via your AI agent -- the wizard prints your recovery phrase).
 
 **NanoClaw** -- Automatic, like OpenClaw. The NanoClaw agent-runner spawns the MCP server as a background process. Memory is shared within the NanoClaw group. No user setup required -- the admin configures the recovery phrase.
 
 **Hermes (Python)** -- Automatic via pre/post LLM call hooks. LLM extraction with heuristic fallback. Full tool parity with OpenClaw plugin since 2.3.x: remember / recall / forget / export / status / account-setup (`totalreclaw_pair`) / pin / unpin / retype / set_scope / import_from / upgrade. Consolidate is self-hosted-only (no batch delete on the managed service) and is exposed via the plugin / MCP server.
 
-**IronClaw (NEAR AI)** -- Uses the MCP server for tools. No lifecycle hooks -- auto-extraction requires setting up routines (cron). The TEE protects the runtime; TotalReclaw protects the data.
+**IronClaw (NEAR AI)** -- First-class integration has been paused since 2026-04-18; IronClaw works via the generic MCP server only (no `ironclaw mcp add` CLI, no lifecycle hooks). It uses the MCP server for tools; auto-extraction requires setting up routines (cron). The TEE protects the runtime; TotalReclaw protects the data.
 
 **ZeroClaw (Rust)** -- Native Rust implementation via the Memory trait. Automatic recall and extraction. Includes hot cache, decay handling (7-day half-life), and conflict resolution. Import not yet implemented.
 

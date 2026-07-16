@@ -1,7 +1,7 @@
 # Environment Variables Reference
 
 **Applies to:** TotalReclaw v1 (all clients).
-**Last updated:** 2026-04-25.
+**Last updated:** 2026-07-16.
 
 v1 deliberately removes every env var that was an internal knob pretending to be user configuration. The list below is the **complete** set of env vars that end users or deployment operators should ever need to set.
 
@@ -149,7 +149,6 @@ These env vars existed in earlier versions and are now silently ignored. Delete 
 | `TOTALRECLAW_TAXONOMY_VERSION` | v1 is the only format. No opt-in needed. |
 | `TOTALRECLAW_CLAIM_FORMAT` | Same reason — the v0 `{text, metadata}` shape is gone. |
 | `TOTALRECLAW_DIGEST_MODE` | Digest behaviour is no longer user-configurable. |
-| `TOTALRECLAW_AUTO_RESOLVE_MODE` | Contradiction-resolution policy is managed by the shared core. |
 | `TOTALRECLAW_HOT_RELOAD` | Kept for OpenClaw plugin development only — see plugin README. |
 | `TOTALRECLAW_TWO_TIER_SEARCH` | Merged into the default search path. |
 
@@ -190,7 +189,7 @@ See [client-consistency spec](../specs/totalreclaw/client-consistency.md) for th
 
 | Env var | Purpose |
 |---|---|
-| `TOTALRECLAW_AUTO_RESOLVE_MODE` | Internal emergency kill-switch for the auto-contradiction-resolution loop (`active` / `shadow` / `off`). Not documented to end users; reserved for incident response. |
+| `TOTALRECLAW_AUTO_RESOLVE_MODE` | Internal emergency kill-switch for the auto-contradiction-resolution loop (`active` / `shadow` / `off`). Not part of user-facing config; reserved for incident response only. |
 
 ---
 
