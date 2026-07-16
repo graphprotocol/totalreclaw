@@ -26,7 +26,13 @@ owner address. Each line carries::
 
     {"owner": "<eoa-or-sa-hex>",
      "queued_at": "<iso8601>",
+     "session_id": "<original-session-id-or-empty>",
      "messages": [{"role": "...", "content": "..."}, ...]}
+
+``session_id`` records the source session's id (issue #494) so the
+next-session drain can stamp re-extracted facts with the ORIGINAL
+session, not the draining one. Absent on records written before #494 —
+drain treats a missing/empty value as "no override" (legacy behavior).
 
 Owner-keying lets a multi-account host (rare today; possible with future
 profile-switching) drain only its own batches. The file lives in
@@ -80,9 +86,16 @@ def _normalize_owners(owner: OwnerSpec) -> frozenset[str]:
 def enqueue_messages(
     owner: str,
     messages: list[dict],
+    session_id: Optional[str] = None,
     path: Optional[Path] = None,
 ) -> bool:
     """Append a batch of unprocessed messages to the pending queue.
+
+    ``session_id`` is the id of the session whose extraction is being
+    deferred. It is persisted so the next-session drain can stamp the
+    re-extracted facts with the ORIGINAL session rather than the draining
+    one (issue #494). ``None``/empty is stored as ``""`` and treated by the
+    reader as "no session override".
 
     Returns ``True`` on success, ``False`` if the disk write fails. A
     ``False`` return is logged at WARNING; callers may use it to decide
@@ -99,6 +112,7 @@ def enqueue_messages(
         record = {
             "owner": owner or "",
             "queued_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "session_id": session_id or "",
             "messages": messages,
         }
         with pending.open("a", encoding="utf-8") as fh:
@@ -119,7 +133,8 @@ def enqueue_messages(
 def drain_pending(
     owner: OwnerSpec,
     path: Optional[Path] = None,
-) -> list[list[dict]]:
+    with_meta: bool = False,
+) -> list:
     """Atomically read + remove all batches matching ``owner``.
 
     ``owner`` is either a single address string or any iterable of address
@@ -130,6 +145,13 @@ def drain_pending(
     Returns a list of message-lists (one per enqueued batch, in arrival
     order). Non-matching batches stay in the file. The file is removed
     when empty.
+
+    When ``with_meta`` is True, each element is instead a dict
+    ``{"messages": [...], "session_id": <str-or-None>}`` so the drain path
+    can stamp re-extracted facts with the batch's original session id
+    (issue #494). ``session_id`` is ``None`` for legacy pre-#494 records
+    that lack the field. The default (``with_meta=False``) preserves the
+    original message-list return shape for existing callers/tests.
 
     Drain on a missing or empty file returns ``[]`` without error — both
     conditions are normal (no prior shutdown loss, or another process
@@ -142,7 +164,7 @@ def drain_pending(
     accept = _normalize_owners(owner)
 
     keep_lines: list[str] = []
-    drained: list[list[dict]] = []
+    drained: list = []
     try:
         raw = pending.read_text(encoding="utf-8")
     except Exception as exc:
@@ -167,7 +189,11 @@ def drain_pending(
             continue
 
         if rec_owner in accept:
-            drained.append(rec_msgs)
+            if with_meta:
+                rec_sid = record.get("session_id") or None
+                drained.append({"messages": rec_msgs, "session_id": rec_sid})
+            else:
+                drained.append(rec_msgs)
         else:
             keep_lines.append(line)
 

@@ -40,6 +40,10 @@ _INTERPRETER_SHUTDOWN_QUOTA_NOTE = (
     "on your next session. No data was lost."
 )
 
+# Sentinel distinguishing "no session override applied" from "override to
+# None" in ``auto_extract``'s save/restore of ``relay._session_id`` (#494).
+_SESSION_OVERRIDE_UNSET = object()
+
 
 def _owner_address(state: "AgentState") -> str:
     """Best-effort lookup of the configured owner address for queue keying.
@@ -187,7 +191,12 @@ def _is_near_duplicate(
     return False
 
 
-def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> list[str]:
+def auto_extract(
+    state: "AgentState",
+    mode: str = "turn",
+    llm_config=None,
+    session_id_override: Optional[str] = None,
+) -> list[str]:
     """Extract facts from conversation and store them.
 
     Tries LLM extraction first, falls back to heuristic if no LLM available.
@@ -199,6 +208,13 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
         mode: "turn" for incremental extraction, "full" for session-end flush.
         llm_config: Optional pre-resolved LLM configuration (e.g. from Hermes config).
             If not provided, ``extract_facts_llm`` falls back to env var detection.
+        session_id_override: When set, the relay session tag (which the relay
+            forwards as ``X-TotalReclaw-Session`` and the server stamps onto
+            ``metadata.session_id``) is temporarily overridden for the duration
+            of this extraction and restored afterwards. Used by the pending-drain
+            path so re-extracted facts carry the ORIGINAL session's id rather
+            than the draining session's (issue #494). An empty override is
+            treated as "no session" (header omitted).
 
     Returns:
         List of stored fact texts (for debrief context).
@@ -220,6 +236,16 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
     if not client:
         return []
 
+    # Drain-path session-id override (issue #494). Temporarily point the relay
+    # session tag at the original session so server-side metadata.session_id is
+    # stamped correctly, then restore. Reading it back inside the shutdown
+    # handler below also lets a re-deferred drain re-enqueue the ORIGINAL id.
+    relay = getattr(client, "_relay", None)
+    _saved_session_id = _SESSION_OVERRIDE_UNSET
+    if session_id_override is not None and relay is not None and hasattr(relay, "_session_id"):
+        _saved_session_id = relay._session_id
+        relay._session_id = session_id_override or None
+
     stored_texts: list[str] = []
 
     try:
@@ -232,9 +258,14 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
         # can't drive any more httpx work, so persist the unprocessed
         # buffer to disk and let the next session drain it. See
         # ``totalreclaw.agent.pending_drain`` and issue #148.
+        #
+        # Persist the source session id (issue #494) so the next-session drain
+        # re-stamps facts with the original session. ``relay._session_id`` here
+        # reflects any active override, so a re-deferred drain preserves it.
         owner = _owner_address(state)
+        source_session_id = getattr(relay, "_session_id", None) if relay is not None else None
         if owner:
-            persisted = enqueue_messages(owner, list(messages))
+            persisted = enqueue_messages(owner, list(messages), session_id=source_session_id)
         else:
             persisted = False
         if persisted:
@@ -259,6 +290,10 @@ def auto_extract(state: "AgentState", mode: str = "turn", llm_config=None) -> li
         # unprocessed is harmless (state dies with the process anyway) and
         # makes the failure visible to any in-process retry path.
         return []
+    finally:
+        # Restore the relay session tag if we overrode it (issue #494).
+        if _saved_session_id is not _SESSION_OVERRIDE_UNSET:
+            relay._session_id = _saved_session_id
 
 
 def _auto_extract_inner(

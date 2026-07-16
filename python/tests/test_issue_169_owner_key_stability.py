@@ -279,7 +279,7 @@ def test_on_session_start_drains_eoa_queue_when_sa_eagerly_resolved(
 
     drained_calls: list = []
 
-    def fake_auto_extract(state, mode="turn", llm_config=None):
+    def fake_auto_extract(state, mode="turn", llm_config=None, session_id_override=None):
         drained_calls.append({"mode": mode, "msg_count": len(state._messages)})
         return []
 

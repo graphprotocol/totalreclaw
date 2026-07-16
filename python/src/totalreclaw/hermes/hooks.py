@@ -479,7 +479,7 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
     try:
         owners = _owner_addresses(state)
         if owners and has_pending(owners):
-            batches = drain_pending(owners)
+            batches = drain_pending(owners, with_meta=True)
             recovered_count = _drain_into_state(state, batches)
             if recovered_count > 0:
                 logger.info(
@@ -563,9 +563,18 @@ def _maybe_queue_update_notice(state: "PluginState", billing: dict) -> None:
         pass
 
 
-def _drain_into_state(state: "PluginState", batches: list[list[dict]]) -> int:
+def _drain_into_state(state: "PluginState", batches: list) -> int:
     """Replay drained message batches into the agent state and run a
     full-mode auto-extract to land the facts.
+
+    Each ``batches`` element is a ``{"messages": [...], "session_id": <str
+    -or-None>}`` dict from ``drain_pending(..., with_meta=True)``. Batches
+    are extracted ONE AT A TIME so each batch's facts are stamped with the
+    ORIGINAL session's id (issue #494) via ``auto_extract``'s
+    ``session_id_override`` — a single combined extraction could only carry
+    one session tag. ``session_id`` is ``None`` for legacy pre-#494 records,
+    in which case no override is applied (facts keep the draining session's
+    id, the prior behavior).
 
     Returns the total number of messages recovered. Errors during the
     extraction call are logged and swallowed — drain is best-effort.
@@ -576,27 +585,45 @@ def _drain_into_state(state: "PluginState", batches: list[list[dict]]) -> int:
     if not batches:
         return 0
 
+    # Isolate drained content from any pre-existing unprocessed buffer so a
+    # stray message can't get swept into a batch's session-scoped extraction.
+    # (Drain runs early in ``on_session_start``, before the session's own
+    # turns, so this is normally a no-op.)
+    state.mark_messages_processed()
+
     total = 0
-    # Snapshot the original buffer so the active session's own messages
-    # stay intact after the drain. We process drained batches in a
-    # separate state-buffer slice via ``add_message`` + final
-    # ``mark_messages_processed`` so the user-visible session message
-    # buffer keeps the drained content for context.
     for batch in batches:
-        for msg in batch:
+        # Tolerate both the meta-dict shape and a bare message-list (older
+        # callers) so this stays robust to the ``with_meta`` flag.
+        if isinstance(batch, dict):
+            msgs = batch.get("messages") or []
+            session_id = batch.get("session_id") or None
+        else:
+            msgs = batch
+            session_id = None
+
+        added = 0
+        for msg in msgs:
             role = msg.get("role") if isinstance(msg, dict) else None
             content = msg.get("content") if isinstance(msg, dict) else None
             if role and content:
                 state.add_message(role, content)
-                total += 1
+                added += 1
 
-    if total == 0:
-        return 0
+        if added == 0:
+            continue
 
-    try:
-        _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config())
-    except Exception as exc:
-        logger.warning("TotalReclaw: drain-side auto_extract failed: %s", exc)
+        try:
+            _auto_extract(
+                state,
+                mode="full",
+                llm_config=_get_hermes_llm_config(),
+                session_id_override=session_id,
+            )
+        except Exception as exc:
+            logger.warning("TotalReclaw: drain-side auto_extract failed: %s", exc)
+
+        total += added
 
     return total
 
