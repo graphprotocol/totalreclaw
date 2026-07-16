@@ -81,7 +81,7 @@ Speak only these lines, in order. Substitute the bracketed placeholders with the
 3. (Step 3 — only if existing credentials were detected, then stop)
    > ✓ TotalReclaw is already set up.
 4. (Step 4 — account-setup URL + PIN, immediately after `tr pair --json` returns — no consent gate)
-   > Open &lt;url&gt; in your browser. Enter PIN &lt;pin&gt;. Generate or paste a 12-word recovery phrase. Reply `done` once it's sealed.
+   > Open &lt;url&gt; in your browser. Enter PIN &lt;pin&gt;. Generate or paste a 12-word recovery phrase. This link expires in 10 minutes (at &lt;HH:MM UTC&gt;). Reply `done` once it's sealed.
 5. (Step 5 — done + free-tier confirmation)
    > ✓ You're set up on the TotalReclaw free tier — 250 memories/month on Gnosis mainnet, E2E encrypted. https://totalreclaw.xyz/pricing. Ask me to remember anything.
 
@@ -212,7 +212,7 @@ Pasting the install prompt was the consent moment for installing the plugin. The
 curl -s http://localhost:18789/plugin/totalreclaw/pair/init
 ```
 
-Parse the JSON `{"v":1,"sid":"...","url":"...","pin":"...","mode":"...","expires_at_ms":...}`. The route returns immediately with the user-facing URL + PIN; the gateway holds the WebSocket open in-process and completes pairing in the background once the browser uploads the encrypted phrase. Emit user-visible line 4 (`Open <url> in your browser. Enter PIN <pin>. Generate or paste a 12-word recovery phrase. Reply done once it's sealed.`) with `<url>` and `<pin>` substituted VERBATIM from the JSON — never invent or modify values. Do not pre-narrate — line 4 itself is the only thing the user needs to see.
+Parse the JSON `{"v":1,"sid":"...","url":"...","pin":"...","mode":"...","expires_at_ms":...}`. The route returns immediately with the user-facing URL + PIN; the gateway holds the WebSocket open in-process and completes pairing in the background once the browser uploads the encrypted phrase. Emit user-visible line 4 (`Open <url> in your browser. Enter PIN <pin>. Generate or paste a 12-word recovery phrase. This link expires in 10 minutes (at <HH:MM UTC>). Reply done once it's sealed.`) with `<url>` and `<pin>` substituted VERBATIM from the JSON and the expiry rendered from `expires_at_ms` (duration + wall-clock UTC — users are better primed by both, internal#194) — never invent or modify values. Do not pre-narrate — line 4 itself is the only thing the user needs to see.
 
 **FALLBACK pair path — `tr pair --json` via `setsid -f`.** Use ONLY if the HTTP route is unreachable (older plugin without `/pair/init`, or the gateway HTTP server isn't bound on `localhost:18789`). The CLI path opens the same relay WS but from a subprocess, so it MUST be detached with `setsid -f` to survive the post-install SIGUSR1 reload. A foreground `node tr-cli pair` is killed mid-flight when the gateway fires its deferred restart, surfacing as `Gateway could not finish pairing (502). The agent timed out or the ciphertext failed to decrypt — ask the agent to retry pairing.` on the user's browser.
 
