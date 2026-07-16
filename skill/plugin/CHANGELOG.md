@@ -4,6 +4,12 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **[#391] AA24 guard — initCode re-asserted after sponsorship.** `pm_sponsorUserOperation` responses are merged into the UserOp with a bare `Object.assign`; a relay proxy or paymaster change echoing `factory: null` would silently strip the initCode from a counterfactual (first-write-after-pair) UserOp and reproduce the AA24 signature-error ship-stopper. Both submit paths (single + batch) now re-apply the deployment decision `getInitCode` made for the attempt after sponsorship: undeployed senders get their computed `factory`/`factoryData` restored; deployed (or AA10 force-deployed) senders get any sponsor-added factory fields removed. Hand-integration of PR #391 onto the post-AA10 (#395/#407) write path, with its counterfactual regression test ported (17 checks: initCode presence, `createAccount(owner, salt=0)` encoding, sign-after-sponsor hash coverage, clobber restore).
+
 ## [3.3.13] — 2026-07-15
 
 Stable promote of `3.3.13-rc.1`. Bundles a write-path perf fix and lands the consolidated npm publishing path that finally moved the stable line onto npm (3.3.12 had reached ClawHub but the npm promote was blocked on Trusted Publisher registration).

@@ -388,6 +388,37 @@ async function getInitCode(
   return { factory, factoryData };
 }
 
+/**
+ * Re-assert the initCode decision after sponsorship (#391, AA24 guard).
+ *
+ * ERC-4337 v0.7 `pm_sponsorUserOperation` is documented (Pimlico) to return
+ * ONLY gas-limit + paymaster fields — it does not echo `factory`/`factoryData`
+ * back. But the response is merged with a bare `Object.assign`, so a relay
+ * proxy or paymaster change that echoes `factory: null` (or junk) would
+ * silently strip the initCode from a counterfactual UserOp — the bytes that
+ * get hashed + signed would then omit the fields the EntryPoint validates,
+ * reproducing the AA24 signature-error ship-stopper (first write from a fresh
+ * pair stores 0 facts). Rather than trust every sponsor response forever,
+ * re-apply the deployment decision `getInitCode` made for THIS attempt:
+ * an undeployed sender gets its computed initCode restored; a deployed (or
+ * AA10 force-deployed) sender gets any sponsor-added factory fields removed
+ * (a stray `factory: null` key would otherwise change the hashed JSON and
+ * trip bundler serde).
+ */
+function reassertInitCodeAfterSponsorship(
+  op: Record<string, any>,
+  factory: string | null,
+  factoryData: string | null,
+): void {
+  if (factory) {
+    if (op.factory !== factory) op.factory = factory;
+    if (op.factoryData !== factoryData) op.factoryData = factoryData;
+  } else {
+    delete op.factory;
+    delete op.factoryData;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // On-chain submission (ERC-4337 UserOps via relay.ts network site)
 // ---------------------------------------------------------------------------
@@ -544,6 +575,8 @@ async function submitFactOnChainLocked(
       // is present but the sender is already deployed.
       const sponsorResult = await rpc('pm_sponsorUserOperation', [unsignedOp, entryPoint]);
       Object.assign(unsignedOp, sponsorResult);
+      // #391 AA24 guard: the sponsor response must not strip (or add) initCode.
+      reassertInitCodeAfterSponsorship(unsignedOp, factory, factoryData);
 
       // 8. Hash and sign the UserOp via WASM
       const opJson = JSON.stringify(unsignedOp);
@@ -772,6 +805,8 @@ async function submitFactBatchOnChainLocked(
       // is present but the sender is already deployed.
       const sponsorResult = await rpc('pm_sponsorUserOperation', [unsignedOp, entryPoint]);
       Object.assign(unsignedOp, sponsorResult);
+      // #391 AA24 guard: the sponsor response must not strip (or add) initCode.
+      reassertInitCodeAfterSponsorship(unsignedOp, factory, factoryData);
 
       // Hash and sign via WASM
       const opJson = JSON.stringify(unsignedOp);
