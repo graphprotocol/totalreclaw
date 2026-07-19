@@ -87,6 +87,13 @@ dependencies = [
 [project.optional-dependencies]
 # hermes-agent is not on PyPI — install manually: pip install git+https://github.com/NousResearch/hermes-agent.git
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-xdist>=3.5", "mnemonic>=0.21"]
+# cred-2 — OS keychain wrap for the mnemonic at rest. `keyring` is pure-Python
+# glue over the platform's native secret store (macOS Keychain / Linux Secret
+# Service / Windows Credential Manager) — no bundled native bindings. It is
+# OPTIONAL: without it, totalreclaw.keychain_wrap degrades to the documented
+# plaintext-at-rest + chmod 600 fallback (headless / container behaviour).
+# Install with `pip install totalreclaw[keychain]` for desktop at-rest wrap.
+keychain = ["keyring>=24,<26"]
 
 [project.entry-points."hermes_agent.plugins"]
 totalreclaw = "totalreclaw.hermes"
