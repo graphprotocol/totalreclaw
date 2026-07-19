@@ -279,7 +279,9 @@ const skillJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'skill.json'),
 // stable publishing consolidated onto npm-publish.yml (#509): the stable
 // publish now carries the clean version in package.json instead of
 // promote-rc.yml re-tagging an rc in-workflow.
-const validVersionPattern = /^3\.3\.(7-rc\.[3-9]\d*|8-rc\.\d+|9-rc\.\d+|10-rc\.\d+|1[1-9](-rc\.\d+)?|[2-9]\d(-rc\.\d+)?|[1-9]\d*\.\d+|[1-9]\d{2,}.*)$/;
+// 3.4+ minor lines (with optional -rc.N) became valid when the 3.4.0 RC line
+// opened (executeBatch revival + AA24 guard, 2026-07-20).
+const validVersionPattern = /^3\.(3\.(7-rc\.[3-9]\d*|8-rc\.\d+|9-rc\.\d+|10-rc\.\d+|1[1-9](-rc\.\d+)?|[2-9]\d(-rc\.\d+)?|[1-9]\d*\.\d+|[1-9]\d{2,}.*)|([4-9]|[1-9]\d+)\.\d+(-rc\.\d+)?)$/;
 
 assert(
   validVersionPattern.test(packageJson.version),
