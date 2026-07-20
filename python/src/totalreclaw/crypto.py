@@ -7,6 +7,7 @@ Maintains the same Python API for backward compatibility.
 from __future__ import annotations
 
 import base64
+import json
 import struct
 from dataclasses import dataclass
 
@@ -120,6 +121,14 @@ def encrypt_embedding(embedding: list[float], encryption_key: bytes) -> str:
     stored blob (2560B -> 1280B for a 640-dim vector) at no retrieval-quality
     cost (round-trip cosine p99 = 1.0; see research/2026-07-06-f16-...-poc.md).
     """
+    # #479 Part B: prefer the core codec when the installed totalreclaw_core
+    # wheel exposes it (canonical rules + fail-closed NaN/inf/overflow guard —
+    # deliberately stricter than this struct fallback, see core's
+    # embedding_codec.rs). Same prefer-core-with-fallback pattern as
+    # segment_sessions: no release-order dependency on the core wheel.
+    core_encode = getattr(totalreclaw_core, "encode_embedding_canonical", None)
+    if core_encode is not None:
+        return encrypt(core_encode(list(embedding)), encryption_key)
     buf = struct.pack(f"<{len(embedding)}e", *embedding)
     return encrypt(base64.b64encode(buf).decode("ascii"), encryption_key)
 
@@ -141,11 +150,36 @@ def decrypt_embedding(
     This guarantees every pre-existing f32 embedding on-chain still decodes
     (2560B -> f32) while new 640-dim writes are f16 (1280B).
     """
-    decrypted_base64 = decrypt(encrypted_embedding, encryption_key)
-    buf = base64.b64decode(decrypted_base64)
+    decrypted_payload = decrypt(encrypted_embedding, encryption_key)
+
+    # #479 Part B: universal decode. Prefer the core decoder when available;
+    # the local fallback implements the same dispatch, INCLUDING the legacy
+    # TS-plugin JSON-array format this client previously could not read at
+    # all (base64.b64decode choked on "[0.1, ...]" — the Hermes-reading-
+    # plugin-facts half of the parity bug).
+    core_decode = getattr(totalreclaw_core, "decode_embedding_universal", None)
+    if core_decode is not None:
+        return [float(v) for v in core_decode(decrypted_payload)]
+
+    trimmed = decrypted_payload.strip()
+    if trimmed.startswith("["):
+        # Legacy TS plugin format: JSON float array.
+        parsed = json.loads(trimmed)
+        if not isinstance(parsed, list) or not all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in parsed
+        ):
+            raise ValueError("JSON embedding payload is not an array of numbers")
+        return [float(v) for v in parsed]
+
+    buf = base64.b64decode(trimmed, validate=True)
     if len(buf) == EMBEDDING_DIMS * 2:
-        # New f16 write (640-dim). Upcast half -> Python float.
+        # Canonical f16 write (640-dim). Upcast half -> Python float.
         return list(struct.unpack(f"<{len(buf) // 2}e", buf))
-    # Legacy f32 blob (any dim, incl. pre-change 640-dim + non-production dims).
-    count = len(buf) // 4
-    return list(struct.unpack(f"<{count}f", buf))
+    if len(buf) % 4 == 0:
+        # Legacy f32 blob (any dim, incl. pre-change 640-dim + non-production dims).
+        count = len(buf) // 4
+        return list(struct.unpack(f"<{count}f", buf))
+    raise ValueError(
+        f"decoded embedding buffer has length {len(buf)} (expected "
+        f"{EMBEDDING_DIMS * 2} for f16, or a multiple of 4 for f32)"
+    )

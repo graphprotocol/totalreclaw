@@ -29,6 +29,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { computeEntityTrapdoor, isDigestBlob } from './claims-helper.js';
+import { decodeEmbeddingUniversal } from './embedding-codec.js';
 
 // MCP uses require('@totalreclaw/core') directly (see consolidation.ts,
 // claims-helper.ts) instead of createRequire — match that pattern.
@@ -378,10 +379,12 @@ export async function collectCandidatesForEntities(
       let embedding: number[] = [];
       if (row.encryptedEmbedding) {
         try {
-          const emb = JSON.parse(deps.decryptFromHex(row.encryptedEmbedding, encryptionKey));
-          if (Array.isArray(emb) && emb.every((x) => typeof x === 'number')) {
-            embedding = emb;
-          }
+          // Universal decode (#479 Part B): read f16 / JSON / f32 — not just
+          // the TS plugin's JSON array — so foreign-format facts contribute
+          // their real embedding to the contradiction check.
+          embedding = decodeEmbeddingUniversal(
+            deps.decryptFromHex(row.encryptedEmbedding, encryptionKey),
+          );
         } catch {
           embedding = [];
         }

@@ -71,6 +71,11 @@ import { resolveChainConfig, buildSubgraphOverrides } from './subgraph/chain-con
 import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, fetchFactById } from './subgraph/search.js';
 import { confirmIndexed } from './subgraph/confirm-indexed.js';
 import {
+  decodeEmbeddingUniversal,
+  encodeEmbeddingPayload,
+  LEGACY_F32_MARKER,
+} from './embedding-codec.js';
+import {
   detectAndResolveContradictions,
   type ResolutionDecision,
 } from './contradiction-sync.js';
@@ -508,28 +513,39 @@ async function saveCredentials(path: string, credentials: { userId: string; salt
 /**
  * Encrypt an embedding vector for on-chain storage.
  *
- * Concatenates the float array into a Buffer, encrypts with XChaCha20-Poly1305,
- * and returns base64. The subgraph stores this as a string field.
+ * The pre-encryption payload is canonical f16 when @totalreclaw/core exposes
+ * the codec (encodeEmbeddingPayload returns the canonical base64), else the
+ * legacy little-endian f32 packing the MCP server has always used (signaled by
+ * the LEGACY_F32_MARKER — the f32→f16 rounding stays in core, never here; see
+ * embedding-codec.ts, #479 Part B). Either payload is then XChaCha20-Poly1305
+ * encrypted; the subgraph stores the ciphertext as a string field.
  */
 function encryptEmbedding(embedding: number[], encryptionKey: Buffer): string {
+  const payload = encodeEmbeddingPayload(embedding);
+  const preEncryption =
+    payload === LEGACY_F32_MARKER ? packLegacyF32(embedding) : payload;
+  return encrypt(preEncryption, encryptionKey);
+}
+
+/** Legacy f32-binary packing (the historical MCP/Python write). */
+function packLegacyF32(embedding: number[]): string {
   const buf = Buffer.alloc(embedding.length * 4);
   for (let i = 0; i < embedding.length; i++) {
     buf.writeFloatLE(embedding[i], i * 4);
   }
-  return encrypt(buf.toString('base64'), encryptionKey);
+  return buf.toString('base64');
 }
 
 /**
  * Decrypt an encrypted embedding back to a number array.
+ *
+ * Universal decode (#479 Part B): reads canonical f16, legacy JSON array (TS
+ * plugin), and legacy f32 binary (old Python / MCP) — so a mixed-client vault
+ * no longer silently degrades foreign-format facts to word-index matching.
  */
 function decryptEmbedding(encryptedEmbedding: string, encryptionKey: Buffer): number[] {
-  const decryptedBase64 = decrypt(encryptedEmbedding, encryptionKey);
-  const buf = Buffer.from(decryptedBase64, 'base64');
-  const floats: number[] = [];
-  for (let i = 0; i < buf.length; i += 4) {
-    floats.push(buf.readFloatLE(i));
-  }
-  return floats;
+  const decryptedPayload = decrypt(encryptedEmbedding, encryptionKey);
+  return decodeEmbeddingUniversal(decryptedPayload);
 }
 
 /**

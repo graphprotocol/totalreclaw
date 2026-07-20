@@ -16,6 +16,7 @@
  */
 
 import { createRequire } from 'node:module';
+import { decodeEmbeddingUniversal } from '../embedding/embedding-codec.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -407,10 +408,14 @@ export async function collectCandidatesForEntities(
       let embedding: number[] = [];
       if (row.encryptedEmbedding) {
         try {
-          const emb = JSON.parse(deps.decryptFromHex(row.encryptedEmbedding, encryptionKey));
-          if (Array.isArray(emb) && emb.every((x) => typeof x === 'number')) {
-            embedding = emb;
-          }
+          // #479 Part B (review-caught twin of the MCP fix): universal decode
+          // — this row may carry canonical f16, legacy JSON (plugin), or
+          // legacy f32 binary (old MCP/Python). Raw JSON.parse threw on
+          // foreign formats and the catch silently zeroed the cosine signal
+          // for Phase 2 contradiction detection in mixed-client vaults.
+          embedding = decodeEmbeddingUniversal(
+            deps.decryptFromHex(row.encryptedEmbedding, encryptionKey),
+          );
         } catch {
           embedding = [];
         }

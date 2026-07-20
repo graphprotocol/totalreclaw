@@ -109,6 +109,10 @@ import {
   dedupeByProvider,
 } from './llm/llm-profile-reader.js';
 import { LSHHasher } from './embedding/lsh.js';
+import {
+  encodeEmbeddingPayload,
+  decodeEmbeddingFromHex,
+} from './embedding/embedding-codec.js';
 import { rerank, cosineSimilarity, detectQueryIntent, INTENT_WEIGHTS, type RerankerCandidate } from './embedding/reranker.js';
 import { deduplicateBatch } from './extraction/semantic-dedup.js';
 import { startTrajectoryPoller, type ExtractedFactLike } from './subgraph/trajectory-poller.js';
@@ -962,8 +966,10 @@ async function generateEmbeddingAndLSH(
     const hasher = getLSHHasher(logger);
     const lshBuckets = hasher ? hasher.hash(embedding) : [];
 
-    // Encrypt the embedding (JSON array of numbers) for server-blind storage
-    const encryptedEmbedding = encryptToHex(JSON.stringify(embedding), encryptionKey!);
+    // Encrypt the embedding for server-blind storage. The pre-encryption
+    // payload is canonical f16 when @totalreclaw/core exposes the codec, else
+    // the legacy JSON array (see embedding/embedding-codec.ts, #479 Part B).
+    const encryptedEmbedding = encryptToHex(encodeEmbeddingPayload(embedding), encryptionKey!);
 
     return { embedding, lshBuckets, encryptedEmbedding };
   } catch (err) {
@@ -1015,7 +1021,7 @@ async function searchForNearDuplicates(
           let embedding: number[] | null = null;
           if (result.encryptedEmbedding) {
             try {
-              embedding = JSON.parse(decryptFromHex(result.encryptedEmbedding, encryptionKey));
+              embedding = decodeEmbeddingFromHex(result.encryptedEmbedding, encryptionKey);
             } catch { /* skip */ }
           }
 
@@ -1046,7 +1052,7 @@ async function searchForNearDuplicates(
           let embedding: number[] | null = null;
           if (candidate.encrypted_embedding) {
             try {
-              embedding = JSON.parse(decryptFromHex(candidate.encrypted_embedding, encryptionKey));
+              embedding = decodeEmbeddingFromHex(candidate.encrypted_embedding, encryptionKey);
             } catch { /* skip */ }
           }
 
@@ -2064,8 +2070,9 @@ function buildRecallDeps(logger: OpenClawPluginApi['logger']): TrNativeMemoryDep
           let decryptedEmbedding: number[] | undefined;
           if (result.encryptedEmbedding) {
             try {
-              decryptedEmbedding = JSON.parse(
-                decryptFromHex(result.encryptedEmbedding, encryptionKey),
+              decryptedEmbedding = decodeEmbeddingFromHex(
+                result.encryptedEmbedding,
+                encryptionKey,
               );
             } catch {
               // embedding decryption failed -- proceed without it
@@ -2118,8 +2125,9 @@ function buildRecallDeps(logger: OpenClawPluginApi['logger']): TrNativeMemoryDep
           let decryptedEmbedding: number[] | undefined;
           if (candidate.encrypted_embedding) {
             try {
-              decryptedEmbedding = JSON.parse(
-                decryptFromHex(candidate.encrypted_embedding, encryptionKey),
+              decryptedEmbedding = decodeEmbeddingFromHex(
+                candidate.encrypted_embedding,
+                encryptionKey,
               );
             } catch {
               // embedding decryption failed
@@ -3716,8 +3724,9 @@ const plugin = {
                 let decryptedEmbedding: number[] | undefined;
                 if (result.encryptedEmbedding) {
                   try {
-                    decryptedEmbedding = JSON.parse(
-                      decryptFromHex(result.encryptedEmbedding, encryptionKey!),
+                    decryptedEmbedding = decodeEmbeddingFromHex(
+                      result.encryptedEmbedding,
+                      encryptionKey!,
                     );
                   } catch {
                     // Embedding decryption failed -- proceed without it.
@@ -3843,8 +3852,9 @@ const plugin = {
               let decryptedEmbedding: number[] | undefined;
               if (candidate.encrypted_embedding) {
                 try {
-                  decryptedEmbedding = JSON.parse(
-                    decryptFromHex(candidate.encrypted_embedding, encryptionKey!),
+                  decryptedEmbedding = decodeEmbeddingFromHex(
+                    candidate.encrypted_embedding,
+                    encryptionKey!,
                   );
                 } catch {
                   // Embedding decryption failed -- proceed without it.
