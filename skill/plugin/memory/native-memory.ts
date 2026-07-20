@@ -21,13 +21,22 @@
  *       "no pinned" when the caller does not supply them — see TODO markers
  *       in index.ts's buildRecallDeps for the H1 QA gate)
  *
- *   and performs the canonical four-call registration in the order memory-core
- *   itself registers them (verified at
+ *   and performs the canonical registration in the order memory-core itself
+ *   registers them (verified at
  *   /tmp/tr-openclaw-probe/node_modules/openclaw/dist/extensions/memory-core/
  *   index.js, 2026.6.8):
  *     1. api.registerMemoryCapability({ promptBuilder, flushPlanResolver, runtime })
  *     2. api.registerTool(() => createMemorySearchTool(runtime), { names: ['memory_search'] })
  *     3. api.registerTool(() => createMemoryGetTool(runtime),    { names: ['memory_get'] })
+ *   PLUS one TR-specific addition (internal#499) memory-core does NOT make:
+ *     4. api.registerTool(() => createMemorySaveTool(deps.store), { names: ['memory_save'] })
+ *   memory-core's native contract is READ-only (search/get) + a flushPlanResolver
+ *   for host-driven batched writes; it exposes no synchronous per-fact write
+ *   tool. TR adds `memory_save` because its encrypted on-chain vault has no
+ *   file-write fallback, so an explicit "remember X" with no write tool
+ *   silently failed (the agent shelled out to GNU coreutils `tr`). memory_save
+ *   routes that one fact through the SAME storeExtractedFacts pipeline
+ *   extraction/import use — it is not a parallel write path.
  *
  *   The SAME `runtime` instance is handed to the capability AND both tool
  *   factories. This is load-bearing: the host calls
@@ -77,10 +86,11 @@ import {
   buildFlushPlan,
   type TrRecallFn,
   type TrGetFn,
+  type TrMemorySaveFn,
   type TrQuotaState,
   type TrPinnedFact,
 } from './memory-runtime.js';
-import { createMemorySearchTool, createMemoryGetTool } from './tools.js';
+import { createMemorySearchTool, createMemoryGetTool, createMemorySaveTool } from './tools.js';
 
 // ---------------------------------------------------------------------------
 // Types — the combined deps shape. Reconciles the two dep shapes the
@@ -105,6 +115,15 @@ export interface TrNativeMemoryDeps {
   recall: TrRecallFn;
   /** getById closure: fetchFactById → decrypt → {id, plaintext} | null. */
   getById: TrGetFn;
+  /**
+   * Store closure: the WRITE pipeline (internal#499). Routes one explicitly
+   * remembered fact through storeExtractedFacts — the SAME path auto-extraction
+   * + smart-import use — and returns a truthful ok/stored. Backs the
+   * `memory_save` tool. Required: without it the plugin would have no
+   * agent-driven write path and explicit "remember X" would silently fail
+   * again (the original bug).
+   */
+  store: TrMemorySaveFn;
   /** Optional quota state for the prompt builder's warning path. */
   quota?: TrQuotaState;
   /** Optional pinned-facts block surfaced by the prompt builder. */
@@ -155,6 +174,10 @@ export interface NativeMemoryApiSurface {
  * Identity is load-bearing — see file header. register-native.test.ts
  * asserts the same `runtime` reaches all three.
  *
+ * The write tool (memory_save) is the exception: it captures `deps.store`, NOT
+ * `runtime`, because the write path is storeExtractedFacts (not the read-only
+ * MemorySearchManager surface). See internal#449 / the tools.ts header.
+ *
  * @param api    the OpenClaw plugin api (registerMemoryCapability + registerTool)
  * @param deps   the combined deps object from buildRecallDeps in index.ts
  * @returns      the runtime that was registered (for callers that want to
@@ -183,7 +206,7 @@ export function registerNativeMemory(
     runtime,
   });
 
-  // (2) + (3) Register the two tools. The factories capture the SAME runtime
+  // (2) + (3) Register the two READ tools. The factories capture the SAME runtime
   // (the captured-runtime design — see tools.ts header). The conventional
   // tool names survive the tool-policy strip in OC 2026.5.x (issue #223):
   // they are passed via the `names` opts so the SDK's name bookkeeping sees
@@ -191,6 +214,15 @@ export function registerNativeMemory(
   // registration name.
   api.registerTool(() => createMemorySearchTool(runtime), { names: ['memory_search'] });
   api.registerTool(() => createMemoryGetTool(runtime), { names: ['memory_get'] });
+
+  // (4) Register the WRITE tool (internal#499). Unlike the read tools, this
+  // factory captures `deps.store` — NOT `runtime` — because the write path is
+  // the storeExtractedFacts pipeline (which closes over unexported index.ts
+  // state), not the MemorySearchManager surface the runtime exposes. The same
+  // `names` opts convention applies; OpenClaw's loader requires this name be
+  // declared in contracts.tools (openclaw.plugin.json) or the registration is
+  // silently dropped — manifest-shape.test.ts guards that lockstep.
+  api.registerTool(() => createMemorySaveTool(deps.store), { names: ['memory_save'] });
 
   return runtime;
 }

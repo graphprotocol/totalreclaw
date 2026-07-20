@@ -162,6 +162,7 @@ import {
   type NonInteractiveOnboardResult,
 } from './pairing/onboarding-cli.js';
 import { PluginHotCache, type HotFact } from './memory/hot-cache-wrapper.js';
+import { buildNativeStore } from './memory/native-store.js';
 import { CONFIG, setRecoveryPhraseOverride } from './config.js';
 import { buildRelayHeaders } from './billing/relay-headers.js';
 import {
@@ -2261,7 +2262,36 @@ function buildRecallDeps(logger: OpenClawPluginApi['logger']): TrNativeMemoryDep
   const quota: TrQuotaState | undefined = undefined;
   const pinned: TrPinnedFact[] | undefined = undefined;
 
-  return { recall, getById, quota, pinned };
+  // -------------------------------------------------------------------
+  // store(): the WRITE closure (internal#499). Routes ONE explicitly
+  // remembered fact through storeExtractedFacts — the SAME pipeline
+  // auto-extraction + smart-import use — so memory_save does NOT become a
+  // parallel write path. When #498 fixes executeBatch INSIDE
+  // storeExtractedFacts, this tool gets batching for free (one store entry
+  // point, shared by extraction + import + the write tool).
+  //
+  // Returns a truthful ok/stored the agent reports verbatim:
+  //   - ok:false  -> not paired / store threw (agent relays the error)
+  //   - ok:true, stored:0 -> dedup/skip (agent says "duplicate", NOT "Saved")
+  //   - ok:true, stored>=1 -> persisted (agent says "Saved")
+  // This truthfulness is the fix: the agent can no longer report "Saved" on a
+  // no-op the way it did when it shelled out to `tr remember` (GNU coreutils
+  // tr) and saw no output.
+  // -------------------------------------------------------------------
+  // The truthful store closure lives in `memory/native-store.ts` (extracted
+  // for direct unit coverage of the not-paired / init-throws / store-throws
+  // branches — #499 review Finding 2). We inject the three deps that close
+  // over this module's live singletons; `isPaired` is read AFTER ensureInit
+  // (inside buildNativeStore) so a hot-reload-completed pairing is honored,
+  // and mirrors storeExtractedFacts' own precondition (index.ts l.1506).
+  const store: TrNativeMemoryDeps['store'] = buildNativeStore({
+    ensureInit: () => ensureInitialized(logger),
+    isPaired: () =>
+      !(needsSetup || !encryptionKey || !dedupKey || !authKeyHex || !userId || !apiClient),
+    storeFacts: (facts) => storeExtractedFacts(facts, logger, 'explicit'),
+  });
+
+  return { recall, getById, store, quota, pinned };
 }
 
 // ---------------------------------------------------------------------------
@@ -4223,17 +4253,17 @@ const plugin = {
     // serve as the capture fallback were RETIRED in Task 3.2. If this
     // registration fails, the agent has NO memory surface until the cause
     // is fixed and the gateway restarted. The before_tool_call gate stays
-    // armed (memory_search/memory_get are simply never registered), and
+    // armed (memory_search/memory_get/memory_save are simply never registered), and
     // auto-extraction hooks still fire on the message_received / agent_end
     // cadence — they write to the subgraph directly, so memories keep
     // getting captured even if the agent can't read them mid-session.
     try {
       registerNativeMemory(api, buildRecallDeps(api.logger));
-      api.logger.info('TotalReclaw: registered native MemoryPluginCapability + memory_search/memory_get tools');
+      api.logger.info('TotalReclaw: registered native MemoryPluginCapability + memory_search/memory_get/memory_save tools');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       api.logger.warn(
-        `TotalReclaw: native memory capability registration failed — agent memory_search/memory_get UNAVAILABLE until fixed: ${msg}`,
+        `TotalReclaw: native memory capability registration failed — agent memory_search/memory_get/memory_save UNAVAILABLE until fixed: ${msg}`,
       );
     }
 

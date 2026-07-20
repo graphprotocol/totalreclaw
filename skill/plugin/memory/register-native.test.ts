@@ -9,10 +9,14 @@
  *
  *   1. api.registerMemoryCapability IS CALLED ONCE with an object that has
  *      exactly { promptBuilder, flushPlanResolver, runtime } as keys.
- *   2. api.registerTool IS CALLED TWICE with factory + opts pairs:
+ *   2. api.registerTool IS CALLED THREE TIMES with factory + opts pairs:
  *        - { names: ['memory_search'] }
  *        - { names: ['memory_get'] }
- *      in that order.
+ *        - { names: ['memory_save'] }   (internal#499 — the write sibling)
+ *      in that order. memory_save is the synchronous write tool that routes an
+ *      explicit "remember X" through storeExtractedFacts (the SAME pipeline
+ *      extraction/import use), closing the silent-data-loss gap where the agent
+ *      shelled out to `tr remember` (GNU coreutils tr) and reported "Saved".
  *   3. THE SAME runtime instance reaches:
  *        - registerMemoryCapability({ ..., runtime })
  *        - the memory_search factory's captured runtime
@@ -55,10 +59,15 @@ const fakeGetById: TrNativeMemoryDeps['getById'] = async (id) => ({
   id,
   plaintext: 'text',
 });
+// fakeStore backs the memory_save tool in the non-instrumented runs (where we
+// only assert registration, not routing). The instrumented run below swaps in a
+// recording store to prove memory_save routes the fact through `store`.
+const fakeStore: TrNativeMemoryDeps['store'] = async () => ({ ok: true, stored: 1 });
 
 const deps: TrNativeMemoryDeps = {
   recall: fakeRecall,
   getById: fakeGetById,
+  store: fakeStore,
   // quota + pinned are intentionally omitted — the wiring helper MUST accept
   // a deps object without them (they default to no-warning / no-pinned).
 };
@@ -122,10 +131,11 @@ assert.deepEqual(
 );
 
 // ---------------------------------------------------------------------------
-// Contract 2: registerTool called exactly twice with the right opts order.
+// Contract 2: registerTool called exactly THREE times with the right opts
+// order — memory_search, memory_get, then memory_save (internal#499).
 // ---------------------------------------------------------------------------
 
-assert.equal(toolCalls.length, 2, 'registerTool must be called exactly twice');
+assert.equal(toolCalls.length, 3, 'registerTool must be called exactly three times');
 assert.deepEqual(
   toolCalls[0]!.opts,
   { names: ['memory_search'] },
@@ -135,6 +145,11 @@ assert.deepEqual(
   toolCalls[1]!.opts,
   { names: ['memory_get'] },
   `second registerTool must use { names: ['memory_get'] }, got: ${JSON.stringify(toolCalls[1]!.opts)}`,
+);
+assert.deepEqual(
+  toolCalls[2]!.opts,
+  { names: ['memory_save'] },
+  `third registerTool must use { names: ['memory_save'] } (internal#499 write sibling), got: ${JSON.stringify(toolCalls[2]!.opts)}`,
 );
 
 // ---------------------------------------------------------------------------
@@ -172,12 +187,20 @@ assert.equal(
 
 // Make recall record so we can prove the tool's runtime ran our recall.
 let recallCalls = 0;
+// Make store record so we can prove memory_save routed the fact through the
+// captured store closure (internal#499 — the write tool must hit the SAME
+// store path extraction/import use, not shell out to a CLI).
+let storeCalls: Array<{ text: string; type?: string; importance?: number }> = [];
 const instrumentedDeps: TrNativeMemoryDeps = {
   recall: async (q) => {
     recallCalls++;
     return [{ id: 'f1', plaintext: `instrumented:${q}`, score: 0.9 }];
   },
   getById: async (id) => ({ id, plaintext: 'getById-text' }),
+  store: async (input) => {
+    storeCalls.push(input);
+    return { ok: true, stored: 1 };
+  },
 };
 
 reset();
@@ -224,6 +247,24 @@ const getPayload = JSON.parse(getRes.content[0]!.text) as { path: string; text: 
 assert.equal(getPayload.text, 'getById-text', 'memory_get returns decrypted plaintext');
 assert.equal(getPayload.path, `${FACT_PATH_PREFIX}f1`, 'memory_get path round-trips');
 
+// Drive memory_save. Its execute must call the captured `store` closure with
+// the fact text (the write path), returning a truthful ok/stored. This is the
+// core internal#499 contract: an explicit remember routes through the store
+// fn — NOT a shell-out — and the agent gets a truthful result it can relay.
+const saveTool = toolCalls[2]!.tool as {
+  name: string;
+  execute: (toolCallId: string, params: unknown) => Promise<{ content: Array<{ type: string; text: string }> }>;
+};
+assert.equal(saveTool.name, 'memory_save', 'memory_save tool name');
+const saveRes = await saveTool.execute('tcid', { text: 'User prefers PostgreSQL', type: 'preference', importance: 9 });
+const savePayload = JSON.parse(saveRes.content[0]!.text) as { ok: boolean; stored: number; message: string };
+assert.equal(savePayload.ok, true, 'memory_save: ok is true on a successful store');
+assert.equal(savePayload.stored, 1, 'memory_save: forwards the stored count');
+assert.equal(storeCalls.length, 1, 'memory_save: routed the fact through the captured store fn exactly once');
+assert.equal(storeCalls[0]!.text, 'User prefers PostgreSQL', 'memory_save: store received the fact text');
+assert.equal(storeCalls[0]!.type, 'preference', 'memory_save: store received the supplied type');
+assert.equal(storeCalls[0]!.importance, 9, 'memory_save: store received the supplied importance');
+
 // ---------------------------------------------------------------------------
 // Contract 4: promptBuilder is the real buildPromptSection (not a stub).
 // Branch on availableTools — both-tools path emits the recall guidance line.
@@ -250,6 +291,7 @@ reset();
 registerNativeMemory(fakeApi, {
   recall: fakeRecall,
   getById: fakeGetById,
+  store: fakeStore,
   quota: { denied: true },
 });
 const linesQuota = capabilityCalls[0]!.promptBuilder({ availableTools: new Set() });
@@ -263,6 +305,7 @@ reset();
 registerNativeMemory(fakeApi, {
   recall: fakeRecall,
   getById: fakeGetById,
+  store: fakeStore,
   pinned: [{ id: 'p1', plaintext: 'User prefers dark mode.' }],
 });
 const linesPinned = capabilityCalls[0]!.promptBuilder({ availableTools: new Set() });

@@ -66,6 +66,11 @@
 // OpenClaw's type package.
 // ---------------------------------------------------------------------------
 import { EXTRACTION_SYSTEM_PROMPT } from '../extraction/extractor.js';
+// Type-only import of the v1 taxonomy types so the save-input contract is typed
+// against the single source of truth in extractor.ts. Erased at build time
+// (mirrors memory/pin.ts:26), so it adds no runtime coupling and does not
+// affect this file's scanner-clean posture.
+import type { MemoryType, MemoryScope, ExtractedEntity } from '../extraction/extractor.js';
 
 // ---------------------------------------------------------------------------
 // Types — injected caller shapes. Kept loose (no OpenClaw type import) so
@@ -100,6 +105,67 @@ export interface TrRecallFn {
 /** getById() decrypts a single fact by id (the read-back reverse path). */
 export interface TrGetFn {
   (id: string): Promise<{ id: string; plaintext: string } | null>;
+}
+
+// ---------------------------------------------------------------------------
+// Types — memory_save (internal#499). The write sibling of recall/getById.
+//
+// WHY THIS EXISTS:
+//   recall/getById are the READ pipeline (they back memory_search/memory_get).
+//   The plugin registered no WRITE tool, so an explicit "remember X" had no
+//   agent-driven store path — the agent shelled out to `tr remember` (GNU
+//   coreutils `tr`), got no output, and reported "Saved" (silent data loss).
+//   `store` is the WRITE closure: it routes the fact through the SAME
+//   storeExtractedFacts pipeline extraction/import use (wired in index.ts's
+//   buildRecallDeps), returning a truthful ok/stored the agent reports verbatim.
+//
+//   The closure — NOT the tool — applies domain defaults (type → 'claim',
+//   importance → 8, source → 'user') and builds the canonical ExtractedFact.
+//   The input here carries only what the agent explicitly supplied, so the
+//   tool stays scanner-trivial orchestration and the domain logic stays in
+//   index.ts alongside the rest of the network surface.
+// ---------------------------------------------------------------------------
+
+/**
+ * The fact an agent explicitly asked to persist via `memory_save`. `text` is
+ * required; every other field is optional and defaulted by the store closure
+ * in index.ts when absent.
+ */
+export interface TrMemorySaveInput {
+  text: string;
+  /** v1 taxonomy type. Defaults to 'claim' in the store closure. */
+  type?: MemoryType;
+  /** 1-10 salience. Defaults to 8 (explicit-remember weight) in the closure. */
+  importance?: number;
+  /** Structured entities for trapdoor generation. */
+  entities?: ExtractedEntity[];
+  /** v1 life-domain scope. */
+  scope?: MemoryScope;
+  /** Decision-with-reasoning "because Y" clause (type='commitment'/'claim'). */
+  reasoning?: string;
+}
+
+/**
+ * Truthful store outcome. `ok:false` means the fact was NOT persisted (agent
+ * must relay `error`); `ok:true` + `stored:0` means the store path ran but the
+ * fact was a near-duplicate / skipped by dedup (agent says "not stored", NOT
+ * "Saved"); `ok:true` + `stored>=1` means persisted.
+ */
+export interface TrMemorySaveResult {
+  ok: boolean;
+  /** Count of newly persisted facts (0 on dedup/skip/failure). */
+  stored: number;
+  /** Present iff ok:false — the reason the store path did not persist. */
+  error?: string;
+}
+
+/**
+ * store() persists one explicitly-remembered fact through storeExtractedFacts.
+ * Bound to the real encrypt/index/submit pipeline in index.ts's buildRecallDeps
+ * (the same path auto-extraction + smart-import use) — NOT reimplemented.
+ */
+export interface TrMemorySaveFn {
+  (input: TrMemorySaveInput): Promise<TrMemorySaveResult>;
 }
 
 export interface TrMemorySearchManagerDeps {

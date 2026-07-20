@@ -9,7 +9,8 @@
   "contracts": {
     "tools": [
       "memory_search",
-      "memory_get"
+      "memory_get",
+      "memory_save"
     ]
   },
   "configSchema": {

@@ -133,6 +133,28 @@ assert(
   'skill/plugin/SKILL.md: documents native recall tool memory_get',
 );
 
+// internal#499: the write sibling must be documented too. Without it the agent
+// had no tool for an explicit "remember X" and shelled out to `tr remember`
+// (GNU coreutils tr) — silent data loss. memory_save is the agent's only write
+// path; SKILL.md MUST name it alongside memory_search/memory_get.
+assert(
+  pluginSkillMd.includes('memory_save'),
+  'skill/plugin/SKILL.md: documents native write tool memory_save (internal#499)',
+);
+
+// internal#499 belt-and-suspenders: SKILL.md MUST forbid shelling out to `tr`
+// to store a memory (the bare-`tr remember` → GNU coreutils → silent no-op →
+// "Saved" data-loss path). Pin both the prohibition and the reason so a future
+// edit that softens the guard fails loudly here.
+assert(
+  /NEVER shell out to `tr`/.test(pluginSkillMd),
+  'skill/plugin/SKILL.md: forbids shelling out to `tr` to store a memory (internal#499 guard)',
+);
+assert(
+  pluginSkillMd.includes('GNU coreutils'),
+  'skill/plugin/SKILL.md: explains why bare `tr remember` is not a TotalReclaw command (internal#499)',
+);
+
 // ---------------------------------------------------------------------------
 // 4. User-initiated `tr pair` (NOT auto-pair-on-load) — plugin file
 // ---------------------------------------------------------------------------

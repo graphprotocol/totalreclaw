@@ -52,6 +52,7 @@ const FRESH: OnboardingState = { onboardingState: 'fresh', version: '3.2.0' };
 const EXPECTED_GATED = [
   'memory_search',
   'memory_get',
+  'memory_save',
 ];
 for (const t of EXPECTED_GATED) {
   assert(isGatedToolName(t), `gated list contains "${t}"`);

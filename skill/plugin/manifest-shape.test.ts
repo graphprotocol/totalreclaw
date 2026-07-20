@@ -169,6 +169,12 @@ let manifest: Record<string, unknown>;
     tools.includes('memory_get'),
     'manifest contracts.tools includes "memory_get" (native contract tool, registered by Task 2.7)',
   );
+  assert(
+    tools.includes('memory_save'),
+    'manifest contracts.tools includes "memory_save" (internal#499 — the write sibling registered by ' +
+      'registerNativeMemory alongside memory_search/memory_get; OpenClaw\'s loader silently drops a ' +
+      'registered tool that is NOT declared here, so this entry is load-bearing, not cosmetic)',
+  );
 }
 
 {

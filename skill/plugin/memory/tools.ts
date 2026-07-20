@@ -90,6 +90,26 @@
  */
 
 // ---------------------------------------------------------------------------
+// Imports — taxonomy types + the entity validator from extractor.ts so the
+// memory_save schema/forwarding is typed + validated against the single source
+// of truth. Type-only imports are erased at build (mirrors memory/pin.ts:26);
+// parseEntity/VALID_MEMORY_TYPES/VALID_MEMORY_SCOPES are pure constants/funcs
+// with no env or net token, so this file's scanner-clean posture is unchanged
+// (memory-runtime.ts already makes the same runtime import — see its l.68).
+// ---------------------------------------------------------------------------
+import {
+  parseEntity,
+  VALID_MEMORY_TYPES,
+  VALID_MEMORY_SCOPES,
+} from '../extraction/extractor.js';
+import type {
+  MemoryType,
+  MemoryScope,
+  ExtractedEntity,
+} from '../extraction/extractor.js';
+import type { TrMemorySaveFn, TrMemorySaveInput } from './memory-runtime.js';
+
+// ---------------------------------------------------------------------------
 // Types — loose on purpose. The plugin does not import OpenClaw's type
 // package; the tool object returned is STRUCTURALLY compatible with
 // OpenClaw's AnyAgentTool at runtime (same field names, same execute arity,
@@ -285,6 +305,21 @@ function readPositiveIntegerParam(
 function readFiniteNumberParam(params: Record<string, unknown>, key: string): number | undefined {
   const v = params[key];
   if (typeof v === 'number' && Number.isFinite(v)) return v;
+  return undefined;
+}
+
+/**
+ * Read a string param that must be one of `allowed`. Returns undefined for
+ * absent OR invalid values (the memory_save tool drops invalid optionals
+ * rather than forwarding garbage — the store closure applies the sane default).
+ */
+function readStringEnum(
+  params: Record<string, unknown>,
+  key: string,
+  allowed: readonly string[],
+): string | undefined {
+  const v = params[key];
+  if (typeof v === 'string' && allowed.includes(v)) return v;
   return undefined;
 }
 
@@ -493,6 +528,182 @@ export function createMemoryGetTool(runtime: TrMemoryPluginRuntimeLike): AgentTo
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         return jsonResult({ path: relPath, text: '', disabled: true, error: msg });
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// createMemorySaveTool (internal#499)
+// ---------------------------------------------------------------------------
+
+/**
+ * The memory_save tool factory. Returns a tool object structurally compatible
+ * with OpenClaw's AnyAgentTool that persists ONE explicitly-remembered fact
+ * through the SAME store path extraction/import use (storeExtractedFacts).
+ *
+ * WHY THIS TOOL EXISTS:
+ *   The plugin registered only `memory_search` + `memory_get` — no write tool.
+ *   So an explicit "remember X" had no agent-driven store path: the agent
+ *   shelled out to `tr remember "X"` (GNU coreutils `tr`, NOT a TotalReclaw
+ *   CLI), got no output, and reported "Saved" — silent data loss on the exact
+ *   user intent the plugin exists to serve. memory_save closes that gap with a
+ *   synchronous write that returns a truthful ok/stored the agent reports
+ *   verbatim (no fabrication).
+ *
+ * CAPTURED-STORE DESIGN (vs captured-runtime):
+ *   memory_search/memory_get capture the READ `runtime` (the
+ *   MemorySearchManager surface). The write path is NOT on that runtime — it
+ *   is the storeExtractedFacts pipeline, which closes over unexported index.ts
+ *   state (encryptionKey/dedupKey/authKeyHex/apiClient). So memory_save
+ *   captures a `store` closure instead, bound to that pipeline in index.ts's
+ *   buildRecallDeps (exactly how recall/getById bind the read pipeline). The
+ *   closure — NOT this tool — applies domain defaults (type → 'claim',
+ *   importance → 8, source → 'user') and constructs the canonical ExtractedFact;
+ *   this tool only validates + forwards, so it stays scanner-trivial.
+ *
+ * TRUTHFULNESS CONTRACT (the bug fix):
+ *   - missing/empty text → ok:false, store NOT called (no silent no-op).
+ *   - store ok:true + stored>=1 → "Saved" (true).
+ *   - store ok:true + stored===0 → "near-duplicate, not stored" (the agent
+ *     must NOT say "Saved" here).
+ *   - store ok:false → the error is surfaced; the agent relays the failure
+ *     instead of fabricating success.
+ *
+ * Wiring (internal#499):
+ *   api.registerTool(() => createMemorySaveTool(store), { names: ['memory_save'] });
+ *
+ * @param store  the TrMemorySaveFn closure bound to storeExtractedFacts
+ *               (captured at register() time, like recall/getById)
+ */
+export function createMemorySaveTool(store: TrMemorySaveFn): AgentToolLike {
+  return {
+    name: 'memory_save',
+    label: 'Memory Save',
+    description:
+      'Store ONE explicitly-remembered fact to the user’s encrypted TotalReclaw ' +
+      'memory vault. Use this when the user explicitly asks to remember / save / ' +
+      'note / not-forget something ("remember X", "save X", "note X", "don’t ' +
+      'forget X"). Returns a truthful ok + stored count: relay that verbatim — ' +
+      'say "Saved" only when stored >= 1; if stored is 0 the fact was a ' +
+      'near-duplicate; if ok is false, tell the user the store failed. NEVER ' +
+      'shell out to `tr` or any CLI to store a memory — this tool is the only ' +
+      'write path. Do NOT use this for background capture (that is automatic).',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: {
+          type: 'string',
+          description: 'The fact to remember, stated as a self-contained assertion.',
+        },
+        type: {
+          type: 'string',
+          enum: [...VALID_MEMORY_TYPES],
+          description: 'Memory taxonomy type. Omit to let the store default it.',
+        },
+        importance: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 10,
+          description: 'Salience 1-10. Omit to let the store default it (explicit-remember weight).',
+        },
+        scope: {
+          type: 'string',
+          enum: [...VALID_MEMORY_SCOPES],
+          description: 'Life-domain scope. Omit to let the store default it.',
+        },
+        reasoning: {
+          type: 'string',
+          maxLength: 256,
+          description: 'Optional "because Y" clause for decision-style claims.',
+        },
+        entities: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              type: { type: 'string', enum: ['person', 'project', 'tool', 'company', 'concept', 'place'] },
+              role: { type: 'string' },
+            },
+            required: ['name', 'type'],
+          },
+          description: 'Optional structured entities to aid search trapdoors.',
+        },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    execute: async (_toolCallId, params) => {
+      const raw = asParamsRecord(params);
+
+      // text is required + must be non-empty after trim. A missing/empty text
+      // is a caller error — return ok:false WITHOUT calling store so the agent
+      // can never drive this tool into a silent no-op it then misreports.
+      const text = typeof raw.text === 'string' ? raw.text.trim() : '';
+      if (!text) {
+        return jsonResult({
+          ok: false,
+          stored: 0,
+          error: 'memory_save requires a non-empty "text" field.',
+          message: 'Could not store that memory: no fact text was provided.',
+        });
+      }
+
+      // Forward only the optionals the agent supplied AND that pass validation.
+      // Invalid optionals are dropped (not forwarded as garbage) — the store
+      // closure then applies the canonical default. Defaults are the closure's
+      // responsibility, never the tool's.
+      const input: TrMemorySaveInput = { text };
+
+      const type = readStringEnum(raw, 'type', VALID_MEMORY_TYPES) as MemoryType | undefined;
+      if (type) input.type = type;
+
+      // importance must be a positive integer within the 1-10 band.
+      const importanceRaw = readPositiveIntegerParam(raw, 'importance');
+      if (importanceRaw !== undefined && importanceRaw <= 10) input.importance = importanceRaw;
+
+      const scope = readStringEnum(raw, 'scope', VALID_MEMORY_SCOPES) as MemoryScope | undefined;
+      if (scope) input.scope = scope;
+
+      const reasoning = readStringParam(raw, 'reasoning');
+      if (reasoning) input.reasoning = reasoning.slice(0, 256);
+
+      const entitiesRaw = Array.isArray(raw.entities) ? raw.entities : [];
+      const entities: ExtractedEntity[] = [];
+      for (const e of entitiesRaw) {
+        // parseEntity validates {name, type, role} against the taxonomy and
+        // returns null on any invalid entity — same validator the historic
+        // totalreclaw_remember handler used (regression-guarded by
+        // store-dedup-wiring.test.ts scenario 6b).
+        const parsed = parseEntity(e);
+        if (parsed) entities.push(parsed);
+      }
+      if (entities.length > 0) input.entities = entities;
+
+      try {
+        const result = await store(input);
+        // Truthful message the agent can relay verbatim. The branching here is
+        // the heart of the fix: stored>=1 is the ONLY "Saved" case.
+        const message = !result.ok
+          ? `Could not store that memory: ${result.error ?? 'unknown error'}.`
+          : result.stored > 0
+            ? `Saved ${result.stored} memor${result.stored === 1 ? 'y' : 'ies'} to the encrypted vault.`
+            : 'No new memory stored — it is a near-duplicate of one already in the vault.';
+        return jsonResult({
+          ok: result.ok,
+          stored: result.stored,
+          ...(result.error ? { error: result.error } : {}),
+          message,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return jsonResult({
+          ok: false,
+          stored: 0,
+          error: msg,
+          message: `Could not store that memory: ${msg}.`,
+        });
       }
     },
   };

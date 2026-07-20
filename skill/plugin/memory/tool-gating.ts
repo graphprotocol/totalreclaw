@@ -38,12 +38,15 @@ import type { OnboardingState } from '../fs-helpers.js';
  * Anything NOT in this set is always callable.
  *
  * Keep in sync with the `registerNativeMemory` registration in `index.ts`
- * (the two `api.registerTool` calls with `names: ['memory_search']` and
- * `names: ['memory_get']`).
+ * (the three `api.registerTool` calls with `names: ['memory_search']`,
+ * `names: ['memory_get']`, and `names: ['memory_save']`). Gating the write
+ * tool too means an unpaired user's explicit "remember X" gets the same
+ * actionable pair-me guidance instead of a generic refusal (#499 review).
  */
 export const GATED_TOOL_NAMES: readonly string[] = Object.freeze([
   'memory_search',
   'memory_get',
+  'memory_save',
 ]);
 
 export interface GateDecision {
@@ -68,7 +71,7 @@ export function decideToolGate(
   return {
     block: true,
     blockReason:
-      'TotalReclaw setup pending — memory_search/memory_get are disabled until the user pairs. ' +
+      'TotalReclaw setup pending — memory_search/memory_get/memory_save are disabled until the user pairs. ' +
       'Tell the user to run `tr pair --url-pin` on the gateway host and open the returned URL ' +
       'in a browser (the recovery phrase is generated and encrypted in-browser; it never enters ' +
       'this chat). Once paired, memory tools unlock automatically. Do NOT attempt to generate, ' +

@@ -104,7 +104,7 @@ const SRC = fs.readFileSync(INDEX_PATH, 'utf-8');
 // false-success breadcrumb — the log is inside the try, before the catch).
 // ---------------------------------------------------------------------------
 {
-  const banner = 'registered native MemoryPluginCapability + memory_search/memory_get tools';
+  const banner = 'registered native MemoryPluginCapability + memory_search/memory_get/memory_save tools';
   const count = SRC.split(banner).length - 1;
   assert(count === 1, `native registration breadcrumb present exactly once (got ${count})`);
 
