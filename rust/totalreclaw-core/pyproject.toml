@@ -7,7 +7,7 @@ name = "totalreclaw-core"
 # Keep in lockstep with Cargo.toml [package].version. maturin uses THIS value
 # for the PyPI wheel version; Cargo.toml drives crates.io + the wasm-pack npm
 # package. Both MUST match or the PyPI wheel ships under the wrong version.
-version = "2.5.6"
+version = "2.6.0"
 description = "TotalReclaw crypto core — E2EE, LSH, blind indices, protobuf encoding (Rust)"
 requires-python = ">=3.10"
 license = { text = "MIT" }
