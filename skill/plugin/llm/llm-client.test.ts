@@ -503,6 +503,43 @@ function restoreEnv(stash: Record<string, string | undefined>): void {
 }
 
 // ---------------------------------------------------------------------------
+// #502 wiring regression — provider config carries models[] but NO apiKey
+// (key comes from a lower tier: auth-profiles / env var). The configured
+// models[] MUST still be threaded so cheapest-configured selection fires,
+// instead of silently dropping to the hardcoded table. This is the real
+// production shape (found live on the QA box: openclaw.json enumerates
+// zai models[] while the key arrives via ZAI_API_KEY → resolution reached
+// the env-var tier and used the hardcoded fallback). Uses openai so the
+// cheapest-configured model (gpt-4.1-nano) is DISTINCT from the hardcoded
+// table default (gpt-4.1-mini) — the assertion can tell them apart.
+// ---------------------------------------------------------------------------
+
+{
+  // Tier 3 (auth-profiles) carries the key; openclawProviders.openai has
+  // models[] but no apiKey → Tier 2 is skipped, resolution reaches Tier 3.
+  const cap = mkLogger();
+  initLLMClient({
+    primaryModel: 'openai/gpt-5',
+    openclawProviders: {
+      openai: {
+        baseUrl: 'https://api.openai.com/v1',
+        // NO apiKey here — key comes from auth-profiles below.
+        models: [{ id: 'gpt-5', maxTokens: 400_000 }, { id: 'gpt-4.1-nano', maxTokens: 128_000 }],
+      },
+    },
+    authProfileKeys: [{ provider: 'openai', apiKey: 'sk-auth' }],
+    logger: cap.logger,
+  });
+  const cfg = resolveLLMConfig();
+  assertEq(
+    cfg?.model,
+    'gpt-4.1-nano',
+    'tier-3 auth-profiles: configured models[] threaded → cheapest-configured gpt-4.1-nano (NOT hardcoded gpt-4.1-mini)',
+  );
+  assertEq(cfg?.apiKey, 'sk-auth', 'tier-3 auth-profiles: key came from auth-profiles (not the provider object)');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

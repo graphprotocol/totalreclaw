@@ -451,6 +451,11 @@ export function initLLMClient(options: {
         baseUrlOverride: llmOverride.baseUrl,
         modelOverride: llmOverride.model ?? modelOverride,
         primaryModelHint: modelFromPrimary,
+        // #502: even for an explicit provider+key override, honor the user's
+        // configured models[] when the override omits a model — keeps
+        // cheapest-configured selection consistent across every tier (moot when
+        // the override sets a model, since that wins outright).
+        configuredModels: openclawProviders?.[provider]?.models,
       });
       if (resolved) {
         _cachedConfig = resolved.config;
@@ -524,6 +529,10 @@ export function initLLMClient(options: {
         const resolved = buildConfigForProvider(providerFromPrimary, hit.apiKey, {
           modelOverride,
           primaryModelHint: modelFromPrimary,
+          // #502: the key came from auth-profiles, but the user's configured
+          // models[] still lives in the OpenClaw provider config — thread it so
+          // cheapest-configured selection fires even when the key isn't co-located.
+          configuredModels: openclawProviders?.[providerFromPrimary]?.models,
         });
         if (resolved) {
           _cachedConfig = resolved.config;
@@ -543,6 +552,9 @@ export function initLLMClient(options: {
     for (const entry of ordered) {
       const resolved = buildConfigForProvider(entry.provider, entry.apiKey, {
         modelOverride,
+        // #502: thread the OpenClaw-configured models[] for this provider (key
+        // source and models[] source are independent).
+        configuredModels: openclawProviders?.[entry.provider]?.models,
       });
       if (resolved) {
         _cachedConfig = resolved.config;
@@ -577,6 +589,12 @@ export function initLLMClient(options: {
         const resolved = buildConfigForProvider(providerFromPrimary, apiKey, {
           modelOverride,
           primaryModelHint: modelFromPrimary,
+          // #502: the key comes from an env var (e.g. ZAI_API_KEY), but the
+          // user's models[] still lives in the OpenClaw provider config — thread
+          // it so cheapest-configured selection fires instead of silently
+          // dropping to the hardcoded CHEAP_MODEL_BY_PROVIDER table. This is the
+          // common production setup (provider key via env, models[] in config).
+          configuredModels: openclawProviders?.[providerFromPrimary]?.models,
         });
         if (resolved) {
           _cachedConfig = resolved.config;
@@ -591,7 +609,11 @@ export function initLLMClient(options: {
   for (const [provider, keyName] of envFallback) {
     const apiKey = CONFIG.llmApiKeys[keyName];
     if (!apiKey) continue;
-    const resolved = buildConfigForProvider(provider, apiKey, { modelOverride });
+    const resolved = buildConfigForProvider(provider, apiKey, {
+      modelOverride,
+      // #502: env-var key + OpenClaw-configured models[] (independent sources).
+      configuredModels: openclawProviders?.[provider]?.models,
+    });
     if (resolved) {
       _cachedConfig = resolved.config;
       _logger?.info?.(
