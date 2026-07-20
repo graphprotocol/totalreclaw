@@ -31,6 +31,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { loadEmbedder } from './embedder-loader.js';
+import { resolveCacheLayout, quickCacheProbe } from './embedder-cache.js';
 
 interface ModelConfig {
   /** Semantic model id surfaced to claims via `embedding_model_id`. */
@@ -140,6 +141,54 @@ let autoModel: any = null;
 let activeModel: ModelConfig | null = null;
 
 /**
+ * Thrown by `generateEmbedding` when an interactive *query* embedding is
+ * requested but the embedder bundle isn't ready yet and loading it would
+ * require a cold ~700 MB download (issue #507). The recall call sites
+ * (`before_agent_start` hook, recall tool) catch this and fall back to
+ * word-only trapdoors, so the user's turn returns promptly instead of
+ * blocking on the download. Distinct type so callers / tests can tell the
+ * fast-fail path apart from a genuine transport/extraction failure.
+ */
+export class EmbedderNotReadyError extends Error {
+  constructor(message = 'embedder bundle not ready — skipping cold load for query embedding') {
+    super(message);
+    this.name = 'EmbedderNotReadyError';
+  }
+}
+
+/**
+ * Cheap, synchronous, network-free probe: can we embed *right now* without
+ * triggering a cold bundle download? True when the model is already loaded
+ * in memory OR the bundle is present on disk (a `manifest.json` at the
+ * version-root, which `loadEmbedder` writes only after a fully downloaded +
+ * extracted + integrity-verified bundle). Reuses `quickCacheProbe`, which is
+ * a pure filesystem read — it never reaches the network.
+ */
+export function isEmbedderReady(): boolean {
+  if (activeModel) return true;
+  try {
+    const cfg = activeRuntimeConfig();
+    return quickCacheProbe(resolveCacheLayout(cfg.cacheRoot)).hasManifest;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Decide whether a cold embedder load should be deferred (issue #507).
+ *
+ * Interactive query embeddings (`isQuery: true`) must never block the user's
+ * turn on a ~700 MB first-use download: on a fresh install the background
+ * prefetch is still running, so we fail fast and let the caller degrade to
+ * word-only recall. Once the prefetch lands, subsequent turns embed normally.
+ * Write/store embeddings (no `isQuery`) always take the blocking load so
+ * facts are guaranteed to be embedded.
+ */
+export function shouldDeferColdEmbedderLoad(options?: { isQuery?: boolean }): boolean {
+  return Boolean(options?.isQuery) && !isEmbedderReady();
+}
+
+/**
  * Generate an embedding vector for the given text.
  *
  * On first call, downloads the embedder bundle (transformers + onnxruntime
@@ -153,6 +202,13 @@ export async function generateEmbedding(
   options?: { isQuery?: boolean },
 ): Promise<number[]> {
   if (!activeModel) {
+    // Issue #507: never block an interactive query turn on a cold ~700 MB
+    // bundle download. If this is a query and the bundle isn't ready yet,
+    // fail fast so the recall call site falls back to word-only trapdoors;
+    // the background prefetch keeps filling the cache for later turns.
+    if (shouldDeferColdEmbedderLoad(options)) {
+      throw new EmbedderNotReadyError();
+    }
     activeModel = getModelConfig();
     const cfg = activeRuntimeConfig();
     console.error(
