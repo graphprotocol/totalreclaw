@@ -290,6 +290,89 @@ assertEqual(wasm.getMaxDebriefItems(), 5, 'MAX_DEBRIEF_ITEMS = 5');
 assertEqual(wasm.getDebriefSource(), 'zeroclaw_debrief', 'DEBRIEF_SOURCE');
 
 // ---------------------------------------------------------------------------
+// 9. Embedding codec (canonical f16 + universal decoder) — internal#479
+// ---------------------------------------------------------------------------
+console.log('\n=== Embedding Codec ===');
+
+const embVectors = JSON.parse(
+  readFileSync(join(__dirname, 'fixtures', 'embedding_codec_vectors.json'), 'utf8')
+);
+const unitVec = embVectors.unit_vector; // 640-d, exact-f32 values
+
+// (a) encode -> canonical f16 base64 must match the Python struct '<e' output.
+const canonicalB64 = wasm.encodeEmbeddingCanonical(new Float32Array(unitVec));
+assertEqual(canonicalB64, embVectors.canonical_f16_base64, 'encodeEmbeddingCanonical matches Python f16 base64');
+
+// decode(canonical f16) -> Float32Array, length 640, cosine >= 0.9999.
+const decF16 = wasm.decodeEmbeddingUniversal(canonicalB64);
+assert(decF16 instanceof Float32Array, 'decodeEmbeddingUniversal returns Float32Array');
+assertEqual(decF16.length, 640, 'decoded f16 length is 640');
+{
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < 640; i++) {
+    dot += decF16[i] * unitVec[i];
+    na += unitVec[i] * unitVec[i];
+    nb += decF16[i] * decF16[i];
+  }
+  const cos = dot / (Math.sqrt(na) * Math.sqrt(nb));
+  assert(cos >= 0.9999, `f16 round-trip cosine ${cos} >= 0.9999`);
+}
+
+// (b) legacy JSON array path (TS plugin) -> exact recovery.
+const decJson = Array.from(wasm.decodeEmbeddingUniversal(embVectors.legacy_json_640));
+assertEqual(decJson.length, 640, 'decoded JSON length is 640');
+assert(decJson.every((v, i) => v === unitVec[i]), 'JSON legacy path recovers input exactly');
+
+// (c) legacy f32 binary path (old Python) -> exact recovery.
+const decF32 = Array.from(wasm.decodeEmbeddingUniversal(embVectors.legacy_f32_base64_640));
+assertEqual(decF32.length, 640, 'decoded f32 length is 640');
+assert(decF32.every((v, i) => v === unitVec[i]), 'f32 legacy path recovers input exactly');
+
+// (d) non-canonical 1024-dim: encode uses f32 (640 guard), lossless round trip.
+const ncVec = embVectors.non_canonical.vector;
+const ncEnc = wasm.encodeEmbeddingCanonical(new Float32Array(ncVec));
+const ncDec = Array.from(wasm.decodeEmbeddingUniversal(ncEnc));
+assertEqual(ncDec.length, 1024, '1024-d round-trip length');
+assert(ncDec.every((v, i) => v === ncVec[i]), '1024-d f32 round trip is lossless');
+// decode the committed 1024-d f32 fixture directly.
+const ncDecFix = Array.from(wasm.decodeEmbeddingUniversal(embVectors.non_canonical.f32_base64));
+assert(ncDecFix.every((v, i) => v === ncVec[i]), 'decode committed 1024-d f32 fixture exact');
+
+// Error paths -> JsError, never a silent wrong-dim vector.
+try {
+  wasm.decodeEmbeddingUniversal(Buffer.from([0xaa]).toString('base64')); // 1 byte
+  assert(false, 'bad-length buffer should error');
+} catch (e) {
+  assert(true, 'rejects bad-length buffer: ' + e.message.slice(0, 60));
+}
+try {
+  wasm.decodeEmbeddingUniversal('[1.0, not-json');
+  assert(false, 'malformed JSON should error');
+} catch (e) {
+  assert(true, 'rejects malformed JSON: ' + e.message.slice(0, 60));
+}
+
+// Fail-closed encode (#479 review): NaN / Infinity / finite-f16-overflow must
+// THROW at the WASM surface; the F16_MAX boundary (65504) must encode.
+function assertThrows(fn, message) {
+  try { fn(); assert(false, message + ' (did not throw)'); }
+  catch (e) { assert(true, message); }
+}
+{
+  const bad = new Float32Array(640).fill(0.5);
+  bad[3] = NaN;
+  assertThrows(() => wasm.encodeEmbeddingCanonical(bad), 'encode throws on NaN component');
+  bad[3] = Infinity;
+  assertThrows(() => wasm.encodeEmbeddingCanonical(bad), 'encode throws on Infinity component');
+  bad[3] = 1e10;
+  assertThrows(() => wasm.encodeEmbeddingCanonical(bad), 'encode throws on finite f16 overflow');
+  bad[3] = 65504;
+  const okB64 = wasm.encodeEmbeddingCanonical(bad);
+  const back = wasm.decodeEmbeddingUniversal(okB64);
+  assertEqual(back[3], 65504, 'F16_MAX boundary encodes and round-trips');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 console.log(`\n${'='.repeat(50)}`);

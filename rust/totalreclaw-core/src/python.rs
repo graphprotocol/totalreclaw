@@ -101,6 +101,10 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_generate_content_fingerprint, m)?)?;
     m.add_function(wrap_pyfunction!(py_normalize_text, m)?)?;
 
+    // Embedding codec (canonical f16 + universal decoder) — internal#479 Part A
+    m.add_function(wrap_pyfunction!(py_encode_embedding_canonical, m)?)?;
+    m.add_function(wrap_pyfunction!(py_decode_embedding_universal, m)?)?;
+
     // LSH
     m.add_class::<PyLshHasher>()?;
 

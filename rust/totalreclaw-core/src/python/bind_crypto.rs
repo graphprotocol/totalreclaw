@@ -116,3 +116,37 @@ pub(crate) fn py_normalize_text(text: &str) -> String {
     fingerprint::normalize_text(text)
 }
 
+// ---------------------------------------------------------------------------
+// Embedding codec (canonical f16 + universal decoder) — internal#479 Part A
+// ---------------------------------------------------------------------------
+
+/// Pack an embedding into the canonical pre-encryption payload string.
+///
+/// ``embedding``: ``list[float]`` (production = 640-d Harrier output). A 640-d
+/// vector is packed little-endian f16; any other length is packed f32 (the
+/// 640 guard — see ``embedding_codec``). Returns the base64 ASCII string that
+/// the client encrypts before storage.
+#[pyfunction]
+#[pyo3(name = "encode_embedding_canonical")]
+pub(crate) fn py_encode_embedding_canonical(embedding: Vec<f32>) -> PyResult<String> {
+    // Fallible (#479 review): rejects NaN/±inf and finite f16 overflow —
+    // stricter than struct '<e' (which packs NaN/inf); fail-closed for
+    // immutable on-chain data. Precondition: f32-precision-exact inputs
+    // (Python floats are f64; this boundary rounds f64→f32 first — see the
+    // core doc comment on double rounding).
+    crate::embedding_codec::encode_embedding_canonical(&embedding).map_err(to_pyerr)
+}
+
+/// Decode any embedding payload into a ``list[float]`` (the forever-reader).
+///
+/// Dispatch mirrors ``decode_embedding_universal``: a payload beginning with
+/// ``[`` is parsed as a JSON float array (legacy TS plugin); otherwise
+/// base64-decode and infer width from the byte count (``640*2`` → f16 upcast
+/// to f32, else a multiple of 4 → f32). Bad input → ``ValueError``, never a
+/// wrong-dim vector.
+#[pyfunction]
+#[pyo3(name = "decode_embedding_universal")]
+pub(crate) fn py_decode_embedding_universal(payload: &str) -> PyResult<Vec<f32>> {
+    crate::embedding_codec::decode_embedding_universal(payload).map_err(to_pyerr)
+}
+

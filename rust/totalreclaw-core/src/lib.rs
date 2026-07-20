@@ -35,6 +35,7 @@ pub mod confirm;
 pub mod consolidation;
 pub mod contradiction;
 pub mod decision_log;
+pub mod embedding_codec;
 pub mod feedback_log;
 pub mod digest;
 pub mod crypto;

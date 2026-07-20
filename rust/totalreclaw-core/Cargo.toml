@@ -56,6 +56,10 @@ tiny-keccak = { version = "2", features = ["keccak"] }
 # Encoding
 base64 = "0.22"
 hex = "0.4"
+# IEEE 754 binary16 (half) for the canonical embedding codec (internal#479).
+# `f16::from_f32` uses round-to-nearest-even, matching Python's `struct 'e'`
+# byte-for-byte — required for cross-client embedding parity.
+half = "2"
 
 # Unicode
 unicode-normalization = "0.1"

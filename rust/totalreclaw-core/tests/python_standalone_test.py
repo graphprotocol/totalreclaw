@@ -334,6 +334,87 @@ def test_get_debrief_system_prompt():
 
 
 # ---------------------------------------------------------------------------
+# Embedding codec (canonical f16 + universal decoder) — internal#479 Part A
+# ---------------------------------------------------------------------------
+
+_EMB_FIXTURE = os.path.join(FIXTURES_DIR, "embedding_codec_vectors.json")
+with open(_EMB_FIXTURE) as _f:
+    EMB = json.load(_f)
+
+
+def _cosine(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(x * x for x in b) ** 0.5
+    return dot / (na * nb)
+
+
+def test_encode_embedding_canonical_fails_closed():
+    """#479 review: NaN/inf and finite f16 overflow must RAISE at the PyO3
+    surface (never a silently poisoned payload); F16_MAX boundary encodes."""
+    base = [0.5] * 640
+    for bad in (float("nan"), float("inf"), float("-inf"), 1e10, 65505.0):
+        v = list(base)
+        v[3] = bad
+        try:
+            totalreclaw_core.encode_embedding_canonical(v)
+            raise AssertionError(f"encode did not raise for component {bad!r}")
+        except AssertionError:
+            raise
+        except Exception:
+            pass  # expected: fail-closed
+    ok = list(base)
+    ok[3] = 65504.0
+    payload = totalreclaw_core.encode_embedding_canonical(ok)
+    back = totalreclaw_core.decode_embedding_universal(payload)
+    assert back[3] == 65504.0, "F16_MAX boundary must round-trip"
+
+
+def test_encode_embedding_canonical_matches_python_f16_base64():
+    """PyO3 encode_embedding_canonical must match Python struct '<e' base64."""
+    got = totalreclaw_core.encode_embedding_canonical(EMB["unit_vector"])
+    assert got == EMB["canonical_f16_base64"], "PyO3 f16 base64 != Python struct '<e'"
+
+
+def test_decode_canonical_f16_round_trip_high_cosine():
+    decoded = totalreclaw_core.decode_embedding_universal(EMB["canonical_f16_base64"])
+    assert len(decoded) == 640
+    assert _cosine(decoded, EMB["unit_vector"]) >= 0.9999
+
+
+def test_decode_legacy_json_array_exact():
+    decoded = totalreclaw_core.decode_embedding_universal(EMB["legacy_json_640"])
+    assert decoded == EMB["unit_vector"], "JSON legacy path must recover input exactly"
+
+
+def test_decode_legacy_f32_640_exact():
+    decoded = totalreclaw_core.decode_embedding_universal(EMB["legacy_f32_base64_640"])
+    assert decoded == EMB["unit_vector"], "f32 legacy path must recover input exactly"
+
+
+def test_non_canonical_1024_f32_round_trip_exact():
+    vec = EMB["non_canonical"]["vector"]
+    payload = totalreclaw_core.encode_embedding_canonical(vec)
+    assert totalreclaw_core.decode_embedding_universal(payload) == vec
+    # decode the committed 1024-d f32 fixture directly
+    assert totalreclaw_core.decode_embedding_universal(EMB["non_canonical"]["f32_base64"]) == vec
+
+
+def test_decode_rejects_bad_length_and_bad_json():
+    import base64 as _b64
+    try:
+        totalreclaw_core.decode_embedding_universal(_b64.b64encode(b"\xaa").decode())
+        assert False, "bad-length buffer should raise"
+    except ValueError:
+        pass
+    try:
+        totalreclaw_core.decode_embedding_universal("[1.0, not-json")
+        assert False, "malformed JSON should raise"
+    except ValueError:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Run all tests
 # ---------------------------------------------------------------------------
 

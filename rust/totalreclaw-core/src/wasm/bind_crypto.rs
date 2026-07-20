@@ -128,3 +128,34 @@ pub fn wasm_normalize_text(text: &str) -> String {
     fingerprint::normalize_text(text)
 }
 
+// ---------------------------------------------------------------------------
+// Embedding codec (canonical f16 + universal decoder) — internal#479 Part A
+// ---------------------------------------------------------------------------
+
+/// Pack an embedding into the canonical pre-encryption payload string.
+///
+/// `embedding`: the f32 vector (production = 640-d Harrier output). A 640-d
+/// vector is packed little-endian f16; any other length is packed f32 (the
+/// 640 guard — see `embedding_codec`). Returns the base64 ASCII string that
+/// the client encrypts before storage.
+#[wasm_bindgen(js_name = "encodeEmbeddingCanonical")]
+pub fn wasm_encode_embedding_canonical(embedding: &[f32]) -> Result<String, JsError> {
+    // Fallible (#479 review): rejects NaN/±inf and finite f16 overflow —
+    // fail-closed at the API boundary, never a silently poisoned payload.
+    // Precondition: inputs should be f32-precision-exact (JS numbers are f64;
+    // the &[f32] boundary rounds f64→f32 first — see the core doc comment).
+    crate::embedding_codec::encode_embedding_canonical(embedding)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Decode any embedding payload into a Float32Array (the forever-reader).
+///
+/// Dispatch mirrors `decode_embedding_universal`: a payload beginning with `[`
+/// is parsed as a JSON float array (legacy TS plugin); otherwise base64-decode
+/// and infer width from the byte count (`640*2` → f16 upcast to f32, else a
+/// multiple of 4 → f32). Bad input → `JsError`, never a wrong-dim vector.
+#[wasm_bindgen(js_name = "decodeEmbeddingUniversal")]
+pub fn wasm_decode_embedding_universal(payload: &str) -> Result<Vec<f32>, JsError> {
+    crate::embedding_codec::decode_embedding_universal(payload).map_err(to_js_error)
+}
+
