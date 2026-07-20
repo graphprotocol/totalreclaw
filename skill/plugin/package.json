@@ -33,7 +33,7 @@
   "dependencies": {
     "@scure/bip39": "^2.2.0",
     "@totalreclaw/client": "^1.3.0",
-    "@totalreclaw/core": "^2.5.3",
+    "@totalreclaw/core": "2.6.0-rc.1",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "ws": "^8.18.3"

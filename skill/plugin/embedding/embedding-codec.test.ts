@@ -169,11 +169,23 @@ check('write-path: core-present encode aborts (throws) on NaN — fail-closed', 
   assert.throws(() => encodeEmbeddingPayloadWithCore(bad, spy), /fail-closed|finite/i);
 });
 
-check('default write-path falls back to JSON when core codec unavailable', () => {
-  // Installed published core (2.5.6) predates the codec -> resolveCoreCodec()
-  // returns null in this environment -> legacy JSON.
-  const payload = encodeEmbeddingPayload(FIXTURE.unit_vector);
+check('write-path falls back to legacy JSON when NO core codec is present', () => {
+  // Install-agnostic: drive the injectable seam with a null core rather than
+  // relying on the ambient @totalreclaw/core version (which now varies —
+  // 2.6.0-rc.1+ ships the codec and correctly writes canonical f16, older
+  // cores write JSON). `null` deterministically exercises the legacy branch.
+  const payload = encodeEmbeddingPayloadWithCore(FIXTURE.unit_vector, null);
   assert.ok(payload.trimStart().startsWith('['));
+});
+
+check('write-path emits canonical f16 (not JSON) when a core codec IS present', () => {
+  // The #479 Part B goal + the #498 batching fix: with a real core codec the
+  // write path produces the compact canonical payload, never the fat JSON
+  // array. Driven via the seam so it holds regardless of the installed core.
+  const spy = makeSpyCore();
+  const payload = encodeEmbeddingPayloadWithCore(FIXTURE.unit_vector, spy);
+  assert.ok(!payload.trimStart().startsWith('['), 'canonical payload must not be JSON');
+  assert.deepEqual(spy.seen, FIXTURE.unit_vector, 'core encoder received the vector');
 });
 
 // ---------------------------------------------------------------------------
