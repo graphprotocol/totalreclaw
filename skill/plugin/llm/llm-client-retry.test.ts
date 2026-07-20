@@ -18,6 +18,7 @@
 import {
   isRetryable,
   chatCompletion,
+  parseRetryAfter,
   LLMUpstreamOutageError,
   isZaiBalanceError,
   zaiFallbackBaseUrl,
@@ -60,6 +61,47 @@ assert(!isRetryable('LLM API 400: bad request'), 'isRetryable: 400 → false');
 assert(!isRetryable('JSON parse error'), 'isRetryable: JSON parse → false');
 
 // ---------------------------------------------------------------------------
+// parseRetryAfter — pure parser for the 429 `Retry-After` header (Part 1.3).
+// Returns the wait in MS (delta-seconds OR HTTP-date delta), floored at 0, or
+// null when absent/unparseable. Does NOT cap — the retry loop applies the
+// 60s ceiling + the exhaustion rule (so this fn can be tested in isolation).
+// ---------------------------------------------------------------------------
+
+// delta-seconds form
+assert(parseRetryAfter(null) === null, 'parseRetryAfter: null → null');
+assert(parseRetryAfter(undefined) === null, 'parseRetryAfter: undefined → null');
+assert(parseRetryAfter('') === null, 'parseRetryAfter: empty → null');
+assert(parseRetryAfter('5') === 5000, 'parseRetryAfter: "5" delta-seconds → 5000ms');
+assert(parseRetryAfter(' 10 ') === 10000, 'parseRetryAfter: trimmed " 10 " → 10000ms');
+assert(parseRetryAfter('0') === 0, 'parseRetryAfter: "0" → 0');
+assert(parseRetryAfter('120') === 120_000, 'parseRetryAfter: returns RAW value (no cap) — "120" → 120000ms');
+
+// HTTP-date form — uses the same Date.parse the parser uses, so the assertion
+// is robust to weekday/format quirks. 30s in the future → 30000ms.
+{
+  const now = Date.UTC(2026, 6, 20, 0, 0, 0); // 2026-07-20T00:00:00Z
+  const dateStr = 'Wed, 21 Oct 2026 07:28:00 GMT';
+  const expected = Date.parse(dateStr) - now;
+  assert(expected > 0, 'parseRetryAfter: fixture HTTP-date is in the future');
+  assert(
+    parseRetryAfter(dateStr, { now: () => now }) === expected,
+    'parseRetryAfter: HTTP-date (future) → now-relative delta ms',
+  );
+}
+
+// HTTP-date in the past → floored to 0 (retry now), NOT negative.
+{
+  const now = Date.UTC(2026, 6, 20, 0, 0, 0);
+  assert(
+    parseRetryAfter('Mon, 01 Jan 2000 00:00:00 GMT', { now: () => now }) === 0,
+    'parseRetryAfter: HTTP-date (past) → 0 (floored, not negative)',
+  );
+}
+
+// Unparseable garbage → null (no digits-only, no valid date).
+assert(parseRetryAfter('not-a-date-or-number') === null, 'parseRetryAfter: garbage → null');
+
+// ---------------------------------------------------------------------------
 // chatCompletion retry harness — we monkey-patch fetch for determinism.
 // ---------------------------------------------------------------------------
 
@@ -94,6 +136,44 @@ function okResponse(content: string): Response {
       choices: [{ message: { content } }],
     }),
   );
+}
+
+/** Like mockResponse but lets the caller add headers (e.g. `retry-after`). */
+function mockResponseWithHeaders(
+  status: number,
+  body: string,
+  headers: Record<string, string>,
+): Response {
+  return new Response(body, {
+    status,
+    headers: { 'Content-Type': 'application/json', ...headers },
+  });
+}
+
+/**
+ * Patch globalThis.setTimeout to RECORD the delay of each call and resolve
+ * immediately (next microtask) so retry-backoff tests run instantly and the
+ * actual jittered wait can be asserted. Returns the captured delays + a
+ * restore fn. Only call-site setTimeouts (the retry sleeps) are recorded in
+ * practice; we filter to the expected backoff range when asserting.
+ */
+function captureSetTimeoutDelays(): {
+  delays: number[];
+  restore: () => void;
+} {
+  const delays: number[] = [];
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((cb: (...args: unknown[]) => void, ms?: unknown) => {
+    delays.push(typeof ms === 'number' ? ms : 0);
+    queueMicrotask(() => cb());
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  return {
+    delays,
+    restore: () => {
+      globalThis.setTimeout = realSetTimeout;
+    },
+  };
 }
 
 const testConfig: LLMClientConfig = {
@@ -487,6 +567,124 @@ assert(zaiFallbackBaseUrl('https://custom.proxy/v1') === null, 'zaiFallbackBaseU
 }
 
 // ---------------------------------------------------------------------------
+// Part 1.2 — Full-jitter exponential backoff. The actual wait is
+// random(0, min(cap, base*2^(n-1))). We inject the rng so the bound is
+// deterministic and assert the captured setTimeout delays land in
+// [0, exp_delay] (and hit the extremes at rng 0 / 1).
+// ---------------------------------------------------------------------------
+
+// 4 attempts, base 1000ms, all 503 → 3 retry sleeps (after attempts 1,2,3).
+// exp delays: 1000, 2000, 4000. Max exp = 4000; filter captures to ≤ 4000 to
+// exclude the 30s AbortSignal.timeout timer (if it routes through setTimeout).
+async function jitterScenario(rng: () => number): Promise<number[]> {
+  const getCount = stubFetch([
+    async () => mockResponse(503, '{"error":{"message":"down"}}'),
+    async () => mockResponse(503, '{"error":{"message":"down"}}'),
+    async () => mockResponse(503, '{"error":{"message":"down"}}'),
+    async () => mockResponse(503, '{"error":{"message":"down"}}'),
+  ]);
+  const cap = captureSetTimeoutDelays();
+  try {
+    let thrown: unknown;
+    try {
+      await chatCompletion(testConfig, [{ role: 'user', content: 'hi' }], {
+        retry: { attempts: 4, baseDelayMs: 1000, random: rng },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    assert(thrown instanceof LLMUpstreamOutageError, `jitter[${rng()}]: all-fail throws LLMUpstreamOutageError`);
+    assert(getCount() === 4, `jitter[${rng()}]: 4 fetches (one per attempt)`);
+    // Keep only the retry-sleep delays (≤ max exp 4000); drop any large timer.
+    return cap.delays.filter((d) => d <= 4000);
+  } finally {
+    cap.restore();
+    restoreFetch();
+  }
+}
+
+{
+  // rng = 0 → every jittered wait is 0 (min bound).
+  const delays = await jitterScenario(() => 0);
+  assert(delays.length === 3, 'jitter rng=0: exactly 3 retry sleeps');
+  assert(delays.every((d) => d === 0), 'jitter rng=0: every wait is 0 (min bound)');
+}
+
+{
+  // rng = 1 → every jittered wait is the full exp delay (max bound).
+  const delays = await jitterScenario(() => 1);
+  assert(delays.length === 3, 'jitter rng=1: exactly 3 retry sleeps');
+  assert(JSON.stringify(delays) === JSON.stringify([1000, 2000, 4000]), `jitter rng=1: waits are full exp [1000,2000,4000] (max bound), got ${JSON.stringify(delays)}`);
+}
+
+{
+  // rng = 0.5 → every wait is strictly inside (0, exp), proving the jitter
+  // is real (not clamped to an endpoint) and within the bound.
+  const delays = await jitterScenario(() => 0.5);
+  const exps = [1000, 2000, 4000];
+  assert(delays.length === 3, 'jitter rng=0.5: exactly 3 retry sleeps');
+  assert(
+    delays.every((d, i) => d > 0 && d < exps[i]),
+    `jitter rng=0.5: every wait strictly inside (0, exp), got ${JSON.stringify(delays)}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Part 1.3 — Honor the 429 `Retry-After` header. The wait is
+// max(jittered_backoff, retry_after); with rng=0 (jittered=0) and a small
+// base delay, the wait must still be ≥ retry_after.
+// ---------------------------------------------------------------------------
+
+{
+  const getCount = stubFetch([
+    // First attempt: 429 carrying Retry-After: 5 (seconds).
+    async () => mockResponseWithHeaders(429, '{"error":{"message":"Rate limit"}}', { 'retry-after': '5' }),
+    async () => okResponse('recovered after retry-after'),
+  ]);
+  const cap = captureSetTimeoutDelays();
+  try {
+    const result = await chatCompletion(testConfig, [{ role: 'user', content: 'hi' }], {
+      // base 100ms → exp(1)=100; rng=0 → jittered=0. Without Retry-After the
+      // wait would be 0. With Retry-After=5s it must be ≥5000.
+      retry: { attempts: 3, baseDelayMs: 100, random: () => 0 },
+    });
+    assert(result === 'recovered after retry-after', 'retry-after: honored → success on 2nd attempt');
+    assert(getCount() === 2, 'retry-after: 2 fetches');
+    const retrySleep = cap.delays.filter((d) => d >= 1000); // the ≥1s wait, not the 30s abort timer
+    assert(retrySleep.length === 1, `retry-after: exactly one retry sleep, got ${JSON.stringify(cap.delays)}`);
+    assert(retrySleep[0] >= 5000, `retry-after: wait ≥ 5000ms (honored), got ${retrySleep[0]}`);
+    // And it equals exactly max(0, 5000) = 5000 (retry-after floors jitter).
+    assert(retrySleep[0] === 5000, `retry-after: wait is exactly 5000ms (max(jitter=0, retry-after)), got ${retrySleep[0]}`);
+  } finally {
+    cap.restore();
+    restoreFetch();
+  }
+}
+
+// Retry-After ABOVE the 60s ceiling → this-cycle-exhausted: throw
+// LLMUpstreamOutageError immediately, do NOT burn retries waiting.
+{
+  const getCount = stubFetch([
+    async () => mockResponseWithHeaders(429, '{"error":{"message":"Rate limit"}}', { 'retry-after': '120' }),
+    async () => okResponse('should-not-reach'),
+  ]);
+  try {
+    let thrown: unknown;
+    try {
+      await chatCompletion(testConfig, [{ role: 'user', content: 'hi' }], {
+        retry: { attempts: 5, baseDelayMs: 1000, random: () => 0.5 },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    assert(thrown instanceof LLMUpstreamOutageError, 'retry-after>cap: throws LLMUpstreamOutageError (this-cycle-exhausted)');
+    assert(getCount() === 1, 'retry-after>cap: single fetch (no retries burned)');
+  } finally {
+    restoreFetch();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Retry budget enforcement — when cumulative delay would exceed budgetMs,
 // chatCompletion surfaces LLMUpstreamOutageError early.
 // ---------------------------------------------------------------------------
@@ -494,6 +692,8 @@ assert(zaiFallbackBaseUrl('https://custom.proxy/v1') === null, 'zaiFallbackBaseU
 {
   // attempts: 5, baseDelay: 10ms → delays 10, 20, 40, 80, 160 (cumulative 310ms total over 4 retries).
   // Set budgetMs: 50 → first retry ok (cum=10), 2nd retry (would add 20 → cum=30, ok), 3rd retry (would add 40 → cum=70 > 50 → stop).
+  // random: ()=>1.0 pins full jitter to the max (= the pre-jitter exponential schedule) so the
+  // cumulative-delay arithmetic stays deterministic under the new full-jitter backoff.
   const getCount = stubFetch([
     async () => mockResponse(503, '{"error":{"message":"down"}}'),
     async () => mockResponse(503, '{"error":{"message":"down"}}'),
@@ -505,7 +705,7 @@ assert(zaiFallbackBaseUrl('https://custom.proxy/v1') === null, 'zaiFallbackBaseU
     let thrown: unknown;
     try {
       await chatCompletion(testConfig, [{ role: 'user', content: 'hi' }], {
-        retry: { attempts: 5, baseDelayMs: 10, budgetMs: 50 },
+        retry: { attempts: 5, baseDelayMs: 10, budgetMs: 50, random: () => 1.0 },
       });
     } catch (err) {
       thrown = err;

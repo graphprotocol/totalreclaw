@@ -20,7 +20,12 @@
  * test env (no ZAI_API_KEY etc.).
  */
 
-import { initLLMClient, resolveLLMConfig, deriveCheapModel } from './llm-client.js';
+import {
+  initLLMClient,
+  resolveLLMConfig,
+  deriveCheapModel,
+  selectCheapestConfiguredModel,
+} from './llm-client.js';
 
 let passed = 0;
 let failed = 0;
@@ -112,6 +117,97 @@ function restoreEnv(stash: Record<string, string | undefined>): void {
   // "Already cheap" model passes through
   assertEq(deriveCheapModel('openai', 'gpt-4.1-mini'), 'gpt-4.1-mini', 'deriveCheapModel: cheap model passes through');
   assertEq(deriveCheapModel('anthropic', 'claude-haiku-4-5'), 'claude-haiku-4-5', 'deriveCheapModel: haiku passes through');
+}
+
+// ---------------------------------------------------------------------------
+// selectCheapestConfiguredModel — Pedro directive (2026-07-20): the extraction
+// model is the CHEAPEST of the user's OWN configured models, never a baked-in
+// glm constant. Selection rule: filter the configured list by CHEAP_INDICATOR_RE
+// (flash/mini/nano/lite/small/fast/haiku at a word boundary), then tiebreak by
+// smallest maxTokens (cheapness proxy), then lexical for determinism. Returns
+// null when nothing matches so the caller falls to the hardcoded table (tier 4,
+// last resort) instead of inventing a model.
+// ---------------------------------------------------------------------------
+
+{
+  // QA-box case: zai provider lists [glm-5-turbo, glm-4.7, glm-4.5-flash].
+  // Only glm-4.5-flash matches a cheap indicator → selected FROM the user's list.
+  assertEq(
+    selectCheapestConfiguredModel([
+      { id: 'glm-5-turbo' },
+      { id: 'glm-4.7' },
+      { id: 'glm-4.5-flash' },
+    ]),
+    'glm-4.5-flash',
+    'selectCheapestConfiguredModel: QA box picks glm-4.5-flash from configured list',
+  );
+
+  // Harvested from config, NOT the hardcoded table: openai table default is
+  // gpt-4.1-mini, but the user's OWN list has gpt-5-mini → that must win.
+  assertEq(
+    selectCheapestConfiguredModel([
+      { id: 'gpt-5', maxTokens: 400_000 },
+      { id: 'gpt-5-mini', maxTokens: 128_000 },
+    ]),
+    'gpt-5-mini',
+    'selectCheapestConfiguredModel: picks gpt-5-mini from config (NOT table gpt-4.1-mini)',
+  );
+
+  // Tiebreak by smallest maxTokens among cheap-indicator matches.
+  assertEq(
+    selectCheapestConfiguredModel([
+      { id: 'm-mini', maxTokens: 128_000 },
+      { id: 'm-nano', maxTokens: 64_000 },
+    ]),
+    'm-nano',
+    'selectCheapestConfiguredModel: smaller maxTokens wins on a cheap-indicator tie',
+  );
+
+  // Missing maxTokens for all candidates → lexical id tiebreak for determinism.
+  assertEq(
+    selectCheapestConfiguredModel([
+      { id: 'b-flash' },
+      { id: 'a-flash' },
+    ]),
+    'a-flash',
+    'selectCheapestConfiguredModel: lexical tiebreak when maxTokens absent',
+  );
+
+  // A model WITH a small maxTokens ranks above one with unknown maxTokens.
+  assertEq(
+    selectCheapestConfiguredModel([
+      { id: 'z-lite' }, // no maxTokens
+      { id: 'a-lite', maxTokens: 8_000 },
+    ]),
+    'a-lite',
+    'selectCheapestConfiguredModel: known small maxTokens beats unknown maxTokens',
+  );
+
+  // gemini-substring false-positive guard: 'mini' inside 'gemini' must NOT
+  // count as a cheap indicator (CHEAP_INDICATOR_RE word-boundary). Only the
+  // real flash model matches.
+  assertEq(
+    selectCheapestConfiguredModel([
+      { id: 'gemini-2.5-pro' },
+      { id: 'gemini-flash-lite' },
+    ]),
+    'gemini-flash-lite',
+    'selectCheapestConfiguredModel: gemini-substring guard (mini-in-gemini rejected, flash matched)',
+  );
+
+  // No model matches a cheap indicator → null (do NOT invent one).
+  assertEq(
+    selectCheapestConfiguredModel([
+      { id: 'gpt-5' },
+      { id: 'glm-4.7' },
+    ]),
+    null,
+    'selectCheapestConfiguredModel: no cheap match → null (falls to hardcoded table)',
+  );
+
+  // Empty / absent list → null (caller falls to table).
+  assertEq(selectCheapestConfiguredModel([]), null, 'selectCheapestConfiguredModel: empty list → null');
+  assertEq(selectCheapestConfiguredModel(undefined), null, 'selectCheapestConfiguredModel: undefined list → null');
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +405,101 @@ function restoreEnv(stash: Record<string, string | undefined>): void {
     cap.infos.some((m) => m.includes('disabled via plugin config')),
     'extraction.enabled=false: info log mentions explicit disable',
   );
+}
+
+// ---------------------------------------------------------------------------
+// Tier 2 with configured models[] — extraction model is harvested as the
+// CHEAPEST of the user's OWN configured models (Pedro directive: no baked-in
+// glm). Proves the configured list is threaded into buildConfigForProvider.
+// ---------------------------------------------------------------------------
+
+{
+  // QA box: zai provider with [glm-5-turbo, glm-4.7, glm-4.5-flash].
+  // primary glm-5-turbo is NOT cheap → cheapest-configured (glm-4.5-flash) wins.
+  const cap = mkLogger();
+  initLLMClient({
+    primaryModel: 'zai/glm-5-turbo',
+    openclawProviders: {
+      zai: {
+        baseUrl: 'https://api.z.ai/api/paas/v4',
+        apiKey: 'zai-key',
+        models: [
+          { id: 'glm-5-turbo', maxTokens: 16_384 },
+          { id: 'glm-4.7', maxTokens: 16_384 },
+          { id: 'glm-4.5-flash', maxTokens: 16_384 },
+        ],
+      },
+    },
+    logger: cap.logger,
+  });
+  const cfg = resolveLLMConfig();
+  assertEq(cfg?.model, 'glm-4.5-flash', 'tier-2 configured: harvests glm-4.5-flash from zai models[] (cheapest-configured)');
+  // Must be logged as resolved from the configured list, not as the hardcoded table.
+  assert(
+    cap.infos.some((m) => m.includes('glm-4.5-flash')),
+    'tier-2 configured: resolved model logged',
+  );
+}
+
+{
+  // Different provider: openai with [gpt-5, gpt-5-mini]. The hardcoded table
+  // says gpt-4.1-mini, but the user's list has gpt-5-mini → that is selected.
+  // This proves we harvest from config, not the table.
+  const cap = mkLogger();
+  initLLMClient({
+    primaryModel: 'openai/gpt-5',
+    openclawProviders: {
+      openai: {
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: 'sk-openai',
+        models: [
+          { id: 'gpt-5', maxTokens: 400_000 },
+          { id: 'gpt-5-mini', maxTokens: 128_000 },
+        ],
+      },
+    },
+    logger: cap.logger,
+  });
+  const cfg = resolveLLMConfig();
+  assertEq(cfg?.model, 'gpt-5-mini', 'tier-2 configured: harvests gpt-5-mini from openai models[] (NOT table gpt-4.1-mini)');
+}
+
+{
+  // Already-cheap primary is used as-is (tier 2) — configured list is NOT
+  // consulted when the primary itself is cheap.
+  const cap = mkLogger();
+  initLLMClient({
+    primaryModel: 'openai/gpt-5-mini',
+    openclawProviders: {
+      openai: {
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: 'sk-openai',
+        models: [{ id: 'gpt-5' }, { id: 'gpt-4.1-nano' }],
+      },
+    },
+    logger: cap.logger,
+  });
+  const cfg = resolveLLMConfig();
+  assertEq(cfg?.model, 'gpt-5-mini', 'tier-2 configured: already-cheap primary used as-is (list not consulted)');
+}
+
+{
+  // No cheap indicator in the configured list AND primary not cheap → falls
+  // through to the hardcoded provider table (tier 4, last resort).
+  const cap = mkLogger();
+  initLLMClient({
+    primaryModel: 'openai/gpt-5',
+    openclawProviders: {
+      openai: {
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: 'sk-openai',
+        models: [{ id: 'gpt-5' }, { id: 'gpt-5-pro' }],
+      },
+    },
+    logger: cap.logger,
+  });
+  const cfg = resolveLLMConfig();
+  assertEq(cfg?.model, 'gpt-4.1-mini', 'tier-2 configured: no cheap match in list → hardcoded table last resort (gpt-4.1-mini)');
 }
 
 // ---------------------------------------------------------------------------

@@ -317,7 +317,9 @@ export const CONFIG = {
   storeDedupEnabled: true,
 
   // LLM provider API keys (read once, passed to llm-client). Model selection
-  // is entirely automatic via `deriveCheapModel(provider)` — the
+  // is entirely automatic via `resolveExtractionModel()` — it prefers the
+  // cheapest of the user's own configured OpenClaw models (internal#502) and
+  // only falls back to the hardcoded per-provider table as a last resort. The
   // TOTALRECLAW_LLM_MODEL override was removed in v1.
   llmApiKeys: {
     zai: process.env.ZAI_API_KEY || '',

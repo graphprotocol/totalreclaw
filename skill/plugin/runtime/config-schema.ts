@@ -46,7 +46,7 @@ export const CONFIG_SCHEMA = {
             },
             model: {
               type: 'string',
-              description: 'Explicit model id. If omitted, deriveCheapModel(provider) picks a sensible default.',
+              description: 'Explicit model id. If omitted, resolveExtractionModel() picks the cheapest of the user\'s configured models, falling back to a per-provider default.',
             },
             apiKey: {
               type: 'string',
