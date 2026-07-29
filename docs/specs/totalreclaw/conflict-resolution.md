@@ -707,6 +707,101 @@ The privacy cost is negligible relative to what blind indices already expose.
 
 ---
 
+## 12. Layer 5 — Persist Unresolved Contradictions for User Review
+
+**Added:** 2026-06-06 · **Status:** Designed, NOT implemented · **Author:** Claude (with Pedro Diogo)
+**Gates:** the **Conflict card** in the Memory Review surface (Phase 3.1.1) — see
+`docs/specs/totalreclaw/memory-review-surface.md`. Tracked as a roadmap item (the SPA cannot
+render a "two beliefs disagree, you decide" card until the engine stops silently discarding the
+contradiction).
+
+### 12.1 The Gap
+
+Layers 1-4 above all **auto-resolve and discard**. When two claims conflict, the engine picks a
+winner (newer `created_at`, higher importance, or LLM-assisted merge) and supersedes the loser.
+The *fact that they ever conflicted* is not retained as a queryable record — it survives only as a
+transient entry in the local `decisions.jsonl` audit log. The tie-zone guard (1% tolerance) and
+pinned-vs-new cases are exactly the situations a confident machine **should not** resolve alone, yet
+today there is no durable "needs a human" record for a UI to surface.
+
+### 12.2 The Change
+
+Introduce a persisted **unresolved-contradiction record**. When `resolve_with_candidates`
+(`rust/totalreclaw-core/src/contradiction.rs`) reaches a low-confidence outcome, it emits a new
+decision variant **`DeferToUser`** instead of force-picking, under any of:
+
+- **Tie-zone:** scores within the 1% tolerance band.
+- **Low confidence:** best-match similarity below a `defer_threshold`.
+- **Pinned-vs-new:** the incoming claim contradicts a `pin_status = pinned` claim. Pinned memories
+  must never be auto-superseded (existing invariant); today such a write is silently dropped, which
+  is itself a trust bug. With Layer 5 it becomes a surfaced conflict.
+
+Both conflicting claims remain `is_active = true` (neither is superseded) until the user decides.
+
+### 12.3 Data Model
+
+A conflict record references claims by `fact_id` and a machine-readable reason — **no plaintext**.
+The claim text stays encrypted; the client decrypts the two referenced facts to render the card.
+
+```sql
+-- MVP (PostgreSQL)
+CREATE TABLE unresolved_contradictions (
+  conflict_id   UUID PRIMARY KEY,             -- UUIDv7, time-sortable
+  user_id       TEXT NOT NULL,
+  fact_id_a     TEXT NOT NULL,                -- the incumbent (often pinned)
+  fact_id_b     TEXT NOT NULL,                -- the challenger
+  reason        TEXT NOT NULL,                -- 'tie_zone' | 'low_confidence' | 'pinned_vs_new'
+  status        TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'resolved' | 'dismissed'
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  resolved_at   TIMESTAMPTZ
+);
+CREATE INDEX idx_conflicts_user_status ON unresolved_contradictions(user_id, status);
+```
+
+```graphql
+# Subgraph — append-only, mirrors the SUPERSEDE pattern (§5.5, §7.2)
+type ContradictionLog @entity {
+  id: ID!                  # conflict_id
+  owner: Bytes!
+  factA: Fact!
+  factB: Fact!
+  reason: String!          # tie_zone | low_confidence | pinned_vs_new
+  status: String!          # pending | resolved | dismissed
+  createdAt: BigInt!
+  resolvedAt: BigInt
+}
+```
+
+A new `CONTRADICTION` event type (alongside `STORE`/`SUPERSEDE`) carries `{fact_id_a, fact_id_b,
+reason}`. Resolution reuses the existing `SUPERSEDE` event: when the user picks a winner, the client
+emits `SUPERSEDE` for the loser and flips the log `status` to `resolved`. "Keep both" flips status to
+`dismissed` and pins both. The reason/status fields leak strictly less than blind indices already do
+(§9): the server learns "two of this user's facts were flagged as conflicting," not what they say.
+
+### 12.4 Exposure + Client Read
+
+- **Relay:** `GET /v1/contradictions?wallet_address=&status=pending` → list of
+  `{conflict_id, fact_id_a, fact_id_b, reason}` plus the two encrypted blobs for client inspection.
+  Mirrors the existing billing/subgraph proxy auth.
+- **Client / SPA:** fetch pending conflicts → decrypt the referenced blobs → render the Conflict
+  card. On a decision, write the `SUPERSEDE` (or dual-pin) and `PATCH` the conflict status.
+
+### 12.5 Effort + Boundary
+
+| Step | Surface | Effort |
+|------|---------|--------|
+| `DeferToUser` decision variant + `defer_threshold` | core (`contradiction.rs`) | ~1d |
+| `unresolved_contradictions` table + `/v1/contradictions` | relay + MVP | ~1d |
+| `ContradictionLog` entity + `CONTRADICTION` event + mapping | subgraph (schema bump) | ~2d |
+| Resolve/dismiss write path (reuse SUPERSEDE) | core + client | ~1d |
+| SPA Conflict card wiring | web app | ~1d (separate, Phase 3.1.1) |
+
+**~1 week** core+relay+subgraph (the SPA card is a separate follow-up gated on this). This touches
+contradiction core + a subgraph schema bump = **risk-tier L2**; dispatch as its own implementation
+track, not folded into the SPA build.
+
+---
+
 ## Appendix A: Sequence Diagram — Reconnection Flow (MVP)
 
 ```

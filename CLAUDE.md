@@ -122,8 +122,9 @@ Specs are organized by product area under `docs/specs/`:
 | MCP Auto-Memory (Generic Hosts) | `mcp-auto-memory.md` | Spec complete |
 | Benchmark Harness (OMBH) | `benchmark.md` | Implemented |
 | LSH Tuning (Multi-Tenant SaaS) | `lsh-tuning.md` | Complete |
-| Conflict Resolution v0.3.2 | `conflict-resolution.md` | Design complete, not implemented |
+| Conflict Resolution v0.3.2 | `conflict-resolution.md` | Design complete, not implemented (+ §12 Layer 5: persist unresolved contradictions — Review dependency) |
 | Retrieval Improvements v3 | `retrieval-improvements-v3.md` | Implemented (superseded by retrieval-v2 in v1) |
+| **Memory Review Surface (Watchtower) + Lineage** | `memory-review-surface.md` | **Spec — Phase 3.1.1; prototype validated. Conflict card gated on conflict-resolution §12** |
 
 ### Subgraph (Decentralized) -- `docs/specs/subgraph/`
 | Spec | File | Status |
