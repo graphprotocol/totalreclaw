@@ -160,26 +160,6 @@ def _normalize_for_dedup(text: str) -> str:
     return t
 
 
-def _extract_mnemonic_from_creds(creds: dict) -> str:
-    """Pull a plausible mnemonic out of a parsed credentials.json blob.
-
-    Accepts both ``mnemonic`` (canonical, plugin 3.2.0 + Python 2.2.2+)
-    and ``recovery_phrase`` (legacy Python) spellings. When both are
-    present, ``mnemonic`` wins — matches the plugin-side
-    ``extractBootstrapMnemonic`` in ``skill/plugin/fs-helpers.ts``.
-
-    Returns an empty string if neither key carries a non-empty string.
-    Never raises — defensive for partial file writes.
-    """
-    primary = creds.get("mnemonic") if isinstance(creds.get("mnemonic"), str) else ""
-    primary = primary.strip() if primary else ""
-    if primary:
-        return primary
-    alias = creds.get("recovery_phrase") if isinstance(creds.get("recovery_phrase"), str) else ""
-    alias = alias.strip() if alias else ""
-    return alias
-
-
 # Sentinel key for the implicit "default" conversation slot — the live state a
 # host uses when it never supplies a per-conversation id (legacy single-session
 # behavior). A NUL prefix keeps it disjoint from any real host session id.
@@ -334,7 +314,21 @@ class AgentState:
         creds = get_credential_provider().load()
         if creds is None:
             return
-        mnemonic = _extract_mnemonic_from_creds(creds)
+        # cred-2 (internal#262): the mnemonic field may be a keychain
+        # marker. Resolve it to the real phrase BEFORE ``configure`` so the
+        # marker never reaches ``derive_keys_from_mnemonic`` (which would
+        # reject it — but we want the real phrase, not a rejection).
+        # KeychainEntryMissing → the entry is gone/locked, or the
+        # kill-switch is armed on a wrapped file; log a clean, non-sensitive
+        # warning and leave the agent unconfigured (same shape as a
+        # missing-credentials boot). Never raises out of auto-configure.
+        from totalreclaw import credentials_wrap
+
+        try:
+            mnemonic = credentials_wrap.resolve_mnemonic(creds)
+        except credentials_wrap.KeychainEntryMissing as err:
+            logger.warning("%s", str(err))
+            return
         if mnemonic:
             self.configure(mnemonic)
 
@@ -386,9 +380,23 @@ class AgentState:
                 should_preserve_legacy = True
 
         if not should_preserve_legacy:
-            # In ``external`` mode this is a no-op (returns False); the
-            # secret manager already holds the credentials.
-            provider.save({"mnemonic": mnemonic})
+            if provider.mode == "file":
+                # cred-2 (internal#262): keychain-wrap the mnemonic at rest.
+                # ``wrap_credentials`` stores the phrase in the OS keychain and
+                # writes a marker in place of the mnemonic field; on any failure
+                # (kill-switch / headless container with no backend) it returns
+                # plaintext unchanged, so this stays a no-op-equivalent on
+                # boxes without a keychain. Opportunistic upgrade: a legacy
+                # plaintext file read on boot is re-saved here, so it gets
+                # wrapped on first boot (best-effort, silent on failure).
+                from totalreclaw.credentials_wrap import wrap_credentials
+
+                provider.save(wrap_credentials({"mnemonic": mnemonic}))
+            else:
+                # ``external`` mode is a no-op (read-only provider) — the
+                # secret manager owns the mnemonic. Do NOT additionally wrap
+                # it into the local keychain (would split the source of truth).
+                provider.save({"mnemonic": mnemonic})
 
         # 2.3.2-rc.1 (#192): clear any stale eager-account-register
         # latch attached by ``totalreclaw.hermes.hooks._eager_account_

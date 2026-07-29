@@ -223,6 +223,14 @@ The agent never generates the recovery phrase. Only the user's browser does, via
    test -s ~/.totalreclaw/credentials.json && echo "already set up"
    ```
    If present, emit `✓ TotalReclaw is already set up.` and skip to the Post-setup section below.
+
+   > **cred-2 (keychain wrap):** on a desktop with an OS keychain, the `mnemonic` /
+   > `recovery_phrase` field in `credentials.json` holds a non-secret marker
+   > (`__keychain__:v1:0x<eoa>`), NOT the phrase — the phrase lives in the OS
+   > keychain. On headless/container hosts (or with `TOTALRECLAW_NO_KEYCHAIN=1`)
+   > the field holds the plaintext phrase as before. Either way the existence
+   > check above is unchanged, and the agent must never read, echo, or pipe that
+   > field — see the phrase-safety rules below.
 2. Call the `totalreclaw_pair` tool. **Inputs: none required.** The tool defaults to `mode=either` — the browser pair page will render BOTH "Generate new" and "Import existing" tabs so the user picks at pair time. Do NOT pass `mode=generate` or `mode=import` explicitly unless the user has specifically asked for one path (e.g. *"restore my account"* → `mode=import`). The tool returns a JSON object: `{url, pin, expires_at_ms}`.
 3. Emit ONE user-visible line containing the URL and PIN verbatim:
 

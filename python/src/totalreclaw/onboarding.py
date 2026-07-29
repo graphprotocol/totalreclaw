@@ -132,7 +132,7 @@ A new recovery phrase has been generated. Write it down now, somewhere safe. Thi
 
 
 # Accepted credentials key names. Matches
-# ``agent/state.py::_extract_mnemonic_from_creds`` — canonical key is
+# ``credentials_wrap._extract_raw`` / ``resolve_mnemonic`` — canonical key is
 # ``mnemonic`` (plugin 3.2.0+), legacy Python clients wrote
 # ``recovery_phrase``; both count as "already onboarded" for first-run
 # detection.

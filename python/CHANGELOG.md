@@ -24,6 +24,10 @@ Hermes client stable (2.4.5 → 2.4.6): session-isolation + import-fidelity + pr
 
 ## [Unreleased]
 
+### Added
+
+- **[internal#262] OS keychain wrap for the mnemonic at rest (cred-2).** On pair/generate/restore, desktop installs store the recovery phrase in the OS keychain (keyring → macOS `security` → Secret Service) and `credentials.json` carries only a `__keychain__:v1:<eoa>` marker — verified to fail BIP-39 validation loudly at every consumer including the Rust core, so no client can misread it as a phrase. Headless/container deploys fall back to today's plaintext behavior unchanged (`TOTALRECLAW_NO_KEYCHAIN=1` forces it); legacy plaintext files upgrade opportunistically on read (keychain store confirmed before the plaintext is replaced). Post-setup backup guidance is wrap-aware (the old `jq -r .mnemonic` advice would have backed up the marker). Optional `totalreclaw[keychain]` extra installs the zero-argv-exposure `keyring` backend.
+
 ### Changed
 
 - **Import session segmentation: per-turn straddle-splitting (#368 Part 2,

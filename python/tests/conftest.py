@@ -44,6 +44,21 @@ def _stub_wallet_privates(client) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_keychain(monkeypatch):
+    """cred-2 (#262) phrase-safety invariant: no test may touch the real OS
+    keychain. ``credentials_wrap`` honours ``TOTALRECLAW_NO_KEYCHAIN=1`` as a
+    plaintext-only kill-switch, so arming it for the whole suite makes every
+    wrap/resolve take the plaintext path by default — the real macOS
+    ``security`` / Linux Secret Service backend is never invoked.
+
+    Tests that exercise the keychain path delete this env var and patch
+    ``credentials_wrap.detect_backend`` / ``store_secret`` / ``load_secret``
+    onto an in-memory fake (see ``fake_keychain`` in test_credentials_wrap).
+    """
+    monkeypatch.setenv("TOTALRECLAW_NO_KEYCHAIN", "1")
+
+
+@pytest.fixture(autouse=True)
 def _route_import_engine_store_to_fake_recorder(monkeypatch):
     """internal#448 single-pass test shim — keeps existing import-engine unit
     tests (and their assertions) UNCHANGED.

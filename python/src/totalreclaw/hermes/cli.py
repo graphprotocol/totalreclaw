@@ -184,14 +184,22 @@ def _generate_mnemonic() -> str:
 
 
 def _write_credentials(credentials_path: Path, mnemonic: str) -> None:
-    """Write ``{"mnemonic": ...}`` at mode 0600.
+    """Write credentials.json at mode 0600, keychain-wrapping the mnemonic.
 
     Canonical shape — matches plugin 3.2.0+ and Python 2.2.2+. This is
     the write path every fresh setup lands on (legacy ``recovery_phrase``
     key is read-compatible but never newly written).
+
+    cred-2 (internal#262): ``wrap_credentials`` stores the phrase in the
+    OS keychain and replaces the mnemonic field with a non-secret marker
+    on success; on any failure (kill-switch, headless/container with no
+    backend) it returns plaintext ``{"mnemonic": ...}`` unchanged, so
+    this path keeps working everywhere and records nothing sensitive.
     """
+    from totalreclaw.credentials_wrap import wrap_credentials
+
     credentials_path.parent.mkdir(parents=True, exist_ok=True)
-    credentials_path.write_text(json.dumps({"mnemonic": mnemonic}))
+    credentials_path.write_text(json.dumps(wrap_credentials({"mnemonic": mnemonic})))
     try:
         credentials_path.chmod(0o600)
     except OSError:
@@ -222,14 +230,21 @@ def _try_eager_resolve_scope_address(credentials_path: Path, mnemonic: str, io: 
                 loop.close()
         if not sa:
             return
-        # Merge into existing JSON, preserving any other fields.
+        # Merge ``scope_address`` into the existing JSON, preserving every
+        # other field. cred-2 (#262): when the file is keychain-wrapped the
+        # mnemonic field holds a marker — we must NOT clobber it with the
+        # real phrase. Only ``scope_address`` is touched below.
         try:
             raw = credentials_path.read_text(encoding="utf-8")
             data = json.loads(raw) if raw.strip() else {}
         except Exception:
-            data = {"mnemonic": mnemonic}
+            # Best-effort merge: if the file we just wrote doesn't parse,
+            # leave it untouched rather than risk rewriting it with the
+            # real mnemonic (phrase-safety). The address resolves lazily
+            # on the first remember/recall call instead.
+            return
         if not isinstance(data, dict):
-            data = {"mnemonic": mnemonic}
+            return
         data["scope_address"] = sa
         credentials_path.write_text(json.dumps(data, indent=2))
         try:
@@ -418,11 +433,31 @@ def _run_generate(io: _IO, credentials_path: Path, emit_phrase: bool = False) ->
         f"\n✓ Recovery phrase generated. Saved to {credentials_path} (mode 0600).\n"
     )
     if not emit_phrase:
-        io.write(
-            f"  Retrieve it with:\n"
-            f"      cat {credentials_path} | jq -r .mnemonic\n"
-            f"  ⚠ STORE IT SAFELY — it's the only way to recover your vault.\n"
-        )
+        # #262 review finding 2: post-wrap, the on-disk field holds the
+        # KEYCHAIN MARKER, not the phrase — the old `jq -r .mnemonic` advice
+        # would have a user back up a useless marker string while believing
+        # it's their recovery phrase (silent, permanent vault loss if the
+        # machine + keychain are later lost). Branch on the actual outcome.
+        from totalreclaw.credentials_wrap import is_marker as _is_marker
+
+        try:
+            _written = json.loads(credentials_path.read_text())
+        except Exception:
+            _written = {}
+        if _is_marker(_written.get("mnemonic")) or _written.get("keychain_wrapped"):
+            io.write(
+                "  Your phrase is stored in the OS keychain (not on disk).\n"
+                "  To back it up, open your keychain app (service 'totalreclaw')\n"
+                "  and copy the 12 words to a safe offline place.\n"
+                "  ⚠ STORE A COPY SAFELY — it's the only way to recover your vault\n"
+                "    if this machine (and its keychain) is lost.\n"
+            )
+        else:
+            io.write(
+                f"  Retrieve it with:\n"
+                f"      cat {credentials_path} | jq -r .mnemonic\n"
+                f"  ⚠ STORE IT SAFELY — it's the only way to recover your vault.\n"
+            )
     io.write("  Memory tools are now active in Hermes.\n")
     # 2.3.1rc2: eager Smart Account resolution — same rationale as _run_restore.
     _try_eager_resolve_scope_address(credentials_path, mnemonic, io)

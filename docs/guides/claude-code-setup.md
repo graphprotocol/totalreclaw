@@ -67,7 +67,7 @@ Wait for `done` before continuing.
 
 Check `test -s ~/.totalreclaw/credentials.json`. If it exists, the user already has a phrase from a previous TotalReclaw client (OpenClaw, Hermes, NanoClaw). Tell them verbatim:
 
-> *You already have a recovery phrase from another TotalReclaw client. Run `cat ~/.totalreclaw/credentials.json | jq -r .mnemonic` in your own terminal (NOT through me — your terminal output should not enter my context), copy the 12 words, and paste them as the value of `TOTALRECLAW_RECOVERY_PHRASE` in the config you just opened. Reply `done` once it's set.*
+> *You already have a recovery phrase from another TotalReclaw client. Retrieve your 12 words in your own terminal (NOT through me — your terminal output should not enter my context): `cat ~/.totalreclaw/credentials.json | jq -r .mnemonic` — and if that prints a `__keychain__:` marker instead of words, your phrase lives in the OS keychain: open your keychain app and copy it from the `totalreclaw` entry. Copy the 12 words, and paste them as the value of `TOTALRECLAW_RECOVERY_PHRASE` in the config you just opened. Reply `done` once it's set.*
 
 If `~/.totalreclaw/credentials.json` does NOT exist, tell them verbatim:
 

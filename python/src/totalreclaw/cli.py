@@ -167,23 +167,42 @@ def run_doctor(credentials_path: Optional[Path] = None, relay_url: Optional[str]
     except Exception:
         data = {}
 
-    mnemonic = data.get("mnemonic") or data.get("recovery_phrase")
+    # cred-2 (internal#262): the mnemonic field may be a keychain marker —
+    # resolve it to the real phrase before validating. On a wrapped file
+    # whose keychain entry is gone/locked (or the kill-switch is armed on a
+    # headless box), surface a clean, non-sensitive FAIL and skip the
+    # BIP-39 check rather than crash.
+    from totalreclaw.credentials_wrap import KeychainEntryMissing, resolve_mnemonic
+
+    mnemonic = ""
+    keychain_resolve_failed = False
+    try:
+        mnemonic = resolve_mnemonic(data) if isinstance(data, dict) else ""
+    except KeychainEntryMissing as err:
+        print(_fail(str(err)))
+        keychain_resolve_failed = True
+        issues += 1
 
     # --------------------------------------------------------------------
     # Check 2 — mnemonic is a valid BIP-39 phrase
     # --------------------------------------------------------------------
-    if not isinstance(mnemonic, str) or not mnemonic.strip():
-        print(_fail("credentials.json has no mnemonic field"))
-        issues += 1
-    else:
-        try:
-            from eth_account import Account
-            Account.enable_unaudited_hdwallet_features()
-            Account.from_mnemonic(mnemonic.strip(), account_path="m/44'/60'/0'/0/0")
-            print(_ok("Recovery phrase is a valid BIP-39 12-word mnemonic"))
-        except Exception as err:
-            print(_fail(f"Recovery phrase validation failed: {err}"))
+    if not keychain_resolve_failed:
+        if not isinstance(mnemonic, str) or not mnemonic.strip():
+            print(_fail("credentials.json has no mnemonic field"))
             issues += 1
+        else:
+            try:
+                from eth_account import Account
+                Account.enable_unaudited_hdwallet_features()
+                Account.from_mnemonic(mnemonic.strip(), account_path="m/44'/60'/0'/0/0")
+                print(_ok("Recovery phrase is a valid BIP-39 12-word mnemonic"))
+            except Exception as err:
+                # eth_account's ValidationError embeds raw phrase words verbatim
+                # ("Language not detected for word(s): ..."); never echo it
+                # (#262 review finding 4). Static message only.
+                del err
+                print(_fail("Recovery phrase validation failed (not a valid BIP-39 mnemonic)"))
+                issues += 1
 
     # --------------------------------------------------------------------
     # Check 3 — Smart Account address
