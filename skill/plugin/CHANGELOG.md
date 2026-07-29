@@ -4,15 +4,35 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.4.0] — 2026-07-21
+
+Stable, promoted from `3.4.0-rc.4` on a full on-chain re-QA GO (`totalreclaw-cc-tests`, OpenClaw 2026.6.8, agent on zai/glm-5-turbo, staging relay + isolated staging DataEdge `0xE7a4D2…`). A **minor** bump over 3.3.13 — it accumulates the whole batch merged since the 3.3.13 tag (a new write tool, the embedding codec + revived batching, and the extraction-resilience line), not a patch. npm `latest` = 3.4.0.
 
 ### Added
 
+- **[internal#499 / #551] `memory_save` native write tool.** The native-memory slot previously registered only `memory_search` + `memory_get` — with no write tool, an agent told "remember X" would shell-hallucinate `tr remember "…"` (GNU coreutils `tr`, not a TotalReclaw CLI), get no output, and report "Saved": **silent data loss on explicit remembers.** `memory_save` routes the fact through the same encrypt→index→submit store path (`native-store.ts`) the auto-extraction pipeline uses. SKILL.md gains a hard rule forbidding any `tr`/shell fallback for storage — if the tool is absent the agent must say it can't store rather than fabricate success. Verified live on-chain (staging tx `0xfea8e704…`, truthful `ok:true` only after the mined submit).
+- **[internal#479 / #544] Universal embedding decode + canonical f16 writes** (`embedding/embedding-codec.ts`, with the core pin in [#549](https://github.com/p-diogo/totalreclaw/pull/549)). Every embedding decrypt site dispatches across canonical base64(LE-f16) / legacy TS JSON array / legacy f32 binary, preferring the core codec with a byte-exact local fallback — fixing mixed-client vaults that silently degraded foreign-format facts to word-index matching. f16 writes shrink batch payloads (~1.7KB vs ~5KB/fact), which is what makes the revived adaptive batching (below) form real multi-fact groups instead of collapsing to groups-of-1.
 - **[internal#449 / #457] executeBatch revived — byte-capped adaptive batch sizing.** `agent_end` auto-extraction now submits all pending facts through one `submitFactBatchOnChain` call instead of one sponsored UserOp per fact: payloads are grouped by BOTH the installed core's live count cap (`getMaxBatchSize`, conservative 15 fallback) and a 32KB byte cap over real encoded lengths, one `executeBatch` UserOp per group, with halve-on-simfail (`-32500`, AA25 token-excluded) down to a single-fact floor. Cuts UserOp cost up to ~30× on extraction bursts. New `subgraph/batch-sizing.ts` (est≥real estimator calibrated against the plugin's real `encodeFactProtobuf` + dual-cap grouping + adaptive store), 65 unit + 10 integration checks, and a staging E2E (35 facts → groups [14,14,7] → 3 UserOps, 35/35 indexed).
 
 ### Fixed
 
 - **[#391] AA24 guard — initCode re-asserted after sponsorship.** `pm_sponsorUserOperation` responses are merged into the UserOp with a bare `Object.assign`; a relay proxy or paymaster change echoing `factory: null` would silently strip the initCode from a counterfactual (first-write-after-pair) UserOp and reproduce the AA24 signature-error ship-stopper. Both submit paths (single + batch) now re-apply the deployment decision `getInitCode` made for the attempt after sponsorship: undeployed senders get their computed `factory`/`factoryData` restored; deployed (or AA10 force-deployed) senders get any sponsor-added factory fields removed. Hand-integration of PR #391 onto the post-AA10 (#395/#407) write path, with its counterfactual regression test ported (17 checks: initCode presence, `createAccount(owner, salt=0)` encoding, sign-after-sponsor hash coverage, clobber restore).
+
+### Changed
+
+- **[internal#502 / #554] 429-resilient extraction.** Removed a stale `{attempts:3, baseDelayMs:1000}` retry override at all 5 extractor call-sites — it *undercut* the shared `chatCompletion` default and caused silent fact-drops under z.ai 429 bursts (the blocker that made rc.1/rc.2 QA untestable). Extraction now inherits the resilient default: 5 attempts, full-jitter exponential backoff (per-attempt ceiling 2/4/8/16s → ~30s worst case over 4 waits), 60s total budget, honoring the 429 `Retry-After` header (delta-seconds + HTTP-date, capped 60s). On exhaustion `chatCompletion` throws the typed `LLMUpstreamOutageError` (callers currently swallow to `[]`; poller re-queue is the tracked fast-follow [#553](https://github.com/p-diogo/totalreclaw/issues/553)).
+- **[internal#502 / #554 + #555] No hardcoded extraction model.** `resolveExtractionModel()` selects the **cheapest of the user's own configured OpenClaw `models[]`** (cheap-tier indicator filter with a word boundary so "mini" inside "gemini" is rejected; `maxTokens` tiebreak) instead of a baked-in per-provider constant, which is demoted to a last-resort fallback. #555 closes the wiring gap its own live re-QA caught: `models[]` is now threaded into the explicit-override, auth-profile, and **env-var** resolution tiers (not just the co-located-key tier) — so on the standard setup where the key comes from an env var (`ZAI_API_KEY`) while `models[]` lives in `openclaw.json`, cheapest-configured selection actually fires. Verified live: the resolution log flipped from `hardcoded table (fallback)` to `cheapest of configured models`.
+
+### Verified
+
+- Plugin gate green (96/96 test files, `check-scanner` 0 flags) on every merge; each PR two-round Sonnet-high reviewed.
+- **On-chain E2E GO** on the clean rc.4 npm artifact: explicit remember → `memory_save` → staging tx `0xfea8e704…` → truthful `ok:true` after the mined submit (no `tr`-shell hallucination); cross-session recall of the stored marker; rapid-turn auto-extraction landing 8 on-chain txs, all `failed=0`, with live store-time dedup. QA report: `totalreclaw-internal/docs/notes/QA-openclaw-RC-3.4.0-rc.4-20260721.md`. Caveat: no live 429s occurred during the run, so the new retry path is unit-verified (deterministic jitter-bound + Retry-After parse tests) rather than storm-exercised.
+
+### Known follow-ups
+
+- [#553](https://github.com/p-diogo/totalreclaw/issues/553) — re-queue rate-limited turns to the `extractd` poller instead of advancing the offset past them.
+- [#558](https://github.com/p-diogo/totalreclaw/issues/558) — make `keyring` a hard macOS dep (fast-follow to the Hermes keychain wrap #546).
+- ClawHub channel promote blocked on a stuck upstream review (SkillSpector "could not complete"); npm `latest` is the authoritative install path and is live.
 
 ## [3.3.13] — 2026-07-15
 
