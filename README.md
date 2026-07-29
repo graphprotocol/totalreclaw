@@ -20,7 +20,10 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/@totalreclaw/mcp-server"><img src="https://img.shields.io/npm/v/@totalreclaw/mcp-server?label=MCP%20Server&color=7B5CFF" alt="npm MCP Server" /></a>
   <a href="https://www.npmjs.com/package/@totalreclaw/totalreclaw"><img src="https://img.shields.io/npm/v/@totalreclaw/totalreclaw?label=OpenClaw%20Plugin&color=7B5CFF" alt="npm Plugin" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
+  <a href="https://pypi.org/project/totalreclaw/"><img src="https://img.shields.io/pypi/v/totalreclaw?label=Python&color=7B5CFF" alt="PyPI" /></a>
+  <a href="https://crates.io/crates/totalreclaw-memory"><img src="https://img.shields.io/crates/v/totalreclaw-memory?label=Rust&color=7B5CFF" alt="crates.io" /></a>
+  <a href="https://github.com/p-diogo/totalreclaw/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/p-diogo/totalreclaw/ci.yml?branch=main&label=CI" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20(server%3A%20AGPL--3.0)-7B5CFF" alt="License" /></a>
 </p>
 
 ---
@@ -34,7 +37,14 @@ Your AI remembers everything — without remembering it for Big Tech. And starti
 
 Other AI memory tools ([Mem0](https://mem0.ai), [Zep](https://getzep.com)) store your data in plaintext on their servers. TotalReclaw can't read your data by design — that's the difference between a privacy promise and a structural guarantee.
 
-> **New in v1 (April 2026):** memory taxonomy, source-weighted reranking, 3 new MCP tools (`totalreclaw_pin` / `totalreclaw_retype` / `totalreclaw_set_scope`), protobuf v4 wire format. v1 is the default on every client. Existing vaults decrypt transparently. See the [v1 migration guide](docs/guides/v1-migration.md).
+| | TotalReclaw | Typical hosted memory |
+|---|---|---|
+| Server sees your memories in plaintext? | Never — E2E encrypted on-device | Yes |
+| One-click plain-text export? | Yes | Varies |
+| Works across agents? | Yes — OpenClaw, Claude Desktop, Hermes, ZeroClaw, any MCP host | Usually SDK-locked |
+| Storage you control? | Yes — public chain or your own PostgreSQL | Vendor database |
+
+> **New in v1 (April 2026):** memory taxonomy, source-weighted reranking, 4 new MCP tools (`totalreclaw_pin` / `totalreclaw_unpin` / `totalreclaw_retype` / `totalreclaw_set_scope`), protobuf v4 wire format. v1 is the default on every client. Existing vaults decrypt transparently. See the [v1 migration guide](docs/guides/v1-migration.md).
 
 ## Quick Start
 
@@ -67,6 +77,8 @@ If you don't have a phrase yet, the setup wizard generates one. See the [client 
 4. **Search works over encrypted data** — blind indices and LSH let the server find relevant memories without reading them.
 5. **Results are decrypted and ranked locally** — BM25 + cosine + RRF with source-weighted reranking (v1 Tier 1).
 
+<p align="center"><img src="docs/assets/architecture.svg" width="720" alt="TotalReclaw architecture: encrypt on-device, store ciphertext on-chain, blind-index search, decrypt and rerank locally"/></p>
+
 > Full technical deep dives: [Architecture](docs/architecture.md), [Memory Taxonomy v1](docs/specs/totalreclaw/memory-taxonomy-v1.md), [Tiered Retrieval](docs/specs/totalreclaw/tiered-retrieval.md).
 
 ## What's new in v1
@@ -76,11 +88,9 @@ v1 shipped across every client in April 2026. Highlights:
 - **6-type speech-act taxonomy** — `claim / preference / directive / commitment / episode / summary`. Replaces the ambiguous 8-type v0 list.
 - **3 orthogonal axes** — `source` (user / user-inferred / assistant / external / derived), `scope` (work / personal / health / family / creative / finance / misc / unspecified), `volatility` (stable / updatable / ephemeral).
 - **Source-weighted reranking** — user-authored claims consistently rank above assistant-regurgitated noise. Structurally fixes the [97.8% junk problem](https://github.com/mem0ai/mem0/issues/4573) documented in other memory systems.
-- **3 new MCP tools** — `totalreclaw_pin`, `totalreclaw_retype`, `totalreclaw_set_scope`. Invoked by natural language ("pin that", "file that under work").
+- **4 new MCP tools** — `totalreclaw_pin`, `totalreclaw_unpin`, `totalreclaw_retype`, `totalreclaw_set_scope`. Invoked by natural language ("pin that", "file that under work").
 - **Protobuf v4 wire format** — outer wrapper bump; subgraph schema unchanged.
 - **Env var cleanup** — several experimental env vars removed; a small set of user-facing env vars remain. See the [env vars reference](docs/guides/env-vars-reference.md).
-
-> Benchmark headline: *(placeholder — filled in once phase 2 500-conv run lands 2026-04-18)* — v1's source-weighted reranker preserves recall quality while breaking the importance-clustering pathology.
 
 Full details: [v1 migration guide](docs/guides/v1-migration.md) and [memory types guide](docs/guides/memory-types-guide.md).
 
@@ -107,9 +117,7 @@ On the managed service, the free tier includes one lifetime import; re-importing
 
 ## Pricing
 
-Free tier is unlimited on testnet. Upgrade to Pro for permanent on-chain storage.
-
-**[See pricing →](https://totalreclaw.xyz/pricing)**
+**Free**: 250 memories/month, permanently stored on Gnosis mainnet, end-to-end encrypted — no credit card required. **Pro**: 1,500 memories/month, plus LLM-guided dedup and custom extraction intervals. [See pricing →](https://totalreclaw.xyz/pricing)
 
 ## Self-Hosting
 
