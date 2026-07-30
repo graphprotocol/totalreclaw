@@ -27,7 +27,8 @@
  *
  * Invocation:
  *   - In CI, runs AFTER the "Apply RC version suffix" step that mutates
- *     package.json (npm-publish.yml + publish-clawhub.yml).
+ *     package.json (npm-publish.yml; also publish-clawhub.yml until that
+ *     channel was retired on 2026-07-30).
  *   - Locally, you can run it any time you bump package.json::version.
  */
 

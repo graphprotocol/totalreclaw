@@ -38,7 +38,7 @@ You are running inside an **OpenClaw gateway** if the `openclaw` CLI is availabl
 openclaw --version        # or: command -v openclaw
 ```
 
-If that succeeds → follow **[`openclaw-setup.md`](./openclaw-setup.md)**. TotalReclaw is OpenClaw's native `kind:"memory"` provider: plugin `@totalreclaw/totalreclaw` (npm) + skill `totalreclaw` (ClawHub).
+If that succeeds → follow **[`openclaw-setup.md`](./openclaw-setup.md)**. TotalReclaw is OpenClaw's native `kind:"memory"` provider, installed from npm: `openclaw plugins install @totalreclaw/totalreclaw`.
 
 ### You are a Hermes agent
 

@@ -1,9 +1,9 @@
 # Promote a release candidate to stable.
 #
 # After `publish-*.yml` with `release-type: rc` publishes artifacts at a
-# pre-release version (e.g. 2.1.0-rc.1 on npm/crates/ClawHub, 2.1.0rc1 on
-# PyPI), and after `qa-totalreclaw` returns GO against those artifacts,
-# this workflow publishes the SAME content at the stable version string.
+# pre-release version (e.g. 2.1.0-rc.1 on npm/crates, 2.1.0rc1 on PyPI),
+# and after `qa-totalreclaw` returns GO against those artifacts, this
+# workflow publishes the SAME content at the stable version string.
 # Per-registry behavior:
 #
 #   npm       -> republish the tarball at the stable version; the RC stays
@@ -13,8 +13,10 @@
 #   PyPI      -> upload stable wheel. PyPI mandates distinct filenames per
 #                version; `pip install foo` resolves to stable-version after
 #                promote.
-#   ClawHub   -> republish at stable version with full stable tag set
-#                (`latest,memory,...`). RC tag stays on the RC version.
+#
+# ClawHub was a supported promote target until 2026-07-30; the channel was
+# retired after a registry-side duplicate-slug-row defect made publishes
+# permanently invisible. See docs/guides/release-process.md.
 #
 # Safety: this workflow does NOT fabricate content. It checks out the same
 # commit SHA as the RC publish and re-runs the publish pipeline with
@@ -41,10 +43,9 @@ on:
           - python-client
           - crate-core
           - crate-memory
-          - clawhub
           - all
       rc-version:
-        description: 'RC version to promote (e.g. "2.1.0-rc.1" for npm/crates/ClawHub, "2.1.0rc1" for PyPI)'
+        description: 'RC version to promote (e.g. "2.1.0-rc.1" for npm/crates, "2.1.0rc1" for PyPI)'
         required: true
       stable-version:
         description: 'Target stable version (leave blank to auto-derive by stripping rc suffix)'
@@ -183,15 +184,6 @@ jobs:
             echo "OK: $c@$RC is on crates.io"
           done
 
-      - name: Note on ClawHub validation
-        if: inputs.package == 'clawhub' || inputs.package == 'all'
-        run: |
-          # ClawHub CLI v0.9.0 has no read-only inspect-by-version API
-          # exposed for validation here. We rely on `clawhub install
-          # totalreclaw --version <rc>` during QA to be the validation;
-          # promotion proceeds on human attestation that QA landed green.
-          echo "NOTE: ClawHub RC validation is via QA attestation, not auto-check."
-
   promote-npm:
     name: Promote npm package ${{ inputs.package }} -> ${{ needs.derive-versions.outputs.stable-version }}
     runs-on: ubuntu-latest
@@ -318,73 +310,11 @@ jobs:
           #   1. merge a stable-version bump commit on main (via a normal PR),
           #   2. dispatch publish-crates.yml with release-type=stable.
           # This job exists to document the handoff + keep the promote
-          # workflow's job graph symmetric with npm / PyPI / ClawHub.
+          # workflow's job graph symmetric with npm / PyPI.
           echo "crates.io promotion: please dispatch publish-crates.yml"
           echo "with release-type=stable after merging the stable-version bump to main."
           echo "Target crate: ${{ inputs.package }}"
           echo "Target version: ${{ needs.derive-versions.outputs.stable-version }}"
-
-  promote-clawhub:
-    name: Promote ClawHub plugin -> ${{ needs.derive-versions.outputs.stable-version }}
-    runs-on: ubuntu-latest
-    needs: [derive-versions, validate-rc-exists]
-    if: >
-      (inputs.package == 'clawhub' || inputs.package == 'all') &&
-      inputs.dry-run == false
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: '22'
-
-      - name: Install ClawHub CLI (pinned to 0.8.0)
-        # Pinned because 0.9.x's `clawhub package publish --family code-plugin`
-        # collides with the existing `totalreclaw` slug already registered
-        # Family=Skill (rc.22 era). Until upstream slug migration lands.
-        # See publish-clawhub.yml comment for full context.
-        run: npm install -g clawhub@0.8.0
-
-      # Issue #206: without this step, `clawhub publish ./skill/plugin
-      # --version <stable>` shipped a tarball whose internal
-      # package.json / SKILL.md / skill.json still carried the prior
-      # `-rc.<N>` strings. The catalog tag moved to stable, but
-      # `clawhub install totalreclaw` users saw `"version": "X.Y.Z-rc.N"`
-      # inside the artifact. Mirror publish-clawhub.yml's "Resolve version
-      # + propagate to bundled tarball files" step so the promoted artifact
-      # is internally consistent with its stable tag.
-      - name: Stamp stable version into bundled tarball files
-        run: |
-          set -e
-          STABLE="${{ needs.derive-versions.outputs.stable-version }}"
-
-          node -e "
-          const fs = require('fs');
-          const p = require('./skill/plugin/package.json');
-          p.version = '${STABLE}';
-          fs.writeFileSync('./skill/plugin/package.json', JSON.stringify(p, null, 2) + '\n');
-          console.log('package.json::version =', p.version);
-          "
-
-          # Propagate into SKILL.md frontmatter + skill.json, then GATE.
-          node skill/scripts/sync-version.mjs
-          node skill/scripts/check-version-drift.mjs
-
-      - name: Publish stable tags over the promoted version
-        env:
-          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
-        run: |
-          set -e
-          STABLE="${{ needs.derive-versions.outputs.stable-version }}"
-          echo "Publishing stable $STABLE to ClawHub with full tag set."
-          clawhub login --token "$CLAWHUB_TOKEN" --no-browser
-          # Using legacy `clawhub publish --slug` (CLI 0.8.0). See install step.
-          clawhub publish ./skill/plugin \
-            --slug totalreclaw \
-            --name "TotalReclaw" \
-            --version "$STABLE" \
-            --tags "latest,memory,encryption,e2ee,privacy,agent-memory,e2e-encryption,persistent-context" \
-            --changelog "Release $STABLE (promoted from RC) -- see https://github.com/p-diogo/totalreclaw/releases/tag/v$STABLE"
 
   tag-stable-release:
     name: Backfill v${{ needs.derive-versions.outputs.stable-version }} git tag
@@ -393,10 +323,11 @@ jobs:
     if: inputs.dry-run == false
     permissions:
       contents: write
-    # Why: ClawHub default-tag resolution depends on git tags in the public
-    # repo. Stable promotes prior to 2026-04-28 (v3.3.1) didn't auto-tag,
-    # leaving ClawHub serving the latest *RC* git tag (v3.3.1-rc.22) as the
-    # default `clawhub install totalreclaw` answer. See finding #189.
+    # Why: every stable release needs a `v<version>` git tag — release notes,
+    # `git diff v<a>..v<b>` content checks, and RC->stable provenance all
+    # depend on it. Originally added because ClawHub's default-tag resolution
+    # read git tags (finding #189, since retired with the channel); the tag is
+    # still load-bearing for the reasons above.
     # The auto-tag-on-RC-publish fix already shipped in publish-*.yml workflows
     # (see #139 / rc.21 backfill); this mirrors it for stable promote.
     steps:

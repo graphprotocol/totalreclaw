@@ -493,8 +493,9 @@ jobs:
         run: cd skill/plugin && rm -f package-lock.json && npm install --legacy-peer-deps
 
       # Defense-in-depth: block the publish if any plugin file would trip
-      # OpenClaw's `env-harvesting` scanner rule. The same gate runs in
-      # `publish-clawhub.yml`. We don't want npm to serve a tarball that
+      # OpenClaw's `env-harvesting` scanner rule. (The same gate used to run
+      # in `publish-clawhub.yml`, retired 2026-07-30 with the ClawHub
+      # channel; CI runs it too.) We don't want npm to serve a tarball that
       # `openclaw plugins install @totalreclaw/totalreclaw` would then
       # refuse to install. `prepublishOnly` ALSO runs this script, but we
       # surface it explicitly here so a failure shows up as its own step.

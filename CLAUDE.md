@@ -540,4 +540,4 @@ Autonomous regression harness for the vault SPA. Driver lives in `tools/qa-vault
 - **Server-side tuning**: Relay billing response carries `extraction_interval`, `max_facts_per_extraction`, `max_candidate_pool`, and (planned) `ephemeral_ttl_days`. Clients read these from the billing cache — no npm/PyPI publish required to retune.
 - **Staging**: Gnosis mainnet (chain 100) — staging relay endpoint, Pimlico-sponsored gas
 - **Production**: Gnosis mainnet (chain 100) — production relay endpoint, Pimlico-sponsored gas
-- **All releases via CI**: GitHub Actions workflows for npm, PyPI, and ClawHub. Never publish manually.
+- **All releases via CI**: GitHub Actions workflows for npm, PyPI, and crates.io. Never publish manually. **ClawHub was retired as a channel on 2026-07-30** (registry-side duplicate-slug defect, [openclaw/clawhub#3212](https://github.com/openclaw/clawhub/issues/3212)) — npm is the plugin's only channel.

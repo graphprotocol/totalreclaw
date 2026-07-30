@@ -143,8 +143,10 @@ jobs:
         run: cd skill/plugin && rm -f package-lock.json && npm install --legacy-peer-deps
 
       # Simulate OpenClaw's `env-harvesting` scanner rule so a JSDoc comment
-      # with "fetch" in a file that reads process.env never makes it to
-      # ClawHub again. See docs/notes/INVESTIGATION-OPENCLAW-SCANNER-*.
+      # with "fetch" in a file that reads process.env never ships again.
+      # (The rule also gates `openclaw plugins install` from npm, so this
+      # stayed load-bearing after the ClawHub channel was retired.)
+      # See docs/notes/INVESTIGATION-OPENCLAW-SCANNER-*.
       - name: Scanner-sim (env-harvesting false-positive check)
         run: node skill/scripts/check-scanner.mjs
 

@@ -4,6 +4,15 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1] — 2026-07-30
+
+Content-identical to 3.4.0 (`git diff v3.4.0..v3.4.1 -- skill/plugin/` is empty apart from the version string). The re-label existed only to publish past a reserved `3.4.0` version number on ClawHub. npm `latest` = 3.4.1.
+
+### Changed
+
+- **ClawHub retired as a distribution channel.** The plugin now ships to **npm only**. A registry-side defect on ClawHub — duplicate `skills` rows for one slug, which makes every slug-scoped `.unique()` lookup throw ([openclaw/clawhub#3212](https://github.com/openclaw/clawhub/issues/3212)) — left publishes permanently invisible: `clawhub publish` returns OK with a release id, the listing never advances past `3.3.13`, and `scan` / `delete` / `hide` all fail with backend errors. Both 3.4.0 and 3.4.1 published into that void. Install is `openclaw plugins install @totalreclaw/totalreclaw`.
+- **Do not run `openclaw skills install totalreclaw`.** The bare `totalreclaw` slug on ClawHub is ambiguous with an unaffiliated third-party copy, so that command can install someone else's package. The npm tarball already ships TotalReclaw's own `SKILL.md` + `skill.json`.
+
 ## [3.4.0] — 2026-07-21
 
 Stable, promoted from `3.4.0-rc.4` on a full on-chain re-QA GO (`totalreclaw-cc-tests`, OpenClaw 2026.6.8, agent on zai/glm-5-turbo, staging relay + isolated staging DataEdge `0xE7a4D2…`). A **minor** bump over 3.3.13 — it accumulates the whole batch merged since the 3.3.13 tag (a new write tool, the embedding codec + revived batching, and the extraction-resilience line), not a patch. npm `latest` = 3.4.0.

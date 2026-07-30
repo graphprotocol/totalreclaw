@@ -23,19 +23,19 @@ All clients write to the same vault. If you use multiple clients, use the same 1
 
 ## OpenClaw plugin
 
-**Package:** `@totalreclaw/totalreclaw@^3.0.0` (ClawHub).
+**Package:** `@totalreclaw/totalreclaw@^3.0.0` (npm).
 **Features:** fully automatic — auto-recall on every message, auto-extract every 3 turns, pre-compaction flush, session debrief.
 
 ### Install
 
 Tell your OpenClaw agent:
 
-> "Install the TotalReclaw skill from ClawHub"
+> "Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/install.md"
 
 Or via terminal:
 
 ```bash
-openclaw skills install totalreclaw
+openclaw plugins install @totalreclaw/totalreclaw
 ```
 
 ### Configure

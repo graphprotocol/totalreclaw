@@ -202,7 +202,7 @@ railway redeploy -s totalreclaw-production    # redeploys current; for an older 
 
 ## 8. Package publishing
 All publishing goes through GitHub Actions (`gh workflow run ...`). **Never
-publish manually.** CI must be green first. Order: Core → MCP → Plugin (ClawHub)
+publish manually.** CI must be green first. Order: Core → MCP → Plugin (npm)
 → Python. Verify each with `npm view` / `pip install --dry-run`. See the
 `deploy-totalreclaw` skill for the per-workflow commands.
 

@@ -40,9 +40,10 @@ The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` i
 
 TotalReclaw is open-source memory tooling for OpenClaw. The plugin is published by `p-diogo` (GitHub-verified) at:
 
-- npm: [`@totalreclaw/totalreclaw`](https://www.npmjs.com/package/@totalreclaw/totalreclaw)
-- ClawHub skill: `totalreclaw`
+- npm: [`@totalreclaw/totalreclaw`](https://www.npmjs.com/package/@totalreclaw/totalreclaw) — the only supported install channel
 - Source code: <https://github.com/p-diogo/totalreclaw>
+
+> **ClawHub is no longer a TotalReclaw channel** (retired 2026-07-30). Do **not** run `openclaw skills install totalreclaw` — the bare `totalreclaw` slug on ClawHub is ambiguous and can resolve to an unaffiliated third-party copy. The plugin ships its own `SKILL.md` inside the npm tarball.
 
 All cryptographic operations run on your device. Encrypted bundles are forwarded through the TotalReclaw relay (`api.totalreclaw.xyz` by default for both stable and RC builds; set `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` to opt into the staging relay). The recovery phrase is generated and stays inside your browser — neither the agent, the relay, nor anyone else ever sees it.
 
@@ -64,9 +65,8 @@ The user pasted this URL deliberately, but treat each command as a step you and 
 
 ### What you will run, and why each step is safe
 
-1. `openclaw plugins install @totalreclaw/totalreclaw` — installs the published plugin from npm under the `@totalreclaw` scope owned by `p-diogo`. The plugin runs inside OpenClaw's plugin sandbox. Upstream docs: <https://docs.openclaw.com/cli/plugins>.
-2. `openclaw skills install totalreclaw` — fetches the SKILL.md descriptor from ClawHub. Read-only metadata; no code executes from this step. Upstream docs: <https://docs.openclaw.com/cli/skills>.
-3. When no `~/.totalreclaw/credentials.json` exists, you trigger pairing via the plugin's in-process HTTP route (`curl http://localhost:18789/plugin/totalreclaw/pair/init`), which mints a one-time URL + PIN. The user opens the URL in their own browser to enter or generate a recovery phrase. The phrase never enters chat or your shell.
+1. `openclaw plugins install @totalreclaw/totalreclaw` — installs the published plugin from npm under the `@totalreclaw` scope owned by `p-diogo`. The plugin runs inside OpenClaw's plugin sandbox, and its tarball carries the `SKILL.md` descriptor. Upstream docs: <https://docs.openclaw.com/cli/plugins>.
+2. When no `~/.totalreclaw/credentials.json` exists, you trigger pairing via the plugin's in-process HTTP route (`curl http://localhost:18789/plugin/totalreclaw/pair/init`), which mints a one-time URL + PIN. The user opens the URL in their own browser to enter or generate a recovery phrase. The phrase never enters chat or your shell.
 
 You are not asked to handle the recovery phrase. You are not asked to bypass auth. Pasting the install prompt IS the consent moment for installing the plugin; the URL + PIN you hand back from `tr pair --json` is the real consent moment for account creation, since the user has to open the page in their browser to continue. There is no separate "yes/no" gate before account setup. If the user pastes a phrase in chat anyway, refuse to proceed — see "Phrase safety" below.
 
@@ -134,16 +134,15 @@ Substitute every one of those with silence — the next user-visible line in the
 
 If the user explicitly asks ("what's it doing?", "why so quiet?", "show me the commands"), then narrate freely — the silence rule only governs the default install path.
 
-### Step 1 — Install the skill + plugin (silent — emit user-visible line 1, then no prose until line 2)
+### Step 1 — Install the plugin (silent — emit user-visible line 1, then no prose until line 2)
 
-Run via your shell tool, in this exact order, **without writing prose about them**. Emit user-visible line 1 (`Setting up TotalReclaw — this takes about a minute…`) once at the start, then stay silent until both commands succeed.
+Run via your shell tool, **without writing prose about it**. Emit user-visible line 1 (`Setting up TotalReclaw — this takes about a minute…`) once at the start, then stay silent until it succeeds.
 
 ```bash
 openclaw plugins install @totalreclaw/totalreclaw
-openclaw skills install totalreclaw
 ```
 
-**Plugin BEFORE skill is deliberate** (post-Pedro QA): the skill install triggers a config-driven SIGUSR1 gateway reload that can race a concurrent plugin install. Plugin-first lets the plugin land cleanly, then the skill's reload picks it up on the next gateway loop. If you accidentally do skill-first and the plugin install dies mid-flight, just retry `openclaw plugins install @totalreclaw/totalreclaw` once — it's idempotent.
+**Do NOT run `openclaw skills install totalreclaw`.** That command pulls from ClawHub, which TotalReclaw retired on 2026-07-30; the bare `totalreclaw` slug there is ambiguous and can resolve to an unaffiliated third-party copy. The npm tarball already ships TotalReclaw's `SKILL.md` and `skill.json`, and `register()` binds the memory slot + hooks directly.
 
 **Bind the memory slot (idempotent):**
 
@@ -243,8 +242,7 @@ NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER 
 
 ## What's happening (for the human reader)
 
-1. `openclaw skills install totalreclaw` — fetches TotalReclaw's SKILL.md from ClawHub and registers it under `~/.openclaw/workspace/skills/totalreclaw/`. The agent picks it up on next config reload.
-2. `openclaw plugins install @totalreclaw/totalreclaw` — installs the plugin from npm (the `latest` dist-tag is always current stable; use `@rc` for the latest release candidate).
+1. `openclaw plugins install @totalreclaw/totalreclaw` — installs the plugin from npm (the `latest` dist-tag is always current stable; use `@rc` for the latest release candidate). The tarball ships `SKILL.md` + `skill.json`, so the agent-facing descriptor arrives with the plugin — no separate skill install, and nothing is fetched from ClawHub.
 3. The plugin's `register()` patches `~/.openclaw/openclaw.json` with the memory slot + hook keys OpenClaw looks for, then signals `SIGUSR1` to its own PID so the gateway picks up the new keys in-process — no manual restart.
 4. When no credentials exist, the plugin does **not** auto-open a pair session — pairing is user-triggered. On load with no `~/.totalreclaw/credentials.json`, the plugin logs a single hint and waits:
    ```
@@ -299,7 +297,7 @@ openclaw plugins install @totalreclaw/totalreclaw            # stable
 
 Then in chat: *"Set up TotalReclaw"* — the agent will run `tr pair --json` and hand you the URL + PIN. Open the URL in your browser to enter or generate your phrase.
 
-> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.13-rc.1`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`. Keep skill and plugin on the same version family (both stable or both RC).
+> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.3.13-rc.1`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`.
 
 <details>
 <summary>From-source install (for plugin development — self-host only)</summary>

@@ -2,6 +2,13 @@
 
 > **Note:** This file lists releases promoted to the public registries' stable tags. Active release-candidate work (`@rc` dist-tag on npm, `rcN` on PyPI, etc.) is tracked in the internal release-pipeline tracker, not here.
 
+## @totalreclaw/totalreclaw (OpenClaw plugin) 3.4.1 — ClawHub retired, npm is the only channel (2026-07-30)
+
+3.4.1 is content-identical to 3.4.0; only the version string differs. It exists because ClawHub had reserved the `3.4.0` number.
+
+- **ClawHub retired.** The plugin ships to **npm only** from now on. A registry-side defect — duplicate `skills` rows for one slug make every slug-scoped `.unique()` lookup throw ([openclaw/clawhub#3212](https://github.com/openclaw/clawhub/issues/3212)) — left publishes permanently invisible: `clawhub publish` returns OK with a release id, the listing never advances past `3.3.13`, and `scan` / `delete` / `hide` all fail. 3.4.0 and 3.4.1 both published into that void, so the channel was retired rather than kept as a stale mirror.
+- **Install is `openclaw plugins install @totalreclaw/totalreclaw`.** Do **not** run `openclaw skills install totalreclaw` — the bare `totalreclaw` slug on ClawHub is ambiguous with an unaffiliated third-party copy, so that command can install someone else's package. The npm tarball ships TotalReclaw's own `SKILL.md` + `skill.json`.
+
 ## @totalreclaw/totalreclaw (OpenClaw plugin) 3.3.12 / 3.3.13 — Stable promote (2026-07-06 / 2026-07-15)
 
 The `rc.20 → rc.23` stabilization arc that restored a working fresh-user onboarding path, plus the publish-pipeline fix that finally landed the stable line on npm.

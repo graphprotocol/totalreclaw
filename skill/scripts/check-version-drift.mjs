@@ -15,9 +15,11 @@
  *
  *   This script is run:
  *     - As `prepublishOnly` in skill/plugin/package.json (npm publish path)
- *     - As an explicit step in npm-publish.yml + publish-clawhub.yml,
- *       AFTER the RC suffix mutation + sync, so a sync regression also
- *       surfaces as a workflow-level failure (not buried in a packlist).
+ *     - As an explicit step in npm-publish.yml, AFTER the RC suffix
+ *       mutation + sync, so a sync regression also surfaces as a
+ *       workflow-level failure (not buried in a packlist).
+ *       (Also ran in publish-clawhub.yml until that channel was retired
+ *       on 2026-07-30.)
  *
  * Performance:
  *   Three small file reads, no network, no spawn. <100ms in practice.

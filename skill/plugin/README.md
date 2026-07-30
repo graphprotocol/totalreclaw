@@ -10,16 +10,14 @@ TotalReclaw gives any [OpenClaw](https://github.com/openclaw/openclaw) agent per
 
 ## Installation
 
-### ClawHub (recommended)
-
 Tell your OpenClaw agent:
 
-> "Install the TotalReclaw skill from ClawHub"
+> "Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/install.md"
 
 Or via terminal:
 
 ```bash
-openclaw skills install totalreclaw
+openclaw plugins install @totalreclaw/totalreclaw
 ```
 
 Then set one environment variable:
@@ -29,12 +27,6 @@ export TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
 ```
 
 That's it. TotalReclaw hooks into your agent automatically. The server URL defaults to `https://api.totalreclaw.xyz` (managed service) -- only set `TOTALRECLAW_SERVER_URL` if you are self-hosting. See the [env vars reference](../../docs/guides/env-vars-reference.md) for the full (short) list.
-
-### Alternative: npm
-
-```bash
-openclaw plugins install @totalreclaw/totalreclaw
-```
 
 ---
 
@@ -80,15 +72,9 @@ Most AI memory solutions force a tradeoff: **good recall OR privacy**. TotalRecl
 
 Tell your OpenClaw agent:
 
-> "Install the TotalReclaw skill from ClawHub"
+> "Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/install.md"
 
 Or via terminal:
-
-```bash
-openclaw skills install totalreclaw
-```
-
-Alternative (npm):
 
 ```bash
 openclaw plugins install @totalreclaw/totalreclaw
@@ -376,6 +362,6 @@ MIT — see the repository LICENSE file.
 ## Links
 
 - [TotalReclaw Documentation](https://github.com/p-diogo/totalreclaw)
-- [Claw Hub Listing](https://clawhub.ai/skills/totalreclaw)
+- [npm package](https://www.npmjs.com/package/@totalreclaw/totalreclaw)
 - [OpenClaw](https://github.com/openclaw/openclaw)
 - [Issue Tracker](https://github.com/p-diogo/totalreclaw/issues)

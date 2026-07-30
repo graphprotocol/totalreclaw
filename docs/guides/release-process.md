@@ -1,8 +1,17 @@
 # Release process
 
 TotalReclaw ships via a **release-candidate (RC) then promote** flow. Every
-stable version on npm / PyPI / crates.io / ClawHub was first validated as an
-RC against real-user QA on staging.
+stable version on npm / PyPI / crates.io was first validated as an RC against
+real-user QA on staging.
+
+> **Retired channel — ClawHub (2026-07-30).** The OpenClaw plugin used to ship
+> to ClawHub in parallel with npm. A registry-side defect (duplicate `skills`
+> rows for one slug make every slug-scoped `.unique()` lookup throw) left
+> publishes permanently invisible: `clawhub publish` returns OK with a release
+> id, the listing never advances, and `scan` / `delete` / `hide` all fail. Ours
+> froze at `3.3.13`; `3.4.0` and `3.4.1` both published into the void. Upstream:
+> [openclaw/clawhub#3212](https://github.com/openclaw/clawhub/issues/3212).
+> npm is now the only channel for the plugin.
 
 This guide is for maintainers. Users install stable artifacts via the
 integration-specific setup guides (`openclaw-setup.md`, `hermes-setup.md`,
@@ -107,7 +116,6 @@ differ. Ship with the table below in front of you.
 | npm        | `<base>-rc.<N>`       | `2.1.0-rc.1`       | `npm install @totalreclaw/core@rc`                     |
 | crates.io  | `<base>-rc.<N>`       | `2.1.0-rc.1`       | `cargo add totalreclaw-core@=2.1.0-rc.1`               |
 | PyPI       | `<base>rc<N>` (PEP440)| `2.1.0rc1`         | `pip install totalreclaw==2.1.0rc1`                    |
-| ClawHub    | `<base>-rc.<N>`       | `3.1.0-rc.1`       | `clawhub install totalreclaw --version 3.1.0-rc.1`     |
 
 - **npm** uses a `rc` dist-tag (not `latest`). Users who run
   `npm install @totalreclaw/core` without `@rc` get the current stable.
@@ -116,9 +124,6 @@ differ. Ship with the table below in front of you.
   implicitly; users must explicitly pin `=2.1.0-rc.1`.
 - **PyPI** `pip install foo` ignores pre-release resolutions by default; users
   pin with `==2.1.0rc1` or pass `--pre`.
-- **ClawHub** has no dedicated pre-release channel. RC publishes tag the
-  version with `rc` only (no `latest`), so UI / search keeps pointing at the
-  last stable release. QA installs with `--version <rc>`.
 
 ## Standard flow (Wave 1 / Phase 1)
 
@@ -153,11 +158,6 @@ differ. Ship with the table below in front of you.
      -f release-type=rc \
      -f rc-number=1
 
-   # ClawHub (provide BASE version; workflow appends -rc.<N>)
-   gh workflow run publish-clawhub.yml \
-     -f version=3.1.0 \
-     -f release-type=rc \
-     -f rc-number=1
    ```
 
 3. **Wait for green builds.** The workflows do not touch the stable
@@ -168,7 +168,7 @@ differ. Ship with the table below in front of you.
    skill in `rc-mode`; point it at the RC versions. Reports land in
    `totalreclaw-internal/docs/notes/QA-<integration>-<YYYYMMDD>.md`.
 
-5. **On GO verdict:** trigger `promote-rc.yml` for the npm / ClawHub pieces
+5. **On GO verdict:** trigger `promote-rc.yml` for the npm pieces
    (they ship new artifacts at the stable version). For PyPI and crates.io,
    dispatch `publish-*.yml` with `release-type=stable` — those registries
    have no retag mechanism, so "promote" is a fresh publish of identical
@@ -193,9 +193,8 @@ differ. Ship with the table below in front of you.
    > ```
    > This rebuilds from source at the stable version (vs `promote-rc.yml`'s
    > re-pack of the exact RC tarball — the accepted tradeoff for a single, clean
-   > publisher). The plugin's **ClawHub** promote is unaffected — still
-   > `promote-rc.yml -f package=clawhub` (ClawHub has no Trusted-Publisher
-   > constraint).
+   > publisher). npm is the plugin's only channel since the ClawHub retirement
+   > (2026-07-30, see the note at the top of this guide).
 
 6. **Advertise the new stable to the fleet — set `LATEST_STABLE_PYTHON` on BOTH
    relay services.** This is the single env flip that makes the automatic update
@@ -291,8 +290,6 @@ To actively yank a broken RC:
   "Yank release"). Yanked versions remain installable via explicit pin
   but disappear from normal resolution.
 - **crates.io**: `cargo yank --version 2.1.0-rc.1 totalreclaw-core`
-- **ClawHub**: `clawhub delete totalreclaw@3.1.0-rc.1` (soft-delete;
-  owners / moderators can restore).
 
 ### Promote fails
 
@@ -300,7 +297,7 @@ The `promote-rc.yml` workflow's `validate-rc-exists` job refuses to run
 against an RC version that isn't actually published. Check:
 
 1. Is the `rc-version` input spelled exactly right? (`-rc.1` for
-   npm/crates/ClawHub; `rc1` for PyPI.)
+   npm/crates; `rc1` for PyPI.)
 2. Did the RC publish succeed? Check the `publish-*.yml` run history.
 3. If the RC was yanked/deprecated, it may fail lookup. Republish RC at
    the next rc-number and re-promote.
@@ -314,8 +311,6 @@ If a stable release ships and is later discovered to be broken:
 - **PyPI**: yank via the web UI. Users on `pip install totalreclaw` (no
   pin) will resolve to the previous version.
 - **crates.io**: `cargo yank --version 2.1.0 totalreclaw-core`.
-- **ClawHub**: republish the previous stable version to restore
-  `latest` tag.
 
 ## Manual escape hatches
 
