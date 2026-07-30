@@ -149,12 +149,12 @@ assert(
 
 // ---------------------------------------------------------------------------
 // 6. PLUGIN_VERSION constant present (auto-synced by sync-version.mjs from
-//    package.json — accept any 3.3.x-rc.N format from rc.9-rc.1 onwards)
+//    package.json — accept any 3.4.x (-rc.N) format)
 // ---------------------------------------------------------------------------
 
 assert(
-  /const PLUGIN_VERSION = '3\.3\.\d+(?:-rc\.\d+)?';/.test(src),
-  "tr-cli.ts: const PLUGIN_VERSION declares a 3.3.x version (auto-synced by sync-version.mjs)",
+  /const PLUGIN_VERSION = '3\.4\.\d+(?:-rc\.\d+)?';/.test(src),
+  "tr-cli.ts: const PLUGIN_VERSION declares a 3.4.x version (auto-synced by sync-version.mjs)",
 );
 
 // ---------------------------------------------------------------------------

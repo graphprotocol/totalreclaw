@@ -381,6 +381,7 @@ jobs:
           # Using legacy `clawhub publish --slug` (CLI 0.8.0). See install step.
           clawhub publish ./skill/plugin \
             --slug totalreclaw \
+            --name "TotalReclaw" \
             --version "$STABLE" \
             --tags "latest,memory,encryption,e2ee,privacy,agent-memory,e2e-encryption,persistent-context" \
             --changelog "Release $STABLE (promoted from RC) -- see https://github.com/p-diogo/totalreclaw/releases/tag/v$STABLE"

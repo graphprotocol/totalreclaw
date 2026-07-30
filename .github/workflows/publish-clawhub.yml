@@ -216,6 +216,7 @@ jobs:
           # See install step above for full context.
           clawhub publish "$PUBLISH_DIR" \
             --slug "$SLUG" \
+            --name "TotalReclaw" \
             --version "$VERSION" \
             --tags "$TAGS" \
             --changelog "$CHANGELOG"
