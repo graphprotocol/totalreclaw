@@ -24,7 +24,9 @@ def _state(*, configured=True, turn_count=3, interval=3) -> MagicMock:
 class TestRecallForQuery:
     def test_delegates_to_auto_recall(self):
         s = _state()
-        with patch.object(hooks, "auto_recall", return_value="CTX") as ar:
+        with patch.object(
+            hooks, "auto_recall_with_status", return_value=("CTX", "ok")
+        ) as ar:
             out = hooks.recall_for_query(s, "who am I?", top_k=8)
         assert out == "CTX"
         ar.assert_called_once_with("who am I?", s, top_k=8)

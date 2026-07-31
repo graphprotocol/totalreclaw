@@ -424,7 +424,7 @@ class TestBug6FirstRunNudge:
                 state = PluginState()
         state._client = MagicMock()  # Forge configured state
 
-        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+        with patch("totalreclaw.hermes.hooks.auto_recall_with_status", return_value=(None, "unconfigured")):
             result = pre_llm_call(
                 state,
                 is_first_turn=True,
@@ -562,7 +562,7 @@ class TestRc3SetupNudgeFirstTurn:
         state = self._make_unconfigured_state()
         state._client = MagicMock()  # Forge configured.
 
-        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+        with patch("totalreclaw.hermes.hooks.auto_recall_with_status", return_value=(None, "unconfigured")):
             with patch.object(Path, "exists", return_value=False):
                 result = pre_llm_call(
                     state, is_first_turn=True, user_message="hello",
@@ -596,7 +596,7 @@ class TestIssue167ToolPriorityNudge:
         from totalreclaw.hermes.hooks import pre_llm_call
 
         state = self._make_configured_state()
-        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+        with patch("totalreclaw.hermes.hooks.auto_recall_with_status", return_value=(None, "unconfigured")):
             result = pre_llm_call(
                 state,
                 is_first_turn=True,
@@ -614,7 +614,7 @@ class TestIssue167ToolPriorityNudge:
         from totalreclaw.hermes.hooks import pre_llm_call
 
         state = self._make_configured_state()
-        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+        with patch("totalreclaw.hermes.hooks.auto_recall_with_status", return_value=(None, "unconfigured")):
             result = pre_llm_call(
                 state,
                 is_first_turn=True,
@@ -632,7 +632,7 @@ class TestIssue167ToolPriorityNudge:
         from totalreclaw.hermes.hooks import pre_llm_call
 
         state = self._make_configured_state()
-        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+        with patch("totalreclaw.hermes.hooks.auto_recall_with_status", return_value=(None, "unconfigured")):
             # Simulate a non-first turn (is_first_turn=False) that still
             # has clear memory intent.
             result = pre_llm_call(
@@ -649,7 +649,7 @@ class TestIssue167ToolPriorityNudge:
         from totalreclaw.hermes.hooks import pre_llm_call
 
         state = self._make_configured_state()
-        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+        with patch("totalreclaw.hermes.hooks.auto_recall_with_status", return_value=(None, "unconfigured")):
             r1 = pre_llm_call(state, is_first_turn=True,
                               user_message="Remember I like Python.")
             r2 = pre_llm_call(state, is_first_turn=False,
@@ -666,9 +666,9 @@ class TestIssue167ToolPriorityNudge:
         state = self._make_configured_state()
 
         def fake_auto_recall(msg, st, top_k=8):
-            return "## Memories\n- User prefers dark mode."
+            return "## Memories\n- User prefers dark mode.", "ok"
 
-        with patch("totalreclaw.hermes.hooks.auto_recall", side_effect=fake_auto_recall):
+        with patch("totalreclaw.hermes.hooks.auto_recall_with_status", side_effect=fake_auto_recall):
             result = pre_llm_call(
                 state,
                 is_first_turn=True,

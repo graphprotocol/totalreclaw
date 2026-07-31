@@ -662,7 +662,7 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
                 sa = await client.get_wallet_address()
             except Exception:
                 sa = None
-        return json.dumps({
+        payload = {
             "tier": billing.tier,
             "free_writes_used": billing.free_writes_used,
             "free_writes_limit": billing.free_writes_limit,
@@ -670,7 +670,35 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
             "account_id": sa,
             "wallet_address": sa,
             "eoa_address": client.eoa_address,
-        })
+        }
+        # Update surfacing (internal#486 follow-up): make "am I current?"
+        # answerable ON DEMAND via status, independent of the once-per-24h
+        # session-start nudge. Relay-advertised value wins; PyPI fallback
+        # covers a dark `LATEST_STABLE_PYTHON`. Best-effort — status must
+        # never fail because a version lookup did.
+        try:
+            from totalreclaw import __version__ as _installed
+            from totalreclaw.update_notice import is_newer_stable, resolve_latest_stable
+
+            features = getattr(billing, "features", None)
+            relay_latest = getattr(features, "latest_stable_python", None)
+            latest, source = resolve_latest_stable(relay_latest)
+            payload["installed_version"] = _installed
+            if latest:
+                payload["latest_stable"] = latest
+                payload["latest_stable_source"] = source
+                if is_newer_stable(latest, _installed):
+                    payload["update_available"] = True
+                    payload["update_hint"] = (
+                        f"TotalReclaw {latest} is available (installed: "
+                        f"{_installed}). Update with `pip install --upgrade "
+                        "totalreclaw` and restart the agent."
+                    )
+                else:
+                    payload["update_available"] = False
+        except Exception:
+            logger.debug("status update-surfacing skipped", exc_info=True)
+        return json.dumps(payload)
     except Exception as e:
         logger.error("totalreclaw_status failed: %s", e)
         return json.dumps({"error": str(e)})

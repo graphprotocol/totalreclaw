@@ -23,7 +23,7 @@ from totalreclaw.agent.lifecycle import (
 )
 from totalreclaw.agent.loop_runner import run_sync
 from totalreclaw.agent.pending_drain import drain_pending, has_pending
-from totalreclaw.agent.recall import auto_recall
+from totalreclaw.agent.recall import auto_recall_with_status
 from totalreclaw.agent.extraction import extract_facts_llm, extract_facts_heuristic
 from totalreclaw.agent.state import _session_idle_seconds
 from totalreclaw.relay import _HARDCODED_DEFAULT_URL
@@ -883,11 +883,39 @@ def recall_for_query(
 ) -> Optional[str]:
     """Recall a context block for *query* (hook-free).
 
-    Thin wrapper over the shared ``agent.recall.auto_recall``; the single
-    entry point the Hermes hook (``pre_llm_call``) and the provider
-    (``prefetch``) both call.
+    Thin wrapper over the shared ``agent.recall`` pipeline; the single entry
+    point the Hermes hook (``pre_llm_call``) and the provider (``prefetch``)
+    both call.
+
+    internal#486 follow-up — fail LOUD instead of silent: when recall raises,
+    or returns nothing despite the billing cache showing a non-empty vault,
+    inject a rate-limited (24h) diagnostic context line so the agent tells
+    the user memory is unavailable. Pre-#486, a broken read path (missing
+    ``X-Wallet-Address`` header → wrong-subgraph routing) looked identical to
+    "no relevant memories" for days; this makes that class of breakage
+    visible on the first affected turn.
     """
-    return auto_recall(query, state, top_k=top_k)
+    from totalreclaw import recall_health
+
+    context, status = auto_recall_with_status(query, state, top_k=top_k)
+    if context is None and status in ("error", "empty"):
+        try:
+            writes_used = (state.get_cached_billing() or {}).get("free_writes_used")
+            notice = recall_health.maybe_build_recall_failure_notice(
+                status, writes_used
+            )
+            if notice:
+                recall_health.mark_notified()
+                logger.warning(
+                    "TotalReclaw recall-health notice injected (status=%s, "
+                    "writes_used=%s)",
+                    status,
+                    writes_used,
+                )
+                return notice
+        except Exception:  # the notice must never break recall itself
+            logger.debug("recall-health notice check failed", exc_info=True)
+    return context
 
 
 def _resolve_extraction_llm_config(state: "PluginState"):

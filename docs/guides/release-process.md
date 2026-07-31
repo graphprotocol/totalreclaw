@@ -221,6 +221,15 @@ differ. Ship with the table below in front of you.
    announcement never fires. Verify with
    `curl -s https://api.totalreclaw.xyz/v1/billing/status | grep latest_stable_python`.
 
+   > **This step is MANDATORY, not optional polish.** It shipped dark and
+   > stayed dark for weeks — a production bot sat on a stale, staging-baked
+   > RC (`2.4.6rc7`) through an entire recall outage (internal#486) because
+   > the fleet was never told a newer build existed. Since 2.4.7 the client
+   > also has a safety net — `totalreclaw_status` and `totalreclaw doctor`
+   > fall back to a PyPI lookup when the relay value is unset — but the
+   > relay flip remains the only channel that proactively *nudges* running
+   > agents, so treat it as part of the promote itself.
+
 7. **Generate the changelog.** Dispatch `changelog.yml` for the stable
    version (see "Changelog automation" below). It opens a reviewable PR
    with the auto-generated section; review and merge it.

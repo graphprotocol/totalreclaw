@@ -66,6 +66,48 @@ def _format_recall_context(results) -> str:
     return totalreclaw_core.format_recall_context(json.dumps(items), int(time.time()))
 
 
+def auto_recall_with_status(
+    query: str,
+    state: "AgentState",
+    top_k: int = 8,
+) -> tuple[Optional[str], str]:
+    """Like :func:`auto_recall`, but also reports WHY there is no context.
+
+    Returns ``(context, status)`` with status one of:
+
+    * ``"ok"`` — context contains formatted memories.
+    * ``"empty"`` — the pipeline ran cleanly but returned zero results.
+    * ``"error"`` — the recall pipeline raised (network, relay, decrypt, …).
+    * ``"unconfigured"`` — no credentials / no client / empty query.
+
+    Callers that only want the context keep using :func:`auto_recall`; the
+    recall drivers (Hermes hook + MemoryProvider) use this variant so the
+    recall-health notice (:mod:`totalreclaw.recall_health`, internal#486
+    follow-up) can distinguish "vault has nothing relevant" from "the read
+    path is broken" instead of both collapsing into a silent ``None``.
+    """
+    if not state.is_configured() or not query:
+        return None, "unconfigured"
+
+    client = state.get_client()
+    if not client:
+        return None, "unconfigured"
+
+    try:
+        results = run_sync(
+            client.recall(
+                query, top_k=top_k, max_candidates=state.get_max_candidate_pool()
+            )
+        )
+    except Exception as e:
+        logger.warning("TotalReclaw auto-recall failed: %s", e)
+        return None, "error"
+
+    if results:
+        return _format_recall_context(results), "ok"
+    return None, "empty"
+
+
 def auto_recall(
     query: str,
     state: "AgentState",
@@ -87,26 +129,8 @@ def auto_recall(
     Returns:
         Formatted string of relevant memories, or None if no results.
     """
-    if not state.is_configured() or not query:
-        return None
-
-    client = state.get_client()
-    if not client:
-        return None
-
-    try:
-        results = run_sync(
-            client.recall(
-                query, top_k=top_k, max_candidates=state.get_max_candidate_pool()
-            )
-        )
-
-        if results:
-            return _format_recall_context(results)
-    except Exception as e:
-        logger.warning("TotalReclaw auto-recall failed: %s", e)
-
-    return None
+    context, _status = auto_recall_with_status(query, state, top_k=top_k)
+    return context
 
 
 async def auto_recall_async(

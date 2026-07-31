@@ -244,7 +244,7 @@ class TestF6DebriefNudgeInjection:
         from totalreclaw.hermes.hooks import pre_llm_call
         state = self._make_configured_state()
         state._turn_count = 5
-        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+        with patch("totalreclaw.hermes.hooks.auto_recall_with_status", return_value=(None, "unconfigured")):
             with patch.object(Path, "exists", return_value=False):
                 result = pre_llm_call(
                     state,
@@ -261,7 +261,7 @@ class TestF6DebriefNudgeInjection:
     def test_pre_llm_call_no_debrief_nudge_when_intent_absent(self):
         from totalreclaw.hermes.hooks import pre_llm_call
         state = self._make_configured_state()
-        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+        with patch("totalreclaw.hermes.hooks.auto_recall_with_status", return_value=(None, "unconfigured")):
             with patch.object(Path, "exists", return_value=False):
                 result = pre_llm_call(
                     state,
@@ -276,7 +276,7 @@ class TestF6DebriefNudgeInjection:
         from totalreclaw.hermes.hooks import pre_llm_call
         state = self._make_configured_state()
         state._turn_count = 5
-        with patch("totalreclaw.hermes.hooks.auto_recall", return_value=None):
+        with patch("totalreclaw.hermes.hooks.auto_recall_with_status", return_value=(None, "unconfigured")):
             with patch.object(Path, "exists", return_value=False):
                 first = pre_llm_call(
                     state, is_first_turn=False,

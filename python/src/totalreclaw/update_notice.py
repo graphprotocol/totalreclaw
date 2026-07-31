@@ -118,13 +118,45 @@ def _sentinel_path() -> Path:
     return _STATE_DIR / _NOTICE_SENTINEL_NAME
 
 
-def last_notified_at() -> Optional[float]:
-    """Unix timestamp of the last notice shown, or None if never / unreadable."""
+# ---------------------------------------------------------------------------
+# Generic timestamp-sentinel helpers — shared by the update notice, the
+# recall-health notice (recall_health.py), and the PyPI lookup cache. One
+# unix-seconds float per file under ~/.totalreclaw/. Best-effort semantics:
+# unreadable ⇒ "never", write failure ⇒ silently skipped.
+# ---------------------------------------------------------------------------
+
+
+def sentinel_read(name: str) -> Optional[float]:
+    """Unix timestamp stored in sentinel *name*, or None if never / unreadable."""
     try:
-        raw = _sentinel_path().read_text(encoding="utf-8").strip()
+        raw = (_STATE_DIR / name).read_text(encoding="utf-8").strip()
         return float(raw)
     except Exception:
         return None
+
+
+def sentinel_within(name: str, interval: float, now: Optional[float] = None) -> bool:
+    """True when sentinel *name* was stamped within the last *interval* seconds."""
+    last = sentinel_read(name)
+    if last is None:
+        return False
+    current = time.time() if now is None else now
+    return (current - last) < interval
+
+
+def sentinel_mark(name: str, now: Optional[float] = None) -> None:
+    """Stamp sentinel *name* with *now* (best-effort)."""
+    try:
+        _STATE_DIR.mkdir(parents=True, exist_ok=True)
+        current = time.time() if now is None else now
+        (_STATE_DIR / name).write_text(str(current), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def last_notified_at() -> Optional[float]:
+    """Unix timestamp of the last notice shown, or None if never / unreadable."""
+    return sentinel_read(_NOTICE_SENTINEL_NAME)
 
 
 def within_rate_limit(now: Optional[float] = None) -> bool:
@@ -133,11 +165,7 @@ def within_rate_limit(now: Optional[float] = None) -> bool:
     Used to suppress a repeat notice. A missing/unreadable sentinel ⇒ False
     (i.e. not rate-limited ⇒ allowed to notify).
     """
-    last = last_notified_at()
-    if last is None:
-        return False
-    current = time.time() if now is None else now
-    return (current - last) < NOTICE_INTERVAL_SECONDS
+    return sentinel_within(_NOTICE_SENTINEL_NAME, NOTICE_INTERVAL_SECONDS, now)
 
 
 def mark_notified(now: Optional[float] = None) -> None:
@@ -145,12 +173,7 @@ def mark_notified(now: Optional[float] = None) -> None:
 
     Best-effort — a write failure means at most one extra notice, not a crash.
     """
-    try:
-        _STATE_DIR.mkdir(parents=True, exist_ok=True)
-        current = time.time() if now is None else now
-        _sentinel_path().write_text(str(current), encoding="utf-8")
-    except OSError:
-        pass
+    sentinel_mark(_NOTICE_SENTINEL_NAME, now)
 
 
 def build_update_notice(latest: str, installed: str) -> str:
@@ -185,3 +208,123 @@ def maybe_build_update_notice(
     if within_rate_limit(now):
         return None
     return build_update_notice(latest or "", installed or "")
+
+
+# ---------------------------------------------------------------------------
+# PyPI fallback — latest-stable lookup when the relay doesn't advertise one.
+#
+# The relay's `features.latest_stable_python` (env `LATEST_STABLE_PYTHON`)
+# is the primary channel, but it depends on an operator remembering the env
+# flip at each stable promote — it shipped dark and stayed dark for weeks.
+# This fallback asks PyPI directly so `totalreclaw_status` / `doctor` can
+# still answer "is there a newer stable?" when the relay feature is unset.
+#
+# Deliberately NOT wired into per-turn hooks: it is a network call (3s
+# timeout) and belongs only on explicit surfaces (status tool, doctor).
+# Result is cached for 24h in ~/.totalreclaw/ so repeated status calls
+# don't re-hit PyPI. Failures are never cached.
+# ---------------------------------------------------------------------------
+
+PYPI_JSON_URL = "https://pypi.org/pypi/totalreclaw/json"
+_PYPI_CACHE_NAME = "pypi-latest-stable-cache"
+PYPI_CACHE_TTL_SECONDS: int = 24 * 60 * 60
+
+
+def _latest_final_from_releases(releases: dict) -> Optional[str]:
+    """Pick the greatest FINAL (non-pre-release, non-fully-yanked) version.
+
+    PyPI's ``info.version`` is close to this but its pre-release handling
+    has edge cases; filtering ``releases`` through our own comparator keeps
+    the rc<final semantics identical to :func:`is_newer_stable`.
+    """
+    best_key = None
+    best = None
+    for version, files in releases.items():
+        parsed = _parse_version(version)
+        if parsed is None or parsed[3] != _PHASE_ORDER[""]:
+            continue  # pre-release or unparseable
+        if isinstance(files, list) and files and all(
+            isinstance(f, dict) and f.get("yanked") for f in files
+        ):
+            continue  # every artifact yanked ⇒ not installable
+        if best_key is None or parsed > best_key:
+            best_key, best = parsed, version
+    return best
+
+
+def _pypi_cache_read(now: Optional[float] = None) -> Optional[str]:
+    """Cached PyPI answer if fresh (<24h), else None. File shape: 'ts version'."""
+    try:
+        raw = (_STATE_DIR / _PYPI_CACHE_NAME).read_text(encoding="utf-8").strip()
+        ts_str, _, version = raw.partition(" ")
+        ts = float(ts_str)
+        current = time.time() if now is None else now
+        if version and (current - ts) < PYPI_CACHE_TTL_SECONDS:
+            return version
+    except Exception:
+        pass
+    return None
+
+
+def _pypi_cache_write(version: str, now: Optional[float] = None) -> None:
+    try:
+        _STATE_DIR.mkdir(parents=True, exist_ok=True)
+        current = time.time() if now is None else now
+        (_STATE_DIR / _PYPI_CACHE_NAME).write_text(
+            f"{current} {version}", encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+def fetch_latest_stable_from_pypi(
+    timeout: float = 3.0, now: Optional[float] = None
+) -> Optional[str]:
+    """Best-effort latest FINAL version of ``totalreclaw`` on PyPI.
+
+    Honours the kill-switch (this is still update-notice machinery), serves
+    from the 24h cache when fresh, and returns None on any failure — the
+    caller treats None exactly like "relay didn't advertise either".
+    """
+    if disabled_by_env():
+        return None
+    cached = _pypi_cache_read(now)
+    if cached:
+        return cached
+    try:
+        import httpx
+
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(PYPI_JSON_URL)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+        latest = _latest_final_from_releases(data.get("releases") or {})
+        if latest:
+            _pypi_cache_write(latest, now)
+        return latest
+    except Exception as exc:
+        logger.debug("PyPI latest-stable lookup failed: %s", exc)
+        return None
+
+
+def resolve_latest_stable(
+    relay_advertised: Optional[str],
+    *,
+    allow_pypi_fallback: bool = True,
+    timeout: float = 3.0,
+) -> Tuple[Optional[str], str]:
+    """Resolve the latest stable version and where the answer came from.
+
+    Returns ``(version, source)`` with source ``"relay"`` | ``"pypi"`` | ``""``.
+    The relay value wins when present (operator-controlled, zero extra I/O);
+    the PyPI fallback only fires when the relay is dark AND fallback is
+    allowed AND the kill-switch is off.
+    """
+    if relay_advertised and isinstance(relay_advertised, str):
+        return relay_advertised, "relay"
+    if allow_pypi_fallback:
+        via_pypi = fetch_latest_stable_from_pypi(timeout=timeout)
+        if via_pypi:
+            return via_pypi, "pypi"
+    return None, ""

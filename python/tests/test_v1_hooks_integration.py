@@ -181,8 +181,8 @@ def test_pre_llm_call_invokes_recall_with_top_k_default() -> None:
     state, fake_client = _make_state()
 
     # Fake auto_recall — we just assert the hook invokes it with the correct top_k.
-    with patch("totalreclaw.hermes.hooks.auto_recall") as fake_auto_recall:
-        fake_auto_recall.return_value = "## Memories\n- user prefers dark mode"
+    with patch("totalreclaw.hermes.hooks.auto_recall_with_status") as fake_auto_recall:
+        fake_auto_recall.return_value = ("## Memories\n- user prefers dark mode", "ok")
         result = pre_llm_call(state, is_first_turn=True, user_message="what do i prefer?")
 
     assert fake_auto_recall.called
@@ -198,7 +198,7 @@ def test_pre_llm_call_silently_no_op_when_not_first_turn() -> None:
 
     state, fake_client = _make_state()
 
-    with patch("totalreclaw.hermes.hooks.auto_recall") as fake_auto_recall:
+    with patch("totalreclaw.hermes.hooks.auto_recall_with_status") as fake_auto_recall:
         result = pre_llm_call(state, is_first_turn=False, user_message="follow-up?")
 
     assert not fake_auto_recall.called

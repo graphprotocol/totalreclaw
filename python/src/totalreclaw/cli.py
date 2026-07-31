@@ -127,8 +127,19 @@ def run_setup(
 # ---------------------------------------------------------------------------
 
 
-def run_doctor(credentials_path: Optional[Path] = None, relay_url: Optional[str] = None) -> int:
-    """Walk through a fixed checklist and print pass/fail for each step."""
+def run_doctor(
+    credentials_path: Optional[Path] = None,
+    relay_url: Optional[str] = None,
+    recall_smoke: bool = False,
+) -> int:
+    """Walk through a fixed checklist and print pass/fail for each step.
+
+    With ``recall_smoke=True`` (CLI: ``--recall-smoke``), additionally runs a
+    READ-ONLY end-to-end recall through the real pipeline and cross-checks it
+    against the vault's billing counters — the check that would have caught
+    internal#486 (Pro reads silently routed to an empty subgraph: writes
+    visible, every recall returning 0).
+    """
     path = credentials_path if credentials_path is not None else CANONICAL_CREDENTIALS_PATH
     issues = 0
     setup_started = True
@@ -243,12 +254,14 @@ def run_doctor(credentials_path: Optional[Path] = None, relay_url: Optional[str]
             if hub_cache.exists()
             else []
         )
+        embed_cached = bool(candidates)
         if candidates:
             print(_ok(f"Embedding model cached under {candidates[0].name}"))
         else:
             print(_warn("Embedding model NOT cached — first recall will download ~216 MB from HuggingFace"))
             # Not counted as an issue — it's a first-run one-time cost.
     except Exception as err:
+        embed_cached = False
         print(_warn(f"Could not verify embedding-model cache: {err}"))
 
     # --------------------------------------------------------------------
@@ -371,6 +384,113 @@ def run_doctor(credentials_path: Optional[Path] = None, relay_url: Optional[str]
         print(_warn(f"Could not check RC bug-report tool status: {err}"))
 
     # --------------------------------------------------------------------
+    # Check 9 — version currency (internal#486 follow-up)
+    # --------------------------------------------------------------------
+    #
+    # A production bot sat on 2.4.6rc7 for weeks — older than the current
+    # stable AND staging-baked by the RC=staging binding rule — with nothing
+    # on the host ever saying so (the runtime sanity check only catches
+    # rc-build-vs-prod-URL mismatch, which a consistent-but-stale RC never
+    # trips). Compare installed vs latest stable (relay-advertised value is
+    # consumed by the running agent; doctor uses the PyPI fallback directly
+    # since it has no billing context here) and warn loudly on stale RCs.
+    try:
+        from totalreclaw import __version__ as _pkg_version
+        from totalreclaw.hermes.qa_bug_report import is_rc_build
+        from totalreclaw.update_notice import (
+            fetch_latest_stable_from_pypi,
+            is_newer_stable,
+        )
+
+        latest_stable = fetch_latest_stable_from_pypi()
+        if not latest_stable:
+            print(_info("Could not determine latest stable version (PyPI lookup unavailable)"))
+        elif is_newer_stable(latest_stable, _pkg_version):
+            if is_rc_build(_pkg_version):
+                print(_warn(
+                    f"Installed {_pkg_version} is an RC OLDER than the current "
+                    f"stable {latest_stable}. RC builds default to the STAGING "
+                    "relay — a long-running production agent should run stable."
+                ))
+            else:
+                print(_warn(
+                    f"A newer stable is available: {latest_stable} "
+                    f"(installed: {_pkg_version})."
+                ))
+            print("        Update: pip install --upgrade totalreclaw  (then restart the agent)")
+            issues += 1
+        else:
+            print(_ok(f"Version {_pkg_version} is current (latest stable: {latest_stable})"))
+    except Exception as err:
+        print(_warn(f"Could not check version currency: {err}"))
+
+    # --------------------------------------------------------------------
+    # Check 10 (opt-in: --recall-smoke) — end-to-end recall pipeline smoke
+    # --------------------------------------------------------------------
+    #
+    # Read-only: billing status (writes counter) + one real recall through
+    # the full pipeline (trapdoor search → relay/subgraph → decrypt →
+    # rerank). The decisive signal is "vault has writes but recall returns
+    # zero candidates" — exactly the internal#486 signature (subgraph reads
+    # routed to the wrong chain/tier), invisible to every other check
+    # because each HTTP call individually succeeds.
+    if recall_smoke:
+        if not (isinstance(mnemonic, str) and mnemonic.strip()):
+            print(_warn("Recall smoke skipped: no usable recovery phrase"))
+        elif not embed_cached:
+            print(_warn(
+                "Recall smoke skipped: embedding model not cached (would "
+                "download ~216 MB). Run once more after a first recall."
+            ))
+        else:
+            try:
+                import asyncio as _asyncio
+
+                from totalreclaw.client import TotalReclawClient
+
+                _client = TotalReclawClient(
+                    recovery_phrase=mnemonic.strip(),
+                    server_url=resolved_relay,
+                    wallet_address=cached_sa if isinstance(cached_sa, str) else None,
+                    suppress_welcome=True,
+                )
+                _billing = _asyncio.run(_client.status())
+                writes_used = getattr(_billing, "free_writes_used", None)
+                results = _asyncio.run(_client.recall(
+                    "my recent memories and preferences about my life and work",
+                    top_k=8,
+                ))
+                m = len(results)
+                if m > 0:
+                    print(_ok(
+                        f"Recall smoke: pipeline returned {m} result(s) "
+                        f"(vault writes counter: {writes_used})"
+                    ))
+                elif isinstance(writes_used, int) and writes_used > 0:
+                    print(_fail(
+                        f"Recall smoke: vault reports {writes_used} writes but "
+                        "recall returned 0 results — the READ path looks broken."
+                    ))
+                    print(
+                        "        Likely causes: outdated client (missing "
+                        "X-Wallet-Address on subgraph reads — fixed in 2.4.7), "
+                        "wrong relay URL (RC build defaults to staging), or "
+                        "relay routing. Check `pip show totalreclaw` and "
+                        "TOTALRECLAW_SERVER_URL."
+                    )
+                    issues += 1
+                else:
+                    print(_info(
+                        "Recall smoke: 0 results, but the vault appears empty "
+                        f"(writes counter: {writes_used}) — nothing to recall."
+                    ))
+            except Exception as err:
+                print(_warn(f"Recall smoke failed to run: {err}"))
+                issues += 1
+    else:
+        print(_info("Recall pipeline smoke not run (pass --recall-smoke to enable)"))
+
+    # --------------------------------------------------------------------
     # Summary
     # --------------------------------------------------------------------
     print()
@@ -454,6 +574,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=None,
         help="Override the relay URL for the reachability check.",
     )
+    sp_doctor.add_argument(
+        "--recall-smoke",
+        action="store_true",
+        default=False,
+        help=(
+            "Also run a READ-ONLY end-to-end recall through the real pipeline "
+            "and cross-check against the vault's write counter. Catches "
+            "broken read paths (e.g. wrong-subgraph routing) that plain "
+            "reachability checks miss. Requires the embedding model cache."
+        ),
+    )
 
     # `activate-memory-provider` — make TotalReclaw the native Hermes
     # MemoryProvider (#351 §5.4). Installs the provider sidecar at the
@@ -519,6 +650,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return run_doctor(
             credentials_path=args.credentials_path,
             relay_url=args.relay_url,
+            recall_smoke=getattr(args, "recall_smoke", False),
         )
 
     if args.command == "activate-memory-provider":

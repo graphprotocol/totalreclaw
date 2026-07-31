@@ -151,3 +151,109 @@ class TestMaybeBuildUpdateNotice:
         un.mark_notified()
         second = un.maybe_build_update_notice("2.4.5", "2.4.4")
         assert second is None
+
+
+# ── PyPI fallback (internal#486 follow-up) ───────────────────────────────
+class TestLatestFinalFromReleases:
+    def test_picks_greatest_final(self):
+        releases = {"2.4.5": [], "2.4.6": [], "2.4.4": []}
+        assert un._latest_final_from_releases(releases) == "2.4.6"
+
+    def test_skips_prereleases(self):
+        releases = {"2.4.6": [], "2.4.7rc1": [], "2.5.0rc2": []}
+        assert un._latest_final_from_releases(releases) == "2.4.6"
+
+    def test_skips_fully_yanked(self):
+        releases = {
+            "2.4.6": [{"yanked": False}],
+            "2.4.7": [{"yanked": True}, {"yanked": True}],
+        }
+        assert un._latest_final_from_releases(releases) == "2.4.6"
+
+    def test_partially_yanked_still_counts(self):
+        releases = {"2.4.7": [{"yanked": True}, {"yanked": False}]}
+        assert un._latest_final_from_releases(releases) == "2.4.7"
+
+    def test_empty_or_garbage(self):
+        assert un._latest_final_from_releases({}) is None
+        assert un._latest_final_from_releases({"not-a-version": []}) is None
+
+
+class TestFetchLatestStableFromPypi:
+    @pytest.fixture(autouse=True)
+    def _isolate(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(un, "_STATE_DIR", tmp_path / ".totalreclaw")
+        monkeypatch.delenv("TOTALRECLAW_DISABLE_UPDATE_NOTICE", raising=False)
+
+    def _mock_httpx(self, releases, status_code=200):
+        from unittest.mock import MagicMock, patch
+
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.json.return_value = {"releases": releases}
+        client = MagicMock()
+        client.get.return_value = resp
+        cm = MagicMock()
+        cm.__enter__ = MagicMock(return_value=client)
+        cm.__exit__ = MagicMock(return_value=False)
+        return patch("httpx.Client", return_value=cm)
+
+    def test_fetch_and_cache(self):
+        with self._mock_httpx({"2.4.6": [], "2.4.7": [], "2.4.8rc1": []}):
+            assert un.fetch_latest_stable_from_pypi() == "2.4.7"
+        # Second call is served from the 24h cache — no network needed.
+        from unittest.mock import patch
+
+        with patch("httpx.Client", side_effect=AssertionError("network hit")):
+            assert un.fetch_latest_stable_from_pypi() == "2.4.7"
+
+    def test_cache_expires(self):
+        now = time.time()
+        un._pypi_cache_write("2.4.6", now=now - (un.PYPI_CACHE_TTL_SECONDS + 10))
+        assert un._pypi_cache_read(now=now) is None
+
+    def test_kill_switch(self, monkeypatch):
+        monkeypatch.setenv("TOTALRECLAW_DISABLE_UPDATE_NOTICE", "1")
+        from unittest.mock import patch
+
+        with patch("httpx.Client", side_effect=AssertionError("network hit")):
+            assert un.fetch_latest_stable_from_pypi() is None
+
+    def test_http_error_returns_none_and_not_cached(self):
+        with self._mock_httpx({}, status_code=503):
+            assert un.fetch_latest_stable_from_pypi() is None
+        assert un._pypi_cache_read() is None
+
+    def test_network_exception_returns_none(self):
+        from unittest.mock import patch
+
+        with patch("httpx.Client", side_effect=OSError("no route")):
+            assert un.fetch_latest_stable_from_pypi() is None
+
+
+class TestResolveLatestStable:
+    @pytest.fixture(autouse=True)
+    def _isolate(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(un, "_STATE_DIR", tmp_path / ".totalreclaw")
+        monkeypatch.delenv("TOTALRECLAW_DISABLE_UPDATE_NOTICE", raising=False)
+
+    def test_relay_value_wins_without_network(self):
+        from unittest.mock import patch
+
+        with patch("httpx.Client", side_effect=AssertionError("network hit")):
+            assert un.resolve_latest_stable("2.4.7") == ("2.4.7", "relay")
+
+    def test_pypi_fallback_when_relay_dark(self, monkeypatch):
+        monkeypatch.setattr(un, "fetch_latest_stable_from_pypi", lambda **kw: "2.4.7")
+        assert un.resolve_latest_stable(None) == ("2.4.7", "pypi")
+
+    def test_fallback_disabled(self, monkeypatch):
+        monkeypatch.setattr(
+            un, "fetch_latest_stable_from_pypi",
+            lambda **kw: (_ for _ in ()).throw(AssertionError("called")),
+        )
+        assert un.resolve_latest_stable(None, allow_pypi_fallback=False) == (None, "")
+
+    def test_nothing_available(self, monkeypatch):
+        monkeypatch.setattr(un, "fetch_latest_stable_from_pypi", lambda **kw: None)
+        assert un.resolve_latest_stable(None) == (None, "")
