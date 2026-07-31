@@ -4,6 +4,16 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.2] — unreleased
+
+### Fixed
+
+- **The plugin now ships its own agent-facing SKILL.md.** `openclaw.plugin.json` gained `"skills": ["."]`, so OpenClaw publishes the plugin's bundled `SKILL.md` into `~/.openclaw/plugin-skills/` on gateway start. Without it the plugin registered its memory *tools* (`memory_search` / `memory_get` / `memory_save`) but the agent never received the SKILL.md *prose* — the shell-`tr` ban that prevents silent data loss on explicit remembers (3.4.0 / #551), the pairing script, and the natural-language curation phrasing.
+
+  This gap predated the ClawHub retirement: the prose used to arrive via a separate `openclaw skills install totalreclaw`, which fetched the descriptor from ClawHub. That step is gone (#561) — the bare `totalreclaw` slug there is ambiguous with an unaffiliated third-party copy — so an npm-only install has to be self-sufficient, and now is.
+
+  Verified on OpenClaw 2026.6.8 against the real published artifact: `plugin-skills/totalreclaw -> extensions/totalreclaw` and `openclaw skills list` reports `✓ ready 🧠 totalreclaw` sourced from `openclaw-extra`. Guarded by new assertions in `manifest-shape.test.ts` (confirmed to fail when the field is removed).
+
 ## [3.4.1] — 2026-07-30
 
 Content-identical to 3.4.0 (`git diff v3.4.0..v3.4.1 -- skill/plugin/` is empty apart from the version string). The re-label existed only to publish past a reserved `3.4.0` version number on ClawHub. npm `latest` = 3.4.1.

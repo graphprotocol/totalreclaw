@@ -246,6 +246,71 @@ let manifest: Record<string, unknown>;
 // 2. JS plugin definition assertions (source inspection)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 3. `skills` — the plugin must publish its OWN SKILL.md descriptor.
+//
+// OpenClaw publishes a plugin's skills ONLY when the manifest declares a
+// top-level `skills: string[]` of plugin-root-relative directories:
+//   manifest-*.js   `const skills = normalizeTrimmedStringList(raw.skills)`
+//   plugin-skills-*.js  resolvePluginSkillDirs() ->
+//                         `if (!record.skills || record.skills.length === 0) continue;`
+//                       then symlinks each into `~/.openclaw/plugin-skills/`.
+//
+// Without this field the agent gets the memory TOOLS but never the SKILL.md
+// PROSE (the tr-shell ban, the pairing script, the curation phrasing). Until
+// 2026-07-30 that prose arrived via `openclaw skills install totalreclaw`
+// from ClawHub — a channel we retired (#561), and one whose bare slug is
+// ambiguous with a third-party clone. npm-only install must be self-sufficient.
+//
+// `"."` = the plugin root, which contains SKILL.md directly. OpenClaw's
+// `collectSkillDirTargets` publishes such a directory as-is, and its
+// containment guard accepts the root itself (`isPathInside` returns true when
+// the relative path is ""). Verified on OpenClaw 2026.6.8 against the real
+// published artifact: `plugin-skills/totalreclaw -> extensions/totalreclaw`
+// and `openclaw skills list` reports `✓ ready  🧠 totalreclaw`.
+// ---------------------------------------------------------------------------
+
+{
+  const skills = manifest.skills;
+  assert(
+    Array.isArray(skills) && skills.length > 0,
+    'openclaw.plugin.json declares a non-empty `skills` array (else the agent never receives SKILL.md)',
+  );
+
+  // Every declared entry must resolve to a directory that actually contains a
+  // SKILL.md — a path typo would make OpenClaw log `plugin skill path not
+  // found` and silently publish nothing.
+  const entries = Array.isArray(skills) ? (skills as unknown[]) : [];
+  for (const entry of entries) {
+    const rel = typeof entry === 'string' ? entry : '';
+    const dir = path.resolve(__dirname, rel);
+    const skillMd = path.join(dir, 'SKILL.md');
+    assert(
+      rel.length > 0 && fs.existsSync(skillMd),
+      `skills[] entry ${JSON.stringify(entry)} resolves to a directory containing SKILL.md`,
+    );
+    // The containment guard OpenClaw applies (isPathInsideWithRealpath):
+    // the entry must not escape the plugin root.
+    const relFromRoot = path.relative(__dirname, dir);
+    assert(
+      !relFromRoot.startsWith('..') && !path.isAbsolute(relFromRoot),
+      `skills[] entry ${JSON.stringify(entry)} stays inside the plugin root`,
+    );
+  }
+}
+
+{
+  // The skill directory only reaches users if SKILL.md is in the npm tarball.
+  // `files[]` gates that — dropping SKILL.md there would publish an empty skill.
+  const pkg = JSON.parse(
+    fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'),
+  ) as { files?: string[] };
+  assert(
+    Array.isArray(pkg.files) && pkg.files.includes('SKILL.md'),
+    'package.json files[] ships SKILL.md (the published skill would be empty without it)',
+  );
+}
+
 const indexPath = path.join(__dirname, 'index.ts');
 const indexSrc = fs.readFileSync(indexPath, 'utf8');
 

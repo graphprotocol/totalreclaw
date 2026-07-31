@@ -6,6 +6,9 @@
   "activation": {
     "onStartup": false
   },
+  "skills": [
+    "."
+  ],
   "contracts": {
     "tools": [
       "memory_search",
