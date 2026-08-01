@@ -1,6 +1,6 @@
 # TotalReclaw security model
 
-> Last reviewed: 2026-07-20 (cred-2)
+> Last reviewed: 2026-08-01 (cred-3 / Phase 4 — headless external-secret provider)
 > If you find a vulnerability, please email security@totalreclaw.xyz with details. Do not file public issues for live exploits.
 
 ## What's protected (in-transit + on-chain)
@@ -63,6 +63,14 @@ headless server has no GUI session to unlock an OS keychain or prompt for a
 passphrase, so on those hosts we ship plaintext-at-rest with chmod 600 and
 recommend an encrypted volume (Phase 3).
 
+> **Actionable path for containers/headless:** the **external credential
+> provider** (cred-3, wired into the Hermes daemon boot path) lets you inject the
+> phrase from a secret manager (systemd `LoadCredential`, Docker `secrets:`,
+> Kubernetes Secrets, HashiCorp Vault / AWS / GCP SM) so `credentials.json` is
+> never written to disk at all. The full worked examples + threat model are in
+> the [headless deployment guide](guides/headless-deployment.md). This is the
+> recommended posture for any long-lived server.
+
 ### Threat model — what this does and doesn't defend against
 
 | Threat | chmod 600 defends? | Real risk |
@@ -79,7 +87,7 @@ recommend an encrypted volume (Phase 3).
 - **Use full-disk encryption** on the host. macOS FileVault, Windows BitLocker, Linux LUKS / dm-crypt. This defeats disk steal.
 - **Disable cloud-synced backups** of `~/.totalreclaw/` if your backup tool is opt-out. Add `~/.totalreclaw/credentials.json` to your backup exclude list. Cloud-sync of a recovery phrase = same as posting it on a public bucket.
 - **For VPS / cloud deployments** — use the provider's encrypted-volume feature (Hetzner CX volumes, Railway encrypted volumes, AWS EBS with KMS, etc.). Mount the credentials directory off the encrypted volume. Container restart inside a running host = transparent. Host reboot = host operator unlocks once.
-- **Don't pass the recovery phrase as an environment variable** (`TOTALRECLAW_RECOVERY_PHRASE=…`). Env vars leak into process listings (`/proc/<pid>/environ`), child-process inheritance, container inspect output (`docker inspect`), and crash dumps. The supported path is the credentials.json file with chmod 600. The env-var override exists for one-shot CLI testing, not production.
+- **Don't pass the recovery phrase as an environment variable** (`TOTALRECLAW_RECOVERY_PHRASE=…`). Env vars leak into process listings (`/proc/<pid>/environ`), child-process inheritance, container inspect output (`docker inspect`), and crash dumps. For a headless server prefer the **external credential provider** with a file-mount transport (see the [headless deployment guide](guides/headless-deployment.md)); the plaintext `credentials.json` file with chmod 600 is the fallback. The env-var override exists for one-shot CLI testing, not production.
 
 ## Roadmap — better at-rest defense
 
@@ -87,7 +95,7 @@ The plaintext-at-rest tradeoff is documented and being addressed in phases. The 
 
 - **Phase 1 (cred-1 — shipped)** — Document the threat model (this file) and enforce chmod 600 at plugin startup. The plugin now **refuses to load** if `credentials.json` is found with permissions broader than `0600`. Fix: `chmod 600 ~/.totalreclaw/credentials.json` then restart the gateway. The plugin also warns if the file is detected on a tmpfs or shared-volume mount (`/tmp/`, `/dev/shm/`, `/run/`, `/var/run/`).
 - **Phase 2 (cred-2 — shipped 2026-07-20)** — Desktop OS-keychain wrap (macOS Keychain via `security` / `keyring`, Linux Secret Service via `secretstorage` / `keyring`). The mnemonic is stored in the OS keychain and `credentials.json` carries a non-secret `__keychain__:v1:<eoa>` marker. Container / headless deployments with no keychain, or hosts with `TOTALRECLAW_NO_KEYCHAIN=1`, fall back to the status-quo plaintext file (chmod 600). Marker fail-loud + opportunistic upgrade of legacy plaintext on first boot are covered by `tests/test_credentials_wrap.py`.
-- **Phase 3 (3.4.x)** — Container deployment patterns. Documented LUKS / dm-crypt setup, plus optional `TOTALRECLAW_CREDENTIALS_PROVIDER=vault` config for HashiCorp Vault / Railway secrets / AWS Secrets Manager / GCP Secret Manager.
+- **Phase 3 (cred-3 / shipped)** — Container / headless external-secret provider. The Hermes daemon (`agent/state.py` `_try_auto_configure`) routes credential discovery through `get_credential_provider()`, so `TOTALRECLAW_CREDENTIALS_PROVIDER=external` + a file-mount transport (`TOTALRECLAW_EXTERNAL_CREDENTIALS_PATH`) injects the phrase from a secret manager without ever writing `credentials.json` to disk. The LUKS / dm-crypt host-volume pattern is documented in [production-deployment.md](guides/production-deployment.md); the full worked examples (systemd `LoadCredential`, Docker Compose, Kubernetes, file-mode fallback) + threat model are in the [headless deployment guide](guides/headless-deployment.md). End-to-end boot + unit coverage in `tests/test_external_credentials_boot.py`.
 - **Phase 4 (optional, 3.5+)** — TPM / Secure Enclave hardware-bound wrap. Defeats `docker save` and disk theft completely, at the cost of platform-specific code paths.
 
 The phasing reflects which user segments take priority. Today the active user base is container-deployers (pop-os docker, Hetzner VPS); Phase 3 helps them most. Desktop natives (future Hermes laptop installer, Cursor / Codex plugins) ship later, and Phase 2 is the right answer for them.

@@ -21,11 +21,17 @@ run against either:
        populated by an ops wrapper that pulls the payload from a vault
        (AWS Secrets Manager, HashiCorp Vault, etc.) before Hermes start.
 
-Stage 2 introduces the module + unit tests. Call sites in
-``hermes/cli.py``, ``hermes/pair_tool_completion.py``, ``agent/state.py``,
-``pair/http_server.py``, etc. are **not yet rewired** to go through this
-abstraction — that's stage 3. The default ``file`` mode is byte-identical
-to today's direct ``json.dumps`` / ``read_text`` calls.
+Stage 2 introduced the module + unit tests; **stage 3 (cred-3) wired the
+read path.** ``agent/state.py`` ``_try_auto_configure`` and ``configure``
+now route credential discovery and persistence through
+``get_credential_provider()``, so the daemon boots against an env-var
+(``TOTALRECLAW_EXTERNAL_CREDENTIALS_JSON``) or mounted-file
+(``TOTALRECLAW_EXTERNAL_CREDENTIALS_PATH``) secret manager. The remaining
+write sites (``hermes/cli.py`` setup, ``hermes/pair_tool_completion.py``,
+``pair/http_server.py`` completion) still use direct
+``json.dumps`` / ``read_text`` against ``credentials.json``; they are not
+yet on the provider abstraction and will be ported when those flows move.
+The default ``file`` mode is byte-identical to the prior direct path.
 
 Phrase-safety:
   - Credential payloads are never logged from this module.
