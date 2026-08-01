@@ -142,9 +142,9 @@ Run via your shell tool, **without writing prose about it**. Emit user-visible l
 openclaw plugins install @totalreclaw/totalreclaw
 ```
 
-**Do NOT run `openclaw skills install totalreclaw`.** That command pulls from ClawHub, which TotalReclaw retired on 2026-07-30; the bare `totalreclaw` slug there is ambiguous and can resolve to an unaffiliated third-party copy. The plugin publishes its own `SKILL.md` — its manifest declares `skills`, so OpenClaw links it into `~/.openclaw/plugin-skills/` and `openclaw skills list` shows `totalreclaw` as ready. Nothing needs to be installed separately.
+**Do NOT run `openclaw skills install totalreclaw`.** That command pulls from ClawHub, which TotalReclaw retired on 2026-07-30; the bare `totalreclaw` slug there is ambiguous and can resolve to an unaffiliated third-party copy. You don't need it: the plugin installs its own skill. On load it mirrors the bundled `SKILL.md` + `skill.json` into `~/.openclaw/workspace/skills/totalreclaw/`, and its manifest also links them into `~/.openclaw/plugin-skills/` so they show up in `openclaw skills list`. One `openclaw plugins install` covers both.
 
-> **The skill appears on the next gateway start, not at install time.** OpenClaw resolves plugin-published skills when it loads its config; the in-process reload that follows `plugins install` re-registers the *tools* but does not re-run the skill publisher. Until the gateway restarts, the agent has `memory_search` / `memory_get` / `memory_save` but not the SKILL.md guidance that tells it how to use them. On a hosted/managed gateway this happens on its own; if you control the process, restart it (or run `/totalreclaw-restart`) and confirm with `openclaw skills list | grep totalreclaw`.
+> **The skill reaches the agent on the next gateway load, not the instant it installs.** OpenClaw's skill scanner runs at gateway load; the in-process reload that follows `plugins install` re-registers the *tools* but does not re-scan skills. So for a short window the agent has `memory_search` / `memory_get` / `memory_save` without the SKILL.md guidance on how to use them. A hosted gateway resolves this on its own restart cycle; if you control the process, restart it and confirm with `openclaw skills list | grep totalreclaw`.
 
 **Bind the memory slot (idempotent):**
 
