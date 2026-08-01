@@ -92,7 +92,9 @@ The plugin self-reloads: after install it writes the gateway config it needs and
 
 **Agent-facing (native memory contract):** `memory_search` (recall), `memory_get` (read one memory by citation), `memory_save` (explicit write — use for "remember X" / "save X" / "note X").
 
-**Curation + status CLI (`tr`, i.e. `node "$TR_CLI" …`):** `tr pin` / `tr unpin` · `tr retype` · `tr set_scope` · `tr status` · `tr export` · `tr pair`. The `tr remember --json "X"` CLI is the underlying store path the `memory_save` tool wraps — prefer the tool (it cannot be confused with GNU coreutils `tr`). Import + plan upgrade run via the gateway subcommand: `openclaw totalreclaw import from <source> --file <path> [--json]`, `openclaw totalreclaw upgrade [--json]`, `openclaw totalreclaw import status|abort`.
+**Status + data CLI (`tr`, i.e. `node "$TR_CLI" …`):** `tr status` · `tr export` · `tr forget <factId>` · `tr pair`. The `tr remember --json "X"` CLI is the underlying store path the `memory_save` tool wraps — prefer the tool (it cannot be confused with GNU coreutils `tr`). Import + plan upgrade run via the gateway subcommand: `openclaw totalreclaw import from <source> --file <path> [--json]`, `openclaw totalreclaw upgrade [--json]`, `openclaw totalreclaw import status|abort`.
+
+**Curation (pin / unpin / retype / set-scope) is NOT available in this client.** There is no pin tool and no `tr pin` / `tr unpin` / `tr retype` / `tr set_scope` command — they exist only in the MCP server and NanoClaw. If the user asks you to pin, unpin, retype, or re-scope a memory, say plainly that this client cannot do it yet and that the memory was left unchanged. Do **not** store a new memory and describe it as pinned: that reports an operation that did not happen, exactly like the shell-`tr` failure above. The only curation this client supports is `tr forget <factId>`, which tombstones a memory on-chain.
 
 The legacy `totalreclaw_*` agent tools and the `tr recall` CLI are retired — recall is `memory_search`, explicit capture is the `memory_save` tool (not a shell-out to `tr`). If a stale guide references them, follow this SKILL instead.
 

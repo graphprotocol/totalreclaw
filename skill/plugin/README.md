@@ -60,7 +60,7 @@ Most AI memory solutions force a tradeoff: **good recall OR privacy**. TotalRecl
 - **Semantic Search**: LSH blind indices with client-side BM25 + cosine + RRF fusion reranking
 - **Retrieval v2 Tier 1**: Source-weighted reranking — user=1.0, user-inferred=0.9, derived/external=0.7, assistant=0.55
 - **Lifecycle Hooks**: Seamlessly integrates with OpenClaw's agent lifecycle (before_agent_start, agent_end, before_compaction, before_reset)
-- **Natural-language overrides**: "pin that", "that was actually a rule, not a preference", "file that under work" — the agent runs the matching `tr` curation command automatically
+- **Forget on request**: "forget that" tombstones the memory on-chain via `tr forget`. Pin / retype / re-scope curation is not available in this client yet — it lives in the MCP server and NanoClaw ([#563](https://github.com/p-diogo/totalreclaw/issues/563))
 - **Portable Export**: One-click plaintext export -- no vendor lock-in
 - **Decay Management**: Automatic memory decay with configurable thresholds
 
