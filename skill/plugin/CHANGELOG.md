@@ -20,7 +20,7 @@ Skips 3.4.3, which was drafted but abandoned. 3.4.3's premise was "this client c
 
 - **No user/agent-facing banner points at bare `tr` anymore.** Three surfaces told the reader to run bare `tr`, which on any Unix host is GNU coreutils' character translator — the precise trap the #551 shell-`tr` rule at the top of SKILL.md exists to stop. A real agent on 3.4.2 hit this during fresh-install QA: it correctly recognised `tr` as coreutils and refused to run it (the ban working as intended), but the pairing banner that told it to `Run \`tr pair\`` was then its only pointer, leaving it with **no working way to pair**. The two `index.ts` banners now point at `openclaw totalreclaw pair` and the in-process `/plugin/totalreclaw/pair/init` route; the curation guidance in SKILL.md and the `memory_save` tool description now says `node "$TR_CLI" …` (with the resolved glob above) and tells the agent to report curation unavailable if `TR_CLI` does not resolve, rather than improvising. Regression guards in `skill-md-native.test.ts`.
 
-## [3.4.2] — unreleased
+## [3.4.2] — 2026-08-01
 
 ### Fixed
 
