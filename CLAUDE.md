@@ -365,6 +365,10 @@ Every new feature implementation MUST include:
    - **When E2E can't run immediately**: Explicitly plan when it will run and leave it as an open item. Do NOT mark the feature as complete.
    - **A feature is NOT done until E2E validates it.** Code that compiles and passes unit tests can still fail at the integration level (wrong chain behavior, subgraph not indexing, paymaster rejecting batched UserOps, etc.).
 
+### Session wrap — mandatory before close
+
+Before telling the user a session can close, run the **`totalreclaw-session-wrap`** skill (user-level, `~/.claude/skills/totalreclaw-session-wrap/SKILL.md`). It runs the deterministic close-out so nothing is lost: assess+warn → commit/push the session's own work → update changelog + roadmap upstream → file pending items/decisions as GitHub issues → remove only this session's worktrees → persist to memory → reason through gaps before confirming. Key invariants it enforces: stage only your own files (never `git add -A` on a shared dirty branch), check for an in-progress cherry-pick/rebase before discarding anything, docs PRs may auto-merge after orchestrator verification but code/crypto needs a real-Sonnet/Fable review, and `docs/plans/` + `.claude/` are gitignored in this repo. **Do not declare a session closed until this skill has run.**
+
 ---
 
 ## Known Technical Gaps
