@@ -479,6 +479,8 @@ For deployment procedures, follow the canonical runbook **[`docs/guides/deployme
 
 **IMPORTANT: All tests (E2E, integration, smoke, cross-client) MUST hit the staging relay (`api-staging.totalreclaw.xyz`), NEVER production.** Staging runs single-chain Gnosis (chain 100) for both tiers — same routing as production post-ops-1 (#283, closed 2026-06-05). Staging is on-chain **isolated**: it writes to its own DataEdge (`0xE7a4D2677B686e13775Ba9092631089e35F0BB91`) + dedicated `total-reclaw-gnosis-staging` subgraph, so staging E2E txs never touch production data. Test registrations send `X-TotalReclaw-Test: true` header and show as `[TEST]` in Telegram notifications.
 
+**⚠️ SHARED DATABASE: staging + production relay share ONE Postgres (deliberate for now — Pedro, 2026-07-29).** The on-chain layer is isolated (above); the DB layer is NOT — one `tiers`/`subscriptions`/`users` table serves both environments. Consequences: (a) staging test rows live in the prod DB; (b) `tiers` is **prod-owned** — staging tier-sync (test-mode Stripe) is guarded to no-op so it can't overwrite the rows prod serves; (c) any "staging" migration or destructive write hits prod data, so every schema change must stay idempotent (`IF NOT EXISTS` / `ON CONFLICT DO NOTHING`). **Re-evaluate (split the DB) before full product launch.** Full rationale, guardrails, and split plan: `totalreclaw-internal/docs/specs/ops/shared-database-decision.md`.
+
 ### Relay Quick Reference
 
 ```bash
