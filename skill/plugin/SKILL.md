@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "End-to-end encrypted, decentralized memory for OpenClaw. A native kind:memory provider — recall is automatic via memory_search/memory_get, and facts are captured in the background. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', any recall request ('what do you remember about me', 'what's my X'), AND any explicit remember request ('remember X', 'save X')."
-version: 3.4.2
+version: 3.4.4
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
