@@ -106,7 +106,7 @@ export function BootstrapPage() {
           support it yet.
         </p>
         <p className="mt-3 text-ink-muted">
-          Try a recent Chrome, Edge, or Safari 17+ on a device with Touch ID / Face ID / Windows
+          Try a recent Chrome, Edge, or Safari 18+ (iOS 18+) on a device with Touch ID / Face ID / Windows
           Hello.
         </p>
       </Shell>
