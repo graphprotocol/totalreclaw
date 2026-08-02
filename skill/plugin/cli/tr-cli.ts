@@ -36,9 +36,11 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 import { CONFIG, setRecoveryPhraseOverride } from '../config.js';
 import { loadCredentialsJson } from '../fs-helpers.js';
+import { isKeychainMarker, KEYCHAIN_MARKER_SETUP_MSG } from '../keychain-marker.js';
 import { printStatus } from '../pairing/onboarding-cli.js';
 import {
   deriveKeys,
@@ -121,8 +123,26 @@ interface CliContext {
   walletAddress: string;
 }
 
-async function buildContext(): Promise<CliContext> {
-  const creds = loadCredentialsJson(CREDENTIALS_PATH);
+/**
+ * Read the mnemonic candidate out of a loaded `credentials.json` object and
+ * `die()` (never returns) if it's unusable — missing entirely, or a
+ * keychain marker (#545: a co-installed Hermes client (#546) may have
+ * wrapped the phrase in the OS keychain, leaving only a non-secret marker
+ * behind). This is the credential-read+marker-guard prelude, extracted out
+ * of `buildContext()` so it's unit-testable in-process, with no reliance on
+ * Node's subprocess/spawn APIs — the plugin's install scanner refuses any
+ * file in this tree that imports those (per the `SHELL_EXEC_PATTERN` rule
+ * in `scripts/check-scanner.mjs`). See `cli/tr-cli-keychain-marker.test.ts`.
+ *
+ * Catches the marker HERE, before the caller ever passes the result to
+ * `setRecoveryPhraseOverride()` / `deriveKeys()` (which would otherwise
+ * throw an unhandled "invalid mnemonic" error on every `tr` command that
+ * calls `buildContext()`: remember/forget/export). NEVER echoes the
+ * marker's payload — only the fixed `KEYCHAIN_MARKER_SETUP_MSG`.
+ *
+ * Exported for tests; not part of the CLI's public "API" otherwise.
+ */
+export function resolveCliMnemonicOrDie(creds: Record<string, unknown> | null): string {
   if (!creds) {
     die('TotalReclaw is not set up. Run: node ~/.openclaw/extensions/totalreclaw/dist/cli/tr-cli.js pair --json');
   }
@@ -135,6 +155,17 @@ async function buildContext(): Promise<CliContext> {
   if (!mnemonic) {
     die('No recovery phrase in credentials.json. Run: tr pair --json');
   }
+
+  if (isKeychainMarker(mnemonic)) {
+    die(KEYCHAIN_MARKER_SETUP_MSG);
+  }
+
+  return mnemonic;
+}
+
+async function buildContext(): Promise<CliContext> {
+  const creds = loadCredentialsJson(CREDENTIALS_PATH);
+  const mnemonic = resolveCliMnemonicOrDie(creds);
 
   // Make the mnemonic visible to subgraph-store helpers (getSubgraphConfig
   // reads CONFIG.recoveryPhrase, which falls back to the override). We do
@@ -571,8 +602,26 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  const msg = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`tr: fatal: ${msg}\n`);
-  process.exit(2);
-});
+// Only auto-run when this file is executed directly (`tsx cli/tr-cli.ts ...`
+// / `node dist/cli/tr-cli.js ...`, the only way it's ever actually invoked in
+// production — see the package.json `bin.tr` entry). NOT when it's imported
+// as a module — e.g. `cli/tr-cli-keychain-marker.test.ts` imports
+// `resolveCliMnemonicOrDie` to test the marker guard in-process, and without
+// this guard that import would trigger a real `main()` run (reading
+// `process.argv`, possibly `process.exit()`-ing) as a side effect of the
+// import itself.
+const isDirectRun = (() => {
+  try {
+    return process.argv[1] != null && import.meta.url === pathToFileURL(process.argv[1]).href;
+  } catch {
+    return true; // fail open — preserve today's always-run CLI behavior
+  }
+})();
+
+if (isDirectRun) {
+  main().catch((err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`tr: fatal: ${msg}\n`);
+    process.exit(2);
+  });
+}
