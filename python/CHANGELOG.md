@@ -26,7 +26,7 @@ Hermes client stable (2.4.5 → 2.4.6): session-isolation + import-fidelity + pr
 
 ### Added
 
-- **[internal#262] OS keychain wrap for the mnemonic at rest (cred-2).** On pair/generate/restore, desktop installs store the recovery phrase in the OS keychain (keyring → macOS `security` → Secret Service) and `credentials.json` carries only a `__keychain__:v1:<eoa>` marker — verified to fail BIP-39 validation loudly at every consumer including the Rust core, so no client can misread it as a phrase. Headless/container deploys fall back to today's plaintext behavior unchanged (`TOTALRECLAW_NO_KEYCHAIN=1` forces it); legacy plaintext files upgrade opportunistically on read (keychain store confirmed before the plaintext is replaced). Post-setup backup guidance is wrap-aware (the old `jq -r .mnemonic` advice would have backed up the marker). Optional `totalreclaw[keychain]` extra installs the zero-argv-exposure `keyring` backend.
+- **[internal#262] OS keychain wrap for the mnemonic at rest (cred-2).** On pair/generate/restore, desktop installs store the recovery phrase in the OS keychain (keyring, mandatory on macOS as of #558 below → Secret Service on Linux) and `credentials.json` carries only a `__keychain__:v1:<eoa>` marker — verified to fail BIP-39 validation loudly at every consumer including the Rust core, so no client can misread it as a phrase. Headless/container deploys fall back to today's plaintext behavior unchanged (`TOTALRECLAW_NO_KEYCHAIN=1` forces it); legacy plaintext files upgrade opportunistically on read (keychain store confirmed before the plaintext is replaced). Post-setup backup guidance is wrap-aware (the old `jq -r .mnemonic` advice would have backed up the marker).
 
 ### Changed
 
@@ -61,6 +61,10 @@ Hermes client stable (2.4.5 → 2.4.6): session-isolation + import-fidelity + pr
   configured with (Telegram, WhatsApp, Slack, Matrix, …).
 
 ### Fixed
+
+- **[#558] macOS keyring is now a mandatory dependency — retires the `security -w` argv-exposure fallback.** `keyring>=24` is a base dependency on darwin (a `sys_platform == 'darwin'` marker in `pyproject.toml`; a no-op install elsewhere), fast-following cred-2 (#546). Previously, macOS installs without `keyring` fell back to a `security add-generic-password -w <secret>` subprocess, which briefly exposed the phrase in the local process list during the one-time wrap (local-attacker-only, one-shot — the login keychain is per-user and the same user can already read their own keychain items at will — but cheap to eliminate). `credentials_wrap.detect_backend()` now always resolves to `"keyring"` on darwin, and the subprocess WRITE path (`_store_macos`) has been removed entirely; the READ fallback (`_load_macos`, which uses `-w` only as a stdout flag with no argv exposure) is kept, though its scope is narrower than "general recovery net" — it can only read entries written by the retired `_store_macos` path (legacy pre-#558 installs), not entries written via `keyring`'s own macOS backend, since those go through different Security-framework attribute plumbing. Linux is unaffected — `keyring` there remains an optional `totalreclaw[keychain]` extra, since the plaintext fallback on Linux is structural (no universal keychain), not a subprocess-vs-library choice.
+
+  **Fix-round addition (review nits):** the `pyproject.toml` packaging test now asserts the actual `>=24` version floor via regex, not just presence of a darwin-marked `keyring` dependency. The `_load_macos` docstring/comments (module + function + test) were tempered to make the legacy-only recovery scope explicit rather than implying it's a general fallback for any degenerate "keyring failed to import" case.
 
 - **Parallel conversations no longer collapse into one mixed session / Crystal.**
   The Hermes plugin kept a single process-global message buffer + turn counter +

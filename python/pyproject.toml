@@ -82,9 +82,23 @@ dependencies = [
     # imp-5 — RAM pre-flight check in import adapters uses psutil.virtual_memory()
     # to detect available memory before loading large files.
     "psutil>=5.9",
+    # #558 fast-follow to cred-2 (#546) — keyring is now a MANDATORY
+    # dependency on macOS (platform-marker-gated, so it's a no-op install
+    # on Linux/Windows). Previously optional via the `[keychain]` extra,
+    # with a `security add-generic-password -w <secret>` subprocess
+    # fallback that briefly exposed the phrase in the local process list
+    # during the one-time wrap. With keyring guaranteed present on darwin,
+    # `credentials_wrap.detect_backend()` always resolves to "keyring"
+    # there and that subprocess write path has been removed entirely (see
+    # `credentials_wrap.py`). Kept as an optional extra below too, for
+    # non-darwin platforms that want to opt into keyring explicitly.
+    "keyring>=24; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]
+# Optional on non-darwin platforms (Linux Secret Service / Windows
+# Credential Manager). On darwin, keyring is already a base dependency
+# (see the `dependencies` list above) — this extra is then a no-op.
 keychain = ["keyring>=24"]
 # hermes-agent is not on PyPI — install manually: pip install git+https://github.com/NousResearch/hermes-agent.git
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-xdist>=3.5", "mnemonic>=0.21"]

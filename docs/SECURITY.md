@@ -34,9 +34,22 @@ BIP-39 validation at **every** consumer — the 12-word count gate, the
 `eth_account` checksum, and the Rust key-derivation core all reject it — so a
 tool that doesn't understand the marker can neither mistake it for a phrase nor
 silently derive a different wallet. The wrap is applied on pair/restore and
-opportunistically on the first boot of a legacy plaintext file. Install the
-optional `keyring` package to route through the native Security framework
-instead of the macOS `security` subprocess.
+opportunistically on the first boot of a legacy plaintext file.
+
+**macOS: `keyring` is a mandatory dependency, zero argv exposure (#558).**
+`pip install totalreclaw` on macOS always installs `keyring>=24` (a
+`sys_platform == 'darwin'` marker in `pyproject.toml`), which wraps through
+the native Security framework — the secret never touches a subprocess
+argument list. Earlier versions fell back to a `security
+add-generic-password -w <secret>` subprocess when `keyring` wasn't
+installed; that command briefly exposed the phrase in the local process
+list during the one-time wrap (local-attacker-only — the login keychain is
+per-user, and the same user can already read any of their own keychain
+items via `security find-generic-password` — but cheap to eliminate).
+That subprocess WRITE path has been removed entirely. The Linux backend
+(`secretstorage` / `keyring`) is unaffected — the plaintext fallback there
+was always structural (no universal Linux keychain), so `keyring` remains
+an optional install via the `totalreclaw[keychain]` extra.
 
 ## What's NOT protected at-rest — containers / headless / kill-switch
 
@@ -94,7 +107,7 @@ recommend an encrypted volume (Phase 3).
 The plaintext-at-rest tradeoff is documented and being addressed in phases. The full UX matrix and phasing is tracked in the private ops tracker (issue #229).
 
 - **Phase 1 (cred-1 — shipped)** — Document the threat model (this file) and enforce chmod 600 at plugin startup. The plugin now **refuses to load** if `credentials.json` is found with permissions broader than `0600`. Fix: `chmod 600 ~/.totalreclaw/credentials.json` then restart the gateway. The plugin also warns if the file is detected on a tmpfs or shared-volume mount (`/tmp/`, `/dev/shm/`, `/run/`, `/var/run/`).
-- **Phase 2 (cred-2 — shipped 2026-07-20)** — Desktop OS-keychain wrap (macOS Keychain via `security` / `keyring`, Linux Secret Service via `secretstorage` / `keyring`). The mnemonic is stored in the OS keychain and `credentials.json` carries a non-secret `__keychain__:v1:<eoa>` marker. Container / headless deployments with no keychain, or hosts with `TOTALRECLAW_NO_KEYCHAIN=1`, fall back to the status-quo plaintext file (chmod 600). Marker fail-loud + opportunistic upgrade of legacy plaintext on first boot are covered by `tests/test_credentials_wrap.py`.
+- **Phase 2 (cred-2 — shipped 2026-07-20)** — Desktop OS-keychain wrap (macOS Keychain via `keyring`, Linux Secret Service via `secretstorage` / `keyring`). The mnemonic is stored in the OS keychain and `credentials.json` carries a non-secret `__keychain__:v1:<eoa>` marker. Container / headless deployments with no keychain, or hosts with `TOTALRECLAW_NO_KEYCHAIN=1`, fall back to the status-quo plaintext file (chmod 600). Marker fail-loud + opportunistic upgrade of legacy plaintext on first boot are covered by `tests/test_credentials_wrap.py`. **[#558, fast-follow]** `keyring>=24` is now a mandatory dependency on macOS (platform marker), retiring the `security add-generic-password -w` subprocess write path that briefly exposed the phrase in the local process list.
 - **Phase 3 (cred-3 / shipped)** — Container / headless external-secret provider. The Hermes daemon (`agent/state.py` `_try_auto_configure`) routes credential discovery through `get_credential_provider()`, so `TOTALRECLAW_CREDENTIALS_PROVIDER=external` + a file-mount transport (`TOTALRECLAW_EXTERNAL_CREDENTIALS_PATH`) injects the phrase from a secret manager without ever writing `credentials.json` to disk. The LUKS / dm-crypt host-volume pattern is documented in [production-deployment.md](guides/production-deployment.md); the full worked examples (systemd `LoadCredential`, Docker Compose, Kubernetes, file-mode fallback) + threat model are in the [headless deployment guide](guides/headless-deployment.md). End-to-end boot + unit coverage in `tests/test_external_credentials_boot.py`.
 - **Phase 4 (optional, 3.5+)** — TPM / Secure Enclave hardware-bound wrap. Defeats `docker save` and disk theft completely, at the cost of platform-specific code paths.
 

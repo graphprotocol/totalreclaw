@@ -528,3 +528,93 @@ def test_end_to_end_setup_then_auto_configure_round_trip(
     assert state.is_configured()
     assert state.get_client()._mnemonic == VALID_MNEMONIC
 
+
+# ---------------------------------------------------------------------------
+# #558 — macOS keyring hard dep: the ``security add-generic-password -w``
+# WRITE path is retired. With ``keyring`` a mandatory dependency on darwin,
+# ``detect_backend()`` returns "keyring" there and the "macos" branch of
+# ``store_secret`` is unreachable in normal operation. These tests guard
+# the retirement directly: no code path left that shells out to
+# ``security add-generic-password -w <secret>`` (which briefly exposed the
+# phrase in the local process list).
+# ---------------------------------------------------------------------------
+
+
+def test_store_macos_write_path_is_removed() -> None:
+    """``_store_macos`` (the ``security add-generic-password -w`` helper)
+    must not exist on the module at all — a direct regression guard that
+    the write path was actually deleted, not merely dispatch-routed
+    around."""
+    assert not hasattr(cw, "_store_macos")
+
+
+def test_store_secret_never_shells_out_when_backend_resolves_macos(monkeypatch) -> None:
+    """Even in the degenerate case where ``detect_backend()`` somehow still
+    returns "macos" (e.g. a corrupted install where the mandatory darwin
+    ``keyring`` dependency failed to import), ``store_secret`` must NOT
+    invoke ``subprocess.run`` with the phrase — it should fall back to
+    :class:`KeychainUnavailable` (plaintext fallback upstream) instead."""
+    monkeypatch.delenv(cw.ENV_NO_KEYCHAIN, raising=False)
+    monkeypatch.setattr(cw, "detect_backend", lambda: "macos")
+
+    calls: list[object] = []
+    monkeypatch.setattr(cw.subprocess, "run", lambda *a, **k: calls.append((a, k)))
+
+    with pytest.raises(KeychainUnavailable):
+        cw.store_secret("0x" + "d" * 40, VALID_MNEMONIC)
+
+    assert calls == [], "store_secret must never shell out to `security` on the write path"
+
+
+def test_load_macos_read_path_still_present() -> None:
+    """The READ fallback (``_load_macos``, uses ``-w`` as a stdout flag —
+    no argv exposure) is kept; only the WRITE path is retired. Note this
+    is a narrow legacy-compat path (entries written by the now-removed
+    ``_store_macos`` subprocess), not a general recovery net for
+    keyring-written entries — see the module docstring."""
+    assert hasattr(cw, "_load_macos")
+
+
+# ---------------------------------------------------------------------------
+# #558 — packaging: ``keyring`` is a mandatory base dependency on darwin.
+# ---------------------------------------------------------------------------
+
+
+def test_pyproject_declares_keyring_as_base_dependency_on_darwin() -> None:
+    """``keyring>=24`` must appear in ``[project].dependencies`` (not just
+    the optional ``[keychain]`` extra) gated by a ``sys_platform ==
+    'darwin'`` environment marker, so a plain ``pip install totalreclaw``
+    on macOS always gets the zero-argv-exposure keychain backend.
+
+    Asserts the actual ``>=24`` version floor, not just presence of a
+    darwin-marked ``keyring`` dependency — a regression that dropped or
+    lowered the floor (e.g. an unpinned ``keyring`` or ``keyring>=1``)
+    would satisfy a presence-only check while installing a version that
+    predates the API this module relies on.
+    """
+    import re
+    import tomllib
+    from pathlib import Path
+
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    data = tomllib.loads(pyproject_path.read_text())
+
+    base_deps = data["project"]["dependencies"]
+    darwin_keyring_deps = [
+        dep
+        for dep in base_deps
+        if dep.replace(" ", "").lower().startswith("keyring")
+        and "sys_platform" in dep
+        and "darwin" in dep
+    ]
+    assert darwin_keyring_deps, (
+        "expected a base dependency like "
+        "\"keyring>=24; sys_platform == 'darwin'\" in [project].dependencies, "
+        f"got: {base_deps}"
+    )
+    floor_pattern = re.compile(r"keyring\s*>=\s*24\b")
+    assert any(floor_pattern.search(dep) for dep in darwin_keyring_deps), (
+        "expected the darwin-marked keyring dependency to declare a "
+        f"`>=24` floor (regex {floor_pattern.pattern!r}), got: {darwin_keyring_deps}"
+    )
+
