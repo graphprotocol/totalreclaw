@@ -26,16 +26,18 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20(server%3A%20AGPL--3.0)-7B5CFF" alt="License" /></a>
 </p>
 
+<p align="center"><strong>Status:</strong> private beta — free tier open, no credit card, no waitlist.</p>
+
 ---
 
 Your AI remembers everything — without remembering it for Big Tech. And starting with v1, every memory is structured: 6 speech-act types, provenance, scope, and volatility on every entry.
 
 - **Private** — XChaCha20-Poly1305 encryption happens on-device. The server never sees plaintext, even if fully compromised.
-- **Structured** — v1 taxonomy: `claim`, `preference`, `directive`, `commitment`, `episode`, `summary`, each with source / scope / volatility. [Learn more →](docs/guides/memory-types-guide.md)
+- **Structured** — every memory typed by speech act with source, scope, and volatility. [Learn more →](docs/guides/memory-types-guide.md)
 - **Portable** — one 12-word recovery phrase works across every supported agent. Switch platforms without losing a single memory. [Compare integrations →](docs/guides/feature-comparison.md)
 - **Yours forever** — memories are anchored to Gnosis Chain and indexed by The Graph. No vendor lock-in, no data hostage.
 
-Other AI memory tools ([Mem0](https://mem0.ai), [Zep](https://getzep.com)) store your data in plaintext on their servers. TotalReclaw can't read your data by design — that's the difference between a privacy promise and a structural guarantee.
+Most AI memory products store your data unencrypted server-side, or leave encryption up to your deployment. TotalReclaw can't read your data by design — that's the difference between a privacy promise and a structural guarantee.
 
 | | TotalReclaw | Typical hosted memory |
 |---|---|---|
@@ -44,7 +46,7 @@ Other AI memory tools ([Mem0](https://mem0.ai), [Zep](https://getzep.com)) store
 | Works across agents? | Yes — OpenClaw, Claude Desktop, Hermes, ZeroClaw, any MCP host | Usually SDK-locked |
 | Storage you control? | Yes — public chain or your own PostgreSQL | Vendor database |
 
-> **New in v1 (April 2026):** memory taxonomy, source-weighted reranking, 4 new MCP tools (`totalreclaw_pin` / `totalreclaw_unpin` / `totalreclaw_retype` / `totalreclaw_set_scope`), protobuf v4 wire format. v1 is the default on every client. Existing vaults decrypt transparently. See the [v1 migration guide](docs/guides/v1-migration.md).
+> **New in v1 (April 2026):** memory taxonomy (6 types), source-weighted reranking, 4 new MCP tools (`totalreclaw_pin` / `totalreclaw_unpin` / `totalreclaw_retype` / `totalreclaw_set_scope`), protobuf v4 wire format. v1 is the default on every client. Existing vaults decrypt transparently. See the [v1 migration guide](docs/guides/v1-migration.md).
 
 ## Quick Start
 
@@ -56,7 +58,7 @@ One command per client. v1 is the default — no env toggles, no feature flags.
 |---|---|
 | **OpenClaw** | `openclaw plugins install @totalreclaw/totalreclaw` |
 | **Claude Desktop / Cursor / Windsurf** | `npx @totalreclaw/mcp-server setup` — run it yourself in a terminal, never via your AI agent (the wizard prints your recovery phrase, which must not enter the agent's context) |
-| **NanoClaw** | add `TOTALRECLAW_RECOVERY_PHRASE` to deployment env |
+| **NanoClaw** | `@totalreclaw/skill-nanoclaw` (bundled via NanoClaw) + set `TOTALRECLAW_RECOVERY_PHRASE` in deployment env — see the [NanoClaw guide](docs/guides/nanoclaw-getting-started.md) |
 | **Python / Hermes** | `pip install totalreclaw` |
 | **Rust / ZeroClaw** | `cargo add totalreclaw-memory` |
 | **IronClaw** | via the generic MCP server (first-class integration paused) — see [IronClaw setup](docs/guides/ironclaw-setup.md) |
@@ -105,6 +107,10 @@ Already using another AI assistant with memory? Tell your agent:
 Supported sources: **ChatGPT** (memories or conversations.json), **Claude** (memory export), **Gemini** (Google Takeout), **Mem0** (API or file), **MCP Memory Server** (JSONL). All imports are encrypted client-side before storage. See the [import guide](docs/guides/importing-memories.md).
 
 On the managed service, the free tier includes one lifetime import; re-importing from additional sources is a Pro feature. See [pricing](https://totalreclaw.xyz/pricing).
+
+## Your vault in the browser
+
+View and curate your memories at [app.totalreclaw.xyz](https://app.totalreclaw.xyz) — no install required. Your recovery phrase is entered locally and never leaves your device; decryption happens entirely in the browser, so the server only ever serves ciphertext.
 
 ## Packages
 

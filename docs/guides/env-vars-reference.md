@@ -160,7 +160,7 @@ These are for deployment operators, not end users. They live in the server or re
 
 - [Self-hosted deployment guide](./self-hosted-deployment.md) for the full self-hosted setup (server + client config + support matrix).
 - [Self-hosted server setup](../specs/totalreclaw/server.md) for PostgreSQL deployment env vars.
-- [Monitoring setup](./monitoring-setup.md) for observability env vars.
+- Monitoring setup for observability env vars (internal runbook).
 - [Relay configuration](https://github.com/p-diogo/totalreclaw-relay) (private repo) for tier tuning, Pimlico, Stripe.
 
 Self-hosted deployments can still set the following as env-var fallbacks — on managed service, the relay billing response delivers these and env vars are ignored:

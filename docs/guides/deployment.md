@@ -35,19 +35,20 @@ doubt: `railway domain -s totalreclaw` shows `api-staging.` → it's staging.
 
 ---
 
-## 2. Chain routing (current — dual-chain)
+## 2. Chain routing (current — single-chain Gnosis)
 
-Verified 2026-05-31 via `railway variables`:
+Single-chain Gnosis mainnet (chain 100) for both tiers, shipped 2026-06-05
+(tracked internally). Verified via `railway variables`:
 
 | Tier | Chain | `/health`-adjacent env |
 |---|---|---|
-| Free | Base Sepolia (84532) | `PIMLICO_CHAIN_ID=84532` |
+| Free | Gnosis (100) | `PIMLICO_CHAIN_ID=100` |
 | Pro | Gnosis (100) | `PRO_PIMLICO_CHAIN_ID=100` |
 
-Single-chain Gnosis (both tiers) is the **target**, tracked as ops-1
-(`totalreclaw-internal#283`) — NOT yet shipped. Clients should read `chain_id`
-from `GET /v1/billing/status` (authoritative as of `totalreclaw-relay` PR #21),
-not hardcode the tier→chain map.
+Both are set on both Railway services (`totalreclaw` staging and
+`totalreclaw-production`). Clients read `chain_id` from
+`GET /v1/billing/status` (authoritative), not a hardcoded tier→chain map — so
+a future chain change needs zero client release.
 
 ---
 
@@ -79,13 +80,13 @@ the SHA alone after a CLI deploy.
 
 ## 4. Deploy-SHA sentinel (catch silent skips)
 
-`totalreclaw-relay/.github/workflows/deploy-sha-sentinel.yml` runs every 15 min +
+A workflow in the private relay repo (`deploy-sha-sentinel.yml`) runs every 15 min +
 on push to main. It asserts:
 - staging `/health.version` == `origin/main` short SHA (alerts on `dev` / stale),
 - prod `/health.version` is a real SHA, never `dev`.
 
 **Staging GitHub auto-deploy is unreliable — it has silently SKIPPED merges**
-(relay PR #21, 2026-05-31). If the sentinel alerts (or staging shows `dev`/stale),
+(observed 2026-05-31; tracked internally). If the sentinel alerts (or staging shows `dev`/stale),
 force a clean deploy per §5 Step 2. Root-cause of the auto-deploy skip lives in
 the Railway dashboard GitHub-trigger config (check: "wait for CI" toggle, watch
 paths, GitHub app connection).
@@ -96,7 +97,7 @@ paths, GitHub app connection).
 
 ### Step 0 — CI is a hard gate
 ```bash
-cd ~/Documents/code/totalreclaw-relay
+cd <totalreclaw-relay checkout>
 gh run list --branch main --limit 1 --json conclusion --jq '.[0].conclusion'  # must be "success"
 ```
 **Never deploy on red CI.**
@@ -109,7 +110,7 @@ curl -s https://api-staging.totalreclaw.xyz/health | jq -r .version   # want ori
 
 ### Step 2 — Staging (forced, when auto-deploy skipped or you need it now)
 ```bash
-cd ~/Documents/code/totalreclaw-relay && git checkout main && git pull --ff-only
+cd <totalreclaw-relay checkout> && git checkout main && git pull --ff-only
 SHA=$(git rev-parse --short HEAD)
 railway variables --set "RAILWAY_GIT_COMMIT_SHA=$SHA" -s totalreclaw --skip-deploys
 railway up -s totalreclaw --detach
@@ -120,13 +121,13 @@ railway up -s totalreclaw --detach
 
 ### Step 3 — E2E against staging (gate before prod)
 ```bash
-cd ~/Documents/code/totalreclaw/tests/e2e-batch
+cd tests/e2e-batch
 RELAY_URL=https://api-staging.totalreclaw.xyz npx tsx batch-e2e.ts --test A --test C --test E
 ```
 
 ### Step 4 — Promote to production (manual; never auto)
 ```bash
-cd ~/Documents/code/totalreclaw-relay && git checkout main && git pull --ff-only
+cd <totalreclaw-relay checkout> && git checkout main && git pull --ff-only
 SHA=$(git rev-parse --short HEAD)
 railway variables --set "RAILWAY_GIT_COMMIT_SHA=$SHA" -s totalreclaw-production --skip-deploys
 railway up -s totalreclaw-production -d
@@ -137,13 +138,13 @@ PROD_VER=$(curl -s https://api.totalreclaw.xyz/health | jq -r .version)
 
 ---
 
-## 6. Subgraph (post-ops-1 — single-chain Gnosis, isolated staging)
+## 6. Subgraph (single-chain Gnosis, isolated staging)
 
 Two deployments, two manifests. The default `subgraph.yaml` is a STALE base-sepolia
 manifest — never deploy from it.
 
 ```bash
-cd ~/Documents/code/totalreclaw/subgraph
+cd subgraph
 # STAGING (isolated DataEdge 0xE7a4…):
 npm run deploy:staging   # = graph deploy --studio total-reclaw-gnosis-staging subgraph-gnosis-staging.yaml
 # PRODUCTION (DataEdge 0xC445…):
@@ -152,8 +153,8 @@ npm run deploy:prod      # = graph deploy --studio total-reclaw-gnosis subgraph-
 Pass `--version-label v<X.Y.Z>` (bump from the currently-served version).
 
 **After ANY subgraph deploy, repoint BOTH endpoint env vars on the matching relay
-service** — each service runs `SUBGRAPH_ENDPOINT` AND `PRO_SUBGRAPH_ENDPOINT` (post-ops-1
-both point at the same subgraph per env):
+service** — each service runs `SUBGRAPH_ENDPOINT` AND `PRO_SUBGRAPH_ENDPOINT` (both
+point at the same subgraph per env, since both tiers share one chain):
 ```bash
 # staging:
 railway variables --set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis-staging/<v>" \
@@ -193,7 +194,7 @@ set the mode-matching ID in each service.
 
 ## 7. Rollback
 ```bash
-cd ~/Documents/code/totalreclaw-relay
+cd <totalreclaw-relay checkout>
 railway deployment list -s totalreclaw-production | head
 railway redeploy -s totalreclaw-production    # redeploys current; for an older one, redeploy by id
 ```
