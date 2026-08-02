@@ -17,6 +17,11 @@ import {
   validatePinArgs,
   type PinOpDeps,
 } from './pin.js';
+import {
+  parseCurationCliArgs,
+  runCurationOp,
+  type CurationParsedArgs,
+} from '../cli/tr-cli.js';
 import { buildCanonicalClaim, computeEntityTrapdoor } from '../extraction/claims-helper.js';
 import {
   appendDecisionLog,
@@ -262,6 +267,61 @@ function seedFact(
 }
 
 // ---------------------------------------------------------------------------
+// CLI: parseCurationCliArgs — pin / unpin argument parsing (bad-args coverage)
+// ---------------------------------------------------------------------------
+// These cover the CLI subcommand surface added in #563 — `tr pin` / `tr unpin`.
+// parseCurationCliArgs is the pure (no process.exit, no network) arg parser
+// behind the cmd* wrappers; runCurationOp (below, in runTests) covers the
+// execute*-delegating success / not-found paths.
+
+{
+  const r = parseCurationCliArgs('pin', ['deadbeef-1234-5678-9abc-def012345678']);
+  assertEq(r.ok, true, 'cli-parse pin: positional factId ok');
+  if (r.ok) assertEq(r.args.factId, 'deadbeef-1234-5678-9abc-def012345678', 'cli-parse pin: factId captured');
+}
+
+{
+  const r = parseCurationCliArgs('pin', ['deadbeef-1234-5678-9abc-def012345678', '--reason', 'user confirmed']);
+  assertEq(r.ok, true, 'cli-parse pin: --reason ok');
+  if (r.ok) assertEq(r.args.reason, 'user confirmed', 'cli-parse pin: reason captured');
+}
+
+{
+  // --reason BEFORE the positional still parses (popOptionFlag cleans it).
+  const r = parseCurationCliArgs('pin', ['--reason', 'why', 'deadbeef-1234-5678-9abc-def012345678']);
+  assertEq(r.ok, true, 'cli-parse pin: --reason before positional ok');
+  if (r.ok) {
+    assertEq(r.args.factId, 'deadbeef-1234-5678-9abc-def012345678', 'cli-parse pin: factId with leading flag');
+    assertEq(r.args.reason, 'why', 'cli-parse pin: reason with leading flag');
+  }
+}
+
+{
+  const r = parseCurationCliArgs('pin', []);
+  assertEq(r.ok, false, 'cli-parse pin: missing factId → fail');
+  // Usage line carries the <factId> positional (matches cmdForget's style).
+  if (!r.ok) assert(/factid/i.test(r.error), 'cli-parse pin: error mentions factId');
+}
+
+{
+  const r = parseCurationCliArgs('unpin', ['deadbeef-1234-5678-9abc-def012345678']);
+  assertEq(r.ok, true, 'cli-parse unpin: positional factId ok');
+  if (r.ok) assertEq(r.args.factId, 'deadbeef-1234-5678-9abc-def012345678', 'cli-parse unpin: factId captured');
+}
+
+{
+  const r = parseCurationCliArgs('unpin', []);
+  assertEq(r.ok, false, 'cli-parse unpin: missing factId → fail');
+}
+
+{
+  // Fact-id shape check mirrors cmdForget: a natural-language id is rejected
+  // before it reaches the on-chain path.
+  const r = parseCurationCliArgs('pin', ['not-a-real-id!@#']);
+  assertEq(r.ok, false, 'cli-parse pin: non-id-shaped factId → fail');
+}
+
+// ---------------------------------------------------------------------------
 // executePinOperation — pin a canonical claim
 // ---------------------------------------------------------------------------
 
@@ -297,6 +357,108 @@ async function runTests(): Promise<void> {
     assertEq(result.reason, 'user confirmed', 'pin canonical: reason passed through');
     assertEq(state.submittedBatches.length, 1, 'pin canonical: exactly 1 batch submitted');
     assertEq(state.submittedBatches[0].length, 2, 'pin canonical: batch has 2 payloads (tombstone + new)');
+  }
+
+  // ── CLI runCurationOp: pin / unpin (#563) ─────────────────────────────────
+  //
+  // runCurationOp is the CLI subcommand core: it takes the parsed args from
+  // parseCurationCliArgs + injectable deps, delegates to executePinOperation,
+  // and normalizes the result into a CLI result object. These cover the
+  // success + not-found paths; bad-args is covered by the parseCurationCliArgs
+  // tests above. FAST_CONFIRM_OPTS stubs the read-after-write subgraph poll.
+
+  // CLI pin success → ok:true, new_status pinned
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const fact: ExtractedFact = {
+      text: 'Pedro uses Vim daily',
+      type: 'preference',
+      importance: 8,
+      action: 'ADD',
+      confidence: 0.92,
+    };
+    const canonical = buildCanonicalClaim({
+      fact,
+      importance: 8,
+      sourceAgent: 'openclaw-plugin',
+      extractedAt: '2026-04-12T10:00:00.000Z',
+    });
+    seedFact(state, 'cli-pin-1', canonical);
+
+    const deps = makeDeps(state);
+    const parsed: CurationParsedArgs = { op: 'pin', factId: 'cli-pin-1' };
+    const result = await runCurationOp(parsed, deps, FAST_CONFIRM_OPTS);
+
+    assertEq(result.ok, true, 'cli pin success: ok');
+    assertEq(result.op, 'pin', 'cli pin success: op echoed');
+    assertEq(result.fact_id, 'cli-pin-1', 'cli pin success: fact_id');
+    assertEq(result.new_status, 'pinned', 'cli pin success: new_status pinned');
+    assert(typeof result.new_fact_id === 'string' && result.new_fact_id!.length > 0, 'cli pin success: new_fact_id set');
+    assert(typeof result.tx_hash === 'string', 'cli pin success: tx_hash present');
+  }
+
+  // CLI pin with --reason → reason threaded through to executePinOperation
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const canonical = JSON.stringify({
+      t: 'hello', c: 'fact', cf: 0.9, i: 5, sa: 'a', ea: 'b',
+    });
+    seedFact(state, 'cli-pin-2', canonical);
+
+    const deps = makeDeps(state);
+    const parsed: CurationParsedArgs = { op: 'pin', factId: 'cli-pin-2', reason: 'sticky' };
+    const result = await runCurationOp(parsed, deps, FAST_CONFIRM_OPTS);
+
+    assertEq(result.ok, true, 'cli pin reason: ok');
+    // The execute path surfaces `reason` on the result.
+    assertEq(result.reason, 'sticky', 'cli pin reason: reason echoed on result');
+  }
+
+  // CLI unpin success → new_status active
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const pinnedJson = JSON.stringify({
+      t: 'Pedro uses Vim', c: 'pref', cf: 0.9, i: 8, sa: 'a', ea: 'b', st: 'p',
+    });
+    seedFact(state, 'cli-unpin-1', pinnedJson);
+
+    const deps = makeDeps(state);
+    const parsed: CurationParsedArgs = { op: 'unpin', factId: 'cli-unpin-1' };
+    const result = await runCurationOp(parsed, deps, FAST_CONFIRM_OPTS);
+
+    assertEq(result.ok, true, 'cli unpin success: ok');
+    assertEq(result.new_status, 'active', 'cli unpin success: new_status active');
+    assertEq(result.previous_status, 'pinned', 'cli unpin success: previous_status pinned');
+  }
+
+  // CLI pin not-found → ok:false, clear error, no on-chain write
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const deps = makeDeps(state);
+    const parsed: CurationParsedArgs = { op: 'pin', factId: 'does-not-exist' };
+    const result = await runCurationOp(parsed, deps, FAST_CONFIRM_OPTS);
+
+    assertEq(result.ok, false, 'cli pin missing: ok=false');
+    assertEq(result.fact_id, 'does-not-exist', 'cli pin missing: fact_id echoed');
+    assert(typeof result.error === 'string' && result.error.toLowerCase().includes('not found'), 'cli pin missing: error mentions not found');
+    assertEq(state.submittedBatches.length, 0, 'cli pin missing: zero on-chain writes');
+  }
+
+  // CLI pin idempotent (already pinned) → ok:true, idempotent flag, no write
+  {
+    const state: MockState = { facts: new Map(), submittedBatches: [] };
+    const pinnedJson = JSON.stringify({
+      t: 'x', c: 'fact', cf: 0.9, i: 5, sa: 'a', ea: 'b', st: 'p',
+    });
+    seedFact(state, 'cli-idem-1', pinnedJson);
+
+    const deps = makeDeps(state);
+    const parsed: CurationParsedArgs = { op: 'pin', factId: 'cli-idem-1' };
+    const result = await runCurationOp(parsed, deps, FAST_CONFIRM_OPTS);
+
+    assertEq(result.ok, true, 'cli pin idempotent: ok');
+    assertEq(result.idempotent, true, 'cli pin idempotent: idempotent flag set');
+    assertEq(state.submittedBatches.length, 0, 'cli pin idempotent: zero writes');
   }
 
   // Idempotency: pin an already-pinned claim → no on-chain write

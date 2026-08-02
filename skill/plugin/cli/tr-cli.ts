@@ -10,7 +10,9 @@
  * What's still CLI-only (no native agent-facing surface):
  *   - explicit write (`tr remember`) — the conventional memory contract has no
  *     agent-facing write tool; auto-extraction stores facts via hooks.
- *   - curation / lifecycle (`tr forget`, `tr export`).
+ *   - curation (`tr pin` / `tr unpin` / `tr retype` / `tr set_scope`) + lifecycle
+ *     (`tr forget`, `tr export`). Curation landed in #563 — the pure operations
+ *     already existed in memory/, this CLI is the wiring that calls them.
  *   - onboarding + pairing (`tr status`, `tr pair`).
  *
  * Phrase-safety: this CLI reads credentials.json (mnemonic at rest) but NEVER
@@ -22,6 +24,10 @@
  *   tr pair [--json]            — start a relay pairing session, print URL+PIN+QR
  *   tr remember [--json] <text> — store a memory in the encrypted vault (on-chain)
  *   tr forget [--json] <factId> — tombstone a memory on-chain (find the id via memory_search)
+ *   tr pin [--json] <factId> [--reason <text>]   — pin a memory so nothing supersedes it
+ *   tr unpin [--json] <factId>                     — remove a pin (allow auto-supersede again)
+ *   tr retype [--json] <factId> <type>             — change a memory's type (claim|preference|directive|commitment|episode|summary)
+ *   tr set_scope [--json] <factId> <scope>         — change a memory's scope (work|personal|health|family|creative|finance|misc|unspecified)
  *   tr export [--json] [--format json|markdown] — dump all memories from the subgraph
  *
  * 3.3.12-rc.4 — switched remember/forget/export from `/v1/store` and
@@ -46,6 +52,8 @@ import {
   deriveKeys,
   computeAuthKeyHash,
   encrypt,
+  decrypt,
+  deriveLshSeed,
   generateBlindIndices,
   generateContentFingerprint,
 } from '../crypto/crypto.js';
@@ -59,6 +67,30 @@ import {
   type FactPayload,
 } from '../subgraph/subgraph-store.js';
 import { exportAllFacts } from './tr-cli-export-helper.js';
+
+// Curation (#563): pin / unpin / retype / set_scope. The pure operations +
+// their tests already existed in memory/ — this CLI surface is the WIRING that
+// finally calls them. Parity reference for the deps wiring is the MCP server's
+// `buildPinDepsFromState` (mcp/src/index.ts); argument shapes follow the MCP
+// `totalreclaw_pin` / `totalreclaw_retype` / `totalreclaw_set_scope` tools.
+import {
+  executePinOperation,
+  validatePinArgs,
+  type PinOpDeps,
+} from '../memory/pin.js';
+import {
+  executeRetype,
+  executeSetScope,
+  validateRetypeArgs,
+  validateSetScopeArgs,
+} from '../memory/retype-setscope.js';
+import type { MemoryType, MemoryScope } from '../extraction/extractor.js';
+import { fetchFactById } from '../subgraph/subgraph-search.js';
+import { generateEmbedding, getEmbeddingDims } from '../embedding/embedding.js';
+import { LSHHasher } from '../embedding/lsh.js';
+import { encodeEmbeddingPayload } from '../embedding/embedding-codec.js';
+import { computeEntityTrapdoor } from '../extraction/claims-helper.js';
+import type { ConfirmIndexedOptions } from '../subgraph/confirm-indexed.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -121,6 +153,16 @@ interface CliContext {
   userId: string;
   /** Smart Account address derived from the mnemonic (subgraph owner key). */
   walletAddress: string;
+  /**
+   * LSH seed derived from the mnemonic + salt (same inputs the plugin runtime
+   * uses via `deriveLshSeed`). Needed by the curation deps' `generateIndices`
+   * to rebuild the LSH hasher so a pinned / retyped fact stays findable by
+   * semantic recall after the original is tombstoned. The raw mnemonic is NOT
+   * stored on the context (phrase-safety) — only this derived seed.
+   */
+  lshSeed: Uint8Array;
+  /** Salt used at key derivation; carried so the LSH hasher can be rebuilt. */
+  salt: Buffer;
 }
 
 /**
@@ -231,6 +273,8 @@ async function buildContext(): Promise<CliContext> {
     apiClient,
     userId,
     walletAddress,
+    salt: keys.salt,
+    lshSeed: deriveLshSeed(mnemonic, keys.salt),
   };
 }
 
@@ -503,6 +547,321 @@ async function cmdExport(rawArgs: string[]): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Commands: pin / unpin / retype / set_scope (curation — #563)
+// ---------------------------------------------------------------------------
+//
+// The pure operations (executePinOperation / executeRetype / executeSetScope)
+// + their tests already lived in memory/ — this section is the WIRING that
+// finally exposes them as `tr` subcommands. Before #563 the plugin was the
+// only client without a curation surface, so an agent told to "pin that"
+// stored an ordinary memory and reported a successful pin (issue #563).
+//
+// Parity: argument shapes follow the MCP `totalreclaw_pin` / `totalreclaw_unpin`
+// / `totalreclaw_retype` / `totalreclaw_set_scope` tools (fact_id + optional
+// reason / new_type / new_scope). The deps wiring mirrors MCP's
+// `buildPinDepsFromState` (mcp/src/index.ts). The execute* result is normalized
+// into a CLI result object so the cmd wrapper can die() with one clean message
+// instead of an MCP content-block envelope.
+
+export type CurationOp = 'pin' | 'unpin' | 'retype' | 'set_scope';
+
+export interface CurationParsedArgs {
+  op: CurationOp;
+  factId: string;
+  reason?: string;
+  newType?: MemoryType;
+  newScope?: MemoryScope;
+}
+
+export type CurationParseResult =
+  | { ok: true; args: CurationParsedArgs }
+  | { ok: false; error: string };
+
+export interface CurationCliResult {
+  ok: boolean;
+  op: CurationOp;
+  fact_id: string;
+  new_fact_id?: string;
+  previous_status?: string;
+  new_status?: string;
+  previous_type?: string;
+  new_type?: string;
+  previous_scope?: string;
+  new_scope?: string;
+  idempotent?: boolean;
+  tx_hash?: string;
+  partial?: boolean;
+  reason?: string;
+  error?: string;
+}
+
+/** UUID-v4-ish shape check — same guard `cmdForget` applies. Real fact ids are
+ * UUIDs; rejecting non-hex natural-language input here keeps a fabricated id
+ * (the #563 / #551 failure mode) from reaching the on-chain supersession path. */
+const FACT_ID_SHAPE = /^[0-9a-f-]{8,}$/i;
+
+/** Per-op one-line usage (the positional args after `tr <op> [--json]`). */
+function curationUsage(op: CurationOp): string {
+  const tail =
+    op === 'pin' ? '<factId> [--reason <text>]'
+    : op === 'retype' ? '<factId> <type>'
+    : op === 'set_scope' ? '<factId> <scope>'
+    : '<factId>';
+  return `Usage: tr ${op} [--json] ${tail}`;
+}
+
+/**
+ * Parse + validate CLI argv for a curation op. Pure — no process.exit, no
+ * network — so the bad-args paths are unit-testable in-process (see
+ * memory/pin-unpin.test.ts + memory/retype-setscope.test.ts). `--json` must
+ * already be stripped by the caller (cmdCuration pops it first). Delegates
+ * field-level validation to the shared validate* helpers so the accepted
+ * shapes stay identical to the MCP tools.
+ */
+export function parseCurationCliArgs(op: CurationOp, argv: string[]): CurationParseResult {
+  // pin accepts an optional --reason VALUE; pop it before positional parsing
+  // so it can appear before or after the factId. The other ops take only
+  // positionals.
+  let reason: string | undefined;
+  let positional = argv;
+  if (op === 'pin') {
+    const [reasonValue, rest] = popOptionFlag(argv, '--reason', '');
+    if (reasonValue) reason = reasonValue;
+    positional = rest;
+  }
+
+  const factId = (positional[0] ?? '').trim();
+  if (!factId) {
+    return { ok: false, error: curationUsage(op) };
+  }
+  if (!FACT_ID_SHAPE.test(factId)) {
+    return {
+      ok: false,
+      error:
+        `"${factId.slice(0, 60)}" doesn't look like a memory ID. ` +
+        `Ask the agent to look it up via memory_search (or tr export) and pass a result's id.`,
+    };
+  }
+
+  if (op === 'pin' || op === 'unpin') {
+    const v = validatePinArgs({ fact_id: factId, ...(reason !== undefined ? { reason } : {}) });
+    if (!v.ok) return { ok: false, error: v.error };
+    const args: CurationParsedArgs = { op, factId: v.factId };
+    if (v.reason) args.reason = v.reason;
+    return { ok: true, args };
+  }
+
+  if (op === 'retype') {
+    const newType = (positional[1] ?? '').trim();
+    const v = validateRetypeArgs({ fact_id: factId, new_type: newType });
+    if (!v.ok) return { ok: false, error: v.error };
+    return { ok: true, args: { op, factId: v.factId, newType: v.newType } };
+  }
+
+  // set_scope
+  const newScope = (positional[1] ?? '').trim();
+  const v = validateSetScopeArgs({ fact_id: factId, new_scope: newScope });
+  if (!v.ok) return { ok: false, error: v.error };
+  return { ok: true, args: { op, factId: v.factId, newScope: v.newScope } };
+}
+
+/**
+ * Build the curation deps (PinOpDeps — structurally compatible with
+ * RetypeSetScopeDeps) bound to a built CLI context. Mirrors the MCP server's
+ * `buildPinDepsFromState`: same retrieve / decrypt / encrypt / submit /
+ * generateIndices wiring via plugin-native helpers. `generateIndices` is
+ * best-effort — if the embedder can't load it falls back to word + entity
+ * trapdoors alone, same as MCP and the plugin's auto-extraction path, so a
+ * curation op never fails purely because the embedding bundle is unavailable.
+ *
+ * Exported so the wiring is exercisable in isolation; the cmd wrapper is the
+ * only production caller.
+ */
+export function buildCurationDeps(ctx: CliContext): PinOpDeps {
+  // LSH hasher is rebuilt lazily on first generateIndices call (the embedder
+  // is the expensive part; no point constructing the hasher if generation
+  // fails). Single-shot CLI process, so a local singleton is fine.
+  let lshHasher: LSHHasher | null = null;
+
+  return {
+    owner: ctx.walletAddress,
+    // Provenance: curation done via the standalone CLI (mirrors cmdRemember's
+    // 'tr-cli' agentId, distinct from the in-process agent tool path).
+    sourceAgent: 'tr-cli',
+    fetchFactById: (factId: string) =>
+      fetchFactById(ctx.walletAddress, factId, ctx.authKeyHex),
+    decryptBlob: (hexEncryptedBlob: string) => {
+      const hex = hexEncryptedBlob.startsWith('0x')
+        ? hexEncryptedBlob.slice(2)
+        : hexEncryptedBlob;
+      const b64 = Buffer.from(hex, 'hex').toString('base64');
+      return decrypt(b64, ctx.encryptionKey);
+    },
+    encryptBlob: (plaintext: string) => {
+      const b64 = encrypt(plaintext, ctx.encryptionKey);
+      return Buffer.from(b64, 'base64').toString('hex');
+    },
+    submitBatch: async (payloads: Buffer[]) => {
+      const config = {
+        ...getSubgraphConfig(),
+        authKeyHex: ctx.authKeyHex,
+        walletAddress: ctx.walletAddress,
+      };
+      const result = await submitFactBatchOnChain(payloads, config);
+      return { txHash: result.txHash, success: result.success };
+    },
+    generateIndices: async (text: string, entityNames: string[]) => {
+      if (!text) return { blindIndices: [] };
+      const wordIndices = generateBlindIndices(text);
+      let lshIndices: string[] = [];
+      let encryptedEmbedding: string | undefined;
+      try {
+        const embedding = await generateEmbedding(text);
+        if (!lshHasher) {
+          lshHasher = new LSHHasher(ctx.lshSeed, getEmbeddingDims());
+        }
+        lshIndices = lshHasher.hash(embedding);
+        const encB64 = encrypt(encodeEmbeddingPayload(embedding), ctx.encryptionKey);
+        encryptedEmbedding = Buffer.from(encB64, 'base64').toString('hex');
+      } catch {
+        // Best-effort: word + entity trapdoors alone still surface the claim
+        // after the original is tombstoned (BM25-style recall covers it).
+      }
+      const entityTrapdoors = entityNames.map((n) => computeEntityTrapdoor(n));
+      return {
+        blindIndices: [...wordIndices, ...lshIndices, ...entityTrapdoors],
+        encryptedEmbedding,
+      };
+    },
+  };
+}
+
+/**
+ * Run a curation op end-to-end against injected deps. Mirrors the MCP server's
+ * `handlePinSubgraphWithDeps` / retype / set_scope handlers: delegate to the
+ * pure execute* fn and normalize its result into a CLI result object. Never
+ * throws on op failure — surfaces `{ ok: false, error }` so the cmd wrapper
+ * can die() with a clean message. `confirmOpts` threads the read-after-write
+ * subgraph poll (the CLI omits it for real polling; tests stub it fast).
+ */
+export async function runCurationOp(
+  args: CurationParsedArgs,
+  deps: PinOpDeps,
+  confirmOpts?: ConfirmIndexedOptions,
+): Promise<CurationCliResult> {
+  const { op, factId: fact_id } = args;
+  try {
+    if (op === 'pin' || op === 'unpin') {
+      const targetStatus = op === 'pin' ? 'pinned' : 'active';
+      const reason = op === 'pin' ? args.reason : undefined;
+      const r = await executePinOperation(fact_id, targetStatus, deps, reason, confirmOpts);
+      return {
+        ok: r.success,
+        op,
+        fact_id,
+        new_fact_id: r.new_fact_id,
+        previous_status: r.previous_status,
+        new_status: r.new_status,
+        idempotent: r.idempotent,
+        tx_hash: r.tx_hash,
+        partial: r.partial,
+        reason: r.reason,
+        error: r.error,
+      };
+    }
+
+    if (op === 'retype') {
+      const r = await executeRetype(fact_id, args.newType!, deps, confirmOpts);
+      return {
+        ok: r.success,
+        op,
+        fact_id,
+        new_fact_id: r.new_fact_id,
+        previous_type: r.previous_type,
+        new_type: r.new_type,
+        tx_hash: r.tx_hash,
+        partial: r.partial,
+        error: r.error,
+      };
+    }
+
+    // set_scope
+    const r = await executeSetScope(fact_id, args.newScope!, deps, confirmOpts);
+    return {
+      ok: r.success,
+      op,
+      fact_id,
+      new_fact_id: r.new_fact_id,
+      previous_scope: r.previous_scope,
+      new_scope: r.new_scope,
+      tx_hash: r.tx_hash,
+      partial: r.partial,
+      error: r.error,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      op,
+      fact_id,
+      error: `${op} failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/** Shared cmd body for all four curation subcommands. */
+async function cmdCuration(op: CurationOp, rawArgs: string[]): Promise<void> {
+  const [jsonMode, args] = popFlag(rawArgs, '--json');
+  const parsed = parseCurationCliArgs(op, args);
+  if (!parsed.ok) {
+    die(parsed.error);
+  }
+
+  const ctx = await buildContext();
+  const deps = buildCurationDeps(ctx);
+  const result = await runCurationOp(parsed.args, deps);
+
+  if (!result.ok) {
+    die(`${op} failed: ${result.error ?? 'unknown error'}`);
+  }
+
+  if (jsonMode) {
+    log(JSON.stringify(result));
+    return;
+  }
+
+  // Human-readable summary (plain-text mode is for direct user CLI use only).
+  const tx = result.tx_hash ? ` (tx=${result.tx_hash.slice(0, 18)}…)` : '';
+  const partial = result.partial
+    ? ' [indexing — may take a few seconds to appear in recall]'
+    : '';
+  const idem = result.idempotent ? ' (already in that state — no change)' : '';
+  if (op === 'pin' || op === 'unpin') {
+    const verb = op === 'pin' ? 'pinned' : 'unpinned';
+    log(`ok — ${verb} ${result.fact_id}${idem}${tx}${partial}`);
+  } else if (op === 'retype') {
+    log(`ok — retyped ${result.fact_id} → ${result.new_type}${tx}${partial}`);
+  } else {
+    log(`ok — re-scoped ${result.fact_id} → ${result.new_scope}${tx}${partial}`);
+  }
+}
+
+async function cmdPin(rawArgs: string[]): Promise<void> {
+  return cmdCuration('pin', rawArgs);
+}
+
+async function cmdUnpin(rawArgs: string[]): Promise<void> {
+  return cmdCuration('unpin', rawArgs);
+}
+
+async function cmdRetype(rawArgs: string[]): Promise<void> {
+  return cmdCuration('retype', rawArgs);
+}
+
+async function cmdSetScope(rawArgs: string[]): Promise<void> {
+  return cmdCuration('set_scope', rawArgs);
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
 
@@ -540,6 +899,22 @@ async function main(): Promise<void> {
       await cmdForget(args.slice(1));
       break;
 
+    case 'pin':
+      await cmdPin(args.slice(1));
+      break;
+
+    case 'unpin':
+      await cmdUnpin(args.slice(1));
+      break;
+
+    case 'retype':
+      await cmdRetype(args.slice(1));
+      break;
+
+    case 'set_scope':
+      await cmdSetScope(args.slice(1));
+      break;
+
     case 'export':
       await cmdExport(args.slice(1));
       break;
@@ -573,7 +948,14 @@ async function main(): Promise<void> {
         '  tr pair [--json]                            — start a relay pairing session\n' +
         '  tr remember [--json] <text>                 — store a memory (on-chain UserOp)\n' +
         '  tr forget [--json] <factId>                 — tombstone a memory on-chain\n' +
+        '  tr pin [--json] <factId> [--reason <text>]  — pin a memory (nothing supersedes it)\n' +
+        '  tr unpin [--json] <factId>                  — remove a pin (allow auto-supersede again)\n' +
+        '  tr retype [--json] <factId> <type>          — change type (claim|preference|directive|commitment|episode|summary)\n' +
+        '  tr set_scope [--json] <factId> <scope>      — change scope (work|personal|health|family|creative|finance|misc|unspecified)\n' +
         '  tr export [--json] [--format json|markdown] — dump every memory in the vault\n\n' +
+        'Curation (pin/unpin/retype/set_scope): look up the factId via memory_search (or\n' +
+        '        tr export) first. Each is an on-chain supersession — tombstones the old fact,\n' +
+        '        writes a fresh one with the changed field, returns {"ok":true,"new_fact_id":...,"tx_hash":...}.\n\n' +
         'Recall: NOT a CLI command. The agent recalls via the bundled memory_search tool.\n' +
         '        To dump memories outside the agent, use `tr export`.\n\n' +
         'Import + Upgrade: NOT on the standalone `tr` binary. They run inside the gateway\n' +
@@ -586,11 +968,14 @@ async function main(): Promise<void> {
         'Flags:\n' +
         '  --json    Output machine-parseable JSON (required for agent shell calls)\n\n' +
         'JSON output shapes:\n' +
-        '  status:   {"version":"...","onboarded":bool,"next_step":"pair|none","tool_count":N,"hybrid_mode":bool}\n' +
-        '  pair:     {"url":"...","pin":"123456","expires_at":"..."}\n' +
-        '  remember: {"ok":true,"id":"...","claim_count":N}\n' +
-        '  forget:   {"ok":true,"id":"...","tx_hash":"0x..."}\n' +
-        '  export:   {"count":N,"facts":[{"id":"...","text":"...","metadata":{...},"created_at":"..."}]}\n\n' +
+        '  status:    {"version":"...","onboarded":bool,"next_step":"pair|none","tool_count":N,"hybrid_mode":bool}\n' +
+        '  pair:      {"url":"...","pin":"123456","expires_at":"..."}\n' +
+        '  remember:  {"ok":true,"id":"...","claim_count":N}\n' +
+        '  forget:    {"ok":true,"id":"...","tx_hash":"0x..."}\n' +
+        '  pin/unpin: {"ok":true,"op":"pin","fact_id":"...","new_fact_id":"...","new_status":"pinned","tx_hash":"0x..."}\n' +
+        '  retype:    {"ok":true,"op":"retype","fact_id":"...","new_type":"preference","tx_hash":"0x..."}\n' +
+        '  set_scope: {"ok":true,"op":"set_scope","fact_id":"...","new_scope":"work","tx_hash":"0x..."}\n' +
+        '  export:    {"count":N,"facts":[{"id":"...","text":"...","metadata":{...},"created_at":"..."}]}\n\n' +
         'Environment:\n' +
         '  TOTALRECLAW_SERVER_URL           — relay URL (default: api.totalreclaw.xyz; staging: api-staging.totalreclaw.xyz)\n' +
         '  TOTALRECLAW_CREDENTIALS_PATH     — override credentials.json path\n',

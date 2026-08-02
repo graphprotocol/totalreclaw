@@ -586,9 +586,17 @@ export function createMemorySaveTool(store: TrMemorySaveFn): AgentToolLike {
       'note / not-forget something ("remember X", "save X", "note X", "don’t ' +
       'forget X"). Returns a truthful ok + stored count: relay that verbatim — ' +
       'say "Saved" only when stored >= 1; if stored is 0 the fact was a ' +
-      'near-duplicate; if ok is false, tell the user the store failed. NEVER ' +
-      'shell out to `tr` or any CLI to store a memory — this tool is the only ' +
-      'write path. Do NOT use this for background capture (that is automatic).',
+      'near-duplicate; if ok is false, tell the user the store failed. ' +
+      'This tool ONLY stores a NEW fact — it does not pin, unpin, retype, or ' +
+      're-scope an existing one. For curation of an EXISTING memory, shell out ' +
+      'to the `tr` CLI: `tr pin <id>`, `tr unpin <id>`, `tr retype <id> <type>`, ' +
+      '`tr set_scope <id> <scope>` (look up the id via memory_search first); ' +
+      'there is no agent tool for those. NEVER use memory_save to fake a ' +
+      'curation op (e.g. storing a fact and describing it as "pinned") — that ' +
+      'reports an operation that did not happen. For storing a NEW fact, prefer ' +
+      'this tool over shelling out to `tr remember` (it cannot be confused with ' +
+      'GNU coreutils `tr`). Do NOT use this for background capture (that is ' +
+      'automatic).',
     parameters: {
       type: 'object',
       properties: {
