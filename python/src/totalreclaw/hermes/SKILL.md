@@ -61,6 +61,13 @@ Auto-fires once per session via the `on_session_end` hook (when the gateway clos
 - **First-person factual query** ("do I / what's my / where do I / what did I say about / what do you know about me / am I supposed to / when did I …") → `totalreclaw_recall` FIRST, then answer from returned facts. If 0 results, say so honestly — DO NOT fabricate from session context. This is non-negotiable: agents MUST call `totalreclaw_recall` even when the answer appears to be in the current context window. Hermes' built-in `USER.md` cache is local; the TotalReclaw vault is canonical + cross-device.
 - **Specific-fact lookups** ("what's my AWS account ID?") → `totalreclaw_recall` with a tight query. The reranker (BM25 + cosine + RRF + source-weighted) is sharper on specific queries.
 
+**Proactive recall — auto-recall only fires on turn 1.** The plugin auto-recalls once, on the first turn, keyed on the user's first message; after that, nothing surfaces memories except your own `totalreclaw_recall` calls. So call recall yourself when:
+- the session opener is low-signal ("continue", "where were we?", a bare greeting) → recall a broad profile: `totalreclaw_recall("user preferences directives active projects recent commitments")`. The first-turn auto-recall had no topical signal to work with.
+- you're about to recommend or act on a standing preference/rule → recall that domain first, even if nothing in context mentions it (directives like "never mention X" don't auto-load).
+- the user shifts to a topic from a past session ("we talked about this", names a project you have no context for) → recall with topic keywords; there is no mid-session auto-recall to catch it.
+
+If a recall returns 0 where memories should exist, retry once with a *broader* query (there is no separate "session search" tool — broadening the query is the fallback). Don't recall every turn, don't re-recall the same message auto-recall already used, and read any injected `## Relevant memories` block before adding a call. Full guidance: [`docs/guides/proactive-recall-best-practices.md`](../../../../docs/guides/proactive-recall-best-practices.md).
+
 ### Mutating existing facts
 
 Pattern is always **recall first → mutate second**, because the mutation tools need `fact_id`:
