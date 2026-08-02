@@ -721,6 +721,7 @@ jobs:
           fi
           echo "Release tag: $TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "plugin-version=$PLUGIN_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Build embedder bundle
         run: |
@@ -728,11 +729,94 @@ jobs:
           node scripts/build-embedder-bundle.mjs --out-dir dist/embedder
           ls -la dist/embedder/
 
+      # Pulls release notes from CHANGELOG-public.md so the Releases tab
+      # (a prominent visitor surface) says something real instead of the
+      # generic embedder-bundle stub (#574). RCs are never listed in
+      # CHANGELOG-public.md (see its header note) so this always misses for
+      # `release-type=rc` and falls back to the stub below — expected.
+      - name: Extract release notes from CHANGELOG-public.md
+        id: notes
+        run: |
+          PLUGIN_VERSION="${{ steps.tag.outputs.plugin-version }}"
+          cat > /tmp/extract-release-notes.cjs <<'NODE_EOF'
+          const fs = require('fs');
+
+          const version = process.argv[2];
+          const changelogPath = process.argv[3];
+          const outPath = process.argv[4];
+
+          function isPluginHeading(line) {
+            return (
+              line.includes('@totalreclaw/totalreclaw') ||
+              line.includes('(OpenClaw plugin)')
+            );
+          }
+
+          // Match `version` as a whole token within the heading line so
+          // "3.4.2" doesn't match "13.4.2" or "3.4.20".
+          function hasVersionToken(line, ver) {
+            let idx = 0;
+            for (;;) {
+              idx = line.indexOf(ver, idx);
+              if (idx === -1) return false;
+              const before = idx === 0 ? '' : line[idx - 1];
+              const after = line[idx + ver.length] || '';
+              const okBefore = !/[0-9.]/.test(before);
+              const okAfter = !/[0-9.]/.test(after);
+              if (okBefore && okAfter) return true;
+              idx += 1;
+            }
+          }
+
+          if (!version) {
+            process.exit(1);
+          }
+
+          let content;
+          try {
+            content = fs.readFileSync(changelogPath, 'utf8');
+          } catch (e) {
+            process.exit(1);
+          }
+
+          const lines = content.split('\n');
+          const headingIdx = [];
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith('## ')) headingIdx.push(i);
+          }
+
+          let matchStart = -1;
+          let matchEnd = lines.length;
+          for (let k = 0; k < headingIdx.length; k++) {
+            const i = headingIdx[k];
+            if (isPluginHeading(lines[i]) && hasVersionToken(lines[i], version)) {
+              matchStart = i;
+              matchEnd = k + 1 < headingIdx.length ? headingIdx[k + 1] : lines.length;
+              break;
+            }
+          }
+
+          if (matchStart === -1) {
+            process.exit(1);
+          }
+
+          const section = lines.slice(matchStart, matchEnd).join('\n').replace(/\s+$/, '') + '\n';
+          fs.writeFileSync(outPath, section);
+          console.log('Extracted release notes for plugin version ' + version);
+          NODE_EOF
+          if node /tmp/extract-release-notes.cjs "$PLUGIN_VERSION" CHANGELOG-public.md /tmp/release-notes.md; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No matching CHANGELOG-public.md section for plugin version $PLUGIN_VERSION; falling back to stub notes."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Ensure GitHub Release exists for the tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
+          NOTES_FOUND="${{ steps.notes.outputs.found }}"
           # `gh release view` exits non-zero if the release doesn't exist.
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             echo "Creating GitHub Release for tag $TAG"
@@ -740,13 +824,31 @@ jobs:
             if [ "${{ inputs.release-type }}" = "rc" ]; then
               FLAGS="--prerelease"
             fi
-            gh release create "$TAG" \
-              --title "$TAG" \
-              --notes "Auto-generated release for embedder bundle attachment. See CHANGELOG-public.md for details." \
-              $FLAGS \
-              --target "${GITHUB_SHA}"
+            if [ "$NOTES_FOUND" = "true" ]; then
+              gh release create "$TAG" \
+                --title "$TAG" \
+                --notes-file /tmp/release-notes.md \
+                $FLAGS \
+                --target "${GITHUB_SHA}"
+            else
+              gh release create "$TAG" \
+                --title "$TAG" \
+                --notes "Auto-generated release for embedder bundle attachment. See CHANGELOG-public.md for details." \
+                $FLAGS \
+                --target "${GITHUB_SHA}"
+            fi
           else
             echo "Release $TAG already exists; will upload bundle assets to it."
+            # Notes-only backfill: if a stable release was first created with
+            # the stub (e.g. this job re-ran after the release existed but
+            # notes extraction previously missed) and a matching section now
+            # exists, refresh just the notes text. Never touches assets or
+            # --prerelease status; skipped entirely for RCs since they never
+            # have a matching CHANGELOG-public.md section.
+            if [ "${{ inputs.release-type }}" != "rc" ] && [ "$NOTES_FOUND" = "true" ]; then
+              echo "Backfilling release notes for existing release $TAG"
+              gh release edit "$TAG" --notes-file /tmp/release-notes.md
+            fi
           fi
 
       - name: Upload embedder bundle + manifest
