@@ -119,7 +119,7 @@ The MCP server exposes 18 tools. Descriptions are summarized from the tool defin
 | `totalreclaw_forget` | Permanently remove a memory by `memory_id`, or by query (tombstones up to 50 matches). |
 | `totalreclaw_export` | Export the decrypted vault as Markdown or JSON (one-click portable backup). |
 | `totalreclaw_import` | Restore memories from a prior TotalReclaw export backup (JSON/Markdown). |
-| `totalreclaw_import_from` | Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, MemoClaw, or JSON/CSV. Dry-run first. |
+| `totalreclaw_import_from` | Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, or JSON/CSV. Dry-run first. |
 | `totalreclaw_import_batch` | Internal chunked-polling helper for large imports (50+ conversations); not meant to be called by name. |
 | `totalreclaw_consolidate` | Cluster near-duplicates and merge each to the best match. **Self-hosted only** (no batch delete on the managed service). |
 | `totalreclaw_status` | Check tier, usage, and quota against the relay billing endpoint. |

@@ -59,7 +59,7 @@ Do NOT repeatedly attempt to store memories after a quota error.
 Note: Billing status is cached locally for up to 2 hours. After upgrading to Pro, the new tier may take up to 2 hours to take effect. If the user reports that Pro features are not active after upgrading, suggest restarting their agent to force a billing cache refresh.
 
 ### Importing memories from other tools
-If the user mentions migrating from Mem0, MCP Memory Server, MemoClaw, or any other AI memory tool, offer to use totalreclaw_import_from. Start with dry_run=true to preview, then confirm before importing.
+If the user mentions migrating from Mem0, MCP Memory Server, or any other AI memory tool, offer to use totalreclaw_import_from. Start with dry_run=true to preview, then confirm before importing.
 API keys provided by the user are used only for the import and are never stored.
 
 ### Agent-specific tips
@@ -161,7 +161,7 @@ WHEN NOT TO USE:
 - user already Pro (check totalreclaw_status)
 - unrelated — don't volunteer upgrades`;
 
-export const IMPORT_FROM_TOOL_DESCRIPTION = `Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, MemoClaw, JSON/CSV.
+export const IMPORT_FROM_TOOL_DESCRIPTION = `Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, JSON/CSV.
 INVOKE WHEN USER SAYS:
 - "migrate memory from [Mem0/ChatGPT/Claude]"
 - "import my ChatGPT memories" / "here's my Mem0 export"
