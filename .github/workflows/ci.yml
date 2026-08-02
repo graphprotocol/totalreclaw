@@ -24,6 +24,7 @@ jobs:
       mcp: ${{ steps.filter.outputs.mcp }}
       app: ${{ steps.filter.outputs.app }}
       plugin: ${{ steps.filter.outputs.plugin }}
+      docs: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
@@ -38,6 +39,26 @@ jobs:
               - 'app/**'
             plugin:
               - 'skill/**'
+            docs:
+              - '**/*.md'
+              - 'skill/plugin/skill.json'
+              - 'scripts/check-docs.sh'
+
+  docs-check:
+    # Guards visitor-facing docs against retired-product drift: retired
+    # tokens (Base Sepolia-as-current, deleted tools, "unlimited" tiers,
+    # removed env vars, unfilled placeholders) + broken/root-absolute
+    # relative links. The 2026-07-15 docs audit found ~40 instances this
+    # would have caught at PR time. See scripts/check-docs.sh.
+    name: Docs Check
+    needs: changes
+    if: ${{ needs.changes.outputs.docs == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run docs guardrail (retired tokens + link check)
+        run: bash scripts/check-docs.sh
 
   phrase-safety:
     # Static guard against accidental "display the recovery phrase" copy
