@@ -348,5 +348,30 @@ assert(
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// TR_CLI resolution must match the REAL npm install layout.
+//
+// `openclaw plugins install` unpacks to
+//   ~/.openclaw/npm/projects/<slug-hash>/node_modules/@totalreclaw/totalreclaw/
+// The glob shipped before #563 listed only ~/.openclaw/npm/node_modules/... and
+// ~/.openclaw/extensions/..., NEITHER of which exists for an npm install — so
+// TR_CLI resolved to EMPTY and every `node "$TR_CLI" ...` instruction failed.
+// A real agent hit this in the 3.4.2 QA and reported it could not find the CLI.
+// Verified live on OpenClaw 2026.6.8: the projects/ glob resolves and
+// `node "$TR_CLI" status --json` returns {"version":"3.4.2","onboarded":true,...}.
+// ---------------------------------------------------------------------------
+
+assert(
+  /npm\/projects\/\*totalreclaw\*\/node_modules\/@totalreclaw\/totalreclaw\/dist\/cli\/tr-cli\.js/.test(pluginSkillMd),
+  'SKILL.md: TR_CLI glob covers the npm/projects/<hash>/ layout plugins install actually uses',
+);
+
+// Curation must never be documented as a bare `tr` shell-out — that is GNU
+// coreutils, the exact trap the rule near the top of SKILL.md exists to stop.
+assert(
+  !/shell out to `tr` \(always/.test(pluginSkillMd),
+  'SKILL.md: curation is NOT documented as a bare `tr` shell-out',
+);
+
 console.log(`\n# ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

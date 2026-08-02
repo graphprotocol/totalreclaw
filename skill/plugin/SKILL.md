@@ -80,7 +80,13 @@ Pairing is a deliberate, user-initiated flow (the plugin does **not** auto-pair 
 Pair is UNCONDITIONAL when no credentials — the user installing/requesting setup IS the consent; do not add a second consent gate. `tr --help` lists every subcommand.
 
 ```bash
-TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/cli/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/cli/tr-cli.js 2>/dev/null | head -1)"
+# `openclaw plugins install` puts the package under npm/projects/<slug-hash>/,
+# so that glob is listed FIRST — the other two are older/dev layouts kept as
+# fallbacks. If TR_CLI comes back empty, say so; do NOT run bare `tr` (that is
+# GNU coreutils, not this CLI) and do NOT report a curation op as done.
+TR_CLI="$(ls -d ~/.openclaw/npm/projects/*totalreclaw*/node_modules/@totalreclaw/totalreclaw/dist/cli/tr-cli.js \
+              ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/cli/tr-cli.js \
+              ~/.openclaw/extensions/totalreclaw/dist/cli/tr-cli.js 2>/dev/null | head -1)"
 node "$TR_CLI" status --json      # {"version":"…","paired":true,…}
 ```
 
@@ -94,7 +100,7 @@ The plugin self-reloads: after install it writes the gateway config it needs and
 
 **Status + data CLI (`tr`, i.e. `node "$TR_CLI" …`):** `tr status` · `tr export` · `tr forget <factId>` · `tr pin <factId>` · `tr unpin <factId>` · `tr retype <factId> <type>` · `tr set_scope <factId> <scope>` · `tr pair`. The `tr remember --json "X"` CLI is the underlying store path the `memory_save` tool wraps — prefer the tool for *storing a new fact* (it cannot be confused with GNU coreutils `tr`). Import + plan upgrade run via the gateway subcommand: `openclaw totalreclaw import from <source> --file <path> [--json]`, `openclaw totalreclaw upgrade [--json]`, `openclaw totalreclaw import status|abort`.
 
-**Curation (pin / unpin / retype / set-scope) IS available — via the `tr` CLI.** There is no agent *tool* for these, so shell out to `tr` (always `--json`): `tr pin <factId> [--reason "<text>"]`, `tr unpin <factId>`, `tr retype <factId> <type>` (type ∈ claim | preference | directive | commitment | episode | summary), `tr set_scope <factId> <scope>` (scope ∈ work | personal | health | family | creative | finance | misc | unspecified). Each is an on-chain supersession: the old fact is tombstoned and a fresh one with the changed field is written, so the response carries a **new** `fact_id` + `tx_hash` — the original id is no longer active. **Always look up the factId first** via `memory_search` (or `tr export`) and pass a real result id; `tr` rejects anything that isn't id-shaped. Pinning makes a memory ground truth — nothing auto-supersedes or retracts it; `tr unpin` restores that. **Do not fake a curation op with `memory_save`** (storing a fact and calling it "pinned" reports an operation that did not happen, exactly like the shell-`tr` failure above) — `memory_save` only stores; use the `tr` subcommands to curate.
+**Curation (pin / unpin / retype / set-scope) IS available — via the TotalReclaw CLI.** There is no agent *tool* for these, so shell out — but **always as `node "$TR_CLI" …` using the TR_CLI glob above, never as bare `tr`** (bare `tr` is GNU coreutils, exactly the trap in the shell-out rule near the top of this file). If TR_CLI does not resolve, tell the user curation is unavailable rather than improvising. Always pass `--json`: `node "$TR_CLI" pin <factId> [--reason "<text>"]`, `node "$TR_CLI" unpin <factId>`, `node "$TR_CLI" retype <factId> <type>` (type ∈ claim | preference | directive | commitment | episode | summary), `node "$TR_CLI" set_scope <factId> <scope>` (scope ∈ work | personal | health | family | creative | finance | misc | unspecified). Each is an on-chain supersession: the old fact is tombstoned and a fresh one with the changed field is written, so the response carries a **new** `fact_id` + `tx_hash` — the original id is no longer active. **Always look up the factId first** via `memory_search` (or `tr export`) and pass a real result id; the CLI rejects anything that isn't id-shaped. Pinning makes a memory ground truth — nothing auto-supersedes or retracts it; `unpin` restores that. **Do not fake a curation op with `memory_save`** (storing a fact and calling it "pinned" reports an operation that did not happen, exactly like the shell-`tr` failure above) — `memory_save` only stores; use the CLI subcommands above to curate.
 
 The legacy `totalreclaw_*` agent tools and the `tr recall` CLI are retired — recall is `memory_search`, explicit capture is the `memory_save` tool (not a shell-out to `tr`). If a stale guide references them, follow this SKILL instead.
 

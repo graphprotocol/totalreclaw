@@ -588,10 +588,13 @@ export function createMemorySaveTool(store: TrMemorySaveFn): AgentToolLike {
       'say "Saved" only when stored >= 1; if stored is 0 the fact was a ' +
       'near-duplicate; if ok is false, tell the user the store failed. ' +
       'This tool ONLY stores a NEW fact — it does not pin, unpin, retype, or ' +
-      're-scope an existing one. For curation of an EXISTING memory, shell out ' +
-      'to the `tr` CLI: `tr pin <id>`, `tr unpin <id>`, `tr retype <id> <type>`, ' +
-      '`tr set_scope <id> <scope>` (look up the id via memory_search first); ' +
-      'there is no agent tool for those. NEVER use memory_save to fake a ' +
+      're-scope an existing one. Curate an EXISTING memory with the TotalReclaw ' +
+      'CLI, invoked as `node "$TR_CLI" <cmd> --json` (resolve TR_CLI with the ' +
+      'glob in SKILL.md — NEVER run bare `tr`, which is GNU coreutils, not this ' +
+      'CLI): `pin <id> [--reason "…"]`, `unpin <id>`, `retype <id> <type>`, ' +
+      '`set_scope <id> <scope>`. Look up the id via memory_search first. If ' +
+      'TR_CLI does not resolve, say curation is unavailable — do not improvise. ' +
+      'There is no agent tool for these. NEVER use memory_save to fake a ' +
       'curation op (e.g. storing a fact and describing it as "pinned") — that ' +
       'reports an operation that did not happen. For storing a NEW fact, prefer ' +
       'this tool over shelling out to `tr remember` (it cannot be confused with ' +
