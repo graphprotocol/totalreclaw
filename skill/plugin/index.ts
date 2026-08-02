@@ -623,7 +623,15 @@ async function initialize(logger: OpenClawPluginApi['logger']): Promise<void> {
     // does not auto-open a pair session on load (the 3.3.13 auto-pair-on-
     // load state machine was retired in Phase 3.4 — pairing is now
     // explicitly user-triggered per the native-integration design).
-    logger.info('TotalReclaw: no credentials found. Run `tr pair` (or ask the agent to) to complete setup.');
+    // NB: never say bare `tr pair` here. On any Unix host `tr` is GNU
+    // coreutils' character translator, so the instruction silently does the
+    // wrong thing — the same trap SKILL.md bans for `tr remember` (#551). A
+    // real agent on 3.4.2 hit this and (correctly) refused to run it, but was
+    // left with no working way to pair. Point at the gateway subcommand, which
+    // is always on PATH wherever this banner can be read.
+    logger.info(
+      'TotalReclaw: no credentials found. Run `openclaw totalreclaw pair` (or ask the agent to) to complete setup.',
+    );
     return;
   }
 
@@ -816,8 +824,10 @@ function buildSetupErrorMsg(): string {
   // thrown by `requireFullSetup` (currently only reached via dead 3.2 tool
   // handlers; kept accurate so any future caller gets the correct pointer).
   return 'TotalReclaw setup required. Pairing is QR-only — the recovery phrase is generated and encrypted in-browser and never enters this chat.\n\n' +
-    'Run `tr pair --url-pin` on the gateway host (or `openclaw totalreclaw pair generate --url-pin-only`) ' +
-    'and hand the user the returned `url` and `pin`. The user opens the URL in a browser to complete pairing. ' +
+    'Mint a session with `openclaw totalreclaw pair --url-pin` on the gateway host, or GET the in-process ' +
+    'route `http://localhost:<gateway-port>/plugin/totalreclaw/pair/init`. Do NOT run bare `tr pair` — on a ' +
+    'Unix host `tr` is GNU coreutils, not this CLI (invoke the binary by path if you need it directly). ' +
+    'Hand the user the returned `url` and `pin`. The user opens the URL in a browser to complete pairing. ' +
     'Do NOT ask the user for a recovery phrase and do NOT attempt to generate or relay one yourself.';
 }
 
