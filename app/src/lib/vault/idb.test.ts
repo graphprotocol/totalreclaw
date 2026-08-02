@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach } from "vitest";
-import { clear, keys } from "idb-keyval";
+import { clear, keys, set } from "idb-keyval";
 import {
   saveVaultRecord,
   loadVaultRecord,
@@ -75,6 +75,49 @@ describe("vault idb store", () => {
     await saveVaultRecord(rec);
     await clearVault(rec.smart_account);
     expect(await hasAnyVault()).toBe(false);
+  });
+});
+
+describe("forward-version tolerance (spa-passkey-unlock.md §2.2, §10.1)", () => {
+  // A Phase 2 build may write `v: 2` records (two extra wrapped fields,
+  // `wrapped_lsh_seed` + `wrapped_dedup_key`, no `salt` field — see
+  // derived-bundle-v1.md §5.1). Both versions coexist on the same device
+  // across a deploy, so a Phase 1 build must read the v1 fields it
+  // understands and IGNORE the rest, rather than discarding or mutating the
+  // record. This is a regression test that a Phase 1 build cannot start
+  // gating on `.v` and silently log out Phase 2 users.
+  it("a v2-shaped record (extra wrapped fields) still loads, unmodified, on a v1 build", async () => {
+    const sa = "0x00000000000000000000000000000000000000cc";
+    const v1Fields = record(sa);
+    const v2Shaped = {
+      ...v1Fields,
+      v: 2,
+      wrapped_lsh_seed: wrapKey(new Uint8Array(32).fill(3), new Uint8Array(32).fill(4)),
+      wrapped_dedup_key: wrapKey(new Uint8Array(32).fill(5), new Uint8Array(32).fill(6)),
+    };
+    // Bypass the VaultRecord type (which is Phase-1-only, `v: 1`) to write a
+    // record shaped the way a future Phase 2 build would — mirrors what
+    // `set()` inside saveVaultRecord() does today, just with `v: 2`.
+    await set(PREFIX + sa.toLowerCase(), v2Shaped);
+
+    expect(await hasAnyVault()).toBe(true);
+    const loaded = await loadVaultRecord(sa);
+    expect(loaded).not.toBeNull();
+    // v1 fields this build understands are intact and usable.
+    expect(loaded!.smart_account).toBe(sa);
+    expect(loaded!.wrapped_vault_key).toEqual(v1Fields.wrapped_vault_key);
+    expect(loaded!.wrapped_auth_key).toEqual(v1Fields.wrapped_auth_key);
+    expect(loaded!.wrapped_master_key).toEqual(v1Fields.wrapped_master_key);
+    // The extra v2 fields survive the round-trip rather than being stripped —
+    // proof this build doesn't rewrite/discard what it doesn't understand.
+    expect((loaded as unknown as Record<string, unknown>).wrapped_lsh_seed).toEqual(
+      v2Shaped.wrapped_lsh_seed,
+    );
+    expect((loaded as unknown as Record<string, unknown>).wrapped_dedup_key).toEqual(
+      v2Shaped.wrapped_dedup_key,
+    );
+    // Not purged, not treated as expired/absent.
+    expect(await vaultKeysInIdb()).toContain(PREFIX + sa.toLowerCase());
   });
 });
 

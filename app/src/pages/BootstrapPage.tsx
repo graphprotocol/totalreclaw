@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { useCrypto } from "../contexts/CryptoContext";
+import { useCrypto, type EscrowChoice } from "../contexts/CryptoContext";
 import { isMnemonicValid } from "../lib/crypto";
 import { isPasskeyPrfAvailable } from "../lib/auth/prf-support";
 import { PrfUnsupportedError } from "../lib/auth/passkey";
+import { download } from "../lib/download";
+import { escrowFilename } from "../lib/auth/escrow";
+import { recordFileBackup } from "../lib/vault/fileBackupRecord";
 
 type Step =
   | "checking"
@@ -11,8 +14,11 @@ type Step =
   | "choose"
   | "show-phrase"
   | "confirm-backup"
+  | "escrow-consent"
+  | "file-caveat"
   | "import"
-  | "working";
+  | "working"
+  | "escrow-notice";
 
 /** Pick `n` distinct 0-based positions from `len` words (backup challenge). */
 function pickPositions(len: number, n: number): number[] {
@@ -48,13 +54,23 @@ export function BootstrapPage() {
 
   const words = phrase ? phrase.trim().split(/\s+/) : [];
 
+  const goVault = useCallback(() => navigate("/memory", { replace: true }), [navigate]);
+
   const doBootstrap = useCallback(
-    async (mnemonic: string) => {
+    async (mnemonic: string, escrow: EscrowChoice) => {
       setStep("working");
       setError(null);
       try {
-        await bootstrap({ mnemonic });
-        navigate("/memory", { replace: true });
+        const result = await bootstrap({ mnemonic, escrow });
+        if (result.escrowFile) {
+          download(escrowFilename(), JSON.stringify(result.escrowFile, null, 2), "application/json");
+          recordFileBackup(result.smartAccount);
+        }
+        if (result.escrowSaveFailed) {
+          setStep("escrow-notice");
+          return;
+        }
+        goVault();
       } catch (e) {
         if (e instanceof PrfUnsupportedError) {
           setStep("unsupported");
@@ -64,7 +80,7 @@ export function BootstrapPage() {
         setStep("choose");
       }
     },
-    [bootstrap, navigate],
+    [bootstrap, goVault],
   );
 
   const startCreate = useCallback(() => {
@@ -119,6 +135,26 @@ export function BootstrapPage() {
         <p className="text-center text-ink-muted">
           Setting up your vault… confirm with your device when prompted.
         </p>
+      </Shell>
+    );
+  }
+
+  if (step === "escrow-notice") {
+    return (
+      <Shell>
+        <h1 className="font-display text-2xl font-semibold text-ink">Your vault is ready</h1>
+        <p className="mt-3 rounded-control bg-clay-tint px-3 py-2 text-sm text-clay-deep">
+          We couldn’t save your backup. You can turn it on later in Settings.
+        </p>
+        <p className="mt-3 text-ink-muted">
+          Your written recovery phrase still works — nothing about your vault is affected.
+        </p>
+        <button
+          onClick={goVault}
+          className="mt-6 w-full rounded-control bg-clay px-5 py-3 font-semibold text-warm-white transition duration-200 ease-keeper hover:bg-clay-deep"
+        >
+          Continue to your vault
+        </button>
       </Shell>
     );
   }
@@ -201,10 +237,10 @@ export function BootstrapPage() {
         </div>
         <button
           disabled={!backupOk}
-          onClick={() => doBootstrap(phrase)}
+          onClick={() => setStep("escrow-consent")}
           className="mt-6 w-full rounded-control bg-clay px-5 py-3 font-semibold text-warm-white transition duration-200 ease-keeper hover:bg-clay-deep disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Create my vault
+          Continue
         </button>
         <button
           onClick={() => setStep("show-phrase")}
@@ -212,6 +248,72 @@ export function BootstrapPage() {
         >
           Show the phrase again
         </button>
+      </Shell>
+    );
+  }
+
+  if (step === "escrow-consent") {
+    return (
+      <Shell>
+        <h1 className="font-display text-2xl font-semibold text-ink">Back up your recovery phrase?</h1>
+        <p className="mt-3 text-ink-muted">
+          We can store an encrypted copy of your phrase, locked to this passkey. If you lose this
+          device, your passkey unlocks it again on a new one.
+        </p>
+        <p className="mt-3 text-ink-muted">
+          We can’t read it — only your passkey can unlock it. But it does mean someone who takes over
+          both our servers and your Apple or Google account could reach your memories. Without a
+          backup, losing this device and your written phrase means losing your vault permanently.
+        </p>
+        <div className="mt-6 space-y-3">
+          <button
+            onClick={() => doBootstrap(phrase, "relay")}
+            className="w-full rounded-control bg-clay px-5 py-3 font-semibold text-warm-white transition duration-200 ease-keeper hover:bg-clay-deep"
+          >
+            Back up my phrase
+          </button>
+          <button
+            onClick={() => setStep("file-caveat")}
+            className="w-full rounded-control bg-surface px-5 py-3 font-semibold text-ink ring-1 ring-hairline transition duration-200 ease-keeper hover:ring-clay"
+          >
+            Download an encrypted file instead
+          </button>
+          <button
+            onClick={() => doBootstrap(phrase, "none")}
+            className="w-full rounded-control px-5 py-2 text-sm font-semibold text-ink-muted hover:text-ink"
+          >
+            Not now
+          </button>
+        </div>
+        <p className="mt-4 text-center text-xs text-ink-muted">You can change this any time in Settings.</p>
+      </Shell>
+    );
+  }
+
+  if (step === "file-caveat") {
+    return (
+      <Shell>
+        <h1 className="font-display text-2xl font-semibold text-ink">Where you put this matters.</h1>
+        <p className="mt-3 text-ink-muted">
+          If you save it to the same account that stores your passkey — iCloud with iCloud Keychain,
+          or Google Drive with Google Password Manager — then anyone who gets into that account has
+          both halves, and the file protects you less than it appears to. Somewhere separate is safer:
+          a different provider, or a USB drive.
+        </p>
+        <div className="mt-6 space-y-3">
+          <button
+            onClick={() => doBootstrap(phrase, "file")}
+            className="w-full rounded-control bg-clay px-5 py-3 font-semibold text-warm-white transition duration-200 ease-keeper hover:bg-clay-deep"
+          >
+            Download backup
+          </button>
+          <button
+            onClick={() => setStep("escrow-consent")}
+            className="w-full rounded-control px-5 py-2 text-sm font-semibold text-ink-muted hover:text-ink"
+          >
+            Back
+          </button>
+        </div>
       </Shell>
     );
   }
@@ -238,7 +340,10 @@ export function BootstrapPage() {
       />
       <button
         disabled={!importValid}
-        onClick={() => doBootstrap(importValue.trim().toLowerCase())}
+        onClick={() => {
+          setPhrase(importValue.trim().toLowerCase());
+          setStep("escrow-consent");
+        }}
         className="mt-4 w-full rounded-control bg-clay px-5 py-3 font-semibold text-warm-white transition duration-200 ease-keeper hover:bg-clay-deep disabled:cursor-not-allowed disabled:opacity-40"
       >
         Restore vault

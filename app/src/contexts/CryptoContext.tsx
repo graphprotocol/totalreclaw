@@ -30,6 +30,8 @@ import { isPasskeyPrfAvailable } from "../lib/auth/prf-support";
 import { enrolPasskey, getPrfSecret, PrfUnsupportedError } from "../lib/auth/passkey";
 import { wrapKey, unwrapKey, deriveMasterWrapSecret } from "../lib/auth/wrap";
 import { runWithMasterKey } from "../lib/auth/master";
+import { sealEscrow, sealedEscrowToFile, type EscrowFile } from "../lib/auth/escrow";
+import { restoreFromEscrowCore, restoreFromFileCore } from "../lib/vault/recovery";
 import {
   saveVaultRecord,
   loadVaultRecord,
@@ -38,7 +40,8 @@ import {
   refreshVaultRecordTtl,
 } from "../lib/vault/idb";
 import { saveSessionKeys, loadSessionKeys, clearSessionKeys } from "../lib/vault/session-storage";
-import { registerSession } from "../lib/api";
+import { registerSession, putEscrow } from "../lib/api";
+import { b64urlEncode, b64urlDecode } from "../lib/base64url";
 
 const SERVER_URL =
   import.meta.env.VITE_SERVER_URL?.replace(/\/$/, "") ?? "https://api.totalreclaw.xyz";
@@ -46,6 +49,24 @@ const SERVER_URL =
 const DEFAULT_CHAIN_ID = 100;
 
 export type VaultStatus = "loading" | "no-vault" | "locked" | "unlocked";
+
+/** What to do with the phrase at bootstrap time (spa-passkey-unlock.md §5.3). */
+export type EscrowChoice = "relay" | "file" | "none";
+
+export interface BootstrapResult {
+  /** The vault this call created/restored — useful to callers reading it before a re-render lands. */
+  smartAccount: string;
+  /** Present when `escrow: "file"` was chosen — the caller triggers the download. */
+  escrowFile?: EscrowFile;
+  /** True when `escrow: "relay"` was chosen but `putEscrow` failed (non-fatal — spec §5.2). */
+  escrowSaveFailed?: boolean;
+}
+
+/**
+ * Idle auto-lock (§7): reset on user activity, fires `lock()` after this
+ * many ms of inactivity. Not user-configurable in this phase.
+ */
+export const IDLE_LOCK_MS = 30 * 60 * 1000; // 30 minutes
 
 interface CryptoContextValue {
   status: VaultStatus;
@@ -55,8 +76,18 @@ interface CryptoContextValue {
   keys: SessionKeys | null;
   /** Generate a fresh phrase for the bootstrap backup gate (page-held, transient). */
   generatePhrase: () => string;
-  /** Create a vault from a generated/imported phrase: derive → enrol passkey → wrap → persist → unlock. */
-  bootstrap: (opts: { mnemonic: string; chainId?: number; userName?: string }) => Promise<void>;
+  /**
+   * Create a vault from a generated/imported phrase: derive → enrol passkey
+   * → wrap → persist → unlock. `escrow` is the bootstrap consent choice
+   * (§5.3); reuses the SAME prfSecret already in hand from enrolment — no
+   * second biometric prompt (§5.2).
+   */
+  bootstrap: (opts: {
+    mnemonic: string;
+    chainId?: number;
+    userName?: string;
+    escrow?: EscrowChoice;
+  }) => Promise<BootstrapResult>;
   /** Passkey-first unlock: prf assert → unwrap vault + auth. */
   unlock: () => Promise<void>;
   /** Recovery fallback: re-enter phrase → re-derive (→ optionally re-enrol a passkey here). */
@@ -64,6 +95,30 @@ interface CryptoContextValue {
     mnemonic: string,
     opts?: { reEnrol?: boolean; chainId?: number; userName?: string },
   ) => Promise<void>;
+  /**
+   * Recover a vault on a device with no local VaultRecord, using only a
+   * (typically synced) passkey. "no-escrow" is an expected outcome — this
+   * passkey has no backup (spa-passkey-unlock.md §6.1).
+   */
+  restoreFromEscrow: () => Promise<"unlocked" | "no-escrow">;
+  /**
+   * Recover from a downloaded encrypted backup file (D-1 amendment). See
+   * spa-passkey-unlock.md §6.4 for why "wrong-passkey" is a distinct AEAD
+   * signal from the relay path's 404.
+   */
+  restoreFromFile: (file: File) => Promise<"unlocked" | "bad-file" | "unsupported-version" | "wrong-passkey">;
+  /**
+   * Settings-triggered escrow enrolment for a user who declined at
+   * bootstrap (§5.3 "You can change this any time in Settings") — or who
+   * wants to back up a SECOND device's passkey. The mnemonic is not held
+   * anywhere after bootstrap, so the caller must have the user re-enter it;
+   * this performs exactly one fresh passkey assertion against THIS
+   * device's EXISTING credential (no re-enrolment) to seal it. Throws if
+   * the entered phrase doesn't derive this vault's Smart Account.
+   */
+  enableEscrowBackup: (mnemonic: string, opts?: { label?: string }) => Promise<void>;
+  /** Same re-entry + single-assertion flow as `enableEscrowBackup`, but returns the file to download instead of calling the relay (§5.4, §8). */
+  sealPhraseToFile: (mnemonic: string) => Promise<EscrowFile>;
   /** A.2: transiently unwrap the master key to sign a UserOp. Throws until A.2. */
   withMasterKey: <T>(fn: (masterPriv: Uint8Array) => Promise<T>) => Promise<T>;
   /** Zero in-RAM keys; return to the locked screen. */
@@ -73,20 +128,6 @@ interface CryptoContextValue {
 }
 
 const CryptoContext = createContext<CryptoContextValue | null>(null);
-
-function b64urlEncode(bytes: Uint8Array): string {
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function b64urlDecode(s: string): Uint8Array {
-  const b64 = s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4);
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
@@ -152,13 +193,14 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
   const generatePhrase = useCallback(() => generateRecoveryPhrase(), []);
 
   const bootstrap = useCallback<CryptoContextValue["bootstrap"]>(
-    async ({ mnemonic, chainId: cid = DEFAULT_CHAIN_ID, userName = "TotalReclaw vault" }) => {
+    async ({ mnemonic, chainId: cid = DEFAULT_CHAIN_ID, userName = "TotalReclaw vault", escrow = "none" }) => {
       if (!(await isPasskeyPrfAvailable())) throw new PrfUnsupportedError();
 
       const sk = await deriveSessionKeys(mnemonic, SERVER_URL, cid);
       const masterPriv = await deriveEoaPrivateKey(mnemonic); // validated 32 bytes
       let prfSecret: Uint8Array | null = null;
       let masterWrapSecret: Uint8Array | null = null;
+      const result: BootstrapResult = { smartAccount: sk.walletAddress };
       try {
         // Register BEFORE any local persistence so a relay failure leaves no
         // half-built vault (idempotent on retry).
@@ -180,8 +222,27 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
           created_at: nowSeconds(),
         });
         credIdRef.current = credentialId;
+
+        // Escrow consent (§5.2): reuses the SAME prfSecret already in hand
+        // from enrolment above — deliberately no second biometric prompt.
+        // Escrow failure is non-fatal: the vault is already fully
+        // bootstrapped and usable either way.
+        if (escrow === "relay" || escrow === "file") {
+          const sealed = sealEscrow(mnemonic, prfSecret);
+          if (escrow === "relay") {
+            try {
+              await putEscrow(sk, sealed, "Passkey backup");
+            } catch {
+              result.escrowSaveFailed = true;
+            }
+          } else {
+            result.escrowFile = sealedEscrowToFile(sealed);
+          }
+        }
+
         // `sk` carries no mnemonic (see SessionKeys) — safe to hold unlocked.
         enterUnlocked(sk, sk.walletAddress, cid);
+        return result;
       } finally {
         // Best-effort zero of every transient secret, even on error.
         masterPriv.fill(0);
@@ -260,6 +321,72 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
     [enterUnlocked],
   );
 
+  const restoreFromEscrow = useCallback<CryptoContextValue["restoreFromEscrow"]>(async () => {
+    const result = await restoreFromEscrowCore(SERVER_URL, DEFAULT_CHAIN_ID);
+    if (result.status === "no-escrow") return "no-escrow";
+    credIdRef.current = result.credentialId;
+    enterUnlocked(result.sk, result.smartAccount, result.chainId);
+    return "unlocked";
+  }, [enterUnlocked]);
+
+  const restoreFromFile = useCallback<CryptoContextValue["restoreFromFile"]>(
+    async (file: File) => {
+      const text = await file.text();
+      const result = await restoreFromFileCore(text, SERVER_URL, DEFAULT_CHAIN_ID);
+      if (result.status !== "unlocked") return result.status;
+      credIdRef.current = result.credentialId;
+      enterUnlocked(result.sk, result.smartAccount, result.chainId);
+      return "unlocked";
+    },
+    [enterUnlocked],
+  );
+
+  /**
+   * Shared by `enableEscrowBackup` / `sealPhraseToFile`: re-derive from a
+   * freshly re-entered phrase, confirm it's THIS vault's phrase (not a typo
+   * / a different vault's phrase — sealing the wrong one under this
+   * passkey would be a silent, hard-to-detect mistake), assert this
+   * device's EXISTING passkey (no re-enrolment), and seal. Zeroes the PRF
+   * secret before returning either way.
+   */
+  const sealTypedPhrase = useCallback(
+    async (mnemonic: string) => {
+      if (!smartAccount) throw new Error("No unlocked vault.");
+      const sk = await deriveSessionKeys(mnemonic, SERVER_URL, chainId ?? DEFAULT_CHAIN_ID);
+      if (sk.walletAddress.toLowerCase() !== smartAccount.toLowerCase()) {
+        throw new Error("That recovery phrase doesn’t match this vault.");
+      }
+      const rec = await loadVaultRecord(smartAccount);
+      if (!rec) throw new Error("No vault on this device.");
+      const credId = credIdRef.current ?? b64urlDecode(rec.credential_id);
+      const { prfSecret } = await getPrfSecret({ credentialId: credId });
+      try {
+        credIdRef.current = credId;
+        return sealEscrow(mnemonic, prfSecret);
+      } finally {
+        prfSecret.fill(0);
+      }
+    },
+    [smartAccount, chainId],
+  );
+
+  const enableEscrowBackup = useCallback<CryptoContextValue["enableEscrowBackup"]>(
+    async (mnemonic, opts) => {
+      if (!keys) throw new Error("Not authenticated");
+      const sealed = await sealTypedPhrase(mnemonic);
+      await putEscrow(keys, sealed, opts?.label ?? "Passkey backup");
+    },
+    [keys, sealTypedPhrase],
+  );
+
+  const sealPhraseToFile = useCallback<CryptoContextValue["sealPhraseToFile"]>(
+    async (mnemonic) => {
+      const sealed = await sealTypedPhrase(mnemonic);
+      return sealedEscrowToFile(sealed);
+    },
+    [sealTypedPhrase],
+  );
+
   const withMasterKey = useCallback<CryptoContextValue["withMasterKey"]>(async (fn) => {
     // A.2: transiently unwrap the master wallet key to sign one UserOp, then
     // zero. Reuses the exact primitives unlock() uses — a fresh PRF assertion
@@ -310,6 +437,34 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
     setStatus("no-vault");
   }, [smartAccount, lock]);
 
+  // Idle auto-lock (§7): a 30-minute inactivity timer, reset on
+  // pointerdown/keydown/visibilitychange-to-visible, firing the existing
+  // lock() — which already zeroes keys, clears sessionStorage, and calls
+  // queryClient.clear() (drops decrypted plaintext from the query cache).
+  // Only armed while unlocked; torn down otherwise so a locked/no-vault tab
+  // never runs a timer with nothing to lock.
+  useEffect(() => {
+    if (status !== "unlocked") return;
+    let timer: ReturnType<typeof setTimeout>;
+    const reset = () => {
+      clearTimeout(timer);
+      timer = setTimeout(lock, IDLE_LOCK_MS);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") reset();
+    };
+    reset();
+    window.addEventListener("pointerdown", reset);
+    window.addEventListener("keydown", reset);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("pointerdown", reset);
+      window.removeEventListener("keydown", reset);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [status, lock]);
+
   return (
     <CryptoContext.Provider
       value={{
@@ -321,6 +476,10 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
         bootstrap,
         unlock,
         unlockWithPhrase,
+        restoreFromEscrow,
+        restoreFromFile,
+        enableEscrowBackup,
+        sealPhraseToFile,
         withMasterKey,
         lock,
         forgetDevice,

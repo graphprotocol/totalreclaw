@@ -11,9 +11,10 @@ import {
   MEMORY_SCOPES,
   SubgraphFact,
 } from "./types";
-import { decryptBlob, encryptBlob } from "./crypto";
+import { decryptBlob, encryptBlob, bytesToHex } from "./crypto";
 import type { PinStatus } from "./types";
 import { SessionKeys } from "./types";
+import type { SealedEscrow } from "./auth/escrow";
 // Type-only: erased at compile time, so it does NOT pull the userop/wasm write
 // chunk into the read bundle. The runtime import is dynamic (see deleteFact).
 import type { SignUserOpHash } from "./userop";
@@ -92,6 +93,126 @@ export async function registerSession(keys: SessionKeys): Promise<void> {
 export async function getAccount(keys: SessionKeys): Promise<BillingStatus> {
   const path = `/v1/billing/status?wallet_address=${keys.walletAddress}`;
   return apiFetch<BillingStatus>(path, keys);
+}
+
+// ---------------------------------------------------------------------------
+// Phrase escrow (Option E Phase 1, #582).
+// Spec: docs/specs/web/phrase-escrow-relay.md (relay contract) +
+// docs/specs/web/spa-passkey-unlock.md §4 (this API surface).
+//
+// PHRASE-SAFETY: `fetchEscrow`'s `handle` is a live, unrotatable capability —
+// the SAME rule as an auth key or a mnemonic. It travels in the JSON BODY
+// ONLY, never a URL or query string (URLs land in browser history, Referer
+// headers, and access logs). Do not "simplify" this into a path param.
+// ---------------------------------------------------------------------------
+
+export interface EscrowRecordMeta {
+  escrowId: string;
+  label: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastFetchedAt: string | null;
+}
+
+interface EscrowErrorBody {
+  success: false;
+  error_code?: string;
+}
+
+/** Create or replace this passkey's escrow record. Bearer-authenticated. */
+export async function putEscrow(
+  keys: SessionKeys,
+  sealed: SealedEscrow,
+  label?: string,
+): Promise<{ escrowId: string; created: boolean }> {
+  const response = await fetch(`${SERVER_URL}/v1/escrow`, {
+    method: "POST",
+    headers: authHeaders(keys),
+    body: JSON.stringify({
+      lookup_hash: sealed.lookupHashHex,
+      ciphertext: sealed.ciphertextHex,
+      nonce: sealed.nonceHex,
+      aad_version: sealed.aadVersion,
+      label: label ?? null,
+    }),
+  });
+  const body = (await response.json().catch(() => ({}))) as {
+    success?: boolean;
+    escrow_id?: string;
+    created?: boolean;
+    error_code?: string;
+  };
+  if (!response.ok || !body.success || !body.escrow_id) {
+    throw new Error(
+      `putEscrow → ${response.status}${body.error_code ? ` (${body.error_code})` : ""}`,
+    );
+  }
+  return { escrowId: body.escrow_id, created: !!body.created };
+}
+
+/**
+ * Capability read — NO auth headers; presenting `handle` IS the
+ * authorization. Sends `{ lookup_id: hex(handle) }` in the body — never in
+ * the URL. Returns `null` on a 404 (a miss is an expected, user-visible
+ * outcome, not an exception — see spa-passkey-unlock.md §6.2).
+ */
+export async function fetchEscrow(
+  handle: Uint8Array,
+): Promise<{ ciphertextHex: string; nonceHex: string; aadVersion: number } | null> {
+  // NOTE: `handle` must never be interpolated into a URL, a query string, or
+  // logged — it is a live capability (relay spec §3.3). Body-only, always.
+  const response = await fetch(`${SERVER_URL}/v1/escrow/fetch`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "X-TotalReclaw-Client": "ts-spa-vault",
+    },
+    body: JSON.stringify({ lookup_id: bytesToHex(handle) }),
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    const errBody = (await response.json().catch(() => ({}))) as EscrowErrorBody;
+    throw new Error(`fetchEscrow → ${response.status}${errBody.error_code ? ` (${errBody.error_code})` : ""}`);
+  }
+  const body = (await response.json()) as {
+    success: boolean;
+    ciphertext: string;
+    nonce: string;
+    aad_version: number;
+  };
+  return { ciphertextHex: body.ciphertext, nonceHex: body.nonce, aadVersion: body.aad_version };
+}
+
+/** List this vault's escrow records (metadata only — no ciphertext/nonce). Bearer-authenticated. */
+export async function listEscrow(keys: SessionKeys): Promise<EscrowRecordMeta[]> {
+  const body = await apiFetch<{
+    success: boolean;
+    records: Array<{
+      escrow_id: string;
+      label: string | null;
+      created_at: string;
+      updated_at: string;
+      last_fetched_at: string | null;
+    }>;
+  }>("/v1/escrow", keys);
+  return body.records.map((r) => ({
+    escrowId: r.escrow_id,
+    label: r.label,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    lastFetchedAt: r.last_fetched_at,
+  }));
+}
+
+/** Revoke one escrow record by id. Bearer-authenticated; idempotent (returns false if already gone). */
+export async function deleteEscrow(keys: SessionKeys, escrowId: string): Promise<boolean> {
+  const body = await apiFetch<{ success: boolean; deleted: boolean }>(
+    `/v1/escrow/${encodeURIComponent(escrowId)}`,
+    keys,
+    { method: "DELETE" },
+  );
+  return body.deleted;
 }
 
 interface SubgraphResponse<T> {

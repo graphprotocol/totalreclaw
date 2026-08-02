@@ -76,7 +76,14 @@ try {
     await input?.fill(words[n - 1]);
   }
 
-  await page.getByRole("button", { name: "Create my vault" }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
+
+  // Escrow consent (Option E Phase 1, #582): decline here so this run
+  // doesn't depend on the relay's /v1/escrow endpoints being live yet —
+  // that path is covered by escrow-roundtrip.mjs once the relay PR merges.
+  await page.getByText("Back up your recovery phrase?").waitFor({ timeout: 10000 });
+  check("escrow consent step shown", true);
+  await page.getByRole("button", { name: "Not now" }).click();
 
   // Bootstrap derives keys, hits staging (/v1/smart-account, /v1/register),
   // enrols the passkey, wraps, persists — then lands on /memory.
@@ -139,7 +146,18 @@ try {
     session: sessionStorage.length,
   }));
   check("zero phrase at rest (localStorage empty)", storage.local === 0);
-  check("zero phrase at rest (sessionStorage empty)", storage.session === 0);
+  // Stage A (#440) deliberately persists the DERIVED SessionKeys (never the
+  // mnemonic) to sessionStorage so a same-tab reload can skip the passkey
+  // prompt — see lib/vault/session-storage.ts. So sessionStorage is NOT
+  // expected to be empty; the real invariant is no phrase WORD in it.
+  const sessionPhraseLeak = await page.evaluate(
+    (words) => {
+      const dump = JSON.stringify(sessionStorage).toLowerCase();
+      return words.some((w) => w && dump.includes(w.toLowerCase()));
+    },
+    words,
+  );
+  check("no phrase word appears in sessionStorage", sessionPhraseLeak === false);
 
   // M1: no phrase word may appear in any persisted IndexedDB value (the wrapped
   // blobs are ciphertext bytes). `words` stays in-script; never logged.
@@ -166,10 +184,16 @@ try {
 
   await page.screenshot({ path: "e2e/shot-memory.png" });
 
-  // --- 3. Lock + unlock with passkey ---
+  // --- 3. Same-tab reload resumes from sessionStorage (Stage A, #440) — no passkey prompt ---
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForURL("**/memory", { timeout: 15000 });
+  check("same-tab reload resumes unlocked with no passkey prompt", page.url().endsWith("/memory"));
+
+  // --- 4. A genuinely locked device (sessionStorage cleared, e.g. tab close) redirects to /unlock ---
+  await page.evaluate(() => sessionStorage.clear());
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForURL("**/unlock", { timeout: 15000 });
-  check("reload (locked) redirects to /unlock", page.url().endsWith("/unlock"));
+  check("cleared session (locked) redirects to /unlock", page.url().endsWith("/unlock"));
   await page.screenshot({ path: "e2e/shot-unlock.png" });
 
   await page.getByRole("button", { name: "Unlock with passkey" }).click();

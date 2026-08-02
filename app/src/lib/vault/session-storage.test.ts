@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { saveSessionKeys, loadSessionKeys, clearSessionKeys } from "./session-storage";
+import { saveSessionKeys, loadSessionKeys, clearSessionKeys, SESSION_MAX_AGE_SECONDS } from "./session-storage";
 import type { SessionKeys } from "../types";
 
 // vitest.config.ts runs this suite under environment: "node" (no jsdom), so
@@ -60,9 +60,10 @@ describe("session-storage (Stage A, #440)", () => {
     saveSessionKeys(sk);
     const raw = sessionStorage.getItem("totalreclaw-spa:session:v1")!;
     const parsed = JSON.parse(raw);
-    // Exactly the derived-key fields SessionKeys carries — no extra/mnemonic field.
+    // Exactly the derived-key fields SessionKeys carries, plus `unlocked_at`
+    // (§7 absolute max-age) — no mnemonic field, ever.
     expect(Object.keys(parsed).sort()).toEqual(
-      ["authKey", "authKeyHex", "chainId", "eoaAddress", "encryptionKey", "v", "walletAddress"].sort(),
+      ["authKey", "authKeyHex", "chainId", "eoaAddress", "encryptionKey", "unlocked_at", "v", "walletAddress"].sort(),
     );
   });
 
@@ -117,5 +118,43 @@ describe("session-storage (Stage A, #440)", () => {
       },
     };
     expect(loadSessionKeys()).toBeNull();
+  });
+});
+
+describe("absolute session max-age (§7)", () => {
+  function nowSeconds(): number {
+    return Math.floor(Date.now() / 1000);
+  }
+
+  it("saveSessionKeys stamps unlocked_at to ~now", () => {
+    saveSessionKeys(keys());
+    const rec = JSON.parse(sessionStorage.getItem("totalreclaw-spa:session:v1")!);
+    expect(rec.unlocked_at).toBeGreaterThanOrEqual(nowSeconds() - 2);
+    expect(rec.unlocked_at).toBeLessThanOrEqual(nowSeconds());
+  });
+
+  it("a session exactly at the max-age boundary is still live", () => {
+    saveSessionKeys(keys());
+    const rec = JSON.parse(sessionStorage.getItem("totalreclaw-spa:session:v1")!);
+    rec.unlocked_at = nowSeconds() - SESSION_MAX_AGE_SECONDS;
+    sessionStorage.setItem("totalreclaw-spa:session:v1", JSON.stringify(rec));
+    expect(loadSessionKeys()).not.toBeNull();
+  });
+
+  it("a session older than the max-age is discarded on load — reads as absent, not an error", () => {
+    saveSessionKeys(keys());
+    const rec = JSON.parse(sessionStorage.getItem("totalreclaw-spa:session:v1")!);
+    rec.unlocked_at = nowSeconds() - SESSION_MAX_AGE_SECONDS - 1;
+    sessionStorage.setItem("totalreclaw-spa:session:v1", JSON.stringify(rec));
+    expect(loadSessionKeys()).toBeNull();
+  });
+
+  it("a refresh (repeated loadSessionKeys calls) does NOT slide unlocked_at forward", () => {
+    saveSessionKeys(keys());
+    const before = JSON.parse(sessionStorage.getItem("totalreclaw-spa:session:v1")!).unlocked_at;
+    loadSessionKeys();
+    loadSessionKeys();
+    const after = JSON.parse(sessionStorage.getItem("totalreclaw-spa:session:v1")!).unlocked_at;
+    expect(after).toBe(before);
   });
 });
