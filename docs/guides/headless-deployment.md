@@ -55,10 +55,14 @@ honest about what each one does and does not protect against.
 At startup `AgentState._try_auto_configure` resolves the phrase in this order
 (first hit wins):
 
-1. **`TOTALRECLAW_RECOVERY_PHRASE` env var** — if set, used directly. This is
-   the one-shot CLI path and is **not recommended for production**: the phrase
-   lands in `/proc/<pid>/environ`, `docker inspect`, child-process inheritance,
-   and crash dumps. It exists for quick CLI testing, not servers.
+1. **`TOTALRECLAW_RECOVERY_PHRASE` env var** — if set, used directly, and still
+   takes precedence over everything below. This is the one-shot CLI path and is
+   **deprecated / not recommended for production**: the phrase lands in
+   `/proc/<pid>/environ`, `docker inspect`, child-process inheritance, and
+   crash dumps. It exists for quick CLI testing, not servers, and is not
+   automatically migrated to a `derived-bundle-v1` bundle (the host doesn't own
+   the env var and can't unset it for the next boot) — prefer the credential
+   provider below, or a bundle payload, for anything long-lived.
 2. **The credential provider**, selected by `TOTALRECLAW_CREDENTIALS_PROVIDER`:
    - **`external`** (this guide) — the secret manager supplies the payload via a
      file mount or inline JSON. Read-only by design; **never silently falls back
@@ -94,6 +98,45 @@ works is just the phrase:
   account identity** verbatim (copy them from an existing `credentials.json`).
   Omitting them is fine for the common case — the phrase alone deterministically
   derives the canonical EOA + Smart Account (CREATE2).
+
+**`derived-bundle-v1` variant (Option E Phase 2).** The credential provider also
+accepts a `version: 2` bundle in place of the phrase — the secret manager holds
+derived vault keys and a signing key instead of the recovery phrase itself.
+Useful when your secret manager provisions bundles directly (e.g. minted by the
+vault SPA or an operator tool) rather than a phrase:
+
+```json
+{
+  "version": 2,
+  "schema": "derived-bundle-v1",
+  "vault": {
+    "encryption_key": "<64 hex>",
+    "dedup_key": "<64 hex>",
+    "auth_key": "<64 hex>",
+    "lsh_seed": "<64 hex>"
+  },
+  "signing": {
+    "kind": "owner-eoa",
+    "private_key": "<64 hex>",
+    "address": "0x<40 hex>"
+  },
+  "account": {
+    "smart_account": "0x<40 hex>",
+    "chain_id": 100
+  },
+  "provisioned_at": "2026-08-02T09:41:00Z",
+  "provisioned_by": "external"
+}
+```
+
+This is the **complete, un-wrapped** object — the same shape a keychain-capable
+desktop install stores the secret half of, but here the whole thing (including
+`vault` and `signing`) is the external provider's payload, since `external` mode
+never touches the local OS keychain. See
+[`docs/specs/totalreclaw/client-consistency.md`](../specs/totalreclaw/client-consistency.md#credential-material)
+for the full schema and validation rules. A client configured from a bundle
+**never calls `POST /v1/register`** — the vault must already be registered by
+whatever provisioned the bundle.
 
 ---
 

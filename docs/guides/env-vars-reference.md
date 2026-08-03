@@ -113,6 +113,54 @@ export TOTALRECLAW_AGENT_NAME="John"
 **Precedence:** an explicit `agent_name=` argument to `client.remember()` (or a per-fact `agent_name` key in `remember_batch()`) wins; otherwise this env var; otherwise unset. Names are trimmed and truncated to 64 chars.
 **Security:** the name IS encrypted at rest (it lives in the E2EE blob). Still, treat it as content — don't put secrets in an agent name.
 
+### `TOTALRECLAW_CREDENTIALS_PROVIDER`
+
+**Optional.** Selects where the client reads its credential from: the local
+`credentials.json` file, or an operator-managed secret manager. Applies to both a
+recovery phrase and a `derived-bundle-v1` bundle — the provider abstraction is
+credential-shape-agnostic.
+
+```bash
+# Default (do not set)
+# TOTALRECLAW_CREDENTIALS_PROVIDER=file
+
+# Secret-manager injection (headless deployments)
+export TOTALRECLAW_CREDENTIALS_PROVIDER=external
+```
+
+**Default:** `file` — reads/writes `~/.totalreclaw/credentials.json` (or
+`TOTALRECLAW_CREDENTIALS_PATH`).
+**When to override:** `external` mode for Docker/Kubernetes/systemd deployments that
+inject credentials from a secret manager instead of writing them to disk — see
+[headless deployment](./headless-deployment.md) for the two transports
+(`TOTALRECLAW_EXTERNAL_CREDENTIALS_PATH` / `TOTALRECLAW_EXTERNAL_CREDENTIALS_JSON`) and
+the `derived-bundle-v1` payload shape.
+**Note:** an unrecognised value falls back to `file` mode (a deploy-time typo reads
+disk rather than silently going dark) — this is distinct from an unrecognised
+`credentials.json` `version`, which is a loud error, never a silent fallback.
+
+### `TOTALRECLAW_NO_AUTO_MIGRATE`
+
+**Optional.** Kill-switch for the automatic local phrase → `derived-bundle-v1`
+migration (Hermes / Python client). By default, on every plugin load, a host holding a
+plaintext or v1-keychain-wrapped recovery phrase is transparently migrated to a v2
+credential bundle — the phrase is replaced with derived vault keys and a signing key,
+and is no longer stored on that host (see [hermes-setup.md](hermes-setup.md) for what
+this means for recovery). Set this to opt out and stay on the legacy phrase-on-disk
+path indefinitely.
+
+```bash
+export TOTALRECLAW_NO_AUTO_MIGRATE=1
+```
+
+**Default:** unset — migration runs automatically. Truthy values (`1`, `true`, `yes`,
+`on`) disable it.
+**When to override:** you have tooling that depends on reading the phrase from
+`credentials.json` (e.g. a backup script), or you want to defer migration until you've
+confirmed your own written copy of the phrase.
+**Note:** migration is idempotent and safe to leave enabled — a `version: 2` file is a
+no-op on every subsequent boot.
+
 ### LLM provider keys
 
 **Required if the client needs an LLM** (auto-extraction, LLM-guided dedup, import processing).

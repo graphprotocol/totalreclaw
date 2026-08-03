@@ -289,15 +289,36 @@ class AgentState:
     def _try_auto_configure(self) -> None:
         """Try to configure from env vars or config file.
 
-        Accepts the credentials.json blob keyed as EITHER ``mnemonic``
-        (canonical as of plugin 3.2.0 + Python 2.2.2) OR
-        ``recovery_phrase`` (legacy Python) — Bug #7, QA 2026-04-20.
-        Preference order on read: ``mnemonic`` wins when both are
-        present so plugin-native files are authoritative.
+        Four-state credential precedence (Option E Phase 2 / #581,
+        derived-bundle-v1.md §6 + the client-consistency patch):
+
+          1. ``TOTALRECLAW_RECOVERY_PHRASE`` env (phrase) — retained,
+             deprecated, emits a one-line nudge.
+          2/3. Credential-provider payload (``file`` | ``external``) —
+             sniff ``version``: ``2`` -> derived-bundle-v1 (unwrapped from
+             the keychain first if ``keychain_wrapped``), otherwise legacy.
+          4. Legacy: plaintext ``{"mnemonic": ...}`` (accepts the legacy
+             ``recovery_phrase`` key too — Bug #7, QA 2026-04-20, preferring
+             ``mnemonic`` when both are present) or the
+             ``__keychain__:v1:<eoa>`` marker.
+
+        Unknown ``version`` (present and not ``2``) is a **loud error** —
+        never a silent downgrade to legacy handling. This is the one place
+        a well-meaning ``try/except`` around the whole precedence chain
+        would create a security bug (cred spec §3.2): a corrupted or
+        future-format credential file must never be silently
+        re-interpreted as a different, weaker format.
         """
-        # Check env var
+        # 1. TOTALRECLAW_RECOVERY_PHRASE env — retained, deprecated.
         mnemonic = os.environ.get("TOTALRECLAW_RECOVERY_PHRASE", "")
         if mnemonic:
+            logger.info(
+                "TotalReclaw: configuring from TOTALRECLAW_RECOVERY_PHRASE. "
+                "This env var is deprecated in favour of a derived-bundle-v1 "
+                "credential — the phrase remains readable by any process "
+                "that can read this host's environment for as long as it "
+                "is set. See docs/guides/headless-deployment.md."
+            )
             self.configure(mnemonic)
             return
 
@@ -307,13 +328,31 @@ class AgentState:
         # (TOTALRECLAW_EXTERNAL_CREDENTIALS_PATH) secret manager.
         # TOTALRECLAW_CREDENTIALS_PROVIDER=external switches transports;
         # default 'file' mode is byte-identical to the prior path.
-        # Accepts both canonical ``mnemonic`` and legacy ``recovery_phrase``
-        # spellings.
         from totalreclaw.credential_provider import get_credential_provider
 
         creds = get_credential_provider().load()
         if creds is None:
             return
+
+        # 2/3. version:2 -> derived-bundle-v1 (file or external transport;
+        # both carry the same dict shape once loaded).
+        version = creds.get("version")
+        if version == 2:
+            self._configure_from_v2_credentials(creds)
+            return
+        if version is not None:
+            raise ValueError(
+                f"credentials.json (or the credential-provider payload) has "
+                f"an unrecognised version={version!r}. Expected 2 (a "
+                f"derived-bundle-v1 bundle) or no version key at all "
+                f"(legacy plaintext/keychain-wrapped mnemonic). Refusing to "
+                f"guess — an unknown version is never silently treated as "
+                f"legacy."
+            )
+
+        # 4. Legacy: plaintext {"mnemonic": ...} / {"recovery_phrase": ...}
+        # or the __keychain__:v1:<eoa> marker.
+        #
         # cred-2 (internal#262): the mnemonic field may be a keychain
         # marker. Resolve it to the real phrase BEFORE ``configure`` so the
         # marker never reaches ``derive_keys_from_mnemonic`` (which would
@@ -331,6 +370,65 @@ class AgentState:
             return
         if mnemonic:
             self.configure(mnemonic)
+
+    def _configure_from_v2_credentials(self, creds: dict) -> None:
+        """Build a ``DerivedBundle`` from a ``version: 2`` credentials dict
+        and configure the client from it.
+
+        Unwraps the secret ``{vault, signing}`` subtree from the keychain
+        first when ``keychain_wrapped`` is set (desktop storage,
+        derived-bundle-v1.md §4.3); otherwise *creds* already carries the
+        full bundle (headless / external-provider storage).
+
+        A missing/locked keychain entry is handled the same way the legacy
+        v1 path handles it — log + leave the agent unconfigured — because
+        it is an operational condition (temporarily can't reach the
+        secret), not evidence of a corrupted credential file. A malformed
+        bundle (bad hex, address/private-key mismatch, unknown
+        ``signing.kind``, …), by contrast, propagates loudly: that IS
+        evidence of corruption or tampering and must never be papered over.
+        """
+        import json as _json
+
+        from totalreclaw import bundle as bundle_module
+        from totalreclaw import credentials_wrap
+
+        if creds.get("keychain_wrapped"):
+            account = creds.get("account")
+            smart_account = (
+                account.get("smart_account") if isinstance(account, dict) else None
+            )
+            if not smart_account:
+                raise ValueError(
+                    "credentials.json has version=2, keychain_wrapped=true, "
+                    "but is missing account.smart_account — cannot locate "
+                    "the keychain entry."
+                )
+            try:
+                secret_json = credentials_wrap.unwrap_bundle(smart_account)
+            except credentials_wrap.KeychainEntryMissing as err:
+                logger.warning("%s", str(err))
+                return
+            secret = _json.loads(secret_json)
+            # Build a CLEAN bundle dict containing only the canonical
+            # BundleWire fields — core's parse_bundle_v1 rejects any extra
+            # field (deny_unknown_fields, #587 review), so the discovery
+            # metadata's own bookkeeping keys (keychain_wrapped, the
+            # address-only `signing` half) must not ride along.
+            full = {
+                "version": creds.get("version"),
+                "schema": creds.get("schema"),
+                "vault": secret.get("vault"),
+                "signing": secret.get("signing"),
+                "account": creds.get("account"),
+                "provisioned_at": creds.get("provisioned_at"),
+                "provisioned_by": creds.get("provisioned_by"),
+            }
+        else:
+            full = creds
+
+        parsed_bundle = bundle_module.parse_bundle_v1(_json.dumps(full))
+        self.configure_from_bundle(parsed_bundle)
 
     def configure(self, mnemonic: str) -> None:
         """Configure the TotalReclaw client with a mnemonic.
@@ -415,6 +513,39 @@ class AgentState:
         # EOA is what we have at this point; the Smart Account address is
         # resolved lazily on the first remember/recall call.
         logger.info("TotalReclaw configured: eoa=%s", self._client.eoa_address)
+
+    def configure_from_bundle(self, bundle) -> None:
+        """Configure the client from a ``derived-bundle-v1`` credential
+        bundle (Option E Phase 2 / #581). No mnemonic anywhere — see
+        ``TotalReclaw.from_bundle``.
+
+        Unlike :meth:`configure`, this never writes ``credentials.json``
+        (or a keychain entry) itself: the credential file was already
+        written by whichever code path produced the bundle in the first
+        place — ``hermes/auto_migrate.py`` (P2-9), the pair-completion
+        sidecar (P2-10), or an operator's external-provider payload.
+        ``configure_from_bundle`` only builds the in-memory client.
+        """
+        from totalreclaw.client import TotalReclaw
+        from totalreclaw.relay import _default_relay_url
+
+        relay_url = self._server_url or _default_relay_url()
+        self._client = TotalReclaw.from_bundle(bundle, server_url=relay_url)
+
+        # Same stale-latch reset as configure() — see the comment there.
+        if hasattr(self, "_eager_account_registered"):
+            try:
+                delattr(self, "_eager_account_registered")
+            except AttributeError:
+                pass
+
+        # Unlike configure(), the Smart Account address IS already known
+        # here (bundle mode resolves it at construction — see
+        # TotalReclaw.from_bundle) — safe to log immediately.
+        logger.info(
+            "TotalReclaw configured from derived-bundle-v1: smart_account=%s",
+            self._client.wallet_address,
+        )
 
     def is_configured(self) -> bool:
         """Return True if the client is configured and ready."""

@@ -219,6 +219,14 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Unified extraction interval (3 turns) | Yes | -- | Yes | Yes | -- | Yes | Server-tunable via relay config (no npm publish needed) |
 | Max facts per extraction | Yes | -- | Yes | Yes | -- | Yes | Server-tunable via relay config (default 15) |
 | Chain auto-detect from billing | Yes | Yes | Yes | -- | -- | Yes | Client reads its chain from the relay billing response. Relay routes both tiers to Gnosis (100) — single-chain shipped (ops-1, #283 closed 2026-06-05). |
+| **Credential Material** | | | | | | |
+| Recovery-phrase configuration | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes | The legacy root path; retained indefinitely |
+| `derived-bundle-v1` configuration | -- | -- | -- | Yes | -- | -- | Host holds derived keys + signing key, never the phrase. Parked clients unimplemented — see Known Gaps |
+| Local phrase→bundle migration | -- | -- | -- | Yes | -- | -- | Automatic, idempotent, no re-pair; Hermes only |
+| Pair-time bundle provisioning | -- | -- | -- | -- | -- | -- | `payload_type: derived-bundle-v1` over the existing relay-blind ECDH pipe — not yet wired (pair-completion + relay changes pending, tracked #581) |
+| Keychain-wrapped bundle (`__keychain__:v2:`) | -- | -- | -- | Yes | -- | -- | Desktop; coexists with the v1 mnemonic marker |
+| External-provider bundle injection | -- | -- | -- | Yes | -- | -- | `TOTALRECLAW_EXTERNAL_CREDENTIALS_PATH` / `_JSON`; headless |
+| Revocable scoped signing key | -- | -- | -- | -- | -- | -- | **Not shipped** — requires the signing-delegation phase; see Known Gaps |
 | **Batching** | | | | | | |
 | Client batching (multi-call UserOps) | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes | Hermes batches via `client.remember_batch()` (PyPI 2.0.0+). With both tiers on Gnosis (chain 100) post-ops-1, free batches via the same `executeBatch` path as pro — the old Base Sepolia gas-estimation blocker no longer applies. **Verified 2026-07-04 on staging**: fresh free-tier account, chain_id=100, 5 facts written via one `executeBatch` UserOp (tx `0xca441bc4...`), all 5 indexed + individually recallable in ~21s, then tombstoned. |
 | **Billing** | | | | | | |
@@ -260,6 +268,7 @@ Managed Service tier model (single-chain Gnosis — ops-1 shipped, #283 closed 2
 | Hot cache | -- | Yes | Self-hosted doesn't need it |
 | Single-chain Gnosis routing | -- | Yes | **Single-chain shipped** (ops-1, `totalreclaw-internal#283` closed 2026-06-05): both Free and Pro route to Gnosis (chain 100). The legacy Free → Base Sepolia (84532) routing is retired. |
 | Client batching | -- | Yes | Multi-call UserOps via batcher.ts (managed service only, uses ERC-4337 executeBatch). Universal mechanism; with both tiers on Gnosis post-ops-1 the old Gnosis-only gate is a no-op. |
+| `derived-bundle-v1` credentials | Yes | Yes | Client-side credential shape; independent of storage mode. Self-hosted deployments skip the on-chain `account` fields' significance but must still carry them for schema validity. |
 
 ### Known Gaps
 
@@ -308,6 +317,10 @@ Managed Service tier model (single-chain Gnosis — ops-1 shipped, #283 closed 2
 | v1 taxonomy adoption | RESOLVED (2026-04-18) | All 5 clients ship v1 (core 2.0.0, plugin 3.0.0, mcp-server 3.0.0, nanoclaw 3.0.0, python 2.0.0, totalreclaw-memory 2.0.0). No env-var gating. Legacy v0 writes are no longer possible. |
 | v1 VPS QA | PENDING | End-to-end validation on VPS per `totalreclaw-internal/docs/plans/2026-04-18-v1-vps-qa-plan.md`. 8 scenarios + cross-client interop + Bangkok recall test. Gates production promotion. |
 | Cross-client parity tests | PENDING | `tests/parity/` cross-language v1 round-trip tests pass in isolation; `totalreclaw-internal/e2e/cross-client/` multi-client parity bed still queued. |
+| Derived-material bundle not on parked clients | LOW | OpenClaw plugin, NanoClaw and ZeroClaw are parked (`deferred:post-hermes`) and still configure from a recovery phrase only. The `derived-bundle-v1` contract is frozen in `docs/specs/totalreclaw/client-consistency.md` so they inherit it without renegotiation when un-parked. |
+| Provisioned signing key is not revocable | MEDIUM | The bundle ships `signing.kind: "owner-eoa"` — the Smart Account owner key. It carries full account authority and cannot be revoked, because canonical `SimpleAccount` has no module dispatch and no owner setter. A compromised host still requires vault-identity rotation. The `session-key` variant (scoped to DataEdge `execute`/`executeBatch`, `valueMax = 0`, on-chain revocable) is specified in the schema but requires the signing-delegation phase. |
+| Phrase remains on env-var and external-provider installs | LOW | Auto-migration covers `credentials.json` states only. `TOTALRECLAW_RECOVERY_PHRASE` and operator-authored external-provider payloads are read-only from the daemon's perspective and must be replaced by the operator. See `docs/guides/headless-deployment.md`. |
+| Phrase not recoverable from a migrated host | LOW | After migration the host holds only derived material; the phrase cannot be reconstructed from it. Users must have their own copy. A one-cycle `credentials.json.bak` is the recovery path. |
 
 ---
 
@@ -392,6 +405,7 @@ Before telling the user a session can close, run the **`totalreclaw-session-wrap
 | Startup validation | MEDIUM | Validate Pimlico/Stripe/Subgraph reachability on relay boot |
 | DB backup monitoring | LOW | Add alerting (Slack/email) if daily R2 backup fails |
 | Graceful shutdown | LOW | Not yet configured in uvicorn |
+| Signing key not decoupled from the vault root | MEDIUM | `SessionKeyModule.sol` is merged and tested but **inert**: canonical `SimpleAccount` has no path that routes `validateUserOp` to a module, and it is not deployed. Making it reachable requires either a UUPS upgrade of existing account proxies (address-preserving) or migration to a modular account (**not** address-preserving — would orphan facts indexed by the current Smart Account address). The accepted spec signed off on kernel v3 while the shipped module assumes a `SimpleAccount`-shaped `owner()`; that needs reconciling before any contract work. |
 
 ---
 
@@ -404,6 +418,7 @@ Before telling the user a session can close, run the **`totalreclaw-session-wrap
 - **Embedding model**: onnx-community/harrier-oss-v1-270m-ONNX (640d, ~344MB, q4, pre-pooled)
 - **Extraction cap**: Max 15 facts per extraction cycle, unified 3-turn interval
 - **Memory types**: 6 v1 types -- claim, preference, directive, commitment, episode, summary (closed enum, per `docs/specs/totalreclaw/memory-taxonomy-v1.md`). v0 tokens (fact, context, decision, episodic, goal, rule) are read-only for pre-v1 vault entries and normalized to v1 on recall.
+- **Credential material**: hosts hold either a BIP-39 recovery phrase or a `derived-bundle-v1` bundle. The bundle never contains the mnemonic or the 64-byte BIP-39 seed — it carries the four HKDF-derived vault keys and a signing key. Derivation lives in `rust/totalreclaw-core/`; clients never derive.
 
 ---
 
@@ -550,3 +565,4 @@ Autonomous regression harness for the vault SPA. Driver lives in `tools/qa-vault
 - **Staging**: Gnosis mainnet (chain 100) — staging relay endpoint, Pimlico-sponsored gas
 - **Production**: Gnosis mainnet (chain 100) — production relay endpoint, Pimlico-sponsored gas
 - **All releases via CI**: GitHub Actions workflows for npm, PyPI, and crates.io. Never publish manually. **ClawHub was retired as a channel on 2026-07-30** (registry-side duplicate-slug defect, [openclaw/clawhub#3212](https://github.com/openclaw/clawhub/issues/3212)) — npm is the plugin's only channel.
+- **Credential model**: recovery phrase (legacy, retained) or `derived-bundle-v1` (Hermes only as of this writing — Option E Phase 2, #581). Bundles carry derived vault keys plus an unscoped owner signing key — they remove the portable root from agent hosts but do **not** improve memory confidentiality at a compromised host, and are not yet revocable. Not yet published to any registry.

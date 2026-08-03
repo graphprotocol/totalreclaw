@@ -26,12 +26,18 @@ import pytest
 from totalreclaw import credentials_wrap as cw
 from totalreclaw.credentials_wrap import (
     MARKER_PREFIX,
+    MARKER_PREFIX_V2,
     KeychainEntryMissing,
     KeychainUnavailable,
     account_for_mnemonic,
+    delete_secret,
     is_marker,
+    is_marker_v2,
     marker_for,
+    marker_for_v2,
     resolve_mnemonic,
+    unwrap_bundle,
+    wrap_bundle,
     wrap_credentials,
 )
 
@@ -58,9 +64,10 @@ VALID_MNEMONIC_2 = (
 def fake_keychain(monkeypatch):
     """In-memory keychain. Returns the backing dict for inspection.
 
-    Patches ``detect_backend`` → a non-None backend, ``store_secret`` and
-    ``load_secret`` → the in-memory impl, and deletes the kill-switch env
-    so the wrap/resolve code paths are live.
+    Patches ``detect_backend`` → a non-None backend, ``store_secret``,
+    ``load_secret``, and ``delete_secret`` → the in-memory impl, and
+    deletes the kill-switch env so the wrap/resolve/delete code paths are
+    live.
     """
     monkeypatch.delenv(cw.ENV_NO_KEYCHAIN, raising=False)
     store: dict[str, str] = {}
@@ -73,9 +80,13 @@ def fake_keychain(monkeypatch):
             raise KeychainEntryMissing(cw.MISSING_MESSAGE)
         return store[account]
 
+    def _delete(account: str) -> None:
+        store.pop(account, None)
+
     monkeypatch.setattr(cw, "detect_backend", lambda: "test-fake")
     monkeypatch.setattr(cw, "store_secret", _store)
     monkeypatch.setattr(cw, "load_secret", _load)
+    monkeypatch.setattr(cw, "delete_secret", _delete)
     return store
 
 
@@ -617,4 +628,219 @@ def test_pyproject_declares_keyring_as_base_dependency_on_darwin() -> None:
         "expected the darwin-marked keyring dependency to declare a "
         f"`>=24` floor (regex {floor_pattern.pattern!r}), got: {darwin_keyring_deps}"
     )
+
+
+# ---------------------------------------------------------------------------
+# v2 — bundle wrap (Option E Phase 2 / #581)
+# ---------------------------------------------------------------------------
+
+SAMPLE_SMART_ACCOUNT = "0x2c0CF74B2b76110708CA431796367779e3738250"
+SAMPLE_SECRET_SUBTREE = json.dumps(
+    {
+        "vault": {
+            "encryption_key": "aa" * 32,
+            "dedup_key": "bb" * 32,
+            "auth_key": "cc" * 32,
+            "lsh_seed": "dd" * 32,
+        },
+        "signing": {
+            "kind": "owner-eoa",
+            "private_key": "ee" * 32,
+            "address": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+        },
+    }
+)
+
+
+def test_marker_for_v2_round_trips_smart_account_through_prefix() -> None:
+    m = marker_for_v2(SAMPLE_SMART_ACCOUNT)
+    assert m.startswith(MARKER_PREFIX_V2)
+    assert m[len(MARKER_PREFIX_V2):] == SAMPLE_SMART_ACCOUNT
+
+
+def test_is_marker_v2_true_for_constructed_marker() -> None:
+    assert is_marker_v2(marker_for_v2(SAMPLE_SMART_ACCOUNT)) is True
+
+
+def test_is_marker_v2_false_for_v1_marker_and_plaintext() -> None:
+    v1_marker = marker_for(account_for_mnemonic(VALID_MNEMONIC))
+    assert is_marker_v2(v1_marker) is False
+    assert is_marker_v2(VALID_MNEMONIC) is False
+    assert is_marker_v2("") is False
+
+
+def test_is_marker_false_for_v2_marker() -> None:
+    """v1's is_marker must not accidentally match a v2 marker — the two
+    namespaces are disjoint prefixes (``__keychain__:v1:`` vs
+    ``__keychain__:v2:``), but ``str.startswith`` bugs are easy to
+    introduce, so assert it explicitly."""
+    assert is_marker(marker_for_v2(SAMPLE_SMART_ACCOUNT)) is False
+
+
+def test_wrap_bundle_then_unwrap_round_trips(fake_keychain) -> None:
+    ok = wrap_bundle(SAMPLE_SMART_ACCOUNT, SAMPLE_SECRET_SUBTREE)
+    assert ok is True
+    assert unwrap_bundle(SAMPLE_SMART_ACCOUNT) == SAMPLE_SECRET_SUBTREE
+
+
+def test_wrap_bundle_uses_smart_account_marker_as_keychain_account(fake_keychain) -> None:
+    wrap_bundle(SAMPLE_SMART_ACCOUNT, SAMPLE_SECRET_SUBTREE)
+    assert marker_for_v2(SAMPLE_SMART_ACCOUNT) in fake_keychain
+    assert fake_keychain[marker_for_v2(SAMPLE_SMART_ACCOUNT)] == SAMPLE_SECRET_SUBTREE
+
+
+def test_v1_and_v2_entries_coexist_without_collision(fake_keychain) -> None:
+    """A v1 mnemonic wrap (keyed on the EOA) and a v2 bundle wrap (keyed on
+    the Smart Account) for facts about the SAME underlying user must not
+    collide in the keychain store."""
+    eoa = account_for_mnemonic(VALID_MNEMONIC)
+    wrapped_v1 = wrap_credentials({"mnemonic": VALID_MNEMONIC}, account=eoa)
+    assert is_marker(wrapped_v1["mnemonic"])
+
+    ok = wrap_bundle(SAMPLE_SMART_ACCOUNT, SAMPLE_SECRET_SUBTREE)
+    assert ok is True
+
+    assert len(fake_keychain) == 2
+    assert resolve_mnemonic(wrapped_v1) == VALID_MNEMONIC
+    assert unwrap_bundle(SAMPLE_SMART_ACCOUNT) == SAMPLE_SECRET_SUBTREE
+
+
+def test_wrap_bundle_returns_false_when_no_backend(monkeypatch) -> None:
+    """Keychain-unavailable falls back to plaintext (caller's job) WITHOUT
+    raising — wrap_bundle just signals failure via its return value."""
+    monkeypatch.delenv(cw.ENV_NO_KEYCHAIN, raising=False)
+    monkeypatch.setattr(cw, "detect_backend", lambda: None)
+    ok = wrap_bundle(SAMPLE_SMART_ACCOUNT, SAMPLE_SECRET_SUBTREE)
+    assert ok is False
+
+
+def test_wrap_bundle_returns_false_when_kill_switch_armed(fake_keychain, monkeypatch) -> None:
+    monkeypatch.setenv(cw.ENV_NO_KEYCHAIN, "1")
+    ok = wrap_bundle(SAMPLE_SMART_ACCOUNT, SAMPLE_SECRET_SUBTREE)
+    assert ok is False
+    assert len(fake_keychain) == 0
+
+
+def test_wrap_bundle_returns_false_never_raises_on_backend_error(fake_keychain, monkeypatch) -> None:
+    def _boom(account, secret):
+        raise RuntimeError("simulated keychain failure")
+
+    monkeypatch.setattr(cw, "store_secret", _boom)
+    ok = wrap_bundle(SAMPLE_SMART_ACCOUNT, SAMPLE_SECRET_SUBTREE)
+    assert ok is False
+
+
+def test_unwrap_bundle_raises_keychain_entry_missing_when_absent(fake_keychain) -> None:
+    with pytest.raises(KeychainEntryMissing):
+        unwrap_bundle(SAMPLE_SMART_ACCOUNT)
+
+
+def test_unwrap_bundle_message_never_contains_payload(fake_keychain) -> None:
+    try:
+        unwrap_bundle(SAMPLE_SMART_ACCOUNT)
+        pytest.fail("expected KeychainEntryMissing")
+    except KeychainEntryMissing as err:
+        msg = str(err)
+        assert SAMPLE_SMART_ACCOUNT not in msg
+        assert "aa" * 32 not in msg
+
+
+def test_unwrap_bundle_raises_when_kill_switch_armed(monkeypatch, fake_keychain) -> None:
+    wrap_bundle(SAMPLE_SMART_ACCOUNT, SAMPLE_SECRET_SUBTREE)
+    monkeypatch.setenv(cw.ENV_NO_KEYCHAIN, "1")
+    with pytest.raises(KeychainEntryMissing):
+        unwrap_bundle(SAMPLE_SMART_ACCOUNT)
+
+
+def test_unwrap_bundle_raises_when_no_backend(monkeypatch) -> None:
+    monkeypatch.delenv(cw.ENV_NO_KEYCHAIN, raising=False)
+    monkeypatch.setattr(cw, "detect_backend", lambda: None)
+    with pytest.raises(KeychainEntryMissing):
+        unwrap_bundle(SAMPLE_SMART_ACCOUNT)
+
+
+# ---------------------------------------------------------------------------
+# delete_secret — added for hermes/auto_migrate.py (Option E Phase 2 / #581)
+# ---------------------------------------------------------------------------
+
+
+def test_delete_secret_removes_a_stored_entry(fake_keychain) -> None:
+    wrap_bundle(SAMPLE_SMART_ACCOUNT, SAMPLE_SECRET_SUBTREE)
+    assert marker_for_v2(SAMPLE_SMART_ACCOUNT) in fake_keychain
+
+    # Module-qualified — fake_keychain patches `cw.delete_secret` itself
+    # (a directly-substituted in-memory fake, mirroring store/load, rather
+    # than exercising the real function's backend dispatch against a
+    # "test-fake" backend id it doesn't recognise). The bare imported name
+    # would bypass the patch (frozen at import time), so tests that want
+    # the FAKE must call through the module.
+    cw.delete_secret(marker_for_v2(SAMPLE_SMART_ACCOUNT))
+
+    with pytest.raises(KeychainEntryMissing):
+        unwrap_bundle(SAMPLE_SMART_ACCOUNT)
+
+
+def test_delete_secret_never_raises_when_entry_absent(fake_keychain) -> None:
+    cw.delete_secret(marker_for_v2(SAMPLE_SMART_ACCOUNT))  # must not raise
+
+
+def test_delete_secret_never_raises_when_no_backend(monkeypatch) -> None:
+    # No fake_keychain here — exercises the REAL delete_secret directly
+    # (the bare imported name IS the real function; nothing patches it in
+    # this test's scope).
+    monkeypatch.delenv(cw.ENV_NO_KEYCHAIN, raising=False)
+    monkeypatch.setattr(cw, "detect_backend", lambda: None)
+    delete_secret(marker_for_v2(SAMPLE_SMART_ACCOUNT))  # must not raise
+
+
+def test_delete_secret_never_raises_on_backend_error(monkeypatch) -> None:
+    monkeypatch.delenv(cw.ENV_NO_KEYCHAIN, raising=False)
+    monkeypatch.setattr(cw, "detect_backend", lambda: "keyring")
+
+    class _BoomKeyring:
+        def delete_password(self, service, account):
+            raise RuntimeError("simulated delete failure")
+
+    monkeypatch.setattr(cw, "_try_keyring", lambda: _BoomKeyring())
+    delete_secret(marker_for_v2(SAMPLE_SMART_ACCOUNT))  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# v2 marker fed to a mnemonic consumer fails loudly — same fail-loud
+# guarantee v1's marker has (module docstring's "v2 — bundle wrap").
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sample_marker_v2() -> str:
+    return marker_for_v2(SAMPLE_SMART_ACCOUNT)
+
+
+def test_v2_marker_fails_bip39_wordlist_check(sample_marker_v2) -> None:
+    from mnemonic import Mnemonic
+
+    m = Mnemonic("english")
+    assert m.check(sample_marker_v2) is False
+
+
+def test_v2_marker_fails_eth_account_validation(sample_marker_v2) -> None:
+    from eth_account import Account
+
+    Account.enable_unaudited_hdwallet_features()
+    with pytest.raises(Exception):
+        Account.from_mnemonic(sample_marker_v2, account_path="m/44'/60'/0'/0/0")
+
+
+def test_v2_marker_fails_rust_core_derivation(sample_marker_v2) -> None:
+    from totalreclaw.crypto import derive_keys_from_mnemonic
+
+    with pytest.raises(Exception):
+        derive_keys_from_mnemonic(sample_marker_v2)
+
+
+def test_v2_marker_is_single_token_so_word_count_gate_rejects(sample_marker_v2) -> None:
+    """The Smart Account carries no whitespace, so like the v1 marker this
+    is a single token — ``hermes._validate_mnemonic``'s word-count gate
+    rejects it before even calling ``from_mnemonic``."""
+    assert len(sample_marker_v2.split()) == 1
 

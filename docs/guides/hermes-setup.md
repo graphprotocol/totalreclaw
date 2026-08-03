@@ -290,6 +290,55 @@ These are hard rules. None of them are negotiable.
 
 ---
 
+## Local phrase migration (Option E Phase 2)
+
+The first time the plugin loads after upgrading, a host that holds the recovery
+phrase in `~/.totalreclaw/credentials.json` (plaintext or OS-keychain-wrapped) is
+**automatically migrated** to a `derived-bundle-v1` credential: the phrase is
+replaced with derived vault keys and a signing key, and is no longer stored on that
+host. This is transparent — no user action required, no re-pairing — and it prints
+a one-time notice to stdout the moment it happens:
+
+> Your recovery phrase has been replaced on this machine with derived vault
+> credentials, and is no longer stored here. Your phrase is still your only
+> recovery path — make sure you have your written copy. A backup of the
+> previous credentials file is at ~/.totalreclaw/credentials.json.bak; delete
+> it once you have confirmed your phrase backup.
+
+**What changes:**
+
+- `~/.totalreclaw/credentials.json` moves to `~/.totalreclaw/credentials.json.bak`
+  (mode `0600`), and a fresh `version: 2` file takes its place.
+- Remember, recall, forget, export, pin/unpin, retype, and set-scope all keep
+  working identically — they use the same derived vault keys, byte-for-byte,
+  whether the host holds the phrase or the bundle.
+- **After migration, the phrase can no longer be recovered from this host.** The
+  `jq -r .mnemonic credentials.json` trick (or reading it from the OS keychain)
+  stops working — there is nothing phrase-shaped left to read. Your own written or
+  otherwise-backed-up copy of the phrase is your only recovery path going forward.
+
+**The `.bak` file:** kept for one release cycle as a safety net for exactly the
+"oops, I didn't actually have my phrase backed up" case — restoring it (plus
+downgrading the package to the pre-migration version) gets you back to the
+phrase-on-host state. It is chmod `0600` but is still a plaintext copy of your root
+key sitting on disk; **delete it once you've confirmed your own phrase backup**:
+
+```bash
+rm ~/.totalreclaw/credentials.json.bak
+```
+
+A future release removes `.bak` retention entirely (immediate destruction, no
+recovery window) — that switch is a deliberate, evidence-gated decision, not
+something this guide's current instructions assume.
+
+**Opting out:** set `TOTALRECLAW_NO_AUTO_MIGRATE=1` to keep the phrase on this host
+indefinitely (see [env-vars-reference.md](env-vars-reference.md)). You might do this
+if you have tooling that depends on reading the phrase from `credentials.json` — but
+note this means the phrase stays exposed to anything that can read this host's
+filesystem.
+
+---
+
 ## Tools
 
 | Tool | Purpose |

@@ -20,6 +20,7 @@ from typing import Optional
 
 import httpx as _httpx
 
+from .bundle import DerivedBundle
 from .crypto import (
     derive_keys_from_mnemonic,
     derive_lsh_seed,
@@ -244,10 +245,17 @@ class TotalReclaw:
         resolved_url = server_url or relay_url or _default_relay_url()
         self._relay_url = resolved_url
 
-        # Derive EOA account (address + private key) for UserOp signing
+        # Derive EOA account (address + private key) for UserOp signing.
+        #
+        # ``_signing_priv_key`` is the naming cred-13 planned over a
+        # deprecation cycle (phase2-implementation-spec.md P2-7):
+        # ``_eoa_private_key`` becomes an actively misleading name the
+        # moment ``session-key`` signing exists (Phase 3) — under that mode
+        # the signing key is a fresh CSPRNG key, not the EOA's. Aliased via
+        # the ``_eoa_private_key`` property below for one minor release.
         eoa_acct = _get_eoa_account(self._mnemonic)
         self._eoa_address: str = eoa_acct.address
-        self._eoa_private_key: bytes = bytes(eoa_acct.key)
+        self._signing_priv_key: bytes = bytes(eoa_acct.key)
 
         # Store Smart Account address. If provided at construction time, mark as
         # resolved. Otherwise, leave as None — callers MUST call
@@ -283,6 +291,125 @@ class TotalReclaw:
         # environments such as the staging Gnosis DataEdge.
         self._data_edge_address: Optional[str] = None
 
+    @classmethod
+    def from_bundle(
+        cls,
+        bundle: DerivedBundle,
+        *,
+        server_url: Optional[str] = None,
+        is_test: bool = False,
+        session_id: Optional[str] = None,
+    ) -> "TotalReclaw":
+        """Construct a client from a ``derived-bundle-v1`` credential bundle.
+
+        No mnemonic anywhere: ``self._mnemonic`` is ``None`` for the
+        lifetime of the returned client, and no code path here attempts to
+        reconstruct one (derived-bundle-v1.md §4.6 point 1).
+
+        Bypasses ``__init__`` (``cls.__new__``) rather than deriving a fake
+        mnemonic path through it — the whole point of bundle mode is that a
+        mnemonic never exists in this process.
+
+        A bundle-configured client is byte-identical, on the same vault, to
+        a mnemonic-configured one for every read/write the vault keys drive:
+        same ``auth_key_hash``, same ciphertext (fixed nonce), same blind
+        indices, same content fingerprints, same 20 LSH buckets — because
+        both draw those keys from ``self._keys`` /``self._lsh_seed``, and
+        this constructor populates those directly from ``bundle.vault``
+        rather than re-deriving them.
+
+        ``wallet_address`` resolves immediately from ``bundle.account`` — no
+        RPC round-trip — since the bundle already carries a
+        provisioning-time-authoritative Smart Account address (§4.6 point
+        3: never re-derive from an owner EOA that may be absent under
+        ``session-key``).
+
+        ``chain_id`` is **seeded** (not eagerly resolved) from
+        ``bundle.account.chain_id`` and left for the normal lazy
+        ``resolve_chain_id()`` path (same mechanism mnemonic-mode already
+        uses, triggered on the first ``remember``/``recall``/etc. via
+        ``_ensure_chain_id``) to confirm on first write. This was
+        eager-resolved in an earlier revision of this method — found to be
+        a live bug in Option E Phase 2 staging E2E (2026-08-03, S1): a
+        bundle client never called the billing endpoint, so
+        ``_data_edge_address`` stayed ``None`` and every write silently
+        targeted core's built-in **production** DataEdge default even
+        while running against the staging relay, because a bundle client
+        has no other source for the environment-specific DataEdge override
+        the relay's ``/v1/billing/status`` response carries. The billing
+        call's own fallback path (``_chain_id_fallback``) now returns
+        whatever ``self._chain_id`` already is — the bundle's own
+        authoritative value — rather than unconditionally overwriting it
+        with the free-tier default, so a bundle client degrades gracefully
+        (network-resilient, same as mnemonic mode) rather than picking a
+        wrong DEFAULT on a billing-endpoint failure.
+
+        Only ``signing.kind == "owner-eoa"`` is supported — Phase 2's
+        shipping configuration. ``session-key`` bundles are parsed and
+        validated fine at the core layer (forward-compatible schema), but
+        this client cannot yet configure from one; that lands with the
+        signing-delegation phase. Raises ``ValueError`` rather than
+        guessing or silently downgrading to ``owner-eoa`` semantics.
+        """
+        if bundle.signing.kind != "owner-eoa":
+            raise ValueError(
+                f"TotalReclaw.from_bundle: signing.kind={bundle.signing.kind!r} "
+                "is not supported yet — session-key signing requires the "
+                "signing-delegation phase. Only 'owner-eoa' bundles can "
+                "configure a client today."
+            )
+
+        self = cls.__new__(cls)
+
+        self._mnemonic = None
+        # Bundle mode never carries `salt` (derived-bundle-v1.md §4.5 — it
+        # is an intermediate of derivation with no consumer once the four
+        # vault keys exist). `DerivedKeys.salt` is read in exactly one place
+        # in this module: `register()`, which bundle-mode clients must never
+        # call (see below) — so an empty placeholder here is never read.
+        self._keys = DerivedKeys(
+            salt=b"",
+            auth_key=bundle.vault.auth_key,
+            encryption_key=bundle.vault.encryption_key,
+            dedup_key=bundle.vault.dedup_key,
+        )
+        self._lsh_seed = bundle.vault.lsh_seed
+        self._lsh_hasher: Optional[LSHHasher] = None
+        self._auth_key_hex = self._keys.auth_key.hex()
+        resolved_url = server_url or _default_relay_url()
+        self._relay_url = resolved_url
+
+        # The bundle's signing key occupies the same slot mnemonic-mode's
+        # EOA fills: it is the Smart Account `owner`, used to sign UserOps.
+        # Naming matches __init__'s cred-13 rename (see `_signing_priv_key`
+        # there) — bundle mode never had the old, misleading name to begin
+        # with.
+        self._signing_priv_key: bytes = bundle.signing.private_key
+        self._eoa_address: str = bundle.signing.address
+
+        # account.smart_account is already resolved — no RPC round-trip.
+        self._wallet_address: Optional[str] = bundle.account.smart_account.lower()
+        self._address_resolved = True
+
+        self._relay = RelayClient(
+            relay_url=resolved_url,
+            auth_key_hex=self._auth_key_hex,
+            wallet_address=self._wallet_address,
+            is_test=is_test,
+            session_id=session_id,
+        )
+        self._registered = False
+
+        # account.chain_id is only a SEED, not a resolved value — see the
+        # docstring above. resolve_chain_id() runs the normal billing
+        # lookup lazily on first write, which is what populates
+        # _data_edge_address (never known from the bundle itself).
+        self._chain_id: int = bundle.account.chain_id
+        self._chain_id_resolved: bool = False
+        self._data_edge_address: Optional[str] = None
+
+        return self
+
     async def resolve_address(self) -> str:
         """Resolve the CREATE2 Smart Account address via RPC.
 
@@ -310,8 +437,20 @@ class TotalReclaw:
 
         Without this, all relay queries return 401. The relay returns 200
         for already-registered users, so this is safe to call on every startup.
+
+        Bundle-mode no-op: a bundle-configured client (``self._mnemonic is
+        None``) never calls ``register()`` here — the vault is registered
+        by the provisioning origin, which holds the root and is the only
+        party able to register correctly (derived-bundle-v1.md §4.5,
+        normative rule). This is a silent skip, not the loud failure
+        ``register()`` itself raises when called directly: the internal
+        auto-registration check's whole job is "make sure remember/recall/
+        etc. can proceed", and in bundle mode that's already guaranteed by
+        construction — there is nothing to retry or surface here.
         """
         if self._registered:
+            return
+        if self._mnemonic is None:
             return
         try:
             await self.register()
@@ -377,14 +516,33 @@ class TotalReclaw:
                 self._chain_id = _chain_id_from_billing(payload)
                 self._data_edge_address = _data_edge_from_billing(payload)
             else:
-                self._chain_id = DEFAULT_CHAIN_ID_FREE
+                self._chain_id = self._chain_id_fallback()
         except Exception:
             # Best-effort — network, timeout, or auth issues all fall back
-            # to the free-tier chain. Matches the MCP "silently default"
-            # contract (mcp/src/index.ts line ~371).
-            self._chain_id = DEFAULT_CHAIN_ID_FREE
+            # to a safe default. Matches the MCP "silently default" contract
+            # (mcp/src/index.ts line ~371) for mnemonic-mode clients, whose
+            # fallback IS DEFAULT_CHAIN_ID_FREE (the __init__-seeded value —
+            # see _chain_id_fallback). A bundle-configured client (P2-7,
+            # #581) falls back to the bundle's own account.chain_id instead:
+            # it already carries authoritative knowledge of which chain its
+            # facts are addressed on, and defaulting THAT away to Base
+            # Sepolia would target the wrong chain outright, not just the
+            # wrong environment's DataEdge.
+            self._chain_id = self._chain_id_fallback()
 
         self._chain_id_resolved = True
+        return self._chain_id
+
+    def _chain_id_fallback(self) -> int:
+        """Chain id to use when the billing lookup fails or returns a
+        non-200. Mnemonic-mode clients have no better source than
+        DEFAULT_CHAIN_ID_FREE (their __init__-seeded value, preserved here
+        rather than re-asserted, so this is a no-op for them). A
+        bundle-configured client seeds ``self._chain_id`` from
+        ``bundle.account.chain_id`` at construction and never had it
+        overwritten before this lookup ran — this returns that value
+        unchanged rather than clobbering it with the free-tier default.
+        """
         return self._chain_id
 
     async def _ensure_chain_id(self) -> int:
@@ -486,6 +644,18 @@ class TotalReclaw:
         return self._eoa_address
 
     @property
+    def _eoa_private_key(self) -> bytes:
+        """Deprecated alias for :attr:`_signing_priv_key`.
+
+        cred-13 (phase2-implementation-spec.md P2-7): ``_eoa_private_key``
+        became an actively misleading name once ``session-key`` signing
+        exists (Phase 3) — under that mode the signing key is a fresh
+        CSPRNG key, not the EOA's. Read-only alias kept for one minor
+        release; internal code reads ``_signing_priv_key`` directly.
+        """
+        return self._signing_priv_key
+
+    @property
     def resolved_wallet_address(self) -> Optional[str]:
         """The Smart Account address if resolved, else ``None``.
 
@@ -532,14 +702,32 @@ class TotalReclaw:
         return WalletContext(
             keys=self._keys,
             owner=self._wallet_address,
-            eoa_private_key=self._eoa_private_key,
+            eoa_private_key=self._signing_priv_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,
         )
 
     async def register(self) -> str:
-        """Register with the relay. Returns user_id."""
+        """Register with the relay. Returns user_id.
+
+        Raises ``RuntimeError`` on a bundle-configured client
+        (``self._mnemonic is None``) — never a silent no-op. The vault is
+        registered by the provisioning origin, which holds the root and is
+        the only party able to register correctly (derived-bundle-v1.md
+        §4.5, normative rule); calling ``register()`` from bundle mode is a
+        provisioning-origin bug, not something this client can paper over.
+        The internal auto-registration check (``_ensure_registered``, used
+        by remember/recall/forget/etc.) never reaches this method in bundle
+        mode at all — it is a separate, silent skip, not this loud error.
+        """
+        if self._mnemonic is None:
+            raise RuntimeError(
+                "TotalReclaw.register() must not be called on a "
+                "bundle-configured client — the vault is registered by the "
+                "provisioning origin, which holds the root. See "
+                "derived-bundle-v1.md §4.5."
+            )
         auth_hash = compute_auth_key_hash(self._keys.auth_key)
         user_id = await self._relay.register(auth_hash, self._keys.salt.hex())
         self._registered = True
@@ -785,7 +973,7 @@ class TotalReclaw:
             fact_id,
             self._wallet_address,
             self._relay,
-            eoa_private_key=self._eoa_private_key,
+            eoa_private_key=self._signing_priv_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,
@@ -815,7 +1003,7 @@ class TotalReclaw:
             keys=self._keys,
             owner=self._wallet_address,
             relay=self._relay,
-            eoa_private_key=self._eoa_private_key,
+            eoa_private_key=self._signing_priv_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,
@@ -836,7 +1024,7 @@ class TotalReclaw:
             keys=self._keys,
             owner=self._wallet_address,
             relay=self._relay,
-            eoa_private_key=self._eoa_private_key,
+            eoa_private_key=self._signing_priv_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,
@@ -866,7 +1054,7 @@ class TotalReclaw:
             keys=self._keys,
             owner=self._wallet_address,
             relay=self._relay,
-            eoa_private_key=self._eoa_private_key,
+            eoa_private_key=self._signing_priv_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,
@@ -889,7 +1077,7 @@ class TotalReclaw:
             keys=self._keys,
             owner=self._wallet_address,
             relay=self._relay,
-            eoa_private_key=self._eoa_private_key,
+            eoa_private_key=self._signing_priv_key,
             eoa_address=self._eoa_address,
             sender=self._wallet_address,
             chain_id=chain_id,

@@ -83,6 +83,35 @@ if that degenerate case is hit on an install that originally wrapped
 *through* ``keyring``, the read can still miss. It is otherwise
 unreachable in normal operation, since ``detect_backend()`` checks
 ``keyring`` first.
+
+v2 — bundle wrap (Option E Phase 2 / #581)
+-------------------------------------------
+The v1 scheme above wraps a *mnemonic string* keyed on the **EOA**
+address. Phase 2 adds a second, independent scheme that wraps a
+*derived-bundle-v1 secret subtree* (``{vault, signing}`` — see
+``totalreclaw.bundle``) keyed on the **Smart Account** address::
+
+    {
+      "version": 2,
+      "schema": "derived-bundle-v1",
+      "keychain_wrapped": true,
+      "account": {"smart_account": "0x<smart-account>", "chain_id": 100},
+      "signing": {"kind": "owner-eoa", "address": "0x<owner-address>"},
+      "provisioned_at": "...",
+      "provisioned_by": "local-migration"
+    }
+
+The secret-bearing ``{vault, signing}`` subtree (private keys included)
+lives ONLY in the keychain, under service ``totalreclaw``, account
+``__keychain__:v2:<smart_account>`` — see :func:`wrap_bundle` /
+:func:`unwrap_bundle`. The ``v2`` account namespace is deliberately
+distinct from ``v1``'s (bare EOA address as account, prefixed marker
+only as the on-disk *value*): a v1 entry and a v2 entry for the same
+user's vault key on different strings (EOA vs ``__keychain__:v2:``-
+prefixed Smart Account) and never collide, so both can coexist on one
+machine during migration. Same phrase-safety rails, same kill-switch
+(``TOTALRECLAW_NO_KEYCHAIN``), same backend chain, same
+never-raise-on-wrap / fail-loud-on-load contract as v1.
 """
 
 from __future__ import annotations
@@ -106,6 +135,17 @@ ENV_NO_KEYCHAIN = "TOTALRECLAW_NO_KEYCHAIN"
 #: keychain-wrapped. ``marker_for(account)`` yields ``PREFIX + account``.
 #: The ``v1`` lets a future format bump coexist with old markers.
 MARKER_PREFIX = "__keychain__:v1:"
+
+#: v2 (Option E Phase 2 / #581) — keychain *account* prefix for a wrapped
+#: derived-bundle-v1 secret subtree. Unlike v1 (bare EOA as account,
+#: prefixed marker only as the credentials.json field VALUE), the v2
+#: account identifier IS the full prefixed string
+#: ``MARKER_PREFIX_V2 + smart_account`` — there is no v2 "marker embedded
+#: in a field" convention, because credentials.json's v2 discovery metadata
+#: has no secret-shaped field to replace (``account.smart_account`` is
+#: already plain, non-secret data; ``keychain_wrapped: true`` is the flag).
+#: See :func:`marker_for_v2` / :func:`wrap_bundle` / :func:`unwrap_bundle`.
+MARKER_PREFIX_V2 = "__keychain__:v2:"
 
 # Non-sensitive, static guidance strings. NEVER include the mnemonic,
 # the marker payload, or the account in these — tests assert that.
@@ -288,6 +328,41 @@ def load_secret(account: str) -> str:
         raise KeychainUnavailable(UNAVAILABLE_MESSAGE)
 
 
+def delete_secret(account: str) -> None:
+    """Best-effort delete of the secret stored under *account*.
+
+    Never raises. A deletion failure (locked keychain, backend error,
+    entry already gone) is not a reason to fail whatever cleanup called
+    this — an orphaned stale entry is harmless once its marker no longer
+    exists anywhere referencing it (nothing reads it once
+    ``credentials.json`` has moved on). Added for Option E Phase 2 / #581
+    (``hermes/auto_migrate.py`` drops the v1 entry after a v2 migration
+    reads back correctly).
+
+    The legacy macOS subprocess write path (``_store_macos``) is retired
+    (#558) and never had a corresponding delete; on that degenerate
+    ``backend == "macos"`` path this is a no-op.
+    """
+    backend = detect_backend()
+    try:
+        if backend == "keyring":
+            kr = _try_keyring()
+            if kr is not None:
+                kr.delete_password(SERVICE_NAME, account)
+        elif backend == "linux_ss":
+            ss = _try_secretstorage()
+            if ss is not None:
+                bus = ss.dbus_init()
+                col = ss.get_default_collection(bus)
+                if col.is_locked():
+                    col.unlock()
+                for item in col.search_items({"service": SERVICE_NAME, "account": account}):
+                    item.delete()
+        # backend in (None, "macos"): nothing to delete through this module.
+    except Exception:  # noqa: BLE001 — best-effort, never raise
+        logger.debug("credentials_wrap: delete_secret failed (backend=%s)", backend)
+
+
 def _store_keyring(account: str, secret: str) -> None:
     kr = _try_keyring()
     assert kr is not None  # narrow for type-checkers; detect_backend guards
@@ -431,6 +506,79 @@ def resolve_mnemonic(creds: dict) -> str:
     if is_kill_switch_on() or detect_backend() is None:
         raise KeychainEntryMissing(MISSING_MESSAGE)
     account = value[len(MARKER_PREFIX):]
+    try:
+        return load_secret(account)
+    except Exception:  # noqa: BLE001 — entry gone / unavailable → clean error
+        raise KeychainEntryMissing(MISSING_MESSAGE)
+
+
+# ---------------------------------------------------------------------------
+# v2 — bundle wrap (Option E Phase 2 / #581). See the module docstring's
+# "v2 — bundle wrap" section for the on-disk shape.
+# ---------------------------------------------------------------------------
+
+
+def marker_for_v2(smart_account: str) -> str:
+    """Build the keychain *account* identifier for a wrapped bundle.
+
+    Unlike v1's :func:`marker_for` (which returns a value embedded in a
+    credentials.json field), this IS the keychain account string passed to
+    :func:`store_secret` / :func:`load_secret` — see :func:`wrap_bundle` /
+    :func:`unwrap_bundle`.
+    """
+    return f"{MARKER_PREFIX_V2}{smart_account}"
+
+
+def is_marker_v2(value: object) -> bool:
+    """True iff *value* is a v2 keychain-marker string.
+
+    v2 markers never appear as a credentials.json field value in normal
+    operation (see the module docstring), but this exists for the same
+    defensive reason :func:`is_marker` does: so a v2 marker accidentally
+    handed to v1-shaped code is recognisable rather than silently
+    misinterpreted.
+    """
+    return isinstance(value, str) and value.startswith(MARKER_PREFIX_V2)
+
+
+def wrap_bundle(smart_account: str, secret_subtree_json: str) -> bool:
+    """Store a derived-bundle-v1 secret subtree (``{"vault": …, "signing":
+    …}`` as a JSON string) in the OS keychain, keyed on *smart_account*.
+
+    Returns ``True`` on success. Returns ``False`` — never raises — on ANY
+    failure: kill-switch armed, no backend, or a store error. On ``False``
+    the caller (``hermes/auto_migrate.py``) falls back to writing the
+    subtree plaintext into ``credentials.json`` (headless / no-keychain
+    host) — see derived-bundle-v1.md §4.3.
+
+    Phrase-safety: *secret_subtree_json* is never logged, printed, or
+    embedded in any exception message — mirrors :func:`wrap_credentials`'s
+    v1 contract exactly.
+    """
+    if is_kill_switch_on() or detect_backend() is None:
+        return False
+    account = marker_for_v2(smart_account)
+    try:
+        store_secret(account, secret_subtree_json)
+    except Exception:  # noqa: BLE001 — phrase-safety: never raise on wrap
+        return False
+    return True
+
+
+def unwrap_bundle(smart_account: str) -> str:
+    """Return the derived-bundle-v1 secret subtree JSON for *smart_account*
+    from the OS keychain.
+
+    Raises :class:`KeychainEntryMissing` — with the non-sensitive
+    :data:`MISSING_MESSAGE`, never the payload — when the entry is
+    absent/locked, the backend is unavailable, or the kill-switch is
+    armed. Mirrors :func:`resolve_mnemonic`'s v1 fail-loud contract: a v2
+    caller MUST go through the keychain and never silently substitutes a
+    default.
+    """
+    if is_kill_switch_on() or detect_backend() is None:
+        raise KeychainEntryMissing(MISSING_MESSAGE)
+    account = marker_for_v2(smart_account)
     try:
         return load_secret(account)
     except Exception:  # noqa: BLE001 — entry gone / unavailable → clean error

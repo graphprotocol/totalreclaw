@@ -57,11 +57,130 @@ for the canonical list.
 | `TOTALRECLAW_CREDENTIALS_PATH` | Override credentials file location | All clients |
 | `TOTALRECLAW_CACHE_PATH` | Override encrypted cache file location | All clients |
 | `TOTALRECLAW_TEST` | Set "true" to mark as test client | Test suites only |
+| `TOTALRECLAW_CREDENTIALS_PROVIDER` | `file` (default) or `external` — selects the credential source | All clients |
 
 Tuning knobs (`TOTALRECLAW_EXTRACT_INTERVAL`, `TOTALRECLAW_MIN_IMPORTANCE`,
 `TOTALRECLAW_COSINE_THRESHOLD`, etc.) are still read by clients but only as
 env-var fallbacks for self-hosted deployments. On managed service, the
 relay billing response carries these values — see the tables below.
+
+### Credential Material
+
+A client is configured from **either** a BIP-39 recovery phrase (the root) **or** a
+`derived-bundle-v1` credential bundle. Both must produce byte-identical cryptographic
+behaviour on the same vault. A client that supports only one of the two is not
+spec-compliant.
+
+**Bundle schema** (`credentials.json` `version: 2`, or the external-provider payload):
+
+```jsonc
+{
+  "version": 2,
+  "schema": "derived-bundle-v1",
+  "vault": {
+    "encryption_key": "<64 hex>",   // 32B — HKDF info "totalreclaw-encryption-key-v1"
+    "dedup_key":      "<64 hex>",   // 32B — HKDF info "openmemory-dedup-v1"
+    "auth_key":       "<64 hex>",   // 32B — HKDF info "totalreclaw-auth-key-v1"
+    "lsh_seed":       "<64 hex>"    // 32B — HKDF info "openmemory-lsh-seed-v1"
+  },
+  "signing": {
+    "kind": "owner-eoa",            // closed enum: "owner-eoa" | "session-key"
+    "private_key": "<64 hex>",      // 32B secp256k1
+    "address": "0x<40 hex>"         // EIP-55 checksummed address of private_key
+    // "grant": {...}               // required iff kind == "session-key"
+  },
+  "account": {
+    "smart_account": "0x<40 hex>",  // CREATE2 Smart Account address — facts are indexed by this
+    "chain_id": 100
+  },
+  "provisioned_at": "<RFC 3339 UTC>",
+  "provisioned_by": "spa" | "local-migration" | "external"
+}
+```
+
+All key material is lowercase hex, no `0x` prefix, exactly 64 characters. Hex casing
+and prefix are load-bearing — a client that emits `0x`-prefixed or uppercase values
+produces a bundle other clients will reject.
+
+**Derivation (canonical).** The four `vault` values are the outputs clients already
+compute from a phrase today. Given `seed = PBKDF2-HMAC-SHA512(mnemonic, "mnemonic",
+2048)` and `salt = seed[0..32]`, each key is
+`HKDF-SHA256(ikm = seed, salt = salt, info = <the info string above>, length = 32)`.
+This is a repackaging of the existing per-key derivation — no new key derivation is
+introduced.
+
+The salt is an *intermediate* of that derivation and is **not** carried in the bundle:
+once the four outputs exist there is nothing left to derive from it, and a
+bundle-configured client never needs it.
+
+**The bundle never contains the mnemonic or the 64-byte seed.** Including the seed
+would reproduce every derived key *and* full wallet control, defeating the purpose of
+the bundle. Implementations MUST NOT add a seed field, and MUST assert its absence in
+tests.
+
+**Derivation and validation live in `@totalreclaw/core` / `totalreclaw-core`**
+(`deriveBundleFromMnemonic` / `derive_bundle_from_mnemonic`, `parseBundleV1` /
+`parse_bundle_v1`). Clients MUST NOT implement HKDF, PBKDF2 or bundle parsing
+themselves.
+
+**`signing.kind`:**
+
+| Value | `private_key` is | Scoped? | Revocable? |
+|---|---|---|---|
+| `owner-eoa` | the BIP-44 `m/44'/60'/0'/0/0` key — the Smart Account **owner** | No | No |
+| `session-key` | 32 CSPRNG bytes, authorised by a `SessionKeyPermissionGrant` | Yes (DataEdge target, `execute`/`executeBatch`, `valueMax = 0`) | Yes (on-chain) |
+
+`owner-eoa` carries full account authority and MUST be handled with the same care as
+the recovery phrase. Unknown `kind` values MUST be rejected loudly — never treated as
+`owner-eoa`.
+
+**Validation (all mandatory, all loud failures — never a silent downgrade):**
+
+- `version == 2`, `schema == "derived-bundle-v1"`.
+- All four `vault.*` present, each exactly 64 lowercase hex chars.
+- `signing.kind` in the closed enum; `signing.private_key` 64 hex chars;
+  `address(signing.private_key) == signing.address`.
+- `kind == "session-key"` ⇒ `grant` present and `grant.account == account.smart_account`,
+  `grant.signer == signing.address`, `grant.domain.chainId == account.chain_id`.
+- `kind == "owner-eoa"` ⇒ `grant` absent.
+
+**Behavioural requirements for a bundle-configured client:**
+
+1. No code path may require, request, or attempt to reconstruct a mnemonic.
+2. `wallet_address` resolves from `account.smart_account` directly — it MUST NOT be
+   re-derived, because the owner EOA may be absent under `session-key`.
+3. `POST /v1/register` MUST NOT be called. The vault is registered by the provisioning
+   origin, which holds the root and is the only party able to register correctly.
+   Provisioning a bundle for a never-registered vault is a provisioning-origin bug.
+4. Relay authentication uses `SHA-256(vault.auth_key)` exactly as in the phrase path.
+5. No value under `vault` or `signing.private_key` may be logged, printed, or included
+   in an exception message.
+
+**Storage.** Keychain-capable hosts store the `{vault, signing}` subtree as one
+keychain item under service `totalreclaw`, account `__keychain__:v2:<smart_account>`,
+leaving only non-secret discovery metadata (`version`, `schema`, `keychain_wrapped`,
+`account`, `signing.kind`, `signing.address`, `provisioned_*`) in `credentials.json`.
+This namespace is distinct from the v1 marker `__keychain__:v1:<eoa>`, which keys on
+the EOA and wraps a mnemonic; the two coexist during migration. Headless hosts hold
+the full object at mode `0600`, or receive it through the external credential provider
+(`TOTALRECLAW_EXTERNAL_CREDENTIALS_PATH` / `_JSON`).
+
+**Credential states a client MUST read.** All four, in this precedence order:
+
+1. `TOTALRECLAW_RECOVERY_PHRASE` env var (phrase).
+2. External credential provider payload — phrase or bundle.
+3. `credentials.json` `version: 2` — bundle (keychain-unwrapped if marked).
+4. `credentials.json` legacy — `{"mnemonic": "…"}` plaintext, or the
+   `__keychain__:v1:<eoa>` marker.
+
+**Parity fixture.** `tests/parity/fixtures/derived-bundle-v1.json`, generated from the
+canonical `abandon … about` test mnemonic. Every implementation MUST assert its
+`derive_bundle_from_mnemonic` output is byte-equal to the fixture before shipping, in
+addition to the existing crypto-parity checks below.
+
+**Shipped clients (as of this writing):** Hermes (Python) — the only implementation.
+See the public CLAUDE.md Feature Compatibility Matrix for the current per-client
+status; MCP and the parked clients inherit this frozen contract when they implement it.
 
 ### Client Identification
 
@@ -140,6 +259,11 @@ Every client must implement this pipeline identically:
 
 See `python/tests/cross_client_e2e.py` for the reference implementation.
 
+**Bundle interop (required once a client supports `derived-bundle-v1`):** repeat the
+7-step sequence with one side configured from a bundle and the other from the phrase,
+in both directions. This proves the bundle path and the phrase path address the same
+vault and produce mutually decryptable ciphertext.
+
 **All E2E tests MUST hit the staging relay (`api-staging.totalreclaw.xyz`), never production.**
 
 ### Crypto Parity Validation
@@ -152,6 +276,10 @@ Before cross-client E2E, validate crypto parity offline:
 4. New client generates blind indices → must match fixture values exactly
 5. New client generates content fingerprint → must match fixture value
 6. New client generates LSH bucket hashes → must match all 20 fixture values
+7. New client derives a `derived-bundle-v1` from the test mnemonic → must match
+   `tests/parity/fixtures/derived-bundle-v1.json` byte-for-byte, and configuring the
+   client from that bundle must reproduce steps 2-6 identically to configuring it from
+   the mnemonic.
 
 See `python/tests/fixtures/crypto_vectors.json` for the fixture format and `tests/parity/cross-impl-test.ts` for the validation script.
 

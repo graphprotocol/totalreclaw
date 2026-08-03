@@ -38,6 +38,17 @@ def register(ctx):
     except Exception:  # pragma: no cover — welcome is best-effort
         logger.debug("first-run welcome emission skipped", exc_info=True)
 
+    # Option E Phase 2 (#581) — transparent local phrase -> derived-bundle-v1
+    # migration. Best-effort: maybe_migrate() itself never raises, but this
+    # call site is defended too, since plugin load must never fail on
+    # account of this. A no-op on every subsequent boot once migrated
+    # (credentials.json version:2 short-circuits inside auto_migrate).
+    try:
+        from totalreclaw.hermes import auto_migrate
+        auto_migrate.maybe_migrate()
+    except Exception:  # pragma: no cover — migration is best-effort
+        logger.debug("auto-migration skipped", exc_info=True)
+
     # Register tools. Descriptions mirror the schemas — they are the
     # text the Hermes agent sees when selecting a tool, so they need to
     # clearly distinguish TotalReclaw from any built-in 'memory' tool.
