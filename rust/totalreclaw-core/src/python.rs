@@ -50,6 +50,7 @@ fn bytes_to_array32(b: &[u8]) -> PyResult<[u8; 32]> {
 // ---------------------------------------------------------------------------
 // Domain submodules (binding declarations live here; registration stays below)
 // ---------------------------------------------------------------------------
+mod bind_bundle;
 mod bind_crypto;
 mod bind_lsh;
 mod bind_protobuf;
@@ -62,6 +63,7 @@ mod bind_search;
 mod bind_kg;
 mod bind_recall;
 
+pub(crate) use bind_bundle::*;
 pub(crate) use bind_crypto::*;
 pub(crate) use bind_lsh::*;
 pub(crate) use bind_protobuf::*;
@@ -86,6 +88,11 @@ pub(crate) use bind_recall::*;
 /// protobuf encoding, and debrief parsing.
 #[pymodule]
 fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Derived-material bundle v1 (Option E Phase 2)
+    m.add_function(wrap_pyfunction!(py_derive_bundle_from_mnemonic, m)?)?;
+    m.add_function(wrap_pyfunction!(py_parse_bundle_v1, m)?)?;
+    m.add_function(wrap_pyfunction!(py_validate_bundle_v1, m)?)?;
+
     // Key derivation
     m.add_function(wrap_pyfunction!(py_derive_keys_from_mnemonic, m)?)?;
     m.add_function(wrap_pyfunction!(py_derive_keys_from_mnemonic_lenient, m)?)?;

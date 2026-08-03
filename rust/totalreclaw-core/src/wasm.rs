@@ -32,6 +32,7 @@ use crate::kg_ffi::*;
 // ---------------------------------------------------------------------------
 // Domain submodules (binding declarations); wasm-bindgen self-registers each.
 // ---------------------------------------------------------------------------
+mod bind_bundle;
 mod bind_crypto;
 mod bind_lsh;
 mod bind_protobuf;
@@ -45,6 +46,8 @@ mod bind_kg;
 mod bind_recall;
 
 pub(crate) use bind_lsh::*;
+#[cfg(test)]
+pub(crate) use bind_bundle::*;
 #[cfg(test)]
 pub(crate) use bind_crypto::*;
 #[cfg(test)]

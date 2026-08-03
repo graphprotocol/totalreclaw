@@ -1,0 +1,49 @@
+{
+  "_comment": "Cross-language parity fixture for derived-bundle-v1 (Option E Phase 2, #581). Every implementation MUST derive byte-identical vault/signing/account fields from the same inputs below. `provisioned_at` is excluded from equality checks (wall-clock-stamped, informational only — see this generator's header comment). Do not edit manually — regenerate via fixtures/generate-derived-bundle-v1.ts.",
+  "_generated_at": "2026-08-02T23:09:37.265Z",
+  "inputs": {
+    "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+    "chain_id": 100,
+    "provisioned_by": "local-migration",
+    "smart_account": "0x2c0CF74B2b76110708CA431796367779e3738250"
+  },
+  "expected": {
+    "vault": {
+      "encryption_key": "a58fdc56e1d768461d95cd46b49e03727b2eb342ac558b9f3ebf1255b871f703",
+      "dedup_key": "63d19334b64c460a95c23c14c1bff018bc83807031451b23117ec0baf85dcf34",
+      "auth_key": "5580b82ac0a8763328600dd335b139d0915de9a591970207d6820306a2a36ae7",
+      "lsh_seed": "6f8b0d095090ecc480130490337485290344eed21235a4d5add0b3870bb0dcd8"
+    },
+    "signing": {
+      "kind": "owner-eoa",
+      "private_key": "1ab42cc412b618bdea3a599e3c9bae199ebf030895b039e9db1e30dafb12b727",
+      "address": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94"
+    },
+    "account": {
+      "smart_account": "0x2c0CF74B2b76110708CA431796367779e3738250",
+      "chain_id": 100
+    },
+    "provisioned_by": "local-migration"
+  },
+  "example_full_bundle": {
+    "version": 2,
+    "schema": "derived-bundle-v1",
+    "vault": {
+      "encryption_key": "a58fdc56e1d768461d95cd46b49e03727b2eb342ac558b9f3ebf1255b871f703",
+      "dedup_key": "63d19334b64c460a95c23c14c1bff018bc83807031451b23117ec0baf85dcf34",
+      "auth_key": "5580b82ac0a8763328600dd335b139d0915de9a591970207d6820306a2a36ae7",
+      "lsh_seed": "6f8b0d095090ecc480130490337485290344eed21235a4d5add0b3870bb0dcd8"
+    },
+    "signing": {
+      "kind": "owner-eoa",
+      "private_key": "1ab42cc412b618bdea3a599e3c9bae199ebf030895b039e9db1e30dafb12b727",
+      "address": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94"
+    },
+    "account": {
+      "smart_account": "0x2c0CF74B2b76110708CA431796367779e3738250",
+      "chain_id": 100
+    },
+    "provisioned_at": "2026-08-02T23:09:37Z",
+    "provisioned_by": "local-migration"
+  }
+}

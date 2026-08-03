@@ -6,6 +6,7 @@
 //!
 //! # Modules
 //!
+//! - [`bundle`] — `derived-bundle-v1` credential bundle: derivation, parsing, validation (Option E Phase 2)
 //! - [`crypto`] — Key derivation (BIP-39 + HKDF-SHA256), XChaCha20-Poly1305 encrypt/decrypt
 //! - [`lsh`] — Locality-sensitive hashing (random hyperplane LSH)
 //! - [`blind`] — Blind index generation (SHA-256 token hashing + Porter stemming)
@@ -30,6 +31,7 @@
 //! - [`kg_ffi`] — Shared JSON-in/JSON-out knowledge-graph marshalling helpers behind the WASM/PyO3 bindings
 
 pub mod blind;
+pub mod bundle;
 pub mod claims;
 pub mod confirm;
 pub mod consolidation;

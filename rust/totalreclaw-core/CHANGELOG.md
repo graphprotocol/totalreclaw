@@ -5,6 +5,17 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - Unreleased
+
+The `2.6.0` line was opened by #547 (canonical f16 embedding codec, #543) and
+is still unreleased (`2.6.0-rc.1` on npm; PyPI/crates.io still on 2.5.5 as of
+this entry). This entry logs only the derived-bundle-v1 addition below —
+#543's embedding-codec changes are not individually logged here.
+
+### Added
+
+- **[#581] `derived-bundle-v1` credential bundle — core derivation, PyO3 + WASM bindings (Option E Phase 2).** New `bundle` module: `DerivedBundleV1`, `derive_bundle_from_mnemonic`, `parse_bundle_v1`, `validate_bundle_v1`, `bundle_to_json`. A **composition**, not a new derivation — the four `vault` keys are exactly `crypto::derive_keys_from_mnemonic` + `crypto::derive_lsh_seed`'s existing outputs, and `signing.private_key`/`address` are exactly `wallet::derive_eoa`'s output (now EIP-55 checksummed for cross-client parity — see below). The bundle never carries the BIP-39 mnemonic or the 64-byte seed; `parse_bundle_v1`/`validate_bundle_v1` reject loudly (never a silent downgrade) on unknown `version`/`schema`, malformed hex, an unknown `signing.kind`, an `owner-eoa` bundle carrying a `grant`, a `session-key` bundle with an inconsistent grant, or a `signing.address` that doesn't match `signing.private_key`. `smart_account` is a required argument to `derive_bundle_from_mnemonic` — this crate has no CREATE2 helper (the Smart Account address is derived via an `eth_call` RPC round-trip in every client today, out of scope for a pure-computation crate), so unlike the design doc's sketched signature, callers must supply it. PyO3: `derive_bundle_from_mnemonic`, `parse_bundle_v1` (returns bytes for key material, matching `derive_keys_from_mnemonic`'s convention), `validate_bundle_v1`. WASM: `deriveBundleFromMnemonic`, `parseBundleV1`, `validateBundleV1` — present in both the `nodejs` and `./web` (browser) builds. Cross-language parity fixture at `tests/parity/fixtures/derived-bundle-v1.json`. Spec: `docs/specs/totalreclaw/client-consistency.md` ("Credential Material"). Ships `signing.kind = "owner-eoa"` only; `session-key` is parsed/validated (closed enum, forward-compatible schema) but not derivable yet — that lands with the signing-delegation phase.
+
 ## [2.5.6] - 2026-07-10
 
 Browser-bundle WASM + publishing hardening. (Note: the intervening `2.3.x`–`2.5.5` core releases were not individually logged in this file; this entry catches up the current stable surface.)
