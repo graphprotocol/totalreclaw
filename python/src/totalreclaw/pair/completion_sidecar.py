@@ -1,6 +1,20 @@
 """F1 (rc.24) — detached sidecar that owns the relay-pair WebSocket
 through completion, even when the parent process exits.
 
+Option E Phase 2 / #581 (P2-10 — the cred-12 leaf)
+----------------------------------------------------
+Adds a ``payload_type == "derived-bundle-v1"`` completion branch alongside
+the existing legacy-mnemonic path (:func:`_complete_pairing_bundle`,
+wired into :func:`remote_client.await_phrase_upload` via its new
+``complete_pairing_bundle`` parameter). The relay does not forward a
+``payload_type`` field yet as of this writing (P2-0 pre-flight found no
+such field in `totalreclaw-relay`'s pair envelope; plumbing it through is
+tracked separately, P2-11) — so this branch is exercised by
+``test_pair_completion_bundle.py`` against a **fixture** forward frame,
+never live traffic, per the implementation spec's explicit instruction to
+build and test this leaf against a fixture provisioning half rather than
+a live SPA/relay round-trip.
+
 Background — rc.23 ship-stopper #157 (BLOCKER)
 ----------------------------------------------
 ``hermes chat -q`` is a one-shot: each turn runs in a fresh Python
@@ -495,10 +509,85 @@ async def _drive_full_pair_session(
             )
             return {"state": "error", "error": str(err)}
 
+    # Option E Phase 2 / #581 (P2-10). Sibling of _complete_pairing above,
+    # for payload_type == "derived-bundle-v1". `bundle` has already been
+    # through totalreclaw.bundle.parse_bundle_v1 (every §4.7 invariant
+    # checked) by the time remote_client.await_phrase_upload calls this —
+    # never persist a bundle that did not validate, and this handler only
+    # ever sees ones that did.
+    async def _complete_pairing_bundle(bundle) -> dict:
+        # Local imports — same rationale as _complete_pairing above.
+        from totalreclaw import credentials_wrap
+        from totalreclaw.agent.state import AgentState
+        from totalreclaw.credential_provider import get_credential_provider
+        from totalreclaw.hermes.auto_migrate import (
+            bundle_secret_subtree_json,
+            v2_credentials_dict,
+        )
+
+        try:
+            # Defensive check beyond parse_bundle_v1's own validation
+            # (address/private-key match, signing.kind consistency, ...):
+            # account.chain_id must match what THIS host expects — single-
+            # chain Gnosis policy. parse_bundle_v1 deliberately does not
+            # enforce this (a client MAY warn rather than fail per §4.7,
+            # to keep self-hosted forks working) but pair completion is a
+            # managed-mode-only flow, so this host can be strict.
+            if bundle.account.chain_id != 100:
+                raise ValueError(
+                    f"pair completion: unexpected chain_id "
+                    f"{bundle.account.chain_id} (expected 100 — "
+                    f"single-chain Gnosis policy)"
+                )
+
+            secret_subtree = bundle_secret_subtree_json(bundle)
+            wrapped_ok = credentials_wrap.wrap_bundle(
+                bundle.account.smart_account, secret_subtree
+            )
+            v2_creds = v2_credentials_dict(bundle, keychain_wrapped=wrapped_ok)
+
+            provider = get_credential_provider()
+            if provider.mode == "file":
+                saved = provider.save(v2_creds)
+                if not saved:
+                    raise RuntimeError(
+                        "pair completion: failed to write credentials.json"
+                    )
+            # external mode: read-only by design (the secret manager owns
+            # the source of truth) — same no-additional-write contract
+            # AgentState.configure() already has for the legacy path.
+
+            state = AgentState()
+            state.configure_from_bundle(bundle)
+            client = state.get_client()
+            address = client.eoa_address if client else bundle.signing.address
+            logger.info(
+                "pair.sidecar: state.configure_from_bundle ok token=%s… "
+                "address=%s keychain_wrapped=%s",
+                token_tag,
+                address,
+                wrapped_ok,
+            )
+            return {"state": "active", "account_id": address}
+        except Exception as err:
+            # Exception-class-only logging (2026-08-03 fix, coordinator
+            # review on #592) — never %r/exc_info here. This branch
+            # handles a derived-bundle-v1 payload; a ValueError from
+            # bundle parsing/validation, keychain wrap, or credential
+            # persistence can echo fragments of the hex/JSON it was
+            # handling, and %r would print the full exception message.
+            logger.error(
+                "pair.sidecar: state.configure_from_bundle failed token=%s… err_type=%s",
+                token_tag,
+                type(err).__name__,
+            )
+            return {"state": "error", "error": str(err)}
+
     try:
         result = await await_phrase_upload(
             session,
             complete_pairing=_complete_pairing,
+            complete_pairing_bundle=_complete_pairing_bundle,
         )
         logger.info(
             "pair.sidecar: completion done token=%s… outcome=ok state=%s",
@@ -506,10 +595,14 @@ async def _drive_full_pair_session(
             result.get("state") if isinstance(result, dict) else "unknown",
         )
     except Exception as err:
+        # Exception-class-only logging (2026-08-03 fix) — this branch
+        # catches failures from EITHER the legacy-mnemonic or the
+        # derived-bundle-v1 path uniformly; the latter can carry a
+        # bundle-JSON-derived error message.
         logger.warning(
-            "pair.sidecar: completion done token=%s… outcome=error err=%r",
+            "pair.sidecar: completion done token=%s… outcome=error err_type=%s",
             token_tag,
-            err,
+            type(err).__name__,
         )
 
 

@@ -223,7 +223,7 @@ Features across OpenClaw plugin (`skill/plugin/`), MCP server (`mcp/`), NanoClaw
 | Recovery-phrase configuration | Yes | Yes | Yes (via MCP) | Yes | Yes (via MCP) | Yes | The legacy root path; retained indefinitely |
 | `derived-bundle-v1` configuration | -- | -- | -- | Yes | -- | -- | Host holds derived keys + signing key, never the phrase. Parked clients unimplemented — see Known Gaps |
 | Local phrase→bundle migration | -- | -- | -- | Yes | -- | -- | Automatic, idempotent, no re-pair; Hermes only |
-| Pair-time bundle provisioning | -- | -- | -- | -- | -- | -- | `payload_type: derived-bundle-v1` over the existing relay-blind ECDH pipe — not yet wired (pair-completion + relay changes pending, tracked #581) |
+| Pair-time bundle provisioning | -- | -- | -- | Built, not live | -- | -- | `payload_type: derived-bundle-v1` over the existing relay-blind ECDH pipe. Hermes-side decrypt/validate/persist branch is implemented and fixture-tested (`pair/completion_sidecar.py`, `pair/remote_client.py`), but the relay does not yet forward a `payload_type` field on the pair envelope — additive plumbing tracked separately (#581, P2-11). Cannot be exercised against live traffic until that lands. |
 | Keychain-wrapped bundle (`__keychain__:v2:`) | -- | -- | -- | Yes | -- | -- | Desktop; coexists with the v1 mnemonic marker |
 | External-provider bundle injection | -- | -- | -- | Yes | -- | -- | `TOTALRECLAW_EXTERNAL_CREDENTIALS_PATH` / `_JSON`; headless |
 | Revocable scoped signing key | -- | -- | -- | -- | -- | -- | **Not shipped** — requires the signing-delegation phase; see Known Gaps |

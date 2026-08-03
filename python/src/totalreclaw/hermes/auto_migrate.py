@@ -268,11 +268,16 @@ def _resolve_smart_account(mnemonic: str, creds: dict) -> Optional[str]:
         return None
 
 
-def _bundle_secret_subtree_json(bundle) -> str:
+def bundle_secret_subtree_json(bundle) -> str:
     """The ``{vault, signing}`` JSON subtree — the part that is secret and
     either keychain-wrapped or (headless) written plaintext into the v2
     file. Field order matches derived-bundle-v1.md §4.1's ``vault``/
-    ``signing`` listings."""
+    ``signing`` listings.
+
+    Public (not module-private) — also reused by
+    ``pair/completion_sidecar.py`` (P2-10), which needs the identical
+    wrap-or-inline persistence shape for a freshly pair-completed bundle.
+    """
     return json.dumps(
         {
             "vault": {
@@ -290,7 +295,7 @@ def _bundle_secret_subtree_json(bundle) -> str:
     )
 
 
-def _v2_credentials_dict(bundle, *, keychain_wrapped: bool) -> dict:
+def v2_credentials_dict(bundle, *, keychain_wrapped: bool) -> dict:
     """The full ``credentials.json`` shape for a freshly derived bundle.
 
     ``keychain_wrapped=True`` -> discovery-metadata only (secret subtree
@@ -395,9 +400,9 @@ def _do_migrate(creds_path: Path) -> bool:
         return False
 
     # Step 5: wrap {vault, signing} via the keychain; plaintext fallback.
-    secret_subtree = _bundle_secret_subtree_json(bundle)
+    secret_subtree = bundle_secret_subtree_json(bundle)
     wrapped_ok = credentials_wrap.wrap_bundle(bundle.account.smart_account, secret_subtree)
-    v2_creds = _v2_credentials_dict(bundle, keychain_wrapped=wrapped_ok)
+    v2_creds = v2_credentials_dict(bundle, keychain_wrapped=wrapped_ok)
 
     # Step 6: rename credentials.json -> credentials.json.bak.
     bak_path = creds_path.parent / f"{creds_path.name}.bak"

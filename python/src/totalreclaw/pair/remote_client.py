@@ -242,24 +242,58 @@ async def open_remote_pair_session(
 # Complete-pairing handler signature (mirrors the local-server form).
 CompleteHandler = Callable[[str], Awaitable[dict]]
 
+# Option E Phase 2 / #581 (P2-10 — the cred-12 leaf). Bundle-completion
+# handler signature — receives an already core-validated
+# ``totalreclaw.bundle.DerivedBundle`` rather than a phrase string.
+CompleteBundleHandler = Callable[[Any], Awaitable[dict]]
+
+#: Payload types this function understands. Anything else on the wire is a
+#: forward-compatible value from a newer relay/SPA this build doesn't know
+#: about yet — rejected loudly (never silently treated as legacy-mnemonic;
+#: see derived-bundle-v1.md §4.7's "unknown version -> loud error" pattern,
+#: which applies equally to an unknown *payload_type* discriminant).
+_KNOWN_PAYLOAD_TYPES = frozenset({"legacy-mnemonic", "derived-bundle-v1"})
+
 
 async def await_phrase_upload(
     session: RemotePairSession,
     *,
     complete_pairing: CompleteHandler,
+    complete_pairing_bundle: Optional[CompleteBundleHandler] = None,
     phrase_validator: Optional[Callable[[str], bool]] = None,
     timeout_s: float = 300.0,
 ) -> dict:
-    """Block until the relay pushes the encrypted phrase, then decrypt and
-    persist via ``complete_pairing``.
+    """Block until the relay pushes the encrypted payload, then decrypt and
+    persist via ``complete_pairing`` / ``complete_pairing_bundle``.
 
     ``complete_pairing`` is async — it receives the decrypted phrase as a
     plain string and is expected to write credentials.json + return a dict
     like ``{"state": "active", "account_id": "0x..."}``. The return value
-    is forwarded back to the caller.
+    is forwarded back to the caller. This is the ``payload_type ==
+    "legacy-mnemonic"`` (or absent — the default today) path, unchanged.
+
+    ``complete_pairing_bundle`` (Option E Phase 2 / #581, P2-10) is the
+    ``payload_type == "derived-bundle-v1"`` sibling: it receives an
+    already core-validated ``totalreclaw.bundle.DerivedBundle`` (this
+    function calls ``totalreclaw.bundle.parse_bundle_v1`` on the decrypted
+    plaintext before invoking it — malformed bundle JSON never reaches the
+    handler) and returns the same result-dict shape. **Optional** — a
+    caller that only handles phrases (every existing call site except
+    ``pair/completion_sidecar.py``) omits it, and a bundle payload_type
+    then nacks loudly with ``unsupported_payload_type`` rather than being
+    silently mishandled as a phrase.
 
     ``phrase_validator`` checks BIP-39 word-count / casing. Defaults to the
-    same 12/24-word lowercase-ASCII check the local HTTP server uses.
+    same 12/24-word lowercase-ASCII check the local HTTP server uses. Only
+    applies to the ``legacy-mnemonic`` path.
+
+    **Note on today's relay:** as of Phase 2's P2-0 pre-flight, the relay
+    does not yet forward a ``payload_type`` field on the pair envelope at
+    all (`totalreclaw-relay`#pending — additive plumbing tracked
+    separately, P2-11). Until that lands, ``msg.get("payload_type")`` is
+    always absent in production and this function always takes the
+    ``legacy-mnemonic`` branch — the ``derived-bundle-v1`` branch below is
+    exercised by unit tests against a fixture ``msg``, not live traffic.
     """
 
     def _default_validate(p: str) -> bool:
@@ -308,6 +342,23 @@ async def await_phrase_upload(
     if forward_mode not in ("generate", "import"):
         forward_mode = None
 
+    # Option E Phase 2 / #581 (P2-10). Absent -> "legacy-mnemonic" (today's
+    # only shipped shape — derived-bundle-v1.md §5's table). An unrecognised
+    # NON-absent value is a forward-compatible payload this build doesn't
+    # understand yet — reject loudly rather than guess which branch to take.
+    payload_type = msg.get("payload_type")
+    if payload_type is None:
+        payload_type = "legacy-mnemonic"
+    if payload_type not in _KNOWN_PAYLOAD_TYPES:
+        try:
+            await ws.send(json.dumps({"type": "nack", "error": "unknown_payload_type"}))
+        finally:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        raise RuntimeError(f"pair.relay: unrecognised payload_type '{payload_type}'")
+
     if not isinstance(client_pubkey, str) or not isinstance(nonce, str) or not isinstance(
         ciphertext, str
     ):
@@ -344,46 +395,116 @@ async def await_phrase_upload(
                 pass
         raise
 
-    try:
-        phrase = plaintext.decode("utf-8")
-        phrase = unicodedata.normalize("NFKC", phrase).strip().lower()
-        phrase = " ".join(phrase.split())
-    except UnicodeDecodeError:
+    if payload_type == "derived-bundle-v1":
+        # Option E Phase 2 / #581 (P2-10). The inner plaintext IS the
+        # bundle JSON itself (not a phrase) — see derived-bundle-v1.md §5.
         try:
-            await ws.send(json.dumps({"type": "nack", "error": "bad_utf8"}))
-        finally:
+            bundle_json = plaintext.decode("utf-8")
+        except UnicodeDecodeError:
             try:
-                await ws.close()
-            except Exception:
-                pass
-        raise
-    finally:
-        plaintext = b"\x00" * len(plaintext)  # noqa: F841 — best-effort scrub
+                await ws.send(json.dumps({"type": "nack", "error": "bad_utf8"}))
+            finally:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+            raise
+        finally:
+            plaintext = b"\x00" * len(plaintext)  # noqa: F841 — best-effort scrub
 
-    if not validate(phrase):
-        try:
-            await ws.send(json.dumps({"type": "nack", "error": "invalid_mnemonic"}))
-        finally:
-            try:
-                await ws.close()
-            except Exception:
-                pass
-        raise RuntimeError("pair.relay: phrase failed BIP-39 validation")
+        from totalreclaw.bundle import parse_bundle_v1
 
-    try:
-        result = await complete_pairing(phrase)
-    except Exception as err:
-        logger.error("pair.remote_client: complete_pairing raised: %r", err)
         try:
-            await ws.send(json.dumps({"type": "nack", "error": "completion_failed"}))
-        finally:
+            bundle = parse_bundle_v1(bundle_json)
+        except ValueError as err:
+            # Never persist a bundle that did not validate — reject loudly,
+            # nothing written anywhere. parse_bundle_v1 runs every §4.7
+            # invariant (malformed hex, unknown signing.kind, an owner-eoa
+            # bundle carrying a grant, address/private-key mismatch, ...).
+            logger.warning(
+                "pair.remote_client: bundle validation failed for token=%s…: %s",
+                session.token[:8],
+                err,
+            )
             try:
-                await ws.close()
-            except Exception:
-                pass
-        raise
-    finally:
-        phrase = ""  # noqa: F841 — drop our reference
+                await ws.send(json.dumps({"type": "nack", "error": "invalid_bundle"}))
+            finally:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+            raise
+        finally:
+            bundle_json = ""  # noqa: F841 — drop our reference
+
+        if complete_pairing_bundle is None:
+            # This caller only handles phrases — never silently mishandle a
+            # bundle payload as one.
+            try:
+                await ws.send(json.dumps({"type": "nack", "error": "unsupported_payload_type"}))
+            finally:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+            raise RuntimeError(
+                "pair.relay: received payload_type=derived-bundle-v1 but this "
+                "call site has no complete_pairing_bundle handler"
+            )
+
+        try:
+            result = await complete_pairing_bundle(bundle)
+        except Exception as err:
+            logger.error("pair.remote_client: complete_pairing_bundle raised: %r", err)
+            try:
+                await ws.send(json.dumps({"type": "nack", "error": "completion_failed"}))
+            finally:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+            raise
+    else:
+        try:
+            phrase = plaintext.decode("utf-8")
+            phrase = unicodedata.normalize("NFKC", phrase).strip().lower()
+            phrase = " ".join(phrase.split())
+        except UnicodeDecodeError:
+            try:
+                await ws.send(json.dumps({"type": "nack", "error": "bad_utf8"}))
+            finally:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+            raise
+        finally:
+            plaintext = b"\x00" * len(plaintext)  # noqa: F841 — best-effort scrub
+
+        if not validate(phrase):
+            try:
+                await ws.send(json.dumps({"type": "nack", "error": "invalid_mnemonic"}))
+            finally:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+            raise RuntimeError("pair.relay: phrase failed BIP-39 validation")
+
+        try:
+            result = await complete_pairing(phrase)
+        except Exception as err:
+            logger.error("pair.remote_client: complete_pairing raised: %r", err)
+            try:
+                await ws.send(json.dumps({"type": "nack", "error": "completion_failed"}))
+            finally:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+            raise
+        finally:
+            phrase = ""  # noqa: F841 — drop our reference
 
     # Ack the relay so the browser gets a 204.
     ack_sent = False
