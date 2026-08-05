@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "End-to-end encrypted, decentralized memory for OpenClaw. A native kind:memory provider — recall is automatic via memory_search/memory_get, and facts are captured in the background. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', any recall request ('what do you remember about me', 'what's my X'), AND any explicit remember request ('remember X', 'save X')."
-version: 3.4.2
+version: 3.4.4
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -80,7 +80,13 @@ Pairing is a deliberate, user-initiated flow (the plugin does **not** auto-pair 
 Pair is UNCONDITIONAL when no credentials — the user installing/requesting setup IS the consent; do not add a second consent gate. `tr --help` lists every subcommand.
 
 ```bash
-TR_CLI="$(ls -d ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/cli/tr-cli.js ~/.openclaw/extensions/totalreclaw/dist/cli/tr-cli.js 2>/dev/null | head -1)"
+# `openclaw plugins install` puts the package under npm/projects/<slug-hash>/,
+# so that glob is listed FIRST — the other two are older/dev layouts kept as
+# fallbacks. If TR_CLI comes back empty, say so; do NOT run bare `tr` (that is
+# GNU coreutils, not this CLI) and do NOT report a curation op as done.
+TR_CLI="$(ls -d ~/.openclaw/npm/projects/*totalreclaw*/node_modules/@totalreclaw/totalreclaw/dist/cli/tr-cli.js \
+              ~/.openclaw/npm/node_modules/@totalreclaw/totalreclaw/dist/cli/tr-cli.js \
+              ~/.openclaw/extensions/totalreclaw/dist/cli/tr-cli.js 2>/dev/null | head -1)"
 node "$TR_CLI" status --json      # {"version":"…","paired":true,…}
 ```
 
@@ -90,11 +96,11 @@ The plugin self-reloads: after install it writes the gateway config it needs and
 
 ## Tools + CLI surface
 
-**Agent-facing (native memory contract):** `memory_search` (recall), `memory_get` (read one memory by citation), `memory_save` (explicit write — use for "remember X" / "save X" / "note X").
+**Agent-facing (native memory contract):** `memory_search` (recall), `memory_get` (read one memory by citation), `memory_save` (explicit write — use for "remember X" / "save X" / "note X"), and the four curation tools — `memory_pin` / `memory_unpin` / `memory_retype` / `memory_set_scope` (curate an EXISTING memory; each is an on-chain supersession).
 
-**Status + data CLI (`tr`, i.e. `node "$TR_CLI" …`):** `tr status` · `tr export` · `tr forget <factId>` · `tr pair`. The `tr remember --json "X"` CLI is the underlying store path the `memory_save` tool wraps — prefer the tool (it cannot be confused with GNU coreutils `tr`). Import + plan upgrade run via the gateway subcommand: `openclaw totalreclaw import from <source> --file <path> [--json]`, `openclaw totalreclaw upgrade [--json]`, `openclaw totalreclaw import status|abort`.
+**Status + data CLI (`tr`, i.e. `node "$TR_CLI" …`):** `tr status` · `tr export` · `tr forget <factId>` · `tr pair`. The curation subcommands (`tr pin` / `unpin` / `retype` / `set_scope`) also exist as a manual / debug path, but the agent should use the `memory_*` tools above — never shell out for curation. The `tr remember --json "X"` CLI is the underlying store path the `memory_save` tool wraps — prefer the tool for *storing a new fact* (it cannot be confused with GNU coreutils `tr`). Import + plan upgrade run via the gateway subcommand: `openclaw totalreclaw import from <source> --file <path> [--json]`, `openclaw totalreclaw upgrade [--json]`, `openclaw totalreclaw import status|abort`.
 
-**Curation (pin / unpin / retype / set-scope) is NOT available in this client.** There is no pin tool and no `tr pin` / `tr unpin` / `tr retype` / `tr set_scope` command — they exist only in the MCP server and NanoClaw. If the user asks you to pin, unpin, retype, or re-scope a memory, say plainly that this client cannot do it yet and that the memory was left unchanged. Do **not** store a new memory and describe it as pinned: that reports an operation that did not happen, exactly like the shell-`tr` failure above. The only curation this client supports is `tr forget <factId>`, which tombstones a memory on-chain.
+**Curation (pin / unpin / retype / set-scope) IS available — via the `memory_pin` / `memory_unpin` / `memory_retype` / `memory_set_scope` tools.** Each takes a `memory_id` (from a `memory_search` result) and performs an on-chain supersession: the old fact is tombstoned and a fresh one with the changed field is written, so the response carries a **new** `fact_id` + `tx_hash` — the original id is no longer active. **Always look up the memory first** via `memory_search` and pass a real result id; never invent or guess an id. Pinning makes a memory ground truth — nothing auto-supersedes or retracts it; `unpin` restores that. **Do not fake a curation op with `memory_save`** (storing a fact and calling it "pinned" reports an operation that did not happen, exactly like the shell-`tr` failure below) — `memory_save` only stores; use the curation tools. The matching `tr pin` / `unpin` / `retype` / `set_scope` CLI subcommands remain as a manual / debug path (`node "$TR_CLI" <op> <factId> --json`, never bare `tr`), but the agent should prefer the tools — there is no need to shell out for curation.
 
 The legacy `totalreclaw_*` agent tools and the `tr recall` CLI are retired — recall is `memory_search`, explicit capture is the `memory_save` tool (not a shell-out to `tr`). If a stale guide references them, follow this SKILL instead.
 

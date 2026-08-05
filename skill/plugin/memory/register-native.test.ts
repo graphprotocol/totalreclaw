@@ -345,4 +345,85 @@ const flushPlanDisabled = cap.flushPlanResolver({
 }) as unknown;
 assert.equal(flushPlanDisabled, null, 'flushPlanResolver must return null when cfg disables flush');
 
+// ---------------------------------------------------------------------------
+// Contract 6 (#573): when deps.curate is present, registerNativeMemory
+// registers the FOUR curation tools (memory_pin / memory_unpin /
+// memory_retype / memory_set_scope) AFTER the three read/write tools — seven
+// registerTool calls total, in that order. When deps.curate is ABSENT, the
+// curation tools are NOT registered (count stays 3) — the guard is what lets
+// a minimal caller wire read+write only without dead curation tools.
+//
+// This is the lockstep-critical assertion: if the `if (deps.curate)` guard or
+// any of the four registerTool calls is dropped, OpenClaw's loader silently
+// drops the missing tool(s) on every boot (manifest-shape.test.ts 1f guards
+// the contracts.tools side; this guards the registration side).
+// ---------------------------------------------------------------------------
+
+// fakeCurate backs the four curation tools — a recording closure so we can
+// prove the tools route through it (the same pattern fakeStore uses).
+let curateCalls: { op: string; factId: string }[] = [];
+const fakeCurate: NonNullable<TrNativeMemoryDeps['curate']> = async (input) => {
+  curateCalls.push({ op: input.op, factId: input.factId });
+  return {
+    ok: true,
+    op: input.op,
+    fact_id: input.factId,
+    new_fact_id: 'new-' + input.factId,
+    tx_hash: '0xtest',
+  };
+};
+
+// With curate: 7 tools, in order memory_search, memory_get, memory_save,
+// memory_pin, memory_unpin, memory_retype, memory_set_scope.
+reset();
+registerNativeMemory(fakeApi, {
+  recall: fakeRecall,
+  getById: fakeGetById,
+  store: fakeStore,
+  curate: fakeCurate,
+});
+assert.equal(
+  toolCalls.length,
+  7,
+  'with deps.curate: registerTool must be called seven times (3 read/write + 4 curation)',
+);
+const expectedNamesWithCuration = [
+  'memory_search',
+  'memory_get',
+  'memory_save',
+  'memory_pin',
+  'memory_unpin',
+  'memory_retype',
+  'memory_set_scope',
+];
+for (let i = 0; i < expectedNamesWithCuration.length; i++) {
+  assert.deepEqual(
+    toolCalls[i]!.opts,
+    { names: [expectedNamesWithCuration[i]!] },
+    `with-curated registerTool #${i} must use { names: ['${expectedNamesWithCuration[i]}'] }, got: ${JSON.stringify(toolCalls[i]!.opts)}`,
+  );
+}
+
+// Without curate (the original 3-tool contract still holds): the guard skips
+// the four curation registrations, so the count stays 3 and no curation name
+// appears. This proves the guard works both ways.
+reset();
+registerNativeMemory(fakeApi, {
+  recall: fakeRecall,
+  getById: fakeGetById,
+  store: fakeStore,
+});
+assert.equal(
+  toolCalls.length,
+  3,
+  'without deps.curate: registerTool stays at three (curation tools skipped)',
+);
+const registeredNoCurate = toolCalls.flatMap((c) => c.opts?.names ?? []);
+for (const cur of ['memory_pin', 'memory_unpin', 'memory_retype', 'memory_set_scope']) {
+  assert.ok(
+    !registeredNoCurate.includes(cur),
+    `without deps.curate: ${cur} must NOT be registered`,
+  );
+}
+
 console.log('register-native.test — OK');

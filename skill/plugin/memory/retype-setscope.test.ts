@@ -25,6 +25,14 @@ import {
 } from './retype-setscope.js';
 
 import {
+  parseCurationCliArgs,
+} from '../cli/tr-cli.js';
+import {
+  runCurationOp,
+  type CurationParsedArgs,
+} from './curation-op.js';
+
+import {
   buildV1ClaimBlob,
   readClaimFromBlob,
   readV1Blob,
@@ -137,6 +145,56 @@ function assert(cond: boolean, name: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// CLI: parseCurationCliArgs — retype / set_scope argument parsing (bad-args)
+// ---------------------------------------------------------------------------
+// Covers the `tr retype` / `tr set_scope` subcommand arg parser added in #563.
+// runCurationOp (success / not-found) is covered further below.
+
+{
+  const r = parseCurationCliArgs('retype', ['deadbeef-1234-5678-9abc-def012345678', 'preference']);
+  assert(r.ok === true, 'cli-parse retype: factId + newType ok');
+  if (r.ok) {
+    assert(r.args.factId === 'deadbeef-1234-5678-9abc-def012345678', 'cli-parse retype: factId captured');
+    assert(r.args.newType === 'preference', 'cli-parse retype: newType captured');
+  }
+}
+
+{
+  const r = parseCurationCliArgs('retype', ['deadbeef-1234-5678-9abc-def012345678', 'banana']);
+  assert(r.ok === false, 'cli-parse retype: invalid type → fail');
+  if (!r.ok) assert(/claim|preference|directive/i.test(r.error), 'cli-parse retype: error lists valid types');
+}
+
+{
+  const r = parseCurationCliArgs('retype', ['deadbeef-1234-5678-9abc-def012345678']);
+  assert(r.ok === false, 'cli-parse retype: missing newType → fail');
+}
+
+{
+  const r = parseCurationCliArgs('retype', []);
+  assert(r.ok === false, 'cli-parse retype: missing factId → fail');
+}
+
+{
+  const r = parseCurationCliArgs('set_scope', ['deadbeef-1234-5678-9abc-def012345678', 'work']);
+  assert(r.ok === true, 'cli-parse set_scope: factId + newScope ok');
+  if (r.ok) {
+    assert(r.args.factId === 'deadbeef-1234-5678-9abc-def012345678', 'cli-parse set_scope: factId captured');
+    assert(r.args.newScope === 'work', 'cli-parse set_scope: newScope captured');
+  }
+}
+
+{
+  const r = parseCurationCliArgs('set_scope', ['deadbeef-1234-5678-9abc-def012345678', 'banana']);
+  assert(r.ok === false, 'cli-parse set_scope: invalid scope → fail');
+}
+
+{
+  const r = parseCurationCliArgs('set_scope', ['deadbeef-1234-5678-9abc-def012345678']);
+  assert(r.ok === false, 'cli-parse set_scope: missing newScope → fail');
+}
+
+// ---------------------------------------------------------------------------
 // executeRetype / executeSetScope — integration-style with mock deps
 // ---------------------------------------------------------------------------
 
@@ -182,6 +240,73 @@ function buildMockDeps(opts: {
     }),
     _captured: captured,
   };
+}
+
+// ── CLI runCurationOp: retype / set_scope (#563) ────────────────────────────
+//
+// runCurationOp is the CLI subcommand core behind `tr retype` / `tr set_scope`.
+// It takes parsed args + injectable deps, delegates to executeRetype /
+// executeSetScope, and normalizes the result into a CLI result object. Covers
+// success + not-found; bad-args is covered by the parseCurationCliArgs tests
+// above. FAST_CONFIRM_OPTS stubs the read-after-write subgraph poll.
+
+// CLI retype success → ok:true, new_type set
+{
+  const v1Blob = buildV1ClaimBlob({
+    id: 'cli-retype-1',
+    text: 'I prefer PostgreSQL over MySQL',
+    type: 'claim',
+    source: 'user',
+    createdAt: new Date().toISOString(),
+    importance: 7,
+    confidence: 0.9,
+  });
+  const deps = buildMockDeps({ existingV1Blob: v1Blob });
+  const parsed: CurationParsedArgs = { op: 'retype', factId: 'cli-retype-1', newType: 'preference' };
+  const r = await runCurationOp(parsed, deps, FAST_CONFIRM_OPTS);
+  assert(r.ok === true, 'cli retype success: ok');
+  assert(r.op === 'retype', 'cli retype success: op echoed');
+  assert(r.fact_id === 'cli-retype-1', 'cli retype success: fact_id');
+  assert(r.new_type === 'preference', 'cli retype success: new_type set');
+  assert(r.previous_type === 'claim', 'cli retype success: previous_type captured');
+  assert(typeof r.new_fact_id === 'string', 'cli retype success: new_fact_id set');
+}
+
+// CLI set_scope success → ok:true, new_scope set
+{
+  const v1Blob = buildV1ClaimBlob({
+    id: 'cli-scope-1',
+    text: 'My manager is Alice',
+    type: 'claim',
+    source: 'user',
+    createdAt: new Date().toISOString(),
+    importance: 5,
+    confidence: 0.9,
+  });
+  const deps = buildMockDeps({ existingV1Blob: v1Blob });
+  const parsed: CurationParsedArgs = { op: 'set_scope', factId: 'cli-scope-1', newScope: 'work' };
+  const r = await runCurationOp(parsed, deps, FAST_CONFIRM_OPTS);
+  assert(r.ok === true, 'cli set_scope success: ok');
+  assert(r.new_scope === 'work', 'cli set_scope success: new_scope set');
+}
+
+// CLI retype not-found → ok:false, clear error
+{
+  const deps = buildMockDeps({ existingV1Blob: '{}', fetchReturnsNull: true });
+  const parsed: CurationParsedArgs = { op: 'retype', factId: 'missing-id', newType: 'preference' };
+  const r = await runCurationOp(parsed, deps, FAST_CONFIRM_OPTS);
+  assert(r.ok === false, 'cli retype missing: ok=false');
+  assert(r.fact_id === 'missing-id', 'cli retype missing: fact_id echoed');
+  assert(typeof r.error === 'string' && r.error.toLowerCase().includes('not found'), 'cli retype missing: error mentions not found');
+}
+
+// CLI set_scope not-found → ok:false, clear error
+{
+  const deps = buildMockDeps({ existingV1Blob: '{}', fetchReturnsNull: true });
+  const parsed: CurationParsedArgs = { op: 'set_scope', factId: 'missing-id', newScope: 'work' };
+  const r = await runCurationOp(parsed, deps, FAST_CONFIRM_OPTS);
+  assert(r.ok === false, 'cli set_scope missing: ok=false');
+  assert(typeof r.error === 'string' && r.error.toLowerCase().includes('not found'), 'cli set_scope missing: error mentions not found');
 }
 
 // Happy path — retype a claim to a preference
