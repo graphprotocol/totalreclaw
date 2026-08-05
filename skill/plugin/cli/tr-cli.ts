@@ -73,24 +73,23 @@ import { exportAllFacts } from './tr-cli-export-helper.js';
 // finally calls them. Parity reference for the deps wiring is the MCP server's
 // `buildPinDepsFromState` (mcp/src/index.ts); argument shapes follow the MCP
 // `totalreclaw_pin` / `totalreclaw_retype` / `totalreclaw_set_scope` tools.
+import { validatePinArgs, type PinOpDeps } from '../memory/pin.js';
+import { validateRetypeArgs, validateSetScopeArgs } from '../memory/retype-setscope.js';
+// runCurationOp + the Curation* types live in memory/curation-op.ts so the
+// agent-tool path (memory/tools.ts → index.ts) reuses the SAME normalizer the
+// CLI does, without importing this heavy bin module (#573). The execute*
+// functions are called inside runCurationOp; this CLI surface only validates
+// argv + builds the PinOpDeps, then hands both to runCurationOp.
 import {
-  executePinOperation,
-  validatePinArgs,
-  type PinOpDeps,
-} from '../memory/pin.js';
-import {
-  executeRetype,
-  executeSetScope,
-  validateRetypeArgs,
-  validateSetScopeArgs,
-} from '../memory/retype-setscope.js';
-import type { MemoryType, MemoryScope } from '../extraction/extractor.js';
+  runCurationOp,
+  type CurationOp,
+  type CurationParsedArgs,
+} from '../memory/curation-op.js';
 import { fetchFactById } from '../subgraph/subgraph-search.js';
 import { generateEmbedding, getEmbeddingDims } from '../embedding/embedding.js';
 import { LSHHasher } from '../embedding/lsh.js';
 import { encodeEmbeddingPayload } from '../embedding/embedding-codec.js';
 import { computeEntityTrapdoor } from '../extraction/claims-helper.js';
-import type { ConfirmIndexedOptions } from '../subgraph/confirm-indexed.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -563,37 +562,13 @@ async function cmdExport(rawArgs: string[]): Promise<void> {
 // into a CLI result object so the cmd wrapper can die() with one clean message
 // instead of an MCP content-block envelope.
 
-export type CurationOp = 'pin' | 'unpin' | 'retype' | 'set_scope';
-
-export interface CurationParsedArgs {
-  op: CurationOp;
-  factId: string;
-  reason?: string;
-  newType?: MemoryType;
-  newScope?: MemoryScope;
-}
-
+// CurationOp / CurationParsedArgs / CurationCliResult + runCurationOp are
+// imported from ../memory/curation-op.ts (shared with the agent-tool path,
+// #573). CurationParseResult stays here — it's CLI-only (the argv-parse result
+// that feeds runCurationOp).
 export type CurationParseResult =
   | { ok: true; args: CurationParsedArgs }
   | { ok: false; error: string };
-
-export interface CurationCliResult {
-  ok: boolean;
-  op: CurationOp;
-  fact_id: string;
-  new_fact_id?: string;
-  previous_status?: string;
-  new_status?: string;
-  previous_type?: string;
-  new_type?: string;
-  previous_scope?: string;
-  new_scope?: string;
-  idempotent?: boolean;
-  tx_hash?: string;
-  partial?: boolean;
-  reason?: string;
-  error?: string;
-}
 
 /** UUID-v4-ish shape check — same guard `cmdForget` applies. Real fact ids are
  * UUIDs; rejecting non-hex natural-language input here keeps a fabricated id
@@ -734,78 +709,6 @@ export function buildCurationDeps(ctx: CliContext): PinOpDeps {
       };
     },
   };
-}
-
-/**
- * Run a curation op end-to-end against injected deps. Mirrors the MCP server's
- * `handlePinSubgraphWithDeps` / retype / set_scope handlers: delegate to the
- * pure execute* fn and normalize its result into a CLI result object. Never
- * throws on op failure — surfaces `{ ok: false, error }` so the cmd wrapper
- * can die() with a clean message. `confirmOpts` threads the read-after-write
- * subgraph poll (the CLI omits it for real polling; tests stub it fast).
- */
-export async function runCurationOp(
-  args: CurationParsedArgs,
-  deps: PinOpDeps,
-  confirmOpts?: ConfirmIndexedOptions,
-): Promise<CurationCliResult> {
-  const { op, factId: fact_id } = args;
-  try {
-    if (op === 'pin' || op === 'unpin') {
-      const targetStatus = op === 'pin' ? 'pinned' : 'active';
-      const reason = op === 'pin' ? args.reason : undefined;
-      const r = await executePinOperation(fact_id, targetStatus, deps, reason, confirmOpts);
-      return {
-        ok: r.success,
-        op,
-        fact_id,
-        new_fact_id: r.new_fact_id,
-        previous_status: r.previous_status,
-        new_status: r.new_status,
-        idempotent: r.idempotent,
-        tx_hash: r.tx_hash,
-        partial: r.partial,
-        reason: r.reason,
-        error: r.error,
-      };
-    }
-
-    if (op === 'retype') {
-      const r = await executeRetype(fact_id, args.newType!, deps, confirmOpts);
-      return {
-        ok: r.success,
-        op,
-        fact_id,
-        new_fact_id: r.new_fact_id,
-        previous_type: r.previous_type,
-        new_type: r.new_type,
-        tx_hash: r.tx_hash,
-        partial: r.partial,
-        error: r.error,
-      };
-    }
-
-    // set_scope
-    const r = await executeSetScope(fact_id, args.newScope!, deps, confirmOpts);
-    return {
-      ok: r.success,
-      op,
-      fact_id,
-      new_fact_id: r.new_fact_id,
-      previous_scope: r.previous_scope,
-      new_scope: r.new_scope,
-      tx_hash: r.tx_hash,
-      partial: r.partial,
-      error: r.error,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      op,
-      fact_id,
-      error: `${op} failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
 }
 
 /** Shared cmd body for all four curation subcommands. */

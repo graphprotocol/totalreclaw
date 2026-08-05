@@ -13,7 +13,11 @@
     "tools": [
       "memory_search",
       "memory_get",
-      "memory_save"
+      "memory_save",
+      "memory_pin",
+      "memory_unpin",
+      "memory_retype",
+      "memory_set_scope"
     ]
   },
   "configSchema": {

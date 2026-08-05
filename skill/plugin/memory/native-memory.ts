@@ -90,7 +90,16 @@ import {
   type TrQuotaState,
   type TrPinnedFact,
 } from './memory-runtime.js';
-import { createMemorySearchTool, createMemoryGetTool, createMemorySaveTool } from './tools.js';
+import type { TrCurationFn } from './curation-runtime.js';
+import {
+  createMemorySearchTool,
+  createMemoryGetTool,
+  createMemorySaveTool,
+  createMemoryPinTool,
+  createMemoryUnpinTool,
+  createMemoryRetypeTool,
+  createMemorySetScopeTool,
+} from './tools.js';
 
 // ---------------------------------------------------------------------------
 // Types — the combined deps shape. Reconciles the two dep shapes the
@@ -124,6 +133,18 @@ export interface TrNativeMemoryDeps {
    * again (the original bug).
    */
   store: TrMemorySaveFn;
+  /**
+   * Curate closure: the CURATION pipeline (#573). Runs pin / unpin / retype /
+   * set_scope through `runCurationOp` (the SAME dispatch the CLI uses, extracted
+   * into the pure `memory/curation-op.ts` so this path does NOT pull the CLI
+   * bin graph in). Backs the four `memory_pin` / `memory_unpin` /
+   * `memory_retype` / `memory_set_scope` tools. Optional: when absent the four
+   * curation tools are not registered (the plugin degrades to memory_save's
+   * "store a NEW fact" path only — the agent must not confabulate a pin from a
+   * store, which is the original #563 bug). The tool descriptions enforce that
+   * in prose regardless; this closure is what makes curation actually work.
+   */
+  curate?: TrCurationFn;
   /** Optional quota state for the prompt builder's warning path. */
   quota?: TrQuotaState;
   /** Optional pinned-facts block surfaced by the prompt builder. */
@@ -223,6 +244,26 @@ export function registerNativeMemory(
   // declared in contracts.tools (openclaw.plugin.json) or the registration is
   // silently dropped — manifest-shape.test.ts guards that lockstep.
   api.registerTool(() => createMemorySaveTool(deps.store), { names: ['memory_save'] });
+
+  // (5) Register the four CURATION tools (#573). Each captures `deps.curate`
+  // (NOT `runtime`) and dispatches on its `op` literal. Guarded on
+  // `deps.curate` so a caller that wires only the read+write path (e.g. a
+  // future minimal install) does not register dead curation tools. The same
+  // `names` opts + contracts.tools lockstep applies — OpenClaw's loader
+  // silently drops a registerTool whose name is NOT declared in contracts.tools
+  // (openclaw.plugin.json), so all four names are declared there in the same
+  // change and asserted in manifest-shape.test.ts 1f.
+  //
+  // WHY FOUR TOOLS, NOT ONE `memory_curate`: MCP (the parity reference),
+  // the CLAUDE.md Feature Compatibility Matrix, and the §6 lesson (tool
+  // description wording is the behavioural control surface) all favour four
+  // tightly-named tools over one umbrella — see tools.ts header.
+  if (deps.curate) {
+    api.registerTool(() => createMemoryPinTool(deps.curate!), { names: ['memory_pin'] });
+    api.registerTool(() => createMemoryUnpinTool(deps.curate!), { names: ['memory_unpin'] });
+    api.registerTool(() => createMemoryRetypeTool(deps.curate!), { names: ['memory_retype'] });
+    api.registerTool(() => createMemorySetScopeTool(deps.curate!), { names: ['memory_set_scope'] });
+  }
 
   return runtime;
 }

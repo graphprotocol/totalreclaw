@@ -175,6 +175,29 @@ let manifest: Record<string, unknown>;
       'registerNativeMemory alongside memory_search/memory_get; OpenClaw\'s loader silently drops a ' +
       'registered tool that is NOT declared here, so this entry is load-bearing, not cosmetic)',
   );
+  // #573 — the four curation tools. registerNativeMemory registers each via
+  // api.registerTool(..., { names: ['memory_pin'] }) etc. when deps.curate is
+  // wired. OpenClaw's loader silently drops any whose name is NOT declared
+  // here, shipping the feature dead with all unit tests green — so each entry
+  // is load-bearing and asserted individually. NOTE: this block is the ONLY
+  // guard for these four names; the original 1f above hard-coded only the
+  // three native names, so without these lines a half-revert (registering the
+  // tools but dropping the contracts entries) would pass this test while the
+  // feature shipped dead. That is the exact "green tests over broken
+  // behaviour" trap the 2026-08-02 handoff warns about.
+  for (const curationTool of [
+    'memory_pin',
+    'memory_unpin',
+    'memory_retype',
+    'memory_set_scope',
+  ]) {
+    assert(
+      tools.includes(curationTool),
+      `manifest contracts.tools includes "${curationTool}" (#573 — registered by registerNativeMemory ` +
+        `when deps.curate is wired; OpenClaw's loader silently drops a registered tool that is NOT ` +
+        `declared here, so this entry is load-bearing, not cosmetic)`,
+    );
+  }
 }
 
 {

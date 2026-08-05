@@ -19,9 +19,11 @@ import {
 } from './pin.js';
 import {
   parseCurationCliArgs,
+} from '../cli/tr-cli.js';
+import {
   runCurationOp,
   type CurationParsedArgs,
-} from '../cli/tr-cli.js';
+} from './curation-op.js';
 import { buildCanonicalClaim, computeEntityTrapdoor } from '../extraction/claims-helper.js';
 import {
   appendDecisionLog,

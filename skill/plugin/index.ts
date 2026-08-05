@@ -151,7 +151,7 @@ import {
   runWeightTuningLoop,
   type ResolutionDecision as ContradictionDecision,
 } from './contradiction/contradiction-sync.js';
-import { searchSubgraph, searchSubgraphBroadened, getSubgraphFactCount, fetchFactById } from './subgraph/subgraph-search.js';
+import { searchSubgraph, searchSubgraphBroadened, getSubgraphFactCount, fetchFactById, type SubgraphSearchFact } from './subgraph/subgraph-search.js';
 import {
   executePinOperation,
   validatePinArgs,
@@ -163,6 +163,7 @@ import {
 } from './pairing/onboarding-cli.js';
 import { PluginHotCache, type HotFact } from './memory/hot-cache-wrapper.js';
 import { buildNativeStore } from './memory/native-store.js';
+import { buildNativeCurate } from './memory/curation-runtime.js';
 import { CONFIG, setRecoveryPhraseOverride } from './config.js';
 import { isKeychainMarker, KEYCHAIN_MARKER_SETUP_MSG } from './keychain-marker.js';
 import { buildRelayHeaders } from './billing/relay-headers.js';
@@ -2339,7 +2340,83 @@ function buildRecallDeps(logger: OpenClawPluginApi['logger']): TrNativeMemoryDep
     storeFacts: (facts) => storeExtractedFacts(facts, logger, 'explicit'),
   });
 
-  return { recall, getById, store, quota, pinned };
+  // -------------------------------------------------------------------
+  // curate(): the CURATION closure (#573). Routes pin / unpin / retype /
+  // set_scope through runCurationOp (the SAME dispatch the CLI uses, extracted
+  // into the pure memory/curation-op.ts). Mirrors the store closure: the
+  // truthful fail-soft + PinOpDeps-assembly contract lives in
+  // memory/curation-runtime.ts's buildNativeCurate (extracted for direct unit
+  // coverage, same split as native-store.ts); we inject the three deps that
+  // close over this module's live singletons.
+  //
+  // `isPaired` for curation requires `subgraphOwner` (not just `userId`):
+  // every curation op is a supersession that calls fetchFactById(owner, …) +
+  // submitFactBatchOnChain(…, { walletAddress: owner }), and both need the
+  // Smart Account address — userId (the EOA) would 404. This is the same
+  // precondition getById enforces (l.2254: `if (!subgraphOwner) return null`).
+  // fail-soft returns { ok:false, error:'not paired …' }, which the tool
+  // surfaces truthfully — the agent never confabulates a successful pin.
+  //
+  // buildDeps() is a FACTORY (not a pre-built object) because the module
+  // singletons can change across a hot-reload pair; rebuilt per call exactly
+  // as the CLI rebuilds per invocation (cli/tr-cli.ts:722-723). sourceAgent is
+  // 'openclaw-plugin-curated' — distinct from the CLI's 'tr-cli' (so on-chain
+  // / subgraph provenance distinguishes agent-tool curation from CLI curation)
+  // and from the auto-extraction 'openclaw-plugin-auto'. generateIndices is
+  // best-effort (mirrors cli/tr-cli.ts:688 + the MCP server): on embedder
+  // failure it falls back to word + entity trapdoors alone, so a curation op
+  // never fails purely because the embedding bundle is unavailable.
+  // -------------------------------------------------------------------
+  const curate: TrNativeMemoryDeps['curate'] = buildNativeCurate({
+    ensureInit: () => ensureInitialized(logger),
+    isPaired: () =>
+      !(needsSetup || !encryptionKey || !authKeyHex || !subgraphOwner),
+    buildDeps: (): PinOpDeps => {
+      const owner = subgraphOwner!;
+      return {
+        owner,
+        sourceAgent: 'openclaw-plugin-curated',
+        fetchFactById: (factId: string): Promise<SubgraphSearchFact | null> =>
+          fetchFactById(owner, factId, authKeyHex!),
+        // Plugin-native crypto helpers (cleaner than the CLI's manual
+        // hex↔base64 dance — see cli/tr-cli.ts:668-678 vs. these one-liners).
+        decryptBlob: (hexEncryptedBlob: string): string =>
+          decryptFromHex(hexEncryptedBlob, encryptionKey!),
+        encryptBlob: (plaintext: string): string =>
+          encryptToHex(plaintext, encryptionKey!),
+        submitBatch: async (payloads: Buffer[]) => {
+          const config = { ...getSubgraphConfig(), authKeyHex: authKeyHex!, walletAddress: owner };
+          const result = await submitFactBatchOnChain(payloads, config);
+          return { txHash: result.txHash, success: result.success };
+        },
+        generateIndices: async (text: string, entityNames: string[]) => {
+          if (!text) return { blindIndices: [] };
+          const wordIndices = generateBlindIndices(text);
+          let lshIndices: string[] = [];
+          let encryptedEmbedding: string | undefined;
+          try {
+            const embedding = await generateEmbedding(text);
+            const hasher = getLSHHasher(logger);
+            if (hasher && embedding) {
+              lshIndices = hasher.hash(embedding);
+              encryptedEmbedding = encryptToHex(encodeEmbeddingPayload(embedding), encryptionKey!);
+            }
+          } catch {
+            // Best-effort: word + entity trapdoors alone still surface the
+            // claim after the original is tombstoned (BM25-style recall). Same
+            // tolerance as cli/tr-cli.ts:701-704 and the auto-extraction path.
+          }
+          const entityTrapdoors = entityNames.map((n) => computeEntityTrapdoor(n));
+          return {
+            blindIndices: [...wordIndices, ...lshIndices, ...entityTrapdoors],
+            encryptedEmbedding,
+          };
+        },
+      };
+    },
+  });
+
+  return { recall, getById, store, curate, quota, pinned };
 }
 
 // ---------------------------------------------------------------------------

@@ -108,6 +108,8 @@ import type {
   ExtractedEntity,
 } from '../extraction/extractor.js';
 import type { TrMemorySaveFn, TrMemorySaveInput } from './memory-runtime.js';
+import type { TrCurationFn, TrCurationInput } from './curation-runtime.js';
+import type { CurationOp } from './curation-op.js';
 
 // ---------------------------------------------------------------------------
 // Types — loose on purpose. The plugin does not import OpenClaw's type
@@ -588,18 +590,17 @@ export function createMemorySaveTool(store: TrMemorySaveFn): AgentToolLike {
       'say "Saved" only when stored >= 1; if stored is 0 the fact was a ' +
       'near-duplicate; if ok is false, tell the user the store failed. ' +
       'This tool ONLY stores a NEW fact — it does not pin, unpin, retype, or ' +
-      're-scope an existing one. Curate an EXISTING memory with the TotalReclaw ' +
-      'CLI, invoked as `node "$TR_CLI" <cmd> --json` (resolve TR_CLI with the ' +
-      'glob in SKILL.md — NEVER run bare `tr`, which is GNU coreutils, not this ' +
-      'CLI): `pin <id> [--reason "…"]`, `unpin <id>`, `retype <id> <type>`, ' +
-      '`set_scope <id> <scope>`. Look up the id via memory_search first. If ' +
-      'TR_CLI does not resolve, say curation is unavailable — do not improvise. ' +
-      'There is no agent tool for these. NEVER use memory_save to fake a ' +
-      'curation op (e.g. storing a fact and describing it as "pinned") — that ' +
-      'reports an operation that did not happen. For storing a NEW fact, prefer ' +
-      'this tool over shelling out to `tr remember` (it cannot be confused with ' +
-      'GNU coreutils `tr`). Do NOT use this for background capture (that is ' +
-      'automatic).',
+      're-scope an existing one. Curate an EXISTING memory with the dedicated ' +
+      'tools: `memory_pin` / `memory_unpin` / `memory_retype` / ' +
+      '`memory_set_scope` (each takes a `memory_id` from a memory_search result; ' +
+      'each is an on-chain supersession that returns a NEW `fact_id` + ' +
+      '`tx_hash`). Look up the id via memory_search first. NEVER use ' +
+      'memory_save to fake a curation op (e.g. storing a fact and describing it ' +
+      'as "pinned") — that reports an operation that did not happen; ' +
+      'importance affects RANKING, pin/retype/set_scope change STATUS/TYPE/SCOPE. ' +
+      'For storing a NEW fact, prefer this tool over shelling out to `tr remember` ' +
+      '(it cannot be confused with GNU coreutils `tr`). Do NOT use this for ' +
+      'background capture (that is automatic).',
     parameters: {
       type: 'object',
       properties: {
@@ -716,6 +717,327 @@ export function createMemorySaveTool(store: TrMemorySaveFn): AgentToolLike {
           message: `Could not store that memory: ${msg}.`,
         });
       }
+    },
+  };
+}
+
+// ===========================================================================
+// Curation tools — memory_pin / memory_unpin / memory_retype / memory_set_scope
+// (#573). Four sibling tools, one captured `curate` closure that dispatches on
+// `op`. Mirrors `createMemorySaveTool` exactly: validate + forward, let the
+// closure own the domain logic + truthfulness.
+//
+// WHY FOUR TOOLS, NOT ONE:
+//   MCP (the parity reference — §3b) exposes four; the CLAUDE.md Feature
+//   Compatibility Matrix lists four; the §6 lesson (tool description wording
+//   is the behavioural control surface) argues for four tightly-named tools
+//   over one generic `memory_curate` with an `op` param — each op gets a
+//   focused, opinionated description instead of one diluted umbrella.
+//   §3b step 1's sketch showed a single `createMemoryCurateTool`, but at the
+//   DEPS layer both readings agree (one `curate?` closure dispatching on op);
+//   the fork is only at the tool surface, and four is the parity-correct call.
+//
+// ARGUMENT SHAPE (MCP parity, §3b step "MCP is the parity reference"):
+//   - `memory_id` (canonical) + `fact_id` (back-compat alias) — accept either,
+//     prefer memory_id. Mirrors `mcp/src/tools/helpers.ts` resolveMemoryId.
+//   - `reason`   (pin-only)
+//   - `new_type` (retype-only, enum v1 types)
+//   - `scope`    (set_scope-only, enum v1 scopes)
+//   The handler normalizes these into `TrCurationInput` (`factId` / `reason` /
+//   `newType` / `newScope`) before calling `curate` — `runCurationOp` consumes
+//   the camelCase shape, the agent sees the snake_case MCP shape.
+//
+// TRUTHFULNESS CONTRACT (same shape as memory_save):
+//   - missing/empty id → ok:false, curate NOT called (no silent no-op).
+//   - curate ok:false  → the error is surfaced verbatim; the agent relays the
+//     failure instead of claiming the op succeeded.
+//   - curate ok:true   → the new_fact_id + tx_hash are surfaced so the agent
+//     reports a REAL on-chain supersession, never a confabulated "pinned".
+// ===========================================================================
+
+/**
+ * Resolve the canonical memory id from a loosely-typed args object. Accepts
+ * `memory_id` (canonical, MCP-aligned) or `fact_id` (back-compat alias).
+ * Returns '' for missing/empty/non-string so the caller can fail truthfully
+ * WITHOUT calling curate — the agent must not drive a curation op into a
+ * silent no-op it then misreports as done (same gate as memory_save's `text`).
+ */
+function resolveMemoryId(params: Record<string, unknown>): string {
+  const a = params['memory_id'];
+  if (typeof a === 'string' && a.trim()) return a.trim();
+  const b = params['fact_id'];
+  if (typeof b === 'string' && b.trim()) return b.trim();
+  return '';
+}
+
+/**
+ * Shared execute body for the four curation tools. The per-op factory only
+ * differs in: the `op` literal, the description text, and which optional
+ * fields (`reason` / `new_type` / `scope`) the schema declares + the handler
+ * forwards. This helper centralizes the id-resolution + truthfulness relay so
+ * all four ops share one reviewed path.
+ */
+async function executeCurate(
+  curate: TrCurationFn,
+  op: CurationOp,
+  params: unknown,
+  extraFields: Pick<TrCurationInput, 'reason' | 'newType' | 'newScope'>,
+): Promise<AgentToolResultLike> {
+  const raw = asParamsRecord(params);
+  const factId = resolveMemoryId(raw);
+  if (!factId) {
+    return jsonResult({
+      ok: false,
+      op,
+      fact_id: '',
+      error: `memory_${op} requires a non-empty "memory_id" (or "fact_id") field.`,
+      message: `Could not ${op === 'set_scope' ? 're-scope' : op} that memory: no memory id was provided.`,
+    });
+  }
+
+  // Build the input carrying ONLY the supplied, validated extras — mirrors
+  // memory_save's "only forward truthy optionals" pattern so an absent reason
+  // / newType / newScope is OMITTED (not forwarded as undefined-as-garbage).
+  // runCurationOp then sees exactly the op-specific field it expects.
+  const input: TrCurationInput = { op, factId };
+  if (extraFields.reason) input.reason = extraFields.reason;
+  if (extraFields.newType) input.newType = extraFields.newType;
+  if (extraFields.newScope) input.newScope = extraFields.newScope;
+
+  try {
+    const result = await curate(input);
+    // Truthful human-readable message the agent relays verbatim. Branching is
+    // the heart of #573: ok:true + new_fact_id + tx_hash is the ONLY "done"
+    // case, and it always names the NEW id (supersession — the old id is dead).
+    let message: string;
+    if (!result.ok) {
+      const why = result.error ?? 'unknown error';
+      const verb = op === 'set_scope' ? 're-scope' : op;
+      message = `Could not ${verb} that memory: ${why}.`;
+    } else if (result.idempotent) {
+      message = `No change — that memory was already in the requested state.`;
+    } else {
+      const newId = result.new_fact_id ? ` (new id ${result.new_fact_id})` : '';
+      const partial = result.partial
+        ? ' [indexing — may take a few seconds to appear in recall]'
+        : '';
+      const verb =
+        op === 'pin' ? 'Pinned' : op === 'unpin' ? 'Unpinned' : op === 'retype' ? 'Retyped' : 'Re-scoped';
+      message = `${verb} the memory${newId}.${partial}`;
+    }
+    return jsonResult({ ...result, message });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const verb = op === 'set_scope' ? 're-scope' : op;
+    return jsonResult({
+      ok: false,
+      op,
+      fact_id: factId,
+      error: msg,
+      message: `Could not ${verb} that memory: ${msg}.`,
+    });
+  }
+}
+
+/**
+ * The pinned-memory guarantee, restated across pin/unpin/retype/set_scope
+ * descriptions: this is an on-chain supersession (NOT a memory_save), the id
+ * must come from memory_search first, results are reported truthfully, and
+ * storing at high importance is NOT a substitute. This is the §6 control
+ * surface — the same rule that failed to hold as SKILL.md prose has held as
+ * tool-description prose since 3.4.0.
+ *
+ * `whatThisChanges` is interpolated per-tool so the agent sees the SPECIFIC
+ * field this op moves (STATUS for pin/unpin, TYPE for retype, SCOPE for
+ * set_scope) — not a generic "STATUS/TYPE/SCOPE" that could read as "all three."
+ */
+function curationNote(whatThisChanges: string): string {
+  return (
+    'This performs an ON-CHAIN SUPERSESSION, not a store: the existing fact is ' +
+    'tombstoned and a replacement is written with the changed field, so the ' +
+    'response carries a NEW `fact_id` + `tx_hash` and the ORIGINAL id is no ' +
+    'longer active. Always look up the memory first with `memory_search` and ' +
+    'pass a real result id; never invent or guess an id. Report the result ' +
+    'truthfully — if `ok` is false, tell the user it failed and relay the ' +
+    'error; never claim a curation op succeeded that did not. Storing a fact ' +
+    'at high importance with `memory_save` is NOT a substitute — importance ' +
+    `affects RANKING; this op changes ${whatThisChanges}. Do NOT shell out to ` +
+    'a CLI (`tr` is GNU coreutils, not TotalReclaw); use this tool.'
+  );
+}
+
+/**
+ * memory_pin — lock a memory against auto-supersession. Captures the curate
+ * closure and dispatches with op='pin'.
+ *
+ * Wiring (#573):
+ *   api.registerTool(() => createMemoryPinTool(curate), { names: ['memory_pin'] });
+ */
+export function createMemoryPinTool(curate: TrCurationFn): AgentToolLike {
+  return {
+    name: 'memory_pin',
+    label: 'Memory Pin',
+    description:
+      'Pin ONE existing memory so it becomes ground truth — nothing the agent ' +
+      'extracts later can auto-supersede or retract it. Use this when the user ' +
+      'asks to pin / lock / protect / make permanent / never-overwrite a ' +
+      'specific memory they already have ("pin that", "lock this one", "make ' +
+      'sure X never gets overwritten"). ' +
+      curationNote('STATUS (pin/active)'),
+    parameters: {
+      type: 'object',
+      properties: {
+        memory_id: {
+          type: 'string',
+          description: 'The id of the memory to pin, from a memory_search result.',
+        },
+        fact_id: {
+          type: 'string',
+          description: 'Back-compat alias for memory_id. Prefer memory_id.',
+        },
+        reason: {
+          type: 'string',
+          maxLength: 256,
+          description: 'Optional human-readable reason for pinning (logged locally for tuning).',
+        },
+      },
+      required: ['memory_id'],
+      additionalProperties: false,
+    },
+    execute: async (_toolCallId, params) =>
+      executeCurate(curate, 'pin', params, {
+        reason: readStringParam(asParamsRecord(params), 'reason')?.slice(0, 256),
+      }),
+  };
+}
+
+/**
+ * memory_unpin — restore a pinned memory to normal (auto-supersessionable).
+ * Captures the curate closure and dispatches with op='unpin'.
+ *
+ * Wiring (#573):
+ *   api.registerTool(() => createMemoryUnpinTool(curate), { names: ['memory_unpin'] });
+ */
+export function createMemoryUnpinTool(curate: TrCurationFn): AgentToolLike {
+  return {
+    name: 'memory_unpin',
+    label: 'Memory Unpin',
+    description:
+      'Unpin ONE existing memory — remove its ground-truth protection so later ' +
+      'extraction can auto-supersede it again. Use this when the user asks to ' +
+      'unpin / unlock / unprotect a specific memory ("unpin that", "you can ' +
+      'overwrite X again now"). Unpinning a memory that is not currently pinned ' +
+      'is a no-op (idempotent). ' +
+      curationNote('STATUS (back to active)'),
+    parameters: {
+      type: 'object',
+      properties: {
+        memory_id: {
+          type: 'string',
+          description: 'The id of the memory to unpin, from a memory_search result.',
+        },
+        fact_id: {
+          type: 'string',
+          description: 'Back-compat alias for memory_id. Prefer memory_id.',
+        },
+      },
+      required: ['memory_id'],
+      additionalProperties: false,
+    },
+    execute: async (_toolCallId, params) => executeCurate(curate, 'unpin', params, {}),
+  };
+}
+
+/**
+ * memory_retype — change the taxonomy TYPE of an existing memory (e.g.
+ * preference → directive). Captures the curate closure, dispatches with
+ * op='retype', forwarding the validated new_type.
+ *
+ * Wiring (#573):
+ *   api.registerTool(() => createMemoryRetypeTool(curate), { names: ['memory_retype'] });
+ */
+export function createMemoryRetypeTool(curate: TrCurationFn): AgentToolLike {
+  return {
+    name: 'memory_retype',
+    label: 'Memory Retype',
+    description:
+      'Change the taxonomy TYPE of ONE existing memory (for example preference → ' +
+      'directive, or claim → commitment). Use this when the user asks to ' +
+      're-categorize / reclassify / change the type of a specific memory they ' +
+      'already have ("make that a directive instead", "reclassify X"). The text ' +
+      'and every other field are unchanged; only the type moves. ' +
+      curationNote('TYPE'),
+    parameters: {
+      type: 'object',
+      properties: {
+        memory_id: {
+          type: 'string',
+          description: 'The id of the memory to retype, from a memory_search result.',
+        },
+        fact_id: {
+          type: 'string',
+          description: 'Back-compat alias for memory_id. Prefer memory_id.',
+        },
+        new_type: {
+          type: 'string',
+          enum: [...VALID_MEMORY_TYPES],
+          description: 'New v1 taxonomy type. One of: claim, preference, directive, commitment, episode, summary.',
+        },
+      },
+      required: ['memory_id', 'new_type'],
+      additionalProperties: false,
+    },
+    execute: async (_toolCallId, params) => {
+      const raw = asParamsRecord(params);
+      const newType = readStringEnum(raw, 'new_type', VALID_MEMORY_TYPES) as MemoryType | undefined;
+      return executeCurate(curate, 'retype', params, newType ? { newType } : {});
+    },
+  };
+}
+
+/**
+ * memory_set_scope — change the life-domain SCOPE of an existing memory (e.g.
+ * misc → finance). Captures the curate closure, dispatches with op='set_scope',
+ * forwarding the validated scope.
+ *
+ * Wiring (#573):
+ *   api.registerTool(() => createMemorySetScopeTool(curate), { names: ['memory_set_scope'] });
+ */
+export function createMemorySetScopeTool(curate: TrCurationFn): AgentToolLike {
+  return {
+    name: 'memory_set_scope',
+    label: 'Memory Set Scope',
+    description:
+      'Change the life-domain SCOPE of ONE existing memory (for example misc → ' +
+      'finance, or unspecified → health). Use this when the user asks to ' +
+      're-scope / move / re-bucket a specific memory they already have ("put ' +
+      'that in my finance scope", "move X to personal"). The text and every ' +
+      'other field are unchanged; only the scope moves. ' +
+      curationNote('SCOPE'),
+    parameters: {
+      type: 'object',
+      properties: {
+        memory_id: {
+          type: 'string',
+          description: 'The id of the memory to re-scope, from a memory_search result.',
+        },
+        fact_id: {
+          type: 'string',
+          description: 'Back-compat alias for memory_id. Prefer memory_id.',
+        },
+        scope: {
+          type: 'string',
+          enum: [...VALID_MEMORY_SCOPES],
+          description: 'New life-domain scope. One of: work, personal, health, family, creative, finance, misc, unspecified.',
+        },
+      },
+      required: ['memory_id', 'scope'],
+      additionalProperties: false,
+    },
+    execute: async (_toolCallId, params) => {
+      const raw = asParamsRecord(params);
+      const newScope = readStringEnum(raw, 'scope', VALID_MEMORY_SCOPES) as MemoryScope | undefined;
+      return executeCurate(curate, 'set_scope', params, newScope ? { newScope } : {});
     },
   };
 }

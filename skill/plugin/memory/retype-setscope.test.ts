@@ -26,9 +26,11 @@ import {
 
 import {
   parseCurationCliArgs,
+} from '../cli/tr-cli.js';
+import {
   runCurationOp,
   type CurationParsedArgs,
-} from '../cli/tr-cli.js';
+} from './curation-op.js';
 
 import {
   buildV1ClaimBlob,
