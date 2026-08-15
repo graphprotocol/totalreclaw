@@ -371,6 +371,117 @@ async def test_malformed_data_edge_address_ignored() -> None:
         assert client._data_edge_address is None, f"bad data_edge {bad!r} should be ignored"
 
 
+# ---------------------------------------------------------------------------
+# #619 — mnemonic-mode billing-fetch FAILURE. Companion to the bundle-mode
+# fail-closed fix in test_client_bundle_mode.py (same billing-failure code
+# path, opposite population): mnemonic-mode clients have a legacy install
+# base, so pre-existing #439 best-effort behavior (proceed with the core's
+# default — production — DataEdge) is intentionally UNCHANGED. The only
+# new thing is a loud logger.warning naming the production default whenever
+# that fallback engages, so the risk is visible instead of silent. Bundle
+# mode (no legacy install base) fails closed instead — see
+# test_client_bundle_mode.py's #619 section.
+# ---------------------------------------------------------------------------
+
+PROD_DATA_EDGE_DEFAULT = "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca"
+
+
+@pytest.mark.asyncio
+async def test_mnemonic_client_billing_failure_proceeds_with_prod_default(caplog) -> None:
+    """Mnemonic mode keeps EXISTING behavior (#439) on a billing-fetch
+    failure: proceed with data_edge_address=None, which core resolves to
+    its hardcoded (production) default. #619 does not change this."""
+    import logging
+
+    client = _make_client()
+    patch_ctx, _ = _patch_billing(None, status_code=500)
+
+    with patch_ctx, caplog.at_level(logging.WARNING, logger="totalreclaw.client"):
+        chain_id = await client.resolve_chain_id()
+
+    assert chain_id == 84532  # DEFAULT_CHAIN_ID_FREE, unchanged fallback
+    assert client._data_edge_address is None  # unchanged — core default applies
+
+
+@pytest.mark.asyncio
+async def test_mnemonic_client_billing_failure_logs_loud_warning(caplog) -> None:
+    """#619's ONLY mnemonic-mode change: a billing-fetch failure that
+    leaves data_edge_address unresolved must now log a warning naming the
+    production DataEdge default, so the risk is visible instead of
+    silent."""
+    import logging
+
+    client = _make_client()
+    patch_ctx, _ = _patch_billing(None, raise_exc=httpx.ConnectError("DNS down"))
+
+    with patch_ctx, caplog.at_level(logging.WARNING, logger="totalreclaw.client"):
+        await client.resolve_chain_id()
+
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert PROD_DATA_EDGE_DEFAULT in message
+    assert "production" in message.lower()
+
+
+@pytest.mark.asyncio
+async def test_mnemonic_client_non_200_billing_also_logs_warning(caplog) -> None:
+    """The warning must fire for the non-200 failure branch too, not just
+    the exception branch."""
+    import logging
+
+    client = _make_client()
+    patch_ctx, _ = _patch_billing({"error": "internal"}, status_code=500)
+
+    with patch_ctx, caplog.at_level(logging.WARNING, logger="totalreclaw.client"):
+        await client.resolve_chain_id()
+
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    assert PROD_DATA_EDGE_DEFAULT in warnings[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_mnemonic_client_no_warning_when_billing_succeeds_without_data_edge_field(caplog) -> None:
+    """A SUCCESSFUL billing response that simply omits data_edge_address
+    (an older relay) is NOT a fetch failure — no warning should fire; this
+    is the pre-existing, legitimate 'use the prod default' case (proven
+    unaffected by test_data_edge_absent_threads_none above)."""
+    import logging
+
+    client = _make_client()
+    patch_ctx, _ = _patch_billing({"tier": "free"})  # 200 OK, no data_edge_address field
+
+    with patch_ctx, caplog.at_level(logging.WARNING, logger="totalreclaw.client"):
+        await client.resolve_chain_id()
+
+    assert client._data_edge_address is None
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warnings == []
+
+
+@pytest.mark.asyncio
+async def test_mnemonic_client_billing_failure_env_override_not_consumed(caplog) -> None:
+    """#619 scopes the TOTALRECLAW_DATA_EDGE_ADDRESS escape hatch to bundle
+    mode ONLY — mnemonic-mode behavior must stay byte-identical to
+    pre-#619 (#439), so the env var must NOT be silently adopted here even
+    if set; only the warning is new."""
+    import logging
+
+    client = _make_client()
+    patch_ctx, _ = _patch_billing(None, status_code=500)
+
+    with patch_ctx, patch.dict(
+        os.environ, {"TOTALRECLAW_DATA_EDGE_ADDRESS": STAGING_DATA_EDGE}
+    ), caplog.at_level(logging.WARNING, logger="totalreclaw.client"):
+        await client.resolve_chain_id()
+
+    # Unchanged: still None, core's default (prod) applies on write.
+    assert client._data_edge_address is None
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+
+
 def test_encode_wrapper_passes_data_edge_to_core() -> None:
     """userop.py wrapper forwards an explicit DataEdge to the core encoder."""
     from unittest.mock import MagicMock

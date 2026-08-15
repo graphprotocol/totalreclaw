@@ -16,6 +16,8 @@ Proves the derived-bundle-v1.md §4.6 consumption contract:
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 totalreclaw_core = pytest.importorskip("totalreclaw_core")
@@ -332,11 +334,148 @@ async def test_bundle_client_chain_id_fallback_preserves_bundle_value_on_billing
     """A billing-lookup failure (network error, non-200) must NOT clobber
     the bundle's own authoritative chain_id with the free-tier default —
     that would target the WRONG CHAIN outright, not just the wrong
-    environment's DataEdge."""
+    environment's DataEdge.
+
+    #619 update: a billing-fetch FAILURE with no DataEdge known now fails
+    CLOSED for bundle mode (see the #619 section below) rather than
+    silently proceeding, so this test supplies the
+    ``TOTALRECLAW_DATA_EDGE_ADDRESS`` escape hatch to reach the resolved
+    path and exercise the chain_id-preservation behavior in isolation.
+    """
     patch_ctx, _captured = _patch_billing(None, status_code=500)
 
-    with patch_ctx:
+    with patch_ctx, patch.dict(
+        os.environ, {"TOTALRECLAW_DATA_EDGE_ADDRESS": FAKE_STAGING_DATA_EDGE}
+    ):
         chain_id = await bundle_client.resolve_chain_id()
 
     assert chain_id == 100  # the bundle's own account.chain_id, preserved
     assert chain_id != 84532  # DEFAULT_CHAIN_ID_FREE — must not clobber
+
+
+# ---------------------------------------------------------------------------
+# 7. #619 REGRESSION — the FAILED-call variant of the S1 junk-fact class.
+#
+# #591 (above) closed the SKIPPED-call variant: from_bundle() used to mark
+# chain_id "resolved" eagerly, so resolve_chain_id() (and therefore the
+# billing lookup that populates _data_edge_address) never ran at all.
+#
+# The variant closed here is different: resolve_chain_id() DOES run and
+# DOES call the billing endpoint, but the call itself FAILS (network error,
+# timeout, non-200). _chain_id_fallback() correctly preserves the bundle's
+# own chain_id (proven above) — but prior to this fix,
+# _data_edge_address stayed None regardless, and every write helper in
+# userop.py treats data_edge_address=None as "use totalreclaw_core's
+# hardcoded default", which is the PRODUCTION DataEdge
+# (0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca) — byte-for-byte the same
+# S1 risk (tx 0xa70c3402…, 2026-08-03), just reached via a live billing
+# 500/timeout instead of a construction-time shortcut.
+#
+# Fix: resolve_chain_id() now fails CLOSED for bundle mode
+# (self._mnemonic is None) on a billing-fetch failure with no DataEdge
+# known — raising BundleDataEdgeUnresolvedError — unless the operator has
+# set TOTALRECLAW_DATA_EDGE_ADDRESS as an explicit override. Mnemonic-mode
+# clients keep their pre-existing #439 best-effort behavior (proceed with
+# the prod default) but now log a loud warning naming the risk.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bundle_client_billing_failure_no_override_raises_before_any_encode(bundle_client):
+    """THE #619 fix: a bundle-mode client whose billing fetch FAILS, with
+    no TOTALRECLAW_DATA_EDGE_ADDRESS override set, must raise instead of
+    silently resolving — and PROD_DATA_EDGE_DEFAULT must never reach the
+    on-chain call encoder."""
+    import totalreclaw.client as client_module
+    from totalreclaw.client import BundleDataEdgeUnresolvedError
+
+    patch_ctx, _captured = _patch_billing(None, status_code=500)
+
+    encode_calls: list[tuple] = []
+
+    async def _fake_store_fact(**kwargs):
+        # If this is ever reached, capture what DataEdge it would have
+        # encoded against — the assertion below is the real guard, but
+        # this also lets us fail loudly with a clear message if the
+        # raise doesn't actually stop execution before the write.
+        encode_calls.append(kwargs.get("data_edge_address"))
+        return "fake-fact-id"
+
+    with patch_ctx, patch.object(client_module, "store_fact", _fake_store_fact):
+        with pytest.raises(BundleDataEdgeUnresolvedError) as excinfo:
+            await bundle_client.remember("must never write to prod")
+
+    # The error names the risk and both remediations.
+    message = str(excinfo.value)
+    assert "production" in message.lower()
+    assert "refusing" in message.lower()
+    assert PROD_DATA_EDGE_DEFAULT in message
+    assert "TOTALRECLAW_DATA_EDGE_ADDRESS" in message
+
+    # No write was ever attempted — the raise happened before store_fact.
+    assert encode_calls == []
+    # And the client's own state never carries the prod default.
+    assert bundle_client._data_edge_address != PROD_DATA_EDGE_DEFAULT
+    assert bundle_client._data_edge_address is None
+    # Not resolved — a later retry gets a clean second attempt.
+    assert bundle_client._chain_id_resolved is False
+
+
+@pytest.mark.asyncio
+async def test_bundle_client_billing_failure_no_override_raises_on_direct_resolve(bundle_client):
+    """Same contract, exercised directly against resolve_chain_id() rather
+    than through remember() — proves the guard lives at resolution, not
+    only in the write path."""
+    from totalreclaw.client import BundleDataEdgeUnresolvedError
+
+    patch_ctx, _captured = _patch_billing(None, raise_exc=httpx.ConnectError("DNS down"))
+
+    with patch_ctx:
+        with pytest.raises(BundleDataEdgeUnresolvedError):
+            await bundle_client.resolve_chain_id()
+
+    assert bundle_client._chain_id_resolved is False
+    assert bundle_client._data_edge_address is None
+
+
+@pytest.mark.asyncio
+async def test_bundle_client_billing_failure_with_override_proceeds(bundle_client):
+    """A bundle-mode client whose billing fetch fails BUT has
+    TOTALRECLAW_DATA_EDGE_ADDRESS set must proceed using the env address —
+    the operator-controlled escape hatch named in the #619 error
+    message."""
+    import totalreclaw.client as client_module
+
+    patch_ctx, _captured = _patch_billing(None, status_code=500)
+
+    captured_kwargs: dict = {}
+
+    async def _fake_store_fact(**kwargs):
+        captured_kwargs.update(kwargs)
+        return "fake-fact-id"
+
+    with patch_ctx, patch.dict(
+        os.environ, {"TOTALRECLAW_DATA_EDGE_ADDRESS": FAKE_STAGING_DATA_EDGE}
+    ), patch.object(client_module, "store_fact", _fake_store_fact):
+        await bundle_client.remember("proceeds via env override")
+
+    assert bundle_client._chain_id_resolved is True
+    assert bundle_client._data_edge_address == FAKE_STAGING_DATA_EDGE
+    assert captured_kwargs["data_edge_address"] == FAKE_STAGING_DATA_EDGE
+    assert captured_kwargs["data_edge_address"] != PROD_DATA_EDGE_DEFAULT
+    # chain_id fallback still preserves the bundle's own known-correct
+    # chain (100), independent of the DataEdge override.
+    assert bundle_client._chain_id == 100
+
+
+@pytest.mark.asyncio
+async def test_bundle_client_billing_failure_empty_override_still_raises(bundle_client):
+    """An env var set to an empty/whitespace string must NOT count as a
+    real override — that would be a silent no-op escape hatch."""
+    from totalreclaw.client import BundleDataEdgeUnresolvedError
+
+    patch_ctx, _captured = _patch_billing(None, status_code=500)
+
+    with patch_ctx, patch.dict(os.environ, {"TOTALRECLAW_DATA_EDGE_ADDRESS": "   "}):
+        with pytest.raises(BundleDataEdgeUnresolvedError):
+            await bundle_client.resolve_chain_id()

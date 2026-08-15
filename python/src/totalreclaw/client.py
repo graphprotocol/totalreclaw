@@ -16,6 +16,8 @@ Legacy parameter names (mnemonic, relay_url) are still accepted for
 backwards compatibility but are deprecated.
 """
 from __future__ import annotations
+import logging
+import os
 from typing import Optional
 
 import httpx as _httpx
@@ -48,6 +50,9 @@ from .operations import (
     MAX_BATCH_GROUP_COUNT,
 )
 from .retype_setscope import execute_retype, execute_set_scope
+from .userop import DATA_EDGE_ADDRESS as _PROD_DATA_EDGE_ADDRESS_DEFAULT
+
+logger = logging.getLogger(__name__)
 
 # Smart Account address derivation constants
 # These match the CREATE2 deterministic address generation used by
@@ -118,6 +123,53 @@ def _data_edge_from_billing(payload: object) -> Optional[str]:
             ):
                 return s
     return None
+
+
+def _data_edge_address_env_override() -> Optional[str]:
+    """Read the operator's explicit ``TOTALRECLAW_DATA_EDGE_ADDRESS`` escape
+    hatch, if set.
+
+    Mirrors the TS clients' env override (``skill/plugin/config.ts``
+    ``CONFIG.dataEdgeAddress``, ``mcp/src/subgraph/chain-config.ts``
+    ``buildSubgraphOverrides``) — but this is a NEW capability for the
+    Python client (#619): prior to this fix, ``totalreclaw`` had no env
+    var at all for the DataEdge contract, so a billing-fetch failure had
+    no operator-controlled remediation other than "wait and retry".
+
+    Scope note: this is currently consulted ONLY on the billing-fetch
+    *failure* path (see :meth:`TotalReclaw.resolve_chain_id`), not as a
+    general env > billing > default precedence — a successful billing
+    response's ``data_edge_address`` still wins when the relay is
+    reachable. Widening this to full precedence (matching the TS clients)
+    is a separate, larger change; out of scope for this fail-closed fix.
+    """
+    raw = os.environ.get("TOTALRECLAW_DATA_EDGE_ADDRESS")
+    if raw is None:
+        return None
+    s = raw.strip()
+    return s or None
+
+
+class BundleDataEdgeUnresolvedError(RuntimeError):
+    """Raised when a bundle-mode client cannot confirm the target DataEdge.
+
+    Bundle-mode clients (:meth:`TotalReclaw.from_bundle`) have no local
+    source of truth for the environment-specific DataEdge contract — only
+    the relay's ``/v1/billing/status`` response carries it (#366). If that
+    fetch fails (network error, timeout, non-200) and no
+    ``TOTALRECLAW_DATA_EDGE_ADDRESS`` override is set, silently proceeding
+    would fall through to ``totalreclaw_core``'s hardcoded DEFAULT
+    DataEdge, which is the **production** contract
+    (``0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca``) — writing a
+    staging/self-hosted host's facts onto the production vault. This is
+    the exact failure class confirmed live 2026-08-03 (S1, tx
+    ``0xa70c3402…``), for the *skipped-call* variant (#591). This
+    exception closes the *failed-call* variant (#619): bundle mode has no
+    legacy install base, so failing closed here is safe — a mnemonic-mode
+    client keeps its pre-existing best-effort fallback (with a loud
+    warning) since retained back-compat outweighs the risk for that
+    population.
+    """
 
 
 def _get_eoa_account(mnemonic: str):
@@ -290,6 +342,13 @@ class TotalReclaw:
         # default DataEdge (correct for prod). Set for chain/env-isolated
         # environments such as the staging Gnosis DataEdge.
         self._data_edge_address: Optional[str] = None
+        # #619 — did the LAST resolve_chain_id() billing fetch actually
+        # fail (network error / timeout / non-200), as opposed to
+        # succeeding with a payload that simply omits data_edge_address
+        # (an older relay — that's a legitimate "use the prod default"
+        # case, not a failure)? Only the FAILURE case triggers the bundle-
+        # mode fail-closed guard and the mnemonic-mode warning below.
+        self._billing_fetch_failed: bool = False
 
     @classmethod
     def from_bundle(
@@ -407,6 +466,8 @@ class TotalReclaw:
         self._chain_id: int = bundle.account.chain_id
         self._chain_id_resolved: bool = False
         self._data_edge_address: Optional[str] = None
+        # #619 — see the matching field in __init__ for the full contract.
+        self._billing_fetch_failed: bool = False
 
         return self
 
@@ -483,6 +544,31 @@ class TotalReclaw:
         signed for Base Sepolia but the relay routed them to Gnosis,
         producing silent AA23 failures (QA-V1CLEAN-VPS-20260418 Bug #11);
         post-ops-1 the same failure would hit free users.
+
+        **#619 — DataEdge fail-closed for bundle mode.** A billing-fetch
+        FAILURE (network error, timeout, non-200 — as opposed to a
+        successful response that simply omits ``data_edge_address``, an
+        old-relay case that is a legitimate "use the prod default")
+        leaves ``self._data_edge_address`` at ``None``. For a bundle-mode
+        client (``self._mnemonic is None``) that means every write helper
+        in ``userop.py`` would silently fall through to
+        ``totalreclaw_core``'s hardcoded PRODUCTION DataEdge default —
+        the exact S1 junk-fact class (tx ``0xa70c3402…``, 2026-08-03),
+        this time via the *failed*-call path rather than the *skipped*-
+        call path #591 already closed. Bundle mode has no legacy install
+        base, so this method now fails closed for it: it raises
+        :class:`BundleDataEdgeUnresolvedError` instead of resolving,
+        unless ``TOTALRECLAW_DATA_EDGE_ADDRESS`` is set (the operator's
+        explicit escape hatch). Raising happens *before*
+        ``self._chain_id_resolved`` is set, so a later retry (relay comes
+        back up, or the operator sets the env var) gets a clean second
+        attempt rather than being stuck with a poisoned "resolved" state.
+
+        Mnemonic-mode behavior is intentionally UNCHANGED (pre-existing
+        #439 semantics: proceed with the core's default DataEdge) — except
+        it now logs a loud ``logger.warning`` naming the production
+        default whenever this fallback engages, so the risk is at least
+        visible instead of silent.
         """
         if self._chain_id_resolved:
             return self._chain_id
@@ -502,6 +588,7 @@ class TotalReclaw:
         if session_id:
             headers["X-TotalReclaw-Session"] = session_id
 
+        billing_fetch_failed = False
         try:
             async with _httpx.AsyncClient(
                 timeout=CHAIN_ID_AUTODETECT_TIMEOUT_SECONDS,
@@ -516,6 +603,7 @@ class TotalReclaw:
                 self._chain_id = _chain_id_from_billing(payload)
                 self._data_edge_address = _data_edge_from_billing(payload)
             else:
+                billing_fetch_failed = True
                 self._chain_id = self._chain_id_fallback()
         except Exception:
             # Best-effort — network, timeout, or auth issues all fall back
@@ -528,7 +616,52 @@ class TotalReclaw:
             # facts are addressed on, and defaulting THAT away to Base
             # Sepolia would target the wrong chain outright, not just the
             # wrong environment's DataEdge.
+            billing_fetch_failed = True
             self._chain_id = self._chain_id_fallback()
+
+        self._billing_fetch_failed = billing_fetch_failed
+
+        if billing_fetch_failed and self._data_edge_address is None:
+            if self._mnemonic is None:
+                # Bundle mode (#619): fail closed unless the operator has
+                # set an explicit escape-hatch override.
+                env_override = _data_edge_address_env_override()
+                if env_override is not None:
+                    self._data_edge_address = env_override
+                else:
+                    raise BundleDataEdgeUnresolvedError(
+                        "TotalReclaw (bundle mode): the billing fetch to "
+                        f"{billing_url} failed, so the authoritative "
+                        "DataEdge for this environment could not be "
+                        "confirmed. Refusing to fall back to the "
+                        "production DataEdge default "
+                        f"({_PROD_DATA_EDGE_ADDRESS_DEFAULT}) — a bundle-"
+                        "mode client has no other way to know it isn't "
+                        "meant to target production, and silently "
+                        "proceeding here is exactly how the S1 junk-fact "
+                        "class happens (facts written to the prod vault "
+                        "from a staging/self-hosted host). To proceed: "
+                        f"(1) make the relay at {self._relay_url} "
+                        "reachable so billing can resolve the correct "
+                        "DataEdge, or (2) set the "
+                        "TOTALRECLAW_DATA_EDGE_ADDRESS environment "
+                        "variable to the correct contract address for "
+                        "this environment."
+                    )
+            else:
+                # Mnemonic mode (#439): behavior is UNCHANGED — proceed
+                # with the core's default DataEdge — but this must be
+                # loud, not silent.
+                logger.warning(
+                    "TotalReclaw: billing fetch to %s failed — falling "
+                    "back to totalreclaw_core's default DataEdge, which "
+                    "is the PRODUCTION contract (%s). If this client is "
+                    "meant to target staging or a self-hosted DataEdge, "
+                    "writes issued now will silently land on PRODUCTION "
+                    "instead.",
+                    billing_url,
+                    _PROD_DATA_EDGE_ADDRESS_DEFAULT,
+                )
 
         self._chain_id_resolved = True
         return self._chain_id
