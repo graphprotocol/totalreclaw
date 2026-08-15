@@ -14,8 +14,20 @@ Cross-spec invariants enforced here:
 - Domain typehash, scope typehash, and grant typehash strings are duplicated
   verbatim from ``SessionKeyModule.sol``. Any drift breaks on-chain verify.
 - ``selectors`` are hashed via ``keccak256(abi.encodePacked(selectors))`` —
-  i.e. 4-byte selectors concatenated, NOT ABI-encoded with length prefix.
-  This matches the Solidity ``keccak256(abi.encodePacked(g.selectors))``.
+  matching the Solidity ``keccak256(abi.encodePacked(g.selectors))`` over the
+  ``bytes4[] memory`` field. **Non-obvious Solidity quirk (see #584):**
+  ``abi.encodePacked`` on an ARRAY argument does NOT tightly concatenate the
+  4-byte elements. Packing only strips the top-level length prefix; each
+  array ELEMENT is still encoded at its normal ABI width, so every
+  ``bytes4`` selector is right-padded (left-aligned) to a full 32-byte word
+  before the elements are concatenated and hashed. Verified by compiling
+  Solidity: ``abi.encodePacked(bytes4[2])`` has length 64, not 8. Mirrored
+  here by padding each 4-byte selector to 32 bytes before ``b"".join(...)``.
+  The cross-language parity fixture (cred-9,
+  ``tests/parity/fixtures/session-key-grant-v1.json``) locks this: its
+  ``eip712_hash`` only reproduces under the padded encoding (see
+  ``tests/parity/session-key-grant-roundtrip.ts`` and
+  ``python/tests/test_session_key_signing.py::TestKnownAnswerDigest``).
 - Domain name is ``"TotalReclawSessionKey"``, version ``"1"``. ``chainId``
   + ``verifyingContract`` (the SessionKeyModule address) are the binding
   fields that prevent cross-chain / cross-module replay.
@@ -150,9 +162,17 @@ class SessionKeyPermissionGrant:
     # -----------------------------------------------------------------
 
     def scope_struct_hash(self) -> bytes:
-        """``keccak256(abi.encode(SCOPE_TYPEHASH, target, keccak(packedSelectors), valueMax))``."""
+        """``keccak256(abi.encode(SCOPE_TYPEHASH, target, keccak(packedSelectors), valueMax))``.
+
+        The inner ``packedSelectors`` hash mirrors Solidity's
+        ``abi.encodePacked(bytes4[] memory)``, which pads EACH array element
+        to a full 32-byte word (only the array's length prefix is dropped —
+        see the module docstring and #584). Right-pad every 4-byte selector
+        to 32 bytes before concatenating, do NOT tight-pack them.
+        """
         selectors_norm = _normalize_selectors(self.selectors)
-        packed_selectors_hash = keccak(b"".join(selectors_norm))
+        padded_selectors = b"".join(s.ljust(32, b"\x00") for s in selectors_norm)
+        packed_selectors_hash = keccak(padded_selectors)
         return keccak(
             abi_encode(
                 ["bytes32", "address", "bytes32", "uint256"],

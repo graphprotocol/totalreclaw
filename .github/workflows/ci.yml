@@ -290,6 +290,8 @@ jobs:
         run: cd tests/parity && npm install --no-audit --no-fund
       - name: Cross-language executeBatch calldata parity (TS/WASM side)
         run: cd tests/parity && npx tsx userop-batch-parity.test.ts
+      - name: Session-key EIP-712 grant digest parity (TS/viem side, cred-9, #584)
+        run: cd tests/parity && npx tsx session-key-grant-roundtrip.ts
 
   # NOTE: Relay unit tests run in the private totalreclaw-relay repo CI.
   # This job runs the E2E smoke test against a real relay + PostgreSQL
