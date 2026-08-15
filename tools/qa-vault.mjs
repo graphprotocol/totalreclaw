@@ -1,27 +1,34 @@
 /**
  * QA driver for the vault SPA — flow-adaptive.
  *
- * The SPA is mid-migration from a Phase-1 recovery-phrase entry flow to a
- * passkey-based "Keeper" flow (PR #329, feat/spa-functional). Production and PR
- * previews can therefore present EITHER surface. This driver detects which one
+ * The SPA has gone through several entry-flow generations. Production and PR
+ * previews can therefore present ANY of them. This driver detects which one
  * the app lands on at runtime and drives it accordingly:
  *
- *   - LEGACY (phrase-entry): the current production flow. Paste-and-derive form
+ *   - LEGACY (phrase-entry): the original pre-#329 flow. Paste-and-derive form
  *     with `input[placeholder="word 1"]`, submit, land on /vault. UNCHANGED.
- *   - PASSKEY (#329 "Keeper"): app routes to /bootstrap. A fresh browser context
- *     has no local vault, so the app shows the choose screen. We attach a CDP
- *     WebAuthn virtual authenticator (mirroring the config in the SPA's own E2E,
- *     app/e2e/bootstrap-unlock.mjs — ctap2/internal/PRF) and drive the
- *     "I have a recovery phrase" → restore flow: it derives keys from the SAME
- *     known QA phrase (so it lands on the real vault with real memories, exactly
- *     like the legacy flow) and enrols a passkey via the virtual authenticator.
- *     Post-restore the SPA navigates to /vault which its router redirects to the
- *     real post-auth surface (/memory).
+ *   - BOOTSTRAP (#329 "Keeper"): app routes to /bootstrap and shows the choose
+ *     screen ("Create a new vault" / "I have a recovery phrase"). We attach a
+ *     CDP WebAuthn virtual authenticator (mirroring the config in the SPA's own
+ *     E2E, app/e2e/bootstrap-unlock.mjs — ctap2/internal/PRF) and drive the
+ *     "I have a recovery phrase" → restore flow. Since PR #588 (phrase escrow),
+ *     the import step routes through an "escrow-consent" interstitial ("Back up
+ *     your recovery phrase?") before landing on the vault — the driver declines
+ *     it ("Not now") so QA runs never write escrow records.
+ *   - UNLOCK (#588 "escrow recovery"): a device with no local vault record now
+ *     routes to /unlock instead of /bootstrap, showing a four-way ladder
+ *     ("Recover with passkey" / "Open a backup file" / "Use recovery phrase
+ *     instead" / "Create a new vault") — or, for a device with a cached vault
+ *     record, a two-way ladder ("Unlock with passkey" / "Use recovery phrase
+ *     instead"). Both expose "Use recovery phrase instead" as the same
+ *     phrase-entry toggle, so one driver function covers both. This is the
+ *     REAL production entry point today: a fresh Playwright context always has
+ *     no local vault record, so this is the path exercised on every QA run.
  *
- * Either way the driver asserts the SAME downstream invariants: it reached the
- * vault, the memory surface rendered, and there were no console/page/network
- * errors. `reachedVault` in the report is true for BOTH /vault (legacy) and
- * /memory (passkey) so the internal workflow's gate is unchanged.
+ * All three converge on the SAME downstream invariants: reached the vault, the
+ * memory surface rendered, no console/page/network errors. `reachedVault` in
+ * the report is true for BOTH /vault (legacy) and /memory (bootstrap/unlock) so
+ * the internal workflow's gate is unchanged.
  *
  * The phrase NEVER leaves this process: it's pulled from the keychain via
  * `security` (or QA_RECOVERY_PHRASE in CI), held in process memory only, typed
@@ -120,35 +127,44 @@ async function attachVirtualAuthenticator(context, page) {
 }
 
 /**
- * Decide which surface the app rendered. Races the two known entry markers:
- *   - legacy phrase-entry form: input[placeholder="word 1"]
- *   - passkey Keeper: /bootstrap or /unlock URL, or the choose-screen copy.
- * Returns "legacy" | "passkey" | "unknown".
+ * Decide which surface the app rendered. URL is the fastest, most reliable
+ * signal (App.tsx routes a fresh/no-record device to /unlock since #588, and
+ * /bootstrap is now only reached explicitly); text markers are the fallback
+ * for a slow client-side route resolution. The two flows' phrase-entry
+ * button copy is deliberately distinct ("I have a recovery phrase" on
+ * /bootstrap's choose screen vs "Use recovery phrase instead" on /unlock's
+ * ladder) so the fallback race can't cross-match.
+ * Returns "legacy" | "bootstrap" | "unlock" | "unknown".
  */
 async function detectSurface(page) {
-  // URL is the fastest signal for the passkey build (router lands on
-  // /bootstrap for a fresh context, /unlock if a wrapped vault is cached).
   const url = page.url();
-  if (/\/(bootstrap|unlock)(\b|\/|$)/.test(url)) return "passkey";
+  if (/\/bootstrap(\b|\/|$)/.test(url)) return "bootstrap";
+  if (/\/unlock(\b|\/|$)/.test(url)) return "unlock";
 
   try {
     const marker = await Promise.race([
       page
         .waitForSelector('input[placeholder="word 1"]', { timeout: 12000 })
         .then(() => "legacy"),
-      // Keeper choose-screen / restore entry points.
+      // #329 bootstrap choose-screen.
+      page
+        .waitForSelector('text=I have a recovery phrase', { timeout: 12000 })
+        .then(() => "bootstrap"),
+      // #588 unlock ladder (no-vault four-way, or locked two-way).
       page
         .waitForSelector(
-          'text=Create a new vault, text=I have a recovery phrase, text=Unlock with passkey',
+          'text=Use recovery phrase instead, text=Recover with passkey',
           { timeout: 12000 },
         )
-        .then(() => "passkey"),
+        .then(() => "unlock"),
     ]);
     return marker;
   } catch {
     // Neither marker within the window — re-check URL in case a late redirect
-    // moved us onto a passkey route.
-    if (/\/(bootstrap|unlock)(\b|\/|$)/.test(page.url())) return "passkey";
+    // moved us onto a known route.
+    const url2 = page.url();
+    if (/\/bootstrap(\b|\/|$)/.test(url2)) return "bootstrap";
+    if (/\/unlock(\b|\/|$)/.test(url2)) return "unlock";
     return "unknown";
   }
 }
@@ -174,32 +190,60 @@ async function driveLegacy(page, phrase) {
 }
 
 /**
- * PASSKEY path (#329): drive the Keeper restore-from-phrase flow. This derives
- * keys from the SAME known QA phrase, so it lands on the real vault with real
- * memories (equivalent to the legacy flow), while exercising passkey enrolment
- * via the virtual authenticator.
+ * Shared tail: wait for the SPA to land on the vault (or show a visible
+ * error) after a restore/unlock action fires. Used by every driving path.
+ */
+async function waitForVaultOrError(page) {
+  // doBootstrap / unlockWithPhrase: derive keys → relay (/v1/smart-account,
+  // /v1/register) → enrol passkey (virtual authenticator) → wrap → navigate
+  // /memory (or /vault, redirected to /memory by the router). Also watch for
+  // a visible error so we don't hang the full window.
+  try {
+    await Promise.race([
+      page.waitForURL(/\/(memory|vault)(\b|\/|$)/, { timeout: 30000 }),
+      page.waitForSelector("text=Failed to fetch", { timeout: 30000 }),
+      page.waitForSelector("text=couldn’t", { timeout: 30000 }),
+      page.waitForSelector("text=Invalid", { timeout: 30000 }),
+    ]);
+  } catch {
+    /* timeout — capture whatever state the page is in */
+  }
+}
+
+/**
+ * PR #588 added an "escrow-consent" interstitial ("Back up your recovery
+ * phrase?") to the /bootstrap restore path, offering to save an encrypted
+ * copy of the phrase to the relay or as a downloaded file. QA must NOT create
+ * escrow records or trigger file downloads on every run, so this always
+ * declines via the "Not now" button when the step appears. Non-fatal and
+ * fast to skip when the step doesn't show (e.g. the /unlock phrase-entry
+ * path, whose unlockWithPhrase() call has no escrow branch at all).
+ */
+async function declineEscrowConsentIfPresent(page) {
+  const notNow = page.getByRole("button", { name: "Not now" });
+  try {
+    await notNow.waitFor({ timeout: 4000 });
+  } catch {
+    return; // step never appeared on this path — nothing to decline
+  }
+  await notNow.click();
+}
+
+/**
+ * BOOTSTRAP path (#329, still reachable via /bootstrap deep links or older
+ * preview builds): drive the Keeper choose-screen restore-from-phrase flow.
+ * This derives keys from the SAME known QA phrase, so it lands on the real
+ * vault with real memories (equivalent to the legacy flow), while exercising
+ * passkey enrolment via the virtual authenticator.
  *
  * Requires attachVirtualAuthenticator() to have run first.
  *
- * The phrase is typed into the restore textarea and never logged. We do NOT use
- * the "Create a new vault" branch: it would mint a throwaway vault + phrase each
- * run and land on an empty vault, which can't assert real memories render.
+ * The phrase is typed into the restore textarea and never logged. We do NOT
+ * use the "Create a new vault" branch: it would mint a throwaway vault +
+ * phrase each run and land on an empty vault, which can't assert real
+ * memories render.
  */
-async function drivePasskey(page, phrase) {
-  // If the app cached a wrapped vault it may show /unlock instead of /bootstrap.
-  // A fresh CI context won't, but handle it defensively: prefer the passkey
-  // unlock button; fall back to the recovery-phrase route if offered.
-  if (/\/unlock(\b|\/|$)/.test(page.url())) {
-    const unlockBtn = page.getByRole("button", { name: "Unlock with passkey" });
-    if (await unlockBtn.isVisible().catch(() => false)) {
-      await unlockBtn.click();
-      await page
-        .waitForURL(/\/(memory|vault)(\b|\/|$)/, { timeout: 20000 })
-        .catch(() => {});
-      return;
-    }
-  }
-
+async function driveBootstrap(page, phrase) {
   // Choose screen → "I have a recovery phrase" (restore). Wait for the choose
   // screen to settle (PRF gate resolves "checking" → "choose").
   await page
@@ -218,19 +262,53 @@ async function drivePasskey(page, phrase) {
   );
   await page.getByRole("button", { name: "Restore vault" }).click();
 
-  // doBootstrap: derive keys → relay (/v1/smart-account, /v1/register) → enrol
-  // passkey (virtual authenticator) → wrap → navigate /vault → router redirect
-  // → /memory. Also watch for a visible error so we don't hang the full window.
-  try {
-    await Promise.race([
-      page.waitForURL(/\/(memory|vault)(\b|\/|$)/, { timeout: 30000 }),
-      page.waitForSelector("text=Failed to fetch", { timeout: 30000 }),
-      page.waitForSelector("text=couldn’t", { timeout: 30000 }),
-      page.waitForSelector("text=Invalid", { timeout: 30000 }),
-    ]);
-  } catch {
-    /* timeout — capture whatever state the page is in */
-  }
+  // #588: a valid import now routes through the escrow-consent interstitial
+  // before landing on /memory — decline it.
+  await declineEscrowConsentIfPresent(page);
+
+  await waitForVaultOrError(page);
+}
+
+/**
+ * UNLOCK path (#588 phrase escrow, PR #588 merged 2026-08-03): the real
+ * production entry point today. App.tsx routes any device with no local
+ * vault record straight to /unlock, which shows a four-way recovery ladder
+ * ("Recover with passkey" / "Open a backup file" / "Use recovery phrase
+ * instead" / "Create a new vault"); a device WITH a cached vault record shows
+ * a two-way ladder ("Unlock with passkey" / "Use recovery phrase instead").
+ * Both variants expose the identical "Use recovery phrase instead" toggle
+ * into the same phrase-entry form, so one function drives either.
+ *
+ * We deliberately never click "Recover with passkey", "Open a backup file",
+ * or "Create a new vault": the virtual authenticator has no enrolled
+ * credential yet (so passkey recovery would just fail), there's no backup
+ * file to open, and creating a new vault would land on an empty vault with
+ * no real memories to assert against. The known QA phrase is the one branch
+ * that both authenticates AND lands on real data — same rationale as the
+ * bootstrap path above.
+ */
+async function driveUnlock(page, phrase) {
+  await page
+    .getByText("Use recovery phrase instead", { exact: false })
+    .waitFor({ timeout: 15000 });
+  await page.getByText("Use recovery phrase instead", { exact: false }).click();
+
+  await page.waitForSelector(
+    'textarea[placeholder="twelve words separated by spaces"]',
+    { timeout: 10000 },
+  );
+  await page.fill(
+    'textarea[placeholder="twelve words separated by spaces"]',
+    phrase,
+  );
+  await page.getByRole("button", { name: "Restore & enrol passkey" }).click();
+
+  // unlockWithPhrase() has no escrow branch (see CryptoContext.tsx), so this
+  // step is not expected to appear here — but guard anyway in case a future
+  // revision folds escrow-consent into this path too.
+  await declineEscrowConsentIfPresent(page);
+
+  await waitForVaultOrError(page);
 }
 
 async function run() {
@@ -306,12 +384,14 @@ async function run() {
 
   // Detect which surface rendered, then drive it.
   const surface = await detectSurface(page);
-  const formReady = surface === "legacy" || surface === "passkey";
+  const formReady = surface === "legacy" || surface === "bootstrap" || surface === "unlock";
 
   if (surface === "legacy") {
     await driveLegacy(page, phrase);
-  } else if (surface === "passkey") {
-    await drivePasskey(page, phrase);
+  } else if (surface === "bootstrap") {
+    await driveBootstrap(page, phrase);
+  } else if (surface === "unlock") {
+    await driveUnlock(page, phrase);
   }
 
   // Give a beat for React Query / paginated subgraph calls to settle.
@@ -329,9 +409,9 @@ async function run() {
 
   await browser.close();
 
-  // Both surfaces converge on a vault view: legacy → /vault, passkey → /memory.
-  // Treat either as "reached the vault" so the internal workflow's gate is
-  // surface-agnostic.
+  // All surfaces converge on a vault view: legacy → /vault, bootstrap/unlock →
+  // /memory. Treat any as "reached the vault" so the internal workflow's gate
+  // is surface-agnostic.
   const reachedVault = /\/(vault|memory)(\b|\/|$)/.test(finalUrl);
 
   const report = {
