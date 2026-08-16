@@ -5,16 +5,40 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.6.0] - Unreleased
+## [2.6.0] - 2026-08-16
 
-The `2.6.0` line was opened by #547 (canonical f16 embedding codec, #543) and
-is still unreleased (`2.6.0-rc.1` on npm; PyPI/crates.io still on 2.5.5 as of
-this entry). This entry logs only the derived-bundle-v1 addition below —
-#543's embedding-codec changes are not individually logged here.
+Two additive surfaces: the `derived-bundle-v1` credential bundle (Option E
+Phase 2) and the canonical f16 embedding codec (internal#479 Part A). Minor,
+not major — nothing existing changes signature or output, and
+`test_bundle_vault_matches_legacy_derivation` is what entitles the bundle work
+to a minor bump: a bundle-derived vault key is byte-identical to the legacy
+mnemonic-derived one.
+
+The `2.6.0` line was opened by #547 on 2026-07-20 and published as
+`2.6.0-rc.1` (npm only) the same day. **That RC predates #587 and carries no
+bundle bindings** — it is superseded by `2.6.0-rc.2`, which is the content
+promoted here. All three artifacts (npm, PyPI, crates.io) ship 2.6.0 from one
+commit; a version skew between the WASM and PyO3 halves would let a TS client
+and a Python client disagree about bundle serialisation, which is exactly the
+bug class the parity fixture exists to prevent.
+
+**Claim discipline for everything in the Phase 2 line** (design memo §3 — these
+three sentences travel with every Phase 2 release note, guide, and matrix row):
+
+1. *Phase 2 removes the recovery phrase from agent hosts. It does not improve
+   memory confidentiality at a compromised host — the encryption key still
+   materialises in RAM on every recall, and ciphertext is public on the Gnosis
+   subgraph.*
+2. *Until Phase 3, the provisioned signing key carries full Smart Account owner
+   authority and is not revocable. Treat a leaked bundle as you would a leaked
+   phrase, minus its portability.*
+3. *Your recovery phrase remains your root and your only recovery path. After
+   migration it no longer exists on this machine.*
 
 ### Added
 
 - **[#581] `derived-bundle-v1` credential bundle — core derivation, PyO3 + WASM bindings (Option E Phase 2).** New `bundle` module: `DerivedBundleV1`, `derive_bundle_from_mnemonic`, `parse_bundle_v1`, `validate_bundle_v1`, `bundle_to_json`. A **composition**, not a new derivation — the four `vault` keys are exactly `crypto::derive_keys_from_mnemonic` + `crypto::derive_lsh_seed`'s existing outputs, and `signing.private_key`/`address` are exactly `wallet::derive_eoa`'s output (now EIP-55 checksummed for cross-client parity — see below). The bundle never carries the BIP-39 mnemonic or the 64-byte seed; `parse_bundle_v1`/`validate_bundle_v1` reject loudly (never a silent downgrade) on unknown `version`/`schema`, malformed hex, an unknown `signing.kind`, an `owner-eoa` bundle carrying a `grant`, a `session-key` bundle with an inconsistent grant, or a `signing.address` that doesn't match `signing.private_key`. `smart_account` is a required argument to `derive_bundle_from_mnemonic` — this crate has no CREATE2 helper (the Smart Account address is derived via an `eth_call` RPC round-trip in every client today, out of scope for a pure-computation crate), so unlike the design doc's sketched signature, callers must supply it. PyO3: `derive_bundle_from_mnemonic`, `parse_bundle_v1` (returns bytes for key material, matching `derive_keys_from_mnemonic`'s convention), `validate_bundle_v1`. WASM: `deriveBundleFromMnemonic`, `parseBundleV1`, `validateBundleV1` — present in both the `nodejs` and `./web` (browser) builds. Cross-language parity fixture at `tests/parity/fixtures/derived-bundle-v1.json`. Spec: `docs/specs/totalreclaw/client-consistency.md` ("Credential Material"). Ships `signing.kind = "owner-eoa"` only; `session-key` is parsed/validated (closed enum, forward-compatible schema) but not derivable yet — that lands with the signing-delegation phase.
+- **[#543 / internal#479 Part A] Canonical f16 embedding codec + universal decoder.** New `embedding_codec` module hoists the cross-client pre-encryption embedding payload format into core so TS/MCP/Python share one byte-for-byte definition. `EMBEDDING_DIMS = 640` (the literal was previously scattered through store/search/lsh); `encode_embedding_canonical(&[f32]) -> String` packs LE f16 at `len == 640` and LE f32 otherwise (the 640 guard exists because a non-640 f16 write would be misread by the length-inferring decoder), base64 standard alphabet, padded; `decode_embedding_universal(&str) -> Result<Vec<f32>>` is the forever-reader, dispatching across canonical base64(LE-f16), legacy TS JSON array, and legacy f32 binary. Encrypt/decrypt wrapping stays client-side — this is pure packing/unpacking of the float vector that gets encrypted. Fixes mixed-client vaults silently degrading foreign-format facts to word-index matching (bidirectional: the plugin could not read Hermes binary, and Python choked on plugin JSON). Base version opened by #547.
 
 ## [2.5.6] - 2026-07-10
 
