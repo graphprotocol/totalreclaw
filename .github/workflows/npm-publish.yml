@@ -143,6 +143,22 @@ jobs:
           echo "Package name: $(node -e "console.log(require('./package.json').name)")"
           echo "Version: $(node -e "console.log(require('./package.json').version)")"
 
+      - name: Copy repo README into the composed package root (#577)
+        # wasm-pack writes ITS OWN generic README.md into each --out-dir
+        # (pkg/nodejs/README.md, pkg/web/README.md), but npm only reads a
+        # README at the PACKAGE ROOT (pkg/README.md here) to populate the
+        # registry's readme/readmeFilename metadata — which is what
+        # renders on the npmjs.com package page. The composed root
+        # manifest above never got a root README, so every published
+        # @totalreclaw/core (through 2.6.0) shipped with NO README on npm
+        # at all: `npm view @totalreclaw/core readme` returned "No README
+        # data found", confirmed by unpacking a published tarball — only
+        # nodejs/README.md + web/README.md existed, nothing at the
+        # tarball root. Ship the repo's real, hand-maintained README
+        # instead (same file crates.io + PyPI already use via
+        # Cargo.toml's `readme = "README.md"`).
+        run: cp rust/totalreclaw-core/README.md rust/totalreclaw-core/pkg/README.md
+
       - name: Apply RC version suffix (rc mode only)
         if: inputs.release-type == 'rc'
         run: |
@@ -176,7 +192,7 @@ jobs:
           fi
           echo "OK: $NAME@$VERSION not yet published, proceeding"
 
-      - name: Upgrade npm to latest (required for tokenless OIDC publish)
+      - name: Pin npm to 11 (required for tokenless OIDC publish)
         if: inputs.dry-run == false
         # npm 10.x (Node 22) signs provenance with OIDC but still PUTs with a
         # legacy token → E404 after NPM_TOKEN expired (the 2026-06-07 core run).
@@ -350,7 +366,7 @@ jobs:
           fi
           echo "OK: $NAME@$VERSION not yet published, proceeding"
 
-      - name: Upgrade npm to latest (required for tokenless OIDC publish)
+      - name: Pin npm to 11 (required for tokenless OIDC publish)
         if: inputs.dry-run == false
         # The npm CLI shipped with Node 22 (npm 10.x) signs provenance with
         # OIDC but still expects a legacy auth token for the actual PUT.
@@ -444,6 +460,28 @@ jobs:
             exit 1
           fi
           echo "OK: $NAME@$VERSION not yet published, proceeding"
+
+      - name: Pin npm to 11 (defense-in-depth, #577)
+        if: inputs.dry-run == false
+        # @totalreclaw/skill-nanoclaw currently has NO README on npm
+        # (`npm view @totalreclaw/skill-nanoclaw readme` returns empty),
+        # even though the published 3.0.0 tarball DOES contain a real
+        # root README.md (unlike @totalreclaw/core's issue — this is a
+        # different mechanism, not the nested-wasm-pack-outdir bug).
+        # Observed: the registry's top-level readme/readmeFilename fields
+        # mirror whichever publish happened most recently BY WALL-CLOCK
+        # TIME, not whichever carries the `latest` dist-tag — and this
+        # package's most recent publish was an RC on 2026-04-25
+        # (3.1.1-rc.19), published with whatever npm ships by default on
+        # this runner (no pin), with no stable publish since to overwrite
+        # it with good data. core/mcp-server/plugin already pin npm@11
+        # (documented npm 12.0.0 --provenance/OIDC regression elsewhere
+        # in this workflow); pin it here too so the next publish (RC or
+        # stable) runs on the same known-good npm CLI instead of an
+        # unpinned default that has drifted before.
+        run: |
+          npm install -g npm@11
+          npm --version
 
       - name: Publish
         if: inputs.dry-run == false
@@ -602,7 +640,7 @@ jobs:
           fi
           echo "OK: $NAME@$VERSION not yet published, proceeding"
 
-      - name: Upgrade npm to latest (required for tokenless OIDC publish)
+      - name: Pin npm to 11 (required for tokenless OIDC publish)
         if: inputs.dry-run == false
         # npm 10.x (Node 22) signs provenance with OIDC but still PUTs with a
         # legacy token → E404 after NPM_TOKEN expired (the 2026-06-07 core run).

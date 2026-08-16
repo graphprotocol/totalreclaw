@@ -19,11 +19,22 @@ Used natively by [`totalreclaw-memory`](https://crates.io/crates/totalreclaw-mem
 - `wasm` — WASM bindings via `wasm-bindgen` (consumed by `@totalreclaw/core` npm package).
 - `python` / `python-extension` — PyO3 bindings (consumed by `totalreclaw-core` PyPI package).
 
-## Usage
+## Installation
+
+```bash
+# TypeScript / JavaScript (WASM)
+npm install @totalreclaw/core
+```
+
+```bash
+# Python (PyO3)
+pip install totalreclaw-core
+```
 
 ```toml
+# Rust
 [dependencies]
-totalreclaw-core = "2.0"
+totalreclaw-core = "2"
 ```
 
 Most Rust users should depend on [`totalreclaw-memory`](https://crates.io/crates/totalreclaw-memory), which bundles core into a high-level `Memory` trait.
