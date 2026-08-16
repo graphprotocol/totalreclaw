@@ -207,10 +207,20 @@ jobs:
         run: |
           # crates.io index propagation can take a few seconds after publish.
           # Poll until the version we depend on shows up (or bail after ~2 min).
+          #
+          # crates.io's API policy REJECTS requests with no User-Agent (403,
+          # not 404) — see https://crates.io/policies#crawlers. Without a UA
+          # this loop 403'd on every single attempt, burned the full 24x5s
+          # window, and reported "Timed out waiting for crates.io propagation"
+          # even though the core crate WAS live seconds after publish (found
+          # while fixing #625, the same latent bug as promote-rc.yml's
+          # validate-rc-exists step — this one is live on the default
+          # `crate=all` publish-crates.yml run, not just the retired promote
+          # workflow).
           CORE_VERSION=$(python3 -c "import tomllib,sys; d=tomllib.load(open('rust/totalreclaw-core/Cargo.toml','rb')); print(d['package']['version'])")
           echo "Waiting for totalreclaw-core@$CORE_VERSION on crates.io..."
           for i in $(seq 1 24); do
-            if curl -sSf "https://crates.io/api/v1/crates/totalreclaw-core/$CORE_VERSION" >/dev/null 2>&1; then
+            if curl -sSf -H 'User-Agent: totalreclaw-ci (https://github.com/p-diogo/totalreclaw)' "https://crates.io/api/v1/crates/totalreclaw-core/$CORE_VERSION" >/dev/null 2>&1; then
               echo "totalreclaw-core@$CORE_VERSION is live"
               exit 0
             fi

@@ -13,6 +13,20 @@ real-user QA on staging.
 > [openclaw/clawhub#3212](https://github.com/openclaw/clawhub/issues/3212).
 > npm is now the only channel for the plugin.
 
+> **Retired workflow — `promote-rc.yml` (2026-08-16, issue #625).** The
+> "publish RC, then promote the same artifact to stable" two-step no longer
+> exists as a working path. `promote-rc.yml` failed on npm, PyPI, AND
+> crates.io the same day it was last used (core 2.6.0 → all three
+> registries) — every failure was a gate bug, not a content problem, and the
+> gate bugs turned out to be structural (npm Trusted Publisher binds
+> `@totalreclaw/core` / `@totalreclaw/mcp-server` to `npm-publish.yml` only,
+> exactly like the plugin before it; no publish workflow ever created the RC
+> git tag its tag-backfill step depended on; PyPI/crates.io "promote" were
+> always no-op placeholders). The file now fails fast with a pointer instead
+> of silently misleading. **The single procedure for every package, RC or
+> stable, is dispatching the relevant `publish-*.yml` with `-f
+> release-type=stable`** — see "Standard flow" below.
+
 This guide is for maintainers. Users install stable artifacts via the
 integration-specific setup guides (`openclaw-setup.md`, `hermes-setup.md`,
 etc.) and don't need to know about RCs.
@@ -71,7 +85,7 @@ Auto-QA (Phase 1: manual dispatch / Phase 2: webhook-triggered)
     └─ GO
         │
         ▼
-Trigger promote-rc.yml (or dispatch publish-*.yml with release-type=stable)
+Dispatch the SAME publish-*.yml with release-type=stable
     │
     ▼
 Stable artifacts land on public registries (latest / default tag)
@@ -168,33 +182,51 @@ differ. Ship with the table below in front of you.
    skill in `rc-mode`; point it at the RC versions. Reports land in
    `totalreclaw-internal/docs/notes/QA-<integration>-<YYYYMMDD>.md`.
 
-5. **On GO verdict:** trigger `promote-rc.yml` for the npm pieces
-   (they ship new artifacts at the stable version). For PyPI and crates.io,
-   dispatch `publish-*.yml` with `release-type=stable` — those registries
-   have no retag mechanism, so "promote" is a fresh publish of identical
-   source at the stable version string.
+5. **On GO verdict: dispatch the SAME `publish-*.yml` workflow again, with
+   `release-type=stable`.** There is no separate "promote" workflow
+   (`promote-rc.yml` was retired 2026-08-16, issue #625 — see the note at
+   the top of this guide). This is a fresh publish of the same source tree
+   at the clean stable version string, not a repack of the RC artifact —
+   true for npm, PyPI, AND crates.io alike, since none of the three
+   registries has a retag mechanism.
+
+   First, bump the checked-in version (`package.json` / `pyproject.toml` /
+   `Cargo.toml`) to the clean stable string via a normal PR to `main` (drop
+   any `-rc.N` suffix — the RC suffix only ever existed in-workflow, never
+   committed). Then dispatch:
 
    ```bash
-   gh workflow run promote-rc.yml \
+   # npm (core, client, mcp-server, nanoclaw, plugin, all)
+   gh workflow run npm-publish.yml \
      -f package=core \
-     -f rc-version=2.1.0-rc.1
-   # (stable-version auto-derived to 2.1.0)
+     -f release-type=stable
+
+   # crates.io (totalreclaw-core, totalreclaw-memory, all)
+   gh workflow run publish-crates.yml \
+     -f crate=all \
+     -f release-type=stable
+
+   # PyPI — PyO3 core
+   gh workflow run publish-pypi.yml \
+     -f release-type=stable
+
+   # PyPI — Python client
+   gh workflow run publish-python-client.yml \
+     -f release-type=stable
    ```
 
-   > **⚠️ The OpenClaw plugin (`@totalreclaw/totalreclaw`) is npm-published ONLY
-   > via `npm-publish.yml` — never `promote-rc.yml`.** npm allows exactly one
-   > Trusted Publisher per package, and the plugin's is `npm-publish.yml` (which
-   > does both `rc` and `stable` via `release-type`). `promote-rc.yml` no longer
-   > lists `plugin` for npm (removed 2026-07-13, consolidation). To promote the
-   > plugin to npm stable, bump `skill/plugin/package.json` to the clean version
-   > (drop the `-rc.N` suffix) and dispatch:
-   > ```bash
-   > gh workflow run npm-publish.yml -f package=plugin -f release-type=stable
-   > ```
-   > This rebuilds from source at the stable version (vs `promote-rc.yml`'s
-   > re-pack of the exact RC tarball — the accepted tradeoff for a single, clean
-   > publisher). npm is the plugin's only channel since the ClawHub retirement
-   > (2026-07-30, see the note at the top of this guide).
+   Each workflow's own "Guard — refuse to republish an existing version"
+   step (npm) / "already uploaded" tolerance (crates) makes this idempotent
+   to re-run — the same property `promote-rc.yml` used to advertise, now
+   provided directly by the publish workflows instead of a second layer on
+   top of them.
+
+   This has been the OpenClaw plugin's ONLY npm path since 2026-07-13 (npm
+   allows exactly one Trusted Publisher per package, and the plugin's is
+   `npm-publish.yml`) — the same constraint that, as of 2026-08-16, also
+   applies to `@totalreclaw/core` and `@totalreclaw/mcp-server`. It is now
+   simply the procedure for every package on every registry, not a
+   plugin-specific exception.
 
 6. **Advertise the new stable to the fleet — set `LATEST_STABLE_PYTHON` on BOTH
    relay services.** This is the single env flip that makes the automatic update
@@ -291,16 +323,26 @@ To actively yank a broken RC:
   but disappear from normal resolution.
 - **crates.io**: `cargo yank --version 2.1.0-rc.1 totalreclaw-core`
 
-### Promote fails
+### Stable publish fails (formerly "promote fails")
 
-The `promote-rc.yml` workflow's `validate-rc-exists` job refuses to run
-against an RC version that isn't actually published. Check:
+There is no separate promote step to debug — the stable dispatch runs the
+exact same `publish-*.yml` job graph as the RC dispatch did, just with
+`release-type=stable`. So a stable-publish failure is a normal
+`publish-*.yml` failure. Check:
 
-1. Is the `rc-version` input spelled exactly right? (`-rc.1` for
-   npm/crates; `rc1` for PyPI.)
-2. Did the RC publish succeed? Check the `publish-*.yml` run history.
-3. If the RC was yanked/deprecated, it may fail lookup. Republish RC at
-   the next rc-number and re-promote.
+1. Did the version-bump PR (dropping the `-rc.N` suffix) actually merge to
+   `main` before you dispatched? The workflow builds from the checked-in
+   version, not from the RC's in-workflow-mutated one.
+2. Each package's own "Guard — refuse to republish an existing version"
+   step (npm) fails loud if that exact version is already on the registry
+   — bump the version rather than re-dispatch with the same one.
+3. npm specifically: confirm which auth path the package actually uses.
+   `@totalreclaw/core`, `@totalreclaw/mcp-server`, and
+   `@totalreclaw/totalreclaw` (the plugin) publish via OIDC Trusted
+   Publisher bound to `npm-publish.yml` — no `NODE_AUTH_TOKEN` involved, so
+   an expired `NPM_TOKEN` secret is never the cause for those three.
+   `@totalreclaw/client` and `@totalreclaw/skill-nanoclaw` still use the
+   classic `NODE_AUTH_TOKEN` secret.
 
 ### Stable rollback
 
@@ -319,10 +361,11 @@ If a stable release ships and is later discovered to be broken:
   `release-type=stable` directly with a tested patch. Mark it as a
   hotfix in the announcement so the next feature wave doesn't skip the
   QA gate.
-- **Re-run promote as idempotent.** `promote-rc.yml` republishes the
-  stable artifact each time. Running it twice with the same inputs
-  usually results in npm's "version already exists" branch, which the
-  workflow tolerates.
+- **Re-running the stable dispatch is idempotent.** Each `publish-*.yml`
+  job's own guard treats an already-published version as a tolerated
+  no-op (npm: explicit "already published" catch; crates: "already
+  uploaded" grep on `cargo publish`'s output) rather than a hard failure —
+  so re-dispatching `release-type=stable` after a partial failure is safe.
 
 ## Policy reference
 

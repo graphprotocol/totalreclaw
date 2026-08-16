@@ -1,389 +1,118 @@
-# Promote a release candidate to stable.
+# Promote RC to stable — RETIRED 2026-08-16 (issue #625).
 #
-# After `publish-*.yml` with `release-type: rc` publishes artifacts at a
-# pre-release version (e.g. 2.1.0-rc.1 on npm/crates, 2.1.0rc1 on PyPI),
-# and after `qa-totalreclaw` returns GO against those artifacts, this
-# workflow publishes the SAME content at the stable version string.
-# Per-registry behavior:
+# This workflow's job graph could not deliver what its name promised, for
+# reasons that don't reduce to a single fixable bug:
 #
-#   npm       -> republish the tarball at the stable version; the RC stays
-#                at the `rc` dist-tag for rollback; `latest` moves to stable.
-#   crates    -> cargo has no retag; republish at stable version (identical
-#                content modulo version string). Old RC remains available.
-#   PyPI      -> upload stable wheel. PyPI mandates distinct filenames per
-#                version; `pip install foo` resolves to stable-version after
-#                promote.
+#   1. `promote-npm` published with a classic `NODE_AUTH_TOKEN`, but npm
+#      allows exactly ONE Trusted Publisher per package, and
+#      @totalreclaw/core + @totalreclaw/mcp-server (like @totalreclaw/
+#      totalreclaw, the OpenClaw plugin, before it) are both bound
+#      EXCLUSIVELY to `npm-publish.yml`'s OIDC (tokenless) publish step. A
+#      token-authenticated PUT against an OIDC-only package 404s — this is
+#      an npm registry policy, not something a workflow change here can
+#      route around. It is the exact failure that got the plugin excluded
+#      from this job on 2026-07-13; core and mcp-server needed the same
+#      exclusion, which only leaves @totalreclaw/client and
+#      @totalreclaw/skill-nanoclaw (still classic-token, no Trusted
+#      Publisher conflict) as npm packages this workflow could ever
+#      actually promote.
 #
-# ClawHub was a supported promote target until 2026-07-30; the channel was
-# retired after a registry-side duplicate-slug-row defect made publishes
-# permanently invisible. See docs/guides/release-process.md.
+#   2. `tag-stable-release` resolves its source SHA by reading an RC git tag
+#      that the RC publish is supposed to have created — but NO publish
+#      workflow in this repo creates an RC tag except the plugin job in
+#      npm-publish.yml (and the plugin was never a promote-rc.yml package).
+#      So this step failed unconditionally, for every package this workflow
+#      could otherwise act on, regardless of npm/PyPI/crates.io outcome.
+#      Fixing it for real means adding tag-on-publish to every publish-*.yml
+#      job (8+ jobs across 4 workflows) plus a `contents: write` permission
+#      bump on each — a materially larger, riskier change than "fix this
+#      workflow's gate bugs," and out of scope here.
 #
-# Safety: this workflow does NOT fabricate content. It checks out the same
-# commit SHA as the RC publish and re-runs the publish pipeline with
-# `release-type: stable` + the derived stable version. Mismatched RC vs
-# workflow-run commit = hard failure (to refuse promoting divergent code).
+#   3. `promote-pypi` and `promote-crates` were intentional no-op
+#      placeholders — duplicating the multi-platform wheel-build matrix /
+#      cargo publish-order graph here was explicitly declined when they
+#      were authored (see the historical job bodies in git history). They
+#      printed a handoff message and exited 0: a misleadingly green result
+#      sitting next to genuinely failed sibling jobs in the same run.
 #
-# Added 2026-04-20 — see docs/guides/release-process.md.
+# Net effect, even after fixing crates.io's missing User-Agent header
+# (separately fixed in publish-crates.yml — the same bug, but one that IS
+# a simple header fix, unlike the three above): this workflow could at
+# absolute best promote 2 of the 8 package/registry combinations it
+# listed (npm client + nanoclaw) while the other 6 fail or silently no-op.
+# That is not a coherent promote path worth keeping half-alive.
+#
+# The proven alternative — already the plugin's sole promote path since
+# 2026-07-13, and what actually shipped core 2.6.0 / python 2.5.0 /
+# mcp-server 3.5.0 on 2026-08-16 after this workflow failed on all three
+# registries in the same session:
+#
+#     gh workflow run npm-publish.yml            -f package=<pkg>   -f release-type=stable
+#     gh workflow run publish-pypi.yml                                -f release-type=stable
+#     gh workflow run publish-python-client.yml                       -f release-type=stable
+#     gh workflow run publish-crates.yml         -f crate=<crate>   -f release-type=stable
+#
+# See docs/guides/release-process.md for the full stable-promote procedure.
+#
+# This file is kept (rather than deleted outright) purely so a stale
+# bookmark or muscle-memory `gh workflow run promote-rc.yml` fails fast
+# with a clear pointer instead of "workflow not found". The input names
+# below mirror the retired workflow's so an old invocation still dispatches
+# and lands on the message.
 
-name: Promote RC to stable
+name: "Promote RC to stable (RETIRED — see #625)"
 
 on:
   workflow_dispatch:
     inputs:
       package:
-        description: 'Which RC artifact to promote'
-        required: true
-        type: choice
-        options:
-          - core
-          - mcp-server
-          - client
-          - nanoclaw
-          - core-pypi
-          - python-client
-          - crate-core
-          - crate-memory
-          - all
-      rc-version:
-        description: 'RC version to promote (e.g. "2.1.0-rc.1" for npm/crates, "2.1.0rc1" for PyPI)'
-        required: true
-      stable-version:
-        description: 'Target stable version (leave blank to auto-derive by stripping rc suffix)'
+        description: 'RETIRED. This workflow no longer promotes anything — see the job log.'
         required: false
-        default: ''
+        type: string
+      rc-version:
+        description: 'RETIRED. This workflow no longer promotes anything — see the job log.'
+        required: false
+        type: string
+      stable-version:
+        description: 'RETIRED. This workflow no longer promotes anything — see the job log.'
+        required: false
+        type: string
       dry-run:
-        description: 'Dry run (validate RC exists; skip the actual stable publish)'
+        description: 'RETIRED. This workflow no longer promotes anything — see the job log.'
         required: false
         type: boolean
         default: false
 
 jobs:
-  derive-versions:
-    name: Derive stable version + validate RC shape
+  retired:
+    name: RETIRED — use publish-*.yml with release-type=stable instead
     runs-on: ubuntu-latest
-    outputs:
-      rc-version: ${{ steps.derive.outputs.rc_version }}
-      stable-version: ${{ steps.derive.outputs.stable_version }}
-      pypi-rc-version: ${{ steps.derive.outputs.pypi_rc_version }}
     steps:
-      - name: Derive
-        id: derive
+      - name: Explain and fail
         run: |
-          set -e
-          RC="${{ inputs.rc-version }}"
-          STABLE_OVERRIDE="${{ inputs.stable-version }}"
+          cat <<'EOF'
+          ============================================================
+          promote-rc.yml is RETIRED (2026-08-16, issue #625).
+          ============================================================
 
-          # Accept either SemVer (`2.1.0-rc.1`) or PEP 440 (`2.1.0rc1`).
-          # Normalize a stable version out of either.
-          if [[ "$RC" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-rc\.([0-9]+)$ ]]; then
-            BASE="${BASH_REMATCH[1]}"
-            NUM="${BASH_REMATCH[2]}"
-            PYPI_RC="${BASE}rc${NUM}"
-          elif [[ "$RC" =~ ^([0-9]+\.[0-9]+\.[0-9]+)rc([0-9]+)$ ]]; then
-            BASE="${BASH_REMATCH[1]}"
-            NUM="${BASH_REMATCH[2]}"
-            PYPI_RC="$RC"
-            RC="${BASE}-rc.${NUM}"
-          else
-            echo "ERROR: rc-version must match 'X.Y.Z-rc.N' (SemVer) or 'X.Y.ZrcN' (PEP 440)."
-            echo "Got: $RC"
-            exit 1
-          fi
+          It could not deliver a working promote for most packages:
+            - npm Trusted Publisher binds @totalreclaw/core and
+              @totalreclaw/mcp-server to npm-publish.yml ONLY (same
+              constraint that already excluded the OpenClaw plugin).
+            - No publish workflow creates the RC git tag this workflow's
+              tag-backfill step depended on.
+            - The PyPI/crates.io "promote" jobs were placeholders that
+              published nothing.
 
-          if [ -n "$STABLE_OVERRIDE" ]; then
-            STABLE="$STABLE_OVERRIDE"
-          else
-            STABLE="$BASE"
-          fi
+          Use this instead — every package already supports it, since
+          it's what publishes RCs too:
 
-          echo "RC version (SemVer)   = $RC"
-          echo "RC version (PEP 440)  = $PYPI_RC"
-          echo "Stable version       = $STABLE"
+              gh workflow run npm-publish.yml            -f package=<pkg>   -f release-type=stable
+              gh workflow run publish-pypi.yml                                -f release-type=stable
+              gh workflow run publish-python-client.yml                       -f release-type=stable
+              gh workflow run publish-crates.yml         -f crate=<crate>   -f release-type=stable
 
-          echo "rc_version=$RC" >> "$GITHUB_OUTPUT"
-          echo "pypi_rc_version=$PYPI_RC" >> "$GITHUB_OUTPUT"
-          echo "stable_version=$STABLE" >> "$GITHUB_OUTPUT"
-
-  validate-rc-exists:
-    name: Validate RC is published (belt-and-suspenders)
-    runs-on: ubuntu-latest
-    needs: [derive-versions]
-    steps:
-      - uses: actions/setup-node@v5
-        with:
-          node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Check npm RCs exist
-        if: >
-          inputs.package == 'core' || inputs.package == 'client' ||
-          inputs.package == 'mcp-server' || inputs.package == 'nanoclaw' ||
-          inputs.package == 'all'
-        run: |
-          set -e
-          RC="${{ needs.derive-versions.outputs.rc-version }}"
-          # Packages that ship on npm. `all` fans out; the others are single.
-          declare -a PKGS
-          case "${{ inputs.package }}" in
-            core) PKGS=("@totalreclaw/core") ;;
-            client) PKGS=("@totalreclaw/client") ;;
-            mcp-server) PKGS=("@totalreclaw/mcp-server") ;;
-            nanoclaw) PKGS=("@totalreclaw/skill-nanoclaw") ;;
-            all) PKGS=("@totalreclaw/core" "@totalreclaw/client" "@totalreclaw/mcp-server" "@totalreclaw/skill-nanoclaw") ;;  # plugin excluded — it publishes via npm-publish.yml only
-          esac
-          for p in "${PKGS[@]}"; do
-            if ! npm view "$p@$RC" version >/dev/null 2>&1; then
-              echo "ERROR: $p@$RC not found on npm; refusing to promote."
-              exit 1
-            fi
-            echo "OK: $p@$RC is on npm"
-          done
-
-      - name: Check PyPI RCs exist
-        if: >
-          inputs.package == 'core-pypi' || inputs.package == 'python-client' ||
-          inputs.package == 'all'
-        run: |
-          set -e
-          PYPI_RC="${{ needs.derive-versions.outputs.pypi-rc-version }}"
-          declare -a PKGS
-          case "${{ inputs.package }}" in
-            core-pypi) PKGS=("totalreclaw-core") ;;
-            python-client) PKGS=("totalreclaw") ;;
-            all) PKGS=("totalreclaw-core" "totalreclaw") ;;
-          esac
-          for p in "${PKGS[@]}"; do
-            if ! curl -sSf "https://pypi.org/pypi/$p/$PYPI_RC/json" >/dev/null 2>&1; then
-              echo "ERROR: $p==$PYPI_RC not found on PyPI; refusing to promote."
-              exit 1
-            fi
-            echo "OK: $p==$PYPI_RC is on PyPI"
-          done
-
-      - name: Check crates.io RCs exist
-        if: >
-          inputs.package == 'crate-core' || inputs.package == 'crate-memory' ||
-          inputs.package == 'all'
-        run: |
-          set -e
-          RC="${{ needs.derive-versions.outputs.rc-version }}"
-          declare -a CRATES
-          case "${{ inputs.package }}" in
-            crate-core) CRATES=("totalreclaw-core") ;;
-            crate-memory) CRATES=("totalreclaw-memory") ;;
-            all) CRATES=("totalreclaw-core" "totalreclaw-memory") ;;
-          esac
-          for c in "${CRATES[@]}"; do
-            if ! curl -sSf "https://crates.io/api/v1/crates/$c/$RC" >/dev/null 2>&1; then
-              echo "ERROR: $c@$RC not found on crates.io; refusing to promote."
-              exit 1
-            fi
-            echo "OK: $c@$RC is on crates.io"
-          done
-
-  promote-npm:
-    name: Promote npm package ${{ inputs.package }} -> ${{ needs.derive-versions.outputs.stable-version }}
-    runs-on: ubuntu-latest
-    needs: [derive-versions, validate-rc-exists]
-    if: >
-      (inputs.package == 'core' || inputs.package == 'client' ||
-       inputs.package == 'mcp-server' || inputs.package == 'nanoclaw' ||
-       inputs.package == 'all') &&
-      inputs.dry-run == false
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Pack RC tarball(s) and republish at stable version
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -e
-          RC="${{ needs.derive-versions.outputs.rc-version }}"
-          STABLE="${{ needs.derive-versions.outputs.stable-version }}"
-
-          declare -a PKGS
-          case "${{ inputs.package }}" in
-            core) PKGS=("@totalreclaw/core") ;;
-            client) PKGS=("@totalreclaw/client") ;;
-            mcp-server) PKGS=("@totalreclaw/mcp-server") ;;
-            nanoclaw) PKGS=("@totalreclaw/skill-nanoclaw") ;;
-            all) PKGS=("@totalreclaw/core" "@totalreclaw/client" "@totalreclaw/mcp-server" "@totalreclaw/skill-nanoclaw") ;;  # plugin excluded — it publishes via npm-publish.yml only
-          esac
-
-          mkdir -p /tmp/promote
-          cd /tmp/promote
-          for p in "${PKGS[@]}"; do
-            echo "=== $p ==="
-            # Pull RC tarball from npm
-            npm pack "$p@$RC"
-            TARBALL=$(ls *.tgz | head -1)
-            mkdir -p unpacked
-            tar -xzf "$TARBALL" -C unpacked
-            # The tarball extracts to ./package/
-            cd unpacked/package
-            # Rewrite version to stable, then repack + publish.
-            node -e "
-              const fs = require('fs');
-              const pkg = require('./package.json');
-              pkg.version = '$STABLE';
-              fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
-              console.log('Repackaging', pkg.name, 'as', pkg.version);
-            "
-            npm install -g npm@11
-            npm publish --access public --tag latest --ignore-scripts
-            cd /tmp/promote
-            rm -rf unpacked "$TARBALL"
-          done
-
-  promote-pypi:
-    name: Promote PyPI ${{ inputs.package }} -> ${{ needs.derive-versions.outputs.stable-version }}
-    runs-on: ubuntu-latest
-    needs: [derive-versions, validate-rc-exists]
-    if: >
-      (inputs.package == 'core-pypi' || inputs.package == 'python-client' ||
-       inputs.package == 'all') &&
-      inputs.dry-run == false
-    permissions:
-      id-token: write  # OIDC trusted publishing
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Note on PyPI promote
-        run: |
-          # PyPI (and pypa/gh-action-pypi-publish) refuses to accept a
-          # re-upload of already-shipped artifacts. "Promote" therefore
-          # means: build the SAME source tree at the stable version and
-          # publish a fresh artifact set. For the python client (pure-py)
-          # this is a one-shot sdist + wheel. For the PyO3 core, this is
-          # the full cross-platform wheel matrix.
-          #
-          # Rather than duplicate those multi-job graphs here, we stamp
-          # the stable version into pyproject.toml and delegate to the
-          # regular publish-*.yml workflows by dispatching them
-          # programmatically (release-type=stable, no rc suffix).
-          #
-          # For the inaugural Wave 1 flow, the simpler path is: run
-          # `gh workflow run publish-pypi.yml -f release-type=stable`
-          # after the version is bumped on main via a separate PR.
-          # This job is therefore a placeholder that enforces the
-          # invariant "promote-pypi is NOT auto-uploading; it documents
-          # the handoff." See docs/guides/release-process.md.
-          echo "PyPI promotion: please dispatch publish-pypi.yml or publish-python-client.yml"
-          echo "with release-type=stable after merging the stable-version bump to main."
-          echo "Target package: ${{ inputs.package }}"
-          echo "Target version: ${{ needs.derive-versions.outputs.stable-version }}"
-
-  promote-crates:
-    name: Promote crates.io ${{ inputs.package }} -> ${{ needs.derive-versions.outputs.stable-version }}
-    runs-on: ubuntu-latest
-    needs: [derive-versions, validate-rc-exists]
-    if: >
-      (inputs.package == 'crate-core' || inputs.package == 'crate-memory' ||
-       inputs.package == 'all') &&
-      inputs.dry-run == false
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Note on crates promote
-        run: |
-          # crates.io has no retag / dist-tag concept. A "stable promote" is
-          # a second `cargo publish` at the stable version number. Because
-          # the source tree must be in sync with the stable version string,
-          # the mechanical play is:
-          #   1. merge a stable-version bump commit on main (via a normal PR),
-          #   2. dispatch publish-crates.yml with release-type=stable.
-          # This job exists to document the handoff + keep the promote
-          # workflow's job graph symmetric with npm / PyPI.
-          echo "crates.io promotion: please dispatch publish-crates.yml"
-          echo "with release-type=stable after merging the stable-version bump to main."
-          echo "Target crate: ${{ inputs.package }}"
-          echo "Target version: ${{ needs.derive-versions.outputs.stable-version }}"
-
-  tag-stable-release:
-    name: Backfill v${{ needs.derive-versions.outputs.stable-version }} git tag
-    runs-on: ubuntu-latest
-    needs: [derive-versions, validate-rc-exists]
-    if: inputs.dry-run == false
-    permissions:
-      contents: write
-    # Why: every stable release needs a `v<version>` git tag — release notes,
-    # `git diff v<a>..v<b>` content checks, and RC->stable provenance all
-    # depend on it. Originally added because ClawHub's default-tag resolution
-    # read git tags (finding #189, since retired with the channel); the tag is
-    # still load-bearing for the reasons above.
-    # The auto-tag-on-RC-publish fix already shipped in publish-*.yml workflows
-    # (see #139 / rc.21 backfill); this mirrors it for stable promote.
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          # Required so `git rev-list -n 1 "v$RC"` can resolve the RC tag.
-          # Default checkout sets up a shallow clone of the requested ref only;
-          # the RC tag (e.g. v3.3.2-rc.4) was pushed by an earlier `publish-*.yml`
-          # auto-tag step but isn't pulled here without this. Tracker #189
-          # surfaced this 2026-04-29 — first stable promote of v3.3.2 failed
-          # at "Backfill v3.3.2 git tag" because the runner couldn't see the
-          # rc tag.
-          fetch-tags: true
-          fetch-depth: 0
-
-      - name: Resolve source SHA from RC artifact
-        id: rc_sha
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          RC_TAG="v${{ needs.derive-versions.outputs.rc-version }}"
-          # Stable promote re-publishes the same content as the RC. Use the
-          # RC's git tag (which IS auto-created on every RC publish) as the
-          # canonical source SHA for the stable tag.
-          if ! SHA=$(git rev-list -n 1 "$RC_TAG" 2>/dev/null); then
-            echo "ERROR: RC tag $RC_TAG not found locally. Cannot backfill stable tag."
-            echo "       The RC publish workflow must auto-tag (see #139)."
-            exit 1
-          fi
-          echo "RC tag $RC_TAG points at $SHA"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Create + push v${{ needs.derive-versions.outputs.stable-version }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          STABLE="${{ needs.derive-versions.outputs.stable-version }}"
-          STABLE_TAG="v${STABLE}"
-          SRC_SHA="${{ steps.rc_sha.outputs.sha }}"
-
-          # Idempotent: if tag already exists at the right SHA, no-op.
-          if git rev-parse "$STABLE_TAG" >/dev/null 2>&1; then
-            EXISTING_SHA=$(git rev-list -n 1 "$STABLE_TAG")
-            if [ "$EXISTING_SHA" = "$SRC_SHA" ]; then
-              echo "$STABLE_TAG already at $SRC_SHA — no-op."
-              exit 0
-            else
-              echo "ERROR: $STABLE_TAG exists but points at $EXISTING_SHA, not $SRC_SHA. Refusing to move."
-              exit 1
-            fi
-          fi
-
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag -a "$STABLE_TAG" "$SRC_SHA" -m "Stable $STABLE — promoted from RC (${{ needs.derive-versions.outputs.rc-version }}) via promote-rc.yml. Source SHA matches the RC tag. Auto-created on stable promote."
-          git push origin "$STABLE_TAG"
-          echo "Pushed $STABLE_TAG -> $SRC_SHA"
+          Full procedure: docs/guides/release-process.md
+          ============================================================
+          EOF
+          exit 1
