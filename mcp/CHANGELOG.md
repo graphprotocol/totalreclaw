@@ -1,6 +1,34 @@
 # Changelog
 
-## [Unreleased]
+## [3.5.0] - 2026-08-16
+
+Minor release — R3 of the Option E Phase 2 release train. Additive: the
+`derived-bundle-v1` credential adapter (P2-13) plus the `@totalreclaw/core`
+floor bump that activates it. Every pre-existing credential path is unchanged.
+
+**Cross-client parity validated (E2E scenario S6, staging, 2026-08-16.)** The
+bundle is a cross-language contract, not a Python convention — proven in all
+four directions on one vault, each hop decrypting the other client's
+ciphertext:
+
+| write | read | result |
+|---|---|---|
+| Hermes (bundle) | MCP (phrase) | PASS |
+| MCP (phrase) | Hermes (bundle) | PASS |
+| Hermes (phrase) | MCP (bundle) | PASS |
+| MCP (bundle) | Hermes (phrase) | PASS |
+
+**Claim discipline** (design memo §3 — carried by every Phase 2 release note):
+Phase 2 removes the recovery phrase from agent hosts. It does **not** improve
+memory confidentiality at a compromised host — the encryption key still
+materialises in RAM on every recall, and ciphertext is public on the Gnosis
+subgraph. Until Phase 3 the provisioned signing key carries full Smart Account
+owner authority and is **not revocable**; treat a leaked bundle as you would a
+leaked phrase, minus its portability.
+
+### Fixed
+- **[#578] `import_from` tool descriptions no longer advertise MemoClaw.** The tool description listed `memoclaw` as an accepted source but the `ImportSource` enum never accepted it, so an agent taking the description at its word got a validation error for a source that was never supported ([#586](https://github.com/p-diogo/totalreclaw/pull/586)). Descriptions now match the enum exactly.
+
 
 ### Added
 - **`derived-bundle-v1` credential bundle support (Option E Phase 2 — [#581](https://github.com/p-diogo/totalreclaw/issues/581), P2-13).** The MCP server is the second client (after Hermes) to configure from a bundle instead of a BIP-39 recovery phrase: the four HKDF-derived vault keys plus a signing key, never the phrase or the 64-byte seed. `~/.totalreclaw/credentials.json` `"version": 2` is detected alongside the existing plaintext-mnemonic shape (precedence: env phrase → `version: 2` bundle → legacy mnemonic; an unrecognised `version` is a loud startup error, never a silent downgrade; an env-phrase that shadows an on-disk `version: 2` bundle logs a warning naming both). New modules: `src/subgraph/bundle.ts` (a runtime-feature-detecting adapter over `@totalreclaw/core`'s `parseBundleV1`/`validateBundleV1`/`deriveBundleFromMnemonic` — never assumes the installed dependency exposes them at compile time), `src/subgraph/credentials.ts` (the precedence resolver, plus `isV2BundleCredentialsFile` for the self-hosted-misconfiguration diagnostic below). `src/subgraph/chain-config.ts` gained `fetchChainConfig` — the single billing-fetch path both mnemonic-mode and bundle-mode state construction now share, closing the SKIPPED-billing-call variant of a bug class found in the Hermes round where a bundle client could skip the billing call entirely (which is the ONLY source of the environment's DataEdge address) and silently write to core's production default even against a staging relay. A sibling FAILED-billing-call variant (the call is made but errors/times out/non-200s) is closed separately below. `src/subgraph/store.ts` gained `resolveOwnerAccount`, threading either a mnemonic-derived or bundle-supplied signing key into every ERC-4337 UserOp signer. Bundle-mode `totalreclaw_pair` completion (`payload_type: "derived-bundle-v1"`) is implemented in `pair-remote-client.ts` + `tools/pair.ts` and fixture-tested, but inert until the relay forwards a `payload_type` field (tracked separately, P2-11). Self-hosted mode is unaffected — it is a wholly separate credential system with no BIP-39 root, and `TOTALRECLAW_SELF_HOSTED=true` with a `version: 2` credentials.json now gets an actionable "bundles are managed-service-only" message instead of the misleading "set TOTALRECLAW_RECOVERY_PHRASE" advice. **No OS-keychain unwrap and no `TOTALRECLAW_CREDENTIALS_PROVIDER` external-secret-manager support** (both Python/Hermes-only for now) — see README's "Credential Material" section for the tracked gaps.
