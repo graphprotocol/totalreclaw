@@ -86,11 +86,22 @@ const FORBIDDEN_PATTERNS: PhrasePattern[] = [
   // legitimately uses this key, so we allow lines that ALSO mention
   // `credentials.json` / `CREDENTIALS_PATH` / disk persistence on the
   // same line. We're catching mnemonic keys built into tool responses.
+  //
+  // Option E Phase 2 / #581 (P2-13): `subgraph/credentials.ts`'s
+  // `ResolvedCredential` discriminated union (`{ kind: 'mnemonic', mnemonic:
+  // ... } | { kind: 'bundle', bundle: ... }`) is INTERNAL credential-
+  // resolution plumbing, never a tool response — its only consumer is
+  // `index.ts`'s `main()`, which unpacks it into `SubgraphState` (itself
+  // never serialised into a tool payload). The `kind: 'mnemonic'` tag on the
+  // same line is a reliable, distinctive marker: no tool-response object
+  // in this codebase pairs a `mnemonic` field with a sibling `kind`
+  // discriminant, so allowing it here cannot mask a real leak the way a
+  // broad wildcard would.
   {
     name: 'mnemonic as JS object key (unquoted)',
     regex: /\bmnemonic\s*:/,
     allowedContext:
-      /credentials\.json|writeFileSync|readFileSync|CREDENTIALS_PATH|SavedCredentials|generateMnemonic|validateMnemonic|mnemonicToAccount|mnemonicToSeedSync|description|inputSchema|process\.env|state\.mnemonic|subgraphState\.mnemonic|trimmed\.mnemonic|parsed\.mnemonic|input\?\.\s*mnemonic|input\.mnemonic|cli\/setup|TOTALRECLAW_RECOVERY_PHRASE/i,
+      /credentials\.json|writeFileSync|readFileSync|CREDENTIALS_PATH|SavedCredentials|generateMnemonic|validateMnemonic|mnemonicToAccount|mnemonicToSeedSync|description|inputSchema|process\.env|state\.mnemonic|subgraphState\.mnemonic|trimmed\.mnemonic|parsed\.mnemonic|input\?\.\s*mnemonic|input\.mnemonic|cli\/setup|TOTALRECLAW_RECOVERY_PHRASE|kind:\s*'mnemonic'/i,
   },
   // Quoted JS object key: `"mnemonic": <expr>`.
   {
@@ -101,11 +112,19 @@ const FORBIDDEN_PATTERNS: PhrasePattern[] = [
   },
   // Property assignment: `<obj>.mnemonic = ...`. Persisted-credentials
   // shape legitimately writes this; tool-response shape must not.
+  //
+  // Option E Phase 2 / #581 (P2-13): `chain-config.ts`'s
+  // `buildSubgraphOverrides` threads the resolved credential (mnemonic OR
+  // bundle-mode `ownerPrivateKeyHex`) into the `SubgraphStoreConfig`
+  // override object used ONLY to build the ERC-4337 UserOp signer inside
+  // `subgraph/store.ts` — never a tool response. `overrides.mnemonic` is
+  // this codebase's config-builder naming convention (parallel to the
+  // already-allowed `state.mnemonic` / `subgraphState.mnemonic`).
   {
     name: 'mnemonic property assignment',
     regex: /\.mnemonic\s*=(?!=)/,
     allowedContext:
-      /credentials\.mnemonic|SavedCredentials|cli\/setup|writeFileSync|readFileSync|state\.mnemonic|subgraphState\.mnemonic|\.mnemonic\s*=\s*undefined/i,
+      /credentials\.mnemonic|SavedCredentials|cli\/setup|writeFileSync|readFileSync|state\.mnemonic|subgraphState\.mnemonic|overrides\.mnemonic|\.mnemonic\s*=\s*undefined/i,
   },
 ];
 

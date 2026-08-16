@@ -138,6 +138,11 @@ the `derived-bundle-v1` payload shape.
 **Note:** an unrecognised value falls back to `file` mode (a deploy-time typo reads
 disk rather than silently going dark) — this is distinct from an unrecognised
 `credentials.json` `version`, which is a loud error, never a silent fallback.
+**Client scope:** the `file` / `external` provider abstraction is implemented in
+Python (Hermes) only (`credential_provider.py`). The MCP server understands the
+`derived-bundle-v1` `version: 2` credential SHAPE (Option E Phase 2 / #581, P2-13)
+but always reads it via `file`-mode disk access — setting this env var has no
+effect on the MCP server today.
 
 ### `TOTALRECLAW_NO_AUTO_MIGRATE`
 

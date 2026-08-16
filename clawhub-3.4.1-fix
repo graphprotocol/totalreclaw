@@ -1,0 +1,906 @@
+ ▐▛███▜▌   Claude Code v2.1.220
+▝▜█████▛▘  glm-5.2 · API Usage Billing
+  ▘▘ ▝▝    ~/Documents/code/totalreclaw
+
+
+❯ lok at totalreclaw-internal/docs/notes/2026-07-29-clawhub-unstick-handoff.md  
+  and help me fix this ussue                                                    
+
+  Thought for 16s (ctrl+o to expand)
+
+⏺ I'll start by reading the handoff document you pointed me to.
+
+  Thought for 41s, read 1 file (ctrl+o to expand)
+
+⏺ This is an external-service publishing-channel issue, not a code bug. Let me
+  read the handoff carefully — I now understand the situation. Let me verify the
+  current live state before recommending actions, since the "fix" hinges on
+  whether anything has changed since the handoff was written.
+
+  Let me gather evidence in parallel:
+
+⏺ Fetch(https://clawhub.ai/p-diogo/skills/totalreclaw)
+  ⎿  Received 128.8KB (200 OK)
+
+⏺ Fetch(https://clawhub.ai/p-diogo/skills/totalreclaw/security-audit)
+  ⎿  Received 157KB (200 OK)
+
+⏺ Fetch(https://clawhub.ai/p-diogo/plugins/totalreclaw-canary/security-audit)
+  ⎿  Received 56.2KB (200 OK)
+
+  Thought for 51s, read 1 file (ctrl+o to expand)
+
+⏺ Now I have a clear picture. Before recommending actions, two things stand out
+  from the live state vs. the handoff (written today):
+
+  1. The main listing's audit page now shows static-analysis findings
+  ("child_process ×2", "hardcoded API secrets ×4 in test files") alongside the
+  SkillSpector "could not complete" — the handoff said "no findings exist."
+  (Caveat: ClawHub is a client-rendered SPA, so I'll treat the exact finding
+  text as unconfirmed until you check the authenticated dashboard.)
+  2. The canary audit now reads "Security audit is unavailable" rather than the
+  "blocked" verdict the handoff recorded — its audit state has shifted.
+
+  The core blocker (phantom 3.4.0 + crashed review) is an external-service
+  problem — it can only be cleared via your authenticated ClawHub dashboard
+  (Rescan) or a support ticket, then a CI re-dispatch. Let me nail down
+  everything I can prepare so the manual steps are turnkey: verify the
+  re-dispatch command, confirm the CLI truly has no rescan/version command, and
+  prep the display-title fix.
+
+  Thought for 29s, read 3 files, ran 1 shell command (ctrl+o to expand)
+
+⏺ Useful — the local ClawHub CLI is v0.9.0 (the handoff referenced v0.23.1;
+  versions differ, so let me verify commands against what's actually installed
+  here). Key confirmations from --help:
+
+  - Top-level delete/hide/undelete/unhide take a <slug> and operate on the whole
+  skill — running clawhub hide totalreclaw would take down the entire main
+  listing (3.3.13, ~2.9k downloads). Must not do that.
+  - No rescan, audit, or version-management command exists — confirms the
+  handoff.
+  - The promote workflow deliberately pins clawhub@0.8.0 because 0.9.x's publish
+  collides with the existing totalreclaw slug (Family=Skill). That's a relevant
+  seam.
+
+  Let me check the publish/package subcommand flags (for both the canary-hide
+  question and the display-title fix) and the SKILL.md frontmatter:
+
+  Thought for 37s, read 1 file, ran 1 shell command (ctrl+o to expand)
+
+⏺ Two key findings for the display-title fix:
+
+  - clawhub publish has --name <name> → "Display name" (v0.9.0). The promote job
+  omits it, so ClawHub falls back to the folder basename ./skill/plugin →
+  renders as "Plugin". The fix is --name "TotalReclaw".
+  - clawhub package has only explore/inspect/publish — confirmed no hide/delete 
+  for packages, so the canary can't be cleaned via CLI either; it needs the
+  dashboard UI or the support ticket.
+
+  Now let me get authoritative server-side state (the SPA WebFetch is
+  unreliable) and locate the support channel. The CLI's inspect should reveal
+  whether the phantom 3.4.0 actually exists server-side:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Web Search("ClawHub support contact Discord help skill review stuck")
+  ⎿  Did 1 search in 5s
+
+  Thought for 33s (ctrl+o to expand)
+
+⏺ Now I have the authoritative picture. Key results:
+
+  - CLI is authenticated as p-diogo here — owner-level read access is available.
+  - clawhub inspect totalreclaw → AMBIGUOUS_SKILL_SLUG, and the error confirms
+  the squatter (@thcjp/totalreclaw vs @p-diogo/totalreclaw). It also returned
+  "(reset in 59s)" — so the ClawHub API is rate-limiting; I'll avoid hammering
+  it. (The owner-scoped @p-diogo/totalreclaw ref the error suggests is exactly
+  what the handoff found the CLI rejects as "Invalid slug" — same gap.)
+  - 0.8.0's clawhub publish DOES support --name <name> (Display name) ✓ — so the
+  "Plugin"→"TotalReclaw" fix is just adding --name "TotalReclaw" to the publish
+  command. Clean and verified.
+  - Support channel = GitHub issues on github.com/openclaw/clawhub (issue #367
+  is the same category — login/skill-management), plus an OpenClaw Discord
+  (mirrored on AnswerOverflow).
+
+  Let me confirm the RC publish path has the same command (so the --name fix is
+  consistent) and check the official review/rescan behavior doc to ground the
+  dashboard step + ticket:
+
+  Listed 1 directory (ctrl+o to expand)
+
+⏺ Fetch(https://docs.openclaw.ai/clawhub/cli)
+  ⎿  Received 30.5KB (200 OK)
+
+  Thought for 46s (ctrl+o to expand)
+
+⏺ This is the breakthrough. The official docs (current) describe two owner 
+  self-serve commands the handoff didn't have (it was written against CLI
+  v0.23.1; the local CLI is v0.9.0 and the docs have moved on):
+
+  1. clawhub scan --slug <slug> → triggers ClawScan (re-runs SkillSpector) via
+  POST /api/v1/skills/-/scan, polls to terminal; --update writes results back to
+  the selected version; --output downloads the full report incl.
+  skillspector.json. This is the "Rescan" the handoff couldn't find — and it's 
+  CLI-driven, no dashboard/browser needed.
+  2. clawhub delete <skill> --version <version> → withdraws one owned non-latest
+  version specifically (not the whole skill) — a surgical way to clear the
+  phantom 3.4.0. Caveat: "version number remains reserved, cannot be republished
+  with different contents" — so this needs care.
+  3. clawhub inspect @owner/slug (while logged in) → shows owner-visible 
+  moderation diagnostics — authoritative state, including the stuck review.
+
+  This rewrites the handoff's plan: most of it is self-serveable from the CLI.
+  Let me get the exact flags for these three commands (local, free) before
+  touching the rate-limited API:
+
+  Thought for 29s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Critical version reality-check from those helps:
+
+  - clawhub scan does NOT exist in the local v0.9.0 — scan --help just printed
+  the top-level help (command not recognized). The scan/delete --version/inspect
+  @owner/slug features in the docs belong to a newer CLI than what's installed
+  here.
+  - Local v0.9.0 delete has only --yes (whole-skill soft-delete, no --version) —
+  so it cannot surgically remove the phantom 3.4.0.
+  - Local inspect does have --versions/--version/--json — useful for
+  authoritative state if it accepts the owner-scoped slug.
+
+  So the self-serve scan path requires upgrading the CLI. Let me check the
+  latest published CLI version and get authoritative state on the listing
+  (owner-scoped inspect):
+
+  Thought for 21s, ran 2 shell commands (ctrl+o to expand)
+
+⏺ Clear now: latest CLI is 0.23.1 (matches Pedro's Mac per the handoff), but the
+  local install is stale at v0.9.0 — which lacks scan, lacks delete --version,
+  and doesn't understand @owner/slug (hence "Skill not found"). That's why the
+  handoff, written from v0.23.1 testing, and my local v0.9.0 both hit walls
+  differently. The self-serve commands exist in 0.23.1.
+
+  Let me confirm the exact 0.23.1 flags (via npx, non-invasive — doesn't touch
+  the global install or CI's pinned 0.8.0):
+
+  Thought for 25s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Now I have the complete 0.23.1 toolkit, and two crucial refinements over the
+  handoff:
+
+  - clawhub scan --slug <slug> --version <ver> --update can target the phantom
+  3.4.0 specifically and write results back → if SkillSpector just crashed,
+  rescanning may finalize 3.4.0 without any re-publish (the cleanest outcome the
+  handoff didn't know was possible).
+  - clawhub delete <skill> --version <ver> (0.23.1) is explicit: "Permanently 
+  delete one version; cannot be restored or republished." So deleting phantom
+  3.4.0 means 3.4.0 can never go live — that path forces a 3.4.1. The handoff's
+  "fallback: ship 3.4.1" is exactly this, not a route to 3.4.0.
+
+  The decisive unknown is whether 3.4.0 exists server-side as a targetable
+  version and what its review state is. Let me get that authoritatively
+  (read-only; rate-limit window has cleared):
+
+  Thought for 1m 18s, ran 1 shell command (ctrl+o to expand)
+
+⏺ This authoritative inspect is decisive. Let me parse it:
+
+  - Live = 3.3.13, healthy — verdict: "clean", 2946 downloads, 108 versions,
+  owner p-diogo.
+  - displayName: "Plugin" — the title bug, confirmed at the data level (the
+  --name fix would correct this).
+  - The crashed-review residue lives on the skill: reasonCodes: 
+  ["review.llm_review"], evidence: [], legacyReason: "scanner.llm.review" —
+  SkillSpector ran, produced no evidence, verdict defaulted to clean. Last
+  updated at the 3.3.13 promote time.
+  - Critically: 3.4.0 is NOT in the published version list (top is 3.3.13, then
+  3.3.12, then rc.23…). So the "phantom 3.4.0" is a stuck pending upload / 
+  version reservation, not a finalized version. That means scan --version 3.4.0
+  and delete --version 3.4.0 likely have no version row to act on.
+
+  Let me confirm that last point definitively with one read-only probe (it
+  determines whether any self-serve CLI path can clear the phantom):
+
+  Thought for 14s, ran 1 shell command (ctrl+o to expand)
+
+⏺ The probe didn't immediately 404, but I truncated before the
+  version-resolution block. Let me see the tail to determine whether 3.4.0
+  resolved to an actual version object:
+
+  Thought for 45s, ran 1 shell command (ctrl+o to expand)
+⏺ The probe returned a full SkillSpector review payload, not a 404 — so 3.4.0
+  does exist server-side as a targetable (pending) version, and it carries a
+  real review (ratings "concern", finding [system-prompt-override] on SKILL.md,
+  broad env-var secret-access mismatch; overall skill verdict stays "clean").
+  That overturns my worry that scan --version/delete --version would have
+  nothing to target. Let me extract just the structural fields (drop the giant
+  embedded SKILL.md) to confirm 3.4.0 is the selected version and see its
+  publish state — this decides whether scan --version 3.4.0 --update can
+  self-serve the unstick:
+
+  Thought for 55s, ran 1 shell command (ctrl+o to expand)
+
+⏺ I now have an authoritative, server-side picture — and it overturns a key
+  assumption in the handoff. Here's what inspect (CLI 0.23.1, authenticated as
+  p-diogo) actually shows:
+
+  Diagnosis (supersedes the handoff's "no findings" read)
+
+  - Live listing is healthy: latest = 3.3.13, verdict: "clean", 2946 downloads,
+  108 versions.
+  - 3.4.0 does exist server-side as a stored version — files uploaded (SKILL.md,
+  config.ts, the .ts sources…), changelog "Release 3.4.0" — but it is not in
+  the public version list and not latest. This is the phantom: a fully-uploaded
+  pending version that never finalized.
+  - It carries a completed SkillSpector review, not a crash with no findings.
+  Ratings: purpose_capability=concern, instruction_scope=concern,
+  environment_proportionality=concern, finding [system-prompt-override]
+  (SKILL.md prompt-injection pattern) + a metadata-vs-code mismatch (registry
+  says env: [], code reads many *_API_KEY vars). Overall verdict stays "clean" →
+  these are advisory, not a hard block. (The "SkillSpector could not complete"
+  the handoff saw was the 3.3.13 audit-modal residue; the moderation block still
+  carries reasonCodes:["review.llm_review"], evidence:[].)
+  - displayName: "Plugin" confirmed at data level — the title bug.
+  - The local CLI was stale (v0.9.0). 0.23.1 (latest; what your Mac has) adds
+  exactly the two commands the handoff needed but didn't find: scan --version 
+  --update and delete --version.
+
+  What this means for the fix
+
+  Because 3.4.0 is a targetable version (not a missing row), two self-serve CLI 
+  paths open up that the handoff didn't have:
+
+  1. clawhub scan --slug @p-diogo/totalreclaw --version 3.4.0 --update — re-run
+  ClawScan on the phantom and write results back. Lowest risk; may
+  finalize/publish 3.4.0 if it's held only on the incomplete-review residue.
+  2. clawhub delete @p-diogo/totalreclaw --version 3.4.0 --yes — permanently
+  clears the phantom (unblocks the dup-guard), but 0.23.1 is explicit: "cannot 
+  be restored or republished" → this forces a 3.4.1 (npm + ClawHub aligned), it
+  does not get 3.4.0 live.
+
+  I have these ready to execute the moment you pick a direction: the exact
+  re-dispatch command (gh workflow run promote-rc.yml -R p-diogo/totalreclaw -f 
+  package=clawhub -f rc-version=3.4.0-rc.4), a support-ticket draft grounded in
+  this evidence, the canary-cleanup + slug-ambiguity asks, and the verified
+  display-title fix (--name "TotalReclaw" in promote-rc.yml:384 +
+  publish-clawhub.yml:217, confirmed supported on the pinned 0.8.0).
+
+  I did not run any mutating command on your live listing — that's your call.
+  Which path?
+
+⏺ User answered Claude's questions:
+  ⎿  · How do you want to unblock 3.4.0 on ClawHub? (I've verified all commands 
+     against CLI 0.23.1 as p-diogo; nothing mutates the live listing until you 
+     pick.) → Delete phantom, ship 3.4.1
+
+  Thought for 44s (ctrl+o to expand)
+
+⏺ You chose delete the phantom, ship 3.4.1. Executing the delete now (CLI
+  0.23.1, authenticated as p-diogo, targeting only the non-latest pending 3.4.0
+  version):
+
+  Thought for 43s, ran 1 shell command (ctrl+o to expand)
+
+⏺ delete --version @p-diogo/totalreclaw failed with "Skill not found" at
+  deleteOwnedSkillVersionForUser — the same skill-resolution wall the handoff
+  hit with hide. Notably, inspect did resolve @p-diogo/totalreclaw, but the
+  delete mutation doesn't parse the owner-scoped ref the same way (it likely
+  passes the whole string as a slug, or the squatter breaks the bare-slug
+  lookup).
+
+  Let me test the likely workaround — the deleteOwnedSkillVersionForUser
+  mutation is auth-scoped to p-diogo, so the bare slug totalreclaw may resolve
+  within your own account where the owner-scoped ref didn't:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ We're trying to ship 3.4.1, but that's really 3.4.0, right?                   
+
+  Thought for 1m 4s (ctrl+o to expand)
+
+⏺ Yes — 3.4.1 is literally 3.4.0. Same rc.4 content (already QA'd 🟢 GO), same
+  bits; only the version string changes. The re-label exists for exactly one
+  reason: to sidestep ClawHub's reserved "3.4.0" number. On npm it goes
+  3.4.0→3.4.1; on ClawHub it'll be the first 3.4.x (jumping 3.3.13→3.4.1). Both
+  land at latest=3.4.1, aligned.
+
+  Two things to report on the delete attempt:
+
+  The delete is CLI-blocked — same wall the handoff hit with hide. Both delete 
+  @p-diogo/totalreclaw --version 3.4.0 and delete totalreclaw --version 3.4.0
+  fail identically with Skill not found at deleteOwnedSkillVersionForUser
+  (convex/skills.ts:9742). The inspect/scan code path resolves the owner-scoped
+  slug fine, but the delete/hide mutations don't — a ClawHub CLI/backend
+  resolution bug (almost certainly the @thcjp/totalreclaw squatter breaking the
+  slug lookup in the delete path).
+
+  But it doesn't matter — and this is the useful part: we don't need to delete
+  the phantom to ship 3.4.1. The dup-guard only blocks the number 3.4.0
+  ("Version 3.4.0 already exists"). 3.4.1 is a fresh number and publishes clean 
+  right past it. The phantom 3.4.0 stays buried (not latest, not in the public
+  version list, invisible to clawhub install) and becomes a support-cleanup item
+  — non-blocking.
+
+  So the revised plan: skip the delete, ship 3.4.1 (= 3.4.0) with the 
+  display-title fix bundled in. Let me update tracking and pull the exact files
+  to prep the bump:
+
+  Thought for 48s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Important catch: the in-repo skill/plugin/package.json here reads 3.3.12-rc.12
+  — but that's because this branch (feat/entity-trapdoors-readside-370) is 
+  stale, cut before the 3.4.0 base bump. main is where 3.4.0 lives. Let me
+  confirm main's base version and how the publish workflows derive
+  version/release-type, so the 3.4.1 procedure is accurate (the release dispatch
+  is your L3 gate — I'll prep, you dispatch):
+
+  Thought for 1m 11s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Got the mechanics. Key findings:
+
+  - main's base is 3.3.13 (the last stable committed; 3.4.0 shipped via the RC
+  flow, not a committed base). So the 3.4.1 bump is 3.3.13 → 3.4.1.
+  - publish-clawhub.yml is version-input-driven (version: + release-type:
+  inputs; release-type=stable → full latest,… tag set, line 176) — so ClawHub 
+  3.4.1 can ship direct-stable, no RC/promote needed (unlike npm).
+  - Both publish commands use clawhub@0.8.0 + --slug totalreclaw + the owner
+  token, which resolves to your skill fine (publish already worked for 3.3.13) —
+  so the display-title fix is safe to add.
+
+  Here's the complete 3.4.1 plan (= 3.4.0 content, re-labeled). Dispatch is your
+  L3 gate — I've prepped everything:
+
+  1. Display-title fix (land before the ClawHub publish) — exact diff
+
+  .github/workflows/promote-rc.yml (promote-clawhub job, ~line 384):
+     clawhub publish ./skill/plugin \
+       --slug totalreclaw \
+  +    --name "TotalReclaw" \
+       --version "$STABLE" \
+       --tags "latest,memory,encryption,e2ee,privacy,agent-memory,e2e-encryption
+  ,persistent-context" \
+  .github/workflows/publish-clawhub.yml (~line 217):
+     clawhub publish "$PUBLISH_DIR" \
+       --slug "$SLUG" \
+  +    --name "TotalReclaw" \
+       --version "$VERSION" \
+       --tags "$TAGS" \
+  (--name verified supported on the pinned 0.8.0; this flips displayName: 
+  "Plugin" → "TotalReclaw".)
+
+  2. Ship npm 3.4.1 (mirror the 3.3.13 model)
+
+  - Bump skill/plugin 3.3.13 → 3.4.1 on main: package.json + node 
+  skill/scripts/sync-version.mjs + node skill/scripts/check-version-drift.mjs.
+  PR → merge.
+  - gh workflow run npm-publish.yml -R p-diogo/totalreclaw -f package=plugin -f 
+  release-type=stable
+
+  3. Ship ClawHub 3.4.1 (direct stable — phantom 3.4.0 stays buried, doesn't 
+  conflict)
+
+  - gh workflow run publish-clawhub.yml -R p-diogo/totalreclaw -f version=3.4.1 
+  -f release-type=stable -f skill-source=plugin
+
+  4. Verify
+
+  - npx clawhub@0.23.1 inspect @p-diogo/totalreclaw --versions → latest 3.4.1,
+  displayName "TotalReclaw"; npm view @totalreclaw/totalreclaw version → 3.4.1.
+
+  5. Deferred (non-blocking) — one support issue on openclaw/clawhub
+
+  Phantom 3.4.0 cleanup + the delete/hide "Skill not found" CLI bug (squatter
+  breaks slug resolution) + @thcjp/totalreclaw slug ambiguity + canary hide.
+  I'll draft it whenever you want.
+
+  ---
+  One nuance to confirm against your release-process doc: npm-publish stable 
+  reads the committed package.json version (that's why step 2 bumps main first)
+  — that's the 3.3.13 precedent, but worth a 10-second sanity check since main
+  is at 3.3.13 not 3.4.0.
+
+  Want me to open the display-title PR now (clean worktree off main, won't touch
+  your entity-trapdoor WIP here), and/or draft the support ticket? The dispatch
+  in steps 2–3 I'll run on your word.
+
+✻ Baked for 15m 29s
+
+❯ hm, wait... are you saying you want to publish 3.4.1 which is actually        
+  3.3.13?! 3.4.1 should be 3.4.0 which si different than 3.3.13 (check the npm  
+  tarball)                                                                      
+
+  Thought for 51s (ctrl+o to expand)
+
+⏺ You're right — that's a real mistake in my step 2, and thanks for catching it.
+  Bumping main's version string 3.3.13 → 3.4.1 and publishing would ship
+  whatever code is on main, which may be 3.3.13-era — not the 3.4.0 content.
+  3.4.1 must be built from the actual 3.4.0 source (the npm tarball / the v3.4.0
+  tag), which differs from 3.3.13 (#551 memory_save write tool, #554
+  429-resilience, #555 cheapest-model). The version string on main told me
+  nothing about the code content — I conflated the two. Let me verify the actual
+  state rigorously:
+
+  Thought for 1m 4s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Good — that corrects the record in the other direction too. My local main ref 
+  was stale. After git fetch, origin/main is at 3.4.0 (version string and code):
+  the log shows #551 (memory_save), #554 (429-resilience), #555
+  (cheapest-model), #540 (3.4.0 base bump) all merged, and the v3.4.0 tag
+  exists. So 3.4.0 content is present — I was misled by the stale local ref
+  showing 3.3.13.
+
+  But your instinct is still the right discipline, because origin/main HEAD is
+  now 3 commits past v3.4.0 (#534 readme, #308 spec, #546 python keychain). So
+  "publish from main" ≠ "exactly npm 3.4.0" unless the plugin subtree is
+  unchanged. Let me check exactly that, plus the npm tarball you pointed to:
+
+  Thought for 32s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Verified — and you were right to make me check. Here's the definitive picture:
+
+  - My local main was stale (showed 3.3.13). After fetch, origin/main is at 
+  3.4.0 — version string and code (#551/#554/#555/#540 all present).
+  - v3.4.0 → commit 314dee8 = exactly what shipped as npm 3.4.0 (matches the
+  release-pipeline record: run 29821735014 on 314dee8).
+  - The content check you asked for is clean: git diff v3.4.0..origin/main -- 
+  skill/plugin/ is empty — main's plugin subtree is byte-identical to v3.4.0 
+  (the npm 3.4.0 source). The 3 commits past v3.4.0 are #546 (python), #308
+  (spec), #534 (readme) — none touch the plugin or its pinned @totalreclaw/core
+  dep.
+  - npm 3.4.0 tarball confirmed: version 3.4.0, integrity
+  sha512-q9T5AcVjIIq5Nb….
+
+  So: publishing 3.4.1 from origin/main's plugin IS publishing 3.4.0 content —
+  the only change is the version string. The bug in my earlier step was bumping
+  3.3.13 → 3.4.1 (stale local ref); it's actually 3.4.0 → 3.4.1.
+
+  Corrected, content-verified plan
+
+  npm 3.4.1 (content ≡ npm 3.4.0):
+  1. On main: bump skill/plugin 3.4.0 → 3.4.1 (package.json → node 
+  skill/scripts/sync-version.mjs → check-version-drift.mjs). PR → merge.
+  2. gh workflow run npm-publish.yml -R p-diogo/totalreclaw -f package=plugin -f
+  release-type=stable
+
+  ClawHub 3.4.1 (content ≡ v3.4.0 SKILL.md, + display-title fix):
+  1. Land --name "TotalReclaw" in promote-rc.yml + publish-clawhub.yml (diff
+  from before).
+  2. gh workflow run publish-clawhub.yml -R p-diogo/totalreclaw -f version=3.4.1
+  -f release-type=stable -f skill-source=plugin
+
+  Verify: npm view @totalreclaw/totalreclaw version → 3.4.1; npx clawhub@0.23.1 
+  inspect @p-diogo/totalreclaw --versions → latest 3.4.1, displayName 
+  "TotalReclaw".
+
+  One conservative alternative if you want the npm 3.4.1 tarball byte-identical
+  to 3.4.0 (not just same-source): the promote-rc npm pattern — npm pack 
+  @totalreclaw/totalreclaw@3.4.0, rewrite the inner version to 3.4.1, republish.
+  Same content guarantee, avoids any rebuild variance. Happy to do that variant
+  instead.
+
+  Want me to open the display-title PR now (worktree off main — won't disturb
+  your entity-trapdoor WIP) and stage the 3.4.0 → 3.4.1 bump? The dispatch
+  itself stays your call.
+✻ Worked for 2m 44s
+
+❯ go ahead, open the PR and stage the 3.4.0 → 3.4.1 bump                        
+
+  Thought for 1m 22s (ctrl+o to expand)
+
+⏺ On it. I'll do this in an isolated worktree off origin/main so your
+  entity-trapdoor WIP here is untouched.
+
+⏺ Creating worktree(stage-341-prep)
+  ⎿  Switched to worktree on branch worktree-stage-341-prep
+     /Users/pdiogo/Documents/code/totalreclaw/.claude/worktrees/stage-341-p
+     rep
+
+  Thought for 31s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Worktree is correctly off origin/main (commit 2550703). Note: SKILL.md
+  frontmatter is already drifted on main (3.3.13 while package.json/skill.json
+  are 3.4.0) — sync-version.mjs will realign it as part of the bump. Let me read
+  the exact files I'll edit:
+
+  Thought for 15s, read 3 files (ctrl+o to expand)
+
+⏺ Now applying the three edits — version bump in package.json and the --name 
+  "TotalReclaw" addition in both publish workflows:
+
+⏺ Update(.claude/worktrees/stage-341-prep/skill/plugin/package.json)
+  ⎿  Added 1 line, removed 1 line
+      1  {
+      2    "name": "@totalreclaw/totalreclaw",
+      3 -  "version": "3.4.0",                                           
+      3 +  "version": "3.4.1",                                           
+      4    "description": "End-to-end encrypted, agent-portable memory fo
+         r OpenClaw and any LLM-agent runtime. XChaCha20-Poly1305 with pr
+         otobuf v4 + on-chain Memory Taxonomy v1 (claim / preference / di
+         rective / commitment / episode / summary).",
+      5    "type": "module",
+      6    "keywords": [
+
+⏺ Update(.claude/worktrees/stage-341-prep/.github/workflows/promote-rc.yml)
+  ⎿  Added 1 line
+      381            # Using legacy `clawhub publish --slug` (CLI 0.8.0).
+            See install step.
+      382            clawhub publish ./skill/plugin \
+      383              --slug totalreclaw \
+      384 +            --name "TotalReclaw" \                            
+      385              --version "$STABLE" \
+      386              --tags "latest,memory,encryption,e2ee,privacy,agen
+           t-memory,e2e-encryption,persistent-context" \
+      387              --changelog "Release $STABLE (promoted from RC) --
+            see https://github.com/p-diogo/totalreclaw/releases/tag/v$STA
+           BLE"
+
+⏺ Update(.claude/worktrees/stage-341-prep/.github/workflows/publish-clawhub.yml)
+  ⎿  Added 1 line
+      216            # See install step above for full context.
+      217            clawhub publish "$PUBLISH_DIR" \
+      218              --slug "$SLUG" \
+      219 +            --name "TotalReclaw" \                            
+      220              --version "$VERSION" \
+      221              --tags "$TAGS" \
+      222              --changelog "$CHANGELOG"
+
+  Thought for 8s (ctrl+o to expand)
+
+⏺ Now propagate the version (sync-version.mjs) and gate
+  (check-version-drift.mjs), then review the full diff:
+
+  Thought for 1m 8s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Diff is exactly right — version bump across all four sites (and
+  sync-version.mjs fixed pre-existing drift: SKILL.md was 3.3.13, tr-cli.ts was
+  3.3.12-rc.10 on main) plus the --name fix in both workflows. Drift gate
+  passes. Committing (two clean commits), renaming the branch, and pushing:
+
+  Thought for 10s, committed 32bc713, pushed to chore/plugin-3.4.1-prep (ctrl+o to expand)
+
+⏺ Pushed. Now opening the PR:
+
+⏺ Write(/tmp/pr-341-body.md)
+  ⎿  Wrote 27 lines to ../../../../../tmp/pr-341-body.md
+      1 ## Why
+        s re-publishing `3.4.0` ("Version 3.4.0 already exists"), and the
+         live listing shows `displayName: "Plugin"` instead of `"TotalRec
+        ath), so urgency is low — this is channel parity + hygiene.
+      4 This stages **3.4.1**, which is **content-identical to 3.4.0** (o
+        nly the version string changes) so it publishes past the phantom.
+        mpty** — main's plugin subtree is byte-identical to the npm 3.4.0
+         source.
+      6 ## Changes
+        c-version.mjs` (
+     … +42 lines (ctrl+o to expand)
+
+  Thought for 24s, created PR #560 (ctrl+o to expand)
+
+⏺ PR opened: https://github.com/p-diogo/totalreclaw/pull/560
+
+  Let me update tracking and clean up the worktree (branch + commits are safely
+  on origin; the PR persists):
+
+⏺ Cleaning up worktree
+  ⎿  Removed worktree (branch worktree-stage-341-prep)
+     Returned to /Users/pdiogo/Documents/code/totalreclaw
+
+  Thought for 25s (ctrl+o to expand)
+
+⏺ Worktree cleaned up; your entity-trapdoor WIP on this branch is untouched. PR
+  is live: https://github.com/p-diogo/totalreclaw/pull/560
+
+  Let me record the resolution state in project memory (the handoff doc's
+  diagnosis was partly outdated — worth correcting for next session):
+
+  Thought for 41s, recalled 1 memory, wrote 2 memories (ctrl+o to expand)
+
+⏺ Done. Here's where it landed:
+
+  PR #560 — https://github.com/p-diogo/totalreclaw/pull/560
+
+  Two commits on chore/plugin-3.4.1-prep → main:
+  1. chore(plugin): bump base 3.4.0 → 3.4.1 — sync-version.mjs across all four
+  sites; it also cleaned up pre-existing drift on main (SKILL.md was 3.3.13,
+  tr-cli.ts was 3.3.12-rc.10). Drift gate passes.
+  2. fix(publish): set ClawHub display name to TotalReclaw — --name 
+  "TotalReclaw" in both promote-rc.yml + publish-clawhub.yml.
+
+  Content guarantee: git diff v3.4.0..origin/main -- skill/plugin/ is empty →
+  3.4.1 ships byte-identical plugin code to npm 3.4.0; only the version string
+  differs. Worktree was off origin/main, your entity-trapdoor WIP here is
+  untouched. Merging is safe — both publish workflows are workflow_dispatch only
+  (no auto-publish).
+
+  Next — your gate
+
+  After CI goes green on #560 (there are version-pattern tests, relaxed for 3.4+
+  stable, so 3.4.1 should pass — worth a glance), merge, then:
+  gh workflow run npm-publish.yml      -R p-diogo/totalreclaw -f package=plugin
+    -f release-type=stable
+  gh workflow run publish-clawhub.yml  -R p-diogo/totalreclaw -f version=3.4.1
+  -f release-type=stable -f skill-source=plugin
+  npm view @totalreclaw/totalreclaw version            # expect 3.4.1
+  npx clawhub@0.23.1 inspect @p-diogo/totalreclaw --versions   # latest 3.4.1, 
+  displayName "TotalReclaw"
+
+  Deferred (non-blocking)
+
+  - ClawHub support issue on openclaw/clawhub: phantom 3.4.0 cleanup + the
+  delete/hide "Skill not found" slug-resolution bug (squatter) +
+  @thcjp/totalreclaw ambiguity + totalreclaw-canary hide.
+  - I also corrected the project memory — the handoff doc's "SkillSpector crash,
+  no findings" was the 3.3.13 audit-modal residue; the real phantom is a
+  pending 3.4.0 with a completed (concern-rated, verdict still "clean") review.
+
+  Want me to dispatch the two workflows the moment #560 merges (say the word),
+  and/or draft the support issue now?
+
+✻ Crunched for 5m 57s
+
+※ recap: Goal: get the plugin live on ClawHub at 3.4.1 (same as 3.4.0). PR #560 stages the version bump plus the display-name fix. Next action: merge #560 after CI is green, then run the two publish workflows. (disable recaps in /config)
+❯ dispatch the workflows now if ci is green                                     
+
+  Thought for 58s (ctrl+o to expand)
+
+⏺ Before dispatching: the workflows read from main (npm-publish reads the
+  committed package.json; publish-clawhub needs the merged --name workflow), so
+  PR #560 must be merged first. Autonomous squash-merge of green PRs is your
+  standing flow, and you've authorized the dispatch — so: check CI → if green,
+  merge → dispatch. Checking CI now:
+
+  Thought for 13s, ran 1 shell command (ctrl+o to expand)
+
+⏺ CI is not green — "Plugin Build Check" failed (the other relevant checks pass:
+  Rust Core, Cross-Language Parity, Phrase Safety, Python Client). Per your "if
+  CI is green" condition, I'm not merging or dispatching. Let me see why it
+  failed:
+
+  Thought for 16s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Two test files failed: cli/tr-cli-json-output.test.ts and
+  skill-md-native.test.ts (94/96 files passed) — almost certainly version-string
+  assertions tripped by the bump. Let me pull the exact assertion failures:
+
+  Thought for 28s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Root cause found. Test #17: const PLUGIN_VERSION declares a 3.3.x version — a
+  stale version-pattern assertion. It was passing on main only because of the 
+  drift (tr-cli.ts was stuck at 3.3.12-rc.10, SKILL.md at 3.3.13); my
+  sync-version fix bumped them to 3.4.1, exposing the stale "3.3.x" expectation.
+  Same story in skill-md-native.test.ts. These test assertions need to move to
+  3.4.x. Let me find them:
+
+  Thought for 32s, ran 2 shell commands (ctrl+o to expand)
+
+⏺ Found the tr-cli assertion (line 158: regex '3\.3\.\d+...'). Let me locate
+  skill-md-native.test.ts (the -o find missed it) and see its version assertion:
+
+  Thought for 30s, ran 2 shell commands (ctrl+o to expand)
+
+⏺ skill-md-native.test.ts isn't on this stale feat branch — let me read it from
+  origin/main and get its failing assertion from the log:
+
+  Thought for 1m 4s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Both failures are stale 3.3.x version-pattern assertions:
+  - tr-cli-json-output.test.ts:158 — regex '3\.3\.\d+...'
+  - skill-md-native.test.ts:265 — regex 3\.3\.(9|1\d)
+
+  Both need to move to 3.4.x. Let me set up a worktree off the PR branch and
+  read the exact lines:
+
+  Thought for 17s, ran 1 shell command (ctrl+o to expand)
+
+⏺ skill-md-native.test.ts is at the expected path. Let me locate
+  tr-cli-json-output.test.ts in the worktree (path differs slightly):
+
+  Thought for 1m 17s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Got both. Fixing the two stale 3.3.x → 3.4.x assertions (regex + message +
+  comment):
+
+⏺ Update(.claude/worktrees/341-fix/skill/plugin/cli/tr-cli-json-output.test.ts)
+  ⎿  Added 3 lines, removed 3 lines
+      149  
+      150  // -----------------------------------------------------------
+           ----------------
+      151  // 6. PLUGIN_VERSION constant present (auto-synced by sync-ver
+           sion.mjs from
+      152 -//    package.json — accept any 3.3.x-rc.N format from rc.9-rc
+          -.1 onwards)                                                   
+      152 +//    package.json — accept any 3.4.x (-rc.N) format)         
+      153  // -----------------------------------------------------------
+           ----------------
+      154  
+      155  assert(
+      156 -  /const PLUGIN_VERSION = '3\.3\.\d+(?:-rc\.\d+)?';/.test(src)
+          -,                                                             
+      157 -  "tr-cli.ts: const PLUGIN_VERSION declares a 3.3.x version (a
+          -uto-synced by sync-version.mjs)",                             
+      156 +  /const PLUGIN_VERSION = '3\.4\.\d+(?:-rc\.\d+)?';/.test(src)
+          +,                                                             
+      157 +  "tr-cli.ts: const PLUGIN_VERSION declares a 3.4.x version (a
+          +uto-synced by sync-version.mjs)",                             
+      158  );
+      159  
+      160  // -----------------------------------------------------------
+           ----------------
+
+⏺ Update(.claude/worktrees/341-fix/skill/plugin/skill-md-native.test.ts)
+  ⎿  Added 2 lines, removed 2 lines
+      262  // -----------------------------------------------------------
+           ----------------
+      263  
+      264  assert(
+      265 -  /^version: 3\.3\.(9|1\d)(-rc\.\d+)?$/m.test(pluginSkillMd), 
+      266 -  'skill/plugin/SKILL.md: frontmatter version is 3.3.9+/3.3.1[
+          -0-9] with optional -rc.N (clean stable versions valid in-repo 
+          -since the #509 publish consolidation)',                       
+      265 +  /^version: 3\.4\.\d+(-rc\.\d+)?$/m.test(pluginSkillMd),     
+      266 +  'skill/plugin/SKILL.md: frontmatter version is 3.4.x with op
+          +tional -rc.N (clean stable versions valid in-repo since the #5
+          +09 publish consolidation)',                                   
+      267  );
+      268  
+      269  // -----------------------------------------------------------
+           ----------------
+
+  Thought for 10s (ctrl+o to expand)
+
+⏺ Let me review the diff, then commit and push to the PR branch:
+
+  Thought for 10s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Both regexes now match 3.4.1 (sanity-checked). Committing and pushing to the
+  PR branch:
+
+  Thought for 41s, pushed to chore/plugin-3.4.1-prep (ctrl+o to expand)
+
+⏺ Pushed the test fix to PR #560 (e4f0b91). The two stale 3.3.x assertions now
+  allow 3.4.x, and I sanity-checked both regexes match 3.4.1. CI will re-run.
+  Launching a background watcher so I'm notified the moment it finishes:
+
+  Thought for 17s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Status while CI runs:
+
+  - PR #560's first CI was red — Plugin Build Check failed on two stale
+  version-pattern assertions (tr-cli-json-output.test.ts,
+  skill-md-native.test.ts) that still pinned 3.3.x. They'd been passing on main
+  only because of the drift my sync-version fix corrected.
+  - Pushed the fix (e4f0b91): both assertions now accept 3.4.x; regexes
+  sanity-checked against 3.4.1.
+  - Background watcher is running — I'll be notified the moment CI finishes.
+
+  Per your "if CI is green" gate: when it goes green I'll squash-merge #560 → 
+  main, confirm main's package.json reads 3.4.1, then dispatch:
+  gh workflow run npm-publish.yml     -R p-diogo/totalreclaw -f package=plugin
+  -f release-type=stable
+  gh workflow run publish-clawhub.yml -R p-diogo/totalreclaw -f version=3.4.1 -f
+  release-type=stable -f skill-source=plugin
+  …and verify both registries. If CI fails again, I'll report and hold — no
+  merge, no dispatch. Standing by for the CI result.
+
+✻ Cooked for 7m 44s
+
+⏺ Background command "Poll CI on PR 560 until terminal" completed (exit code 0)
+
+  Thought for 6s (ctrl+o to expand)
+
+⏺ CI watcher finished. Let me read the result:
+
+  Thought for 21s, read 1 file (ctrl+o to expand)
+
+⏺ That "skipped" is a false signal — -L 1 grabbed a path-scoped workflow that
+  skipped, not the CI run. Let me check the actual required checks for commit
+  e4f0b91:
+
+  Thought for 14s, ran 1 shell command (ctrl+o to expand)
+
+⏺ My watcher caught the wrong run — the Auto-merge workflow (skipped), not CI.
+  The real CI run (#30526538636) is still in_progress (Plugin Build Check
+  pending). Re-launching the watcher on the correct run:
+  Thought for 9s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Corrected watcher is now on CI run #30526538636. I'll be notified when it
+  finishes, then merge + dispatch per your gate (or report if red). Standing by.
+
+✻ Brewed for 59s
+
+⏺ Background command "Watch CI run 30526538636 until terminal" completed (exit
+code 0)
+
+⏺ CI watcher finished. Let me read the conclusion:
+
+  Thought for 42s, read 1 file (ctrl+o to expand)
+
+⏺ CI is green (conclusion=success). Per your gate and the autonomous-merge flow,
+  proceeding: verify the required check, then squash-merge #560 to main:
+
+  Thought for 13s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Merge command returned no output — let me confirm it actually merged and that
+  main now carries 3.4.1:
+
+  Thought for 28s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Merged — #560 → main (1a9d86e), package.json confirms 3.4.1. Dispatching both
+  stable publishes:
+
+  Thought for 15s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Both dispatched and queued:
+  - npm: https://github.com/p-diogo/totalreclaw/actions/runs/30526911477
+  - ClawHub: https://github.com/p-diogo/totalreclaw/actions/runs/30526914075
+
+  Watching both to completion:
+
+  Thought for 15s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Status:
+  - ✅ PR #560 merged → main (1a9d86e), package.json = 3.4.1.
+  - 🚀 Both stable publishes dispatched and queued (npm #30526911477, ClawHub
+  #30526914075).
+  - ⏳ Watcher running — I'll verify both registries the moment they finish:
+    - npm view @totalreclaw/totalreclaw version → expect 3.4.1
+    - clawhub inspect @p-diogo/totalreclaw --versions → expect latest 3.4.1,
+  displayName "TotalReclaw"
+
+  If either run fails I'll pull the logs and report before any retry. Standing
+  by for the publish completion.
+
+✻ Brewed for 2m 29s
+
+※ recap: Goal: get plugin 3.4.1 live on npm and ClawHub (content-identical to 3.4.0) to clear the stuck ClawHub channel. PR #560 merged and both stable-publish workflows are dispatched and running. Next: verify both registries serve 3.4.1 once the runs finish. (disable recaps in /config)
+
+⏺ Background command "Watch both 3.4.1 publish runs to completion" completed
+(exit code 0)
+
+⏺ Publish watcher finished. Let me read the outcome of both runs:
+
+  Thought for 17s, read 1 file (ctrl+o to expand)
+
+⏺ Both publishes succeeded (ClawHub ✓, npm ✓). Verifying both registries:
+
+  Thought for 26s, ran 1 shell command (ctrl+o to expand)
+
+⏺ npm ✅ — latest is 3.4.1. But ClawHub still shows 3.3.13
+  (latestVersion/displayName/versions_total all unchanged) even though the
+  publish run "succeeded." That's a real problem — a green workflow that didn't
+  update the listing. Let me look at what the ClawHub publish actually did:
+
+  Thought for 12s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Let me filter out setup noise and see the actual resolved publish variables
+  and clawhub publish output:
+
+  Thought for 18s, ran 1 shell command (ctrl+o to expand)
+
+⏺ Version resolved correctly (3.4.1). Now I need the actual clawhub publish
+  result — let me find that step's output:
+
+  Thought for 33s, ran 1 shell command (ctrl+o to expand)
+
+⏺ The publish step did succeed: ✔ OK. Published totalreclaw@3.4.1 
+  (k97bc9fdvc32bhfh9z640zzfd58bh9g2), and it tagged v3.4.1. So 3.4.1 landed on
+  ClawHub's backend — yet inspect still shows 3.3.13 as latest with displayName 
+  "Plugin". That's the signature of the same review queue that trapped 3.4.0: a
+  freshly-published version sits in review.llm_review (SkillSpector) and doesn't
+  become latest/visible until the scan finalizes. Let me check 3.4.1's actual
+  state:
+
+  Thought for 7s, ran 2 shell commands (ctrl+o to expand)
+
+⏺ API Error: Request rejected (429) · [1308][Usage limit reached for 5 
+  hour. Your limit will reset at 2026-07-30 
+  18:49:51][2026073016373955f02cf6b82a4767]
+
+✻ Sautéed for 2m 47s
+
+❯ try again?                                                                    
+
+⏺ API Error: Request rejected (429) · [1308][Usage limit reached for 5 
+  hour. Your limit will reset at 2026-07-30 
+  18:49:51][20260730164422810a916669134487]
+
+✻ Worked for 3s

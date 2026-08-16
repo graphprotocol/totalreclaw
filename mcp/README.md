@@ -168,13 +168,71 @@ See [`docs/specs/totalreclaw/memory-taxonomy-v1.md`](../docs/specs/totalreclaw/m
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `TOTALRECLAW_RECOVERY_PHRASE` | 12-word BIP-39 recovery phrase | Required |
+| `TOTALRECLAW_RECOVERY_PHRASE` | 12-word BIP-39 recovery phrase. Deprecated in favour of a `derived-bundle-v1` bundle in `credentials.json` — see "Credential Material" below | Required unless a `version: 2` bundle is present |
 | `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL (only needed for self-hosted) | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_SELF_HOSTED` | Use a self-hosted server instead of the managed service | `false` |
 | `TOTALRECLAW_CREDENTIALS_PATH` | Override credentials file location | `~/.totalreclaw/credentials.json` |
 | `TOTALRECLAW_CACHE_PATH` | Override encrypted cache file location | `~/.totalreclaw/cache.enc` |
 
 > **v1 env cleanup:** `TOTALRECLAW_CHAIN_ID`, `TOTALRECLAW_EMBEDDING_MODEL`, `TOTALRECLAW_STORE_DEDUP`, `TOTALRECLAW_LLM_MODEL`, `TOTALRECLAW_SESSION_ID`, `TOTALRECLAW_TAXONOMY_VERSION`, `TOTALRECLAW_CLAIM_FORMAT`, and `TOTALRECLAW_DIGEST_MODE` were removed. All tiers use Gnosis mainnet; chain selection is no longer user-configurable. The MCP server silently ignores these vars for a transition period. See the [env vars reference](../docs/guides/env-vars-reference.md).
+
+## Credential Material
+
+The managed-service (subgraph) path configures from **either** a BIP-39 recovery
+phrase (the legacy path, above) **or** a `derived-bundle-v1` credential bundle
+(Option E Phase 2 — [#581](https://github.com/p-diogo/totalreclaw/issues/581)):
+the four HKDF-derived vault keys plus a signing key, but never the phrase or
+the 64-byte BIP-39 seed. See
+[`docs/specs/totalreclaw/client-consistency.md`](../docs/specs/totalreclaw/client-consistency.md#credential-material)
+for the full cross-client contract.
+
+**Precedence** (first match wins):
+
+1. `TOTALRECLAW_RECOVERY_PHRASE` env var — a phrase. Deprecated but retained.
+2. `~/.totalreclaw/credentials.json` with `"version": 2` — a `derived-bundle-v1`
+   bundle.
+3. `~/.totalreclaw/credentials.json` legacy shape — `{"mnemonic": "…", ...}`.
+
+A `credentials.json` with a `version` field present and **not** `2` is a loud,
+fatal startup error — never a silent downgrade to legacy handling. Same for a
+`version: 2` file that fails schema validation (malformed hex, an
+`owner-eoa` bundle carrying a `grant`, a `signing.address` that doesn't match
+the address of `signing.private_key`, …).
+
+**MCP-specific gaps vs. the Hermes (Python) implementation** — tracked
+explicitly, not silently unsupported:
+
+- **No OS-keychain unwrap.** MCP only reads the plaintext ("headless / no
+  keychain") bundle storage form. A `version: 2` file with
+  `"keychain_wrapped": true` (the desktop-keychain storage form Hermes
+  writes) is a loud, actionable error, not a silent skip.
+- **No `TOTALRECLAW_CREDENTIALS_PROVIDER` / external-secret-manager
+  transport.** MCP always reads `credentials.json` from disk (or
+  `TOTALRECLAW_CREDENTIALS_PATH`) — it has no `file` / `external` provider
+  abstraction yet.
+- **No local-migration tool.** MCP does not write a `version: 2` bundle from
+  an existing plaintext mnemonic on its own initiative — that credential is
+  produced by Hermes's `auto_migrate.py` or the vault SPA's pair-time
+  provisioning, and simply *read* by the MCP server if present.
+- **Bundle-mode pairing (`totalreclaw_pair`) is wired but currently inert.**
+  The relay does not yet forward a `payload_type` field on the pair
+  envelope, so `totalreclaw_pair` always completes via the legacy-phrase
+  path today. The `derived-bundle-v1` completion branch is implemented and
+  fixture-tested (`tests/pair-bundle.test.ts`) so it activates automatically
+  once the relay-side plumbing (tracked separately) lands.
+
+**Self-hosted mode is unaffected and unrelated.** It is a completely
+separate credential system (`MASTER_PASSWORD` + a random, server-issued
+salt — no BIP-39 root at all) and never consults bundle detection.
+
+**Dependency note:** bundle support requires an `@totalreclaw/core` release
+exposing `parseBundleV1` / `validateBundleV1` / `deriveBundleFromMnemonic`.
+That gate is **cleared** — `@totalreclaw/core` **2.6.0** (published
+2026-08-16) carries all three in both the `nodejs` and `./web` builds, and
+`package.json` requires `^2.6.0`. (The earlier `2.6.0-rc.1` predated #587 and
+did **not** carry them; it is superseded by 2.6.0.) The runtime
+feature-detection in `src/subgraph/bundle.ts` is retained deliberately — it
+keeps a stale-install downgrade loud rather than a crash.
 
 ## Free Tier & Pricing
 

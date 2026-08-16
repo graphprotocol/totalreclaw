@@ -139,9 +139,35 @@ describe('embedding-codec write-path selection', () => {
     expect(() => encodeEmbeddingPayloadWithCore(bad, spy)).toThrow(/fail-closed|finite/i);
   });
 
-  it('default write-path returns the legacy marker when core codec unavailable', () => {
-    // Published core (2.5.x) predates the codec -> marker, not canonical.
-    expect(encodeEmbeddingPayload(FIXTURE.unit_vector)).toBe(LEGACY_F32_MARKER);
+  it('default write-path tracks the INSTALLED core capability', () => {
+    // This is the only assertion here keyed to the ambient dependency
+    // rather than an injected double, so it must be derived from what the
+    // installed core actually exposes -- not from a hardcoded assumption
+    // about which version is pinned. It previously asserted the legacy
+    // marker unconditionally ("Published core (2.5.x) predates the codec"),
+    // which silently became false the moment mcp/package.json moved to
+    // `@totalreclaw/core` ^2.6.0: 2.6.0 ships `encodeEmbeddingCanonical`,
+    // so the feature-detecting write path correctly flips to canonical
+    // f16 -- exactly the automatic flip the #479 Part B design intended.
+    //
+    // Asserting the contract (delegate when available, fall back when not)
+    // keeps this test meaningful across future dep bumps in both directions.
+    let core: any = null;
+    try {
+      core = require('@totalreclaw/core');
+    } catch {
+      core = null;
+    }
+    const canonicalAvailable =
+      !!core && typeof core.encodeEmbeddingCanonical === 'function';
+    const payload = encodeEmbeddingPayload(FIXTURE.unit_vector);
+
+    if (canonicalAvailable) {
+      expect(payload).not.toBe(LEGACY_F32_MARKER);
+      expect(payload).toBe(core.encodeEmbeddingCanonical(FIXTURE.unit_vector));
+    } else {
+      expect(payload).toBe(LEGACY_F32_MARKER);
+    }
   });
 });
 

@@ -14,6 +14,16 @@
  *   salt = seed[0..32]
  *   authKey = HKDF-SHA256(seed, salt, "totalreclaw-auth-key-v1", 32)
  *   authKeyHash = SHA-256(authKey).hex()
+ *
+ * Credential material (Option E Phase 2 / #581, P2-13): this wizard writes
+ * ONLY the legacy mnemonic shape (`SavedCredentials` below). The MCP server
+ * separately reads a `derived-bundle-v1` `version: 2` credentials.json
+ * (`subgraph/credentials.ts`) if one is present — that credential shape is
+ * produced by Hermes's local-migration tool (`hermes/auto_migrate.py`,
+ * Python-only) or the SPA's pair-time provisioning flow, never by this CLI.
+ * An MCP-side migration tool (mnemonic credentials.json -> a v2 bundle,
+ * in-place) is tracked as a known gap — see mcp/README.md — not built in
+ * this phase.
  */
 
 import * as readline from 'node:readline';

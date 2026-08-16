@@ -46,6 +46,12 @@ export async function handleAccount(
   const serverUrl = ctx.serverUrl ?? '';
   const authKeyHex = ctx.authKeyHex ?? '';
   const walletAddress = ctx.walletAddress ?? '';
+  // Option E Phase 2 / #581 (P2-13): on a bundle-configured server
+  // (`derived-bundle-v1`, no mnemonic anywhere in the process), `index.ts`'s
+  // `accountHandler` passes a descriptive placeholder here instead of a
+  // `first … last` phrase hint — there is no phrase to hint at. This tool
+  // just forwards whatever it's given; it has no credential-kind awareness
+  // of its own.
   const mnemonicHint = ctx.mnemonicHint ?? '';
   const getFactCount = ctx.getFactCount ?? (async () => null as unknown as number);
 

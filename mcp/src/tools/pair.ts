@@ -56,6 +56,7 @@ import {
   type RemotePairSession,
 } from '../pair-remote-client.js';
 import { deriveAuthKey, computeAuthKeyHash } from '../cli/setup.js';
+import { redactedBundleSummary, type DerivedBundleV1 } from '../subgraph/bundle.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -159,6 +160,44 @@ function writePairedCredentials(creds: {
     fs.mkdirSync(CREDENTIALS_DIR, { recursive: true, mode: 0o700 });
   }
   fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(creds, null, 2) + '\n', {
+    encoding: 'utf-8',
+    mode: 0o600,
+  });
+}
+
+/**
+ * Write a `derived-bundle-v1` bundle to `credentials.json`, `version: 2`
+ * (Option E Phase 2 / #581, P2-13).
+ *
+ * MCP has no OS-keychain integration (that is Python/Hermes-only — see
+ * `subgraph/credentials.ts`'s module doc), so this always writes the
+ * "headless / no keychain" storage form: the complete object, including
+ * `vault` and `signing.private_key`, as plaintext at mode `0600`
+ * (derived-bundle-v1.md §4.3). This is the SAME at-rest exposure class as
+ * today's plaintext-mnemonic `credentials.json` — not a regression, and not
+ * yet a security improvement for headless MCP hosts (the improvement is
+ * "the root is gone", not "secrets at rest are now protected"; see
+ * derived-bundle-v1.md §0's threat-model ceiling).
+ *
+ * Field order matches the canonical wire shape (client-consistency.md
+ * "Credential Material") verbatim — `bundle` already carries every field
+ * this object needs, since `DerivedBundleV1`'s shape IS the wire shape
+ * (see `subgraph/bundle.ts`).
+ */
+function writePairedBundleCredentials(bundle: DerivedBundleV1): void {
+  const wire = {
+    version: 2 as const,
+    schema: 'derived-bundle-v1' as const,
+    vault: bundle.vault,
+    signing: bundle.signing,
+    account: bundle.account,
+    provisioned_at: bundle.provisioned_at,
+    provisioned_by: bundle.provisioned_by,
+  };
+  if (!fs.existsSync(CREDENTIALS_DIR)) {
+    fs.mkdirSync(CREDENTIALS_DIR, { recursive: true, mode: 0o700 });
+  }
+  fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(wire, null, 2) + '\n', {
     encoding: 'utf-8',
     mode: 0o600,
   });
@@ -280,6 +319,33 @@ export async function runPairBackgroundTask(opts: {
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         log('error', `pair: completePairing failed: ${msg}`);
+        return { state: 'error', error: msg };
+      }
+    },
+    // Option E Phase 2 / #581 (P2-13) — payload_type: "derived-bundle-v1"
+    // sibling. Inert in production today: as documented in
+    // pair-remote-client.ts's module doc, the relay does not yet forward a
+    // `payload_type` field on the pair envelope (P2-11), so this branch
+    // only ever fires in `mcp/tests/pair-bundle.test.ts`'s fixture-driven
+    // tests. Wired here anyway so the contract is complete and P2-11
+    // landing on the relay side needs zero MCP-side follow-up.
+    completePairingBundle: async ({ bundle }) => {
+      try {
+        // NO registerWithServer()/registerUser() call — derived-bundle-v1.md
+        // §4.5's normative rule: a bundle-configured client MUST NOT call
+        // POST /v1/register. The vault is registered by the provisioning
+        // origin (the SPA, which holds the root), which is the only party
+        // able to register correctly.
+        writePairedBundleCredentials(bundle);
+        log(
+          'info',
+          `pair: session ${tokenTail}… completed via derived-bundle-v1; ` +
+            `credentials written — ${JSON.stringify(redactedBundleSummary(bundle))}`,
+        );
+        return { state: 'active' };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log('error', `pair: completePairingBundle failed: ${msg}`);
         return { state: 'error', error: msg };
       }
     },

@@ -14,10 +14,10 @@
  * Config can be injected directly (for MCP server state) or read from env vars.
  */
 
-import { createPublicClient, createWalletClient, http, type Hex, type Address, type Chain } from 'viem';
+import { createPublicClient, createWalletClient, http, type Hex, type Address, type Chain, type LocalAccount } from 'viem';
 import { getClientId } from '../client-id.js';
 import { entryPoint07Address } from 'viem/account-abstraction';
-import { mnemonicToAccount } from 'viem/accounts';
+import { mnemonicToAccount, privateKeyToAccount } from 'viem/accounts';
 import { gnosis, baseSepolia, foundry } from 'viem/chains';
 import { createSmartAccountClient } from 'permissionless';
 import { toSimpleSmartAccount } from 'permissionless/accounts';
@@ -27,21 +27,71 @@ import { createPimlicoClient } from 'permissionless/clients/pimlico';
 // Types
 // ---------------------------------------------------------------------------
 
-/** Default EventfulDataEdge contract address on Gnosis mainnet */
-const DEFAULT_DATA_EDGE_ADDRESS = '0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca';
+/**
+ * Default EventfulDataEdge contract address on Gnosis mainnet — the
+ * PRODUCTION DataEdge. Exported (not just a local const) so callers that
+ * need to name it in a diagnostic/warning log (e.g. `index.ts`'s
+ * mnemonic-mode billing-unavailable fallback, #618 adversarial-review
+ * fixup) don't duplicate the literal and risk it drifting.
+ */
+export const DEFAULT_DATA_EDGE_ADDRESS = '0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca';
 
 /** Well-known ERC-4337 EntryPoint v0.7 address (same on all chains) */
 const DEFAULT_ENTRYPOINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
 
 export interface SubgraphStoreConfig {
   relayUrl: string;           // TotalReclaw relay server URL (proxies bundler + subgraph)
-  mnemonic: string;           // BIP-39 mnemonic for key derivation
+  /**
+   * BIP-39 mnemonic for key derivation. Mutually exclusive with
+   * `ownerPrivateKeyHex` (Option E Phase 2 / #581, P2-13) — a bundle-mode
+   * caller has no mnemonic anywhere in the process (derived-bundle-v1.md
+   * §4.6 point 1) and threads the bundle's `signing.private_key` directly
+   * instead. Exactly one of the two must be present; see
+   * `resolveOwnerAccount` below for the resolution + error contract.
+   */
+  mnemonic?: string;
+  /**
+   * Bundle-mode signing key — 64 lowercase hex chars, no `0x` prefix
+   * (`bundle.signing.private_key`, `signing.kind === "owner-eoa"` only;
+   * Phase 2 does not support submitting on-chain with a `session-key`
+   * bundle — that requires the signing-delegation phase, see
+   * derived-bundle-v1.md §4.2). Takes precedence over `mnemonic` when both
+   * happen to be set (never expected in practice).
+   */
+  ownerPrivateKeyHex?: string;
   cachePath: string;          // Hot cache file path
   chainId: number;            // 100 for Gnosis mainnet, 10200 for Chiado testnet, 84532 for Base Sepolia
   dataEdgeAddress: string;    // EventfulDataEdge contract address
   entryPointAddress: string;  // ERC-4337 EntryPoint v0.7
   authKeyHex?: string;        // HKDF auth key hex for relay Authorization header
   walletAddress?: string;     // Smart Account address for X-Wallet-Address header
+}
+
+/**
+ * Resolve the Smart Account **owner** signing account from whichever
+ * credential source `config` carries.
+ *
+ * Prefers `ownerPrivateKeyHex` (bundle mode) over `mnemonic` (legacy mode)
+ * when — contrary to the normal precedence contract — both are somehow
+ * present, since the private key is the more direct source of truth and
+ * skips a redundant BIP-44 derivation. Throws a loud, actionable error when
+ * NEITHER is present rather than letting `mnemonicToAccount(undefined)`
+ * throw viem's own less legible error.
+ */
+export function resolveOwnerAccount(config: SubgraphStoreConfig): LocalAccount {
+  if (config.ownerPrivateKeyHex) {
+    const hex = config.ownerPrivateKeyHex.startsWith('0x')
+      ? config.ownerPrivateKeyHex
+      : `0x${config.ownerPrivateKeyHex}`;
+    return privateKeyToAccount(hex as Hex);
+  }
+  if (config.mnemonic) {
+    return mnemonicToAccount(config.mnemonic);
+  }
+  throw new Error(
+    'On-chain submission requires either a mnemonic or a bundle-mode ' +
+      'ownerPrivateKeyHex — neither is present on this SubgraphStoreConfig.',
+  );
 }
 
 export interface FactPayload {
@@ -213,8 +263,8 @@ export async function submitFactOnChain(
     throw new Error('Relay URL is required for on-chain submission');
   }
 
-  if (!config.mnemonic) {
-    throw new Error('Mnemonic is required for on-chain submission');
+  if (!config.mnemonic && !config.ownerPrivateKeyHex) {
+    throw new Error('Mnemonic or bundle-mode ownerPrivateKeyHex is required for on-chain submission');
   }
 
   const chain = getChainFromId(config.chainId);
@@ -233,8 +283,9 @@ export async function submitFactOnChain(
     ? http(bundlerRpcUrl, { fetchOptions: { headers } })
     : http(bundlerRpcUrl);
 
-  // 1. Derive EOA signer from mnemonic (BIP-44 m/44'/60'/0'/0/0)
-  const ownerAccount = mnemonicToAccount(config.mnemonic);
+  // 1. Resolve the owner signer — mnemonic-derived EOA (BIP-44
+  //    m/44'/60'/0'/0/0) or bundle-mode `ownerPrivateKeyHex` directly.
+  const ownerAccount = resolveOwnerAccount(config);
 
   // 2. Create a public client for chain reads (use default RPC, not bundler proxy)
   const publicClient = createPublicClient({
@@ -332,8 +383,8 @@ export async function submitFactBatchOnChain(
   if (!config.relayUrl) {
     throw new Error('Relay URL is required for on-chain submission');
   }
-  if (!config.mnemonic) {
-    throw new Error('Mnemonic is required for on-chain submission');
+  if (!config.mnemonic && !config.ownerPrivateKeyHex) {
+    throw new Error('Mnemonic or bundle-mode ownerPrivateKeyHex is required for on-chain submission');
   }
 
   const chain = getChainFromId(config.chainId);
@@ -351,7 +402,7 @@ export async function submitFactBatchOnChain(
     ? http(bundlerRpcUrl, { fetchOptions: { headers } })
     : http(bundlerRpcUrl);
 
-  const ownerAccount = mnemonicToAccount(config.mnemonic);
+  const ownerAccount = resolveOwnerAccount(config);
   const publicClient = createPublicClient({
     chain,
     transport: http(),
@@ -432,7 +483,7 @@ export async function submitFactLocal(
 ): Promise<{ txHash: string; success: boolean }> {
   const rpcUrl = process.env.TOTALRECLAW_LOCAL_RPC!;
   const dataEdgeAddress = config.dataEdgeAddress as Address;
-  const ownerAccount = mnemonicToAccount(config.mnemonic);
+  const ownerAccount = resolveOwnerAccount(config);
 
   const walletClient = createWalletClient({
     account: ownerAccount,

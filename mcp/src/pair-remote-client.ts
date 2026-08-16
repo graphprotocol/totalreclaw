@@ -27,6 +27,25 @@
  *   - No env-var reads — caller passes the relay base URL.
  *
  * See pair-crypto.ts for the cipher-suite header comment.
+ *
+ * Bundle-mode pairing (Option E Phase 2 / #581, P2-13)
+ * ------------------------------------------------------
+ * `awaitPhraseUpload` also understands a `payload_type: "derived-bundle-v1"`
+ * forward frame alongside the default `"legacy-mnemonic"` shape: the
+ * decrypted plaintext is the bundle JSON itself (not a phrase), validated
+ * via `parseBundleV1` before being handed to an optional
+ * `completePairingBundle` handler. This mirrors
+ * `python/src/totalreclaw/pair/remote_client.py`'s identical addition.
+ *
+ * **As of this writing the relay does not forward a `payload_type` field on
+ * the pair envelope at all** — P2-0 pre-flight (see the internal
+ * implementation spec) found no such field in `totalreclaw-relay`'s pair
+ * envelope; plumbing it through is tracked separately (P2-11, a private-repo
+ * change). Until that lands, `msg.payload_type` is always absent in
+ * production and this function always takes the `legacy-mnemonic` branch —
+ * the `derived-bundle-v1` branch is exercised by `mcp/tests/pair-bundle.test.ts`
+ * against a fixture forward frame, never live traffic. This is the exact
+ * same caveat Python's `remote_client.py` documents for its own P2-10 leaf.
  */
 
 import { randomBytes, randomInt } from 'node:crypto';
@@ -38,6 +57,7 @@ import {
   generateGatewayKeypair,
   type GatewayKeypair,
 } from './pair-crypto.js';
+import { parseBundleV1, type DerivedBundleV1 } from './subgraph/bundle.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -76,7 +96,30 @@ export type RelayCompletePairingHandler = (inputs: {
   session: RemotePairSession;
 }) => Promise<RelayCompletionResult>;
 
+/**
+ * Bundle-completion handler signature (Option E Phase 2 / #581, P2-13 —
+ * mirrors `python/src/totalreclaw/pair/remote_client.py`'s
+ * `CompleteBundleHandler`). Receives an already core-validated
+ * `DerivedBundleV1` — `awaitPhraseUpload` calls `parseBundleV1` on the
+ * decrypted plaintext before invoking this, so a malformed bundle never
+ * reaches the handler.
+ */
+export type RelayCompleteBundleHandler = (inputs: {
+  bundle: DerivedBundleV1;
+  session: RemotePairSession;
+}) => Promise<RelayCompletionResult>;
+
 export type PhraseValidator = (phrase: string) => boolean;
+
+/**
+ * `payload_type` values this client understands. Anything else on the wire
+ * is a forward-compatible value from a newer relay/SPA this build doesn't
+ * know about yet — rejected loudly (never silently treated as
+ * `legacy-mnemonic`; mirrors derived-bundle-v1.md §4.7's "unknown version ->
+ * loud error" pattern, which applies equally to an unknown `payload_type`
+ * discriminant). Mirrors Python's `_KNOWN_PAYLOAD_TYPES`.
+ */
+const KNOWN_PAYLOAD_TYPES = new Set(['legacy-mnemonic', 'derived-bundle-v1']);
 
 function defaultBip39CountValidator(phrase: string): boolean {
   const words = phrase.split(' ');
@@ -129,6 +172,15 @@ export interface OpenRemotePairOptions {
 
 export interface AwaitPhraseUploadOptions {
   completePairing: RelayCompletePairingHandler;
+  /**
+   * Optional `payload_type === "derived-bundle-v1"` sibling to
+   * `completePairing` (Option E Phase 2 / #581, P2-13). A call site that
+   * omits this only handles phrases — a bundle payload_type then nacks
+   * loudly with `unsupported_payload_type` rather than being silently
+   * mishandled as a phrase string. See the module doc's "Bundle-mode
+   * pairing" section for the current relay-support caveat.
+   */
+  completePairingBundle?: RelayCompleteBundleHandler;
   phraseValidator?: PhraseValidator;
   timeoutMs?: number;
 }
@@ -262,6 +314,22 @@ export async function awaitPhraseUpload(
   const clientPubkey = typeof msg.client_pubkey === 'string' ? msg.client_pubkey : '';
   const nonce = typeof msg.nonce === 'string' ? msg.nonce : '';
   const ciphertext = typeof msg.ciphertext === 'string' ? msg.ciphertext : '';
+
+  // Option E Phase 2 / #581 (P2-13). Absent -> "legacy-mnemonic" (today's
+  // only shape the relay actually sends — see the module doc's "Bundle-mode
+  // pairing" caveat: the relay does not yet forward `payload_type` at all,
+  // P2-11, a private-repo change). An unrecognised NON-absent value is a
+  // forward-compatible payload this build doesn't understand yet — reject
+  // loudly rather than guess which branch to take. Mirrors
+  // `python/src/totalreclaw/pair/remote_client.py`'s identical check.
+  const rawPayloadType = typeof msg.payload_type === 'string' ? msg.payload_type : undefined;
+  const payloadType = rawPayloadType ?? 'legacy-mnemonic';
+  if (!KNOWN_PAYLOAD_TYPES.has(payloadType)) {
+    safeSend(ws, { type: 'nack', error: 'unknown_payload_type' });
+    safeClose(ws);
+    throw new Error(`pair-remote-client: unrecognised payload_type '${payloadType}'`);
+  }
+
   if (!clientPubkey || !nonce || !ciphertext) {
     safeSend(ws, { type: 'nack', error: 'bad_forward_body' });
     safeClose(ws);
@@ -283,38 +351,93 @@ export async function awaitPhraseUpload(
     throw err instanceof Error ? err : new Error(String(err));
   }
 
-  let mnemonic: string;
-  try {
-    mnemonic = plaintext
-      .toString('utf-8')
-      .normalize('NFKC')
-      .toLowerCase()
-      .trim()
-      .split(/\s+/)
-      .join(' ');
-  } catch (err) {
-    safeSend(ws, { type: 'nack', error: 'bad_utf8' });
-    safeClose(ws);
-    throw err instanceof Error ? err : new Error(String(err));
-  } finally {
-    plaintext.fill(0);
-  }
-
-  if (!validate(mnemonic)) {
-    safeSend(ws, { type: 'nack', error: 'invalid_mnemonic' });
-    safeClose(ws);
-    throw new Error('pair-remote-client: phrase failed BIP-39 validation');
-  }
-
   let result: RelayCompletionResult;
-  try {
-    result = await opts.completePairing({ mnemonic, session });
-  } catch (err) {
-    safeSend(ws, { type: 'nack', error: 'completion_failed' });
-    safeClose(ws);
-    throw err instanceof Error ? err : new Error(String(err));
-  } finally {
-    mnemonic = '';
+
+  if (payloadType === 'derived-bundle-v1') {
+    if (!opts.completePairingBundle) {
+      // This caller only handles phrases — never silently mishandle a
+      // bundle payload as one. Checked BEFORE `parseBundleV1` (#618
+      // adversarial-review NIT) so a call site with no bundle handler
+      // always gets `unsupported_payload_type` — the accurate diagnosis —
+      // rather than `invalid_bundle` in the case where the (never-parsed)
+      // payload also happens to be malformed. Which nack fires should
+      // reflect "this call site can't handle bundles at all", not
+      // incidentally depend on payload validity it never got to check.
+      plaintext.fill(0);
+      safeSend(ws, { type: 'nack', error: 'unsupported_payload_type' });
+      safeClose(ws);
+      throw new Error(
+        'pair-remote-client: received payload_type=derived-bundle-v1 but this call site ' +
+          'has no completePairingBundle handler',
+      );
+    }
+
+    // The inner plaintext IS the bundle JSON itself (not a phrase) — see
+    // derived-bundle-v1.md §5.
+    let bundleJson: string;
+    try {
+      bundleJson = plaintext.toString('utf-8');
+    } catch (err) {
+      safeSend(ws, { type: 'nack', error: 'bad_utf8' });
+      safeClose(ws);
+      throw err instanceof Error ? err : new Error(String(err));
+    } finally {
+      plaintext.fill(0);
+    }
+
+    let bundle: DerivedBundleV1;
+    try {
+      // parseBundleV1 runs every derived-bundle-v1.md §4.7 invariant — never
+      // persist a bundle that did not validate.
+      bundle = parseBundleV1(bundleJson);
+    } catch (err) {
+      safeSend(ws, { type: 'nack', error: 'invalid_bundle' });
+      safeClose(ws);
+      throw err instanceof Error ? err : new Error(String(err));
+    } finally {
+      bundleJson = '';
+    }
+
+    try {
+      result = await opts.completePairingBundle({ bundle, session });
+    } catch (err) {
+      safeSend(ws, { type: 'nack', error: 'completion_failed' });
+      safeClose(ws);
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+  } else {
+    let mnemonic: string;
+    try {
+      mnemonic = plaintext
+        .toString('utf-8')
+        .normalize('NFKC')
+        .toLowerCase()
+        .trim()
+        .split(/\s+/)
+        .join(' ');
+    } catch (err) {
+      safeSend(ws, { type: 'nack', error: 'bad_utf8' });
+      safeClose(ws);
+      throw err instanceof Error ? err : new Error(String(err));
+    } finally {
+      plaintext.fill(0);
+    }
+
+    if (!validate(mnemonic)) {
+      safeSend(ws, { type: 'nack', error: 'invalid_mnemonic' });
+      safeClose(ws);
+      throw new Error('pair-remote-client: phrase failed BIP-39 validation');
+    }
+
+    try {
+      result = await opts.completePairing({ mnemonic, session });
+    } catch (err) {
+      safeSend(ws, { type: 'nack', error: 'completion_failed' });
+      safeClose(ws);
+      throw err instanceof Error ? err : new Error(String(err));
+    } finally {
+      mnemonic = '';
+    }
   }
 
   if (result.state !== 'active') {

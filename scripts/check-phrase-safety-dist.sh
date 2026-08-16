@@ -101,7 +101,17 @@ EMISSION_PATTERNS=(
 #   - cli/setup (the standalone setup CLI runs in the user's terminal,
 #     not in LLM context — see CLAUDE.md phrase-safety rule)
 #   - explicit `= undefined` (defensive nulling)
-ALLOW_CONTEXT_RE='credentials\.json|writeFileSync|readFileSync|CREDENTIALS_PATH|SavedCredentials|generateMnemonic|validateMnemonic|mnemonicToAccount|mnemonicToSeedSync|process\.env|TOTALRECLAW_RECOVERY_PHRASE|subgraphState\.mnemonic|state\.mnemonic|parsed\.mnemonic|trimmed\.mnemonic|input\?\.\s*mnemonic|input\.mnemonic|description[[:space:]]*:|inputSchema|cli/setup|=[[:space:]]*undefined'
+#   - kind: 'mnemonic' (Option E Phase 2 / #581, P2-13): `mcp/src/subgraph
+#     /credentials.ts`'s `ResolvedCredential` discriminated union
+#     (`{ kind: 'mnemonic', mnemonic: ... } | { kind: 'bundle', bundle: ... }`)
+#     is INTERNAL credential-resolution plumbing consumed only by
+#     `index.ts`'s `main()`, which unpacks it into `SubgraphState` —
+#     never serialised into a tool response. The `kind: 'mnemonic'` tag on
+#     the same line is a distinctive marker no tool-response object in this
+#     codebase pairs with a `mnemonic` field, so allowing it here cannot
+#     mask a real leak. Mirrors the equivalent allowance added to
+#     mcp/tests/phrase-safety-dist.test.ts's own FORBIDDEN_PATTERNS.
+ALLOW_CONTEXT_RE='credentials\.json|writeFileSync|readFileSync|CREDENTIALS_PATH|SavedCredentials|generateMnemonic|validateMnemonic|mnemonicToAccount|mnemonicToSeedSync|process\.env|TOTALRECLAW_RECOVERY_PHRASE|subgraphState\.mnemonic|state\.mnemonic|parsed\.mnemonic|trimmed\.mnemonic|input\?\.\s*mnemonic|input\.mnemonic|description[[:space:]]*:|inputSchema|cli/setup|=[[:space:]]*undefined|kind[[:space:]]*:[[:space:]]*.mnemonic.'
 
 violations=0
 debug="${PHRASE_SAFETY_DIST_DEBUG:-0}"

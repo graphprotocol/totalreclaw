@@ -1,0 +1,15 @@
+import { chromium } from "@playwright/test";
+const BASE = "https://localhost:5173";
+const b = await chromium.launch();
+const ctx = await b.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1120, height: 900 } });
+const p = await ctx.newPage();
+const errs = [];
+p.on("pageerror", (e) => errs.push(e.message));
+await p.goto(BASE + "/proto/memory-v2", { waitUntil: "domcontentloaded" });
+await p.waitForTimeout(900);
+await p.screenshot({ path: "proto-shots/redesign-list.png" });
+await p.locator("main button:has(time)").first().click().catch((e) => console.log("click1", e.message));
+await p.waitForTimeout(600);
+await p.screenshot({ path: "proto-shots/redesign-panel.png" });
+await b.close();
+console.log("shots done; pageerrors:", errs.length ? errs.join(" | ") : "none");
