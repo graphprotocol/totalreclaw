@@ -2,6 +2,39 @@
 
 > **Note:** This file lists releases promoted to the public registries' stable tags. Active release-candidate work (`@rc` dist-tag on npm, `rcN` on PyPI, etc.) is tracked in the internal release-pipeline tracker, not here.
 
+## Option E Phase 2 — `derived-bundle-v1` credential bundle (2026-08-16)
+
+One coordinated release train across three packages, published in strict order (core → Python → MCP) because every client consumes the same derivation through WASM or PyO3.
+
+**What it changes for users:** an agent host can now hold a *derived credential bundle* — the four vault keys plus a signing key — instead of your BIP-39 recovery phrase. Existing Hermes installs migrate to one transparently on the next plugin load, with no re-pairing.
+
+**What it does not change** (stated deliberately, because this is easy to over-read):
+
+1. Phase 2 removes the recovery phrase from agent hosts. It does **not** improve memory confidentiality at a compromised host — the encryption key still materialises in RAM on every recall, and ciphertext is public on the Gnosis subgraph.
+2. Until Phase 3, the provisioned signing key carries full Smart Account owner authority and is **not revocable**. Treat a leaked bundle as you would a leaked phrase, minus its portability.
+3. Your recovery phrase remains your root and your only recovery path. After migration it no longer exists on that machine.
+
+### @totalreclaw/core 2.6.0 / `totalreclaw-core` 2.6.0 (npm + PyPI + crates.io)
+
+All three artifacts published from one commit — a version skew between the WASM and PyO3 halves would let a TypeScript client and a Python client disagree about bundle serialisation, which is the bug class the cross-language parity fixture exists to prevent.
+
+- **`derived-bundle-v1` derivation + bindings** (#587). New `bundle` module: `derive_bundle_from_mnemonic`, `parse_bundle_v1`, `validate_bundle_v1`. A *composition*, not new cryptography — the vault keys are byte-identical to the existing mnemonic-derived ones, which is what entitles this to a minor bump. Parsing rejects loudly (never silently downgrades) on unknown `version`/`schema`, malformed hex, unknown `signing.kind`, or an address that doesn't match its private key.
+- **Canonical f16 embedding codec** (#543). Cross-client embedding payload format hoisted into core, with a universal decoder that reads canonical, legacy TS JSON, and legacy f32 binary. Fixes mixed-client vaults silently degrading foreign-format facts to word-index matching.
+
+### totalreclaw (Python / Hermes) 2.5.0 (PyPI)
+
+- **Configure from a bundle, or migrate to one automatically.** `TotalReclaw.from_bundle()` constructs a client whose process never holds a mnemonic; `hermes/auto_migrate.py` performs a transparent, idempotent, lock-guarded local migration on plugin load. `credentials.json.bak` is retained this release as the recovery path — opt out with `TOTALRECLAW_NO_AUTO_MIGRATE`.
+- **Requires `totalreclaw-core>=2.6.0`** (raised from `>=2.5.5`). A hard floor: the bundle path delegates entirely to core with no feature-detection, and the migration's error handling is deliberately silent so plugin load can never break — so an older core would have made the migration quietly never happen.
+- **Fixed: migration silently no-opped inside a running event loop** (#628). A hand-rolled nested-loop fallback raised from inside an `except` clause and escaped to a blanket handler that logs at debug level. Affected the oldest install shape (a plaintext `credentials.json` with no cached account address). Found by the staging E2E, not by unit tests — every existing fixture cached the address and so never reached the broken branch.
+
+### @totalreclaw/mcp-server 3.5.0 (npm)
+
+- **Second client to support bundles** (#618). `credentials.json` `version: 2` is detected alongside the legacy shape; an unrecognised `version` is a loud startup error, never a silent downgrade. No OS-keychain unwrap and no external-secret-manager transport yet — both remain Hermes-only.
+- **Canonical f16 embedding writes** now active, as an automatic consequence of the core floor bump — smaller payloads, and the cross-client canonical form. Reads were already universal in both directions, so no migration is implied for existing facts.
+- **Fixed:** `import_from`'s tool description advertised a `memoclaw` source the enum never accepted (#578).
+
+**Validation.** Cross-client parity was proven on a single staging vault in all four directions, each hop decrypting the other client's ciphertext: Hermes(bundle)→MCP(phrase), MCP(phrase)→Hermes(bundle), Hermes(phrase)→MCP(bundle), MCP(bundle)→Hermes(phrase). Migration was verified non-destructive on a real non-empty vault — same Smart Account, pre-migration facts decrypting byte-identically from a cold process holding no mnemonic.
+
 ## @totalreclaw/totalreclaw (OpenClaw plugin) 3.4.1 — ClawHub retired, npm is the only channel (2026-07-30)
 
 3.4.1 is content-identical to 3.4.0; only the version string differs. It exists because ClawHub had reserved the `3.4.0` number.
