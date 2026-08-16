@@ -447,3 +447,85 @@ def test_migrated_vault_can_still_decrypt_pre_migration_facts(
 
     decrypted = decrypt(ciphertext, post_migration_client._keys.encryption_key)
     assert decrypted == plaintext
+
+
+# ---------------------------------------------------------------------------
+# Smart Account resolution when the address is NOT cached on disk
+#
+# Every fixture above writes `scope_address`, which short-circuits
+# `_resolve_smart_account` before it ever derives the address over RPC. That
+# is why the nested-event-loop defect below survived the original test suite:
+# the broken branch was simply never reached.
+#
+# The uncached shape is not exotic — it is the OLDEST install shape, a
+# plaintext {"mnemonic": ...} credentials.json with no scope_address.
+# ---------------------------------------------------------------------------
+
+
+def _write_legacy_plaintext_uncached(home: Path) -> Path:
+    """Legacy plaintext creds with NO cached scope_address/wallet_address."""
+    path = _creds_dir(home) / "credentials.json"
+    path.write_text(json.dumps({"mnemonic": TEST_MNEMONIC}))
+    return path
+
+
+@pytest.fixture
+def stub_sa_rpc(monkeypatch):
+    """Stub the Smart Account RPC derivation — no network in unit tests."""
+    import totalreclaw.client as client_mod
+
+    async def _fake(mnemonic: str) -> str:
+        return TEST_SMART_ACCOUNT
+
+    monkeypatch.setattr(client_mod, "_derive_smart_account_address", _fake)
+
+
+def test_uncached_smart_account_migrates_from_sync_context(
+    isolated_home: Path, fake_keychain, stub_sa_rpc
+) -> None:
+    """Baseline: with no cached address, a bare sync caller still migrates."""
+    creds_path = _write_legacy_plaintext_uncached(isolated_home)
+
+    assert auto_migrate.maybe_migrate() is True
+
+    creds = json.loads(creds_path.read_text())
+    assert creds["version"] == 2
+    assert "mnemonic" not in creds
+
+
+def test_uncached_smart_account_migrates_from_inside_a_running_loop(
+    isolated_home: Path, fake_keychain, stub_sa_rpc
+) -> None:
+    """Regression: migration must work when plugin load sits inside a loop.
+
+    `register()` is a plain `def`, but nothing guarantees the host calling it
+    is outside an event loop — an asyncio-driven gateway calling a sync
+    plugin entrypoint is the normal case, and `_resolve_smart_account`'s own
+    comment anticipated it.
+
+    Pre-fix this failed silently rather than loudly, which is the dangerous
+    part: `asyncio.run()` raised RuntimeError inside the running loop (leaving
+    the coroutine un-awaited), the `except RuntimeError` fallback called
+    `run_until_complete` on a fresh loop and raised "Cannot run the event loop
+    while another loop is running", and because that second raise happens
+    *inside* an except clause the sibling `except Exception` never caught it.
+    It surfaced to `maybe_migrate`'s blanket handler, which logs at DEBUG and
+    returns False — so the host simply never migrated and said nothing.
+    """
+    import asyncio
+
+    creds_path = _write_legacy_plaintext_uncached(isolated_home)
+
+    async def driver() -> bool:
+        # Exactly how an async host invokes a sync plugin entrypoint.
+        return auto_migrate.maybe_migrate()
+
+    assert asyncio.run(driver()) is True, (
+        "migration silently no-opped when called from inside a running event "
+        "loop — the pre-fix nested-loop failure"
+    )
+
+    creds = json.loads(creds_path.read_text())
+    assert creds["version"] == 2
+    assert "mnemonic" not in creds
+    assert "recovery_phrase" not in creds

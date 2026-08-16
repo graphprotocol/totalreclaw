@@ -249,18 +249,37 @@ def _resolve_smart_account(mnemonic: str, creds: dict) -> Optional[str]:
     if isinstance(cached, str) and cached.strip():
         return cached.strip()
 
+    from totalreclaw.agent.loop_runner import run_sync
     from totalreclaw.client import _derive_smart_account_address
 
+    # Use the process-wide background loop rather than asyncio.run here.
+    # This call site is sync but is NOT guaranteed to be outside a running
+    # event loop: `register()` is a plain `def`, but the host that calls it
+    # may well be driving an asyncio gateway, and this function's original
+    # comment anticipated exactly that. The previous hand-rolled fallback
+    # did not survive it:
+    #
+    #   asyncio.run(coro)                 -> RuntimeError inside a running
+    #                                        loop, AND leaves `coro` never
+    #                                        awaited (RuntimeWarning)
+    #   except RuntimeError:
+    #       new_event_loop().run_until_complete(coro2)
+    #                                     -> "Cannot run the event loop
+    #                                        while another loop is running"
+    #
+    # That second RuntimeError is raised from inside an `except` clause, so
+    # the `except Exception` below never sees it. It propagated to
+    # `maybe_migrate`'s blanket handler, which logs at DEBUG and returns
+    # False — i.e. on such a host the migration silently never happened and
+    # nothing above debug level said so. `run_sync` schedules onto a
+    # persistent loop on a SEPARATE thread via run_coroutine_threadsafe, so
+    # it is correct from both a bare sync context and inside a running loop.
+    #
+    # Only reached when the address is not already cached on disk, which is
+    # precisely the oldest install shape: a plaintext {"mnemonic": ...}
+    # credentials.json with no scope_address.
     try:
-        return asyncio.run(_derive_smart_account_address(mnemonic))
-    except RuntimeError:
-        # Already inside a running event loop (e.g. a programmatically
-        # driven host) — asyncio.run refuses to nest. Spin a fresh loop.
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(_derive_smart_account_address(mnemonic))
-        finally:
-            loop.close()
+        return run_sync(_derive_smart_account_address(mnemonic))
     except Exception:  # noqa: BLE001 — network failure is non-fatal here
         logger.debug(
             "auto_migrate: Smart Account RPC derivation failed", exc_info=True
