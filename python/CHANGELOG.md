@@ -22,7 +22,43 @@ Hermes client stable (2.4.5 → 2.4.6): session-isolation + import-fidelity + pr
 
 - **ChatGPT import line.** Conversations become import sessions (#430) with byte-capped batching + halve-on-sim-revert + 240s receipt wait (#461), hashed disclosure tokens + orphan reaping + accounting (#468), an import fix wave — deploy-state/receipt, re-import registry, provider label (#454) — and ledger hardening (#470, #480).
 
-## [Unreleased]
+## [2.5.0] — 2026-08-16
+
+Option E Phase 2 lands on Hermes: a host can be configured from a
+`derived-bundle-v1` bundle instead of the BIP-39 recovery phrase, and existing
+phrase-configured installs migrate to one transparently on plugin load.
+
+**Minor, not patch.** This adds a new credential state. The four legacy
+credential states keep working (`derived-bundle-v1.md` §6), so it is not major
+— but `2.4.7` (the open-line patch bump left after the 2.4.6 promote) would
+have understated a change to how key material is held at rest.
+
+**Requires `totalreclaw-core>=2.6.0`** — a hard floor, newly raised from
+`>=2.5.5`. `totalreclaw.bundle` delegates entirely to core's
+`derive_bundle_from_mnemonic`/`parse_bundle_v1`/`validate_bundle_v1`, which
+landed in core 2.6.0, and it does so with no feature-detection and no local
+fallback. An older core does not fail loudly — `auto_migrate.maybe_migrate()`
+catches bare `Exception` at DEBUG so plugin load can never break — so a stale
+core would make the migration silently no-op forever. Hence the floor.
+
+**Claim discipline** (design memo §3 — these travel with every Phase 2
+release note):
+
+1. *Phase 2 removes the recovery phrase from agent hosts. It does not improve
+   memory confidentiality at a compromised host — the encryption key still
+   materialises in RAM on every recall, and ciphertext is public on the Gnosis
+   subgraph.*
+2. *Until Phase 3, the provisioned signing key carries full Smart Account owner
+   authority and is not revocable. Treat a leaked bundle as you would a leaked
+   phrase, minus its portability.*
+3. *Your recovery phrase remains your root and your only recovery path. After
+   migration it no longer exists on this machine.*
+
+**Rollback.** `pip install totalreclaw==2.4.6`, then
+`mv ~/.totalreclaw/credentials.json.bak ~/.totalreclaw/credentials.json`. An
+install that has already migrated to v2 is **not** readable by 2.4.6 without
+that restore. `.bak` is retained unconditionally this release; its removal is
+gated on #579 and is a deliberate, evidence-gated decision — never automated.
 
 ### Added
 
@@ -37,6 +73,7 @@ Hermes client stable (2.4.5 → 2.4.6): session-isolation + import-fidelity + pr
 
 ### Changed
 
+- **`totalreclaw-core` floor raised `>=2.5.5` → `>=2.6.0`.** Not a preference — `totalreclaw.bundle` calls `totalreclaw_core.derive_bundle_from_mnemonic` / `parse_bundle_v1` / `validate_bundle_v1` directly, with no feature-detection and no local fallback (unlike `segment_sessions` / `parse_gemini`, which degrade gracefully to a local implementation when the installed core predates the hoist). Those three bindings ship in core 2.6.0 (#587). Because `hermes/auto_migrate.maybe_migrate()` catches bare `Exception` and logs at DEBUG so plugin load can never break, resolving an older core would not surface an error — the transparent phrase→bundle migration would simply never happen, indefinitely, with nothing above debug level to indicate it. The floor is what makes the failure impossible rather than invisible.
 - **Import session segmentation: per-turn straddle-splitting (#368 Part 2,
   fact-attribution fidelity).** Building on the flat per-turn view (#466), each
   `ParsedTurn` now also carries its message-index range within its chunk

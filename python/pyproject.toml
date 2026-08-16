@@ -24,7 +24,7 @@ name = "totalreclaw"
 # now `2.4.5`, so RCs cut as `2.4.5rcN` outrank `2.4.4` and the
 # version-agnostic install path lands them. NEVER leave the base equal to
 # an already-published stable.
-version = "2.4.7"
+version = "2.5.0"
 description = "End-to-end encrypted memory for AI agents — Python client (Memory Taxonomy v1)"
 readme = "README.md"
 license = "MIT"
@@ -52,7 +52,17 @@ dependencies = [
     # >=2.5.3: exposes format_memory_date / recall_context_header /
     # format_recall_context so Hermes recall.py delegates to the shared
     # core formatter (zero-behavior-change refactor, chore/wire-hermes-recall-core).
-    "totalreclaw-core>=2.5.5,<3.0.0",
+    # >=2.6.0: HARD floor, not a preference. `totalreclaw.bundle` calls
+    # `totalreclaw_core.derive_bundle_from_mnemonic` / `parse_bundle_v1` /
+    # `validate_bundle_v1` directly, with NO feature-detection and no local
+    # fallback (unlike segment_sessions/parse_gemini, which do degrade
+    # gracefully). Those three landed in core 2.6.0 (#587). Resolving an
+    # older core does not fail loudly: `hermes/auto_migrate.maybe_migrate()`
+    # catches bare Exception and logs at DEBUG so plugin load can never
+    # break, so a stale core makes the transparent phrase->bundle migration
+    # silently no-op forever with nothing above debug level to show for it.
+    # Do not relax this floor below 2.6.0.
+    "totalreclaw-core>=2.6.0,<3.0.0",
     "httpx>=0.27",
     "onnxruntime>=1.24",
     "numpy>=1.26",
