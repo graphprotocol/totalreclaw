@@ -3,15 +3,26 @@
  *
  * Per imp spec §6 T-5 + decomposition §imp item 18.
  *
- * Validates the Path B chain-gate (issue #281 / spec #317):
- *   - Pro-tier wallets on Gnosis (chain 100) MUST submit fact writes
- *     through `executeBatch` (1 UserOp → N Log(bytes) events).
- *   - Free-tier Sepolia keeps single-fact UserOps.
+ * Validates the batch-write path (issue #281 / spec #317):
+ *   - Wallets on Gnosis (chain 100) can submit fact writes through
+ *     `executeBatch` (1 UserOp → N Log(bytes) events).
  *
- * This test covers the Gnosis half: seed a Pro-tier test wallet on staging,
- * submit BATCH_SIZE facts (default 15, env-tunable) as one batched UserOp,
- * poll the subgraph for indexing, recall one fact, and assert the round-trip
- * fact ID matches what was written.
+ * STALE-ASSUMPTION CLEANUP (2026-08-16, tracker #621): this originally
+ * described a "Path B chain-gate" where batching was Pro-only because
+ * Pro ran on Gnosis while Free ran on Base Sepolia (which had a gas-
+ * estimation bug blocking `executeBatch`). That split was retired in ops-1
+ * (totalreclaw-internal#283, closed 2026-06-05) — BOTH tiers now route to
+ * Gnosis, and batching is a universal mechanism, not a tier feature (see
+ * "Storage Mode Support" in the repo root CLAUDE.md). This test still seeds
+ * a pro-tier wallet (staging's test fixture provisions pro by default — see
+ * below) and exercises the Gnosis batch path end-to-end; it is no longer
+ * "half" of a Sepolia/Gnosis pair — batch-e2e.ts's Group B now also runs on
+ * Gnosis, so the two tests cover overlapping ground on the same chain.
+ *
+ * Seed a test wallet on staging, submit BATCH_SIZE facts (default 15,
+ * env-tunable) as one batched UserOp, poll the subgraph for indexing,
+ * recall one fact, and assert the round-trip fact ID matches what was
+ * written.
  *
  * Emits one structured log line on success:
  *
@@ -44,7 +55,7 @@ import { createPimlicoClient } from 'permissionless/clients/pimlico';
 // ---------------------------------------------------------------------------
 
 const RELAY_URL = process.env.RELAY_URL || 'https://api-staging.totalreclaw.xyz';
-const CHAIN_ID = 100; // Gnosis mainnet (Pro-tier path)
+const CHAIN_ID = 100; // Gnosis mainnet — single-chain for both tiers since ops-1
 const DEFAULT_DATA_EDGE_ADDRESS = '0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca' as const;
 const ENTRYPOINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032' as const;
 const BATCH_SIZE = Number(process.env.BATCH_SIZE) || 15;
@@ -444,7 +455,10 @@ async function main(): Promise<void> {
     `register failed: status=${regRes.status} body=${JSON.stringify(regRes.data).slice(0, 200)}`,
   );
 
-  // 3. Confirm relay assigned Pro tier (Gnosis chain).
+  // 3. Confirm relay assigned Pro tier — expected staging test-fixture
+  // behavior (relay billing.ts ~line 174), not a chain-routing assertion:
+  // both tiers route to Gnosis post ops-1, so this checks the fixture, not
+  // "only pro gets Gnosis."
   const billing = await getBillingStatus(keys.authKeyHex, walletAddress);
   assert(
     billing.status === 200,
@@ -452,7 +466,7 @@ async function main(): Promise<void> {
   );
   assert(
     billing.data?.tier === 'pro',
-    `expected tier=pro for test wallet (Pro-tier batch path), got tier=${billing.data?.tier}`,
+    `expected tier=pro for staging test wallet (staging_test_fixture), got tier=${billing.data?.tier}`,
   );
   console.log(`  Pro tier confirmed (features=${JSON.stringify(billing.data?.features ?? {})})`);
 

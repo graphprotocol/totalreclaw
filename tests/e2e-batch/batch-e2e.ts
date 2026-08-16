@@ -1,17 +1,20 @@
 /**
- * E2E Tests: Client Batching, Extraction Config, Dual-Chain Routing, Full Pipeline
+ * E2E Tests: Client Batching, Extraction Config, Single-Chain Gnosis Routing, Full Pipeline
  *
  * Tests against LIVE staging:
  *   - Relay: api-staging.totalreclaw.xyz
- *   - Chain: Base Sepolia (84532)
- *   - Subgraph: totalreclaw---base-sepolia (Graph Studio)
+ *   - Chain: Gnosis mainnet (100) — single-chain for BOTH tiers since ops-1
+ *     (totalreclaw-internal#283, closed 2026-06-05). The legacy Free → Base
+ *     Sepolia (84532) routing is retired; do not reintroduce it here.
+ *   - Subgraph: total-reclaw-gnosis-staging (Graph Studio, staging-isolated
+ *     DataEdge — see the `dataEdgeAddress` resolution below)
  *
  * Test Groups:
  *   A — Relay health + registration (prerequisites)
  *   B — Client batching: 3 facts in 1 UserOp (CRITICAL)
  *   C — Server-side extraction config fields
  *   D — Tombstone + replacement in same batch
- *   E — Dual-chain routing verification
+ *   E — Single-chain Gnosis routing verification
  *   F — Full search pipeline (store → blind-index search → recall)
  *
  * Run:
@@ -26,7 +29,7 @@ import { mnemonicToAccount } from 'viem/accounts';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { createPublicClient, http, type Address, type Hex } from 'viem';
-import { baseSepolia } from 'viem/chains';
+import { gnosis } from 'viem/chains';
 import { toSimpleSmartAccount } from 'permissionless/accounts';
 import { createSmartAccountClient } from 'permissionless';
 import { createPimlicoClient } from 'permissionless/clients/pimlico';
@@ -36,7 +39,10 @@ import { createPimlicoClient } from 'permissionless/clients/pimlico';
 // ---------------------------------------------------------------------------
 
 const RELAY_URL = process.env.RELAY_URL || 'https://api-staging.totalreclaw.xyz';
-const CHAIN_ID = 84532; // Base Sepolia
+// Single-chain Gnosis for BOTH tiers since ops-1 (totalreclaw-internal#283,
+// closed 2026-06-05). The legacy Free -> Base Sepolia (84532) split no
+// longer exists — do not branch on tier here.
+const CHAIN_ID = 100; // Gnosis mainnet
 const DEFAULT_DATA_EDGE_ADDRESS = '0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca' as const;
 const ENTRYPOINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032' as const;
 
@@ -266,7 +272,7 @@ async function pollSubgraph(
 
 async function deriveSmartAccountAddress(mnemonic: string): Promise<string> {
   const owner = mnemonicToAccount(mnemonic);
-  const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
+  const publicClient = createPublicClient({ chain: gnosis, transport: http() });
   const sa = await toSimpleSmartAccount({
     client: publicClient as any,
     owner,
@@ -297,10 +303,10 @@ async function submitBatch(
   const authTransport = http(bundlerUrl, { fetchOptions: { headers } });
 
   const owner = mnemonicToAccount(mnemonic);
-  const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
+  const publicClient = createPublicClient({ chain: gnosis, transport: http() });
 
   const pimlicoClient = createPimlicoClient({
-    chain: baseSepolia,
+    chain: gnosis,
     transport: authTransport,
     entryPoint: { address: ENTRYPOINT_ADDRESS, version: '0.7' },
   });
@@ -313,7 +319,7 @@ async function submitBatch(
 
   const smartAccountClient = createSmartAccountClient({
     account: smartAccount,
-    chain: baseSepolia,
+    chain: gnosis,
     bundlerTransport: authTransport,
     paymaster: pimlicoClient,
     userOperation: {
@@ -441,7 +447,11 @@ async function testGroupC(keys: ReturnType<typeof generateTestKeys>) {
     console.log(`    max_facts_per_extraction=${res.data.features.max_facts_per_extraction}`);
   });
 
-  await runTest('C3: Free tier defaults are sensible', async () => {
+  // Note: intentionally tier-agnostic. Staging provisions test registrations
+  // as tier=pro via the staging_test_fixture path (relay billing.ts ~line
+  // 174, deliberate — see Group E below), so this only checks the config
+  // bounds are sane, not which tier's defaults produced them.
+  await runTest('C3: Extraction config defaults are sensible', async () => {
     const res = await getBillingStatus(keys.authKeyHex, walletAddress);
     const f = res.data.features;
     assert(f.extraction_interval >= 1 && f.extraction_interval <= 10, `interval ${f.extraction_interval} out of [1,10]`);
@@ -452,24 +462,41 @@ async function testGroupC(keys: ReturnType<typeof generateTestKeys>) {
 }
 
 // =========================================================================
-// TEST GROUP E: Dual-chain routing
+// TEST GROUP E: Single-chain Gnosis routing
+//
+// STALE-ASSUMPTION CLEANUP (2026-08-16, tracker #621): this group used to be
+// "Dual-Chain Routing" and asserted Free-tier -> Base Sepolia (84532) vs.
+// Pro-tier -> Gnosis (100). That split was retired in ops-1
+// (totalreclaw-internal#283, closed 2026-06-05) — BOTH tiers now route to
+// Gnosis mainnet (chain 100) via the same isolated staging DataEdge. Do not
+// reintroduce a tier->chain branch here; the current contract is "every
+// registration gets Gnosis, regardless of tier."
+//
+// Separately: staging registrations sent with `X-TotalReclaw-Test: true`
+// are provisioned as tier=pro by the relay's `staging_test_fixture` path
+// (relay billing.ts ~line 174). This is DELIBERATE test-fixture behavior,
+// not a bug — so E1 below asserts tier=pro rather than trying to force or
+// "fix" the wallet into tier=free.
 // =========================================================================
 
 async function testGroupE(keys: ReturnType<typeof generateTestKeys>) {
-  console.log('\n=== Test Group E: Dual-Chain Routing ===\n');
+  console.log('\n=== Test Group E: Single-Chain Gnosis Routing ===\n');
 
   const walletAddress = '0x' + randomBytes(20).toString('hex');
 
-  // E1: Free tier has correct chain config in features
-  await runTest('E1: Free tier billing shows Base Sepolia chain', async () => {
+  // E1: Test-tier billing shows single-chain Gnosis routing.
+  await runTest('E1: Test-tier billing shows Gnosis chain (single-chain routing)', async () => {
     const res = await getBillingStatus(keys.authKeyHex, walletAddress);
     assert(res.status === 200, `Expected 200, got ${res.status}`);
-    assert(res.data.tier === 'free', `Expected tier=free, got ${res.data.tier}`);
-    // The features dict may include chain info from the tiers table
-    console.log(`    tier=${res.data.tier}, features=${JSON.stringify(res.data.features)}`);
+    // Staging test registrations are provisioned pro by design (see comment
+    // above) — assert that, not tier=free.
+    assert(res.data.tier === 'pro', `Expected tier=pro (staging test-fixture), got ${res.data.tier}`);
+    assert(res.data.chain_id === 100, `Expected chain_id=100 (Gnosis, single-chain post ops-1), got ${res.data.chain_id}`);
+    console.log(`    tier=${res.data.tier}, chain_id=${res.data.chain_id}, features=${JSON.stringify(res.data.features)}`);
   });
 
-  // E2: Bundler proxy accepts free-tier JSON-RPC (supportedEntryPoints)
+  // E2: Bundler proxy accepts JSON-RPC (supportedEntryPoints). Batching/
+  // bundler access is universal post ops-1 — not gated by tier.
   await runTest('E2: Bundler proxy accepts eth_supportedEntryPoints', async () => {
     const res = await relayRequest(
       'POST',
@@ -495,16 +522,21 @@ async function testGroupE(keys: ReturnType<typeof generateTestKeys>) {
     console.log(`    EntryPoints: ${JSON.stringify(res.data.result)}`);
   });
 
-  // E3: Subgraph proxy returns data from Base Sepolia subgraph
-  await runTest('E3: Subgraph proxy returns _meta from Base Sepolia', async () => {
+  // E3: Subgraph proxy returns data from the staging Gnosis subgraph
+  // (total-reclaw-gnosis-staging, on the isolated staging DataEdge).
+  await runTest('E3: Subgraph proxy returns _meta from Gnosis subgraph', async () => {
     const result = await querySubgraph(
       keys.authKeyHex,
       '{ _meta { block { number } } }',
     );
     assert(result?.data?._meta?.block?.number !== undefined, `Expected _meta.block.number`);
     const blockNum = parseInt(result.data._meta.block.number);
-    // Base Sepolia block numbers are > 30M
-    assert(blockNum > 30_000_000, `Block ${blockNum} too low for Base Sepolia (expected >30M)`);
+    // Gnosis mainnet has run since 2018 and was already >47M blocks as of
+    // 2026-08 (verified live against https://rpc.gnosischain.com). 30M is a
+    // safe, monotonically-true lower bound that guards against the subgraph
+    // silently pointing at a fresh/wrong chain (e.g. block 0 on a testnet) —
+    // it does not need bumping over time since Gnosis block height only grows.
+    assert(blockNum > 30_000_000, `Block ${blockNum} too low for Gnosis mainnet (expected >30M)`);
     console.log(`    Subgraph synced to block: ${blockNum}`);
   });
 }
@@ -785,7 +817,7 @@ async function main() {
   console.log(`  TotalReclaw E2E Tests — Batch, Routing, Pipeline`);
   console.log(`${'='.repeat(60)}`);
   console.log(`  Relay:     ${RELAY_URL}`);
-  console.log(`  Chain:     Base Sepolia (${CHAIN_ID})`);
+  console.log(`  Chain:     Gnosis mainnet (${CHAIN_ID})`);
   console.log(`  Groups:    ${groups.length ? groups.join(', ') : 'ALL'}`);
   console.log(`${'='.repeat(60)}\n`);
 
@@ -834,8 +866,9 @@ async function main() {
   // get the current chain tip block and poll _meta until the subgraph passes it.
   const needsSubgraph = bCtx || dCtx || fCtx;
   if (needsSubgraph) {
-    // Get current chain tip (all our txs are confirmed by now)
-    const tipRes = await fetch('https://sepolia.base.org', {
+    // Get current chain tip (all our txs are confirmed by now). Gnosis
+    // mainnet (chain 100) — single-chain for both tiers since ops-1.
+    const tipRes = await fetch('https://rpc.gnosischain.com', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_blockNumber', params: [], id: 1 }),
