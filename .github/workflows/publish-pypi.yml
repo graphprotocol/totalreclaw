@@ -182,10 +182,33 @@ jobs:
           # (it is decl-derived), but it DOES shrink the built wheel -- which is
           # exactly the discrepancy this diff catches.
           python scripts/check-pyfunction-parity.py --expected-exports | sort > /tmp/expected.txt
+          # Submodules are excluded from the comparison. The expected list is
+          # derived purely from `#[pyfunction]` / `#[pyclass]` declarations, so
+          # it can never contain a module -- meaning any module attribute is
+          # guaranteed to show up as "extra" and fail the diff no matter what
+          # the source says. maturin's layout puts exactly one there: it emits a
+          # `totalreclaw_core/__init__.py` that does `from .totalreclaw_core
+          # import *`, which leaves the inner extension module bound as an
+          # attribute of the same name. That self-reference is present in every
+          # wheel we have ever shipped (verified against the published 2.5.5),
+          # and it is not part of the pyfunction surface this check exists to
+          # police. It only surfaced now because this built-wheel diff (#504,
+          # merged 2026-07-10) had never actually executed in a publish -- the
+          # last real PyPI publish was 2026-06-22, so 2.6.0-rc.2 is its first
+          # run. Filtered names are printed, so this stays visible rather than
+          # silently swallowing a future surprise.
           /tmp/venv/bin/python - <<'PY' | sort > /tmp/actual.txt
+          import sys, types
           import totalreclaw_core as m
+          skipped = []
           for n in sorted(n for n in dir(m) if not n.startswith('_')):
+              if isinstance(getattr(m, n, None), types.ModuleType):
+                  skipped.append(n)
+                  continue
               print(n)
+          if skipped:
+              print('note: excluded submodule attrs from surface diff: '
+                    + ', '.join(skipped), file=sys.stderr)
           PY
           echo "expected exports: $(wc -l < /tmp/expected.txt) | actual wheel surface: $(wc -l < /tmp/actual.txt)"
           /tmp/venv/bin/python - <<'PY'
