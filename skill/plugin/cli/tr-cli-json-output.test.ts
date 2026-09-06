@@ -262,6 +262,41 @@ assert(
 );
 
 // ---------------------------------------------------------------------------
+// 9. Human-mode success logs reference the in-scope result variable (#639)
+//    Regression guard: the human-mode (no --json) success logs in
+//    cmdRemember / cmdForget logged `result.txHash` while the variable in
+//    scope is `submitResult` — so a successful on-chain write crashed with
+//    "ReferenceError: result is not defined", which the surrounding catch
+//    surfaced as "remember failed: result is not defined" (same for forget),
+//    inviting a re-run that would double-write. The build is transpile-only
+//    (`tsc --noCheck`) and nothing type-checked this file, so the class was
+//    never compiler-caught. The negative check is anchored with a lookbehind
+//    so the legitimate tail of `submitResult.txHash` is not itself flagged.
+// ---------------------------------------------------------------------------
+
+const bareResultTxHash = /(?<!submit)result\.txHash/;
+
+assert(
+  rememberFn !== null && /tx=\$\{submitResult\.txHash/.test(rememberFn[0]),
+  'tr-cli.ts: cmdRemember human-mode success log reports submitResult.txHash (#639 regression)',
+);
+
+assert(
+  rememberFn !== null && !bareResultTxHash.test(rememberFn[0]),
+  'tr-cli.ts: cmdRemember body has no unqualified result.txHash reference (#639 regression)',
+);
+
+assert(
+  forgetFn !== null && /tx=\$\{submitResult\.txHash/.test(forgetFn[0]),
+  'tr-cli.ts: cmdForget human-mode success log reports submitResult.txHash (#639 regression)',
+);
+
+assert(
+  forgetFn !== null && !bareResultTxHash.test(forgetFn[0]),
+  'tr-cli.ts: cmdForget body has no unqualified result.txHash reference (#639 regression)',
+);
+
+// ---------------------------------------------------------------------------
 
 console.log(`\n# ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

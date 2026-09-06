@@ -36,6 +36,8 @@ Install TotalReclaw RC <version> against the staging relay (TOTALRECLAW_SERVER_U
 
 The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` in the install / setup shell before any TotalReclaw command. Without this env var, both stable AND RC installs default to the production relay `api.totalreclaw.xyz`.
 
+> If QA drives the standalone `tr` CLI directly (`node .../dist/cli/tr-cli.js`, e.g. the pair fallback), also export `TOTALRECLAW_DATA_EDGE_ADDRESS=0xE7a4D2677B686e13775Ba9092631089e35F0BB91` — the CLI never fetches billing, so it silently defaults to the **production** DataEdge even with `TOTALRECLAW_SERVER_URL` on staging, and its writes land on production chain data.
+
 ## What this is and where it comes from
 
 TotalReclaw is open-source memory tooling for OpenClaw. The plugin is published by `p-diogo` (GitHub-verified) at:

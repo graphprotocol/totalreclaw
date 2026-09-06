@@ -101,7 +101,7 @@ const STATE_PATH = CONFIG.onboardingStatePath;
 // Auto-synced by skill/scripts/sync-version.mjs from skill/plugin/package.json::version.
 // Do not edit by hand — running tests will catch drift but the publish workflow
 // rewrites this constant at the start of every npm/ClawHub publish.
-const PLUGIN_VERSION = '3.4.4';
+const PLUGIN_VERSION = '3.4.5';
 
 function die(msg: string, code = 1): never {
   process.stderr.write(`tr: ${msg}\n`);
@@ -424,7 +424,7 @@ async function cmdRemember(rawArgs: string[]): Promise<void> {
       // isn't worth the latency.
       log(JSON.stringify({ ok: true, id: factId, claim_count: 1 }));
     } else {
-      log(`ok — stored memory (id=${factId}, tx=${result.txHash || 'pending'})`);
+      log(`ok — stored memory (id=${factId}, tx=${submitResult.txHash || 'pending'})`);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -491,7 +491,7 @@ async function cmdForget(rawArgs: string[]): Promise<void> {
     if (jsonMode) {
       log(JSON.stringify({ ok: true, id: factId, tx_hash: submitResult.txHash }));
     } else {
-      log(`ok — tombstoned ${factId} (tx=${result.txHash || 'pending'})`);
+      log(`ok — tombstoned ${factId} (tx=${submitResult.txHash || 'pending'})`);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

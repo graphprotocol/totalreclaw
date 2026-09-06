@@ -1,3 +1,11 @@
+## [3.4.5] — 2026-09-06
+
+### Fixed
+
+- **[#639] `tr remember` / `tr forget` in human mode (no `--json`) reported failure for operations that had already succeeded on-chain.** Both human-mode success logs referenced an undefined variable — `result.txHash` where the batch-submit result in scope is named `submitResult` — so once the UserOp had landed, the template literal threw `ReferenceError: result is not defined`, the surrounding catch swallowed it, and the user saw `remember failed: result is not defined` (same for `forget`) for a write that was in fact committed on-chain. The worst consequence is the invited re-run: believing the first attempt failed, a user or agent would store the fact (or tombstone) a second time. The `--json` path was never affected — it reads `submitResult` correctly — so agent callers got truthful output; only the human-readable log lied. The fix is two tokens: both logs now print `submitResult.txHash`. ([#639](https://github.com/p-diogo/totalreclaw/issues/639))
+
+  **Why no gate caught it:** the package build runs `tsc --noCheck` (transpile-only) and the package had no typecheck script at all, so nothing ever type-checked `cli/tr-cli.ts`; the existing CLI test asserted only `--json`-mode output shape via static source analysis, leaving human mode with zero coverage. This release adds an ungated `npm run typecheck` (`tsc --noEmit`) as a follow-up handle — the tree still carries ~30 pre-existing type errors unrelated to this fix, so it is deliberately NOT wired into any gate (test runner, CI, prepack) yet — plus static regression assertions in `cli/tr-cli-json-output.test.ts` that both handlers' human-mode success logs report `submitResult.txHash` and contain no unqualified `result.txHash` (verified to fail against the pre-fix source).
+
 # Changelog
 
 All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are documented here.

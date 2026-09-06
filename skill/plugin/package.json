@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/totalreclaw",
-  "version": "3.4.4",
+  "version": "3.4.5",
   "description": "End-to-end encrypted, agent-portable memory for OpenClaw and any LLM-agent runtime. XChaCha20-Poly1305 with protobuf v4 + on-chain Memory Taxonomy v1 (claim / preference / directive / commitment / episode / summary).",
   "type": "module",
   "keywords": [
@@ -66,6 +66,7 @@
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json --noCheck",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify-tarball": "node ../scripts/verify-tarball.mjs",
     "test": "node run-tests.mjs",
     "smoke:dist": "npx tsx dist-esm-smoke.test.ts",
