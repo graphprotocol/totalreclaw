@@ -66,7 +66,13 @@ Auto-fires once per session via the `on_session_end` hook (when the gateway clos
 - you're about to recommend or act on a standing preference/rule → recall that domain first, even if nothing in context mentions it (directives like "never mention X" don't auto-load).
 - the user shifts to a topic from a past session ("we talked about this", names a project you have no context for) → recall with topic keywords; there is no mid-session auto-recall to catch it.
 
-If a recall returns 0 where memories should exist, retry once with a *broader* query (there is no separate "session search" tool — broadening the query is the fallback). Don't recall every turn, don't re-recall the same message auto-recall already used, and read any injected `## Relevant memories` block before adding a call. Full guidance: [`docs/guides/proactive-recall-best-practices.md`](../../../../docs/guides/proactive-recall-best-practices.md).
+If a recall returns 0 where memories should exist, retry once with a *broader* query. Don't recall every turn, don't re-recall the same message auto-recall already used, and read any injected `## Relevant memories` block before adding a call. Full guidance: [`docs/guides/proactive-recall-best-practices.md`](../../../../docs/guides/proactive-recall-best-practices.md).
+
+#### Fallback: session_search → totalreclaw_recall
+
+Hermes provides `session_search` for the local session DB, which has limited retention. When `session_search` returns no results or insufficient context, attempt `totalreclaw_recall` with broader keywords before concluding the information isn't available — TotalReclaw may hold facts from sessions that were pruned locally. Only tell the user you can't find something after **both** paths are exhausted.
+
+❌ **Anti-pattern — stopping at session_search.** If `session_search` returns empty, don't assume the information doesn't exist. Always try `totalreclaw_recall` as a fallback.
 
 ### Mutating existing facts
 
