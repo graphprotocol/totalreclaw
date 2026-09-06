@@ -367,6 +367,15 @@ filesystem.
 - **`hermes gateway restart` from inside a docker container returns "no running gateway" or fails silently:** the container has no systemd / launchd service supervisor to respawn the gateway after a self-exit. The correct restart for docker is `docker restart <container-name>` from the **host** shell, not from inside the container.
 - **`/restart` returns "not authorized" / "command not found", or the surface has no supervisor to respawn the gateway:** the user restarts the gateway out-of-band — `hermes gateway restart` (native) or `docker restart <container-name>` (docker, from the host). **Do NOT suggest `/new` as a shortcut** — a new session reuses the gateway's boot-time tool registry and will NOT pick up the freshly-installed plugin (Hermes discovers plugins once, at gateway startup).
 - **After restart, agent doesn't continue setup:** if the user replied only `done` without a continuation phrase, the agent may not infer it should resume. The rc.27+ proactive setup nudge fires on the first turn of every unconfigured session, so re-engaging the conversation with anything (even another bare message) should trigger the new-vs-restore question. If it doesn't, ask the user to type "Continue setting up TotalReclaw" verbatim.
+- **All TotalReclaw tools/hooks vanished silently after a Hermes update (issue #638):** Hermes occasionally regenerates its managed Python runtime (`.hermes-runtime/python/generation-*/`), and the recreated venv does **not** carry pip-installed packages outside Hermes' own dependency set — so `totalreclaw` disappears and the plugin fails to load with no user-visible error. Verify from a **neutral cwd** (running it from `$HOME` or the checkout's parent masks the failure via a namespace-package pickup):
+  ```bash
+  cd /tmp && "$(dirname "$HERMES_PYTHON")/../hermes-agent/venv/bin/python3" -c "import totalreclaw"
+  ```
+  If that raises `ModuleNotFoundError`, reinstall into the **running Hermes interpreter's venv** and restart the gateway:
+  ```bash
+  "$HERMES_PYTHON" -m pip install --pre totalreclaw   # then restart the gateway
+  ```
+  The memory-provider sidecar shipped in `totalreclaw` ≥ this fix self-heals exactly this (one bounded reinstall attempt at plugin load; failing that, a degraded `totalreclaw_status` tool reports the problem). Older installs carrying the bare-stub sidecar can take the one-shot upgrade: `totalreclaw hermes install-memory-provider --force`, or simply re-pair. Credentials and vault data are never affected — this is an availability failure only.
 
 ---
 
