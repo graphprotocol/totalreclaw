@@ -6,19 +6,19 @@ This page is a short summary for humans. The full setup guide with rationale and
 
 ## Install
 
-If you already have OpenClaw running, install the plugin and the skill from the OpenClaw CLI:
+If you already have OpenClaw running, install the plugin from the OpenClaw CLI — the skill ships with the plugin, so one command covers both:
 
 ```bash
 openclaw plugins install @totalreclaw/totalreclaw
-openclaw skills install totalreclaw
 ```
 
 For release-candidate builds (newer features, may be unstable), append `@rc` to the plugin name:
 
 ```bash
 openclaw plugins install @totalreclaw/totalreclaw@rc
-openclaw skills install totalreclaw
 ```
+
+> **OpenClaw 2026.9.x consent prompts.** Newer OpenClaw releases gate a fresh npm install behind two consent checks (npm-source trust, then per-plugin capabilities) and you confirm each when asked. If you install from a script or other non-interactive shell — where there is no prompt to answer — pass the CLI's own flags instead: `openclaw plugins install --force --accept-capabilities @totalreclaw/totalreclaw`. That `--force` answers the source-trust gate on a fresh install only; the separate never-`--force`-a-reinstall rule in [`openclaw-setup.md`](./openclaw-setup.md) is unchanged.
 
 The plugin is published by `p-diogo` on npm under the `@totalreclaw` scope. Source code: <https://github.com/p-diogo/totalreclaw>.
 
