@@ -132,4 +132,12 @@ mcp/package-lock.json
 # Foundry vendored libraries — install via 'forge install foundry-rs/forge-std' from contracts/
 contracts/lib/forge-std/
 contracts/out/
+
+# contracts/account/ is its OWN Foundry project (Option E Phase 3 --
+# TotalReclawAccount), deliberately isolated from contracts/foundry.toml.
+# See contracts/account/foundry.toml's header comment. Libs pinned in
+# contracts/account/foundry.lock, reinstalled by CI and by hand locally.
+contracts/account/lib/
+contracts/account/out/
+contracts/account/cache/
 .desloppify/

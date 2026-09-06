@@ -70,3 +70,77 @@ jobs:
       - name: Snapshot gas (diagnostic)
         run: forge snapshot --check --diff || true
         continue-on-error: true
+
+  forge-test-account:
+    name: Forge Test (TotalReclawAccount)
+    # Option E Phase 3 (P3-1/P3-2/P3-4). This is a SEPARATE job (not a step
+    # folded into `forge-test` above) because `contracts/account/` is a
+    # deliberately SEPARATE Foundry project with its own `foundry.toml` and
+    # `lib/` — see `contracts/account/foundry.toml`'s header comment for
+    # why: adding `account-abstraction`/`openzeppelin-contracts` to the
+    # OUTER project's `lib/`+`remappings.txt` was tried first and reverted,
+    # because solc embeds the full project-wide `settings.remappings` list
+    # into EVERY compiled contract's metadata regardless of whether that
+    # contract uses them — verified to shift `EventfulDataEdge`'s bytecode
+    # and break `test/DataEdgeStagingCreate2.t.sol`'s pinned CREATE2
+    # address for the real, deployed staging DataEdge. Keeping this a
+    # fully separate `forge build`/`forge test` invocation (own working
+    # directory, own project root) is what guarantees the outer job's
+    # compiled artifacts can never be perturbed by this one.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: contracts/account
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Show forge version
+        run: forge --version
+
+      # contracts/account/lib/ is gitignored — install pinned versions
+      # (matching contracts/account/foundry.lock) fresh on every run.
+      - name: Install vendored libs (forge-std, account-abstraction, openzeppelin-contracts)
+        run: |
+          forge install --no-git foundry-rs/forge-std@v1.16.1
+          forge install --no-git OpenZeppelin/openzeppelin-contracts@v5.0.2
+          forge install --no-git eth-infinitism/account-abstraction@v0.7.0
+
+      - name: Build
+        run: forge build --sizes
+
+      # Storage-layout diff gate (B2 mitigation) — TotalReclawAccount must
+      # declare ZERO plain state variables beyond what it inherits from
+      # SimpleAccount; all new session-key state lives in ERC-7201
+      # namespaced storage, which correctly does not appear in solc's
+      # storageLayout output. See script/storage-layout-diff.sh.
+      - name: Storage layout diff (TotalReclawAccount vs SimpleAccount baseline)
+        run: ./script/storage-layout-diff.sh
+
+      # Includes the fork test suite (TotalReclawAccountFork.t.sol), which
+      # forks live Gnosis mainnet against a public RPC
+      # (https://rpc.gnosischain.com by default; override with
+      # GNOSIS_RPC_URL repo/environment secret for a private endpoint with
+      # less exposure to public-RPC rate limits). Read-only — never
+      # broadcasts a transaction. If this specific job is flaky on public
+      # RPC availability, that is a CI-infra follow-up, not a reason to
+      # drop the fork tests — they are the highest-value test in the phase
+      # (phase3-impl spec §3.4) and must keep running on every PR that
+      # touches this contract.
+      - name: Run tests (including fork tests against live Gnosis)
+        env:
+          # GH Actions `||` falls back on an unset/empty secret (empty
+          # string is falsy in expression context) — do NOT rely on
+          # `vm.envOr`'s unset-vs-empty handling here, resolve it in YAML
+          # instead so an absent secret can never resolve to "".
+          GNOSIS_RPC_URL: ${{ secrets.GNOSIS_RPC_URL || 'https://rpc.gnosischain.com' }}
+        run: forge test -vvv

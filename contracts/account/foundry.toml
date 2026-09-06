@@ -1,0 +1,50 @@
+# Foundry config for `TotalReclawAccount` (Option E Phase 3, P3-1/P3-2).
+#
+# WHY THIS IS A SEPARATE FOUNDRY PROJECT FROM `contracts/foundry.toml`,
+# NOT JUST A NEW FILE IN THE EXISTING ONE:
+#
+# `TotalReclawAccount` subclasses eth-infinitism's `SimpleAccount`, which
+# needs the real `account-abstraction` (v0.7.0) and `openzeppelin-contracts`
+# (v5.0.2) packages as Foundry libs. Adding those libs' directories (or a
+# `remappings.txt` naming them) under the SHARED `contracts/lib/` /
+# `contracts/remappings.txt` was tried first and reverted: solc embeds the
+# FULL, PROJECT-WIDE `settings.remappings` list into every compiled
+# contract's metadata, REGARDLESS of whether that specific contract
+# actually imports anything through those remappings. Verified empirically:
+# adding the two new remapping lines (with no other change, not even the
+# lib directories present) shifted `EventfulDataEdge`'s compiled bytecode
+# and broke `test/DataEdgeStagingCreate2.t.sol`'s pinned CREATE2 address
+# assertion for the STAGING DataEdge (`0xE7a4D2677B686e13775Ba9092631089e35F0BB91`,
+# a REAL deployed contract) — a self-inflicted, purely incidental bytecode
+# change to a contract this PR has nothing to do with. A nested Foundry
+# project (its own `foundry.toml`, `lib/`, `remappings.txt`) is the only
+# way to add `account-abstraction`/`openzeppelin-contracts` without that
+# collateral effect: `forge` resolves the project root as the nearest
+# `foundry.toml` walking up from the working directory, so a `forge build`
+# / `forge test` run from THIS directory never sees, and cannot perturb,
+# the outer project's compiler settings or vendored libs.
+#
+# Run from here: `cd contracts/account && forge build && forge test`.
+# CI wiring: `.github/workflows/forge-test.yml` (separate job/step, see
+# comment there for why it must not be folded into the outer job).
+
+[profile.default]
+src = "contracts"
+test = "test"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.24"
+# Deterministic CREATE2: strip the appended metadata hash so `creationCode`
+# is a pure function of (source, solc version, optimizer settings) and the
+# predicted implementation address reproduces on any machine/toolchain.
+bytecode_hash = "none"
+cbor_metadata = false
+optimizer = true
+optimizer_runs = 200
+via_ir = false
+extra_output = ["storageLayout"]
+
+[fmt]
+line_length = 100
+tab_width = 4
+bracket_spacing = false

@@ -753,38 +753,20 @@ contract SessionKeyModuleTest is Test {
         return _signWithKey(masterPriv, digest);
     }
 
-    /// @dev Mirror of `SessionKeyModule._grantDigest`. Kept in the test file
-    ///      so the parity contract (cred-9) can also pull from here. If the
-    ///      module hash construction changes, update both.
+    /// @dev Calls the PRODUCTION digest computation (`SessionKeyModule
+    ///      .grantDigest`, an external pure wrapper around the internal
+    ///      `_grantDigest`) instead of hand-copying the EIP-712 hashing
+    ///      formula. Previously this function WAS a hand-copied mirror of
+    ///      `_grantDigest`, with a comment admitting both copies had to be
+    ///      updated together — precisely the kind of duplication that let
+    ///      the §2 `bytes4[]` selector-hashing bug ship in the Python
+    ///      client (`grant.py`) without any test catching it (phase3-impl
+    ///      spec §3.4 "de-duplicate the EIP-712 logic"). Fixed by adding a
+    ///      real production entry point instead of a second copy.
     function _grantDigestExt(
         SessionKeyModule.PermissionGrant memory g
-    ) internal pure returns (bytes32) {
-        bytes32 domainTypeHash = keccak256(
-            "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
-        );
-        bytes32 scopeTypeHash = keccak256(
-            "Scope(address target,bytes4[] selectors,uint256 valueMax)"
-        );
-        bytes32 grantTypeHash = keccak256(
-            "SessionKeyPermissionGrant(address account,address signer,Scope scope,uint256 nonce,uint256 issuedAt)Scope(address target,bytes4[] selectors,uint256 valueMax)"
-        );
-
-        bytes32 scopeHash = keccak256(
-            abi.encode(scopeTypeHash, g.target, keccak256(abi.encodePacked(g.selectors)), g.valueMax)
-        );
-        bytes32 structHash = keccak256(
-            abi.encode(grantTypeHash, g.account, g.signer, scopeHash, g.nonce, g.issuedAt)
-        );
-        bytes32 domainSep = keccak256(
-            abi.encode(
-                domainTypeHash,
-                keccak256(bytes("TotalReclawSessionKey")),
-                keccak256(bytes("1")),
-                g.chainId,
-                g.verifyingContract
-            )
-        );
-        return keccak256(abi.encodePacked(hex"19_01", domainSep, structHash));
+    ) internal view returns (bytes32) {
+        return module.grantDigest(g);
     }
 
     function _signWithKey(uint256 privKey, bytes32 digest) internal pure returns (bytes memory) {

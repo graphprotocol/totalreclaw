@@ -263,6 +263,20 @@ contract SessionKeyModule is ISessionKeyModule {
         return (g.nonce, g.issuedAt, g.selectors, g.target);
     }
 
+    /// @notice External read-only wrapper around `_grantDigest`, added
+    ///         (P3-4, Phase 3) so tests compute the EIP-712 grant digest
+    ///         via the actual production code path instead of a
+    ///         hand-copied mirror of it. Before this existed,
+    ///         `test/SessionKeyModule.t.sol`'s `_grantDigestExt` was such
+    ///         a mirror, with a comment admitting both copies had to be
+    ///         updated together — exactly the kind of duplication that
+    ///         let the §2 `bytes4[]` selector-hashing bug ship in the
+    ///         Python client without a test catching it. Pure function,
+    ///         zero behaviour change to the validator itself.
+    function grantDigest(PermissionGrant calldata g) external pure returns (bytes32) {
+        return _grantDigest(g);
+    }
+
     // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
