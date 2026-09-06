@@ -2,6 +2,10 @@
 
 > **Note:** This file lists releases promoted to the public registries' stable tags. Active release-candidate work (`@rc` dist-tag on npm, `rcN` on PyPI, etc.) is tracked in the internal release-pipeline tracker, not here.
 
+## @totalreclaw/totalreclaw (OpenClaw plugin) 3.4.5 — patch release (2026-09-06)
+
+- **Fixed: `tr remember` / `tr forget` in human mode reported failure for operations that had already succeeded on-chain** ([#639](https://github.com/p-diogo/totalreclaw/issues/639)). Both human-mode success logs printed an undefined variable — `result.txHash`, where the batch-submit result in scope is named `submitResult` — so once the UserOp had landed, the log line itself threw `ReferenceError: result is not defined` and the surrounding catch reported `remember failed` for a write that was in fact committed on-chain. The invited consequence is the double-store: believing the first attempt failed, a user or agent would run it again. The `--json` path (agent callers) was never affected; only the human-readable log lied. The fix is two tokens. This release also adds static regression assertions covering human-mode output and an ungated `npm run typecheck` handle — the package build runs `tsc --noCheck` (transpile-only), which is exactly why this class shipped.
+
 ## Option E Phase 2 — `derived-bundle-v1` credential bundle (2026-08-16)
 
 One coordinated release train across three packages, published in strict order (core → Python → MCP) because every client consumes the same derivation through WASM or PyO3.
