@@ -6,6 +6,13 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **[#638] The Hermes MemoryProvider sidecar is now a full self-healing plugin file instead of a bare 3-line re-export stub.** The old stub had two defects: it carried no `register()` (so once it replaced a git-plugin bootstrap at `$HERMES_HOME/plugins/totalreclaw/__init__.py`, the *next* plugin reload silently dropped every `totalreclaw_*` tool + lifecycle hook), and it had no bootstrap (a Hermes runtime regeneration that recreated the venv without the pip-installed `totalreclaw` package killed the import and the plugin vanished with **no error anywhere** — Hermes does not surface an unmet `requires:`). The new `_SIDECAR_CONTENT` (rc.10 git-plugin bootstrap behaviour, ported): on `ImportError`, one bounded reinstall attempt into the RUNNING interpreter's venv (pip bootstrapped via ensurepip); if that fails the module still loads in DEGRADED mode, registering a `totalreclaw_status` tool that reports the missing package + the exact fix command. Success path re-exports `TotalReclawMemoryProvider` AND delegates `register(ctx)` to `totalreclaw.hermes.register`, plus mirrors the SKILL.md. Marker semantics unchanged (hand-edited files still refused); boxes carrying the old stub heal by re-pairing or one `install-memory-provider --force`. Recovery note added to `docs/guides/hermes-setup.md`. ([#644](https://github.com/p-diogo/totalreclaw/pull/644); end-state ownership split tracked in [#645](https://github.com/p-diogo/totalreclaw/issues/645))
+- **[#637] SKILL.md `session_search` → `totalreclaw_recall` fallback guidance** — Hermes' host-level `session_search` tool (local session transcripts, limited retention) is now explicitly framed as a fallback only, never a substitute for vault recall.
+
 ## [2.4.6] — 2026-07-08
 
 Hermes client stable (2.4.5 → 2.4.6): session-isolation + import-fidelity + provenance cycle. (Note: 2.4.5 was likewise promoted without a dated header in this file; items that shipped between 2.4.4 and this entry accumulated under `[Unreleased]` below.)
