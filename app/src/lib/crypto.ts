@@ -15,7 +15,7 @@ import { xchacha20poly1305 } from "@noble/ciphers/chacha";
 import { SessionKeys } from "./types";
 
 const BIP44_PATH = "m/44'/60'/0'/0/0";
-const DEFAULT_CHAIN_ID = 84532; // Base Sepolia (free tier)
+const DEFAULT_CHAIN_ID = 100; // Gnosis mainnet — both tiers since ops-1
 
 // HKDF-SHA256 via WebCrypto SubtleCrypto
 async function hkdf(
