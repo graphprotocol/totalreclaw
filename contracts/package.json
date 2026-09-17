@@ -6,8 +6,6 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "deploy:local": "hardhat run scripts/deploy.ts --network hardhat",
-    "deploy:sepolia": "hardhat run scripts/deploy.ts --network baseSepolia",
     "verify": "hardhat run scripts/verify.ts --network baseSepolia",
     "fund": "hardhat run scripts/fund-paymaster.ts --network baseSepolia",
     "clean": "hardhat clean"

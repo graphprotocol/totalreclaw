@@ -145,7 +145,7 @@ export interface SessionKeys {
   eoaAddress: string;
   /** Smart Account address — the `owner` field used to query the subgraph */
   walletAddress: string;
-  /** Chain ID for subgraph routing (84532 free / 100 pro). Pro detection
+  /** Chain ID for subgraph routing (100 for both tiers since ops-1). Pro detection
    *  happens after billing/status returns — defaults to free at derivation. */
   chainId: number;
 }
