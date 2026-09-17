@@ -47,7 +47,7 @@ beforeEach(() => {
     const url = String(input);
     if (url.includes("/v1/smart-account")) {
       return new Response(
-        JSON.stringify({ smart_account: MOCK_SMART_ACCOUNT, chain_id: 84532 }),
+        JSON.stringify({ smart_account: MOCK_SMART_ACCOUNT, chain_id: 100 }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
@@ -86,7 +86,7 @@ describe("deriveSessionKeys", () => {
     const calledUrl = String(fetchMock.mock.calls[0][0]);
     expect(calledUrl).toContain("/v1/smart-account");
     expect(calledUrl).toContain(`eoa=${GOLDEN_EOA}`);
-    expect(calledUrl).toContain("chain=84532");
+    expect(calledUrl).toContain("chain=100");
   });
 
   it("authKey and encryptionKey are distinct", async () => {
