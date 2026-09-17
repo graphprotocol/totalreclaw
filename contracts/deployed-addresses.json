@@ -1,12 +1,12 @@
 {
-  "network": "baseSepolia",
-  "chainId": 84532,
-  "entryPoint": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
-  "eventfulDataEdge": "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca",
-  "totalReclawPaymaster": "0xd10Be4669c739C3315616f7E6a2D7Dbd7033e7aD",
-  "deployedAt": "2026-03-20T12:55:55.353Z",
-  "deployer": "0x5C6A2E495F032E31Fc4c042085Bea0006B9C7A06",
-  "blockNumber": 39121533,
+  "gnosis": {
+    "network": "gnosis",
+    "chainId": 100,
+    "entryPoint": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+    "eventfulDataEdge": "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca",
+    "status": "LIVE \u2014 production DataEdge, both tiers (single-chain Gnosis since ops-1, 2026-06-05). Indexed by the total-reclaw-gnosis subgraph (subgraph/subgraph-gnosis-mainnet.yaml).",
+    "note": "CREATE2-deployed; address is byte-equal across chains. Hand-edit discipline: no automated writer \u2014 see docs/plans/2026-08-02-phase3-contract-deployment-plan.md \u00a72.6."
+  },
   "stagingGnosis": {
     "network": "gnosis",
     "chainId": 100,
@@ -14,9 +14,22 @@
     "status": "DEPLOYED",
     "create2Factory": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
     "create2Salt": "keccak256(\"totalreclaw.EventfulDataEdge.staging.v1\")",
-    "purpose": "Isolated staging DataEdge on Gnosis — distinct address from prod 0xC445 (ops-5, staging-chain-isolation spec).",
+    "purpose": "Isolated staging DataEdge on Gnosis \u2014 distinct address from prod 0xC445 (ops-5, staging-chain-isolation spec).",
     "deployedAt": "2026-06-01",
     "deployTx": "0x94f08afe7f26ed9d660d4181ca562d991cc14f408900a9c45a727226b8f87be6",
     "blockNumber": 46464196
+  },
+  "historical": {
+    "baseSepolia": {
+      "network": "baseSepolia",
+      "chainId": 84532,
+      "entryPoint": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+      "eventfulDataEdge": "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca",
+      "totalReclawPaymaster": "0xd10Be4669c739C3315616f7E6a2D7Dbd7033e7aD",
+      "deployedAt": "2026-03-20T12:55:55.353Z",
+      "deployer": "0x5C6A2E495F032E31Fc4c042085Bea0006B9C7A06",
+      "blockNumber": 39121533,
+      "status": "RETIRED \u2014 free tier lived here before the ops-1 single-chain Gnosis migration (2026-06-05). The free\u2192Base-Sepolia routing no longer exists; kept as the historical deploy record only."
+    }
   }
 }

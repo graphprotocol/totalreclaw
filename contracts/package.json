@@ -1,13 +1,11 @@
 {
   "name": "@totalreclaw/contracts",
   "version": "0.1.0",
-  "description": "TotalReclaw smart contracts — EventfulDataEdge and Paymaster for Base L2",
+  "description": "TotalReclaw smart contracts \u2014 EventfulDataEdge and Paymaster for Base L2",
   "private": true,
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "verify": "hardhat run scripts/verify.ts --network baseSepolia",
-    "fund": "hardhat run scripts/fund-paymaster.ts --network baseSepolia",
     "clean": "hardhat clean"
   },
   "devDependencies": {

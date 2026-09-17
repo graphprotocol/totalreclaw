@@ -462,16 +462,16 @@ async function main() {
     process.exit(1);
   }
   const addresses = JSON.parse(fs.readFileSync(addressesPath, 'utf-8'));
-  const dataEdgeAddress = addresses.eventfulDataEdge;
+  const dataEdgeAddress = addresses.local.eventfulDataEdge;
 
   console.log(`  Deployer: ${deployer.address}`);
   console.log(`  DataEdge: ${dataEdgeAddress}`);
-  console.log(`  EntryPoint: ${addresses.entryPoint}`);
+  console.log(`  EntryPoint: ${addresses.local.entryPoint}`);
 
   // The EventfulDataEdge fallback checks `require(msg.sender == entryPoint)`.
   // On localhost, deploy.ts sets entryPoint to the canonical ERC-4337 address.
   // Use setEntryPoint() to update it to the deployer address for local testing.
-  if (deployer.address.toLowerCase() !== addresses.entryPoint.toLowerCase()) {
+  if (deployer.address.toLowerCase() !== addresses.local.entryPoint.toLowerCase()) {
     console.log('  EntryPoint != deployer — calling setEntryPoint() to update...');
     const abi = ['function setEntryPoint(address _newEntryPoint) external'];
     const dataEdge = new ethers.Contract(dataEdgeAddress, abi, deployer);

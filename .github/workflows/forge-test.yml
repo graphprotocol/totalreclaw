@@ -63,11 +63,12 @@ jobs:
         run: forge test -vvv
 
       # Cred-6 spec §6.1 mandates a `forge snapshot` gas budget on the
-      # executeBatch per-inner-call validator (< 5K gas per inner). We emit
-      # a snapshot here but DO NOT fail the build on gas drift — that's a
-      # follow-up once the cred-6 baseline lands. For now the snapshot is
-      # diagnostic-only so reviewers can spot regressions in PRs.
-      - name: Snapshot gas (diagnostic)
+      # executeBatch per-inner-call validator (< 5K gas per inner). Since
+      # #650 the baseline `.gas-snapshot` is COMMITTED, so `--diff` output
+      # in PR logs is meaningful — but enforcement (failing on drift) stays
+      # deferred until the cred-6 baseline lands with the paused Phase 3
+      # work. Regenerate locally with `cd contracts && forge snapshot`.
+      - name: Snapshot gas (diagnostic vs committed baseline)
         run: forge snapshot --check --diff || true
         continue-on-error: true
 

@@ -57,8 +57,8 @@ npx hardhat run scripts/deploy.ts --network localhost
 
 echo "=== Updating subgraph config ==="
 ADDRESSES_FILE="$CONTRACTS_DIR/deployed-addresses.json"
-DATA_EDGE=$(python3 -c "import json; print(json.load(open('$ADDRESSES_FILE'))['eventfulDataEdge'])")
-START_BLOCK=$(python3 -c "import json; print(json.load(open('$ADDRESSES_FILE'))['blockNumber'])")
+DATA_EDGE=$(python3 -c "import json; print(json.load(open('$ADDRESSES_FILE'))['local']['eventfulDataEdge'])")
+START_BLOCK=$(python3 -c "import json; print(json.load(open('$ADDRESSES_FILE'))['local']['blockNumber'])")
 
 cd "$SUBGRAPH_DIR"
 # Use sed to update address and startBlock in subgraph.yaml
