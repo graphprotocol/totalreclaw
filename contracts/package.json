@@ -5,7 +5,6 @@
   "private": true,
   "scripts": {
     "compile": "hardhat compile",
-    "test": "hardhat test",
     "clean": "hardhat clean"
   },
   "devDependencies": {
