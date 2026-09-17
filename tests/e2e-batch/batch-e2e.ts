@@ -217,7 +217,18 @@ async function getBillingStatus(authKeyHex: string, walletAddress: string) {
     'GET',
     `/v1/billing/status?wallet_address=${walletAddress}`,
     undefined,
-    { Authorization: `Bearer ${authKeyHex}` },
+    {
+      Authorization: `Bearer ${authKeyHex}`,
+      // Stay on the staging test-fixture path for billing reads too: the
+      // relay provisions (and, if provisioned lazily, lazy-provisions)
+      // `X-TotalReclaw-Test: true` registrations as tier=pro (relay
+      // billing.ts ~line 174). Without the header a billing read could
+      // observe the non-fixture default tier — same header set the
+      // registration in registerUser() used (and gnosis-batch-cycle.test.ts
+      // sends on every request).
+      'X-TotalReclaw-Test': 'true',
+      'X-TotalReclaw-Client': 'e2e-batch-test',
+    },
   );
 }
 
@@ -464,13 +475,16 @@ async function testGroupC(keys: ReturnType<typeof generateTestKeys>) {
 // =========================================================================
 // TEST GROUP E: Single-chain Gnosis routing
 //
-// STALE-ASSUMPTION CLEANUP (2026-08-16, tracker #621): this group used to be
-// "Dual-Chain Routing" and asserted Free-tier -> Base Sepolia (84532) vs.
-// Pro-tier -> Gnosis (100). That split was retired in ops-1
-// (totalreclaw-internal#283, closed 2026-06-05) — BOTH tiers now route to
-// Gnosis mainnet (chain 100) via the same isolated staging DataEdge. Do not
-// reintroduce a tier->chain branch here; the current contract is "every
-// registration gets Gnosis, regardless of tier."
+// STALE-ASSUMPTION CLEANUP (2026-08-16, tracker #621; finished 2026-09-17,
+// #650 phase 4): this group used to be "Dual-Chain Routing" and asserted
+// Free-tier -> Base Sepolia (84532) vs. Pro-tier -> Gnosis (100). That split
+// was retired in ops-1 (totalreclaw-internal#283, closed 2026-06-05) — BOTH
+// tiers now route to Gnosis mainnet (chain 100) via the same isolated
+// staging DataEdge. Do not reintroduce a tier->chain branch here; the
+// current contract is "every registration gets Gnosis, regardless of tier."
+// The relay's /v1/billing/status is the authoritative router (it returns
+// chain_id + data_edge_address — the client-consistency rule, #402/#460);
+// E1 now asserts the full advertised routing tuple.
 //
 // Separately: staging registrations sent with `X-TotalReclaw-Test: true`
 // are provisioned as tier=pro by the relay's `staging_test_fixture` path
@@ -479,20 +493,33 @@ async function testGroupC(keys: ReturnType<typeof generateTestKeys>) {
 // "fix" the wallet into tier=free.
 // =========================================================================
 
-async function testGroupE(keys: ReturnType<typeof generateTestKeys>) {
+async function testGroupE(keys: ReturnType<typeof generateTestKeys>, dataEdgeAddress: string) {
   console.log('\n=== Test Group E: Single-Chain Gnosis Routing ===\n');
 
   const walletAddress = '0x' + randomBytes(20).toString('hex');
 
-  // E1: Test-tier billing shows single-chain Gnosis routing.
-  await runTest('E1: Test-tier billing shows Gnosis chain (single-chain routing)', async () => {
+  // E1: Billing is the authoritative router — the staging test user gets
+  // Gnosis (chain 100) + the staging-isolated DataEdge, provisioned pro.
+  await runTest('E1: Billing routes test user to Gnosis (chain 100, staging DataEdge)', async () => {
     const res = await getBillingStatus(keys.authKeyHex, walletAddress);
     assert(res.status === 200, `Expected 200, got ${res.status}`);
     // Staging test registrations are provisioned pro by design (see comment
     // above) — assert that, not tier=free.
     assert(res.data.tier === 'pro', `Expected tier=pro (staging test-fixture), got ${res.data.tier}`);
     assert(res.data.chain_id === 100, `Expected chain_id=100 (Gnosis, single-chain post ops-1), got ${res.data.chain_id}`);
-    console.log(`    tier=${res.data.tier}, chain_id=${res.data.chain_id}, features=${JSON.stringify(res.data.features)}`);
+    // DataEdge also comes from billing (client-consistency rule): staging is
+    // on-chain isolated (ops-5/6), so this must be a valid address AND agree
+    // with the one main() resolved for the submit path.
+    const advertised: string = res.data.data_edge_address ?? '';
+    assert(
+      /^0x[0-9a-fA-F]{40}$/.test(advertised),
+      `Expected billing data_edge_address (0x + 40 hex), got ${advertised}`,
+    );
+    assert(
+      advertised.toLowerCase() === dataEdgeAddress.toLowerCase(),
+      `billing data_edge_address ${advertised} != address resolved in main() ${dataEdgeAddress}`,
+    );
+    console.log(`    tier=${res.data.tier}, chain_id=${res.data.chain_id}, data_edge=${advertised}, features=${JSON.stringify(res.data.features)}`);
   });
 
   // E2: Bundler proxy accepts JSON-RPC (supportedEntryPoints). Batching/
@@ -859,7 +886,7 @@ async function main() {
   // ---- PHASE 2: Quick tests (no subgraph dependency) ----
   if (shouldRun('A')) await testGroupA(keys);
   if (shouldRun('C')) await testGroupC(keys);
-  if (shouldRun('E')) await testGroupE(keys);
+  if (shouldRun('E')) await testGroupE(keys, dataEdgeAddress);
 
   // ---- Wait for subgraph to catch up to chain tip ----
   // Graph Studio has variable latency (5-40 min). Instead of a fixed wait,
