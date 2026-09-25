@@ -12,5 +12,18 @@ except Exception:
     __version__ = "2.3.5"
 
 from .client import TotalReclaw
+from .relay import (
+    RelayReadError,
+    RelayReadBlocked,
+    RelayReadQuotaExceeded,
+    RelayRateLimited,
+)
 
-__all__ = ["TotalReclaw", "__version__"]
+__all__ = [
+    "TotalReclaw",
+    "__version__",
+    "RelayReadError",
+    "RelayReadBlocked",
+    "RelayReadQuotaExceeded",
+    "RelayRateLimited",
+]

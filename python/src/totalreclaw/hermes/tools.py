@@ -14,12 +14,52 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
+
+from ..relay import ReadBlockState, RelayReadBlocked
+from ..agent.read_block import read_block_tool_payload
 
 if TYPE_CHECKING:
     from .state import PluginState
 
 logger = logging.getLogger(__name__)
+
+
+def _real_read_block(client) -> Optional[ReadBlockState]:
+    """``client.read_block`` if it's a real ``ReadBlockState``, else
+    ``None``.
+
+    Guards against a loosely-mocked test client whose bare ``MagicMock()``
+    auto-vends a truthy, non-``ReadBlockState`` attribute for anything it
+    wasn't told about (e.g. it would otherwise fail ``json.dumps`` in
+    ``status()`` below). A real ``TotalReclaw.read_block`` always returns
+    ``None`` or a real ``ReadBlockState``.
+    """
+    blk = getattr(client, "read_block", None) if client is not None else None
+    return blk if isinstance(blk, ReadBlockState) else None
+
+
+def _read_block_response(state: "PluginState", client, err: RelayReadBlocked) -> str:
+    """Shared ``except RelayReadBlocked`` handler for the tools below (#662).
+
+    Latches the ``(episode, kind)`` as announced (so
+    ``pending_read_block_notice`` doesn't re-announce it in ``pre_llm_call``
+    later this turn) and returns the tool-facing JSON payload —
+    deliberately shaped so it can never be misread as "0 results" (see
+    ``read_block_tool_payload``).
+
+    When ``client.read_block`` is ``None`` at handling time (the real
+    ``RelayClient`` should have just set it synchronously in this same
+    process, so this is a corner/test-only case), there is no real episode
+    to latch — do NOT invent one (e.g. a ``-1`` sentinel), since that would
+    prime ``pending_read_block_notice``'s "a previously-announced episode
+    was cleared" branch and fire a spurious "working again" the next time
+    it's called with no episode on record.
+    """
+    blk = _real_read_block(client)
+    if blk is not None:
+        state.mark_read_block_announced(blk.episode, blk.error.kind)
+    return json.dumps(read_block_tool_payload(err, blk))
 
 
 # First-person agent-voice phrases. LLMs use these to declare their own
@@ -262,6 +302,8 @@ async def recall(args: dict, state: "PluginState", **kwargs) -> str:
                 mem["provenance"] = compose_provenance_label("Hermes", md["agent_name"])
             memories.append(mem)
         return json.dumps({"count": len(results), "memories": memories})
+    except RelayReadBlocked as e:
+        return _read_block_response(state, client, e)
     except Exception as e:
         logger.error("totalreclaw_recall failed: %s", e)
         return json.dumps({"error": str(e)})
@@ -319,6 +361,8 @@ async def pin(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps(response)
     except ValueError as e:
         return json.dumps({"error": str(e)})
+    except RelayReadBlocked as e:
+        return _read_block_response(state, client, e)
     except Exception as e:
         logger.error("totalreclaw_pin failed: %s", e)
         return json.dumps({"error": str(e)})
@@ -357,6 +401,8 @@ async def unpin(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps(response)
     except ValueError as e:
         return json.dumps({"error": str(e)})
+    except RelayReadBlocked as e:
+        return _read_block_response(state, client, e)
     except Exception as e:
         logger.error("totalreclaw_unpin failed: %s", e)
         return json.dumps({"error": str(e)})
@@ -399,6 +445,8 @@ async def retype(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps(response)
     except ValueError as e:
         return json.dumps({"error": str(e)})
+    except RelayReadBlocked as e:
+        return _read_block_response(state, client, e)
     except Exception as e:
         logger.error("totalreclaw_retype failed: %s", e)
         return json.dumps({"error": str(e)})
@@ -438,6 +486,8 @@ async def set_scope(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps(response)
     except ValueError as e:
         return json.dumps({"error": str(e)})
+    except RelayReadBlocked as e:
+        return _read_block_response(state, client, e)
     except Exception as e:
         logger.error("totalreclaw_set_scope failed: %s", e)
         return json.dumps({"error": str(e)})
@@ -584,6 +634,8 @@ async def export_all(args: dict, state: "PluginState", **kwargs) -> str:
 
     try:
         facts = await client.export_all()
+    except RelayReadBlocked as e:
+        return _read_block_response(state, client, e)
     except Exception as e:
         logger.error("totalreclaw_export failed: %s", e)
         return json.dumps({"error": str(e)})
@@ -662,6 +714,9 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
                 sa = await client.get_wallet_address()
             except Exception:
                 sa = None
+        # #662 — surface the client-wide relay read pause. Makes no
+        # subgraph call (``client.read_block`` is a local, time-based read).
+        read_blk = _real_read_block(client)
         return json.dumps({
             "tier": billing.tier,
             "free_writes_used": billing.free_writes_used,
@@ -670,6 +725,20 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
             "account_id": sa,
             "wallet_address": sa,
             "eoa_address": client.eoa_address,
+            "reads": {
+                "paused": read_blk is not None,
+                "reason": read_blk.error.kind if read_blk is not None else None,
+                "until": (
+                    read_blk.paused_until_utc.isoformat()
+                    if read_blk is not None
+                    else None
+                ),
+                "upgrade_url": (
+                    getattr(read_blk.error, "upgrade_url", None)
+                    if read_blk is not None
+                    else None
+                ),
+            },
         })
     except Exception as e:
         logger.error("totalreclaw_status failed: %s", e)

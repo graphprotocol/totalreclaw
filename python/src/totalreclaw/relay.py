@@ -30,9 +30,12 @@ loop-bound client. Old clients from orphaned loops are dropped.
 from __future__ import annotations
 import asyncio
 import logging
+import math
 import os
+import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, ClassVar, Optional
 
 import httpx
 
@@ -91,6 +94,348 @@ def _client_header_value(client_id: str) -> str:
     before the first ``/``, so appending the version is observability-only and
     does not fragment client-type aggregation."""
     return f"{client_id}/{_client_version()}"
+
+
+# ---------------------------------------------------------------------------
+# Read-denial surfacing (#662) — typed errors for POST /v1/subgraph, plus the
+# client-wide read pause on RelayClient. See
+# docs/specs/totalreclaw/read-error-surfacing.md for the full design.
+#
+# All four classes subclass httpx.HTTPStatusError so existing
+# ``except httpx.HTTPStatusError`` / ``.response.status_code`` call sites
+# (e.g. ``crystals/recrystallize.py::_is_quota_exhausted_error``) keep
+# working unchanged.
+# ---------------------------------------------------------------------------
+
+
+def _truncate_message(message: Optional[str]) -> Optional[str]:
+    if not isinstance(message, str):
+        return None
+    return message[:200]
+
+
+class RelayReadError(httpx.HTTPStatusError):
+    """Non-2xx from ``POST /v1/subgraph``."""
+
+    def __init__(
+        self,
+        response: httpx.Response,
+        *,
+        error_code: Optional[str] = None,
+        relay_message: Optional[str] = None,
+    ):
+        self.status_code: int = response.status_code
+        self.error_code: Optional[str] = error_code
+        self.relay_message: Optional[str] = _truncate_message(relay_message)
+        super().__init__(
+            self._format_message(), request=response.request, response=response
+        )
+
+    def _format_message(self) -> str:
+        detail = self.relay_message or self.error_code or "unknown error"
+        return f"TotalReclaw relay read failed (HTTP {self.status_code}): {detail}"
+
+
+class RelayReadBlocked(RelayReadError):
+    """Reads are blocked for a window. Triggers the client-wide read pause."""
+
+    kind: ClassVar[str] = "read_blocked"
+
+    def __init__(
+        self,
+        response: httpx.Response,
+        *,
+        error_code: Optional[str] = None,
+        relay_message: Optional[str] = None,
+        retry_after_s: Optional[float] = None,
+    ):
+        self.retry_after_s: Optional[float] = retry_after_s
+        super().__init__(response, error_code=error_code, relay_message=relay_message)
+
+
+class RelayReadQuotaExceeded(RelayReadBlocked):
+    kind: ClassVar[str] = "read_quota"
+
+    def __init__(
+        self,
+        response: httpx.Response,
+        *,
+        error_code: Optional[str] = None,
+        relay_message: Optional[str] = None,
+        retry_after_s: Optional[float] = None,
+        upgrade_url: Optional[str] = None,
+        tier: Optional[str] = None,
+        limit: Optional[int] = None,
+        used: Optional[int] = None,
+        resets_at: Optional[datetime] = None,
+        legacy: bool = False,
+    ):
+        self.upgrade_url = upgrade_url
+        self.tier = tier
+        self.limit = limit
+        self.used = used
+        self.resets_at = resets_at
+        self.legacy = legacy
+        super().__init__(
+            response,
+            error_code=error_code,
+            relay_message=relay_message,
+            retry_after_s=retry_after_s,
+        )
+
+    def _format_message(self) -> str:
+        return "TotalReclaw memory reads are paused: monthly read limit reached."
+
+
+class RelayRateLimited(RelayReadBlocked):
+    kind: ClassVar[str] = "rate_limited"
+
+    def __init__(
+        self,
+        response: httpx.Response,
+        *,
+        error_code: Optional[str] = None,
+        relay_message: Optional[str] = None,
+        retry_after_s: Optional[float] = None,
+        limit_scope: Optional[str] = None,
+    ):
+        self.limit_scope = limit_scope
+        super().__init__(
+            response,
+            error_code=error_code,
+            relay_message=relay_message,
+            retry_after_s=retry_after_s,
+        )
+
+    def _format_message(self) -> str:
+        if self.retry_after_s is not None:
+            minutes = max(1, round(self.retry_after_s / 60))
+            return (
+                "TotalReclaw memory reads are paused: too many requests "
+                f"(retry in ~{minutes} min)."
+            )
+        return "TotalReclaw memory reads are paused: too many requests."
+
+
+def _parse_resets_at(raw: Any) -> Optional[datetime]:
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _retry_after_seconds(resp: httpx.Response, body: Optional[dict]) -> Optional[float]:
+    """Body ``retry_after`` (a number) first, then the ``Retry-After`` header
+    (delta-seconds or an HTTP-date). Negative or unparseable -> ``None``.
+
+    Mirrors ``agent/llm_client.py::_parse_retry_after`` — not imported from
+    there, because ``relay.py`` must not import ``agent/``.
+    """
+    if isinstance(body, dict):
+        raw = body.get("retry_after")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw >= 0:
+            return float(raw)
+
+    raw_header = resp.headers.get("retry-after")
+    if not raw_header:
+        return None
+    raw_header = raw_header.strip()
+    if not raw_header:
+        return None
+
+    try:
+        secs = float(raw_header)
+        return secs if secs >= 0 else None
+    except ValueError:
+        pass
+
+    try:
+        from email.utils import parsedate_to_datetime
+
+        target = parsedate_to_datetime(raw_header)
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        delta = (target - datetime.now(timezone.utc)).total_seconds()
+        return delta if delta >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _body_str(body: Optional[dict], key: str) -> Optional[str]:
+    """*body[key]* if it's a ``str``, else ``None``. A relay running an
+    older/newer contract (or a compromised upstream) can send a field of
+    the wrong type — never let that propagate past classification as a
+    surprise type on a typed-error attribute."""
+    if not body:
+        return None
+    val = body.get(key)
+    return val if isinstance(val, str) else None
+
+
+def _body_int(body: Optional[dict], key: str) -> Optional[int]:
+    """*body[key]* if it's an ``int`` (excluding ``bool``, a ``bool`` subclass
+    of ``int``), else ``None``."""
+    if not body:
+        return None
+    val = body.get(key)
+    if isinstance(val, bool):
+        return None
+    return val if isinstance(val, int) else None
+
+
+def _classify_subgraph_error(resp: httpx.Response) -> RelayReadError:
+    """Classify a non-2xx ``/v1/subgraph`` response.
+
+    Matches on ``error_code`` first, then ``error``, by **string equality**
+    (never substring — ``read_quota_exceeded`` contains the substring
+    ``quota_exceeded``). Tolerates a non-JSON body (e.g. a Cloudflare HTML
+    error page). First match wins:
+
+      1. ``code == "read_quota_exceeded"`` (any status) -> quota, new contract
+      2. ``status == 403 and code == "quota_exceeded"`` -> quota, legacy contract
+      3. ``status == 429`` -> rate limited (legacy text body or
+         ``error_code == "rate_limited"``)
+      4. otherwise -> plain ``RelayReadError``
+    """
+    try:
+        body: Any = resp.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        body = None
+
+    code: Optional[str] = None
+    message: Optional[str] = None
+    if body is not None:
+        raw_code = body.get("error_code") or body.get("error")
+        if isinstance(raw_code, str):
+            code = raw_code
+        raw_message = body.get("message")
+        if isinstance(raw_message, str):
+            message = raw_message
+
+    status = resp.status_code
+    retry_after_s = _retry_after_seconds(resp, body)
+
+    if code == "read_quota_exceeded":
+        return RelayReadQuotaExceeded(
+            resp,
+            error_code=code,
+            relay_message=message,
+            retry_after_s=retry_after_s,
+            upgrade_url=_body_str(body, "upgrade_url"),
+            tier=_body_str(body, "tier"),
+            limit=_body_int(body, "limit"),
+            used=_body_int(body, "used"),
+            resets_at=_parse_resets_at(body.get("resets_at")) if body else None,
+            legacy=False,
+        )
+    if status == 403 and code == "quota_exceeded":
+        return RelayReadQuotaExceeded(
+            resp,
+            error_code=code,
+            relay_message=message,
+            retry_after_s=retry_after_s,
+            upgrade_url=_body_str(body, "upgrade_url"),
+            legacy=True,
+        )
+    if status == 429:
+        return RelayRateLimited(
+            resp,
+            error_code=code,
+            relay_message=message,
+            retry_after_s=retry_after_s,
+            limit_scope=_body_str(body, "limit_scope"),
+        )
+    return RelayReadError(resp, error_code=code, relay_message=message)
+
+
+# Floor + ceiling + default for the read-pause re-probe cadence. The floor
+# exists so a test/E2E env override can shorten the window without allowing
+# a hot loop. The ceiling exists so a pathological override (``1e12``,
+# ``inf``) can't make ``_set_read_block`` overflow ``datetime + timedelta``
+# arithmetic (``datetime.max`` is year 9999) — clamp instead of crash.
+_REPROBE_FLOOR_S = 5.0
+_REPROBE_CEILING_S = 86400.0  # 24h
+_REPROBE_DEFAULT_S = 900.0
+
+
+def _reprobe_seconds() -> float:
+    raw = os.environ.get("TOTALRECLAW_READ_PAUSE_REPROBE_SECONDS")
+    if raw:
+        try:
+            val = float(raw)
+        except ValueError:
+            return _REPROBE_DEFAULT_S
+        if math.isfinite(val):
+            return _clamp(val, _REPROBE_FLOOR_S, _REPROBE_CEILING_S)
+    return _REPROBE_DEFAULT_S
+
+
+def read_pause_reprobe_seconds() -> float:
+    """Public accessor for the re-probe cadence (env-configurable via
+    ``TOTALRECLAW_READ_PAUSE_REPROBE_SECONDS``). Used by the user-facing
+    read-pause notice text (``agent/read_block.py``) to tell the user how
+    often TotalReclaw retries."""
+    return _reprobe_seconds()
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
+def _pause_seconds(err: RelayReadBlocked) -> float:
+    """How long to pause reads for *err*. See §4.3 of the read-error-surfacing
+    spec for the re-probe rationale (a fixed pause-until-``resets_at`` would
+    stay stuck past a mid-episode cap raise, upgrade, or transient DB blip)."""
+    if isinstance(err, RelayRateLimited):
+        base = err.retry_after_s if err.retry_after_s is not None else 300.0
+        return _clamp(base, 30.0, 3600.0)
+    if isinstance(err, RelayReadQuotaExceeded):
+        reprobe = _reprobe_seconds()
+        if err.resets_at is not None:
+            remaining = (err.resets_at - datetime.now(timezone.utc)).total_seconds()
+            if remaining > 0:
+                return min(reprobe, remaining)
+        return reprobe
+    return _reprobe_seconds()
+
+
+@dataclass
+class ReadBlockState:
+    """A client-wide read-pause episode (see ``RelayClient.read_block``)."""
+
+    error: RelayReadBlocked
+    paused_until: float  # time.monotonic() deadline
+    paused_until_utc: datetime  # for display — aware UTC
+    since_utc: datetime  # start of the episode — aware UTC
+    episode: int  # monotonically increasing per RelayClient
+
+
+def ephemeral_read_block_state(err: RelayReadBlocked) -> ReadBlockState:
+    """Build a throwaway :class:`ReadBlockState` for *err* without touching
+    any ``RelayClient``.
+
+    Defensive fallback for a caller that catches ``RelayReadBlocked`` but
+    finds ``relay.read_block()`` already ``None`` (e.g. a very short pause
+    window expired between the raise and the catch) — it still needs
+    *something* to format a user-facing notice from. ``episode=-1`` marks
+    it as not a real ``RelayClient``-tracked episode.
+    """
+    now_utc = datetime.now(timezone.utc)
+    pause_s = _pause_seconds(err)
+    return ReadBlockState(
+        error=err,
+        paused_until=time.monotonic() + pause_s,
+        paused_until_utc=now_utc + timedelta(seconds=pause_s),
+        since_utc=now_utc,
+        episode=-1,
+    )
 
 
 @dataclass
@@ -169,6 +514,11 @@ class RelayClient:
         # its own client, correctly bound, and orphaned clients (from
         # short-lived sync loops) are dropped transparently.
         self._http_per_loop: dict[int, httpx.AsyncClient] = {}
+        # Client-wide read pause (#662) — see ``read_block`` / ``_set_read_block``.
+        # In-memory only; not persisted across a daemon restart (Decision #2,
+        # read-error-surfacing.md).
+        self._read_block: Optional[ReadBlockState] = None
+        self._read_block_episode_counter: int = 0
 
     async def _get_http(self) -> httpx.AsyncClient:
         """Return an ``httpx.AsyncClient`` bound to the current event loop.
@@ -266,6 +616,111 @@ class RelayClient:
         """The Smart Account address the relay tags outgoing writes with."""
         return self._wallet_address
 
+    # ------------------------------------------------------------------
+    # Client-wide read pause (#662)
+    #
+    # Owned here (not on the higher-level ``TotalReclaw`` client) because a
+    # ``RelayClient`` lives as long as the process's configured client —
+    # shared by the sync-loop hooks and the Hermes async tools — making it
+    # the right place for state that must be visible from every call site
+    # that shares one relay connection.
+    #
+    # Plain attribute writes, no lock — NOT because this is single-threaded
+    # (it isn't: Hermes sync hooks run on the ``loop_runner`` background
+    # thread's event loop while async tools run on the host's own loop, so
+    # ``self._read_block`` genuinely is read/written from more than one
+    # thread). No lock is needed because every write is a single Python
+    # attribute assignment (atomic under the GIL) of a fully-formed,
+    # immutable-in-practice ``ReadBlockState``, and every race is benign:
+    #   * A 2xx response on one thread clearing a block (``_clear_read_block``)
+    #     that a denial on another thread just set: worst case is one extra
+    #     HTTP call gets through during the overlap instead of being
+    #     short-circuited — never a crash, never a stuck state.
+    #   * Two threads both finding the deadline passed and both probing
+    #     concurrently (``read_block()`` returns ``None`` for both): worst
+    #     case is one redundant HTTP call, and whichever response lands last
+    #     wins (either both clear it, or both reuse/extend the same episode
+    #     via ``_set_read_block``'s ``prev is not None`` branch).
+    # No partial/torn read is possible because nothing here does read-modify-
+    # write across two attribute accesses.
+    # ------------------------------------------------------------------
+    def read_block(self) -> Optional[ReadBlockState]:
+        """The active read-pause episode, or ``None`` once its deadline has
+        passed.
+
+        The underlying episode record is *kept* past the deadline (not
+        cleared) so a re-probe that blocks again reuses the same episode id
+        — only a successful response (``_clear_read_block``) starts a fresh
+        episode. See ``_set_read_block``. Use :meth:`read_block_episode` to
+        observe that underlying record independently of the deadline (e.g.
+        to distinguish "the pause expired but we haven't yet probed
+        successfully" from "a success genuinely cleared it").
+        """
+        blk = self._read_block
+        if blk is None:
+            return None
+        if time.monotonic() >= blk.paused_until:
+            return None
+        return blk
+
+    def read_block_episode(self) -> Optional[int]:
+        """The episode id of the current read-pause record, or ``None``.
+
+        Unlike :meth:`read_block`, this does NOT go ``None`` just because
+        the pause deadline has passed — it only goes ``None`` when there has
+        never been a block, or the last one was cleared by an actual
+        successful response (``_clear_read_block``). This is the signal a
+        caller must use to tell "still the same unresolved episode, just
+        past its re-probe deadline" apart from "recovered" — using
+        :meth:`read_block` for that check produces a **false-recovery
+        loop**: it goes ``None`` on every deadline expiry even when the very
+        next probe re-blocks, so a naive "``read_block`` is ``None`` -> tell
+        the user it's working again" falsely announces recovery every
+        re-probe window.
+        """
+        blk = self._read_block
+        return blk.episode if blk is not None else None
+
+    def _set_read_block(self, err: RelayReadBlocked) -> None:
+        prev = self._read_block
+        now_utc = datetime.now(timezone.utc)
+        pause_s = _pause_seconds(err)
+        paused_until_utc = now_utc + timedelta(seconds=pause_s)
+        if prev is not None:
+            # Re-block within the same episode (the prior episode was never
+            # cleared by a success) — log at DEBUG to avoid errors.log spam.
+            episode = prev.episode
+            since_utc = prev.since_utc
+            logger.debug(
+                "TotalReclaw: relay reads re-blocked (%s) within episode %d, "
+                "until %s UTC",
+                err.kind,
+                episode,
+                paused_until_utc.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+        else:
+            self._read_block_episode_counter += 1
+            episode = self._read_block_episode_counter
+            since_utc = now_utc
+            logger.warning(
+                "TotalReclaw: relay reads paused (%s) until %s UTC; recall "
+                "will show a notice",
+                err.kind,
+                paused_until_utc.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+        self._read_block = ReadBlockState(
+            error=err,
+            paused_until=time.monotonic() + pause_s,
+            paused_until_utc=paused_until_utc,
+            since_utc=since_utc,
+            episode=episode,
+        )
+
+    def _clear_read_block(self) -> None:
+        """Called on any 2xx ``/v1/subgraph`` response. The next block (if
+        any) starts a new episode."""
+        self._read_block = None
+
     def set_wallet_address(self, wallet_address: Optional[str]) -> None:
         """Update the Smart Account address forwarded on writes.
 
@@ -313,6 +768,24 @@ class RelayClient:
     async def query_subgraph(
         self, query: str, variables: dict[str, Any], chain: Optional[str] = None,
     ) -> dict[str, Any]:
+        # Read-denial surfacing (#662) — an active pause means NO HTTP call.
+        # Once one call is blocked, every ``query_subgraph`` call site gets a
+        # zero-HTTP typed-error failure until the pause window expires: this
+        # is what stops a recall's trapdoor-chunk fan-out (plus dedup /
+        # contradiction / confirm-indexed) from re-hitting an already-denied
+        # relay. See docs/specs/totalreclaw/read-error-surfacing.md §4.2-4.3.
+        blk = self.read_block()
+        if blk is not None:
+            logger.debug(
+                "subgraph read short-circuited (%s paused until %s UTC)",
+                blk.error.kind,
+                blk.paused_until_utc.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            # ``with_traceback(None)`` — this same exception instance can be
+            # raised many times across an episode; reset the traceback each
+            # time so it doesn't grow unbounded.
+            raise blk.error.with_traceback(None)
+
         http = await self._get_http()
         params = {}
         if chain:
@@ -334,8 +807,13 @@ class RelayClient:
             json={"query": query, "variables": variables},
             params=params,
         )
-        resp.raise_for_status()
-        return resp.json()
+        if resp.is_success:
+            self._clear_read_block()
+            return resp.json()
+        err = _classify_subgraph_error(resp)
+        if isinstance(err, RelayReadBlocked):
+            self._set_read_block(err)
+        raise err
 
     async def submit_userop(self, json_rpc_body: dict[str, Any]) -> dict[str, Any]:
         http = await self._get_http()

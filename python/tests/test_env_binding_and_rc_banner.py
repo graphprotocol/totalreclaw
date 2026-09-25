@@ -162,6 +162,40 @@ def test_no_other_hardcoded_default_url_sites():
 # ---------------------------------------------------------------------------
 
 
+def _reload_relay_and_restore():
+    """Context manager: ``importlib.reload(totalreclaw.relay)``, then
+    restore the module's original namespace afterward.
+
+    ``importlib.reload`` re-executes the module body in place, which
+    replaces every class/function object defined in it (``RelayClient``,
+    ``RelayReadQuotaExceeded``, ...) with a NEW object of the same name.
+    Anything that imported one of those names by reference before the
+    reload (``from totalreclaw.relay import RelayReadQuotaExceeded``,
+    e.g. in ``totalreclaw/__init__.py`` or any test module collected
+    earlier) keeps pointing at the OLD object, so an ``isinstance()``
+    check against a freshly-reloaded instance silently fails — with no
+    exception, just a wrong bool. Restoring the pre-reload namespace back
+    onto the SAME module object (not reloading again, which would just
+    create a third set of objects) undoes that for every other consumer
+    holding a reference to the original classes.
+    """
+    import contextlib
+
+    @contextlib.contextmanager
+    def _cm():
+        from totalreclaw import relay
+
+        snapshot = dict(vars(relay))
+        try:
+            importlib.reload(relay)
+            yield relay
+        finally:
+            vars(relay).clear()
+            vars(relay).update(snapshot)
+
+    return _cm()
+
+
 def test_default_relay_url_resolves_to_hardcoded_when_env_unset(monkeypatch):
     """Without ``TOTALRECLAW_SERVER_URL`` the resolver returns the bake-in.
 
@@ -172,10 +206,9 @@ def test_default_relay_url_resolves_to_hardcoded_when_env_unset(monkeypatch):
     in the module at runtime is what the resolver hands back.
     """
     monkeypatch.delenv("TOTALRECLAW_SERVER_URL", raising=False)
-    from totalreclaw import relay
 
-    importlib.reload(relay)
-    assert relay._default_relay_url() == relay._HARDCODED_DEFAULT_URL
+    with _reload_relay_and_restore() as relay:
+        assert relay._default_relay_url() == relay._HARDCODED_DEFAULT_URL
 
 
 def test_default_relay_url_env_override_wins(monkeypatch):
@@ -187,10 +220,9 @@ def test_default_relay_url_env_override_wins(monkeypatch):
     must hit that URL — never the bake-in.
     """
     monkeypatch.setenv("TOTALRECLAW_SERVER_URL", "https://example.invalid")
-    from totalreclaw import relay
 
-    importlib.reload(relay)
-    assert relay._default_relay_url() == "https://example.invalid"
+    with _reload_relay_and_restore() as relay:
+        assert relay._default_relay_url() == "https://example.invalid"
 
 
 # ---------------------------------------------------------------------------

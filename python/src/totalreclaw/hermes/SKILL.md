@@ -112,6 +112,7 @@ The plugin fetches billing on every `on_session_start` and caches it for 2 hours
 - **>80% usage** — soft warning. Mention casually: *"You're at `<used>` / `<limit>` of your free-tier quota this month. Upgrade to Pro for 1,500/month — want me to open the upgrade link?"* Wait for confirmation before calling `totalreclaw_upgrade`.
 - **403 quota exceeded** on a write → billing cache invalidated, warning re-injects next turn. Surface the error verbatim + offer `totalreclaw_upgrade` immediately.
 - **First successful pair** → the setup-flow confirmation already includes tier + limit. Do not re-emit the same info on subsequent first-message-of-session.
+- **Read denial (quota / rate limit)** — DIFFERENT from the write-quota warning above. A `[totalreclaw] Memory lookups are paused: ...` context line (or a `totalreclaw_recall`/`_export`/`_pin`/`_unpin`/`_retype`/`_set_scope` result carrying `error_code: "read_quota_exceeded"` or `"rate_limited"`) means the vault could NOT be searched right now — it does **not** mean the user has no memories. Relay the message to the user in one or two sentences; never say "you have no memories" or invent a count. New memories keep saving during the pause. Lookups resume automatically.
 
 Do NOT compute "you have X left" math yourself — `totalreclaw_status` returns `free_writes_used` and `free_writes_limit` already. Quote them verbatim.
 

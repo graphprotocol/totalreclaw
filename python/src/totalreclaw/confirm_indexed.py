@@ -21,7 +21,7 @@ from typing import Optional, Literal
 
 import totalreclaw_core as _core
 
-from .relay import RelayClient
+from .relay import RelayClient, RelayReadBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +131,19 @@ async def confirm_indexed(
                     attempts,
                 )
                 return True
+        except RelayReadBlocked as exc:
+            # Reads are paused (quota / rate limit) — degrade FAST rather
+            # than polling to the timeout. The on-chain write this is
+            # confirming is already acknowledged; callers already treat a
+            # ``False`` return as ``partial=True``, not an error. #662.
+            logger.info(
+                "confirm_indexed: fact_id=%s expect=%s — reads paused (%s); "
+                "not polling further",
+                fact_id,
+                expect,
+                exc,
+            )
+            return False
         except Exception as exc:  # pragma: no cover — best-effort polling
             logger.debug("confirm_indexed: poll attempt failed: %s", exc)
 

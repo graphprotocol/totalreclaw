@@ -17,9 +17,28 @@ from typing import Optional, TYPE_CHECKING
 import totalreclaw_core
 
 from .loop_runner import run_sync
+from ..relay import ReadBlockState, RelayReadBlocked
 
 if TYPE_CHECKING:
     from .state import AgentState
+
+
+def _resolve_read_block(client, err: RelayReadBlocked) -> ReadBlockState:
+    """``client.read_block`` if it's a real ``ReadBlockState``, else an
+    ephemeral one built from *err*.
+
+    Guards against a loosely-mocked test client whose bare ``MagicMock()``
+    auto-vends a truthy, non-``ReadBlockState`` attribute for anything it
+    wasn't told about — that must never be treated as the real pause state.
+    A real ``TotalReclaw.read_block`` always returns ``None`` or a real
+    ``ReadBlockState``.
+    """
+    blk = getattr(client, "read_block", None)
+    if isinstance(blk, ReadBlockState):
+        return blk
+    from ..relay import ephemeral_read_block_state
+
+    return ephemeral_read_block_state(err)
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +122,11 @@ def auto_recall(
 
         if results:
             return _format_recall_context(results)
+    except RelayReadBlocked as e:
+        # Reads are paused (quota / rate limit) — never silently return
+        # None here: that reads to the caller exactly like "no memories
+        # found". Surface a plain-language notice instead. #662.
+        return state.read_block_notice(_resolve_read_block(client, e))
     except Exception as e:
         logger.warning("TotalReclaw auto-recall failed: %s", e)
 
@@ -137,6 +161,8 @@ async def auto_recall_async(
         )
         if results:
             return _format_recall_context(results)
+    except RelayReadBlocked as e:
+        return state.read_block_notice(_resolve_read_block(client, e))
     except Exception as e:
         logger.warning("TotalReclaw auto-recall failed: %s", e)
 

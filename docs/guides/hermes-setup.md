@@ -276,6 +276,8 @@ Rationale: Hermes's built-in memory layer auto-loads a local `~/.hermes/memories
 If `totalreclaw_recall` returns matching facts: use those as the answer.
 If it returns nothing: say so honestly, do not fabricate from context.
 
+If you see *"Memory lookups are paused"*, your memories are safe. TotalReclaw can't search them right now, either because the account used its monthly read allowance or because of a short rate limit. New memories keep saving. Lookups resume on their own (the notice says when), and the upgrade link lifts the monthly limit. Until then, the agent will say lookups are paused rather than claim you have no memories.
+
 ---
 
 ## Phrase safety

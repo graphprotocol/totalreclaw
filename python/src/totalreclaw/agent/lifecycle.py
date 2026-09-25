@@ -29,6 +29,7 @@ from .loop_runner import (
     is_interpreter_shutdown_error,
 )
 from .pending_drain import enqueue_messages
+from ..relay import RelayReadBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,11 @@ def _fetch_recent_memories(state: "AgentState") -> list[dict]:
         return [{"id": r.id, "text": r.text, "embedding": r.embedding} for r in results]
     except InterpreterShutdownError:
         raise
+    except RelayReadBlocked as e:
+        # Reads are paused (quota / rate limit) — dedup context is
+        # best-effort; degrade quietly rather than at WARNING level (#662).
+        logger.debug("Recent-memories fetch skipped: reads paused (%s)", e)
+        return []
     except Exception as e:
         if is_interpreter_shutdown_error(e):
             raise InterpreterShutdownError(str(e)) from e

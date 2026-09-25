@@ -6,6 +6,12 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **[#662] Relay read denials are no longer silent.** A monthly read-quota denial (legacy 403 `quota_exceeded` or the new 429 `read_quota_exceeded`) or a 429 rate limit from `/v1/subgraph` now raises a typed error (`RelayReadQuotaExceeded` / `RelayRateLimited`, both `httpx.HTTPStatusError` subclasses). Recall stops at the first denied query instead of firing every trapdoor batch plus the broadened search. The client pauses subgraph reads until `Retry-After` / `resets_at`, re-probing every 15 min (`TOTALRECLAW_READ_PAUSE_REPROBE_SECONDS`). Hermes auto-recall and `totalreclaw_recall` tell the user memory lookups are paused, and why, instead of reporting no memories. Writes are unaffected; pre-write dedup fails open while paused. `totalreclaw_export` no longer returns a silent partial export on relay errors, and a recall where every query fails raises instead of returning `[]`. See `docs/specs/totalreclaw/read-error-surfacing.md`.
+
 ## [2.5.1] — 2026-09-16
 
 ### Fixed

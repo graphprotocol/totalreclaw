@@ -17,6 +17,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, List, Optional
 
+from ..relay import RelayReadBlocked
+
 if TYPE_CHECKING:
     from totalreclaw.client import TotalReclaw
     from .extraction import ExtractedFact
@@ -129,7 +131,7 @@ async def detect_and_resolve_contradictions(
     now_unix = int(time.time())
     kept: List["ExtractedFact"] = []
 
-    for fact in new_facts:
+    for fact_idx, fact in enumerate(new_facts):
         # Only run contradiction detection on facts with entities
         if not fact.entities or len(fact.entities) == 0:
             kept.append(fact)
@@ -170,6 +172,20 @@ async def detect_and_resolve_contradictions(
                     query_embedding=embedding,
                     top_k=20,
                 )
+            except RelayReadBlocked as exc:
+                # Reads are paused (quota / rate limit) — every remaining
+                # fact's recall would short-circuit identically. Keep this
+                # fact AND every fact still to come (best-effort: unresolved
+                # contradiction detection beats dropping a fact silently),
+                # log once, and stop the loop. #662.
+                log.info(
+                    "Contradiction detection skipped for remaining facts: "
+                    "reads paused (%s)",
+                    exc,
+                )
+                kept.append(fact)
+                kept.extend(new_facts[fact_idx + 1 :])
+                break
             except Exception as exc:
                 log.debug("Recall for contradiction candidates failed: %s", exc)
                 kept.append(fact)
