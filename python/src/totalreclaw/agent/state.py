@@ -17,6 +17,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from ..relay import ReadBlockState
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_EXTRACTION_INTERVAL = 3
@@ -237,6 +239,10 @@ class AgentState:
         # extraction batch will capture. Bounded to last 10 entries.
         self._pending_extract_buffer: list[dict] = []
         self._suppressed_manual_writes: int = 0
+        # #662 — latch for the relay read-pause episode last announced in
+        # full to the user (via auto-recall or a tool payload). None until
+        # the first pause; reset to None once the episode clears.
+        self._read_block_announced_episode: Optional[int] = None
 
         # Apply env var overrides (highest priority)
         self._apply_env_overrides()
@@ -1019,3 +1025,78 @@ class AgentState:
     def clear_quota_warning(self) -> None:
         """Clear the quota warning after it has been shown."""
         self._quota_warning = None
+
+    # ------------------------------------------------------------------
+    # Relay read pause (#662) — see
+    # docs/specs/totalreclaw/read-error-surfacing.md §4.5. Distinct from
+    # the write-quota warning above: this is a *read* denial (quota or
+    # rate limit) surfaced through auto-recall / the recall tool, not the
+    # `on_session_start` billing-cache write warning.
+    # ------------------------------------------------------------------
+    def read_block_notice(self, blk: ReadBlockState) -> str:
+        """Format a notice for read-pause episode *blk*.
+
+        Full text the first time this episode is seen (then latches it as
+        announced); compact after that. ``blk.episode < 0`` (an ephemeral,
+        not-RelayClient-tracked state — see
+        ``totalreclaw.relay.ephemeral_read_block_state``) always gets the
+        full text, since there is no real episode counter to latch against.
+        """
+        from .read_block import format_read_block_notice
+
+        if not hasattr(self, "_read_block_announced_episode"):
+            self._read_block_announced_episode = None
+        if blk.episode < 0:
+            return format_read_block_notice(blk, compact=False)
+        already_announced = self._read_block_announced_episode == blk.episode
+        self._read_block_announced_episode = blk.episode
+        return format_read_block_notice(blk, compact=already_announced)
+
+    def mark_read_block_announced(self, episode: int) -> None:
+        """Latch *episode* as announced without returning notice text.
+
+        Used by tool handlers (e.g. Hermes ``totalreclaw_recall``) that
+        build their own JSON payload via
+        ``totalreclaw.agent.read_block.read_block_tool_payload`` instead of
+        the plain-text notice, but still need to stop
+        ``pending_read_block_notice`` from re-announcing the same episode
+        later in the same turn.
+        """
+        self._read_block_announced_episode = episode
+
+    def pending_read_block_notice(self, client) -> Optional[str]:
+        """A read-pause notice for a pause NOT already surfaced this turn.
+
+        Covers pauses triggered off-turn (background auto-extraction dedup,
+        an import) rather than by the turn's own auto-recall. Returns:
+
+          - the full notice, if ``client.read_block`` is active and its
+            episode hasn't been announced yet;
+          - a one-time "working again" line, if a previously-announced
+            episode has since cleared (a success cleared the pause);
+          - ``None`` otherwise (including: an active episode already
+            announced this turn — e.g. by ``auto_recall`` just above this
+            call in ``pre_llm_call``).
+        """
+        if not hasattr(self, "_read_block_announced_episode"):
+            self._read_block_announced_episode = None
+        if client is None:
+            return None
+        # ``getattr`` + an isinstance check, not a bare ``client.read_block``:
+        # a loosely-mocked test client (bare ``MagicMock()``) auto-vends a
+        # truthy, non-``ReadBlockState`` attribute for anything it wasn't
+        # told about, which must never be misread as an active pause. A
+        # real ``TotalReclaw.read_block`` always returns ``None`` or a real
+        # ``ReadBlockState`` (see ``client.py``).
+        blk = getattr(client, "read_block", None)
+        if isinstance(blk, ReadBlockState):
+            if self._read_block_announced_episode == blk.episode:
+                return None
+            from .read_block import format_read_block_notice
+
+            self._read_block_announced_episode = blk.episode
+            return format_read_block_notice(blk, compact=False)
+        if self._read_block_announced_episode is not None:
+            self._read_block_announced_episode = None
+            return "[totalreclaw] Memory lookups are working again."
+        return None

@@ -107,7 +107,9 @@ RECALL = {
         "call recall FIRST and answer from the results; if it returns nothing, "
         "say so honestly and do NOT fabricate from context. Returns "
         "top-ranked memories via BM25 + semantic similarity + Tier 1 "
-        "source-weighted reranking."
+        "source-weighted reranking. If the result has an error_code, memory "
+        "lookups are paused: relay the error text to the user; never report "
+        "that they have no memories."
     ),
     "parameters": {
         "type": "object",

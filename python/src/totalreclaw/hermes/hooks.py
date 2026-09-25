@@ -858,6 +858,22 @@ def pre_llm_call(state: "PluginState", **kwargs) -> Optional[dict]:
         except Exception as e:
             logger.warning("TotalReclaw pre_llm_call auto-recall failed: %s", e)
 
+    # #662 — surface a read-pause (quota / rate limit) triggered off-turn
+    # (background auto-extraction dedup, an import) rather than by this
+    # turn's own auto-recall above. No-op when the pause was already
+    # announced by auto-recall this turn (same episode) — see
+    # ``AgentState.pending_read_block_notice``.
+    try:
+        _read_block_notice = state.pending_read_block_notice(state.get_client())
+        # isinstance guard (not just truthiness): a loosely-mocked ``state``
+        # in a test (bare ``MagicMock()``) auto-vends a truthy MagicMock
+        # return value here rather than None/str, which would blow up the
+        # ``"\n\n".join(context_parts)`` below.
+        if isinstance(_read_block_notice, str) and _read_block_notice:
+            context_parts.append(_read_block_notice)
+    except Exception as e:  # never let this break the turn
+        logger.debug("read-block notice check failed: %s", e)
+
     if not context_parts:
         return None
 

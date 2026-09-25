@@ -816,6 +816,16 @@ class TotalReclaw:
         """
         return self._relay
 
+    @property
+    def read_block(self):
+        """The active client-wide read-pause episode, or ``None``.
+
+        See :meth:`totalreclaw.relay.RelayClient.read_block` (#662) —
+        surfaced here so adapters (Hermes hooks/tools) don't reach into
+        ``client.relay`` for it.
+        """
+        return self._relay.read_block()
+
     async def ensure_address(self) -> None:
         """Public, best-effort Smart Account resolution.
 

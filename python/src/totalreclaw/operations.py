@@ -36,7 +36,7 @@ from .crypto import (
 from .embedding import get_embedding, get_embedding_dims
 from .lsh import LSHHasher
 from .protobuf import FactPayload, encode_fact_protobuf, encode_tombstone_protobuf
-from .relay import RelayClient
+from .relay import RelayClient, RelayReadBlocked
 from .reranker import RerankerCandidate, RerankerResult, rerank
 from .tuning_loop import maybe_write_feedback_for_pin
 from .userop import build_and_send_userop, build_and_send_userop_batch, MAX_BATCH_SIZE
@@ -825,6 +825,12 @@ async def search_facts(
 
     # Query subgraph via relay
     all_facts: dict[str, dict] = {}
+    # Read-denial surfacing (#662) — a generic outage (5xx/transport/401)
+    # still degrades per-chunk (partial results beat none), but if *every*
+    # query fails we must not silently report "vault empty". Track whether
+    # any query succeeded so we can raise instead of returning [] below.
+    ok_queries = 0
+    last_error: Optional[Exception] = None
 
     for chunk in chunks:
         try:
@@ -865,8 +871,16 @@ async def search_facts(
                     if len(page_entries) < DEFAULT_PAGE_SIZE:
                         break
                     last_id = page_entries[-1]["id"]
+            ok_queries += 1
+        except RelayReadBlocked:
+            # Reads are paused (quota / rate limit) — every further chunk
+            # plus the broadened query would short-circuit identically
+            # (zero HTTP, same error). Stop the fan-out at the first denial
+            # instead of re-raising N more times.
+            raise
         except Exception as e:
             logger.warning("Trapdoor batch query failed (owner=%s): %s", owner, e)
+            last_error = e
             continue
 
     # Always run broadened search and merge — ensures vocabulary mismatches
@@ -881,10 +895,19 @@ async def search_facts(
         for fact in facts_list:
             if fact and fact.get("isActive", True) and fact["id"] not in all_facts:
                 all_facts[fact["id"]] = fact
+        ok_queries += 1
+    except RelayReadBlocked:
+        raise
     except Exception as e:
         logger.warning("Broadened search failed (owner=%s): %s", owner, e)
+        last_error = e
 
     if not all_facts:
+        # A total outage (every query failed generically — 5xx, transport,
+        # 401) must not read as "vault empty". Only return [] when at least
+        # one query actually succeeded and simply found nothing.
+        if ok_queries == 0 and last_error is not None:
+            raise last_error
         return []
 
     # Decrypt candidates and build reranker input
@@ -1737,68 +1760,71 @@ async def export_facts(
     skip = 0
 
     while True:
-        try:
-            data = await relay.query_subgraph(
-                EXPORT_QUERY,
-                {"owner": owner, "first": page_size, "skip": skip},
-            )
-            facts = data.get("data", {}).get("facts", [])
-            if not facts:
-                break
-
-            for fact in facts:
-                try:
-                    encrypted_hex = fact.get("encryptedBlob", "")
-                    if encrypted_hex.startswith("0x"):
-                        encrypted_hex = encrypted_hex[2:]
-                    encrypted_b64 = base64.b64encode(
-                        bytes.fromhex(encrypted_hex)
-                    ).decode("ascii")
-                    decrypted_blob = decrypt(encrypted_b64, keys.encryption_key)
-                    if is_digest_blob(decrypted_blob):
-                        continue
-                    doc = read_claim_from_blob(decrypted_blob)
-                    text = doc["text"]
-
-                    # Prefer createdAt (per-fact client timestamp) over
-                    # timestamp (block time). Both are BigInt strings from
-                    # the subgraph representing Unix seconds.
-                    raw_ts = fact.get("createdAt") or fact.get("timestamp") or ""
-                    formatted_ts = ""
-                    if raw_ts:
-                        try:
-                            ts_int = int(str(raw_ts))
-                            formatted_ts = datetime.fromtimestamp(
-                                ts_int, tz=timezone.utc
-                            ).strftime("%Y-%m-%d %H:%M:%S UTC")
-                        except (ValueError, OSError):
-                            formatted_ts = str(raw_ts)
-
-                    entry = {
-                        "id": fact["id"],
-                        "text": text,
-                        "timestamp": formatted_ts,
-                        "importance": float(fact.get("decayScore", "0.5")),
-                        "type": doc.get("category", "fact"),
-                    }
-                    # #425 — export carries provenance: source +
-                    # import_source + session_id (tagged on write since
-                    # #356/#363 but previously dropped here).
-                    # #317 — agent_name rides the same provenance passthrough.
-                    doc_meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
-                    for key in ("source", "import_source", "session_id", "agent_name"):
-                        val = doc_meta.get(key)
-                        if isinstance(val, str) and val:
-                            entry[key] = val
-                    results.append(entry)
-                except Exception:
-                    continue
-
-            if len(facts) < page_size:
-                break
-            skip += page_size
-        except Exception:
+        # #662 — no outer ``except Exception: break`` here. It used to turn
+        # *any* failure (including a read-quota/rate-limit denial) into a
+        # silent partial or empty export; a relay failure must now propagate
+        # (RelayReadBlocked or otherwise) rather than pass as "done
+        # exporting". Per-fact decrypt failures still degrade individually
+        # below — one bad blob shouldn't fail the whole export.
+        data = await relay.query_subgraph(
+            EXPORT_QUERY,
+            {"owner": owner, "first": page_size, "skip": skip},
+        )
+        facts = data.get("data", {}).get("facts", [])
+        if not facts:
             break
+
+        for fact in facts:
+            try:
+                encrypted_hex = fact.get("encryptedBlob", "")
+                if encrypted_hex.startswith("0x"):
+                    encrypted_hex = encrypted_hex[2:]
+                encrypted_b64 = base64.b64encode(
+                    bytes.fromhex(encrypted_hex)
+                ).decode("ascii")
+                decrypted_blob = decrypt(encrypted_b64, keys.encryption_key)
+                if is_digest_blob(decrypted_blob):
+                    continue
+                doc = read_claim_from_blob(decrypted_blob)
+                text = doc["text"]
+
+                # Prefer createdAt (per-fact client timestamp) over
+                # timestamp (block time). Both are BigInt strings from
+                # the subgraph representing Unix seconds.
+                raw_ts = fact.get("createdAt") or fact.get("timestamp") or ""
+                formatted_ts = ""
+                if raw_ts:
+                    try:
+                        ts_int = int(str(raw_ts))
+                        formatted_ts = datetime.fromtimestamp(
+                            ts_int, tz=timezone.utc
+                        ).strftime("%Y-%m-%d %H:%M:%S UTC")
+                    except (ValueError, OSError):
+                        formatted_ts = str(raw_ts)
+
+                entry = {
+                    "id": fact["id"],
+                    "text": text,
+                    "timestamp": formatted_ts,
+                    "importance": float(fact.get("decayScore", "0.5")),
+                    "type": doc.get("category", "fact"),
+                }
+                # #425 — export carries provenance: source +
+                # import_source + session_id (tagged on write since
+                # #356/#363 but previously dropped here).
+                # #317 — agent_name rides the same provenance passthrough.
+                doc_meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+                for key in ("source", "import_source", "session_id", "agent_name"):
+                    val = doc_meta.get(key)
+                    if isinstance(val, str) and val:
+                        entry[key] = val
+                results.append(entry)
+            except Exception:
+                continue
+
+        if len(facts) < page_size:
+            break
+        skip += page_size
 
     return results
 
@@ -1837,6 +1863,12 @@ async def find_existing_content_fps(
             for f in data.get("data", {}).get("facts", [])
             if f.get("contentFp")
         }
+    except RelayReadBlocked as e:
+        # Reads are paused (quota / rate limit) — this is expected and
+        # frequent while blocked (every store attempts pre-write dedup), so
+        # log at DEBUG rather than WARNING to avoid errors.log spam.
+        logger.debug("Pre-write dedup query skipped (reads paused): %s", e)
+        return set()
     except Exception as e:
         logger.warning("Pre-write dedup query failed (fail-open): %s", e)
         return set()

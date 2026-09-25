@@ -199,6 +199,22 @@ status; MCP and the parked clients inherit this frozen contract when they implem
 | `GET /v1/billing/status?wallet_address=<addr>` | GET | Bearer | Billing status + feature flags |
 | `POST /v1/billing/checkout` | POST | Bearer | Create Stripe checkout |
 
+### Relay Read-Error Contract (#662)
+
+Every client reading `POST /v1/subgraph` must classify a non-2xx response the same way, so a read denial (monthly quota or rate limit) is surfaced to the user instead of silently read as "vault empty". Full design: `docs/specs/totalreclaw/read-error-surfacing.md`. Python/Hermes is the reference implementation (`python/src/totalreclaw/relay.py`); MCP, the OpenClaw plugin, and ZeroClaw inherit this contract when they un-park (see CLAUDE.md Known Gaps).
+
+| Case | Status | Body (relevant keys) | Headers |
+|---|---|---|---|
+| Legacy read quota | 403 | `{"error":"quota_exceeded","message":"...","upgrade_url":"..."}` | none |
+| New read quota (`READ_QUOTA_MODE=enforce`) | 429 | `{"error":"read_quota_exceeded","error_code":"read_quota_exceeded","message","tier","limit","used","resets_at","retry_after","upgrade_url"|null}` | `Retry-After: <s>` |
+| Rate limit | 429 | `{"success":false,"error":"...","retry_after":N}`, plus `error_code:"rate_limited"` | `Retry-After` |
+
+**Matching rule:** compare `error_code` first, then `error`, by **string equality only** — never substring (`read_quota_exceeded` contains the substring `quota_exceeded`). First match wins: (1) `code == "read_quota_exceeded"` at any status; (2) `status == 403 and code == "quota_exceeded"`; (3) `status == 429`; (4) otherwise a plain (non-blocking) read error. A 403 with a non-JSON or unrecognized body is NOT quota.
+
+**Pause semantics:** once a client sees a blocking denial, it must short-circuit every further read (zero HTTP) for a bounded window instead of re-raising once per call site — a single recall can fan out into a dozen-plus subgraph queries (trapdoor chunks, pagination, broadened search, dedup, contradiction detection), and re-hitting an already-denied relay on every one just adds load without new information. Re-probe periodically (default 15 min) rather than pausing until the stated reset time — a legacy 403 can be a transient DB blip, and a raised cap or upgrade should self-heal without a restart. Writes are never gated by this pause; pre-write dedup and contradiction detection fail open while paused.
+
+The write-path 403 `quota_exceeded` on `/v1/bundler` is a **different, unrelated** contract (`submit_userop` keeps `raise_for_status()` and must not change).
+
 ### Session Debrief
 
 | Parameter | Value | Notes |
