@@ -111,11 +111,15 @@ def read_block_tool_payload(
     tool_error_code = "read_quota_exceeded" if is_quota else "rate_limited"
 
     if is_quota:
+        # ``_reset_phrase`` already returns a full clause including its own
+        # "(UTC)" (e.g. "the 1st of next month (UTC)") — do NOT wrap it in
+        # another pair of parens, that produced a double-nested
+        # "(the 1st of next month (UTC))".
         reset_phrase = _reset_phrase(blk) if blk is not None else "the monthly reset"
         error_text = (
             "Memory lookups are paused: this account has used its monthly "
             "memory-read allowance. Memories are safe and new ones are "
-            f"still being saved; lookups resume automatically ({reset_phrase})."
+            f"still being saved; lookups resume automatically — {reset_phrase}."
         )
     else:
         minutes = _remaining_minutes(blk) if blk is not None else None

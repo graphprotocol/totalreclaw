@@ -239,10 +239,13 @@ class AgentState:
         # extraction batch will capture. Bounded to last 10 entries.
         self._pending_extract_buffer: list[dict] = []
         self._suppressed_manual_writes: int = 0
-        # #662 — latch for the relay read-pause episode last announced in
-        # full to the user (via auto-recall or a tool payload). None until
-        # the first pause; reset to None once the episode clears.
-        self._read_block_announced_episode: Optional[int] = None
+        # #662 — latch for the relay read-pause (episode, kind) last
+        # announced in full to the user (via auto-recall or a tool
+        # payload). None until the first pause; reset to None only when a
+        # real success clears the underlying RelayClient record (never
+        # merely because the re-probe deadline passed — see
+        # ``pending_read_block_notice``).
+        self._read_block_announced: Optional[tuple] = None
 
         # Apply env var overrides (highest priority)
         self._apply_env_overrides()
@@ -1033,27 +1036,41 @@ class AgentState:
     # rate limit) surfaced through auto-recall / the recall tool, not the
     # `on_session_start` billing-cache write warning.
     # ------------------------------------------------------------------
+    def _read_block_announced_marker(self) -> Optional[tuple]:
+        if not hasattr(self, "_read_block_announced"):
+            self._read_block_announced = None
+        return self._read_block_announced
+
     def read_block_notice(self, blk: ReadBlockState) -> str:
         """Format a notice for read-pause episode *blk*.
 
-        Full text the first time this episode is seen (then latches it as
-        announced); compact after that. ``blk.episode < 0`` (an ephemeral,
+        Full text the first time this ``(episode, kind)`` pair is seen
+        (then latches it as announced); compact after that. Tracking
+        ``kind`` alongside ``episode`` (not just the episode id) means a
+        ``rate_limited`` -> ``read_quota`` transition WITHIN one episode
+        (``RelayClient._set_read_block`` reuses the episode id on any
+        re-block that isn't cleared by a success — a rate-limit denial
+        followed by a quota denial before either clears keeps the same
+        episode) still gets a fresh full announcement, so the user sees the
+        quota wording (and upgrade link) rather than a stale compact line
+        about the earlier rate limit. ``blk.episode < 0`` (an ephemeral,
         not-RelayClient-tracked state — see
         ``totalreclaw.relay.ephemeral_read_block_state``) always gets the
         full text, since there is no real episode counter to latch against.
         """
         from .read_block import format_read_block_notice
 
-        if not hasattr(self, "_read_block_announced_episode"):
-            self._read_block_announced_episode = None
+        self._read_block_announced_marker()
         if blk.episode < 0:
             return format_read_block_notice(blk, compact=False)
-        already_announced = self._read_block_announced_episode == blk.episode
-        self._read_block_announced_episode = blk.episode
+        marker = (blk.episode, blk.error.kind)
+        already_announced = self._read_block_announced == marker
+        self._read_block_announced = marker
         return format_read_block_notice(blk, compact=already_announced)
 
-    def mark_read_block_announced(self, episode: int) -> None:
-        """Latch *episode* as announced without returning notice text.
+    def mark_read_block_announced(self, episode: int, kind: Optional[str] = None) -> None:
+        """Latch ``(episode, kind)`` as announced without returning notice
+        text.
 
         Used by tool handlers (e.g. Hermes ``totalreclaw_recall``) that
         build their own JSON payload via
@@ -1062,7 +1079,7 @@ class AgentState:
         ``pending_read_block_notice`` from re-announcing the same episode
         later in the same turn.
         """
-        self._read_block_announced_episode = episode
+        self._read_block_announced = (episode, kind)
 
     def pending_read_block_notice(self, client) -> Optional[str]:
         """A read-pause notice for a pause NOT already surfaced this turn.
@@ -1070,33 +1087,63 @@ class AgentState:
         Covers pauses triggered off-turn (background auto-extraction dedup,
         an import) rather than by the turn's own auto-recall. Returns:
 
-          - the full notice, if ``client.read_block`` is active and its
-            episode hasn't been announced yet;
+          - the full notice, if there's a read-pause record not yet
+            announced (by ``(episode, kind)``) — whether or not its
+            re-probe deadline has passed (see below);
           - a one-time "working again" line, if a previously-announced
-            episode has since cleared (a success cleared the pause);
+            episode's RECORD has since been cleared by an actual success
+            (never merely by its deadline passing);
           - ``None`` otherwise (including: an active episode already
             announced this turn — e.g. by ``auto_recall`` just above this
-            call in ``pre_llm_call``).
+            call in ``pre_llm_call``; or a record exists past its deadline
+            but we have no live ``blk`` to format from yet).
+
+        Deliberately keys the "still an unresolved episode" check off
+        ``client.read_block_episode`` (the record, kept until a real
+        success clears it), NOT ``client.read_block`` (the active view,
+        which goes ``None`` on every re-probe-deadline expiry regardless of
+        whether the NEXT probe re-blocks). Using the latter here produced a
+        false-recovery loop: it announced "working again" — and reset the
+        latch — every ~15 minutes even while genuinely still denied,
+        because the deadline lapsing looks identical to a clear until the
+        next probe's outcome is known.
         """
-        if not hasattr(self, "_read_block_announced_episode"):
-            self._read_block_announced_episode = None
+        self._read_block_announced_marker()
         if client is None:
             return None
-        # ``getattr`` + an isinstance check, not a bare ``client.read_block``:
-        # a loosely-mocked test client (bare ``MagicMock()``) auto-vends a
-        # truthy, non-``ReadBlockState`` attribute for anything it wasn't
-        # told about, which must never be misread as an active pause. A
-        # real ``TotalReclaw.read_block`` always returns ``None`` or a real
-        # ``ReadBlockState`` (see ``client.py``).
-        blk = getattr(client, "read_block", None)
-        if isinstance(blk, ReadBlockState):
-            if self._read_block_announced_episode == blk.episode:
+        # ``getattr`` + an isinstance(int) check, not a bare
+        # ``client.read_block_episode``: a loosely-mocked test client (bare
+        # ``MagicMock()``) auto-vends a truthy, non-int attribute for
+        # anything it wasn't told about, which must never be misread as a
+        # real episode id. A real ``TotalReclaw.read_block_episode`` always
+        # returns ``None`` or a real ``int``.
+        episode = getattr(client, "read_block_episode", None)
+        if isinstance(episode, bool) or not isinstance(episode, int):
+            episode = None
+
+        if episode is not None:
+            # A record is on file — whether or not its deadline has passed,
+            # this is NOT a recovery. Never latch "working again" here.
+            blk = getattr(client, "read_block", None)
+            if not isinstance(blk, ReadBlockState):
+                # Deadline already passed (or a loosely-mocked client) —
+                # no live state to format a fresh announcement from. Leave
+                # the latch untouched (don't un-announce something we
+                # already told the user, and don't fabricate a "working
+                # again" the record contradicts).
+                return None
+            marker = (episode, blk.error.kind)
+            if self._read_block_announced == marker:
                 return None
             from .read_block import format_read_block_notice
 
-            self._read_block_announced_episode = blk.episode
+            self._read_block_announced = marker
             return format_read_block_notice(blk, compact=False)
-        if self._read_block_announced_episode is not None:
-            self._read_block_announced_episode = None
+
+        # No record at all -> never blocked, or a real success cleared it
+        # (``RelayClient._clear_read_block``). Only the latter case has a
+        # previously-set latch to resolve into a one-time recovery line.
+        if self._read_block_announced is not None:
+            self._read_block_announced = None
             return "[totalreclaw] Memory lookups are working again."
         return None

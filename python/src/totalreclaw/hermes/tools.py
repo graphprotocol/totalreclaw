@@ -42,14 +42,23 @@ def _real_read_block(client) -> Optional[ReadBlockState]:
 def _read_block_response(state: "PluginState", client, err: RelayReadBlocked) -> str:
     """Shared ``except RelayReadBlocked`` handler for the tools below (#662).
 
-    Latches the episode as announced (so ``pending_read_block_notice``
-    doesn't re-announce it in ``pre_llm_call`` later this turn) and returns
-    the tool-facing JSON payload — deliberately shaped so it can never be
-    misread as "0 results" (see ``read_block_tool_payload``).
+    Latches the ``(episode, kind)`` as announced (so
+    ``pending_read_block_notice`` doesn't re-announce it in ``pre_llm_call``
+    later this turn) and returns the tool-facing JSON payload —
+    deliberately shaped so it can never be misread as "0 results" (see
+    ``read_block_tool_payload``).
+
+    When ``client.read_block`` is ``None`` at handling time (the real
+    ``RelayClient`` should have just set it synchronously in this same
+    process, so this is a corner/test-only case), there is no real episode
+    to latch — do NOT invent one (e.g. a ``-1`` sentinel), since that would
+    prime ``pending_read_block_notice``'s "a previously-announced episode
+    was cleared" branch and fire a spurious "working again" the next time
+    it's called with no episode on record.
     """
     blk = _real_read_block(client)
-    episode = blk.episode if blk is not None else -1
-    state.mark_read_block_announced(episode)
+    if blk is not None:
+        state.mark_read_block_announced(blk.episode, blk.error.kind)
     return json.dumps(read_block_tool_payload(err, blk))
 
 

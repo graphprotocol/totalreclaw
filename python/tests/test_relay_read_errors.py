@@ -126,6 +126,40 @@ class TestClassifySubgraphError:
         assert type(err) is RelayReadError
         assert not isinstance(err, RelayReadBlocked)
 
+    def test_wrong_typed_body_fields_are_ignored_not_propagated(self):
+        # Nit 6: a relay running a different contract version (or a
+        # compromised/buggy upstream) sending the wrong JSON type for
+        # limit/used/tier/upgrade_url must not leak that type onto the
+        # typed error's attributes — degrade to None instead of surprising
+        # a caller that does ``isinstance(err.limit, int)`` etc.
+        resp = _resp(
+            429,
+            {
+                "error_code": "read_quota_exceeded",
+                "limit": "not-a-number",
+                "used": [1, 2, 3],
+                "tier": 42,
+                "upgrade_url": {"nested": "object"},
+            },
+        )
+        err = _classify_subgraph_error(resp)
+        assert isinstance(err, RelayReadQuotaExceeded)
+        assert err.limit is None
+        assert err.used is None
+        assert err.tier is None
+        assert err.upgrade_url is None
+
+    def test_bool_is_not_accepted_as_limit_or_used(self):
+        # bool is a subclass of int in Python — must not slip through.
+        resp = _resp(
+            429,
+            {"error_code": "read_quota_exceeded", "limit": True, "used": False},
+        )
+        err = _classify_subgraph_error(resp)
+        assert isinstance(err, RelayReadQuotaExceeded)
+        assert err.limit is None
+        assert err.used is None
+
 
 class TestRetryAfterSeconds:
     def test_negative_body_value_is_ignored(self):
@@ -173,6 +207,38 @@ class TestReadPauseLength:
     def test_rate_limit_ceiling_3600(self):
         err = RelayRateLimited(_resp(429, {}), retry_after_s=99999)
         assert _pause_seconds(err) == 3600.0
+
+    def test_quota_reprobe_env_ceiling_huge_value_clamped(self):
+        # S2: a pathological override must not overflow the datetime
+        # arithmetic in ``_set_read_block`` (``now_utc + timedelta(seconds=
+        # pause_s)``) — clamp to a sane ceiling instead of raising.
+        err = RelayReadQuotaExceeded(_resp(403, {"error": "quota_exceeded"}), legacy=True)
+        with patch.dict("os.environ", {"TOTALRECLAW_READ_PAUSE_REPROBE_SECONDS": "1e12"}):
+            assert _pause_seconds(err) == 86400.0
+
+    def test_quota_reprobe_env_infinite_falls_back_to_default(self):
+        err = RelayReadQuotaExceeded(_resp(403, {"error": "quota_exceeded"}), legacy=True)
+        with patch.dict("os.environ", {"TOTALRECLAW_READ_PAUSE_REPROBE_SECONDS": "inf"}):
+            assert _pause_seconds(err) == 900.0
+        with patch.dict("os.environ", {"TOTALRECLAW_READ_PAUSE_REPROBE_SECONDS": "nan"}):
+            assert _pause_seconds(err) == 900.0
+
+    @pytest.mark.asyncio
+    async def test_huge_reprobe_override_does_not_raise_on_set_read_block(self):
+        # The actual regression: relay.py:621 (``now_utc + timedelta(...)``)
+        # used to raise OverflowError instead of the typed error when the
+        # env override was pathological.
+        count = {"n": 0}
+
+        def handler(request):
+            count["n"] += 1
+            return httpx.Response(403, json={"error": "quota_exceeded"})
+
+        rc = _relay_with_handler(handler)
+        with patch.dict("os.environ", {"TOTALRECLAW_READ_PAUSE_REPROBE_SECONDS": "1e12"}):
+            with pytest.raises(RelayReadQuotaExceeded):
+                await rc.query_subgraph("{}", {})
+        assert rc.read_block() is not None
 
 
 class TestClientWidePause:

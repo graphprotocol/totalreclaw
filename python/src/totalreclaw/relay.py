@@ -30,6 +30,7 @@ loop-bound client. Old clients from orphaned loops are dropped.
 from __future__ import annotations
 import asyncio
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -265,6 +266,28 @@ def _retry_after_seconds(resp: httpx.Response, body: Optional[dict]) -> Optional
         return None
 
 
+def _body_str(body: Optional[dict], key: str) -> Optional[str]:
+    """*body[key]* if it's a ``str``, else ``None``. A relay running an
+    older/newer contract (or a compromised upstream) can send a field of
+    the wrong type — never let that propagate past classification as a
+    surprise type on a typed-error attribute."""
+    if not body:
+        return None
+    val = body.get(key)
+    return val if isinstance(val, str) else None
+
+
+def _body_int(body: Optional[dict], key: str) -> Optional[int]:
+    """*body[key]* if it's an ``int`` (excluding ``bool``, a ``bool`` subclass
+    of ``int``), else ``None``."""
+    if not body:
+        return None
+    val = body.get(key)
+    if isinstance(val, bool):
+        return None
+    return val if isinstance(val, int) else None
+
+
 def _classify_subgraph_error(resp: httpx.Response) -> RelayReadError:
     """Classify a non-2xx ``/v1/subgraph`` response.
 
@@ -305,10 +328,10 @@ def _classify_subgraph_error(resp: httpx.Response) -> RelayReadError:
             error_code=code,
             relay_message=message,
             retry_after_s=retry_after_s,
-            upgrade_url=(body.get("upgrade_url") if body else None),
-            tier=(body.get("tier") if body else None),
-            limit=(body.get("limit") if body else None),
-            used=(body.get("used") if body else None),
+            upgrade_url=_body_str(body, "upgrade_url"),
+            tier=_body_str(body, "tier"),
+            limit=_body_int(body, "limit"),
+            used=_body_int(body, "used"),
             resets_at=_parse_resets_at(body.get("resets_at")) if body else None,
             legacy=False,
         )
@@ -318,24 +341,27 @@ def _classify_subgraph_error(resp: httpx.Response) -> RelayReadError:
             error_code=code,
             relay_message=message,
             retry_after_s=retry_after_s,
-            upgrade_url=(body.get("upgrade_url") if body else None),
+            upgrade_url=_body_str(body, "upgrade_url"),
             legacy=True,
         )
     if status == 429:
-        limit_scope = body.get("limit_scope") if body else None
         return RelayRateLimited(
             resp,
             error_code=code,
             relay_message=message,
             retry_after_s=retry_after_s,
-            limit_scope=(limit_scope if isinstance(limit_scope, str) else None),
+            limit_scope=_body_str(body, "limit_scope"),
         )
     return RelayReadError(resp, error_code=code, relay_message=message)
 
 
-# Floor + default for the read-pause re-probe cadence. The floor exists so a
-# test/E2E env override can shorten the window without allowing a hot loop.
+# Floor + ceiling + default for the read-pause re-probe cadence. The floor
+# exists so a test/E2E env override can shorten the window without allowing
+# a hot loop. The ceiling exists so a pathological override (``1e12``,
+# ``inf``) can't make ``_set_read_block`` overflow ``datetime + timedelta``
+# arithmetic (``datetime.max`` is year 9999) — clamp instead of crash.
 _REPROBE_FLOOR_S = 5.0
+_REPROBE_CEILING_S = 86400.0  # 24h
 _REPROBE_DEFAULT_S = 900.0
 
 
@@ -343,9 +369,11 @@ def _reprobe_seconds() -> float:
     raw = os.environ.get("TOTALRECLAW_READ_PAUSE_REPROBE_SECONDS")
     if raw:
         try:
-            return max(_REPROBE_FLOOR_S, float(raw))
+            val = float(raw)
         except ValueError:
-            pass
+            return _REPROBE_DEFAULT_S
+        if math.isfinite(val):
+            return _clamp(val, _REPROBE_FLOOR_S, _REPROBE_CEILING_S)
     return _REPROBE_DEFAULT_S
 
 
@@ -595,8 +623,26 @@ class RelayClient:
     # ``RelayClient`` lives as long as the process's configured client —
     # shared by the sync-loop hooks and the Hermes async tools — making it
     # the right place for state that must be visible from every call site
-    # that shares one relay connection. Plain attribute writes are enough;
-    # no lock is needed (single-threaded asyncio).
+    # that shares one relay connection.
+    #
+    # Plain attribute writes, no lock — NOT because this is single-threaded
+    # (it isn't: Hermes sync hooks run on the ``loop_runner`` background
+    # thread's event loop while async tools run on the host's own loop, so
+    # ``self._read_block`` genuinely is read/written from more than one
+    # thread). No lock is needed because every write is a single Python
+    # attribute assignment (atomic under the GIL) of a fully-formed,
+    # immutable-in-practice ``ReadBlockState``, and every race is benign:
+    #   * A 2xx response on one thread clearing a block (``_clear_read_block``)
+    #     that a denial on another thread just set: worst case is one extra
+    #     HTTP call gets through during the overlap instead of being
+    #     short-circuited — never a crash, never a stuck state.
+    #   * Two threads both finding the deadline passed and both probing
+    #     concurrently (``read_block()`` returns ``None`` for both): worst
+    #     case is one redundant HTTP call, and whichever response lands last
+    #     wins (either both clear it, or both reuse/extend the same episode
+    #     via ``_set_read_block``'s ``prev is not None`` branch).
+    # No partial/torn read is possible because nothing here does read-modify-
+    # write across two attribute accesses.
     # ------------------------------------------------------------------
     def read_block(self) -> Optional[ReadBlockState]:
         """The active read-pause episode, or ``None`` once its deadline has
@@ -605,7 +651,10 @@ class RelayClient:
         The underlying episode record is *kept* past the deadline (not
         cleared) so a re-probe that blocks again reuses the same episode id
         — only a successful response (``_clear_read_block``) starts a fresh
-        episode. See ``_set_read_block``.
+        episode. See ``_set_read_block``. Use :meth:`read_block_episode` to
+        observe that underlying record independently of the deadline (e.g.
+        to distinguish "the pause expired but we haven't yet probed
+        successfully" from "a success genuinely cleared it").
         """
         blk = self._read_block
         if blk is None:
@@ -613,6 +662,24 @@ class RelayClient:
         if time.monotonic() >= blk.paused_until:
             return None
         return blk
+
+    def read_block_episode(self) -> Optional[int]:
+        """The episode id of the current read-pause record, or ``None``.
+
+        Unlike :meth:`read_block`, this does NOT go ``None`` just because
+        the pause deadline has passed — it only goes ``None`` when there has
+        never been a block, or the last one was cleared by an actual
+        successful response (``_clear_read_block``). This is the signal a
+        caller must use to tell "still the same unresolved episode, just
+        past its re-probe deadline" apart from "recovered" — using
+        :meth:`read_block` for that check produces a **false-recovery
+        loop**: it goes ``None`` on every deadline expiry even when the very
+        next probe re-blocks, so a naive "``read_block`` is ``None`` -> tell
+        the user it's working again" falsely announces recovery every
+        re-probe window.
+        """
+        blk = self._read_block
+        return blk.episode if blk is not None else None
 
     def _set_read_block(self, err: RelayReadBlocked) -> None:
         prev = self._read_block

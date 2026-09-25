@@ -68,6 +68,7 @@ class TestAutoRecallNotice:
         client = state.get_client()
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.recall = AsyncMock(side_effect=_quota_err())
 
         notice = auto_recall("what do I like?", state)
@@ -81,6 +82,7 @@ class TestAutoRecallNotice:
         client = state.get_client()
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.recall = AsyncMock(side_effect=_quota_err())
 
         first = auto_recall("q1", state)
@@ -94,6 +96,7 @@ class TestAutoRecallNotice:
         client = state.get_client()
         blk1 = _mk_block(_quota_err(), episode=1)
         client.read_block = blk1
+        client.read_block_episode = blk1.episode
         client.recall = AsyncMock(side_effect=_quota_err())
         first = auto_recall("q1", state)
         assert "used its monthly memory-read allowance" in first
@@ -101,6 +104,7 @@ class TestAutoRecallNotice:
         # Episode cleared + a NEW episode (2) begins.
         blk2 = _mk_block(_quota_err(), episode=2)
         client.read_block = blk2
+        client.read_block_episode = blk2.episode
         client.recall = AsyncMock(side_effect=_quota_err())
         third = auto_recall("q3", state)
         assert "used its monthly memory-read allowance" in third
@@ -111,6 +115,7 @@ class TestAutoRecallNotice:
         client = state.get_client()
         blk = _mk_block(_rate_err(retry_after_s=180), episode=1, pause_s=180)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.recall = AsyncMock(side_effect=_rate_err(retry_after_s=180))
 
         notice = auto_recall("q", state)
@@ -123,6 +128,7 @@ class TestAutoRecallNotice:
         client = state.get_client()
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.recall = AsyncMock(side_effect=_quota_err())
 
         notice = await auto_recall_async("q", state)
@@ -136,6 +142,7 @@ class TestPreLlmCallOffTurnNotice:
         client = state.get_client()
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.recall = AsyncMock(side_effect=_quota_err())
 
         result = hooks.pre_llm_call(state, user_message="hello there", is_first_turn=True)
@@ -150,6 +157,7 @@ class TestPreLlmCallOffTurnNotice:
         # auto-recall call happens this turn (not first turn).
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.recall = AsyncMock(return_value=[])
 
         result1 = hooks.pre_llm_call(state, user_message="hello", is_first_turn=False)
@@ -162,12 +170,131 @@ class TestPreLlmCallOffTurnNotice:
 
         # Cleared — one "working again" line, then nothing.
         client.read_block = None
+        client.read_block_episode = None
         result3 = hooks.pre_llm_call(state, user_message="still there?", is_first_turn=False)
         assert result3 is not None
         assert "working again" in result3["context"]
 
         result4 = hooks.pre_llm_call(state, user_message="ok", is_first_turn=False)
         assert result4 is None or "working again" not in (result4 or {}).get("context", "")
+
+
+class _RealClientProxy:
+    """Exposes exactly the ``.read_block`` / ``.read_block_episode``
+    surface ``TotalReclaw`` does (see ``client.py``), backed by a REAL
+    ``RelayClient`` instead of a hand-rolled ``ReadBlockState`` — so the
+    false-recovery regression below exercises the actual state machine
+    (``_set_read_block`` / ``_clear_read_block`` / ``read_block()`` /
+    ``read_block_episode()``), not a mock standing in for it.
+    """
+
+    def __init__(self, relay):
+        self._relay = relay
+
+    @property
+    def read_block(self):
+        return self._relay.read_block()
+
+    @property
+    def read_block_episode(self):
+        return self._relay.read_block_episode()
+
+
+class TestPendingNoticeFalseRecoveryRegression:
+    """Blocker fix (Opus review round on PR #664): ``client.read_block``
+    goes ``None`` BOTH when a success clears the pause AND when the
+    re-probe deadline merely passes with no probe attempted yet.
+    ``pending_read_block_notice`` must only ever say "working again" for
+    the former — keying off ``read_block_episode`` (kept until a real
+    ``_clear_read_block``), not ``read_block`` (the deadline-gated view).
+    """
+
+    def test_deadline_expiry_alone_is_not_reported_as_recovery(self):
+        import time as _time
+
+        from totalreclaw.relay import RelayClient
+
+        relay = RelayClient(relay_url="https://api-staging.totalreclaw.xyz")
+        client = _RealClientProxy(relay)
+        state = _mk_state(configured=False)  # no client needed on state itself
+
+        err1 = _quota_err()
+        relay._set_read_block(err1)
+        episode = relay.read_block_episode()
+        assert episode is not None
+
+        # 1) First call: full announcement, latches (episode, kind).
+        first = state.pending_read_block_notice(client)
+        assert first is not None
+        assert "paused" in first
+
+        # 2) Same turn/episode again, deadline not yet passed: nothing new.
+        again = state.pending_read_block_notice(client)
+        assert again is None
+
+        # 3) Advance monotonic PAST the deadline. NO probe has happened —
+        #    read_block() now goes None, but read_block_episode() must
+        #    still report the same episode (the record is only cleared by
+        #    an actual success). This must NOT be reported as "working
+        #    again", and must NOT reset the latch.
+        future = _time.monotonic() + 100000
+        with patch("totalreclaw.relay.time.monotonic", return_value=future):
+            assert relay.read_block() is None  # sanity: the buggy signal
+            assert relay.read_block_episode() == episode  # the record persists
+
+            after_deadline = state.pending_read_block_notice(client)
+            assert after_deadline is None, (
+                f"deadline expiry alone must not be reported as recovery, got: {after_deadline!r}"
+            )
+
+            # 4) A probe re-blocks under the SAME episode (still denied).
+            #    No new full announcement — already announced.
+            err2 = _quota_err()
+            relay._set_read_block(err2)
+            assert relay.read_block_episode() == episode  # same episode, reused
+
+            reblocked = state.pending_read_block_notice(client)
+            assert reblocked is None, (
+                f"a re-block under the same (episode, kind) must not re-announce, got: {reblocked!r}"
+            )
+
+        # 5) NOW a real success clears it (the actual clear path — not a
+        #    hand-set ``client.read_block = None``).
+        relay._clear_read_block()
+        assert relay.read_block_episode() is None
+
+        recovered = state.pending_read_block_notice(client)
+        assert recovered == "[totalreclaw] Memory lookups are working again."
+
+        # 6) Exactly once — calling again after the recovery line reports
+        #    nothing further.
+        again_after_recovery = state.pending_read_block_notice(client)
+        assert again_after_recovery is None
+
+    def test_kind_change_within_episode_reannounces_in_full(self):
+        """Nit 3: a rate_limited -> read_quota transition within one
+        episode (the relay re-blocks with a different denial kind before
+        either clears) must re-announce in full, not stay compact/suppressed
+        — the user needs the quota wording + upgrade link, not stale
+        rate-limit text."""
+        from totalreclaw.relay import RelayClient
+
+        relay = RelayClient(relay_url="https://api-staging.totalreclaw.xyz")
+        client = _RealClientProxy(relay)
+        state = _mk_state(configured=False)
+
+        relay._set_read_block(_rate_err())
+        first = state.pending_read_block_notice(client)
+        assert first is not None
+        assert "too many requests" in first
+
+        # Same episode (never cleared), but the kind flips to quota.
+        relay._set_read_block(_quota_err())
+        assert relay.read_block_episode() == 1  # confirms same episode reused
+
+        second = state.pending_read_block_notice(client)
+        assert second is not None, "a kind change within the episode must re-announce in full"
+        assert "monthly memory-read allowance" in second
 
 
 class TestMemoryProviderPrefetch:
@@ -189,6 +316,7 @@ class TestHermesToolPayloadShape:
         client = state.get_client()
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.recall = AsyncMock(side_effect=_quota_err())
 
         raw = await tools.recall({"query": "hi"}, state)
@@ -204,6 +332,7 @@ class TestHermesToolPayloadShape:
         client = state.get_client()
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.export_all = AsyncMock(side_effect=_quota_err())
 
         raw = await tools.export_all({}, state)
@@ -218,6 +347,7 @@ class TestHermesToolPayloadShape:
         client = state.get_client()
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.pin_fact = AsyncMock(side_effect=_quota_err())
 
         raw = await tools.pin({"fact_id": "abc"}, state)
@@ -231,6 +361,7 @@ class TestHermesToolPayloadShape:
         client = state.get_client()
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.retype = AsyncMock(side_effect=_quota_err())
 
         raw = await tools.retype({"fact_id": "abc", "new_type": "preference"}, state)
@@ -248,6 +379,7 @@ class TestStatusToolReadsBlock:
         client = state.get_client()
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.status = AsyncMock(
             return_value=BillingStatus(
                 tier="free", free_writes_used=1, free_writes_limit=250
@@ -268,6 +400,7 @@ class TestStatusToolReadsBlock:
         state = _mk_state()
         client = state.get_client()
         client.read_block = None
+        client.read_block_episode = None
         client.status = AsyncMock(
             return_value=BillingStatus(
                 tier="free", free_writes_used=1, free_writes_limit=250
@@ -288,6 +421,7 @@ class TestRememberUnaffected:
         client = state.get_client()
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.remember = AsyncMock(return_value="new-fact-id")
 
         raw = await tools.remember({"text": "Pedro likes espresso"}, state)
@@ -310,6 +444,7 @@ class TestBillingCacheUnaffectedByReadDenial:
         client = state.get_client()
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.recall = AsyncMock(side_effect=_quota_err())
 
         auto_recall("q", state)
@@ -321,6 +456,7 @@ class TestBillingCacheUnaffectedByReadDenial:
         client = state.get_client()
         blk = _mk_block(_rate_err(), episode=1)
         client.read_block = blk
+        client.read_block_episode = blk.episode
         client.recall = AsyncMock(side_effect=_rate_err())
 
         auto_recall("q", state)

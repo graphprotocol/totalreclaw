@@ -11,8 +11,9 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from totalreclaw.crypto import derive_keys_from_mnemonic, encrypt
+from totalreclaw.crypto import derive_keys_from_mnemonic, encrypt, generate_blind_indices
 from totalreclaw.operations import (
+    DEFAULT_TRAPDOOR_BATCH_SIZE,
     search_facts,
     export_facts,
     find_existing_content_fps,
@@ -38,6 +39,26 @@ def _quota_error() -> RelayReadQuotaExceeded:
     )
 
 
+# A long-enough query to guarantee >=3 trapdoor chunks so the short-circuit
+# tests below actually prove the fan-out stopped (a 1- or 2-chunk query
+# would pass even without the fix, since there'd be nothing left to fan out
+# into). Verified as a precondition in each test, not just asserted in a
+# comment — see the spec's E2E/test §5 group 1.
+_MANY_CHUNKS_QUERY = "Pedro prefers dark mode and likes strong coffee in the morning meetings"
+
+
+def _assert_at_least_n_chunks(query: str, n: int = 3) -> None:
+    word_trapdoors = generate_blind_indices(query)
+    chunk_count = -(-len(word_trapdoors) // DEFAULT_TRAPDOOR_BATCH_SIZE)  # ceil div
+    assert chunk_count >= n, (
+        f"test query only yields {chunk_count} trapdoor chunk(s) "
+        f"({len(word_trapdoors)} word trapdoors / batch size "
+        f"{DEFAULT_TRAPDOOR_BATCH_SIZE}) — need >= {n} for this test to "
+        f"actually prove the fan-out stopped rather than trivially having "
+        f"nothing left to fan out into."
+    )
+
+
 class TestSearchFactsShortCircuit:
     @pytest.fixture
     def keys(self):
@@ -45,14 +66,14 @@ class TestSearchFactsShortCircuit:
 
     @pytest.mark.asyncio
     async def test_mocked_relay_raises_and_stops_after_first_chunk(self, keys):
+        _assert_at_least_n_chunks(_MANY_CHUNKS_QUERY)
+
         relay = AsyncMock(spec=RelayClient)
         relay.query_subgraph = AsyncMock(side_effect=_quota_error())
 
         with pytest.raises(RelayReadQuotaExceeded):
             await search_facts(
-                # A long-enough query to guarantee >=3 trapdoor chunks so we
-                # can prove the fan-out actually stopped.
-                query="Pedro prefers dark mode and likes strong coffee in the morning meetings",
+                query=_MANY_CHUNKS_QUERY,
                 keys=keys,
                 owner="0x1234",
                 relay=relay,
@@ -61,6 +82,8 @@ class TestSearchFactsShortCircuit:
 
     @pytest.mark.asyncio
     async def test_real_relay_mocktransport_short_circuits(self, keys):
+        _assert_at_least_n_chunks(_MANY_CHUNKS_QUERY)
+
         count = {"n": 0}
 
         def handler(request):
@@ -77,7 +100,7 @@ class TestSearchFactsShortCircuit:
 
         with pytest.raises(RelayReadQuotaExceeded):
             await search_facts(
-                query="Pedro prefers dark mode and likes strong coffee in the morning meetings",
+                query=_MANY_CHUNKS_QUERY,
                 keys=keys,
                 owner="0x1234",
                 relay=rc,
