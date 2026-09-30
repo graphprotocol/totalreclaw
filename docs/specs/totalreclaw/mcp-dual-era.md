@@ -4,9 +4,9 @@
 |---|---|
 | **Status** | Implemented in `@totalreclaw/mcp-server` (stdio) — DEP-15 / PRD-04 F15; RC pending |
 | **Applies to** | `mcp/` (local stdio server). Section 6 is the contract the enclave's Streamable-HTTP `/mcp` endpoint mirrors. |
-| **SDK** | `@modelcontextprotocol/server` ~2.1 (MCP TypeScript SDK v2). Replaced `@modelcontextprotocol/sdk` 1.x, whose newest line (1.30.x) speaks 2025-11-25 at most. |
+| **SDK** | `@modelcontextprotocol/server` ^2.1 (MCP TypeScript SDK v2). Replaced `@modelcontextprotocol/sdk` 1.x, whose newest line (1.30.x) speaks 2025-11-25 at most. |
 | **Protocol revisions** | Modern: 2026-07-28. Legacy: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07. |
-| **Last reviewed** | 2026-09-27 |
+| **Last reviewed** | 2026-09-30 |
 
 ## 1. Why
 
@@ -14,7 +14,7 @@ MCP 2026-07-28 made the protocol stateless: the `initialize` / `notifications/in
 
 ## 2. Era selection on stdio
 
-The SDK's `serveStdio` entry reads the client's **first** message and pins the process to one era. `mcp/src/server-setup.ts` (`serveTotalReclawStdio`) hands it a factory that builds the same `Server` for either era.
+The SDK's `serveStdio` entry reads the client's **first** message and pins the process to one era — era selection on stdio is **per process**, not per request. `mcp/src/server-setup.ts` (`serveTotalReclawStdio`) hands it a factory that builds the same `Server` for either era.
 
 | Opening message | Era | Result |
 |---|---|---|
@@ -32,7 +32,7 @@ After pinning:
 
 The envelope is the three `_meta` keys `io.modelcontextprotocol/protocolVersion`, `io.modelcontextprotocol/clientCapabilities` (both required) and `io.modelcontextprotocol/clientInfo` (recommended).
 
-stdio has no header layer, so the 2026-07-28 HTTP header rules (`MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, `-32020 HeaderMismatch`) do not apply to this server. They apply to the enclave (section 6).
+stdio has no header layer, so the 2026-07-28 HTTP header rules (`MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, `-32020 HeaderMismatch`) do not apply to this server. They apply to the enclave (section 6) — which also selects the era differently: per request, from the `MCP-Protocol-Version` header, instead of per process from the first message (section 6, item 1).
 
 ## 3. What is identical in both eras
 
@@ -95,11 +95,18 @@ Notes:
 - Claude Code 2.1.283 negotiates 2026-07-28 wrongly when a legacy server's `-32601` reply to the probe mentions a protocol version (anthropics/claude-code#97391). This server never does: before `initialize` it answers the probe properly, after `initialize` it answers `"Method not found"`.
 - Claude Code 2.1.220 was reported treating a legacy server's `initialize` answer of `2025-11-25` as a 2026-07-28 session (anthropics/claude-code#97189). If a host sends `initialize` with `protocolVersion: "2026-07-28"`, this server answers `2025-11-25` and keeps serving that process, including requests that carry the modern `_meta` keys.
 
+Known gaps (from the PR #668 review):
+
+- **stdin EOF closes the transport** (SDK v2 behaviour; the 1.x server never listened for EOF). When the host closes its end of the pipe, the transport closes and any requests still in flight are **aborted and not answered** — a client that expects responses keeps stdin open until it has them (the SDK stdio transport's own contract).
+- **`Server.getClientVersion()` is deprecated in SDK v2.** It is the accessor `mcp/src/index.ts` (`getClientIdentifier()`) reads for `X-TotalReclaw-Client` attribution. On 2025-era connections it is fed by `initialize` and works; on a modern stdio connection it stays `undefined` — the SDK's stdio entry does not backfill it from the per-request envelope (only its HTTP entry does). Follow-up: read client identity from `ctx.mcpReq.envelope` in the handlers instead.
+
 ## 6. What the enclave (Python, Streamable HTTP) must mirror
 
-The enclave spec (`enclave-mcp-v1.md` §4.1, §6) requires a stateless, dual-era `POST /mcp`. Mirror this server, plus the HTTP rules stdio does not have:
+The enclave spec (`enclave-mcp-v1.md` §4.1, §6) requires a stateless, dual-era `POST /mcp`. Mirror this server, plus the HTTP rules stdio does not have. Everything in this section is mirrored as written except the two era-selection divergences recorded under item 1:
 
-1. **Era per request, not per connection.** A body that is `initialize` without a modern envelope claim is legacy; a request carrying the envelope is modern. Serve both on the same endpoint.
+1. **Era per request, not per process.** The local stdio server pins the era **per process**, from the client's first message (section 2). The enclave instead decides **per request**: a body that is `initialize` without a modern envelope claim is legacy; a request carrying the envelope is modern. Serve both on the same endpoint. Two consequences of the per-request choice diverge from the stdio server:
+   - **A modern envelope with no `MCP-Protocol-Version` header:** the enclave rejects it with HTTP `400` + `-32020` (item 3); the local server serves it — stdio has no header layer, so the body is the only signal.
+   - **A modern-era `initialize`:** the enclave answers HTTP `404` + `-32601` — `initialize` was removed in 2026-07-28, so on a per-request modern determination it is an unknown method (item 4); the local server answers `-32022` (`supported: ["2026-07-28"]`) for a legacy `initialize` arriving on a modern-pinned process (section 2). (An envelope-bearing `initialize` on stdio is also delivered to the modern instance and answered `-32601`, matching the enclave at the JSON-RPC level.)
 2. **Legacy over HTTP, statelessly.** Answer `initialize` (2025-11-25 or the older revision requested); never mint an `Mcp-Session-Id`, ignore one if sent; `GET`/`DELETE` on `/mcp` → `405`.
 3. **Modern header validation** (2026-07-28 Streamable HTTP): `MCP-Protocol-Version` must equal `_meta["io.modelcontextprotocol/protocolVersion"]`; `Mcp-Method` must equal `method`; `Mcp-Name` must equal `params.name` / `params.uri` for `tools/call`, `resources/read`, `prompts/get` (decode the `=?base64?…?=` form first). Missing or mismatched → HTTP `400` + JSON-RPC `-32020` (HeaderMismatch).
 4. **Modern errors:** unsupported revision → `400` + `-32022` with `data.supported`; unknown method → `404` + `-32601`; malformed envelope → JSON-RPC `-32602` (the spec fixes the code, not the HTTP status).
@@ -116,7 +123,7 @@ The enclave spec (`enclave-mcp-v1.md` §4.1, §6) requires a stateless, dual-era
 | File | What it pins |
 |---|---|
 | `mcp/tests/tools-list-golden.test.ts` | `TOOL_MANIFEST` equals the golden captured from the 1.x-SDK server. |
-| `mcp/tests/dual-era-stdio.test.ts` | Raw JSON-RPC over the SDK's `StdioServerTransport`: every row of sections 2–3, the section 5 bug shapes, change notifications in both eras, the probe fallback. |
+| `mcp/tests/dual-era-stdio.test.ts` | Raw JSON-RPC over the SDK's `StdioServerTransport`: every row of sections 2–3, the section 5 bug shapes, change notifications in both eras, the probe fallback, the client-attribution input seam (`getClientVersion`, section 5 known gaps). |
 | `mcp/tests/dual-era-client.test.ts` | The reference SDK-v2 client in `legacy`, `auto` and pinned modes sees the same tools, instructions, prompts, resources and tool results. |
 | `mcp/tests/dual-era-process.test.ts` | The built `dist/index.js` over a real pipe: both eras, stdout carries only JSON-RPC, exit on stdin EOF. |
 | `mcp/scripts/e2e-dual-era-staging.cjs` | Staging E2E: remember + recall in the legacy era, recall + forget in the modern era, staging DataEdge asserted before any write. |

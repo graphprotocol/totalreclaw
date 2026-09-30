@@ -55,8 +55,33 @@ function log(msg) {
   console.log(`[e2e-dual-era] ${msg}`);
 }
 
+// Failure-path cleanup state: every live child process and the throwaway
+// HOME. The happy path tears these down in main()'s finally blocks, which
+// process.exit() in fail() would skip — so fail() does it itself.
+const activeChildren = new Set();
+let activeHome;
+
 function fail(msg) {
   console.error(`[e2e-dual-era] FAIL: ${msg}`);
+  for (const child of activeChildren) {
+    try {
+      child.stdin.end();
+    } catch {
+      // stream already destroyed
+    }
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // already exited
+    }
+  }
+  if (activeHome) {
+    try {
+      fs.rmSync(activeHome, { recursive: true, force: true });
+    } catch {
+      // best effort
+    }
+  }
   process.exit(1);
 }
 
@@ -76,6 +101,8 @@ function startServer(mnemonic, home, sessionTag) {
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
+  activeChildren.add(child);
+  child.on('exit', () => activeChildren.delete(child));
   const redact = (text) => text.split(mnemonic).join('<redacted>');
   let stderrText = '';
   child.stderr.on('data', (chunk) => {
@@ -191,6 +218,7 @@ async function main() {
   const mnemonic = generateMnemonic(wordlist, 128);
   const marker = crypto.randomBytes(6).toString('hex');
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-dep15-e2e-'));
+  activeHome = home;
   const sessionTag = `dep15-e2e-${marker}`;
   const factText = `DEP-15 dual-era staging smoke: the marker word for this run is ${marker}.`;
   const query = `DEP-15 dual-era staging smoke marker word ${marker}`;

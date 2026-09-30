@@ -182,14 +182,19 @@ describe('legacy era (2025-11-25 initialize) — Claude Desktop / Cursor path', 
       serverInfo: EXPECTED_SERVER_INFO,
       instructions: SERVER_INSTRUCTIONS,
     });
+    // Happy paths additionally assert stderr stayed clean: serveStdio reports
+    // rejected openings through onerror → console.error, and a spurious one
+    // here would mean a healthy-looking exchange was internally failed.
+    expect(console.error).not.toHaveBeenCalled();
   });
 
-  it.each(['2025-06-18', '2025-03-26', '2024-11-05'])(
+  it.each(['2025-06-18', '2025-03-26', '2024-11-05', '2024-10-07'])(
     'echoes the older legacy version %s a pre-2025-11-25 host asks for',
     async (version) => {
       const { peer } = startServer();
       const res = await peer.request(1, 'initialize', initializeParams(version));
       expect(res.result.protocolVersion).toBe(version);
+      expect(console.error).not.toHaveBeenCalled();
     },
   );
 
@@ -197,6 +202,7 @@ describe('legacy era (2025-11-25 initialize) — Claude Desktop / Cursor path', 
     const { peer } = startServer();
     const res = await peer.request(1, 'initialize', initializeParams('2099-01-01'));
     expect(res.result.protocolVersion).toBe('2025-11-25');
+    expect(console.error).not.toHaveBeenCalled();
   });
 
   it('serves tools/list with the golden tool list and no 2026-only result fields', async () => {
@@ -206,6 +212,7 @@ describe('legacy era (2025-11-25 initialize) — Claude Desktop / Cursor path', 
     const res = await peer.request(2, 'tools/list', {});
     expect(res.result.tools).toEqual(GOLDEN_TOOLS);
     expect(Object.keys(res.result)).toEqual(['tools']);
+    expect(console.error).not.toHaveBeenCalled();
   });
 
   it('routes tools/call through the injected dispatcher and returns its content unchanged', async () => {
@@ -220,6 +227,7 @@ describe('legacy era (2025-11-25 initialize) — Claude Desktop / Cursor path', 
     expect(res.result).toEqual({
       content: [{ type: 'text', text: JSON.stringify({ ok: true, tool: 'totalreclaw_recall' }) }],
     });
+    expect(console.error).not.toHaveBeenCalled();
   });
 
   it('answers ping (2025-era keepalive hosts send)', async () => {
@@ -227,6 +235,7 @@ describe('legacy era (2025-11-25 initialize) — Claude Desktop / Cursor path', 
     await peer.request(1, 'initialize', initializeParams('2025-11-25'));
     const res = await peer.request(2, 'ping');
     expect(res.result).toEqual({});
+    expect(console.error).not.toHaveBeenCalled();
   });
 
   it('answers server/discover on a legacy-pinned connection with plain -32601 "Method not found"', async () => {
@@ -256,6 +265,7 @@ describe('hosts that mix the eras (anthropics/claude-code#97189 shape)', () => {
       { type: 'text', text: JSON.stringify({ ok: true, tool: 'totalreclaw_status' }) },
     ]);
     expect(calls).toEqual([{ name: 'totalreclaw_status', args: {} }]);
+    expect(console.error).not.toHaveBeenCalled();
   });
 });
 
@@ -288,6 +298,7 @@ describe('modern era (2026-07-28 server/discover + per-request _meta)', () => {
       cacheScope: 'private',
       _meta: { 'io.modelcontextprotocol/serverInfo': EXPECTED_SERVER_INFO },
     });
+    expect(console.error).not.toHaveBeenCalled();
   });
 
   it('serves tools/list with the golden tool list plus resultType/ttlMs/cacheScope', async () => {
@@ -299,6 +310,7 @@ describe('modern era (2026-07-28 server/discover + per-request _meta)', () => {
     expect(res.result.ttlMs).toBe(0);
     expect(res.result.cacheScope).toBe('private');
     expect(res.result._meta).toEqual({ 'io.modelcontextprotocol/serverInfo': EXPECTED_SERVER_INFO });
+    expect(console.error).not.toHaveBeenCalled();
   });
 
   it('routes tools/call with content identical to the legacy era', async () => {
@@ -314,12 +326,21 @@ describe('modern era (2026-07-28 server/discover + per-request _meta)', () => {
       { type: 'text', text: JSON.stringify({ ok: true, tool: 'totalreclaw_recall' }) },
     ]);
     expect(res.result.resultType).toBe('complete');
+    expect(console.error).not.toHaveBeenCalled();
   });
 
   it('serves a modern request that was not preceded by server/discover (discover is optional)', async () => {
     const { peer } = startServer();
     const res = await peer.request(1, 'tools/list', { _meta: MODERN_META });
     expect(res.result.tools).toEqual(GOLDEN_TOOLS);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it('answers ping with plain -32601 "Method not found" once the connection is pinned modern (ping was removed in 2026-07-28)', async () => {
+    const { peer } = startServer();
+    await peer.request('discover-1', 'server/discover', { _meta: MODERN_META });
+    const res = await peer.request(2, 'ping', { _meta: MODERN_META });
+    expect(res.error).toEqual({ code: -32601, message: 'Method not found' });
   });
 
   it('rejects an unsupported modern protocolVersion with -32022 naming 2026-07-28', async () => {
@@ -366,6 +387,7 @@ describe('memory-context change notifications (remember → sendResourceUpdated)
       'notifications/resources/updated',
     );
     expect(note.params).toEqual({ uri: RESOURCE_URI });
+    expect(console.error).not.toHaveBeenCalled();
   });
 
   it('modern era: delivered on the subscriptions/listen stream the host opened, stamped with its id', async () => {
@@ -393,6 +415,7 @@ describe('memory-context change notifications (remember → sendResourceUpdated)
       uri: RESOURCE_URI,
       _meta: { 'io.modelcontextprotocol/subscriptionId': 'listen-1' },
     });
+    expect(console.error).not.toHaveBeenCalled();
   });
 });
 
@@ -410,5 +433,46 @@ describe('probe fallback (server/discover answered, client still falls back to i
 
     // One probe instance + one legacy instance; the last one is live.
     expect(instances).toHaveLength(2);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('client attribution (the input seam getClientIdentifier() reads)', () => {
+  // `mcp/src/index.ts` `getClientIdentifier()` builds `X-TotalReclaw-Client`
+  // as `mcp-server:<name>` from `server.getClientVersion()` (index.ts, the
+  // "Client identification" section). That function is module-private and
+  // imports of index.ts boot the server, so these tests pin its INPUT on the
+  // live instance instead: after the era's handshake, `getClientVersion()`
+  // must reflect the client the host declared.
+
+  it('legacy era: initialize populates getClientVersion() with the clientInfo the host sent', async () => {
+    const { peer, instances } = startServer();
+    await peer.request(1, 'initialize', initializeParams('2025-11-25'));
+    const live = instances[instances.length - 1];
+    expect(live.getClientVersion()).toEqual({ name: 'dep15-legacy-host', version: '0.0.0' });
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  // SKIPPED — finding from the PR #668 review, verified against
+  // @modelcontextprotocol/server 2.2.0: the SDK's stdio entry (`serveStdio`)
+  // never seeds the connection-scoped client identity from the per-request
+  // `_meta` envelope (`seedClientIdentityFromEnvelope` is called only by the
+  // HTTP entry, `createMcpHandler`). So on a modern stdio connection
+  // `getClientVersion()` stays undefined and `getClientIdentifier()`
+  // (mcp/src/index.ts) keeps the default `mcp-server` id instead of
+  // `mcp-server:<host>`. Product code is unchanged per the review decision;
+  // the fix belongs to the follow-up that moves client attribution to
+  // `ctx.mcpReq.envelope` (docs/specs/totalreclaw/mcp-dual-era.md §5 known
+  // gaps). Un-skip when that lands.
+  it.skip('modern era: a tools/call envelope carrying clientInfo is reflected in getClientVersion()', async () => {
+    const { peer, instances } = startServer();
+    await peer.request('discover-1', 'server/discover', { _meta: MODERN_META });
+    await peer.request(2, 'tools/call', {
+      name: 'totalreclaw_status',
+      arguments: {},
+      _meta: MODERN_META,
+    });
+    const live = instances[instances.length - 1];
+    expect(live.getClientVersion()?.name).toBe(MODERN_META['io.modelcontextprotocol/clientInfo'].name);
   });
 });

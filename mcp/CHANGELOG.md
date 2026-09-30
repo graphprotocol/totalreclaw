@@ -9,6 +9,8 @@
 - **Requires Node.js 20 or newer** (was 18). The MCP TypeScript SDK v2 requires Node ≥ 20; Node 18 has been end-of-life since April 2025.
 - MCP SDK: `@modelcontextprotocol/sdk` ^1.0.0 → `@modelcontextprotocol/server` ^2.1.0 (TypeScript SDK v2).
 - stdio framing errors are logged to stderr as one bounded line; a non-JSON stdin line is reported as "discarded a stdin line that is not valid JSON" and never echoed.
+- **The stdio transport now closes on stdin EOF** (SDK v2 behaviour; the 1.x server never listened for EOF). When the host closes its end of the pipe the transport closes, and requests still in flight are aborted and **not answered** — a client that expects responses keeps stdin open until it has them. Hosts already behave this way; noted because 1.x silently kept the process alive instead.
+- `Server.getClientVersion()` — the accessor `getClientIdentifier()` reads for `X-TotalReclaw-Client` attribution — is **deprecated in SDK v2**. It still works on 2025-era connections (fed by `initialize`), but on a modern stdio connection it stays `undefined`: the SDK's stdio entry does not backfill it from the per-request envelope (only its HTTP entry does). Follow-up: read client identity from `ctx.mcpReq.envelope` in the handlers. See `docs/specs/totalreclaw/mcp-dual-era.md` §5 known gaps.
 
 ## [3.5.0] - 2026-08-16
 
