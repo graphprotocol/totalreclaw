@@ -37,7 +37,7 @@ from .embedding import get_embedding, get_embedding_dims
 from .lsh import LSHHasher
 from .protobuf import FactPayload, encode_fact_protobuf, encode_tombstone_protobuf
 from .relay import RelayClient, RelayReadBlocked
-from .reranker import RerankerCandidate, RerankerResult, rerank
+from .reranker import RerankerCandidate, RerankerResult, default_pin_boost, rerank
 from .tuning_loop import maybe_write_feedback_for_pin
 from .userop import build_and_send_userop, build_and_send_userop_batch, MAX_BATCH_SIZE
 from .claims_helper import (
@@ -45,6 +45,7 @@ from .claims_helper import (
     build_canonical_claim_v1,
     compute_entity_trapdoor,
     compute_entity_trapdoors,
+    entity_refs_from_blob,
     is_digest_blob,
     is_stub_blob_hex,
     read_blob_unified,
@@ -57,6 +58,11 @@ from .entity_extract import extract_query_entities
 # on the whole ``agent`` subpackage, the exact root<->agent cycle the leaf was
 # extracted to break.
 from .memory_types import V0_TO_V1_TYPE, VALID_MEMORY_TYPES
+
+# PRD-04 F1 / DEP-5: recall pin boost (core ``reranker::DEFAULT_PIN_BOOST``,
+# 1.5). ``None`` on a core wheel that predates the option -- ranking is then
+# unchanged. Core ignores it for lexical-only recalls (no query embedding).
+PIN_BOOST_DEFAULT: Optional[float] = default_pin_boost()
 
 # GraphQL queries — matching TypeScript search.ts
 SEARCH_QUERY = """
@@ -939,6 +945,11 @@ async def search_facts(
                 continue
             doc = read_claim_from_blob(decrypted_blob)
             text = doc["text"]
+            # PRD-04 F1 / DEP-5: pin state feeds the reranker's pin boost and
+            # the contradiction resolver; entity refs let the resolver find
+            # the shared entity it requires.
+            candidate_pinned = bool(_core.is_pinned_claim(decrypted_blob))
+            candidate_entities = entity_refs_from_blob(decrypted_blob) or None
 
             emb: Optional[list[float]] = None
             encrypted_emb = fact.get("encryptedEmbedding")
@@ -995,6 +1006,8 @@ async def search_facts(
                     category=doc.get("category", "fact"),
                     source=candidate_source,
                     metadata=extra_meta,
+                    pinned=candidate_pinned,
+                    entities=candidate_entities,
                 )
             )
         except Exception as e:
@@ -1018,7 +1031,14 @@ async def search_facts(
 
     # Retrieval v2 Tier 1 source-weighting: OFF by default as of 2026-06-08
     # (benchmark showed tie-or-worse; see APPLY_SOURCE_WEIGHTS_DEFAULT).
-    return rerank(query, query_embedding, candidates, top_k=top_k, apply_source_weights=APPLY_SOURCE_WEIGHTS_DEFAULT)
+    return rerank(
+        query,
+        query_embedding,
+        candidates,
+        top_k=top_k,
+        apply_source_weights=APPLY_SOURCE_WEIGHTS_DEFAULT,
+        pin_boost=PIN_BOOST_DEFAULT,
+    )
 
 
 async def forget_fact(

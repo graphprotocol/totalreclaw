@@ -13,9 +13,15 @@ RRF + source-weighted final score is the canonical Pipeline G + Tier 1 mix
 that benchmark E13 calibrated. The extra Python-side passes were not part
 of the validated baseline and were a source of cross-client divergence.
 
+PRD-04 F1 / DEP-5 adds one core signal: a pin boost. Candidates carry
+``pinned`` and ``rerank(..., pin_boost=...)`` forwards core's multiplier.
+Core wheels that predate the option (``totalreclaw-core`` 2.6.x) are detected
+once at import; on them ``pin_boost`` is ignored and ranking is unchanged.
+
 Public surface kept for callers:
-  - ``rerank(query, query_embedding, candidates, top_k, apply_source_weights)``
+  - ``rerank(query, query_embedding, candidates, top_k, apply_source_weights, pin_boost)``
     -- called by ``operations.py``
+  - ``default_pin_boost()`` -- core's pin multiplier, or ``None`` on an older core
   - ``cosine_similarity(a, b)`` -- called by ``agent/lifecycle.py``
   - ``source_weight(source)`` / ``LEGACY_CLAIM_FALLBACK_WEIGHT``
   - Dataclasses: ``RerankerCandidate``, ``RerankerResult`` -- ``RerankerResult``
@@ -74,6 +80,23 @@ def source_weight(source: Optional[str]) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Pin boost (PRD-04 F1 / DEP-5, delegated to core)
+# ---------------------------------------------------------------------------
+
+#: True when the installed core exposes ``default_pin_boost`` -- shipped in
+#: the same release as the ``pin_boost`` argument of ``rerank_with_config``.
+_CORE_SUPPORTS_PIN_BOOST: bool = hasattr(totalreclaw_core, "default_pin_boost")
+
+
+def default_pin_boost() -> Optional[float]:
+    """Core's recall boost for pinned candidates (1.5), or ``None`` when the
+    installed ``totalreclaw_core`` predates the option."""
+    if not _CORE_SUPPORTS_PIN_BOOST:
+        return None
+    return float(totalreclaw_core.default_pin_boost())
+
+
+# ---------------------------------------------------------------------------
 # Data classes (cross-runtime stable surface)
 # ---------------------------------------------------------------------------
 
@@ -93,6 +116,13 @@ class RerankerCandidate:
     #: session_id / subtype. Never sent to core; rejoined by id after
     #: ``rerank_with_config`` so read surfaces can expose provenance.
     metadata: Optional[dict] = None
+    #: PRD-04 F1 / DEP-5 — True when the decrypted blob is pinned
+    #: (``totalreclaw_core.is_pinned_claim``). Sent to core as ``pinned``.
+    pinned: bool = False
+    #: PRD-04 DEP-5 — short-key entity refs (``{"n","tp","r"?}``) from the
+    #: decrypted blob. Never sent to the reranker; rejoined by id and read by
+    #: ``agent/contradiction.py`` to hand core's resolver shared entities.
+    entities: Optional[list[dict]] = None
 
 
 @dataclass
@@ -109,6 +139,8 @@ class RerankerResult:
     source: Optional[str] = None
     source_weight: Optional[float] = None
     metadata: Optional[dict] = None
+    pinned: bool = False
+    entities: Optional[list[dict]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -121,18 +153,24 @@ def rerank(
     candidates: list[RerankerCandidate],
     top_k: int = 8,
     apply_source_weights: bool = False,
+    pin_boost: Optional[float] = None,
 ) -> list[RerankerResult]:
     """Re-rank candidates by routing through ``totalreclaw_core.rerank_with_config``.
 
     Core handles intent-weighting itself based on the per-candidate cosine
     score. Importance / recency / MMR signals are no longer applied
     client-side; if you need those, contribute them to core::reranker first.
+
+    ``pin_boost`` (PRD-04 F1 / DEP-5): multiplier for candidates with
+    ``pinned=True``; pass :func:`default_pin_boost`. ``None`` keeps the
+    pre-DEP-5 call exactly. Core ignores it when ``query_embedding`` is empty,
+    and this wrapper drops it when the installed core predates it.
     """
     if not candidates:
         return []
 
     # Build the core::Candidate JSON shape:
-    #   { id, text, embedding, timestamp, source? }
+    #   { id, text, embedding, timestamp, source?, pinned? }
     # ``embedding`` defaults to [] for candidates without an embedding;
     # core's cosine_similarity_f32 returns 0 for that case.
     core_candidates: list[dict] = []
@@ -145,24 +183,36 @@ def rerank(
         }
         if c.source:
             core_obj["source"] = c.source
+        if c.pinned:
+            core_obj["pinned"] = True
         core_candidates.append(core_obj)
 
     candidates_json = json.dumps(core_candidates)
     query_vec = [float(x) for x in (query_embedding or [])]
 
-    raw = totalreclaw_core.rerank_with_config(
-        query,
-        query_vec,
-        candidates_json,
-        top_k,
-        apply_source_weights,
-    )
+    if pin_boost is not None and _CORE_SUPPORTS_PIN_BOOST:
+        raw = totalreclaw_core.rerank_with_config(
+            query,
+            query_vec,
+            candidates_json,
+            top_k,
+            apply_source_weights,
+            float(pin_boost),
+        )
+    else:
+        raw = totalreclaw_core.rerank_with_config(
+            query,
+            query_vec,
+            candidates_json,
+            top_k,
+            apply_source_weights,
+        )
     # rerank_with_config returns a JSON string of RankedResult objects.
     ranked: list[dict] = json.loads(raw)
 
     # Restore the optional metadata (importance / created_at / category /
-    # embedding / source) so consumers like agent/contradiction.py keep
-    # working without changes.
+    # embedding / source / pinned / entities) so consumers like
+    # agent/contradiction.py keep working without changes.
     by_id = {c.id: c for c in candidates}
     out: list[RerankerResult] = []
     for r in ranked:
@@ -182,6 +232,8 @@ def rerank(
                 if apply_source_weights and "source_weight" in r
                 else (1.0 if apply_source_weights else None),
                 metadata=orig.metadata if orig else None,
+                pinned=orig.pinned if orig else False,
+                entities=orig.entities if orig else None,
             )
         )
 
