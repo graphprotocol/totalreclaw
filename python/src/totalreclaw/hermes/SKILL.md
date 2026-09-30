@@ -79,7 +79,7 @@ Hermes provides `session_search` for the local session DB, which has limited ret
 Pattern is always **recall first → mutate second**, because the mutation tools need `fact_id`:
 
 - `forget X` → `totalreclaw_recall("X")` → pick the right `fact_id` → `totalreclaw_forget(fact_id)`. Tombstones the fact (still retained for audit; recall filters it out).
-- `pin X as canonical` → recall → `totalreclaw_pin(fact_id)`. Pinned facts surface in every subsequent recall regardless of query similarity.
+- `pin X as canonical` → recall → `totalreclaw_pin(fact_id)`. Automatic extraction never updates or deletes a pinned fact, and pinned facts rank higher in recall when they match the query — pinning does not add a fact to every recall.
 - `unpin X` → recall → `totalreclaw_unpin(fact_id)`.
 - `change type of X to <type>` → recall → `totalreclaw_retype(fact_id, type)`. Use when the extractor misclassified.
 - `change scope of X to <scope>` → recall → `totalreclaw_set_scope(fact_id, scope)`.
