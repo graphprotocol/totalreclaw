@@ -1151,6 +1151,59 @@ async def _fetch_fact_by_id(
     return data.get("data", {}).get("fact")
 
 
+def _has_raw_pin_sentinel(decrypted: str) -> bool:
+    """Pin sentinel check on raw JSON, for blobs core cannot parse as a claim.
+
+    Fail-closed fallback for the pin guard only (PRD-04 DEP-5): a pinned blob
+    written by a newer client (e.g. an enum value this core does not know)
+    must still count as pinned. Recall ranking uses core alone.
+    """
+    try:
+        obj = _json.loads(decrypted)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(obj, dict):
+        return False
+    return obj.get("pin_status") == "pinned" or obj.get("st") == "p"
+
+
+async def get_fact_pin_status(
+    fact_id: str,
+    keys: DerivedKeys,
+    owner: str,
+    relay: RelayClient,
+) -> bool:
+    """Is on-chain fact ``fact_id`` pinned right now? (PRD-04 F1 / DEP-5)
+
+    ``True`` iff the fact exists, is active, and its decrypted blob is pinned
+    per ``totalreclaw_core.is_pinned_claim`` (v1.1 ``pin_status == "pinned"``
+    or v0 ``st == "p"``) or, for a blob core cannot parse, carries one of
+    those sentinels. A missing fact, an inactive fact and a tombstone stub
+    are all ``False`` -- tombstoning them again cannot hurt a pin.
+
+    Raises on any relay error (including :class:`RelayReadBlocked`) and on
+    decrypt failure. Callers MUST treat a raise as "pin state unknown" and
+    fail closed (see ``agent/pin_guard.py``).
+    """
+    if not isinstance(fact_id, str) or not fact_id.strip():
+        raise ValueError("fact_id must be a non-empty string")
+    fact = await _fetch_fact_by_id(fact_id.strip(), owner, relay)
+    if not fact:
+        return False
+    if fact.get("isActive") is False:
+        return False
+    blob_hex = fact.get("encryptedBlob", "") or ""
+    if is_stub_blob_hex(blob_hex):
+        return False
+    if blob_hex.startswith(("0x", "0X")):
+        blob_hex = blob_hex[2:]
+    blob_b64 = base64.b64encode(bytes.fromhex(blob_hex)).decode("ascii")
+    decrypted = decrypt(blob_b64, keys.encryption_key)
+    if _core.is_pinned_claim(decrypted):
+        return True
+    return _has_raw_pin_sentinel(decrypted)
+
+
 def _decrypt_and_parse_claim(
     fact: dict,
     keys: DerivedKeys,

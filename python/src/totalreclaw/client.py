@@ -42,6 +42,7 @@ from .operations import (
     export_facts,
     pin_fact,
     unpin_fact,
+    get_fact_pin_status,
     find_existing_content_fps,
     # internal#448 — byte-capped batching + halve-on-simfail hoisted into the
     # shared write path so EVERY remember_batch caller inherits it.
@@ -1183,6 +1184,21 @@ class TotalReclaw:
             sender=self._wallet_address,
             chain_id=chain_id,
             data_edge_address=self._data_edge_address,
+        )
+
+    async def get_fact_pin_status(self, fact_id: str) -> bool:
+        """Whether ``fact_id`` is pinned (PRD-04 F1 / DEP-5).
+
+        Delegates to :func:`totalreclaw.operations.get_fact_pin_status`.
+        Raises when the state cannot be read -- callers fail closed.
+        """
+        await self._ensure_address()
+        await self._ensure_registered()
+        return await get_fact_pin_status(
+            fact_id=fact_id,
+            keys=self._keys,
+            owner=self._wallet_address,
+            relay=self._relay,
         )
 
     async def retype(self, fact_id: str, new_type: str) -> dict:
