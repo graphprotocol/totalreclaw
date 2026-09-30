@@ -25,6 +25,7 @@ jobs:
       app: ${{ steps.filter.outputs.app }}
       plugin: ${{ steps.filter.outputs.plugin }}
       docs: ${{ steps.filter.outputs.docs }}
+      enclave: ${{ steps.filter.outputs.enclave }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
@@ -43,6 +44,13 @@ jobs:
               - '**/*.md'
               - 'skill/plugin/skill.json'
               - 'scripts/check-docs.sh'
+            # The enclave imports the in-repo Python client and core, so
+            # changes there must re-run its tests too.
+            enclave:
+              - 'enclave/**'
+              - 'python/**'
+              - 'rust/totalreclaw-core/**'
+              - '.github/workflows/ci.yml'
 
   docs-check:
     # Guards visitor-facing docs against retired-product drift: retired
@@ -267,6 +275,41 @@ jobs:
           cd python
           pip install -e ".[dev]"
           python -m pytest tests/ -v --ignore=tests/test_staging_integration.py --ignore=tests/cross_client_e2e.py --ignore=tests/test_cross_client.py -x
+
+  enclave-tests:
+    # TotalReclaw Enclave service (enclave/, Python 3.12). Path-scoped like
+    # client/mcp/app: runs when enclave/, python/ or core change. Installs
+    # the in-repo core wheel and Python client first so the enclave is tested
+    # against the code in this PR, not the PyPI releases its floors allow.
+    name: Enclave Tests (Python)
+    needs: changes
+    if: ${{ needs.changes.outputs.enclave == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build totalreclaw_core wheel from local source
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: rust/totalreclaw-core
+          args: --release --features python-extension --out dist -i python3.12
+      - name: Install local totalreclaw_core wheel
+        run: pip install --force-reinstall rust/totalreclaw-core/dist/totalreclaw_core-*.whl
+      - name: Install the in-repo Python client, then the enclave
+        run: |
+          pip install -e ./python
+          pip install -e "./enclave[dev]"
+      - name: Lint (ruff check + format check)
+        run: |
+          cd enclave
+          ruff check src tests
+          ruff format --check src tests
+      - name: Test
+        run: cd enclave && python -m pytest tests/ -v
 
   cross-language-parity:
     name: Cross-Language Parity Tests
