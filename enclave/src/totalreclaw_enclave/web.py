@@ -26,7 +26,9 @@ from totalreclaw_enclave.deps import Deps, build_deps
 from totalreclaw_enclave.settings import Settings
 from totalreclaw_enclave.subsystems import Subsystem, default_subsystems
 
-_log = logging.getLogger("totalreclaw_enclave.web")
+# Named ``logger`` (not ``_log``): ruff's G/LOG rules only check logging calls
+# on loggers they recognise by name, so any other name silently escapes lint.
+logger = logging.getLogger("totalreclaw_enclave.web")
 
 UNMATCHED_ROUTE = "unmatched"
 
@@ -85,14 +87,13 @@ class RequestLogMiddleware:
         try:
             await self.app(scope, receive, send_wrapper)
         except Exception:
-            _log.error(
+            logger.exception(
                 "http.request.error",
-                exc_info=True,
                 extra={"method": scope["method"], "route": route_template(scope)},
             )
             raise
         finally:
-            _log.info(
+            logger.info(
                 "http.request",
                 extra={
                     "method": scope["method"],
@@ -153,7 +154,7 @@ def create_app(
                 for subsystem in chosen:
                     if subsystem.lifespan is not None:
                         await stack.enter_async_context(subsystem.lifespan(settings, deps))
-                _log.info("enclave.started", extra={"env": settings.env, "subsystems": len(chosen)})
+                logger.info("enclave.started", extra={"env": settings.env, "subsystems": len(chosen)})
                 yield {}
         finally:
             await deps.db.close()

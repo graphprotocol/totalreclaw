@@ -7,9 +7,12 @@ from __future__ import annotations
 import io
 import json
 import logging
+import shutil
+import subprocess
 import sys
 import threading
 import warnings
+from pathlib import Path
 
 import pytest
 
@@ -184,12 +187,25 @@ def test_non_ascii_multiline_and_huge_arguments_are_redacted(value: str) -> None
     assert line["msg"] == "value [redacted]"
 
 
-def test_ruff_logging_rules_stay_enabled() -> None:
+def test_ruff_g_rules_actually_flag_fstring_logging(tmp_path: Path) -> None:
     # G001-G004 (no str.format / % / + / f-string in logging calls) and LOG
-    # are what keep plaintext out of log *templates*; see logs.py docstring.
-    import tomllib
-    from pathlib import Path
-
-    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
-    select = tomllib.loads(pyproject.read_text())["tool"]["ruff"]["lint"]["select"]
-    assert "G" in select and "LOG" in select
+    # are what keep plaintext out of log *templates* — but ruff only checks
+    # loggers it recognises by name (``logger``, ``log``, the logging module),
+    # which is why module loggers here must be called ``logger``. This test
+    # runs the real linter on the exact violation it must catch, so a ruff
+    # upgrade that stops recognising the rules turns CI red. (The test it
+    # replaced only asserted the pyproject select list, which stays green even
+    # when the rules match nothing.)
+    ruff = shutil.which("ruff")
+    if ruff is None:
+        pytest.skip("ruff is not on PATH")
+    snippet = tmp_path / "snippet.py"
+    snippet.write_text('import logging\nlogger = logging.getLogger(__name__)\nx = 1\nlogger.info(f"v {x}")\n')
+    proc = subprocess.run(
+        [ruff, "check", "--select", "G,LOG", "--isolated", str(snippet)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    assert "G004" in proc.stdout + proc.stderr

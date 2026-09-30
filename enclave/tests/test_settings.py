@@ -15,6 +15,7 @@ from totalreclaw_enclave.settings import (
     STAGING_DATA_EDGE,
     STAGING_RELAY_URL,
     Secret,
+    Settings,
     SettingsError,
     assert_owner_eoa_permitted,
     load_settings,
@@ -119,6 +120,13 @@ def test_replace_cannot_bypass_the_owner_eoa_refusal(tmp_path: Path) -> None:
     assert dataclasses.replace(staging, measurement_id="m-2").allow_owner_eoa is True
 
 
+def test_replace_cannot_sneak_in_an_unknown_env(dev_settings: Settings) -> None:
+    # load_settings refuses a bad ENCLAVE_ENV, but the owner-EOA refusal only
+    # compares env == "prod": replace(s, env="PROD") would sidestep it.
+    with pytest.raises(SettingsError, match="must be one of dev, staging, prod"):
+        dataclasses.replace(dev_settings, env="PROD")
+
+
 @pytest.mark.parametrize(
     ("root", "error"),
     [
@@ -210,6 +218,57 @@ def test_prod_refuses_debug_logging(tmp_path: Path) -> None:
 def test_malformed_values_are_refused(tmp_path: Path, overrides: dict[str, str]) -> None:
     with pytest.raises(SettingsError):
         load_settings(staging_env(tmp_path, **overrides))
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://enclave@enclave-staging.totalreclaw.xyz",
+        "https://enclave:secret@enclave-staging.totalreclaw.xyz",
+    ],
+)
+def test_public_url_userinfo_is_refused(tmp_path: Path, url: str) -> None:
+    # https://host@evil.example must not become the OAuth issuer (ENC-5).
+    with pytest.raises(SettingsError, match="username or password"):
+        load_settings(staging_env(tmp_path, ENCLAVE_PUBLIC_URL=url))
+
+
+@pytest.mark.parametrize("url", ["https://", "https://:8443", "enclave-staging.totalreclaw.xyz"])
+def test_public_url_without_a_host_is_refused(tmp_path: Path, url: str) -> None:
+    with pytest.raises(SettingsError, match="hostname"):
+        load_settings(staging_env(tmp_path, ENCLAVE_PUBLIC_URL=url))
+
+
+def test_public_url_host_is_normalised_to_lowercase(tmp_path: Path) -> None:
+    s = load_settings(staging_env(tmp_path, ENCLAVE_PUBLIC_URL="https://ENCLAVE-Staging.TotalReclaw.XYZ"))
+    assert s.public_url == "https://enclave-staging.totalreclaw.xyz"
+    s = load_settings(staging_env(tmp_path, ENCLAVE_PUBLIC_URL="https://Enclave-Staging.TotalClaw.XYZ:8443"))
+    assert s.public_url == "https://enclave-staging.totalclaw.xyz:8443"
+
+
+@pytest.mark.parametrize("url", ["http://localhost:8080", "http://127.0.0.1:8080", "http://[::1]:8080"])
+def test_dev_public_url_accepts_http_on_loopback_hosts(url: str) -> None:
+    assert load_settings({"ENCLAVE_ENV": "dev", "ENCLAVE_PUBLIC_URL": url}).public_url == url
+
+
+@pytest.mark.parametrize("url", ["http://enclave-dev.totalreclaw.xyz", "http://192.168.1.10:8080"])
+def test_dev_public_url_refuses_http_off_loopback(url: str) -> None:
+    with pytest.raises(SettingsError, match="must be an https origin"):
+        load_settings({"ENCLAVE_ENV": "dev", "ENCLAVE_PUBLIC_URL": url})
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://user@totalreclaw.xyz/enclave", "https://user:pw@totalreclaw.xyz/enclave"],
+)
+def test_transparency_url_userinfo_is_refused(tmp_path: Path, url: str) -> None:
+    with pytest.raises(SettingsError, match="username or password"):
+        load_settings(staging_env(tmp_path, ENCLAVE_TRANSPARENCY_URL=url))
+
+
+def test_transparency_url_without_a_host_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(SettingsError, match="hostname"):
+        load_settings(staging_env(tmp_path, ENCLAVE_TRANSPARENCY_URL="https:///enclave"))
 
 
 def test_errors_never_echo_values(tmp_path: Path) -> None:

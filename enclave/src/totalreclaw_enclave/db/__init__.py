@@ -109,10 +109,14 @@ class Database:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 result = fn(conn)
+                conn.execute("COMMIT")
             except BaseException:
-                conn.execute("ROLLBACK")
+                # COMMIT sits inside the try: a COMMIT-time failure (disk full,
+                # I/O error) must also roll back, or the transaction stays open
+                # and every later BEGIN wedges the shared connection.
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
                 raise
-            conn.execute("COMMIT")
             return result
 
         return await self._submit(_tx)

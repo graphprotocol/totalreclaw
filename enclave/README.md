@@ -67,7 +67,7 @@ Relay and DataEdge are fixed per environment: dev and staging use the staging re
 
 ## Invariants every change must keep
 
-- **No plaintext in logs.** Log through `logging.getLogger(__name__)` with constant messages and values as arguments or `extra=` fields. The single root handler (`logs.configure_logging`) redacts any argument or field that is not a short slug, drops exception messages (except `SafeMessageError`), and scrubs phrase- and key-shaped text. Ruff's `G` rules reject f-strings, `%`, `+` and `.format` inside logging calls.
+- **No plaintext in logs.** Log through `logging.getLogger(__name__)` with constant messages and values as arguments or `extra=` fields. The single root handler (`logs.configure_logging`) redacts any argument or field that is not a short slug, drops exception messages (except `SafeMessageError`), and scrubs phrase- and key-shaped text. Ruff's `G` rules reject f-strings, `%`, `+` and `.format` inside logging calls — and module loggers must be named `logger`, because ruff only checks logging calls on loggers it recognises by name.
 - **No plaintext in the audit log.** `AuditLogger.record(event, vault_id=..., details=...)` refuses plaintext-shaped fields (`redaction.py` defines the rule) and stores only a 16-hex `vault_hash`, never the vault address.
 - **Staging only.** Nothing in dev or staging may talk to the production relay or DataEdge; `load_settings` refuses it.
 - **Schema changes are new migrations.** Append `Migration(N + 1, ...)` to `db/migrations.py`; never edit a released one.

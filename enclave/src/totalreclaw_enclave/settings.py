@@ -53,6 +53,9 @@ _HEX64 = re.compile(r"[0-9a-f]{64}")
 _NEAR_ACCOUNT = re.compile(r"(?:[a-z\d]+[-_])*[a-z\d]+(?:\.(?:[a-z\d]+[-_])*[a-z\d]+)*")
 _MEASUREMENT_ID = re.compile(r"[a-z0-9][a-z0-9_.:-]{0,63}")
 _LOG_LEVELS: Final = ("DEBUG", "INFO", "WARNING", "ERROR")
+# http:// public URLs are allowed on these hosts only, and only when
+# ENCLAVE_ENV=dev (see _https_origin).
+_LOOPBACK_HOSTS: Final = ("localhost", "127.0.0.1", "::1")
 
 
 class SettingsError(SafeMessageError):
@@ -110,7 +113,11 @@ class Settings:
     def __post_init__(self) -> None:
         # Every construction re-checks the refusal, including a
         # dataclasses.replace(settings, ...) after boot (ENC-11 swaps in
-        # attested values that way).
+        # attested values that way). load_settings already refuses an unknown
+        # ENCLAVE_ENV; this closes the replace(env=...) path, which would
+        # otherwise sidestep the env == "prod" comparisons below.
+        if self.env not in ENVS:
+            raise SettingsError("Settings.env must be one of dev, staging, prod")
         assert_owner_eoa_permitted(self, self.derivation_root)
 
 
@@ -144,17 +151,42 @@ def _require(environ: Mapping[str, str], name: str, env: Env) -> str:
     return value
 
 
-def _https_origin(name: str, value: str) -> str:
+def _host(name: str, value: str) -> str:
+    """The validated, lower-case host of ``value``.
+
+    Refuses userinfo (``https://host@evil.example`` would otherwise become the
+    OAuth issuer in ENC-5) and a missing host. Shared by the origin check and
+    the ``transparency_url`` check.
+    """
     parts = urlsplit(value)
-    if (
-        parts.scheme != "https"
-        or not parts.netloc
-        or parts.path not in ("", "/")
-        or parts.query
-        or parts.fragment
-    ):
+    if parts.username is not None or parts.password is not None:
+        raise SettingsError(f"{name} must not contain a username or password")
+    host = parts.hostname
+    if not host:
+        raise SettingsError(f"{name} must include a hostname")
+    return host.lower()
+
+
+def _https_origin(name: str, value: str, *, allow_loopback_http: bool = False) -> str:
+    """Normalise ``value`` to an origin: lower-case host, no trailing slash.
+
+    https only, unless ``allow_loopback_http`` and the host is loopback (the
+    dev default). Never echoes the value in an error.
+    """
+    host = _host(name, value)
+    parts = urlsplit(value)
+    if parts.path not in ("", "/") or parts.query or parts.fragment:
         raise SettingsError(f"{name} must be an https origin with no path, query or fragment")
-    return f"https://{parts.netloc}"
+    scheme = parts.scheme
+    if scheme != "https" and not (allow_loopback_http and scheme == "http" and host in _LOOPBACK_HOSTS):
+        raise SettingsError(f"{name} must be an https origin with no path, query or fragment")
+    try:
+        port = parts.port
+    except ValueError:
+        raise SettingsError(f"{name} must include a valid port") from None
+    host_part = f"[{host}]" if ":" in host else host
+    netloc = f"{host_part}:{port}" if port is not None else host_part
+    return f"{scheme}://{netloc}"
 
 
 def _bool_flag(environ: Mapping[str, str], name: str) -> bool:
@@ -212,7 +244,11 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         raise SettingsError("ENCLAVE_PORT must be an integer in 1..65535")
 
     if env == "dev":
-        public_url = (_get(environ, "ENCLAVE_PUBLIC_URL") or "http://127.0.0.1:8080").rstrip("/")
+        public_url = _https_origin(
+            "ENCLAVE_PUBLIC_URL",
+            _get(environ, "ENCLAVE_PUBLIC_URL") or "http://127.0.0.1:8080",
+            allow_loopback_http=True,
+        )
         db_path = Path(_get(environ, "ENCLAVE_DB_PATH") or ".enclave-dev/enclave.sqlite3")
         if _get(environ, "ENCLAVE_NEAR_CONTRACT") is not None:
             raise SettingsError("ENCLAVE_NEAR_CONTRACT must be unset when ENCLAVE_ENV=dev (no NEAR network)")
@@ -246,6 +282,9 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         raise SettingsError("ENCLAVE_INFERENCE_POLICY_VERSION must match [a-z0-9][a-z0-9_.:-]{0,63}")
 
     transparency_url = _get(environ, "ENCLAVE_TRANSPARENCY_URL") or DEFAULT_TRANSPARENCY_URL
+    # A full https URL (it carries a path), but the same host rules as the
+    # origin check: no userinfo, a host must be present.
+    _host("ENCLAVE_TRANSPARENCY_URL", transparency_url)
     if urlsplit(transparency_url).scheme != "https":
         raise SettingsError("ENCLAVE_TRANSPARENCY_URL must be an https URL")
 

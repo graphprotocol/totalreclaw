@@ -44,6 +44,43 @@ async def test_run_rolls_back_on_exception(db: Database) -> None:
     assert (await db.fetchone("SELECT count(*) FROM audit_log"))[0] == 0
 
 
+class _CommitFails:
+    """Connection proxy simulating a COMMIT-time failure (e.g. disk full).
+
+    Everything delegates to the real connection except ``execute("COMMIT")``,
+    which raises. Used only for fault injection from this test.
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._wrapped = conn
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._wrapped.in_transaction
+
+    def execute(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
+        if sql == "COMMIT":
+            raise sqlite3.OperationalError("simulated COMMIT-time failure")
+        return self._wrapped.execute(sql, params)
+
+
+async def test_run_rolls_back_when_commit_fails(db: Database) -> None:
+    raw = db._conn
+    assert raw is not None
+    db._conn = _CommitFails(raw)  # type: ignore[assignment]
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            await db.run(
+                lambda conn: conn.execute("INSERT INTO audit_log (ts, event) VALUES (?, 'a.b')", (T0,))
+            )
+    finally:
+        db._conn = raw
+    # A COMMIT-time failure must not wedge the shared connection: the failed
+    # transaction is rolled back, so later writes still succeed.
+    await db.execute("INSERT INTO audit_log (ts, event) VALUES (?, 'c.d')", (T0 + 1,))
+    assert (await db.fetchone("SELECT count(*) FROM audit_log"))[0] == 1
+
+
 async def test_concurrent_writes_are_serialized(db: Database) -> None:
     await asyncio.gather(
         *(db.execute("INSERT INTO audit_log (ts, event) VALUES (?, 'a.b')", (T0 + i,)) for i in range(50))
