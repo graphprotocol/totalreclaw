@@ -58,6 +58,24 @@ pub fn wasm_build_debrief_prompt(stored_facts_json: &str) -> Result<String, JsEr
     Ok(debrief::build_debrief_prompt(&refs))
 }
 
+/// Render the "Existing memories" block appended to the extraction user
+/// prompt (PRD-04 DEP-3).
+///
+/// Each argument is a JSON array of `{ id: string, text: string }` objects
+/// (`"null"` = empty section; extra fields such as `embedding` are ignored).
+/// Pinned first, then topical, then recent; dedupe by fact id; at most `cap`
+/// lines; returns `""` when no line survives. Malformed JSON → `JsError`.
+#[wasm_bindgen(js_name = "buildDedupContext")]
+pub fn wasm_build_dedup_context(
+    topical_json: &str,
+    pinned_json: &str,
+    recent_json: &str,
+    cap: usize,
+) -> Result<String, JsError> {
+    crate::dedup_context::build_dedup_context_json(topical_json, pinned_json, recent_json, cap)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // Constants (exposed as getter functions since wasm_bindgen doesn't support statics)
 // ---------------------------------------------------------------------------
