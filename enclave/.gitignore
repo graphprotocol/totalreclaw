@@ -1,0 +1,2 @@
+# Local dev database (ENCLAVE_ENV=dev), including its -wal and -shm files.
+.enclave-dev/
