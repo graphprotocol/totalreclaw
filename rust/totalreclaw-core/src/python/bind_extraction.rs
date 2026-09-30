@@ -60,3 +60,27 @@ pub(crate) fn py_get_compaction_system_prompt() -> &'static str {
     crate::prompts::get_compaction_system_prompt()
 }
 
+// ---------------------------------------------------------------------------
+// Topical dedup context (PRD-04 DEP-3)
+// ---------------------------------------------------------------------------
+
+/// Render the "Existing memories" block appended to the extraction user prompt.
+///
+/// Each argument is a JSON array of ``{"id": str, "text": str}`` objects
+/// (``"null"`` = empty section; extra keys such as ``embedding`` are ignored).
+/// Pinned first, then topical, then recent; dedupe by fact id; at most
+/// ``cap`` lines; returns ``""`` when no line survives.
+///
+/// Raises ``ValueError`` on malformed JSON.
+#[pyfunction]
+#[pyo3(name = "build_dedup_context")]
+pub(crate) fn py_build_dedup_context(
+    topical_json: &str,
+    pinned_json: &str,
+    recent_json: &str,
+    cap: usize,
+) -> PyResult<String> {
+    crate::dedup_context::build_dedup_context_json(topical_json, pinned_json, recent_json, cap)
+        .map_err(to_pyerr)
+}
+
