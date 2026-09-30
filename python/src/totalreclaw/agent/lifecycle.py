@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 from .extraction import ExtractedFact, extract_facts_llm, extract_facts_heuristic
 from .contradiction import detect_and_resolve_contradictions
+from .pin_guard import apply_pin_guard, fail_closed_actions
 from .debrief import generate_crystal
 from .loop_runner import (
     run_sync,
@@ -350,6 +351,22 @@ def _auto_extract_inner(
         if is_interpreter_shutdown_error(exc):
             raise InterpreterShutdownError(str(exc)) from exc
         logger.debug("Contradiction detection failed (proceeding with all facts): %s", exc)
+
+    # Pin contract (PRD-04 F1 / DEP-5): an LLM UPDATE/DELETE never tombstones
+    # a pinned fact. Must run before the action loop below, which is the only
+    # place auto-extraction issues tombstones.
+    try:
+        facts = run_sync(apply_pin_guard(facts, client, logger))
+    except InterpreterShutdownError:
+        raise
+    except Exception as exc:
+        if is_interpreter_shutdown_error(exc):
+            raise InterpreterShutdownError(str(exc)) from exc
+        logger.warning(
+            "Pin guard failed (%s); no UPDATE/DELETE tombstones this cycle",
+            type(exc).__name__,
+        )
+        facts = fail_closed_actions(facts, logger)
 
     # -----------------------------------------------------------------------
     # Two-pass approach:
