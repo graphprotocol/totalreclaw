@@ -333,6 +333,7 @@ fn test_auto_recall_top_k_is_8() {
             embedding: vec![i as f32 / 20.0; 4],
             timestamp: String::new(),
             source: None,
+            pinned: false,
         })
         .collect();
 
