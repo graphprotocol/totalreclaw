@@ -5,6 +5,16 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **[PRD-04 F1 / DEP-5] Recall pin boost.** `RerankerConfig.pin_boost: Option<f64>` (JSON `pin_boost`) multiplies the final score of candidates whose new `Candidate.pinned: bool` (JSON `pinned`, default `false`) is set, after source weighting and before top-k truncation. `None` (the default), a non-finite value, a value `<= 1.0`, or an empty query embedding is a no-op, so every existing caller ranks bit-for-bit as before and no parity vector changes. `DEFAULT_PIN_BOOST = 1.5` (= `PinConfig::default().hard_boost`, signed off 2026-04-28). PyO3: `rerank_with_config(..., pin_boost=None)`, `default_pin_boost()`. WASM: `rerankWithConfig(..., pin_boost?)`, `defaultPinBoost()`. Spec: `docs/specs/totalreclaw/retrieval-v2.md` §Pin boost.
+
+### Changed
+
+- `reranker::Candidate` gains the public field `pinned`. Rust code that builds a `Candidate` with a struct literal must add `pinned: false`; JSON callers (all WASM/PyO3 clients) are unaffected because the field defaults to `false`. In-tree callers (`search.rs`, `totalreclaw-memory`) are updated.
+
 ## [2.6.0] - 2026-08-16
 
 Two additive surfaces: the `derived-bundle-v1` credential bundle (Option E

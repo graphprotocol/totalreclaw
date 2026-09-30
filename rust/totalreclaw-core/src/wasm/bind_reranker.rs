@@ -28,13 +28,18 @@ pub fn wasm_rerank(
     serde_wasm_bindgen::to_value(&results).map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// Rerank candidates with a config flag (Retrieval v2 Tier 1).
+/// Rerank candidates with a config flag (Retrieval v2 Tier 1) and an optional
+/// pin boost (PRD-04 F1 / DEP-5).
 ///
 /// When `apply_source_weights` is `true`, each candidate's final score is
 /// multiplied by the provenance weight from its `source` field (legacy
 /// candidates without `source` use the v0 fallback weight).
 ///
-/// `candidates_json`: JSON array of `{ id, text, embedding, timestamp, source? }` objects.
+/// When `pin_boost` is a number > 1.0, candidates carrying `"pinned": true`
+/// are multiplied by it (ignored when `query_embedding` is empty). Omitted,
+/// `undefined` or `null` keeps the pre-DEP-5 ranking bit-for-bit.
+///
+/// `candidates_json`: JSON array of `{ id, text, embedding, timestamp, source?, pinned? }` objects.
 /// Returns a JsValue (array of `RankedResult` objects including `source_weight`).
 #[wasm_bindgen(js_name = "rerankWithConfig")]
 pub fn wasm_rerank_with_config(
@@ -43,6 +48,7 @@ pub fn wasm_rerank_with_config(
     candidates_json: &str,
     top_k: usize,
     apply_source_weights: bool,
+    pin_boost: Option<f64>,
 ) -> Result<JsValue, JsError> {
     let candidates: Vec<reranker::Candidate> = serde_json::from_str(candidates_json)
         .map_err(|e| JsError::new(&format!("Invalid candidates JSON: {}", e)))?;
@@ -50,6 +56,7 @@ pub fn wasm_rerank_with_config(
         apply_source_weights,
         bm25_weight_override: None,
         vector_weight_override: None,
+        pin_boost,
     };
     let results = reranker::rerank_with_config(query, query_embedding, &candidates, top_k, config)
         .map_err(|e| JsError::new(&e.to_string()))?;
@@ -75,6 +82,13 @@ pub fn wasm_source_weight(source: &str) -> f64 {
 #[wasm_bindgen(js_name = "legacyClaimFallbackWeight")]
 pub fn wasm_legacy_claim_fallback_weight() -> f64 {
     reranker::LEGACY_CLAIM_FALLBACK_WEIGHT
+}
+
+/// Default recall boost for pinned candidates (PRD-04 F1 / DEP-5) — 1.5.
+/// Pass it as `pin_boost` to `rerankWithConfig` to enable the boost.
+#[wasm_bindgen(js_name = "defaultPinBoost")]
+pub fn wasm_default_pin_boost() -> f64 {
+    reranker::DEFAULT_PIN_BOOST
 }
 
 /// Validate a Memory Taxonomy v1 claim (JSON in, JSON out — canonicalised).
