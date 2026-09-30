@@ -1140,14 +1140,40 @@ async def _fetch_fact_by_id(
     fact_id: str,
     owner: str,
     relay: RelayClient,
+    *,
+    strict: bool = False,
 ) -> Optional[dict]:
     """Fetch a single fact's on-chain record via the subgraph.
 
     Returns the raw ``fact`` subgraph object or ``None`` if not found.
     The caller is responsible for checking ``owner`` matches the expected
     smart-account address.
+
+    With ``strict=True`` (PRD-04 F1 / DEP-5, review fix-up) a 2xx body that
+    does not carry a ``data`` dict with a ``fact`` key raises ``RuntimeError``
+    instead of collapsing to ``None``: ``relay.query_subgraph`` returns the
+    parsed body for any HTTP 2xx, so an indexer error body (``{"errors":
+    [...]}``) has no ``data`` key and the lenient ``.get`` chain would make
+    "pin state unreadable" look like "fact absent". The pin guard must fail
+    closed on that difference, so ``get_fact_pin_status`` is the strict
+    caller; other callers keep the lenient shape.
     """
     data = await relay.query_subgraph(FACT_BY_ID_QUERY, {"id": fact_id})
+    if strict:
+        if isinstance(data, dict) and data.get("errors"):
+            # Categorical message only — never echo the body, which may carry
+            # indexer diagnostics (pin-guard log hygiene, PRD-04 DEP-5).
+            raise RuntimeError(
+                "fact-by-id subgraph query returned errors "
+                f"({len(data['errors'])} item(s))"
+            )
+        inner = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(inner, dict) or "fact" not in inner:
+            raise RuntimeError(
+                "fact-by-id subgraph response has no data.fact "
+                f"(body type {type(data).__name__})"
+            )
+        return inner["fact"]
     return data.get("data", {}).get("fact")
 
 
@@ -1181,13 +1207,15 @@ async def get_fact_pin_status(
     those sentinels. A missing fact, an inactive fact and a tombstone stub
     are all ``False`` -- tombstoning them again cannot hurt a pin.
 
-    Raises on any relay error (including :class:`RelayReadBlocked`) and on
-    decrypt failure. Callers MUST treat a raise as "pin state unknown" and
-    fail closed (see ``agent/pin_guard.py``).
+    Raises on any relay error (including :class:`RelayReadBlocked`), on a 2xx
+    subgraph body that does not carry ``data.fact`` (a GraphQL error body —
+    never mistake an unreadable state for an absent fact), and on decrypt
+    failure. Callers MUST treat a raise as "pin state unknown" and fail closed
+    (see ``agent/pin_guard.py``).
     """
     if not isinstance(fact_id, str) or not fact_id.strip():
         raise ValueError("fact_id must be a non-empty string")
-    fact = await _fetch_fact_by_id(fact_id.strip(), owner, relay)
+    fact = await _fetch_fact_by_id(fact_id.strip(), owner, relay, strict=True)
     if not fact:
         return False
     if fact.get("isActive") is False:

@@ -43,15 +43,18 @@ def _fact(blob_hex: str, active: bool = True) -> dict:
 
 
 class _Relay:
-    def __init__(self, fact=None, exc: Exception | None = None) -> None:
+    def __init__(self, fact=None, exc: Exception | None = None, body: dict | None = None) -> None:
         self.fact = fact
         self.exc = exc
+        self.body = body
         self.calls: list[dict] = []
 
     async def query_subgraph(self, gql: str, variables: dict) -> dict:
         self.calls.append(variables)
         if self.exc is not None:
             raise self.exc
+        if self.body is not None:
+            return self.body
         return {"data": {"fact": self.fact}}
 
 
@@ -90,6 +93,38 @@ async def test_tombstone_stub_is_not_pinned() -> None:
 async def test_relay_error_propagates() -> None:
     with pytest.raises(RuntimeError):
         await operations.get_fact_pin_status(FACT_ID, _keys(), "0xabc", _Relay(exc=RuntimeError("503")))
+
+
+async def test_subgraph_error_body_raises() -> None:
+    """A 2xx GraphQL error body is "pin state unknown", not "fact absent".
+
+    ``relay.query_subgraph`` returns the parsed body for any HTTP 2xx, so an
+    indexer error arrives as ``{"errors": [...]}`` with no ``data`` key. The
+    lenient ``.get`` chain collapsed that to ``None`` → ``False`` and the pin
+    guard let an UPDATE/DELETE through (review fix-up, PRD-04 DEP-5).
+    """
+    with pytest.raises(RuntimeError):
+        await operations.get_fact_pin_status(
+            FACT_ID, _keys(), "0xabc",
+            _Relay(body={"errors": [{"message": "indexer error"}]}),
+        )
+
+
+@pytest.mark.parametrize("body", [{}, {"data": {}}, {"data": None}])
+async def test_body_without_data_fact_raises(body: dict) -> None:
+    """Any 2xx body that does not carry ``data.fact`` must raise, not return
+    ``False`` -- the pin guard cannot distinguish a malformed response from a
+    missing fact, so it must fail closed."""
+    with pytest.raises(RuntimeError):
+        await operations.get_fact_pin_status(FACT_ID, _keys(), "0xabc", _Relay(body=body))
+
+
+async def test_explicitly_absent_fact_is_still_false() -> None:
+    """Only ``data.fact is None`` (the subgraph answering "no such fact")
+    counts as a genuinely absent, unpinned fact."""
+    assert await operations.get_fact_pin_status(
+        FACT_ID, _keys(), "0xabc", _Relay(body={"data": {"fact": None}})
+    ) is False
 
 
 async def test_wrong_key_propagates() -> None:
