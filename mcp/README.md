@@ -26,7 +26,7 @@ End-to-end encrypted memory vault as an MCP server. Your memories are encrypted 
 
 **v3.0.0 ships Memory Taxonomy v1** — 6 speech-act types + source / scope / volatility axes on every memory. Four new tools (`totalreclaw_pin`, `totalreclaw_unpin`, `totalreclaw_retype`, `totalreclaw_set_scope`) let agents override categorization via natural language. Source-weighted reranking ranks user-authored claims above assistant-regurgitated noise. See [memory types guide](../docs/guides/memory-types-guide.md).
 
-**Requirements:** Node.js 18+
+**Requirements:** Node.js 20+
 
 ## Quick Start
 
@@ -103,6 +103,10 @@ If IronClaw supports a credential vault, store `TOTALRECLAW_RECOVERY_PHRASE` the
 ### 3. Verify
 
 Ask your agent: *"Do you have access to TotalReclaw memory tools?"*
+
+## Protocol Support
+
+The server speaks both MCP protocol eras over stdio, with no configuration: hosts that open with `initialize` (MCP 2025-11-25 and earlier — Claude Desktop, Cursor, Claude Code by default) and hosts that open with `server/discover` (MCP 2026-07-28 — e.g. Claude Code with `MCP_PROTOCOL_NEGOTIATION=auto`). Tools and behaviour are identical in both. Details: [MCP dual-era spec](../docs/specs/totalreclaw/mcp-dual-era.md).
 
 ## How It Works
 
