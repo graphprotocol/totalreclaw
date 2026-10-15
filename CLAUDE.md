@@ -27,7 +27,7 @@ Managed Service chain routing (**single-chain Gnosis — ops-1 shipped 2026-06-0
 
 Smart Account addresses are deterministic (CREATE2) and byte-equal across chains. **Production** DataEdge = `0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca` (both tiers), indexed by the `total-reclaw-gnosis` subgraph. **Staging is on-chain isolated** (shipped): its own DataEdge `0xE7a4D2677B686e13775Ba9092631089e35F0BB91` + dedicated `total-reclaw-gnosis-staging` subgraph, so staging writes never touch production data. See `totalreclaw-internal/docs/specs/ops/staging-chain-isolation.md`.
 
-**On-chain footprint — what of ours is actually deployed (verified 2026-09-15):** exactly ONE TotalReclaw-owned contract family is live: `EventfulDataEdge`, at the two addresses above. Everything else in `contracts/` is **not deployed**: `TotalReclawAccount` (Option E Phase 3 revocable session-key signing — implementation merged via #636, never deployed, **parked by Pedro 2026-09-15**), `SessionKeyModule` (superseded; its validator logic was absorbed into `TotalReclawAccount`), and `TotalReclawPaymaster` (Base Sepolia era only — on Gnosis, gas sponsorship goes through **Pimlico's** paymaster, not ours). User Smart Accounts are third-party infrastructure (eth-infinitism `SimpleAccount` proxies from the canonical factory + the v0.7 EntryPoint singleton `0x0000000071727De22E5E9d8BAf0edAc6f37da032`). The subgraph YAMLs (`subgraph/subgraph-gnosis-*.yaml`) are the authoritative record of what is indexed where — the top-level block of `contracts/deployed-addresses.json` still carries stale March-era `baseSepolia` labels next to what is now the Gnosis prod DataEdge.
+**On-chain footprint — what of ours is actually deployed (verified 2026-10-15):** exactly ONE TotalReclaw-owned contract is **in use**: `EventfulDataEdge`, at the two addresses above. `TotalReclawPaymaster` **is deployed but inert** at `0xd10Be4669c739C3315616f7E6a2D7Dbd7033e7aD` on both Gnosis (2026-03-18) and Base Sepolia (2026-03-20) — zero transactions, zero internal calls, zero balance/EntryPoint deposit; gas sponsorship goes through **Pimlico's** paymaster, not ours. Its source and `SessionKeyModule` (superseded by `TotalReclawAccount`, never deployed) were removed from the repo; both are recorded in `contracts/deployed-addresses.json` → `historical` / git history. The only other contract in `contracts/` is `TotalReclawAccount` (`contracts/account/`, Option E Phase 3 revocable session-key signing — merged via #636, never deployed, **parked by Pedro 2026-09-15**). User Smart Accounts are third-party infrastructure (eth-infinitism `SimpleAccount` proxies from the canonical factory + the v0.7 EntryPoint singleton `0x0000000071727De22E5E9d8BAf0edAc6f37da032`). The subgraph YAMLs (`subgraph/subgraph-gnosis-*.yaml`) are the authoritative record of what is indexed where.
 
 ```
 +-------------------------------------------------------------------------+
@@ -87,7 +87,7 @@ Smart Account addresses are deterministic (CREATE2) and byte-equal across chains
 ├── app/                   # Vault SPA (Vite + React + TS, managed-mode reads via relay subgraph proxy)
 ├── tools/                 # QA + ops helpers
 │   └── qa-vault.mjs       # Playwright vault driver (keychain or QA_RECOVERY_PHRASE env)
-├── contracts/             # Solidity smart contracts (EventfulDataEdge, Paymaster)
+├── contracts/             # Solidity smart contracts (EventfulDataEdge; TotalReclawAccount under account/, parked)
 ├── subgraph/              # Graph Node indexer (AssemblyScript mappings)
 ├── database/              # Database schema (schema.sql)
 ├── tests/                 # Integration tests
@@ -410,7 +410,7 @@ Before telling the user a session can close, run the **`totalreclaw-session-wrap
 | Startup validation | MEDIUM | Validate Pimlico/Stripe/Subgraph reachability on relay boot |
 | DB backup monitoring | LOW | Add alerting (Slack/email) if daily R2 backup fails |
 | Graceful shutdown | LOW | Not yet configured in uvicorn |
-| Signing key not decoupled from the vault root | MEDIUM | `SessionKeyModule.sol` is merged and tested but **inert**: canonical `SimpleAccount` has no path that routes `validateUserOp` to a module, and it is not deployed. Making it reachable requires either a UUPS upgrade of existing account proxies (address-preserving) or migration to a modular account (**not** address-preserving — would orphan facts indexed by the current Smart Account address). The accepted spec signed off on kernel v3 while the shipped module assumes a `SimpleAccount`-shaped `owner()`; that needs reconciling before any contract work. |
+| Signing key not decoupled from the vault root | MEDIUM | Hosts sign with the unscoped, non-revocable owner EOA. The fix is `TotalReclawAccount` (`contracts/account/`, #636): a `SimpleAccount` subclass that also accepts scoped, revocable session keys, reached by a UUPS upgrade of existing account proxies (address-preserving, so facts indexed under the current Smart Account address are kept). It replaced the standalone `SessionKeyModule` (removed — a module's grant storage fails ERC-7562 bundler validation). Merged and tested, **never deployed, parked by Pedro 2026-09-15**; needs an audit before deploy. |
 
 ---
 

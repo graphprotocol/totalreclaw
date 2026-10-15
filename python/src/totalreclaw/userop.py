@@ -1346,16 +1346,16 @@ def sign_userop_with_session_key(
 
     - ``include_grant=False`` (steady state): raw 65-byte ECDSA over the
       EntryPoint UserOp hash. The session signer must already be installed
-      in the SessionKeyModule (lazy-installed by an earlier UserOp).
+      in the account (``TotalReclawAccount``, lazy-installed by an earlier UserOp).
     - ``include_grant=True`` (first UserOp post-pair): ``abi.encode(
-      PermissionGrant, ecdsaSig)`` matching ``SessionKeyModule._decodeInstallSig``.
+      PermissionGrant, ecdsaSig)`` matching ``TotalReclawAccount._decodeInstallSig``.
       The module installs the entry on first encounter and validates the
       current call's scope.
 
     Unlike :func:`sign_user_op_hash` (which applies the EIP-191
     ``\\x19Ethereum Signed Message:\\n32`` prefix used by SimpleAccount's
     legacy validator), this function signs the userOpHash raw — matching
-    ``SessionKeyModule._recoverEcdsa(userOpHash, sig)`` exactly.
+    ``TotalReclawAccount._recoverEcdsa(userOpHash, sig)`` exactly.
 
     Parameters
     ----------
@@ -1414,9 +1414,10 @@ def sign_userop_with_session_key(
 # ---------------------------------------------------------------------------
 
 
-# Standard TheGraph entity-collection name for the SessionKeyModule's
-# ``SessionKeyInstalled(address indexed account, address indexed signer,
-# uint256 nonce)`` event. The subgraph indexing of this event is open per
+# Standard TheGraph entity-collection name for ``TotalReclawAccount``'s
+# ``SessionKeyInstalled(address indexed signer, uint256 nonce)`` event (the
+# emitting contract is the account, so the subgraph derives ``account`` from
+# the event address). The subgraph indexing of this event is open per
 # spec §11.Q4 — when the subgraph ships, this name is the contract.
 _SESSION_KEY_INSTALLED_QUERY: str = (
     "query SessionKeyInstalled($account: Bytes!, $signer: Bytes!) {\n"
@@ -1444,7 +1445,7 @@ async def session_key_grant_was_installed(
     chain_id: int,
     relay_client: "RelayClient",
 ) -> bool:
-    """Return True iff the SessionKeyModule has emitted
+    """Return True iff the Smart Account (``TotalReclawAccount``) has emitted
     ``SessionKeyInstalled(smart_account, signer, *)`` on ``chain_id``.
 
     Callers use this to switch ``sign_userop_with_session_key`` from
