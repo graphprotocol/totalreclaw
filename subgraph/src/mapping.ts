@@ -1,18 +1,36 @@
 /**
- * Subgraph mapping for EventfulDataEdge.
+ * Subgraph mapping for the TotalReclaw DataEdge contracts.
  *
- * Handles Log(bytes) events emitted by the EventfulDataEdge contract.
- * Each event contains an XChaCha20-Poly1305 encrypted Protobuf-serialized TotalReclawFact (v3).
- * The mapping extracts metadata fields and stores them as Fact records
- * with inverted BlindIndex entities for efficient hash_in queries.
+ * TWO data sources, ONE entity store (audit finding 1.1 — write authorization):
  *
- * IMPORTANT: The subgraph stores encrypted data. It never sees plaintext.
- * The blind_indices are SHA-256 hashes — the subgraph can match them but
- * cannot reverse them to learn the original content.
+ *   - handleLogV2  (EventfulDataEdgeV2, `Log(address indexed sender, bytes)`):
+ *       the LIVE, authenticated path. Ownership is derived from `sender`
+ *       (msg.sender = the Smart Account), NEVER from the payload. A fact may
+ *       only be CREATED by a sender (owner := sender), or UPDATED by a write
+ *       whose sender equals the fact's existing owner. Any other write — the
+ *       tombstone / overwrite / hijack an attacker could previously perform by
+ *       calling the contract directly with someone else's fact id — is rejected.
+ *
+ *   - handleLog    (legacy EventfulDataEdge, `Log(bytes)`):
+ *       the pre-V2 contract, kept so existing facts stay readable. Behaviour is
+ *       UNCHANGED (permissive: trusts the payload `owner`, last-write-wins). It
+ *       is "frozen" at cutover by setting `endBlock` on this data source in the
+ *       manifest (see the YAMLs) — past that block the legacy contract is no
+ *       longer indexed, so new direct-call tampering on the old address can no
+ *       longer affect the indexed view. Existing (possibly already-tampered)
+ *       facts are carried as-is; this was an accepted trade (no healing).
+ *
+ * Both paths share `upsertFact` below for the field-writing + blind-index +
+ * sequence bookkeeping, which is identical regardless of how ownership was
+ * established.
+ *
+ * The subgraph stores only ciphertext and SHA-256 blind-index hashes; it never
+ * sees plaintext.
  */
 
 import { Bytes, BigDecimal, BigInt, log } from "@graphprotocol/graph-ts";
-import { Log } from "../generated/EventfulDataEdge/EventfulDataEdge";
+import { Log as LogLegacy } from "../generated/EventfulDataEdge/EventfulDataEdge";
+import { Log as LogV2 } from "../generated/EventfulDataEdgeV2/EventfulDataEdgeV2";
 import { Fact, BlindIndex, GlobalState } from "../generated/schema";
 import { decodeFact, DecodedFact } from "./protobuf";
 
@@ -82,68 +100,58 @@ function getOrCreateGlobalState(): GlobalState {
   return state;
 }
 
-export function handleLog(event: Log): void {
-  let data = event.params.data;
-  if (data.length == 0) {
-    log.warning("Empty Log event in tx {}", [event.transaction.hash.toHexString()]);
-    return;
-  }
-
-  let decoded = decodeFact(data);
-
-  // Use Protobuf ID or fall back to tx hash + log index
-  let factId = decoded.id;
-  if (factId == "") {
-    factId = event.transaction.hash.toHexString() + "-" + event.logIndex.toString();
-  }
-
+/**
+ * Write (create or update) a Fact and its BlindIndex entries. Shared by both
+ * handlers; ownership (`owner`) and authorization are decided by the caller.
+ *
+ * @param factId   resolved entity id (payload id, or txHash-logIndex fallback)
+ * @param owner    the owner to record (legacy: payload/tx.from; V2: sender)
+ * @param decoded  the already-decoded payload
+ * @param isNew    whether this is a brand-new entity (for the totalFacts count)
+ */
+function upsertFact(
+  factId: string,
+  owner: Bytes,
+  decoded: DecodedFact,
+  isNew: boolean,
+  blockNumber: BigInt,
+  blockTimestamp: BigInt,
+  txHash: Bytes
+): void {
   let fact = Fact.load(factId);
-  let isNew = fact == null;
   if (fact == null) {
     fact = new Fact(factId);
   }
 
-  // Owner: from Protobuf or tx.from
-  let owner: Bytes;
-  if (decoded.owner != "") {
-    owner = Bytes.fromHexString(decoded.owner);
-  } else {
-    owner = event.transaction.from;
-  }
-  fact!.owner = owner;
+  fact.owner = owner;
+  fact.encryptedBlob = decoded.encryptedBlob;
+  fact.encryptedEmbedding = decoded.encryptedEmbedding;
+  fact.decayScore = decoded.decayScore;
+  fact.isActive = decoded.decayScore.ge(INACTIVE_THRESHOLD);
+  fact.contentFp = decoded.contentFp;
+  fact.version = decoded.version;
+  fact.blockNumber = blockNumber;
+  fact.timestamp = blockTimestamp;
+  fact.txHash = txHash;
 
-  fact!.encryptedBlob = decoded.encryptedBlob;
-  fact!.encryptedEmbedding = decoded.encryptedEmbedding;
-  fact!.decayScore = decoded.decayScore;
-  fact!.isActive = decoded.decayScore.ge(INACTIVE_THRESHOLD);
-  fact!.contentFp = decoded.contentFp;
-  fact!.version = decoded.version;
-  fact!.blockNumber = event.block.number;
-  fact!.timestamp = event.block.timestamp;
-  fact!.txHash = event.transaction.hash;
-
-  // Client-generated per-fact timestamp (from protobuf field 2).
-  // Falls back to block timestamp if field 2 is missing or malformed.
+  // Client-generated per-fact timestamp (protobuf field 2); fall back to block
+  // timestamp if missing or malformed.
   let parsedCreatedAt = parseISO8601ToUnix(decoded.timestamp);
-  if (parsedCreatedAt.gt(BigInt.zero())) {
-    fact!.createdAt = parsedCreatedAt;
-  } else {
-    fact!.createdAt = event.block.timestamp;
-  }
+  fact.createdAt = parsedCreatedAt.gt(BigInt.zero()) ? parsedCreatedAt : blockTimestamp;
 
-  // Assign monotonic sequence ID
+  // Monotonic sequence id.
   let state = getOrCreateGlobalState();
-  fact!.sequenceId = state.nextSequenceId;
+  fact.sequenceId = state.nextSequenceId;
   state.nextSequenceId = state.nextSequenceId.plus(BigInt.fromI32(1));
   if (isNew) {
     state.totalFacts = state.totalFacts.plus(BigInt.fromI32(1));
   }
-  state.lastUpdated = event.block.timestamp;
+  state.lastUpdated = blockTimestamp;
   state.save();
 
-  fact!.save();
+  fact.save();
 
-  // Create inverted BlindIndex entities
+  // Inverted BlindIndex entities for hash_in search.
   let indices = decoded.blindIndices;
   for (let i = 0; i < indices.length; i++) {
     let hash = indices[i];
@@ -158,6 +166,94 @@ export function handleLog(event: Log): void {
   log.info("Indexed fact {} with {} blind indices for owner {}", [
     factId,
     indices.length.toString(),
-    owner.toHexString()
+    owner.toHexString(),
   ]);
+}
+
+/**
+ * LIVE path — EventfulDataEdgeV2 `Log(address indexed sender, bytes data)`.
+ *
+ * Ownership comes from `sender` (the Smart Account), not the payload. A write
+ * may create a fact or update one it already owns; a write whose sender is not
+ * the existing owner is rejected (this is the audit-1.1 fix).
+ */
+export function handleLogV2(event: LogV2): void {
+  let data = event.params.data;
+  if (data.length == 0) {
+    log.warning("V2: empty Log event in tx {}", [event.transaction.hash.toHexString()]);
+    return;
+  }
+
+  let sender = event.params.sender;
+
+  // Resolve the fact id: payload id, else a per-event fallback. The fallback is
+  // globally unique, so it can only ever create a fresh (sender-owned) fact.
+  let decoded = decodeFact(data);
+  let factId = decoded.id;
+  if (factId == "") {
+    factId = event.transaction.hash.toHexString() + "-" + event.logIndex.toString();
+  }
+
+  // Authorization: only the owner may update an existing fact.
+  let existing = Fact.load(factId);
+  let isNew = existing == null;
+  if (existing != null && existing.owner != sender) {
+    log.warning(
+      "V2: rejected write to fact {} — sender {} is not owner {} (tx {})",
+      [
+        factId,
+        sender.toHexString(),
+        existing.owner.toHexString(),
+        event.transaction.hash.toHexString(),
+      ]
+    );
+    return;
+  }
+
+  upsertFact(
+    factId,
+    sender,
+    decoded,
+    isNew,
+    event.block.number,
+    event.block.timestamp,
+    event.transaction.hash
+  );
+}
+
+/**
+ * LEGACY path — EventfulDataEdge `Log(bytes data)`. Behaviour unchanged
+ * (permissive, trusts payload owner, last-write-wins). Frozen at cutover via
+ * the data source's `endBlock` in the manifest — see the mapping-level comment.
+ */
+export function handleLog(event: LogLegacy): void {
+  let data = event.params.data;
+  if (data.length == 0) {
+    log.warning("Empty Log event in tx {}", [event.transaction.hash.toHexString()]);
+    return;
+  }
+
+  let decoded = decodeFact(data);
+  let factId = decoded.id;
+  if (factId == "") {
+    factId = event.transaction.hash.toHexString() + "-" + event.logIndex.toString();
+  }
+
+  let owner: Bytes;
+  if (decoded.owner != "") {
+    owner = Bytes.fromHexString(decoded.owner);
+  } else {
+    owner = event.transaction.from;
+  }
+
+  let isNew = Fact.load(factId) == null;
+  upsertFact(
+    factId,
+    owner,
+    decoded,
+    isNew,
+    event.block.number,
+    event.block.timestamp,
+    event.transaction.hash
+  );
 }
