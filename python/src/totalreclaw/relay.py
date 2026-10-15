@@ -790,14 +790,15 @@ class RelayClient:
         params = {}
         if chain:
             params["chain"] = chain
-        # The relay routes /v1/subgraph to the correct chain by looking up
-        # this wallet's tier (Pro → Gnosis, Free → Base Sepolia). It reads the
-        # wallet from the ``X-Wallet-Address`` header and *fails open to free*
-        # when the header is absent. Without it, Pro-tier reads land on the
-        # Base Sepolia subgraph and return 0 rows even though the facts live
-        # on Gnosis — the recall-returns-nothing bug (issue #486). Mirror the
-        # write path (``submit_userop``) and always send the wallet so reads
-        # track the same chain as writes.
+        # The relay routes /v1/subgraph by looking up this wallet's tier,
+        # reading the wallet from the ``X-Wallet-Address`` header and
+        # *failing open to free* when it is absent. Both tiers are on Gnosis
+        # since ops-1 (#283), but the routing is still per-tier, and the
+        # wallet also keys per-wallet read accounting and rate limits. Back
+        # when free routed to Base Sepolia, omitting the header sent Pro
+        # reads to the wrong subgraph — the recall-returns-nothing bug
+        # (#486). Mirror the write path (``submit_userop``) and always send
+        # the wallet so reads track the same routing as writes.
         headers = self._base_headers()
         if self._wallet_address:
             headers["X-Wallet-Address"] = self._wallet_address
