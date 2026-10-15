@@ -1,22 +1,53 @@
 # STAGING — Gnosis (isolated DataEdge). Deploy via `npm run deploy:staging`.
-specVersion: 0.0.5
-description: TotalReclaw — STAGING subgraph (Gnosis mainnet, isolated DataEdge). Indexes the staging-only EventfulDataEdge so staging on-chain activity is isolated from the production subgraph. Part of ops-6 (totalreclaw-internal#363 staging-chain-isolation).
+#
+# TWO data sources (audit 1.1 fix): the live EventfulDataEdgeV2 (strict,
+# sender-authenticated) and the legacy EventfulDataEdge (permissive, frozen at
+# cutover via `endBlock`). Both feed one entity store. See src/mapping.ts.
+specVersion: 0.0.8
+description: TotalReclaw — STAGING subgraph (Gnosis mainnet, isolated DataEdge). Indexes the staging-only DataEdge contracts so staging on-chain activity is isolated from the production subgraph.
 repository: https://github.com/p-diogo/totalreclaw
 schema:
   file: ./schema.graphql
 dataSources:
+  # LIVE — EventfulDataEdgeV2 (strict, sender-authenticated).
+  - kind: ethereum
+    name: EventfulDataEdgeV2
+    network: gnosis
+    source:
+      # TODO(deploy): set to the staging V2 address from
+      # `TR_DATAEDGE_V2_TARGET=staging forge script script/DeployDataEdgeV2.s.sol`
+      # and its deploy block. Placeholder until the audit-1.1 V2 contract is deployed.
+      address: "0x0000000000000000000000000000000000000000"
+      abi: EventfulDataEdgeV2
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - Fact
+        - BlindIndex
+        - GlobalState
+      abis:
+        - name: EventfulDataEdgeV2
+          file: ./abis/EventfulDataEdgeV2.json
+      eventHandlers:
+        - event: Log(indexed address,bytes)
+          handler: handleLogV2
+      file: ./src/mapping.ts
+  # LEGACY — pre-V2 EventfulDataEdge (permissive, read-only history).
   - kind: ethereum
     name: EventfulDataEdge
     network: gnosis
     source:
       # Isolated STAGING DataEdge — distinct from production's 0xC445…c36f.
-      # Predicted CREATE2 address (ops-5, contracts/script/DeployDataEdgeStaging.s.sol).
-      # Verified against contracts/deployed-addresses.json → stagingGnosis.eventfulDataEdge.
       address: "0xE7a4D2677B686e13775Ba9092631089e35F0BB91"
       abi: EventfulDataEdge
-      # Staging DataEdge deploy block on Gnosis (ops-5 broadcast 2026-06-01,
-      # tx 0x94f08afe…7be6). The contract emits no events before this block.
+      # Staging DataEdge deploy block on Gnosis (ops-5 broadcast 2026-06-01).
       startBlock: 46464196
+      # TODO(cutover): set `endBlock: <B_cut>` once staging clients write to V2,
+      # to stop indexing the legacy contract (soft-reject past cutover). Until
+      # then the legacy contract keeps indexing so existing facts stay current.
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7

@@ -1,10 +1,41 @@
 # PROD — Gnosis mainnet (chain 100). Deploy via `npm run deploy:prod`.
-specVersion: 0.0.5
-description: TotalReclaw — End-to-end encrypted memory vault subgraph (Gnosis mainnet, test instance)
+#
+# TWO data sources (audit 1.1 fix): the live EventfulDataEdgeV2 (strict,
+# sender-authenticated) and the legacy EventfulDataEdge (permissive, frozen at
+# cutover via `endBlock`). Both feed one entity store. See src/mapping.ts.
+specVersion: 0.0.8
+description: TotalReclaw — End-to-end encrypted memory vault subgraph (Gnosis mainnet)
 repository: https://github.com/p-diogo/totalreclaw
 schema:
   file: ./schema.graphql
 dataSources:
+  # LIVE — EventfulDataEdgeV2 (strict, sender-authenticated).
+  - kind: ethereum
+    name: EventfulDataEdgeV2
+    network: gnosis
+    source:
+      # TODO(deploy): set to the prod V2 address from
+      # `TR_DATAEDGE_V2_TARGET=prod forge script script/DeployDataEdgeV2.s.sol`
+      # and its deploy block. Placeholder until the audit-1.1 V2 contract is deployed.
+      address: "0x0000000000000000000000000000000000000000"
+      abi: EventfulDataEdgeV2
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - Fact
+        - BlindIndex
+        - GlobalState
+      abis:
+        - name: EventfulDataEdgeV2
+          file: ./abis/EventfulDataEdgeV2.json
+      eventHandlers:
+        - event: Log(indexed address,bytes)
+          handler: handleLogV2
+      file: ./src/mapping.ts
+  # LEGACY — pre-V2 EventfulDataEdge (permissive, read-only history).
   - kind: ethereum
     name: EventfulDataEdge
     network: gnosis
@@ -12,6 +43,9 @@ dataSources:
       address: "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca"
       abi: EventfulDataEdge
       startBlock: 45217698
+      # TODO(cutover): set `endBlock: <B_cut>` once prod clients write to V2, to
+      # stop indexing the legacy contract (soft-reject past cutover). Until then
+      # the legacy contract keeps indexing so existing facts stay current.
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
