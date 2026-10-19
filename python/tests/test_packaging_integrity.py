@@ -220,3 +220,28 @@ def test_pyproject_version_no_rc_suffix():
         f"workflow's mutation logic. See F3 in "
         f"QA-hermes-RC-2.3.1-rc.23-20260426.md."
     )
+
+
+def test_pyproject_caps_httpx_below_1():
+    """httpx must stay capped below 1.0. httpx 1.0 drops
+    ``httpx.HTTPStatusError``, which ``relay.py`` subclasses at import
+    time (``RelayReadError``, #662). ``pip install --pre`` resolves the
+    httpx 1.0 pre-releases unless the cap excludes them, and
+    ``import totalreclaw`` then fails with AttributeError.
+    """
+    import tomllib
+
+    from packaging.requirements import Requirement
+
+    deps = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["project"][
+        "dependencies"
+    ]
+    httpx = [Requirement(d) for d in deps if Requirement(d).name == "httpx"]
+    assert len(httpx) == 1, "pyproject.toml must declare httpx exactly once"
+    spec = httpx[0].specifier
+    assert spec.contains("0.28.1"), f"httpx {spec} must still allow 0.28.x"
+    for blocked in ("1.0.dev6", "1.0rc1", "1.0.0"):
+        assert not spec.contains(blocked, prereleases=True), (
+            f"httpx {spec} admits {blocked}; keep the <1 cap until relay.py "
+            f"is ported off httpx.HTTPStatusError"
+        )
