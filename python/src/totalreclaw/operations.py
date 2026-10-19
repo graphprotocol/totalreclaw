@@ -37,7 +37,7 @@ from .embedding import get_embedding, get_embedding_dims
 from .lsh import LSHHasher
 from .protobuf import FactPayload, encode_fact_protobuf, encode_tombstone_protobuf
 from .relay import RelayClient, RelayReadBlocked
-from .reranker import RerankerCandidate, RerankerResult, rerank
+from .reranker import RerankerCandidate, RerankerResult, default_pin_boost, rerank
 from .tuning_loop import maybe_write_feedback_for_pin
 from .userop import build_and_send_userop, build_and_send_userop_batch, MAX_BATCH_SIZE
 from .claims_helper import (
@@ -45,6 +45,7 @@ from .claims_helper import (
     build_canonical_claim_v1,
     compute_entity_trapdoor,
     compute_entity_trapdoors,
+    entity_refs_from_blob,
     is_digest_blob,
     is_stub_blob_hex,
     read_blob_unified,
@@ -57,6 +58,11 @@ from .entity_extract import extract_query_entities
 # on the whole ``agent`` subpackage, the exact root<->agent cycle the leaf was
 # extracted to break.
 from .memory_types import V0_TO_V1_TYPE, VALID_MEMORY_TYPES
+
+# PRD-04 F1 / DEP-5: recall pin boost (core ``reranker::DEFAULT_PIN_BOOST``,
+# 1.5). ``None`` on a core wheel that predates the option -- ranking is then
+# unchanged. Core ignores it for lexical-only recalls (no query embedding).
+PIN_BOOST_DEFAULT: Optional[float] = default_pin_boost()
 
 # GraphQL queries — matching TypeScript search.ts
 SEARCH_QUERY = """
@@ -939,6 +945,11 @@ async def search_facts(
                 continue
             doc = read_claim_from_blob(decrypted_blob)
             text = doc["text"]
+            # PRD-04 F1 / DEP-5: pin state feeds the reranker's pin boost and
+            # the contradiction resolver; entity refs let the resolver find
+            # the shared entity it requires.
+            candidate_pinned = bool(_core.is_pinned_claim(decrypted_blob))
+            candidate_entities = entity_refs_from_blob(decrypted_blob) or None
 
             emb: Optional[list[float]] = None
             encrypted_emb = fact.get("encryptedEmbedding")
@@ -995,6 +1006,8 @@ async def search_facts(
                     category=doc.get("category", "fact"),
                     source=candidate_source,
                     metadata=extra_meta,
+                    pinned=candidate_pinned,
+                    entities=candidate_entities,
                 )
             )
         except Exception as e:
@@ -1018,7 +1031,14 @@ async def search_facts(
 
     # Retrieval v2 Tier 1 source-weighting: OFF by default as of 2026-06-08
     # (benchmark showed tie-or-worse; see APPLY_SOURCE_WEIGHTS_DEFAULT).
-    return rerank(query, query_embedding, candidates, top_k=top_k, apply_source_weights=APPLY_SOURCE_WEIGHTS_DEFAULT)
+    return rerank(
+        query,
+        query_embedding,
+        candidates,
+        top_k=top_k,
+        apply_source_weights=APPLY_SOURCE_WEIGHTS_DEFAULT,
+        pin_boost=PIN_BOOST_DEFAULT,
+    )
 
 
 async def forget_fact(
@@ -1120,15 +1140,96 @@ async def _fetch_fact_by_id(
     fact_id: str,
     owner: str,
     relay: RelayClient,
+    *,
+    strict: bool = False,
 ) -> Optional[dict]:
     """Fetch a single fact's on-chain record via the subgraph.
 
     Returns the raw ``fact`` subgraph object or ``None`` if not found.
     The caller is responsible for checking ``owner`` matches the expected
     smart-account address.
+
+    With ``strict=True`` (PRD-04 F1 / DEP-5, review fix-up) a 2xx body that
+    does not carry a ``data`` dict with a ``fact`` key raises ``RuntimeError``
+    instead of collapsing to ``None``: ``relay.query_subgraph`` returns the
+    parsed body for any HTTP 2xx, so an indexer error body (``{"errors":
+    [...]}``) has no ``data`` key and the lenient ``.get`` chain would make
+    "pin state unreadable" look like "fact absent". The pin guard must fail
+    closed on that difference, so ``get_fact_pin_status`` is the strict
+    caller; other callers keep the lenient shape.
     """
     data = await relay.query_subgraph(FACT_BY_ID_QUERY, {"id": fact_id})
+    if strict:
+        if isinstance(data, dict) and data.get("errors"):
+            # Categorical message only — never echo the body, which may carry
+            # indexer diagnostics (pin-guard log hygiene, PRD-04 DEP-5).
+            raise RuntimeError(
+                "fact-by-id subgraph query returned errors "
+                f"({len(data['errors'])} item(s))"
+            )
+        inner = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(inner, dict) or "fact" not in inner:
+            raise RuntimeError(
+                "fact-by-id subgraph response has no data.fact "
+                f"(body type {type(data).__name__})"
+            )
+        return inner["fact"]
     return data.get("data", {}).get("fact")
+
+
+def _has_raw_pin_sentinel(decrypted: str) -> bool:
+    """Pin sentinel check on raw JSON, for blobs core cannot parse as a claim.
+
+    Fail-closed fallback for the pin guard only (PRD-04 DEP-5): a pinned blob
+    written by a newer client (e.g. an enum value this core does not know)
+    must still count as pinned. Recall ranking uses core alone.
+    """
+    try:
+        obj = _json.loads(decrypted)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(obj, dict):
+        return False
+    return obj.get("pin_status") == "pinned" or obj.get("st") == "p"
+
+
+async def get_fact_pin_status(
+    fact_id: str,
+    keys: DerivedKeys,
+    owner: str,
+    relay: RelayClient,
+) -> bool:
+    """Is on-chain fact ``fact_id`` pinned right now? (PRD-04 F1 / DEP-5)
+
+    ``True`` iff the fact exists, is active, and its decrypted blob is pinned
+    per ``totalreclaw_core.is_pinned_claim`` (v1.1 ``pin_status == "pinned"``
+    or v0 ``st == "p"``) or, for a blob core cannot parse, carries one of
+    those sentinels. A missing fact, an inactive fact and a tombstone stub
+    are all ``False`` -- tombstoning them again cannot hurt a pin.
+
+    Raises on any relay error (including :class:`RelayReadBlocked`), on a 2xx
+    subgraph body that does not carry ``data.fact`` (a GraphQL error body —
+    never mistake an unreadable state for an absent fact), and on decrypt
+    failure. Callers MUST treat a raise as "pin state unknown" and fail closed
+    (see ``agent/pin_guard.py``).
+    """
+    if not isinstance(fact_id, str) or not fact_id.strip():
+        raise ValueError("fact_id must be a non-empty string")
+    fact = await _fetch_fact_by_id(fact_id.strip(), owner, relay, strict=True)
+    if not fact:
+        return False
+    if fact.get("isActive") is False:
+        return False
+    blob_hex = fact.get("encryptedBlob", "") or ""
+    if is_stub_blob_hex(blob_hex):
+        return False
+    if blob_hex.startswith(("0x", "0X")):
+        blob_hex = blob_hex[2:]
+    blob_b64 = base64.b64encode(bytes.fromhex(blob_hex)).decode("ascii")
+    decrypted = decrypt(blob_b64, keys.encryption_key)
+    if _core.is_pinned_claim(decrypted):
+        return True
+    return _has_raw_pin_sentinel(decrypted)
 
 
 def _decrypt_and_parse_claim(

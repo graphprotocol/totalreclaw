@@ -132,6 +132,7 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_rerank_with_config, m)?)?;
     m.add_function(wrap_pyfunction!(py_source_weight, m)?)?;
     m.add_function(wrap_pyfunction!(py_legacy_claim_fallback_weight, m)?)?;
+    m.add_function(wrap_pyfunction!(py_default_pin_boost, m)?)?;
     m.add_function(wrap_pyfunction!(py_validate_memory_claim_v1, m)?)?;
     m.add_function(wrap_pyfunction!(py_parse_memory_type_v1, m)?)?;
     m.add_function(wrap_pyfunction!(py_parse_memory_source, m)?)?;
@@ -774,6 +775,7 @@ mod tests {
             candidates,
             10,
             true,
+            None,
         )
         .unwrap();
         // User must come first — the JSON array is ordered by score desc.
@@ -799,6 +801,7 @@ mod tests {
             candidates_json,
             10,
             false,
+            None,
         )
         .unwrap();
         let v0 = py_rerank(
@@ -809,5 +812,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(off, v0, "flag OFF must equal v0 rerank output");
+    }
+
+    #[test]
+    fn py_rerank_with_config_pin_boost_lifts_pinned_candidate() {
+        // Same fixture as reranker::tests::pin_fixture (PRD-04 DEP-5).
+        let candidates = r#"[
+            {"id":"a","text":"alpha note","embedding":[1.0,0.0,0.0,0.0],"timestamp":""},
+            {"id":"b","text":"bravo note","embedding":[0.9,0.1,0.0,0.0],"timestamp":""},
+            {"id":"c","text":"charlie note","embedding":[0.8,0.2,0.0,0.0],"timestamp":""},
+            {"id":"p","text":"papa note","embedding":[0.7,0.3,0.0,0.0],"timestamp":"","pinned":true},
+            {"id":"e","text":"echo note","embedding":[0.6,0.4,0.0,0.0],"timestamp":""},
+            {"id":"f","text":"foxtrot note","embedding":[0.5,0.5,0.0,0.0],"timestamp":""}
+        ]"#;
+        let ids = |s: &str| -> Vec<String> {
+            serde_json::from_str::<Vec<serde_json::Value>>(s)
+                .unwrap()
+                .iter()
+                .map(|v| v["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let off = py_rerank_with_config("zulu", vec![1.0f32, 0.0, 0.0, 0.0], candidates, 3, false, None).unwrap();
+        let on = py_rerank_with_config(
+            "zulu",
+            vec![1.0f32, 0.0, 0.0, 0.0],
+            candidates,
+            3,
+            false,
+            Some(py_default_pin_boost()),
+        )
+        .unwrap();
+        assert_eq!(ids(&off), vec!["a", "b", "c"]);
+        assert_eq!(ids(&on), vec!["p", "a", "b"]);
+        assert_eq!(py_default_pin_boost(), 1.5);
     }
 }

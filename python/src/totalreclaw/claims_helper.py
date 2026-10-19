@@ -583,6 +583,61 @@ def read_claim_from_blob(decrypted_json: str) -> Dict[str, Any]:
     return read_blob_unified(decrypted_json)
 
 
+# Core ``EntityType`` tokens (rust/totalreclaw-core/src/claims.rs). Any other
+# token makes core reject the whole claim, so refs outside this set are dropped
+# before they reach ``totalreclaw_core.resolve_with_candidates`` (PRD-04 DEP-5).
+CORE_ENTITY_TYPES = frozenset({"person", "project", "tool", "company", "concept", "place"})
+
+
+def to_entity_refs(raw: Any) -> List[Dict[str, str]]:
+    """Normalise entities to core short-key ``EntityRef`` dicts ``{"n","tp","r"?}``.
+
+    Accepts a list of objects with ``name``/``type``/``role`` attributes
+    (``ExtractedEntity``), v1 dicts (``{"name","type","role"}``) or v0 dicts
+    (``{"n","tp","r"}``). Entries with an empty name or a type outside
+    :data:`CORE_ENTITY_TYPES` are dropped. Non-list input returns ``[]``.
+    """
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: List[Dict[str, str]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            name = item.get("name", item.get("n"))
+            etype = item.get("type", item.get("tp"))
+            role = item.get("role", item.get("r"))
+        else:
+            name = getattr(item, "name", None)
+            etype = getattr(item, "type", None)
+            role = getattr(item, "role", None)
+        if not isinstance(name, str) or not name.strip():
+            continue
+        if not isinstance(etype, str) or etype.strip().lower() not in CORE_ENTITY_TYPES:
+            continue
+        ref: Dict[str, str] = {"n": name.strip(), "tp": etype.strip().lower()}
+        if isinstance(role, str) and role.strip():
+            ref["r"] = role.strip()
+        out.append(ref)
+    return out
+
+
+def entity_refs_from_blob(decrypted: str) -> List[Dict[str, str]]:
+    """Short-key entity refs carried by a decrypted claim blob.
+
+    v1 blobs keep them under ``entities``; v0 short-key blobs under ``e``.
+    Returns ``[]`` for unparseable blobs or blobs without entities.
+    """
+    try:
+        obj = json.loads(decrypted)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(obj, dict):
+        return []
+    raw = obj.get("entities")
+    if not isinstance(raw, list):
+        raw = obj.get("e")
+    return to_entity_refs(raw)
+
+
 def is_digest_blob(decrypted: str) -> bool:
     """Does this decrypted blob look like a digest claim?"""
     try:

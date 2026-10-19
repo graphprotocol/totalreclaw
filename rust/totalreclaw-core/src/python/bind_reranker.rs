@@ -35,22 +35,29 @@ pub(crate) fn py_rerank(
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
-/// Rerank candidates with a config flag (Retrieval v2 Tier 1).
+/// Rerank candidates with a config flag (Retrieval v2 Tier 1) and an
+/// optional pin boost (PRD-04 F1 / DEP-5).
 ///
 /// When ``apply_source_weights`` is True, each candidate's final fused score is
 /// multiplied by the provenance weight derived from its ``source`` field.
 /// Legacy candidates without ``source`` receive the v0 fallback weight.
 ///
+/// When ``pin_boost`` is a float > 1.0, candidates carrying ``"pinned": true``
+/// are multiplied by it (ignored when ``query_embedding`` is empty). ``None``
+/// (the default) keeps the pre-DEP-5 ranking bit-for-bit.
+///
 /// Args:
 ///     query: Search query text.
 ///     query_embedding: Query embedding vector (list of floats).
-///     candidates_json: JSON array of ``{ id, text, embedding, timestamp, source? }`` objects.
+///     candidates_json: JSON array of ``{ id, text, embedding, timestamp, source?, pinned? }`` objects.
 ///     top_k: Number of top results to return.
 ///     apply_source_weights: If True, apply v1 source weighting.
+///     pin_boost: Optional pin multiplier; pass :func:`default_pin_boost` to enable.
 ///
 /// Returns:
 ///     JSON string of ranked results including ``source_weight``.
 #[pyfunction]
+#[pyo3(signature = (query, query_embedding, candidates_json, top_k, apply_source_weights, pin_boost=None))]
 #[pyo3(name = "rerank_with_config")]
 pub(crate) fn py_rerank_with_config(
     query: &str,
@@ -58,6 +65,7 @@ pub(crate) fn py_rerank_with_config(
     candidates_json: &str,
     top_k: usize,
     apply_source_weights: bool,
+    pin_boost: Option<f64>,
 ) -> PyResult<String> {
     let candidates: Vec<reranker::Candidate> =
         serde_json::from_str(candidates_json).map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -65,6 +73,7 @@ pub(crate) fn py_rerank_with_config(
         apply_source_weights,
         bm25_weight_override: None,
         vector_weight_override: None,
+        pin_boost,
     };
     let results = reranker::rerank_with_config(query, &query_embedding, &candidates, top_k, config)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -93,6 +102,15 @@ pub(crate) fn py_source_weight(source: &str) -> f64 {
 #[pyo3(name = "legacy_claim_fallback_weight")]
 pub(crate) fn py_legacy_claim_fallback_weight() -> f64 {
     reranker::LEGACY_CLAIM_FALLBACK_WEIGHT
+}
+
+/// Default recall boost for pinned candidates (PRD-04 F1 / DEP-5) — 1.5.
+///
+/// Pass it as ``pin_boost`` to :func:`rerank_with_config` to enable the boost.
+#[pyfunction]
+#[pyo3(name = "default_pin_boost")]
+pub(crate) fn py_default_pin_boost() -> f64 {
+    reranker::DEFAULT_PIN_BOOST
 }
 
 /// Validate a Memory Taxonomy v1 claim (JSON in, canonical JSON out).

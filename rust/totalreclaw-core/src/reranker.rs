@@ -18,6 +18,15 @@
 //! [`LEGACY_CLAIM_FALLBACK_WEIGHT`] when the candidate has no source field).
 //!
 //! See `docs/specs/totalreclaw/retrieval-v2.md` §Tier 1.
+//!
+//! # PRD-04 F1: pin boost
+//!
+//! When [`RerankerConfig::pin_boost`] is `Some(b)` with a finite `b > 1.0`
+//! and the query has an embedding, the final score of every candidate whose
+//! [`Candidate::pinned`] flag is set is multiplied by `b` (after source
+//! weighting, before top-k truncation). [`DEFAULT_PIN_BOOST`] is the value
+//! clients enable. `None` — the default — leaves every score bit-for-bit
+//! unchanged. See `docs/specs/totalreclaw/retrieval-v2.md` §Pin boost.
 
 use std::collections::HashMap;
 
@@ -90,6 +99,17 @@ pub fn source_weight(source: MemorySource) -> f64 {
         .unwrap_or(LEGACY_CLAIM_FALLBACK_WEIGHT)
 }
 
+/// Recall boost clients enable for pinned candidates (PRD-04 F1 / DEP-5).
+///
+/// Equals [`crate::claims::PinConfig::default`]`().hard_boost`: the 1.5×
+/// value signed off on 2026-04-28 (internal
+/// `docs/plans/2026-04-28-f1-pin-ux-defaults.md`) as strong enough to lift
+/// pinned facts about 50% above unpinned ones without making every pinned
+/// fact rank first. On-wire pins are binary (`pin_status == "pinned"` /
+/// `st == "p"`) and carry no pin timestamp, so the non-decaying hard-pin
+/// value applies.
+pub const DEFAULT_PIN_BOOST: f64 = 1.5;
+
 /// Reranker runtime configuration.
 ///
 /// v0 callers can stay with the legacy [`rerank`] API (no source awareness).
@@ -113,16 +133,27 @@ pub struct RerankerConfig {
     /// intent-weighted formula when `Some`. Default: `None` (adaptive).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vector_weight_override: Option<f64>,
+    /// PRD-04 F1 / DEP-5: multiplicative boost for candidates whose
+    /// [`Candidate::pinned`] is true, applied after source weighting and
+    /// before top-k truncation. `None` (default), a non-finite value or a
+    /// value `<= 1.0` is a no-op, and so is any call with an empty query
+    /// embedding (lexical-only recall has no relevance signal to separate
+    /// non-matching candidates, so a boost would lift every pin to the top).
+    /// Clients enable it with [`DEFAULT_PIN_BOOST`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_boost: Option<f64>,
 }
 
 impl Default for RerankerConfig {
-    /// Defaults to v0-compatible behaviour (`apply_source_weights = false`) so
-    /// pre-v1 callers can bump the core version without ranking drift.
+    /// Defaults to v0-compatible behaviour (`apply_source_weights = false`,
+    /// no pin boost) so pre-v1 callers can bump the core version without
+    /// ranking drift.
     fn default() -> Self {
         RerankerConfig {
             apply_source_weights: false,
             bm25_weight_override: None,
             vector_weight_override: None,
+            pin_boost: None,
         }
     }
 }
@@ -145,6 +176,12 @@ pub struct Candidate {
     /// source yields [`LEGACY_CLAIM_FALLBACK_WEIGHT`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<MemorySource>,
+    /// PRD-04 F1 / DEP-5: true when the fact is pinned (clients set it from
+    /// `claims::is_pinned_json` on the decrypted blob). Only affects ranking
+    /// when [`RerankerConfig::pin_boost`] is set. JSON key `pinned`; absent
+    /// means false, and false is omitted on serialisation.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
 }
 
 /// A reranked result with scores.
@@ -154,7 +191,7 @@ pub struct RankedResult {
     pub id: String,
     /// Decrypted plaintext.
     pub text: String,
-    /// Final fused score (post source-weight multiplication if enabled).
+    /// Final fused score (post source-weight and pin-boost multiplication if enabled).
     pub score: f64,
     /// BM25 component score.
     pub bm25_score: f64,
@@ -170,6 +207,10 @@ pub struct RankedResult {
 
 fn is_one_f64(v: &f64) -> bool {
     (*v - 1.0).abs() < f64::EPSILON
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 /// Rerank candidates using BM25 + Cosine + RRF fusion (v0-compatible).
@@ -260,6 +301,10 @@ pub fn rerank_with_config(
     let bm25_ranks = compute_ranks(&bm25_scores);
     let cosine_ranks = compute_ranks(&cosine_scores);
 
+    // PRD-04 F1 / DEP-5: the pin boost needs a semantic signal (see
+    // `RerankerConfig::pin_boost`).
+    let semantic_signal = !query_embedding.is_empty();
+
     // Intent-weighted fusion
     let mut results: Vec<RankedResult> = Vec::with_capacity(candidates.len());
     for (i, candidate) in candidates.iter().enumerate() {
@@ -286,7 +331,14 @@ pub fn rerank_with_config(
             1.0
         };
 
-        let final_score = fused * src_weight;
+        // PRD-04 F1 / DEP-5 pin boost (post source weight, pre-truncation).
+        // `x * 1.0 == x` exactly, so the no-boost path stays bit-identical.
+        let pin_mult = match config.pin_boost {
+            Some(b) if candidate.pinned && semantic_signal && b.is_finite() && b > 1.0 => b,
+            _ => 1.0,
+        };
+
+        let final_score = fused * src_weight * pin_mult;
 
         results.push(RankedResult {
             id: candidate.id.clone(),
@@ -460,6 +512,7 @@ mod tests {
                 embedding: vec![i as f32 / 10.0; 4],
                 timestamp: String::new(),
                 source: None,
+                pinned: false,
             })
             .collect();
 
@@ -505,6 +558,7 @@ mod tests {
             embedding,
             timestamp: String::new(),
             source,
+            pinned: false,
         }
     }
 
@@ -926,6 +980,7 @@ mod tests {
                 embedding: vec![0.1f32, 0.2],
                 timestamp: "2026-04-17T00:00:00Z".into(),
                 source: Some(MemorySource::User),
+                pinned: false,
             },
             Candidate {
                 id: "2".into(),
@@ -933,6 +988,7 @@ mod tests {
                 embedding: vec![0.1f32, 0.2],
                 timestamp: String::new(),
                 source: None,
+                pinned: false,
             },
         ];
         let json = serde_json::to_string(&candidates).unwrap();
@@ -1002,6 +1058,7 @@ mod tests {
                 apply_source_weights: false,
                 bm25_weight_override: Some(1.0),
                 vector_weight_override: Some(0.0),
+                pin_boost: None,
             },
         )
         .unwrap();
@@ -1029,6 +1086,7 @@ mod tests {
                 apply_source_weights: false,
                 bm25_weight_override: None,
                 vector_weight_override: None,
+                pin_boost: None,
             },
         )
         .unwrap();
@@ -1052,6 +1110,7 @@ mod tests {
             apply_source_weights: false,
             bm25_weight_override: Some(0.7),
             vector_weight_override: Some(0.3),
+            pin_boost: None,
         };
         let json2 = serde_json::to_string(&cfg_with).unwrap();
         assert!(json2.contains("0.7"));
@@ -1060,5 +1119,236 @@ mod tests {
         let back: RerankerConfig = serde_json::from_str(&json2).unwrap();
         assert_eq!(back.bm25_weight_override, Some(0.7));
         assert_eq!(back.vector_weight_override, Some(0.3));
+    }
+
+    // === PRD-04 F1 / DEP-5: pin boost ===
+
+    fn cand_pinned(id: &str, text: &str, embedding: Vec<f32>, pinned: bool) -> Candidate {
+        Candidate {
+            id: id.to_string(),
+            text: text.to_string(),
+            embedding,
+            timestamp: String::new(),
+            source: None,
+            pinned,
+        }
+    }
+
+    /// No candidate shares a token with the query "zulu", so BM25 ties every
+    /// candidate and cosine alone orders them a > b > c > p > e > f.
+    /// Mirrored in python/tests/test_reranker_pin_boost.py and
+    /// mcp/tests/reranker-pin-boost.test.ts — change all three together.
+    fn pin_fixture(p_pinned: bool) -> Vec<Candidate> {
+        vec![
+            cand_pinned("a", "alpha note", vec![1.0, 0.0, 0.0, 0.0], false),
+            cand_pinned("b", "bravo note", vec![0.9, 0.1, 0.0, 0.0], false),
+            cand_pinned("c", "charlie note", vec![0.8, 0.2, 0.0, 0.0], false),
+            cand_pinned("p", "papa note", vec![0.7, 0.3, 0.0, 0.0], p_pinned),
+            cand_pinned("e", "echo note", vec![0.6, 0.4, 0.0, 0.0], false),
+            cand_pinned("f", "foxtrot note", vec![0.5, 0.5, 0.0, 0.0], false),
+        ]
+    }
+
+    const PIN_QUERY: &str = "zulu";
+    const PIN_QUERY_EMBEDDING: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
+
+    fn boosted() -> RerankerConfig {
+        RerankerConfig {
+            pin_boost: Some(DEFAULT_PIN_BOOST),
+            ..Default::default()
+        }
+    }
+
+    fn ids(results: &[RankedResult]) -> Vec<String> {
+        results.iter().map(|r| r.id.clone()).collect()
+    }
+
+    fn assert_bit_identical(x: &[RankedResult], y: &[RankedResult]) {
+        assert_eq!(ids(x), ids(y));
+        for (a, b) in x.iter().zip(y.iter()) {
+            assert_eq!(a.score.to_bits(), b.score.to_bits(), "score drift on {}", a.id);
+        }
+    }
+
+    #[test]
+    fn test_default_pin_boost_is_the_signed_off_hard_pin_value() {
+        assert_eq!(DEFAULT_PIN_BOOST, 1.5);
+        assert_eq!(DEFAULT_PIN_BOOST, crate::claims::PinConfig::default().hard_boost);
+    }
+
+    #[test]
+    fn test_reranker_config_default_has_no_pin_boost() {
+        assert_eq!(RerankerConfig::default().pin_boost, None);
+    }
+
+    #[test]
+    fn test_pin_boost_lifts_pinned_candidate_just_outside_top_k_into_top_k() {
+        let without = rerank_with_config(
+            PIN_QUERY,
+            &PIN_QUERY_EMBEDDING,
+            &pin_fixture(true),
+            3,
+            RerankerConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(ids(&without), vec!["a", "b", "c"], "p must sit just outside the top 3 without a boost");
+
+        let with = rerank_with_config(PIN_QUERY, &PIN_QUERY_EMBEDDING, &pin_fixture(true), 3, boosted()).unwrap();
+        assert_eq!(ids(&with), vec!["p", "a", "b"]);
+    }
+
+    #[test]
+    fn test_pin_boost_leaves_unpinned_candidates_bit_identical() {
+        let base = rerank_with_config(
+            PIN_QUERY,
+            &PIN_QUERY_EMBEDDING,
+            &pin_fixture(false),
+            6,
+            RerankerConfig::default(),
+        )
+        .unwrap();
+        let with = rerank_with_config(PIN_QUERY, &PIN_QUERY_EMBEDDING, &pin_fixture(false), 6, boosted()).unwrap();
+        assert_bit_identical(&base, &with);
+    }
+
+    #[test]
+    fn test_pin_boost_none_leaves_pinned_candidates_bit_identical() {
+        let unpinned = rerank_with_config(
+            PIN_QUERY,
+            &PIN_QUERY_EMBEDDING,
+            &pin_fixture(false),
+            6,
+            RerankerConfig::default(),
+        )
+        .unwrap();
+        let pinned = rerank_with_config(
+            PIN_QUERY,
+            &PIN_QUERY_EMBEDDING,
+            &pin_fixture(true),
+            6,
+            RerankerConfig::default(),
+        )
+        .unwrap();
+        assert_bit_identical(&unpinned, &pinned);
+    }
+
+    #[test]
+    fn test_pin_boost_non_finite_or_not_above_one_is_a_no_op() {
+        let base = rerank_with_config(
+            PIN_QUERY,
+            &PIN_QUERY_EMBEDDING,
+            &pin_fixture(true),
+            6,
+            RerankerConfig::default(),
+        )
+        .unwrap();
+        for b in [1.0, 0.5, 0.0, -2.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let got = rerank_with_config(
+                PIN_QUERY,
+                &PIN_QUERY_EMBEDDING,
+                &pin_fixture(true),
+                6,
+                RerankerConfig {
+                    pin_boost: Some(b),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_bit_identical(&base, &got);
+        }
+    }
+
+    #[test]
+    fn test_pin_boost_is_ignored_without_query_embedding() {
+        // Lexical-only recall: with no query embedding every candidate ties on
+        // cosine and every non-matching candidate ties on BM25, so a multiplier
+        // would lift every pinned fact above genuine matches. Without this
+        // rule "p" would score 1.5 * (0.6/62 + 0.3/61) = 0.0219 > "a" 0.0148.
+        let base = rerank_with_config("alpha", &[], &pin_fixture(true), 6, RerankerConfig::default()).unwrap();
+        let with = rerank_with_config("alpha", &[], &pin_fixture(true), 6, boosted()).unwrap();
+        assert_bit_identical(&base, &with);
+        assert_eq!(with[0].id, "a", "the lexical match stays first");
+    }
+
+    #[test]
+    fn test_pin_boost_does_not_surface_an_irrelevant_pinned_fact() {
+        // 60 facts that match the query lexically and semantically plus one
+        // pinned fact that matches neither: 1.5x must not put it in the top 8.
+        // A pin raises rank; it does not add a fact to every recall.
+        let mut candidates: Vec<Candidate> = (0..60)
+            .map(|i| {
+                cand_pinned(
+                    &format!("m{:02}", i),
+                    &format!("dark mode setting {}", i + 10),
+                    vec![1.0, i as f32 * 0.01, 0.0, 0.0],
+                    false,
+                )
+            })
+            .collect();
+        candidates.push(cand_pinned(
+            "pin",
+            "grocery list for saturday",
+            vec![0.0, 1.0, 0.0, 0.0],
+            true,
+        ));
+        let got = rerank_with_config("dark mode", &[1.0, 0.0, 0.0, 0.0], &candidates, 8, boosted()).unwrap();
+        assert_eq!(got.len(), 8);
+        assert!(
+            got.iter().all(|r| r.id != "pin"),
+            "irrelevant pinned fact entered the top 8: {:?}",
+            ids(&got)
+        );
+    }
+
+    #[test]
+    fn test_pin_boost_composes_with_source_weights() {
+        let user = cand("u", "dark mode preference", vec![0.9, 0.1, 0.0, 0.0], Some(MemorySource::User));
+        let mut assistant = cand(
+            "a",
+            "dark mode preference",
+            vec![0.9, 0.1, 0.0, 0.0],
+            Some(MemorySource::Assistant),
+        );
+        assistant.pinned = true;
+        let got = rerank_with_config(
+            "dark mode",
+            &[0.9, 0.1, 0.0, 0.0],
+            &[user, assistant],
+            2,
+            RerankerConfig {
+                apply_source_weights: true,
+                pin_boost: Some(DEFAULT_PIN_BOOST),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // assistant 0.85 x 1.5 = 1.275 beats user 1.0 on an otherwise tied base score.
+        assert_eq!(ids(&got), vec!["a", "u"]);
+        assert!((got[0].score / got[1].score - 0.85 * 1.5).abs() < 1e-9);
+        assert!(
+            (got[0].source_weight - 0.85).abs() < 1e-12,
+            "source_weight reports the source multiplier only"
+        );
+    }
+
+    #[test]
+    fn test_candidate_pinned_field_serde() {
+        let json = r#"[{"id":"x","text":"t","embedding":[0.1],"timestamp":""},{"id":"y","text":"t","embedding":[0.1],"timestamp":"","pinned":true}]"#;
+        let parsed: Vec<Candidate> = serde_json::from_str(json).unwrap();
+        assert!(!parsed[0].pinned, "absent pinned must default to false");
+        assert!(parsed[1].pinned);
+        let back = serde_json::to_string(&parsed).unwrap();
+        assert_eq!(back.matches("\"pinned\"").count(), 1, "pinned=false must be omitted: {}", back);
+    }
+
+    #[test]
+    fn test_reranker_config_pin_boost_json_key() {
+        let json = serde_json::to_string(&RerankerConfig::default()).unwrap();
+        assert!(!json.contains("pin_boost"), "None pin_boost must be omitted: {}", json);
+        let cfg: RerankerConfig =
+            serde_json::from_str(r#"{"apply_source_weights":false,"pin_boost":1.5}"#).unwrap();
+        assert_eq!(cfg.pin_boost, Some(1.5));
+        let legacy: RerankerConfig = serde_json::from_str(r#"{"apply_source_weights":true}"#).unwrap();
+        assert_eq!(legacy.pin_boost, None);
     }
 }
