@@ -180,7 +180,7 @@ See [`docs/specs/totalreclaw/memory-taxonomy-v1.md`](../docs/specs/totalreclaw/m
 
 The managed-service (subgraph) path configures from **either** a BIP-39 recovery
 phrase (the legacy path, above) **or** a `derived-bundle-v1` credential bundle
-(Option E Phase 2 — [#581](https://github.com/p-diogo/totalreclaw/issues/581)):
+(Option E Phase 2 — [#581](https://github.com/graphprotocol/totalreclaw/issues/581)):
 the four HKDF-derived vault keys plus a signing key, but never the phrase or
 the 64-byte BIP-39 seed. See
 [`docs/specs/totalreclaw/client-consistency.md`](../docs/specs/totalreclaw/client-consistency.md#credential-material)
@@ -258,7 +258,7 @@ npm run lint     # Lint
 - [Feature comparison](../docs/guides/feature-comparison.md) — what works on each client
 - [IronClaw setup guide](../docs/guides/ironclaw-setup.md) — full walkthrough for IronClaw (NEAR AI) agents
 - [totalreclaw.xyz](https://totalreclaw.xyz)
-- [Main repository](https://github.com/p-diogo/totalreclaw)
+- [Main repository](https://github.com/graphprotocol/totalreclaw)
 
 ## License
 

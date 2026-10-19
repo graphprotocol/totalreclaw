@@ -8,7 +8,7 @@ Family of autonomous regression workflows that exercise TotalReclaw's user-facin
 
 All autopilot workflows share these conventions:
 
-- **Live on the internal repo** (`p-diogo/totalreclaw-internal`). Phrases, PATs, screenshots, and raw transcripts stay private. Only a sanitized issue body escapes to the public repo.
+- **Live on the internal repo** (`graphprotocol/totalreclaw-internal`). Phrases, PATs, screenshots, and raw transcripts stay private. Only a sanitized issue body escapes to the public repo.
 - **One label**, `qa-autopilot`, across every surface. One label = one triage queue. The issue **title prefix** differentiates: `qa-autopilot:vault-spa: ...`, `qa-autopilot:relay: ...`, `qa-autopilot:cross-client: ...`.
 - **Workflow filename**: `qa-autopilot-<surface>.yml`. Surface names match the title prefix.
 - **Three trigger shapes**:
@@ -18,9 +18,9 @@ All autopilot workflows share these conventions:
 - **Common output**: stdout JSON with the fields `target`, `reachedX` (per surface), `*ErrorCount`, `visibleError`. Driver exits non-zero on any regression signal; workflow uploads `qa-output/*` as a 14-day artifact and opens the issue.
 - **Common secrets** on the internal repo:
   - `QA_RECOVERY_PHRASE` — BIP-39 phrase for a **dummy** vault (zero real assets). Reused across surfaces.
-  - `PUBLIC_ISSUE_PAT` — fine-grained PAT with `Issues: Read and write` on `p-diogo/totalreclaw` only.
-- **On the public repo (`p-diogo/totalreclaw`)**:
-  - `INTERNAL_DISPATCH_PAT` — fine-grained PAT with `Actions: Read and write` on `p-diogo/totalreclaw-internal` only. Used by deploy workflows to fire the matching autopilot.
+  - `PUBLIC_ISSUE_PAT` — fine-grained PAT with `Issues: Read and write` on `graphprotocol/totalreclaw` only.
+- **On the public repo (`graphprotocol/totalreclaw`)**:
+  - `INTERNAL_DISPATCH_PAT` — fine-grained PAT with `Actions: Read and write` on `graphprotocol/totalreclaw-internal` only. Used by deploy workflows to fire the matching autopilot.
 
 ## Current coverage
 
@@ -52,9 +52,9 @@ Both surfaces converge on the vault view (`/vault` legacy, `/memory` passkey), a
 
 | Piece | Where | What |
 |---|---|---|
-| `tools/qa-vault.mjs` | `p-diogo/totalreclaw` (public) | Playwright driver. Reads phrase from keychain locally or `QA_RECOVERY_PHRASE` env in CI. Redacts the phrase + any contiguous 3-word slice from all output before it touches stdout, JSON, or screenshots. Non-zero exit on any regression signal. |
-| `.github/workflows/deploy-app.yml` | `p-diogo/totalreclaw` (public) | After a successful Cloudflare Pages preview deploy, fires `gh workflow run qa-autopilot.yml` on the internal repo with the preview URL + PR number. Gated behind `INTERNAL_DISPATCH_PAT`; deploys still flow if the secret is missing. |
-| `.github/workflows/qa-autopilot.yml` | `p-diogo/totalreclaw-internal` (private) | Runs the driver, uploads the report + screenshot as a 14-day artifact, opens a public-repo issue on failure. Triggers: `workflow_dispatch`, daily cron 07:30 UTC against prod, and the cross-repo dispatch above. |
+| `tools/qa-vault.mjs` | `graphprotocol/totalreclaw` (public) | Playwright driver. Reads phrase from keychain locally or `QA_RECOVERY_PHRASE` env in CI. Redacts the phrase + any contiguous 3-word slice from all output before it touches stdout, JSON, or screenshots. Non-zero exit on any regression signal. |
+| `.github/workflows/deploy-app.yml` | `graphprotocol/totalreclaw` (public) | After a successful Cloudflare Pages preview deploy, fires `gh workflow run qa-autopilot.yml` on the internal repo with the preview URL + PR number. Gated behind `INTERNAL_DISPATCH_PAT`; deploys still flow if the secret is missing. |
+| `.github/workflows/qa-autopilot.yml` | `graphprotocol/totalreclaw-internal` (private) | Runs the driver, uploads the report + screenshot as a 14-day artifact, opens a public-repo issue on failure. Triggers: `workflow_dispatch`, daily cron 07:30 UTC against prod, and the cross-repo dispatch above. |
 
 ## Reading run health (caveat)
 
@@ -72,8 +72,8 @@ Both are GitHub Actions repository secrets (not environment secrets — the work
 | Secret | Repo | Type | Purpose |
 |---|---|---|---|
 | `QA_RECOVERY_PHRASE` | `totalreclaw-internal` | BIP-39 phrase | The driver types this into the SPA. **Must be a dummy seed** (no real assets) — the matching Smart Account will receive automated traffic, and the screenshot/report artifacts are accessible to anyone with write access to the internal repo. |
-| `PUBLIC_ISSUE_PAT` | `totalreclaw-internal` | Fine-grained PAT | Used by the internal workflow to create issues on `p-diogo/totalreclaw`. Scope to that one repo only; permissions: **Issues: Read and write**, everything else "No access". |
-| `INTERNAL_DISPATCH_PAT` | `totalreclaw` (public) | Fine-grained PAT | Used by `deploy-app.yml` to invoke `gh workflow run qa-autopilot.yml`. Scope to `p-diogo/totalreclaw-internal` only; permissions: **Actions: Read and write**. |
+| `PUBLIC_ISSUE_PAT` | `totalreclaw-internal` | Fine-grained PAT | Used by the internal workflow to create issues on `graphprotocol/totalreclaw`. Scope to that one repo only; permissions: **Issues: Read and write**, everything else "No access". |
+| `INTERNAL_DISPATCH_PAT` | `totalreclaw` (public) | Fine-grained PAT | Used by `deploy-app.yml` to invoke `gh workflow run qa-autopilot.yml`. Scope to `graphprotocol/totalreclaw-internal` only; permissions: **Actions: Read and write**. |
 
 If a PAT is missing the workflow doesn't crash — the deploy-app step short-circuits with a `::notice::` and the QA chain stays dark.
 
@@ -126,22 +126,22 @@ with `[REDACTED_PHRASE]` / `[REDACTED_PHRASE_SLICE]` placeholders. This runs ove
 ```bash
 # Run against the prod alias
 gh workflow run qa-autopilot.yml \
-  -R p-diogo/totalreclaw-internal
+  -R graphprotocol/totalreclaw-internal
 
 # Run against a specific preview
 gh workflow run qa-autopilot.yml \
-  -R p-diogo/totalreclaw-internal \
+  -R graphprotocol/totalreclaw-internal \
   -f target_url=https://pr-237.totalreclaw-app.pages.dev \
   -f pr_number=237
 
 # Watch the run
-gh run list --workflow=qa-autopilot.yml -R p-diogo/totalreclaw-internal --limit 3
+gh run list --workflow=qa-autopilot.yml -R graphprotocol/totalreclaw-internal --limit 3
 ```
 
 ## What happens on failure
 
 1. Internal workflow uploads `tools/qa-output/*` as `qa-report-<run_id>` artifact (14 days).
-2. Internal workflow opens an issue on `p-diogo/totalreclaw` titled `qa-autopilot: regression on <target>`, labeled `qa-autopilot`, body containing:
+2. Internal workflow opens an issue on `graphprotocol/totalreclaw` titled `qa-autopilot: regression on <target>`, labeled `qa-autopilot`, body containing:
    - run summary (`reachedVault`, error counts, visible error text)
    - link to the run on the internal repo (the artifact is reachable from there)
    - the redacted stdout JSON inline
@@ -151,5 +151,5 @@ From there the existing `tr-triage-and-fix` skill (or any other triage agent) ca
 
 ## When to disable
 
-- A relay outage or staging-down event will produce a real cascade of `qa-autopilot` issues. Either temporarily set the label to auto-close, or `gh workflow disable qa-autopilot.yml -R p-diogo/totalreclaw-internal` until the upstream is back.
+- A relay outage or staging-down event will produce a real cascade of `qa-autopilot` issues. Either temporarily set the label to auto-close, or `gh workflow disable qa-autopilot.yml -R graphprotocol/totalreclaw-internal` until the upstream is back.
 - Schema migrations on the subgraph that change `Fact` fields will trip the driver until the SPA query is updated; expect issues during those windows.

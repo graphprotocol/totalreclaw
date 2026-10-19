@@ -113,6 +113,6 @@
   <text transform="translate(825,340) rotate(90)" text-anchor="middle" fill="#34d399" font-size="7" font-weight="700" letter-spacing="1">READ / RECOVER</text>
 
   <!-- Footer -->
-  <text x="420" y="498" text-anchor="middle" fill="#30363d" font-size="9" font-family="'Segoe UI', system-ui, sans-serif">github.com/p-diogo/totalreclaw · totalreclaw.xyz · MIT / AGPL</text>
+  <text x="420" y="498" text-anchor="middle" fill="#30363d" font-size="9" font-family="'Segoe UI', system-ui, sans-serif">github.com/graphprotocol/totalreclaw · totalreclaw.xyz · MIT / AGPL</text>
 
 </svg>

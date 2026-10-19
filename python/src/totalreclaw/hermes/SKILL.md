@@ -11,7 +11,7 @@ homepage: https://totalreclaw.xyz
 
 > **This is the post-install usage skill.** If `totalreclaw_*` tools are already bound to your toolset, use the guidance below.
 >
-> **Not installed yet, or the tools are missing?** The install + account-setup flow is a separate document: <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md>. Fetch it and follow its agent-instructions. Do NOT improvise install steps from this file — this doc is **usage only**, and the install flow has its own silence rules that live in that guide.
+> **Not installed yet, or the tools are missing?** The install + account-setup flow is a separate document: <https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md>. Fetch it and follow its agent-instructions. Do NOT improvise install steps from this file — this doc is **usage only**, and the install flow has its own silence rules that live in that guide.
 
 ## Phrase safety (HARD — never break)
 
@@ -141,7 +141,7 @@ These statements are WRONG. Never write any of them — they fabricate a pricing
 
 ## Diagnostics
 
-- `totalreclaw_*` tools not visible → the gateway wasn't restarted after install. This is an **install** problem — follow the install guide (<https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md>), which owns the `/restart` procedure.
+- `totalreclaw_*` tools not visible → the gateway wasn't restarted after install. This is an **install** problem — follow the install guide (<https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md>), which owns the `/restart` procedure.
 - User says done but `credentials.json` missing → PIN expired or wrong phrase entered; call `totalreclaw_pair` again.
 - `onboarding required` → credentials missing; redo from the account-setup step in the install guide.
 - `quota exceeded` → `totalreclaw_status`, then offer `totalreclaw_upgrade`.

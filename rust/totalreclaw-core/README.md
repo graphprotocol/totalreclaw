@@ -46,6 +46,6 @@ MIT
 ## Links
 
 - Homepage: <https://totalreclaw.xyz>
-- Repository: <https://github.com/p-diogo/totalreclaw>
+- Repository: <https://github.com/graphprotocol/totalreclaw>
 - npm (WASM): [`@totalreclaw/core`](https://www.npmjs.com/package/@totalreclaw/core)
 - PyPI (PyO3): [`totalreclaw-core`](https://pypi.org/project/totalreclaw-core/)

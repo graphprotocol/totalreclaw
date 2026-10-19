@@ -5,7 +5,7 @@ suppression vs auto-extract) findings from the 2.4.4rc1 auto-QA NO-GO
 verdict. Full spec: ``plans/2026-05-29-skill-md-enforcement-hooks.md``
 in the internal repo.
 
-F5 already shipped via [PR #285](https://github.com/p-diogo/totalreclaw/pull/285)
+F5 already shipped via [PR #285](https://github.com/graphprotocol/totalreclaw/pull/285)
 (test file: ``test_remember_self_directive_filter.py``).
 """
 from __future__ import annotations

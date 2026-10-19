@@ -3,7 +3,7 @@
 # subgraph-gnosis-mainnet.yaml (prod) / subgraph-gnosis-staging.yaml (staging).
 specVersion: 0.0.5
 description: TotalReclaw — End-to-end encrypted memory vault subgraph
-repository: https://github.com/p-diogo/totalreclaw
+repository: https://github.com/graphprotocol/totalreclaw
 schema:
   file: ./schema.graphql
 dataSources:

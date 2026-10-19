@@ -310,7 +310,7 @@ For technical testers running the validation harness:
 ### Functional suite (plugin-level, mock infrastructure)
 
 ```bash
-git clone https://github.com/p-diogo/totalreclaw.git
+git clone https://github.com/graphprotocol/totalreclaw.git
 cd totalreclaw/skill/plugin
 npm install
 npm test

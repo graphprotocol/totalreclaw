@@ -6,7 +6,7 @@ name: Publish npm packages
 # pre-centralization work), which tripped the CLI's `env-harvesting`
 # scanner and blocked install. Plugin had only ever shipped to ClawHub.
 # Publishing the current 3.0.x plugin to npm restores the documented
-# one-liner install path. See PR https://github.com/p-diogo/totalreclaw/pull/
+# one-liner install path. See PR https://github.com/graphprotocol/totalreclaw/pull/
 # (the PR that introduced this comment) for full write-up.
 #
 # `release-type` input was added 2026-04-20 for the RC (release-candidate)

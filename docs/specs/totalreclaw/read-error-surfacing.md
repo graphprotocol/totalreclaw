@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | Draft, ready for implementation |
-| **Issue** | [p-diogo/totalreclaw#662](https://github.com/p-diogo/totalreclaw/issues/662) |
+| **Issue** | [graphprotocol/totalreclaw#662](https://github.com/graphprotocol/totalreclaw/issues/662) |
 | **Baseline** | `origin/main` `2a75c49` (public). Relay reference `b7eefc8` (read-only) |
 | **Implementer** | Sonnet coding agent, one PR, `python/` + docs only |
 | **Sibling** | Relay spec B, `totalreclaw-internal/docs/specs/ops/relay-read-quota-rework.md` (new `read_quota_exceeded` 429 contract, `error_code: "rate_limited"`, `/v1/billing/status` read fields) |

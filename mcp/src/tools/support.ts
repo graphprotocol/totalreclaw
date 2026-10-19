@@ -84,8 +84,8 @@ export async function handleSupport(
       type: 'text',
       text: JSON.stringify({
         contact_email: contactEmail,
-        documentation_url: 'https://github.com/p-diogo/totalreclaw/tree/main/docs/guides',
-        issues_url: 'https://github.com/p-diogo/totalreclaw/issues',
+        documentation_url: 'https://github.com/graphprotocol/totalreclaw/tree/main/docs/guides',
+        issues_url: 'https://github.com/graphprotocol/totalreclaw/issues',
         wallet_address: walletAddress,
         troubleshooting: TROUBLESHOOTING,
       }),

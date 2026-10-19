@@ -78,7 +78,7 @@ truth: their phrase is recoverable from the OS keychain, not from
 
 The change to immediate destruction of EITHER backup is a **conscious,
 evidence-gated one-line edit in a LATER release**, tracked at
-p-diogo/totalreclaw#579, which explicitly says: *do not automate this
+graphprotocol/totalreclaw#579, which explicitly says: *do not automate this
 transition*. There is deliberately no flag, timer, or version check
 controlling either retention in this module — do not add one.
 """
