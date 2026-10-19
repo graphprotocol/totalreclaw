@@ -20,7 +20,7 @@ Not every client can talk to a self-hosted server. Managed-mode clients speak th
 | **NanoClaw** (`@totalreclaw/skill-nanoclaw`) | ✅ Supported | Spawns the MCP server; env vars pass through |
 | **TypeScript client library** (`@totalreclaw/client`) | ✅ Supported | Calls `/v1/store`, `/v1/search`, `/v1/facts/{id}`, `/v1/sync` directly |
 | **OpenClaw plugin** (`@totalreclaw/totalreclaw`) | ⚠️ Flag exists, not recently validated | `TOTALRECLAW_SELF_HOSTED=true` disables subgraph mode; the HTTP path hasn't been E2E-validated recently (client is parked) |
-| **Hermes plugin** (`totalreclaw` on PyPI) | ❌ **Not supported** | The Python client speaks the managed-relay protocol only — it has no HTTP storage path. Tracked in [#364](https://github.com/p-diogo/totalreclaw/issues/364) |
+| **Hermes plugin** (`totalreclaw` on PyPI) | ❌ **Not supported** | The Python client speaks the managed-relay protocol only — it has no HTTP storage path. Tracked in [#364](https://github.com/graphprotocol/totalreclaw/issues/364) |
 | **ZeroClaw** (`totalreclaw-memory` crate) | ❌ Not supported | Same limitation (relay protocol only; client is parked) |
 
 If you need self-hosted today, use the **MCP server** — it works with Claude Desktop, Claude Code, Cursor, Windsurf, and any other MCP-compatible host.
@@ -32,7 +32,7 @@ If you need self-hosted today, use the **MCP server** — it works with Claude D
 Requirements: Docker + Docker Compose. The stack is `server/docker-compose.yml`: the FastAPI server, PostgreSQL 16, and an optional Caddy reverse proxy. All ports bind to `127.0.0.1` by default.
 
 ```bash
-git clone https://github.com/p-diogo/totalreclaw.git
+git clone https://github.com/graphprotocol/totalreclaw.git
 cd totalreclaw/server
 
 # 1. Configure
@@ -143,4 +143,4 @@ Additionally, self-hosted search accepts a per-request `max_candidates` paramete
 - [production-deployment.md](./production-deployment.md) — credentials-at-rest hardening (LUKS, external secret managers)
 - [`docs/specs/totalreclaw/server.md`](../specs/totalreclaw/server.md) — server spec
 - [feature-comparison.md](./feature-comparison.md) — full feature matrix
-- Issue [#364](https://github.com/p-diogo/totalreclaw/issues/364) — self-hosted parity tracking (incl. the Hermes gap)
+- Issue [#364](https://github.com/graphprotocol/totalreclaw/issues/364) — self-hosted parity tracking (incl. the Hermes gap)

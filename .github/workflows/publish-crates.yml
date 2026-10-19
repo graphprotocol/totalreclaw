@@ -220,7 +220,7 @@ jobs:
           CORE_VERSION=$(python3 -c "import tomllib,sys; d=tomllib.load(open('rust/totalreclaw-core/Cargo.toml','rb')); print(d['package']['version'])")
           echo "Waiting for totalreclaw-core@$CORE_VERSION on crates.io..."
           for i in $(seq 1 24); do
-            if curl -sSf -H 'User-Agent: totalreclaw-ci (https://github.com/p-diogo/totalreclaw)' "https://crates.io/api/v1/crates/totalreclaw-core/$CORE_VERSION" >/dev/null 2>&1; then
+            if curl -sSf -H 'User-Agent: totalreclaw-ci (https://github.com/graphprotocol/totalreclaw)' "https://crates.io/api/v1/crates/totalreclaw-core/$CORE_VERSION" >/dev/null 2>&1; then
               echo "totalreclaw-core@$CORE_VERSION is live"
               exit 0
             fi

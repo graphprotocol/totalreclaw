@@ -2,7 +2,7 @@
 
 Only registered when ``totalreclaw.__version__`` carries a pre-release
 token (PEP-440 ``rcN`` or SemVer ``-rc.``). Lets the agent file a
-structured QA bug issue to ``p-diogo/totalreclaw-internal`` during RC
+structured QA bug issue to ``graphprotocol/totalreclaw-internal`` during RC
 testing without the maintainer opening a fresh issue manually.
 
 All user-supplied free-text fields run through :func:`redact_secrets`
@@ -11,10 +11,10 @@ bot tokens, and bearer-token auth headers are replaced with
 ``<REDACTED>``. The agent is also instructed (via SKILL.md addendum) to
 not pass raw secrets, but redaction is the last line of defence.
 
-The target repo defaults to ``p-diogo/totalreclaw-internal`` and can
+The target repo defaults to ``graphprotocol/totalreclaw-internal`` and can
 only be overridden via the ``TOTALRECLAW_QA_REPO`` environment variable
 to a repo slug ending in ``-internal``. Any other slug (including the
-public ``p-diogo/totalreclaw`` repo) is rejected with a loud error —
+public ``graphprotocol/totalreclaw`` repo) is rejected with a loud error —
 QA bug reports frequently contain RC ship-stopper detail that must
 never reach the public tracker. See rc.13 → rc.14 for the fix rationale.
 """
@@ -122,13 +122,17 @@ def redact_secrets(text: Optional[str]) -> str:
 # Target repo guard — fail-loud on any repo that isn't the internal tracker.
 # ---------------------------------------------------------------------------
 
-DEFAULT_QA_REPO = "p-diogo/totalreclaw-internal"
+DEFAULT_QA_REPO = "graphprotocol/totalreclaw-internal"
 
 # Repo slugs we KNOW are public. The slug must also end in ``-internal``
 # (structural rule); this list is a belt-and-braces explicit denylist so
 # the rule catches the historical ``p-diogo/totalreclaw`` leak even if a
-# future repo rename skips the ``-internal`` suffix.
+# future repo rename skips the ``-internal`` suffix. The ``p-diogo/*`` slugs
+# predate the move to the ``graphprotocol`` org and stay listed because
+# GitHub redirects them to the new public repos.
 PUBLIC_REPOS_DENYLIST = frozenset({
+    "graphprotocol/totalreclaw",
+    "graphprotocol/totalreclaw-relay",
     "p-diogo/totalreclaw",
     "p-diogo/totalreclaw-website",
     "p-diogo/totalreclaw-relay",
@@ -147,7 +151,7 @@ def resolve_qa_repo(
     Precedence (highest first):
       1. ``override`` argument (used by tests).
       2. ``TOTALRECLAW_QA_REPO`` environment variable.
-      3. Default: ``p-diogo/totalreclaw-internal``.
+      3. Default: ``graphprotocol/totalreclaw-internal``.
 
     Raises ``RuntimeError`` if the resolved slug is on the public-repo
     denylist or does not end in ``-internal``. rc.13 QA surfaced a bug
@@ -165,7 +169,7 @@ def resolve_qa_repo(
             f"refusing to file QA bug to PUBLIC repo {candidate!r}. "
             "QA bug reports contain RC ship-stopper detail that must not "
             "leak to public. Set TOTALRECLAW_QA_REPO to a repo ending in "
-            "'-internal' (e.g. p-diogo/totalreclaw-internal)."
+            "'-internal' (e.g. graphprotocol/totalreclaw-internal)."
         )
     if not candidate.endswith("-internal"):
         raise RuntimeError(

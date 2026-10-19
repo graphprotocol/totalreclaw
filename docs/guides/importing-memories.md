@@ -201,4 +201,4 @@ The following sources are planned but not yet implemented:
 - **QMD** — OpenClaw's native memory system
 - **Generic JSON/CSV** -- catch-all for other tools
 
-Track progress and request additional sources via [GitHub Issues](https://github.com/p-diogo/totalreclaw/issues).
+Track progress and request additional sources via [GitHub Issues](https://github.com/graphprotocol/totalreclaw/issues).

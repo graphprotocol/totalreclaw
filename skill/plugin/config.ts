@@ -53,7 +53,7 @@ const REMOVED_ENV_VARS = [
 // useful than the relative repo path: operators copying the warning out of
 // stderr usually do not have the repo cloned. rc.22 finding #4.
 export const ENV_VARS_REFERENCE_URL =
-  'https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/env-vars-reference.md';
+  'https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/env-vars-reference.md';
 
 function warnRemovedEnvVars(warn: (msg: string) => void = console.warn): void {
   const set = REMOVED_ENV_VARS.filter((name) => process.env[name] !== undefined);
@@ -372,7 +372,7 @@ export const CONFIG = {
   // "slug ends in `-internal`" rule on whatever is resolved here, so
   // this override is only useful for forks / mirrors of the internal
   // tracker. Leaving unset uses the production default
-  // (`p-diogo/totalreclaw-internal`). Read via getter so operators can
+  // (`graphprotocol/totalreclaw-internal`). Read via getter so operators can
   // flip the var at runtime.
   get qaRepoOverride(): string {
     return process.env.TOTALRECLAW_QA_REPO || '';

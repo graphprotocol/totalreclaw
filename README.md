@@ -22,7 +22,7 @@
   <a href="https://www.npmjs.com/package/@totalreclaw/totalreclaw"><img src="https://img.shields.io/npm/v/@totalreclaw/totalreclaw?label=OpenClaw%20Plugin&color=7B5CFF" alt="npm Plugin" /></a>
   <a href="https://pypi.org/project/totalreclaw/"><img src="https://img.shields.io/pypi/v/totalreclaw?label=Python&color=7B5CFF" alt="PyPI" /></a>
   <a href="https://crates.io/crates/totalreclaw-memory"><img src="https://img.shields.io/crates/v/totalreclaw-memory?label=Rust&color=7B5CFF" alt="crates.io" /></a>
-  <a href="https://github.com/p-diogo/totalreclaw/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/p-diogo/totalreclaw/ci.yml?branch=main&label=CI" alt="CI" /></a>
+  <a href="https://github.com/graphprotocol/totalreclaw/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/graphprotocol/totalreclaw/ci.yml?branch=main&label=CI" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20(server%3A%20AGPL--3.0)-7B5CFF" alt="License" /></a>
 </p>
 

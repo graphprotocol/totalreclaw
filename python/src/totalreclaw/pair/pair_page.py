@@ -2,7 +2,7 @@
 side of the local-mode pair flow (``TOTALRECLAW_PAIR_MODE=local``).
 
 rc.13 UX refresh: mirrors the relay's production "wizard" UX (see
-``p-diogo/totalreclaw-relay:src/routes/pair-html.ts``). Three-step
+``graphprotocol/totalreclaw-relay:src/routes/pair-html.ts``). Three-step
 typeform-style flow — PIN → phrase → done — with the 4 user-ratified
 design decisions baked in:
 

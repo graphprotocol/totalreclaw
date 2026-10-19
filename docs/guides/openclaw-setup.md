@@ -13,7 +13,7 @@ The user pastes one of these three prompts. The shape is fixed; the agent extrac
 ### Stable (default)
 
 ```
-Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md
+Install TotalReclaw. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/openclaw-setup.md
 ```
 
 The agent installs the stable channel (`@totalreclaw/totalreclaw` from npm `latest`) and proceeds to setup.
@@ -23,7 +23,7 @@ To see what the channels currently resolve to: `npm view @totalreclaw/totalrecla
 ### RC (user specifies a version)
 
 ```
-Install TotalReclaw RC <version>. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md
+Install TotalReclaw RC <version>. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/openclaw-setup.md
 ```
 
 `<version>` is a semver RC string the user picks (e.g. `3.3.13-rc.1`). When the user omits `<version>` and writes only `Install TotalReclaw RC`, the agent installs the **newest release candidate** via `openclaw plugins install @totalreclaw/totalreclaw@rc` (no pin — always the latest cut).
@@ -31,7 +31,7 @@ Install TotalReclaw RC <version>. See https://github.com/p-diogo/totalreclaw/blo
 ### RC against the staging relay (QA only)
 
 ```
-Install TotalReclaw RC <version> against the staging relay (TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz). See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md
+Install TotalReclaw RC <version> against the staging relay (TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz). See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/openclaw-setup.md
 ```
 
 The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` in the install / setup shell before any TotalReclaw command. Without this env var, both stable AND RC installs default to the production relay `api.totalreclaw.xyz`.
@@ -43,7 +43,7 @@ The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` i
 TotalReclaw is open-source memory tooling for OpenClaw. The plugin is published by `p-diogo` (GitHub-verified) at:
 
 - npm: [`@totalreclaw/totalreclaw`](https://www.npmjs.com/package/@totalreclaw/totalreclaw) — the only supported install channel
-- Source code: <https://github.com/p-diogo/totalreclaw>
+- Source code: <https://github.com/graphprotocol/totalreclaw>
 
 > **ClawHub is no longer a TotalReclaw channel** (retired 2026-07-30). Do **not** run `openclaw skills install totalreclaw` — the bare `totalreclaw` slug on ClawHub is ambiguous and can resolve to an unaffiliated third-party copy. The plugin ships its own `SKILL.md` inside the npm tarball.
 
@@ -316,7 +316,7 @@ Then in chat: *"Set up TotalReclaw"* — the agent will run `tr pair --json` and
 <summary>From-source install (for plugin development — self-host only)</summary>
 
 ```bash
-git clone https://github.com/p-diogo/totalreclaw.git
+git clone https://github.com/graphprotocol/totalreclaw.git
 openclaw plugins install ./totalreclaw/skill/plugin
 ```
 
@@ -413,7 +413,7 @@ Upgrade: *"Upgrade my TotalReclaw subscription."*
 
 The canonical install prompts live in the **Install prompts** section at the top of this guide (Stable / RC / RC-staging). The default stable prompt is:
 
-> **Install TotalReclaw. See <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>**
+> **Install TotalReclaw. See <https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/openclaw-setup.md>**
 
 ---
 

@@ -167,7 +167,7 @@ const MASTER_PASSWORD = process.env.TOTALRECLAW_RECOVERY_PHRASE;
     // rc.22 finding #4 — full URL beats relative repo path on stderr.
     console.error(
       `TotalReclaw MCP: ignoring removed env var(s): ${removed.join(', ')}. ` +
-        `Migration guide: https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/env-vars-reference.md`,
+        `Migration guide: https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/env-vars-reference.md`,
     );
   }
 })();
