@@ -29,7 +29,7 @@ The user pastes one of these three prompts. The shape is fixed; the agent extrac
 ### Stable (default)
 
 ```
-Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md
+Install TotalReclaw. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md
 ```
 
 The agent installs the stable channel from the table above and proceeds to setup.
@@ -37,7 +37,7 @@ The agent installs the stable channel from the table above and proceeds to setup
 ### RC (user specifies a version)
 
 ```
-Install TotalReclaw RC <version>. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md
+Install TotalReclaw RC <version>. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md
 ```
 
 `<version>` is a PEP 440 RC string the user picks (e.g. `2.4.4rc9`). When the user omits `<version>` and writes only `Install TotalReclaw RC`, the agent installs the **newest pre-release** via `pip install --pre --upgrade totalreclaw` (no pin — always the latest cut, so this never needs the doc to be bumped).
@@ -45,7 +45,7 @@ Install TotalReclaw RC <version>. See https://github.com/p-diogo/totalreclaw/blo
 ### RC against the staging relay (QA only)
 
 ```
-Install TotalReclaw RC <version> against the staging relay (TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz). See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md
+Install TotalReclaw RC <version> against the staging relay (TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz). See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md
 ```
 
 The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` and `TOTALRECLAW_RELAY_URL=https://api-staging.totalreclaw.xyz` in the install / setup shell before any TotalReclaw command. Without these env vars, both stable AND RC installs default to the production relay `api.totalreclaw.xyz`.
@@ -57,7 +57,7 @@ The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` a
 TotalReclaw has NO native Hermes update path (`hermes plugins update` is git-clone-only; `hermes update` updates Hermes itself, not a pip plugin). So updates run the same install machinery, re-pointed at the newest **stable**. The user pastes:
 
 ```
-Update TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md
+Update TotalReclaw. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md
 ```
 
 The agent updates to the newest **stable** and re-binds — **silently**, exactly like install (same HARD RULE: no `pip` / `venv` / interpreter narration). Reuse the **Install procedure below**:
@@ -425,7 +425,7 @@ This is not a bug we can fix from the TotalReclaw side. We document it honestly:
 - **For any user-facing recall query, the agent calls `totalreclaw_recall`** even when USER.md may already contain a relevant fact in context (see Recall behaviour). This forces the answer through the canonical TotalReclaw read path.
 - **The agent may run `hermes tools disable memory`** to block the `memory` agent tool (this still has value: prevents the agent from being tempted to call the built-in `memory` tool when TotalReclaw's tools are the right ones). But this command does NOT stop the USER.md / MEMORY.md writes.
 
-Flag interest in fully-disable-able built-in memory at <https://github.com/NousResearch/hermes-agent/issues> (Hermes upstream). We track interest at <https://github.com/p-diogo/totalreclaw/issues>.
+Flag interest in fully-disable-able built-in memory at <https://github.com/NousResearch/hermes-agent/issues> (Hermes upstream). We track interest at <https://github.com/graphprotocol/totalreclaw/issues>.
 
 ---
 

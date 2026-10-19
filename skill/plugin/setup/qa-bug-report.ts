@@ -4,7 +4,7 @@
  * Only registered when the plugin version contains `-rc.` (SemVer pre-release
  * token); stable builds never expose this tool. Shipped in 3.3.1-rc.3 so
  * agents running the `qa-totalreclaw` skill can file structured issues to
- * `p-diogo/totalreclaw-internal` via direct GitHub REST API fetch (scanner-
+ * `graphprotocol/totalreclaw-internal` via direct GitHub REST API fetch (scanner-
  * safe — no shelling out to CLIs) without the maintainer opening a fresh
  * issue by hand for every RC finding.
  *
@@ -19,10 +19,10 @@
  * in headers all become `<REDACTED>` in the posted issue. Refer to
  * `redactSecrets()` for the exact rule set.
  *
- * Target repo safety: the default target is `p-diogo/totalreclaw-internal`.
+ * Target repo safety: the default target is `graphprotocol/totalreclaw-internal`.
  * Operators can override via the `TOTALRECLAW_QA_REPO` env var, but only
  * to another slug ending in `-internal`. Any other slug — including the
- * public `p-diogo/totalreclaw` — is rejected with a loud error. rc.13 QA
+ * public `graphprotocol/totalreclaw` — is rejected with a loud error. rc.13 QA
  * surfaced a repo-slug drift where QA findings leaked to the public
  * tracker; rc.14 adds this fail-loud guard.
  */
@@ -158,7 +158,7 @@ export interface QaBugDeps {
   /**
    * Repo to post to. Defaults to `resolveQaRepo(null)` → reads
    * `TOTALRECLAW_QA_REPO` env var and falls back to
-   * `p-diogo/totalreclaw-internal`. Pass a slug (tests only) to
+   * `graphprotocol/totalreclaw-internal`. Pass a slug (tests only) to
    * bypass env-var lookup.
    */
   repo?: string;
@@ -176,15 +176,19 @@ export interface QaBugDeps {
 // Target repo guard — fail-loud on any repo that isn't the internal tracker.
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_QA_REPO = 'p-diogo/totalreclaw-internal';
+export const DEFAULT_QA_REPO = 'graphprotocol/totalreclaw-internal';
 
 /**
  * Known-public repo slugs that must never receive QA bug reports. The
  * structural rule (`endsWith('-internal')`) below should already block
  * these, but the explicit denylist is a belt-and-braces safety against
- * a future rename that accidentally drops the `-internal` suffix.
+ * a future rename that accidentally drops the `-internal` suffix. The
+ * `p-diogo/*` slugs predate the move to the `graphprotocol` org and stay
+ * listed because GitHub redirects them to the new public repos.
  */
 export const PUBLIC_REPOS_DENYLIST: ReadonlySet<string> = new Set([
+  'graphprotocol/totalreclaw',
+  'graphprotocol/totalreclaw-relay',
   'p-diogo/totalreclaw',
   'p-diogo/totalreclaw-website',
   'p-diogo/totalreclaw-relay',
@@ -229,7 +233,7 @@ export function resolveQaRepo(
       `refusing to file QA bug to PUBLIC repo '${raw}'. ` +
         'QA bug reports contain RC ship-stopper detail that must not ' +
         "leak to public. Set TOTALRECLAW_QA_REPO to a repo ending in " +
-        "'-internal' (e.g. p-diogo/totalreclaw-internal).",
+        "'-internal' (e.g. graphprotocol/totalreclaw-internal).",
     );
   }
   if (!raw.endsWith('-internal')) {

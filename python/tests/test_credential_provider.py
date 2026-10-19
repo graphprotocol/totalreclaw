@@ -1,7 +1,7 @@
 """Unit tests for ``totalreclaw.credential_provider`` (cred-3 stage 2).
 
 Mirrors the test surface of ``skill/plugin/credential-provider.test.ts``
-(cred-3 stage 1, merged in p-diogo/totalreclaw#271) so the Python and TS
+(cred-3 stage 1, merged in graphprotocol/totalreclaw#271) so the Python and TS
 sides have matching coverage. Tests cover:
 
   - file-mode round-trip + 0o600 preservation

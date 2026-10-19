@@ -4,7 +4,7 @@ End-to-end encrypted memory + knowledge graph for AI agents.
 
 Store, search, and recall memories across any AI agent with zero-knowledge encryption. Your data is encrypted on-device before it leaves -- the server never sees plaintext.
 
-As of **2.4.6**, the client uses **Memory Taxonomy v1** (6 canonical types: `claim | preference | directive | commitment | episode | summary`) and **Retrieval v2 Tier 1** source-weighted reranking (user-sourced facts rank higher than assistant-sourced facts on tied BM25 + cosine scores). See the [memory types guide](https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/memory-types-guide.md). Existing pre-v1 vault entries decrypt transparently.
+As of **2.4.6**, the client uses **Memory Taxonomy v1** (6 canonical types: `claim | preference | directive | commitment | episode | summary`) and **Retrieval v2 Tier 1** source-weighted reranking (user-sourced facts rank higher than assistant-sourced facts on tied BM25 + cosine scores). See the [memory types guide](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/memory-types-guide.md). Existing pre-v1 vault entries decrypt transparently.
 
 ## Features
 
@@ -104,7 +104,7 @@ The embedding model (~600 MB) downloads automatically on first use.
 pip install totalreclaw[hermes]
 ```
 
-The plugin registers automatically with Hermes Agent v0.5.0+. See the [Hermes setup guide](https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md).
+The plugin registers automatically with Hermes Agent v0.5.0+. See the [Hermes setup guide](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md).
 
 ## Architecture
 
@@ -130,16 +130,16 @@ Memories stored by the Python client can be recalled by the MCP server, and vice
 
 ## Learn More
 
-- [Client setup guide (v1)](https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/client-setup-v1.md)
-- [Memory types guide](https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/memory-types-guide.md)
-- [v1 migration guide](https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/v1-migration.md)
-- [Environment variables](https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/env-vars-reference.md)
-- [Hermes setup guide](https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md)
-- [Feature comparison](https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/feature-comparison.md)
+- [Client setup guide (v1)](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/client-setup-v1.md)
+- [Memory types guide](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/memory-types-guide.md)
+- [v1 migration guide](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/v1-migration.md)
+- [Environment variables](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/env-vars-reference.md)
+- [Hermes setup guide](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md)
+- [Feature comparison](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/feature-comparison.md)
 
 ## Changelog
 
-The latest changes live in [`CHANGELOG-public.md`](https://github.com/p-diogo/totalreclaw/blob/main/CHANGELOG-public.md) — kept current there rather than duplicated in this README.
+The latest changes live in [`CHANGELOG-public.md`](https://github.com/graphprotocol/totalreclaw/blob/main/CHANGELOG-public.md) — kept current there rather than duplicated in this README.
 
 ## License
 

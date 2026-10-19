@@ -7,7 +7,7 @@ in ``~/.hermes/.env`` (``HERMES_MODEL`` / ``{PROVIDER}_MODEL``). Before
 rc.15, :func:`read_hermes_llm_config` only understood the legacy shape
 and returned ``None`` every turn, producing the silent extraction
 disable reported at
-https://github.com/p-diogo/totalreclaw-internal/issues/97.
+https://github.com/graphprotocol/totalreclaw-internal/issues/97.
 
 Shape of these tests:
   - Build a throwaway ``~/.hermes``-like dir via ``tmp_path``.

@@ -200,7 +200,7 @@ class TestPostQaBugIssue:
                 text="",
                 json=lambda: {
                     "number": 42,
-                    "html_url": "https://github.com/p-diogo/totalreclaw-internal/issues/42",
+                    "html_url": "https://github.com/graphprotocol/totalreclaw-internal/issues/42",
                 },
             )
 
@@ -214,7 +214,7 @@ class TestPostQaBugIssue:
         )
         assert result["issue_number"] == 42
         assert "/issues/42" in result["issue_url"]
-        assert captured["url"].endswith("/repos/p-diogo/totalreclaw-internal/issues")
+        assert captured["url"].endswith("/repos/graphprotocol/totalreclaw-internal/issues")
         assert captured["headers"]["Authorization"] == "Bearer gh-test-token"
         assert captured["headers"]["Accept"] == "application/vnd.github+json"
         assert captured["json"]["title"].startswith("[qa-bug]")
@@ -284,7 +284,7 @@ class TestPostQaBugIssue:
 
 class TestResolveQaRepo:
     def test_default_is_internal(self):
-        assert resolve_qa_repo(env={}) == "p-diogo/totalreclaw-internal"
+        assert resolve_qa_repo(env={}) == "graphprotocol/totalreclaw-internal"
         assert resolve_qa_repo(env={}) == DEFAULT_QA_REPO
 
     def test_env_override_internal_fork(self):
@@ -298,15 +298,15 @@ class TestResolveQaRepo:
         )
 
     def test_reject_public_repo_literal(self):
-        env = {"TOTALRECLAW_QA_REPO": "p-diogo/totalreclaw"}
+        env = {"TOTALRECLAW_QA_REPO": "graphprotocol/totalreclaw"}
         with pytest.raises(RuntimeError) as exc:
             resolve_qa_repo(env=env)
         assert "PUBLIC" in str(exc.value)
-        assert "p-diogo/totalreclaw" in str(exc.value)
+        assert "graphprotocol/totalreclaw" in str(exc.value)
 
     def test_reject_public_repo_via_override(self):
         with pytest.raises(RuntimeError) as exc:
-            resolve_qa_repo("p-diogo/totalreclaw", env={})
+            resolve_qa_repo("graphprotocol/totalreclaw", env={})
         assert "PUBLIC" in str(exc.value)
 
     def test_reject_non_internal_suffix(self):
@@ -321,7 +321,15 @@ class TestResolveQaRepo:
 
     def test_denylist_contains_known_public_repos(self):
         # Ensures we caught the historical leak target.
+        assert "graphprotocol/totalreclaw" in PUBLIC_REPOS_DENYLIST
+
+    def test_reject_pre_org_move_public_slug(self):
+        # p-diogo/totalreclaw redirects to graphprotocol/totalreclaw since the
+        # org move, so the old slug must stay blocked too.
         assert "p-diogo/totalreclaw" in PUBLIC_REPOS_DENYLIST
+        with pytest.raises(RuntimeError) as exc:
+            resolve_qa_repo("p-diogo/totalreclaw", env={})
+        assert "PUBLIC" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +346,7 @@ class TestPostRespectsRepoGuard:
             await post_qa_bug_issue(
                 VALID_ARGS,
                 github_token="gh-token",
-                repo="p-diogo/totalreclaw",
+                repo="graphprotocol/totalreclaw",
                 http_client=mock_client,
             )
         assert "PUBLIC" in str(exc.value)

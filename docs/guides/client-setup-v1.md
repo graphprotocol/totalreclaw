@@ -30,7 +30,7 @@ All clients write to the same vault. If you use multiple clients, use the same 1
 
 Tell your OpenClaw agent:
 
-> "Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/install.md"
+> "Install TotalReclaw. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/install.md"
 
 Or via terminal:
 

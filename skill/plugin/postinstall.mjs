@@ -42,7 +42,7 @@
  * Scanner-safe: pure import + filesystem; no outbound-request word markers.
  *
  * @see fs-helpers.ts (detectPartialInstall, PARTIAL_INSTALL_MARKER)
- * @see issue https://github.com/p-diogo/totalreclaw-internal/issues/188
+ * @see issue https://github.com/graphprotocol/totalreclaw-internal/issues/188
  */
 
 import { unlinkSync, existsSync } from 'node:fs';

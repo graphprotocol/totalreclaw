@@ -11,7 +11,7 @@ This is the **only** line a user ever needs to paste — the same string works n
 ### Stable (default)
 
 ```
-Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/install.md
+Install TotalReclaw. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/install.md
 ```
 
 > Short form (same destination): `Install TotalReclaw. See https://totalreclaw.xyz/install` — `totalreclaw.xyz/install` redirects here. Either form works; agents that can't follow redirects should use the GitHub URL above. The GitHub URL is canonical and stays primary in these docs (they must not depend on the website being up).
@@ -19,7 +19,7 @@ Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/g
 ### RC (user may specify a version)
 
 ```
-Install TotalReclaw RC [<version>]. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/install.md
+Install TotalReclaw RC [<version>]. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/install.md
 ```
 
 `<version>` is optional. When the user writes only `Install TotalReclaw RC` with no version, install the **newest release candidate** for your runtime (see [Current channels](#current-channels)). When they give a specific version, pin to it — a semver RC string for npm runtimes (e.g. `3.3.13-rc.1`) or a PEP 440 RC string for Hermes/PyPI (e.g. `2.4.7rc1`).

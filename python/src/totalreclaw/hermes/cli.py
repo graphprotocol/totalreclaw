@@ -554,7 +554,7 @@ the values. The user opens the URL in their browser, enters the PIN,
 and the browser generates the recovery phrase locally. The phrase
 never crosses your context.
 
-Procedure: https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md
+Procedure: https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md
 """
 
 

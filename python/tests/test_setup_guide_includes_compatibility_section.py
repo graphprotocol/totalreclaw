@@ -137,7 +137,7 @@ def test_guide_points_users_to_issue_tracker_for_dual_mode_feedback():
         "Compatibility section must link to Hermes upstream issue "
         "tracker since the fix has to land there, not in totalreclaw."
     )
-    assert "github.com/p-diogo/totalreclaw/issues" in body, (
+    assert "github.com/graphprotocol/totalreclaw/issues" in body, (
         "Compatibility section must also link to our own tracker so we "
         "can scope demand independently."
     )

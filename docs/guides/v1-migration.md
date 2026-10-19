@@ -161,4 +161,4 @@ This is the first release where cross-client parity is specified and tested — 
 - [Environment variables reference](./env-vars-reference.md) — current env vars after cleanup.
 - [Client setup guide](./client-setup-v1.md) — install instructions per client at v1.
 - [Feature comparison](./feature-comparison.md) — what works on each client.
-- GitHub: <https://github.com/p-diogo/totalreclaw/issues>
+- GitHub: <https://github.com/graphprotocol/totalreclaw/issues>
