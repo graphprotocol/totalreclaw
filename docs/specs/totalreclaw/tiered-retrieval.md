@@ -20,7 +20,7 @@ Four discrete tiers of retrieval improvement were designed. Tier 1 ships with v1
                                      CLIENT
   query text
       │
-      ├── tokenize → blind trapdoors (HMAC-SHA256 word hashes)
+      ├── tokenize → blind trapdoors (SHA-256 word hashes)
       ├── compute query embedding (Harrier-OSS 640d, local)
       ├── compute LSH bucket hashes
       │

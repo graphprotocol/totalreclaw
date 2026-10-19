@@ -68,8 +68,8 @@ The same phrase always produces the same Smart Account, encryption key, and auth
 When a fact is stored:
 
 1. Plain text + metadata are encrypted with XChaCha20-Poly1305 (24-byte nonce).
-2. A SHA-256 content fingerprint over the canonical text dedupes duplicates client-side.
-3. Blind search trapdoors are generated for keyword tokens (HMAC-SHA256 with a per-user index secret).
+2. A content fingerprint (HMAC-SHA256 over the canonical text, keyed with a per-user dedup key) lets exact duplicates be detected without revealing the text.
+3. Blind search trapdoors are generated for keyword tokens: unkeyed SHA-256 hashes of each word and its stem, plus any entity names.
 4. A 640-dim embedding (`onnx-community/harrier-oss-v1-270m-ONNX`, q4, pre-pooled) is computed locally for semantic search.
 5. The encrypted blob, blind indices, content fingerprint, and (for v1) the protobuf-packed taxonomy fields are wrapped in a v=4 outer envelope and submitted via ERC-4337 UserOp to the EventfulDataEdge contract.
 6. The Pimlico paymaster sponsors gas. All writes (free and Pro) go to Gnosis mainnet.
@@ -86,11 +86,11 @@ When you query:
 5. Tier 1 source-weighted reranker scores: BM25 (lexical) + cosine (semantic) + RRF fusion + source weights (user > assistant) + scope bonus + pin override.
 6. The top-N (default 8) are returned to the host LLM as context.
 
-The relay never sees plaintext, never sees query terms, and never holds an encryption key.
+The relay never sees plaintext and never holds an encryption key. Query words reach it only as blind hashes, which have limits (see below).
 
 ### Privacy guarantees
 
-- **Server-blind search.** The relay sees blind index tokens (HMAC outputs) and never the plaintext keywords. Even with a full database compromise, an attacker can't reverse a query without the per-user secret.
+- **Server-blind search, with a caveat.** The relay and the subgraph see blind index hashes, never the plaintext. But the word, stem and entity hashes are unkeyed SHA-256, so they aren't secret: anyone can hash a wordlist and test which words a stored fact or a query contains, and stored hashes are public on-chain. LSH bucket hashes depend on a per-user seed and can't be tested that way. Keyed word indices are planned.
 - **End-to-end encryption.** All fact bytes are XChaCha20-Poly1305 ciphertext when they leave your device.
 - **No phrase ever leaves your device** as long as you follow the canonical setup. Browser setup flow encrypts the phrase locally with a fresh x25519/AES-GCM key derived against the gateway's ephemeral pubkey before posting; the relay only ever sees ciphertext.
 - **Decay is local.** Importance decay and eviction run client-side from the decrypted set. The relay can't infer which memories matter to you.
