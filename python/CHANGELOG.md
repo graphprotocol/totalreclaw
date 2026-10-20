@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`import totalreclaw` no longer breaks under an httpx 1.0 pre-release.** `httpx` is now capped at `<1`. httpx 1.0 (pre-releases on PyPI since 2026-08-31) drops `httpx.HTTPStatusError`, which 2.5.2's `RelayReadError` (#662) subclasses at import time, so `pip install --pre totalreclaw` into a venv without httpx failed on import with `AttributeError`. Existing Hermes venvs were unaffected: Hermes already pins `httpx` 0.28.x and pip keeps it.
+
 ## [2.5.2] — 2026-09-26
 
 ### Fixed
