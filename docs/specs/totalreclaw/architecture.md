@@ -93,7 +93,7 @@ Two separate authenticated symmetric ciphers are used, deliberately, because the
 | **Pair-flow ECDH session** (browser ↔ client during onboarding, rc.12+) | **AES-256-GCM** | Short-lived session payload (the paired phrase, encrypted to the client's ephemeral pubkey); native WebCrypto support across browsers; nonce reuse risk is trivial because each pair session uses a fresh ECDH session key |
 | Authentication | HKDF-SHA256-derived `authKey`, sent as bearer token; relay stores only `SHA256(authKey)` | Stateless; no separate password; same mnemonic re-derives auth on any device |
 | Dedup | `HMAC-SHA256(dedupKey, normalize(plaintext))` → content fingerprint | Server can de-duplicate without learning plaintext; one bit of leakage per pair (same/not-same) |
-| Blind search | `SHA-256` of word tokens + LSH bucket IDs (trapdoors) | Server matches trapdoors via GIN index; cannot invert |
+| Blind search | `SHA-256` of word, stem and entity tokens + per-user LSH bucket IDs (trapdoors) | Server matches trapdoors without decrypting. Word hashes are unkeyed, so hashing a wordlist inverts them; keyed indices are planned |
 
 **One-line summary:** XChaCha20-Poly1305 for things that live a long time, AES-GCM for the brief ECDH onboarding payload, SHA-256/HMAC for everything the server needs to *match without decrypting*.
 
