@@ -24,7 +24,7 @@ name = "totalreclaw"
 # now `2.4.5`, so RCs cut as `2.4.5rcN` outrank `2.4.4` and the
 # version-agnostic install path lands them. NEVER leave the base equal to
 # an already-published stable.
-version = "2.5.2"
+version = "2.5.3"
 description = "End-to-end encrypted memory for AI agents — Python client (Memory Taxonomy v1)"
 readme = "README.md"
 license = "MIT"
@@ -63,7 +63,12 @@ dependencies = [
     # silently no-op forever with nothing above debug level to show for it.
     # Do not relax this floor below 2.6.0.
     "totalreclaw-core>=2.6.0,<3.0.0",
-    "httpx>=0.27",
+    # <1: httpx 1.0 (pre-releases on PyPI since 2026-08-31, e.g. 1.0.dev6) is a
+    # rewrite with no `httpx.HTTPStatusError`, which `relay.py` subclasses at
+    # import time (`RelayReadError`, #662). Any `pip install --pre totalreclaw`
+    # into a venv without httpx resolved it, and `import totalreclaw` raised
+    # AttributeError. Lift only after porting to the 1.0 API.
+    "httpx>=0.27,<1",
     "onnxruntime>=1.24",
     "numpy>=1.26",
     "transformers>=4.40,<5",
