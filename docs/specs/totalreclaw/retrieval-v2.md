@@ -31,7 +31,7 @@ Lives in `rust/totalreclaw-core/src/reranker.rs` (shared via WASM/PyO3 across al
 ```
 query_text
   │
-  ├─► extract blind trapdoors (word-level HMAC + LSH buckets)
+  ├─► extract blind trapdoors (word-level SHA-256 + LSH buckets)
   │
   ├─► server returns encrypted candidates (~30-200)
   │
