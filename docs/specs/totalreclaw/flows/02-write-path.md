@@ -208,12 +208,14 @@ FactPayload {
   encrypted_blob_hex
   blind_indices    = repeated string
   decay_score      = double        // importance normalized to [0,1]
-  source           = string
+  source           = string        // client struct only: NOT encoded (outer field 9 left the wire in v3)
   content_fp       = string
-  agent_id         = string
+  agent_id         = string        // client struct only: NOT encoded (outer field 11 left the wire in v3)
   encrypted_embedding = string     // optional
 }
 ```
+
+`source` and `agent_id` exist on the client-side structs but are never encoded. Provenance travels only inside the encrypted blob (field 4), so the outer protobuf carries fields 1-8, 10 and 13 (12 is assigned by the subgraph). Every client encoder is pinned to this layout by `tests/parity/fixtures/outer-protobuf-v1.json`: the Rust core, Python, TS/WASM and the MCP server (MCP since PRD-04 F8 / DEP-6).
 
 The DataEdge contract at `0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca` (same address on every chain, deployed via Pimlico's CREATE2 factory) has a `fallback()` function that just emits `Log(bytes)` carrying whatever data it receives. The subgraph indexer listens for that event and decodes the protobuf client-side.
 
