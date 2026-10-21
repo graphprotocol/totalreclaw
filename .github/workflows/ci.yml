@@ -267,6 +267,8 @@ jobs:
           cd python
           pip install -e ".[dev]"
           python -m pytest tests/ -v --ignore=tests/test_staging_integration.py --ignore=tests/cross_client_e2e.py --ignore=tests/test_cross_client.py -x
+      - name: Outer protobuf fields 9/11 absent — Python calldata parity (PRD-04 F8 / DEP-6)
+        run: cd python && python -m pytest ../tests/parity/test_outer_protobuf_parity.py -v -p no:cacheprovider
 
   cross-language-parity:
     name: Cross-Language Parity Tests
@@ -292,6 +294,8 @@ jobs:
         run: cd tests/parity && npx tsx userop-batch-parity.test.ts
       - name: Session-key EIP-712 grant digest parity (TS/viem side, cred-9, #584)
         run: cd tests/parity && npx tsx session-key-grant-roundtrip.ts
+      - name: Outer protobuf fields 9/11 absent — MCP + WASM calldata parity (PRD-04 F8 / DEP-6)
+        run: cd tests/parity && npx tsx outer-protobuf-parity.test.ts
 
   # NOTE: Relay unit tests run in the private totalreclaw-relay repo CI.
   # This job runs the E2E smoke test against a real relay + PostgreSQL

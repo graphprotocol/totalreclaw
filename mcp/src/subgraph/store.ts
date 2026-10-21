@@ -94,126 +94,20 @@ export function resolveOwnerAccount(config: SubgraphStoreConfig): LocalAccount {
   );
 }
 
-export interface FactPayload {
-  id: string;
-  timestamp: string;
-  owner: string;           // Smart Account address (hex)
-  encryptedBlob: string;   // Hex-encoded XChaCha20-Poly1305 ciphertext
-  blindIndices: string[];   // SHA-256 hashes (word + LSH)
-  decayScore: number;
-  source: string;
-  contentFp: string;
-  agentId: string;
-  encryptedEmbedding?: string;
-}
-
 // ---------------------------------------------------------------------------
-// Protobuf encoding
+// Fact payload type + protobuf encoding
 // ---------------------------------------------------------------------------
-
-/**
- * Memory Taxonomy v1 outer protobuf wrapper version.
- *
- * The v1 contract (shipped 2026-04-18) mandates that all clients write
- * `version = 4` on the outer protobuf so the subgraph + cross-client
- * readers can recognize the inner blob as a v1 JSON `MemoryClaim`.
- *
- * Canonical source: `rust/totalreclaw-core/src/protobuf.rs`
- * (`PROTOBUF_VERSION_V4 = 4`). The WASM/PyO3 bindings do not re-export
- * this constant to TS today — when they do, replace this literal with
- * an import from `@totalreclaw/core`.
- *
- * TODO: import from @totalreclaw/core once the constant is re-exported.
- */
-export const PROTOBUF_VERSION_V4 = 4;
-
-/**
- * Encode a fact payload as a minimal Protobuf wire format.
- *
- * Field numbers match server/proto/totalreclaw.proto:
- *   1: id (string), 2: timestamp (string), 3: owner (string),
- *   4: encrypted_blob (bytes), 5: blind_indices (repeated string),
- *   6: decay_score (double), 7: is_active (bool), 8: version (int32),
- *   9: source (string), 10: content_fp (string), 11: agent_id (string),
- *   12: sequence_id (int64), 13: encrypted_embedding (string)
- *
- * Field 8 (`version`) is written as `PROTOBUF_VERSION_V4` (4) to match
- * the Memory Taxonomy v1 contract. All other v1 clients (plugin, python,
- * rust/totalreclaw-memory) write 4 here — writing anything else breaks
- * cross-client uniformity.
- */
-export function encodeFactProtobuf(fact: FactPayload): Buffer {
-  const parts: Buffer[] = [];
-
-  // Helper: encode a string field
-  const writeString = (fieldNumber: number, value: string) => {
-    if (!value) return;
-    const data = Buffer.from(value, 'utf-8');
-    const key = (fieldNumber << 3) | 2; // wire type 2 = length-delimited
-    parts.push(encodeVarint(key));
-    parts.push(encodeVarint(data.length));
-    parts.push(data);
-  };
-
-  // Helper: encode a bytes field
-  const writeBytes = (fieldNumber: number, value: Buffer) => {
-    const key = (fieldNumber << 3) | 2;
-    parts.push(encodeVarint(key));
-    parts.push(encodeVarint(value.length));
-    parts.push(value);
-  };
-
-  // Helper: encode a double field (wire type 1 = 64-bit)
-  const writeDouble = (fieldNumber: number, value: number) => {
-    const key = (fieldNumber << 3) | 1;
-    parts.push(encodeVarint(key));
-    const buf = Buffer.alloc(8);
-    buf.writeDoubleLE(value);
-    parts.push(buf);
-  };
-
-  // Helper: encode a varint field (wire type 0)
-  const writeVarintField = (fieldNumber: number, value: number) => {
-    const key = (fieldNumber << 3) | 0;
-    parts.push(encodeVarint(key));
-    parts.push(encodeVarint(value));
-  };
-
-  // Encode fields
-  writeString(1, fact.id);
-  writeString(2, fact.timestamp);
-  writeString(3, fact.owner);
-  writeBytes(4, Buffer.from(fact.encryptedBlob, 'hex'));
-
-  for (const index of fact.blindIndices) {
-    writeString(5, index);
-  }
-
-  writeDouble(6, fact.decayScore);
-  writeVarintField(7, 1); // is_active = true
-  writeVarintField(8, PROTOBUF_VERSION_V4); // version = 4 (Memory Taxonomy v1)
-  writeString(9, fact.source);
-  writeString(10, fact.contentFp);
-  writeString(11, fact.agentId);
-  // Field 12 (sequence_id) is assigned by the subgraph mapping, not the client
-  if (fact.encryptedEmbedding) {
-    writeString(13, fact.encryptedEmbedding);
-  }
-
-  return Buffer.concat(parts);
-}
-
-/** Encode an integer as a Protobuf varint */
-export function encodeVarint(value: number): Buffer {
-  const bytes: number[] = [];
-  let v = value >>> 0; // unsigned
-  while (v > 0x7f) {
-    bytes.push((v & 0x7f) | 0x80);
-    v >>>= 7;
-  }
-  bytes.push(v & 0x7f);
-  return Buffer.from(bytes);
-}
+//
+// Moved to ./protobuf.ts (dependency-free, so tests/parity can load it
+// without the MCP runtime deps). Re-exported so every existing import from
+// './subgraph/store.js' keeps working. PRD-04 F8 / DEP-6: that encoder no
+// longer writes outer fields 9 (source) / 11 (agent_id).
+export {
+  encodeFactProtobuf,
+  encodeVarint,
+  PROTOBUF_VERSION_V4,
+  type FactPayload,
+} from './protobuf.js';
 
 // ---------------------------------------------------------------------------
 // Chain helpers
