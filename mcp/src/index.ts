@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-
 import { TotalReclaw } from '@totalreclaw/client';
 import {
   handleRemember,
@@ -34,7 +32,7 @@ import {
   memoryContextResource,
   invalidateMemoryContextCache,
 } from './resources/index.js';
-import { createTotalReclawServer } from './server-setup.js';
+import { serveTotalReclawStdio, type createTotalReclawServer } from './server-setup.js';
 import {
   createCallToolHandler,
   type HandlerBundle,
@@ -2122,17 +2120,23 @@ async function main(): Promise<void> {
   // top-of-file rationale in `extraction/extractor.ts`.
   startPollerSafely();
 
-  // Construct the MCP server and wire its request handlers to the single
-  // dispatch router. Created here (not at module load) so importing this file
-  // in tests does not stand up a server or connect a transport.
-  server = createTotalReclawServer({
-    callTool: callToolHandler,
-    isManagedMode: () => !!subgraphState,
-    getClient,
-  });
-
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // Serve MCP over stdio in both protocol eras (DEP-15): the SDK's stdio
+  // entry reads the client's opening message (`initialize` → 2025-11-25,
+  // `server/discover` / per-request `_meta` → 2026-07-28) and builds the
+  // server from this factory. Started here (not at module load) so importing
+  // this file in tests does not stand up a server or connect a transport.
+  serveTotalReclawStdio(
+    {
+      callTool: callToolHandler,
+      isManagedMode: () => !!subgraphState,
+      getClient,
+    },
+    {
+      onServerCreated: (created) => {
+        server = created;
+      },
+    },
+  );
 }
 
 function startPollerSafely(): void {

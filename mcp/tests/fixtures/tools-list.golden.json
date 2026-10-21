@@ -1,0 +1,737 @@
+[
+  {
+    "name": "totalreclaw_remember",
+    "description": "Store user info PROACTIVELY — don't wait for \"remember this\".\nINVOKE WHEN USER SAYS \"I prefer X\", \"I'm X\", \"I chose X because Y\"; reveals identity/location/job/family.\nNOT FOR: chitchat, passwords, generic knowledge.\nExtract ATOMIC. Good: \"User is vegan\". Bad: \"User said they became vegan, prefer organic\".\nPARAMS facts[]: text; importance 1-10 def 5; type claim|preference|directive|commitment|episode|summary; scope work|personal|health|family|creative|finance|misc|unspecified. Dedup auto.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "fact": {
+          "type": "string",
+          "description": "A single fact to remember (atomic, concise). Use this OR the facts array."
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "The atomic fact text"
+              },
+              "importance": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 10,
+                "description": "Importance score 1-10"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "preference",
+                  "decision",
+                  "episodic",
+                  "goal",
+                  "context",
+                  "summary",
+                  "rule",
+                  "claim",
+                  "directive",
+                  "commitment",
+                  "episode"
+                ],
+                "description": "Memory taxonomy v1 type. One of: claim, preference, directive, commitment, episode, summary. Boundary tests: claim = assertive state-of-world (\"lives in Lisbon\", \"chose PostgreSQL\"). preference = expressive taste (\"likes dark mode\", \"prefers coffee over tea\"). directive = imperative rule the user wants enforced (\"always check d.get(errors)\", \"never rm -rf the state dir without stopping gateway\"). commitment = future intent (\"will ship v2 Friday\", \"planning to migrate to Postgres\"). episode = notable past event (\"deployed v1.0 on March 15\", \"had surgery last summer\"). summary = session synthesis (only for debrief pipelines). Legacy v0 types (fact, context, decision, rule, goal, episodic) are still accepted and auto-mapped."
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "work",
+                  "personal",
+                  "health",
+                  "family",
+                  "creative",
+                  "finance",
+                  "misc",
+                  "unspecified"
+                ],
+                "description": "Life-domain scope. One of: work, personal, health, family, creative, finance, misc, unspecified. Optional — defaults to \"unspecified\"."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Optional \"why\" clause for decision-style claims. Populate when the user expresses a decision with rationale: text=\"Chose PostgreSQL for the analytics store\", reasoning=\"data is relational and needs ACID guarantees\"."
+              }
+            },
+            "required": [
+              "text"
+            ]
+          },
+          "description": "Array of facts to store in a single call (preferred for multiple facts)"
+        },
+        "importance": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 5,
+          "description": "Importance score 1-10 (only for single-fact mode)"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal",
+            "health",
+            "family",
+            "creative",
+            "finance",
+            "misc",
+            "unspecified"
+          ],
+          "description": "Life-domain scope (single-fact mode). One of: work, personal, health, family, creative, finance, misc, unspecified."
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Optional \"why\" clause for decision-style claims (single-fact mode). See facts[].reasoning."
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "fact",
+                "preference",
+                "decision",
+                "episodic",
+                "goal",
+                "context",
+                "summary",
+                "rule",
+                "claim",
+                "directive",
+                "commitment",
+                "episode"
+              ]
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "work",
+                "personal",
+                "health",
+                "family",
+                "creative",
+                "finance",
+                "misc",
+                "unspecified"
+              ]
+            },
+            "reasoning": {
+              "type": "string"
+            },
+            "expires_at": {
+              "type": "string",
+              "description": "ISO timestamp for time-limited facts"
+            }
+          }
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_recall",
+    "description": "Search encrypted vault. Top 8 reranked by provenance+semantic+recency.\nINVOKE WHEN USER SAYS:\n- \"what's my [phone/address/doctor]\"\n- \"remember when I...\" / \"what did I say about...\"\n- \"do you know my...\" / \"my preferences for...\"\n- opens convo on a topic (auto-recall first msg)\nWHEN NOT TO USE: world knowledge, small talk.\nDOES: trapdoor search, decrypt, rerank BM25+cosine+source-provenance.\nPARAMS: query (5-15 words), k (def 8, max 50).\nDon't announce \"I found these memories\" — just use them.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query"
+        },
+        "k": {
+          "type": "number",
+          "default": 8,
+          "description": "Number of results to return"
+        },
+        "min_importance": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Filter by minimum importance"
+        },
+        "include_decay": {
+          "type": "boolean",
+          "default": true,
+          "description": "Apply decay scoring"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_forget",
+    "description": "Permanently remove memory.\nINVOKE WHEN USER SAYS:\n- \"forget what I said about X\" / \"delete that fact\"\n- \"that's wrong/outdated — remove it\"\n- \"I don't want you remembering X\"\n- \"erase that password I pasted\"\nWHEN NOT TO USE:\n- CORRECTING → totalreclaw_remember (dedup auto)\n- changing mind (\"I prefer tea now\") → remember new pref\n- no explicit request — never forget proactively\nDOES: fact_id → tombstone. query → recall ≤50, tombstone all.\nPARAMS: fact_id (pref), query (max 50), scope (hint).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "memory_id": {
+          "type": "string",
+          "description": "The ID of a specific memory to forget (from a prior totalreclaw_recall result). Preferred over `query` — avoids over-deletion."
+        },
+        "fact_id": {
+          "type": "string",
+          "description": "Back-compat alias for `memory_id`. Prefer `memory_id`."
+        },
+        "query": {
+          "type": "string",
+          "description": "Semantic search string — every matching memory (up to 50) is tombstoned. Use sparingly; confirm with the user first."
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal",
+            "health",
+            "family",
+            "creative",
+            "finance",
+            "misc",
+            "unspecified"
+          ],
+          "description": "Optional v1 scope hint for query-based forgets. Not yet enforced server-side, but supplying it lets future versions restrict deletion to one life-domain (e.g. `scope=\"health\"` to forget only diet-related memories). No effect when `fact_id` is given."
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_export",
+    "description": "Export decrypted vault — one-click backup.\nINVOKE WHEN USER SAYS:\n- \"show everything you know about me\" / \"what do you have on me?\"\n- \"export / back up / download my memories\"\n- \"take my memory elsewhere\" / \"portable copy\"\n- \"audit what's stored\" / \"what's in my vault?\"\nWHEN NOT TO USE:\n- one thing → totalreclaw_recall\n- cleanup → totalreclaw_consolidate/forget\nDOES: decrypt all → Markdown or JSON. Surfaces v1 type/source/scope/reasoning.\nPARAMS: format, include_metadata.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": [
+            "markdown",
+            "json"
+          ],
+          "default": "markdown",
+          "description": "Output format"
+        },
+        "include_metadata": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include metadata in export"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_import",
+    "description": "Restore from totalreclaw_export backup (JSON/Markdown).\nINVOKE WHEN USER SAYS:\n- \"restore memories from this backup\" / \"import this JSON\"\n- \"I exported from another TotalReclaw account\"\n- \"here's the Markdown export — put it back\"\nWHEN NOT TO USE:\n- Mem0/ChatGPT/Claude → totalreclaw_import_from\n- single fact → totalreclaw_remember\nDOES: parse JSON/Markdown (auto), store via totalreclaw_remember + fingerprint dedup.\nPARAMS: content (req), format, merge_strategy, validate_only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "The exported content (JSON or Markdown string)"
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "markdown",
+            "json"
+          ],
+          "description": "Format of content (auto-detected if not specified)"
+        },
+        "merge_strategy": {
+          "type": "string",
+          "enum": [
+            "skip_existing",
+            "overwrite",
+            "merge"
+          ],
+          "default": "skip_existing",
+          "description": "How to handle conflicts"
+        },
+        "validate_only": {
+          "type": "boolean",
+          "default": false,
+          "description": "Parse and validate without importing"
+        }
+      },
+      "required": [
+        "content"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "totalreclaw_import_from",
+    "description": "Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, JSON/CSV.\nINVOKE WHEN USER SAYS:\n- \"migrate memory from [Mem0/ChatGPT/Claude]\"\n- \"import my ChatGPT memories\" / \"here's my Mem0 export\"\n- \"I pasted my Claude memory — store it\"\nWHEN NOT TO USE: TotalReclaw backup → totalreclaw_import. Single fact → totalreclaw_remember.\nDOES: adapter parses+stores (unless dry_run). Fingerprint dedup. Convo sources return chunks for host LLM.\nALWAYS dry_run=true first → preview → confirm.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": [
+            "mem0",
+            "mcp-memory",
+            "chatgpt",
+            "claude",
+            "gemini"
+          ],
+          "description": "The source system to import from (gemini: Google Takeout HTML; chatgpt: conversations.json or memory text; claude: memory text)"
+        },
+        "api_key": {
+          "type": "string",
+          "description": "API key for the source system (Mem0). NOT stored — used only for this import."
+        },
+        "source_user_id": {
+          "type": "string",
+          "description": "User or agent ID in the source system"
+        },
+        "content": {
+          "type": "string",
+          "description": "For file-based sources: the file content (pasted JSON, CSV, or JSONL)"
+        },
+        "file_path": {
+          "type": "string",
+          "description": "For file-based sources: path to the file on disk"
+        },
+        "dry_run": {
+          "type": "boolean",
+          "default": false,
+          "description": "Parse and validate without actually importing. Shows what would be imported."
+        },
+        "api_url": {
+          "type": "string",
+          "description": "Override API base URL (for self-hosted instances)"
+        }
+      },
+      "required": [
+        "source"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_import_batch",
+    "description": "Internal polling for LARGE imports (Gemini/ChatGPT/Claude 50+ convos). Slice per call.\n\nINVOKE WHEN:\n- totalreclaw_import_from returned total_chunks > 50\n- large Takeout/conversations.json times out\n\nPOLLING: offset=0, batch_size def 25, offset+=batch_size until is_complete. Extract + totalreclaw_remember. Dedup safe.\n\nWHEN NOT TO USE:\n- <50 convos → totalreclaw_import_from\n- pre-structured (Mem0) → totalreclaw_import_from\n- single block → totalreclaw_import_from\n- don't expose tool name",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": [
+            "gemini",
+            "chatgpt",
+            "claude"
+          ],
+          "description": "Source system (gemini: Google Takeout HTML; chatgpt: conversations.json; claude: memory text)"
+        },
+        "file_path": {
+          "type": "string",
+          "description": "Path to the source file on disk"
+        },
+        "content": {
+          "type": "string",
+          "description": "File content (for text-based sources like Claude memories)"
+        },
+        "offset": {
+          "type": "number",
+          "default": 0,
+          "description": "Starting chunk index (0-based). Increment by batch_size for each call."
+        },
+        "batch_size": {
+          "type": "number",
+          "default": 25,
+          "description": "Number of chunks to process per call (default 25)"
+        }
+      },
+      "required": [
+        "source"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_consolidate",
+    "description": "Cluster near-duplicates, merge each to best. Self-hosted only.\nINVOKE WHEN USER SAYS:\n- \"clean up / dedupe my memory\"\n- \"lots of duplicates — consolidate\"\n- \"consolidate\" / \"consolidation\" (explicit)\n- after big totalreclaw_import_from\nDOES: cosine cluster via Rust WASM, delete redundant (unless dry_run).\nWHEN NOT TO USE:\n- managed service — no on-chain batch delete; self-hosted only\n- specific deletes → totalreclaw_forget\n- unsure → dry_run=true first\nPARAMS: dry_run (def false).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "dry_run": {
+          "type": "boolean",
+          "description": "Preview consolidation without deleting (default: false)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "totalreclaw_status",
+    "description": "Check tier + usage + quota.\nINVOKE WHEN USER SAYS:\n- \"what tier am I on?\" / \"am I on free or pro?\"\n- \"how many memories have I stored?\" / \"what's my usage?\"\n- \"is my subscription active?\" / \"when does it expire?\"\n- \"am I close to the limit?\"\nDOES: query relay billing endpoint. Returns tier, writes_used/limit, expiry. Refreshes local billing cache. Call before bulk ops.\nWHEN NOT TO USE:\n- billing history/invoices → dashboard/support\n- wants to upgrade → totalreclaw_upgrade",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "wallet_address": {
+          "type": "string",
+          "description": "Smart Account address (derived from recovery phrase)"
+        }
+      },
+      "required": [
+        "wallet_address"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_upgrade",
+    "description": "Stripe checkout URL for Pro (1,500 memories/month on Gnosis mainnet, permanent on-chain, LLM-guided dedup).\nINVOKE WHEN USER SAYS:\n- \"how do I upgrade?\" / \"I want to go pro\"\n- \"how much does it cost?\" (share pricing from checkout, don't hardcode)\n- after `quota_exceeded` — offer inline\n- \"raise my limit\" / \"I keep hitting the cap\"\nDOES: calls relay checkout, returns one-time Stripe URL.\nWHEN NOT TO USE:\n- user already Pro (check totalreclaw_status)\n- unrelated — don't volunteer upgrades",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "wallet_address": {
+          "type": "string",
+          "description": "Smart Account address"
+        }
+      },
+      "required": [
+        "wallet_address"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "totalreclaw_debrief",
+    "description": "Crystal session summary — one structured summary per session.\n\nINVOKE WHEN USER SAYS:\n- \"goodbye\" / \"bye\" / \"thanks\"\n- \"that's all\" / \"I'm done\"\n- \"wrapping up\" / after long debug/plan session\n- before detected compaction/reset\n\nWHEN NOT TO USE:\n- casual chat / Q&A — adds noise\n- no prior totalreclaw_remember — no context\n- unsure → skip; debriefs rare\n\nProvide a Crystal object. narrative is embedded; all other fields go in metadata.",
+    "inputSchema": {
+      "type": "object",
+      "oneOf": [
+        {
+          "description": "Crystal-shaped debrief (preferred, am-1)",
+          "properties": {
+            "crystal": {
+              "type": "object",
+              "description": "Structured Crystal session summary",
+              "properties": {
+                "narrative": {
+                  "type": "string",
+                  "description": "1-2 sentence session summary (will be embedded)"
+                },
+                "key_outcomes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Decisions made, bugs fixed, conclusions reached"
+                },
+                "files_affected": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "File paths worked on (coding sessions)"
+                },
+                "open_threads": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Unfinished items needing follow-up"
+                },
+                "lessons": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Patterns, gotchas, insights worth remembering"
+                },
+                "importance": {
+                  "type": "number",
+                  "description": "Importance 1-10 (default 8)"
+                },
+                "session_id": {
+                  "type": "string",
+                  "description": "Optional session identifier"
+                }
+              },
+              "required": [
+                "narrative"
+              ]
+            }
+          },
+          "required": [
+            "crystal"
+          ]
+        },
+        {
+          "description": "Legacy free-form debrief items (backward compat)",
+          "properties": {
+            "facts": {
+              "type": "array",
+              "description": "Array of debrief items to store",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "The debrief summary text (1-3 sentences)"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "summary",
+                      "context"
+                    ],
+                    "description": "summary=conclusion/outcome, context=broader project context"
+                  },
+                  "importance": {
+                    "type": "number",
+                    "description": "Importance 1-10 (typically 7-8 for debriefs)"
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            }
+          },
+          "required": [
+            "facts"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_support",
+    "description": "Support contact, docs, troubleshooting.\nINVOKE WHEN USER SAYS:\n- \"how do I get help?\" / \"who do I contact?\"\n- \"memories aren't loading\" / \"getting errors\"\n- \"lost my recovery phrase\" / \"where's the docs?\"\n- \"how do I report a bug?\"\n- asks: slow recall, quota errors, failed imports, missing post-upgrade memories\nDOES: static bundle (pre-filled email, docs URL, issues URL, troubleshooting table). Works unconfigured.\nWHEN NOT TO USE: billing info → totalreclaw_status. Skip unrelated questions.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_account",
+    "description": "Account overview: wallet, tier, usage, memories, features, safe recovery hint.\nINVOKE WHEN USER SAYS:\n- \"show my account\" / \"what's my profile?\"\n- \"how many memories?\" / \"my wallet?\"\n- \"right recovery phrase? hint\"\n- \"summary of my setup\"\nDOES: billing+fact count parallel. Returns wallet, tier, writes_used/limit, total_facts, features, FIRST+LAST recovery words (never full).\nWHEN NOT TO USE:\n- only billing → totalreclaw_status (lighter)\n- FULL recovery phrase → NEVER; password manager.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_pin",
+    "description": "Pin memory — nothing overrides/supersedes/auto-retracts. Ground truth.\n\nINVOKE WHEN USER SAYS:\n- \"pin that\" / \"never forget this\" / \"always remember this\"\n- \"this is definitely true even though I said X\" (contradiction)\n- \"make sure this sticks\" / \"lock this in\"\n- \"don't lose it\"\n\nDOES: fetches by fact_id, writes pin claim, tombstones original. Idempotent, on-chain.\n\nWHEN NOT TO USE:\n- no memory ID yet → totalreclaw_recall first\n- storing new → totalreclaw_remember importance 9-10",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "memory_id": {
+          "type": "string",
+          "description": "The ID of the memory to pin (from a totalreclaw_recall result)."
+        },
+        "fact_id": {
+          "type": "string",
+          "description": "Back-compat alias for `memory_id`. Prefer `memory_id`."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Optional human-readable reason for pinning (logged locally for tuning)."
+        },
+        "expires_at": {
+          "type": "string",
+          "description": "Optional ISO 8601 timestamp at which the pin should lapse. Recorded on the new claim; enforcement (auto-unpin after expiry) lives in a future revision."
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_unpin",
+    "description": "Remove pin so auto-resolution can supersede/update again.\n\nINVOKE WHEN USER SAYS:\n- \"unpin that\" / \"stop pinning that memory\"\n- \"that was pinned by mistake\"\n- \"let that one get overwritten if new info comes in\"\n\nDOES: flips pin → active via supersession. Takes fact_id. Idempotent. Propagates on-chain.\n\nWHEN NOT TO USE:\n- wants to DELETE → totalreclaw_forget\n- wants to UPDATE → totalreclaw_remember new text (dedup handles it)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "memory_id": {
+          "type": "string",
+          "description": "The ID of the memory to unpin (from a totalreclaw_recall result)."
+        },
+        "fact_id": {
+          "type": "string",
+          "description": "Back-compat alias for `memory_id`. Prefer `memory_id`."
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_retype",
+    "description": "Reclassify memory to different v1 type.\n\nINVOKE WHEN USER SAYS:\n- \"that was actually a directive, not a preference\"\n- \"more of a decision than a goal\" / \"retype as claim\"\n- \"file that under directives/commitments\"\n\nDOES: builds v1 claim with new_type, links via superseded_by, tombstones original. Idempotent.\n\nWHEN NOT TO USE:\n- text wrong → totalreclaw_forget + totalreclaw_remember\n- unsure which memory → totalreclaw_recall first\n\nnew_type: claim|preference|directive|commitment|episode|summary.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "memory_id": {
+          "type": "string",
+          "description": "The ID of the memory to retype (from a prior totalreclaw_recall result)."
+        },
+        "fact_id": {
+          "type": "string",
+          "description": "Back-compat alias for `memory_id`. Prefer `memory_id`."
+        },
+        "new_type": {
+          "type": "string",
+          "enum": [
+            "claim",
+            "preference",
+            "directive",
+            "commitment",
+            "episode",
+            "summary"
+          ],
+          "description": "New Memory Taxonomy v1 type. One of: claim, preference, directive, commitment, episode, summary."
+        }
+      },
+      "required": [
+        "new_type"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_set_scope",
+    "description": "Re-tag memory under different life-domain scope (work|personal|health|family|creative|finance|misc|unspecified).\n\nINVOKE WHEN USER SAYS:\n- \"actually that's work context, not personal\"\n- \"file that under health\" / \"move to finance\"\n- \"wrong scope — about my kids, not work\"\n\nDOES: builds v1 claim with new scope, links via superseded_by, tombstones original. Idempotent.\n\nWHEN NOT TO USE:\n- memory wrong → totalreclaw_forget + totalreclaw_remember\n- type wrong (not scope) → totalreclaw_retype",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "memory_id": {
+          "type": "string",
+          "description": "The ID of the memory to retag (from a prior totalreclaw_recall result)."
+        },
+        "fact_id": {
+          "type": "string",
+          "description": "Back-compat alias for `memory_id`. Prefer `memory_id`."
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal",
+            "health",
+            "family",
+            "creative",
+            "finance",
+            "misc",
+            "unspecified"
+          ],
+          "description": "New scope value. One of: work, personal, health, family, creative, finance, misc, unspecified."
+        }
+      },
+      "required": [
+        "scope"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "totalreclaw_pair",
+    "description": "Set up the user's TotalReclaw account (browser-side recovery-phrase generation or import).\nINVOKE WHEN USER SAYS:\n- \"set up totalreclaw\" / \"set up my account\"\n- \"I don't have a totalreclaw recovery phrase yet\" / \"create a totalreclaw account\"\n- ANY tool returns \"not_configured\" — propose this tool BEFORE asking the user to edit MCP config.\nDOES: opens a brief relay session, returns {url, pin, expires_at_ms}. Hand the URL + PIN to the user — they open the URL in any browser, the BROWSER generates (or imports) a 12-word phrase, encrypts it, uploads ciphertext to this MCP server. Server decrypts in-memory, writes ~/.totalreclaw/credentials.json (mode 0600). Phrase NEVER touches LLM context, chat transcript, stdout, or logs.\nAFTER PAIRING: tell the user to RESTART their MCP host (Claude Desktop / Cursor / Claude Code) so the server re-reads credentials.json and switches out of unconfigured mode.\nWHEN NOT TO USE:\n- user already has TOTALRECLAW_RECOVERY_PHRASE in env → tool will return URL but pairing is unnecessary\n- user explicitly wants terminal-only setup → point them at `npx @totalreclaw/mcp-server setup` (CLI wizard, runs OUTSIDE your shell tool)\n- NEVER ask the user to paste their phrase in chat. NEVER echo or print a phrase from any source.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "generate",
+            "import"
+          ],
+          "description": "\"generate\" = the browser will create a NEW recovery phrase. \"import\" = the browser will accept an EXISTING phrase that the user pastes in their browser (never through chat).",
+          "default": "generate"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  }
+]

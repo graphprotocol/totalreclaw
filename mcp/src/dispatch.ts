@@ -23,7 +23,7 @@
  *      wrap the whole thing in the shared quota → auth → generic error funnel.
  */
 
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Tool } from '@modelcontextprotocol/server';
 import type { ToolResponse } from './tools/types.js';
 import {
   rememberToolDefinition,

@@ -114,7 +114,7 @@ TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
 
 Add this to your NanoClaw deployment (Docker env, `.env`, or platform config). The NanoClaw agent-runner auto-spawns `@totalreclaw/mcp-server` with this env.
 
-If you need to generate a recovery phrase first, run `npx @totalreclaw/mcp-server setup` on any machine with Node 18+.
+If you need to generate a recovery phrase first, run `npx @totalreclaw/mcp-server setup` on any machine with Node 20+.
 
 **Full guide:** [nanoclaw-getting-started.md](./nanoclaw-getting-started.md)
 

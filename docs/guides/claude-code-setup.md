@@ -107,7 +107,7 @@ First real interaction downloads a ~600 MB embedding model (cached locally, one-
 
 ## Prerequisites
 
-- **Node.js 18+** (22 recommended)
+- **Node.js 20+** (22 recommended)
 - **An MCP-compatible host:** Claude Code, Claude Desktop, Cursor, Windsurf, IronClaw, or similar
 - **A recovery phrase** — generated via OpenClaw / Hermes browser account-setup flow, an offline BIP-39 generator, or already on file at `~/.totalreclaw/credentials.json`
 

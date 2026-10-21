@@ -20,7 +20,7 @@ End users do not need to do anything. Memory is fully automatic.
 ## Prerequisites
 
 - A running NanoClaw deployment (Docker or platform-hosted)
-- Node.js 18+ available on your local machine (for the one-time setup wizard)
+- Node.js 20+ available on your local machine (for the one-time setup wizard)
 - Internet access from the NanoClaw container (to reach `api.totalreclaw.xyz`)
 
 ---
