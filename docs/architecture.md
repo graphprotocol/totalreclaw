@@ -36,29 +36,59 @@ Every operation that touches plaintext — encryption, embedding generation, sea
 
 ### Key Derivation
 
-A 12-word BIP-39 recovery phrase is the single root of trust. From it, three independent keys are derived — none of which ever leave the device.
+A 12-word BIP-39 recovery phrase is the single root of trust. Two independent branches are derived from it: the **vault keys** (HKDF), which protect and index memory content, and the **owner key** (BIP-32), which controls the user's on-chain Smart Account.
+
+```
+                 recovery phrase (12 or 24 words)
+                               │  PBKDF2-HMAC-SHA512, 2048 rounds (BIP-39)
+                               ▼
+                         512-bit seed
+              ┌────────────────┴────────────────┐
+   HKDF-SHA256, salt = seed[0..32]     BIP-32, path m/44'/60'/0'/0/0
+              │                                 │
+   ├─ authKey                              owner key (EOA)
+   ├─ encryptionKey                             │  SimpleAccountFactory (CREATE2)
+   ├─ dedupKey                                  ▼
+   └─ lshSeed                             Smart Account address
+```
 
 **Step 1 — Seed Generation**
 
-The 12 or 24 words pass through PBKDF2 (2048 rounds) to produce a 512-bit seed. For arbitrary passwords, Argon2id (t=3, m=64 MB, p=4) is used instead — memory-hard to resist GPU brute-force.
+The 12 or 24 words pass through PBKDF2-HMAC-SHA512 (2048 rounds, standard BIP-39) to produce a 512-bit seed.
 
-**Step 2 — Key Expansion**
+**Step 2 — Vault Keys**
 
-The seed is expanded into three 256-bit keys using HKDF-SHA256 with distinct info strings, ensuring cryptographic independence:
+The seed is expanded into four 256-bit keys using HKDF-SHA256, with the first 32 bytes of the seed as the salt and a distinct info string per key:
 
 ```
-HKDF(seed, "totalreclaw-auth-key-v1")       → authKey
-HKDF(seed, "totalreclaw-encryption-key-v1")  → encryptionKey
-HKDF(seed, "openmemory-dedup-v1")            → dedupKey
+salt = seed[0..32]
+HKDF(seed, salt, "totalreclaw-auth-key-v1")        → authKey
+HKDF(seed, salt, "totalreclaw-encryption-key-v1")  → encryptionKey
+HKDF(seed, salt, "openmemory-dedup-v1")            → dedupKey
+HKDF(seed, salt, "openmemory-lsh-seed-v1")         → lshSeed
 ```
 
-**Step 3 — Key Usage**
+The `openmemory-` info strings are a holdover from the project's earlier name. They can't be renamed: a different info string derives a different key, which would break every existing vault.
 
-| Key | Purpose | What the server sees |
+**Step 3 — Owner Key and Smart Account**
+
+The same seed also derives an Ethereum key at the standard path `m/44'/60'/0'/0/0`, the same key viem's `mnemonicToAccount()` or MetaMask would produce from these words. This **owner key** owns the user's ERC-4337 Smart Account (eth-infinitism `SimpleAccount`, created by the canonical factory). The account's address is a CREATE2 function of the owner key, so every client computes the same address before the account exists; it is deployed by the user's first write. The owner key signs every UserOp, and on-chain facts are indexed under the Smart Account address.
+
+HKDF and BIP-32 are different functions over the seed, so neither branch can be derived from the other: a leaked vault key does not reveal the owner key, or vice versa. Only a leak of the phrase or seed compromises both.
+
+**Step 4 — Key Usage**
+
+| Key | Purpose | What the relay sees |
 | --- | --- | --- |
-| `authKey` | Authenticates with the relay | SHA-256 hash only |
+| `authKey` | Authenticates with the relay. Sent as a bearer token (`Authorization: Bearer <authKey>`) on every request | The key itself, on each request (over TLS). Stores only `SHA-256(authKey)`. Grants relay access only (reads, quota, billing, escrow management) — it cannot decrypt memories or sign on-chain writes |
 | `encryptionKey` | Encrypts all memory content via XChaCha20-Poly1305 | Nothing — never transmitted |
-| `dedupKey` | Generates HMAC-SHA256 content fingerprints for dedup | Hash only |
+| `dedupKey` | Keys the HMAC-SHA256 content fingerprints used for exact-duplicate detection | Fingerprints only |
+| `lshSeed` | Seeds the per-user random hyperplanes for LSH bucket hashes | Bucket hashes only |
+| Owner key | Signs UserOps for the user's Smart Account | Signatures and the public address only |
+
+**Where the keys live.** A client configured with a recovery phrase derives every key on the device; only `authKey` is ever sent anywhere. An agent host configured with a `derived-bundle-v1` bundle holds the four vault keys and the owner key directly, but never the phrase or seed (see [client consistency](specs/totalreclaw/client-consistency.md)).
+
+**Legacy password path (self-hosted only).** The managed service always requires a BIP-39 phrase. Self-hosted deployments can still be configured with an arbitrary password instead: it is stretched with Argon2id (t=3, m=64 MB, p=4) over a random salt into a master key, which then takes the place of the seed in Step 2. This path has no owner key, since self-hosted mode doesn't use the chain.
 
 ### XChaCha20-Poly1305 Wire Format
 
