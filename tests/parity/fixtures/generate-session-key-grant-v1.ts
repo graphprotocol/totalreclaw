@@ -5,8 +5,9 @@
  * Locks byte-equality between three implementations of the EIP-712 grant
  * digest + master ECDSA signature + ABI-encoded install blob:
  *
- *   - Solidity validator (`contracts/contracts/SessionKeyModule.sol`,
- *     cred-5 stage 2, MERGED #272) — source-of-truth encoder.
+ *   - Solidity validator (`contracts/account/contracts/TotalReclawAccount.sol`,
+ *     #636; wire format ported verbatim from the since-removed
+ *     `SessionKeyModule.sol`, cred-5 #272) — source-of-truth encoder.
  *   - TS / viem (`tests/parity/session-key-grant-roundtrip.ts`, this PR).
  *   - Python / `eth_account` (`python/...`, cred-8 in flight #333).
  *
@@ -73,7 +74,7 @@ const MOCK_USER_OP_HASH = keccak256(
 );
 
 // ---------------------------------------------------------------------------
-// EIP-712 typehashes — must match SessionKeyModule.sol byte-for-byte.
+// EIP-712 typehashes — must match TotalReclawAccount.sol byte-for-byte.
 // ---------------------------------------------------------------------------
 
 const DOMAIN_TYPEHASH = keccak256(
@@ -175,7 +176,7 @@ function grantDigest(args: {
 function signatureToHex(sig: { r: Hex; s: Hex; v: bigint | undefined; yParity?: number }): Hex {
   // viem returns r/s as 0x-prefixed 32-byte hex strings and v as the parity
   // byte (27 or 28 for legacy / EIP-191 / EIP-712 signatures). Pack to the
-  // 65-byte (r, s, v) layout the SessionKeyModule._recoverEcdsa expects.
+  // 65-byte (r, s, v) layout the TotalReclawAccount._recoverEcdsa expects.
   let vByte: number;
   if (sig.v === 27n || sig.v === 28n) {
     vByte = Number(sig.v);
@@ -226,7 +227,7 @@ async function main(): Promise<void> {
   const sessionSignature = signatureToHex(sessionRaw);
 
   // 4. ABI-encode the install blob — must decode as `(PermissionGrant, bytes)`
-  //    inside SessionKeyModule._decodeInstallSig.
+  //    inside TotalReclawAccount._decodeInstallSig.
   const permissionGrantType = {
     type: 'tuple',
     components: [
@@ -268,7 +269,7 @@ async function main(): Promise<void> {
     meta: {
       version: 1,
       description:
-        'Cross-language parity fixture for SessionKeyPermissionGrant (cred-9, spec §3.1 + §6.4). Locks the EIP-712 digest + master ECDSA signature + ABI-encoded install blob across Solidity (SessionKeyModule.sol), TS (viem), Python (eth_account). The Solidity validator uses a non-standard `bytes4[]` encoding — see generate-session-key-grant-v1.ts for the digest implementation siblings MUST mirror. Regenerate via: npx tsx fixtures/generate-session-key-grant-v1.ts',
+        'Cross-language parity fixture for SessionKeyPermissionGrant (cred-9, spec §3.1 + §6.4). Locks the EIP-712 digest + master ECDSA signature + ABI-encoded install blob across Solidity (TotalReclawAccount.sol), TS (viem), Python (eth_account). The Solidity validator uses a non-standard `bytes4[]` encoding — see generate-session-key-grant-v1.ts for the digest implementation siblings MUST mirror. Regenerate via: npx tsx fixtures/generate-session-key-grant-v1.ts',
       grant_version: GRANT_VERSION,
       generator: 'tests/parity/fixtures/generate-session-key-grant-v1.ts',
     },

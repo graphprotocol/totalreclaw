@@ -1,7 +1,7 @@
 {
   "name": "@totalreclaw/contracts",
   "version": "0.1.0",
-  "description": "TotalReclaw smart contracts \u2014 EventfulDataEdge and Paymaster for Base L2",
+  "description": "TotalReclaw smart contracts \u2014 EventfulDataEdge (Gnosis)",
   "private": true,
   "scripts": {
     "compile": "hardhat compile",
