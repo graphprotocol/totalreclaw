@@ -35,6 +35,7 @@ CURRENT_FACT_FILES=$(ls -1 \
   docs/*.md \
   docs/guides/*.md \
   python/README.md \
+  enclave/README.md \
   rust/totalreclaw-memory/README.md \
   rust/totalreclaw-core/README.md \
   client/README.md \
