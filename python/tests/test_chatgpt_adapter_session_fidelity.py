@@ -14,11 +14,11 @@ that preserves them end-to-end:
   G5  a real export is a zip / directory with conversations-NNN.json splits;
       zip, directory, and single-file inputs parse identically
 
-Fixture: tests/fixtures/chatgpt-conversations.fixture.json — 7 real
-(anonymized) conversations + 1 synthetic, selected by
-totalreclaw-internal/e2e/chatgpt-import/make-fixture.py. Expected counts
-below were derived from the fixture by that script's companion analysis;
-see the manifest JSON for per-case metadata.
+Fixture: tests/fixtures/chatgpt-conversations.fixture.json — 7 fully
+synthetic conversations (2026-10-25) whose tree shape (mapping, branches,
+current_node, roles, content types, part kinds, relative timestamps) mirrors
+a real export; every id and all text were generated. Expected counts below
+hold for that shape; see fixtures/README.md and the manifest JSON.
 """
 from __future__ import annotations
 

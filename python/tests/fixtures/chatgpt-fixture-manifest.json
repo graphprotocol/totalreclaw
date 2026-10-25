@@ -1,0 +1,44 @@
+{
+  "plain": {
+    "source_file": "<synthetic: structure derived from an export, every id and all text replaced>",
+    "conversation_id": "33126225-0217-55a6-baf8-71c1c4e9281b",
+    "title": "Synthetic plain: a community garden plan",
+    "message_nodes": 5
+  },
+  "singleton": {
+    "source_file": "<synthetic: structure derived from an export, every id and all text replaced>",
+    "conversation_id": "f5851967-160d-561a-81d4-035fcae85e44",
+    "title": "Synthetic singleton: a community garden plan",
+    "message_nodes": 3
+  },
+  "branched": {
+    "source_file": "<synthetic: structure derived from an export, every id and all text replaced>",
+    "conversation_id": "aa738314-2cf3-5363-9c33-326713db7ce6",
+    "title": "Synthetic branched: a community garden plan",
+    "message_nodes": 7
+  },
+  "long": {
+    "source_file": "<synthetic: structure derived from an export, every id and all text replaced>",
+    "conversation_id": "b127ac9d-a9af-53f7-98f4-8088105b19ed",
+    "title": "Synthetic long: sorting a photo library",
+    "message_nodes": 80
+  },
+  "code": {
+    "source_file": "<synthetic: structure derived from an export, every id and all text replaced>",
+    "conversation_id": "8f986d6a-4447-55f6-a269-da47e6b8d492",
+    "title": "Synthetic code: chess openings",
+    "message_nodes": 36
+  },
+  "voice": {
+    "source_file": "<synthetic: structure derived from an export, every id and all text replaced>",
+    "conversation_id": "e2d78403-296f-548a-81af-dea5265f8ace",
+    "title": "Synthetic voice: a kitchen renovation budget",
+    "message_nodes": 255
+  },
+  "empty": {
+    "source_file": "<synthetic: structure derived from an export, every id and all text replaced>",
+    "conversation_id": "e68eaa61-d464-562b-9b5e-95e9c9c16d98",
+    "title": "Synthetic empty: sourdough baking",
+    "message_nodes": 1
+  }
+}
