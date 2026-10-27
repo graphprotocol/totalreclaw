@@ -141,7 +141,8 @@ These statements are WRONG. Never write any of them — they fabricate a pricing
 
 ## Diagnostics
 
-- `totalreclaw_*` tools not visible → the gateway wasn't restarted after install. This is an **install** problem — follow the install guide (<https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md>), which owns the `/restart` procedure.
+- `totalreclaw_*` tools not visible → the plugin isn't enabled (Hermes 0.22+ loads plugins only after `hermes plugins enable totalreclaw`) or the gateway wasn't restarted after install. This is an **install** problem — follow the install guide (<https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md>), which owns the enable + `/restart` procedure.
+- Your context says TotalReclaw memory is **OFFLINE**, or `totalreclaw_status` returns `"degraded": true` → the totalreclaw package can't be loaded in this Hermes install, so nothing is being saved or recalled. Tell the user in one sentence, don't claim anything was remembered, and give them the `fix` command from `totalreclaw_status` if they want to repair it.
 - User says done but `credentials.json` missing → PIN expired or wrong phrase entered; call `totalreclaw_pair` again.
 - `totalreclaw_pair` returns `already_configured` → an account is already set up; tell the user. Only if they ask to replace it, call again with `replace=true`: the pairing page warns them and only they can confirm there. Never move, rename or delete `credentials.json` to get around this.
 - `onboarding required` → credentials missing; redo from the account-setup step in the install guide.

@@ -93,7 +93,15 @@ dependencies = [
     # and await the encrypted phrase upload. See
     # ``totalreclaw.pair.remote_client`` for the transport, and the
     # rc.10 blueprint in the internal repo for the full design.
-    "websockets>=12.0,<14",
+    # No upper cap: we share the host's environment, and Hermes pins its
+    # own websockets (15.x as of Hermes 0.22). The old `<14` cap made every
+    # install downgrade it to 13.x, and Hermes' gateway client (which passes
+    # `proxy=`, added in 14) then failed on every `hermes chat`. We only use
+    # connect/send/recv/close, which are stable from 12 through 17; the
+    # tests/test_pair_*.py suites run the pair transport against whatever
+    # version is installed, and tests/test_hermes_entrypoint_kind.py keeps
+    # the cap from coming back.
+    "websockets>=12.0",
     # imp-5 — RAM pre-flight check in import adapters uses psutil.virtual_memory()
     # to detect available memory before loading large files.
     "psutil>=5.9",

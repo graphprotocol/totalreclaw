@@ -75,7 +75,9 @@ _SIDECAR_MARKER = "# managed-by: totalreclaw.hermes.install_memory_provider"
 
 # NOTE: plain string (not an f-string) — the template contains dict/brace
 # literals for the degraded tool schema. The marker is prepended by
-# concatenation so the template body needs no escaping.
+# concatenation so the template body needs no escaping. ``install_sidecar``
+# replaces ``_VERSION_PLACEHOLDER`` with the installed package version.
+_VERSION_PLACEHOLDER = "__TOTALRECLAW_VERSION__"
 _SIDECAR_CONTENT = _SIDECAR_MARKER + "\n" + '''\
 """Hermes plugin + MemoryProvider sidecar for TotalReclaw (resilient edition, #638).
 
@@ -94,25 +96,34 @@ This file serves BOTH Hermes surfaces that live at
   so every ``totalreclaw_*`` tool + lifecycle hook keeps working even
   where this sidecar has replaced a git-plugin bootstrap file.
 
-Self-healing (the #638 failure mode): a Hermes runtime regeneration
-recreates the venv WITHOUT pip-installed extras, so
-``import totalreclaw`` fails and the old bare-stub sidecar made the
-whole plugin vanish silently. Here an ImportError triggers ONE bounded
-reinstall attempt into the RUNNING interpreter's venv; if that also
-fails the module still finishes importing in DEGRADED mode —
-``register(ctx)`` registers a ``totalreclaw_status`` tool that reports
-what is wrong and how to fix it, instead of Hermes skipping the plugin
-with no error anywhere.
+Self-healing (the #638 failure mode): a Hermes update can replace the
+environment Hermes imports from, so ``import totalreclaw`` fails. Here an
+ImportError triggers ONE bounded reinstall, with dependencies, into the
+environment this process actually imports from, pinned to the version
+that wrote this file (a pre-release only if that version is one). The
+import is then retried. If it still fails the module finishes importing
+in DEGRADED mode: ``register(ctx)`` registers a ``totalreclaw_status``
+tool that reports what is wrong and how to fix it, and a ``pre_llm_call``
+hook that tells the agent memory is offline, so the user hears about it.
 """
 from __future__ import annotations
 
+import importlib
 import logging
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# The totalreclaw version that wrote this file. Self-heal reinstalls exactly
+# this version, so a stable install never picks up a pre-release.
+_SIDECAR_VERSION = "__TOTALRECLAW_VERSION__"
+_PIP_TIMEOUT_S = 900
+
 _LOAD_ERROR = None
+_FIX_COMMAND = None
 TotalReclawMemoryProvider = None  # re-exported on the success path below
 
 _DEGRADED_STATUS_SCHEMA = {
@@ -125,39 +136,107 @@ _DEGRADED_STATUS_SCHEMA = {
     "parameters": {"type": "object", "properties": {}},
 }
 
+_DEGRADED_NOTICE = (
+    "TotalReclaw memory is OFFLINE on this Hermes install: the totalreclaw "
+    "package could not be loaded, so nothing is being remembered or "
+    "recalled. Tell the user this in your reply, in one sentence, and "
+    "offer to show the fix (call totalreclaw_status for the exact command)."
+)
+
+
+def _requirement():
+    v = _SIDECAR_VERSION
+    if not v or v.startswith("__"):
+        # Unknown version: pip without --pre resolves the newest final.
+        return "totalreclaw"
+    return "totalreclaw==" + v
+
+
+def _target_python():
+    """Interpreter of the environment this process imports packages from.
+
+    Hermes 0.22+ runs on its own Python but imports its dependencies from a
+    separate venv placed on ``sys.path`` (the interpreter's own
+    site-packages is dropped). Installing with ``sys.executable`` would put
+    the package where this process never looks. The first site-packages
+    entry on ``sys.path`` is the one in use; when it belongs to a venv,
+    target that venv's interpreter.
+    """
+    for entry in sys.path:
+        sp = Path(entry)
+        if sp.name not in ("site-packages", "dist-packages") or not sp.is_dir():
+            continue
+        for root in (sp.parent.parent.parent, sp.parent.parent):
+            if (root / "pyvenv.cfg").is_file():
+                if root.resolve() == Path(sys.prefix).resolve():
+                    return sys.executable
+                for exe in (root / "bin" / "python3", root / "bin" / "python",
+                            root / "Scripts" / "python.exe"):
+                    if exe.exists():
+                        return str(exe)
+        break
+    return sys.executable
+
+
+def _clean_env():
+    env = dict(os.environ)
+    # PYTHONPATH would make pip treat packages from other environments as
+    # installed and skip them (how dependencies went missing before). The
+    # PIP_* overrides could add --pre, --no-deps or a --user/--target install.
+    for key in ("PYTHONPATH", "PYTHONHOME", "PIP_PRE", "PIP_NO_DEPS",
+                "PIP_USER", "PIP_TARGET", "PIP_PREFIX"):
+        env.pop(key, None)
+    return env
+
+
+def _has_pip(python, env):
+    try:
+        return subprocess.run(
+            [python, "-m", "pip", "--version"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=60, check=False,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
 
 def _pip_install_totalreclaw():
-    """One bounded attempt to (re)install the package into the RUNNING
-    interpreter's venv (``sys.executable``). Returns ``None`` on success,
-    an error string on failure. Never raises."""
-    try:
-        import pip  # noqa: F401
-    except ImportError:
-        try:
-            subprocess.check_call(
-                [sys.executable, "-m", "ensurepip", "--upgrade"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except subprocess.CalledProcessError as exc:
-            return f"venv lacks pip and ensurepip failed: {exc}"
-    cmd = [
-        sys.executable, "-m", "pip", "install",
-        "--pre", "--no-cache-dir",
-        "--index-url", "https://pypi.org/simple/",
-        "--no-warn-script-location",
-        "totalreclaw",
+    """One bounded attempt to (re)install the package, with its
+    dependencies, into the environment this process imports from.
+    Returns ``None`` on success, an error string on failure. Never raises."""
+    global _FIX_COMMAND
+    env = _clean_env()
+    target = _target_python()
+    tail = [
+        "install", "--disable-pip-version-check", "--no-warn-script-location",
+        "--index-url", "https://pypi.org/simple/", _requirement(),
     ]
+    if target == sys.executable:
+        cmd = [sys.executable, "-m", "pip", *tail]
+    else:
+        cmd = [sys.executable, "-m", "pip", "--python", target, *tail]
+    _FIX_COMMAND = " ".join(cmd)
     try:
+        if not _has_pip(sys.executable, env):
+            if not _has_pip(target, env):
+                subprocess.run(
+                    [target, "-m", "ensurepip", "--upgrade"], env=env,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=300, check=True,
+                )
+            cmd = [target, "-m", "pip", *tail]
+            _FIX_COMMAND = " ".join(cmd)
         proc = subprocess.run(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, check=False,
+            text=True, check=False, env=env, timeout=_PIP_TIMEOUT_S,
         )
-    except OSError as exc:
+    except subprocess.TimeoutExpired:
+        return f"`{_FIX_COMMAND}` did not finish within {_PIP_TIMEOUT_S}s"
+    except (OSError, subprocess.SubprocessError) as exc:
         return f"could not run pip: {exc}"
     if proc.returncode != 0:
-        tail = (proc.stderr or "").strip()[-1500:]
-        return f"`{' '.join(cmd)}` exited {proc.returncode}. stderr tail:\\n{tail}"
+        tail_err = (proc.stderr or "").strip()[-1500:]
+        return f"`{_FIX_COMMAND}` exited {proc.returncode}. stderr tail:\\n{tail_err}"
     return None
 
 
@@ -190,6 +269,19 @@ def _install_skill():
         logger.debug("sidecar: SKILL.md write skipped", exc_info=True)
 
 
+def _refresh_self():
+    """Rewrite this file when the installed package ships a newer one, so the
+    pinned self-heal version follows package upgrades. Best-effort."""
+    me = globals().get("__file__")
+    if not me:
+        return
+    try:
+        from totalreclaw.hermes.install_memory_provider import refresh_sidecar
+        refresh_sidecar(Path(me))
+    except Exception:
+        logger.debug("sidecar: self-refresh skipped", exc_info=True)
+
+
 try:
     from totalreclaw.hermes.memory_provider import TotalReclawMemoryProvider  # noqa: F401
     _IMPORT_OK = True
@@ -197,26 +289,57 @@ except ImportError as _first_err:
     _IMPORT_OK = False
     _heal_err = _pip_install_totalreclaw()
     if _heal_err is None:
+        importlib.invalidate_caches()
         try:
             from totalreclaw.hermes.memory_provider import TotalReclawMemoryProvider  # noqa: F401
             _IMPORT_OK = True
+            logger.warning(
+                "TotalReclaw sidecar: the totalreclaw package was missing; "
+                "reinstalled %s with dependencies (%s)", _requirement(), _FIX_COMMAND,
+            )
         except ImportError as _second_err:
             _LOAD_ERROR = (
-                "self-heal reinstall reported success but import still "
-                f"fails: {_second_err}"
+                f"the self-heal reinstall ran (`{_FIX_COMMAND}`) but "
+                f"`import totalreclaw` still fails: {_second_err}"
             )
     else:
         _LOAD_ERROR = (
             f"`import totalreclaw` failed ({_first_err}) and the self-heal "
-            f"reinstall could not run: {_heal_err}"
+            f"reinstall failed: {_heal_err}"
         )
+
+def _general_plugin_loaded():
+    """True when Hermes' general plugin loader has already loaded the
+    ``totalreclaw`` entry-point plugin in this process (Hermes 0.22+ with
+    ``hermes plugins enable totalreclaw``), so its tools and hooks are live."""
+    try:
+        from hermes_cli.plugins import get_plugin_manager
+        loaded = get_plugin_manager()._plugins.get("totalreclaw")
+    except Exception:
+        return False
+    manifest = getattr(loaded, "manifest", None)
+    return bool(
+        loaded is not None
+        and getattr(loaded, "enabled", False)
+        and getattr(manifest, "source", "") == "entrypoint"
+        and getattr(loaded, "tools_registered", None)
+    )
+
 
 if _IMPORT_OK:
     _install_skill()
+    _refresh_self()
 
     def register(ctx):
         """Hermes calls this on plugin load — delegate to the package's
-        full register (all ``totalreclaw_*`` tools + lifecycle hooks)."""
+        full register (all ``totalreclaw_*`` tools + lifecycle hooks).
+
+        Skipped when the entry-point plugin already registered them: Hermes
+        keys hook de-duplication on the source file, and this file is not
+        the entry point's, so registering again would fire every hook twice.
+        The provider class above is still picked up either way."""
+        if _general_plugin_loaded():
+            return None
         from totalreclaw.hermes import register as _register
         return _register(ctx)
 
@@ -232,8 +355,9 @@ else:
     def register(ctx):
         """Degraded register (issue #638): make the failure LOUD. The
         agent gets a ``totalreclaw_status`` tool reporting the missing
-        package + the fix command, instead of every TotalReclaw tool
-        vanishing with no error anywhere."""
+        package + the fix command, and a first-turn context notice so it
+        tells the user, instead of every TotalReclaw tool vanishing with
+        no error anywhere."""
 
         def _degraded_status(args, **kw):
             return {
@@ -241,19 +365,20 @@ else:
                 "degraded": True,
                 "error": (
                     "The totalreclaw Python package is missing from this "
-                    "Hermes venv (likely wiped by a Hermes runtime "
-                    "regeneration). Memory tools are unavailable until it "
-                    "is reinstalled."
+                    "Hermes venv (likely wiped by a Hermes update). Memory "
+                    "tools are unavailable until it is reinstalled."
                 ),
                 "fix": (
-                    "Reinstall with: "
-                    + sys.executable
-                    + " -m pip install --pre totalreclaw   (then restart "
-                    "the Hermes gateway), or re-run: totalreclaw hermes "
-                    "install-memory-provider --force"
+                    "Run: " + (_FIX_COMMAND or (sys.executable + " -m pip install "
+                    + _requirement())) + "   then restart the Hermes gateway."
                 ),
                 "detail": _LOAD_ERROR,
             }
+
+        def _degraded_notice(**kw):
+            if kw.get("is_first_turn", True):
+                return {"context": _DEGRADED_NOTICE}
+            return None
 
         try:
             ctx.register_tool(
@@ -267,9 +392,25 @@ else:
                 "sidecar: degraded status tool registration failed — "
                 "TotalReclaw is fully unavailable on this gateway"
             )
+        try:
+            ctx.register_hook("pre_llm_call", _degraded_notice)
+        except Exception:
+            logger.exception("sidecar: degraded notice hook registration failed")
 
     __all__ = ["register"]
 '''
+
+
+def _sidecar_content() -> str:
+    """The sidecar file body, pinned to the installed package version."""
+    try:
+        from totalreclaw import __version__ as version
+    except ImportError:  # pragma: no cover - this module is in the package
+        version = ""
+    return _SIDECAR_CONTENT.replace(
+        f'_SIDECAR_VERSION = "{_VERSION_PLACEHOLDER}"',
+        f"_SIDECAR_VERSION = {str(version)!r}",
+    )
 
 
 def _hermes_home() -> Path:
@@ -370,9 +511,33 @@ def install_sidecar(hermes_home: Optional[Path] = None, *, force: bool = False) 
                 f"Pass force=True (or --force on the CLI) to replace it."
             )
 
-    path.write_text(_SIDECAR_CONTENT, encoding="utf-8")
+    path.write_text(_sidecar_content(), encoding="utf-8")
     logger.info("TotalReclaw MemoryProvider sidecar installed at %s", path)
     return path
+
+
+def refresh_sidecar(path: Path) -> bool:
+    """Rewrite a managed sidecar at *path* whose content is out of date.
+
+    Called by the sidecar itself on a healthy load, so the version it pins
+    for self-heal tracks package upgrades. Leaves hand-edited files alone.
+    Returns True when the file was rewritten.
+    """
+    try:
+        existing = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    if _SIDECAR_MARKER not in existing:
+        return False
+    content = _sidecar_content()
+    if existing == content:
+        return False
+    try:
+        path.write_text(content, encoding="utf-8")
+    except OSError:
+        return False
+    logger.info("TotalReclaw MemoryProvider sidecar refreshed at %s", path)
+    return True
 
 
 def uninstall_sidecar(hermes_home: Optional[Path] = None) -> bool:
@@ -394,15 +559,261 @@ def uninstall_sidecar(hermes_home: Optional[Path] = None) -> bool:
     return True
 
 
-# Trailing `[ \t]*$` (horizontal whitespace only) is load-bearing: `\s*$`
-# would let the engine consume the line-terminating `\n` (since `\s` matches
-# newlines and `$` matches end-of-string), so the replacement would smash the
-# value into the next top-level key. See test_issue_351_*.
-_PROVIDER_LINE_RE = re.compile(r"^(\s*)provider\s*:\s*(\S+)[ \t]*$", re.MULTILINE)
-_MEMORY_BLOCK_RE = re.compile(
-    r"^(memory:\s*\n(?:[ \t]+.*\n?)*)",
-    re.MULTILINE,
-)
+# ---------------------------------------------------------------------------
+# config.yaml editing
+# ---------------------------------------------------------------------------
+#
+# Hermes' config.yaml is heavily commented (the stock file is a copy of
+# ``cli-config.yaml.example``), so a parse + dump would throw away every
+# comment. Instead we edit lines, but on the YAML structure rather than on
+# regexes: the ``memory:`` block runs until the next top-level key, blank
+# lines and comments inside it included, and keys are matched only at the
+# block's own child indent. The old regex stopped the block at the first
+# blank or comment line. On Hermes 0.22's stock config that hid
+# ``user_profile_enabled``, so a second copy was appended, and Hermes then
+# rejected the whole file for the duplicate key and ran on defaults.
+#
+# Every write is checked by parsing the result (duplicate keys rejected)
+# before the file is replaced, and the replace is atomic. Setting a key also
+# removes extra copies of it, so re-running ``activate-memory-provider``
+# repairs a config that an older version corrupted.
+
+_TOP_LEVEL_KEY_RE = re.compile(r"^(?P<key>[^\s#'\"][^:#]*?)\s*:(?P<rest>(?:\s.*)?)$")
+_EMPTY_INLINE_VALUES = {"", "{}", "null", "~"}
+
+
+class HermesConfigEditError(RuntimeError):
+    """``config.yaml`` could not be edited safely; the file was left as is."""
+
+
+def _split_value_comment(rest: str) -> "tuple[str, str]":
+    """Split the text after ``key:`` into ``(value, comment)``.
+
+    A ``#`` starts a comment only at the start or after whitespace, and
+    never inside a quoted scalar. The comment keeps its leading spacing so
+    a rewrite preserves the user's alignment.
+    """
+    quote = ""
+    for i, ch in enumerate(rest):
+        if quote:
+            if ch == quote:
+                quote = ""
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "#" and (i == 0 or rest[i - 1] in " \t"):
+            value = rest[:i]
+            stripped = value.rstrip()
+            return stripped.strip(), rest[len(stripped):]
+    return rest.strip(), ""
+
+
+def _is_content(line: str) -> bool:
+    stripped = line.strip()
+    return bool(stripped) and not stripped.startswith("#")
+
+
+def _indent_of(line: str) -> str:
+    return line[: len(line) - len(line.lstrip(" \t"))]
+
+
+def _find_block(lines: "list[str]", name: str) -> "Optional[tuple[int, int]]":
+    """``(header_index, end_index)`` of the top-level ``name:`` block.
+
+    ``end_index`` is exclusive: the next top-level content line (a column-0
+    key or a document marker). Indented lines, blank lines and comments in
+    between all belong to the block.
+    """
+    header = None
+    for i, raw in enumerate(lines):
+        line = raw.rstrip("\r\n")
+        if header is None:
+            m = _TOP_LEVEL_KEY_RE.match(line)
+            if m and m.group("key") == name:
+                header = i
+            continue
+        if line and not line[0].isspace() and not line.startswith("#"):
+            return header, i
+    if header is None:
+        return None
+    return header, len(lines)
+
+
+def _child_indent(lines: "list[str]", start: int, end: int) -> str:
+    for raw in lines[start:end]:
+        if _is_content(raw):
+            return _indent_of(raw)
+    return "  "
+
+
+def _entry_end(lines: "list[str]", idx: int, end: int, indent: str) -> int:
+    """Exclusive end of the entry at ``idx``: its own line plus any deeper-
+    indented lines (a nested value) that follow it."""
+    j = idx + 1
+    while j < end:
+        raw = lines[j]
+        if _is_content(raw) and len(_indent_of(raw)) <= len(indent):
+            break
+        j += 1
+    # Trailing blanks/comments belong to whatever follows, not to this entry.
+    while j > idx + 1 and not _is_content(lines[j - 1]):
+        j -= 1
+    return j
+
+
+def _key_lines(lines: "list[str]", start: int, end: int, indent: str, key: str) -> "list[int]":
+    out = []
+    for i in range(start, end):
+        raw = lines[i].rstrip("\r\n")
+        if not raw.startswith(indent) or raw[len(indent):len(indent) + 1].isspace():
+            continue
+        m = _TOP_LEVEL_KEY_RE.match(raw[len(indent):])
+        if m and m.group("key") == key:
+            out.append(i)
+    return out
+
+
+def _read_memory_key(text: str, key: str) -> Optional[str]:
+    """Value of ``memory.<key>`` (quotes stripped), or None when unset."""
+    lines = text.splitlines(keepends=True)
+    block = _find_block(lines, "memory")
+    if block is None:
+        return None
+    header, end = block
+    indent = _child_indent(lines, header + 1, end)
+    hits = _key_lines(lines, header + 1, end, indent, key)
+    if not hits:
+        return None
+    # Last occurrence wins, like PyYAML; a duplicate never comes from us.
+    m = _TOP_LEVEL_KEY_RE.match(lines[hits[-1]].rstrip("\r\n")[len(indent):])
+    value, _comment = _split_value_comment(m.group("rest"))
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1]
+    return value
+
+
+def _set_memory_key(text: str, key: str, value: str) -> str:
+    """Return *text* with ``memory.<key>: <value>`` set.
+
+    Replaces the key in place (keeping any trailing comment) and drops any
+    further copies of it, appends it after the block's last entry when it is
+    missing, or adds a ``memory:`` block when there is none. Raises
+    :class:`HermesConfigEditError` for shapes it will not rewrite (a flow
+    mapping such as ``memory: {provider: x}``).
+    """
+    lines = text.splitlines(keepends=True)
+    newline = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
+    block = _find_block(lines, "memory")
+    if block is None:
+        sep = "" if (text == "" or text.endswith("\n")) else newline
+        return text + sep + f"memory:{newline}  {key}: {value}{newline}"
+
+    header, end = block
+    m = _TOP_LEVEL_KEY_RE.match(lines[header].rstrip("\r\n"))
+    inline, comment = _split_value_comment(m.group("rest"))
+    if inline not in _EMPTY_INLINE_VALUES:
+        raise HermesConfigEditError(
+            f"`memory:` is written inline ({inline!r}); edit it as a block by hand"
+        )
+    if inline:
+        lines[header] = f"memory:{comment}{newline}"
+
+    indent = _child_indent(lines, header + 1, end)
+    hits = _key_lines(lines, header + 1, end, indent, key)
+    if hits:
+        first = hits[0]
+        km = _TOP_LEVEL_KEY_RE.match(lines[first].rstrip("\r\n")[len(indent):])
+        _old, old_comment = _split_value_comment(km.group("rest"))
+        replacement = [f"{indent}{key}: {value}{old_comment}{newline}"]
+        # Remove from the bottom up so earlier indices stay valid.
+        for idx in reversed(hits[1:]):
+            del lines[idx:_entry_end(lines, idx, end, indent)]
+        lines[first:_entry_end(lines, first, end, indent)] = replacement
+        return "".join(lines)
+
+    last = header
+    for i in range(header + 1, end):
+        if _is_content(lines[i]):
+            last = i
+    if not lines[last].endswith("\n"):
+        lines[last] += newline
+    lines.insert(last + 1, f"{indent}{key}: {value}{newline}")
+    return "".join(lines)
+
+
+def _validate_config(text: str, expected: "dict[str, str]") -> None:
+    """Parse *text* the way Hermes does and check the memory keys landed.
+
+    Raises :class:`HermesConfigEditError` on a parse error, a duplicate key
+    anywhere in the file, or a memory key that doesn't read back.
+    """
+    try:
+        import yaml
+    except ImportError:  # pragma: no cover - PyYAML ships with our deps
+        return
+
+    class _StrictLoader(yaml.SafeLoader):
+        pass
+
+    def _no_duplicates(loader, node, deep=False):
+        seen = set()
+        for key_node, _value_node in node.value:
+            key = loader.construct_object(key_node, deep=deep)
+            if key in seen:
+                raise HermesConfigEditError(
+                    f"duplicate key {key!r} (line {key_node.start_mark.line + 1})"
+                )
+            seen.add(key)
+        return loader.construct_mapping(node, deep=deep)
+
+    _StrictLoader.add_constructor(
+        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicates
+    )
+    try:
+        data = yaml.load(text, Loader=_StrictLoader) or {}
+    except yaml.YAMLError as exc:
+        raise HermesConfigEditError(f"result is not valid YAML: {exc}") from exc
+    memory = data.get("memory") if isinstance(data, dict) else None
+    if not isinstance(memory, dict):
+        raise HermesConfigEditError("result has no `memory:` mapping")
+    for key, value in expected.items():
+        got = memory.get(key)
+        want = yaml.safe_load(value)
+        if got != want:
+            raise HermesConfigEditError(
+                f"memory.{key} reads back as {got!r}, expected {want!r}"
+            )
+
+
+def _update_memory_keys(
+    values: "dict[str, str]", hermes_home: Optional[Path] = None
+) -> Path:
+    """Set several ``memory.*`` keys in one validated, atomic write."""
+    path = config_path(hermes_home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    original = ""
+    if path.exists():
+        # Unlike the read path, refuse to edit a file we can't read: writing
+        # a fresh config over it would wipe the user's settings. newline=""
+        # keeps CRLF files CRLF.
+        with open(path, encoding="utf-8", newline="") as fh:
+            original = fh.read()
+    text = original
+    for key, value in values.items():
+        text = _set_memory_key(text, key, value)
+    _validate_config(text, values)
+    if text == original:
+        return path
+    tmp = path.with_name(f".{path.name}.totalreclaw-{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        if path.exists():
+            os.chmod(tmp, path.stat().st_mode & 0o7777)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    return path
 
 
 def read_active_provider(hermes_home: Optional[Path] = None) -> str:
@@ -419,22 +830,11 @@ def read_active_provider(hermes_home: Optional[Path] = None) -> str:
     path = config_path(hermes_home)
     if not path.exists():
         return ""
-
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
-
-    block_match = _MEMORY_BLOCK_RE.search(text)
-    if not block_match:
-        return ""
-
-    block = block_match.group(1)
-    prov_match = _PROVIDER_LINE_RE.search(block)
-    if not prov_match:
-        return ""
-
-    return prov_match.group(2).strip().lower()
+    return (_read_memory_key(text, "provider") or "").strip().lower()
 
 
 def set_active_provider(
@@ -444,72 +844,14 @@ def set_active_provider(
     """Write ``memory.provider: <provider>`` to Hermes config.
 
     Creates the config file + ``memory:`` block if missing. Updates the
-    ``provider:`` line in-place if present. Preserves unrelated keys.
+    ``provider:`` line in-place if present. Preserves unrelated keys and
+    comments.
 
     Returns the config path written.
     """
-    path = config_path(hermes_home)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    if path.exists():
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            text = ""
-    else:
-        text = ""
-
-    block_match = _MEMORY_BLOCK_RE.search(text)
-    if block_match:
-        block = block_match.group(1)
-        if _PROVIDER_LINE_RE.search(block):
-            new_block = _PROVIDER_LINE_RE.sub(
-                rf"\1provider: {provider}",
-                block,
-                count=1,
-            )
-        else:
-            # memory: block exists but no provider key — append the line
-            # at end of block (preserve trailing newline behaviour).
-            stripped = block.rstrip("\n")
-            new_block = stripped + f"\n  provider: {provider}\n"
-        text = text[:block_match.start(1)] + new_block + text[block_match.end(1):]
-    else:
-        # No memory: block — append one. Preserve a single trailing newline
-        # between any existing content and our block.
-        sep = "" if (text == "" or text.endswith("\n")) else "\n"
-        text = text + sep + f"memory:\n  provider: {provider}\n"
-
-    path.write_text(text, encoding="utf-8")
+    path = _update_memory_keys({"provider": provider}, hermes_home)
     logger.info("TotalReclaw: set memory.provider=%s in %s", provider, path)
     return path
-
-
-def _memory_key_re(key: str) -> "re.Pattern[str]":
-    """Match ``<indent><key>: <value>`` inside the memory block."""
-    return re.compile(rf"^(\s*){re.escape(key)}\s*:\s*(\S+)[ \t]*$", re.MULTILINE)
-
-
-def _set_memory_key(text: str, key: str, value: str) -> str:
-    """Return *text* with ``memory.<key>: <value>`` set.
-
-    Replaces the key in-place if present in the ``memory:`` block, appends it
-    to the block if the block exists but the key doesn't, or creates a
-    ``memory:`` block if there is none. Mirrors :func:`set_active_provider`'s
-    YAML-surgery approach (no full YAML parse — preserves comments/ordering).
-    """
-    key_re = _memory_key_re(key)
-    block_match = _MEMORY_BLOCK_RE.search(text)
-    if block_match:
-        block = block_match.group(1)
-        if key_re.search(block):
-            new_block = key_re.sub(rf"\g<1>{key}: {value}", block, count=1)
-        else:
-            stripped = block.rstrip("\n")
-            new_block = stripped + f"\n  {key}: {value}\n"
-        return text[: block_match.start(1)] + new_block + text[block_match.end(1):]
-    sep = "" if (text == "" or text.endswith("\n")) else "\n"
-    return text + sep + f"memory:\n  {key}: {value}\n"
 
 
 def disable_builtin_memory(hermes_home: Optional[Path] = None) -> Path:
@@ -527,17 +869,9 @@ def disable_builtin_memory(hermes_home: Optional[Path] = None) -> Path:
 
     Returns the config path written.
     """
-    path = config_path(hermes_home)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = ""
-    if path.exists():
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            text = ""
-    text = _set_memory_key(text, "memory_enabled", "false")
-    text = _set_memory_key(text, "user_profile_enabled", "false")
-    path.write_text(text, encoding="utf-8")
+    path = _update_memory_keys(
+        {"memory_enabled": "false", "user_profile_enabled": "false"}, hermes_home
+    )
     logger.info(
         "TotalReclaw: disabled builtin memory (memory_enabled=false, "
         "user_profile_enabled=false) in %s",
@@ -562,14 +896,26 @@ def install_and_activate(
     activated = False
     builtin_disabled = False
     if activate:
-        set_active_provider("totalreclaw", hermes_home)
-        activated = True
         # Make TotalReclaw the SOLE memory system: silence the builtin local
         # store so it stops loading/injecting MEMORY.md + maintaining local
         # profiles in parallel (the split-brain). TR keeps running via its own
         # lifecycle hooks. Switching back to local files = user sets
-        # `memory.provider: builtin` explicitly.
-        disable_builtin_memory(hermes_home)
+        # `memory.provider: builtin` explicitly. One write for all three keys,
+        # so a config an older version corrupted is repaired in one step.
+        path = _update_memory_keys(
+            {
+                "provider": "totalreclaw",
+                "memory_enabled": "false",
+                "user_profile_enabled": "false",
+            },
+            hermes_home,
+        )
+        logger.info(
+            "TotalReclaw: set memory.provider=totalreclaw and disabled builtin "
+            "memory in %s",
+            path,
+        )
+        activated = True
         builtin_disabled = True
 
     return {
