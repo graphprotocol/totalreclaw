@@ -1112,9 +1112,33 @@ async def chat_completion(
                     # consume the normal retry budget.
                     attempt -= 1
                     continue
+            elif (
+                zai_fallback_attempted
+                and e.response.status_code == 429
+                and is_zai_balance_error(err_body)
+                and active.base_url != config.base_url
+            ):
+                # The other endpoint has no balance either, so the first
+                # "Insufficient balance" was the Coding plan's rate limit, which
+                # z.ai reports with the same 1113 body. Go back to the user's
+                # endpoint and back off like any other 429.
+                logger.info(
+                    "zai endpoint %s also reports no balance; returning to %s and backing off",
+                    active.base_url, config.base_url,
+                )
+                active.base_url = config.base_url
 
             is_retryable = e.response.status_code in (429, 502, 503, 504)
             if not is_retryable:
+                if _is_zai_base_url(active.base_url) and '"1301"' in err_body:
+                    # z.ai's content filter refused the input or output. It is
+                    # deterministic for this text, so retrying cannot help;
+                    # say so plainly instead of a bare "HTTP 400".
+                    logger.warning(
+                        "z.ai content filter refused the request (code 1301, model=%s); "
+                        "nothing is extracted from this window",
+                        active.model,
+                    )
                 # Non-retryable HTTP error (400/401/403/404/etc.) — propagate
                 # as-is so callers can distinguish config errors from outages.
                 logger.warning(
@@ -1170,11 +1194,16 @@ async def chat_completion(
                 )
             await _asyncio.sleep(delay)
             continue
-        except httpx.TimeoutException as e:
+        except httpx.TransportError as e:
+            # Timeouts and other transport failures (dropped connection, DNS,
+            # protocol error) are transient: retry them with backoff. Before
+            # this, everything but a timeout fell to the catch-all below and
+            # the extraction was dropped as an empty answer with no retry.
             last_exc = e
+            kind = "timeout" if isinstance(e, httpx.TimeoutException) else type(e).__name__
             if attempt >= _MAX_RETRIES:
                 raise LLMUpstreamOutageError(
-                    f"LLM upstream outage (timeouts on {_MAX_RETRIES} attempts)",
+                    f"LLM upstream outage ({'timeouts' if kind == 'timeout' else kind} on {_MAX_RETRIES} attempts)",
                     attempts=attempt,
                     last_status=None,
                 ) from e
@@ -1182,20 +1211,20 @@ async def chat_completion(
             delay = _BACKOFF_DELAYS[min(attempt - 1, len(_BACKOFF_DELAYS) - 1)]
             if cumulative_delay_s + delay > budget_s:
                 raise LLMUpstreamOutageError(
-                    f"LLM upstream outage (budget {budget_s:.0f}s exhausted after {attempt} attempts): timeout",
+                    f"LLM upstream outage (budget {budget_s:.0f}s exhausted after {attempt} attempts): {kind}",
                     attempts=attempt,
                     last_status=None,
                 ) from e
             cumulative_delay_s += delay
             if attempt == 1:
                 logger.warning(
-                    "LLM call timeout (attempt %d/%d, retrying in %.0fs)",
-                    attempt, _MAX_RETRIES, delay,
+                    "LLM call %s (attempt %d/%d, retrying in %.0fs)",
+                    kind, attempt, _MAX_RETRIES, delay,
                 )
             else:
                 logger.debug(
-                    "LLM retry after timeout (attempt %d/%d, wait %.0fs)",
-                    attempt, _MAX_RETRIES, delay,
+                    "LLM retry after %s (attempt %d/%d, wait %.0fs)",
+                    kind, attempt, _MAX_RETRIES, delay,
                 )
             await _asyncio.sleep(delay)
             continue
@@ -1249,6 +1278,26 @@ def _supports_json_object_response_format(base_url: str) -> bool:
         return False
     lower = base_url.lower()
     return any(hint in lower for hint in _JSON_OBJECT_PROVIDER_HINTS)
+
+
+#: z.ai models that refuse ``thinking: {"type": "disabled"}`` (400, code 1210:
+#: "This model always engages in thinking and cannot be disabled"), learned at
+#: runtime so only the first call per process pays the rejected round-trip
+#: (GLM 5.3 Flash is the first such model).
+_ZAI_ALWAYS_THINKING_MODELS: set[str] = set()
+
+#: Completion budget floor for always-thinking models: their reasoning tokens
+#: count against ``max_completion_tokens``, so the extraction-sized budget
+#: would let the reasoning pass crowd out the answer.
+_ALWAYS_THINKING_MIN_TOKENS = 8192
+
+
+def _is_zai_thinking_rejected(resp: httpx.Response) -> bool:
+    """True for z.ai's 400/1210 answer to a request that disabled thinking."""
+    if resp.status_code != 400:
+        return False
+    text = resp.text or ""
+    return "1210" in text and "thinking" in text.lower()
 
 
 def _is_zai_base_url(base_url: str) -> bool:
@@ -1341,17 +1390,31 @@ async def _call_openai(
         # quota-exhausted instant-empty → surface an actionable error) is
         # tracked separately. The recovery + rich diag below cover any
         # residual empty-content case.
-        body["thinking"] = {"type": "disabled"}
+        #
+        # Models that always think (GLM 5.3 Flash) reject the field with
+        # 400/1210; for those we send the server default instead.
+        if config.model in _ZAI_ALWAYS_THINKING_MODELS:
+            body["max_completion_tokens"] = max(max_tokens, _ALWAYS_THINKING_MIN_TOKENS)
+        else:
+            body["thinking"] = {"type": "disabled"}
 
     async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
-        resp = await client.post(
-            f"{config.base_url}/chat/completions",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {config.api_key}",
-            },
-            json=body,
-        )
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {config.api_key}",
+        }
+        resp = await client.post(f"{config.base_url}/chat/completions", headers=headers, json=body)
+        if "thinking" in body and _is_zai_thinking_rejected(resp):
+            # The model cannot turn thinking off. Retry once with the
+            # server default and remember the model for later calls.
+            _ZAI_ALWAYS_THINKING_MODELS.add(config.model)
+            logger.info(
+                "z.ai model %s cannot disable thinking; retrying with the server default",
+                config.model,
+            )
+            del body["thinking"]
+            body["max_completion_tokens"] = max(max_tokens, _ALWAYS_THINKING_MIN_TOKENS)
+            resp = await client.post(f"{config.base_url}/chat/completions", headers=headers, json=body)
         resp.raise_for_status()
         data = resp.json()
         choice = (data.get("choices") or [{}])[0]
