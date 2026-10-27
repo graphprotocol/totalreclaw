@@ -159,6 +159,13 @@ jobs:
     if: ${{ needs.changes.outputs.plugin == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Same as the client-tests job: skip onnxruntime-node's CUDA/GPU binary
+    # fetch from api.nuget.org. Since onnxruntime-node 1.31.1 that fetch fails
+    # outright ("Failed to find specific package versions for
+    # Microsoft.ML.OnnxRuntime.Gpu.Linux"), breaking npm install. CPU
+    # inference is all this job needs.
+    env:
+      ONNXRUNTIME_NODE_INSTALL_CUDA: skip
 
     steps:
       - uses: actions/checkout@v5
