@@ -1118,7 +1118,7 @@ async def chat_completion(
                 and is_zai_balance_error(err_body)
                 and active.base_url != config.base_url
             ):
-                # #591: the other endpoint has no balance either, so the first
+                # The other endpoint has no balance either, so the first
                 # "Insufficient balance" was the Coding plan's rate limit, which
                 # z.ai reports with the same 1113 body. Go back to the user's
                 # endpoint and back off like any other 429.
@@ -1283,7 +1283,7 @@ def _supports_json_object_response_format(base_url: str) -> bool:
 #: z.ai models that refuse ``thinking: {"type": "disabled"}`` (400, code 1210:
 #: "This model always engages in thinking and cannot be disabled"), learned at
 #: runtime so only the first call per process pays the rejected round-trip
-#: (#592; GLM 5.3 Flash is the first such model).
+#: (GLM 5.3 Flash is the first such model).
 _ZAI_ALWAYS_THINKING_MODELS: set[str] = set()
 
 #: Completion budget floor for always-thinking models: their reasoning tokens
@@ -1392,7 +1392,7 @@ async def _call_openai(
         # residual empty-content case.
         #
         # Models that always think (GLM 5.3 Flash) reject the field with
-        # 400/1210; for those we send the server default instead (#592).
+        # 400/1210; for those we send the server default instead.
         if config.model in _ZAI_ALWAYS_THINKING_MODELS:
             body["max_completion_tokens"] = max(max_tokens, _ALWAYS_THINKING_MIN_TOKENS)
         else:
@@ -1405,7 +1405,7 @@ async def _call_openai(
         }
         resp = await client.post(f"{config.base_url}/chat/completions", headers=headers, json=body)
         if "thinking" in body and _is_zai_thinking_rejected(resp):
-            # #592: the model cannot turn thinking off. Retry once with the
+            # The model cannot turn thinking off. Retry once with the
             # server default and remember the model for later calls.
             _ZAI_ALWAYS_THINKING_MODELS.add(config.model)
             logger.info(

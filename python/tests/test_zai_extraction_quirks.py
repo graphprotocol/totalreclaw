@@ -1,9 +1,9 @@
 """z.ai quirks that silently dropped extractions.
 
-- #592: GLM 5.3 Flash always thinks; ``thinking: {"type": "disabled"}`` gets
+- GLM 5.3 Flash always thinks; ``thinking: {"type": "disabled"}`` gets
   400/1210 and extraction returned nothing. The client now retries with the
   server default and remembers the model.
-- #591: on the Coding plan, the rate limit arrives as 429/1113 "Insufficient
+- On the Coding plan, the rate limit arrives as 429/1113 "Insufficient
   balance". The client flipped to the Standard (pay-as-you-go) endpoint, which
   has no balance either, and spent its retries there. It now returns to the
   user's endpoint and backs off.
@@ -65,7 +65,7 @@ def fast_backoff():
         yield
 
 
-# --- #592 ---------------------------------------------------------------------
+# --- GLM 5.3 Flash always thinks -----------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -120,7 +120,7 @@ async def test_other_400s_are_not_retried_as_thinking_rejections():
     assert post.await_count == 1
 
 
-# --- #591 ---------------------------------------------------------------------
+# --- Coding-plan rate limit reported as "Insufficient balance" -----------------
 
 
 @pytest.mark.asyncio
