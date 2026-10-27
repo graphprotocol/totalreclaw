@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Extraction works on GLM 5.3 Flash.** The client sends `thinking: {"type": "disabled"}` to z.ai, and GLM 5.3 Flash rejects it (400, code 1210: the model always thinks), so extraction returned no facts. The client now retries once with the server default, raises the completion budget so the reasoning pass cannot crowd out the answer, and remembers the model for the rest of the process. Models that accept the flag (glm-4.5-flash) are unchanged.
+- **z.ai Coding-plan rate limits no longer drop extractions.** The Coding plan reports its rate limit as 429 code 1113 "Insufficient balance", which made the client flip to the Standard (pay-as-you-go) endpoint. Without a balance there, every retry failed there too. When the other endpoint also reports no balance, the client now returns to the user's endpoint and backs off as for any 429.
+- **Dropped connections are retried instead of silently returning nothing.** Transport errors other than timeouts (connection reset, DNS failure, protocol errors) fell to a catch-all that returned an empty answer with no retry, so the window was stored as having nothing to remember. They now retry with backoff like timeouts and surface as `LLMUpstreamOutageError` when exhausted.
+- **z.ai content-filter refusals are named in the log.** A 400 with code 1301 now logs that z.ai's content filter refused the window, instead of a bare HTTP 400. It is still not retried: the refusal is deterministic for the same text.
+
 - **`import totalreclaw` no longer breaks under an httpx 1.0 pre-release.** `httpx` is now capped at `<1`. httpx 1.0 (pre-releases on PyPI since 2026-08-31) drops `httpx.HTTPStatusError`, which 2.5.2's `RelayReadError` (#662) subclasses at import time, so `pip install --pre totalreclaw` into a venv without httpx failed on import with `AttributeError`. Existing Hermes venvs were unaffected: Hermes already pins `httpx` 0.28.x and pip keeps it.
 
 ## [2.5.2] — 2026-09-26
