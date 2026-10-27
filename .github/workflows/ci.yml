@@ -282,6 +282,22 @@ jobs:
           python -m pytest tests/ -v --ignore=tests/test_staging_integration.py --ignore=tests/cross_client_e2e.py --ignore=tests/test_cross_client.py -x
       - name: Outer protobuf fields 9/11 absent — Python calldata parity (PRD-04 F8 / DEP-6)
         run: cd python && python -m pytest ../tests/parity/test_outer_protobuf_parity.py -v -p no:cacheprovider
+      # Hermes runs its own bundled Python 3.14. Install the client there with
+      # --only-binary :all:, reusing the abi3 core wheel built above, so any
+      # dependency (core included) that would need a compiler on 3.14 fails
+      # this PR instead of a user's install.
+      - uses: actions/setup-python@v5
+        id: py314
+        with:
+          python-version: '3.14'
+      - name: Install client binary-only on Python 3.14 (no compiler)
+        run: |
+          set -e
+          pip wheel --no-deps --wheel-dir /tmp/client-wheel ./python
+          "${{ steps.py314.outputs.python-path }}" -m venv /tmp/venv314
+          /tmp/venv314/bin/pip install --only-binary :all: \
+            rust/totalreclaw-core/dist/totalreclaw_core-*.whl /tmp/client-wheel/totalreclaw-*.whl
+          /tmp/venv314/bin/python -c "import sys, totalreclaw, totalreclaw_core; print('OK: totalreclaw imports on', sys.version.split()[0])"
 
   enclave-tests:
     # TotalReclaw Enclave service (enclave/, Python 3.12). Path-scoped like
