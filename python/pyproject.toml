@@ -62,7 +62,11 @@ dependencies = [
     # break, so a stale core makes the transparent phrase->bundle migration
     # silently no-op forever with nothing above debug level to show for it.
     # Do not relax this floor below 2.6.0.
-    "totalreclaw-core>=2.6.0,<3.0.0",
+    # >=2.6.1rc1: 2.6.1 ships abi3 wheels (CPython 3.10+, including the 3.14
+    # that Hermes 0.22 runs), so no Rust/C toolchain is needed. The rc is
+    # named explicitly because pip only picks a core pre-release when the
+    # specifier names one; becomes >=2.6.1 at the stable promote.
+    "totalreclaw-core>=2.6.1rc1,<3.0.0",
     # <1: httpx 1.0 (pre-releases on PyPI since 2026-08-31, e.g. 1.0.dev6) is a
     # rewrite with no `httpx.HTTPStatusError`, which `relay.py` subclasses at
     # import time (`RelayReadError`, #662). Any `pip install --pre totalreclaw`
@@ -93,7 +97,15 @@ dependencies = [
     # and await the encrypted phrase upload. See
     # ``totalreclaw.pair.remote_client`` for the transport, and the
     # rc.10 blueprint in the internal repo for the full design.
-    "websockets>=12.0,<14",
+    # No upper cap: we share the host's environment, and Hermes pins its
+    # own websockets (15.x as of Hermes 0.22). The old `<14` cap made every
+    # install downgrade it to 13.x, and Hermes' gateway client (which passes
+    # `proxy=`, added in 14) then failed on every `hermes chat`. We only use
+    # connect/send/recv/close, which are stable from 12 through 17; the
+    # tests/test_pair_*.py suites run the pair transport against whatever
+    # version is installed, and tests/test_hermes_entrypoint_kind.py keeps
+    # the cap from coming back.
+    "websockets>=12.0",
     # imp-5 — RAM pre-flight check in import adapters uses psutil.virtual_memory()
     # to detect available memory before loading large files.
     "psutil>=5.9",

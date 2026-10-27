@@ -6,10 +6,19 @@ for E2E encrypted AI memory.
 This is a thin adapter that wires the generic ``totalreclaw.agent``
 layer into Hermes's lifecycle hooks. New agent integrations should
 use ``totalreclaw.agent`` directly.
+
+Keep the Hermes memory-provider class names out of this file, comments
+included. Hermes 0.22+ classifies an entry-point plugin by a plain text
+scan of this module: if the provider base-class name or its register
+call appears, the plugin is treated as a memory provider ("exclusive")
+and its tools are not loaded until it is the active provider, which
+means ``totalreclaw_pair`` is missing exactly when setup needs it.
+tests/test_hermes_entrypoint_kind.py enforces this.
 """
 from __future__ import annotations
 
 import logging
+import sys
 
 from . import schemas, tools, hooks, pair_tool
 from .state import PluginState, get_shared_state
@@ -20,7 +29,7 @@ logger = logging.getLogger(__name__)
 def register(ctx):
     """Called by Hermes plugin system at startup."""
     # Provider conformance §5.3 (#351): the entry-point plugin and the
-    # MemoryProvider sidecar must share ONE PluginState so the provider's
+    # memory-provider sidecar must share ONE PluginState so the provider's
     # per-turn recall/extract and the plugin's tools/hooks observe the same
     # buffer + turn counter + the `_provider_active` single-driver flag.
     state = get_shared_state()
@@ -48,6 +57,8 @@ def register(ctx):
         auto_migrate.maybe_migrate()
     except Exception:  # pragma: no cover — migration is best-effort
         logger.debug("auto-migration skipped", exc_info=True)
+
+    _refresh_provider_sidecar()
 
     # Register tools. Descriptions mirror the schemas — they are the
     # text the Hermes agent sees when selecting a tool, so they need to
@@ -293,17 +304,36 @@ def register(ctx):
     except Exception:  # pragma: no cover — defensive check must not crash
         logger.debug("built-in memory enablement check skipped", exc_info=True)
 
-    # Issue #275 — Path B MemoryProvider integration.
-    # The ``TotalReclawMemoryProvider`` class lives at
+    # Issue #275 — Path B memory-provider integration.
+    # The TotalReclaw provider class lives at
     # ``totalreclaw.hermes.memory_provider``; we deliberately do NOT
     # import / register it here. Activation happens via the sidecar shim
     # at ``$HERMES_HOME/plugins/memory/totalreclaw/__init__.py`` — see
     # ``totalreclaw hermes install-memory-provider``. This separation
     # keeps users with another active provider (Honcho, Byterover, ...)
     # unaffected by plugin import: TR tools stay available, but
-    # MemoryProvider hooks only fire when TR is the active provider.
+    # memory-provider hooks only fire when TR is the active provider.
 
     logger.info("TotalReclaw plugin registered (14+ tools, 6 hooks)")
+
+
+def _refresh_provider_sidecar() -> None:
+    """Bring the memory-provider sidecar written at pairing up to date.
+
+    The sidecar outlives package upgrades, and older ones carry the old
+    self-heal (``--pre``, wrong interpreter on Hermes 0.22+). Rewriting it
+    here means the next Hermes update that drops the package is healed by
+    the current logic, pinned to this version. Only inside a real Hermes
+    process, and only for our own managed file.
+    """
+    if "hermes_cli" not in sys.modules:
+        return
+    try:
+        from .install_memory_provider import refresh_sidecar, sidecar_path
+
+        refresh_sidecar(sidecar_path())
+    except Exception:  # pragma: no cover — best-effort
+        logger.debug("sidecar refresh skipped", exc_info=True)
 
 
 _RECURSION_GUARD_ENV = "_TOTALRECLAW_SKIP_BUILTIN_MEMORY_CHECK"
