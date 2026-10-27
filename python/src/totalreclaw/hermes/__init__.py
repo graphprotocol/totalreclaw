@@ -18,6 +18,7 @@ tests/test_hermes_entrypoint_kind.py enforces this.
 from __future__ import annotations
 
 import logging
+import sys
 
 from . import schemas, tools, hooks, pair_tool
 from .state import PluginState, get_shared_state
@@ -56,6 +57,8 @@ def register(ctx):
         auto_migrate.maybe_migrate()
     except Exception:  # pragma: no cover — migration is best-effort
         logger.debug("auto-migration skipped", exc_info=True)
+
+    _refresh_provider_sidecar()
 
     # Register tools. Descriptions mirror the schemas — they are the
     # text the Hermes agent sees when selecting a tool, so they need to
@@ -312,6 +315,25 @@ def register(ctx):
     # memory-provider hooks only fire when TR is the active provider.
 
     logger.info("TotalReclaw plugin registered (14+ tools, 6 hooks)")
+
+
+def _refresh_provider_sidecar() -> None:
+    """Bring the memory-provider sidecar written at pairing up to date.
+
+    The sidecar outlives package upgrades, and older ones carry the old
+    self-heal (``--pre``, wrong interpreter on Hermes 0.22+). Rewriting it
+    here means the next Hermes update that drops the package is healed by
+    the current logic, pinned to this version. Only inside a real Hermes
+    process, and only for our own managed file.
+    """
+    if "hermes_cli" not in sys.modules:
+        return
+    try:
+        from .install_memory_provider import refresh_sidecar, sidecar_path
+
+        refresh_sidecar(sidecar_path())
+    except Exception:  # pragma: no cover — best-effort
+        logger.debug("sidecar refresh skipped", exc_info=True)
 
 
 _RECURSION_GUARD_ENV = "_TOTALRECLAW_SKIP_BUILTIN_MEMORY_CHECK"

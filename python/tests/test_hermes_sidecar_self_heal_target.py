@@ -225,3 +225,23 @@ def test_classic_venv_uses_the_running_interpreter(monkeypatch):
     monkeypatch.setattr(sys, "path", [str(site)])
     ns = _exec(imp._SIDECAR_CONTENT)
     assert ns["_target_python"]() == sys.executable
+
+
+def test_plugin_load_refreshes_an_old_sidecar_inside_hermes(tmp_path, monkeypatch):
+    # A sidecar written by an older version keeps its old self-heal until
+    # it is rewritten; the plugin rewrites it on load inside Hermes.
+    from totalreclaw.hermes import _refresh_provider_sidecar
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    path = imp.sidecar_path()
+    path.parent.mkdir(parents=True)
+    old = imp._SIDECAR_MARKER + '\n_cmd = ["pip", "install", "--pre", "totalreclaw"]\n'
+    path.write_text(old)
+
+    monkeypatch.delitem(sys.modules, "hermes_cli", raising=False)
+    _refresh_provider_sidecar()  # not inside Hermes (tests, CLI): untouched
+    assert path.read_text() == old
+
+    monkeypatch.setitem(sys.modules, "hermes_cli", ModuleType("hermes_cli"))
+    _refresh_provider_sidecar()
+    assert path.read_text() == imp._sidecar_content()
