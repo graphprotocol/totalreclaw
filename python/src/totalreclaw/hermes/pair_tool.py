@@ -606,9 +606,10 @@ async def pair(args: dict, state: "PluginState", **kwargs) -> str:
             logger.warning("totalreclaw_pair: relay has no replace mode")
             return json.dumps({
                 "error": (
-                    "Replacing an existing account is not available on this "
-                    "TotalReclaw relay yet, so no pairing was started and the "
-                    "current account is unchanged."
+                    "This TotalReclaw relay needs updating before an account "
+                    "can be replaced: it cannot ask the user to confirm the "
+                    "replacement on the pairing page. No pairing was started "
+                    "and the current account is unchanged."
                 ),
                 "already_configured": True,
             })

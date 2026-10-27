@@ -124,7 +124,7 @@ async def test_relay_without_replace_mode_fails_closed(monkeypatch):
     res = json.loads(await pair_tool.pair({"replace": True}, state))
     assert "url" not in res
     assert res.get("already_configured") is True
-    assert "not available" in res["error"]
+    assert "relay needs updating" in res["error"]
 
 
 @pytest.mark.asyncio

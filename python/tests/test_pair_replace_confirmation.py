@@ -503,3 +503,46 @@ def test_register_vault_sync_runs_without_a_loop():
             return "user-1"
 
     assert register_vault_sync(_Ok()) is True
+
+
+# ---------------------------------------------------------------------------
+# Tool level, real transport: a relay without replace mode (e.g. one that
+# predates it) must make the tool refuse, with no fallback to any
+# agent-confirmed path.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("sidecar", ["0", "1"])
+@pytest.mark.asyncio
+async def test_tool_fails_closed_against_a_relay_without_replace_mode(
+    home, monkeypatch, sidecar
+):
+    from totalreclaw.hermes import pair_tool
+    from totalreclaw.hermes.state import PluginState
+
+    creds = _write_existing_creds(home)
+    before = creds.read_bytes()
+    relay = _RelayStub(echo_replace=False, forward=False)
+    await relay.start()
+    monkeypatch.setenv("TOTALRECLAW_PAIR_RELAY_URL", relay.url)
+    monkeypatch.setenv("TOTALRECLAW_PAIR_SIDECAR", sidecar)
+    monkeypatch.delenv("TOTALRECLAW_PAIR_MODE", raising=False)
+    state = PluginState()
+    monkeypatch.setattr(state, "is_configured", lambda: True)
+    try:
+        for args in (
+            {"mode": "generate", "replace": True},
+            # Old-style self-confirmation must not open anything either.
+            {"mode": "generate", "replace_confirmed": True, "replace_token": "x"},
+        ):
+            res = json.loads(await pair_tool.pair(args, state))
+            assert "url" not in res and "pin" not in res, args
+            assert res.get("already_configured") is True
+            if args.get("replace"):
+                assert "relay needs updating" in res["error"]
+    finally:
+        await relay.stop()
+
+    assert relay.open_frame is not None and relay.open_frame["replace"] is True
+    assert creds.read_bytes() == before
+    assert not any(".replaced-" in p.name for p in creds.parent.iterdir())
