@@ -62,7 +62,11 @@ dependencies = [
     # break, so a stale core makes the transparent phrase->bundle migration
     # silently no-op forever with nothing above debug level to show for it.
     # Do not relax this floor below 2.6.0.
-    "totalreclaw-core>=2.6.0,<3.0.0",
+    # >=2.6.1rc1: 2.6.1 ships abi3 wheels (CPython 3.10+, including the 3.14
+    # that Hermes 0.22 runs), so no Rust/C toolchain is needed. The rc is
+    # named explicitly because pip only picks a core pre-release when the
+    # specifier names one; becomes >=2.6.1 at the stable promote.
+    "totalreclaw-core>=2.6.1rc1,<3.0.0",
     # <1: httpx 1.0 (pre-releases on PyPI since 2026-08-31, e.g. 1.0.dev6) is a
     # rewrite with no `httpx.HTTPStatusError`, which `relay.py` subclasses at
     # import time (`RelayReadError`, #662). Any `pip install --pre totalreclaw`
