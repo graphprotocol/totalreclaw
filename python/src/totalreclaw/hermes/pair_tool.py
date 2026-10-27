@@ -27,17 +27,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from . import consent_tokens
-
 if TYPE_CHECKING:
     from .state import PluginState
 
 logger = logging.getLogger(__name__)
-
-#: Subject key for the pair-replace consent token. One account per install, so
-#: a constant subject is sufficient (unlike the disclosure token, keyed by the
-#: import source).
-_PAIR_REPLACE_SUBJECT = "pair"
 
 
 # ---------------------------------------------------------------------------
@@ -100,26 +93,16 @@ PAIR_SCHEMA: Dict[str, Any] = {
                     "you don't know whether the user is new or returning)."
                 ),
             },
-            "replace_confirmed": {
+            "replace": {
                 "type": "boolean",
                 "description": (
-                    "Required ONLY when this install is already paired: the "
-                    "tool refuses to start a fresh pair over existing "
-                    "credentials (it would orphan the current vault) unless "
-                    "the user explicitly confirmed they want to REPLACE "
-                    "their account. Must be accompanied by the replace_token "
-                    "from the already_configured response — confirmation "
-                    "without the token is rejected, so you cannot self-assert "
-                    "replacement. Never set this without explicit user "
-                    "confirmation."
-                ),
-            },
-            "replace_token": {
-                "type": "string",
-                "description": (
-                    "One-time token from the already_configured response. "
-                    "Proves the tool's replace warning was surfaced this flow; "
-                    "replace_confirmed without it is rejected."
+                    "Only for an install that is already set up, and only "
+                    "when the user has asked to replace their current "
+                    "account with a different one. It does not authorise "
+                    "anything: it opens a pairing page that warns the user "
+                    "and asks THEM to confirm the replacement there. You "
+                    "cannot confirm it for them. Without it, the tool "
+                    "refuses to pair over existing credentials."
                 ),
             },
         },
@@ -283,6 +266,7 @@ def _run_relay_pair_on_thread(
     state: "PluginState",
     mode: Optional[str],
     handshake_timeout_s: float = 15.0,
+    replace: bool = False,
 ) -> _OpenedSession:
     """Spawn a worker thread that runs the FULL relay pair session.
 
@@ -304,6 +288,12 @@ def _run_relay_pair_on_thread(
 
     def _configure_from_phrase(token_tag: str, phrase: str) -> dict:
         """Synchronous credential write — runs on the thread's executor."""
+        if replace:
+            # Reached only after the user confirmed on the pairing page.
+            # Outside the try so a failure nacks the relay untouched.
+            from .auto_migrate import preserve_credentials_before_replace
+
+            preserve_credentials_before_replace()
         try:
             state.configure(phrase)
             client = state.get_client()
@@ -341,7 +331,7 @@ def _run_relay_pair_on_thread(
                 """
                 token_tag_local = "?"
                 try:
-                    session = await open_remote_pair_session(mode=mode)
+                    session = await open_remote_pair_session(mode=mode, replace=replace)
                 except BaseException as err:
                     handshake_q.put(_OpenFailed(err))
                     return
@@ -381,6 +371,24 @@ def _run_relay_pair_on_thread(
                         token_tag_local,
                         err,
                     )
+                    return
+
+                # Register the new vault while its phrase is on this host
+                # (a later migration to a derived bundle cannot). After the
+                # ack so the browser is not kept waiting.
+                if isinstance(result, dict) and result.get("state") == "active":
+                    from ..pair.registration import register_vault_sync
+
+                    client = state.get_client()
+                    if client is not None:
+                        registered = await loop.run_in_executor(
+                            None, register_vault_sync, client
+                        )
+                        logger.info(
+                            "pair.relay_register token=%s… outcome=%s",
+                            token_tag_local,
+                            "ok" if registered else "failed",
+                        )
 
             loop.run_until_complete(_drive_full_session())
         finally:
@@ -463,41 +471,37 @@ async def pair(args: dict, state: "PluginState", **kwargs) -> str:
         the safest default for agents that don't know whether the user
         has an existing phrase or is creating one fresh.
     """
-    # F8 (#428) — existing-credentials guard. Completing a fresh pair on an
-    # already-configured install mints a NEW phrase / Smart Account and
-    # silently orphans the existing vault. Refuse unless the user explicitly
-    # chose replacement. Message-level guard only — no crypto-path changes.
-    #
-    # #466 Finding-2: rc7 QA showed the agent self-asserting replace_confirmed
-    # on an explicit "generate a new phrase" request WITHOUT ever surfacing the
-    # replace warning to the user. Apply the disclosure-token pattern — the
-    # already_configured response mints a one-time replace_token (hashed at
-    # rest, 1h TTL) and replacement now requires BOTH replace_confirmed=true
-    # AND that token, so the agent cannot pre-confirm a replacement it never
-    # showed the user.
+    # Existing-credentials guard. Completing a fresh pair on an
+    # already-configured install mints a NEW account and orphans the existing
+    # vault, so only the user may confirm it, and only on the pairing page.
+    # The agent never holds anything that authorises a replacement: an
+    # earlier design returned a one-time token here, and agents echoed it
+    # back and confirmed on the user's behalf. ``replace=true`` now only
+    # opens a replace-mode session; the relay's page warns the user and
+    # makes them tick a confirmation box, and the upload is refused unless
+    # the relay forwards that confirmation (``remote_client``).
+    replace = False
     if state.is_configured():
-        replace_ok = bool(args.get("replace_confirmed", False)) and consent_tokens.redeem(
-            "pair-replace", _PAIR_REPLACE_SUBJECT, args.get("replace_token")
-        )
-        if not replace_ok:
-            token = consent_tokens.mint("pair-replace", _PAIR_REPLACE_SUBJECT)
+        if not bool(args.get("replace", False)):
             return json.dumps({
                 "already_configured": True,
-                "replace_token": token,
                 "message": (
                     "This install is already paired to a TotalReclaw account — "
                     "its credentials are on disk and the vault is reachable. "
-                    "Starting a new pair flow would create a DIFFERENT account "
-                    "and orphan the existing vault's memories. Tell the user "
-                    "their account is already set up. Only if they explicitly "
-                    "say they want to REPLACE it with a new/different account, "
-                    "call again with replace_confirmed=true AND "
-                    f"replace_token=\"{token}\". Confirmation without the token "
-                    "is rejected — you cannot pre-confirm replacement on the "
-                    "user's behalf. (Restoring this same account on another "
-                    "device happens on that device, not here.)"
+                    "Starting a new pair flow would switch this agent to a "
+                    "DIFFERENT account, and the current account's memories "
+                    "would no longer be available here. Tell the user their "
+                    "account is already set up. Only if they ask to REPLACE "
+                    "it with a different account, call again with "
+                    "replace=true: the pairing page then shows them a warning "
+                    "and they confirm the replacement there. You cannot "
+                    "confirm it for them, and do not move, rename or delete "
+                    "the credentials file to get around this. (Restoring this "
+                    "same account on another device happens on that device, "
+                    "not here.)"
                 ),
             })
+        replace = True
 
     raw_mode = args.get("mode")
     if raw_mode in ("generate", "import", "either"):
@@ -511,10 +515,22 @@ async def pair(args: dict, state: "PluginState", **kwargs) -> str:
             # Local mode's pair_page.py predates "either" — map it to
             # the first-run default (generate) since that's what a new
             # user on a fresh local install is most likely doing.
+            if replace:
+                # The local page has no replace confirmation, so the user
+                # could not confirm there. Refuse rather than replace
+                # unconfirmed.
+                return json.dumps({
+                    "error": (
+                        "Replacing an existing account is not available in "
+                        "local pair mode. The user can replace it from the "
+                        "default (relay) pairing flow."
+                    ),
+                    "already_configured": True,
+                })
             local_mode = mode if mode in ("generate", "import") else "generate"
             url, pin, expires_iso, session = await _pair_local(state, local_mode)
         else:
-            url, pin, expires_iso = await _pair_relay(state, mode)
+            url, pin, expires_iso = await _pair_relay(state, mode, replace=replace)
 
         qr_png_b64 = ""
         qr_unicode = ""
@@ -552,19 +568,28 @@ async def pair(args: dict, state: "PluginState", **kwargs) -> str:
                 "you do. The phrase stays in the browser — never in chat.\n"
             )
 
+        replace_step = (
+            "Before you continue, the page warns that this replaces the "
+            "account currently on this agent. Tick the box there only if "
+            "you want to replace it.\n"
+            if replace
+            else ""
+        )
+
         return json.dumps(
             {
                 "url": url,
                 "pin": pin,
                 "expires_at": expires_iso,
                 "mode": mode,
+                "replace": replace,
                 "qr_png_b64": qr_png_b64,
                 "qr_unicode": qr_unicode,
                 "instructions": (
                     f"Relay these to the user verbatim:\n"
                     f"1. Open {url} in your browser.\n"
                     f"2. Enter PIN {pin} when asked.\n"
-                    f"3. " + step3
+                    f"3. " + replace_step + step3
                     + f"4. The encrypted phrase uploads to this gateway; it never crosses "
                     f"this chat.\n"
                     f"5. Come back to chat once the browser says 'Paired'. "
@@ -574,6 +599,20 @@ async def pair(args: dict, state: "PluginState", **kwargs) -> str:
             }
         )
     except Exception as err:
+        # Imported here: the pair package stays off the plugin-load path.
+        from ..pair.remote_client import ReplaceNotSupportedError
+
+        if isinstance(err, ReplaceNotSupportedError):
+            logger.warning("totalreclaw_pair: relay has no replace mode")
+            return json.dumps({
+                "error": (
+                    "This TotalReclaw relay needs updating before an account "
+                    "can be replaced: it cannot ask the user to confirm the "
+                    "replacement on the pairing page. No pairing was started "
+                    "and the current account is unchanged."
+                ),
+                "already_configured": True,
+            })
         logger.error("totalreclaw_pair failed: %s", err)
         return json.dumps({"error": f"Failed to start pairing session: {err}"})
 
@@ -608,7 +647,7 @@ async def _pair_local(state: "PluginState", mode: str):
     return url, session.secondary_code, expires_iso, session
 
 
-async def _pair_relay(state: "PluginState", mode: str):
+async def _pair_relay(state: "PluginState", mode: str, *, replace: bool = False):
     """rc.10 relay-brokered WebSocket path.
 
     The relay's pair HTML page bundles the full BIP-39 English wordlist
@@ -652,11 +691,13 @@ async def _pair_relay(state: "PluginState", mode: str):
         # + handshake-poll doesn't block the asyncio loop. The whole
         # call is fast (<1s typical) since the sidecar reports back as
         # soon as the relay returns ``opened``.
-        record = await asyncio.to_thread(_run_relay_pair_via_sidecar, mode)
+        record = await asyncio.to_thread(_run_relay_pair_via_sidecar, mode, replace)
         return record.url, record.pin, record.expires_at
 
     # rc.13 fallback path — daemon-thread inside the parent process.
-    opened = await asyncio.to_thread(_run_relay_pair_on_thread, state, mode)
+    opened = await asyncio.to_thread(
+        _run_relay_pair_on_thread, state, mode, replace=replace
+    )
     return opened.url, opened.pin, opened.expires_at
 
 
@@ -672,7 +713,7 @@ def _sidecar_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
-def _run_relay_pair_via_sidecar(mode: Optional[str]):
+def _run_relay_pair_via_sidecar(mode: Optional[str], replace: bool = False):
     """Sync helper — spawns the sidecar and waits for its handshake.
 
     Returns the
@@ -697,4 +738,5 @@ def _run_relay_pair_via_sidecar(mode: Optional[str]):
         mode=mode,
         relay_url=relay_url,
         server_url=server_url,
+        replace=replace,
     )

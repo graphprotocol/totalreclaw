@@ -1,7 +1,9 @@
 """One-time, hash-at-rest consent tokens.
 
-Shared by the import privacy-disclosure gate (#437) and the pair-replace guard
-(#466 Finding-2). A token proves the agent surfaced a specific tool RESPONSE
+Used by the import privacy-disclosure gate (#437). (The pair-replace guard
+used these too until replacement moved to a user-only confirmation on the
+pairing page: a token the agent holds can be echoed back by the agent.) A
+token proves the agent surfaced a specific tool RESPONSE
 this flow before it can assert the user's consent — it forces at least one
 round-trip through the guard's response instead of the agent self-asserting a
 confirmation it never showed the user.

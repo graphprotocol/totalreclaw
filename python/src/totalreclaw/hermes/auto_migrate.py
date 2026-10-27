@@ -15,6 +15,13 @@ Flow
 3. Resolve the mnemonic (plaintext field, or the v1 keychain marker).
    Unreadable/corrupt credentials, or a keychain entry that's gone/locked,
    -> abort, leave the file untouched, log a clear (non-sensitive) message.
+3b. Register the vault with the relay (``POST /v1/register``) while the
+   phrase is still here. This module is the bundle's provisioning origin,
+   and a bundle-configured client never registers (derived-bundle-v1.md
+   §4.5), so a vault migrated unregistered gets 401 on every call, for
+   good. No confirmed registration (relay unreachable, timeout, error) ->
+   abort, file untouched; the phrase path registers on first use and the
+   migration retries on the next boot.
 4. ``derive_bundle_from_mnemonic(mnemonic, chain_id=100,
    provisioned_by="local-migration", smart_account=...)``. The Smart
    Account is read from a cached ``scope_address``/``wallet_address``
@@ -287,6 +294,90 @@ def _resolve_smart_account(mnemonic: str, creds: dict) -> Optional[str]:
         return None
 
 
+def preserve_credentials_before_replace() -> None:
+    """Keep the outgoing account's credential files before a user-confirmed
+    replacement pairing overwrites them.
+
+    - ``credentials.json`` is copied to ``credentials.json.replaced-<UTC>``
+      (mode 0600 from the first byte; the original stays in place until
+      the new credentials are written over it).
+    - ``credentials.json.bak`` (this module's root backup from an earlier
+      migration), if present, is renamed to ``credentials.json.bak.replaced-<UTC>``
+      so migrating the NEW account cannot overwrite it.
+
+    The copies are bytes-for-bytes: no parsing, nothing logged but paths.
+    A no-op outside ``file`` credential mode (an external secret manager
+    owns its own history). Raises ``OSError`` if a copy cannot be made, so
+    the caller fails the pairing rather than overwrite unpreserved files.
+    """
+    from totalreclaw.credential_provider import get_credential_provider
+
+    if get_credential_provider().mode != "file":
+        return
+
+    creds_path = _credentials_path()
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+
+    if creds_path.exists():
+        dest = creds_path.parent / f"{creds_path.name}.replaced-{stamp}"
+        data = creds_path.read_bytes()
+        fd = os.open(str(dest), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        del data
+        logger.info("pair replace: kept the previous credentials at %s", dest)
+
+    bak_path = creds_path.parent / f"{creds_path.name}.bak"
+    if bak_path.exists():
+        dest = creds_path.parent / f"{bak_path.name}.replaced-{stamp}"
+        os.replace(bak_path, dest)
+        logger.info("pair replace: kept the previous credentials backup at %s", dest)
+
+
+def _register_vault(mnemonic: str) -> bool:
+    """Register the vault with the relay, using the phrase while it is
+    still on this host. Returns ``True`` only on a confirmed registration.
+
+    Targets the same relay the migrated client will use
+    (``TOTALRECLAW_SERVER_URL`` or the build default). Runs on the
+    process-wide background loop for the same reason as
+    :func:`_resolve_smart_account`: this call site may sit inside a host's
+    running event loop.
+    """
+    from totalreclaw.agent.loop_runner import run_sync
+    from totalreclaw.client import TotalReclaw
+    from totalreclaw.pair.registration import register_vault
+
+    try:
+        client = TotalReclaw(mnemonic=mnemonic, suppress_welcome=True)
+    except Exception as err:  # noqa: BLE001 — class only: the frame holds the phrase
+        logger.warning(
+            "auto_migrate: could not build a client to register with (%s)",
+            type(err).__name__,
+        )
+        return False
+
+    async def _register_and_close() -> bool:
+        try:
+            return await register_vault(client)
+        finally:
+            try:
+                await client.close()
+            except Exception:  # noqa: BLE001 — closing is best-effort
+                pass
+
+    try:
+        return run_sync(_register_and_close())
+    except Exception as err:  # noqa: BLE001 — treated as "not registered"
+        logger.debug(
+            "auto_migrate: registration attempt did not run (%s)",
+            type(err).__name__,
+        )
+        return False
+
+
 def bundle_secret_subtree_json(bundle) -> str:
     """The ``{vault, signing}`` JSON subtree — the part that is secret and
     either keychain-wrapped or (headless) written plaintext into the v2
@@ -397,6 +488,20 @@ def _do_migrate(creds_path: Path) -> bool:
             "auto_migrate: could not resolve the Smart Account address "
             "(no cached value, RPC unreachable) — leaving the install on "
             "the legacy path; will retry on the next boot."
+        )
+        return False
+
+    # Step 3b: this function is the provisioning origin for the bundle it
+    # is about to write, so it must register the vault while the root is
+    # still here (derived-bundle-v1.md §4.5). A bundle-configured client
+    # never registers, so migrating an unregistered vault strands it on
+    # 401 for good. Registration is idempotent, so a returning user pays
+    # one round-trip. No confirmed registration -> no migration.
+    if not _register_vault(mnemonic):
+        logger.warning(
+            "auto_migrate: not migrating — could not confirm the vault is "
+            "registered with the relay. Staying on the recovery-phrase "
+            "path, which registers on first use; will retry on the next boot."
         )
         return False
 
