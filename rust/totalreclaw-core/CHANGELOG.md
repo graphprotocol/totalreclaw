@@ -5,6 +5,31 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.1] - Unreleased
+
+Packaging-only release for the PyPI wheel. No source, API or output changes:
+the Rust code is the same as 2.6.0, and a fixed set of deterministic outputs
+(key derivation, auth-key hash, EOA address, blind indices, content
+fingerprint, f16 embedding encoding, LSH buckets) is byte-identical between
+the 2.6.0 `cp312` wheel and the new `abi3` wheel.
+
+### Changed
+
+- **PyPI wheels now target CPython's stable ABI (`abi3`, Python 3.10 and later).**
+  2.6.0 shipped `cp312` wheels only, so on Python 3.13 and 3.14, pip fell back to
+  the sdist and needed a Rust and C toolchain to install, which most users don't
+  have. The `python-extension` feature now enables `pyo3/abi3-py310`, so each
+  platform gets one `cp310-abi3` wheel that installs on 3.10, 3.11, 3.12, 3.13,
+  3.14 and later CPython releases without a compiler. Platforms are unchanged:
+  manylinux2014 x86_64 and aarch64, macOS arm64 and x86_64, and Windows x86_64.
+  Free-threaded (`3.14t`) builds are not covered, because the stable ABI does not
+  support them yet. The PyPI publish workflow now installs the built wheel on
+  Python 3.10 through 3.14 (Linux, macOS, Windows) before it publishes. PR CI
+  now installs the Python client binary-only on Python 3.14 against the
+  in-repo core wheel.
+- npm (`@totalreclaw/core`) and crates.io: nothing to ship. The source is
+  identical to 2.6.0, so publishing 2.6.1 there is optional.
+
 ## [2.6.0] - 2026-08-16
 
 Two additive surfaces: the `derived-bundle-v1` credential bundle (Option E

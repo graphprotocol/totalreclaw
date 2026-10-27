@@ -1,6 +1,6 @@
 [package]
 name = "totalreclaw-core"
-version = "2.6.0"
+version = "2.6.1"
 edition = "2021"
 description = "TotalReclaw core — E2EE crypto, reranker, wallet, UserOp, store/search pipelines. Single source of truth for all clients."
 license = "MIT"
@@ -31,7 +31,13 @@ wasm = ["dep:wasm-bindgen", "dep:js-sys", "dep:serde-wasm-bindgen", "getrandom/j
 python = ["dep:pyo3"]
 # maturin enables this on top of `python` when building the cdylib.
 # Keeping it separate lets `cargo test --features python` link cleanly.
-python-extension = ["python", "pyo3/extension-module"]
+# `abi3-py310` builds against CPython's stable ABI, so one wheel per platform
+# (tagged `cp310-abi3`) installs on 3.10 and every later CPython, including
+# releases that did not exist when the wheel was built. The floor matches
+# `requires-python` in pyproject.toml. Without it, each wheel is tied to the
+# one interpreter it was built with, and pip on any other version falls back
+# to the sdist, which needs a Rust and C toolchain to install.
+python-extension = ["python", "pyo3/extension-module", "pyo3/abi3-py310"]
 
 [lib]
 crate-type = ["lib", "cdylib"]
