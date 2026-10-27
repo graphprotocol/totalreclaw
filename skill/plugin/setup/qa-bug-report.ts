@@ -189,11 +189,11 @@ export const DEFAULT_QA_REPO = 'graphprotocol/totalreclaw-internal';
 export const PUBLIC_REPOS_DENYLIST: ReadonlySet<string> = new Set([
   'graphprotocol/totalreclaw',
   'graphprotocol/totalreclaw-relay',
+  'graphprotocol/totalreclaw-hermes',
   'p-diogo/totalreclaw',
   'p-diogo/totalreclaw-website',
   'p-diogo/totalreclaw-relay',
   'p-diogo/totalreclaw-plugin',
-  'p-diogo/totalreclaw-hermes',
 ]);
 
 /**
